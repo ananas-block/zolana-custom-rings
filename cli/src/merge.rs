@@ -9,7 +9,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_signer::Signer;
 use thiserror::Error;
-use zolana_client::{ClientError, ComputeBudgetConfig, IndexerRpcConfig, Rpc, SpendableUtxos};
+use zolana_client::{ClientError, ComputeBudgetConfig, IndexerRpcConfig, Rpc, UtxoScan};
 use zolana_interface::pda;
 use zolana_keypair::{KeypairError, ShieldedKeypair};
 use zolana_transaction::{SpendableDecryptionResult, TransactionError, WalletUtxo, SOL_MINT};
@@ -76,12 +76,12 @@ pub fn run(ctx: &mut Context, args: MergeArgs) -> Result<(), MergeError> {
         payment: None,
     }
     .load(ctx)?;
-    let sender_utxos = SpendableUtxos::new(&sender, &registry)
+    let sender_utxos = UtxoScan::new(&sender, &registry)
         .with_ring_deposit_payload(ctx.ring.program_id(), zolana_ring_client::deposit_payload)
         .with_indexer_config(IndexerRpcConfig::at_slot(ctx.rpc.get_slot()?));
 
     println!("reading the sender's notes");
-    let spendable = sender_utxos.fetch(&indexer)?;
+    let spendable = sender_utxos.fetch(&indexer)?.spendable;
     if !spendable.unknown_asset_ids.is_empty() {
         line("unregistered asset ids", spendable.unknown_asset_ids.len());
     }
@@ -135,6 +135,7 @@ pub fn run(ctx: &mut Context, args: MergeArgs) -> Result<(), MergeError> {
     wait_for_indexed_transaction(&indexer, signature)?;
     if !sender_utxos
         .fetch(&indexer)?
+        .spendable
         .utxos()
         .any(|entry| entry.utxo_hash == output_hash)
     {
