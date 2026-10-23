@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-
-import { treeAddress } from "../src/interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../src/interface/program.js";
-import type { RpcAccount } from "../src/client/rpc.js";
+import { treeAddress } from "@heliuslabs/zolana/internal";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
+import type { RpcAccount } from "@heliuslabs/zolana/client";
+import { treeAccount } from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import { readTreeHeads } from "../src/ring/policy-trees.js";
 import { ringTreeIdResolver } from "../src/ring/trees.js";
 import { ownedAccount } from "./helpers/ring-accounts.js";
-import { treeAccount } from "./helpers/tree-account.js";
 
 function treeWithId(treeId: number): RpcAccount {
   return ownedAccount(

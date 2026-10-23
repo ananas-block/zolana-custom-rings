@@ -1,15 +1,22 @@
-import type {
-  BlockhashProvider,
-  ChainReader,
-  RingSpendRecordReader,
-  SlotReader,
-} from "../client/ports.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { hashBytes, initializePoseidon } from "../hasher/index.js";
-import { signerAddress, type SignerAccount } from "../interface/instructions/index.js";
-import { addressBytes } from "../interface/internal.js";
-import type { Address, Bytes32, RequestContext, Transaction } from "../interface/types.js";
-import { hashChain } from "../transaction/internal.js";
+import type { BlockhashProvider, ChainReader, SlotReader } from "@heliuslabs/zolana/client";
+import type { RingSpendRecordReader } from "../client/ports.js";
+import {
+  compileUnsignedTransaction,
+  hashBytes,
+  signerAddress,
+  addressBytes,
+  hashChain,
+} from "@heliuslabs/zolana/internal";
+import {
+  initializePoseidon,
+  type Address,
+  type Bytes32,
+  type RequestContext,
+  type ShieldedAddress,
+  type ShieldedKeys,
+} from "@heliuslabs/zolana";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import type { Transaction } from "@heliuslabs/zolana/interface";
 import type { RingPolicyConfig } from "./codecs.js";
 import { fetchRingConfigs, ringPolicyNamespaceAddress, windowedPolicy } from "./config.js";
 import { proveRingSpendRegistration, type RingEntryProofClient } from "./entry-proof.js";
@@ -33,8 +40,6 @@ import {
 } from "./submission.js";
 import { ringTreeIdResolver } from "./trees.js";
 import { readVelocityFacts, type VelocityFacts } from "./velocity.js";
-import type { ShieldedAddress } from "../keypair/shielded.js";
-import type { ShieldedKeys } from "../transaction/wallet/keys.js";
 
 export type RingSpendRegistrationClient = RingEntryProofClient &
   RingSpendRecordReader &

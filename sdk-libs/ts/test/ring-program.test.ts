@@ -10,10 +10,9 @@ import {
   type Address,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import { SYSTEM_PROGRAM } from "../src/interface/instructions/index.js";
-import { addressBytes, sha256 } from "../src/interface/internal.js";
-import type { Bytes32 } from "../src/interface/types.js";
+import { SYSTEM_PROGRAM, addressBytes, sha256 } from "@heliuslabs/zolana/internal";
+import { type Bytes32, ClientError } from "@heliuslabs/zolana";
+import { BLOCKHASH, solanaRpcReads } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringPolicyConfigAddress } from "../src/interface/pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "../src/ring/config.js";
 import { RING_POLICY_CONFIG_SIZE } from "../src/ring/codecs.js";
@@ -33,10 +32,6 @@ import {
   verifyRingProgram,
   writeBufferInstruction,
 } from "../src/ring/program.js";
-
-import { ClientError } from "../src/client/error.js";
-
-import { BLOCKHASH, solanaRpcReads } from "./helpers/clients.js";
 import { ownedAccount } from "./helpers/ring-accounts.js";
 
 const filled = (byte: number): Bytes32 => new Uint8Array(32).fill(byte) as Bytes32;

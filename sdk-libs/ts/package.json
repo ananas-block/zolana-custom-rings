@@ -1,0 +1,65 @@
+{
+  "name": "@heliuslabs/zolana-custom-rings",
+  "version": "0.1.0-alpha",
+  "description": "TypeScript SDK for Zolana custom rings.",
+  "license": "Apache-2.0",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./keypair": {
+      "types": "./dist/keypair/index.d.ts",
+      "import": "./dist/keypair/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node -e \"import('node:fs/promises').then(({ rm }) => rm('dist', { recursive: true, force: true }))\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run changelog:check -- --release",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "changelog:check": "node ../../zolana/sdk-libs/ts/scripts/check-changelog.mjs .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --deny-warnings src test scripts",
+    "test": "vitest run --exclude \"test/e2e/**\"",
+    "test:e2e": "vitest run --no-file-parallelism test/e2e",
+    "test:ring-controls:live": "node scripts/run-ring-controls-live.mjs",
+    "check": "npm run format:check && npm run lint && npm run changelog:check && npm run typecheck && npm run test && npm run build && npm run check:dist",
+    "check:dist": "tsc -p tsconfig.dist.json"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@solana-program/system": "^0.14.1"
+  },
+  "devDependencies": {
+    "@heliuslabs/zolana": "file:../../zolana/sdk-libs/ts",
+    "@solana/kit": "^8.3.0",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.67.0",
+    "oxlint": "^1.75.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@heliuslabs/zolana": "0.5.0-alpha",
+    "@solana/kit": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

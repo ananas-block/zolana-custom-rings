@@ -1,9 +1,13 @@
-import type { BlockhashProvider } from "../client/ports.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { addressBytes } from "../interface/internal.js";
-import type { Address, RequestContext, Transaction } from "../interface/types.js";
-import { U64_MAX, ZERO_32 } from "../transaction/internal.js";
-import { equalBytes } from "../wallet/internal.js";
+import type { BlockhashProvider } from "@heliuslabs/zolana/client";
+import {
+  compileUnsignedTransaction,
+  addressBytes,
+  U64_MAX,
+  ZERO_32,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import type { Address, RequestContext } from "@heliuslabs/zolana";
+import type { Transaction } from "@heliuslabs/zolana/interface";
 
 import { fetchRingConfigs, ringPolicyNamespaceAddress } from "./config.js";
 import { proveRingEntryTransition, type RingEntryProofClient } from "./entry-proof.js";

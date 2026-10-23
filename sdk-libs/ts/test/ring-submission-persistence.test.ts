@@ -1,22 +1,31 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  LocalKeys,
+  type Bytes32,
+  ShieldedKeypair,
+  SOL_MINT,
+  Utxo,
+  Wallet,
+  deserializeWallet,
+  serializeWallet,
+  loadPersistedWallet,
+  walletSnapshotCipher,
+} from "@heliuslabs/zolana";
+import {
+  compileUnsignedTransaction,
+  reserveEntries,
+  DEFAULT_RESERVATION_TTL_MS,
+  treeAddress,
+} from "@heliuslabs/zolana/internal";
+import { ringConfigPda } from "../src/interface/pda/index.js";
+import { AssetRegistry, ProofInputUtxo } from "@heliuslabs/zolana/transaction";
+import { savePersistedWallet } from "@heliuslabs/zolana/wallet";
+import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { ringTransferClient } from "./helpers/clients.js";
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { afterEach, expect, it, vi } from "vitest";
-
-import { LocalKeys } from "../src/client/keys.js";
-import { compileUnsignedTransaction } from "../src/flows/compile.js";
-import { reserveEntries, DEFAULT_RESERVATION_TTL_MS } from "../src/flows/reserve.js";
-import { ringConfigPda, treeAddress } from "../src/interface/pda/index.js";
-import type { Bytes32 } from "../src/interface/types.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
 import { buildRingTransferTransaction } from "../src/ring/transfer.js";
 import { RingTransactionSubmission, reconcileRingSubmissions } from "../src/ring/submission.js";
-import { SOL_MINT, AssetRegistry } from "../src/transaction/asset.js";
-import { Utxo, ProofInputUtxo } from "../src/transaction/utxo.js";
-import { Wallet } from "../src/transaction/wallet/state.js";
-import { deserializeWallet, serializeWallet } from "../src/transaction/wallet/persistence.js";
-import { loadPersistedWallet, savePersistedWallet } from "../src/wallet/persisted.js";
-import { walletSnapshotCipher } from "../src/wallet/snapshot-cipher.js";
-import { BLOCKHASH, ringTransferClient } from "./helpers/clients.js";
 import { ringProgramConfigData, ownedAccount } from "./helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");

@@ -1,28 +1,29 @@
 import type { Instruction } from "@solana/kit";
-import type { Address, RingAssetDeposit } from "../interface/types.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
-import { Writer, copyBytes, fail } from "../interface/internal.js";
-import { InstructionTag } from "../interface/program.js";
-import { encodeRingDepositInstructionData } from "../interface/codecs/index.js";
+import type { Address } from "@heliuslabs/zolana";
+import { type RingAssetDeposit, InstructionTag } from "@heliuslabs/zolana/interface";
 import {
+  Writer,
+  copyBytes,
+  fail,
+  encodeRingDepositInstructionData,
   ringAuthAddress,
-  ringConfigAddress,
-  ringCoSignerAddress,
-  ringDepositAuditAddress,
-  ringKeyRegistryRootAddress,
-} from "../interface/pda/index.js";
-import {
   depositLayout,
   depositAssetIndex,
   depositAccounts,
   instruction,
   tagged,
   meta,
-  ringCoSignerMetas,
-  ringSpendWindowMetas,
   SYSTEM_PROGRAM,
-  type SignerAccount,
-} from "../interface/instructions/index.js";
+} from "@heliuslabs/zolana/internal";
+import {
+  ringConfigAddress,
+  ringCoSignerAddress,
+  ringDepositAuditAddress,
+  ringKeyRegistryRootAddress,
+} from "../interface/pda/index.js";
+import { ringCoSignerMetas, ringSpendWindowMetas } from "../interface/instructions/index.js";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
 import {
   AUDITED_RING_DEPOSIT_TAG,
   RING_DEPOSIT_AUDIT_SLOTS,

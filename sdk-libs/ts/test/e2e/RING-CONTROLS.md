@@ -1,9 +1,9 @@
 # Fresh local ring controls test
 
-Run from `sdk-libs/ts` after `npm ci` and local builds. Use a dedicated local stack
+Run from `sdk-libs/ts` after `npm ci` at the repository root and local builds. Use a dedicated local stack
 with current SPP and user-registry programs, the generated localnet snapshots
 (protocol config, tree and SPL asset counter), Photon with spend-record indexing,
-and the prover with the SPP and custom-ring keys `proving-keys.lock` pins,
+and the ring prover with the SPP keys and the custom-ring keys `prover/ring/proving-keys.lock` pins,
 including the deposit disclosure circuit. V1
 transactions are required. Surfpool needs the explicitly opt-in local fixture
 Photon build.
@@ -34,13 +34,14 @@ The rollover case advances the dedicated stack's clock after proof creation.
 It checks one proof rebuild, reset counters and one settled balance change.
 The process scope must exist and the RPC URL must match its configured port.
 
-The runner uses `target/debug/zolana` and `target/deploy/custom_ring_program.so`.
+The runner uses `zolana/target/debug/zolana` and `target/deploy/custom_ring_program.so`
+from the repository root, `just test-ts-ring-controls` builds both and starts the stack.
 Override with `ZOLANA_CLI_BIN` and `RING_PROGRAM_SO` when needed. It creates a
 temporary CLI config and wallet, then calls the existing CLI to create, fund and
 register fresh SPL and Token-2022 mints. It passes their returned mint/ATA addresses
 to the test. Optional `ZOLANA_TEST_AUTHORITY_WALLET` selects an existing local
 CLI wallet.
 
-All endpoints must be loopback. The runner does not start, reset, or stop services.
+All endpoints must be loopback. The runner itself does not start, reset, or stop services.
 Stop the stack through its own `ZOLANA_PROCESS_SCOPE_DIR` after the test. Temporary
 wallet/config artifacts are retained at the printed path for debugging.

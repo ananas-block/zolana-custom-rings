@@ -1,23 +1,34 @@
-import type { ChainReader, ProofDataSource, ProofReader } from "../client/ports.js";
+import type {
+  ChainReader,
+  ProofDataSource,
+  ProofReader,
+  MerkleProof,
+  NonInclusionProof,
+} from "@heliuslabs/zolana/client";
+import {
+  decodeTreeHeadRoots,
+  INPUT_TREES,
+  type TreeSlot,
+  type TreeContext,
+  type TreeHeadRoots,
+} from "@heliuslabs/zolana/interface";
+import {
+  decodeTreeId,
+  nullifierPdaAddress,
+  ZERO_32,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import {
+  SHIELDED_POOL_PROGRAM_ID,
+  type Address,
+  type Bytes32,
+  type RequestContext,
+} from "@heliuslabs/zolana";
 import {
   RING_ANSWER_SLOTS,
   RING_NULLIFIER_PATH_LENGTH,
   RING_STATE_PATH_LENGTH,
 } from "../client/prover/types.js";
-import type { MerkleProof, NonInclusionProof } from "../client/rpc.js";
-import { decodeTreeHeadRoots, decodeTreeId } from "../interface/codecs/index.js";
-import { nullifierPdaAddress } from "../interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../interface/program.js";
-import { INPUT_TREES, type TreeSlot } from "../interface/tree-slot.js";
-import type {
-  Address,
-  Bytes32,
-  RequestContext,
-  TreeContext,
-  TreeHeadRoots,
-} from "../interface/types.js";
-import { ZERO_32 } from "../transaction/internal.js";
-import { equalBytes } from "../wallet/internal.js";
 
 import { RingError } from "./error.js";
 import type { LeafTree } from "./policy.js";

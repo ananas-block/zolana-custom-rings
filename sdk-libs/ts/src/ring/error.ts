@@ -32,7 +32,11 @@ export const RING_ERROR_CODES = [
   "RING_INVALID_LENGTH",
   "RING_KEY_ENVELOPE_INVALID",
   "RING_KEY_REGISTRY_INVALID",
+  "RING_KEY_REGISTRY_MEMBER_ALREADY_REGISTERED",
+  "RING_KEY_REGISTRY_MEMBER_UNREGISTERED",
   "RING_KEY_REGISTRY_MISSING",
+  "RING_KEY_REGISTRY_OUT_OF_SYNC",
+  "RING_KEY_REGISTRY_ROOT_CHANGED",
   "RING_KEY_REGISTRY_STALE",
   "RING_LIST_SHARED",
   "RING_LIST_WRITER_UNAUTHORIZED",
@@ -57,6 +61,7 @@ export const RING_ERROR_CODES = [
   "RING_SPEND_RECORD_INVALID",
   "RING_SPEND_RECORD_LINEAGE_BROKEN",
   "RING_SPEND_RECORD_MISSING",
+  "RING_SPEND_RECORD_OUT_OF_SYNC",
   "RING_VELOCITY_CAP_EXCEEDED",
   "RING_VELOCITY_DISABLED",
   "RING_VELOCITY_OVERFLOW",
@@ -93,13 +98,8 @@ export const RING_ERROR_CODES = [
   "RING_UNREGISTERED_OUTPUT_KEY",
   "RING_ZERO_AMOUNT",
 ] as const;
-
-import {
-  extractCauseCodes,
-  hideCause,
-  sanitizeDetails,
-  type ErrorEnvelope,
-} from "../errors/internal.js";
+import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
+import type { ErrorEnvelope } from "@heliuslabs/zolana";
 
 export type RingErrorCode = (typeof RING_ERROR_CODES)[number];
 

@@ -1,5 +1,73 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
-import { ClientError } from "../src/client/error.js";
+import { RingError } from "../src/ring/error.js";
+import {
+  X25519Keypair,
+  solanaOwnerIdentity,
+  symmetricApply,
+  transactOutputBlinding,
+} from "@heliuslabs/zolana/keypair";
+import {
+  ClientError,
+  SHIELDED_POOL_PROGRAM_ID,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  type Bytes128,
+  type Signature,
+  ShieldedKeypair,
+  SigningKey,
+  ViewingKey,
+  Data,
+  Utxo,
+  SOL_MINT,
+  LocalKeys,
+  LocalShieldedKeys,
+} from "@heliuslabs/zolana";
+import {
+  treeAddress,
+  bytesToBigInt,
+  assemble,
+  ownerSignerAddresses,
+  signerIdentity,
+  hashBytesBigInt,
+  hashBytes,
+  RING_AUTHORITY_WIDTHS,
+  ringAuthorityWidth,
+  privateTxAddressChain,
+  prepareRingAuthorityTransfer,
+  sppPrivateTxHashInput,
+  nonZeroHashChain,
+  poseidon,
+  decryptConfidentialAsSender,
+  encodeConfidential,
+  readOutputData,
+  splitEmbeddedKey,
+  withTransactionKey,
+} from "@heliuslabs/zolana/internal";
+import {
+  InstructionTag,
+  StateDiscriminator,
+  type OwnerTag,
+  type TransactInstructionData,
+} from "@heliuslabs/zolana/interface";
+import { ringOpenings } from "../src/client/prover/assembly.js";
+import { ringAuditReader, ringTransferClient } from "./helpers/clients.js";
+import { transactionsPage } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import type { SpendProof } from "@heliuslabs/zolana/client";
+import { treeAccount } from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
+import {
+  ConfidentialTransfer,
+  SppProofInputs,
+  createExternalData,
+  type IndexedShieldedTransaction,
+  type PreparedTransfer,
+  EncryptedScheme,
+  ProofInputUtxo,
+  createProofOutput,
+  AssetRegistry,
+  SOL_ASSET_ID,
+  encryptConfidentialTransfer,
+} from "@heliuslabs/zolana/transaction";
+import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
 import {
   address,
   getAddressDecoder,
@@ -10,19 +78,6 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import recordPaddingVectors from "../../../test-vectors/record_padding.json" with { type: "json" };
-import { treeAddress } from "../src/interface/pda/index.js";
-import { InstructionTag, SHIELDED_POOL_PROGRAM_ID } from "../src/interface/program.js";
-import { StateDiscriminator } from "../src/interface/state.js";
-import type {
-  Bytes16,
-  Bytes32,
-  Bytes33,
-  Bytes128,
-  OwnerTag,
-  Signature,
-  TransactInstructionData,
-} from "../src/interface/types.js";
-import { solanaOwnerIdentity } from "../src/hasher/index.js";
 import {
   AUDIT_ENC_INFO,
   auditPublicInputHash,
@@ -30,31 +85,16 @@ import {
   auditorViewTag,
   parseAuditorMessage,
 } from "../src/keypair/audit.js";
-import { bytesToBigInt } from "../src/keypair/bytes.js";
-import { symmetricApply } from "../src/keypair/merge/index.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
-import { SigningKey } from "../src/keypair/signing-key.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
 import {
   auditRing,
   auditRingTransaction,
   auditorMessage,
   recoverTransactionViewingKey,
 } from "../src/ring/audit.js";
-import {
-  assemble,
-  ownerSignerAddresses,
-  ringOpenings,
-  signerIdentity,
-} from "../src/client/prover/assembly.js";
 import type {
   CustomRingBaseProofRequest,
   CustomRingPolicyProofRequest,
 } from "../src/client/prover/types.js";
-import { ringAuditReader, ringTransferClient, transactionsPage } from "./helpers/clients.js";
-import type { SpendProof } from "../src/client/rpc.js";
-import { hashBytesBigInt } from "../src/client/internal.js";
-import { hashBytes } from "../src/hasher/index.js";
 import {
   checkRingMembership,
   frameDummyOutputs,
@@ -77,37 +117,6 @@ import { keyRegistryRootData, oneMemberRegistry } from "./helpers/key-registry.j
 import { KEY_REGISTRY_EMPTY_ROOT } from "../src/ring/key-registry-tree.js";
 import { ringKeyRegistryRootPda } from "../src/interface/pda/index.js";
 import { entryProofReads, lineage } from "./helpers/ring-entries.js";
-import { treeAccount } from "./helpers/tree-account.js";
-import { RING_AUTHORITY_WIDTHS, ringAuthorityWidth } from "../src/interface/shape.js";
-import {
-  ConfidentialTransfer,
-  SppProofInputs,
-  privateTxAddressChain,
-  prepareRingAuthorityTransfer,
-  createExternalData,
-  sppPrivateTxHashInput,
-  type IndexedShieldedTransaction,
-  type PreparedTransfer,
-} from "../src/transaction/instructions/transact.js";
-import { nonZeroHashChain, poseidon } from "../src/transaction/internal.js";
-import {
-  EncryptedScheme,
-  decryptConfidentialAsSender,
-  encodeConfidential,
-  readOutputData,
-  splitEmbeddedKey,
-} from "../src/transaction/serialization/codecs.js";
-import { Data } from "../src/transaction/data.js";
-import { ProofInputUtxo, Utxo, createProofOutput } from "../src/transaction/utxo.js";
-import { AssetRegistry, SOL_ASSET_ID, SOL_MINT } from "../src/transaction/asset.js";
-import { LocalKeys } from "../src/client/keys.js";
-import {
-  encryptConfidentialTransfer,
-  encryptCustomRingTransfer,
-} from "../src/transaction/wallet/encrypt-rails.js";
-import { LocalShieldedKeys } from "../src/transaction/wallet/keys.js";
-import { withTransactionKey } from "../src/wallet/private-transaction.js";
-import { transactOutputBlinding } from "../src/keypair/transact/index.js";
 import { recordShape } from "../src/ring/velocity.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
@@ -1498,7 +1507,7 @@ describe("ring proof folded fields", () => {
         tree: ACTIVE_TREE,
         spenders: entries.flatMap((entry) => entry.spenders),
       });
-      const refused = new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+      const refused = new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
         details: { method: "prove", member },
       });
       const proving = proveCustomRingTransfer({

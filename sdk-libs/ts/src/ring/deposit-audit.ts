@@ -1,7 +1,16 @@
-import { X25519PublicKey, X25519Keypair } from "../keypair/x25519.js";
-import { hashBytes } from "../hasher/index.js";
-import { addressBytes, copyBytes } from "../interface/internal.js";
-import { pack33 } from "../interface/merge-utils.js";
+import { X25519PublicKey, X25519Keypair, symmetricApply } from "@heliuslabs/zolana/keypair";
+import {
+  hashBytes,
+  addressBytes,
+  copyBytes,
+  isCanonicalField,
+  bigIntBytes,
+  equal,
+  hashChain,
+} from "@heliuslabs/zolana/internal";
+import { pack33 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Bytes96 } from "@heliuslabs/zolana";
+import { ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
@@ -10,12 +19,7 @@ import {
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
   type RingDepositCapsule,
 } from "./deposit-capsule.js";
-import type { Address, Bytes32, Bytes96 } from "../interface/types.js";
 import { auditSharedSecret } from "../keypair/audit.js";
-import { isCanonicalField } from "../interface/canonical-field.js";
-import { symmetricApply } from "../keypair/merge/index.js";
-import { bigIntBytes, equal, hashChain } from "../transaction/internal.js";
-import { ownerUtxoHash } from "../transaction/utxo.js";
 import { RingError } from "./error.js";
 import { ConfirmedDeposit } from "./origin.js";
 

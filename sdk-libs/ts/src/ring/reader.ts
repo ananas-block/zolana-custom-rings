@@ -8,18 +8,29 @@ import {
   type Instruction,
   type ProgramDerivedAddress,
 } from "@solana/kit";
-
-import type { ChainReader } from "../client/ports.js";
-import { SYSTEM_PROGRAM, meta, type SignerAccount } from "../interface/instructions/index.js";
-import { addressBytes, encodeBase58, Reader, sha256 } from "../interface/internal.js";
-import type { Bytes32, Bytes33, RequestContext } from "../interface/types.js";
-import { ShieldedPublicKey } from "../keypair/public-key.js";
-import { equal } from "../transaction/internal.js";
+import type { ChainReader } from "@heliuslabs/zolana/client";
+import {
+  SYSTEM_PROGRAM,
+  meta,
+  addressBytes,
+  encodeBase58,
+  Reader,
+  sha256,
+  equal,
+  checkedBytes,
+  copyBytes,
+  wrapKeypairError,
+} from "@heliuslabs/zolana/internal";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import {
+  type Bytes32,
+  type Bytes33,
+  type RequestContext,
+  ShieldedPublicKey,
+} from "@heliuslabs/zolana";
 
 import { ringConfigAddress } from "../interface/pda/index.js";
 import { RingError } from "./error.js";
-import { checkedBytes, copyBytes } from "../keypair/bytes.js";
-import { wrapKeypairError } from "../keypair/error.js";
 
 const encoder = new TextEncoder();
 

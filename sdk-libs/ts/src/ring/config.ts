@@ -1,10 +1,14 @@
 import { getProgramDerivedAddress, type Address, type Instruction } from "@solana/kit";
-
-import type { ChainReader } from "../client/ports.js";
-import { SYSTEM_PROGRAM, meta, type SignerAccount } from "../interface/instructions/index.js";
-import { Writer, addressBytes } from "../interface/internal.js";
+import type { ChainReader } from "@heliuslabs/zolana/client";
 import {
+  SYSTEM_PROGRAM,
+  meta,
+  Writer,
+  addressBytes,
   ringAuthAddress,
+} from "@heliuslabs/zolana/internal";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import {
   ringCoSignerAddress,
   ringCoSignerPda,
   ringConfigAddress,
@@ -18,8 +22,7 @@ import {
   ringSpendWindowAddress,
   ringSpendWindowPda,
 } from "../interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../interface/program.js";
-import type { RequestContext } from "../interface/types.js";
+import { SHIELDED_POOL_PROGRAM_ID, type RequestContext } from "@heliuslabs/zolana";
 
 import {
   checkRingCoSignerConfig,

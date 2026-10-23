@@ -1,4 +1,4 @@
-import { sha256 } from "../interface/internal.js";
+import { sha256 } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "./error.js";
 import { P256ReaderKey, checkedReaderKey, readerKeyBytes } from "./reader.js";

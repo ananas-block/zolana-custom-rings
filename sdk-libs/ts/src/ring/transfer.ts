@@ -1,17 +1,74 @@
-import { withProofDataRetry } from "../client/retry.js";
+import {
+  withProofDataRetry,
+  inputTreeAddress,
+  ownerSignerAddresses,
+  hashBytes,
+  addressBytes,
+  compileUnsignedTransaction,
+  inputTreeIds,
+  privateTxAddressChain,
+  sppPrivateTxHashInput,
+  encodeConfidential,
+  encodeOutputData,
+  checkIntentApproval,
+  checkPreparedTransfer,
+  checkTransactData,
+  ownerSolanaAccount,
+  withdrawalIntentRecipient,
+  withTransactionKey,
+  type UtxoReservation,
+  resolveWithdrawalSettlement,
+  withdrawalSetupInstructions,
+  resolveShieldedRecipient,
+  selectUtxos,
+  type SpendSelectionErrors,
+  reserveEntries,
+  reservedUtxoKeys,
+  unreserved,
+  equalBytes,
+  treeAddress,
+} from "@heliuslabs/zolana/internal";
+import type { BlockhashProvider, Prover, SlotReader, TreeContext } from "@heliuslabs/zolana/client";
+import {
+  type ProofAuthority,
+  type WalletKeys,
+  type Address,
+  type Bytes32,
+  type RequestContext,
+  initializePoseidon,
+  ShieldedAddress,
+  ViewingKey,
+  Data,
+  SOL_MINT,
+  type Wallet,
+  type WalletUtxo,
+} from "@heliuslabs/zolana";
+import type { RingKeyRegistryReader, RingProver, RingSpendRecordReader } from "../client/ports.js";
+import { ringOpenings } from "../client/prover/assembly.js";
+import {
+  InstructionTag,
+  type Instruction,
+  type Transaction,
+  type TransactInstructionData,
+  type TransactWithdrawal,
+} from "@heliuslabs/zolana/interface";
+import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  ConfidentialTransfer,
+  SppProofInputs,
+  createExternalData,
+  type PreparedTransfer,
+  EncryptedScheme,
+  ProofInputUtxo,
+  approveUnattended,
+  intentHash,
+  type ApprovalHandler,
+  type TransactionIntent,
+  SOL_ASSET_ID,
+  type AssetRegistry,
+} from "@heliuslabs/zolana/transaction";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
 import { findSpendCountersMessage, spendCountersDisclosureHash } from "./counters.js";
-import type {
-  BlockhashProvider,
-  ProofAuthority,
-  Prover,
-  RingKeyRegistryReader,
-  SlotReader,
-  TreeContext,
-  RingSpendRecordReader,
-  WalletKeys,
-} from "../client/ports.js";
-import { inputTreeAddress } from "../client/internal.js";
-import { ownerSignerAddresses, ringOpenings } from "../client/prover/assembly.js";
 import {
   RING_INLINE_ASSET_SLOTS,
   RING_INPUT_SLOTS,
@@ -21,65 +78,16 @@ import {
   type CustomRingVelocityProofInput,
   type CustomRingPolicyProofRequest,
 } from "../client/prover/types.js";
-import { hashBytes } from "../hasher/index.js";
-import { addressBytes } from "../interface/internal.js";
-import { InstructionTag } from "../interface/program.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import type {
-  Address,
-  Bytes32,
-  Instruction,
-  RequestContext,
-  Transaction,
-  TransactInstructionData,
-  TransactWithdrawal,
-} from "../interface/types.js";
-import { initializePoseidon } from "../hasher/index.js";
 import {
   auditPublicInputHash,
   policyPublicInputHash,
   policyIndexedInputs,
   parseAuditorMessage,
 } from "../keypair/audit.js";
-import type { X25519PublicKey } from "../keypair/x25519.js";
-import { ShieldedAddress } from "../keypair/shielded.js";
-import { ViewingKey } from "../keypair/viewing-key.js";
-import {
-  ConfidentialTransfer,
-  SppProofInputs,
-  createExternalData,
-  inputTreeIds,
-  privateTxAddressChain,
-  sppPrivateTxHashInput,
-  type PreparedTransfer,
-} from "../transaction/instructions/transact.js";
-import {
-  EncryptedScheme,
-  encodeConfidential,
-  encodeOutputData,
-} from "../transaction/serialization/codecs.js";
-import { Data } from "../transaction/data.js";
-import { ProofInputUtxo } from "../transaction/utxo.js";
 import {
   encryptCustomRingTransfer,
   type EncryptedCustomRingTransfer,
 } from "../transaction/wallet/encrypt-rails.js";
-import {
-  approveUnattended,
-  checkIntentApproval,
-  checkPreparedTransfer,
-  checkTransactData,
-  ownerSolanaAccount,
-  withdrawalIntentRecipient,
-  intentHash,
-  type ApprovalHandler,
-  type TransactionIntent,
-} from "../transaction/wallet/intent.js";
-import { withTransactionKey } from "../wallet/private-transaction.js";
-import { SOL_ASSET_ID, SOL_MINT, type AssetRegistry } from "../transaction/asset.js";
-import type { UtxoReservation, Wallet, WalletUtxo } from "../transaction/wallet/state.js";
-import { resolveWithdrawalSettlement, withdrawalSetupInstructions } from "../flows/settlement.js";
-import { resolveShieldedRecipient } from "../wallet/registry.js";
 
 import { RING_COSIGN_TRANSFERS, RING_COSIGN_WITHDRAWALS, type RingPolicyConfig } from "./codecs.js";
 import { provePolicyAnswers, type RingPolicyAnswerClient } from "./answers.js";
@@ -97,10 +105,7 @@ import {
   windowedPolicy,
 } from "./config.js";
 import { TRANSFER_DEMAND, checkRingCoSigner, type CoSignDemand } from "./cosign.js";
-import { selectUtxos, type SpendSelectionErrors } from "../flows/select.js";
-import { reserveEntries, reservedUtxoKeys, unreserved } from "../flows/reserve.js";
 import { RingError, wrapRingError } from "./error.js";
-import type { SignerAccount } from "../interface/instructions/index.js";
 
 import {
   ringTransactInstruction,
@@ -122,9 +127,7 @@ import {
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "./submission.js";
-import { equalBytes } from "../wallet/internal.js";
 import { resolveRingOutputTree, ringTreeIdResolver } from "./trees.js";
-import { treeAddress } from "../interface/pda/index.js";
 
 /** Rust `TRANSACT_COMPUTE_UNIT_LIMIT`. The custom-ring transact verifies two proofs. */
 export const RING_TRANSACT_COMPUTE_UNIT_LIMIT = 1_400_000;
@@ -138,12 +141,10 @@ export type RingTransferClient = import("../client/ports.js").IndexedPolicyClien
   SlotReader &
   RingSpendRecordReader &
   Pick<RingKeyRegistryReader, "getRingKeyRegistryEntry"> &
+  Pick<Prover, "proveRingTransact"> &
   Pick<
-    Prover,
-    | "proveRingTransact"
-    | "proveCustomRingPolicy"
-    | "proveCustomRingCompressedPolicy"
-    | "proveCustomRingBase"
+    RingProver,
+    "proveCustomRingPolicy" | "proveCustomRingCompressedPolicy" | "proveCustomRingBase"
   >;
 
 export interface RingTransferTransactionParams {
@@ -209,10 +210,8 @@ export type RingDelegateProofClient = import("../client/ports.js").IndexedPolicy
   TreeContext &
   RingPolicyAnswerClient &
   Pick<RingKeyRegistryReader, "getRingKeyRegistryEntry"> &
-  Pick<
-    Prover,
-    "proveRingAuthorityTransact" | "proveCustomRingDelegatePolicy" | "proveCustomRingBase"
-  >;
+  Pick<Prover, "proveRingAuthorityTransact"> &
+  Pick<RingProver, "proveCustomRingDelegatePolicy" | "proveCustomRingBase">;
 
 /** Proofs over the source's nullifier key and a sealing key per transaction, the source's viewing key stays with its holder. */
 export interface RingDelegateSpender {

@@ -1,6 +1,7 @@
-import type { BlockhashProvider, ChainReader } from "../client/ports.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import type { Address, RequestContext, Transaction } from "../interface/types.js";
+import type { BlockhashProvider, ChainReader } from "@heliuslabs/zolana/client";
+import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import type { Address, RequestContext } from "@heliuslabs/zolana";
+import type { Transaction } from "@heliuslabs/zolana/interface";
 
 import type { RingPolicyConfig } from "./codecs.js";
 import { fetchRingPolicyConfig, fetchRingProgramConfig } from "./config.js";

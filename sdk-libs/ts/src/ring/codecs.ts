@@ -1,5 +1,14 @@
-import { X25519PublicKey } from "../keypair/x25519.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../client/prover/proof.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
+import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  Reader,
+  addressBytes,
+  encodeBase58,
+  ZERO_32,
+  bytesToBigInt,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana";
 import {
   RING_INLINE_ASSET_SLOTS,
   RING_RULE_SLOTS,
@@ -7,11 +16,6 @@ import {
   RING_VELOCITY_SLOTS,
   type CustomRingVelocityRow,
 } from "../client/prover/types.js";
-import type { Address, Bytes32, Bytes33 } from "../interface/types.js";
-import { Reader, addressBytes, encodeBase58 } from "../interface/internal.js";
-
-import { ZERO_32, bytesToBigInt } from "../transaction/internal.js";
-import { equalBytes } from "../wallet/internal.js";
 
 import { RingError } from "./error.js";
 import { checkedRegistryField, KEY_REGISTRY_CAPACITY } from "./key-registry-tree.js";

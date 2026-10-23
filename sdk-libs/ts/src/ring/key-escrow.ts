@@ -1,18 +1,20 @@
-import { isClientError } from "../client/error.js";
-import type { ProofDataSource } from "../client/ports.js";
+import {
+  hashBytes,
+  bytesToBigInt,
+  bytesKey,
+  equalBytes,
+  waitForProjection,
+} from "@heliuslabs/zolana/internal";
+import type { ProofDataSource } from "@heliuslabs/zolana/client";
+import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana";
+import { ownerHash } from "@heliuslabs/zolana/keypair";
 import type { CustomRingOpening, CustomRingRegistryKey } from "../client/prover/types.js";
-import { hashBytes } from "../hasher/index.js";
-import { UTXO_DOMAIN } from "../interface/program.js";
-import type { Address, Bytes32, RequestContext } from "../interface/types.js";
-import { ownerHash } from "../keypair/hash.js";
-import { bytesToBigInt } from "../transaction/internal.js";
-import { bytesKey, equalBytes } from "../wallet/internal.js";
 
 import { fetchRingKeyRegistryRoot } from "./config.js";
 import { RingError } from "./error.js";
 import { readSealedKey, registersKey, type RingSealedKeyClient } from "./key-registry.js";
 import { memberOfIdentity } from "./policy.js";
-import { waitForProjection } from "../client/retry.js";
 import { KEY_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 
 export interface RingKeyOwner {
@@ -105,7 +107,7 @@ async function openKey(
   try {
     entry = await readSealedKey({ ...input, member }, context);
   } catch (cause) {
-    if (isClientError(cause) && cause.code === "CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED") {
+    if (cause instanceof RingError && cause.code === "RING_KEY_REGISTRY_MEMBER_UNREGISTERED") {
       throw refusedOwner(owner, cause);
     }
     throw cause;
@@ -125,8 +127,8 @@ export function unregisteredOutputKey(
   owners: readonly (RingKeyOwner | undefined)[],
 ): unknown {
   const member =
-    isClientError(cause) &&
-    cause.code === "CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED" &&
+    cause instanceof RingError &&
+    cause.code === "RING_KEY_REGISTRY_MEMBER_UNREGISTERED" &&
     cause.details !== undefined &&
     "member" in cause.details
       ? cause.details.member

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClientError } from "../src/client/error.js";
-import { createIndexerPollConfig, waitForProjection } from "../src/client/retry.js";
+import { createIndexerPollConfig } from "@heliuslabs/zolana/client";
+import { waitForProjection } from "@heliuslabs/zolana/internal";
+import { RingError } from "../src/ring/error.js";
 import { KEY_REGISTRY_PROJECTION_ERRORS } from "../src/ring/projection.js";
 
 const IMMEDIATE_POLL = createIndexerPollConfig(2, 0n, 0n);
@@ -8,12 +9,12 @@ const IMMEDIATE_POLL = createIndexerPollConfig(2, 0n, 0n);
 describe("ring projection consistency", () => {
   it("retries key-registry races", async () => {
     for (const code of [
-      "CLIENT_KEY_REGISTRY_OUT_OF_SYNC",
-      "CLIENT_KEY_REGISTRY_ROOT_CHANGED",
+      "RING_KEY_REGISTRY_OUT_OF_SYNC",
+      "RING_KEY_REGISTRY_ROOT_CHANGED",
     ] as const) {
       const read = vi
         .fn<() => Promise<number>>()
-        .mockRejectedValueOnce(new ClientError(code, { details: { method: "projection" } }))
+        .mockRejectedValueOnce(new RingError(code, { details: { method: "projection" } }))
         .mockResolvedValue(7);
       await expect(
         waitForProjection(read, KEY_REGISTRY_PROJECTION_ERRORS, undefined, IMMEDIATE_POLL),
@@ -23,7 +24,7 @@ describe("ring projection consistency", () => {
   });
 
   it("returns the last projection error after the bounded wait", async () => {
-    const last = new ClientError("CLIENT_KEY_REGISTRY_OUT_OF_SYNC", {
+    const last = new RingError("RING_KEY_REGISTRY_OUT_OF_SYNC", {
       details: { method: "projection" },
     });
     const read = vi.fn<() => Promise<never>>().mockRejectedValue(last);
@@ -34,7 +35,7 @@ describe("ring projection consistency", () => {
   });
 
   it("bounds a projection read that stops answering", async () => {
-    const last = new ClientError("CLIENT_KEY_REGISTRY_OUT_OF_SYNC", {
+    const last = new RingError("RING_KEY_REGISTRY_OUT_OF_SYNC", {
       details: { method: "projection" },
     });
     const read = vi
@@ -48,7 +49,7 @@ describe("ring projection consistency", () => {
   });
 
   it("does not retry terminal projection answers", async () => {
-    const terminal = new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+    const terminal = new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
       details: { method: "projection" },
     });
     const read = vi.fn<() => Promise<never>>().mockRejectedValue(terminal);

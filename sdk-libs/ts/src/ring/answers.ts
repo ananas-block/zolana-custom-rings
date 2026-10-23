@@ -1,9 +1,9 @@
-import type {
-  ChainReader,
-  IndexedPolicyLookup,
-  ProofDataSource,
-  ProofReader,
-} from "../client/ports.js";
+import type { ChainReader, ProofDataSource, ProofReader } from "@heliuslabs/zolana/client";
+import type { IndexedPolicyLookup } from "../client/ports.js";
+import type { TreeSlot, TreeContext } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana";
+import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/zolana/transaction";
+import { bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
 import {
   RING_ANSWER_SLOTS,
   RING_INPUT_SLOTS,
@@ -11,10 +11,6 @@ import {
   disabledRuleAnswer,
   type CustomRingRuleAnswer,
 } from "../client/prover/types.js";
-import type { TreeSlot } from "../interface/tree-slot.js";
-import type { Address, Bytes32, RequestContext, TreeContext } from "../interface/types.js";
-import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "../transaction/utxo.js";
-import { bytesKey, equalBytes } from "../wallet/internal.js";
 
 import type { RingPolicyConfig } from "./codecs.js";
 import { RingError } from "./error.js";

@@ -1,16 +1,15 @@
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-import { ClientError } from "../src/client/error.js";
+import { ClientError, type Bytes32 } from "@heliuslabs/zolana";
+import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { BLOCKHASH, kitReads } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../src/client/ports.js";
-import { compileUnsignedTransaction } from "../src/flows/compile.js";
-import type { Bytes32 } from "../src/interface/types.js";
 import { RingProgramError } from "../src/ring/error.js";
 import {
   createKitRingSubmissionTransport,
   RingTransactionSubmission,
   type RingSubmissionAttempt,
 } from "../src/ring/submission.js";
-import { BLOCKHASH, kitReads } from "./helpers/clients.js";
 
 const HASH = new Uint8Array(32) as Bytes32;
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");

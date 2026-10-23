@@ -1,7 +1,7 @@
-import { ClientError } from "../client/error.js";
-import type { ChainReader, RingSpendRecordReader } from "../client/ports.js";
-import { nullifierPdaAddress } from "../interface/pda/index.js";
-import type { Address, RequestContext } from "../interface/types.js";
+import type { Address, RequestContext } from "@heliuslabs/zolana";
+import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { RingSpendRecordReader } from "../client/ports.js";
+import { nullifierPdaAddress, waitForProjection } from "@heliuslabs/zolana/internal";
 import { RingError } from "./error.js";
 import {
   currentRingSpendRecord,
@@ -9,7 +9,6 @@ import {
   type Member,
   type RingRecordTrees,
 } from "./policy.js";
-import { waitForProjection } from "../client/retry.js";
 import { SPEND_RECORD_PROJECTION_ERRORS } from "./projection.js";
 
 export interface ReadCurrentSpendRecordInput extends RingRecordTrees {
@@ -44,7 +43,7 @@ export async function findCurrentSpendRecord(
         attempt,
       );
       if (spent !== undefined) {
-        throw new ClientError("CLIENT_SPEND_RECORD_OUT_OF_SYNC", {
+        throw new RingError("RING_SPEND_RECORD_OUT_OF_SYNC", {
           details: { method: "getRingSpendRecord" },
         });
       }

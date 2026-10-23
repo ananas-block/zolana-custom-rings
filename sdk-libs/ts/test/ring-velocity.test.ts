@@ -1,14 +1,23 @@
 import { getAddressDecoder } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
-
-import { initializePoseidon } from "../src/hasher/index.js";
-import type { Bytes31, Bytes32, Bytes128, TransactProof } from "../src/interface/types.js";
-import { ShieldedAddress } from "../src/keypair/shielded.js";
-import { ShieldedPublicKey } from "../src/keypair/public-key.js";
-import { NullifierKey } from "../src/keypair/nullifier-key.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { Utxo, ProofInputUtxo, createProofOutput } from "../src/transaction/utxo.js";
-import type { ProofInputUtxo as InputUtxo, ProofOutputUtxo } from "../src/transaction/utxo.js";
+import {
+  initializePoseidon,
+  type Bytes31,
+  type Bytes32,
+  type Bytes128,
+  ShieldedAddress,
+  ShieldedPublicKey,
+  NullifierKey,
+  ViewingKey,
+  Utxo,
+} from "@heliuslabs/zolana";
+import type { TransactProof } from "@heliuslabs/zolana/interface";
+import {
+  ProofInputUtxo,
+  createProofOutput,
+  type ProofInputUtxo as InputUtxo,
+  type ProofOutputUtxo,
+} from "@heliuslabs/zolana/transaction";
 import type { CustomRingVelocityRow } from "../src/client/prover/types.js";
 import { registerRingSpendInstruction } from "../src/ring/instructions.js";
 import {

@@ -10,25 +10,20 @@ import {
   type Signature,
   type TransactionPartialSigner,
 } from "@solana/kit";
-import { isClientError } from "../client/error.js";
-import { runKitRpc } from "../client/kit.js";
-import type {
-  KitRpcAccess,
-  RingSubmissionStatus,
-  RingSubmissionTransport,
-  SlotReader,
-} from "../client/ports.js";
-import { savePersistedWallet, type WalletPersistence } from "../wallet/persisted.js";
-import type { Bytes32, RequestContext, Transaction } from "../interface/types.js";
 import {
+  isClientError,
+  runKitRpc,
   hex,
   type UtxoReservation,
-  type Wallet,
-  type WalletUtxo,
-  type PendingWalletSubmission,
-} from "../transaction/wallet/state.js";
-import { equalBytes } from "../wallet/internal.js";
-import { assertVersion1Transaction } from "../flows/compile.js";
+  equalBytes,
+  assertVersion1Transaction,
+} from "@heliuslabs/zolana/internal";
+import type { KitRpcAccess, SlotReader } from "@heliuslabs/zolana/client";
+import type { RingSubmissionStatus, RingSubmissionTransport } from "../client/ports.js";
+import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/zolana/wallet";
+import type { Bytes32, RequestContext, Wallet, WalletUtxo } from "@heliuslabs/zolana";
+import type { Transaction } from "@heliuslabs/zolana/interface";
+import type { PendingWalletSubmission } from "@heliuslabs/zolana/transaction";
 import { RingError, RingProgramError } from "./error.js";
 
 /** Keeps the signed intent and validity bounds of one transaction attempt. */

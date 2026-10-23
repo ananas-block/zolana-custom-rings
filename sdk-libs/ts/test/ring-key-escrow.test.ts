@@ -1,32 +1,39 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
-import { AccountRole, address, getAddressDecoder, type Address } from "@solana/kit";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-
-import { ClientError } from "../src/client/error.js";
-import type { MerkleProof, NonInclusionProof } from "../src/client/rpc.js";
-import type { CustomRingDepositProofRequest } from "../src/client/prover/types.js";
-import type { IndexedDepositInputs } from "../src/client/ports.js";
-import { hashBytes, initializePoseidon } from "../src/hasher/index.js";
+import { RingError } from "../src/ring/error.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
+  initializePoseidon,
+  SHIELDED_POOL_PROGRAM_ID,
+  type Bytes16,
+  type Bytes31,
+  type Bytes32,
+  NullifierKey,
+  ShieldedAddress,
+  ShieldedKeypair,
+  ViewingKey,
+} from "@heliuslabs/zolana";
+import type { MerkleProof, NonInclusionProof } from "@heliuslabs/zolana/client";
+import {
+  hashBytes,
   nullifierPdaAddress,
+  treeAddress,
+  bigintToBytes,
+  ZERO_NULLIFIER_PK,
+  poseidon,
+} from "@heliuslabs/zolana/internal";
+import {
   ringConfigPda,
   ringDepositAuditAddress,
   ringDepositAuditPda,
   ringKeyRegistryRootAddress,
   ringKeyRegistryRootPda,
-  treeAddress,
 } from "../src/interface/pda/index.js";
-import { bigintToBytes } from "../src/client/internal.js";
-import {
-  DUMMY_DOMAIN,
-  SHIELDED_POOL_PROGRAM_ID,
-  UTXO_DOMAIN,
-  ZERO_NULLIFIER_PK,
-} from "../src/interface/program.js";
-import { DepositAsset, type Bytes16, type Bytes31, type Bytes32 } from "../src/interface/types.js";
-import { NullifierKey } from "../src/keypair/nullifier-key.js";
-import { ShieldedAddress, ShieldedKeypair } from "../src/keypair/shielded.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
+import { DUMMY_DOMAIN, UTXO_DOMAIN, DepositAsset } from "@heliuslabs/zolana/interface";
+import { depositClient } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { treeAccount } from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
+import { AccountRole, address, getAddressDecoder, type Address } from "@solana/kit";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { CustomRingDepositProofRequest } from "../src/client/prover/types.js";
+import type { IndexedDepositInputs } from "../src/client/ports.js";
 import { buildRingDepositTransaction } from "../src/ring/deposit.js";
 import { sealRingDepositOpenings } from "../src/ring/deposit-audit.js";
 import { ringDepositInstruction } from "../src/ring/deposit-instruction.js";
@@ -42,12 +49,8 @@ import {
   provePolicyTrees,
   revocationPdaAddresses,
 } from "../src/ring/policy-trees.js";
-import { poseidon } from "../src/transaction/internal.js";
-
-import { depositClient } from "./helpers/clients.js";
 import { keyRegistryRootData, oneMemberRegistry } from "./helpers/key-registry.js";
 import { ownedAccount, ringProgramConfigData } from "./helpers/ring-accounts.js";
-import { treeAccount } from "./helpers/tree-account.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = treeAddress(0);
@@ -97,7 +100,7 @@ async function escrowedRing() {
   ]);
   const getRingKeyRegistryEntry = vi.fn(async (request: { member: Bytes32 }) => {
     if (Buffer.from(request.member).equals(registry.entry.member)) return registry.entry;
-    throw new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+    throw new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
       details: { method: "getRingKeyRegistryEntry" },
     });
   });
@@ -295,7 +298,7 @@ describe("escrowed deposits", () => {
       const ring = await escrowedRing();
       const stranger = ShieldedKeypair.generate();
       const owner = Buffer.from(ownerOf(stranger).ownerPkHash).toString("hex");
-      const refused = new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+      const refused = new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
         details: { method: "prove", member: owner },
       });
       const building = buildRingDepositTransaction({
@@ -326,7 +329,7 @@ describe("escrowed deposits", () => {
 
   it("keeps a refusal of a member the request does not own as the client error", async () => {
     const ring = await escrowedRing();
-    const refused = new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+    const refused = new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
       details: { method: "prove", member: "2a".repeat(32) },
     });
     await expect(
@@ -347,14 +350,14 @@ describe("escrowed deposits", () => {
       }),
     ).rejects.toMatchObject({
       code: "RING_BUILD_DEPOSIT",
-      causeCode: "CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED",
+      causeCode: "RING_KEY_REGISTRY_MEMBER_UNREGISTERED",
     });
     expect(unregisteredOutputKey(refused, [ownerOf(ring.member), undefined])).toBe(refused);
   });
 
   it("passes every other failure through and refuses a client without indexed deposits", async () => {
     const ring = await escrowedRing();
-    const other = new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+    const other = new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
       details: { method: "getRingKeyRegistryEntry" },
     });
     expect(unregisteredOutputKey(other, [ownerOf(ring.member)])).toBe(other);

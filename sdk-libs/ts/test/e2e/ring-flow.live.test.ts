@@ -6,13 +6,14 @@
 import { p256 } from "@noble/curves/nist.js";
 import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-
+import { SPL_TOKEN_2022_PROGRAM_ID, buildDepositTransaction } from "@heliuslabs/zolana";
+import { createCustomRingClient } from "../../src/client/client.js";
+import { sha256 } from "@heliuslabs/zolana/internal";
 import {
-  SPL_TOKEN_2022_PROGRAM_ID,
-  buildDepositTransaction,
-  createZolanaClient,
-} from "../../src/index.js";
-import { sha256 } from "../../src/interface/internal.js";
+  signSendAndConfirm,
+  signerFromWalletFile,
+  tokenBalance,
+} from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import { P256ReaderKey } from "../../src/ring/reader.js";
 import {
   RingError,
@@ -29,7 +30,6 @@ import {
   readerKeyBytes,
   type RingReadSigner,
 } from "../../src/ring/index.js";
-import { signSendAndConfirm, signerFromWalletFile, tokenBalance } from "./live-helpers.js";
 import {
   airdrop,
   enrolInAllow,
@@ -89,7 +89,7 @@ async function ringReadError(
 describe("ring flow", () => {
   it("deposits, transfers audited, and reads back as authority, delegate and passkey", async () => {
     const ringProgramId = address(requiredEnv("RING_PROGRAM_ID"));
-    const client = await createZolanaClient({
+    const client = await createCustomRingClient({
       solanaRpcUrl: requiredEnv("ZOLANA_LOCALNET_URL"),
       indexerUrl: requiredEnv("ZOLANA_INDEXER_URL"),
       proverUrl: requiredEnv("ZOLANA_PROVER_URL"),
@@ -272,7 +272,7 @@ describe("ring flow", () => {
     // by the private-flow suite.
     const mint = address(requiredEnv("ZOLANA_TEST_TOKEN_2022_MINT"));
     const fundingTokenAccount = address(requiredEnv("ZOLANA_TEST_TOKEN_2022_ACCOUNT"));
-    const client = await createZolanaClient({
+    const client = await createCustomRingClient({
       solanaRpcUrl: requiredEnv("ZOLANA_LOCALNET_URL"),
       indexerUrl: requiredEnv("ZOLANA_INDEXER_URL"),
       proverUrl: requiredEnv("ZOLANA_PROVER_URL"),

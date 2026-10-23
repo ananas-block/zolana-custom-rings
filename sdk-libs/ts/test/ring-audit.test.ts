@@ -1,16 +1,50 @@
-import { X25519PublicKey, X25519Keypair } from "../src/keypair/x25519.js";
-import { SOLANA_OWNER_TAG, hashBytes, initializePoseidon } from "../src/hasher/index.js";
+import {
+  X25519PublicKey,
+  X25519Keypair,
+  SOLANA_OWNER_TAG,
+  poseidon,
+} from "@heliuslabs/zolana/keypair";
+import {
+  hashBytes,
+  addressBytes,
+  encodeBase58,
+  treeAddress,
+  bigIntToBytes,
+  commitmentPoseidon,
+  rightAlign,
+  ZERO_32,
+  encodeConfidential,
+  encodeOutputData,
+  encryptAnonymous,
+  encryptConfidential,
+} from "@heliuslabs/zolana/internal";
+import {
+  initializePoseidon,
+  ShieldedKeypair,
+  ViewingKey,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  Utxo,
+  SOL_MINT,
+  Data,
+} from "@heliuslabs/zolana";
+import {
+  inputTreeSlots,
+  treeIdField,
+  treeSlotsHashChain,
+  UTXO_DOMAIN,
+} from "@heliuslabs/zolana/interface";
+import { ringAuditReader } from "./helpers/clients.js";
+import { transactionsPage } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import {
+  AssetRegistry,
+  SOL_ASSET_ID,
+  EncryptedScheme,
+  type IndexedShieldedTransaction,
+} from "@heliuslabs/zolana/transaction";
 import { describe, expect, it } from "vitest";
 import { address, type Signature } from "@solana/kit";
-
-import { poseidon } from "../src/keypair/poseidon.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { inputTreeSlots, treeIdField, treeSlotsHashChain } from "../src/interface/tree-slot.js";
-import { addressBytes, encodeBase58 } from "../src/interface/internal.js";
-import { treeAddress } from "../src/interface/pda/index.js";
-import { UTXO_DOMAIN } from "../src/interface/program.js";
-import type { Bytes16, Bytes32, Bytes33 } from "../src/interface/types.js";
 import {
   auditPublicInputHash,
   policyPublicInputHash,
@@ -28,11 +62,8 @@ import {
   type AnonymousOutputOpening,
   type AuditOutputOpening,
 } from "../src/keypair/audit.js";
-import { bigIntToBytes } from "../src/keypair/bytes.js";
 import { auditRingTransaction } from "../src/ring/audit.js";
 import { recoverRingMemberNotes } from "../src/ring/recover.js";
-import { Utxo } from "../src/transaction/utxo.js";
-import { ringAuditReader, transactionsPage } from "./helpers/clients.js";
 import {
   encodeSpendRecord,
   encodeSpendCounters,
@@ -40,17 +71,6 @@ import {
   memberOfIdentity,
   spendRecordMessageTag,
 } from "../src/ring/policy.js";
-import { AssetRegistry, SOL_ASSET_ID, SOL_MINT } from "../src/transaction/asset.js";
-import { commitmentPoseidon, rightAlign, ZERO_32 } from "../src/transaction/internal.js";
-import { Data } from "../src/transaction/data.js";
-import {
-  EncryptedScheme,
-  encodeConfidential,
-  encodeOutputData,
-  encryptAnonymous,
-  encryptConfidential,
-} from "../src/transaction/serialization/codecs.js";
-import type { IndexedShieldedTransaction } from "../src/transaction/instructions/transact.js";
 
 function hex(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value, "hex"));

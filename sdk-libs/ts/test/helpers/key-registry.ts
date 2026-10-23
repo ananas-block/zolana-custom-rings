@@ -1,8 +1,7 @@
-import { X25519PublicKey } from "../../src/keypair/x25519.js";
+import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { Writer } from "@heliuslabs/zolana/internal";
+import type { Bytes32, NullifierKey } from "@heliuslabs/zolana";
 import type { RingKeyRegistryEntry } from "../../src/client/ports.js";
-import { Writer } from "../../src/interface/internal.js";
-import type { Bytes32 } from "../../src/interface/types.js";
-import type { NullifierKey } from "../../src/keypair/nullifier-key.js";
 
 import { RING_KEY_REGISTRY_ROOT_HISTORY } from "../../src/ring/codecs.js";
 import {

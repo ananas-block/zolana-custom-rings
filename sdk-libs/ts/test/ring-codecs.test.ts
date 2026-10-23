@@ -1,4 +1,39 @@
-import { X25519PublicKey, X25519Keypair } from "../src/keypair/x25519.js";
+import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  ringTransactAccounts,
+  DepositAsset,
+  InstructionTag,
+  SHIELDED_POOL_CPI_AUTHORITY,
+  TransactWithdrawal,
+} from "@heliuslabs/zolana/interface";
+import {
+  type Bytes16,
+  type Bytes64,
+  type Bytes32,
+  type Bytes33,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import {
+  ringCoSignerAddress,
+  ringCoSignerPda,
+  ringConfigAddress,
+  ringDelegateAddress,
+  ringDelegatePda,
+  ringDepositAuditAddress,
+  ringKeyRegistryRootAddress,
+  ringSpendWindowAddress,
+  ringSpendWindowPda,
+} from "../src/interface/pda/index.js";
+import {
+  nullifierPdaAddress,
+  addressBytes,
+  sha256,
+  decodeRingDepositOutput,
+  decodeRingDepositPlaintext,
+  encodeRingDepositPlaintext,
+} from "@heliuslabs/zolana/internal";
+import { getProtocolConfigAddress } from "@heliuslabs/zolana/addresses";
+import { decodeOutputData } from "@heliuslabs/zolana/transaction";
 import { ringDepositInstruction } from "../src/ring/deposit-instruction.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { readFileSync } from "node:fs";
@@ -14,20 +49,6 @@ import {
   type MessagePartialSigner,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import { ringTransactAccounts } from "../src/interface/instructions/index.js";
-import {
-  DepositAsset,
-  InstructionTag,
-  SHIELDED_POOL_CPI_AUTHORITY,
-} from "../src/interface/index.js";
-import {
-  TransactWithdrawal,
-  type Bytes16,
-  type Bytes64,
-  type Bytes32,
-  type Bytes33,
-} from "../src/interface/types.js";
 import {
   RING_CREATE_CONFIG_COMPUTE_UNIT_LIMIT,
   RING_SET_PAUSED_COMPUTE_UNIT_LIMIT,
@@ -52,26 +73,12 @@ import {
 } from "../src/ring/config.js";
 import { ownedAccount } from "./helpers/ring-accounts.js";
 import {
-  ringCoSignerAddress,
-  ringCoSignerPda,
-  ringConfigAddress,
-  ringDelegateAddress,
-  ringDelegatePda,
-  ringDepositAuditAddress,
-  ringKeyRegistryRootAddress,
-  nullifierPdaAddress,
-  ringSpendWindowAddress,
-  ringSpendWindowPda,
-} from "../src/interface/pda/index.js";
-import { SOL_MINT } from "../src/transaction/asset.js";
-import {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   decodeRingCoSigner,
   decodeRingDelegate,
   decodeRingSpendWindow,
 } from "../src/ring/codecs.js";
-import { getProtocolConfigAddress } from "../src/addresses.js";
 import { passkeyReader } from "../src/ring/passkey.js";
 import {
   checkedReaderKey,
@@ -86,7 +93,6 @@ import {
   revokeReadAccessInstruction,
   type ReaderKey,
 } from "../src/ring/reader.js";
-import { addressBytes, sha256 } from "../src/interface/internal.js";
 import { P256ReaderKey } from "../src/ring/reader.js";
 import { RING_VELOCITY_SLOTS } from "../src/client/prover/types.js";
 import {
@@ -99,12 +105,6 @@ import {
   messageSignerReader,
   ringReadAttestation,
 } from "../src/ring/rpc.js";
-import { decodeOutputData } from "../src/transaction/serialization/codecs.js";
-import {
-  decodeRingDepositOutput,
-  decodeRingDepositPlaintext,
-  encodeRingDepositPlaintext,
-} from "../src/transaction/serialization/ring-deposit.js";
 
 function hex(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value, "hex"));
@@ -500,7 +500,7 @@ describe("ring config", () => {
 
   it("decodes the Rust policy account vector", () => {
     const encoded = readFileSync(
-      new URL("../../../custom-rings/sdk/tests/fixtures/policy-config.hex", import.meta.url),
+      new URL("../../sdk/tests/fixtures/policy-config.hex", import.meta.url),
       "utf8",
     );
     const config = decodeRingPolicyConfig(hex(encoded.replace(/\s/g, "")));

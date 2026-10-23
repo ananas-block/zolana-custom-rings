@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { address, getBase58Decoder, type Address, type Signature } from "@solana/kit";
-
-import { encodeTransactInstructionData } from "../src/interface/codecs/index.js";
 import {
+  encodeTransactInstructionData,
   InstructionTag,
   SHIELDED_POOL_CPI_AUTHORITY,
-  SHIELDED_POOL_PROGRAM_ID,
   SOL_INTERFACE,
-} from "../src/interface/program.js";
-import type {
-  Bytes16,
-  Bytes32,
-  Bytes33,
-  Bytes128,
-  InterfaceTransfer,
-} from "../src/interface/types.js";
-import { SOL_MINT } from "../src/transaction/asset.js";
+  type InterfaceTransfer,
+} from "@heliuslabs/zolana/interface";
+import {
+  SHIELDED_POOL_PROGRAM_ID,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  type Bytes128,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import { solanaRpcReads } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { RingError } from "../src/ring/error.js";
 import {
   CachedTransactionOrigin,
@@ -29,7 +29,6 @@ import {
   type OriginInstructionGroup,
   type TransactionOrigin,
 } from "../src/ring/origin.js";
-import { solanaRpcReads } from "./helpers/clients.js";
 
 // Mirrors custom-rings/client/tests/origin.rs.
 const RING = address("zYYvj4LTBF4Lz2FBhDaAbJ7CsVWvHjyanxQJPmN2dSU");

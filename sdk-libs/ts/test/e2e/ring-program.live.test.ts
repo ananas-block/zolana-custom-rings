@@ -1,12 +1,11 @@
-import { X25519Keypair } from "../../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { createZolanaClient } from "@heliuslabs/zolana";
 // Deploys a fresh ring program from the built binaries, upgrades it in place
 // and registers its config. Reads RING_PROGRAM_SO and USER_REGISTRY_PROGRAM_SO.
 import { readFile } from "node:fs/promises";
 
 import { address, generateKeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-
-import { createZolanaClient } from "../../src/index.js";
 
 import {
   createRingConfigInstruction,

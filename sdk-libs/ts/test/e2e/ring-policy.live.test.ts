@@ -2,16 +2,15 @@
 // released rows, allow required for every party, block and frozen forbidden.
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-
-import { createZolanaClient } from "../../src/index.js";
-import { decodeTreeHeadRoots } from "../../src/interface/index.js";
+import { createCustomRingClient } from "../../src/client/client.js";
+import { decodeTreeHeadRoots } from "@heliuslabs/zolana/interface";
+import { signSendAndConfirm } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import {
   ListId,
   buildRingDepositTransaction,
   buildRingTransferTransaction,
   fetchRingPolicyConfig,
 } from "../../src/ring/index.js";
-import { signSendAndConfirm } from "./live-helpers.js";
 import {
   airdrop,
   enrolInAllow,
@@ -25,7 +24,7 @@ import {
 describe("ring policy", () => {
   it("frozen senders and blocked recipients are refused until cleared", async () => {
     const ringProgramId = address(requiredEnv("RING_PROGRAM_ID"));
-    const client = await createZolanaClient({
+    const client = await createCustomRingClient({
       solanaRpcUrl: requiredEnv("ZOLANA_LOCALNET_URL"),
       indexerUrl: requiredEnv("ZOLANA_INDEXER_URL"),
       proverUrl: requiredEnv("ZOLANA_PROVER_URL"),

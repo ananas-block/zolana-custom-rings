@@ -1,22 +1,28 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
-import { beforeAll, describe, expect, it } from "vitest";
-import { getAddressDecoder, type Address, type Signature } from "@solana/kit";
-import { initializePoseidon } from "../src/hasher/index.js";
-import type { RpcAccount } from "../src/client/rpc.js";
-import { nullifierPdaAddress } from "../src/interface/pda/index.js";
-import type { Bytes31, Bytes32 } from "../src/interface/types.js";
-import { NullifierKey } from "../src/keypair/nullifier-key.js";
-import { ShieldedAddress } from "../src/keypair/shielded.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { AssetRegistry, SOL_MINT } from "../src/transaction/asset.js";
-import { createProofOutput, ProofInputUtxo, Utxo } from "../src/transaction/utxo.js";
-import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
-import { EncryptedScheme, readOutputData } from "../src/transaction/serialization/codecs.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
+  initializePoseidon,
+  type Bytes31,
+  type Bytes32,
+  NullifierKey,
+  ShieldedAddress,
+  ViewingKey,
+  SOL_MINT,
+  Utxo,
+} from "@heliuslabs/zolana";
+import type { RpcAccount } from "@heliuslabs/zolana/client";
+import { nullifierPdaAddress, readOutputData } from "@heliuslabs/zolana/internal";
+import {
+  AssetRegistry,
+  createProofOutput,
+  ProofInputUtxo,
+  EncryptedScheme,
   createExternalData,
   SppProofInputs,
   type IndexedShieldedTransaction,
-} from "../src/transaction/instructions/transact.js";
+} from "@heliuslabs/zolana/transaction";
+import { beforeAll, describe, expect, it } from "vitest";
+import { getAddressDecoder, type Address, type Signature } from "@solana/kit";
+import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
 import { auditRingTransaction } from "../src/ring/audit.js";
 import { frameDummyOutputs } from "../src/ring/transfer.js";
 import { sealedSpendCounters } from "../src/ring/counters.js";

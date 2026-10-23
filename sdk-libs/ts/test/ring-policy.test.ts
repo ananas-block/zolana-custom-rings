@@ -1,12 +1,13 @@
 import { getAddressDecoder, type Address, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import { initializePoseidon } from "../src/hasher/index.js";
-import type { Bytes32 } from "../src/interface/types.js";
-import type {
-  IndexedShieldedTransaction,
-  OutputSlot,
-} from "../src/transaction/instructions/transact.js";
+import { initializePoseidon, type Bytes32 } from "@heliuslabs/zolana";
+import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
+import { bigIntBytes } from "@heliuslabs/zolana/internal";
+import {
+  matchesPage,
+  syncReads,
+  transactionsPage,
+} from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { readFileSync } from "node:fs";
 
 import type { CustomRingSourceOwner } from "../src/client/prover/types.js";
@@ -48,9 +49,6 @@ import {
   type RuleGuard,
 } from "../src/ring/policy.js";
 import { RingError } from "../src/ring/error.js";
-import { bigIntBytes } from "../src/transaction/internal.js";
-
-import { matchesPage, syncReads, transactionsPage } from "./helpers/clients.js";
 
 await initializePoseidon();
 
@@ -1010,7 +1008,7 @@ describe("policy hash", () => {
 
   it("trusts the Rust policy account vector and refuses a tampered hash", () => {
     const encoded = readFileSync(
-      new URL("../../../custom-rings/sdk/tests/fixtures/policy-config.hex", import.meta.url),
+      new URL("../../sdk/tests/fixtures/policy-config.hex", import.meta.url),
       "utf8",
     ).replace(/\s+/g, "");
     const account = Uint8Array.from(Buffer.from(encoded, "hex"));

@@ -1,10 +1,17 @@
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-
-import { initializePoseidon } from "../src/hasher/index.js";
-import type { Bytes32 } from "../src/interface/types.js";
-import { ShieldedKeypair } from "../src/keypair/index.js";
-import type { ShieldedAddress } from "../src/keypair/shielded.js";
+import {
+  initializePoseidon,
+  type Bytes32,
+  ShieldedKeypair,
+  type ShieldedAddress,
+  Utxo,
+} from "@heliuslabs/zolana";
+import {
+  ProofInputUtxo,
+  createProofOutput,
+  type ProofOutputUtxo,
+} from "@heliuslabs/zolana/transaction";
 import { planPolicyAnswers, provePolicyAnswers, type PolicyAnswers } from "../src/ring/answers.js";
 import {
   ListId,
@@ -16,12 +23,6 @@ import {
   type Rule,
   type RuleTable,
 } from "../src/ring/policy.js";
-import {
-  ProofInputUtxo,
-  Utxo,
-  createProofOutput,
-  type ProofOutputUtxo,
-} from "../src/transaction/utxo.js";
 
 import { ownSources, ringPolicyConfig } from "./helpers/ring-accounts.js";
 import { FIXTURE_HEADS, entryProofReads, lineage } from "./helpers/ring-entries.js";

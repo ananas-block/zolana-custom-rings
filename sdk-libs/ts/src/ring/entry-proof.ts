@@ -1,6 +1,17 @@
-import type { ChainReader, ProofReader, Prover } from "../client/ports.js";
-import { bytesField, bytesToBigInt, inputFlags } from "../client/internal.js";
+import type {
+  ChainReader,
+  ProofReader,
+  Prover,
+  CircuitUtxo,
+  TransferInput,
+  TransferInputs,
+  TransferOutput,
+  NonInclusionProof,
+} from "@heliuslabs/zolana/client";
 import {
+  bytesField,
+  bytesToBigInt,
+  inputFlags,
   NULLIFIER_TREE_HEIGHT,
   STATE_TREE_HEIGHT,
   asField,
@@ -10,41 +21,35 @@ import {
   signerIdentity,
   transferPublicInputHash,
   treeSlotFields,
-} from "../client/prover/assembly.js";
-import type {
-  CircuitUtxo,
-  TransferInput,
-  TransferInputs,
-  TransferOutput,
-} from "../client/prover/types.js";
-import type { NonInclusionProof } from "../client/rpc.js";
-import { externalDataHash } from "../interface/external-data-hash.js";
-import { addressBytes } from "../interface/internal.js";
-import {
+  addressBytes,
   ADDRESS_DOMAIN,
+  ZERO_NULLIFIER_PK,
+  randomBytes,
+  U64_MAX,
+  ZERO_32,
+} from "@heliuslabs/zolana/internal";
+import {
+  externalDataHash,
   InstructionTag,
   UTXO_DOMAIN,
-  ZERO_NULLIFIER_PK,
-} from "../interface/program.js";
-import { inputTreeSlots, type TreeSlot } from "../interface/tree-slot.js";
-import type {
-  Address,
-  Bytes16,
-  Bytes32,
-  Bytes33,
-  RequestContext,
-  TransactProof,
-} from "../interface/types.js";
-import { randomBytes } from "../keypair/bytes.js";
+  inputTreeSlots,
+  type TreeSlot,
+  type TransactProof,
+} from "@heliuslabs/zolana/interface";
+import {
+  type Address,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  type RequestContext,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
 import {
   outputBlindingSeed,
   privateTxBlinding,
   transactOutputBlinding,
-} from "../keypair/transact/index.js";
-import { privateTxHash } from "../transaction/instructions/transact.js";
-import { SOL_MINT } from "../transaction/asset.js";
-import { U64_MAX, ZERO_32 } from "../transaction/internal.js";
-import { createProofOutput, type TreeId } from "../transaction/utxo.js";
+} from "@heliuslabs/zolana/keypair";
+import { privateTxHash, createProofOutput, type TreeId } from "@heliuslabs/zolana/transaction";
 
 import { ringPolicyNamespaceAddress } from "./config.js";
 import { checkedEntryProof, readTreeHeads } from "./policy-trees.js";

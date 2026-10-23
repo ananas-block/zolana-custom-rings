@@ -1,36 +1,52 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
-import { decryptRingDepositUtxo } from "../src/ring/deposit-payload.js";
-import { address, AccountRole, getAddressDecoder, type Signature } from "@solana/kit";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { initializePoseidon, BN254_SCALAR_ORDER } from "../src/hasher/index.js";
-import { customRingDepositProofRequest, ProverClient } from "../src/client/prover/client.js";
-import { ZolanaClient } from "../src/client/client.js";
-import { wireDecoder } from "../src/interface/decode.js";
-import type { CustomRingDepositProofRequest } from "../src/client/prover/types.js";
-import { DepositAsset } from "../src/interface/types.js";
-import type { Bytes16, Bytes32, Bytes96 } from "../src/interface/types.js";
-import { ringDepositInstruction } from "../src/ring/deposit-instruction.js";
-import { ringConfigPda, ringDepositAuditPda, treeAddress } from "../src/interface/pda/index.js";
-import { encodeRingDepositCapsule, readRingDepositCapsule } from "../src/ring/deposit-capsule.js";
-import { InstructionTag } from "../src/interface/program.js";
-import { Writer, addressBytes } from "../src/interface/internal.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
-import { bigIntToBytes, checkedBytes } from "../src/keypair/bytes.js";
-import { encodeRingDepositPlaintext } from "../src/transaction/serialization/ring-deposit.js";
-import { ownerUtxoHash, Utxo } from "../src/transaction/utxo.js";
-import { AssetRegistry, SOL_MINT } from "../src/transaction/asset.js";
-import type { IndexedShieldedTransaction } from "../src/transaction/instructions/transact.js";
-import { encodeOutputData, EncryptedScheme } from "../src/transaction/serialization/codecs.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
+  initializePoseidon,
+  type Bytes16,
+  type Bytes32,
+  type Bytes96,
+  ViewingKey,
+  ShieldedKeypair,
+  Utxo,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import {
+  BN254_SCALAR_ORDER,
+  ProverClient,
+  wireDecoder,
+  treeAddress,
+  Writer,
+  addressBytes,
+  bigIntToBytes,
+  checkedBytes,
+  encodeRingDepositPlaintext,
+  encodeOutputData,
   mergeDummyNullifier,
   mergeOutputBlinding,
   mergeOutputKey,
-} from "../src/keypair/merge/index.js";
-import {
   encodeMergeOutputData,
   encryptMergeOutput,
-} from "../src/transaction/serialization/merge.js";
+} from "@heliuslabs/zolana/internal";
+import { CustomRingProver, customRingDepositProofRequest } from "../src/client/prover/client.js";
+import { CustomRingClient } from "../src/client/client.js";
+import { DepositAsset, InstructionTag } from "@heliuslabs/zolana/interface";
+import { ringConfigPda, ringDepositAuditPda } from "../src/interface/pda/index.js";
+import {
+  ownerUtxoHash,
+  AssetRegistry,
+  type IndexedShieldedTransaction,
+  EncryptedScheme,
+} from "@heliuslabs/zolana/transaction";
+import {
+  depositClient,
+  transactionsPage,
+} from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { ringAuditReader } from "./helpers/clients.js";
+import { decryptRingDepositUtxo } from "../src/ring/deposit-payload.js";
+import { address, AccountRole, getAddressDecoder, type Signature } from "@solana/kit";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { CustomRingDepositProofRequest } from "../src/client/prover/types.js";
+import { ringDepositInstruction } from "../src/ring/deposit-instruction.js";
+import { encodeRingDepositCapsule, readRingDepositCapsule } from "../src/ring/deposit-capsule.js";
 import { buildRingDepositTransaction } from "../src/ring/deposit.js";
 import { decodeRingDepositAudit } from "../src/ring/codecs.js";
 import { fetchRingDepositAudit, setRingDepositAuditInstruction } from "../src/ring/config.js";
@@ -42,7 +58,6 @@ import {
   ringDepositPublicInputHash,
   sealRingDepositOpenings,
 } from "../src/ring/deposit-audit.js";
-import { depositClient, ringAuditReader, transactionsPage } from "./helpers/clients.js";
 import { ownedAccount, ringProgramConfigData } from "./helpers/ring-accounts.js";
 import { proofFor } from "./helpers/proofs.js";
 import { ConfirmedDeposit } from "../src/ring/origin.js";
@@ -383,7 +398,9 @@ describe("deposit disclosure", () => {
         expect(JSON.parse(String(options?.body))).toEqual(customRingDepositProofRequest(input));
         return Response.json(proofFor(String(options?.body)));
       });
-      const prover = new ProverClient({ url: "http://127.0.0.1:3001", fetch });
+      const prover = new CustomRingProver(
+        new ProverClient({ url: "http://127.0.0.1:3001", fetch }),
+      );
       await expect(prover.proveCustomRingDeposit(input)).resolves.toEqual({
         a: new Uint8Array(64),
         b: new Uint8Array(128),
@@ -413,7 +430,7 @@ describe("deposit disclosure", () => {
       const indexedFetch = vi.fn<typeof globalThis.fetch>(async () =>
         Response.json({ ...proof, resolution: { trees: [], publicInputHash: "0x1" } }),
       );
-      const client = new ZolanaClient({
+      const client = new CustomRingClient({
         fetch: indexedFetch,
         indexerConfig: { requireSlot: 42n, poll: { numRetries: 1, delayMs: 0n, maxDelayMs: 0n } },
       });

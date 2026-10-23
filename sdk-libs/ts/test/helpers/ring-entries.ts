@@ -1,9 +1,10 @@
 import { type Address, type Signature } from "@solana/kit";
 import { expect, vi } from "vitest";
-
-import type { MerkleProof, NonInclusionProof, RpcAccount } from "../../src/client/rpc.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../../src/interface/program.js";
-import type { Bytes32 } from "../../src/interface/types.js";
+import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/zolana/client";
+import { SHIELDED_POOL_PROGRAM_ID, type Bytes32 } from "@heliuslabs/zolana";
+import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { filled, treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import {
   RingListNamespace,
   encodeListEntry,
@@ -12,10 +13,6 @@ import {
   type ListId,
   type Member,
 } from "../../src/ring/policy.js";
-import type { IndexedShieldedTransaction } from "../../src/transaction/instructions/transact.js";
-
-import { transactionsPage } from "./clients.js";
-import { filled, treeAccount } from "./tree-account.js";
 
 export interface Lineage {
   readonly spenders: readonly IndexedShieldedTransaction[];

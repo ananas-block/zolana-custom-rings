@@ -1,32 +1,41 @@
 import type { Address } from "@solana/kit";
-import { NullifierKey } from "../keypair/nullifier-key.js";
-import { ShieldedAddress } from "../keypair/shielded.js";
-import { ShieldedPublicKey } from "../keypair/public-key.js";
-import { ViewingKey } from "../keypair/viewing-key.js";
-import { randomBlinding } from "../keypair/bytes.js";
-import { transactOutputBlinding } from "../keypair/transact/index.js";
-import { hashBytes } from "../hasher/index.js";
-import type { Shape } from "../interface/shape.js";
-import { SPP_SUPPORTED_SHAPES } from "../interface/shape.js";
-import type { Bytes31, Bytes32, MessageData, RequestContext } from "../interface/types.js";
-import { Utxo, ProofInputUtxo, createProofOutput } from "../transaction/utxo.js";
-import type { ProofOutputUtxo } from "../transaction/utxo.js";
-import { SOL_MINT } from "../transaction/asset.js";
-import { U64_MAX, decodeAddress } from "../transaction/internal.js";
-import { equalBytes } from "../wallet/internal.js";
-import type { SealedMessageInput } from "../transaction/wallet/encrypt-rails.js";
-import type { ShieldedKeys } from "../transaction/wallet/keys.js";
+import {
+  NullifierKey,
+  ShieldedAddress,
+  ShieldedPublicKey,
+  ViewingKey,
+  type Bytes31,
+  type Bytes32,
+  type RequestContext,
+  Utxo,
+  SOL_MINT,
+  type ShieldedKeys,
+  type ProofAuthority,
+} from "@heliuslabs/zolana";
+import { randomBlinding, transactOutputBlinding } from "@heliuslabs/zolana/keypair";
+import {
+  hashBytes,
+  U64_MAX,
+  decodeAddress,
+  equalBytes,
+  bytesField,
+  checkIndexedAuthority,
+  asField,
+} from "@heliuslabs/zolana/internal";
+import { type Shape, SPP_SUPPORTED_SHAPES, type MessageData } from "@heliuslabs/zolana/interface";
+import {
+  ProofInputUtxo,
+  createProofOutput,
+  type ProofOutputUtxo,
+} from "@heliuslabs/zolana/transaction";
 import type {
   ChainReader,
   SlotReader,
-  ProofAuthority,
   IndexedProofAuthority,
-  RingSpendRecordReader,
-} from "../client/ports.js";
-import { bytesField } from "../client/internal.js";
-import { checkIndexedAuthority } from "../client/prover/indexed.js";
-import type { PreparedTransferInput } from "../client/ports.js";
-import { asField } from "../client/prover/assembly.js";
+  PreparedTransferInput,
+} from "@heliuslabs/zolana/client";
+import type { RingSpendRecordReader } from "../client/ports.js";
+import type { SealedMessageInput } from "../transaction/wallet/encrypt-rails.js";
 import {
   RING_INPUT_SLOTS,
   RING_OUTPUT_SLOTS,

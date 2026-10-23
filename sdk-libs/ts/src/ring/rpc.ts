@@ -5,7 +5,6 @@ import {
   getBase64Decoder,
   type MessagePartialSigner,
 } from "@solana/kit";
-
 import type {
   Address,
   Bytes32,
@@ -13,20 +12,20 @@ import type {
   Bytes64,
   RequestContext,
   Signature,
-} from "../interface/types.js";
-import { RING_VELOCITY_SLOTS } from "../client/prover/types.js";
-import { SOLANA_OWNER_TAG } from "../hasher/index.js";
-import { postJsonRpc } from "../services/jsonrpc.js";
+} from "@heliuslabs/zolana";
+import { SOLANA_OWNER_TAG, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
+  postJsonRpc,
   TransportFailure,
   checkedApiKey,
   checkedEndpoint,
   checkedFetch,
   serviceUrl,
-} from "../services/transport.js";
-import { wireDecoder } from "../interface/decode.js";
-import { addressBytes, copyBytes } from "../interface/internal.js";
-import { X25519PublicKey } from "../keypair/x25519.js";
+  wireDecoder,
+  addressBytes,
+  copyBytes,
+} from "@heliuslabs/zolana/internal";
+import { RING_VELOCITY_SLOTS } from "../client/prover/types.js";
 
 import type { DecryptedAnonymousRingTrace } from "./audit.js";
 import { RingError } from "./error.js";

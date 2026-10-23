@@ -1,4 +1,21 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import type { MerkleProof, NonInclusionProof } from "@heliuslabs/zolana/client";
+import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID, type Bytes32 } from "@heliuslabs/zolana";
+import {
+  SYSTEM_PROGRAM,
+  addressBytes,
+  nullifierPdaAddress,
+  bigintToBytes,
+  bytesToBigInt,
+} from "@heliuslabs/zolana/internal";
+import { ringConfigAddress, ringPolicyConfigAddress } from "../src/interface/pda/index.js";
+import type { TransactProof } from "@heliuslabs/zolana/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import { BLOCKHASH, transactionsPage } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import {
+  filled as fill,
+  treeAccount,
+} from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import {
   AccountRole,
   getAddressDecoder,
@@ -6,20 +23,6 @@ import {
   type Address,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import type { MerkleProof, NonInclusionProof } from "../src/client/rpc.js";
-import { initializePoseidon } from "../src/hasher/index.js";
-import { SYSTEM_PROGRAM } from "../src/interface/instructions/index.js";
-import { addressBytes } from "../src/interface/internal.js";
-import {
-  nullifierPdaAddress,
-  ringConfigAddress,
-  ringPolicyConfigAddress,
-} from "../src/interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../src/interface/program.js";
-import type { Bytes32, TransactProof } from "../src/interface/types.js";
-
-import { bigintToBytes, bytesToBigInt } from "../src/client/internal.js";
 import { ringPolicyNamespaceAddress } from "../src/ring/config.js";
 import {
   proveRingEntryTransition,
@@ -40,9 +43,6 @@ import {
   memberOfTag,
   type ListEntry,
 } from "../src/ring/policy.js";
-import type { IndexedShieldedTransaction } from "../src/transaction/instructions/transact.js";
-
-import { BLOCKHASH, transactionsPage } from "./helpers/clients.js";
 import {
   ownSources,
   ownedAccount,
@@ -50,7 +50,6 @@ import {
   ringPolicyConfigData,
   ringProgramConfigData,
 } from "./helpers/ring-accounts.js";
-import { filled as fill, treeAccount } from "./helpers/tree-account.js";
 
 await initializePoseidon();
 

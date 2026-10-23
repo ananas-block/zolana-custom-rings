@@ -1,19 +1,29 @@
 import { getBase58Decoder } from "@solana/kit";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { wireDecoder } from "../../interface/decode.js";
-import { treeAddress } from "../../interface/pda/index.js";
+import {
+  wireDecoder,
+  treeAddress,
+  equal as equalBytes,
+  checkedClientBytes as checkedBytes,
+  bytesField,
+  bindResolution,
+  contextSlotJson,
+  opensAt,
+  bytesToBigInt,
+  hashChain,
+} from "@heliuslabs/zolana/internal";
 import {
   STATE_ROOT_HISTORY_CAPACITY,
   NULLIFIER_TREE_ROOT_HISTORY_CAPACITY,
-} from "../../interface/state.js";
-import { equal as equalBytes } from "../../transaction/internal.js";
-import { ClientError } from "../error.js";
-import { checkedBytes, bytesField } from "../internal.js";
+  inputTreeSlots,
+  treeSlotsHashChain,
+} from "@heliuslabs/zolana/interface";
+import { ClientError, type Bytes32 } from "@heliuslabs/zolana";
+import type { ProofResolution } from "@heliuslabs/zolana/client";
 import type { IndexedPolicyInputs, IndexedDepositInputs, IndexedRegistry } from "../ports.js";
-import { contextSlotJson } from "./indexed.js";
-import type { Bytes32 } from "../../interface/types.js";
 
 const invalid = (): ClientError => new ClientError("CLIENT_INVALID_PROOF_INPUTS");
+const unparsable = (): ClientError => new ClientError("CLIENT_PROOF_PARSE", { details: {} });
 const decoder = wireDecoder(invalid);
 const hex = (value: Uint8Array): string => {
   const bytes = checkedBytes(value, 32, "field");
@@ -181,4 +191,42 @@ export function snapshotPolicyInputs(inputs: IndexedPolicyInputs): IndexedPolicy
     })),
     publicInputs: inputs.publicInputs.map((value) => checkedBytes(value, 32, "public input")),
   };
+}
+
+/** A tree without a state or nullifier lookup keeps the root and position the client sent for it. */
+export function checkPolicyResolution(
+  inputs: IndexedPolicyInputs,
+  resolution: ProofResolution,
+): void {
+  bindResolution(resolution, inputs.trees, (slots) =>
+    bytesToBigInt(
+      hashChain([
+        ...inputs.publicInputs.slice(0, 1),
+        treeSlotsHashChain(inputTreeSlots(slots)),
+        ...inputs.publicInputs.slice(1),
+      ]),
+    ),
+  );
+  resolution.trees.forEach((tree, index) => {
+    const sent = inputs.trees[index];
+    if (
+      sent === undefined ||
+      tree.utxoRootIndex >= STATE_ROOT_HISTORY_CAPACITY ||
+      (!opensAt(inputs.lookups, index, "commitment") &&
+        (bytesToBigInt(tree.utxoRoot) !== bytesToBigInt(sent.utxoRoot) ||
+          tree.utxoRootIndex !== sent.utxoRootIndex)) ||
+      (!opensAt(inputs.lookups, index, "nullifier") &&
+        (bytesToBigInt(tree.nullifierRoot) !== bytesToBigInt(sent.nullifierRoot) ||
+          tree.nullifierRootIndex !== sent.nullifierRootIndex))
+    )
+      throw unparsable();
+  });
+}
+
+/** A deposit resolves no tree, its statement is the hash the request carries. */
+export function checkDepositResolution(
+  publicInputHash: Bytes32,
+  resolution: ProofResolution,
+): void {
+  bindResolution(resolution, [], () => bytesToBigInt(publicInputHash));
 }

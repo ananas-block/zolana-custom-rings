@@ -1,6 +1,5 @@
-import type { ChainReader } from "../client/ports.js";
-import type { RpcAccount } from "../client/rpc.js";
-import type { Address, RequestContext } from "../interface/types.js";
+import type { ChainReader, RpcAccount } from "@heliuslabs/zolana/client";
+import type { Address, RequestContext } from "@heliuslabs/zolana";
 
 import { decodeRingProgramConfig } from "./codecs.js";
 import { ringConfigAddress } from "../interface/pda/index.js";

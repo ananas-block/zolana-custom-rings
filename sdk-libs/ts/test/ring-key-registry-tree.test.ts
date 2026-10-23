@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-
-import { initializePoseidon } from "../src/hasher/index.js";
-import type { Bytes32 } from "../src/interface/types.js";
+import { initializePoseidon, type Bytes32 } from "@heliuslabs/zolana";
+import { bigIntBytes } from "@heliuslabs/zolana/internal";
 import {
   KEY_REGISTRY_CAPACITY,
   KEY_REGISTRY_EMPTY_ROOT,
@@ -12,7 +11,6 @@ import {
   keyRegistryZeroBytes,
   verifyKeyRegistryInsert,
 } from "../src/ring/key-registry-tree.js";
-import { bigIntBytes } from "../src/transaction/internal.js";
 
 const ZERO = new Uint8Array(32) as Bytes32;
 const member = (value: number): Bytes32 => bigIntBytes(BigInt(value)) as Bytes32;

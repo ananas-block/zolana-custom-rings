@@ -1,16 +1,48 @@
-import { X25519PublicKey, X25519Keypair } from "../keypair/x25519.js";
-import { SOLANA_OWNER_TAG, hashBytes, initializePoseidon } from "../hasher/index.js";
-
-import type { IndexerReader, KitRpcAccess } from "../client/ports.js";
-import type {
-  Address,
-  Bytes16,
-  Bytes32,
-  Bytes33,
-  MessageData,
-  RequestContext,
-  Signature,
-} from "../interface/types.js";
+import {
+  X25519PublicKey,
+  X25519Keypair,
+  SOLANA_OWNER_TAG,
+  ownerHash,
+} from "@heliuslabs/zolana/keypair";
+import {
+  hashBytes,
+  bigIntToBytes,
+  concatBytes,
+  clampViewingSecret,
+  commitmentPoseidon,
+  equal,
+  rightAlign,
+  ZERO_32,
+  addressBytes,
+  encodeBase58,
+  decryptConfidentialAsSender,
+  readOutputData,
+  fetchSplAssetRegistrations,
+} from "@heliuslabs/zolana/internal";
+import {
+  initializePoseidon,
+  type Address,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  type RequestContext,
+  type Signature,
+  ViewingKey,
+  TransactionError,
+  type Data,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import type { IndexerReader, KitRpcAccess } from "@heliuslabs/zolana/client";
+import { type MessageData, UTXO_DOMAIN, treeIdField } from "@heliuslabs/zolana/interface";
+import {
+  type IndexedShieldedTransaction,
+  type OutputContext,
+  type OutputSlot,
+  EncryptedScheme,
+  decodeConfidential,
+  type ConfidentialOutputPlaintext,
+  type AssetRegistry,
+} from "@heliuslabs/zolana/transaction";
 import {
   AUDIT_OUTPUT_SLOTS,
   auditorViewTag,
@@ -25,31 +57,6 @@ import {
   type AuditOutputOpening,
   type AuditorMessage,
 } from "../keypair/audit.js";
-import { bigIntToBytes, concatBytes } from "../keypair/bytes.js";
-import { clampViewingSecret } from "../keypair/derivation.js";
-import { ownerHash } from "../keypair/hash.js";
-import { ViewingKey } from "../keypair/viewing-key.js";
-import { TransactionError } from "../transaction/error.js";
-import { commitmentPoseidon, equal, rightAlign, ZERO_32 } from "../transaction/internal.js";
-import { addressBytes, encodeBase58 } from "../interface/internal.js";
-import { UTXO_DOMAIN } from "../interface/program.js";
-import { treeIdField } from "../interface/tree-slot.js";
-import type { Data } from "../transaction/data.js";
-import type {
-  IndexedShieldedTransaction,
-  OutputContext,
-  OutputSlot,
-} from "../transaction/instructions/transact.js";
-import {
-  EncryptedScheme,
-  decodeConfidential,
-  decryptConfidentialAsSender,
-  readOutputData,
-  type ConfidentialOutputPlaintext,
-} from "../transaction/serialization/codecs.js";
-import { SOL_MINT, type AssetRegistry } from "../transaction/asset.js";
-
-import { fetchSplAssetRegistrations } from "../wallet/sync.js";
 
 import type { RingMode } from "./codecs.js";
 import { RingError } from "./error.js";

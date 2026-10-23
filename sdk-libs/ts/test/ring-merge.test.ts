@@ -1,33 +1,49 @@
 import { proofFor } from "./helpers/proofs.js";
 import { address, AccountRole } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-import { ClientError, LocalKeys, ZolanaClient } from "../src/client/index.js";
-import { initializePoseidon } from "../src/hasher/index.js";
-import { assembleMergeWithProofs, prepareMerge } from "../src/client/prover/merge.js";
-import { mergeProverRequestBody } from "../src/client/prover/client.js";
-import type { NonInclusionProof, SpendProof } from "../src/client/rpc.js";
-import { treeAddress, ringAuthAddress, ringCoSignerAddress } from "../src/interface/pda/index.js";
-import type { Address, Bytes32, Bytes128 } from "../src/interface/types.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
 import {
+  ClientError,
+  LocalKeys,
+  initializePoseidon,
+  type Address,
+  type Bytes32,
+  type Bytes128,
+  ShieldedKeypair,
+  Data,
+  Utxo,
+  SOL_MINT,
+  Wallet,
+} from "@heliuslabs/zolana";
+import {
+  ZolanaClient,
+  mergeProverRequestBody,
+  type NonInclusionProof,
+  type SpendProof,
+  type MergeAssembler,
+} from "@heliuslabs/zolana/client";
+import {
+  assembleMergeWithProofs,
+  prepareProverMerge as prepareMerge,
+  treeAddress,
+  ringAuthAddress,
   mergeDummyNullifier,
   mergeOutputBlinding,
   mergeOutputKey,
-  mergePrivateTxBlinding,
-} from "../src/keypair/merge/index.js";
-import { Merge, PreparedMerge } from "../src/transaction/instructions/builders.js";
-import { privateTxHash } from "../src/transaction/instructions/transact.js";
-import { Data } from "../src/transaction/data.js";
-import { Utxo, ProofInputUtxo } from "../src/transaction/utxo.js";
-import { SOL_MINT } from "../src/transaction/asset.js";
-import { MAX_MERGE_INPUTS, MERGE_INPUT_COUNT } from "../src/interface/constants.js";
+} from "@heliuslabs/zolana/internal";
+import { ringCoSignerAddress } from "../src/interface/pda/index.js";
+import { mergePrivateTxBlinding } from "@heliuslabs/zolana/keypair";
+import {
+  Merge,
+  PreparedMerge,
+  privateTxHash,
+  ProofInputUtxo,
+  intentHash,
+  AssetRegistry,
+} from "@heliuslabs/zolana/transaction";
+import { MAX_MERGE_INPUTS, MERGE_INPUT_COUNT } from "@heliuslabs/zolana/interface";
+import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringMergeInstruction } from "../src/ring/instructions.js";
-import { intentHash } from "../src/transaction/wallet/intent.js";
-import { AssetRegistry } from "../src/transaction/asset.js";
-import { Wallet } from "../src/transaction/wallet/state.js";
 import { buildRingMergeTransaction } from "../src/ring/merge.js";
-import type { MergeAssembler } from "../src/client/ports.js";
-import { BLOCKHASH } from "./helpers/clients.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 function field(value: number): Bytes32 {

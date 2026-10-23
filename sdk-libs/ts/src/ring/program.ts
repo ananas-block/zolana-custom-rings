@@ -27,21 +27,29 @@ import {
   type TransactionPlan,
   type TransactionSigner,
 } from "@solana/kit";
-
-import { ClientError } from "../client/error.js";
-import { runKitRpc } from "../client/kit.js";
-import { createIndexerPollConfig, pollUntil } from "../client/retry.js";
-import type {
-  BlockhashProvider,
-  ChainReader,
-  KitRpcAccess,
-  TransactionConfirmer,
-} from "../client/ports.js";
-import { assertVersion1Transaction, LOADED_ACCOUNTS_DATA_SIZE_LIMIT } from "../flows/compile.js";
-import { SYSTEM_PROGRAM, meta, type SignerAccount } from "../interface/instructions/index.js";
-import { Reader, Writer, addressBytes, encodeBase58, sha256 } from "../interface/internal.js";
-import type { Address, Bytes32, RequestContext } from "../interface/types.js";
-import { equalBytes } from "../wallet/internal.js";
+import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
+import {
+  runKitRpc,
+  pollUntil,
+  assertVersion1Transaction,
+  LOADED_ACCOUNTS_DATA_SIZE_LIMIT,
+  SYSTEM_PROGRAM,
+  meta,
+  Reader,
+  Writer,
+  addressBytes,
+  encodeBase58,
+  sha256,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import {
+  createIndexerPollConfig,
+  type BlockhashProvider,
+  type ChainReader,
+  type KitRpcAccess,
+  type TransactionConfirmer,
+} from "@heliuslabs/zolana/client";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
 
 import { ringPolicyConfigAddress } from "../interface/pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "./config.js";

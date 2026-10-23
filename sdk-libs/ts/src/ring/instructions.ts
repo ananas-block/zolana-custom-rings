@@ -1,4 +1,35 @@
-import { X25519PublicKey } from "../keypair/x25519.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
+import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  SYSTEM_PROGRAM,
+  meta,
+  signerAddress,
+  encodeMergeTransactInstructionData,
+  writeTreeContext,
+  nullifierPdaAddress,
+  protocolConfigAddress,
+  ringAuthAddress,
+  Writer,
+} from "@heliuslabs/zolana/internal";
+import { ringCoSignerMetas, ringSpendWindowMetas } from "../interface/instructions/index.js";
+import {
+  ringTransactAccounts,
+  encodeTransactInstructionData,
+  InstructionTag,
+  type MergeTransactInstructionData,
+  type TransactInstructionData,
+  type TransactWithdrawal,
+  type TreeContext,
+} from "@heliuslabs/zolana/interface";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import { SHIELDED_POOL_PROGRAM_ID, type Bytes32, type Bytes33, SOL_MINT } from "@heliuslabs/zolana";
+import {
+  ringCoSignerAddress,
+  ringConfigAddress,
+  ringDelegateAddress,
+  ringKeyRegistryRootAddress,
+  ringPolicyConfigAddress,
+} from "../interface/pda/index.js";
 import {
   AccountRole,
   downgradeRoleToNonSigner,
@@ -6,46 +37,6 @@ import {
   type Address,
   type Instruction,
 } from "@solana/kit";
-
-import {
-  SYSTEM_PROGRAM,
-  meta,
-  ringCoSignerMetas,
-  ringSpendWindowMetas,
-  ringTransactAccounts,
-  signerAddress,
-  type SignerAccount,
-} from "../interface/instructions/index.js";
-import {
-  encodeMergeTransactInstructionData,
-  encodeTransactInstructionData,
-  writeTreeContext,
-} from "../interface/codecs/index.js";
-import { InstructionTag, SHIELDED_POOL_PROGRAM_ID } from "../interface/program.js";
-import {
-  nullifierPdaAddress,
-  protocolConfigAddress,
-  ringAuthAddress,
-  ringCoSignerAddress,
-  ringConfigAddress,
-  ringDelegateAddress,
-  ringKeyRegistryRootAddress,
-  ringPolicyConfigAddress,
-} from "../interface/pda/index.js";
-import type {
-  MergeTransactInstructionData,
-  Bytes32,
-  Bytes33,
-  TransactInstructionData,
-  TransactWithdrawal,
-  TreeContext,
-} from "../interface/types.js";
-
-import { SOL_MINT } from "../transaction/asset.js";
-
-import { Writer } from "../interface/internal.js";
-
-import { CUSTOM_RING_PROOF_LENGTH } from "../client/prover/proof.js";
 import { RING_ANSWER_SLOTS } from "../client/prover/types.js";
 import { checkedCustomRingProof } from "./codecs.js";
 import {

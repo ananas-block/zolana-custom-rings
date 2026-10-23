@@ -1,22 +1,28 @@
-import { X25519PublicKey, X25519Keypair } from "../keypair/x25519.js";
-import type {
-  BlockhashProvider,
-  ChainReader,
-  Prover,
-  RingKeyRegistryReader,
-} from "../client/ports.js";
-import { ClientError } from "../client/error.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { hashBytes, initializePoseidon } from "../hasher/index.js";
-import { addressBytes } from "../interface/internal.js";
-import { pack33, rightAlign } from "../interface/merge-utils.js";
-import type { Address, Bytes31, Bytes32, RequestContext, Transaction } from "../interface/types.js";
+import { X25519PublicKey, X25519Keypair, symmetricApply } from "@heliuslabs/zolana/keypair";
+import type { BlockhashProvider, ChainReader } from "@heliuslabs/zolana/client";
+import type { RingKeyRegistryReader, RingProver } from "../client/ports.js";
+import {
+  initializePoseidon,
+  type Address,
+  type Bytes31,
+  type Bytes32,
+  type RequestContext,
+  NullifierKey,
+  type ShieldedAddress,
+} from "@heliuslabs/zolana";
+import {
+  compileUnsignedTransaction,
+  hashBytes,
+  addressBytes,
+  rightAlign,
+  bigIntBytes,
+  hashChain,
+  poseidon,
+  equalBytes,
+  waitForProjection,
+} from "@heliuslabs/zolana/internal";
+import { pack33, type Transaction } from "@heliuslabs/zolana/interface";
 import { auditSharedSecret } from "../keypair/audit.js";
-import { symmetricApply } from "../keypair/merge/index.js";
-import { NullifierKey } from "../keypair/nullifier-key.js";
-import { bigIntBytes, hashChain, poseidon } from "../transaction/internal.js";
-import type { ShieldedAddress } from "../keypair/shielded.js";
-import { equalBytes } from "../wallet/internal.js";
 import type { RingKeyRegistryRoot } from "./codecs.js";
 import { fetchRingKeyRegistryRoot, fetchRingProgramConfig } from "./config.js";
 import { RingError } from "./error.js";
@@ -33,7 +39,6 @@ import {
   registerRingKeyInstruction,
 } from "./instructions.js";
 import { memberOfTag, type Member } from "./policy.js";
-import { waitForProjection } from "../client/retry.js";
 import { KEY_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 import { RingTransactionSubmission, type RingSubmissionAttempt } from "./submission.js";
 
@@ -68,7 +73,7 @@ export interface RegisterKeyStatement {
 export type RingKeyRegistrationClient = Pick<ChainReader, "getAccount"> &
   RingKeyRegistryReader &
   BlockhashProvider &
-  Pick<Prover, "proveCustomRingRegisterKey">;
+  Pick<RingProver, "proveCustomRingRegisterKey">;
 
 /** Registers a member's key under that member's Solana signature. */
 export interface RingKeyRegistrationParams {
@@ -201,7 +206,7 @@ export async function prepareRingKeyRegistration(
     checkRegisteredKey(entry, identity.nullifierPublicKey);
     return { kind: "registered", sealed: entry.sealed };
   } catch (cause) {
-    if (!(cause instanceof ClientError) || cause.code !== "CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED")
+    if (!(cause instanceof RingError) || cause.code !== "RING_KEY_REGISTRY_MEMBER_UNREGISTERED")
       throw cause;
   }
   return { kind: "pending", submission: await registrationSubmission(input, context) };

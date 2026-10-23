@@ -1,4 +1,7 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon, type Bytes32 } from "@heliuslabs/zolana";
+import { SYSTEM_PROGRAM } from "@heliuslabs/zolana/internal";
+import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
   AccountRole,
   getAddressDecoder,
@@ -6,10 +9,6 @@ import {
   type Address,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import { initializePoseidon } from "../src/hasher/index.js";
-import { SYSTEM_PROGRAM } from "../src/interface/instructions/index.js";
-import type { Bytes32 } from "../src/interface/types.js";
 import { ringConfigAddress, ringPolicyConfigAddress } from "../src/interface/pda/index.js";
 import { ringPolicyNamespaceAddress, ringProgramDataAddress } from "../src/ring/config.js";
 import {
@@ -27,8 +26,6 @@ import {
   buildRingSetPolicySourceTransaction,
 } from "../src/ring/policy-admin.js";
 import { ListId, buildRuleTable, encodeRule, type Rule } from "../src/ring/policy.js";
-
-import { BLOCKHASH } from "./helpers/clients.js";
 import {
   ownSources,
   ownedAccount,

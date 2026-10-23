@@ -1,0 +1,35 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "@heliuslabs/zolana-custom-rings",
+  "entryPoints": ["src/index.ts", "src/client/index.ts", "src/keypair/index.ts"],
+  "entryPointStrategy": "resolve",
+  "basePath": "src",
+  "out": "../../target/typedoc",
+  "tsconfig": "tsconfig.build.json",
+  "readme": "README.md",
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "includeVersion": true,
+  "searchInComments": true,
+  "categorizeByGroup": true,
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true
+  },
+  "sort": ["source-order"],
+  "kindSortOrder": ["Function", "Class", "Interface", "TypeAlias", "Variable", "Enum"],
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+  "intentionallyNotExported": ["AccountReader"],
+  "treatWarningsAsErrors": true,
+  "githubPages": true,
+  "navigationLinks": {
+    "GitHub": "https://github.com/helius-labs/zolana-custom-rings",
+    "npm": "https://www.npmjs.com/package/@heliuslabs/zolana-custom-rings"
+  }
+}

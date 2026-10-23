@@ -1,9 +1,7 @@
-import type { ChainReader, TreeContext } from "../client/ports.js";
-import { decodeTreeId } from "../interface/codecs/index.js";
-import { treeAddress } from "../interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../interface/program.js";
-import type { Address, RequestContext } from "../interface/types.js";
-import type { TreeId } from "../transaction/utxo.js";
+import type { ChainReader, TreeContext } from "@heliuslabs/zolana/client";
+import { decodeTreeId, treeAddress } from "@heliuslabs/zolana/internal";
+import { SHIELDED_POOL_PROGRAM_ID, type Address, type RequestContext } from "@heliuslabs/zolana";
+import type { TreeId } from "@heliuslabs/zolana/transaction";
 import { RingError } from "./error.js";
 
 export async function resolveRingOutputTree(

@@ -27,7 +27,7 @@ export type {
   AuditorMessage,
   CustomRingBasePublicInput,
 } from "../keypair/audit.js";
-export { ringAuthAddress } from "../interface/pda/index.js";
+export { ringAuthAddress } from "@heliuslabs/zolana/internal";
 export { ringKeyRegistryRootAddress, ringKeyRegistryRootPda } from "../interface/pda/index.js";
 export { fetchRingKeyRegistryRoot, createRingKeyRegistryRootInstruction } from "./config.js";
 export { RING_KEY_REGISTRY_ROOT_HISTORY, decodeRingKeyRegistryRoot } from "./codecs.js";
@@ -121,7 +121,7 @@ export type {
   RingDelegateSpender,
 } from "./transfer.js";
 export { currentRingSpendRecord } from "./policy.js";
-export { ringTransactAccounts } from "../interface/instructions/index.js";
+export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
 export { ringDepositInstruction } from "./deposit-instruction.js";
 export { customRingDepositPayload, decryptRingDepositUtxo } from "./deposit-payload.js";
 export {
@@ -135,11 +135,8 @@ export {
   decodeRingDepositOutput,
   decodeRingDepositPlaintext,
   encodeRingDepositPlaintext,
-} from "../transaction/serialization/ring-deposit.js";
-export type {
-  RingDepositOutput,
-  RingDepositPlaintext,
-} from "../transaction/serialization/ring-deposit.js";
+} from "@heliuslabs/zolana/internal";
+export type { RingDepositOutput, RingDepositPlaintext } from "@heliuslabs/zolana/internal";
 export {
   CUSTOM_RING_PROOF_LENGTH,
   checkedCustomRingProof,
@@ -463,7 +460,7 @@ export type {
   RingTransferTransactionParams,
   RingWithdrawalTransactionParams,
 } from "./transfer.js";
-export type { ErrorEnvelope } from "../errors/internal.js";
+export type { ErrorEnvelope } from "@heliuslabs/zolana";
 
 export {
   buildRingMergeTransaction,

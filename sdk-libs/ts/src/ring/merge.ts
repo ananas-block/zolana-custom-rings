@@ -1,24 +1,38 @@
-import type { RingMergeClient, WalletKeys } from "../client/ports.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { reserveEntries, reservedUtxoKeys, unreserved } from "../flows/reserve.js";
-import { selectUtxos } from "../flows/select.js";
-import { initializePoseidon } from "../hasher/index.js";
-import { MAX_MERGE_INPUTS, MERGE_INPUT_COUNT } from "../interface/constants.js";
-import type { SignerAccount } from "../interface/instructions/index.js";
-import type { Address, Bytes32, RequestContext, Transaction } from "../interface/types.js";
-import { SOL_MINT } from "../transaction/asset.js";
-import { prepareMerge } from "../flows/merge.js";
-import { checkKeysIdentity } from "../transaction/wallet/keys.js";
-import type { Wallet } from "../transaction/wallet/state.js";
+import type { RingMergeClient } from "../client/ports.js";
 import {
-  approveUnattended,
+  type WalletKeys,
+  initializePoseidon,
+  type Address,
+  type Bytes32,
+  type RequestContext,
+  SOL_MINT,
+  type Wallet,
+} from "@heliuslabs/zolana";
+import {
+  compileUnsignedTransaction,
+  reserveEntries,
+  reservedUtxoKeys,
+  unreserved,
+  selectUtxos,
+  prepareMerge,
   checkIntentApproval,
-  intentHash,
   ownerSolanaAccount,
+  equalBytes,
+  withProofDataRetry,
+} from "@heliuslabs/zolana/internal";
+import {
+  MAX_MERGE_INPUTS,
+  MERGE_INPUT_COUNT,
+  type Transaction,
+} from "@heliuslabs/zolana/interface";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import {
+  checkKeysIdentity,
+  approveUnattended,
+  intentHash,
   type ApprovalHandler,
   type TransactionIntent,
-} from "../transaction/wallet/intent.js";
-import { equalBytes } from "../wallet/internal.js";
+} from "@heliuslabs/zolana/transaction";
 import { fetchRingCoSigner } from "./config.js";
 import { checkRingCoSigner, TRANSFER_DEMAND } from "./cosign.js";
 import { RingError, wrapRingError } from "./error.js";
@@ -31,7 +45,6 @@ import {
 } from "./submission.js";
 import { ringProofInput, ringSelectionErrors, ringIntentMismatch } from "./transfer.js";
 import { resolveRingOutputTree } from "./trees.js";
-import { withProofDataRetry } from "../client/retry.js";
 
 export interface RingMergeTransactionParams {
   readonly client: RingMergeClient;

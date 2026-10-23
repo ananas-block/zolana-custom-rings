@@ -1,21 +1,26 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
-import { getAddressDecoder } from "@solana/kit";
-import { describe, expect, it } from "vitest";
-
-import type { Bytes32 } from "../src/interface/types.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
-import { SigningKey } from "../src/keypair/signing-key.js";
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { ed25519DerivationPayload, isDerivationInput } from "../src/keypair/derivation.js";
+import {
+  X25519Keypair,
+  ed25519DerivationPayload,
+  isDerivationInput,
+} from "@heliuslabs/zolana/keypair";
+import {
+  type Bytes32,
+  ShieldedKeypair,
+  SigningKey,
+  ViewingKey,
+  LocalShieldedKeys,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
 import {
   encryptConfidentialTransfer,
-  encryptCustomRingTransfer,
-} from "../src/transaction/wallet/encrypt-rails.js";
-import { LocalShieldedKeys } from "../src/transaction/wallet/keys.js";
-import { createProofOutput } from "../src/transaction/utxo.js";
-import { AssetRegistry, SOL_MINT } from "../src/transaction/asset.js";
+  createProofOutput,
+  AssetRegistry,
+} from "@heliuslabs/zolana/transaction";
+import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
+import { withTransactionKey } from "@heliuslabs/zolana/internal";
+import { getAddressDecoder } from "@solana/kit";
+import { describe, expect, it } from "vitest";
 import { decryptTransactionViewingSecret, parseAuditorMessage } from "../src/keypair/audit.js";
-import { withTransactionKey } from "../src/wallet/private-transaction.js";
 
 function seed(byte: number): Bytes32 {
   return new Uint8Array(32).fill(byte) as Bytes32;

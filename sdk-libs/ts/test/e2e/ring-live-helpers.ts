@@ -10,9 +10,8 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
-
-import type { ZolanaClient } from "../../src/client/client.js";
-import { compileUnsignedTransaction } from "../../src/flows/compile.js";
+import type { ZolanaClient } from "@heliuslabs/zolana/client";
+import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import {
   LocalKeys,
   ShieldedKeypair,
@@ -20,7 +19,13 @@ import {
   Wallet,
   syncWallet,
   type Bytes32,
-} from "../../src/index.js";
+} from "@heliuslabs/zolana";
+import {
+  currentSlot,
+  signSendAndConfirm,
+  waitForSignature,
+  type Actor,
+} from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import {
   ListId,
   RingListNamespace,
@@ -33,7 +38,6 @@ import {
   type RingRpc,
   messageSignerReader,
 } from "../../src/ring/index.js";
-import { currentSlot, signSendAndConfirm, waitForSignature, type Actor } from "./live-helpers.js";
 
 export function requiredEnv(name: string): string {
   const value = process.env[name];

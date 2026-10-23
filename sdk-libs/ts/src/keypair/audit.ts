@@ -1,32 +1,32 @@
-import { X25519PublicKey, X25519Keypair } from "./x25519.js";
+import {
+  X25519PublicKey,
+  X25519Keypair,
+  SOLANA_OWNER_TAG,
+  type Bytes16,
+  type Bytes32,
+  type Bytes33,
+  symmetricApply,
+  poseidon,
+} from "@heliuslabs/zolana/keypair";
 import {
   inputTreeSlots,
   treeIdField,
   treeSlotsHashChain,
   type TreeSlot,
-} from "../interface/tree-slot.js";
+  pack33,
+  type MessageData,
+} from "@heliuslabs/zolana/interface";
 import {
   BN254_SCALAR_ORDER,
-  SOLANA_OWNER_TAG,
   fieldAdd,
   fieldSub,
   hashBytes,
-} from "../hasher/index.js";
-import { pack33 } from "../interface/merge-utils.js";
-import type { MessageData } from "../interface/types.js";
-
-import {
-  type Bytes16,
-  type Bytes32,
-  type Bytes33,
   bigIntToBytes,
   bytesToBigInt,
   checkedBytes,
   concatBytes,
   u32be,
-} from "./bytes.js";
-import { symmetricApply } from "./merge/index.js";
-import { poseidon } from "./poseidon.js";
+} from "@heliuslabs/zolana/internal";
 
 /** Rust `AUDIT_ENC_INFO`. */
 export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt1");

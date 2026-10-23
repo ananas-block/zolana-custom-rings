@@ -7,6 +7,7 @@ import { address } from "@solana/kit";
 
 const sdk = fileURLToPath(new URL("../", import.meta.url));
 const workspace = fileURLToPath(new URL("../../../", import.meta.url));
+const zolana = join(workspace, "zolana");
 function loopback(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -28,7 +29,7 @@ const indexer = loopback("ZOLANA_INDEXER_URL");
 loopback("ZOLANA_PROVER_URL");
 if (!process.env.ZOLANA_TREE) throw new Error("ZOLANA_TREE is required");
 address(process.env.ZOLANA_TREE);
-const cli = process.env.ZOLANA_CLI_BIN ?? join(workspace, "target/debug/zolana");
+const cli = process.env.ZOLANA_CLI_BIN ?? join(zolana, "target/debug/zolana");
 const program =
   process.env.RING_PROGRAM_SO ?? join(workspace, "target/deploy/custom_ring_program.so");
 if (!existsSync(cli) || !existsSync(program))
@@ -41,7 +42,7 @@ const environment = {
 };
 const run = (...args) => {
   const output = execFileSync(cli, args, {
-    cwd: workspace,
+    cwd: zolana,
     env: environment,
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,

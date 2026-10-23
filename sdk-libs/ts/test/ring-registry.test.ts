@@ -7,11 +7,9 @@ import {
   type Base64EncodedBytes,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-
-import { decodeRingConfig } from "../src/interface/accounts.js";
-import { StateDiscriminator } from "../src/interface/state.js";
+import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/zolana/interface";
+import { kitReads } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { listRegisteredRings } from "../src/ring/registry.js";
-import { kitReads } from "./helpers/clients.js";
 
 const base64Decoder = getBase64Decoder();
 const addressEncoder = getAddressEncoder();

@@ -1,4 +1,18 @@
-import { X25519Keypair } from "../../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { SOL_MINT, SPL_TOKEN_2022_PROGRAM_ID, ShieldedAddress } from "@heliuslabs/zolana";
+import type { RingSubmissionStatus, RingSubmissionTransport } from "../../src/client/ports.js";
+import type { SlotReader } from "@heliuslabs/zolana/client";
+import {
+  wireDecoder,
+  postJsonRpc,
+  setRingActivationInstruction,
+  ZERO_NULLIFIER_PK,
+} from "@heliuslabs/zolana/internal";
+import { liveHarness } from "./live-helpers.js";
+import {
+  signSendAndConfirm,
+  type Actor,
+} from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import { readFile, stat } from "node:fs/promises";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
@@ -7,18 +21,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import { ClientError } from "../../src/client/error.js";
-import type {
-  RingSubmissionStatus,
-  RingSubmissionTransport,
-  SlotReader,
-} from "../../src/client/ports.js";
-import { wireDecoder } from "../../src/interface/decode.js";
-import { postJsonRpc } from "../../src/services/jsonrpc.js";
-import { setRingActivationInstruction } from "../../src/interface/instructions/index.js";
-import { SOL_MINT } from "../../src/transaction/asset.js";
-import { SPL_TOKEN_2022_PROGRAM_ID, ZERO_NULLIFIER_PK } from "../../src/interface/program.js";
-import { ShieldedAddress } from "../../src/keypair/shielded.js";
+import { KEY_REGISTRY_PROJECTION_ERRORS } from "../../src/ring/projection.js";
 import {
   RingProgramBinary,
   RingError,
@@ -65,7 +68,6 @@ import {
   auditRingTransaction,
   type RingTransactionSubmission,
 } from "../../src/ring/index.js";
-import { liveHarness, signSendAndConfirm, type Actor } from "./live-helpers.js";
 import {
   airdrop,
   enrolInAllow,
@@ -149,15 +151,9 @@ async function indexedKeys<T>(read: () => Promise<T>): Promise<T> {
     try {
       return await read();
     } catch (cause) {
-      const code =
-        cause instanceof ClientError
-          ? cause.code
-          : cause instanceof RingError
-            ? cause.causeCode
-            : undefined;
+      const codes = cause instanceof RingError ? [cause.code, cause.causeCode] : [];
       if (
-        code === undefined ||
-        !["CLIENT_KEY_REGISTRY_OUT_OF_SYNC", "CLIENT_KEY_REGISTRY_ROOT_CHANGED"].includes(code) ||
+        !codes.some((code) => code !== undefined && KEY_REGISTRY_PROJECTION_ERRORS.has(code)) ||
         Date.now() > deadline
       )
         throw cause;

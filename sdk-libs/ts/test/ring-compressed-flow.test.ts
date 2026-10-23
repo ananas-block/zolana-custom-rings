@@ -1,4 +1,16 @@
-import { X25519Keypair } from "../src/keypair/x25519.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  initializePoseidon,
+  ClientError,
+  SHIELDED_POOL_PROGRAM_ID,
+  type Bytes32,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import type { TransferInputs } from "@heliuslabs/zolana/client";
+import { addressBytes, bigIntBytes } from "@heliuslabs/zolana/internal";
+import type { TransactProof } from "@heliuslabs/zolana/interface";
+import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { treeAccount } from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import {
   getAddressDecoder,
   getProgramDerivedAddress,
@@ -6,9 +18,6 @@ import {
   signTransactionWithSigners,
 } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { initializePoseidon } from "../src/hasher/index.js";
-import { ClientError } from "../src/client/error.js";
-import type { TransferInputs } from "../src/client/prover/types.js";
 import type { RingSpendRegistrationClient } from "../src/ring/register-spend.js";
 import {
   buildRingSpendRegistrationTransaction,
@@ -17,9 +26,6 @@ import {
 } from "../src/ring/register-spend.js";
 import { ringPolicyNamespaceAddress, fetchRingConfigs } from "../src/ring/config.js";
 import { ringConfigAddress, ringPolicyConfigAddress } from "../src/interface/pda/index.js";
-import { addressBytes } from "../src/interface/internal.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../src/interface/program.js";
-import type { Bytes32, TransactProof } from "../src/interface/types.js";
 
 import {
   buildRuleTable,
@@ -31,16 +37,12 @@ import {
   zeroSpendCounters,
 } from "../src/ring/policy.js";
 import { KEY_REGISTRY_FIELD_MAX, keyRegistryZeroBytes } from "../src/ring/key-registry-tree.js";
-import { SOL_MINT } from "../src/transaction/asset.js";
-import { bigIntBytes } from "../src/transaction/internal.js";
-import { BLOCKHASH } from "./helpers/clients.js";
 import {
   ownSources,
   ownedAccount,
   ringPolicyConfigData,
   ringProgramConfigData,
 } from "./helpers/ring-accounts.js";
-import { treeAccount } from "./helpers/tree-account.js";
 
 const field = (value: number): Bytes32 => {
   const bytes = new Uint8Array(32);

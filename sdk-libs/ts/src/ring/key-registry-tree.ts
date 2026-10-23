@@ -1,8 +1,12 @@
-import { BN254_SCALAR_ORDER } from "../hasher/index.js";
+import {
+  BN254_SCALAR_ORDER,
+  bigIntBytes,
+  bytesToBigInt,
+  poseidon,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/zolana";
 import { KEY_REGISTRY_CAPACITY, KEY_REGISTRY_HEIGHT } from "../interface/key-registry.js";
-import type { Bytes32 } from "../interface/types.js";
-import { bigIntBytes, bytesToBigInt, poseidon } from "../transaction/internal.js";
-import { equalBytes } from "../wallet/internal.js";
 import { RingError } from "./error.js";
 
 export { KEY_REGISTRY_CAPACITY, KEY_REGISTRY_HEIGHT };

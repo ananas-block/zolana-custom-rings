@@ -1,8 +1,7 @@
 import { getAddressDecoder, getProgramDerivedAddress, type Address } from "@solana/kit";
-
-import type { RpcAccount } from "../../src/client/rpc.js";
-import { Writer, addressBytes } from "../../src/interface/internal.js";
-import type { Bytes32 } from "../../src/interface/types.js";
+import type { RpcAccount } from "@heliuslabs/zolana/client";
+import { Writer, addressBytes, bigIntBytes } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/zolana";
 import type { RingPolicyConfig, RingPolicySource } from "../../src/ring/codecs.js";
 import {
   LIST_IDS,
@@ -12,7 +11,6 @@ import {
   ringPolicyHash,
   type RuleTable,
 } from "../../src/ring/policy.js";
-import { bigIntBytes } from "../../src/transaction/internal.js";
 
 export const ZERO_ADDRESS = getAddressDecoder().decode(new Uint8Array(32));
 

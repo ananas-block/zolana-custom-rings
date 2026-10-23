@@ -1,5 +1,48 @@
-import { ViewingKey } from "../src/keypair/viewing-key.js";
-import { X25519Keypair } from "../src/keypair/x25519.js";
+import {
+  ViewingKey,
+  initializePoseidon,
+  SHIELDED_POOL_PROGRAM_ID,
+  type Bytes16,
+  type Bytes31,
+  type Bytes32,
+  type Bytes33,
+  type Bytes128,
+  NullifierKey,
+  ShieldedKeypair,
+  SigningKey,
+  SOL_MINT,
+  Data,
+  Utxo,
+  type WalletUtxo,
+} from "@heliuslabs/zolana";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { MERGE_INPUT_COUNT, type TransactInstructionData } from "@heliuslabs/zolana/interface";
+import {
+  Writer,
+  addressBytes,
+  treeAddress,
+  mergeDummyNullifier,
+  mergeOutputBlinding,
+  mergeOutputKey,
+  encodeMergeOutputData,
+  encryptMergeOutput,
+  bigIntBytes,
+  encodeOutputData,
+} from "@heliuslabs/zolana/internal";
+import {
+  ringConfigPda,
+  ringDelegatePda,
+  ringKeyRegistryRootPda,
+} from "../src/interface/pda/index.js";
+import {
+  AssetRegistry,
+  type IndexedShieldedTransaction,
+  EncryptedScheme,
+  createProofOutput,
+} from "@heliuslabs/zolana/transaction";
+import { BLOCKHASH, transactionsPage } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { ringAuditReader } from "./helpers/clients.js";
+import { treeAccount } from "../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import {
   address,
   getAddressDecoder,
@@ -8,54 +51,13 @@ import {
   type Signature,
 } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-
-import { ClientError } from "../src/client/error.js";
-import * as mergeKeys from "../src/keypair/merge/index.js";
-import * as mergeCipher from "../src/transaction/serialization/merge.js";
+import * as internal from "@heliuslabs/zolana/internal";
 import type { RingKeyRegistryEntry } from "../src/client/ports.js";
 import type {
   CustomRingRegisterKeyProofRequest,
   CustomRingPolicyProofRequest,
 } from "../src/client/prover/types.js";
-import { initializePoseidon } from "../src/hasher/index.js";
-import { MERGE_INPUT_COUNT } from "../src/interface/constants.js";
-import { Writer, addressBytes } from "../src/interface/internal.js";
-import {
-  ringConfigPda,
-  ringDelegatePda,
-  ringKeyRegistryRootPda,
-  treeAddress,
-} from "../src/interface/pda/index.js";
-import { SHIELDED_POOL_PROGRAM_ID } from "../src/interface/program.js";
-import type {
-  Bytes16,
-  Bytes31,
-  Bytes32,
-  Bytes33,
-  Bytes128,
-  TransactInstructionData,
-} from "../src/interface/types.js";
-import { NullifierKey } from "../src/keypair/nullifier-key.js";
-import {
-  mergeDummyNullifier,
-  mergeOutputBlinding,
-  mergeOutputKey,
-} from "../src/keypair/merge/index.js";
-import {
-  encodeMergeOutputData,
-  encryptMergeOutput,
-} from "../src/transaction/serialization/merge.js";
-import { ShieldedKeypair } from "../src/keypair/shielded.js";
-import { SigningKey } from "../src/keypair/signing-key.js";
-
-import { AssetRegistry, SOL_MINT } from "../src/transaction/asset.js";
-import { bigIntBytes } from "../src/transaction/internal.js";
-import { Data } from "../src/transaction/data.js";
-import type { IndexedShieldedTransaction } from "../src/transaction/instructions/transact.js";
-import { EncryptedScheme, encodeOutputData } from "../src/transaction/serialization/codecs.js";
-import { createProofOutput, Utxo } from "../src/transaction/utxo.js";
 import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
-import type { WalletUtxo } from "../src/transaction/wallet/state.js";
 import { decodeRingKeyRegistryRoot, RING_KEY_REGISTRY_ROOT_HISTORY } from "../src/ring/codecs.js";
 import { fetchRingKeyRegistryRoot } from "../src/ring/config.js";
 import { buildRingDelegateRecoveredTransaction } from "../src/ring/delegate.js";
@@ -83,7 +85,6 @@ import { RingError } from "../src/ring/error.js";
 import { buildRuleTable, memberOfTag, ringNamespaceOwnerHash } from "../src/ring/policy.js";
 import { ringPolicyNamespaceAddress } from "../src/ring/config.js";
 import { recoverRingMemberNotes } from "../src/ring/recover.js";
-import { BLOCKHASH, ringAuditReader, transactionsPage } from "./helpers/clients.js";
 import {
   ownSources,
   ownedAccount,
@@ -91,7 +92,6 @@ import {
   ringPolicyConfigData,
   ringProgramConfigData,
 } from "./helpers/ring-accounts.js";
-import { treeAccount } from "./helpers/tree-account.js";
 import { firstInsertion, keyRegistryRootData, oneMemberRegistry } from "./helpers/key-registry.js";
 
 function hex(value: string): Uint8Array {
@@ -410,7 +410,7 @@ async function registrationFixture(input: Readonly<{ registered?: boolean }> = {
     }),
     getRingKeyRegistryEntry: async () => {
       if (input.registered) return entry;
-      throw new ClientError("CLIENT_KEY_REGISTRY_MEMBER_UNREGISTERED", {
+      throw new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
         details: { method: "getRingKeyRegistryEntry" },
       });
     },
@@ -542,7 +542,7 @@ describe("key registration flow", () => {
             ...test.client,
             getRingKeyRegistryEntry: async () => {
               abort.abort();
-              throw new ClientError("CLIENT_KEY_REGISTRY_OUT_OF_SYNC", {
+              throw new RingError("RING_KEY_REGISTRY_OUT_OF_SYNC", {
                 details: { method: "getRingKeyRegistryEntry" },
               });
             },
@@ -1078,9 +1078,9 @@ describe("recovery closure", () => {
         }),
     };
     const derived: Bytes32[] = [];
-    const deriveKey = mergeKeys.mergeOutputKey;
+    const deriveKey = internal.mergeOutputKey;
     const keySpy = vi
-      .spyOn(mergeKeys, "mergeOutputKey")
+      .spyOn(internal, "mergeOutputKey")
       .mockImplementation((nullifierKey, firstNullifier) => {
         const value = deriveKey(nullifierKey, firstNullifier);
         derived.push(value);
@@ -1096,7 +1096,7 @@ describe("recovery closure", () => {
       resolveTreeId: () => 0,
       origin: { ringInvoked: async () => true },
     };
-    const decryptSpy = vi.spyOn(mergeCipher, "decryptMergeOutput");
+    const decryptSpy = vi.spyOn(internal, "decryptMergeOutput");
     try {
       const result = await recoverRingMemberNotes(params);
       expect(result.unopened).toEqual([]);

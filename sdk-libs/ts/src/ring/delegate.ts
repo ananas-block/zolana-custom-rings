@@ -1,31 +1,47 @@
-import { NullifierKeyProofAuthority } from "../client/keys.js";
-import type { BlockhashProvider, KitRpcAccess, ProofService, WalletKeys } from "../client/ports.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { reserveEntries, reservedUtxoKeys, unreserved } from "../flows/reserve.js";
-import { selectUtxos } from "../flows/select.js";
-import { signerAddress, type SignerAccount } from "../interface/instructions/index.js";
-import { RING_AUTHORITY_MAX_WIDTH } from "../interface/shape.js";
-import type { Address, RequestContext, Transaction } from "../interface/types.js";
-import type { NullifierKey } from "../keypair/nullifier-key.js";
-import type { ShieldedAddress } from "../keypair/shielded.js";
-import { ViewingKey } from "../keypair/viewing-key.js";
-import { prepareRingAuthorityTransfer } from "../transaction/instructions/transact.js";
-import { ZERO_32 } from "../transaction/internal.js";
 import {
-  approveUnattended,
+  NullifierKeyProofAuthority,
+  type BlockhashProvider,
+  type KitRpcAccess,
+} from "@heliuslabs/zolana/client";
+import {
+  type ProofService,
+  type WalletKeys,
+  type Address,
+  type RequestContext,
+  type NullifierKey,
+  type ShieldedAddress,
+  ViewingKey,
+  Wallet,
+  type WalletUtxo,
+} from "@heliuslabs/zolana";
+import {
+  compileUnsignedTransaction,
+  reserveEntries,
+  reservedUtxoKeys,
+  unreserved,
+  selectUtxos,
+  signerAddress,
+  RING_AUTHORITY_MAX_WIDTH,
+  prepareRingAuthorityTransfer,
+  ZERO_32,
   checkIntentApproval,
   checkPreparedTransfer,
   checkTransactData,
   checkTransactionIntent,
-  intentHash,
   ownerSolanaAccount,
+  type UtxoReservation,
+  equalBytes,
+  withTransactionKey,
+  fetchSplAssetRegistrations,
+} from "@heliuslabs/zolana/internal";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import type { Transaction } from "@heliuslabs/zolana/interface";
+import {
+  approveUnattended,
+  intentHash,
   type ApprovalHandler,
   type TransactionIntent,
-} from "../transaction/wallet/intent.js";
-import { Wallet, type UtxoReservation, type WalletUtxo } from "../transaction/wallet/state.js";
-import { equalBytes } from "../wallet/internal.js";
-import { withTransactionKey } from "../wallet/private-transaction.js";
-import { fetchSplAssetRegistrations } from "../wallet/sync.js";
+} from "@heliuslabs/zolana/transaction";
 import { fetchRingCoSigner, fetchRingDelegate } from "./config.js";
 import { TRANSFER_DEMAND, checkRingCoSigner } from "./cosign.js";
 import { RingError, wrapRingError } from "./error.js";

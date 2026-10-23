@@ -1,6 +1,6 @@
 import type { Address } from "@solana/kit";
-
-import { signerAddress, type SignerAccount } from "../interface/instructions/index.js";
+import { signerAddress } from "@heliuslabs/zolana/internal";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
 import {
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_TRANSFERS,

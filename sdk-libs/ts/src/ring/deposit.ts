@@ -1,23 +1,30 @@
-import { withProofDataRetry } from "../client/retry.js";
-import { compileUnsignedTransaction } from "../flows/compile.js";
-import { DEFAULT_COMPUTE_UNIT_LIMIT } from "../flows/internal.js";
-import type { DepositClient } from "../wallet/deposit.js";
-import type { IndexedDepositClient, Prover, RingKeyRegistryReader } from "../client/ports.js";
+import {
+  withProofDataRetry,
+  compileUnsignedTransaction,
+  DEFAULT_COMPUTE_UNIT_LIMIT,
+  copyBytes,
+  encodeRingDepositPlaintext,
+  resolveDepositSettlement,
+  resolveShieldedRecipient,
+} from "@heliuslabs/zolana/internal";
+import type { DepositClient } from "@heliuslabs/zolana/wallet";
+import type { IndexedDepositClient, RingKeyRegistryReader, RingProver } from "../client/ports.js";
+import {
+  type Address,
+  type Bytes32,
+  type RequestContext,
+  initializePoseidon,
+  ShieldedAddress,
+  ViewingKey,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import type { Transaction } from "@heliuslabs/zolana/interface";
+import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+import { randomBlinding, randomSalt } from "@heliuslabs/zolana/keypair";
+import { ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
 import { RING_DEPOSIT_AUDIT_SLOTS } from "./deposit-capsule.js";
-import { copyBytes } from "../interface/internal.js";
-import type { Address, Bytes32, RequestContext, Transaction } from "../interface/types.js";
-import type { SignerAccount } from "../interface/instructions/index.js";
 import { ringDepositInstruction } from "./deposit-instruction.js";
-import { initializePoseidon } from "../hasher/index.js";
-import { randomBlinding, randomSalt } from "../keypair/bytes.js";
-import { ShieldedAddress } from "../keypair/shielded.js";
-import { ViewingKey } from "../keypair/viewing-key.js";
-import { encodeRingDepositPlaintext } from "../transaction/serialization/ring-deposit.js";
-import { ownerUtxoHash } from "../transaction/utxo.js";
-import { SOL_MINT } from "../transaction/asset.js";
-import { resolveDepositSettlement } from "../flows/settlement.js";
-import { resolveShieldedRecipient } from "../wallet/registry.js";
 
 import {
   checkBuildableRingMode,
@@ -39,7 +46,7 @@ export const RING_DEPOSIT_COMPUTE_UNIT_LIMIT = 1_400_000;
 
 export type RingDepositClient = DepositClient &
   IndexedDepositClient &
-  Pick<Prover, "proveCustomRingDeposit"> &
+  Pick<RingProver, "proveCustomRingDeposit"> &
   Pick<RingKeyRegistryReader, "getRingKeyRegistryEntry">;
 
 export interface RingDepositTransactionParams {

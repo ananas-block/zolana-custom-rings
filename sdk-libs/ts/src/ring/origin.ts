@@ -1,12 +1,29 @@
 import { getBase58Encoder } from "@solana/kit";
-
-import { runKitRpc, type SolanaRpc } from "../client/kit.js";
-import { MAX_CACHE_WRITES } from "../interface/cache.js";
-import { wireDecoder } from "../interface/decode.js";
-import { Reader, sha256 } from "../interface/internal.js";
-import { decodeRingDepositInstructionData } from "../interface/codecs/index.js";
+import {
+  runKitRpc,
+  type SolanaRpc,
+  wireDecoder,
+  Reader,
+  sha256,
+  decodeRingDepositInstructionData,
+  equal,
+} from "@heliuslabs/zolana/internal";
+import {
+  MAX_CACHE_WRITES,
+  InstructionTag,
+  SHIELDED_POOL_CPI_AUTHORITY,
+  SOL_INTERFACE,
+  type InterfaceTransfer,
+} from "@heliuslabs/zolana/interface";
+import {
+  SHIELDED_POOL_PROGRAM_ID,
+  type Address,
+  type Bytes32,
+  type RequestContext,
+  type Signature,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
 import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
-import { equal } from "../transaction/internal.js";
 import {
   AUDITED_RING_DEPOSIT_TAG,
   encodeRingDepositCapsule,
@@ -14,20 +31,6 @@ import {
   RING_DEPOSIT_AUDIT_SLOTS,
   type RingDepositCapsule,
 } from "./deposit-capsule.js";
-import {
-  InstructionTag,
-  SHIELDED_POOL_CPI_AUTHORITY,
-  SHIELDED_POOL_PROGRAM_ID,
-  SOL_INTERFACE,
-} from "../interface/program.js";
-import type {
-  Address,
-  Bytes32,
-  InterfaceTransfer,
-  RequestContext,
-  Signature,
-} from "../interface/types.js";
-import { SOL_MINT } from "../transaction/asset.js";
 
 import { RingError } from "./error.js";
 

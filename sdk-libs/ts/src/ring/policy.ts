@@ -1,9 +1,40 @@
 import type { Address, Signature } from "@solana/kit";
-
-import { ClientError } from "../client/error.js";
-import { concatBytes } from "../keypair/bytes.js";
-import { ownerHash } from "../keypair/hash.js";
-import type { IndexerReader, RingSpendRecordLookup } from "../client/ports.js";
+import {
+  ClientError,
+  type Bytes16,
+  type Bytes32,
+  type RequestContext,
+  SOL_MINT,
+} from "@heliuslabs/zolana";
+import {
+  concatBytes,
+  hashBytes,
+  Reader,
+  Writer,
+  addressBytes,
+  ADDRESS_DOMAIN,
+  ZERO_NULLIFIER_PK,
+  ZERO_32,
+  bigIntBytes,
+  bytesToBigInt,
+  decodeAddress,
+  poseidon,
+  rightAlign,
+  sha256Bytes,
+  readOutputData,
+  bytesKey,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
+import { ownerHash, solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
+import type { IndexerReader } from "@heliuslabs/zolana/client";
+import type { RingSpendRecordLookup } from "../client/ports.js";
+import { UTXO_DOMAIN, treeIdField, type MessageData } from "@heliuslabs/zolana/interface";
+import {
+  type TreeId,
+  type IndexedShieldedTransaction,
+  type OutputSlot,
+  EncryptedScheme,
+} from "@heliuslabs/zolana/transaction";
 import {
   RING_ANSWER_SLOTS,
   RING_INLINE_ASSET_SLOTS,
@@ -13,28 +44,6 @@ import {
   type CustomRingSourceOwner,
   type CustomRingVelocityRow,
 } from "../client/prover/types.js";
-import { hashBytes, solanaOwnerIdentity } from "../hasher/index.js";
-import { Reader, Writer, addressBytes } from "../interface/internal.js";
-import { ADDRESS_DOMAIN, UTXO_DOMAIN, ZERO_NULLIFIER_PK } from "../interface/program.js";
-import { treeIdField } from "../interface/tree-slot.js";
-import type { TreeId } from "../transaction/utxo.js";
-import type { Bytes16, Bytes32, MessageData, RequestContext } from "../interface/types.js";
-import { SOL_MINT } from "../transaction/asset.js";
-import type {
-  IndexedShieldedTransaction,
-  OutputSlot,
-} from "../transaction/instructions/transact.js";
-import {
-  ZERO_32,
-  bigIntBytes,
-  bytesToBigInt,
-  decodeAddress,
-  poseidon,
-  rightAlign,
-  sha256Bytes,
-} from "../transaction/internal.js";
-import { EncryptedScheme, readOutputData } from "../transaction/serialization/codecs.js";
-import { bytesKey, equalBytes } from "../wallet/internal.js";
 
 import type { RingPolicyConfig, RingPolicySource } from "./codecs.js";
 import { RingError } from "./error.js";

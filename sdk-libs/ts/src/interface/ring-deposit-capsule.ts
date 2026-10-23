@@ -1,5 +1,5 @@
-import { copyBytes, fail } from "./internal.js";
-import type { Bytes33, Bytes96 } from "./types.js";
+import { copyBytes, fail } from "@heliuslabs/zolana/internal";
+import type { Bytes33, Bytes96 } from "@heliuslabs/zolana";
 
 export const RING_DEPOSIT_AUDIT_SLOTS = 8;
 export const AUDITED_RING_DEPOSIT_TAG = 31;
