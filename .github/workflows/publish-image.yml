@@ -8,7 +8,7 @@ on:
         required: true
         default: ring-rpc
         type: choice
-        options: [ring-rpc, ring-photon]
+        options: [ring-rpc, ring-indexer, ring-prover]
       channel:
         description: >-
           release enforces the commit-naming tag and requires the commit to be

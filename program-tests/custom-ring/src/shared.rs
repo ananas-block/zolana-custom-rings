@@ -49,6 +49,8 @@ use zolana_test_utils::{
 use zolana_transaction::AssetRegistry;
 use zolana_user_registry_interface::user_registry_program_id;
 
+use crate::ring_indexer::RingIndexerLaunch;
+
 /// Funds the fee payer for the whole bootstrap (smart accounts, protocol
 /// config, tree allocation) plus every deposit a test drives through it.
 pub const PAYER_AIRDROP: u64 = 10_000_000_000_000;
@@ -388,6 +390,14 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
     )
     .collect();
     validator.start_with_upgradeable_programs(&deployments)?;
+    RingIndexerLaunch {
+        indexer_url: &localnet_indexer_url(),
+        photon_url: &validator.ports.photon_url(),
+        rpc_url: &localnet_rpc_url(),
+        log_dir: &validator.log_dir,
+    }
+    .spawn()
+    .context("start the ring indexer")?;
 
     // A prover that takes its proof data from the client needs no indexer.
     let indexer = match ProverClient::local().proof_data_source() {
@@ -395,11 +405,11 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         ProofDataSource::Prover => IndexerRequirement::Required,
     };
     if let Some(keys) = std::env::var_os("ZOLANA_PROVER_KEYS_DIR") {
-        let photon = localnet_indexer_url();
+        let ring_indexer = localnet_indexer_url();
         ProverLaunch::new_with_cli(&validator.cli_bin)
             .and_then(|launch| launch.with_keys_dir(keys))
             .and_then(|launch| match indexer {
-                IndexerRequirement::Required => launch.with_indexer(photon, indexer).spawn(),
+                IndexerRequirement::Required => launch.with_indexer(ring_indexer, indexer).spawn(),
                 IndexerRequirement::Optional => launch.spawn(),
             })
             .context("start the isolated ring prover")?;

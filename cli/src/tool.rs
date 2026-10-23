@@ -2,7 +2,7 @@
 
 use std::{
     io,
-    process::{Command, ExitStatus},
+    process::{Child, Command, ExitStatus},
 };
 
 use thiserror::Error;
@@ -65,8 +65,11 @@ impl Tool {
 
     /// The child is left running, its handle dropped.
     pub fn spawn(self, command: &mut Command) -> Result<(), ToolError> {
-        command.spawn().map_err(|source| self.spawn_error(source))?;
-        Ok(())
+        self.start(command).map(drop)
+    }
+
+    pub fn start(self, command: &mut Command) -> Result<Child, ToolError> {
+        command.spawn().map_err(|source| self.spawn_error(source))
     }
 
     /// `--version` is the one flag every tool here answers.
