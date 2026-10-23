@@ -23,7 +23,7 @@
       "file": "zolana/prover/server/Dockerfile.light",
       "title": "Zolana Ring Prover",
       "description": "Zolana Groth16 proving server with the custom ring circuits",
-      "smoke": "docker run --rm \"$image\" --help >/dev/null"
+      "smoke": "docker run --rm \"$image\" --help >/dev/null && test -n \"$(docker run --rm \"$image\" release-keys)\""
     }
   }
 }

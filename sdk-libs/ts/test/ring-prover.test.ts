@@ -621,7 +621,7 @@ describe("indexed registry refusals", () => {
     const refusal = {
       code: "registry_member_missing",
       message: SERVER_TEXT,
-      member: getBase58Decoder().decode(MEMBER),
+      detail: { member: getBase58Decoder().decode(MEMBER) },
     };
     for (const fetch of [
       vi.fn<typeof globalThis.fetch>(async () => Response.json(refusal, { status: 422 })),
@@ -638,7 +638,7 @@ describe("indexed registry refusals", () => {
       await expect(
         prove(
           vi.fn<typeof globalThis.fetch>(async () =>
-            Response.json({ ...refusal, member }, { status: 422 }),
+            Response.json({ ...refusal, detail: { member } }, { status: 422 }),
           ),
         ),
       ).rejects.toMatchObject({ code: "CLIENT_PROVER_JSON" });

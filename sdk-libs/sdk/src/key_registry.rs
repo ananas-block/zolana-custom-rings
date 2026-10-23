@@ -80,11 +80,12 @@ impl KeyRegistrationError {
     /// The registry error a prover refusal stands for.
     pub(crate) fn claim(error: &ClientError) -> Option<Self> {
         match error {
-            ClientError::ProverRefusedMember { code, member }
-                if code == REGISTRY_MEMBER_MISSING =>
-            {
-                Member::from_bytes(*member)
+            ClientError::ProverRejected { code, detail } if code == REGISTRY_MEMBER_MISSING => {
+                detail
+                    .get("member")?
+                    .parse::<Address>()
                     .ok()
+                    .and_then(|member| Member::from_bytes(member.to_bytes()).ok())
                     .map(|owner| Self::UnregisteredOutputKey { owner })
             }
             _ => None,
