@@ -9,18 +9,18 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 )
 
 func TestPackedAuditAndMemberPolicyProve(t *testing.T) {
-	audit, err := base.NewPackedAuditCircuit(2)
+	packed, err := audit.NewPackedAuditCircuit(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, audit, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
+	requireProves(t, packed, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
 	member, err := policy.NewMemberPolicyCircuit(2)
 	if err != nil {
 		t.Fatal(err)
@@ -29,12 +29,12 @@ func TestPackedAuditAndMemberPolicyProve(t *testing.T) {
 }
 
 func TestAnonymousAuditTransferProves(t *testing.T) {
-	shape := base.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	audit, err := base.NewAnonymousAuditCircuit(shape)
+	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
+	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, audit, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
+	requireProves(t, anonymous, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
 }
 
 func requireProves(t *testing.T, circuit, assignment frontend.Circuit) {

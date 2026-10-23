@@ -1,17 +1,17 @@
-// Package ringrecords is the host twin of circuits/records for the Go tests.
-package ringrecords
+// Package ringregistry is the host twin of circuits/registry for the Go tests.
+package ringregistry
 
 import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/records"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/poseidon"
 )
 
-// FieldMax is q-1, the sentinel's next, above every member.
-var FieldMax = new(big.Int).Sub(poseidon.Modulus, big.NewInt(1))
+// fieldMax is q-1, the sentinel's next, above every member.
+var fieldMax = new(big.Int).Sub(poseidon.Modulus, big.NewInt(1))
 
 // Record list bits mirror ListId::record_bit in program-libs/policy/src/list.rs.
 const (
@@ -21,7 +21,7 @@ const (
 	EscrowBit = 1 << 7
 )
 
-// Record mirrors records.Record.
+// Record mirrors registry.Record.
 type Record struct {
 	Member, Next, Lists, EscrowKey *big.Int
 }
@@ -31,20 +31,20 @@ func (r Record) Hash(t testing.TB) *big.Int {
 	return ringtest.MustPoseidonHash(t, r.Member, r.Next, r.Lists, r.EscrowKey)
 }
 
-// EscrowKey mirrors records.EscrowKey.
+// EscrowKey mirrors registry.EscrowKey.
 func EscrowKey(t testing.TB, nullifierPk, ctHash *big.Int) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, nullifierPk, ctHash)
 }
 
-// Path mirrors records.QuadPath.
+// Path mirrors registry.QuadPath.
 type Path struct {
 	Index    uint64
-	Siblings [records.Height][records.Arity - 1]*big.Int
+	Siblings [registry.Height][registry.Arity - 1]*big.Int
 }
 
-func (p Path) Wires() records.QuadPath {
-	w := records.QuadPath{Index: p.Index}
+func (p Path) Wires() registry.QuadPath {
+	w := registry.QuadPath{Index: p.Index}
 	for level, siblings := range p.Siblings {
 		for k, sibling := range siblings {
 			w.Siblings[level][k] = new(big.Int).Set(sibling)
@@ -53,12 +53,12 @@ func (p Path) Wires() records.QuadPath {
 	return w
 }
 
-// Root mirrors records.QuadPath.Root.
+// Root mirrors registry.QuadPath.Root.
 func (p Path) Root(t testing.TB, leaf *big.Int) *big.Int {
 	t.Helper()
 	node := leaf
 	for level, siblings := range p.Siblings {
-		digit := int(p.Index>>(2*level)) & (records.Arity - 1)
+		digit := int(p.Index>>(2*level)) & (registry.Arity - 1)
 		children := append(append(append([]*big.Int{}, siblings[:digit]...), node), siblings[digit:]...)
 		node = ringtest.MustPoseidonHash(t, children...)
 	}
@@ -73,8 +73,8 @@ type Opening struct {
 }
 
 // Wires zeroes the unused half.
-func (o Opening) Wires() records.QuadOpening {
-	w := records.QuadOpening{Present: 0, Next: 0, Lists: 0, EscrowKey: 0, LowMember: 0, LowNext: 0, LowLists: 0, LowEscrow: 0, Path: o.Path.Wires()}
+func (o Opening) Wires() registry.QuadOpening {
+	w := registry.QuadOpening{Present: 0, Next: 0, Lists: 0, EscrowKey: 0, LowMember: 0, LowNext: 0, LowLists: 0, LowEscrow: 0, Path: o.Path.Wires()}
 	r := o.Record
 	if o.Present {
 		w.Present, w.Next, w.Lists, w.EscrowKey = 1, copied(r.Next), copied(r.Lists), copied(r.EscrowKey)
@@ -85,15 +85,9 @@ func (o Opening) Wires() records.QuadOpening {
 }
 
 // RecordWires expects a present member.
-func (o Opening) RecordWires() records.QuadRecordOpening {
+func (o Opening) RecordWires() registry.QuadRecordOpening {
 	r := o.Record
-	return records.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), Path: o.Path.Wires()}
-}
-
-// UnreadRecordWires is the all-zero opening the prover assigns where a proof reads no record.
-func UnreadRecordWires() records.QuadRecordOpening {
-	zero := big.NewInt(0)
-	return Opening{Record: Record{Next: zero, Lists: zero, EscrowKey: zero}, Path: zeroPath()}.RecordWires()
+	return registry.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), Path: o.Path.Wires()}
 }
 
 // Value lies inside Mask, as the program queues an entry.
@@ -113,27 +107,27 @@ type Write struct {
 // Registry keeps the sentinel at index 0 and appends every insert.
 type Registry struct {
 	records []Record
-	nodes   [records.Height + 1]map[uint64]*big.Int
-	empty   [records.Height + 1]*big.Int
+	nodes   [registry.Height + 1]map[uint64]*big.Int
+	empty   [registry.Height + 1]*big.Int
 }
 
 func New(t testing.TB) *Registry {
 	t.Helper()
 	r := &Registry{}
 	r.empty[0] = big.NewInt(0)
-	for level := 1; level <= records.Height; level++ {
+	for level := 1; level <= registry.Height; level++ {
 		e := r.empty[level-1]
 		r.empty[level] = ringtest.MustPoseidonHash(t, e, e, e, e)
 	}
 	for level := range r.nodes {
 		r.nodes[level] = map[uint64]*big.Int{}
 	}
-	r.set(t, 0, Record{Member: big.NewInt(0), Next: FieldMax, Lists: big.NewInt(0), EscrowKey: big.NewInt(0)})
+	r.set(t, 0, Record{Member: big.NewInt(0), Next: fieldMax, Lists: big.NewInt(0), EscrowKey: big.NewInt(0)})
 	return r
 }
 
 func (r *Registry) Root() *big.Int {
-	return new(big.Int).Set(r.node(records.Height, 0))
+	return new(big.Int).Set(r.node(registry.Height, 0))
 }
 
 func (r *Registry) NextIndex() uint64 {
@@ -149,8 +143,8 @@ func (r *Registry) Opening(member *big.Int) Opening {
 func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	t.Helper()
 	// The program queues only members in [1, q-2] and values inside their mask.
-	if e.Member.Sign() <= 0 || e.Member.Cmp(FieldMax) >= 0 || new(big.Int).AndNot(e.Value, e.Mask).Sign() != 0 {
-		t.Fatalf("ring records: the program never queues %+v", e)
+	if e.Member.Sign() <= 0 || e.Member.Cmp(fieldMax) >= 0 || new(big.Int).AndNot(e.Value, e.Mask).Sign() != 0 {
+		t.Fatalf("ringregistry: the program never queues %+v", e)
 	}
 	zero := big.NewInt(0)
 	index, present := r.find(e.Member)
@@ -166,11 +160,11 @@ func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	if masked(zero, e).Sign() == 0 && e.EscrowKey.Sign() == 0 {
 		return w
 	}
-	return r.Insert(t, e)
+	return r.insert(t, e)
 }
 
-// Insert relinks and appends e's record even when empty, a forged insert Apply never makes.
-func (r *Registry) Insert(t testing.TB, e Entry) Write {
+// insert relinks the low record to e's member and appends e's record.
+func (r *Registry) insert(t testing.TB, e Entry) Write {
 	t.Helper()
 	zero := big.NewInt(0)
 	index, _ := r.find(e.Member)
@@ -204,7 +198,7 @@ func (r *Registry) Path(index uint64) Path {
 	for level := range p.Siblings {
 		node := index >> (2 * level)
 		k := 0
-		for child := node &^ (records.Arity - 1); k < records.Arity-1; child++ {
+		for child := node &^ (registry.Arity - 1); k < registry.Arity-1; child++ {
 			if child != node {
 				p.Siblings[level][k] = new(big.Int).Set(r.node(level, child))
 				k++
@@ -239,9 +233,9 @@ func (r *Registry) set(t testing.TB, index uint64, record Record) {
 		r.records[index] = record
 	}
 	r.nodes[0][index] = record.Hash(t)
-	for level := 0; level < records.Height; level++ {
+	for level := 0; level < registry.Height; level++ {
 		parent := index >> (2 * (level + 1))
-		first := parent * records.Arity
+		first := parent * registry.Arity
 		r.nodes[level+1][parent] = ringtest.MustPoseidonHash(t, r.node(level, first), r.node(level, first+1), r.node(level, first+2), r.node(level, first+3))
 	}
 }

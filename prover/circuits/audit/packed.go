@@ -1,4 +1,4 @@
-package base
+package audit
 
 import (
 	"errors"
@@ -10,6 +10,7 @@ import (
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -27,7 +28,7 @@ type PackedAuditCircuit struct {
 	Capacity        int               `gnark:"-"`
 	AuditWires
 	NOut      frontend.Variable
-	Outputs   []UtxoWires
+	Outputs   []shared.UtxoWires
 	OwnerKeys [][32]frontend.Variable
 }
 
@@ -39,11 +40,11 @@ type packedRecord struct {
 
 func NewPackedAuditCircuit(capacity int) (*PackedAuditCircuit, error) {
 	if !slices.Contains(PackedAuditCapacities[:], capacity) {
-		return nil, fmt.Errorf("base: unsupported packed audit capacity %d, want one of %v", capacity, PackedAuditCapacities)
+		return nil, fmt.Errorf("audit: unsupported packed audit capacity %d, want one of %v", capacity, PackedAuditCapacities)
 	}
 	return &PackedAuditCircuit{
 		Capacity:  capacity,
-		Outputs:   make([]UtxoWires, capacity),
+		Outputs:   make([]shared.UtxoWires, capacity),
 		OwnerKeys: make([][32]frontend.Variable, capacity),
 	}, nil
 }
@@ -71,8 +72,8 @@ func (c *PackedAuditCircuit) Define(api frontend.API) error {
 		slots[i] = classify(api, output, opened, api.Mul(nOut.Active[i], opened.Utxo))
 		live := slots[i].live
 		// 4. The ring secret derives from a slot secret only the sender and the auditor hold.
-		secret := PackedSlot{TxViewingSk: envelope.packedTxViewingSk, Salt: envelope.salt, OutputIndex: i, FirstNullifier: c.FirstNullifier}.Secret(api)
-		c.assertBlinding(api, output, slots[i], ConfidentialRingSecret(api, secret), i)
+		secret := shared.PackedSlot{TxViewingSk: envelope.packedTxViewingSk, Salt: envelope.salt, OutputIndex: i, FirstNullifier: c.FirstNullifier}.Secret(api)
+		c.assertBlinding(api, output, slots[i], shared.ConfidentialRingSecret(api, secret), i)
 		// 5. The disclosed key is the owner the slot hash binds, SolanaOwnerIdentity bounds its bytes.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: live, A: output.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, c.OwnerKeys[i])})
 		// 6. A data-free disclosure opens no data hash, so no published UTXO carries one.
@@ -89,13 +90,13 @@ func (c *PackedAuditCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func newPackedRecord(api frontend.API, o UtxoWires, ownerKey [32]frontend.Variable, live frontend.Variable) packedRecord {
+func newPackedRecord(api frontend.API, o shared.UtxoWires, ownerKey [32]frontend.Variable, live frontend.Variable) packedRecord {
 	return packedRecord{
 		nullifierPk:  api.Mul(live, o.NullifierPk),
 		asset:        api.Mul(live, o.Asset),
 		dataHash:     api.Mul(live, o.DataHash),
 		ringDataHash: api.Mul(live, o.RingDataHash),
-		keyAndAmount: PackDisclosure(api, slices.Concat(masked(api, live, ownerKey[:]), uintBytes(api, api.Mul(live, o.Amount), 8))),
+		keyAndAmount: shared.PackDisclosure(api, slices.Concat(masked(api, live, ownerKey[:]), uintBytes(api, api.Mul(live, o.Amount), 8))),
 	}
 }
 

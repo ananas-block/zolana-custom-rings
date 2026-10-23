@@ -5,8 +5,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -26,16 +28,16 @@ type AuditHead struct {
 // Elements is CRAU, n0, ring_id, pack_be(0x04 ‖ tx_u), pack_be(auditor_pubkey), pack_be(0x04 ‖ eph_u), hash_bytes(sealed), salt, layout.
 func (h AuditHead) Elements(t testing.TB) []*big.Int {
 	t.Helper()
-	txLo, txHi := pack33(Tagged(h.TxViewingU[:]))
-	auditorLo, auditorHi := pack33(h.AuditorPubkey)
-	ephLo, ephHi := pack33(Tagged(h.EphU[:]))
+	txLo, txHi := ringprotocol.Pack33(ringprotocol.Tagged(h.TxViewingU[:]))
+	auditorLo, auditorHi := ringprotocol.Pack33(h.AuditorPubkey)
+	ephLo, ephHi := ringprotocol.Pack33(ringprotocol.Tagged(h.EphU[:]))
 	return []*big.Int{
-		big.NewInt(base.AuditStatementDomain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
-		auditorLo, auditorHi, ephLo, ephHi, HashBytes(t, h.Sealed), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
+		big.NewInt(shared.AuditStatementDomain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
+		auditorLo, auditorHi, ephLo, ephHi, ringtest.HashBytes(t, h.Sealed), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
 	}
 }
 
-// Layout is a transfer's layout flags, mirrors the Layout flags of package base.
+// Layout is a transfer's layout flags, mirrors the Layout flags of package audit.
 type Layout struct {
 	Exits        bool
 	Escrow       bool
@@ -44,8 +46,8 @@ type Layout struct {
 }
 
 func (l Layout) Value() int64 {
-	return ringtest.Bit(l.Exits)*base.LayoutExits | ringtest.Bit(l.Escrow)*base.LayoutEscrow |
-		ringtest.Bit(l.DataFree)*base.LayoutDataFree | ringtest.Bit(l.FullOpenings)*base.LayoutFullOpenings
+	return ringtest.Bit(l.Exits)*audit.LayoutExits | ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
+		ringtest.Bit(l.DataFree)*audit.LayoutDataFree | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
 }
 
 func hasExit(utxos []Utxo) bool {
@@ -82,7 +84,7 @@ func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 	t.Helper()
 	var keys []*big.Int
 	for _, output := range outputs {
-		lo, hi := pack32(output.U)
+		lo, hi := ringprotocol.Pack32(output.U)
 		if output.Exit {
 			lo, hi = big.NewInt(0), big.NewInt(0)
 		}
@@ -124,7 +126,7 @@ func bodyChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	for i, output := range outputs {
 		hashes[i] = big.NewInt(0)
 		if !output.Exit {
-			hashes[i] = HashBytes(t, output.Body)
+			hashes[i] = ringtest.HashBytes(t, output.Body)
 		}
 	}
 	return spptest.MustHashChain4(t, hashes)

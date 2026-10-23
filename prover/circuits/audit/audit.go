@@ -1,5 +1,5 @@
-// Package base proves what a ring auditor reads from a ring transfer.
-package base
+// Package audit proves what a ring auditor reads from a ring transfer.
+package audit
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/x25519"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -76,13 +77,13 @@ type auditEnvelope struct {
 	// packedTxViewingSk is pack_be(tx_viewing_sk), the key of the CRAS slot secrets and the CROD pad.
 	packedTxViewingSk [2]frontend.Variable
 	salt              frontend.Variable
-	sealed            Sealed
+	sealed            shared.Sealed
 	sealedHash        frontend.Variable
 }
 
 // outputSlot sorts a live UTXO into a ring output or an exit, a dummy or an unpublished slot is neither.
 type outputSlot struct {
-	OpenedUtxo
+	shared.OpenedUtxo
 	live frontend.Variable
 	ring frontend.Variable
 	exit frontend.Variable
@@ -95,13 +96,13 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 	// 2. The auditor reads the recovered bytes as they are, an unclamped alias would key another stream.
 	AssertClamped(api, w.TxViewingSk)
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
-	txPk := packBounded(api, TaggedPubkey(api, w.TxViewingSk))
+	txPk := shared.PackBounded(api, TaggedPubkey(api, w.TxViewingSk))
 	// 4. The envelope seals tx_viewing_sk to the auditor under the audit stream schedule.
-	sealed := Envelope{Plaintext: w.TxViewingSk[:], EphSk: w.EphSk, AuditorPk: w.AuditorPk}.SealAuditStream(api)
+	sealed := shared.Envelope{Plaintext: w.TxViewingSk[:], EphSk: w.EphSk, AuditorPk: w.AuditorPk}.SealAuditStream(api)
 	return auditEnvelope{
 		txViewingSk:       w.TxViewingSk,
 		txPk:              [2]frontend.Variable(txPk),
-		packedTxViewingSk: [2]frontend.Variable(packBounded(api, w.TxViewingSk[:])),
+		packedTxViewingSk: [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:])),
 		salt:              salt,
 		sealed:            sealed,
 		// The cipher's byte tables bound every ciphertext byte.
@@ -109,15 +110,15 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 	}
 }
 
-func classify(api frontend.API, o UtxoWires, opened OpenedUtxo, live frontend.Variable) outputSlot {
-	// SPP holds every UTXO's ring id to 0 or the ring's on the same output hashes, AssertRingMemberOrFree in shared/ring.go.
+func classify(api frontend.API, o shared.UtxoWires, opened shared.OpenedUtxo, live frontend.Variable) outputSlot {
+	// SPP holds every UTXO's ring id to 0 or the ring's on the same output hashes, AssertRingMemberOrFree in spp_transaction/shared/ring.go.
 	ring := api.Mul(live, ringgadget.IsNonZero(api, o.RingProgramID))
 	return outputSlot{OpenedUtxo: opened, live: live, ring: ring, exit: api.Sub(live, ring)}
 }
 
 // assertBlinding pins a live UTXO's blinding to the one SPP derives, TXRB over ringSecret or TXOB over SeedOut on an exit.
-func (w AuditWires) assertBlinding(api frontend.API, o UtxoWires, slot outputSlot, ringSecret frontend.Variable, i int) {
-	blinding := ringgadget.DeriveRingRailOutputBlinding(api, slot.exit, w.FirstNullifier, w.SeedOut, ringSecret, i)
+func (w AuditWires) assertBlinding(api frontend.API, o shared.UtxoWires, slot outputSlot, ringSecret frontend.Variable, i int) {
+	blinding := shared.DeriveRingRailOutputBlinding(api, slot.exit, w.FirstNullifier, w.SeedOut, ringSecret, i)
 	// Only a ring output carries the audited ring secret, an exit keeps the TXOB form no anchor opens.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.live, A: o.Blinding, B: blinding})
 }
@@ -127,7 +128,7 @@ func (w AuditWires) assertBlinding(api frontend.API, o UtxoWires, slot outputSlo
 //	CRAU, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout
 func (e auditEnvelope) statementHead(w AuditWires) []frontend.Variable {
 	return []frontend.Variable{
-		AuditStatementDomain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1],
+		shared.AuditStatementDomain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1],
 		e.sealed.Auditor[0], e.sealed.Auditor[1], e.sealed.Eph[0], e.sealed.Eph[1], e.sealedHash, e.salt, w.Layout,
 	}
 }
@@ -147,17 +148,26 @@ func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
 
 // TaggedPubkey is 0x04 ‖ u of the clamped secret, the generator gadget bounds every secret byte.
 func TaggedPubkey(api frontend.API, secret [32]frontend.Variable) []frontend.Variable {
-	return tagged(x25519.ScalarMulGenerator(api, secret))
+	return shared.Tagged(x25519.ScalarMulGenerator(api, secret))
 }
 
-// tagged is the 0x04 ‖ u encoding of an X25519 key.
-func tagged(u [32]frontend.Variable) []frontend.Variable {
-	return append([]frontend.Variable{4}, u[:]...)
+// uintBytes is the big-endian encoding of an unsigned value below 2^(8n), a larger value fails the decomposition.
+func uintBytes(api frontend.API, value frontend.Variable, n int) []frontend.Variable {
+	return gadget.BitsToBytesBE(api, api.ToBinary(value, 8*n))
+}
+
+// masked multiplies every byte by the bit flag, zeroing a slot the disclosure does not open.
+func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {
+	out := make([]frontend.Variable, len(bytes))
+	for i, b := range bytes {
+		out[i] = api.Mul(flag, b)
+	}
+	return out
 }
 
 func validateLength(name string, got, want int) error {
 	if got != want {
-		return fmt.Errorf("base: %s count mismatch: got %d want %d", name, got, want)
+		return fmt.Errorf("audit: %s count mismatch: got %d want %d", name, got, want)
 	}
 	return nil
 }

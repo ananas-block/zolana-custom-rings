@@ -1,10 +1,10 @@
-package base
+package shared
 
 import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // UtxoWires opens one transaction slot, its owner is Poseidon(OwnerPkHash, NullifierPk).
@@ -31,9 +31,9 @@ type OpenedUtxo struct {
 
 // Open hashes the slot as SPP does, so a ring proof binds the commitment SPP publishes or spends.
 func (w UtxoWires) Open(api frontend.API) OpenedUtxo {
-	utxo := api.IsZero(api.Sub(w.Domain, shared.UtxoDomain))
+	utxo := api.IsZero(api.Sub(w.Domain, transaction.UtxoDomain))
 	owner := api.Mul(utxo, gadget.PoseidonHash(api, []frontend.Variable{w.OwnerPkHash, w.NullifierPk}))
-	hash := shared.UtxoHashCircuit(api, shared.UtxoCircuitFields{
+	hash := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
 		Domain:        w.Domain,
 		Owner:         owner,
 		Asset:         w.Asset,

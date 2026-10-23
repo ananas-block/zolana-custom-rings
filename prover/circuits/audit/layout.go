@@ -1,4 +1,4 @@
-package base
+package audit
 
 import (
 	"math/bits"
@@ -7,6 +7,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
 // Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/disclosure.rs.
@@ -49,7 +50,7 @@ type layoutEnd struct {
 // decodeLayout pins every flag outside free to its bit of fixed.
 func decodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) auditLayout {
 	if free&fixed != 0 {
-		panic("base: a layout flag is both free and fixed")
+		panic("audit: a layout flag is both free and fixed")
 	}
 	// ToBinary over the four flags refuses a layout value past them.
 	l := auditLayout{flags: [layoutBits]frontend.Variable(api.ToBinary(layout, layoutBits)), free: free, fixed: fixed}
@@ -82,7 +83,7 @@ func (c layoutChoice) has(f int) bool {
 // choices is every assignment of the free flags in vary over the pinned ones, the statement selects exactly one.
 func (l auditLayout) choices(api frontend.API, vary int) []layoutChoice {
 	if vary&^l.free != 0 {
-		panic("base: a varied layout flag is pinned")
+		panic("audit: a varied layout flag is pinned")
 	}
 	choices := []layoutChoice{{set: l.fixed, selected: 1}}
 	for i, flag := range l.flags {
@@ -125,7 +126,7 @@ func uniformTail(records [][]frontend.Variable) countedTail {
 	tail := countedTail{published: func(n int) int { return n * width }}
 	for _, record := range records {
 		if len(record) != width {
-			panic("base: disclosure records differ in width")
+			panic("audit: disclosure records differ in width")
 		}
 		tail.fields = append(tail.fields, record...)
 	}
@@ -149,8 +150,8 @@ func (e auditEnvelope) disclose(api frontend.API, choices []layoutChoice, layout
 		layouts[i] = layoutOf(choice)
 		width = max(width, len(layouts[i].fields))
 	}
-	ciphertext := ringgadget.DisclosurePad(api, DisclosurePadDomain, e.packedTxViewingSk, e.salt, width)
-	ends := zeros(width)
+	ciphertext := shared.DisclosurePad(api, shared.DisclosurePadDomain, e.packedTxViewingSk, e.salt, width)
+	ends := shared.Zeros(width)
 	for _, l := range layouts {
 		for j, field := range l.fields {
 			ciphertext[j] = api.Add(ciphertext[j], api.Mul(l.selected, field))

@@ -6,8 +6,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -24,11 +26,11 @@ type Transfer struct {
 // newTransfer is the fixture transfer of the default keys in the ring of program address 0x90..90.
 func newTransfer(t testing.TB) Transfer {
 	t.Helper()
-	ringProgram := Repeat(0x90)
+	ringProgram := ringtest.Repeat(0x90)
 	tr := Transfer{
 		Keys:           DefaultKeys(t),
 		FirstNullifier: big.NewInt(0x1f1f),
-		RingProgramID:  HashBytes(t, ringProgram[:]),
+		RingProgramID:  ringtest.HashBytes(t, ringProgram[:]),
 	}
 	for i := range tr.Salt {
 		tr.Salt[i] = 0xa0 + byte(i)
@@ -41,13 +43,13 @@ func newTransfer(t testing.TB) Transfer {
 // ExitBlinding is the TXOB blinding SPP derives for slot i of the transfer.
 func (tr Transfer) ExitBlinding(t testing.TB, i int) *big.Int {
 	t.Helper()
-	return ExitBlinding(t, tr.FirstNullifier, tr.SeedOut, i)
+	return ringprotocol.ExitBlinding(t, tr.FirstNullifier, tr.SeedOut, i)
 }
 
 // DeliveredSlotSecret is the CRDS secret of slot i keyed to the recipient u.
 func (tr Transfer) DeliveredSlotSecret(t testing.TB, u [32]byte, i int) *big.Int {
 	t.Helper()
-	return DeliveredSlotSecret(t, tr.Keys.txViewingSk, u, tr.Salt, i, tr.FirstNullifier)
+	return ringprotocol.DeliveredSlotSecret(t, tr.Keys.txViewingSk, u, tr.Salt, i, tr.FirstNullifier)
 }
 
 // AuditHead is the statement head the program builds for the transfer under layout.
@@ -66,22 +68,22 @@ func (tr Transfer) seedOut(layout Layout) []*big.Int {
 	return nil
 }
 
-func (tr Transfer) wires(layout Layout) base.AuditWires {
-	w := base.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, SeedOut: tr.SeedOut, Layout: layout.Value()}
-	setBytes(w.TxViewingSk[:], tr.Keys.txViewingSk[:])
-	setBytes(w.EphSk[:], tr.Keys.ephSk[:])
-	setBytes(w.AuditorPk[:], tr.Keys.auditorPk[:])
-	setBytes(w.Salt[:], tr.Salt[:])
+func (tr Transfer) wires(layout Layout) audit.AuditWires {
+	w := audit.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, SeedOut: tr.SeedOut, Layout: layout.Value()}
+	ringtest.SetBytes(w.TxViewingSk[:], tr.Keys.txViewingSk[:])
+	ringtest.SetBytes(w.EphSk[:], tr.Keys.ephSk[:])
+	ringtest.SetBytes(w.AuditorPk[:], tr.Keys.auditorPk[:])
+	ringtest.SetBytes(w.Salt[:], tr.Salt[:])
 	return w
 }
 
-// DeliveredOutput is one delivered slot, the host twin of base.DeliveryWires.
+// DeliveredOutput is one delivered slot, the host twin of audit.DeliveryWires.
 type DeliveredOutput struct {
 	Utxo         Utxo
 	AssetAddress [32]byte
 	RecipientKey [32]byte
 	OwnerKey     [32]byte
-	Body         [base.BodyLen]byte
+	Body         [shared.BodyLen]byte
 }
 
 // NewRingOutput delivers slot to its recipient key, its blinding over ringSecret of the CRDS secret.
@@ -91,14 +93,14 @@ func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot, ringSecret fun
 	return DeliveredOutput{
 		Utxo: Utxo{
 			Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, slot.OwnerKey),
-			NullifierPk: slot.NullifierPk, Asset: AssetField(t, slot.AssetAddress), Amount: slot.Amount,
-			Blinding: RingBlinding(t, tr.FirstNullifier, ringSecret(secret), slot.Index),
+			NullifierPk: slot.NullifierPk, Asset: ringtest.AssetField(t, slot.AssetAddress), Amount: slot.Amount,
+			Blinding: ringprotocol.RingBlinding(t, tr.FirstNullifier, ringSecret(secret), slot.Index),
 			DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: tr.RingProgramID,
 		},
 		AssetAddress: slot.AssetAddress,
 		RecipientKey: slot.RecipientKey,
 		OwnerKey:     slot.OwnerKey,
-		Body:         SealBody(t, secret, slot.AssetAddress, slot.Amount),
+		Body:         ringprotocol.SealBody(t, secret, slot.AssetAddress, slot.Amount),
 	}
 }
 
@@ -106,8 +108,8 @@ func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot, ringSecret fun
 func (tr Transfer) NewExit(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
 	return DeliveredOutput{Utxo: Utxo{
-		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, Repeat(0xe5)),
-		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(23)), Asset: AssetField(t, [32]byte{}), Amount: 40,
+		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, ringtest.Repeat(0xe5)),
+		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(23)), Asset: ringtest.AssetField(t, [32]byte{}), Amount: 40,
 		Blinding: tr.ExitBlinding(t, i), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: big.NewInt(0),
 	}}
 }
@@ -115,7 +117,7 @@ func (tr Transfer) NewExit(t testing.TB, i int) DeliveredOutput {
 // newDummy pads a slot with random key and body bytes.
 func (tr Transfer) newDummy(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
-	d := DeliveredOutput{Utxo: Dummy(OutputTreeID, tr.ExitBlinding(t, i)), RecipientKey: Repeat(0xd1 + byte(i))}
+	d := DeliveredOutput{Utxo: Dummy(OutputTreeID, tr.ExitBlinding(t, i)), RecipientKey: ringtest.Repeat(0xd1 + byte(i))}
 	for j := range d.Body {
 		d.Body[j] = 0xd0 + byte(j)
 	}
@@ -137,10 +139,10 @@ func Recipient(t testing.TB, n byte, index int, amount uint64) DeliverySlot {
 	t.Helper()
 	return DeliverySlot{
 		Index:        index,
-		RecipientKey: XPublicKey(t, Scalar(0x55+n)),
-		OwnerKey:     Repeat(0xb2 + n),
+		RecipientKey: ringprotocol.XPublicKey(t, ringtest.Scalar(0x55+n)),
+		OwnerKey:     ringtest.Repeat(0xb2 + n),
 		NullifierPk:  spptest.MustNullifierPk(t, big.NewInt(20+int64(n))),
-		AssetAddress: Repeat(0x0a),
+		AssetAddress: ringtest.Repeat(0x0a),
 		Amount:       amount,
 	}
 }
@@ -148,12 +150,12 @@ func Recipient(t testing.TB, n byte, index int, amount uint64) DeliverySlot {
 // OutputTreeID is the fixture tree every output is appended to.
 const OutputTreeID = 9
 
-func (o DeliveredOutput) wires() base.DeliveryWires {
-	w := base.DeliveryWires{Output: o.Utxo.Wires()}
-	setBytes(w.AssetAddress[:], o.AssetAddress[:])
-	setBytes(w.RecipientKey[:], o.RecipientKey[:])
-	setBytes(w.OwnerKey[:], o.OwnerKey[:])
-	setBytes(w.Body[:], o.Body[:])
+func (o DeliveredOutput) wires() audit.DeliveryWires {
+	w := audit.DeliveryWires{Output: o.Utxo.Wires()}
+	ringtest.SetBytes(w.AssetAddress[:], o.AssetAddress[:])
+	ringtest.SetBytes(w.RecipientKey[:], o.RecipientKey[:])
+	ringtest.SetBytes(w.OwnerKey[:], o.OwnerKey[:])
+	ringtest.SetBytes(w.Body[:], o.Body[:])
 	return w
 }
 
@@ -162,7 +164,7 @@ func (o DeliveredOutput) statementOutput(t testing.TB) StatementOutput {
 	return StatementOutput{Hash: o.Utxo.Hash(t), Exit: o.Utxo.isExit(), U: o.RecipientKey, Body: o.Body[:]}
 }
 
-// slotBytes mirrors base slotDisclosure, owner_key ‖ ringTail on a ring output, asset ‖ u64be(amount) on an exit.
+// slotBytes mirrors audit slotDisclosure, owner_key ‖ ringTail on a ring output, asset ‖ u64be(amount) on an exit.
 func (o DeliveredOutput) slotBytes(t testing.TB, ringTail []byte) []byte {
 	t.Helper()
 	out := make([]byte, 32+len(ringTail))

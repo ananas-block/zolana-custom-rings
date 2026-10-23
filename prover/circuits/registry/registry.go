@@ -1,6 +1,6 @@
-// Package records proves records of a ring's member registry, a 4-ary Poseidon
-// tree whose records form one list sorted by member.
-package records
+// Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records
+// form one list sorted by member, and the writes the ring program queues and applies to it.
+package registry
 
 import (
 	"github.com/consensys/gnark/frontend"
@@ -10,11 +10,10 @@ import (
 
 // The tree shape mirrors program-libs/interface/src/member_registry.rs and must stay in sync with it.
 const (
-	Height       = 10
-	Arity        = 4
-	IndexBits    = 2 * Height
-	Capacity     = 1 << IndexBits
-	PathSiblings = Height * (Arity - 1)
+	Height    = 10
+	Arity     = 4
+	IndexBits = 2 * Height
+	Capacity  = 1 << IndexBits
 	// ListBits is the width of a record's list bitmap, bit id-1 marks list id.
 	ListBits = 64
 )

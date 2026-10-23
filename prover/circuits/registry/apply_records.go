@@ -1,4 +1,3 @@
-// Package registry proves the queued member record writes a ring program applies to its registry.
 package registry
 
 import (
@@ -9,9 +8,8 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/records"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -41,7 +39,7 @@ type QueueEntry struct {
 
 // Hash is the entry the program chains at write time in program-libs/interface/src/member_registry.rs.
 func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{base.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey})
+	return gadget.PoseidonHash(api, []frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey})
 }
 
 // RecordWrite applies one entry, Slot opening the member's leaf or the empty leaf an insert takes.
@@ -51,12 +49,12 @@ type RecordWrite struct {
 	OldNext   frontend.Variable
 	OldLists  frontend.Variable
 	OldEscrow frontend.Variable
-	Slot      records.QuadPath
+	Slot      QuadPath
 	LowMember frontend.Variable
 	LowNext   frontend.Variable
 	LowLists  frontend.Variable
 	LowEscrow frontend.Variable
-	Low       records.QuadPath
+	Low       QuadPath
 }
 
 // ApplyRecordsCircuit applies the first Count of NumWrites queued writes to OldRoot.
@@ -79,10 +77,11 @@ type registryState struct {
 	root, next, chain frontend.Variable
 }
 
-// NewApplyRecordsCircuit allocates the circuit of one apply key, Define refuses any
-// width outside ApplyWidths.
-func NewApplyRecordsCircuit(n int) *ApplyRecordsCircuit {
-	return &ApplyRecordsCircuit{NumWrites: n, Writes: make([]RecordWrite, n)}
+func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
+	if !slices.Contains(ApplyWidths, writes) {
+		return nil, fmt.Errorf("registry: unsupported write capacity %d, want one of %v", writes, ApplyWidths)
+	}
+	return &ApplyRecordsCircuit{NumWrites: writes, Writes: make([]RecordWrite, writes)}, nil
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
@@ -121,8 +120,8 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	ringgadget.AssertOrderedWhen(api, absent, w.LowMember, w.Entry.Member, w.LowNext)
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldLists})
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldEscrow})
-	low := records.Record{Member: w.LowMember, Next: w.LowNext, Lists: w.LowLists, EscrowKey: w.LowEscrow}
-	relinked := records.Record{Member: w.LowMember, Next: w.Entry.Member, Lists: w.LowLists, EscrowKey: w.LowEscrow}
+	low := Record{Member: w.LowMember, Next: w.LowNext, Lists: w.LowLists, EscrowKey: w.LowEscrow}
+	relinked := Record{Member: w.LowMember, Next: w.Entry.Member, Lists: w.LowLists, EscrowKey: w.LowEscrow}
 	lowRoot, relinkedRoot := w.Low.Update(api, low.Hash(api), relinked.Hash(api))
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: absent, A: lowRoot, B: s.root})
 	// 4. Only a nonempty new record is inserted, an empty one leaves the member absent.
@@ -135,8 +134,8 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.OldNext, B: w.LowNext})
 	// 6. An update or insert replaces the slot's old leaf under the running root, a no-op
 	// leaves the root, and an insert's old leaf is the empty leaf 0.
-	before := api.Select(w.Exists, records.Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow}.Hash(api), 0)
-	after := records.Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow}.Hash(api)
+	before := api.Select(w.Exists, Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow}.Hash(api), 0)
+	after := Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow}.Hash(api)
 	opened, written := w.Slot.Update(api, before, after)
 	changes := api.Add(insert, update)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: changes, A: opened, B: linked})
@@ -151,8 +150,8 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 
 func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable {
 	// Both bitmaps hold ListBits bits, the width of every record and queued mask.
-	oldBits := api.ToBinary(old, records.ListBits)
-	maskBits := api.ToBinary(mask, records.ListBits)
+	oldBits := api.ToBinary(old, ListBits)
+	maskBits := api.ToBinary(mask, ListBits)
 	kept := frontend.Variable(0)
 	for i := range oldBits {
 		kept = api.Add(kept, api.Mul(oldBits[i], api.Sub(1, maskBits[i]), new(big.Int).Lsh(big.NewInt(1), uint(i))))
@@ -164,6 +163,6 @@ func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable 
 // count], rebuilt by the program through program-libs/interface/src/statement.rs.
 func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
 	return []frontend.Variable{
-		base.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
+		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
 	}
 }

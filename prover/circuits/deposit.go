@@ -1,5 +1,5 @@
-// Package deposit binds every deposited owner commitment to an opening encrypted for the auditor.
-package deposit
+// Package circuits proves a ring deposit and an anonymous ring merge.
+package circuits
 
 import (
 	"slices"
@@ -8,9 +8,9 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/records"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -26,14 +26,12 @@ import (
 
 const (
 	MaxDeposits = 8
-	// OpeningBytes is owner hash || blinding || owner key.
-	OpeningBytes = 96
-	// Domain = "CRDP", the first statement element.
-	Domain         = 0x43524450
-	EncryptionInfo = "CRING/dep1"
+	// DepositOpeningBytes is owner hash || blinding || owner key.
+	DepositOpeningBytes = 96
 )
 
-type CustomRingDepositCircuit struct {
+// DepositCircuit binds every deposited owner commitment to an opening encrypted for the auditor.
+type DepositCircuit struct {
 	PublicInputHash    frontend.Variable `gnark:",public"`
 	ContextHash        frontend.Variable
 	Count              frontend.Variable
@@ -47,10 +45,10 @@ type CustomRingDepositCircuit struct {
 	KeyEscrow          frontend.Variable
 	MemberRegistryRoot frontend.Variable
 	CtHashes           [MaxDeposits]frontend.Variable
-	Members            [MaxDeposits]records.QuadRecordOpening
+	Members            [MaxDeposits]registry.QuadRecordOpening
 }
 
-func (c *CustomRingDepositCircuit) Define(api frontend.API) error {
+func (c *DepositCircuit) Define(api frontend.API) error {
 	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1 and a zero root without escrow.
 	count := ringgadget.SelectCount(api, c.Count, 1, MaxDeposits)
 	rc := rangecheck.New(api)
@@ -65,7 +63,7 @@ func (c *CustomRingDepositCircuit) Define(api frontend.API) error {
 		// 3. Under escrow the owner's record exists and escrows Poseidon(nullifier_pk, ct_hash).
 		escrowed := api.Mul(active, c.KeyEscrow)
 		c.Members[i].AssertPresent(api, escrowed, c.MemberRegistryRoot, c.OwnerPkHashes[i])
-		key := records.EscrowKey(api, c.NullifierPks[i], c.CtHashes[i])
+		key := registry.EscrowKey(api, c.NullifierPks[i], c.CtHashes[i])
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: c.Members[i].EscrowKey, B: key})
 		// 4. An anonymous slot's owner hash is the owner identity of its key, the envelope's cipher
 		// bounds the key bytes, any other slot discloses no key.
@@ -76,7 +74,7 @@ func (c *CustomRingDepositCircuit) Define(api frontend.API) error {
 		}
 		// 5. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
 		owner := gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i]})
-		blinding := base.DepositBlinding(api, c.BlindingSecrets[i])
+		blinding := shared.DepositBlinding(api, c.BlindingSecrets[i])
 		commitments[i] = gadget.PoseidonHash(api, []frontend.Variable{owner, blinding})
 		// 6. The canonical field encodings keep one plaintext per opening.
 		ownerBytes, blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, owner), ringgadget.FieldToBytesBEWith(api, rc, blinding)
@@ -84,7 +82,7 @@ func (c *CustomRingDepositCircuit) Define(api frontend.API) error {
 	}
 	// 7. The statement binds every commitment SPP receives to the ciphertext the auditor opens,
 	// the cipher bounds every ciphertext byte.
-	sealed := base.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: EncryptionInfo}.Seal(api)
+	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.Seal(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))
 	return nil
 }
@@ -92,10 +90,10 @@ func (c *CustomRingDepositCircuit) Define(api frontend.API) error {
 // statement is [CRDP, context, count, anonymous, (commitment, ct_hash) per slot, aud0,
 // aud1, eph0, eph1, key_escrow, registry_root], a zero pair per padding slot, mirrored by
 // DepositPublicInput::hash in program-libs/interface/src/deposit.rs.
-func (c *CustomRingDepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed base.Sealed) []frontend.Variable {
-	chain := []frontend.Variable{Domain, c.ContextHash, c.Count, c.Anonymous}
+func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
+	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count, c.Anonymous}
 	for i, commitment := range commitments {
-		ciphertext := gadget.HashBoundedBytes(api, sealed.Ciphertext[i*OpeningBytes:(i+1)*OpeningBytes])
+		ciphertext := gadget.HashBoundedBytes(api, sealed.Ciphertext[i*DepositOpeningBytes:(i+1)*DepositOpeningBytes])
 		chain = append(chain, api.Mul(count.Active[i], commitment), api.Mul(count.Active[i], ciphertext))
 	}
 	return slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot})

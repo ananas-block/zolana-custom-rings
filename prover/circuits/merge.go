@@ -1,5 +1,4 @@
-// Package merge binds an anonymous ring's SPP merge to a disclosure only its auditor opens.
-package merge
+package circuits
 
 import (
 	"fmt"
@@ -9,8 +8,8 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -22,15 +21,12 @@ import (
 // 3. Only the auditor opens the disclosure of the owner key, nullifier key, mint, amount, output blinding and every input commitment.
 
 const (
-	// Domain is "CRMG", the first element of the statement chain.
-	Domain         = 0x43524d47
-	EncryptionInfo = "CRING/mrg1"
-	// HeaderBytes is owner key, nullifier pk, mint, amount and output blinding, the output opening.
-	HeaderBytes = 32 + 32 + 32 + 8 + 32
+	// MergeHeaderBytes is owner key, nullifier pk, mint, amount and output blinding, the output opening.
+	MergeHeaderBytes = 32 + 32 + 32 + 8 + 32
 )
 
-// Input is one merge slot, the owner, asset and ring program come from the circuit.
-type Input struct {
+// MergeInput is one merge slot, the owner, asset and ring program come from the circuit.
+type MergeInput struct {
 	Domain       frontend.Variable
 	TreeID       frontend.Variable
 	Amount       frontend.Variable
@@ -38,6 +34,7 @@ type Input struct {
 	RingDataHash frontend.Variable
 }
 
+// AnonymousMergeCircuit binds an anonymous ring's SPP merge to a disclosure only its auditor opens.
 type AnonymousMergeCircuit struct {
 	NumInputs int `gnark:"-"`
 
@@ -56,24 +53,24 @@ type AnonymousMergeCircuit struct {
 	OwnerKey           [32]frontend.Variable
 	NullifierSecret    frontend.Variable
 	MintChunks         [2]frontend.Variable
-	Inputs             []Input
+	Inputs             []MergeInput
 	OutputTreeID       frontend.Variable
 	OutputRingDataHash frontend.Variable
 }
 
-// NewAnonymousMergeCircuit allocates the circuit of one supported merge width.
-func NewAnonymousMergeCircuit(n int) *AnonymousMergeCircuit {
-	return &AnonymousMergeCircuit{NumInputs: n, Inputs: make([]Input, n)}
-}
+// MergeWidths are the input counts the anonymous merge keys ship.
+var MergeWidths = []int{8, 24}
 
-// DisclosureBytes is the plaintext length of the n-input circuit.
-func DisclosureBytes(n int) int {
-	return HeaderBytes + 32*n
+func NewAnonymousMergeCircuit(width int) (*AnonymousMergeCircuit, error) {
+	if !slices.Contains(MergeWidths, width) {
+		return nil, fmt.Errorf("merge: unsupported input count %d, want one of %v", width, MergeWidths)
+	}
+	return &AnonymousMergeCircuit{NumInputs: width, Inputs: make([]MergeInput, width)}, nil
 }
 
 func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
-	if !mergeshared.IsSupportedInputCount(c.NumInputs) {
-		return fmt.Errorf("merge: unsupported input count %d, want one of %v", c.NumInputs, mergeshared.SupportedInputCounts)
+	if !slices.Contains(MergeWidths, c.NumInputs) {
+		return fmt.Errorf("merge: unsupported input count %d, want one of %v", c.NumInputs, MergeWidths)
 	}
 	if len(c.Inputs) != c.NumInputs {
 		return fmt.Errorf("merge: input count mismatch: got %d want %d", len(c.Inputs), c.NumInputs)
@@ -132,7 +129,7 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 		[]frontend.Variable{outputHash}, addressNullifiers, transaction.DerivePrivateTxBlinding(api, firstNullifier, c.NullifierSecret)))
 
 	// 5. The envelope seals the disclosure key to the auditor, its cipher bounds every key and ciphertext byte.
-	sealed := base.Envelope{Plaintext: c.DisclosureKey[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: EncryptionInfo}.Seal(api)
+	sealed := shared.Envelope{Plaintext: c.DisclosureKey[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.MergeEncInfo}.Seal(api)
 	// 6. The disclosure is the canonical opening of the output and every input commitment under the key's pad.
 	rc := rangecheck.New(api)
 	nullifierPkBytes, outputBlindingBytes := ringgadget.FieldToBytesBEWith(api, rc, nullifierPk), ringgadget.FieldToBytesBEWith(api, rc, outputBlinding)
@@ -141,8 +138,8 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 		hashBytes := ringgadget.FieldToBytesBEWith(api, rc, hash)
 		plaintext = append(plaintext, hashBytes[:]...)
 	}
-	fields := base.PackDisclosure(api, plaintext)
-	pad := ringgadget.DisclosurePad(api, base.MergeDisclosureDomain, [2]frontend.Variable(gadget.PackBytesBEWith(api, ringgadget.BoundedBytes{}, c.DisclosureKey[:])), c.Salt, len(fields))
+	fields := shared.PackDisclosure(api, plaintext)
+	pad := shared.DisclosurePad(api, shared.MergeDisclosureDomain, [2]frontend.Variable(gadget.PackBytesBEWith(api, ringgadget.BoundedBytes{}, c.DisclosureKey[:])), c.Salt, len(fields))
 	for i := range fields {
 		fields[i] = api.Add(fields[i], pad[i])
 	}
@@ -154,9 +151,9 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 // statement is the anonymous merge preimage, mirrored by MergeAnonymousPublicInput::elements in program-libs/interface/src/merge.rs.
 //
 //	CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_id, aud0, aud1, eph0, eph1, ct_hash, salt, HashChain4(fields)
-func (c *AnonymousMergeCircuit) statement(api frontend.API, sealed base.Sealed, fields []frontend.Variable) []frontend.Variable {
+func (c *AnonymousMergeCircuit) statement(api frontend.API, sealed shared.Sealed, fields []frontend.Variable) []frontend.Variable {
 	return slices.Concat(
-		[]frontend.Variable{Domain, c.PrivateTxHash, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
+		[]frontend.Variable{shared.MergeStatementDomain, c.PrivateTxHash, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
 		sealed.Auditor,
 		sealed.Eph,
 		[]frontend.Variable{gadget.HashBoundedBytes(api, sealed.Ciphertext), c.Salt, gadget.HashChain4(api, fields)},

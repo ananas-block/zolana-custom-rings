@@ -1,4 +1,4 @@
-package records
+package registry
 
 import (
 	"github.com/consensys/gnark/frontend"

@@ -7,8 +7,8 @@ import (
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -90,7 +90,7 @@ func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash fro
 // Fields lists the hashed fields in EncodedRuleTable::fields order.
 func (t Table) Fields() []frontend.Variable {
 	fields := make([]frontend.Variable, 0, PolicyTableFields)
-	fields = append(fields, base.PolicyTableDomain, PolicyTableVersion)
+	fields = append(fields, shared.PolicyTableDomain, PolicyTableVersion)
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}

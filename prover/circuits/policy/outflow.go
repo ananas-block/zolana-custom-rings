@@ -4,7 +4,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
-	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // constrainOutflow bounds every active limit row's outflow and returns whether one passes its co-sign bound.
@@ -17,7 +17,7 @@ func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, t tableView,
 	}
 	approval := frontend.Variable(0)
 	for r, row := range p.Limits {
-		// 2. others sums the row asset leaving the sender, net the row asset SPP settles publicly within u64 magnitude (shared.assertBalanceConservation).
+		// 2. others sums the row asset leaving the sender, net the row asset SPP settles publicly within u64 magnitude (transaction.assertBalanceConservation).
 		others, net := frontend.Variable(0), frontend.Variable(0)
 		for o, out := range outputs {
 			others = api.Add(others, api.Mul(api.IsZero(api.Sub(out.asset, row.Asset)), leaving[o]))
@@ -27,10 +27,10 @@ func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, t tableView,
 		}
 		active := t.limitActive[r]
 		// 3. The outflow, others less net, is never negative, a public deposit offsets at most what leaves the sender.
-		shared.AssertWhen(api, active, cmp.atMost(api, net, others))
+		transaction.AssertWhen(api, active, cmp.atMost(api, net, others))
 		outflow := api.Sub(others, net)
 		// 4. A nonzero cap bounds the outflow.
-		shared.AssertWhen(api, api.Mul(active, ringgadget.IsNonZero(api, row.Cap)), cmp.atMost(api, outflow, row.Cap))
+		transaction.AssertWhen(api, api.Mul(active, ringgadget.IsNonZero(api, row.Cap)), cmp.atMost(api, outflow, row.Cap))
 		// 5. An outflow past a nonzero co-sign bound demands the co-signer.
 		cosigned := api.Mul(active, ringgadget.IsNonZero(api, row.CosignAbove))
 		approval = api.Or(approval, api.Mul(cosigned, api.Sub(1, cmp.atMost(api, outflow, row.CosignAbove))))

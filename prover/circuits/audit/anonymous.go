@@ -1,8 +1,9 @@
-package base
+package audit
 
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -10,8 +11,9 @@ import (
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -24,6 +26,13 @@ import (
 // 7. A ring output's blinding binds its slot secret and its published tag through CRRA and TXRB.
 // 8. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
 // 9. The sender is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
+
+const (
+	// InputPrefixLen is the byte width of a spent hash's prefix on a commitment key.
+	InputPrefixLen = 16
+	// InputPrefixBits bounds a prefix of a canonical hash, two of them pack below q.
+	InputPrefixBits = 126
+)
 
 type AnonymousOutputWires struct {
 	DeliveryWires
@@ -53,7 +62,7 @@ type AnchorWires struct {
 	Epoch          frontend.Variable
 	Index          frontend.Variable
 	PathIndex      frontend.Variable
-	Path           [shared.StateTreeHeight]frontend.Variable
+	Path           [transaction.StateTreeHeight]frontend.Variable
 }
 
 // AnonymousAuditCircuit is the audit of anonymous transfers, one key per shape.
@@ -68,7 +77,7 @@ type AnonymousAuditCircuit struct {
 	SenderKey []frontend.Variable
 	// InputCount is the published nullifier count, from 1 to the input class.
 	InputCount frontend.Variable
-	Inputs     []UtxoWires
+	Inputs     []shared.UtxoWires
 	// SenderCommitment is 0 on an audit-only transfer and Poseidon(CRSC, sender_pk_hash, PrivateTxBlinding) under a policy.
 	SenderCommitment frontend.Variable
 	// Epoch is the tag epoch the program derives from the slot.
@@ -96,13 +105,13 @@ type spentInputs struct {
 
 func NewAnonymousAuditCircuit(shape AnonymousAuditShape) (*AnonymousAuditCircuit, error) {
 	if !slices.Contains(AnonymousAuditShapes[:], shape) && !slices.Contains(AnonymousEntryShapes[:], shape) {
-		return nil, fmt.Errorf("base: unsupported anonymous audit shape %+v, want one of %v or %v", shape, AnonymousAuditShapes, AnonymousEntryShapes)
+		return nil, fmt.Errorf("audit: unsupported anonymous audit shape %+v, want one of %v or %v", shape, AnonymousAuditShapes, AnonymousEntryShapes)
 	}
 	return &AnonymousAuditCircuit{
 		Shape:     shape,
 		Outputs:   make([]AnonymousOutputWires, shape.Outputs),
 		SenderKey: make([]frontend.Variable, shape.senderKeyLen()),
-		Inputs:    make([]UtxoWires, shape.InputClass),
+		Inputs:    make([]shared.UtxoWires, shape.InputClass),
 	}, nil
 }
 
@@ -145,9 +154,9 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	// 6. Every spent UTXO is the sender's and published.
 	spent := c.spend(api, rc, senderPkHash)
 	// 7. SPP's private transaction hash reopens over the same slots with no address input.
-	api.AssertIsEqual(c.PrivateTxHash, shared.PrivateTxHashCircuit(api, spent.hashes, outputHashes, nil, c.PrivateTxBlinding))
+	api.AssertIsEqual(c.PrivateTxHash, transaction.PrivateTxHashCircuit(api, spent.hashes, outputHashes, nil, c.PrivateTxBlinding))
 	// 8. The commitment is 0 on an audit-only transfer or opens to the sender the inputs prove, the policy proof reads it.
-	commitment := SenderCommitment(api, senderPkHash, c.PrivateTxBlinding)
+	commitment := shared.SenderCommitment(api, senderPkHash, c.PrivateTxBlinding)
 	api.AssertIsEqual(api.Mul(c.SenderCommitment, api.Sub(c.SenderCommitment, commitment)), 0)
 	// 9. Only the holder of tx_viewing_sk opens the disclosure of every output and spent UTXO.
 	statement := c.statement(api, envelope,
@@ -179,10 +188,10 @@ func (c *AnonymousAuditCircuit) deliverSlot(api frontend.API, rc frontend.Rangec
 	api.AssertIsBoolean(s.Self)
 	api.AssertIsEqual(api.Add(s.Inbox, s.Pair, s.Self), slot.ring)
 	// 3. Every stream position is below 64, the bound a recipient scans per stream and epoch.
-	rc.Check(s.Index, StreamIndexBits)
+	rc.Check(s.Index, shared.StreamIndexBits)
 	// 4. A self slot is change of the hidden sender, its tag stays free.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: s.Self, A: o.Output.OwnerPkHash, B: senderPkHash})
-	return anonymousSlot{delivery: d, inboxKey: InboxKey(api, c.RingProgramID, d.recipient), stream: s}
+	return anonymousSlot{delivery: d, inboxKey: shared.InboxKey(api, c.RingProgramID, d.recipient), stream: s}
 }
 
 // anchor proves the pair stream's key reached the recipient and returns the pair tag digest of the pair slot.
@@ -199,14 +208,14 @@ func (c *AnonymousAuditCircuit) anchor(api frontend.API, rc frontend.Rangechecke
 	// At most one slot is pair tagged, the anchor opens one first contact.
 	api.AssertIsBoolean(pairs)
 	// 2. The first contact's tag is an inbox tag of the pair slot's key at a position of its stream.
-	firstTag := TagField(api, rc, InboxTagDigest(api, inboxKey, a.Epoch, a.Index))
-	rc.Check(api.Mul(pairs, a.Index), StreamIndexBits)
+	firstTag := shared.TagField(api, rc, shared.InboxTagDigest(api, inboxKey, a.Epoch, a.Index))
+	rc.Check(api.Mul(pairs, a.Index), shared.StreamIndexBits)
 	// A pair stream lives KPairEpochs from its anchor and never before it.
-	rc.Check(api.Mul(pairs, api.Sub(c.Epoch, a.Epoch)), PairEpochBits)
+	rc.Check(api.Mul(pairs, api.Sub(c.Epoch, a.Epoch)), shared.PairEpochBits)
 	// 3. Only an inbox delivery to the same owner, or that owner's own change, takes the first contact's form.
-	blinding := ringgadget.DeriveRingOutputBlinding(api, a.FirstNullifier, AnonymousRingSecret(api, a.SlotSecret, firstTag), a.SlotIndex)
-	firstContact := shared.UtxoHashCircuit(api, shared.UtxoCircuitFields{
-		Domain:        shared.UtxoDomain,
+	blinding := shared.DeriveRingOutputBlinding(api, a.FirstNullifier, shared.AnonymousRingSecret(api, a.SlotSecret, firstTag), a.SlotIndex)
+	firstContact := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
+		Domain:        transaction.UtxoDomain,
 		Owner:         owner,
 		Asset:         a.Asset,
 		Amount:        a.Amount,
@@ -218,25 +227,25 @@ func (c *AnonymousAuditCircuit) anchor(api frontend.API, rc frontend.Rangechecke
 	// 4. The first contact is a leaf of the state tree the program names, without a pair slot the root stays free.
 	root := abstractor.Call(api, gadget.MerkleRootGadget{
 		Hash:   firstContact,
-		Index:  api.ToBinary(a.PathIndex, shared.StateTreeHeight),
+		Index:  api.ToBinary(a.PathIndex, transaction.StateTreeHeight),
 		Path:   a.Path[:],
-		Height: shared.StateTreeHeight,
+		Height: transaction.StateTreeHeight,
 	})
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: pairs, A: root, B: c.FirstContactRoot})
 	// 5. The pair key derives from the first contact's slot secret, the recipient rebuilds it from its viewing key.
-	return PairTagDigest(api, PairKey(api, a.SlotSecret), c.Epoch, index)
+	return shared.PairTagDigest(api, shared.PairKey(api, a.SlotSecret), c.Epoch, index)
 }
 
 // assertTag proves an inbox or pair slot's tag and binds every ring output's tag into its blinding.
 func (c *AnonymousAuditCircuit) assertTag(api frontend.API, rc frontend.Rangechecker, o AnonymousOutputWires, s anonymousSlot, pairTag frontend.Variable, i int) {
 	digest := api.Add(
-		api.Mul(s.stream.Inbox, InboxTagDigest(api, s.inboxKey, c.Epoch, s.stream.Index)),
+		api.Mul(s.stream.Inbox, shared.InboxTagDigest(api, s.inboxKey, c.Epoch, s.stream.Index)),
 		api.Mul(s.stream.Pair, pairTag),
 	)
 	// 1. A proven tag is low128 of its stream digest, TagField refuses the split of digest + q.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Add(s.stream.Inbox, s.stream.Pair), A: s.stream.Tag, B: TagField(api, rc, digest)})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Add(s.stream.Inbox, s.stream.Pair), A: s.stream.Tag, B: shared.TagField(api, rc, digest)})
 	// 2. The ring secret binds the published tag, an anchor reads a first contact's tag back from its blinding.
-	c.assertBlinding(api, o.Output, s.outputSlot, AnonymousRingSecret(api, s.secret, s.stream.Tag), i)
+	c.assertBlinding(api, o.Output, s.outputSlot, shared.AnonymousRingSecret(api, s.secret, s.stream.Tag), i)
 }
 
 // spend proves every spent UTXO is the hidden sender's and lies below the published count.
@@ -292,10 +301,10 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 //	pack_disclosure(u64be(amount) per input slot), asset and blinding per published input
 func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, layout auditLayout, nullifierPks, slotBytes []frontend.Variable, spent spentInputs) frontend.Variable {
 	// SolanaOwnerIdentity bounds the sender key bytes, deliverSlot and slotDisclosure the slot bytes.
-	head := slices.Concat(nullifierPks, PackDisclosure(api, slices.Concat(c.SenderKey, slotBytes)))
+	head := slices.Concat(nullifierPks, shared.PackDisclosure(api, slices.Concat(c.SenderKey, slotBytes)))
 	if c.Shape.FullOpenings {
 		// Input 0 is a UTXO, its key is the key of every spent UTXO.
-		head = slices.Concat([]frontend.Variable{c.Inputs[0].NullifierPk}, head, PackDisclosure(api, spent.amounts))
+		head = slices.Concat([]frontend.Variable{c.Inputs[0].NullifierPk}, head, shared.PackDisclosure(api, spent.amounts))
 	}
 	return e.disclose(api, layout.choices(api, LayoutExits), func(choice layoutChoice) disclosureLayout {
 		return choice.counted(api, slices.Concat(c.seedOut(choice), head), spent.tail, spent.count)
@@ -309,4 +318,25 @@ func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, out
 	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires),
 		outputChain, bodyChain, disclosureChain, c.PrivateTxHash, tagChain, c.Epoch, c.FirstContactRoot, c.SenderCommitment,
 	))
+}
+
+// commitmentTail is hashes[0] in full, then the prefixes of the other hashes two per field, the last half zero for an odd prefix count.
+func commitmentTail(api frontend.API, rc frontend.Rangechecker, hashes []frontend.Variable) []frontend.Variable {
+	prefixes := make([]frontend.Variable, 0, len(hashes))
+	for _, hash := range hashes[1:] {
+		// The canonical split leaves one prefix per hash, the prefix of hash + q would name another note.
+		prefix, _ := ringgadget.SplitField(api, rc, hash, 8*(32-InputPrefixLen))
+		prefixes = append(prefixes, prefix)
+	}
+	shift := new(big.Int).Lsh(big.NewInt(1), InputPrefixBits)
+	tail := []frontend.Variable{hashes[0]}
+	for k := 0; k < len(prefixes); k += 2 {
+		second := frontend.Variable(0)
+		if k+1 < len(prefixes) {
+			second = prefixes[k+1]
+		}
+		// Both prefixes lie below 2^InputPrefixBits, the pair packs without a wrap and decodes to one pair.
+		tail = append(tail, api.Add(api.Mul(prefixes[k], shift), second))
+	}
+	return tail
 }
