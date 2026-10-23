@@ -1,75 +1,93 @@
-//! Auditor-side client for the custom ring: scans the indexer for transactions
-//! carrying the ring's auditor view tag, recovers the per-transaction viewing
-//! secret key from the auditor message, and returns typed decrypted transaction
-//! data.
-//!
-//! It never depends on test utilities: the end-to-end test asserts on the data
-//! this crate returns, so it has to be the same code path an external auditor
-//! would run.
-//!
-//! ## What goes where
-//!
-//! The ring SDK owns instruction construction and proof inputs. This crate owns
-//! auditor encryption, reader keys, ring-scoped indexer scans, ring
-//! attribution through the Solana call stack, and decrypted audit results.
-//!
-//! The localnet test drives both crates and compares the audit result with the
-//! transfer inputs.
-//!
-//! ## Audit coverage
-//!
-//! Auditor keys open transaction slots and verified deposit disclosures.
-//! Deposits without disclosure expose no opening to the auditor.
+//! The custom ring auditor client, free of test utilities so the end-to-end test runs its path.
 
-mod counters;
+pub mod anonymous;
+mod created;
 mod decrypt;
+pub mod delivered;
 mod deposit;
-mod deposit_encryption;
 mod deposit_payload;
+mod disclosure;
 mod encryption;
 mod error;
 mod indexer;
+mod known;
+mod merge_audit;
 mod origin;
+mod paging;
+mod program_data;
 mod reader;
-mod record;
+pub mod records;
 mod recover;
+#[cfg(feature = "rpc")]
+pub mod rpc;
 mod scan;
+pub mod tags;
 mod types;
 
+pub use crate::anonymous::{
+    AnonymousRingScan, AnonymousRingState, AnonymousRingSync, AnonymousRingUtxo, AnonymousStream,
+    DecoyLeaf, IssuedAddress, PairAnchor, PaymentStream, PaymentTag, ReceivedAnchor,
+    SentFirstContact, TagAllocation, ADDRESS_GAP, ANCHOR_DECOYS, ANONYMOUS_RING_STATE_VERSION,
+    DECOYS_PER_TREE, DEPOSIT_GAP, MAX_FETCH_EPOCHS, MAX_ISSUED_ADDRESSES, PAIR_IDLE_EPOCHS,
+};
 #[cfg(feature = "solana-rpc")]
-pub use crate::origin::{ConfirmedTransaction, ORIGIN_TRANSACTION_CONFIG};
+pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
+pub use crate::tags::{IndexerReads, TagWindow, DEFAULT_TAG_WINDOW, TAGS_PER_REQUEST};
 pub use crate::{
-    counters::{find_counters_message, CountersSeal, SealedCounters, SpendCountersError},
-    decrypt::TransactionAudit,
+    created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
+    decrypt::{EscrowedKeys, KnownUtxos, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
-    deposit_encryption::{DepositEncryption, DepositOpen, DepositOpening, DepositSeal},
-    encryption::{
-        auditor_view_tag, AnonymousDisclosure, AnonymousOutputOpening, AuditEncryptionError,
-        AuditInputOpening, AuditOutputOpening, AuditorEncryption, AuditorMessage,
-        NullifierKeyEnvelope, SealedNullifierKey,
+    deposit_payload::deposit_payload,
+    disclosure::{
+        AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
+        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
+        PublishedOutputs, SealedAuditEnvelope,
     },
-    error::{AuditError, RecoveryError},
+    encryption::{
+        auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
+        DepositOpening, MergeDisclosureEncryption, MergeOpening, NullifierKeyEnvelope,
+        SealedNullifierKey,
+    },
+    error::{AnonymousError, AuditError},
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
+    known::KnownUtxoIndex,
+    merge_audit::{
+        AuditedMerge, MergeAudit, MergeAuditPage, MergeAuditResult, MergeKeys, UnresolvedMerge,
+    },
     origin::{
-        ring_event_origin_in, ring_invoked_in, ring_withdrawals_in, ConfirmedDeposit, OriginError,
-        RingOrigin, RingWithdrawal, TransactionOrigin,
+        ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
+        ConfirmedMergeDisclosure, RingOrigin, RingWithdrawal, TransactionOrigin,
     },
     reader::{
         Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError, READ_ACCESS_RECORD_PDA_SEED,
     },
-    record::{MalformedRecordCarrier, RecordCarrier},
-    recover::{
-        MemberRecovery, NoteDataHashes, NoteHashResolver, RecoveredNotes, RecoveryEnvironment,
-        RingRecovery, SourceMember,
+    records::{apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RegistryTip},
+    recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
+    scan::{AuditedPage, RingScan, RingScanPage, ScanPage},
+    types::{
+        AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
+        AuditedUtxo, CreatedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening,
+        OutputPayloadError, OutputPayloadErrorKind, UtxoOwner,
     },
-    scan::{AuditedPage, RingAudit, RingEnvironment, RingScan, RingScanPage},
-    types::{AuditedOutput, AuditedSpendRecord, AuditedTransaction},
 };
-pub use custom_ring_interface::AUDITOR_MESSAGE_LEN;
-pub use zolana_ring_indexer::rpc::{
-    GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse,
-    GetRingSpendRecordResponse, RingMemberProofRequest, RingRpcError, RingSpendRecord,
-    RingSpendRecordRequest,
-};
+pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
+pub use zolana_ring_indexer::rpc::RingRpcError;
 
-pub use deposit_payload::deposit_payload;
+/// The answer to a one-item request, a holder that answers more or less is refused.
+pub fn exactly_one<T>(answers: Vec<T>) -> Result<T, zolana_transaction::TransactionError> {
+    let got = answers.len();
+    <[T; 1]>::try_from(answers)
+        .map(|[answer]| answer)
+        .map_err(|_| zolana_transaction::TransactionError::IncompleteDerivation { got, want: 1 })
+}
+
+/// One answer per request, a holder that answers more or less is refused.
+pub(crate) fn exactly_one_each<T>(
+    answers: Vec<T>,
+    want: usize,
+) -> Result<Vec<T>, zolana_transaction::TransactionError> {
+    match answers.len() {
+        got if got == want => Ok(answers),
+        got => Err(zolana_transaction::TransactionError::IncompleteDerivation { got, want }),
+    }
+}

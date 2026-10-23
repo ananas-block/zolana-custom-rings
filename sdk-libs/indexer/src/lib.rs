@@ -1,7 +1,6 @@
-pub mod key_registry;
-pub mod proof;
+pub mod records;
 pub mod rpc;
-pub mod spend_record;
+pub mod tree;
 
 use solana_address::Address;
 
