@@ -1,35 +1,180 @@
 {
+  "release": "https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-v24",
   "keys": {
-    "custom_ring_base.key": {
-      "sha256": "6a99eb09a8f5b5286c032f461550a894c2a8b522f246678f3987ee542e7c6f5c",
-      "size": 45118581,
+    "custom_ring_apply_records_1.key": {
+      "sha256": "4f1672078b3674747095db4a35eb83ca9808c14ee656b6d8cf8ab983356e9aef",
+      "size": 4675582,
       "source": "release"
     },
-    "custom_ring_compressed_policy.key": {
-      "sha256": "836c3d218a67d87d45a900fc8b45594ce9ef2fcc26122b26776e8c0e002995c8",
-      "size": 379108331,
+    "custom_ring_apply_records_16.key": {
+      "sha256": "1019a112fae03241b1539d88866cc82054eb0587a66683bff47acfc08c218534",
+      "size": 75332745,
       "source": "release"
     },
-    "custom_ring_delegate_policy.key": {
-      "sha256": "5cca9ae5ae6034b6f29e2b6c6506513fc1bd51ea979218fca54ee0f0b2a9e5af",
-      "size": 142195462,
+    "custom_ring_audit_anonymous_12_2.key": {
+      "sha256": "ecffd6e90577458575ce9a0ae09db8dcf6a8a1c2ba022e81c3bcdbcb63041c44",
+      "size": 61036733,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_12_4.key": {
+      "sha256": "c6355018555b9123dfdb77103e5cf59a2aebb9075567568d3d4a60383b051193",
+      "size": 85604027,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_12_8.key": {
+      "sha256": "50e561c8250afeb558b3e566958221556b95c5de6b81513c517d168faa408a87",
+      "size": 143699451,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_16_2.key": {
+      "sha256": "f79762cfebcaee8345ff0801a01914b319fad72472bc8ddc3d023f38bf49ae1b",
+      "size": 63221139,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_16_4.key": {
+      "sha256": "22547cd587214750f5ea9ae2da041e60cb463b2b2944ac7cc735f59e4a1a2a70",
+      "size": 87799361,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_16_8.key": {
+      "sha256": "6893ec5dc641edc855e5a6e69f67aa58123de5ab19d18fc21a45b785910525ba",
+      "size": 145901744,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_1_16.key": {
+      "sha256": "c27e5847fe6059919923e586ee13037cd40d1833a83bcb12fe3b4bf588d53f5c",
+      "size": 253283764,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_24_2.key": {
+      "sha256": "fd810419f6f4bcc9c002940951bf7f2058485be8b84f5e45207f8825f05c67bd",
+      "size": 67605507,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_24_4.key": {
+      "sha256": "7882a676a73c5f78954bbe7b70de938d090eaf8e24f085e4613177011dd829c9",
+      "size": 92187378,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_32_2.key": {
+      "sha256": "1fb73e72c92a02d001945ba6fc629009b7c769b45dd49f6201fd404762c49c11",
+      "size": 72001295,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_4_2.key": {
+      "sha256": "980f73cc690eca0b5e5162f1ea18c4981c698d8bee4685708ff6b43d86821c73",
+      "size": 52459615,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_4_4.key": {
+      "sha256": "6eab25d270f3c1f63dccbeae3352eebefd9d04575c2349ea5765a2ca9989c94b",
+      "size": 81220628,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_4_8.key": {
+      "sha256": "703111f2d57a94a32c496dc69d99edaa5e8c6b53a2049193c750b0504f3d06f4",
+      "size": 139317697,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_8_2.key": {
+      "sha256": "7bcd1c552eef79f9e0a10e8a83a8aa40899e12269529ebcb452f2a2dfa4d3d84",
+      "size": 54642799,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_8_4.key": {
+      "sha256": "3dac9cd84e4463d6344d715389a943baa20e8dfcf930930df843d7bbaf27ca29",
+      "size": 83414973,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_8_8.key": {
+      "sha256": "355cbc38bcba1c88f8ab4a8ff778b6be9a07d0f30f317b980876e9735f279cb5",
+      "size": 141516454,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_entry_8_2.key": {
+      "sha256": "faefdddb575e731b3b6118c318676ba151d12c112fdd1fec3348caf2b19ae66e",
+      "size": 61287138,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_entry_8_4.key": {
+      "sha256": "311b4226255b6a59e2ad7a9d7df923ac875fc3d02421aa4beae7de19d2abd537",
+      "size": 85857463,
+      "source": "release"
+    },
+    "custom_ring_audit_anonymous_entry_8_8.key": {
+      "sha256": "976b914967eb08a06f29f1dc79717ffbbc55b2cb728cfc114191cb5b10e3f146",
+      "size": 143956726,
+      "source": "release"
+    },
+    "custom_ring_audit_delivered_16.key": {
+      "sha256": "12c00572c7f77f48a7da7f37e0ec2002e0ceeaf6362b8912c4723b1a258b6e3b",
+      "size": 243667518,
+      "source": "release"
+    },
+    "custom_ring_audit_delivered_8.key": {
+      "sha256": "a78c491900c172dc3fd06f050fedf52e067b295aeffd877279c6febb05f3a572",
+      "size": 130816117,
+      "source": "release"
+    },
+    "custom_ring_audit_packed_2.key": {
+      "sha256": "bdeaec80202024d07138dc3ae03c56b43646c05289bca449623cbbb9e1dcb397",
+      "size": 22977805,
+      "source": "release"
+    },
+    "custom_ring_audit_packed_4.key": {
+      "sha256": "8a9d43a69032fe1c96699074744fcd70a264f98aeaac64f9c16cfa38d54947a2",
+      "size": 26631745,
       "source": "release"
     },
     "custom_ring_deposit.key": {
-      "sha256": "248bf150c4717700d5c978a47d6b6b394bed00d8fb61f29c7ea2142261ca2c64",
-      "size": 71190230,
+      "sha256": "74cef2529908ac7870e8de0844610d2f8fefd4be8a1e31c8b8cc2f58c4b8b462",
+      "size": 55825077,
       "source": "release"
     },
-    "custom_ring_policy.key": {
-      "sha256": "506d4e70b89aa188c891ecd8c63ef74fc99edd605dbe40a2a1ffbee1fe3bfd1e",
-      "size": 145414110,
+    "custom_ring_merge_anonymous_24.key": {
+      "sha256": "5dbeffbe7bcafd48dd16bf69963d45f1241a3decd0f046d8073dc0ee62aae05a",
+      "size": 32009433,
+      "source": "release"
+    },
+    "custom_ring_merge_anonymous_8.key": {
+      "sha256": "3358396d9acb9d6927437f4b359b5d0b195df989484055b2be47b5db1d645d5f",
+      "size": 22418971,
+      "source": "release"
+    },
+    "custom_ring_policy_delegate_2x2.key": {
+      "sha256": "eb7746d07097843fa3c5c3bb801a28ad0d0b620a8ceaf79dcfcd2c8fdebd9774",
+      "size": 16164775,
+      "source": "release"
+    },
+    "custom_ring_policy_delegate_4x4.key": {
+      "sha256": "972202e46f2436bda43b6a328637ee23f68e92862aee9a0ab1a01a4ba04fcc52",
+      "size": 28689936,
+      "source": "release"
+    },
+    "custom_ring_policy_member_16.key": {
+      "sha256": "acdf7fc309058df3f0a73b6286f3a46fea85e020d600fd627ed0ad3f8e191936",
+      "size": 97639297,
+      "source": "release"
+    },
+    "custom_ring_policy_member_2.key": {
+      "sha256": "f337fba386bf0b295266e37eac78f7dc15841a1d2e16202976a540478e8e10f8",
+      "size": 15654611,
+      "source": "release"
+    },
+    "custom_ring_policy_member_4.key": {
+      "sha256": "12c87b5e532311585d876a17d5f76b91cbe9bf9bac5905ca7826f93209857f81",
+      "size": 27371811,
+      "source": "release"
+    },
+    "custom_ring_policy_member_8.key": {
+      "sha256": "8680d2e4bd2e437c3cba8b64c9e92da7bb93d016481a32cab563da4e0ccf3b43",
+      "size": 50809506,
       "source": "release"
     },
     "custom_ring_register_key.key": {
-      "sha256": "6f4ce5a730b7d61a8938ab9798ac3d520d1b8e818b337eeb9ff68ffb8d332bc1",
-      "size": 32829617,
+      "sha256": "a8fca81c9e1e4b1c66211d787aaab1f71e1401228b82f85bbc012ed0c9ef0603",
+      "size": 17031964,
       "source": "release"
     }
-  },
-  "release": "https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-v23"
+  }
 }

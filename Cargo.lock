@@ -777,12 +777,6 @@ checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bitflags"
-version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
-
-[[package]]
-name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
@@ -1516,12 +1510,10 @@ name = "custom-ring-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bincode 2.0.1",
  "bytemuck",
  "clap",
  "console",
  "custom-ring-interface",
- "custom-ring-program",
  "custom-ring-sdk",
  "dialoguer",
  "hex",
@@ -1542,16 +1534,24 @@ dependencies = [
  "solana-transaction-error",
  "spl-token-2022-interface 2.1.0",
  "thiserror 2.0.20",
+ "tokio",
  "toml",
  "toml_edit 0.22.27",
- "wincode",
+ "zolana-api",
+ "zolana-cli-common",
  "zolana-client",
+ "zolana-event",
+ "zolana-event-parser",
  "zolana-indexer-api",
  "zolana-interface",
  "zolana-keypair",
  "zolana-ring-client",
+ "zolana-ring-indexer",
+ "zolana-ring-keys",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
- "zolana-ring-rpc",
+ "zolana-ring-transaction",
+ "zolana-secret-file",
  "zolana-transaction",
 ]
 
@@ -1559,13 +1559,24 @@ dependencies = [
 name = "custom-ring-interface"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
+ "borsh",
  "bytemuck",
  "groth16-solana",
+ "hex",
+ "serde",
  "serde_json",
  "solana-address 2.6.1",
+ "solana-bn254",
+ "solana-program-error",
+ "spl-token-2022-interface 2.1.0",
+ "thiserror 2.0.20",
  "wincode",
+ "zolana-event",
  "zolana-hasher",
+ "zolana-instruction",
  "zolana-interface",
+ "zolana-keypair",
  "zolana-ring-policy",
 ]
 
@@ -1577,9 +1588,12 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytemuck",
+ "cadence",
+ "cadence-macros",
  "clap",
  "custom-ring-interface",
  "futures",
+ "hex",
  "jsonrpsee",
  "log",
  "photon-indexer",
@@ -1588,6 +1602,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-account 4.3.2",
+ "solana-clock",
  "solana-pubkey 4.2.1",
  "solana-signature",
  "solana-transaction-status-client-types",
@@ -1599,7 +1614,7 @@ dependencies = [
  "zolana-indexer-api",
  "zolana-interface",
  "zolana-ring-indexer",
- "zolana-ring-key-registry",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
 ]
 
@@ -1609,29 +1624,30 @@ version = "0.1.0"
 dependencies = [
  "bincode 2.0.1",
  "bytemuck",
- "curve25519-dalek",
  "custom-ring-interface",
- "ed25519-dalek",
  "groth16-solana",
  "hex",
- "mollusk-svm",
+ "litesvm",
  "pinocchio 0.11.2",
  "pinocchio-system",
+ "serde_json",
  "solana-account 4.3.2",
+ "solana-address 2.6.1",
+ "solana-bn254",
  "solana-curve25519 4.0.1",
  "solana-instruction",
+ "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
- "solana-program-error",
- "solana-pubkey 4.2.1",
- "thiserror 2.0.20",
+ "solana-message",
+ "solana-signer",
+ "solana-transaction",
+ "solana-transaction-error",
  "wincode",
  "x25519-dalek",
  "zolana-account-checks",
  "zolana-hasher",
  "zolana-interface",
- "zolana-program",
  "zolana-ring-policy",
- "zolana-test-utils",
  "zolana-tree",
 ]
 
@@ -1640,25 +1656,22 @@ name = "custom-ring-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "borsh",
  "bytemuck",
  "curve25519-dalek",
  "custom-ring-interface",
+ "ed25519-dalek",
  "futures",
- "groth16-solana",
  "hex",
- "num-bigint 0.4.8",
- "rand 0.8.8",
+ "http",
+ "rand_core 0.9.5",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "solana-account 4.3.2",
  "solana-address 2.6.1",
- "solana-hash",
+ "solana-commitment-config",
  "solana-instruction",
  "solana-instruction-error",
  "solana-message",
- "solana-pubkey 4.2.1",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-signature",
@@ -1666,23 +1679,25 @@ dependencies = [
  "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
+ "spl-token-2022-interface 2.1.0",
  "thiserror 2.0.20",
  "tokio",
  "wincode",
  "zeroize",
+ "zolana-api",
  "zolana-client",
  "zolana-event",
  "zolana-hasher",
  "zolana-indexer-api",
  "zolana-interface",
  "zolana-keypair",
- "zolana-merkle-tree",
  "zolana-program",
  "zolana-ring-client",
- "zolana-ring-key-registry",
+ "zolana-ring-indexer",
+ "zolana-ring-keys",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-transaction",
- "zolana-test-utils",
  "zolana-transaction",
  "zolana-tree",
 ]
@@ -1695,7 +1710,6 @@ dependencies = [
  "bincode 2.0.1",
  "custom-ring-cli",
  "custom-ring-interface",
- "custom-ring-program",
  "custom-ring-sdk",
  "hex",
  "serde_json",
@@ -1708,13 +1722,13 @@ dependencies = [
  "solana-signer",
  "solana-system-interface 3.2.0",
  "tokio",
- "zeroize",
  "zolana-client",
  "zolana-interface",
  "zolana-keypair",
  "zolana-program",
  "zolana-program-test",
  "zolana-ring-client",
+ "zolana-ring-keys",
  "zolana-ring-policy",
  "zolana-ring-rpc",
  "zolana-ring-transaction",
@@ -1874,37 +1888,6 @@ dependencies = [
  "sha2 0.10.9",
  "signature 2.2.0",
  "untrusted",
-]
-
-[[package]]
-name = "defmt"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
-dependencies = [
- "bitflags 1.3.2",
- "defmt-macros",
-]
-
-[[package]]
-name = "defmt-macros"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
-dependencies = [
- "defmt-parser",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "defmt-parser"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
-dependencies = [
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2248,29 +2231,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
-]
-
-[[package]]
-name = "env_filter"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
-dependencies = [
- "log",
- "regex",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
-dependencies = [
- "anstream",
- "anstyle",
- "env_filter",
- "jiff",
- "log",
 ]
 
 [[package]]
@@ -3217,42 +3177,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jiff"
-version = "0.2.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
-dependencies = [
- "defmt",
- "jiff-core",
- "jiff-static",
- "log",
- "portable-atomic",
- "portable-atomic-util",
- "serde_core",
-]
-
-[[package]]
-name = "jiff-core"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
-dependencies = [
- "defmt",
-]
-
-[[package]]
-name = "jiff-static"
-version = "0.2.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
-dependencies = [
- "jiff-core",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "jobserver"
 version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3461,7 +3385,7 @@ version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "libc",
  "plain",
  "redox_syscall 0.9.5",
@@ -3763,72 +3687,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mollusk-svm"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "283ff0ca84f639081a577c16d2bd705e6a45cce79428965860c5973aae6c2169"
-dependencies = [
- "bincode 1.3.3",
- "mollusk-svm-error",
- "mollusk-svm-result",
- "solana-account 4.3.2",
- "solana-bpf-loader-program",
- "solana-clock",
- "solana-compute-budget",
- "solana-epoch-rewards",
- "solana-epoch-schedule",
- "solana-hash",
- "solana-instruction",
- "solana-instruction-error",
- "solana-instructions-sysvar 3.0.1",
- "solana-loader-v3-interface 7.0.0",
- "solana-logger",
- "solana-message",
- "solana-precompile-error",
- "solana-program-error",
- "solana-program-runtime",
- "solana-pubkey 4.2.1",
- "solana-rent",
- "solana-sdk-ids",
- "solana-slot-hashes",
- "solana-stake-history",
- "solana-svm-callback",
- "solana-svm-feature-set",
- "solana-svm-log-collector",
- "solana-svm-timings",
- "solana-syscalls",
- "solana-system-program",
- "solana-sysvar",
- "solana-sysvar-id",
- "solana-transaction-context",
- "solana-transaction-error",
-]
-
-[[package]]
-name = "mollusk-svm-error"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "557ec90b7648b8b1a17c63fcd353a8fcb520bfd8ed2796dcccc40c4338ff3dd1"
-dependencies = [
- "solana-pubkey 4.2.1",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "mollusk-svm-result"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa04c37c77daa8cb23cdaa36d1924575ed14ea208376c8631d709417fc900b8"
-dependencies = [
- "solana-account 4.3.2",
- "solana-instruction",
- "solana-program-error",
- "solana-pubkey 4.2.1",
- "solana-rent",
- "solana-transaction-error",
-]
-
-[[package]]
 name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4009,7 +3867,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
 ]
 
 [[package]]
@@ -4465,15 +4323,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
-name = "portable-atomic-util"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
-dependencies = [
- "portable-atomic",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4580,7 +4429,7 @@ checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
 dependencies = [
  "bit-set",
  "bit-vec",
- "bitflags 2.13.1",
+ "bitflags",
  "num-traits",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
@@ -4729,7 +4578,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "memchr",
  "unicase",
 ]
@@ -4971,7 +4820,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
 ]
 
 [[package]]
@@ -4980,7 +4829,7 @@ version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
 ]
 
 [[package]]
@@ -5108,9 +4957,11 @@ name = "ring-xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "custom-ring-cli",
+ "custom-ring-interface",
+ "hex",
  "serde_json",
  "xtask",
+ "zolana-cli-common",
 ]
 
 [[package]]
@@ -5228,7 +5079,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -5542,7 +5393,7 @@ version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -5790,16 +5641,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "signal-hook"
-version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
-
-[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5914,7 +5755,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26788ba0d7eb5b250edda3e1d393739bafd5daf94882f2261d14f5ab0d6a25e0"
 dependencies = [
  "bincode 1.3.3",
- "qualifier_attr",
  "serde",
  "serde_bytes",
  "serde_derive",
@@ -6567,7 +6407,7 @@ version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e0732294560e88ecdb2bbc656e67383e9f88c78ec09469cef172f0d28cd1bcd"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "solana-account-info",
  "solana-instruction",
  "solana-instruction-error",
@@ -6584,7 +6424,7 @@ version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e38363a181313d607f7a118df2b401bb27b477a0104b09283cbf504f5f0f00cc"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "solana-account-info",
  "solana-instruction",
  "solana-instruction-error",
@@ -6680,19 +6520,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-logger"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef7421d1092680d72065edbf5c7605856719b021bf5f173656c71febcdd5d003"
-dependencies = [
- "env_logger",
- "lazy_static",
- "libc",
- "log",
- "signal-hook",
-]
-
-[[package]]
 name = "solana-message"
 version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6770,7 +6597,7 @@ version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a2a582d7863548f047f49aa3745c076cfa9e1364baa080ef0c1210f0e4ebda"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "solana-pubkey 4.2.1",
 ]
 
@@ -7520,7 +7347,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64d61811155533aebcf806e694d3ed91be7fc168dc9bdcf25e8eb98b9234c7c3"
 dependencies = [
  "bincode 1.3.3",
- "qualifier_attr",
  "serde",
  "solana-account 4.3.2",
  "solana-instruction",
@@ -8174,7 +8000,7 @@ checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bitflags 2.13.1",
+ "bitflags",
  "byteorder",
  "bytes",
  "crc",
@@ -8217,7 +8043,7 @@ checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
  "base64 0.22.1",
- "bitflags 2.13.1",
+ "bitflags",
  "byteorder",
  "crc",
  "dotenvy",
@@ -8782,7 +8608,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "async-compression",
- "bitflags 2.13.1",
+ "bitflags",
  "bytes",
  "futures-core",
  "futures-util",
@@ -8804,7 +8630,7 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags",
  "bytes",
  "http",
  "percent-encoding",
@@ -9905,6 +9731,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zolana-cli-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "groth16-solana",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "zolana-client"
 version = "0.1.0"
 dependencies = [
@@ -10055,6 +9894,8 @@ dependencies = [
  "getrandom 0.3.4",
  "hkdf",
  "rand 0.8.8",
+ "serde",
+ "serde_bytes",
  "sha2 0.10.9",
  "solana-address 2.6.1",
  "solana-keypair",
@@ -10148,19 +9989,27 @@ name = "zolana-ring-client"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "borsh",
  "bs58",
+ "bytemuck",
  "curve25519-dalek",
  "custom-ring-interface",
  "hex",
  "http",
  "p256 0.13.2",
+ "rand 0.8.8",
+ "rand_core 0.9.5",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-commitment-config",
+ "solana-keypair",
  "solana-rpc-client-api",
  "solana-signature",
+ "solana-signer",
  "solana-transaction-status-client-types",
  "thiserror 2.0.20",
  "tokio",
@@ -10175,9 +10024,11 @@ dependencies = [
  "zolana-keypair",
  "zolana-ring-client",
  "zolana-ring-indexer",
- "zolana-ring-key-registry",
+ "zolana-ring-keys",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-transaction",
+ "zolana-secret-file",
  "zolana-transaction",
 ]
 
@@ -10185,28 +10036,47 @@ dependencies = [
 name = "zolana-ring-indexer"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "custom-ring-interface",
  "serde",
  "solana-address 2.6.1",
  "thiserror 2.0.20",
- "wincode",
- "zolana-event",
- "zolana-hasher",
  "zolana-indexer-api",
- "zolana-interface",
- "zolana-ring-key-registry",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
 ]
 
 [[package]]
-name = "zolana-ring-key-registry"
+name = "zolana-ring-keys"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "bs58",
+ "ctr",
+ "custom-ring-interface",
+ "hex",
+ "hkdf",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-address 2.6.1",
+ "thiserror 2.0.20",
+ "zeroize",
+ "zolana-hasher",
+ "zolana-keypair",
+]
+
+[[package]]
+name = "zolana-ring-member-registry"
 version = "0.1.0"
 dependencies = [
  "custom-ring-interface",
+ "hex",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "zolana-hasher",
- "zolana-merkle-tree",
+ "zolana-ring-policy",
 ]
 
 [[package]]
@@ -10220,11 +10090,8 @@ dependencies = [
  "serde_json",
  "solana-address 2.6.1",
  "thiserror 2.0.20",
- "zolana-client",
+ "wincode",
  "zolana-hasher",
- "zolana-interface",
- "zolana-keypair",
- "zolana-transaction",
 ]
 
 [[package]]
@@ -10232,8 +10099,9 @@ name = "zolana-ring-rpc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
- "bincode 2.0.1",
+ "borsh",
  "bytemuck",
  "clap",
  "custom-ring-interface",
@@ -10242,7 +10110,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "jsonrpsee",
- "libc",
  "log",
  "p256 0.13.2",
  "psl",
@@ -10252,13 +10119,11 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solana-account 4.3.2",
- "solana-account-decoder-client-types",
  "solana-address 2.6.1",
  "solana-commitment-config",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
  "solana-rpc-client",
- "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
  "thiserror 2.0.20",
@@ -10269,11 +10134,18 @@ dependencies = [
  "zeroize",
  "zolana-api",
  "zolana-client",
+ "zolana-event",
+ "zolana-event-parser",
+ "zolana-hasher",
  "zolana-indexer-api",
  "zolana-interface",
  "zolana-keypair",
  "zolana-ring-client",
+ "zolana-ring-indexer",
+ "zolana-ring-member-registry",
+ "zolana-ring-policy",
  "zolana-ring-transaction",
+ "zolana-secret-file",
  "zolana-transaction",
 ]
 
@@ -10281,12 +10153,18 @@ dependencies = [
 name = "zolana-ring-transaction"
 version = "0.1.0"
 dependencies = [
- "borsh",
+ "custom-ring-interface",
+ "rand 0.8.8",
  "solana-address 2.6.1",
  "solana-signature",
+ "thiserror 2.0.20",
+ "wincode",
  "zolana-event",
+ "zolana-hasher",
+ "zolana-instruction",
  "zolana-interface",
  "zolana-keypair",
+ "zolana-ring-keys",
  "zolana-transaction",
 ]
 
@@ -10300,6 +10178,16 @@ dependencies = [
  "serde",
  "serde_json",
  "tower",
+]
+
+[[package]]
+name = "zolana-secret-file"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "libc",
+ "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]
@@ -10322,7 +10210,6 @@ dependencies = [
  "bytemuck",
  "futures",
  "groth16-solana",
- "mollusk-svm",
  "num-bigint 0.4.8",
  "rand 0.8.8",
  "solana-account 4.3.2",
@@ -10332,7 +10219,6 @@ dependencies = [
  "solana-instruction-error",
  "solana-keypair",
  "solana-message",
- "solana-program-error",
  "solana-pubkey 4.2.1",
  "solana-signature",
  "solana-signer",
@@ -10359,6 +10245,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "num-bigint 0.4.8",
+ "serde",
  "solana-address 2.6.1",
  "solana-signature",
  "thiserror 2.0.20",
