@@ -7,6 +7,7 @@ import {
   postJsonRpc,
   setRingActivationInstruction,
   ZERO_NULLIFIER_PK,
+  waitForProjection,
 } from "@heliuslabs/zolana/internal";
 import { liveHarness } from "./live-helpers.js";
 import {
@@ -21,7 +22,10 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import { KEY_REGISTRY_PROJECTION_ERRORS } from "../../src/ring/projection.js";
+import {
+  KEY_REGISTRY_PROJECTION_ERRORS,
+  SPEND_RECORD_PROJECTION_ERRORS,
+} from "../../src/ring/projection.js";
 import {
   RingProgramBinary,
   RingError,
@@ -340,8 +344,12 @@ describe("fresh ring controls", () => {
       const senderMember = memberOfIdentity(
         sender.keypair.shieldedAddress().signingPublicKey.ownerProofInputHash(),
       );
+      // The spend record projection lags settlement; retry it as the SDK reader does.
       const senderRecord = async () => {
-        const { record } = await client.getRingSpendRecord({ ringProgramId, member: senderMember });
+        const { record } = await waitForProjection(
+          (context) => client.getRingSpendRecord({ ringProgramId, member: senderMember }, context),
+          SPEND_RECORD_PROJECTION_ERRORS,
+        );
         if (record === null) throw new Error("spend record missing");
         return record;
       };
