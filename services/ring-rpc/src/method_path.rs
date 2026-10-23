@@ -135,11 +135,11 @@ mod tests {
         });
         let service = MethodPathLayer { max_body_size: 256 }.layer(inner);
         for method in [
-            crate::api::HEALTH,
-            crate::api::RING_STATUS,
-            crate::api::RING_DEPOSITS,
-            crate::api::CREATE_AUDITOR_KEY,
-            crate::api::GET_DECRYPTED_TRANSACTIONS,
+            zolana_ring_client::rpc::HEALTH,
+            zolana_ring_client::rpc::RING_STATUS,
+            zolana_ring_client::rpc::RING_DEPOSITS,
+            zolana_ring_client::rpc::CREATE_AUDITOR_KEY,
+            zolana_ring_client::rpc::GET_DECRYPTED_TRANSACTIONS,
         ] {
             let body = format!(
                 r#"{{ "jsonrpc": "2.0", "id": "request", "method": "{method}", "params": {{}} }}"#
