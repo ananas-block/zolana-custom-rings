@@ -15,8 +15,11 @@ use solana_account::Account;
 use solana_address::Address;
 use solana_signer::Signer;
 use zolana_client::{ClientError, ComputeBudgetConfig, ProofDataSource, ProverClient, Rpc};
-use zolana_indexer_api::{GetRingKeyRegistryEntryResponse, RingMemberProofRequest};
 use zolana_keypair::{ShieldedKeypair, X25519Keypair};
+use zolana_ring_client::{
+    GetRingKeyRegistryEntryResponse, RingIndexer, RingIndexerError, RingMemberProofRequest,
+    RingRpcError,
+};
 use zolana_transaction::RingDepositPlaintext;
 
 struct DepositRpc {
@@ -24,6 +27,8 @@ struct DepositRpc {
     config: Account,
     setting: Option<Account>,
 }
+
+impl RingIndexer for DepositRpc {}
 
 impl Rpc for DepositRpc {
     fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
@@ -191,12 +196,14 @@ impl Rpc for EscrowRpc {
         assert_eq!(address, self.ring.key_registry_root_pda());
         Ok(self.registry.clone())
     }
+}
 
+impl RingIndexer for EscrowRpc {
     fn get_ring_key_registry_entry(
         &self,
         _request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
-        Err(ClientError::RingKeyRegistryMemberUnregistered)
+    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
+        Err(RingRpcError::MemberUnregistered.into())
     }
 }
 

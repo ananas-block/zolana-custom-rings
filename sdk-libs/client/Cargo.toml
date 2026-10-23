@@ -16,6 +16,7 @@ solana-rpc = [
 ]
 
 [dependencies]
+async-trait = { workspace = true }
 p256 = { workspace = true }
 hex = { workspace = true }
 custom-ring-interface = { workspace = true }
@@ -29,6 +30,7 @@ solana-transaction-status-client-types = { workspace = true, optional = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 borsh = { workspace = true }
+zolana-api = { workspace = true }
 zolana-client = { workspace = true }
 zolana-event = { workspace = true }
 zolana-event-parser = { workspace = true }
@@ -36,11 +38,14 @@ zolana-interface = { workspace = true }
 zolana-hasher = { workspace = true }
 zolana-indexer-api = { workspace = true }
 zolana-keypair = { workspace = true }
+zolana-ring-indexer = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-transaction = { workspace = true }
 
 [dev-dependencies]
+http = { workspace = true }
+tokio = { workspace = true }
 borsh = { workspace = true }
 bs58 = { workspace = true }
 zolana-ring-key-registry = { workspace = true }

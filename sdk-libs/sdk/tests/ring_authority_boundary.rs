@@ -1,4 +1,4 @@
-#[path = "../../../sdk-libs/client/tests/test_indexer.rs"]
+#[path = "../../../zolana/sdk-libs/client/tests/test_indexer.rs"]
 mod test_indexer;
 
 use custom_ring_sdk::{RingAuthorityProofInputs, RingAuthorityProofs};

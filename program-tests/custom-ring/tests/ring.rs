@@ -58,10 +58,6 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use zeroize::Zeroizing;
 use zolana_client::{
-    rpc::{
-        GetRingKeyRegistryEntryResponse, GetRingSpendRecordResponse, RingMemberProofRequest,
-        RingSpendRecordRequest,
-    },
     AsyncProverClient, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError, ComputeBudgetConfig,
     GetMerkleProofsResponse, GetNonInclusionProofsResponse, IndexerRpcConfig, ProofDataSource,
     ProverClient, Rpc, ShieldedTransaction, SolanaRpc, ZolanaIndexer,
@@ -83,8 +79,9 @@ use zolana_program::instruction::{
 };
 use zolana_program_test::Rejection;
 use zolana_ring_client::{
-    AuditedOutput, AuditedTransaction, RecoveryEnvironment, RingAudit, RingEnvironment,
-    RingRecovery, SourceMember,
+    AuditedOutput, AuditedTransaction, GetRingKeyRegistryEntryResponse, GetRingSpendRecordResponse,
+    RecoveryEnvironment, RingAudit, RingEnvironment, RingIndexer, RingIndexerError,
+    RingMemberProofRequest, RingRecovery, RingSpendRecordRequest, SourceMember,
 };
 use zolana_ring_policy::{Member, ZERO_NULLIFIER_PK};
 use zolana_ring_rpc::{
@@ -2537,11 +2534,11 @@ struct WithoutSpendCounters<'a> {
     namespace: Address,
 }
 
-impl Rpc for WithoutSpendCounters<'_> {
+impl RingIndexer for WithoutSpendCounters<'_> {
     fn get_ring_spend_record(
         &self,
         request: RingSpendRecordRequest,
-    ) -> Result<GetRingSpendRecordResponse, ClientError> {
+    ) -> Result<GetRingSpendRecordResponse, RingIndexerError> {
         let mut response = self.indexer.get_ring_spend_record(request)?;
         let messages = &mut response
             .record
@@ -2555,6 +2552,15 @@ impl Rpc for WithoutSpendCounters<'_> {
         Ok(response)
     }
 
+    fn get_ring_key_registry_entry(
+        &self,
+        request: RingMemberProofRequest,
+    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
+        self.indexer.get_ring_key_registry_entry(request)
+    }
+}
+
+impl Rpc for WithoutSpendCounters<'_> {
     fn get_merkle_proofs(
         &self,
         tree_account: Address,
@@ -2572,13 +2578,6 @@ impl Rpc for WithoutSpendCounters<'_> {
     ) -> Result<GetNonInclusionProofsResponse, ClientError> {
         self.indexer
             .get_non_inclusion_proofs(tree_account, leaves, config)
-    }
-
-    fn get_ring_key_registry_entry(
-        &self,
-        request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
-        self.indexer.get_ring_key_registry_entry(request)
     }
 }
 

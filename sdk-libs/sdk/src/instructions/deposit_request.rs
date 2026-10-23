@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(json["keyRegistryRoot"], format!("0x{}", "09".repeat(32)));
         assert_eq!(json["auditorPk"].as_str().unwrap().len(), 66);
 
-        use zolana_client::prover::indexed::{IndexedDepositRequest, IndexedRegistry};
+        use crate::indexed::{IndexedDepositRequest, IndexedRegistry};
         let registry = IndexedRegistry {
             ring_program_id: solana_address::Address::from([3; 32]),
             root: [9; 32],

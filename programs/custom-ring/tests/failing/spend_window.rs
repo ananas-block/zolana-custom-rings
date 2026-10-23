@@ -12,11 +12,11 @@ use zolana_interface::instruction::{
 };
 
 use crate::common::{
-    account, audit_only_config_account, audit_transact_fixture, auditor_message_len,
-    auditor_pubkey, authority, clear_spend_window_fixture, custom, deposit_fixture, rent_recipient,
-    ring_deposit_data, set_spend_window_data, set_spend_window_fixture, setup_mollusk,
-    sol_settlement, spend_window_pda, spl_settlement, stored, window_slot, Fixture, Slot,
-    WindowState, SOL, SOL_DEPOSIT_AMOUNT, USDC,
+    account, add_spp_recorder, audit_only_config_account, audit_transact_fixture,
+    auditor_message_len, auditor_pubkey, authority, clear_spend_window_fixture, custom,
+    deposit_fixture, rent_recipient, ring_deposit_data, set_spend_window_data,
+    set_spend_window_fixture, setup_mollusk, sol_settlement, spend_window_pda, spl_settlement,
+    stored, window_slot, Fixture, Slot, WindowState, SOL, SOL_DEPOSIT_AMOUNT, USDC,
 };
 use crate::transact::{audit_instruction_data, auditor_message, bogus_proof, transact};
 
@@ -382,7 +382,7 @@ fn a_ring_deposit_with_unreadable_data_is_rejected_exactly() {
 fn successful_deposits_charge_the_window_and_preserve_withdrawals() {
     let (mut mollusk, _) = setup_mollusk();
     let spp_id = Pubkey::new_from_array(zolana_interface::SHIELDED_POOL_PROGRAM_ID);
-    mollusk.add_program(&spp_id, "spp_recorder_program");
+    add_spp_recorder(&mut mollusk);
     let mut state = window(SOL, 10, 10);
     state.deposited = 2;
     state.withdrawn = 3;
@@ -419,7 +419,7 @@ fn successful_deposits_charge_the_window_and_preserve_withdrawals() {
 fn failed_deposit_settlement_rolls_back_the_window_charge_and_rollover() {
     let (mut mollusk, _) = setup_mollusk();
     let spp_id = Pubkey::new_from_array(zolana_interface::SHIELDED_POOL_PROGRAM_ID);
-    mollusk.add_program(&spp_id, "spp_recorder_program");
+    add_spp_recorder(&mut mollusk);
     let mut state = window(SOL, 10, 10);
     state.deposited = 2;
     state.withdrawn = 3;

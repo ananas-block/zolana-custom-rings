@@ -15,8 +15,8 @@ use zolana_interface::{
 };
 
 use crate::common::{
-    account, anonymous_config_account, audit_only_config_account, auditor_pubkey, authority,
-    config_pda, deposit_fixture, escrowed_config_account, key_registry_root_slot, payer,
+    account, add_spp_recorder, anonymous_config_account, audit_only_config_account, auditor_pubkey,
+    authority, config_pda, deposit_fixture, escrowed_config_account, key_registry_root_slot, payer,
     program_id, setup_mollusk, system_program_slot, Fixture, Slot,
 };
 
@@ -138,7 +138,7 @@ fn proven_fixture(count: usize) -> Fixture {
 fn proven_disclosures_reach_spp_for_two_and_eight_outputs() {
     let (mut mollusk, _) = setup_mollusk();
     let spp_id = Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID);
-    mollusk.add_program(&spp_id, "spp_recorder_program");
+    add_spp_recorder(&mut mollusk);
     for count in [2, 8] {
         let mut fixture = proven_fixture(count);
         let mut recorder = account(1_000_000_000);

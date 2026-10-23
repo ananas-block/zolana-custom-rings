@@ -1,11 +1,12 @@
 use solana_address::Address;
-use zolana_client::{
-    indexer::decode_shielded_transaction, AsyncRpc, ClientError, IndexerRpcConfig, Rpc,
-};
-use zolana_indexer_api::{Hash, RingSpendRecord, RingSpendRecordRequest, SerializablePubkey};
+use zolana_client::{indexer::decode_shielded_transaction, AsyncRpc, IndexerRpcConfig, Rpc};
+use zolana_indexer_api::{Hash, SerializablePubkey};
 use zolana_interface::instruction::MessageData;
 use zolana_keypair::{constants::SALT_LEN, X25519Pubkey};
-use zolana_ring_client::RecordCarrier;
+use zolana_ring_client::{
+    AsyncRingIndexer, RecordCarrier, RingIndexer, RingRpcError, RingSpendRecord,
+    RingSpendRecordRequest,
+};
 use zolana_ring_policy::{entry_nullifier, ListNamespace, Member, SpendRecord};
 
 use crate::{
@@ -72,14 +73,14 @@ impl ReadSpendRecord {
     }
 
     /// `None` until the member registers.
-    pub fn read_current<I: Rpc, R: Rpc>(
+    pub fn read_current<I: RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<Option<LiveSpendRecord>, EntryProofError> {
         retry_projection_lag(|| self.fetch_current(env))
     }
 
-    pub async fn read_current_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn read_current_async<I: AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<Option<LiveSpendRecord>, EntryProofError> {
@@ -87,7 +88,7 @@ impl ReadSpendRecord {
         retry_projection_lag_async(|| read.fetch_current_async(env)).await
     }
 
-    fn fetch_current<I: Rpc, R: Rpc>(
+    fn fetch_current<I: RingIndexer, R: Rpc>(
         &self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<Option<LiveSpendRecord>, EntryProofError> {
@@ -99,7 +100,7 @@ impl ReadSpendRecord {
         live_unless_spent(live, spent)
     }
 
-    async fn fetch_current_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn fetch_current_async<I: AsyncRingIndexer, R: AsyncRpc>(
         &self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<Option<LiveSpendRecord>, EntryProofError> {
@@ -256,7 +257,7 @@ fn live_unless_spent<A>(
     nullifier_pda: Option<A>,
 ) -> Result<Option<LiveSpendRecord>, EntryProofError> {
     if nullifier_pda.is_some() {
-        return Err(ClientError::RingSpendRecordOutOfSync.into());
+        return Err(EntryProofError::Indexer(RingRpcError::SpendRecordOutOfSync));
     }
     Ok(Some(live))
 }

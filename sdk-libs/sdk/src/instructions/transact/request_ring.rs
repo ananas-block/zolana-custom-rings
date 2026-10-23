@@ -180,7 +180,7 @@ impl VelocityProofInput {
 }
 
 pub struct CustomRingPolicyProofRequest {
-    pub indexed: Option<zolana_client::prover::indexed::IndexedPolicyData>,
+    pub indexed: Option<crate::indexed::IndexedPolicyData>,
     pub anonymous: bool,
     pub sender: [u8; 33],
     pub recipients: [[u8; 33]; POLICY_OUTPUT_SLOTS],

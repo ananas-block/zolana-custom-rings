@@ -2,7 +2,7 @@ use serde::Deserialize;
 use zolana_ring_policy::mutation_private_tx_hash;
 
 const PRIVATE_TX_HASH_VECTORS_JSON: &str =
-    include_str!("../../../test-vectors/private_tx_hash.json");
+    include_str!("../../../zolana/test-vectors/private_tx_hash.json");
 
 #[derive(Deserialize)]
 struct PrivateTxHashVectors {

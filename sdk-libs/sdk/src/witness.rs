@@ -5,7 +5,9 @@
 use custom_ring_interface::PolicyConfig;
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::prover::indexed::{IndexedPolicyLookup, ProofDataSource};
+use zolana_client::prover::indexed::ProofDataSource;
+
+use crate::indexed::IndexedPolicyLookup;
 use zolana_client::{AsyncRpc, IndexerRpcConfig, MerkleProof, NonInclusionProof, Rpc};
 use zolana_hasher::primitives::{hash_bytes, right_align};
 use zolana_interface::{
@@ -14,6 +16,7 @@ use zolana_interface::{
     tree_slot::{tree_id_field, TreeSlot},
     DUMMY_DOMAIN, INPUT_TREES, SHIELDED_POOL_PROGRAM_ID, UTXO_DOMAIN,
 };
+use zolana_ring_client::{AsyncRingIndexer, RingIndexer};
 use zolana_ring_policy::{
     EntryState, Guard, ListId, ListNamespace, Member, Mode, Rule, RuleTable, SourceMap, Subject,
     ANSWER_SLOTS, MAX_INLINE_ASSETS, MAX_RULES, MAX_SOURCES, POLICY_INPUT_SLOTS,
@@ -69,7 +72,7 @@ impl PolicyTree {
 /// The policy witness of one transfer, serialized into the proof request.
 pub struct CustomRingWitness {
     pub indexed_inputs: Option<Vec<IndexedPolicyLookup>>,
-    pub indexed_registry: Option<zolana_client::prover::indexed::IndexedRegistry>,
+    pub indexed_registry: Option<crate::indexed::IndexedRegistry>,
     /// In slot order, at most `INPUT_TREES`.
     pub trees: Vec<PolicyTree>,
     pub address_tree_id: u16,
@@ -127,7 +130,7 @@ pub struct CustomRingWitnessInput<'a> {
 
 impl<'a> CustomRingWitnessInput<'a> {
     /// Refuses client-side with a named rule before any prover round.
-    pub fn build_with_source<I: Rpc, R: Rpc>(
+    pub fn build_with_source<I: Rpc + RingIndexer, R: Rpc>(
         self,
         indexer: &I,
         rpc: &R,
@@ -151,7 +154,7 @@ impl<'a> CustomRingWitnessInput<'a> {
         resolved.assemble(proofs, escrow, source)
     }
 
-    pub async fn build_async_with_source<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn build_async_with_source<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         indexer: &I,
         rpc: &R,
@@ -655,13 +658,11 @@ impl ResolvedWitness<'_> {
             input
                 .key_registry
                 .zip(escrow.as_ref())
-                .map(
-                    |(registry, escrow)| zolana_client::prover::indexed::IndexedRegistry {
-                        ring_program_id: registry.ring.program_id(),
-                        root: escrow.root.root,
-                        next_index: escrow.root.next_index,
-                    },
-                )
+                .map(|(registry, escrow)| crate::indexed::IndexedRegistry {
+                    ring_program_id: registry.ring.program_id(),
+                    root: escrow.root.root,
+                    next_index: escrow.root.next_index,
+                })
         } else {
             None
         };
@@ -1510,6 +1511,8 @@ mod tests {
             roots[position.min(roots.len() - 1)]
         }
     }
+
+    impl RingIndexer for ProofRpc {}
 
     impl Rpc for ProofRpc {
         fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {

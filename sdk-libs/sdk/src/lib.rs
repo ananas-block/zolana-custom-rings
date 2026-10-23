@@ -7,6 +7,7 @@ mod authority;
 mod budget;
 mod delegate;
 mod escrow;
+pub mod indexed;
 mod instructions;
 mod key_registry;
 mod prepared_authority;

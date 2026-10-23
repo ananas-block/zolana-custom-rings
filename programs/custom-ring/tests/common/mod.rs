@@ -216,6 +216,20 @@ impl Fixture {
     }
 }
 
+/// SPP stand-in from the zolana build, `just zolana::build-programs`.
+pub fn add_spp_recorder(mollusk: &mut Mollusk) {
+    let path = format!(
+        "{}/spp_recorder_program.so",
+        sbf_dir("zolana/target/deploy")
+    );
+    let elf = std::fs::read(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    mollusk.add_program_with_loader_and_elf(
+        &Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID),
+        &mollusk_svm::program::loader_keys::LOADER_V3,
+        &elf,
+    );
+}
+
 pub fn setup_mollusk() -> (Mollusk, Pubkey) {
     let (mut mollusk, program_id) = zolana_test_utils::mollusk::mollusk_with_program(
         &sbf_dir("target/deploy"),

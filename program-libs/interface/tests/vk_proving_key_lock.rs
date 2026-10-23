@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use custom_ring_interface::PROVING_KEY_SHA256S;
 
-const LOCK: &str = include_str!("../../../prover/server/prover/provingkeys/proving-keys.lock");
+const LOCK: &str = include_str!("../../../prover/ring/proving-keys.lock");
 
 fn locked_sha256s() -> BTreeMap<String, String> {
     let lock: serde_json::Value = serde_json::from_str(LOCK).expect("proving-keys.lock is JSON");

@@ -3,20 +3,20 @@ use super::{
     *,
 };
 use crate::{
-    custom_rings::{
-        storage::{BlockJournal, BlockUndo},
-        tests::{field, indexer, member},
-        Invocations, StartSlot,
-    },
+    storage::{BlockJournal, BlockUndo},
+    tests::{field, indexer, member},
+    CustomRingMigrator, Invocations, StartSlot,
+};
+use jsonrpsee::server::ServerHandle;
+use photon_indexer::{
     ingester::{
         parser::state_update::{RingsMessageUpdate, RingsOutputUpdate, RingsTransactionUpdate},
         typedefs::block_info::{
             BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo,
         },
     },
-    migration::{MigratorTrait, RingsMigrator},
+    migration::MigratorTrait,
 };
-use jsonrpsee::server::ServerHandle;
 use sea_orm::Database;
 use serde_json::json;
 use solana_pubkey::Pubkey;
@@ -29,7 +29,7 @@ const PROGRAM: [u8; 32] = [11; 32];
 
 async fn fixture() -> (DatabaseConnection, CustomRingCursor) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    RingsMigrator::up(&db, None).await.unwrap();
+    CustomRingMigrator::up(&db, None).await.unwrap();
     let cursor = CustomRingCursor::new(0);
     storage::save_cursor(&db, &cursor).await.unwrap();
     SpendStore::new(&db, PROGRAM).open().await.unwrap();
@@ -211,9 +211,7 @@ async fn a_malformed_record_update_quarantines_only_its_ring_until_rollback() {
     cursor.resume(&db).await.unwrap();
     assert!(matches!(
         lookup(&db, &indexer.rpc, request(PROGRAM, 4)).await,
-        Err(PhotonApiError::CustomRing(
-            CustomRingError::SpendRecordOutOfSync(_)
-        ))
+        Err(RingApiError::SpendRecordOutOfSync(_))
     ));
 
     let mut restarted = storage::cursor(&db).await.unwrap().unwrap();
@@ -265,9 +263,7 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
     let (rpc, handle) = chain_at(block(7)).await;
     assert!(matches!(
         lookup(&db, &rpc, request(PROGRAM, 4)).await,
-        Err(PhotonApiError::CustomRing(
-            CustomRingError::SpendRecordOutOfSync(_)
-        ))
+        Err(RingApiError::SpendRecordOutOfSync(_))
     ));
     cursor.tip = Some(block(7));
     cursor.resume(&db).await.unwrap();
@@ -286,9 +282,7 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
         .unwrap();
     assert!(matches!(
         lookup(&db, &rpc, request(PROGRAM, 4)).await,
-        Err(PhotonApiError::CustomRing(
-            CustomRingError::SpendRecordOutOfSync(_)
-        ))
+        Err(RingApiError::SpendRecordOutOfSync(_))
     ));
     assert!(matches!(
         lookup(
@@ -300,7 +294,7 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
             }
         )
         .await,
-        Err(PhotonApiError::ValidationError(_))
+        Err(RingApiError::Photon(PhotonApiError::ValidationError(_)))
     ));
     handle.stop().unwrap();
     handle.stopped().await;
@@ -309,16 +303,13 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
 #[test]
 fn custom_ring_errors_keep_their_wire_codes() {
     for (error, code) in [
-        (CustomRingError::OutOfSync(String::new()), -32070),
-        (CustomRingError::RootChanged, -32071),
-        (CustomRingError::MemberUnregistered, -32072),
-        (CustomRingError::MemberAlreadyRegistered, -32073),
-        (CustomRingError::SpendRecordOutOfSync(String::new()), -32074),
+        (RingApiError::OutOfSync(String::new()), -32070),
+        (RingApiError::RootChanged, -32071),
+        (RingApiError::MemberUnregistered, -32072),
+        (RingApiError::MemberAlreadyRegistered, -32073),
+        (RingApiError::SpendRecordOutOfSync(String::new()), -32074),
     ] {
-        assert_eq!(
-            jsonrpsee::types::ErrorObjectOwned::from(PhotonApiError::from(error)).code(),
-            code
-        );
+        assert_eq!(jsonrpsee::types::ErrorObjectOwned::from(error).code(), code);
     }
 }
 

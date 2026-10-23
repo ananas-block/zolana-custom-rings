@@ -8,8 +8,9 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
 use solana_signature::{Signature, SIGNATURE_BYTES};
-use zolana_indexer_api::{
-    GetRingSpendRecordResponse, RingSpendRecord, RingSpendRecordRequest, SerializableSignature,
+use zolana_indexer_api::SerializableSignature;
+use zolana_ring_indexer::rpc::{
+    GetRingSpendRecordResponse, RingSpendRecord, RingSpendRecordRequest,
 };
 use zolana_ring_key_registry::FIELD_MAX;
 
@@ -19,15 +20,15 @@ use super::{
     storage::{self, statement, CustomRingCursor},
     ApplyError, BlockEnv, Invocation,
 };
-use crate::{
+use crate::error::RingApiError;
+use parser::Rail;
+use photon_indexer::{
     api::{
-        error::{CustomRingError, PhotonApiError},
-        method::rings::shielded_transaction_at,
+        error::PhotonApiError, method::rings::shielded_transaction_at,
         set_transaction_isolation_if_needed,
     },
     rpc::RpcClient,
 };
-use parser::Rail;
 
 pub(super) const TAGS: [u8; 2] = [tag::REGISTER_SPEND, tag::TRANSACT];
 
@@ -129,11 +130,9 @@ pub(crate) async fn lookup(
     db: &DatabaseConnection,
     rpc: &RpcClient,
     request: RingSpendRecordRequest,
-) -> Result<GetRingSpendRecordResponse, PhotonApiError> {
+) -> Result<GetRingSpendRecordResponse, RingApiError> {
     if request.member.0 == [0; 32] || request.member.0 >= FIELD_MAX {
-        return Err(PhotonApiError::ValidationError(
-            "invalid spend record member".into(),
-        ));
+        return Err(PhotonApiError::ValidationError("invalid spend record member".into()).into());
     }
     let tx = db.begin().await?;
     set_transaction_isolation_if_needed(&tx).await?;
@@ -422,8 +421,8 @@ fn invalid(error: anyhow::Error) -> ApplyError {
     fault(format!("{error:#}"))
 }
 
-fn out_of_sync(reason: impl std::fmt::Display) -> PhotonApiError {
-    CustomRingError::SpendRecordOutOfSync(reason.to_string()).into()
+fn out_of_sync(reason: impl std::fmt::Display) -> RingApiError {
+    RingApiError::SpendRecordOutOfSync(reason.to_string())
 }
 
 #[cfg(test)]

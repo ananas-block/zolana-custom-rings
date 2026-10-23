@@ -19,15 +19,15 @@ pub(crate) const WORKSPACE_ENV: &str = "ZOLANA_RING_WORKSPACE";
 pub(crate) const PROCESS_SCOPE_ENV: &str = "ZOLANA_PROCESS_SCOPE_DIR";
 const SURFPOOL_ENV: &str = "SURFPOOL_BIN";
 const PROVER_KEYS_ENV: &str = "ZOLANA_PROVER_KEYS_DIR";
-const ZOLANA_BIN: &str = "target/debug/zolana";
+const ZOLANA_BIN: &str = "zolana/target/debug/zolana";
 const PHOTON_BIN: &str = "target/debug/photon";
 const RING_RPC_BIN: &str = "target/debug/ring-rpc";
-const XTASK_BIN: &str = "target/debug/xtask";
+const XTASK_BIN: &str = "zolana/target/debug/xtask";
 const PROVER_BIN: &str = "target/prover-server";
-const SHIELDED_POOL_SO: &str = "target/deploy/shielded_pool_program.so";
+const SHIELDED_POOL_SO: &str = "zolana/target/deploy/shielded_pool_program.so";
 const RING_PROGRAM_SO: &str = "target/deploy/custom_ring_program.so";
-const PROVING_KEYS_LOCK: &str = "prover/server/prover/provingkeys/proving-keys.lock";
-const PROVING_KEYS_DIR: &str = "prover/server/proving-keys";
+const PROVING_KEYS_LOCK: &str = "prover/ring/proving-keys.lock";
+const PROVING_KEYS_DIR: &str = "zolana/prover/server/proving-keys";
 
 pub(crate) struct Workspace {
     pub root: PathBuf,
@@ -143,7 +143,7 @@ impl Workspace {
             Command::new(self.artifact(XTASK_BIN)?)
                 .arg("generate-account-snapshots")
                 .arg("--deploy-dir")
-                .arg(self.root.join("target/deploy"))
+                .arg(self.root.join("zolana/target/deploy"))
                 .arg("--accounts-dir")
                 .arg(&accounts),
         )?;

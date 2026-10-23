@@ -13,6 +13,7 @@ use zolana_client::{
     compile_message, sign_transaction, AsyncProverClient, AsyncRpc, AsyncSolanaRpc, ClientError,
     ComputeBudgetConfig, ProverClient, Rpc, SolanaRpc,
 };
+use zolana_ring_client::{AsyncRingIndexer, RingIndexer};
 
 use crate::{
     budget::TRANSACT_COMPUTE_UNIT_LIMIT, instructions::transact::ProvedWindow,
@@ -280,7 +281,7 @@ impl<'a> RingSubmission<'a> {
     }
 
     /// Inputs remain reserved while the submitted signature is unresolved.
-    pub fn send<I: Rpc>(
+    pub fn send<I: Rpc + RingIndexer>(
         &mut self,
         env: SubmissionEnvironment<'_, I>,
     ) -> Result<SubmissionStatus, SubmissionError> {
@@ -334,7 +335,7 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
-    pub fn send_until_settled<I: Rpc>(
+    pub fn send_until_settled<I: Rpc + RingIndexer>(
         &mut self,
         env: SubmissionEnvironment<'_, I>,
     ) -> Result<SettledSubmission, SubmissionError> {
@@ -352,7 +353,7 @@ impl<'a> RingSubmission<'a> {
     }
 
     /// Inputs remain reserved while the submitted signature is unresolved.
-    pub async fn send_async<I: AsyncRpc>(
+    pub async fn send_async<I: AsyncRpc + AsyncRingIndexer>(
         &mut self,
         env: AsyncSubmissionEnvironment<'_, I>,
     ) -> Result<SubmissionStatus, SubmissionError> {
@@ -545,7 +546,7 @@ fn retryable(error: &TransactionError, window: WindowState) -> bool {
 }
 
 impl RingOperation<'_> {
-    fn prove<I: Rpc>(
+    fn prove<I: Rpc + RingIndexer>(
         &self,
         env: &SubmissionEnvironment<'_, I>,
     ) -> Result<ProvedOperation, SubmissionError> {
@@ -622,7 +623,7 @@ impl RingOperation<'_> {
             }
         })
     }
-    async fn prove_async<I: AsyncRpc>(
+    async fn prove_async<I: AsyncRpc + AsyncRingIndexer>(
         &self,
         env: &AsyncSubmissionEnvironment<'_, I>,
     ) -> Result<ProvedOperation, SubmissionError> {
@@ -722,6 +723,12 @@ mod tests {
         SOL_MINT,
     };
 
+    struct NoIndexer;
+    impl Rpc for NoIndexer {}
+    impl AsyncRpc for NoIndexer {}
+    impl RingIndexer for NoIndexer {}
+    impl AsyncRingIndexer for NoIndexer {}
+
     fn transfer(sender: &ShieldedKeypair, payer: Address) -> CustomRingTransfer<'_> {
         let ring = CustomRing::new(Address::new_from_array([5; 32]));
         let input = zolana_test_utils::utxo::wallet(
@@ -799,7 +806,7 @@ mod tests {
     ) -> SubmissionStatus {
         submission
             .send(SubmissionEnvironment {
-                indexer: rpc,
+                indexer: &NoIndexer,
                 rpc,
                 prover: &ProverClient::local(),
                 payer,
@@ -1282,7 +1289,7 @@ mod tests {
     ) -> SubmissionStatus {
         let prover = AsyncProverClient::local();
         let future = submission.send_async(AsyncSubmissionEnvironment {
-            indexer: rpc,
+            indexer: &NoIndexer,
             rpc,
             prover: &prover,
             payer,
@@ -1308,7 +1315,7 @@ mod tests {
         }
         .into_rpc();
         let result = operation.prove(&SubmissionEnvironment {
-            indexer: &rpc,
+            indexer: &NoIndexer,
             rpc: &rpc,
             prover: &ProverClient::local(),
             payer: &owner,
@@ -1342,7 +1349,7 @@ mod tests {
         );
         let result = operation
             .prove_async(&AsyncSubmissionEnvironment {
-                indexer: &rpc,
+                indexer: &NoIndexer,
                 rpc: &rpc,
                 prover: &AsyncProverClient::local(),
                 payer: &owner,

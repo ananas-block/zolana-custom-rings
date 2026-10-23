@@ -1,12 +1,12 @@
 use super::*;
-use crate::{
-    api::error::{CustomRingError, PhotonApiError},
+use photon_indexer::{
     ingester::typedefs::block_info::{BlockMetadata, InstructionGroup, TransactionInfo},
-    migration::{MigratorTrait, RingsMigrator},
+    migration::MigratorTrait,
 };
 use sea_orm::Database;
 use solana_signature::Signature;
-use zolana_indexer_api::{Hash, RingMemberProofRequest};
+use zolana_indexer_api::Hash;
+use zolana_ring_indexer::rpc::RingMemberProofRequest;
 
 pub(super) fn field(value: u8) -> [u8; 32] {
     let mut field = [0; 32];
@@ -22,7 +22,7 @@ pub(super) fn member(value: u8) -> [u8; 32] {
 
 pub(super) async fn fixture() -> (DatabaseConnection, RingRoot, CustomRingCursor) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    RingsMigrator::up(&db, None).await.unwrap();
+    CustomRingMigrator::up(&db, None).await.unwrap();
     let mut cursor = CustomRingCursor::new(0);
     let root = initialize_root(&db, &mut cursor, [11; 32]).await;
     storage::save_cursor(&db, &cursor).await.unwrap();
@@ -209,11 +209,11 @@ async fn an_invalid_instruction_quarantines_only_its_ring_until_rollback() {
     };
     assert!(matches!(
         key_registry::lookup(&db, &indexer.rpc, request(faulty.program)).await,
-        Err(PhotonApiError::CustomRing(CustomRingError::OutOfSync(_)))
+        Err(RingApiError::OutOfSync(_))
     ));
     assert_eq!(
         key_registry::lookup(&db, &indexer.rpc, request(healthy.program)).await,
-        Err(CustomRingError::MemberUnregistered.into())
+        Err(RingApiError::MemberUnregistered)
     );
 
     let mut restarted = storage::cursor(&db).await.unwrap().unwrap();

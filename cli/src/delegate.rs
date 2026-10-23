@@ -9,13 +9,13 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_signer::Signer;
 use thiserror::Error;
-use zolana_client::{ClientError, ComputeBudgetConfig, IndexerRpcConfig, Rpc};
+use zolana_client::{ComputeBudgetConfig, IndexerRpcConfig, Rpc};
 use zolana_interface::pda;
 use zolana_keypair::ShieldedAddress;
 #[cfg(test)]
 use zolana_keypair::ViewingKey;
 use zolana_ring_client::{
-    RecoveryEnvironment, RecoveryError, RingEnvironment, RingRecovery, SourceMember,
+    RecoveryEnvironment, RecoveryError, RingEnvironment, RingRecovery, RingRpcError, SourceMember,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_rpc::KeyFileError;
@@ -186,9 +186,7 @@ fn run_move(ctx: &mut Context, args: DelegateMoveArgs) -> Result<(), DelegateErr
             .open(&auditor)
             .map_err(|error| DelegateError::Registry(Box::new(error)))?,
         Ok(None) => return Err(DelegateError::NoKeyRegistry),
-        Err(KeyRegistrationError::Client(error))
-            if matches!(*error, ClientError::RingKeyRegistryMemberUnregistered) =>
-        {
+        Err(KeyRegistrationError::Indexer(RingRpcError::MemberUnregistered)) => {
             return Err(DelegateError::MemberUnregistered(source));
         }
         Err(error) => return Err(DelegateError::Registry(Box::new(error))),
@@ -366,7 +364,7 @@ mod tests {
     use custom_ring_sdk::CustomRing;
     use solana_signature::Signature;
     use zolana_client::{
-        rpc::GetShieldedTransactionsByNullifiersResponse, Context,
+        rpc::GetShieldedTransactionsByNullifiersResponse, ClientError, Context,
         GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, ProofInputUtxo,
         ShieldedTransaction,
     };

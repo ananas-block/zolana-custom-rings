@@ -1,6 +1,7 @@
 use custom_ring_interface::{RingMode, KEY_REGISTRY_HEIGHT};
 use futures::future::try_join_all;
-use zolana_client::{AsyncRpc, ClientError, Rpc};
+use zolana_client::{AsyncRpc, Rpc};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexer, RingRpcError};
 use zolana_ring_policy::Member;
 
 use crate::{
@@ -74,7 +75,7 @@ impl KeyRegistry {
         }
     }
 
-    pub fn openings<I: Rpc, R: Rpc>(
+    pub fn openings<I: RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
         keys: &[Option<OutputKey>],
@@ -91,7 +92,7 @@ impl KeyRegistry {
         })
     }
 
-    pub async fn openings_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn openings_async<I: AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
         keys: &[Option<OutputKey>],
@@ -183,11 +184,7 @@ fn enrolled(
 ) -> Result<Option<SealedKeyEntry>, KeyRegistrationError> {
     match read {
         Ok(entry) => Ok(Some(entry)),
-        Err(KeyRegistrationError::Client(error))
-            if matches!(*error, ClientError::RingKeyRegistryMemberUnregistered) =>
-        {
-            Ok(None)
-        }
+        Err(KeyRegistrationError::Indexer(RingRpcError::MemberUnregistered)) => Ok(None),
         Err(error) => Err(error),
     }
 }

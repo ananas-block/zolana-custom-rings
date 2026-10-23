@@ -1,11 +1,14 @@
 use anyhow::Context;
 use custom_ring_interface::KEY_REGISTRY_CAPACITY;
 use sea_orm::{DatabaseConnection, DatabaseTransaction};
-use zolana_indexer_api::{
-    Base64String, GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse, Hash,
-    RingMemberProofRequest,
+use zolana_indexer_api::{Base64String, Hash};
+use zolana_ring_indexer::{
+    key_registry::Spliced,
+    rpc::{
+        GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse,
+        RingMemberProofRequest,
+    },
 };
-use zolana_ring_indexer::key_registry::Spliced;
 
 use super::{
     api::{self, Insertion, MemberPath},
@@ -13,7 +16,8 @@ use super::{
     storage::{LeafWrite, MemberRestore, RingRoot, RingStore, Undo},
     ApplyError, Invocation, Step,
 };
-use crate::{api::error::PhotonApiError, rpc::RpcClient};
+use crate::error::RingApiError;
+use photon_indexer::rpc::RpcClient;
 
 pub(crate) use zolana_ring_indexer::key_registry::{MemberKey, Registration};
 
@@ -121,7 +125,7 @@ pub(crate) async fn register(
     db: &DatabaseConnection,
     rpc: &RpcClient,
     request: RingMemberProofRequest,
-) -> Result<GetRingKeyRegistryRegisterProofResponse, PhotonApiError> {
+) -> Result<GetRingKeyRegistryRegisterProofResponse, RingApiError> {
     let Insertion {
         context,
         root,
@@ -147,7 +151,7 @@ pub(crate) async fn lookup(
     db: &DatabaseConnection,
     rpc: &RpcClient,
     request: RingMemberProofRequest,
-) -> Result<GetRingKeyRegistryEntryResponse, PhotonApiError> {
+) -> Result<GetRingKeyRegistryEntryResponse, RingApiError> {
     let MemberPath {
         context,
         root,
@@ -171,15 +175,12 @@ pub(crate) async fn lookup(
 mod tests {
     use super::*;
     use crate::{
-        api::error::CustomRingError,
-        custom_rings::{
-            proof,
-            storage::{self, BlockJournal, BlockUndo},
-            tests::{field, fixture, member},
-        },
-        ingester::typedefs::block_info::BlockMetadata,
+        proof,
+        storage::{self, BlockJournal, BlockUndo},
+        tests::{field, fixture, member},
     };
     use custom_ring_interface::RegisteredKey;
+    use photon_indexer::ingester::typedefs::block_info::BlockMetadata;
     use sea_orm::TransactionTrait;
     use solana_pubkey::Pubkey;
     use zolana_ring_key_registry::KeyRegistryTree;
@@ -353,18 +354,18 @@ mod tests {
         };
         assert!(matches!(
             lookup(&db, &rpc, request.clone()).await,
-            Err(PhotonApiError::CustomRing(CustomRingError::OutOfSync(_)))
+            Err(RingApiError::OutOfSync(_))
         ));
         cursor.resume(&db).await.unwrap();
         let mut stale = request.clone();
         stale.expected_next_index = 2;
         assert_eq!(
             lookup(&db, &rpc, stale).await,
-            Err(CustomRingError::RootChanged.into())
+            Err(RingApiError::RootChanged)
         );
         assert_eq!(
             lookup(&db, &rpc, request).await,
-            Err(CustomRingError::MemberUnregistered.into())
+            Err(RingApiError::MemberUnregistered)
         );
     }
 }

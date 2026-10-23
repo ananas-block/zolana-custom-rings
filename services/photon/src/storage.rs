@@ -6,13 +6,18 @@ use thiserror::Error;
 use zolana_indexer_api::Hash;
 
 use super::{key_registry::MemberKey, spend_record::SpendUndo};
-use crate::{
-    common::rings_tree::RingsTreeKind,
+use custom_ring_interface::KEY_REGISTRY_HEIGHT;
+use photon_indexer::{
+    common::rings_tree::StoredTreeKind,
     ingester::{
         persist::{persist_leaf_nodes, LeafNode},
         typedefs::block_info::BlockMetadata,
     },
 };
+
+/// Fixed by deployed databases.
+pub(crate) const KEY_REGISTRY_TREE: StoredTreeKind = StoredTreeKind::extension(3);
+pub(crate) const KEY_REGISTRY_LEVELS: u32 = KEY_REGISTRY_HEIGHT as u32 + 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RingRoot {
@@ -508,10 +513,7 @@ impl<'c, C: ConnectionTrait> RingStore<'c, C> {
             .execute(statement(
                 self.conn,
                 "DELETE FROM state_trees WHERE tree=$1 AND tree_kind=$2",
-                vec![
-                    tree.to_vec().into(),
-                    i32::from(RingsTreeKind::KeyRegistry).into(),
-                ],
+                vec![tree.to_vec().into(), i32::from(KEY_REGISTRY_TREE).into()],
             ))
             .await?;
         Ok(())
@@ -525,7 +527,7 @@ impl RingStore<'_, DatabaseTransaction> {
         leaves: &[LeafWrite],
         revision: u64,
     ) -> Result<[u8; 32]> {
-        let kind = RingsTreeKind::KeyRegistry;
+        let kind = KEY_REGISTRY_TREE;
         let leaves = leaves
             .iter()
             .map(|leaf| LeafNode {
@@ -536,7 +538,7 @@ impl RingStore<'_, DatabaseTransaction> {
                 seq: Some(revision),
             })
             .collect();
-        persist_leaf_nodes(self.conn, leaves, kind.tree_height() + 1).await?;
+        persist_leaf_nodes(self.conn, leaves, KEY_REGISTRY_LEVELS).await?;
         let row = self
             .conn
             .query_one(statement(

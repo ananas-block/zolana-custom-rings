@@ -1,12 +1,10 @@
-use crate::{
-    custom_rings::{instruction_view, Invocation},
-    ingester::{
-        parser::{rings_event_parser::parse_rings_events, state_update::RingsTransactionUpdate},
-        typedefs::block_info::Instruction,
-    },
-};
+use crate::{instruction_view, Invocation};
 use anyhow::{Context, Result};
 use custom_ring_interface::PolicyConfig;
+use photon_indexer::ingester::{
+    parser::{rings_event_parser::parse_rings_events, state_update::RingsTransactionUpdate},
+    typedefs::block_info::Instruction,
+};
 use solana_pubkey::Pubkey;
 use zolana_indexer_api::{
     Base64String, Hash, RingsMessage, RingsOutputContext, RingsOutputSlot, ShieldedTransaction,

@@ -330,7 +330,7 @@ pub fn setup() -> Result<TestEnv> {
 /// Every extra address deploys the same ring image again as a full second ring,
 /// every PDA derives from the runtime program id.
 pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv> {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../zolana");
     let artifacts = WorkspaceArtifacts::new(root);
     let cli =
         std::env::var("ZOLANA_CLI_BIN").unwrap_or_else(|_| artifacts.path("target/debug/zolana"));
@@ -533,10 +533,8 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
 }
 
 pub fn custom_ring_program_id() -> Result<Address> {
-    let id = match std::env::var("CUSTOM_RING_PROGRAM_ID") {
-        Ok(id) if !id.trim().is_empty() => id,
-        _ => zolana_test_utils::localnet::CUSTOM_RING_PROGRAM_ADDRESS.to_string(),
-    };
+    let id = std::env::var("CUSTOM_RING_PROGRAM_ID")
+        .map_err(|_| anyhow!("CUSTOM_RING_PROGRAM_ID is unset, run the suite through just"))?;
     id.trim()
         .parse()
         .map_err(|e| anyhow!("CUSTOM_RING_PROGRAM_ID {id} failed {e}"))

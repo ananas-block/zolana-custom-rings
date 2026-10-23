@@ -1,0 +1,43 @@
+[package]
+name = "custom-ring-photon"
+version = "0.1.0"
+description = "Photon with the custom ring indexer"
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+
+[features]
+surfpool-fixture = ["photon-indexer/surfpool-fixture"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytemuck = { workspace = true }
+clap = { workspace = true }
+custom-ring-interface = { workspace = true }
+futures = { workspace = true }
+jsonrpsee = { workspace = true }
+log = { workspace = true }
+photon-indexer = { workspace = true }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+solana-account = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-signature = { workspace = true }
+solana-transaction-status-client-types = { workspace = true, features = ["agave-unstable-api"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+zolana-hasher = { workspace = true }
+zolana-indexer-api = { workspace = true }
+zolana-interface = { workspace = true }
+zolana-ring-indexer = { workspace = true }
+zolana-ring-key-registry = { workspace = true }
+zolana-ring-policy = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+wincode = { workspace = true }
+zolana-event = { workspace = true }

@@ -14,6 +14,7 @@ use zolana_client::{
 };
 use zolana_interface::instruction::TransactIxData;
 use zolana_keypair::{random_salt, NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexer};
 use zolana_transaction::instructions::transact::SppProofInputs;
 use zolana_transaction::{
     instructions::transact::SppProofOutputUtxo, utxo::SppProofInputUtxo, AssetRegistry,
@@ -123,14 +124,14 @@ impl<'a> DelegateTransfer<'a> {
         self
     }
 
-    pub fn prove<I: Rpc, R: Rpc>(
+    pub fn prove<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: TransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenDelegateTransfer, TransferError> {
         crate::projection::retry_projection_lag(|| self.clone().prove_once(&env))
     }
 
-    fn prove_once<I: Rpc, R: Rpc>(
+    fn prove_once<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: &TransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenDelegateTransfer, TransferError> {
@@ -176,14 +177,14 @@ impl<'a> DelegateTransfer<'a> {
     }
 
     /// The async twin of [`Self::prove`].
-    pub async fn prove_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn prove_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenDelegateTransfer, TransferError> {
         crate::projection::retry_projection_lag_async(|| self.clone().prove_once_async(&env)).await
     }
 
-    async fn prove_once_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn prove_once_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: &AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenDelegateTransfer, TransferError> {

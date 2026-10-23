@@ -20,8 +20,8 @@ clap = { workspace = true }
 console = { workspace = true }
 custom-ring-interface = { workspace = true }
 # Only for the error codes the init hints name.
-custom-ring-program = { path = "../program", features = ["no-entrypoint"] }
-custom-ring-sdk = { path = "../sdk" }
+custom-ring-program = { workspace = true, features = ["no-entrypoint"] }
+custom-ring-sdk = { workspace = true }
 dialoguer = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }
@@ -49,7 +49,7 @@ zolana-interface = { workspace = true }
 zolana-keypair = { workspace = true }
 zolana-ring-client = { workspace = true, features = ["solana-rpc"] }
 zolana-ring-policy = { workspace = true }
-zolana-ring-rpc = { path = "../../services/ring-rpc" }
+zolana-ring-rpc = { workspace = true }
 zolana-transaction = { workspace = true }
 
 [dev-dependencies]

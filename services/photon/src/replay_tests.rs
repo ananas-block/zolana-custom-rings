@@ -1,15 +1,16 @@
 use super::tests::{field, initialize_root, member};
 use super::*;
-use crate::migration::{MigratorTrait, RingsMigrator};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use custom_ring_interface::{
     instruction::tag, CustomRingProof, KeyRegistryRoot, RegisterKeyIxData, RegisteredKey,
 };
 use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
+use photon_indexer::migration::MigratorTrait;
 use sea_orm::Database;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Mutex};
-use zolana_indexer_api::{Hash, RingMemberProofRequest};
+use zolana_indexer_api::Hash;
+use zolana_ring_indexer::rpc::RingMemberProofRequest;
 
 /// Mutable confirmed RPC history, including failures between replay commits.
 #[derive(Default)]
@@ -244,7 +245,7 @@ async fn late_ring() -> (
     }));
     let (rpc, handle) = rpc(chain.clone()).await;
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    RingsMigrator::up(&db, None).await.unwrap();
+    CustomRingMigrator::up(&db, None).await.unwrap();
     let indexer = CustomRingIndexer {
         db: Arc::new(db),
         rpc,
@@ -497,7 +498,7 @@ async fn post_init_root_faults_are_local_and_ahead_roots_are_not_quarantined() {
         Some(account(Pubkey::new_from_array([11; 32]), &[0; 3])),
     ] {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        RingsMigrator::up(&db, None).await.unwrap();
+        CustomRingMigrator::up(&db, None).await.unwrap();
         let mut cursor = CustomRingCursor::new(0);
         let faulty = initialize_root(&db, &mut cursor, [11; 32]).await;
         let healthy = initialize_root(&db, &mut cursor, [12; 32]).await;

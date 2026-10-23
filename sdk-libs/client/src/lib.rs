@@ -28,6 +28,7 @@ mod deposit_encryption;
 mod deposit_payload;
 mod encryption;
 mod error;
+mod indexer;
 mod origin;
 mod reader;
 mod record;
@@ -48,6 +49,7 @@ pub use crate::{
         NullifierKeyEnvelope, SealedNullifierKey,
     },
     error::{AuditError, RecoveryError},
+    indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     origin::{
         ring_event_origin_in, ring_invoked_in, ring_withdrawals_in, ConfirmedDeposit, OriginError,
         RingOrigin, RingWithdrawal, TransactionOrigin,
@@ -64,5 +66,10 @@ pub use crate::{
     types::{AuditedOutput, AuditedSpendRecord, AuditedTransaction},
 };
 pub use custom_ring_interface::AUDITOR_MESSAGE_LEN;
+pub use zolana_ring_indexer::rpc::{
+    GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse,
+    GetRingSpendRecordResponse, RingMemberProofRequest, RingRpcError, RingSpendRecord,
+    RingSpendRecordRequest,
+};
 
 pub use deposit_payload::deposit_payload;

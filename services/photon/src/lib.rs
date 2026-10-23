@@ -1,9 +1,12 @@
 //! A rollback never changes SPP state.
 
-pub(crate) mod api;
-pub(crate) mod key_registry;
+mod api;
+mod error;
+mod extension;
+mod key_registry;
+pub mod migration;
 mod proof;
-pub(crate) mod spend_record;
+mod spend_record;
 mod storage;
 
 use std::{collections::HashMap, ops::RangeInclusive, sync::Arc, time::Duration};
@@ -22,14 +25,17 @@ use thiserror::Error;
 use zolana_hasher::HasherError;
 use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
 
-use crate::{
+pub use error::RingApiError;
+pub use extension::CustomRings;
+use key_registry::{MemberKey, Registration};
+pub use migration::CustomRingMigrator;
+use photon_indexer::{
     ingester::typedefs::block_info::{
         parse_ui_confirmed_blocked, BlockInfo, BlockMetadata, Instruction, InstructionGroup,
         TransactionInfo,
     },
     rpc::{RpcClient, RpcError},
 };
-use key_registry::{MemberKey, Registration};
 use spend_record::{SpendRing, SpendStore, SpendUndo};
 use storage::{
     BlockJournal, BlockUndo, CustomRingCursor, LeafWrite, PendingRing, PredecessorError, RingRoot,
@@ -48,7 +54,7 @@ const PENDING_TTL_SLOTS: u64 = 43_200;
 const EMPTY_ROOT: [u8; 32] = custom_ring_interface::KEY_REGISTRY_EMPTY_ROOT;
 
 #[derive(Clone, Copy, Debug)]
-pub enum StartSlot {
+enum StartSlot {
     /// Refused when the stored cursor started elsewhere.
     Explicit(u64),
     Derived(u64),
@@ -62,12 +68,12 @@ impl StartSlot {
     }
 }
 
-pub struct CustomRingIndexer {
-    pub db: Arc<DatabaseConnection>,
-    pub rpc: Arc<RpcClient>,
-    pub start: StartSlot,
+struct CustomRingIndexer {
+    db: Arc<DatabaseConnection>,
+    rpc: Arc<RpcClient>,
+    start: StartSlot,
     /// Concurrent `getBlock` requests, photon's `--max-concurrent-block-fetches`.
-    pub block_fetches: usize,
+    block_fetches: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,7 +89,7 @@ impl CustomRingIndexer {
         MIN_BLOCK_BATCH.max(self.block_fetches.saturating_mul(2))
     }
 
-    pub fn spawn(self) -> tokio::task::JoinHandle<()> {
+    fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut delay = 1;
             loop {
@@ -540,7 +546,7 @@ impl BlockEnv<'_> {
             return Ok(*id);
         }
         let account = ring_account(self.rpc.get_account(tree).await)?;
-        let id = crate::monitor::tree_metadata_sync::rings_tree_id(*tree, &account)
+        let id = photon_indexer::monitor::tree_metadata_sync::rings_tree_id(*tree, &account)
             .filter(|id| zolana_interface::pda::tree(*id).to_bytes() == tree.to_bytes())
             .ok_or_else(|| fault("output tree is not the SPP tree of its id"))?;
         self.tree_ids.insert(tree.to_bytes(), id);

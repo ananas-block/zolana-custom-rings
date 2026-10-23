@@ -8,6 +8,7 @@ use solana_signer::Signer;
 use thiserror::Error;
 use zolana_client::{ClientError, Rpc, SolanaRpc};
 use zolana_keypair::{KeypairError, ShieldedKeypair};
+use zolana_ring_client::{RingIndexer, RingRpcError};
 use zolana_ring_policy::{Member, MemberError};
 
 use crate::{
@@ -121,7 +122,7 @@ impl KeyOutcome {
 }
 
 impl KeyEnrolment<'_> {
-    pub(crate) fn ensure<I: Rpc>(
+    pub(crate) fn ensure<I: Rpc + RingIndexer>(
         &self,
         env: TransferProofEnvironment<'_, I, SolanaRpc>,
     ) -> Result<KeyOutcome, KeyError> {
@@ -148,7 +149,7 @@ impl KeyEnrolment<'_> {
 
     /// Only the sender's key included under the current registry root counts as
     /// enrolled.
-    fn registered(&self, indexer: &impl Rpc, rpc: &impl Rpc) -> Result<bool, KeyError> {
+    fn registered(&self, indexer: &impl RingIndexer, rpc: &impl Rpc) -> Result<bool, KeyError> {
         let member = self.member_tag()?;
         let nullifier_pubkey = self.member.shielded_address()?.nullifier_pubkey;
         wait_for(
@@ -168,9 +169,7 @@ impl KeyEnrolment<'_> {
                         entry.verify_nullifier_pubkey(&nullifier_pubkey)?;
                         Ok(Probe::Ready(true))
                     }
-                    Err(KeyRegistrationError::Client(error))
-                        if matches!(*error, ClientError::RingKeyRegistryMemberUnregistered) =>
-                    {
+                    Err(KeyRegistrationError::Indexer(RingRpcError::MemberUnregistered)) => {
                         Ok(Probe::Ready(false))
                     }
                     Err(error) if error.is_projection_lag() => {
@@ -186,7 +185,7 @@ impl KeyEnrolment<'_> {
         })
     }
 
-    fn register<I: Rpc>(
+    fn register<I: Rpc + RingIndexer>(
         &self,
         env: TransferProofEnvironment<'_, I, SolanaRpc>,
     ) -> Result<(), KeyError> {
@@ -227,9 +226,9 @@ mod tests {
     };
     use solana_account::Account;
     use solana_address::Address;
-    use zolana_indexer_api::{
-        Base64String, Context as RegistryContext, GetRingKeyRegistryEntryResponse, Hash,
-        RingMemberProofRequest,
+    use zolana_indexer_api::{Base64String, Context as RegistryContext, Hash};
+    use zolana_ring_client::{
+        GetRingKeyRegistryEntryResponse, RingIndexerError, RingMemberProofRequest,
     };
 
     use crate::ui::{Answer, Scripted};
@@ -296,14 +295,14 @@ mod tests {
 
     struct StubIndexer(Option<GetRingKeyRegistryEntryResponse>);
 
-    impl Rpc for StubIndexer {
+    impl RingIndexer for StubIndexer {
         fn get_ring_key_registry_entry(
             &self,
             _request: RingMemberProofRequest,
-        ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
+        ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
             self.0
                 .clone()
-                .ok_or(ClientError::RingKeyRegistryMemberUnregistered)
+                .ok_or(RingRpcError::MemberUnregistered.into())
         }
     }
 
@@ -409,17 +408,17 @@ mod tests {
     #[test]
     fn a_lagging_registry_is_polled_until_it_answers() {
         struct Lagging(std::cell::Cell<u8>);
-        impl Rpc for Lagging {
+        impl RingIndexer for Lagging {
             fn get_ring_key_registry_entry(
                 &self,
                 _request: RingMemberProofRequest,
-            ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
+            ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
                 let calls = self.0.get();
                 self.0.set(calls + 1);
                 if calls == 0 {
-                    return Err(ClientError::RingKeyRegistryOutOfSync);
+                    return Err(RingRpcError::KeyRegistryOutOfSync.into());
                 }
-                Err(ClientError::RingKeyRegistryMemberUnregistered)
+                Err(RingRpcError::MemberUnregistered.into())
             }
         }
         let member = member();
@@ -437,21 +436,21 @@ mod tests {
     #[test]
     fn a_changed_registry_root_is_refetched_before_retrying() {
         struct Advanced(Cell<u8>);
-        impl Rpc for Advanced {
+        impl RingIndexer for Advanced {
             fn get_ring_key_registry_entry(
                 &self,
                 request: RingMemberProofRequest,
-            ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
+            ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
                 let calls = self.0.get();
                 self.0.set(calls + 1);
                 if calls == 0 {
                     assert_eq!(request.expected_root.0, ROOT.root);
                     assert_eq!(request.expected_next_index, ROOT.next_index);
-                    return Err(ClientError::RingKeyRegistryRootChanged);
+                    return Err(RingRpcError::KeyRegistryRootChanged.into());
                 }
                 assert_eq!(request.expected_root.0, [1; 32]);
                 assert_eq!(request.expected_next_index, ROOT.next_index + 1);
-                Err(ClientError::RingKeyRegistryMemberUnregistered)
+                Err(RingRpcError::MemberUnregistered.into())
             }
         }
         let member = member();
@@ -513,12 +512,12 @@ mod tests {
     #[test]
     fn a_transport_failure_is_not_read_as_unregistered() {
         struct Down;
-        impl Rpc for Down {
+        impl RingIndexer for Down {
             fn get_ring_key_registry_entry(
                 &self,
                 _request: RingMemberProofRequest,
-            ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
-                Err(ClientError::IndexerUnavailable("down".to_owned()))
+            ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
+                Err(ClientError::IndexerUnavailable("down".to_owned()).into())
             }
         }
         let member = member();

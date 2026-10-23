@@ -38,7 +38,7 @@ fn dump_deposit_audit_fixtures() {
     let prover = ProverClient::local();
     let dir = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../program/tests/fixtures/deposit-audit"
+        "/../../programs/custom-ring/tests/fixtures/deposit-audit"
     );
     for count in [2, 8] {
         let data = audited_deposit(&prover, count);

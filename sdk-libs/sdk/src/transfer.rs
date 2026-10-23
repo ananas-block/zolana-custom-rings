@@ -43,8 +43,8 @@ use zolana_program::instruction::{
     DepositAsset, DepositBuildError, RingAssetDeposit, TransactInterfaceTransferAccounts,
 };
 use zolana_ring_client::{
-    AnonymousDisclosure, AnonymousOutputOpening, AuditInputOpening, DepositEncryption,
-    DepositOpening, DepositSeal,
+    AnonymousDisclosure, AnonymousOutputOpening, AsyncRingIndexer, AuditInputOpening,
+    DepositEncryption, DepositOpening, DepositSeal, RingIndexer,
 };
 use zolana_ring_policy::{ListNamespace, Member, VelocityMode, VelocityRow};
 use zolana_ring_transaction::AnonymousViewTags;
@@ -442,14 +442,14 @@ impl<'a> CustomRingTransfer<'a> {
     }
 
     /// Proves the transfer over a blocking transport.
-    pub fn prove<I: Rpc, R: Rpc>(
+    pub fn prove<I: Rpc + RingIndexer, R: Rpc>(
         self,
         environment: TransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenTransfer, TransferError> {
         crate::projection::retry_projection_lag(|| self.clone().prove_once(&environment))
     }
 
-    fn prove_once<I: Rpc, R: Rpc>(
+    fn prove_once<I: Rpc + RingIndexer, R: Rpc>(
         self,
         environment: &TransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenTransfer, TransferError> {
@@ -516,7 +516,7 @@ impl<'a> CustomRingTransfer<'a> {
     ///
     /// Both paths run the same proof assembly; only the five reads differ, and
     /// this one asks for its two proofs together rather than one after the other.
-    pub async fn prove_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn prove_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         environment: AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenTransfer, TransferError> {
@@ -526,7 +526,7 @@ impl<'a> CustomRingTransfer<'a> {
         .await
     }
 
-    async fn prove_once_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn prove_once_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         environment: &AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenTransfer, TransferError> {
@@ -1023,7 +1023,7 @@ struct ResolvedPolicy {
 }
 
 impl PolicyLookup<'_> {
-    fn read<I: Rpc, R: Rpc>(
+    fn read<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<ResolvedPolicy, TransferError> {
@@ -1033,7 +1033,7 @@ impl PolicyLookup<'_> {
         })
     }
 
-    async fn read_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn read_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<ResolvedPolicy, TransferError> {
@@ -1085,14 +1085,14 @@ impl<W> SpendLimit<W> {
 }
 
 impl SpendLimitLookup<'_> {
-    fn read<I: Rpc, R: Rpc>(
+    fn read<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<SpendLimit<VelocityFacts>, TransferError> {
         self.map_window(|lookup| lookup.read(env))
     }
 
-    async fn read_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn read_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<SpendLimit<VelocityFacts>, TransferError> {
@@ -1106,7 +1106,7 @@ struct VelocityLookup<'a> {
 }
 
 impl VelocityLookup<'_> {
-    fn read<I: Rpc, R: Rpc>(
+    fn read<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<VelocityFacts, TransferError> {
@@ -1118,7 +1118,7 @@ impl VelocityLookup<'_> {
         self.context.facts(live, env.rpc.get_slot()?)
     }
 
-    async fn read_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn read_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<VelocityFacts, TransferError> {
@@ -1343,7 +1343,7 @@ pub(crate) struct PolicyTierInput<'a> {
 }
 
 impl PolicyTierInput<'_> {
-    pub fn read<I: Rpc, R: Rpc>(
+    pub fn read<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
         source: ProofDataSource,
@@ -1356,7 +1356,7 @@ impl PolicyTierInput<'_> {
             .build(env.indexer, env.rpc, source)
     }
 
-    pub async fn read_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn read_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
         source: ProofDataSource,
@@ -1415,7 +1415,7 @@ pub(crate) struct PolicyTier<'a> {
 }
 
 impl PolicyTier<'_> {
-    pub fn build<I: Rpc, R: Rpc>(
+    pub fn build<I: Rpc + RingIndexer, R: Rpc>(
         self,
         indexer: &I,
         rpc: &R,
@@ -1428,7 +1428,7 @@ impl PolicyTier<'_> {
         Ok(PolicyStatement::new(self.policy_config, witness))
     }
 
-    pub async fn build_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn build_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         indexer: &I,
         rpc: &R,
@@ -1836,21 +1836,14 @@ impl TierRequest {
 }
 
 impl PolicyRequest {
-    fn indexed_request(
-        &self,
-    ) -> Result<Option<zolana_client::prover::indexed::IndexedPolicyRequest>, ClientError> {
+    fn indexed_request(&self) -> Result<Option<crate::indexed::IndexedPolicyRequest>, ClientError> {
         let Some(mut data) = self.request.indexed.clone() else {
             return Ok(None);
         };
         if let PolicyProofKind::Compressed(compressed) = &self.kind {
             data.public_inputs.push(compressed.counters_disclosure_hash);
         }
-        zolana_client::prover::indexed::IndexedPolicyRequest::new(
-            self.body()?,
-            self.proving_key()?,
-            data,
-        )
-        .map(Some)
+        crate::indexed::IndexedPolicyRequest::new(self.body()?, self.proving_key()?, data).map(Some)
     }
 
     fn accept_indexed(
@@ -2338,7 +2331,7 @@ impl RingDeposit<'_> {
 
     /// A stale key-registry root re-proves the prepared note under a fresh root.
     #[cfg(feature = "solana-rpc")]
-    pub fn send<I: Rpc>(
+    pub fn send<I: Rpc + RingIndexer>(
         self,
         env: DepositProofEnvironment<'_, I, zolana_client::SolanaRpc>,
     ) -> Result<RingDepositReceipt, DepositError> {
@@ -2416,14 +2409,14 @@ impl PreparedRingDeposit {
         }
     }
 
-    pub fn prove<I: Rpc, R: Rpc>(
+    pub fn prove<I: Rpc + RingIndexer, R: Rpc>(
         &self,
         env: DepositProofEnvironment<'_, I, R>,
     ) -> Result<Instruction, DepositError> {
         crate::projection::retry_projection_lag(|| self.prove_once(&env))
     }
 
-    fn prove_once<I: Rpc, R: Rpc>(
+    fn prove_once<I: Rpc + RingIndexer, R: Rpc>(
         &self,
         env: &DepositProofEnvironment<'_, I, R>,
     ) -> Result<Instruction, DepositError> {
@@ -2460,14 +2453,14 @@ impl PreparedRingDeposit {
         self.instruction(Some(to_instruction_proof(proof)?), escrow)
     }
 
-    pub async fn prove_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn prove_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         &self,
         env: AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<Instruction, DepositError> {
         crate::projection::retry_projection_lag_async(|| self.prove_once_async(&env)).await
     }
 
-    async fn prove_once_async<I: AsyncRpc, R: AsyncRpc>(
+    async fn prove_once_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         &self,
         env: &AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<Instruction, DepositError> {
@@ -2539,16 +2532,16 @@ impl DepositDisclosure {
         statement: &DepositStatement,
         escrow: Option<&EscrowedKeys>,
         source: ProofDataSource,
-    ) -> Result<Option<zolana_client::prover::indexed::IndexedDepositRequest>, ClientError> {
+    ) -> Result<Option<crate::indexed::IndexedDepositRequest>, ClientError> {
         if source == ProofDataSource::Client {
             return Ok(None);
         }
         let (Some(escrow), Some(registry)) = (escrow, self.key_registry) else {
             return Ok(None);
         };
-        zolana_client::prover::indexed::IndexedDepositRequest::new(
+        crate::indexed::IndexedDepositRequest::new(
             &self.request(statement),
-            zolana_client::prover::indexed::IndexedRegistry {
+            crate::indexed::IndexedRegistry {
                 ring_program_id: registry.ring.program_id(),
                 root: escrow.root.root,
                 next_index: escrow.root.next_index,
@@ -3483,6 +3476,7 @@ mod tests {
     /// Every `AsyncRpc` method has a default, so an empty type is a valid one.
     struct NoRpc;
     impl AsyncRpc for NoRpc {}
+    impl AsyncRingIndexer for NoRpc {}
 
     #[test]
     fn the_async_prove_future_is_send() {

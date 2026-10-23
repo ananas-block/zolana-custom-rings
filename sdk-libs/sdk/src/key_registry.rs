@@ -15,17 +15,19 @@ use zolana_client::{
     AsyncRpc, ClientError, Prover, Rpc,
 };
 use zolana_hasher::primitives::right_align;
-use zolana_indexer_api::{
-    GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse, Hash,
-    RingMemberProofRequest, SerializablePubkey,
-};
+use zolana_indexer_api::{Hash, SerializablePubkey};
 use zolana_interface::merge_utils::ciphertext_hash;
 use zolana_keypair::{KeypairError, NullifierKey, ShieldedKeypair, X25519Keypair, X25519Pubkey};
-use zolana_ring_client::{AuditEncryptionError, NullifierKeyEnvelope, SealedNullifierKey};
+use zolana_ring_client::{
+    AsyncRingIndexer, AuditEncryptionError, GetRingKeyRegistryEntryResponse,
+    GetRingKeyRegistryRegisterProofResponse, NullifierKeyEnvelope, RingIndexer, RingIndexerError,
+    RingMemberProofRequest, RingRpcError, SealedNullifierKey,
+};
 use zolana_ring_policy::Member;
 
 use crate::{
     escrow::RegistryKeyOpening,
+    indexed::REGISTRY_MEMBER_MISSING,
     instructions::transact::request::{bytes_to_hex, field_hex, index_hex, json_body, SecretHex},
     projection::{retry_projection_lag, retry_projection_lag_async, ProjectionLag},
     to_instruction_proof, AccountReadError, AsyncTransferProofEnvironment, CurrentKeyRegistryRoot,
@@ -36,6 +38,8 @@ use crate::{
 pub enum KeyRegistrationError {
     #[error(transparent)]
     Client(Box<ClientError>),
+    #[error(transparent)]
+    Indexer(RingRpcError),
     #[error(transparent)]
     AccountRead(#[from] AccountReadError),
     #[error(transparent)]
@@ -65,18 +69,24 @@ pub enum KeyRegistrationError {
 impl KeyRegistrationError {
     /// Photon trails or passed the root asked for, a fresh chain root settles either.
     pub fn is_projection_lag(&self) -> bool {
-        matches!(self, Self::Client(error) if matches!(
-            error.as_ref(),
-            ClientError::RingKeyRegistryOutOfSync | ClientError::RingKeyRegistryRootChanged
-        ))
+        matches!(
+            self,
+            Self::Indexer(
+                RingRpcError::KeyRegistryOutOfSync | RingRpcError::KeyRegistryRootChanged
+            )
+        )
     }
 
     /// The registry error a prover refusal stands for.
     pub(crate) fn claim(error: &ClientError) -> Option<Self> {
         match error {
-            ClientError::RegistryMemberMissing { member } => Member::from_bytes(*member)
-                .ok()
-                .map(|owner| Self::UnregisteredOutputKey { owner }),
+            ClientError::ProverRefusedMember { code, member }
+                if code == REGISTRY_MEMBER_MISSING =>
+            {
+                Member::from_bytes(*member)
+                    .ok()
+                    .map(|owner| Self::UnregisteredOutputKey { owner })
+            }
             _ => None,
         }
     }
@@ -97,6 +107,15 @@ impl From<ClientError> for KeyRegistrationError {
     }
 }
 
+impl From<RingIndexerError> for KeyRegistrationError {
+    fn from(error: RingIndexerError) -> Self {
+        match error {
+            RingIndexerError::Refused(refused) => Self::Indexer(refused),
+            RingIndexerError::Client(error) => error.into(),
+        }
+    }
+}
+
 #[must_use]
 #[derive(Clone, Copy)]
 pub struct RegisterKey<'a> {
@@ -106,7 +125,7 @@ pub struct RegisterKey<'a> {
 }
 
 impl RegisterKey<'_> {
-    pub fn prove<I: Rpc, R: Rpc>(
+    pub fn prove<I: Rpc + RingIndexer, R: Rpc>(
         self,
         env: TransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenKeyRegistration, KeyRegistrationError> {
@@ -140,7 +159,7 @@ impl RegisterKey<'_> {
         Ok(staged.finish(transition, proof))
     }
 
-    pub async fn prove_async<I: AsyncRpc, R: AsyncRpc>(
+    pub async fn prove_async<I: AsyncRpc + AsyncRingIndexer, R: AsyncRpc>(
         self,
         env: AsyncTransferProofEnvironment<'_, I, R>,
     ) -> Result<ProvenKeyRegistration, KeyRegistrationError> {
@@ -306,7 +325,7 @@ pub struct ReadCurrentSealedKey {
 
 impl ReadCurrentSealedKey {
     /// `None` when the ring has no key registry.
-    pub fn read<I: Rpc, R: Rpc>(
+    pub fn read<I: RingIndexer, R: Rpc>(
         self,
         env: ReadEnvironment<'_, I, R>,
     ) -> Result<Option<SealedKeyEntry>, KeyRegistrationError> {
@@ -337,13 +356,13 @@ pub struct SealedKeyEntry {
 }
 
 impl ReadSealedKey {
-    pub fn read<I: Rpc>(self, indexer: &I) -> Result<SealedKeyEntry, KeyRegistrationError> {
+    pub fn read<I: RingIndexer>(self, indexer: &I) -> Result<SealedKeyEntry, KeyRegistrationError> {
         let query = self.ring.member_proof_request(&self.member, self.root);
         let response = indexer.get_ring_key_registry_entry(query.clone())?;
         self.decode_entry(&query, response)
     }
 
-    pub async fn read_async<I: AsyncRpc>(
+    pub async fn read_async<I: AsyncRingIndexer>(
         self,
         indexer: &I,
     ) -> Result<SealedKeyEntry, KeyRegistrationError> {
@@ -920,7 +939,7 @@ mod tests {
         calls: std::cell::Cell<usize>,
         root_reads: std::cell::Cell<usize>,
         /// Answered in order before the entry.
-        lag: std::cell::RefCell<Vec<ClientError>>,
+        lag: std::cell::RefCell<Vec<RingRpcError>>,
     }
 
     impl Rpc for EntryIndexer {
@@ -949,19 +968,21 @@ mod tests {
                 rent_epoch: 0,
             }))
         }
+    }
 
+    impl RingIndexer for EntryIndexer {
         fn get_ring_key_registry_entry(
             &self,
             request: RingMemberProofRequest,
-        ) -> Result<GetRingKeyRegistryEntryResponse, ClientError> {
+        ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
             self.calls.set(self.calls.get() + 1);
             if !self.lag.borrow().is_empty() {
-                return Err(self.lag.borrow_mut().remove(0));
+                return Err(self.lag.borrow_mut().remove(0).into());
             }
             if request == self.entry.0 {
                 return Ok(self.entry.1.clone());
             }
-            Err(ClientError::RingKeyRegistryMemberUnregistered)
+            Err(RingRpcError::MemberUnregistered.into())
         }
     }
 
@@ -1071,8 +1092,8 @@ mod tests {
         let fixture = Fixture::new();
         let (registry, indexer) = escrow(&fixture);
         indexer.lag.replace(vec![
-            ClientError::RingKeyRegistryRootChanged,
-            ClientError::RingKeyRegistryOutOfSync,
+            RingRpcError::KeyRegistryRootChanged,
+            RingRpcError::KeyRegistryOutOfSync,
         ]);
         let key = output_key(&fixture.member, fixture.envelope.nullifier_pk);
         let escrowed = registry.openings(indexer.env(), &[key]).expect("caught up");

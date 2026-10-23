@@ -21,6 +21,7 @@ use zolana_interface::{
     ADDRESS_DOMAIN, INPUT_TREES, SHIELDED_POOL_PROGRAM_ID, SOL_ASSET_FIELD, UTXO_DOMAIN,
 };
 use zolana_keypair::NullifierKey;
+use zolana_ring_client::{RingIndexerError, RingRpcError};
 use zolana_ring_policy::{
     entry_nullifier, entry_seed, EntryState, Leaf, ListEntry, ListId, ListNamespace, Member,
 };
@@ -43,6 +44,8 @@ use crate::{
 pub enum EntryProofError {
     #[error(transparent)]
     Client(#[from] Box<ClientError>),
+    #[error(transparent)]
+    Indexer(RingRpcError),
     #[error("hashing failed")]
     Hashing,
     #[error("tree account {address} is missing")]
@@ -67,13 +70,22 @@ pub enum EntryProofError {
 
 impl ProjectionLag for EntryProofError {
     fn is_projection_lag(&self) -> bool {
-        matches!(self, Self::Client(error) if matches!(**error, ClientError::RingSpendRecordOutOfSync))
+        matches!(self, Self::Indexer(RingRpcError::SpendRecordOutOfSync))
     }
 }
 
 impl From<ClientError> for EntryProofError {
     fn from(error: ClientError) -> Self {
         Self::Client(Box::new(error))
+    }
+}
+
+impl From<RingIndexerError> for EntryProofError {
+    fn from(error: RingIndexerError) -> Self {
+        match error {
+            RingIndexerError::Refused(refused) => Self::Indexer(refused),
+            RingIndexerError::Client(error) => error.into(),
+        }
     }
 }
 

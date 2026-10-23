@@ -1,10 +1,9 @@
-use super::storage::RingRoot;
-use crate::{
-    common::rings_tree::RingsTreeKind,
-    ingester::persist::persisted_state_tree::{get_proof_nodes, zero_hash_for_level},
-};
+use crate::storage::{RingRoot, KEY_REGISTRY_LEVELS, KEY_REGISTRY_TREE};
 use anyhow::{bail, Context, Result};
 use custom_ring_interface::{KEY_REGISTRY_CAPACITY, KEY_REGISTRY_HEIGHT};
+use photon_indexer::ingester::persist::persisted_state_tree::{
+    get_proof_nodes, zero_hash_for_level,
+};
 use sea_orm::DatabaseTransaction;
 pub(crate) use zolana_ring_indexer::proof::{LeafPath, PathOverlay};
 
@@ -16,18 +15,18 @@ pub(crate) async fn path(
     if index >= KEY_REGISTRY_CAPACITY {
         bail!("key registry index out of range");
     }
-    let kind = RingsTreeKind::KeyRegistry;
+    let kind = i32::from(KEY_REGISTRY_TREE);
     let mut node = i64::try_from(KEY_REGISTRY_CAPACITY + index)?;
     let values = get_proof_nodes(
         tx,
-        vec![(root.address.to_vec(), kind.into(), node)],
+        vec![(root.address.to_vec(), kind, node)],
         true,
         true,
-        kind.tree_height() + 1,
+        KEY_REGISTRY_LEVELS,
     )
     .await?;
     let lookup = |node, level| -> Result<[u8; 32]> {
-        match values.get(&(root.address.to_vec(), kind.into(), node)) {
+        match values.get(&(root.address.to_vec(), kind, node)) {
             Some(value) => value
                 .hash
                 .clone()

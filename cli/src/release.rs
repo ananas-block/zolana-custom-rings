@@ -174,6 +174,18 @@ impl RingKey {
         }
     }
 
+    /// The key's field in the release lock.
+    pub const fn lock_section(self) -> &'static str {
+        match self {
+            Self::Policy => "proving_key",
+            Self::Base => "audit_key",
+            Self::CompressedPolicy => "compressed_policy_key",
+            Self::DelegatePolicy => "delegate_policy_key",
+            Self::RegisterKey => "register_key",
+            Self::Deposit => "deposit_key",
+        }
+    }
+
     /// The prover's circuit type, the name its health lists.
     pub const fn circuit(self) -> &'static str {
         match self {

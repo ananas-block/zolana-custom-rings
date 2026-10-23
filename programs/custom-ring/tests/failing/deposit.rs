@@ -14,7 +14,7 @@ use mollusk_svm::result::ProgramResult;
 use zolana_interface::SHIELDED_POOL_PROGRAM_ID;
 
 use crate::common::{
-    account, auditor_pubkey, authority, deposit_fixture, deposit_fixture_with,
+    account, add_spp_recorder, auditor_pubkey, authority, deposit_fixture, deposit_fixture_with,
     escrowed_config_account, initialized_config_account, ring_auth_pda, setup_mollusk, Slot,
 };
 
@@ -62,7 +62,7 @@ fn oversized_account_list_is_rejected_exactly() {
 fn the_forward_raises_only_ring_auth_to_a_signer() {
     let (mut mollusk, _) = setup_mollusk();
     let spp_id = Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID);
-    mollusk.add_program(&spp_id, "spp_recorder_program");
+    add_spp_recorder(&mut mollusk);
     let mut fixture = deposit_fixture();
     let metas = fixture.instruction().accounts.clone();
     let tree_key = fixture.account_key("tree");

@@ -1,0 +1,332 @@
+[workspace]
+members = [
+    "cli",
+    "program-libs/interface",
+    "program-libs/key-registry",
+    "program-libs/policy",
+    "program-tests/custom-ring",
+    "programs/custom-ring",
+    "sdk-libs/client",
+    "sdk-libs/indexer",
+    "sdk-libs/sdk",
+    "sdk-libs/transaction",
+    "services/photon",
+    "services/ring-rpc",
+    "xtask",
+]
+exclude = ["zolana"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/helius-labs/zolana-custom-rings"
+
+[workspace.metadata.solana]
+tools-version = "v1.54"
+
+[workspace.dependencies]
+# Ring workspace crates.
+custom-ring-interface = { path = "program-libs/interface", version = "0.1.0" }
+zolana-ring-policy = { path = "program-libs/policy", version = "0.1.0" }
+zolana-ring-key-registry = { path = "program-libs/key-registry", version = "0.1.0" }
+zolana-ring-indexer = { path = "sdk-libs/indexer", version = "0.1.0" }
+zolana-ring-client = { path = "sdk-libs/client", version = "0.1.0" }
+zolana-ring-transaction = { path = "sdk-libs/transaction", version = "0.1.0" }
+custom-ring-sdk = { path = "sdk-libs/sdk", version = "0.1.0" }
+custom-ring-program = { path = "programs/custom-ring", version = "0.1.0" }
+custom-ring-cli = { path = "cli", version = "0.1.0" }
+zolana-ring-rpc = { path = "services/ring-rpc", version = "0.1.0" }
+custom-ring-photon = { path = "services/photon", version = "0.1.0" }
+
+# Solana platform-tools Cargo 1.84 cannot build edition2024 crates pulled by
+# newer time-core releases.
+time = ">=0.3, <0.3.46"
+
+# zolana crates through the submodule.
+zolana-event = { path = "zolana/program-libs/event", version = "0.1.0" }
+zolana-event-parser = { path = "zolana/sdk-libs/event", version = "0.1.0" }
+zolana-interface = { path = "zolana/program-libs/interface", version = "0.1.0" }
+zolana-user-registry-interface = { path = "zolana/program-libs/user-registry-interface", version = "0.1.0" }
+zolana-tree = { path = "zolana/program-libs/tree", version = "0.1.0" }
+zolana-keypair = { path = "zolana/sdk-libs/keypair", version = "0.1.0" }
+zolana-instruction = { path = "zolana/sdk-libs/instruction", version = "0.1.0" }
+zolana-program = { path = "zolana/sdk-libs/program", version = "0.1.0" }
+# The zk crates live in helius-labs/zk-tools (zk-dsl/), pinned by rev.
+zolana-zk-dsl = { git = "https://github.com/helius-labs/zk-tools", rev = "56d6e53616c26a69130c51f9a9084829eef514bd" }
+zolana-zk-gadgets = { git = "https://github.com/helius-labs/zk-tools", rev = "56d6e53616c26a69130c51f9a9084829eef514bd" }
+zolana-zk-macros = { git = "https://github.com/helius-labs/zk-tools", rev = "56d6e53616c26a69130c51f9a9084829eef514bd" }
+zolana-zk-macros-core = { git = "https://github.com/helius-labs/zk-tools", rev = "56d6e53616c26a69130c51f9a9084829eef514bd" }
+zolana-api = { path = "zolana/sdk-libs/zolana-api", version = "0.1.0", default-features = false }
+zolana-program-test = { path = "zolana/sdk-libs/program-test", version = "0.23.0" }
+zolana-transaction = { path = "zolana/sdk-libs/transaction", version = "0.1.0" }
+zolana-client = { path = "zolana/sdk-libs/client", version = "0.1.0" }
+zolana-gnark-ffi-prover = { path = "zolana/sdk-libs/gnark-ffi-prover", version = "0.1.0" }
+zolana-gnark-ffi-prover-build = { path = "zolana/sdk-libs/gnark-ffi-prover/build-helper", version = "0.1.0" }
+zolana-indexer-api = { path = "zolana/sdk-libs/indexer-api", version = "0.1.0" }
+zolana-merkle-tree = { path = "zolana/sdk-libs/merkle-tree", version = "4.0.0" }
+zolana-smart-account-client = { path = "zolana/sdk-libs/smart-account-client", version = "0.1.0" }
+zolana-test-utils = { path = "zolana/program-tests/test-utils", version = "0.1.0" }
+photon-indexer = { path = "zolana/services/photon", version = "0.51.2" }
+shielded-pool-program = { path = "zolana/programs/shielded-pool", version = "0.1.0" }
+zolana-user-registry = { path = "zolana/programs/user-registry", version = "0.1.0", default-features = false, features = ["no-entrypoint"] }
+groth16-solana = { git = "https://github.com/Lightprotocol/groth16-solana", rev = "70a93803e5f55b8425301d506c625169ef557c9d", features = ["bsb22"] }
+
+light-array-map = "0.2.0"
+zolana-account-checks = { path = "zolana/program-libs/account-checks", version = "0.8.0", default-features = false }
+zolana-hasher = { path = "zolana/program-libs/hasher", version = "5.0.0", default-features = false }
+zolana-indexed-array = { path = "zolana/program-libs/indexed-array", version = "0.3.0" }
+light-poseidon = "0.4.0"
+# Pinned to the head of the mollusk-0.15 branch (Lightprotocol/light-program-profiler).
+# Switch back to a released version once that lands upstream.
+light-program-profiler = { git = "https://github.com/Lightprotocol/light-program-profiler", rev = "db49f3c801996a80e1cb7e4e92b13a694e962b65" }
+light-sparse-merkle-tree = "0.3.0"
+
+# Mollusk test harness. Tracks the workspace's agave 4.2 wire crates.
+mollusk-svm = "0.15.0"
+
+# Solana and SPL.
+anchor-lang = "1.1"
+anchor-spl = "1.1"
+borsh = { version = "1.5", default-features = false, features = ["derive"] }
+solana-account = "4.3"
+solana-account-info = "3.1"
+solana-account-view = "2.0"
+solana-account-decoder = "4.1"
+solana-account-decoder-client-types = "4.1"
+solana-address = { version = "2.6", features = ["atomic", "borsh", "bytemuck", "copy", "decode", "wincode"] }
+solana-banks-client = { version = "4.1", features = ["agave-unstable-api"] }
+solana-bn254 = "3.2.1"
+solana-clock = "3.0"
+solana-commitment-config = "3.1"
+solana-compute-budget = "3.1"
+solana-compute-budget-interface = "3.0"
+solana-cpi = "3.1"
+solana-curve25519 = "4.0"
+solana-epoch-info = "3.1"
+# Pin solana-hash to 4.5.0: the agave 4.2 graph (agave-feature-set,
+# solana-message, solana-transaction) is built against 4.5.x; letting it float
+# duplicates the crate with types the rest of the graph does not share.
+solana-hash = "=4.5.0"
+solana-instruction = "3.4"
+solana-instruction-error = "2.4"
+solana-keypair = "3.1.2"
+solana-loader-v3-interface = "8.0"
+solana-loader-v4-interface = "3.1"
+solana-message = "4.2"
+solana-msg = { version = "3.1", default-features = false }
+solana-packet = "3.0"
+solana-program = "4.0"
+solana-program-error = "3.0"
+solana-program-pack = "3.1"
+solana-pubkey = { version = "4.2", features = ["curve25519"] }
+solana-rent = "4.2"
+# Pin solana-reward-info to 6.2.0: 6.3.0 pulls in wincode 0.6.0, which conflicts
+# with the wincode 0.5.x used by the rest of the agave 4.2 graph.
+solana-reward-info = "=6.2.0"
+# 4.1 encodes VersionedTransaction with serde: signatures, then the message.
+# A v1 transaction's wire format is the message, then a raw signature array,
+# and those swapped bytes are rejected with "invalid transaction config mask".
+# 4.2 encodes with wincode, which writes v1 in wire order.
+solana-rpc-client = "4.2"
+solana-rpc-client-api = "4.2"
+solana-sbpf = { version = "=0.21.1", default-features = false }
+solana-security-txt = "1.1.2"
+solana-sdk = "4.0"
+solana-sdk-ids = "3.1"
+solana-signature = "3.4"
+solana-signer = "3.0"
+solana-system-interface = { version = "3.2", features = ["bincode"] }
+solana-sysvar = { version = "4.0", features = ["bincode"] }
+solana-transaction = "4.1"
+solana-transaction-error = "3.0"
+solana-transaction-status = "4.1"
+solana-transaction-status-client-types = "4.1"
+spl-token = "9.0"
+spl-token-2022 = { version = "11.0", features = ["no-entrypoint"] }
+spl-token-2022-interface = "2.0"
+spl-pod = "0.7"
+pinocchio = "0.11"
+pinocchio-pubkey = "0.3.0"
+pinocchio-system = "0.6.0"
+pinocchio-token-program = { git = "https://github.com/Lightprotocol/token", rev = "f7bee9bbc8039c224a88ea76e9ae2edd78e0f9c3" }
+
+# Async, HTTP, logging, and utilities.
+aes-gcm = "0.10"
+anyhow = "1.0"
+async-channel = "2.5"
+async-stream = "0.3.6"
+async-trait = "0.1.82"
+arrayvec = "0.7"
+base64 = "0.22.1"
+bb8 = "0.8.6"
+bincode = { version = "2.0.1", features = ["serde"] }
+bitvec = { version = "1.0.1", default-features = false }
+bs58 = "0.5.1"
+bytemuck = { version = "1.19.0", features = ["derive"] }
+bytes = "1.12.0"
+cadence = "1.8.0"
+cadence-macros = "1.8.0"
+chrono = "0.4"
+ciborium = "0.2.2"
+ciborium-ll = "0.2.2"
+clap = { version = "4.5.53", features = ["derive", "env"] }
+console = "0.16"
+coset = "0.4.2"
+dashmap = "6.1.0"
+# At least 0.6.5 for CVE-2026-22696, since collateral arrives from the prover.
+dcap-qvl = { version = "0.6.5", default-features = false, features = ["std", "rustcrypto", "default-x509"] }
+darling = "0.21"
+dialoguer = { version = "0.12", default-features = false }
+env_logger = "0.11"
+flate2 = "1"
+futures = "0.3.31"
+governor = "0.8.0"
+heck = "0.5"
+hex = "0.4"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+libc = "0.2"
+http-body-util = "0.1.3"
+http = "1"
+httpdate = "1.0.3"
+hyper = "1.10.1"
+hyper-util = { version = "0.1.20", features = ["server-auto", "tokio"] }
+itertools = "0.15.0"
+jsonwebtoken = "10.4.0"
+jsonrpsee = { version = "0.26.0", features = ["server", "macros"] }
+lazy_static = "1.5.0"
+log = "0.4"
+litesvm = "0.16"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+once_cell = "1.21.4"
+p384 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8"] }
+proc-macro2 = "1.0"
+quote = "1.0"
+rand = "0.8.5"
+rand_core = { version = "0.9", features = ["os_rng"] }
+rayon = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+s3 = { package = "rust-s3", version = "0.37.2", default-features = false, features = ["fail-on-err", "tags", "tokio-rustls-tls"] }
+sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"] }
+sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_bytes = "0.11.19"
+serde_norway = "0.9.42"
+serde_path_to_error = "0.1"
+serial_test = "3.2.0"
+sha2 = "0.10"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "sqlite", "rust_decimal"] }
+syn = { version = "2.0", features = ["visit-mut", "full"] }
+tabled = "0.20"
+tar = "0.4"
+thiserror = { version = "2.0", default-features = false }
+toml = "0.8"
+toml_edit = "0.22"
+tinyvec = "1.10.0"
+tokio = { version = "1.48.0", features = ["rt", "macros", "rt-multi-thread"] }
+url = "2"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.0", default-features = false, features = ["cors"] }
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+utoipa = { version = "5.5.0", features = ["yaml", "non_strict_integers"] }
+yellowstone-grpc-proto = "12.5.0"
+tonic = { version = "0.14.6", default-features = false, features = ["transport", "tls-native-roots"] }
+tokio-stream = "0.1.18"
+zerocopy = "0.8.25"
+
+# Browser (wasm) bindings.
+console_error_panic_hook = "0.1.7"
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6.5"
+tsify = { version = "0.5.8", default-features = false, features = ["js"] }
+wasm-bindgen = "0.2.104"
+
+# Prover math/crypto.
+ark-bn254 = "0.5"
+ark-ff = "=0.5.0"
+ark-serialize = "0.5"
+ark-std = "0.5"
+
+# Client keypair crypto.
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa", "std"] }
+psl = "2"
+ed25519-dalek = "2.2.0"
+aes = { version = "0.8", default-features = false }
+ctr = { version = "0.9", default-features = false }
+hkdf = "0.12"
+zeroize = "1"
+# HSM custody backends exercised by the keypair test suite.
+aws-sdk-kms = "1"
+aws-smithy-mocks = "0.3"
+criterion = "0.5"
+proptest = "1"
+wincode = { version = "0.5", default-features = false, features = ["derive", "alloc"] }
+x509-cert = { version = "0.3", default-features = false }
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+strip = "none"
+
+[profile.dev.package.syn]
+opt-level = 3
+
+[profile.dev.package.proc-macro2]
+opt-level = 3
+
+[profile.dev.package.quote]
+opt-level = 3
+
+[profile.dev.package.serde_derive]
+opt-level = 3
+
+[profile.dev.package.ark-ff-macros]
+opt-level = 3
+
+[profile.dev.package.ark-ff-asm]
+opt-level = 3
+
+[profile.dev.package.p256]
+opt-level = 3
+
+[profile.dev.package.primeorder]
+opt-level = 3
+
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.hmac]
+opt-level = 3
+
+[profile.dev.package.hkdf]
+opt-level = 3
+
+[profile.dev.package.aes]
+opt-level = 3
+
+[profile.dev.package.ark-ff]
+opt-level = 3
+
+[profile.dev.package.ark-bn254]
+opt-level = 3
+
+[profile.dev.package.light-poseidon]
+opt-level = 3
+
+[profile.release]
+overflow-checks = true
+
+# Share the local hasher with the zk-tools git dependencies.
+[patch."https://github.com/helius-labs/zolana"]
+zolana-hasher = { path = "zolana/program-libs/hasher" }

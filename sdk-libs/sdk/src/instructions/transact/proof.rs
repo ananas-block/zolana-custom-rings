@@ -252,27 +252,25 @@ impl PendingCustomRingProof {
         let indexed = witness
             .indexed_inputs
             .map(|inputs| {
-                Ok::<_, CustomRingProofInputError>(
-                    zolana_client::prover::indexed::IndexedPolicyData {
-                        inputs,
-                        registry: witness.indexed_registry,
-                        public_inputs: statement
-                            .indexed_inputs()
-                            .map_err(|_| CustomRingProofInputError::Hashing)?
-                            .to_vec(),
-                        trees: witness
-                            .trees
-                            .iter()
-                            .map(|tree| zolana_client::prover::indexed::ResolvedProofTree {
-                                tree: tree.tree.address,
-                                id: tree.tree.id,
-                                utxo_root: tree.roots.state,
-                                nullifier_root: tree.roots.nullifier,
-                                context: tree.context().context,
-                            })
-                            .collect(),
-                    },
-                )
+                Ok::<_, CustomRingProofInputError>(crate::indexed::IndexedPolicyData {
+                    inputs,
+                    registry: witness.indexed_registry,
+                    public_inputs: statement
+                        .indexed_inputs()
+                        .map_err(|_| CustomRingProofInputError::Hashing)?
+                        .to_vec(),
+                    trees: witness
+                        .trees
+                        .iter()
+                        .map(|tree| zolana_client::prover::indexed::ResolvedProofTree {
+                            tree: tree.tree.address,
+                            id: tree.tree.id,
+                            utxo_root: tree.roots.state,
+                            nullifier_root: tree.roots.nullifier,
+                            context: tree.context().context,
+                        })
+                        .collect(),
+                })
             })
             .transpose()?;
 
