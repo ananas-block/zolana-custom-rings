@@ -7,6 +7,7 @@ import {
   bigIntBytes,
   equalBytes,
   hashChain,
+  isZero,
   readOutputData,
   decodeRingDepositOutput,
   type RingDepositOutput,

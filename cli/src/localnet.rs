@@ -219,7 +219,10 @@ impl RingIndexer<'_> {
             "the ring indexer did not answer on {addr} within {READY_TIMEOUT:?}, see {shown}"
         );
         let (url, photon) = (&self.urls.indexer, self.photon);
-        line("indexer", format_args!("{url} in front of photon on port {photon}"));
+        line(
+            "indexer",
+            format_args!("{url} in front of photon on port {photon}"),
+        );
         Ok(())
     }
 }

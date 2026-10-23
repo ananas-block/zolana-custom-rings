@@ -26,7 +26,6 @@ import {
   fetchReaderGrant,
   fetchRingProgramConfig,
   grantReadAccessInstruction,
-  memberOfTag,
   messageSignerReader,
   revokeReadAccessInstruction,
   readerKeyBytes,
@@ -175,20 +174,18 @@ describe("ring flow", () => {
     expect(outputs.map((output) => output.ringProgramId)).toEqual([ringProgramId, ringProgramId]);
 
     // Ring reads go to the ring indexer at the URL the SPP reads use.
-    const member = memberOfTag(sender.keypair.shieldedAddress().confidentialViewTag());
-    let spendRecord;
-    for (let attempt = 0; attempt < 120 && spendRecord === undefined; attempt++) {
+    let registry;
+    for (let attempt = 0; attempt < 120 && registry === undefined; attempt++) {
       try {
-        spendRecord = await client.getRingSpendRecord({ ringProgramId, member });
+        registry = await client.getRingMemberRegistryRoot({ ringProgramId });
       } catch (error) {
-        if (!(error instanceof RingError) || error.code !== "RING_SPEND_RECORD_OUT_OF_SYNC") {
+        if (!(error instanceof RingError) || error.code !== "RING_REGISTRY_OUT_OF_SYNC") {
           throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    expect(spendRecord?.record).toBeNull();
-    expect(spendRecord?.context.slot).toBeGreaterThan(0n);
+    expect(registry?.context.slot).toBeGreaterThan(0n);
 
     // Participants read their own side from wallet sync.
     await airdrop(client, recipient.signer.address);
