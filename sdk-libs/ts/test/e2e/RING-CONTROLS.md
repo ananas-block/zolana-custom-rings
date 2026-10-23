@@ -2,11 +2,11 @@
 
 Run from `sdk-libs/ts` after `npm ci` at the repository root and local builds. Use a dedicated local stack
 with current SPP and user-registry programs, the generated localnet snapshots
-(protocol config, tree and SPL asset counter), Photon with spend-record indexing,
+(protocol config, tree and SPL asset counter), Photon behind the ring indexer,
 and the ring prover with the SPP keys and the custom-ring keys `prover/ring/proving-keys.lock` pins,
 including the deposit disclosure circuit. V1
 transactions are required. Surfpool needs the explicitly opt-in local fixture
-Photon build.
+builds of Photon and the ring indexer.
 
 ```sh
 ZOLANA_PROCESS_SCOPE_DIR=<scope directory of the dedicated local stack> \

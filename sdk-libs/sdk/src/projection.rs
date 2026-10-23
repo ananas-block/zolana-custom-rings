@@ -2,7 +2,7 @@ use core::future::Future;
 
 use zolana_client::IndexerPollConfig;
 
-/// Photon trails or passed the chain state the read was asked under.
+/// The ring indexer trails or passed the chain state the read was asked under.
 pub(crate) trait ProjectionLag {
     fn is_projection_lag(&self) -> bool;
 }

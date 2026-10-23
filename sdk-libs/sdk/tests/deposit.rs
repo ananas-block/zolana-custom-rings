@@ -296,7 +296,7 @@ fn refusing_prover(member: &[u8; 32]) -> RefusingProver {
     let body = serde_json::json!({
         "code": "registry_member_missing",
         "message": "registry member missing",
-        "member": Address::new_from_array(*member).to_string(),
+        "detail": { "member": Address::new_from_array(*member).to_string() },
     })
     .to_string();
     let handle = std::thread::spawn(move || {

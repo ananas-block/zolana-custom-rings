@@ -28,7 +28,7 @@ import type {
 
 const { hash, hashBytes } = indexerScalars;
 
-/** Photon's ring projection codes, `zolana_indexer_api::error_code`. */
+/** The ring indexer's refusal codes, `zolana_ring_indexer::rpc::RingRpcError`. */
 const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
   [-32070, "RING_KEY_REGISTRY_OUT_OF_SYNC"],
   [-32071, "RING_KEY_REGISTRY_ROOT_CHANGED"],

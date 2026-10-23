@@ -1,51 +1,53 @@
-use super::{
-    parser::{self, Rail, SuccessorContext},
-    *,
-};
-use crate::{
-    storage::{BlockJournal, BlockUndo},
-    tests::{field, indexer, member},
-    Invocations, StartSlot,
-};
 use jsonrpsee::server::ServerHandle;
-use photon_indexer::{
-    ingester::{
-        parser::state_update::{RingsMessageUpdate, RingsOutputUpdate, RingsTransactionUpdate},
-        typedefs::block_info::{
-            BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo,
-        },
-    },
-    migration::{MigratorTrait, RingsMigrator},
-};
-use sea_orm::Database;
+use sea_orm::TransactionTrait;
 use serde_json::json;
-use solana_pubkey::Pubkey;
+use solana_signature::Signature;
+use zolana_event::{GeneralEvent, MessageData, OutputUtxo};
 use zolana_indexer_api::Hash;
+use zolana_ring_indexer::spend_record::SuccessorContext;
 use zolana_ring_policy::{
     spend_record_message_tag, ListNamespace, Member, SpendCounters, SpendRecord,
 };
 
+use super::*;
+use crate::{
+    block::{BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo},
+    event::SppEvent,
+    indexer::Invocations,
+    storage::{BlockJournal, BlockUndo},
+    tests::{database, field, indexer, member},
+};
+
 const PROGRAM: [u8; 32] = [11; 32];
 
-async fn fixture() -> (DatabaseConnection, CustomRingCursor) {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    RingsMigrator::up(&db, None).await.unwrap();
-    let cursor = CustomRingCursor::new(0);
+async fn fixture() -> (DatabaseConnection, RingCursor) {
+    let db = database().await;
+    let cursor = RingCursor::new(0);
     storage::save_cursor(&db, &cursor).await.unwrap();
     SpendStore::new(&db, PROGRAM).open().await.unwrap();
     (db, cursor)
 }
 
-fn row(seed: u8, version: u8) -> RecordRow {
+pub(crate) fn row(seed: u8, version: u8) -> RecordRow {
     let mut nullifier = field(version);
     nullifier[0] = seed;
     RecordRow {
         member: member(seed),
         nullifier,
-        signature: Signature::from([version; 64]).into(),
-        event_index: 0,
         output_index: u16::from(version),
-        slot: u64::from(version),
+        transaction: ShieldedTransaction {
+            slot: u64::from(version),
+            tx_signature: Signature::from([version; 64]).into(),
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![],
+            messages: vec![],
+            nullifiers: vec![],
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(Address::new_from_array(PROGRAM).into()),
+        },
     }
 }
 
@@ -78,7 +80,7 @@ async fn register_then_transfers_keep_only_the_latest_record_until_rollback() {
         assert_eq!(spent, current);
         undo.push(
             Update::Transfer {
-                spent,
+                spent: Box::new(spent),
                 successor: row(5, version),
             }
             .apply(&store)
@@ -156,7 +158,7 @@ async fn a_transfer_cannot_move_another_members_record_or_spend_two() {
     }
     assert!(matches!(
         Update::Transfer {
-            spent: row(5, 0),
+            spent: Box::new(row(5, 0)),
             successor: row(6, 1),
         }
         .apply(&store)
@@ -187,7 +189,7 @@ async fn a_malformed_record_update_quarantines_only_its_ring_until_rollback() {
         error,
         instruction_groups: vec![InstructionGroup {
             outer_instruction: Instruction {
-                program_id: Pubkey::new_from_array(program),
+                program_id: Address::new_from_array(program),
                 data: vec![tag::REGISTER_SPEND, 1, 2, 3],
                 accounts: vec![],
                 stack_height: Some(1),
@@ -202,7 +204,7 @@ async fn a_malformed_record_update_quarantines_only_its_ring_until_rollback() {
             garbage(healthy, Some("failed".into())),
         ],
     };
-    let indexer = indexer(&db, StartSlot::Derived(0));
+    let indexer = indexer(&db, None);
     let tx = db.begin().await.unwrap();
     indexer.apply_block(&tx, &block, &mut cursor).await.unwrap();
     tx.commit().await.unwrap();
@@ -232,12 +234,12 @@ async fn fault_of(db: &DatabaseConnection, program: [u8; 32]) -> Option<String> 
 
 fn request(program: [u8; 32], seed: u8) -> RingSpendRecordRequest {
     RingSpendRecordRequest {
-        ring_program_id: Pubkey::new_from_array(program).into(),
+        ring_program_id: Address::new_from_array(program).into(),
         member: Hash(member(seed)),
     }
 }
 
-async fn chain_at(tip: BlockMetadata) -> (RpcClient, ServerHandle) {
+async fn chain_at(tip: BlockMetadata) -> (SolanaRpc, ServerHandle) {
     let server = jsonrpsee::server::ServerBuilder::default()
         .build("127.0.0.1:0")
         .await
@@ -252,13 +254,13 @@ async fn chain_at(tip: BlockMetadata) -> (RpcClient, ServerHandle) {
         })
         .unwrap();
     (
-        RpcClient::new(format!("http://{address}")),
+        SolanaRpc::new(format!("http://{address}")),
         server.start(module),
     )
 }
 
 #[tokio::test]
-async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
+async fn lookups_report_the_index_tip_and_serve_the_stored_transaction() {
     let (db, mut cursor) = fixture().await;
     let (rpc, handle) = chain_at(block(7)).await;
     assert!(matches!(
@@ -276,14 +278,15 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
         .unwrap()
         .record
         .is_none());
-    SpendStore::new(&db, PROGRAM)
-        .save(&row(4, 0))
-        .await
-        .unwrap();
-    assert!(matches!(
-        lookup(&db, &rpc, request(PROGRAM, 4)).await,
-        Err(RingApiError::SpendRecordOutOfSync(_))
-    ));
+    let stored = row(4, 3);
+    SpendStore::new(&db, PROGRAM).save(&stored).await.unwrap();
+    assert_eq!(
+        lookup(&db, &rpc, request(PROGRAM, 4)).await.unwrap().record,
+        Some(RingSpendRecord {
+            transaction: stored.transaction,
+            output_index: stored.output_index,
+        })
+    );
     assert!(matches!(
         lookup(
             &db,
@@ -294,29 +297,16 @@ async fn lookups_report_the_index_tip_and_refuse_unindexed_state() {
             }
         )
         .await,
-        Err(RingApiError::Photon(PhotonApiError::ValidationError(_)))
+        Err(RingApiError::InvalidRequest(_))
     ));
     handle.stop().unwrap();
     handle.stopped().await;
 }
 
 #[test]
-fn custom_ring_errors_keep_their_wire_codes() {
-    for (error, code) in [
-        (RingApiError::OutOfSync(String::new()), -32070),
-        (RingApiError::RootChanged, -32071),
-        (RingApiError::MemberUnregistered, -32072),
-        (RingApiError::MemberAlreadyRegistered, -32073),
-        (RingApiError::SpendRecordOutOfSync(String::new()), -32074),
-    ] {
-        assert_eq!(jsonrpsee::types::ErrorObjectOwned::from(error).code(), code);
-    }
-}
-
-#[test]
 fn invocation_subtree_excludes_sibling_emissions() {
     let ix = |program, tag, depth| Instruction {
-        program_id: Pubkey::new_from_array([program; 32]),
+        program_id: Address::new_from_array([program; 32]),
         data: vec![tag],
         accounts: vec![],
         stack_height: Some(depth),
@@ -338,22 +328,22 @@ fn invocation_subtree_excludes_sibling_emissions() {
     let invocation = invocations.invocation(1).unwrap();
     assert_eq!(
         invocation.instruction.program_id,
-        Pubkey::new_from_array([2; 32])
+        Address::new_from_array([2; 32])
     );
-    let children = &invocation.subtree.instruction_groups[0].inner_instructions;
+    let children = invocation.descendants();
     assert_eq!(children.len(), 1);
-    assert_eq!(children[0].program_id, Pubkey::new_from_array([3; 32]));
+    assert_eq!(children[0].program_id, Address::new_from_array([3; 32]));
 }
 
 const ADDRESS_TREE_ID: u16 = 7;
 
-fn spend_fixture() -> (RingsTransactionUpdate, [u8; 32], SpendRecord) {
+fn spend_fixture() -> (SppEvent, [u8; 32], SpendRecord) {
     spend_fixture_in(ADDRESS_TREE_ID)
 }
 
 /// The successor lands in `output_tree_id`, its address stays in the address tree.
-fn spend_fixture_in(output_tree_id: u16) -> (RingsTransactionUpdate, [u8; 32], SpendRecord) {
-    let namespace = Pubkey::new_from_array([9; 32]).to_bytes();
+fn spend_fixture_in(output_tree_id: u16) -> (SppEvent, [u8; 32], SpendRecord) {
+    let namespace = Address::new_from_array([9; 32]).to_bytes();
     let output_tree = zolana_interface::pda::tree(output_tree_id).to_bytes();
     let record = SpendRecord {
         member: Member::owner_tag(&[5; 32]).unwrap(),
@@ -366,39 +356,34 @@ fn spend_fixture_in(output_tree_id: u16) -> (RingsTransactionUpdate, [u8; 32], S
     let address = owner
         .spend_address(&record.member, ADDRESS_TREE_ID)
         .unwrap();
-    let event = RingsTransactionUpdate {
+    let event = SppEvent {
         signature: Signature::from([1; 64]),
         event_index: 0,
         slot: 1,
+        source_instruction_tag: zolana_event::tag::RING_TRANSACT,
         ring_config: None,
-        source_instruction_tag: i16::from(zolana_event::tag::RING_TRANSACT),
-        output_tree,
-        first_output_leaf_index: 0,
-        tx_viewing_pk: None,
-        salt: None,
-        proofless: false,
-        encrypted_utxos: None,
-        raw_event: None,
-        parse_version: 1,
-        outputs: vec![RingsOutputUpdate {
-            output_index: 0,
+        general: GeneralEvent {
+            inputs: vec![],
+            outputs: vec![OutputUtxo {
+                view_tag: namespace,
+                utxo_hash: record.utxo_hash(&owner, &address, output_tree_id).unwrap(),
+                data: vec![zolana_event::OutputDataEncoding::ENCRYPTED_TAG],
+            }],
+            messages: vec![MessageData {
+                view_tag: spend_record_message_tag(&namespace).unwrap(),
+                data: record.to_output_data().to_vec(),
+            }],
+            tx_viewing_pk: [0; 33],
+            salt: [0; 16],
+            first_output_leaf_index: 0,
             output_tree,
-            leaf_index: 0,
-            view_tag: namespace,
-            utxo_hash: record.utxo_hash(&owner, &address, output_tree_id).unwrap(),
-            payload: vec![zolana_event::OutputDataEncoding::ENCRYPTED_TAG],
-        }],
-        messages: vec![RingsMessageUpdate {
-            message_index: 0,
-            view_tag: spend_record_message_tag(&namespace).unwrap(),
-            payload: record.to_output_data().to_vec(),
-        }],
-        nullifiers: vec![],
+            spl_transfers: vec![],
+        },
     };
     (event, namespace, record)
 }
 
-fn context<'a>(namespace: [u8; 32], rail: &'a Rail) -> SuccessorContext<'a> {
+fn context(namespace: [u8; 32], rail: &Rail) -> SuccessorContext<'_> {
     SuccessorContext {
         namespace,
         rail,
@@ -406,11 +391,22 @@ fn context<'a>(namespace: [u8; 32], rail: &'a Rail) -> SuccessorContext<'a> {
     }
 }
 
+fn successor(
+    event: &SppEvent,
+    context: &SuccessorContext<'_>,
+    output_tree_id: u16,
+) -> Result<SpendRecord> {
+    spend_record::successor(
+        &event.transaction(Address::default(), output_tree_id)?,
+        context,
+    )
+}
+
 #[test]
 fn record_message_opens_the_confidential_successor_and_registration_stays_plaintext() {
     let (mut event, namespace, record) = spend_fixture();
     assert_eq!(
-        parser::successor(
+        successor(
             &event,
             &context(namespace, &Rail::Transfer),
             ADDRESS_TREE_ID
@@ -418,17 +414,17 @@ fn record_message_opens_the_confidential_successor_and_registration_stays_plaint
         .unwrap(),
         record
     );
-    event.messages.clear();
-    event.outputs[0].payload = record.to_output_data().to_vec();
+    event.general.messages.clear();
+    event.general.outputs[0].data = record.to_output_data().to_vec();
     let registration = Rail::Register { blinding: field(2) };
     assert_eq!(
-        parser::successor(&event, &context(namespace, &registration), ADDRESS_TREE_ID).unwrap(),
+        successor(&event, &context(namespace, &registration), ADDRESS_TREE_ID).unwrap(),
         record
     );
 }
 
-fn transfer_refusal(event: &RingsTransactionUpdate, namespace: [u8; 32]) -> String {
-    parser::successor(event, &context(namespace, &Rail::Transfer), ADDRESS_TREE_ID)
+fn transfer_refusal(event: &SppEvent, namespace: [u8; 32]) -> String {
+    successor(event, &context(namespace, &Rail::Transfer), ADDRESS_TREE_ID)
         .unwrap_err()
         .to_string()
 }
@@ -437,25 +433,28 @@ fn transfer_refusal(event: &RingsTransactionUpdate, namespace: [u8; 32]) -> Stri
 fn missing_duplicate_foreign_and_malformed_record_messages_are_refused() {
     let (event, namespace, _) = spend_fixture();
     let mut changed = event.clone();
-    changed.messages.clear();
+    changed.general.messages.clear();
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "spend-record message missing"
     );
     let mut changed = event.clone();
-    changed.messages.push(changed.messages[0].clone());
+    changed
+        .general
+        .messages
+        .push(changed.general.messages[0].clone());
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "duplicate spend-record messages"
     );
     let mut changed = event.clone();
-    changed.messages[0].view_tag = namespace;
+    changed.general.messages[0].view_tag = namespace;
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "spend-record message missing"
     );
     let mut changed = event;
-    changed.messages[0].payload.pop();
+    changed.general.messages[0].data.pop();
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "malformed spend-record message"
@@ -465,24 +464,26 @@ fn missing_duplicate_foreign_and_malformed_record_messages_are_refused() {
 #[test]
 fn a_record_message_cannot_be_associated_with_another_output_or_tree() {
     let (event, namespace, record) = spend_fixture();
-    let unopened = "spend-record message does not open its successor output";
     let mut changed = event.clone();
-    changed.outputs[0].utxo_hash = [0; 32];
-    assert_eq!(transfer_refusal(&changed, namespace), unopened);
+    changed.general.outputs[0].utxo_hash = [0; 32];
+    assert_eq!(
+        transfer_refusal(&changed, namespace),
+        "spend-record message does not open its successor output"
+    );
     let mut changed = event.clone();
-    changed.outputs[0].output_tree = [0; 32];
+    changed.general.output_tree = [0; 32];
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "spend-record output names a tree its id does not derive"
     );
     let mut changed = event.clone();
-    changed.outputs[0].view_tag = [0; 32];
+    changed.general.outputs[0].view_tag = [0; 32];
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "spend-record output belongs to another namespace"
     );
     let mut changed = event;
-    changed.outputs[0].payload = record.to_output_data().to_vec();
+    changed.general.outputs[0].data = record.to_output_data().to_vec();
     assert_eq!(
         transfer_refusal(&changed, namespace),
         "transfer spend-record output is not confidential"
@@ -493,9 +494,9 @@ fn a_record_message_cannot_be_associated_with_another_output_or_tree() {
 fn a_successor_in_a_second_tree_hashes_under_that_tree() {
     let (event, namespace, record) = spend_fixture_in(9);
     let transfer = context(namespace, &Rail::Transfer);
-    assert_eq!(parser::successor(&event, &transfer, 9).unwrap(), record);
+    assert_eq!(successor(&event, &transfer, 9).unwrap(), record);
     assert_eq!(
-        parser::successor(&event, &transfer, ADDRESS_TREE_ID)
+        successor(&event, &transfer, ADDRESS_TREE_ID)
             .unwrap_err()
             .to_string(),
         "spend-record output names a tree its id does not derive"
@@ -517,9 +518,9 @@ fn an_emit_event_without_an_spp_parent_cannot_update_a_record() {
         .unwrap(),
     );
     let instruction = Instruction {
-        program_id: Pubkey::new_from_array(PROGRAM),
+        program_id: Address::new_from_array(PROGRAM),
         data,
-        accounts: vec![Pubkey::new_from_array([2; 32]); 10],
+        accounts: vec![Address::new_from_array([2; 32]); 10],
         stack_height: Some(1),
     };
     let transaction = TransactionInfo {
@@ -538,8 +539,8 @@ fn an_emit_event_without_an_spp_parent_cannot_update_a_record() {
     let invocations = Invocations::new(&transaction, 1);
     let invocation = invocations.invocation(0).unwrap();
     assert!(matches!(
-        parser::decode(&instruction).unwrap(),
+        spend_record::decode(instruction_view(&instruction)).unwrap(),
         Some(Rail::Register { .. })
     ));
-    assert!(parser::event(&invocation).is_err());
+    assert!(invocation.event().is_err());
 }

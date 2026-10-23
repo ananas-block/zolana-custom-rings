@@ -72,6 +72,17 @@ pub fn create_dir_all(path: &Path) -> Result<(), FileError> {
     })
 }
 
+/// A missing directory is already removed.
+pub fn remove_dir_all(path: &Path) -> Result<(), FileError> {
+    match fs::remove_dir_all(path) {
+        Err(source) if source.kind() != io::ErrorKind::NotFound => Err(FileError::Write {
+            path: path.to_path_buf(),
+            source,
+        }),
+        _ => Ok(()),
+    }
+}
+
 pub fn parse_toml<T: DeserializeOwned>(path: &Path) -> Result<T, FileError> {
     toml::from_str(&read(path)?).map_err(|source| FileError::Parse {
         path: path.to_path_buf(),

@@ -7,6 +7,7 @@ import {
   type Base64EncodedBytes,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
 import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import { kitReads } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { listRegisteredRings } from "../src/ring/registry.js";
@@ -81,7 +82,7 @@ describe("listRegisteredRings", () => {
           data: [base64Decoder.decode(entry.data) as Base64EncodedBytes, "base64"],
           executable: false,
           lamports: 0n,
-          owner: address("sppU489D7A4U1exNo1oeMGZtLEofq3a6o2fR7UeoWB6"),
+          owner: SHIELDED_POOL_PROGRAM_ID,
           rentEpoch: 0n,
           space: BigInt(entry.data.length),
         },
@@ -102,7 +103,7 @@ describe("listRegisteredRings", () => {
     expect(await listRegisteredRings(rpc)).toEqual([]);
 
     const [programId, config] = getProgramAccounts.mock.calls[0] ?? [];
-    expect(programId).toBe("sppU489D7A4U1exNo1oeMGZtLEofq3a6o2fR7UeoWB6");
+    expect(programId).toBe(SHIELDED_POOL_PROGRAM_ID);
     // Filtered at the RPC: the pool also holds trees and asset registries, and
     // an unfiltered scan would download all of them to find a handful of rings.
     expect(config).toMatchObject({

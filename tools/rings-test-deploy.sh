@@ -7,7 +7,7 @@
 #   tools/rings-test-deploy.sh status          addresses and health
 #   tools/rings-test-deploy.sh down            delete everything it created
 #
-# Images live in the zolana-prover and zolana-ring-rpc repositories under
+# Images live in the zolana-ring-prover and zolana-ring-rpc repositories under
 # <service>-<branch>-<sha12>, built and pushed here when the tag is absent.
 # The prover task fetches the SPP transfer proving keys at start. The ring RPC
 # runs in derived mode, one root secret serves every ring
@@ -18,7 +18,7 @@
 # Needs aws (with write access), docker, jq, openssl, git.
 #
 # Environment
-#   RINGS_TEST_PROVER_TAG     tag in zolana-prover, default prover-<branch>-<sha12>
+#   RINGS_TEST_PROVER_TAG     tag in zolana-ring-prover, default ring-prover-<branch>-<sha12>
 #   RINGS_TEST_RING_RPC_TAG   tag in zolana-ring-rpc, default ring-rpc-<branch>-<sha12>
 #   RINGS_TEST_INDEXER_URL    photon the ring RPC reads, required. A plain HTTP
 #                             one also gets a distribution of this stack in
@@ -294,15 +294,16 @@ up() {
     [[ $# -eq 0 ]] || usage
     local indexer="${RINGS_TEST_INDEXER_URL:?set RINGS_TEST_INDEXER_URL to the photon the ring RPC reads}"
     local rpc="${RINGS_TEST_SOLANA_RPC_URL:-https://api.devnet.solana.com}"
-    local prover_tag="${RINGS_TEST_PROVER_TAG:-prover-$branch-${sha:0:12}}"
+    local prover_tag="${RINGS_TEST_PROVER_TAG:-ring-prover-$branch-${sha:0:12}}"
     local ring_rpc_tag="${RINGS_TEST_RING_RPC_TAG:-ring-rpc-$branch-${sha:0:12}}"
 
     log "== images"
+    ensure_repository zolana-ring-prover
     ensure_repository zolana-ring-rpc
     local service tag repository
-    for service in prover ring-rpc; do
-        tag="$prover_tag"; repository=zolana-prover
-        [[ "$service" == prover ]] || { tag="$ring_rpc_tag"; repository=zolana-ring-rpc; }
+    for service in ring-prover ring-rpc; do
+        tag="$prover_tag"; repository=zolana-ring-prover
+        [[ "$service" == ring-prover ]] || { tag="$ring_rpc_tag"; repository=zolana-ring-rpc; }
         if ! aws_ ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag" >/dev/null 2>&1; then
             zolana/tools/publish-image.sh "$service" --repository "$repository" --tag "$tag" --push >&2
         fi
@@ -323,7 +324,7 @@ up() {
 
     log "== services"
     local prover_td ring_rpc_td
-    prover_td="$(register_prover "$registry/zolana-prover:$prover_tag" "$role_arn")"
+    prover_td="$(register_prover "$registry/zolana-ring-prover:$prover_tag" "$role_arn")"
     ring_rpc_td="$(register_ring_rpc "$registry/zolana-ring-rpc:$ring_rpc_tag" "$role_arn" "$secret_arn" "$indexer" "$rpc")"
     ensure_service "$prefix-prover" "$prover_td" "$subnets" "$sg" prover "$prover_port"
     ensure_service "$prefix-ring-rpc" "$ring_rpc_td" "$subnets" "$sg" ring-rpc "$ring_rpc_port"

@@ -9,21 +9,21 @@
       "description": "Zolana custom ring audit RPC",
       "smoke": "docker run --rm \"$image\" --help >/dev/null && test \"$(docker run --rm --entrypoint id \"$image\" -u)\" = 10002"
     },
-    "ring-photon": {
-      "repository": "zolana-ring-photon",
+    "ring-indexer": {
+      "repository": "zolana-ring-indexer",
       "context": ".",
-      "file": "services/photon/Dockerfile",
-      "title": "Zolana Ring Photon",
-      "description": "Zolana shielded-pool indexer with the custom ring extension",
-      "smoke": "zolana/tools/check-photon-image.sh \"$image\""
+      "file": "services/ring-indexer/Dockerfile",
+      "title": "Zolana Ring Indexer",
+      "description": "Zolana custom ring indexer beside Photon",
+      "smoke": "docker run --rm \"$image\" --help >/dev/null && test \"$(docker run --rm --entrypoint id \"$image\" -u)\" = 10003"
     },
-    "prover": {
-      "repository": "zolana-prover",
+    "ring-prover": {
+      "repository": "zolana-ring-prover",
       "context": "zolana/prover/server",
       "file": "zolana/prover/server/Dockerfile.light",
-      "title": "Zolana Prover",
+      "title": "Zolana Ring Prover",
       "description": "Zolana Groth16 proving server with the custom ring circuits",
-      "smoke": "docker run --rm \"$image\" --help >/dev/null"
+      "smoke": "docker run --rm \"$image\" --help >/dev/null && test -n \"$(docker run --rm \"$image\" release-keys)\""
     }
   }
 }
