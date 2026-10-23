@@ -1,12 +1,19 @@
 use sea_orm::DatabaseBackend;
 use sea_orm_migration::prelude::*;
 
+mod m20261024_000001_drop_ring_spend_records;
+mod m20261024_000002_record_tree;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(RingTables)]
+        vec![
+            Box::new(RingTables),
+            Box::new(m20261024_000001_drop_ring_spend_records::Migration),
+            Box::new(m20261024_000002_record_tree::Migration),
+        ]
     }
 }
 

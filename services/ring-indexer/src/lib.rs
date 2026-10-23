@@ -1,18 +1,15 @@
-//! Indexes custom ring key registries and spend records, and forwards every
-//! other JSON-RPC call to Photon.
+//! Indexes custom ring member registries and forwards every other JSON-RPC
+//! call to Photon.
 
 mod api;
 mod block;
 mod error;
-mod event;
 mod indexer;
-mod key_registry;
+mod member_registry;
 mod migration;
 mod rpc;
 mod server;
-mod spend_record;
 mod storage;
-mod tree;
 
 use std::{net::SocketAddr, sync::Arc};
 

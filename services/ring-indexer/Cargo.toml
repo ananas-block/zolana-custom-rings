@@ -29,6 +29,7 @@ serde_json = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder-client-types = { workspace = true, features = ["agave-unstable-api"] }
 solana-address = { workspace = true, features = ["curve25519"] }
+solana-clock = { workspace = true }
 solana-rpc-client = { workspace = true }
 solana-rpc-client-api = { workspace = true }
 solana-signature = { workspace = true }
@@ -39,17 +40,14 @@ tokio = { workspace = true, features = ["net", "signal", "time"] }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing-subscriber = { workspace = true }
-zolana-event = { workspace = true }
-zolana-event-parser = { workspace = true }
-zolana-hasher = { workspace = true }
 zolana-indexer-api = { workspace = true }
 zolana-interface = { workspace = true }
 zolana-ring-indexer = { workspace = true }
-zolana-ring-member-registry = { workspace = true }
-zolana-ring-policy = { workspace = true }
 zolana-rpc-http = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+hex = { workspace = true }
 hyper-util = { workspace = true }
-wincode = { workspace = true }
+zolana-ring-member-registry = { workspace = true }
+zolana-ring-policy = { workspace = true }

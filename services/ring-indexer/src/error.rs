@@ -2,18 +2,18 @@ use jsonrpsee::types::{error::ErrorCode, ErrorObjectOwned};
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingRpcError;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Clone, Debug, PartialEq, Eq)]
 pub enum RingApiError {
-    #[error("key registry is out of sync ({0})")]
+    #[error("member registry is out of sync ({0})")]
     OutOfSync(String),
-    #[error("key registry root changed")]
+    #[error("member registry root changed")]
     RootChanged,
-    #[error("member is not registered in the key registry")]
+    #[error("member has no record in the member registry")]
     MemberUnregistered,
-    #[error("member is already registered in the key registry")]
-    MemberAlreadyRegistered,
-    #[error("spend records are out of sync ({0})")]
-    SpendRecordOutOfSync(String),
+    #[error("member registry page has an index gap or inconsistent leaf")]
+    PageGap,
+    #[error("record queue moved under the request")]
+    QueueChanged,
     #[error("invalid request ({0})")]
     InvalidRequest(String),
     #[error("internal error ({0})")]
@@ -29,11 +29,11 @@ impl From<sea_orm::DbErr> for RingApiError {
 impl From<RingApiError> for ErrorObjectOwned {
     fn from(error: RingApiError) -> Self {
         let refusal = match &error {
-            RingApiError::OutOfSync(_) => RingRpcError::KeyRegistryOutOfSync,
-            RingApiError::RootChanged => RingRpcError::KeyRegistryRootChanged,
+            RingApiError::OutOfSync(_) => RingRpcError::RegistryOutOfSync,
+            RingApiError::RootChanged => RingRpcError::RegistryRootChanged,
             RingApiError::MemberUnregistered => RingRpcError::MemberUnregistered,
-            RingApiError::MemberAlreadyRegistered => RingRpcError::MemberAlreadyRegistered,
-            RingApiError::SpendRecordOutOfSync(_) => RingRpcError::SpendRecordOutOfSync,
+            RingApiError::PageGap => RingRpcError::RegistryPageGap,
+            RingApiError::QueueChanged => RingRpcError::RecordQueueChanged,
             RingApiError::InvalidRequest(_) => {
                 return Self::owned(
                     ErrorCode::InvalidRequest.code(),
