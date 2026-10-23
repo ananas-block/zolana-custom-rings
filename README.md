@@ -49,9 +49,11 @@ not on zolana `main` or a `release/*` branch.
    settlement to SPP.
 5. [`transfer.rs`](sdk-libs/sdk/src/transfer.rs) assembles the client proof inputs.
    [`indexer`](sdk-libs/indexer/src/lib.rs) validates spend-record and key transitions
-   and builds the key registry's Merkle overlay. Photon owns block fetching,
-   persistence and replay. Clients validate its exact-root key-registry proofs
-   before using them.
+   and builds the key registry's Merkle overlay. The ring indexer in
+   [`services/ring-indexer`](services/ring-indexer) owns block fetching,
+   persistence and replay, and forwards every other JSON-RPC call to Photon
+   untouched. Clients validate its exact-root key-registry proofs before using
+   them.
 
 ## Roles
 
@@ -103,8 +105,8 @@ delegate cannot withdraw; SPP's authority rail alone would accept a public
 withdrawal. The shielded pool refuses the rail until governance enables it
 for the ring with `set_ring_activation`. A move spends
 the source member's notes with that member's nullifier key. `init` creates
-the ring's key registry, a member-keyed tree the ring owns and Photon
-indexes, and `transact` and `transfer` escrow the sender's key there on
+the ring's key registry, a member-keyed tree the ring owns and the ring
+indexer indexes, and `transact` and `transfer` escrow the sender's key there on
 first use, sealed to the ring auditor's X25519 key with a proof that binds
 the ciphertext to the auditor the config pins. `zolana-ring key register`
 runs that step alone. Registration binds the member's signature to an
@@ -182,7 +184,7 @@ program requires exactly one matching namespace message. Its statement binds
 the transaction salt and complete ciphertext under `CRING/spend-counters/v1`.
 The sender and auditor reject a missing or malformed disclosure on a
 non-genesis record. The record publishes their commitment, member,
-version and window. Photon serves each member's latest record through
+version and window. The ring indexer serves each member's latest record through
 `getRingSpendRecord`, and SPP refuses any spent record. The `transact` and
 `transfer` commands register the sender on first use and refuse to send a transfer the proof marks for approval without
 `--cosigner-keypair`.
@@ -360,24 +362,44 @@ ring's. `pipeline` and `deploy` on localnet start whatever does not answer
 before deploying, so `zolana-ring pipeline` alone brings a ring up. `just
 ring-localnet` needs this repository's localnet prerequisites instead.
 
+### Ring indexer
+
+`ring-indexer` indexes the key registries and spend records of every active
+ring from Solana RPC and serves the three ring methods. Every other request goes
+to `--photon-url` with its path, body and content type, and the upstream status
+and body come back unchanged. `--db-url` names a Postgres or SQLite database
+the ring indexer alone writes. An empty index needs `--start-slot`, a slot or
+`latest`, and holds no history before that slot. A stored index refuses a
+different start slot. `GET /health` answers while the process
+runs, `GET /ready` once the index first reaches the confirmed tip.
+
+`just test-ring-compat` runs one ring flow through the ring indexer on a fresh
+localnet. `ZOLANA_PHOTON_BIN`, `ZOLANA_SPP_PROGRAM_SO` and
+`ZOLANA_USER_REGISTRY_SO` take external builds, the submodule builds the rest.
+
 ### Workspace localnet
 
-Build the workspace CLI, Photon, ring RPC, xtask, prover and SBF programs first.
-The ring keys must match `prover/ring/proving-keys.lock`.
+Build the workspace CLI, Photon, the ring indexer, ring RPC, xtask, prover and
+SBF programs first. The ring keys must match `prover/ring/proving-keys.lock`.
 Local mode verifies these files and fetches no custom-rings release.
 
 ```sh
-cargo build -p custom-ring-photon --bin photon --features surfpool-fixture
+just build-photon build-ring-indexer
 export ZOLANA_RING_WORKSPACE=/absolute/path/to/zolana-custom-rings
 export ZOLANA_PROCESS_SCOPE_DIR="$(mktemp -d)"
 export SURFPOOL_BIN=/absolute/path/to/pinned/surfpool
 export ZOLANA_RING_SURFPOOL_FIXTURE=1
+export ZOLANA_LOCALNET_PHOTON_PORT=8794
 "$ZOLANA_RING_WORKSPACE/target/debug/zolana-ring" dev
 ```
 
-`custom-ring-photon` runs the custom ring worker and serves its RPC methods
-unless it is started with `--disable-custom-rings`. zolana's Photon has no
-custom ring code.
+zolana's Photon has no custom ring code. It listens on
+`ZOLANA_LOCALNET_PHOTON_PORT`, and the ring indexer listens on the `indexer`
+URL of `ring.toml`. The ring indexer serves `getRingKeyRegistryEntry`,
+`getRingKeyRegistryRegisterProof` and `getRingSpendRecord` and forwards every
+other call to Photon, so clients, the ring prover and the ring RPC all take the
+ring indexer URL. It keeps its index under the process scope directory and
+stops with the foreground ring RPC.
 
 The fixture feature repairs Surfpool's synthetic parent block hashes on
 loopback RPC only, opted in with `ZOLANA_RING_SURFPOOL_FIXTURE=1`. Production
@@ -392,15 +414,17 @@ keys the lock pins, two stacks sharing one cache collide on the download's
 `.tmp` file.
 To stop the base services, use the same environment and
 `"$ZOLANA_RING_WORKSPACE/target/debug/zolana" dev start --local --stop` with
-the RPC, Photon and prover ports from `ring.toml`. Only task-owned process
-receipts authorize a stop.
+the RPC and prover ports from `ring.toml` and the Photon port. Only task-owned
+process receipts authorize a stop.
 
 `just test-custom-ring-validator` installs the pinned Surfpool under
 `zolana/target/tools` unless `SURFPOOL_BIN` names one, runs under its own temporary
 process scope and verifies the ring keys in `zolana/prover/server/proving-keys`
-against the lock. Ports default to 40899 (RPC), 40784 (Photon) and 43001
-(prover) plus `ZOLANA_PORT_OFFSET`, `RING_TEST_RPC_PORT`,
-`RING_TEST_PHOTON_PORT` and `RING_TEST_PROVER_PORT` override them. An occupied
+against the lock. Ports default to 40899 (RPC), 40784 (Photon), 40786 (ring
+indexer) and 43001 (prover) plus `ZOLANA_PORT_OFFSET`, `RING_TEST_RPC_PORT`,
+`RING_TEST_PHOTON_PORT`, `RING_TEST_RING_INDEXER_PORT` and
+`RING_TEST_PROVER_PORT` override them. Each test bring-up starts a fresh ring
+indexer beside its Photon. An occupied
 port refuses the run. Logs remain in the printed scratch directory.
 
 ## Prover trust policy
@@ -496,8 +520,8 @@ count, up to 52.
 `deploy`.
 
 On devnet, configure the prover, indexer and ring RPC URLs in `ring.toml`.
-They must run the matching release, including its proving keys and Photon
-spend-record and key-registry indexes. The CLI probes these services and does
+They must run the matching release, including its proving keys and the ring
+indexer in front of Photon. The CLI probes these services and does
 not start them. A healthy HTTP endpoint alone does not prove key compatibility.
 The hosted ring RPC derives one auditor key per
 ring from a root secret, so it serves any ring that asks and a new ring needs
@@ -579,7 +603,7 @@ binding the input and output tree accounts before proving.
 The auditor side is `zolana-ring-client`, `RingAudit` scans a ring and opens
 its transactions, the ring RPC and the lifecycle test both use it. Auditor
 discovery matches the auditor view tag. Spend-record discovery additionally
-requires Photon's custom ring spend-record index. A transaction
+requires the ring indexer's spend-record index. A transaction
 belongs to the ring when, in its confirmed call stack read from Solana RPC,
 the shielded pool instruction has the ring program as direct caller. A member
 escrows its nullifier key with `RegisterKey`, `ReadSealedKey` reads the sealed

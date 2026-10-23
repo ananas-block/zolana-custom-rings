@@ -1,26 +1,22 @@
 use std::fmt::Display;
 
 use anyhow::Context as _;
-
 use custom_ring_interface::{pda, KEY_REGISTRY_CAPACITY};
-use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
-use solana_pubkey::Pubkey;
+use sea_orm::{DatabaseConnection, DatabaseTransaction};
+use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
 use zolana_indexer_api::Context as ApiContext;
-use zolana_ring_indexer::rpc::RingMemberProofRequest;
+use zolana_ring_indexer::{
+    key_registry::MemberKey, proof::PathOverlay, rpc::RingMemberProofRequest,
+};
 use zolana_ring_key_registry::FIELD_MAX;
 
-use super::{
-    key_registry::MemberKey,
-    load_root,
-    proof::{self, PathOverlay},
-    storage::{self, CustomRingCursor, PredecessorError, RingRoot, RingStore},
-};
-use crate::error::RingApiError;
-use photon_indexer::{
-    api::{error::PhotonApiError, set_transaction_isolation_if_needed},
-    ingester::typedefs::block_info::BlockMetadata,
-    rpc::RpcClient,
+use crate::{
+    block::BlockMetadata,
+    error::RingApiError,
+    indexer::load_root,
+    rpc::SolanaRpc,
+    storage::{self, PredecessorError, RingCursor, RingRoot, RingStore},
 };
 
 pub(crate) struct Insertion {
@@ -40,18 +36,17 @@ pub(crate) struct MemberPath {
 
 pub(crate) async fn insertion(
     db: &DatabaseConnection,
-    rpc: &RpcClient,
+    rpc: &SolanaRpc,
     request: &RingMemberProofRequest,
 ) -> Result<Insertion, RingApiError> {
-    // 1. Read the requested root and both paths from one database snapshot.
-    let tx = db.begin().await?;
-    set_transaction_isolation_if_needed(&tx).await?;
+    // The root and both paths come from one database snapshot.
+    let tx = storage::begin_read(db).await?;
     let snapshot = snapshot(&tx, request).await?;
     let root = &snapshot.root;
     if root.next_index >= KEY_REGISTRY_CAPACITY {
-        return Err(
-            PhotonApiError::ValidationError("key registry capacity exhausted".into()).into(),
-        );
+        return Err(RingApiError::InvalidRequest(
+            "key registry capacity exhausted".into(),
+        ));
     }
     let store = RingStore::new(&tx, root.program);
     if store
@@ -66,23 +61,23 @@ pub(crate) async fn insertion(
         .predecessor(&request.member.0)
         .await
         .map_err(|error| match error {
-            PredecessorError::NotAbsent => {
-                PhotonApiError::ValidationError(error.to_string()).into()
-            }
+            PredecessorError::NotAbsent => RingApiError::InvalidRequest(error.to_string()),
             PredecessorError::Storage(error) => internal(error),
         })?;
-    let low_path = proof::path(&tx, root, low.index).await.map_err(internal)?;
+    let tree = store.tree();
+    let low_path = tree.path(&root.root, low.index).await.map_err(internal)?;
     if low.hash().map_err(internal)? != low_path.leaf {
         return Err(internal("key registry predecessor disagrees with its leaf"));
     }
-    let mut new_path = proof::path(&tx, root, root.next_index)
+    let mut new_path = tree
+        .path(&root.root, root.next_index)
         .await
         .map_err(internal)?;
     if new_path.leaf != [0; 32] {
         return Err(internal("key registry append slot is occupied"));
     }
     tx.commit().await?;
-    // 2. Rebase the empty append path onto the predecessor's updated root.
+    // The empty append path opens to the root after the predecessor update.
     let mut spliced = low.clone();
     spliced.next = request.member.0;
     PathOverlay {
@@ -92,7 +87,6 @@ pub(crate) async fn insertion(
     }
     .apply(root.next_index, &mut new_path)
     .map_err(internal)?;
-    // 3. Require the proof's block and root to match the chain.
     let context = confirm(rpc, &snapshot).await?;
     Ok(Insertion {
         context,
@@ -105,19 +99,23 @@ pub(crate) async fn insertion(
 
 pub(crate) async fn member_path(
     db: &DatabaseConnection,
-    rpc: &RpcClient,
+    rpc: &SolanaRpc,
     request: &RingMemberProofRequest,
 ) -> Result<MemberPath, RingApiError> {
-    let tx = db.begin().await?;
-    set_transaction_isolation_if_needed(&tx).await?;
+    let tx = storage::begin_read(db).await?;
     let snapshot = snapshot(&tx, request).await?;
     let root = &snapshot.root;
-    let leaf = RingStore::new(&tx, root.program)
+    let store = RingStore::new(&tx, root.program);
+    let leaf = store
         .member(&request.member.0)
         .await
         .map_err(internal)?
         .ok_or(RingApiError::MemberUnregistered)?;
-    let path = proof::path(&tx, root, leaf.index).await.map_err(internal)?;
+    let path = store
+        .tree()
+        .path(&root.root, leaf.index)
+        .await
+        .map_err(internal)?;
     if leaf.hash().map_err(internal)? != path.leaf {
         return Err(internal("key registry member disagrees with its leaf"));
     }
@@ -131,8 +129,8 @@ pub(crate) async fn member_path(
     })
 }
 
-async fn check_chain(rpc: &RpcClient, root: &RingRoot) -> anyhow::Result<()> {
-    let program = Pubkey::new_from_array(root.program);
+async fn check_chain(rpc: &SolanaRpc, root: &RingRoot) -> anyhow::Result<()> {
+    let program = Address::new_from_array(root.program);
     anyhow::ensure!(
         pda::key_registry_root(&program).0.to_bytes() == root.address,
         "noncanonical key registry address"
@@ -159,16 +157,15 @@ async fn snapshot(
         || request.member.0 == [0; 32]
         || request.member.0 >= FIELD_MAX
     {
-        return Err(PhotonApiError::ValidationError(
+        return Err(RingApiError::InvalidRequest(
             "invalid key registry member or cursor".into(),
-        )
-        .into());
+        ));
     }
     let cursor = storage::cursor(tx)
         .await
         .map_err(internal)?
-        .filter(CustomRingCursor::is_ready)
-        .ok_or_else(|| out_of_sync("custom ring indexer is catching up or recovering"))?;
+        .filter(RingCursor::is_ready)
+        .ok_or_else(|| out_of_sync("ring indexer is catching up or recovering"))?;
     if storage::pending_ring(tx, &request.ring_program_id.0.to_bytes())
         .await
         .map_err(internal)?
@@ -194,7 +191,7 @@ async fn snapshot(
 }
 
 /// Runs after the read transaction commits.
-async fn confirm(rpc: &RpcClient, snapshot: &Snapshot) -> Result<ApiContext, RingApiError> {
+async fn confirm(rpc: &SolanaRpc, snapshot: &Snapshot) -> Result<ApiContext, RingApiError> {
     let context = canonical_context(rpc, snapshot.tip.as_ref())
         .await
         .map_err(out_of_sync)?;
@@ -204,8 +201,8 @@ async fn confirm(rpc: &RpcClient, snapshot: &Snapshot) -> Result<ApiContext, Rin
     Ok(context)
 }
 
-pub(super) async fn canonical_context(
-    rpc: &RpcClient,
+pub(crate) async fn canonical_context(
+    rpc: &SolanaRpc,
     tip: Option<&BlockMetadata>,
 ) -> anyhow::Result<ApiContext> {
     let tip = tip.context("cursor has no canonical block")?;
@@ -224,6 +221,6 @@ fn out_of_sync(reason: impl Display) -> RingApiError {
     RingApiError::OutOfSync(reason.to_string())
 }
 
-pub(super) fn internal(error: impl Display) -> RingApiError {
-    PhotonApiError::UnexpectedError(format!("{error:#}")).into()
+pub(crate) fn internal(error: impl Display) -> RingApiError {
+    RingApiError::Internal(format!("{error:#}"))
 }

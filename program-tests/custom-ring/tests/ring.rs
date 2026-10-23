@@ -2931,7 +2931,12 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         };
         match read.read(indexer) {
             Ok(entry) => Ok(Probe::Ready(entry)),
-            Err(error @ KeyRegistrationError::Client(_)) => Ok(Probe::Retry(error)),
+            Err(error)
+                if error.is_projection_lag()
+                    || matches!(error, KeyRegistrationError::Client(_)) =>
+            {
+                Ok(Probe::Retry(error))
+            }
             Err(error) => Err(error),
         }
     })?;

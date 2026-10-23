@@ -8,7 +8,7 @@ on:
         required: true
         default: ring-rpc
         type: choice
-        options: [ring-rpc, ring-photon]
+        options: [ring-rpc, ring-indexer, ring-prover]
       channel:
         description: >-
           release enforces the commit-naming tag and requires the commit to be
@@ -35,7 +35,7 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    uses: helius-labs/zolana/.github/workflows/publish-service-image.yml@13d976a0f3b060670f7378ecc9c6eda9f80def0b
+    uses: helius-labs/zolana/.github/workflows/publish-service-image.yml@a775326a5d3deb7d4ced56da9b11e68d8adc6d90
     with:
       service: ${{ inputs.service }}
       channel: ${{ inputs.channel }}

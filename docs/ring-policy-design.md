@@ -498,7 +498,7 @@ requires the owner's signature for an output carrying data, merge refuses
 data outputs, and a deposit carrying data requires its owner's signature.
 A member cannot mint a zero-counter record to reset the meter.
 
-Photon's spend record projection maps each member to the transaction
+The ring indexer's spend record projection maps each member to the transaction
 holding its latest record and serves it through `getRingSpendRecord`. The
 client re-hashes the record under the member's spend address before
 proving. A record whose nullifier PDA exists is spent, the client waits for
@@ -515,8 +515,8 @@ from that message.
 The counter envelope is encrypted to the transaction viewing key. The
 sender derives the key and the auditor recovers it. The record's member,
 window, version, blinding and salted counters commitment remain public.
-The pseudonymous spend history remains visible. Transaction data and Photon
-state grow with activity.
+The pseudonymous spend history remains visible. Transaction data, Photon
+and ring indexer state grow with activity.
 
 The opt-in Rust `RingTransferSubmission` and TS `RingTransactionSubmission` preserve
 the selected inputs and payment intent across at most three attempts.

@@ -4,6 +4,7 @@ import {
   DepositAsset,
   InstructionTag,
   SHIELDED_POOL_CPI_AUTHORITY,
+  SOL_INTERFACE,
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
 import {
@@ -11,6 +12,7 @@ import {
   type Bytes64,
   type Bytes32,
   type Bytes33,
+  SHIELDED_POOL_PROGRAM_ID,
   SOL_MINT,
 } from "@heliuslabs/zolana";
 import {
@@ -189,10 +191,8 @@ const OUTPUT_TREE = address("2VDW9dFE1ZXz4zWAbaBDQFynNVdRpQ73HyfSHMzBSL6Z");
 const ADDRESS_TREE = addressOf(60);
 const RING_AUTH = address("AtyqWdns8uYfWdpLhWJRN9DxRdpwB6Zaa33k66TAkwFx");
 const RING_CONFIG = address("CXJhGzAcN4NYaapjRqiTzmnRBTmtUL52Zg4ooG2PtMfP");
-const SPP = address("sppU489D7A4U1exNo1oeMGZtLEofq3a6o2fR7UeoWB6");
 const SYSTEM = address("11111111111111111111111111111111");
 const JSON_HEADERS = { headers: { "content-type": "application/json" } };
-const SOL_INTERFACE = address("2iAazE9tAWcUJhNhfscRzX17Gb32Km9jJYZLGy1AnkVP");
 
 function ringPolicyConfig() {
   return getProgramDerivedAddress({
@@ -245,7 +245,7 @@ describe("ring deposit", () => {
       [TREE, AccountRole.WRITABLE],
       [PAYER, AccountRole.WRITABLE_SIGNER],
       [RING_AUTH, AccountRole.READONLY],
-      [SPP, AccountRole.READONLY],
+      [SHIELDED_POOL_PROGRAM_ID, AccountRole.READONLY],
       [SYSTEM, AccountRole.READONLY],
       [SOL_INTERFACE, AccountRole.WRITABLE],
     ]);
@@ -372,7 +372,7 @@ describe("ring config", () => {
       [await getProtocolConfigAddress(), AccountRole.READONLY],
       [RING_AUTH, AccountRole.WRITABLE],
       [SYSTEM, AccountRole.READONLY],
-      [SPP, AccountRole.READONLY],
+      [SHIELDED_POOL_PROGRAM_ID, AccountRole.READONLY],
     ]);
     expect(instruction.data).toEqual(Uint8Array.of(2));
   });
@@ -986,7 +986,7 @@ describe("ring config", () => {
         [AUTHORITY, AccountRole.READONLY_SIGNER],
         [RING_CONFIG, AccountRole.READONLY],
         [RING_AUTH, AccountRole.WRITABLE],
-        [SPP, AccountRole.READONLY],
+        [SHIELDED_POOL_PROGRAM_ID, AccountRole.READONLY],
       ]);
       expect(instruction.data).toEqual(Uint8Array.of(11, paused ? 1 : 0));
     }
@@ -1669,7 +1669,7 @@ describe("ring transact", () => {
       [await nullifierPdaAddress(ADDRESS_TREE, revocationTarget), AccountRole.READONLY],
       [PAYER, AccountRole.WRITABLE_SIGNER],
       [OUTPUT_TREE, AccountRole.WRITABLE],
-      [SPP, AccountRole.READONLY],
+      [SHIELDED_POOL_PROGRAM_ID, AccountRole.READONLY],
       [SYSTEM, AccountRole.READONLY],
       [RING_AUTH, AccountRole.READONLY],
       [TREE, AccountRole.WRITABLE],

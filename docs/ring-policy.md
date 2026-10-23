@@ -315,7 +315,7 @@ message. The sender derives that key from the transfer's first nullifier and
 recovers the counters for its next transfer, the auditor recovers it from
 the audit ciphertext and reports the record with its counters, or without
 them when no message opens to the commitment. `ReadSpendRecord::read_current`
-reads the member's latest record from Photon's `getRingSpendRecord`, checks
+reads the member's latest record from the ring indexer's `getRingSpendRecord`, checks
 it hashes under the member's spend address, and reports a record whose
 nullifier PDA exists as `RingSpendRecordOutOfSync`. `RegisterSpend` creates
 the genesis record and claims that address, once per member. Then

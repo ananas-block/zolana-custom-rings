@@ -6,7 +6,7 @@ use std::{
     io,
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -31,6 +31,10 @@ const SBPF_V0_FEATURE: &str = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
 const RING_RPC: Tool = Tool {
     name: "ring-rpc serve",
     install: "rerun `zolana-ring localnet`, it downloads the ring rpc of the release",
+};
+const RING_INDEXER: Tool = Tool {
+    name: "ring-indexer",
+    install: "build it with `just build-ring-indexer`",
 };
 const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -83,7 +87,7 @@ pub enum LocalnetError {
 #[derive(Debug, Clone, Copy)]
 struct Ports {
     rpc: u16,
-    photon: u16,
+    indexer: u16,
     prover: u16,
     ring_rpc: u16,
 }
@@ -215,10 +219,11 @@ fn bring_up_workspace(workspace: Workspace, run: WorkspaceRun<'_>) -> Result<(),
         }
     }
     let ports = Ports::of(urls)?;
+    let photon_port = workspace.photon_port(ports.indexer)?;
     if matches!(live_ring_rpc, LiveRingRpc::Keep) {
         for (port, url) in [
             (ports.rpc, &urls.rpc),
-            (ports.photon, &urls.indexer),
+            (ports.indexer, &urls.indexer),
             (ports.prover, &urls.prover),
             (ports.ring_rpc, &urls.ring_rpc),
         ] {
@@ -233,14 +238,14 @@ fn bring_up_workspace(workspace: Workspace, run: WorkspaceRun<'_>) -> Result<(),
             addr: local(ports.ring_rpc),
         });
     }
-    if !answers(local(ports.rpc)) {
+    let fresh_chain = !answers(local(ports.rpc));
+    if fresh_chain {
         let snapshots = workspace.account_snapshots()?;
         let mut command = workspace.command()?;
         command
-            .args(["dev", "start", "--local"])
+            .args(["dev", "start", "--local", "--skip-prover"])
             .args(["--rpc-port", &ports.rpc.to_string()])
-            .args(["--photon-port", &ports.photon.to_string()])
-            .args(["--prover-port", &ports.prover.to_string()])
+            .args(["--photon-port", &photon_port.to_string()])
             .arg("--photon-start-slot")
             .arg("0")
             .arg("--account-dir")
@@ -253,10 +258,28 @@ fn bring_up_workspace(workspace: Workspace, run: WorkspaceRun<'_>) -> Result<(),
             .named("workspace zolana dev start")
             .run(&mut command)?;
     }
-    for (port, url) in [(ports.photon, &urls.indexer), (ports.prover, &urls.prover)] {
-        if !answers(local(port)) {
-            return Err(LocalnetError::WorkspaceService(url.clone()));
-        }
+    if !answers(local(photon_port)) {
+        return Err(LocalnetError::WorkspaceService(format!(
+            "http://127.0.0.1:{photon_port}"
+        )));
+    }
+    let mut ring_indexer = RingIndexer {
+        workspace: &workspace,
+        urls,
+        port: ports.indexer,
+        photon_port,
+        fresh_chain,
+    }
+    .start()?;
+    if !answers(local(ports.prover)) {
+        let mut command = workspace.command()?;
+        command
+            .args(["dev", "prover", "start"])
+            .args(["--prover-port", &ports.prover.to_string()])
+            .args(["--indexer-url", &urls.indexer]);
+        ZOLANA
+            .named("workspace zolana dev prover start")
+            .run(&mut command)?;
     }
     check_prover_serves_custom_ring(&urls.prover)?;
     let project_root = ProjectRoot::for_config(config_path);
@@ -275,7 +298,7 @@ fn bring_up_workspace(workspace: Workspace, run: WorkspaceRun<'_>) -> Result<(),
         "next",
         "zolana-ring pipeline in a second terminal with the same environment",
     );
-    RING_RPC.run(
+    let served = RING_RPC.run(
         Command::new(workspace.ring_rpc()?)
             .arg("serve")
             .args(["--port", &ports.ring_rpc.to_string()])
@@ -284,8 +307,86 @@ fn bring_up_workspace(workspace: Workspace, run: WorkspaceRun<'_>) -> Result<(),
             .arg("--auditor-key-file")
             .arg(auditor_key)
             .args(["--ring-program-id", &config.program_id.to_string()]),
-    )?;
-    Ok(())
+    );
+    if let Err(error) = ring_indexer
+        .kill()
+        .and_then(|()| ring_indexer.wait().map(drop))
+    {
+        eprintln!("cannot stop the ring indexer ({error})");
+    }
+    Ok(served?)
+}
+
+struct RingIndexer<'a> {
+    workspace: &'a Workspace,
+    urls: &'a Urls,
+    port: u16,
+    photon_port: u16,
+    /// A new chain needs a new index.
+    fresh_chain: bool,
+}
+
+impl RingIndexer<'_> {
+    fn start(self) -> Result<Child, LocalnetError> {
+        let addr = local(self.port);
+        stop_listeners(addr)?;
+        let data = self.workspace.scope.join("ring-indexer");
+        if self.fresh_chain {
+            file::remove_dir_all(&data)?;
+        }
+        file::create_dir_all(&data)?;
+        let log = data.join("ring-indexer.log");
+        let open = || {
+            File::options()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .map_err(|source| LocalnetError::Log {
+                    path: log.clone(),
+                    source,
+                })
+        };
+        let (out, err) = (open()?, open()?);
+        let child = RING_INDEXER.start(
+            Command::new(self.workspace.ring_indexer()?)
+                .arg("--db-url")
+                .arg(format!(
+                    "sqlite://{}?mode=rwc",
+                    data.join("index.db").display()
+                ))
+                .args(["--rpc-url", &self.urls.rpc])
+                .args([
+                    "--photon-url",
+                    &format!("http://127.0.0.1:{}", self.photon_port),
+                ])
+                .args(["--port", &self.port.to_string()])
+                .args(["--start-slot", "0"])
+                .stdin(Stdio::null())
+                .stdout(out)
+                .stderr(err),
+        )?;
+        let ready = probe::service_url(&self.urls.indexer, "/ready");
+        let http = probe::http(POLL, POLL);
+        if !wait_until(READY_TIMEOUT, || {
+            http.get(&ready)
+                .send()
+                .is_ok_and(|response| response.status().is_success())
+        }) {
+            return Err(LocalnetError::NotReady {
+                addr,
+                timeout: READY_TIMEOUT,
+                log,
+            });
+        }
+        line(
+            "indexer",
+            format_args!(
+                "{} in front of photon on port {}",
+                self.urls.indexer, self.photon_port
+            ),
+        );
+        Ok(child)
+    }
 }
 
 fn local(port: u16) -> SocketAddr {
@@ -301,7 +402,7 @@ impl Ports {
         };
         Ok(Self {
             rpc: port(&urls.rpc)?,
-            photon: port(&urls.indexer)?,
+            indexer: port(&urls.indexer)?,
             prover: port(&urls.prover)?,
             ring_rpc: port(&urls.ring_rpc)?,
         })
@@ -355,7 +456,7 @@ fn start_validator(ports: Ports) -> Result<(), LocalnetError> {
         Command::new("zolana")
             .args(["dev", "start"])
             .args(["--rpc-port", &ports.rpc.to_string()])
-            .args(["--photon-port", &ports.photon.to_string()])
+            .args(["--photon-port", &ports.indexer.to_string()])
             .args(["--prover-port", &ports.prover.to_string()])
             .args(["--", "--deactivate-feature", SBPF_V0_FEATURE]),
     )?;
@@ -420,6 +521,7 @@ fn stop_listeners(addr: SocketAddr) -> Result<(), LocalnetError> {
     }
     let pids = Command::new("lsof")
         .arg(format!("-ti:{}", addr.port()))
+        .arg("-sTCP:LISTEN")
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
