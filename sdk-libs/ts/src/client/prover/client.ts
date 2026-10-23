@@ -180,13 +180,15 @@ export class CustomRingProver {
 function registryRefusal(body: Readonly<Record<string, unknown>>): RingError | undefined {
   if (body["code"] !== "registry_member_missing") return undefined;
   return new RingError("RING_KEY_REGISTRY_MEMBER_UNREGISTERED", {
-    details: { method: "prove", member: registryMember(body["member"]) },
+    details: { method: "prove", member: registryMember(body["detail"]) },
   });
 }
 
 /** Base58 on the wire, hex in details like `RING_UNREGISTERED_OUTPUT_KEY.owner`. */
-function registryMember(value: unknown): string {
-  const member = proverJsonDecoder.base58(value, "$.member");
+function registryMember(detail: unknown): string {
+  const value =
+    typeof detail === "object" && detail !== null ? Reflect.get(detail, "member") : undefined;
+  const member = proverJsonDecoder.base58(value, "$.detail.member");
   if (member.length !== 32) throw invalidProverJson();
   return bytesToHex(member);
 }
