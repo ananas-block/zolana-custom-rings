@@ -2,7 +2,7 @@
 
 Run from `sdk-libs/ts` after `npm ci` at the repository root and local builds. Use a dedicated local stack
 with current SPP and user-registry programs, the generated localnet snapshots
-(protocol config, tree and SPL asset counter), Photon with spend-record indexing,
+(protocol config, tree and SPL asset counter), Photon with member-registry indexing,
 and the ring prover with the SPP keys and the custom-ring keys `prover/ring/proving-keys.lock` pins,
 including the deposit disclosure circuit. V1
 transactions are required. Surfpool needs the explicitly opt-in local fixture
@@ -30,9 +30,8 @@ below-threshold private transfer lands without the co-signer, and an
 above-threshold transfer requires it. Transfer-scoped approval is enabled later
 for the delegate checks.
 
-The rollover case advances the dedicated stack's clock after proof creation.
-It checks one proof rebuild, reset counters and one settled balance change.
-The process scope must exist and the RPC URL must match its configured port.
+A transfer above an outflow cap is refused before proving, and the delegate
+move passes the cap untouched.
 
 The runner uses `zolana/target/debug/zolana` and `target/deploy/custom_ring_program.so`
 from the repository root, `just test-ts-ring-controls` builds both and starts the stack.

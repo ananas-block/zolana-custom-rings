@@ -1,32 +1,21 @@
+import { getAddressDecoder } from "@solana/kit";
+import { describe, expect, it } from "vitest";
+
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import {
-  X25519Keypair,
-  ed25519DerivationPayload,
-  isDerivationInput,
-} from "@heliuslabs/zolana/keypair";
-import {
-  type Bytes32,
   ShieldedKeypair,
   SigningKey,
   ViewingKey,
-  LocalShieldedKeys,
-  SOL_MINT,
-} from "@heliuslabs/zolana";
-import {
-  encryptConfidentialTransfer,
-  createProofOutput,
-  AssetRegistry,
-} from "@heliuslabs/zolana/transaction";
-import { encryptCustomRingTransfer } from "../src/transaction/wallet/encrypt-rails.js";
-import { withTransactionKey } from "@heliuslabs/zolana/internal";
-import { getAddressDecoder } from "@solana/kit";
-import { describe, expect, it } from "vitest";
-import { decryptTransactionViewingSecret, parseAuditorMessage } from "../src/keypair/audit.js";
+  ed25519DerivationPayload,
+  isDerivationInput,
+} from "@heliuslabs/zolana/keypair";
+import { LocalShieldedKeys } from "@heliuslabs/zolana/transaction";
 
 function seed(byte: number): Bytes32 {
   return new Uint8Array(32).fill(byte) as Bytes32;
 }
 
-describe("LocalShieldedKeys on the ring rail", () => {
+describe("LocalShieldedKeys from a derivation seed", () => {
   it("derives the same keys from a wallet's derivation signature as from the secret", () => {
     const signing = SigningKey.fromEd25519Bytes(seed(7));
     const keypair = ShieldedKeypair.fromKeypair(signing);
@@ -52,40 +41,5 @@ describe("LocalShieldedKeys on the ring rail", () => {
     expect(derived.withNullifierKey((key) => key.publicKey())).toEqual(
       local.withNullifierKey((key) => key.publicKey()),
     );
-  });
-
-  it("seals the transaction viewing secret to the auditor in a custom-ring transfer", async () => {
-    const keypair = ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(seed(8)));
-    const keys = LocalShieldedKeys.fromKeypair(keypair);
-    const auditor = X25519Keypair.generate();
-    const firstNullifier = seed(9);
-    const encrypted = await withTransactionKey(keys, firstNullifier, (tx) =>
-      encryptCustomRingTransfer(tx, {
-        outputs: [
-          createProofOutput({
-            ownerAddress: keypair.shieldedAddress(),
-            asset: SOL_MINT,
-            amount: 5n,
-            blinding: seed(10),
-          }),
-        ],
-        assets: new AssetRegistry(),
-        auditorPublicKey: auditor.publicKey(),
-        outputTreeId: 0,
-      }),
-    );
-    const plain = await withTransactionKey(keys, firstNullifier, (tx) =>
-      encryptConfidentialTransfer(tx, { outputs: [], assets: new AssetRegistry() }),
-    );
-    // Same transaction viewing key as an unaudited transfer of the same inputs.
-    expect(encrypted.txViewingPublicKey.toBytes()).toEqual(plain.txViewingPublicKey.toBytes());
-    expect(encrypted.auditorMessage.viewTag).toEqual(auditor.publicKey().u());
-    const message = parseAuditorMessage(encrypted.auditorMessage.data);
-    const recovered = decryptTransactionViewingSecret(auditor, message);
-    expect(recovered).toEqual(encrypted.audit.txViewingSecret);
-    expect(ViewingKey.fromBytes(recovered).publicKey().toBytes()).toEqual(
-      encrypted.txViewingPublicKey.toBytes(),
-    );
-    expect(encrypted.payload).toHaveLength(1);
   });
 });

@@ -1,57 +1,25 @@
-import { DUMMY_DOMAIN, UTXO_DOMAIN, treeIdField } from "@heliuslabs/zolana/interface";
-import { type Bytes32, ClientError } from "@heliuslabs/zolana";
-import {
-  SppProofInputs,
-  type ProofInputUtxo,
-  type ProofOutputUtxo,
-} from "@heliuslabs/zolana/transaction";
+import type { Bytes32 } from "@heliuslabs/zolana";
 import { bigintToBytes, inputCircuitUtxo, outputCircuitUtxo } from "@heliuslabs/zolana/internal";
-import { RING_INPUT_SLOTS, RING_OUTPUT_SLOTS, type CustomRingOpening } from "./types.js";
+import { DUMMY_DOMAIN, UTXO_DOMAIN, treeIdField } from "@heliuslabs/zolana/interface";
+import type { ProofInputUtxo, ProofOutputUtxo, TreeId } from "@heliuslabs/zolana/transaction";
 
-export interface RingOpenings {
-  readonly nIn: number;
-  readonly nOut: number;
-  readonly inputs: readonly CustomRingOpening[];
-  readonly outputs: readonly CustomRingOpening[];
-}
+import type { RingSlotOpening } from "./ring.js";
 
-/** A dummy output retains the tree and blinding bound by its SPP commitment and auditor disclosure. */
-export function ringOpenings(proofInputs: SppProofInputs): RingOpenings {
-  if (!(proofInputs instanceof SppProofInputs)) {
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
-  }
-  if (
-    proofInputs.inputUtxos.length > RING_INPUT_SLOTS ||
-    proofInputs.outputs.length > RING_OUTPUT_SLOTS
-  ) {
-    throw new ClientError("CLIENT_PROVER_INPUT");
-  }
-  const outputTreeId = treeIdField(proofInputs.outputTreeId);
-  const inputs = Array.from({ length: RING_INPUT_SLOTS }, (_, index) => {
-    const input = proofInputs.inputUtxos[index];
-    return input === undefined ? zeroOpening(0) : inputOpening(input);
-  });
-  const outputs = Array.from({ length: RING_OUTPUT_SLOTS }, (_, index) => {
-    const output = proofInputs.outputs[index];
-    return output === undefined ? zeroOpening(0) : outputOpening(output, outputTreeId);
-  });
-  return Object.freeze({
-    nIn: proofInputs.inputUtxos.length,
-    nOut: proofInputs.outputs.filter((output) => !output.isCompact()).length,
-    inputs: Object.freeze(inputs),
-    outputs: Object.freeze(outputs),
-  });
-}
-
-/** Mirrors Rust `input_opening`, each slot opens under its own tree. */
-function inputOpening(input: ProofInputUtxo): CustomRingOpening {
-  if (input.isDummy()) return zeroOpening(DUMMY_DOMAIN);
+/** Rust `Opening::input`, a dummy opens its domain, tree and blinding only. */
+export function ringInputOpening(input: ProofInputUtxo): RingSlotOpening {
+  if (input.isDummy())
+    return Object.freeze({
+      ...zeroOpening(DUMMY_DOMAIN),
+      treeId: treeIdField(input.treeId),
+      blinding: input.utxo.blinding,
+    });
   const utxo = inputCircuitUtxo(input);
+  const real = !input.isAddress();
   return Object.freeze({
-    domain: openingField(BigInt(UTXO_DOMAIN)),
+    domain: openingField(utxo.domain),
     treeId: treeIdField(input.treeId),
-    ownerPkHash: input.utxo.owner.ownerProofInputHash(),
-    nullifierPk: input.nullifierPublicKey,
+    ownerPkHash: real ? input.utxo.owner.ownerProofInputHash() : openingField(0n),
+    nullifierPk: real ? input.nullifierPublicKey : openingField(0n),
     asset: openingField(utxo.asset),
     amount: openingField(utxo.amount),
     blinding: openingField(utxo.blinding),
@@ -61,8 +29,9 @@ function inputOpening(input: ProofInputUtxo): CustomRingOpening {
   });
 }
 
-/** Owner address presence determines the dummy domain independently of the public owner tag. */
-function outputOpening(output: ProofOutputUtxo, treeId: Bytes32): CustomRingOpening {
+/** Rust `Opening::output`, the output hashed into `outputTreeId`. */
+export function ringOutputOpening(output: ProofOutputUtxo, outputTreeId: TreeId): RingSlotOpening {
+  const treeId = treeIdField(outputTreeId);
   const owner = output.ownerAddress;
   if (owner === undefined) {
     return Object.freeze({
@@ -86,7 +55,10 @@ function outputOpening(output: ProofOutputUtxo, treeId: Bytes32): CustomRingOpen
   });
 }
 
-function zeroOpening(domain: number): CustomRingOpening {
+/** Rust `Opening::default`, the slot past a key's used capacity. */
+export const EMPTY_RING_OPENING: RingSlotOpening = zeroOpening(0);
+
+function zeroOpening(domain: number): RingSlotOpening {
   return Object.freeze({
     domain: openingField(BigInt(domain)),
     treeId: openingField(0n),

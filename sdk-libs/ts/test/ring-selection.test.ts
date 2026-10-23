@@ -1,35 +1,32 @@
+import { X25519Keypair, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { LocalKeys, type ProofService } from "@heliuslabs/zolana/client";
+import { treeAddress } from "@heliuslabs/zolana/internal";
+import { type Bytes32 } from "@heliuslabs/zolana/interface";
+import { Data, SOL_MINT, Utxo, Wallet, AssetRegistry } from "@heliuslabs/zolana/transaction";
+import {
+  approveRingUnattended,
+  type RingApprovalHandler,
+  type RingApprovalRequest,
+} from "../src/transaction/intent.js";
+import {
+  LocalRingKeys,
+  ringWalletKeys,
+  type RingKeys,
+} from "../src/transaction/wallet/ring-keys.js";
 import { address, type Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-import {
-  type Bytes32,
-  ShieldedKeypair,
-  SigningKey,
-  Data,
-  Utxo,
-  Wallet,
-  SOL_MINT,
-  LocalKeys,
-  type ProofService,
-} from "@heliuslabs/zolana";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, approveIntent, type ApprovalRequest } from "@heliuslabs/zolana/transaction";
-import {
-  MAX_SPEND_INPUTS,
-  isPlainUtxo,
-  selectUtxos,
-  type SpendSelectionErrors,
-  treeAddress,
-} from "@heliuslabs/zolana/internal";
-import { MAX_INPUT_TREES } from "@heliuslabs/zolana/interface";
-import { ringConfigPda } from "../src/interface/pda/index.js";
-import { RING_INPUT_SLOTS } from "../src/client/prover/types.js";
+
 import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
   selectRingInputs,
 } from "../src/ring/transfer.js";
 import { ringTransferClient } from "./helpers/clients.js";
-import { ringProgramConfigData } from "./helpers/ring-accounts.js";
+import { ringProgramConfigData, sppRingRegistration } from "./helpers/ring-accounts.js";
+import { signingKeySpendSigner } from "../src/ring/anonymous.js";
+import type { RingMode } from "../src/ring/codecs.js";
+import { ringConfigPda } from "../src/interface/pda/index.js";
+import { AnonymousRingState } from "../src/transaction/wallet/anonymous-state.js";
 
 const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
@@ -45,8 +42,8 @@ function spendingKeypair(): ShieldedKeypair {
 }
 
 /** Unit tests never reach the prover; the keys still need one to exist. */
-function localKeys(keypair: ShieldedKeypair): LocalKeys {
-  const proofs: ProofService = {
+function stubProofs(): ProofService {
+  return {
     prove: vi.fn(async () => {
       throw new Error("prove must not be called");
     }),
@@ -54,29 +51,69 @@ function localKeys(keypair: ShieldedKeypair): LocalKeys {
       throw new Error("proveMerge must not be called");
     }),
   };
-  return LocalKeys.fromKeypair(keypair, proofs);
+}
+
+function localKeys(keypair: ShieldedKeypair): LocalKeys & RingKeys {
+  return ringWalletKeys(
+    LocalKeys.fromKeypair(keypair, stubProofs()),
+    LocalRingKeys.fromKeypair(keypair),
+  );
 }
 
 /** Records every approval a build asks for and grants it. */
 function recordingApproval(): Readonly<{
-  approve: (request: ApprovalRequest) => Promise<ReturnType<typeof approveIntent>>;
-  requests: ApprovalRequest[];
+  approve: RingApprovalHandler;
+  requests: RingApprovalRequest[];
 }> {
-  const requests: ApprovalRequest[] = [];
+  const requests: RingApprovalRequest[] = [];
   return {
     approve: (request) => {
       requests.push(request);
-      return Promise.resolve(approveIntent(request.intent));
+      return approveRingUnattended(request);
     },
     requests,
   };
+}
+
+function fundedWallet(
+  keypair: ShieldedKeypair,
+  amounts: readonly bigint[],
+  options: Readonly<{ asset?: Address; ringProgramId?: Address }> = {},
+): Wallet {
+  const asset = options.asset ?? SOL_MINT;
+  const wallet = new Wallet({
+    identity: keypair.shieldedAddress(),
+    registry: new AssetRegistry(asset === SOL_MINT ? [] : [[2n, asset]]),
+  });
+  wallet._replace({
+    utxos: amounts.map((amount, index) => ({
+      utxo: new Utxo({
+        owner: keypair.signingPublicKey(),
+        asset,
+        amount,
+        blinding: new Uint8Array(32).fill(index + 1) as Bytes32,
+        data: new Data(),
+        ...(options.ringProgramId === undefined ? {} : { ringProgramId: options.ringProgramId }),
+      }),
+      outputContext: {
+        hash: filled(index + 1),
+        tree: TREE,
+        leafIndex: BigInt(index),
+      },
+      nullifier: filled(index + 20),
+      spent: false,
+    })),
+    transactions: [],
+    nullifiers: new Set(),
+  });
+  return wallet;
 }
 
 function ringUtxoWallet(
   keypair: ShieldedKeypair,
   utxos: readonly (readonly [bigint, Address | undefined, Address?])[],
 ): Wallet {
-  const wallet = new Wallet({ identity: keypair.shieldedAddress(), registry: new AssetRegistry() });
+  const wallet = fundedWallet(keypair, []);
   wallet._replace({
     utxos: utxos.map(([amount, ringProgramId, tree], index) => ({
       utxo: new Utxo({
@@ -97,66 +134,21 @@ function ringUtxoWallet(
   return wallet;
 }
 
-const errors: SpendSelectionErrors = {
-  insufficient: ({ requested, available }) =>
-    new Error(`insufficient ${String(requested)} ${String(available)}`),
-  tooManyInputs: ({ eligible, max }) => new Error(`tooMany ${String(eligible)} ${String(max)}`),
-  overflow: () => new Error("overflow"),
-  multipleTrees: ({ treeCount }) => new Error(`trees ${String(treeCount)}`),
-  tooFewUtxos: ({ eligible, minimum }) =>
-    new Error(`tooFew ${String(eligible)} ${String(minimum)}`),
-};
-
-describe("ring UTXO selection", () => {
-  it("allows wide eligible ring balances without changing the default rail's u64 check", () => {
-    const half = (1n << 63n) + 1n;
-    const amount = (1n << 64n) - 1n;
-    const wallet = ringUtxoWallet(spendingKeypair(), [
-      [half, undefined],
-      [half, undefined],
-    ]);
-    const before = wallet.utxos();
-    const selected = selectRingInputs({
-      wallet,
-      ringProgramId: RECIPIENT,
-      asset: SOL_MINT,
-      amount,
-      inputs: "default",
-      tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
-    });
-    expect(selected).toHaveLength(2);
-    expect(selected.reduce((sum, entry) => sum + entry.utxo.amount, 0n) - amount).toBe(3n);
-    expect(() =>
-      selectUtxos({
-        wallet,
-        asset: SOL_MINT,
-        target: { kind: "cover", amount },
-        policy: {
-          eligible: isPlainUtxo,
-          ordering: "largestFirst",
-          maxInputs: MAX_SPEND_INPUTS,
-          tree: { kind: "infer", maxTrees: MAX_INPUT_TREES },
-          errors,
-        },
-      }),
-    ).toThrow("overflow");
-    expect(wallet.utxos()).toEqual(before);
-  });
-});
+/** The cap `refuses a cover wider than the input cap` runs into with six UTXOs. */
+const INPUT_CAP = 5;
 
 describe("selectRingInputs", () => {
   it("refuses a zero amount", () => {
     const wallet = ringUtxoWallet(spendingKeypair(), [[10n, RING]]);
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 0n,
         inputs: "ring",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_ZERO_AMOUNT");
   });
@@ -168,23 +160,23 @@ describe("selectRingInputs", () => {
     ]);
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 15n,
         inputs: "ring",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
     const selected = selectRingInputs({
-      wallet,
+      wallet: wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
       amount: 15n,
       inputs: "ring-or-default",
       tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
+      maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(2);
   });
@@ -195,25 +187,25 @@ describe("selectRingInputs", () => {
       [25n, undefined],
     ]);
     const selected = selectRingInputs({
-      wallet,
+      wallet: wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
       amount: 25n,
       inputs: "default",
       tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
+      maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
     expect(selected[0]?.utxo.ringProgramId).toBeUndefined();
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 30n,
         inputs: "default",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
   });
@@ -224,25 +216,25 @@ describe("selectRingInputs", () => {
       [20n, RING],
     ]);
     const selected = selectRingInputs({
-      wallet,
+      wallet: wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
       amount: 20n,
       inputs: "ring",
       tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
+      maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
     expect(selected[0]?.utxo.amount).toBe(20n);
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 30n,
         inputs: "ring",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
   });
@@ -253,13 +245,13 @@ describe("selectRingInputs", () => {
       [100n, RING],
     ]);
     const selected = selectRingInputs({
-      wallet,
+      wallet: wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
       amount: 100n,
       inputs: "ring",
       tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
+      maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
     expect(selected[0]?.utxo.amount).toBe(100n);
@@ -272,13 +264,13 @@ describe("selectRingInputs", () => {
     );
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 30n,
         inputs: "ring",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_TOO_MANY_INPUTS");
   });
@@ -289,36 +281,42 @@ describe("selectRingInputs", () => {
       [20n, undefined],
     ]);
     const selected = selectRingInputs({
-      wallet,
+      wallet: wallet,
       ringProgramId: RING,
       asset: SOL_MINT,
       amount: 20n,
       inputs: "ring-or-default",
       tree: TREE,
-      maxInputs: RING_INPUT_SLOTS,
+      maxInputs: INPUT_CAP,
     });
     expect(selected).toHaveLength(1);
     expect(selected[0]?.utxo.ringProgramId).toBeUndefined();
     expect(() =>
       selectRingInputs({
-        wallet,
+        wallet: wallet,
         ringProgramId: RING,
         asset: SOL_MINT,
         amount: 30n,
         inputs: "ring-or-default",
         tree: TREE,
-        maxInputs: RING_INPUT_SLOTS,
+        maxInputs: INPUT_CAP,
       }),
     ).toThrow("RING_INSUFFICIENT_BALANCE");
   });
 });
 
 describe("ring approval summary", () => {
-  async function approvalClient(_keypair: ShieldedKeypair) {
+  /** An active ring, every build reaches its approval and stops at the prover. */
+  async function approvalClient(_keypair: ShieldedKeypair, mode: RingMode = "off") {
     const [config, bump] = await ringConfigPda(RING);
+    const [ringAuth, registration] = await sppRingRegistration({
+      authority: PAYER,
+      ringProgramId: RING,
+    });
     return ringTransferClient({
       tree: TREE,
-      getAccount: async (address) =>
+      getSlot: async () => 1n,
+      getAccount: async (address: Address) =>
         address === config
           ? {
               owner: RING,
@@ -330,9 +328,12 @@ describe("ring approval summary", () => {
                   .toBytes(),
                 bump,
                 hasPolicy: false,
+                mode,
               }),
             }
-          : undefined,
+          : address === ringAuth
+            ? registration
+            : undefined,
     });
   }
   it("approves the exact amount moved into the ring", async () => {
@@ -382,6 +383,43 @@ describe("ring approval summary", () => {
     if (summary === undefined) throw new Error("approval not requested");
     return summary;
   }
+
+  /** An entry of `amount` into an anonymous ring out of nine default notes of 1000. */
+  async function anonymousEntry(amount: bigint) {
+    const keypair = spendingKeypair();
+    const wallet = ringUtxoWallet(
+      keypair,
+      Array.from({ length: 9 }, () => [1_000n, undefined] as const),
+    );
+    const { approve, requests } = recordingApproval();
+    const error: unknown = await buildRingEntryTransaction({
+      client: await approvalClient(keypair, "anonymous"),
+      ringProgramId: RING,
+      wallet,
+      keys: localKeys(keypair),
+      approve,
+      feePayer: PAYER,
+      amount,
+      anonymous: {
+        signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
+        state: AnonymousRingState.create(RING, 0n),
+      },
+    }).catch((cause: unknown) => cause);
+    return { error, requests };
+  }
+
+  it("funds an anonymous ring's entry from at most eight default notes, the entry key's bound", async () => {
+    const eight = await anonymousEntry(8_000n);
+    expect(eight.requests.map((request) => request.intent)).toMatchObject([
+      { kind: "ringEntry", amount: 8_000n },
+    ]);
+    const nine = await anonymousEntry(8_001n);
+    expect(nine.error).toMatchObject({
+      code: "RING_BUILD_ENTRY",
+      causeCode: "RING_TOO_MANY_INPUTS",
+    });
+    expect(nine.requests).toEqual([]);
+  });
 
   it("names the whole default UTXO crossing into the ring, change included", async () => {
     const summary = await capturedSummary([[40n, undefined]], 25n, "default");

@@ -1,13 +1,11 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, expectTypeOf, it } from "vitest";
-import type { Bytes32 } from "@heliuslabs/zolana";
+import { describe, expect, it } from "vitest";
 import { compressProof, parseProof } from "@heliuslabs/zolana/client";
 import { customRingProof } from "../src/client/prover/proof.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../src/interface/custom-ring-proof.js";
 import { RING_PROVING_KEY_SHA256S, ringProvingKey } from "../src/interface/proving-keys.js";
 import { RingError, wrapRingError } from "../src/ring/error.js";
-import type { CustomRingSourceOwner } from "../src/client/index.js";
 
 const ZERO_POINT = ["0x0", "0x0"];
 const ZERO_PROOF = {
@@ -70,8 +68,11 @@ describe("RING_PROVING_KEY_SHA256S", () => {
   });
 
   it("names the key file the prover proves each ring circuit with", () => {
-    expect([ringProvingKey("custom-ring-base"), ringProvingKey("custom-ring-policy")]).toEqual(
-      ["custom_ring_base.key", "custom_ring_policy.key"].map((name) => ({
+    expect([
+      ringProvingKey({ family: "registerKey" }),
+      ringProvingKey({ family: "deposit" }),
+    ]).toEqual(
+      ["custom_ring_register_key.key", "custom_ring_deposit.key"].map((name) => ({
         name,
         sha256: lock.keys[name]?.sha256,
       })),
@@ -80,36 +81,32 @@ describe("RING_PROVING_KEY_SHA256S", () => {
 });
 
 describe("public package surface", () => {
-  it("exports every type named by the custom-ring public API", () => {
-    expectTypeOf<CustomRingSourceOwner>().toMatchTypeOf<{
-      readonly listId: number;
-      readonly ownerHash: Bytes32;
-    }>();
-  });
-
   it("serves the ring surface from its entry points", async () => {
-    const [root, client, keypair] = await Promise.all([
+    const [root, client, keypair, advanced] = await Promise.all([
       import("../src/index.js"),
       import("../src/client/index.js"),
       import("../src/keypair/index.js"),
+      import("../src/ring-advanced.js"),
     ]);
     for (const name of [
       "ringConfigAddress",
       "createRingConfigInstruction",
+      "createMemberRegistryInstruction",
       "initSppRingConfigInstruction",
       "ringTransactInstruction",
-      "proveCustomRingTransfer",
+      "CustomRingTransfer",
+      "AnonymousTransfer",
+      "DelegateTransfer",
       "createRingPolicyInstruction",
       "setRingPolicyRulesInstruction",
       "setRingPolicySourceInstruction",
       "buildRingCreatePolicyTransaction",
-      "createRingEntryInstruction",
-      "buildRingListWriteTransaction",
+      "memberListWriteInstruction",
+      "AuthorityListWrite",
+      "RecordApplication",
       "deployRingProgram",
-      "registerRingKeyInstruction",
-      "prepareRingKeyRegistration",
+      "RegisterKey",
       "recoverRingMemberNotes",
-      "buildRingEntryTransaction",
       "createCustomRingClient",
       "decryptRingDepositUtxo",
       "customRingDepositPayload",
@@ -117,7 +114,8 @@ describe("public package surface", () => {
       expect(root[name]).toBeTypeOf("function");
     }
     expect(client.createCustomRingClient).toBe(root.createCustomRingClient);
-    expect(client.ringOpenings).toBeTypeOf("function");
-    expect(keypair.encryptTransactionViewingSecret).toBe(root.encryptTransactionViewingSecret);
+    expect(client.ringInputOpening).toBeTypeOf("function");
+    expect(keypair.RingAddress).toBeTypeOf("function");
+    expect(advanced.sealRingDisclosure).toBeTypeOf("function");
   });
 });

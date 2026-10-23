@@ -1,5 +1,11 @@
 import { getBase58Decoder, type Address, type Signature } from "@solana/kit";
-import { encodeRingDepositInstructionData } from "@heliuslabs/zolana/internal";
+import {
+  EncryptedScheme,
+  Writer,
+  addressBytes,
+  encodeOutputData,
+  encodeRingDepositInstructionData,
+} from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import { SHIELDED_POOL_PROGRAM_ID, type Bytes16, type Bytes32 } from "@heliuslabs/zolana";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/interface/custom-ring-proof.js";
@@ -7,6 +13,32 @@ import {
   encodeRingDepositCapsule,
   type RingDepositCapsule,
 } from "../../src/ring/deposit-capsule.js";
+
+/** Borsh `RingDepositOutput`, the capsule as its ciphertext. */
+export function ringDepositPayload(
+  input: Readonly<{
+    ring: Address;
+    ownerCommitment: Bytes32;
+    asset: Address;
+    amount: bigint;
+    capsule: RingDepositCapsule;
+  }>,
+): Uint8Array {
+  const ciphertext = encodeRingDepositCapsule(input.capsule);
+  const body = new Writer()
+    .bytes(input.ownerCommitment)
+    .bytes(addressBytes(input.asset))
+    .u64(input.amount, "amount")
+    .u8(0, "dataHash")
+    .bytes(addressBytes(input.ring))
+    .bytes(new Uint8Array(32))
+    .bytes(input.capsule.ephemeralPublicKey)
+    .bytes(new Uint8Array(16))
+    .u32(ciphertext.length, "ciphertext.length")
+    .bytes(ciphertext)
+    .finish();
+  return encodeOutputData(EncryptedScheme.ringDeposit, body, "encrypted");
+}
 
 /** A successful confirmed wrapper and its exact SPP self-CPI ancestry. */
 export function confirmedDepositTransaction(

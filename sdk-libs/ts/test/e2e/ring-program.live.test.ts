@@ -1,5 +1,5 @@
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { createZolanaClient } from "@heliuslabs/zolana";
+import { createCustomRingClient } from "../../src/client/client.js";
 // Deploys a fresh ring program from the built binaries, upgrades it in place
 // and registers its config. Reads RING_PROGRAM_SO and USER_REGISTRY_PROGRAM_SO.
 import { readFile } from "node:fs/promises";
@@ -8,6 +8,7 @@ import { address, generateKeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_INSERT_FEE,
   createRingConfigInstruction,
   deployRingProgram,
   fetchRingProgramConfig,
@@ -19,7 +20,7 @@ import { airdrop, requiredEnv, sendInstruction } from "./ring-live-helpers.js";
 
 describe("ring program", () => {
   it("deploys, upgrades and registers a ring under the sdk", async () => {
-    const client = await createZolanaClient({
+    const client = await createCustomRingClient({
       solanaRpcUrl: requiredEnv("ZOLANA_LOCALNET_URL"),
       indexerUrl: requiredEnv("ZOLANA_INDEXER_URL"),
       proverUrl: requiredEnv("ZOLANA_PROVER_URL"),
@@ -74,7 +75,7 @@ describe("ring program", () => {
         payer: operator,
         authority: operator,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
-        hasPolicy: false,
+        kind: "auditOnly",
       }),
       operator,
     );
@@ -91,5 +92,7 @@ describe("ring program", () => {
     const config = await fetchRingProgramConfig(client, program.address);
     expect(config.authority).toBe(operator.address);
     expect(config.hasPolicy).toBe(false);
+    expect(config.mode).toBe("off");
+    expect(config.insertFee).toBe(DEFAULT_INSERT_FEE);
   }, 900_000);
 });

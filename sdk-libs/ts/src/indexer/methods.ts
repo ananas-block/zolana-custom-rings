@@ -1,41 +1,78 @@
+import type { Address } from "@heliuslabs/zolana";
 import type { MethodDescriptor } from "@heliuslabs/zolana/internal";
 
 import {
-  decodeRingKeyRegistryEntry,
-  decodeRingKeyRegistryRegisterProof,
-  decodeRingSpendRecordResponse,
+  decodeRingApplyProofInputs,
+  decodeRingMemberOpening,
+  decodeRingMemberOpenings,
+  decodeRingMemberPage,
+  decodeRingRecordQueue,
+  decodeRingRegistryState,
+  encodeRingApplyProofInputsRequest,
+  encodeRingMemberOpeningsRequest,
   encodeRingMemberProofRequest,
-  encodeRingMemberRequest,
+  encodeRingMemberRecordsRequest,
+  encodeRingMemberRegistryRootRequest,
 } from "./codec.js";
 import type {
-  GetRingSpendRecordResponse,
-  RingKeyRegistryEntry,
-  RingKeyRegistryRegisterProof,
+  RingApplyProofInputsRequest,
+  RingApplyProofInputsResponse,
+  RingMemberOpeningResponse,
+  RingMemberOpeningsRequest,
+  RingMemberOpeningsResponse,
+  RingMemberPageResponse,
   RingMemberProofRequest,
-  RingMemberRequest,
+  RingMemberRecordsRequest,
+  RingRecordQueueResponse,
+  RingRegistryStateResponse,
 } from "./types.js";
 
-export const getRingSpendRecordMethod: MethodDescriptor<
-  RingMemberRequest,
-  GetRingSpendRecordResponse
-> = {
-  name: "getRingSpendRecord",
-  encodeRequest: encodeRingMemberRequest,
-  decodeResponse: decodeRingSpendRecordResponse,
-};
-export const getRingKeyRegistryEntryMethod: MethodDescriptor<
+export const getRingMemberRecordMethod: MethodDescriptor<
   RingMemberProofRequest,
-  RingKeyRegistryEntry
+  RingMemberOpeningResponse
 > = {
-  name: "getRingKeyRegistryEntry",
+  name: "getRingMemberRecord",
   encodeRequest: encodeRingMemberProofRequest,
-  decodeResponse: decodeRingKeyRegistryEntry,
+  decodeResponse: decodeRingMemberOpening,
 };
-export const getRingKeyRegistryRegisterProofMethod: MethodDescriptor<
-  RingMemberProofRequest,
-  RingKeyRegistryRegisterProof
+export const getRingMemberRecordsMethod: MethodDescriptor<
+  RingMemberRecordsRequest,
+  RingMemberPageResponse
 > = {
-  name: "getRingKeyRegistryRegisterProof",
-  encodeRequest: encodeRingMemberProofRequest,
-  decodeResponse: decodeRingKeyRegistryRegisterProof,
+  name: "getRingMemberRecords",
+  encodeRequest: encodeRingMemberRecordsRequest,
+  decodeResponse: decodeRingMemberPage,
+};
+export const getRingMemberRegistryRootMethod: MethodDescriptor<
+  Readonly<{ ringProgramId: Address }>,
+  RingRegistryStateResponse
+> = {
+  name: "getRingMemberRegistryRoot",
+  encodeRequest: encodeRingMemberRegistryRootRequest,
+  decodeResponse: decodeRingRegistryState,
+};
+
+export const getRingMemberOpeningsMethod: MethodDescriptor<
+  RingMemberOpeningsRequest,
+  RingMemberOpeningsResponse
+> = {
+  name: "getRingMemberOpenings",
+  encodeRequest: encodeRingMemberOpeningsRequest,
+  decodeResponse: decodeRingMemberOpenings,
+};
+export const getRingRecordQueueMethod: MethodDescriptor<
+  Readonly<{ ringProgramId: Address }>,
+  RingRecordQueueResponse
+> = {
+  name: "getRingRecordQueue",
+  encodeRequest: encodeRingMemberRegistryRootRequest,
+  decodeResponse: decodeRingRecordQueue,
+};
+export const getRingApplyProofInputsMethod: MethodDescriptor<
+  RingApplyProofInputsRequest,
+  RingApplyProofInputsResponse
+> = {
+  name: "getRingApplyProofInputs",
+  encodeRequest: encodeRingApplyProofInputsRequest,
+  decodeResponse: decodeRingApplyProofInputs,
 };

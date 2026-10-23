@@ -51,9 +51,17 @@ import {
 } from "@heliuslabs/zolana/client";
 import type { SignerAccount } from "@heliuslabs/zolana/instructions";
 
-import { ringPolicyConfigAddress } from "../interface/pda/index.js";
+import {
+  ringConfigAddress,
+  ringMemberRegistryAddress,
+  ringRecordQueueAddress,
+} from "../interface/pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "./config.js";
-import { RING_POLICY_CONFIG_SIZE } from "./codecs.js";
+import {
+  decodeRingMemberRegistry,
+  decodeRingProgramConfig,
+  decodeRingRecordQueue,
+} from "./codecs.js";
 import { RingError, wrapRingError } from "./error.js";
 import { checkRingElf } from "./elf.js";
 
@@ -390,7 +398,7 @@ export async function deployRingProgram(
     if (present !== undefined) return Object.freeze({ kind: "present", programData: present });
     // Precedes any paid step, a rejected upgrade spends nothing.
     if (existing !== undefined) {
-      await ensurePolicyConfigCompatible(params, context);
+      await ensureRingStateCompatible(params, context);
     }
     const bufferSigner = params.buffer ?? (await generateKeyPairSigner());
     const length = params.binary.byteLength;
@@ -524,18 +532,28 @@ function checkBinary(binary: RingProgramBinary): void {
   if (!checkedBinaries.has(binary)) throw new RingError("RING_PROGRAM_BINARY_INVALID");
 }
 
-/** An equal size is not proof the target binary is compatible. */
-async function ensurePolicyConfigCompatible(
+/** An upgrade must not strand ring state the released layouts cannot read. */
+async function ensureRingStateCompatible(
   params: RingProgramDeployParams,
   context: RequestContext | undefined,
 ): Promise<void> {
-  const policyConfig = await ringPolicyConfigAddress(params.ringProgramId);
-  const account = await params.client.getAccount(policyConfig, context);
-  if (account === undefined || account.owner !== params.ringProgramId) return;
-  if (account.data.length !== RING_POLICY_CONFIG_SIZE) {
-    throw new RingError("RING_POLICY_CONFIG_INCOMPATIBLE", {
-      details: { ringProgramId: params.ringProgramId, policyConfig, size: account.data.length },
-    });
+  const accounts = [
+    { account: "config", address: ringConfigAddress, decode: decodeRingProgramConfig },
+    { account: "registry", address: ringMemberRegistryAddress, decode: decodeRingMemberRegistry },
+    { account: "queue", address: ringRecordQueueAddress, decode: decodeRingRecordQueue },
+  ] as const;
+  for (const { account, address, decode } of accounts) {
+    const stored = await params.client.getAccount(await address(params.ringProgramId), context);
+    if (stored === undefined || stored.owner !== params.ringProgramId || stored.data.length === 0)
+      continue;
+    try {
+      decode(stored.data);
+    } catch (cause) {
+      throw new RingError("RING_PROGRAM_STATE_INCOMPATIBLE", {
+        details: { ringProgramId: params.ringProgramId, account, size: stored.data.length },
+        cause,
+      });
+    }
   }
 }
 
