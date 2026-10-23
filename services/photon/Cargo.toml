@@ -14,6 +14,8 @@ surfpool-fixture = ["photon-indexer/surfpool-fixture"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 bytemuck = { workspace = true }
+cadence = { workspace = true }
+cadence-macros = { workspace = true }
 clap = { workspace = true }
 custom-ring-interface = { workspace = true }
 futures = { workspace = true }
@@ -21,10 +23,11 @@ jsonrpsee = { workspace = true }
 log = { workspace = true }
 photon-indexer = { workspace = true }
 sea-orm = { workspace = true }
-sea-orm-migration = { workspace = true }
+sea-orm-migration = { workspace = true, features = ["sqlx-sqlite"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 solana-account = { workspace = true }
+solana-clock = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction-status-client-types = { workspace = true, features = ["agave-unstable-api"] }
@@ -34,10 +37,11 @@ zolana-hasher = { workspace = true }
 zolana-indexer-api = { workspace = true }
 zolana-interface = { workspace = true }
 zolana-ring-indexer = { workspace = true }
-zolana-ring-key-registry = { workspace = true }
+zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+hex = { workspace = true }
 wincode = { workspace = true }
 zolana-event = { workspace = true }

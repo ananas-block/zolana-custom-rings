@@ -7,10 +7,11 @@ use photon_indexer::{
 use tokio::task::JoinHandle;
 use zolana_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::method::{
-    GetRingKeyRegistryEntry, GetRingKeyRegistryRegisterProof, GetRingSpendRecord,
+    GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
+    GetRingMemberRegistryRoot, GetRingRecordQueue,
 };
 
-use crate::{key_registry, spend_record, CustomRingIndexer, StartSlot};
+use crate::{member_registry, member_registry::CachedChain, CustomRingIndexer, StartSlot};
 
 pub struct CustomRings {
     /// First indexed custom ring slot, the SPP indexer's last indexed slot by
@@ -20,7 +21,17 @@ pub struct CustomRings {
 
 struct Lookups {
     db: Arc<DatabaseConnection>,
-    rpc: Arc<RpcClient>,
+    chain: CachedChain,
+}
+
+macro_rules! register {
+    ($module:ident, $($method:ty => $read:path,)+) => {
+        $($module.register_async_method(<$method>::NAME, |params, lookups, _| async move {
+            $read(&lookups.db, &lookups.chain, params.parse()?)
+                .await
+                .map_err(ErrorObjectOwned::from)
+        })?;)+
+    };
 }
 
 impl Extension for CustomRings {
@@ -46,31 +57,19 @@ impl Extension for CustomRings {
         db: Arc<DatabaseConnection>,
         rpc: Arc<RpcClient>,
     ) -> Result<Methods, RegisterMethodError> {
-        let mut module = RpcModule::new(Lookups { db, rpc });
-        module.register_async_method(
-            GetRingKeyRegistryEntry::NAME,
-            |params, lookups, _| async move {
-                key_registry::lookup(&lookups.db, &lookups.rpc, params.parse()?)
-                    .await
-                    .map_err(ErrorObjectOwned::from)
-            },
-        )?;
-        module.register_async_method(
-            GetRingKeyRegistryRegisterProof::NAME,
-            |params, lookups, _| async move {
-                key_registry::register(&lookups.db, &lookups.rpc, params.parse()?)
-                    .await
-                    .map_err(ErrorObjectOwned::from)
-            },
-        )?;
-        module.register_async_method(
-            GetRingSpendRecord::NAME,
-            |params, lookups, _| async move {
-                spend_record::lookup(&lookups.db, &lookups.rpc, params.parse()?)
-                    .await
-                    .map_err(ErrorObjectOwned::from)
-            },
-        )?;
+        let mut module = RpcModule::new(Lookups {
+            db,
+            chain: CachedChain::new(rpc),
+        });
+        register!(
+            module,
+            GetRingMemberRecord => member_registry::member_record,
+            GetRingMemberRecords => member_registry::member_records,
+            GetRingMemberOpenings => member_registry::member_openings,
+            GetRingMemberRegistryRoot => member_registry::registry_root,
+            GetRingRecordQueue => member_registry::record_queue,
+            GetRingApplyProofInputs => member_registry::apply_proof_inputs,
+        );
         Ok(module.into())
     }
 }
