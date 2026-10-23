@@ -1,7 +1,6 @@
 //! Pins a SHA-256 fingerprint over the committed custom-ring verifying key. The key
-//! is a generated artifact (`prover/scripts/generate_keys_custom_ring.sh`),
-//! a regeneration rewrites an opaque constant file that is effectively
-//! unreviewable by diff. This test turns any VK change into an explicit
+//! is a generated artifact, a regeneration rewrites an opaque constant file that
+//! is effectively unreviewable by diff. This test turns any VK change into an explicit
 //! one-line re-pin: if it fails, confirm the rotation was intentional and
 //! update the pinned fingerprint below.
 #![cfg(feature = "verifying-keys")]

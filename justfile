@@ -117,15 +117,15 @@ _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-progra
 
 # === Keys ===
 
-# zolana's prover with the ring circuits linked in.
+# zolana's prover, built from the ring Go module.
 build-prover-server:
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     mkdir -p target
     cd prover && sh ../zolana/prover/server/build-release.sh ../target/prover-server ./cmd/prover
 
-# Go circuit and proof tests, a proof must verify under the committed VERIFYINGKEY.
-test-custom-ring: fetch-custom-ring-keys
+# Go circuit and proof tests.
+test-custom-ring:
     cd prover && go test ./... -count=1
 
 # Ring keys and transfer shapes must match their lockfiles.
@@ -180,10 +180,6 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
         diff -u "program-libs/interface/src/$module" "$export_dir/$module"
     done
-
-# Rotate the ring proving keys, their verifying keys and the ring lockfile.
-regen-custom-ring-keys:
-    prover/scripts/generate_keys_custom_ring.sh "{{spp-keys-dir}}" "$PWD/program-libs/interface/src"
 
 # Regenerate the deposit-audit fixtures with proofs from the pinned deposit key.
 dump-deposit-audit-fixtures: check-custom-ring-keys zolana::build-cli

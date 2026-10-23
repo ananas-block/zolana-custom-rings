@@ -59,7 +59,7 @@ impl ReleaseSet for CustomRings {
             let pinned = pinned_sha256(&ring_lock, key.file_name())?;
             if staged.sha256 != pinned {
                 bail!(
-                    "{} hashes to {}, {RING_KEYS_LOCK} pins {pinned}, run `just regen-custom-ring-keys` to rotate both",
+                    "{} hashes to {}, {RING_KEYS_LOCK} pins {pinned}",
                     key.file_name(),
                     staged.sha256
                 );

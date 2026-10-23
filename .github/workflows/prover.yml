@@ -40,5 +40,4 @@ jobs:
           cache-dependency-path: prover/go.sum
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      # Tests that need the release proving keys skip, test-custom-ring-keys runs them.
       - run: go test ./... -timeout 50m
