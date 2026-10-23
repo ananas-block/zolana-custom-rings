@@ -6,21 +6,18 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/domain.rs and sdk-libs/ts/src/keypair/ring-domain.ts.
 const (
 	// AuditStatementDomain = "CRAU"
 	AuditStatementDomain = 0x43524155
-	// PackedSlotSecretDomain = "CRAS"
-	PackedSlotSecretDomain = 0x43524153
 	// DeliveredSlotSecretDomain = "CRDS"
 	DeliveredSlotSecretDomain = 0x43524453
-	// ConfidentialRingSecretDomain = "CRRC"
-	ConfidentialRingSecretDomain = 0x43525243
-	// AnonymousRingSecretDomain = "CRRA"
-	AnonymousRingSecretDomain = 0x43525241
+	// BlindingSeedDomain = "CRBS"
+	BlindingSeedDomain = 0x43524253
+	// AnonymousRingDataDomain = "CRAT"
+	AnonymousRingDataDomain = 0x43524154
 	// InboxKeyDomain = "CRIK"
 	InboxKeyDomain = 0x4352494b
 	// InboxTagDomain = "CRIT"
@@ -50,9 +47,6 @@ const (
 	// DepositBlindingDomain = "CRDB"
 	DepositBlindingDomain = 0x43524442
 )
-
-// RingOutputBlindingDomainV1 = "TXRB".
-const RingOutputBlindingDomainV1 = 0x54585242
 
 // Envelope and merge pad domains, mirrored by sdk-libs/client/src/encryption.rs, its merge_disclosure module and sdk-libs/ts/src/keypair/audit.ts.
 const (
@@ -87,23 +81,8 @@ const (
 	TagLen = 16
 )
 
-// BodyLen is asset_address(32) ‖ u64be(amount).
+// BodyLen is be32(blinding) ‖ u64be(amount).
 const BodyLen = 40
-
-// PackedSlot is a packed rail slot secret preimage, TxViewingSk = pack_be(tx_viewing_sk).
-type PackedSlot struct {
-	TxViewingSk    [2]frontend.Variable
-	Salt           frontend.Variable
-	OutputIndex    frontend.Variable
-	FirstNullifier frontend.Variable
-}
-
-// Secret is Poseidon(CRAS, key0, key1, salt, i, n0), held only by the sender and the auditor of tx_viewing_sk.
-func (s PackedSlot) Secret(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{
-		PackedSlotSecretDomain, s.TxViewingSk[0], s.TxViewingSk[1], s.Salt, s.OutputIndex, s.FirstNullifier,
-	})
-}
 
 // DeliveredSlot is a delivered slot secret preimage, Agreement = pack_be(X25519(tx_viewing_sk, u)) and each key pack_be(0x04 ‖ u).
 type DeliveredSlot struct {
@@ -149,14 +128,14 @@ func TagField(api frontend.API, rc frontend.Rangechecker, value frontend.Variabl
 	return low
 }
 
-// ConfidentialRingSecret is Poseidon(CRRC, slotSecret), a ring secret no anchor accepts.
-func ConfidentialRingSecret(api frontend.API, slotSecret frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{ConfidentialRingSecretDomain, slotSecret})
+// BlindingSeed is SPP's blinding_seed Poseidon(CRBS, sk0, sk1, salt), every output blinding rebuilds from tx_viewing_sk.
+func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{BlindingSeedDomain, txViewingSk[0], txViewingSk[1], salt})
 }
 
-// AnonymousRingSecret is Poseidon(CRRA, slotSecret, tag), binding the published tag into the output blinding.
-func AnonymousRingSecret(api frontend.API, slotSecret, tag frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{AnonymousRingSecretDomain, slotSecret, tag})
+// AnonymousRingData is Poseidon(CRAT, slotSecret, tag), the ring_data_hash an anchor reads a first contact's tag back from.
+func AnonymousRingData(api frontend.API, slotSecret, tag frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{AnonymousRingDataDomain, slotSecret, tag})
 }
 
 // SenderCommitment binds the anonymous audit and the member policy to one sender, private_tx_hash fixes the blinding both read.
@@ -167,19 +146,4 @@ func SenderCommitment(api frontend.API, senderPkHash, privateTxBlinding frontend
 // DepositBlinding is Poseidon(CRDB, blindingSecret), a deposit blinding no anchor opens as a first contact.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
-}
-
-// DeriveRingOutputBlinding is bound by the ring's audit proof, never by SPP.
-func DeriveRingOutputBlinding(api frontend.API, firstNullifier, ringSecret, outputIndex frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{RingOutputBlindingDomainV1, firstNullifier, ringSecret, outputIndex})
-}
-
-// DeriveRingRailOutputBlinding is TXOB over seed when inDefaultRing is 1 and TXRB over ringSecret when it is 0.
-func DeriveRingRailOutputBlinding(api frontend.API, inDefaultRing, firstNullifier, seed, ringSecret frontend.Variable, outputIndex int) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{
-		api.Select(inDefaultRing, transaction.OutputBlindingDomainV1, RingOutputBlindingDomainV1),
-		firstNullifier,
-		api.Select(inDefaultRing, seed, ringSecret),
-		outputIndex,
-	})
 }

@@ -13,10 +13,11 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// SealBody is the delivered body, AES-256-CTR of asset_address ‖ u64be(amount) under the stream of the slot secret.
-func SealBody(t testing.TB, slotSecret *big.Int, assetAddress [32]byte, amount uint64) [shared.BodyLen]byte {
+// SealBody is the delivered body, AES-256-CTR of be32(blinding) ‖ u64be(amount) under the stream of the slot secret.
+func SealBody(t testing.TB, slotSecret, blinding *big.Int, amount uint64) [shared.BodyLen]byte {
 	t.Helper()
-	plaintext := binary.BigEndian.AppendUint64(append([]byte{}, assetAddress[:]...), amount)
+	blindingBytes := spptest.MustFieldBytes(t, blinding)
+	plaintext := binary.BigEndian.AppendUint64(blindingBytes[:], amount)
 	key, nonce := AuditStreamKeys(t, slotSecret)
 	return [shared.BodyLen]byte(CTREncrypt(t, key, nonce, plaintext))
 }

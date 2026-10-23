@@ -30,17 +30,16 @@ type AnonymousOutput struct {
 // Anchor is the first contact of the pair slot and its place in the state tree.
 type Anchor struct {
 	// Owner is the owner hash the first contact commits.
-	Owner          *big.Int
-	TreeID         uint16
-	Asset          *big.Int
-	Amount         uint64
-	Blinding       *big.Int
-	SlotSecret     *big.Int
-	FirstNullifier *big.Int
-	SlotIndex      int
-	Epoch          uint64
-	Index          uint64
-	LeafIndex      uint64
+	Owner        *big.Int
+	TreeID       uint16
+	Asset        *big.Int
+	Amount       uint64
+	Blinding     *big.Int
+	RingDataHash *big.Int
+	SlotSecret   *big.Int
+	Epoch        uint64
+	Index        uint64
+	LeafIndex    uint64
 }
 
 // AnonymousAudit is an anonymous audit witness with every derived value explicit, the statement rebuilds from its fields.
@@ -155,11 +154,11 @@ func (a AnonymousAudit) Change(t testing.TB, i int) DeliverySlot {
 	}
 }
 
-// NewPayment delivers a ring output whose blinding binds stream.Tag.
+// NewPayment delivers a ring output whose ring data binds stream.Tag.
 func (a AnonymousAudit) NewPayment(t testing.TB, slot DeliverySlot, stream Stream) AnonymousOutput {
 	t.Helper()
 	return AnonymousOutput{
-		DeliveredOutput: a.NewRingOutput(t, slot, func(secret *big.Int) *big.Int { return ringprotocol.AnonymousRingSecret(t, secret, stream.Tag) }),
+		DeliveredOutput: a.NewRingOutput(t, slot, func(secret *big.Int) *big.Int { return ringprotocol.AnonymousRingData(t, secret, stream.Tag) }),
 		Stream:          stream,
 	}
 }
@@ -170,26 +169,21 @@ func (a AnonymousAudit) NewAnchor(t testing.TB, payee DeliverySlot, epoch, index
 	earlier := a.Transfer
 	earlier.Keys = earlier.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44)))
 	earlier.FirstNullifier = big.NewInt(0x2f2f)
+	earlier = earlier.withSeed(t)
 	anchor := &Anchor{
-		TreeID:         4,
-		Asset:          ringtest.AssetField(t, ringtest.Repeat(0x0a)),
-		Amount:         7,
-		SlotSecret:     earlier.DeliveredSlotSecret(t, payee.RecipientKey, 1),
-		FirstNullifier: earlier.FirstNullifier,
-		SlotIndex:      1,
-		Epoch:          epoch,
-		Index:          index,
-		LeafIndex:      37,
+		TreeID:     4,
+		Asset:      ringtest.AssetField(t, ringtest.Repeat(0x0a)),
+		Amount:     7,
+		Blinding:   earlier.Blinding(t, 1),
+		SlotSecret: earlier.DeliveredSlotSecret(t, payee.RecipientKey, 1),
+		Epoch:      epoch,
+		Index:      index,
+		LeafIndex:  37,
 	}
 	anchor.Owner = spptest.MustOwnerHash(t, ringtest.MustSolanaPkField(t, payee.OwnerKey), payee.NullifierPk)
-	anchor.Blinding = anchor.FirstContactBlinding(t, ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, payee.RecipientKey), epoch, index))
+	firstTag := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, payee.RecipientKey), epoch, index)
+	anchor.RingDataHash = ringprotocol.AnonymousRingData(t, anchor.SlotSecret, firstTag)
 	return anchor
-}
-
-// FirstContactBlinding is the anonymous ring output blinding of the first contact under its first tag.
-func (anchor Anchor) FirstContactBlinding(t testing.TB, firstTag *big.Int) *big.Int {
-	t.Helper()
-	return ringprotocol.RingBlinding(t, anchor.FirstNullifier, ringprotocol.AnonymousRingSecret(t, anchor.SlotSecret, firstTag), anchor.SlotIndex)
 }
 
 // FirstContactRoot is the state root holding the first contact, 0 without an anchor.
@@ -207,7 +201,7 @@ func (a AnonymousAudit) firstContactTree(t testing.TB) (*big.Int, protocol.State
 	leaf := spptest.MustUtxoHash(t, protocol.Utxo{
 		Domain: big.NewInt(protocol.UtxoDomain), Owner: a.Anchor.Owner, Asset: a.Anchor.Asset,
 		Amount: new(big.Int).SetUint64(a.Anchor.Amount), Blinding: a.Anchor.Blinding,
-		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: a.RingProgramID,
+		DataHash: big.NewInt(0), RingDataHash: a.Anchor.RingDataHash, RingProgramID: a.RingProgramID,
 	}, big.NewInt(int64(a.Anchor.TreeID)))
 	root, proofs := spptest.MustBuildSparseStateTree(t, map[uint64]*big.Int{a.Anchor.LeafIndex: leaf})
 	return root, proofs[a.Anchor.LeafIndex]
@@ -323,7 +317,7 @@ func (a AnonymousAudit) Circuit(t testing.TB) *audit.AnonymousAuditCircuit {
 // anchorWires opens the first contact, zero without an anchor.
 func (a AnonymousAudit) anchorWires(t testing.TB) audit.AnchorWires {
 	t.Helper()
-	w := audit.AnchorWires{TreeID: 0, Asset: 0, Amount: 0, SlotSecret: 0, FirstNullifier: 0, SlotIndex: 0, Epoch: 0, Index: 0, PathIndex: 0}
+	w := audit.AnchorWires{TreeID: 0, Asset: 0, Amount: 0, SlotSecret: 0, Blinding: 0, Epoch: 0, Index: 0, PathIndex: 0}
 	for i := range w.Path {
 		w.Path[i] = 0
 	}
@@ -333,7 +327,7 @@ func (a AnonymousAudit) anchorWires(t testing.TB) audit.AnchorWires {
 	_, proof := a.firstContactTree(t)
 	w = audit.AnchorWires{
 		TreeID: int(a.Anchor.TreeID), Asset: a.Anchor.Asset, Amount: a.Anchor.Amount, SlotSecret: a.Anchor.SlotSecret,
-		FirstNullifier: a.Anchor.FirstNullifier, SlotIndex: a.Anchor.SlotIndex, Epoch: a.Anchor.Epoch, Index: a.Anchor.Index,
+		Blinding: a.Anchor.Blinding, Epoch: a.Anchor.Epoch, Index: a.Anchor.Index,
 		PathIndex: proof.PathIndex,
 	}
 	for i, sibling := range proof.PathElements {

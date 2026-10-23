@@ -102,9 +102,9 @@ func (l auditLayout) choices(api frontend.API, vary int) []layoutChoice {
 	return choices
 }
 
-func (w AuditWires) seedOut(c layoutChoice) []frontend.Variable {
+func (e auditEnvelope) seedOut(c layoutChoice) []frontend.Variable {
 	if c.has(LayoutExits) {
-		return []frontend.Variable{w.SeedOut}
+		return []frontend.Variable{e.outputSeed}
 	}
 	return nil
 }

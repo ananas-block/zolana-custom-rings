@@ -54,16 +54,9 @@ func (p PackedAudit) NewRingOutput(t testing.TB, i int) Utxo {
 	return Utxo{
 		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, p.OwnerKeys[i]),
 		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(20+int64(i))), Asset: ringtest.AssetField(t, ringtest.Repeat(0x0a)),
-		Amount: 100 + uint64(i), Blinding: p.RingBlinding(t, i),
+		Amount: 100 + uint64(i), Blinding: p.Blinding(t, i),
 		DataHash: big.NewInt(0x61 + int64(i)), RingDataHash: big.NewInt(0x71 + int64(i)), RingProgramID: p.RingProgramID,
 	}
-}
-
-// RingBlinding is the TXRB blinding of slot i under the CRRC secret of its CRAS slot secret.
-func (p PackedAudit) RingBlinding(t testing.TB, i int) *big.Int {
-	t.Helper()
-	secret := ringprotocol.PackedSlotSecret(t, p.Keys.txViewingSk, p.Salt, i, p.FirstNullifier)
-	return ringprotocol.RingBlinding(t, p.FirstNullifier, ringprotocol.ConfidentialRingSecret(t, secret), i)
 }
 
 // Statement mirrors the packed audit preimage, head ‖ output_chain, disclosure_chain.

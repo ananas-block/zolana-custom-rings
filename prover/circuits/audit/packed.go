@@ -18,7 +18,7 @@ import (
 // 1. tx_viewing_sk is clamped, its tagged public key and the envelope sealing it to the auditor are statement values.
 // 2. The output chain covers the first NOut slots, the outputs SPP publishes.
 // 3. Every published UTXO is a ring output or an exit, with no data hash under LayoutDataFree.
-// 4. A ring output's blinding derives from its CRAS slot secret through CRRC and TXRB, an exit's from SeedOut through TXOB.
+// 4. Every published UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 5. The disclosure opens every published UTXO's owner key, asset and amount, its nullifier key unless LayoutEscrow is set and its data hashes unless LayoutDataFree is set.
 // 6. SeedOut opens the disclosure exactly when a published UTXO exits.
 
@@ -71,9 +71,8 @@ func (c *PackedAuditCircuit) Define(api frontend.API) error {
 		// 3. Every published UTXO is a ring output or an exit.
 		slots[i] = classify(api, output, opened, api.Mul(nOut.Active[i], opened.Utxo))
 		live := slots[i].live
-		// 4. The ring secret derives from a slot secret only the sender and the auditor hold.
-		secret := shared.PackedSlot{TxViewingSk: envelope.packedTxViewingSk, Salt: envelope.salt, OutputIndex: i, FirstNullifier: c.FirstNullifier}.Secret(api)
-		c.assertBlinding(api, output, slots[i], shared.ConfidentialRingSecret(api, secret), i)
+		// 4. The auditor rebuilds the blinding from tx_viewing_sk.
+		c.assertBlinding(api, envelope, output, slots[i], i)
 		// 5. The disclosed key is the owner the slot hash binds, SolanaOwnerIdentity bounds its bytes.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: live, A: output.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, c.OwnerKeys[i])})
 		// 6. A data-free disclosure opens no data hash, so no published UTXO carries one.
@@ -110,7 +109,7 @@ func (c *PackedAuditCircuit) disclosure(api frontend.API, e auditEnvelope, layou
 		for i, record := range records {
 			slots[i] = record.fields(choice)
 		}
-		return choice.counted(api, c.seedOut(choice), uniformTail(slots), nOut)
+		return choice.counted(api, e.seedOut(choice), uniformTail(slots), nOut)
 	})
 }
 

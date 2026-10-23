@@ -14,8 +14,6 @@ import (
 
 type DeliveryWires struct {
 	Output shared.UtxoWires
-	// AssetAddress is the mint the body opens with, all zero for SOL.
-	AssetAddress [32]frontend.Variable
 	// RecipientKey is the X25519 u the body is sealed to.
 	RecipientKey [32]frontend.Variable
 	OwnerKey     [32]frontend.Variable
@@ -37,9 +35,8 @@ type delivery struct {
 func openDelivered(api frontend.API, d DeliveryWires) outputSlot {
 	opened := d.Output.Open(api)
 	slot := classify(api, d.Output, opened, opened.Utxo)
-	// The recipient rebuilds the whole commitment from the body and its own keys, no UTXO carries output data.
+	// No UTXO carries a data hash, the recipient never learns one.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: d.Output.DataHash})
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: d.Output.RingDataHash})
 	return slot
 }
 
@@ -53,12 +50,12 @@ func recipientKey(api frontend.API, slot outputSlot, key [32]frontend.Variable) 
 	return u
 }
 
-// deliver proves a ring output's body opens to its committed asset and amount for the holder of u.
-func (w AuditWires) deliver(api frontend.API, e auditEnvelope, d DeliveryWires, slot outputSlot, u [32]frontend.Variable, i int) delivery {
+// deliver proves a ring output's body opens to its committed blinding and amount for the holder of u.
+func (w AuditWires) deliver(api frontend.API, rc frontend.Rangechecker, e auditEnvelope, d DeliveryWires, slot outputSlot, u [32]frontend.Variable, i int) delivery {
 	// 1. One encoding per recipient key, an alias would key the slot secret and the owner tag or inbox key to bytes the recipient never derives.
 	agreement := shared.AgreeCanonical(api, e.txViewingSk, u)
-	// 2. The committed asset is hash_bytes of the mint the body names, the cipher's byte tables bound the mint bytes.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: d.Output.Asset, B: gadget.HashBoundedBytes(api, d.AssetAddress[:])})
+	// 2. be32 is the one encoding below q, the recipient decodes the committed blinding.
+	blinding := ringgadget.FieldToBytesBEWith(api, rc, d.Output.Blinding)
 	// 3. The agreement's ECDH bounds every byte of u and returns canonical agreement bytes.
 	recipient := [2]frontend.Variable(shared.PackBounded(api, shared.Tagged(u)))
 	// 4. The slot secret binds the agreement, both keys, the salt, the slot and n0, no two slots share a keystream.
@@ -72,7 +69,7 @@ func (w AuditWires) deliver(api frontend.API, e auditEnvelope, d DeliveryWires, 
 	}.Secret(api)
 	key, nonce := shared.AuditStreamKeySchedule(api, secret)
 	amount := uintBytes(api, d.Output.Amount, 8)
-	for j, b := range aes.NewCipher(api, key).CTREncrypt(nonce, slices.Concat(d.AssetAddress[:], amount)) {
+	for j, b := range aes.NewCipher(api, key).CTREncrypt(nonce, slices.Concat(blinding[:], amount)) {
 		// 5. A ring output's body is the encryption of its opening, the recipient and the auditor decrypt the same bytes.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: d.Body[j], B: b})
 	}

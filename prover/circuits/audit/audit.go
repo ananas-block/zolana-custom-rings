@@ -11,6 +11,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/x25519"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type AnonymousAuditShape struct {
@@ -65,18 +66,17 @@ type AuditWires struct {
 	EphSk         [32]frontend.Variable
 	AuditorPk     [32]frontend.Variable
 	Salt          [16]frontend.Variable
-	// SeedOut is SPP's output blinding seed Poseidon(TXOS, n0, blinding_seed), the seed of every exit blinding.
-	SeedOut frontend.Variable
-	Layout  frontend.Variable
+	Layout        frontend.Variable
 }
 
 type auditEnvelope struct {
 	txViewingSk [32]frontend.Variable
 	// txPk is pack_be(0x04 ‖ tx_u).
 	txPk [2]frontend.Variable
-	// packedTxViewingSk is pack_be(tx_viewing_sk), the key of the CRAS slot secrets and the CROD pad.
+	// packedTxViewingSk is pack_be(tx_viewing_sk), the key of the CRBS blinding seed and the CROD pad.
 	packedTxViewingSk [2]frontend.Variable
 	salt              frontend.Variable
+	outputSeed        frontend.Variable
 	sealed            shared.Sealed
 	sealedHash        frontend.Variable
 }
@@ -99,11 +99,13 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 	txPk := shared.PackBounded(api, TaggedPubkey(api, w.TxViewingSk))
 	// 4. The envelope seals tx_viewing_sk to the auditor under the audit stream schedule.
 	sealed := shared.Envelope{Plaintext: w.TxViewingSk[:], EphSk: w.EphSk, AuditorPk: w.AuditorPk}.SealAuditStream(api)
+	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
 	return auditEnvelope{
 		txViewingSk:       w.TxViewingSk,
 		txPk:              [2]frontend.Variable(txPk),
-		packedTxViewingSk: [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:])),
+		packedTxViewingSk: packedTxViewingSk,
 		salt:              salt,
+		outputSeed:        transaction.DeriveOutputBlindingSeed(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
 		sealed:            sealed,
 		// The cipher's byte tables bound every ciphertext byte.
 		sealedHash: gadget.HashBoundedBytes(api, sealed.Ciphertext),
@@ -116,10 +118,9 @@ func classify(api frontend.API, o shared.UtxoWires, opened shared.OpenedUtxo, li
 	return outputSlot{OpenedUtxo: opened, live: live, ring: ring, exit: api.Sub(live, ring)}
 }
 
-// assertBlinding pins a live UTXO's blinding to the one SPP derives, TXRB over ringSecret or TXOB over SeedOut on an exit.
-func (w AuditWires) assertBlinding(api frontend.API, o shared.UtxoWires, slot outputSlot, ringSecret frontend.Variable, i int) {
-	blinding := shared.DeriveRingRailOutputBlinding(api, slot.exit, w.FirstNullifier, w.SeedOut, ringSecret, i)
-	// Only a ring output carries the audited ring secret, an exit keeps the TXOB form no anchor opens.
+// assertBlinding pins a live UTXO's blinding to SPP's TXOB blinding over the seed tx_viewing_sk fixes.
+func (w AuditWires) assertBlinding(api frontend.API, e auditEnvelope, o shared.UtxoWires, slot outputSlot, i int) {
+	blinding := transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.live, A: o.Blinding, B: blinding})
 }
 

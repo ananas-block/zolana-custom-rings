@@ -12,13 +12,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// PackedSlotSecret mirrors shared.PackedSlot.Secret.
-func PackedSlotSecret(t testing.TB, txViewingSk [32]byte, salt [16]byte, i int, firstNullifier *big.Int) *big.Int {
-	t.Helper()
-	keyLo, keyHi := Pack32(txViewingSk)
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.PackedSlotSecretDomain), keyLo, keyHi, new(big.Int).SetBytes(salt[:]), big.NewInt(int64(i)), firstNullifier)
-}
-
 // DeliveredSlotSecret mirrors shared.DeliveredSlot.Secret over X25519(tx_viewing_sk, u).
 func DeliveredSlotSecret(t testing.TB, txViewingSk [32]byte, u [32]byte, salt [16]byte, i int, firstNullifier *big.Int) *big.Int {
 	t.Helper()
@@ -38,26 +31,21 @@ func DeliveredSlotSecret(t testing.TB, txViewingSk [32]byte, u [32]byte, salt [1
 		new(big.Int).SetBytes(salt[:]), big.NewInt(int64(i)), firstNullifier)
 }
 
-// ConfidentialRingSecret mirrors shared.ConfidentialRingSecret.
-func ConfidentialRingSecret(t testing.TB, slotSecret *big.Int) *big.Int {
+// BlindingSeed mirrors shared.BlindingSeed.
+func BlindingSeed(t testing.TB, txViewingSk [32]byte, salt [16]byte) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ConfidentialRingSecretDomain), slotSecret)
+	keyLo, keyHi := Pack32(txViewingSk)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.BlindingSeedDomain), keyLo, keyHi, new(big.Int).SetBytes(salt[:]))
 }
 
-// AnonymousRingSecret mirrors shared.AnonymousRingSecret.
-func AnonymousRingSecret(t testing.TB, slotSecret, tag *big.Int) *big.Int {
+// AnonymousRingData mirrors shared.AnonymousRingData.
+func AnonymousRingData(t testing.TB, slotSecret, tag *big.Int) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.AnonymousRingSecretDomain), slotSecret, tag)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.AnonymousRingDataDomain), slotSecret, tag)
 }
 
-// RingBlinding mirrors shared.DeriveRingOutputBlinding.
-func RingBlinding(t testing.TB, firstNullifier, ringSecret *big.Int, i int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.RingOutputBlindingDomainV1), firstNullifier, ringSecret, big.NewInt(int64(i)))
-}
-
-// ExitBlinding is SPP's TXOB blinding of slot i under the output blinding seed.
-func ExitBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.Int {
+// OutputBlinding is SPP's TXOB blinding of slot i under the output blinding seed.
+func OutputBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.Int {
 	t.Helper()
 	blinding, err := protocol.OutputBlinding(firstNullifier, seedOut, i)
 	return spptest.MustHash(t, blinding, err)

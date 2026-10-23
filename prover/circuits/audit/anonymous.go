@@ -23,7 +23,7 @@ import (
 // 4. Every spent UTXO lies below the published input count, ahead of every dummy on a commitment key, and belongs to the hidden sender.
 // 5. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
 // 6. An inbox tag derives from the recipient's inbox key, a pair tag from an anchored first contact to the same owner, a change or dummy tag is free.
-// 7. A ring output's blinding binds its slot secret and its published tag through CRRA and TXRB.
+// 7. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes, a ring output's ring data binds its slot secret and published tag through CRAT.
 // 8. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
 // 9. The sender is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
 
@@ -56,13 +56,12 @@ type AnchorWires struct {
 	Asset  frontend.Variable
 	Amount frontend.Variable
 	// SlotSecret is the first contact's CRDS slot secret, its recipient rebuilds it from its viewing key.
-	SlotSecret     frontend.Variable
-	FirstNullifier frontend.Variable
-	SlotIndex      frontend.Variable
-	Epoch          frontend.Variable
-	Index          frontend.Variable
-	PathIndex      frontend.Variable
-	Path           [transaction.StateTreeHeight]frontend.Variable
+	SlotSecret frontend.Variable
+	Blinding   frontend.Variable
+	Epoch      frontend.Variable
+	Index      frontend.Variable
+	PathIndex  frontend.Variable
+	Path       [transaction.StateTreeHeight]frontend.Variable
 }
 
 // AnonymousAuditCircuit is the audit of anonymous transfers, one key per shape.
@@ -143,8 +142,8 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	var hashes, outputHashes, bodyHashes, tags, nullifierPks, slotBytes []frontend.Variable
 	for i, output := range c.Outputs {
 		s := slots[i]
-		// 5. A proven tag derives from its stream, every ring output blinding binds its tag.
-		c.assertTag(api, rc, output, s, pairTag, i)
+		// 5. A proven tag derives from its stream, every ring output's ring data binds its tag.
+		c.assertTag(api, rc, output, s, pairTag)
 		notExit := api.Sub(1, s.exit)
 		hashes, outputHashes = append(hashes, s.Hash), append(outputHashes, api.Mul(s.Utxo, s.Hash))
 		bodyHashes, tags = append(bodyHashes, s.bodyHash), append(tags, api.Mul(notExit, output.Stream.Tag))
@@ -180,7 +179,8 @@ func (c *AnonymousAuditCircuit) senderPkHash(api frontend.API) frontend.Variable
 func (c *AnonymousAuditCircuit) deliverSlot(api frontend.API, rc frontend.Rangechecker, e auditEnvelope, o AnonymousOutputWires, senderPkHash frontend.Variable, i int) anonymousSlot {
 	slot := openDelivered(api, o.DeliveryWires)
 	// 1. Every ring output body opens for the holder of its canonical recipient key.
-	d := c.deliver(api, e, o.DeliveryWires, slot, recipientKey(api, slot, o.RecipientKey), i)
+	d := c.deliver(api, rc, e, o.DeliveryWires, slot, recipientKey(api, slot, o.RecipientKey), i)
+	c.assertBlinding(api, e, o.Output, slot, i)
 	s := o.Stream
 	// 2. Each stream flag is a bit and a ring output takes exactly one stream, any other slot none.
 	api.AssertIsBoolean(s.Inbox)
@@ -212,16 +212,15 @@ func (c *AnonymousAuditCircuit) anchor(api frontend.API, rc frontend.Rangechecke
 	rc.Check(api.Mul(pairs, a.Index), shared.StreamIndexBits)
 	// A pair stream lives KPairEpochs from its anchor and never before it.
 	rc.Check(api.Mul(pairs, api.Sub(c.Epoch, a.Epoch)), shared.PairEpochBits)
-	// 3. Only an inbox delivery to the same owner, or that owner's own change, takes the first contact's form.
-	blinding := shared.DeriveRingOutputBlinding(api, a.FirstNullifier, shared.AnonymousRingSecret(api, a.SlotSecret, firstTag), a.SlotIndex)
+	// 3. Only an inbox delivery to the same owner, or that owner's own change, carries the first contact's ring data.
 	firstContact := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
 		Domain:        transaction.UtxoDomain,
 		Owner:         owner,
 		Asset:         a.Asset,
 		Amount:        a.Amount,
-		Blinding:      blinding,
+		Blinding:      a.Blinding,
 		DataHash:      0,
-		RingDataHash:  0,
+		RingDataHash:  shared.AnonymousRingData(api, a.SlotSecret, firstTag),
 		RingProgramID: c.RingProgramID,
 	}, a.TreeID)
 	// 4. The first contact is a leaf of the state tree the program names, without a pair slot the root stays free.
@@ -236,16 +235,17 @@ func (c *AnonymousAuditCircuit) anchor(api frontend.API, rc frontend.Rangechecke
 	return shared.PairTagDigest(api, shared.PairKey(api, a.SlotSecret), c.Epoch, index)
 }
 
-// assertTag proves an inbox or pair slot's tag and binds every ring output's tag into its blinding.
-func (c *AnonymousAuditCircuit) assertTag(api frontend.API, rc frontend.Rangechecker, o AnonymousOutputWires, s anonymousSlot, pairTag frontend.Variable, i int) {
+// assertTag proves an inbox or pair slot's tag and binds every ring output's tag into its ring data.
+func (c *AnonymousAuditCircuit) assertTag(api frontend.API, rc frontend.Rangechecker, o AnonymousOutputWires, s anonymousSlot, pairTag frontend.Variable) {
 	digest := api.Add(
 		api.Mul(s.stream.Inbox, shared.InboxTagDigest(api, s.inboxKey, c.Epoch, s.stream.Index)),
 		api.Mul(s.stream.Pair, pairTag),
 	)
 	// 1. A proven tag is low128 of its stream digest, TagField refuses the split of digest + q.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Add(s.stream.Inbox, s.stream.Pair), A: s.stream.Tag, B: shared.TagField(api, rc, digest)})
-	// 2. The ring secret binds the published tag, an anchor reads a first contact's tag back from its blinding.
-	c.assertBlinding(api, o.Output, s.outputSlot, shared.AnonymousRingSecret(api, s.secret, s.stream.Tag), i)
+	// 2. The ring data binds the published tag, an anchor reads a first contact's tag back from it.
+	ringData := api.Mul(s.ring, shared.AnonymousRingData(api, s.secret, s.stream.Tag))
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: s.Utxo, A: o.Output.RingDataHash, B: ringData})
 }
 
 // spend proves every spent UTXO is the hidden sender's and lies below the published count.
@@ -307,7 +307,7 @@ func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 		head = slices.Concat([]frontend.Variable{c.Inputs[0].NullifierPk}, head, shared.PackDisclosure(api, spent.amounts))
 	}
 	return e.disclose(api, layout.choices(api, LayoutExits), func(choice layoutChoice) disclosureLayout {
-		return choice.counted(api, slices.Concat(c.seedOut(choice), head), spent.tail, spent.count)
+		return choice.counted(api, slices.Concat(e.seedOut(choice), head), spent.tail, spent.count)
 	})
 }
 

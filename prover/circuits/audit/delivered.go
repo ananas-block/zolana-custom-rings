@@ -6,6 +6,7 @@ import (
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -15,8 +16,8 @@ import (
 // 1. tx_viewing_sk is clamped, its tagged public key and the envelope sealing it to the auditor are statement values.
 // 2. The output chain covers every slot, a delivered transfer publishes no prefix.
 // 3. Every UTXO is a ring output or an exit and carries no output data.
-// 4. A ring output's body encrypts asset_address ‖ u64be(amount) under its CRDS slot secret for the holder of its canonical recipient key and the auditor.
-// 5. A ring output's blinding derives from that slot secret through CRRC and TXRB, an exit's from SeedOut through TXOB.
+// 4. A ring output's body encrypts be32(blinding) ‖ u64be(amount) under its CRDS slot secret for the holder of its canonical recipient key and the auditor.
+// 5. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 6. The disclosure opens a ring output's owner key and every UTXO's nullifier key, LayoutEscrow leaves the keys to the policy's escrow records.
 // 7. Every exit discloses its full opening, SeedOut and slots of 40 bytes appear exactly when a UTXO exits.
 
@@ -50,9 +51,10 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	for i, output := range c.Outputs {
 		// 2. Every ring output body opens for the holder of its published recipient key.
 		slots[i] = openDelivered(api, output)
-		d := c.deliver(api, envelope, output, slots[i], recipientKey(api, slots[i], output.RecipientKey), i)
-		// 3. The ring secret derives from the slot secret the recipient rebuilds.
-		c.assertBlinding(api, output.Output, slots[i], shared.ConfidentialRingSecret(api, d.secret), i)
+		d := c.deliver(api, rc, envelope, output, slots[i], recipientKey(api, slots[i], output.RecipientKey), i)
+		// 3. The auditor rebuilds every blinding from tx_viewing_sk, no UTXO carries ring data.
+		c.assertBlinding(api, envelope, output.Output, slots[i], i)
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slots[i].Utxo, V: output.Output.RingDataHash})
 		hashes, bodyHashes = append(hashes, d.Hash), append(bodyHashes, d.bodyHash)
 		// 4. The program rebuilds the owner tag from the published key, a ring output's key bytes are the ones ECDH bounds.
 		key, notExit := shared.PackBounded(api, output.RecipientKey[:]), api.Sub(1, slots[i].exit)
@@ -92,7 +94,7 @@ func (c *DeliveredAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 		if choice.has(LayoutExits) {
 			slots = wide
 		}
-		return choice.fixed(slices.Concat(c.seedOut(choice), keys, slots))
+		return choice.fixed(slices.Concat(e.seedOut(choice), keys, slots))
 	})
 }
 

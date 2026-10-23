@@ -41,12 +41,10 @@ func DeliveredAuditOf(t testing.TB, capacity int, exits ...int) DeliveredAudit {
 	return d
 }
 
-// NewConfidentialOutput delivers slot i to fixture recipient i mod 3 under its CRRC ring secret.
+// NewConfidentialOutput delivers slot i to fixture recipient i mod 3 with no ring data.
 func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
-	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(secret *big.Int) *big.Int {
-		return ringprotocol.ConfidentialRingSecret(t, secret)
-	})
+	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(*big.Int) *big.Int { return big.NewInt(0) })
 }
 
 // Statement mirrors the delivered audit preimage, head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain.
