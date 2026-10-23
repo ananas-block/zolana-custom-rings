@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use custom_ring_photon::{CustomRingMigrator, CustomRings};
-use photon_indexer::{Extension, PhotonArgs};
+use custom_ring_photon::CustomRings;
+use photon_indexer::{migration::RingsMigrator, Extension, PhotonArgs};
 
 /// Photon: the Rings indexer, with the custom ring indexer
 #[derive(Parser)]
@@ -30,5 +30,5 @@ async fn main() -> Result<()> {
             start_slot: cli.custom_rings_start_slot,
         })]
     };
-    photon_indexer::run::<CustomRingMigrator>(cli.photon, &extensions).await
+    photon_indexer::run::<RingsMigrator>(cli.photon, &extensions).await
 }

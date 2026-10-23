@@ -9,7 +9,7 @@ import (
 	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	spp "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/ring"
+	spp "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/custom"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -68,7 +68,7 @@ func TestWindowedPolicyRejectsNamespaceAddressClaim(t *testing.T) {
 	}
 
 	shape := shared.Shape{NInputs: len(s.inputs), NOutputs: len(s.outputs)}
-	assignment, err := spp.NewRingConfidentialEddsaCircuit(shape)
+	assignment, err := spp.NewCustomRingConfidentialEddsaCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestWindowedPolicyRejectsNamespaceAddressClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	circuit, err := spp.NewRingConfidentialEddsaCircuit(shape)
+	circuit, err := spp.NewCustomRingConfidentialEddsaCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}

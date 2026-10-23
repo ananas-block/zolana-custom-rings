@@ -5,7 +5,7 @@ use super::{
 use crate::{
     storage::{BlockJournal, BlockUndo},
     tests::{field, indexer, member},
-    CustomRingMigrator, Invocations, StartSlot,
+    Invocations, StartSlot,
 };
 use jsonrpsee::server::ServerHandle;
 use photon_indexer::{
@@ -15,7 +15,7 @@ use photon_indexer::{
             BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo,
         },
     },
-    migration::MigratorTrait,
+    migration::{MigratorTrait, RingsMigrator},
 };
 use sea_orm::Database;
 use serde_json::json;
@@ -29,7 +29,7 @@ const PROGRAM: [u8; 32] = [11; 32];
 
 async fn fixture() -> (DatabaseConnection, CustomRingCursor) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    CustomRingMigrator::up(&db, None).await.unwrap();
+    RingsMigrator::up(&db, None).await.unwrap();
     let cursor = CustomRingCursor::new(0);
     storage::save_cursor(&db, &cursor).await.unwrap();
     SpendStore::new(&db, PROGRAM).open().await.unwrap();

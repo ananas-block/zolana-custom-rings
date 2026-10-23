@@ -1,7 +1,6 @@
-use custom_ring_photon::CustomRingMigrator;
-use photon_indexer::migration::cli;
+use photon_indexer::migration::{cli, RingsMigrator};
 
 #[tokio::main]
 async fn main() {
-    cli::main::<CustomRingMigrator>().await
+    cli::main::<RingsMigrator>().await
 }

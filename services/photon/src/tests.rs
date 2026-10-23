@@ -1,7 +1,7 @@
 use super::*;
 use photon_indexer::{
     ingester::typedefs::block_info::{BlockMetadata, InstructionGroup, TransactionInfo},
-    migration::MigratorTrait,
+    migration::{MigratorTrait, RingsMigrator},
 };
 use sea_orm::Database;
 use solana_signature::Signature;
@@ -22,7 +22,7 @@ pub(super) fn member(value: u8) -> [u8; 32] {
 
 pub(super) async fn fixture() -> (DatabaseConnection, RingRoot, CustomRingCursor) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    CustomRingMigrator::up(&db, None).await.unwrap();
+    RingsMigrator::up(&db, None).await.unwrap();
     let mut cursor = CustomRingCursor::new(0);
     let root = initialize_root(&db, &mut cursor, [11; 32]).await;
     storage::save_cursor(&db, &cursor).await.unwrap();

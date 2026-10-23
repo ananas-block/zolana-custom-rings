@@ -4,7 +4,6 @@ mod api;
 mod error;
 mod extension;
 mod key_registry;
-pub mod migration;
 mod proof;
 mod spend_record;
 mod storage;
@@ -28,7 +27,6 @@ use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
 pub use error::RingApiError;
 pub use extension::CustomRings;
 use key_registry::{MemberKey, Registration};
-pub use migration::CustomRingMigrator;
 use photon_indexer::{
     ingester::typedefs::block_info::{
         parse_ui_confirmed_blocked, BlockInfo, BlockMetadata, Instruction, InstructionGroup,
