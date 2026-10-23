@@ -1,0 +1,3 @@
+[submodule "zolana"]
+	path = zolana
+	url = https://github.com/helius-labs/zolana

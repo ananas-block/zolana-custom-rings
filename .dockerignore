@@ -1,0 +1,9 @@
+target/
+**/target/
+.git/
+node_modules/
+**/node_modules/
+zolana/prover/server/proving-keys/
+zolana/prover/server/formal-verification/
+test-ledger/
+.env

@@ -1,0 +1,26 @@
+# cargo-nextest configuration, the profiles mirror zolana/.config/nextest.toml.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 10 }
+failure-output = "immediate-final"
+final-status-level = "slow"
+
+[profile.ci]
+retries = 0
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "slow"
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+# Validator suites bind fixed ports, one at a time.
+[test-groups]
+serial-validator = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "package(custom-ring-test-validator)"
+test-group = "serial-validator"
+
+[[profile.ci.overrides]]
+filter = "package(custom-ring-test-validator)"
+test-group = "serial-validator"
+retries = 2
