@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"crypto/ecdh"
@@ -9,18 +9,18 @@ import (
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
 
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base/audittest"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base/audittest"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
 func TestCustomRingProofVerifies(t *testing.T) {
-	loadedSystem := loadRingSystem(t, common.CustomRingPolicyKeyFile)
+	loadedSystem := loadRingSystem(t, CustomRingPolicyKeyFile)
 	params := rulesFreeParams(t)
-	proof, err := RingProof{System: loadedSystem, Parameters: params}.Prove()
+	proof, err := common.ExtensionProof{System: loadedSystem, Request: params}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +38,9 @@ func TestCustomRingProofVerifies(t *testing.T) {
 }
 
 func TestAuditProofVerifies(t *testing.T) {
-	ps := loadRingSystem(t, common.CustomRingBaseKeyFile)
+	ps := loadRingSystem(t, CustomRingBaseKeyFile)
 	params := baseParams(t)
-	proof, err := RingProof{System: ps, Parameters: params}.Prove()
+	proof, err := common.ExtensionProof{System: ps, Request: params}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}

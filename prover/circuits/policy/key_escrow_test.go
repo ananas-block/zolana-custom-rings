@@ -4,16 +4,17 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // Registers every UTXO output's key and turns escrow on.
-func (s *statement) escrowOutputs(t *testing.T) *spptest.KeyRegistry {
+func (s *statement) escrowOutputs(t *testing.T) *ringtest.KeyRegistry {
 	t.Helper()
-	keys := spptest.NewKeyRegistry(t, registry.Height)
-	registered := make([]*spptest.RegisteredKey, len(s.outputs))
+	keys := ringtest.NewKeyRegistry(t, registry.Height)
+	registered := make([]*ringtest.RegisteredKey, len(s.outputs))
 	for i, output := range s.outputs {
 		if spptest.AsBigInt(output.Domain).Int64() != protocol.UtxoDomain {
 			continue
@@ -31,7 +32,7 @@ func (s *statement) escrowOutputs(t *testing.T) *spptest.KeyRegistry {
 	return keys
 }
 
-func keyOpening(keys *spptest.KeyRegistry, key spptest.RegisteredKey) *registry.KeyOpening {
+func keyOpening(keys *ringtest.KeyRegistry, key ringtest.RegisteredKey) *registry.KeyOpening {
 	opening := &registry.KeyOpening{Next: key.Next, CtHash: key.CtHash, Index: key.Index}
 	for i, node := range keys.Path(key.Index) {
 		opening.Path[i] = new(big.Int).Set(&node)
@@ -48,7 +49,7 @@ func TestOutputKeysMustBeEscrowed(t *testing.T) {
 		{"registered key beside a keyless dummy output", func(t *testing.T, s *statement) { s.escrowOutputs(t) }, true},
 		{"zero key for a member without a registration", func(t *testing.T, s *statement) {
 			s.outputs[0].NullifierPk = registry.ZeroNullifierPk
-			s.keyEscrow, s.keyRegistryRoot = true, spptest.NewKeyRegistry(t, registry.Height).Root()
+			s.keyEscrow, s.keyRegistryRoot = true, ringtest.NewKeyRegistry(t, registry.Height).Root()
 		}, false},
 		{"unregistered key with escrow off", func(*testing.T, *statement) {}, true},
 		{"unregistered key", func(t *testing.T, s *statement) {

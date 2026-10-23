@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"math/big"
@@ -7,9 +7,9 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/deposit"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
 func zeroedKeyPath() [registry.Height]*big.Int {
@@ -21,10 +21,10 @@ func zeroedKeyPath() [registry.Height]*big.Int {
 }
 
 // Registers every occupied slot's key and turns escrow on.
-func escrowDeposits(t *testing.T, p *DepositParameters) *spptest.KeyRegistry {
+func escrowDeposits(t *testing.T, p *DepositParameters) *ringtest.KeyRegistry {
 	t.Helper()
-	keys := spptest.NewKeyRegistry(t, registry.Height)
-	registered := make([]spptest.RegisteredKey, p.Count)
+	keys := ringtest.NewKeyRegistry(t, registry.Height)
+	registered := make([]ringtest.RegisteredKey, p.Count)
 	for i := range registered {
 		registered[i] = keys.Register(t, p.OwnerPkHashes[i], p.NullifierPks[i], big.NewInt(int64(0xc0+i)))
 	}
@@ -35,7 +35,7 @@ func escrowDeposits(t *testing.T, p *DepositParameters) *spptest.KeyRegistry {
 	return keys
 }
 
-func registryKey(keys *spptest.KeyRegistry, key spptest.RegisteredKey) *RegistryKey {
+func registryKey(keys *ringtest.KeyRegistry, key ringtest.RegisteredKey) *RegistryKey {
 	opening := &RegistryKey{Next: key.Next, CtHash: key.CtHash, Index: key.Index}
 	for i, node := range keys.Path(key.Index) {
 		opening.Path[i] = new(big.Int).Set(&node)

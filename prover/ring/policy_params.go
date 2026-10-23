@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/hex"
@@ -11,10 +11,10 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/iden3/go-iden3-crypto/poseidon"
 
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -241,7 +241,7 @@ func (p *PolicyParameters) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	raw := policyParametersJSON{
-		CircuitType:          string(common.CustomRingPolicyCircuitType),
+		CircuitType:          string(CustomRingPolicyCircuitType),
 		PublicInputHash:      common.ToHex(p.PublicInputHash),
 		PrivateTxHash:        common.ToHex(p.PrivateTxHash),
 		Anonymous:            p.Anonymous,
@@ -319,7 +319,7 @@ func (p *PolicyParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if raw.CircuitType != string(common.CustomRingPolicyCircuitType) {
+	if raw.CircuitType != string(CustomRingPolicyCircuitType) {
 		return fmt.Errorf("custom-ring-policy: unexpected circuitType %q", raw.CircuitType)
 	}
 	if raw.NIn == 0 || int(raw.NIn) > policy.NInputs {

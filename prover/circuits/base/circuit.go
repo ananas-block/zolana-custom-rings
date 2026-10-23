@@ -21,7 +21,7 @@
 //  12. anonymous          -- ring mode, selecting full spend disclosure
 //
 // The on-chain Rust recompute in
-// custom-rings/program/src/instructions/transact.rs
+// programs/custom-ring/src/instructions/transact.rs
 // (CustomRingBasePublicInput::hash) MUST mirror this chain order element for element:
 // gadget.HashChain here == zolana_hasher::hash_chain::create_hash_chain_from_slice
 // there, gadget.HashBytes here == zolana_hasher::primitives::hash_bytes

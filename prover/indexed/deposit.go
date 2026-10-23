@@ -5,18 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ring"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
-	ring "github.com/helius-labs/zolana/prover/server/prover/custom_ring"
+	zolana "github.com/helius-labs/zolana/prover/server/prover/indexed"
 	"github.com/helius-labs/zolana/prover/server/prover/timing"
 )
 
-func decodeDeposit(data []byte) (Request, *ring.DepositParameters, error) {
-	request, err := decodeEnvelope(data)
+func decodeDepositRequest(data []byte) (zolana.Resolution, error) {
+	request, params, err := decodeDeposit(data)
 	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, r *zolana.Resolver) (*zolana.Resolved, error) {
+		return resolveDeposit(ctx, r, request, params)
+	}, nil
+}
+
+func decodeDeposit(data []byte) (request, *ring.DepositParameters, error) {
+	var request request
+	if err := zolana.DecodeEnvelope(data, &request); err != nil {
 		return request, nil, err
 	}
-	if request.CircuitType != common.CustomRingDepositCircuitType || len(request.Trees) != 0 || len(request.Inputs) != 0 || len(request.PublicInputs) != 1 {
+	if request.CircuitType != ring.CustomRingDepositCircuitType || len(request.Trees) != 0 || len(request.Inputs) != 0 || len(request.PublicInputs) != 1 {
 		return request, nil, fmt.Errorf("invalid indexed deposit")
 	}
 	var base map[string]json.RawMessage
@@ -53,24 +64,17 @@ func decodeDeposit(data []byte) (Request, *ring.DepositParameters, error) {
 	return request, &params, nil
 }
 
-func (r *Resolver) resolveDeposit(ctx context.Context, data []byte) (*Resolved, error) {
-	finish := timing.FromContext(ctx).Start("indexer_decode")
-	request, params, err := decodeDeposit(data)
-	finish()
+func resolveDeposit(ctx context.Context, r *zolana.Resolver, request request, params *ring.DepositParameters) (*zolana.Resolved, error) {
+	release, err := r.Admit(ctx)
 	if err != nil {
 		return nil, err
 	}
-	select {
-	case r.permits <- struct{}{}:
-		defer func() { <-r.permits }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	finish = timing.FromContext(ctx).Start("indexer_fetch")
+	defer release()
+	finish := timing.FromContext(ctx).Start("indexer_fetch")
 	defer finish()
-	keys := make(map[Hash]*ring.RegistryKey)
+	keys := make(map[zolana.Hash]*ring.RegistryKey)
 	for i := range int(params.Count) {
-		params.Keys[i], err = r.registryKey(ctx, request, keys, params.OwnerPkHashes[i], params.NullifierPks[i])
+		params.Keys[i], err = registryKey(ctx, r, request, keys, params.OwnerPkHashes[i], params.NullifierPks[i])
 		if err != nil {
 			return nil, err
 		}
@@ -79,5 +83,5 @@ func (r *Resolver) resolveDeposit(ctx context.Context, data []byte) (*Resolved, 
 	if err != nil {
 		return nil, err
 	}
-	return &Resolved{Payload: payload, Resolution: &common.ProofResolution{Trees: []common.ResolvedTree{}, PublicInputHash: common.FeHex(params.PublicInputHash)}}, nil
+	return &zolana.Resolved{Payload: payload, Resolution: &common.ProofResolution{Trees: []common.ResolvedTree{}, PublicInputHash: common.FeHex(params.PublicInputHash)}}, nil
 }

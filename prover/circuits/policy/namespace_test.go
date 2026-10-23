@@ -8,7 +8,8 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	spp "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/custom"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	spp "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/ring"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -67,7 +68,7 @@ func TestWindowedPolicyRejectsNamespaceAddressClaim(t *testing.T) {
 	}
 
 	shape := shared.Shape{NInputs: len(s.inputs), NOutputs: len(s.outputs)}
-	assignment, err := spp.NewCustomRingConfidentialEddsaCircuit(shape)
+	assignment, err := spp.NewRingConfidentialEddsaCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestWindowedPolicyRejectsNamespaceAddressClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	circuit, err := spp.NewCustomRingConfidentialEddsaCircuit(shape)
+	circuit, err := spp.NewRingConfidentialEddsaCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestWindowedPolicyRejectsNamespaceAddressClaim(t *testing.T) {
 	for i, b := range policy.TxViewingSk {
 		secret[i] = byte(spptest.AsBigInt(b).Uint64())
 	}
-	disclosure := spptest.CounterDisclosure{Secret: secret, CounterSalt: s.record.nextSalt, Assets: s.record.assets, Spent: s.record.nextSpent}.Hash(t)
+	disclosure := ringtest.CounterDisclosure{Secret: secret, CounterSalt: s.record.nextSalt, Assets: s.record.assets, Spent: s.record.nextSpent}.Hash(t)
 	policy.PublicInputHash = spptest.MustHashChain(t, append(s.policyChainElements(t, nil), disclosure))
 	compressed := &CompressedPolicyCircuit{Policy: *policy}
 	for i := range compressed.TransactionSalt {

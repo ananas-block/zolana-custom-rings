@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"math/big"
@@ -7,7 +7,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 

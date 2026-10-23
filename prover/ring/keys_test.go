@@ -1,15 +1,19 @@
-package custom_ring
+package ring
 
 import (
 	"bytes"
+	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark/constraint"
 
 	"github.com/helius-labs/zolana/prover/server/prover/common"
+	"github.com/helius-labs/zolana/prover/server/prover/provingkeys"
 )
 
 func TestRingKeysCarryTheCompiledCircuits(t *testing.T) {
@@ -18,12 +22,12 @@ func TestRingKeysCarryTheCompiledCircuits(t *testing.T) {
 		file    string
 		compile func() (constraint.ConstraintSystem, error)
 	}{
-		{name: string(common.CustomRingPolicyCircuitType), file: common.CustomRingPolicyKeyFile, compile: R1CSPolicy},
-		{name: string(common.CustomRingBaseCircuitType), file: common.CustomRingBaseKeyFile, compile: R1CSBase},
-		{name: string(common.CustomRingDelegatePolicyCircuitType), file: common.CustomRingDelegatePolicyKeyFile, compile: R1CSDelegatePolicy},
-		{name: string(common.CustomRingCompressedPolicyCircuitType), file: common.CustomRingCompressedPolicyKeyFile, compile: R1CSCompressedPolicy},
-		{name: string(common.CustomRingKeyRegisterCircuitType), file: common.CustomRingKeyRegisterKeyFile, compile: R1CSKeyRegister},
-		{name: string(common.CustomRingDepositCircuitType), file: common.CustomRingDepositKeyFile, compile: R1CSDeposit},
+		{name: string(CustomRingPolicyCircuitType), file: CustomRingPolicyKeyFile, compile: R1CSPolicy},
+		{name: string(CustomRingBaseCircuitType), file: CustomRingBaseKeyFile, compile: R1CSBase},
+		{name: string(CustomRingDelegatePolicyCircuitType), file: CustomRingDelegatePolicyKeyFile, compile: R1CSDelegatePolicy},
+		{name: string(CustomRingCompressedPolicyCircuitType), file: CustomRingCompressedPolicyKeyFile, compile: R1CSCompressedPolicy},
+		{name: string(CustomRingKeyRegisterCircuitType), file: CustomRingKeyRegisterKeyFile, compile: R1CSKeyRegister},
+		{name: string(CustomRingDepositCircuitType), file: CustomRingDepositKeyFile, compile: R1CSDeposit},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -47,14 +51,19 @@ func TestRingKeysCarryTheCompiledCircuits(t *testing.T) {
 	}
 }
 
-// Skips the test when proving-keys/<file> is absent.
-func loadRingSystem(t *testing.T, file string) *common.RingProofSystem {
+func decodeRequest(circuit common.ExtensionCircuit, payload []byte) (common.ExtensionRequest, error) {
+	request := circuit.Request()
+	return request, json.Unmarshal(payload, request)
+}
+
+// Skips the test when the workspace key cache has no <file>.
+func loadRingSystem(t *testing.T, file string) *common.ExtensionProofSystem {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("source path unavailable")
 	}
-	path := filepath.Join(filepath.Dir(source), "..", "..", "proving-keys", file)
+	path := filepath.Join(filepath.Dir(source), "..", "..", "zolana", "prover", "server", "proving-keys", file)
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("%s is not available", file)
 	}
@@ -62,9 +71,21 @@ func loadRingSystem(t *testing.T, file string) *common.RingProofSystem {
 	if err != nil {
 		t.Fatal(err)
 	}
-	system, ok := loaded.(*common.RingProofSystem)
+	system, ok := loaded.(*common.ExtensionProofSystem)
 	if !ok {
 		t.Fatalf("unexpected proof system %T", loaded)
 	}
 	return system
+}
+
+// A proof's path names its key file, the provers must name exactly the pinned keys.
+func TestKeyFilesAreTheLockfileKeys(t *testing.T) {
+	manifest, err := provingkeys.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := slices.Sorted(maps.Keys(manifest.Keys))
+	if got := common.KeyFiles(); !slices.Equal(got, pinned) {
+		t.Fatalf("key files %v, lockfiles %v", got, pinned)
+	}
 }

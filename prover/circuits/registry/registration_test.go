@@ -9,7 +9,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
 func proofVars(proof []big.Int) []frontend.Variable {
@@ -54,7 +54,7 @@ func registrationCircuit() *insertionCircuit {
 
 func registrationAssignment(t *testing.T, member, key *big.Int) *insertionCircuit {
 	t.Helper()
-	insertion := spptest.NewKeyRegistryTree(t, Height).Register(t, member, key)
+	insertion := ringtest.NewKeyRegistryTree(t, Height).Register(t, member, key)
 	return &insertionCircuit{
 		OldRoot:        insertion.OldRoot,
 		RegisteredRoot: insertion.NewRoot,
@@ -70,10 +70,10 @@ func registrationAssignment(t *testing.T, member, key *big.Int) *insertionCircui
 	}
 }
 
-// custom-rings/interface/src/state.rs KEY_REGISTRY_EMPTY_ROOT.
+// program-libs/interface/src/state.rs KEY_REGISTRY_EMPTY_ROOT.
 func TestSentinelRootMatchesProgram(t *testing.T) {
 	const programEmptyRoot = "03a753cd12b351201070a629c59b9a162c53a1fd33a138cbd6be814bfcfe980e"
-	if got := fmt.Sprintf("%064x", spptest.NewKeyRegistryTree(t, Height).Root()); got != programEmptyRoot {
+	if got := fmt.Sprintf("%064x", ringtest.NewKeyRegistryTree(t, Height).Root()); got != programEmptyRoot {
 		t.Fatalf("sentinel root %s, the program pins %s", got, programEmptyRoot)
 	}
 }
@@ -90,7 +90,7 @@ func TestInsertionRejectsMisorderedMember(t *testing.T) {
 		member *big.Int
 	}{
 		{"member equal to the predecessor", big.NewInt(0)},
-		{"member equal to the predecessor successor", spptest.KeyRegistrySentinelNext()},
+		{"member equal to the predecessor successor", ringtest.KeyRegistrySentinelNext()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

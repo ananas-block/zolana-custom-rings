@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/json"
@@ -9,18 +9,19 @@ import (
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
 func TestCompressedSuccessorProofVerifies(t *testing.T) {
-	transferSystem := loadRingSystem(t, common.CustomRingCompressedPolicyKeyFile)
+	transferSystem := loadRingSystem(t, CustomRingCompressedPolicyKeyFile)
 	var decodedTransfer CompressedPolicyParameters
 	roundTripProofParameters(t, compressedProofParameters(t, nil), &decodedTransfer)
-	transferProof, err := RingProof{System: transferSystem, Parameters: &decodedTransfer}.Prove()
+	transferProof, err := common.ExtensionProof{System: transferSystem, Request: &decodedTransfer}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +43,10 @@ func TestCompressedProofResetsExpiredCountersWithoutTheirOpening(t *testing.T) {
 		unknownCounters(p)
 		p.Record.Window--
 	})
-	ps := loadRingSystem(t, common.CustomRingCompressedPolicyKeyFile)
+	ps := loadRingSystem(t, CustomRingCompressedPolicyKeyFile)
 	var decoded CompressedPolicyParameters
 	roundTripProofParameters(t, transfer, &decoded)
-	proof, err := RingProof{System: ps, Parameters: &decoded}.Prove()
+	proof, err := common.ExtensionProof{System: ps, Request: &decoded}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +63,12 @@ func TestCompressedProofResetsExpiredCountersWithoutTheirOpening(t *testing.T) {
 		t.Fatal(err)
 	}
 	rejectInstalledProof(t, ps, proof, staleWindow)
-	if _, err := (RingProof{System: ps, Parameters: &decoded}).Prove(); err == nil {
+	if _, err := (common.ExtensionProof{System: ps, Request: &decoded}).Prove(); err == nil {
 		t.Fatal("an expired successor was proven under the predecessor window")
 	}
 
 	live := compressedProofParameters(t, unknownCounters)
-	if _, err := (RingProof{System: ps, Parameters: live}).Prove(); err == nil {
+	if _, err := (common.ExtensionProof{System: ps, Request: live}).Prove(); err == nil {
 		t.Fatal("a live record was proven without its counter opening")
 	}
 }
@@ -76,15 +77,15 @@ func TestDelegateProofVerifiesAboveCommittedWindowCap(t *testing.T) {
 	p := rulesFreeParams(t)
 	p.WindowSlots, p.VelocityCount = 100, 1
 	p.Velocity[0] = VelocityRow{Asset: p.Inputs[0].Asset, Cap: big.NewInt(1), CosignAbove: big.NewInt(1)}
-	keys := spptest.NewKeyRegistry(t, registry.Height)
+	keys := ringtest.NewKeyRegistry(t, registry.Height)
 	p.Outputs[0].Key = registryKey(keys, keys.Register(t, p.Outputs[0].OwnerPkHash, p.Outputs[0].NullifierPk, big.NewInt(0x4b)))
 	p.KeyEscrow = KeyEscrow{Enabled: true, Root: keys.Root()}
 	bindRulesFreeStatement(t, p)
 	params := DelegatePolicyParameters{Policy: *p}
 	var decoded DelegatePolicyParameters
 	roundTripProofParameters(t, &params, &decoded)
-	ps := loadRingSystem(t, common.CustomRingDelegatePolicyKeyFile)
-	proof, err := RingProof{System: ps, Parameters: &decoded}.Prove()
+	ps := loadRingSystem(t, CustomRingDelegatePolicyKeyFile)
+	proof, err := common.ExtensionProof{System: ps, Request: &decoded}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestDelegateProofVerifiesAboveCommittedWindowCap(t *testing.T) {
 	}
 	assignment := &policy.CustomRingDelegatePolicyCircuit{Policy: *base}
 	verifyInstalledProof(t, ps, proof, assignment)
-	rejectInstalledProof(t, loadRingSystem(t, common.CustomRingPolicyKeyFile), proof, assignment)
+	rejectInstalledProof(t, loadRingSystem(t, CustomRingPolicyKeyFile), proof, assignment)
 }
 
 func roundTripProofParameters(t *testing.T, source, target any) {
@@ -108,21 +109,21 @@ func roundTripProofParameters(t *testing.T, source, target any) {
 	}
 }
 
-func verifyInstalledProof(t *testing.T, ps *common.RingProofSystem, proof *common.Proof, assignment frontend.Circuit) {
+func verifyInstalledProof(t *testing.T, ps *common.ExtensionProofSystem, proof *common.Proof, assignment frontend.Circuit) {
 	t.Helper()
 	if err := verifyProofAssignment(ps, proof, assignment); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func rejectInstalledProof(t *testing.T, ps *common.RingProofSystem, proof *common.Proof, assignment frontend.Circuit) {
+func rejectInstalledProof(t *testing.T, ps *common.ExtensionProofSystem, proof *common.Proof, assignment frontend.Circuit) {
 	t.Helper()
 	if err := verifyProofAssignment(ps, proof, assignment); err == nil {
 		t.Fatal("proof admitted under a different statement or rail")
 	}
 }
 
-func verifyProofAssignment(ps *common.RingProofSystem, proof *common.Proof, assignment frontend.Circuit) error {
+func verifyProofAssignment(ps *common.ExtensionProofSystem, proof *common.Proof, assignment frontend.Circuit) error {
 	witness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField(), frontend.PublicOnly())
 	if err != nil {
 		return err
@@ -184,7 +185,7 @@ func proofCounters(t *testing.T, salt, asset, spent *big.Int) *big.Int {
 }
 
 func compressedDisclosure(t *testing.T, p *CompressedPolicyParameters) *big.Int {
-	return (spptest.CounterDisclosure{Secret: p.Base.TxViewingSk, TransactionSalt: p.TransactionSalt,
+	return (ringtest.CounterDisclosure{Secret: p.Base.TxViewingSk, TransactionSalt: p.TransactionSalt,
 		CounterSalt: p.Base.Record.NextSalt, Assets: []*big.Int{p.Base.Velocity[0].Asset},
 		Spent: []uint64{p.Base.Inputs[0].Amount.Uint64()}}).Hash(t)
 }

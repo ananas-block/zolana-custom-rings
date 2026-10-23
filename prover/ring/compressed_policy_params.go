@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/hex"
@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
-	"github.com/helius-labs/zolana/prover/server/prover/common"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 )
 
 type CompressedPolicyParameters struct {
@@ -27,7 +26,7 @@ func (p *CompressedPolicyParameters) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(compressedPolicyParametersJSON{
-		CircuitType:     string(common.CustomRingCompressedPolicyCircuitType),
+		CircuitType:     string(CustomRingCompressedPolicyCircuitType),
 		Policy:          base,
 		TransactionSalt: "0x" + hex.EncodeToString(p.TransactionSalt[:]),
 	})
@@ -38,7 +37,7 @@ func (p *CompressedPolicyParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if raw.CircuitType != string(common.CustomRingCompressedPolicyCircuitType) {
+	if raw.CircuitType != string(CustomRingCompressedPolicyCircuitType) {
 		return fmt.Errorf("custom-ring-compressed-policy: unexpected circuitType %q", raw.CircuitType)
 	}
 	if err := json.Unmarshal(raw.Policy, &p.Base); err != nil {

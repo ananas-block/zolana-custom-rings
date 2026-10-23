@@ -13,8 +13,8 @@ import (
 	"github.com/consensys/gnark/test"
 )
 
-// Written by custom-rings/policy/tests/policy_hash_corpus.rs.
-const corpusPath = "../../../../../custom-rings/policy/tests/fixtures/policy-hash-corpus.json"
+// Written by program-libs/policy/tests/policy_hash_corpus.rs.
+const corpusPath = "../../../program-libs/policy/tests/fixtures/policy-hash-corpus.json"
 
 type corpus struct {
 	Version uint8        `json:"version"`

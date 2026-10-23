@@ -6,9 +6,9 @@ package policy
 import (
 	"github.com/consensys/gnark/frontend"
 
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
 )
 
 // UtxoWires supplies a transaction slot's fields for hash binding and

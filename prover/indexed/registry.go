@@ -7,17 +7,30 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/ring"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
-	ring "github.com/helius-labs/zolana/prover/server/prover/custom_ring"
+	zolana "github.com/helius-labs/zolana/prover/server/prover/indexed"
 	"github.com/helius-labs/zolana/prover/server/prover/transcript"
 )
 
 type RegistryRequest struct {
-	Ring      string `json:"ringProgramId"`
-	Root      Hash   `json:"root"`
-	NextIndex uint64 `json:"nextIndex"`
+	Ring      zolana.Hash `json:"ringProgramId"`
+	Root      zolana.Hash `json:"root"`
+	NextIndex uint64      `json:"nextIndex"`
+}
+
+type request struct {
+	zolana.Request
+	Registry *RegistryRequest `json:"registry,omitempty"`
+}
+
+func init() {
+	zolana.Register(ring.CustomRingDepositCircuitType, decodeDepositRequest)
+	for _, circuit := range policyCircuits {
+		zolana.Register(circuit, decodePolicyRequest)
+	}
 }
 
 func prepareRegistry(base map[string]json.RawMessage, request *RegistryRequest) error {
@@ -52,10 +65,7 @@ func validateRegistryAnchor(base map[string]json.RawMessage, request *RegistryRe
 	if request == nil {
 		return fmt.Errorf("missing registry anchor")
 	}
-	if _, err := decodeHash(request.Ring); err != nil {
-		return err
-	}
-	root, err := request.Root.field()
+	root, err := request.Root.Field()
 	if err != nil || request.NextIndex < 1 || request.NextIndex > 1<<registry.Height {
 		return fmt.Errorf("invalid registry anchor")
 	}
@@ -80,35 +90,28 @@ func registryPlaceholder() json.RawMessage {
 	return value
 }
 
-var errMemberUnregistered = errors.New("registry member missing")
-
-type UnregisteredMemberError struct {
-	Member   Hash
-	mismatch bool
-}
-
-func (e *UnregisteredMemberError) Error() string {
-	return fmt.Sprintf("registry member %s missing", e.Member)
+func unregistered(member zolana.Hash, outcome string) error {
+	return &zolana.Rejection{Outcome: outcome, Code: "registry_member_missing", Message: "Output owner has no registered key", Detail: map[string]string{"member": member.String()}}
 }
 
 type registryEntry struct {
 	Context struct {
 		Slot uint64 `json:"slot"`
 	} `json:"context"`
-	Root       Hash   `json:"root"`
-	Member     Hash   `json:"member"`
-	Next       Hash   `json:"next"`
-	NextIndex  uint64 `json:"nextIndex"`
-	Index      uint64 `json:"index"`
-	Ciphertext []byte `json:"ciphertext"`
-	Proof      []Hash `json:"proof"`
+	Root       zolana.Hash   `json:"root"`
+	Member     zolana.Hash   `json:"member"`
+	Next       zolana.Hash   `json:"next"`
+	NextIndex  uint64        `json:"nextIndex"`
+	Index      uint64        `json:"index"`
+	Ciphertext []byte        `json:"ciphertext"`
+	Proof      []zolana.Hash `json:"proof"`
 }
 
-func (r *Resolver) resolvePolicyRegistry(ctx context.Context, request Request, policy *resolvedPolicy) error {
+func resolvePolicyRegistry(ctx context.Context, r *zolana.Resolver, request request, policy *resolvedPolicy) error {
 	if request.Registry == nil {
 		return nil
 	}
-	keys := make(map[Hash]*ring.RegistryKey)
+	keys := make(map[zolana.Hash]*ring.RegistryKey)
 	for i := range policy.base.Outputs {
 		output := &policy.base.Outputs[i]
 		output.Key = nil
@@ -122,7 +125,7 @@ func (r *Resolver) resolvePolicyRegistry(ctx context.Context, request Request, p
 		if owner.Cmp(policy.base.NamespaceOwnerHash) == 0 {
 			continue
 		}
-		key, err := r.registryKey(ctx, request, keys, output.OwnerPkHash, output.NullifierPk)
+		key, err := registryKey(ctx, r, request, keys, output.OwnerPkHash, output.NullifierPk)
 		if err != nil {
 			return err
 		}
@@ -131,22 +134,28 @@ func (r *Resolver) resolvePolicyRegistry(ctx context.Context, request Request, p
 	return nil
 }
 
-func (r *Resolver) registryKey(ctx context.Context, request Request, keys map[Hash]*ring.RegistryKey, owner, nullifier *big.Int) (*ring.RegistryKey, error) {
+func registryKey(ctx context.Context, r *zolana.Resolver, request request, keys map[zolana.Hash]*ring.RegistryKey, owner, nullifier *big.Int) (*ring.RegistryKey, error) {
 	anchor := request.Registry
-	member, err := hashField(owner)
+	member, err := zolana.HashField(owner)
 	if err != nil || owner.Sign() == 0 {
 		return nil, fmt.Errorf("invalid registry owner")
 	}
 	// 2. The membership leaf binds both the owner and its expected nullifier key.
 	if known := keys[member]; known != nil {
 		if verifyRegistryKey(member, nullifier, known, anchor.Root) != nil {
-			return nil, &UnregisteredMemberError{Member: member, mismatch: true}
+			return nil, unregistered(member, "mismatch")
 		}
 		return known, nil
 	}
-	payload, err := r.rpc(ctx, "getRingKeyRegistryEntry", map[string]any{"ringProgramId": anchor.Ring, "member": member, "expectedRoot": anchor.Root, "expectedNextIndex": anchor.NextIndex})
-	if errors.Is(err, errMemberUnregistered) {
-		return nil, &UnregisteredMemberError{Member: member}
+	payload, err := r.RPC(ctx, "getRingKeyRegistryEntry", map[string]any{"ringProgramId": anchor.Ring, "member": member, "expectedRoot": anchor.Root, "expectedNextIndex": anchor.NextIndex})
+	var failure *zolana.RPCError
+	if errors.As(err, &failure) {
+		switch failure.Code {
+		case -32070, -32071:
+			return nil, zolana.ErrIndexerNotReady
+		case -32072:
+			return nil, unregistered(member, "rejected")
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -155,7 +164,7 @@ func (r *Resolver) registryKey(ctx context.Context, request Request, keys map[Ha
 	if json.Unmarshal(payload, &entry) != nil || entry.Root != anchor.Root || entry.Member != member || entry.NextIndex != anchor.NextIndex || entry.Index == 0 || entry.Index >= entry.NextIndex || len(entry.Proof) != registry.Height || len(entry.Ciphertext) != 32 {
 		return nil, fmt.Errorf("invalid registry membership")
 	}
-	next, err := entry.Next.field()
+	next, err := entry.Next.Field()
 	if err != nil {
 		return nil, err
 	}
@@ -165,28 +174,28 @@ func (r *Resolver) registryKey(ctx context.Context, request Request, keys map[Ha
 	}
 	key := &ring.RegistryKey{Next: next, CtHash: ciphertext, Index: entry.Index}
 	for level, sibling := range entry.Proof {
-		key.Path[level], err = sibling.field()
+		key.Path[level], err = sibling.Field()
 		if err != nil {
 			return nil, err
 		}
 	}
 	// A corrupt indexer path is indistinguishable from a key mismatch here.
 	if verifyRegistryKey(member, nullifier, key, anchor.Root) != nil {
-		return nil, &UnregisteredMemberError{Member: member, mismatch: true}
+		return nil, unregistered(member, "mismatch")
 	}
 	if entry.Context.Slot < request.MinContextSlot {
-		return nil, ErrIndexerNotReady
+		return nil, zolana.ErrIndexerNotReady
 	}
 	keys[member] = key
 	return key, nil
 }
 
-func verifyRegistryKey(member Hash, nullifier *big.Int, key *ring.RegistryKey, root Hash) error {
+func verifyRegistryKey(member zolana.Hash, nullifier *big.Int, key *ring.RegistryKey, root zolana.Hash) error {
 	keyHash, err := transcript.HashFields([]*big.Int{nullifier, key.CtHash})
 	if err != nil {
 		return err
 	}
-	owner, err := member.field()
+	owner, err := member.Field()
 	if err != nil {
 		return err
 	}
@@ -194,16 +203,16 @@ func verifyRegistryKey(member Hash, nullifier *big.Int, key *ring.RegistryKey, r
 	if err != nil {
 		return err
 	}
-	hash, err := hashField(leaf)
+	hash, err := zolana.HashField(leaf)
 	if err != nil {
 		return err
 	}
-	path := make([]Hash, registry.Height)
+	path := make([]zolana.Hash, registry.Height)
 	for level, sibling := range key.Path {
-		path[level], err = hashField(sibling)
+		path[level], err = zolana.HashField(sibling)
 		if err != nil {
 			return err
 		}
 	}
-	return verifyPath(hash, path, key.Index, root)
+	return zolana.VerifyPath(hash, path, key.Index, root)
 }

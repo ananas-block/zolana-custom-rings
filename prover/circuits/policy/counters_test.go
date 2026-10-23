@@ -10,7 +10,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
 type counterCircuit struct {
@@ -31,11 +31,11 @@ func (c *counterCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func counterVector() spptest.CounterDisclosure {
+func counterVector() ringtest.CounterDisclosure {
 	var secret [32]byte
 	secret[31] = 0x51
 	salt := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	return spptest.CounterDisclosure{Secret: secret, TransactionSalt: salt,
+	return ringtest.CounterDisclosure{Secret: secret, TransactionSalt: salt,
 		CounterSalt: new(big.Int).Sub(ecc.BN254.ScalarField(), big.NewInt(1)),
 		Assets:      []*big.Int{big.NewInt(1), big.NewInt(2)}, Spent: []uint64{42, ^uint64(0)}}
 }
@@ -43,7 +43,7 @@ func counterVector() spptest.CounterDisclosure {
 func TestCounterCiphertextMatchesSDKFormat(t *testing.T) {
 	native := counterVector()
 	var vector struct{ Body, Hash string }
-	bytes, err := os.ReadFile("../../../../../test-vectors/spend-counters.json")
+	bytes, err := os.ReadFile("../../../test-vectors/spend-counters.json")
 	if err != nil {
 		t.Fatal(err)
 	}

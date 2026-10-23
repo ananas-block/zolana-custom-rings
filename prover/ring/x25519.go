@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	"crypto/ecdh"

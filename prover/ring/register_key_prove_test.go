@@ -1,12 +1,13 @@
-package custom_ring
+package ring
 
 import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base/audittest"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base/audittest"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
@@ -23,7 +24,7 @@ func TestKeyRegisterProofVerifiesEndToEnd(t *testing.T) {
 	sealed := keys.Seal(t, nullifierSecret[:], policy.NfKeyEncInfo)
 
 	keyHash := spptest.MustPoseidon(t, 3, []*big.Int{nullifierPk, sealed.CiphertextHash})
-	insertion := spptest.NewKeyRegistryTree(t, registry.Height).Register(t, member, keyHash)
+	insertion := ringtest.NewKeyRegistryTree(t, registry.Height).Register(t, member, keyHash)
 	chain := func(ctHash *big.Int) *big.Int {
 		return spptest.MustHashChain(t, []*big.Int{
 			insertion.OldRoot, insertion.NewRoot, member, nullifierPk,
@@ -39,11 +40,11 @@ func TestKeyRegisterProofVerifiesEndToEnd(t *testing.T) {
 		AuditorPk:         keys.AuditorPk(),
 	}
 
-	registerSystem := loadRingSystem(t, common.CustomRingKeyRegisterKeyFile)
+	registerSystem := loadRingSystem(t, CustomRingKeyRegisterKeyFile)
 	var decoded KeyRegisterParameters
 	roundTripProofParameters(t, params, &decoded)
 
-	proof, err := RingProof{System: registerSystem, Parameters: &decoded}.Prove()
+	proof, err := common.ExtensionProof{System: registerSystem, Request: &decoded}.Prove()
 	if err != nil {
 		t.Fatalf("prove: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestKeyRegisterProofVerifiesEndToEnd(t *testing.T) {
 	rejectInstalledProof(t, registerSystem, proof, tampered)
 }
 
-func fixtureInsertion(insertion spptest.KeyRegistryInsertion, member *big.Int) registryInsertion {
+func fixtureInsertion(insertion ringtest.KeyRegistryInsertion, member *big.Int) registryInsertion {
 	r := registryInsertion{
 		RegistryOldRoot: insertion.OldRoot,
 		RegistryNewRoot: insertion.NewRoot,

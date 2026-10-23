@@ -1,21 +1,50 @@
 package indexed
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/ring"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
-	ring "github.com/helius-labs/zolana/prover/server/prover/custom_ring"
+	zolana "github.com/helius-labs/zolana/prover/server/prover/indexed"
+	"github.com/helius-labs/zolana/prover/server/prover/transcript"
 )
 
-func policyCircuit(circuit common.CircuitType) bool {
-	switch circuit {
-	case common.CustomRingPolicyCircuitType, common.CustomRingCompressedPolicyCircuitType, common.CustomRingDelegatePolicyCircuitType:
-		return true
-	default:
-		return false
+var policyCircuits = []common.CircuitType{ring.CustomRingPolicyCircuitType, ring.CustomRingCompressedPolicyCircuitType, ring.CustomRingDelegatePolicyCircuitType}
+
+func decodePolicyRequest(data []byte) (zolana.Resolution, error) {
+	var request request
+	if err := zolana.DecodeEnvelope(data, &request); err != nil {
+		return nil, err
 	}
+	publicInputs := 19
+	if request.CircuitType == ring.CustomRingCompressedPolicyCircuitType {
+		publicInputs = 20
+	}
+	if err := request.Check(zolana.Limits{Trees: 5, PublicInputs: publicInputs}); err != nil {
+		return nil, err
+	}
+	prepared, err := decodePolicy(request)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, r *zolana.Resolver) (*zolana.Resolved, error) {
+		return r.ResolvePrepared(ctx, request.Request, prepared)
+	}, nil
+}
+
+// The policy statement folds the tree hash in after the first public input.
+func policyStatement(public []*big.Int, trees *big.Int) (*big.Int, error) {
+	value := public[0]
+	for _, field := range append([]*big.Int{trees}, public[1:]...) {
+		var err error
+		if value, err = transcript.HashFields([]*big.Int{value, field}); err != nil {
+			return nil, err
+		}
+	}
+	return value, nil
 }
 
 type policyTarget struct {
@@ -44,13 +73,13 @@ func (p *resolvedPolicy) MarshalJSON() ([]byte, error) {
 	return p.wrapped.MarshalJSON()
 }
 
-func decodePolicy(request Request) (*preparedProof, error) {
+func decodePolicy(request request) (*zolana.Prepared, error) {
 	var outer map[string]json.RawMessage
 	if json.Unmarshal(request.Prepared, &outer) != nil {
 		return nil, fmt.Errorf("invalid prepared policy")
 	}
 	var base map[string]json.RawMessage
-	if request.CircuitType == common.CustomRingPolicyCircuitType {
+	if request.CircuitType == ring.CustomRingPolicyCircuitType {
 		base = outer
 	} else {
 		if json.Unmarshal(outer["policy"], &base) != nil {
@@ -104,10 +133,10 @@ func decodePolicy(request Request) (*preparedProof, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := hashField(state); err != nil {
+		if _, err := zolana.HashField(state); err != nil {
 			return nil, err
 		}
-		if _, err := hashField(exclusion); err != nil {
+		if _, err := zolana.HashField(exclusion); err != nil {
 			return nil, err
 		}
 		slots[i] = common.TreeSlotParams{ID: new(big.Int).SetUint64(uint64(tree.ID)), UtxoRoot: state, NullifierRoot: exclusion}
@@ -115,7 +144,7 @@ func decodePolicy(request Request) (*preparedProof, error) {
 	base["treeSlots"], _ = json.Marshal(common.TreeSlotsToJSON(slots))
 	base["publicInputHash"], _ = json.Marshal(common.ToHex(new(big.Int)))
 	base["answers"], _ = json.Marshal(facts)
-	if request.CircuitType != common.CustomRingPolicyCircuitType {
+	if request.CircuitType != ring.CustomRingPolicyCircuitType {
 		outer["policy"], _ = json.Marshal(base)
 	}
 	data, err := json.Marshal(outer)
@@ -124,19 +153,19 @@ func decodePolicy(request Request) (*preparedProof, error) {
 	}
 	p := &resolvedPolicy{}
 	switch request.CircuitType {
-	case common.CustomRingPolicyCircuitType:
+	case ring.CustomRingPolicyCircuitType:
 		value := &ring.PolicyParameters{}
 		if err = json.Unmarshal(data, value); err != nil {
 			return nil, err
 		}
 		p.base, p.wrapped = value, value
-	case common.CustomRingCompressedPolicyCircuitType:
+	case ring.CustomRingCompressedPolicyCircuitType:
 		value := &ring.CompressedPolicyParameters{}
 		if err = json.Unmarshal(data, value); err != nil {
 			return nil, err
 		}
 		p.base, p.wrapped = &value.Base, value
-	case common.CustomRingDelegatePolicyCircuitType:
+	case ring.CustomRingDelegatePolicyCircuitType:
 		value := &ring.DelegatePolicyParameters{}
 		if err = json.Unmarshal(data, value); err != nil {
 			return nil, err
@@ -144,7 +173,7 @@ func decodePolicy(request Request) (*preparedProof, error) {
 		p.base, p.wrapped = &value.Policy, value
 	}
 	p.targets = make([]policyTarget, len(facts))
-	inputs := make([]inputTarget, len(facts))
+	inputs := make([]zolana.Input, len(facts))
 	for i := range p.targets {
 		fact, lookup := &p.base.ListFacts[i], request.Inputs[i]
 		if int(lookup.TreeSlot) >= len(request.Trees) || fact.TreeSlot != lookup.TreeSlot || fact.Enabled != (lookup.Nullifier != nil) || (fact.Enabled && (fact.AbsentBranch == 2) != (lookup.Commitment != nil)) || (!fact.Enabled && lookup.Commitment != nil) {
@@ -154,13 +183,16 @@ func decodePolicy(request Request) (*preparedProof, error) {
 		*target = policyTarget{fact: fact, stateIndex: new(big.Int), exclusionIndex: new(big.Int)}
 		nullifier := new(big.Int)
 		if lookup.Nullifier != nil {
-			nullifier, err = lookup.Nullifier.field()
+			nullifier, err = lookup.Nullifier.Field()
 			if err != nil {
 				return nil, err
 			}
 		}
-		inputs[i] = inputTarget{slot: big.NewInt(int64(lookup.TreeSlot)), nullifier: nullifier, cached: lookup.Commitment == nil, disabled: !fact.Enabled,
-			state: &target.state, exclusion: &target.exclusion, stateIndex: &target.stateIndex, exclusionIndex: &target.exclusionIndex, low: &fact.Low, high: &fact.Next}
+		inputs[i] = zolana.Input{Nullifier: nullifier, Disabled: !fact.Enabled,
+			State: &target.state, Exclusion: &target.exclusion, StateIndex: &target.stateIndex, ExclusionIndex: &target.exclusionIndex, Low: &fact.Low, High: &fact.Next}
 	}
-	return &preparedProof{value: p, inputs: inputs, slots: &p.slots, hash: &p.base.PublicInputHash, policy: true, registry: p}, nil
+	return &zolana.Prepared{
+		Value: p, Inputs: inputs, Slots: &p.slots, Hash: &p.base.PublicInputHash, EmptyTrees: true, Statement: policyStatement,
+		Fetch: func(ctx context.Context, r *zolana.Resolver) error { return resolvePolicyRegistry(ctx, r, request, p) },
+	}, nil
 }

@@ -11,8 +11,8 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
 
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
 	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )

@@ -8,6 +8,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -33,7 +34,7 @@ func (c *escrowCircuit) Define(api frontend.API) error {
 
 // Host leaves hash as registry leaves, the shape register_key inserts.
 func TestEscrowOpensTheRegisteredLeaf(t *testing.T) {
-	keys := spptest.NewKeyRegistry(t, Height)
+	keys := ringtest.NewKeyRegistry(t, Height)
 	owner, nullifierPk := big.NewInt(0x0a), big.NewInt(0x0b)
 	registered := keys.Register(t, owner, nullifierPk, big.NewInt(0x0c))
 	keys.Register(t, big.NewInt(0x0d), nullifierPk, big.NewInt(0x0e))

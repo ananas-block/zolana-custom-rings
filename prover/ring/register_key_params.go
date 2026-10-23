@@ -1,11 +1,11 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/json"
 	"fmt"
 	"math/big"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -28,7 +28,7 @@ type keyRegisterParametersJSON struct {
 
 func (p *KeyRegisterParameters) MarshalJSON() ([]byte, error) {
 	return json.Marshal(keyRegisterParametersJSON{
-		CircuitType:           string(common.CustomRingKeyRegisterCircuitType),
+		CircuitType:           string(CustomRingKeyRegisterCircuitType),
 		PublicInputHash:       common.ToHex(p.PublicInputHash),
 		registryInsertionJSON: p.registryInsertion.json(),
 		NullifierSecret:       bytesHex(p.NullifierSecret[:]),
@@ -42,7 +42,7 @@ func (p *KeyRegisterParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	rail := string(common.CustomRingKeyRegisterCircuitType)
+	rail := string(CustomRingKeyRegisterCircuitType)
 	if raw.CircuitType != rail {
 		return fmt.Errorf("%s: unexpected circuitType %q", rail, raw.CircuitType)
 	}

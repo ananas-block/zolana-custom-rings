@@ -1,11 +1,11 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/json"
 	"fmt"
 	"math/big"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -50,7 +50,7 @@ func (p *DepositParameters) MarshalJSON() ([]byte, error) {
 		keys[i] = writeRegistryKey(key)
 	}
 	return json.Marshal(depositParametersJSON{
-		CircuitType: string(common.CustomRingDepositCircuitType), PublicInputHash: common.ToHex(p.PublicInputHash),
+		CircuitType: string(CustomRingDepositCircuitType), PublicInputHash: common.ToHex(p.PublicInputHash),
 		ContextHash: common.ToHex(p.ContextHash), Count: p.Count,
 		Anonymous: p.Anonymous, OwnerKeys: writeDepositOwnerKeys(p.OwnerKeys[:], p.Anonymous),
 		OwnerPkHashes: writePath(p.OwnerPkHashes[:]), NullifierPks: writePath(p.NullifierPks[:]),
@@ -65,7 +65,7 @@ func (p *DepositParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if raw.CircuitType != string(common.CustomRingDepositCircuitType) {
+	if raw.CircuitType != string(CustomRingDepositCircuitType) {
 		return fmt.Errorf("custom-ring-deposit: unexpected circuitType %q", raw.CircuitType)
 	}
 	if raw.Count < 1 || raw.Count > deposit.MaxDeposits || len(raw.Keys) != deposit.MaxDeposits {

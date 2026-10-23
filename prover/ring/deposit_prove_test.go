@@ -1,4 +1,4 @@
-package custom_ring
+package ring
 
 import (
 	stdaes "crypto/aes"
@@ -13,10 +13,10 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/deposit"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
@@ -321,7 +321,7 @@ func TestDepositParametersRejectAliasesAndMalformedShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := DecodeRequest(common.CustomRingDepositCircuitType, encoded); err == nil {
+			if _, err := decodeRequest(depositRing, encoded); err == nil {
 				t.Fatal("invalid request accepted")
 			}
 		})
@@ -338,20 +338,20 @@ func TestDepositProofVerifiesEndToEnd(t *testing.T) {
 		vector.Params.ContextHash, chain[1] = value, value
 		vector.Params.PublicInputHash = spptest.MustHashChain(t, chain)
 	}
-	ps := loadRingSystem(t, common.CustomRingDepositKeyFile)
+	ps := loadRingSystem(t, CustomRingDepositKeyFile)
 	encoded, err := json.Marshal(vector.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := DecodeRequest(common.CustomRingDepositCircuitType, encoded)
+	request, err := decodeRequest(depositRing, encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := RingProof{System: ps, Parameters: request}.Prove()
+	proof, err := common.ExtensionProof{System: ps, Request: request}.Prove()
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := request.assignment()
+	assignment, err := request.Assignment()
 	if err != nil {
 		t.Fatal(err)
 	}

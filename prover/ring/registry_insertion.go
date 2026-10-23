@@ -1,10 +1,10 @@
-package custom_ring
+package ring
 
 import (
 	"fmt"
 	"math/big"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 

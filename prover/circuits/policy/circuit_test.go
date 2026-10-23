@@ -13,10 +13,10 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base/audittest"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base/audittest"
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -26,7 +26,7 @@ import (
 // policy hashing with the same iden3 Poseidon the Rust twins use, and the two
 // SPP trees with the protocol helpers. Solving the compiled R1CS against that
 // witness is the cross-check that the circuit computes what
-// custom-rings/policy will recompute.
+// program-libs/policy will recompute.
 
 // The policy the fixture proves against.
 const (

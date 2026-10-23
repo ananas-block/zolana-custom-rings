@@ -1,11 +1,10 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/policy"
-	"github.com/helius-labs/zolana/prover/server/prover/common"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 )
 
 type DelegatePolicyParameters struct {
@@ -23,7 +22,7 @@ func (p *DelegatePolicyParameters) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(delegatePolicyJSON{
-		CircuitType: string(common.CustomRingDelegatePolicyCircuitType),
+		CircuitType: string(CustomRingDelegatePolicyCircuitType),
 		Policy:      raw,
 	})
 }
@@ -33,7 +32,7 @@ func (p *DelegatePolicyParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	rail := string(common.CustomRingDelegatePolicyCircuitType)
+	rail := string(CustomRingDelegatePolicyCircuitType)
 	if raw.CircuitType != rail {
 		return fmt.Errorf("%s: unexpected circuitType %q", rail, raw.CircuitType)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -20,7 +21,7 @@ func compressedAssignment(t *testing.T, chain func(policy []*big.Int, disclosure
 	for i, b := range c.TxViewingSk {
 		secret[i] = byte(spptest.AsBigInt(b).Uint64())
 	}
-	disclosure := spptest.CounterDisclosure{
+	disclosure := ringtest.CounterDisclosure{
 		Secret: secret, CounterSalt: s.record.nextSalt, Assets: s.record.assets, Spent: s.record.nextSpent,
 	}.Hash(t)
 	c.PublicInputHash = spptest.MustHashChain(t, chain(s.policyChainElements(t, f.facts()), disclosure))

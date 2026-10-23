@@ -1,11 +1,11 @@
-package custom_ring
+package ring
 
 import (
 	"encoding/json"
 	"fmt"
 	"math/big"
 
-	base "github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base"
+	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
@@ -76,7 +76,7 @@ type baseParametersJSON struct {
 
 func (p *BaseParameters) MarshalJSON() ([]byte, error) {
 	return json.Marshal(baseParametersJSON{
-		CircuitType:          string(common.CustomRingBaseCircuitType),
+		CircuitType:          string(CustomRingBaseCircuitType),
 		PublicInputHash:      common.ToHex(p.PublicInputHash),
 		PrivateTxHash:        common.ToHex(p.PrivateTxHash),
 		Anonymous:            p.Anonymous,
@@ -101,7 +101,7 @@ func (p *BaseParameters) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if raw.CircuitType != string(common.CustomRingBaseCircuitType) {
+	if raw.CircuitType != string(CustomRingBaseCircuitType) {
 		return fmt.Errorf("custom-ring-base: unexpected circuitType %q", raw.CircuitType)
 	}
 	var err error

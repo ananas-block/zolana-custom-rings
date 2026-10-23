@@ -1,11 +1,11 @@
-package custom_ring
+package ring
 
 import (
 	"math/big"
 	"os"
 	"testing"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/base/audittest"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base/audittest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/aeglosfixture"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )

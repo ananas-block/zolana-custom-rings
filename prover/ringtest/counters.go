@@ -1,4 +1,4 @@
-package spptest
+package ringtest
 
 import (
 	"crypto/aes"

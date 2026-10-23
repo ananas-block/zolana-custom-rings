@@ -3,7 +3,7 @@ package policy
 import (
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana/prover/server/custom_rings/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 )
 
 func (c *CustomRingPolicyCircuit) constrainOutputKeys(api frontend.API, txContext transactionContext) {
