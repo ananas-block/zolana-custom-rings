@@ -5,7 +5,7 @@ import {
   copyBytes,
   isCanonicalField,
   bigIntBytes,
-  equal,
+  equalBytes,
   hashChain,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
@@ -126,7 +126,7 @@ export function openRingDepositOpening(
         !isCanonicalField(ownerHash) ||
         !isCanonicalField(blinding) ||
         !isCanonicalField(ownerCommitment) ||
-        !equal(ownerUtxoHash(ownerHash, blinding), ownerCommitment)
+        !equalBytes(ownerUtxoHash(ownerHash, blinding), ownerCommitment)
       )
         throw new RingError("RING_AUDIT_MESSAGE");
     } catch (cause) {

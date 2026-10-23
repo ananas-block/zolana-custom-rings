@@ -13,7 +13,7 @@ import {
 import {
   isClientError,
   runKitRpc,
-  hex,
+  bytesKey,
   type UtxoReservation,
   equalBytes,
   assertVersion1Transaction,
@@ -104,7 +104,7 @@ export class RingTransactionSubmission {
     this.#reservation = input.reservation ?? NO_RESERVATION;
     this.#windowChanged = input.windowChanged;
     this.#wallet = input.wallet;
-    this.#id = input.reservationId ?? hex(crypto.getRandomValues(new Uint8Array(16)));
+    this.#id = input.reservationId ?? bytesKey(crypto.getRandomValues(new Uint8Array(16)));
     this.#utxoHashes = (input.utxoHashes ?? []).map((hash) => new Uint8Array(hash) as Bytes32);
   }
 
@@ -316,9 +316,9 @@ export async function reconcileRingSubmissions(
         input.wallet
           .utxos()
           .filter((entry) => !entry.spent)
-          .map((entry) => hex(entry.outputContext.hash)),
+          .map((entry) => bytesKey(entry.outputContext.hash)),
       );
-      if (!pending.utxoHashes.some((hash) => unspent.has(hex(hash)))) {
+      if (!pending.utxoHashes.some((hash) => unspent.has(bytesKey(hash)))) {
         input.wallet._releaseReservation(pending.id);
         input.wallet._removePendingSubmission(pending.id);
       }
@@ -369,7 +369,7 @@ export function checkRetainedEntries(wallet: Wallet, entries: readonly WalletUtx
     );
     if (!unspent) {
       throw new RingError("RING_RESERVED_INPUT_SPENT", {
-        details: { utxoHash: hex(entry.outputContext.hash) },
+        details: { utxoHash: bytesKey(entry.outputContext.hash) },
       });
     }
   }

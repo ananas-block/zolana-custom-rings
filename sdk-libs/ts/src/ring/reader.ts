@@ -16,7 +16,7 @@ import {
   encodeBase58,
   Reader,
   sha256,
-  equal,
+  equalBytes,
   checkedBytes,
   copyBytes,
   wrapKeypairError,
@@ -103,7 +103,8 @@ export function checkedReaderKey(reader: ReaderKey): ReaderKey {
     let canonical = false;
     try {
       const point = ed25519.Point.fromBytes(body);
-      canonical = equal(point.toBytes(), body) && point.isTorsionFree() && !point.isSmallOrder();
+      canonical =
+        equalBytes(point.toBytes(), body) && point.isTorsionFree() && !point.isSmallOrder();
     } catch {
       canonical = false;
     }

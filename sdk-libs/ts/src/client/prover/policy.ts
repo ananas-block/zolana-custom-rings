@@ -3,7 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   wireDecoder,
   treeAddress,
-  equal as equalBytes,
+  equalBytes,
   checkedClientBytes as checkedBytes,
   bytesField,
   bindResolution,

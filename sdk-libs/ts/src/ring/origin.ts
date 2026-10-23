@@ -6,7 +6,7 @@ import {
   Reader,
   sha256,
   decodeRingDepositInstructionData,
-  equal,
+  equalBytes,
 } from "@heliuslabs/zolana/internal";
 import {
   MAX_CACHE_WRITES,
@@ -116,7 +116,7 @@ export class ConfirmedDeposit {
               wrapper.data[0] !== AUDITED_RING_DEPOSIT_TAG
             )
               return [];
-            if (!equal(wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), source.data))
+            if (!equalBytes(wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), source.data))
               throw invalid("auditedDeposit");
             return ConfirmedDeposit.#decode(source.data);
           }
@@ -131,8 +131,8 @@ export class ConfirmedDeposit {
   authenticate(capsule: RingDepositCapsule, ownerCommitment: Bytes32): void {
     if (
       capsule.slotIndex !== this.slotIndex ||
-      !equal(ownerCommitment, this.#ownerCommitment) ||
-      !equal(sha256(encodeRingDepositCapsule(capsule)), this.#capsuleHash)
+      !equalBytes(ownerCommitment, this.#ownerCommitment) ||
+      !equalBytes(sha256(encodeRingDepositCapsule(capsule)), this.#capsuleHash)
     ) {
       throw new RingError("RING_AUDIT_MESSAGE", {
         details: { reason: "unconfirmed deposit capsule" },
