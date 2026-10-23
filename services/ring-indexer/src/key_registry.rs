@@ -10,16 +10,20 @@ use zolana_ring_indexer::{
     },
 };
 
-use super::{
-    api::{self, Insertion, MemberPath},
-    fault, instruction_view, proof,
-    storage::{LeafWrite, MemberRestore, RingRoot, RingStore, Undo},
-    ApplyError, Invocation, Step,
-};
-use crate::error::RingApiError;
-use photon_indexer::rpc::RpcClient;
-
 pub(crate) use zolana_ring_indexer::key_registry::{MemberKey, Registration};
+
+use crate::{
+    api::{self, Insertion, MemberPath},
+    error::RingApiError,
+    indexer::{fault, instruction_view, ApplyError, Invocation},
+    rpc::SolanaRpc,
+    storage::{LeafWrite, MemberRestore, RingRoot, RingStore, Undo},
+};
+
+pub(crate) struct Step<'a> {
+    pub root: &'a RingRoot,
+    pub transition: Registration,
+}
 
 pub(crate) fn transition(invocation: &Invocation<'_>) -> Result<Option<Registration>, ApplyError> {
     zolana_ring_indexer::key_registry::registration(instruction_view(invocation.instruction))
@@ -30,11 +34,7 @@ pub(crate) async fn apply(
     store: &RingStore<'_, DatabaseTransaction>,
     step: Step<'_>,
 ) -> Result<Undo, ApplyError> {
-    let Step {
-        root,
-        transition,
-        revision,
-    } = step;
+    let Step { root, transition } = step;
     let &Registration {
         old_root,
         new_root,
@@ -42,7 +42,7 @@ pub(crate) async fn apply(
         member,
         ..
     } = &transition;
-    // 1. Require the current root, append cursor and an absent member.
+    // Requires the current root, append cursor and an absent member.
     if next_index != root.next_index || next_index >= KEY_REGISTRY_CAPACITY {
         return Err(fault("append cursor mismatch"));
     }
@@ -53,10 +53,11 @@ pub(crate) async fn apply(
         return Err(fault("duplicate member"));
     }
     let low = store.predecessor(&member).await?;
-    if proof::path(store.conn(), root, next_index).await?.leaf != [0; 32] {
+    let tree = store.tree();
+    if tree.path(&root.root, next_index).await?.leaf != [0; 32] {
         return Err(fault("append slot occupied"));
     }
-    // 2. Rollback needs both leaves before the ordered chain changes.
+    // Rollback needs both leaves before the ordered chain changes.
     let undo = Undo {
         program: root.program,
         before: Some(root.clone()),
@@ -87,23 +88,19 @@ pub(crate) async fn apply(
     } = transition
         .splice(low)
         .map_err(|error| fault(error.to_string()))?;
-    let computed = store
-        .write_leaves(
-            &root.address,
-            &[
-                LeafWrite {
-                    index: spliced.index,
-                    hash: spliced.hash()?,
-                },
-                LeafWrite {
-                    index: added.index,
-                    hash: added.hash()?,
-                },
-            ],
-            revision,
-        )
+    let computed = tree
+        .write(&[
+            LeafWrite {
+                index: spliced.index,
+                hash: spliced.hash()?,
+            },
+            LeafWrite {
+                index: added.index,
+                hash: added.hash()?,
+            },
+        ])
         .await?;
-    // 3. Reconstructed leaves must match the proven root before publication.
+    // Reconstructed leaves must match the proven root before publication.
     if computed != new_root {
         return Err(fault("new root mismatch"));
     }
@@ -123,7 +120,7 @@ pub(crate) async fn apply(
 
 pub(crate) async fn register(
     db: &DatabaseConnection,
-    rpc: &RpcClient,
+    rpc: &SolanaRpc,
     request: RingMemberProofRequest,
 ) -> Result<GetRingKeyRegistryRegisterProofResponse, RingApiError> {
     let Insertion {
@@ -149,7 +146,7 @@ pub(crate) async fn register(
 
 pub(crate) async fn lookup(
     db: &DatabaseConnection,
-    rpc: &RpcClient,
+    rpc: &SolanaRpc,
     request: RingMemberProofRequest,
 ) -> Result<GetRingKeyRegistryEntryResponse, RingApiError> {
     let MemberPath {
@@ -175,14 +172,13 @@ pub(crate) async fn lookup(
 mod tests {
     use super::*;
     use crate::{
-        proof,
+        block::BlockMetadata,
         storage::{self, BlockJournal, BlockUndo},
         tests::{field, fixture, member},
     };
     use custom_ring_interface::RegisteredKey;
-    use photon_indexer::ingester::typedefs::block_info::BlockMetadata;
     use sea_orm::TransactionTrait;
-    use solana_pubkey::Pubkey;
+    use solana_address::Address;
     use zolana_ring_key_registry::KeyRegistryTree;
 
     fn key_hash(seed: u8) -> [u8; 32] {
@@ -194,7 +190,7 @@ mod tests {
         .unwrap()
     }
 
-    fn registration(root: &storage::RingRoot, seed: u8, new_root: [u8; 32]) -> Registration {
+    fn registration(root: &RingRoot, seed: u8, new_root: [u8; 32]) -> Registration {
         Registration {
             old_root: root.root,
             new_root,
@@ -208,15 +204,19 @@ mod tests {
 
     #[tokio::test]
     async fn key_insert_path_matches_reference_without_mutating_reads() {
-        let (db, mut root, mut cursor) = fixture().await;
+        let (db, mut root, _) = fixture().await;
         let mut reference = KeyRegistryTree::new().unwrap();
         for seed in [5u8, 9, 2, 8] {
             let subject = member(seed);
             let tx = db.begin().await.unwrap();
             let store = RingStore::new(&tx, root.program);
             let low = store.predecessor(&subject).await.unwrap();
-            let low_path = proof::path(&tx, &root, low.index).await.unwrap();
-            let slot = proof::path(&tx, &root, root.next_index).await.unwrap();
+            let low_path = store.tree().path(&root.root, low.index).await.unwrap();
+            let slot = store
+                .tree()
+                .path(&root.root, root.next_index)
+                .await
+                .unwrap();
             assert_eq!(slot.leaf, [0; 32]);
             let inputs = reference
                 .register(zolana_ring_key_registry::Registration {
@@ -231,7 +231,6 @@ mod tests {
                 Step {
                     root: &root,
                     transition: registration(&root, seed, inputs.new_root),
-                    revision: cursor.advance_revision().unwrap(),
                 },
             )
             .await
@@ -263,7 +262,6 @@ mod tests {
             Step {
                 root: &root,
                 transition: registration(&root, 8, field(99)),
-                revision: 2,
             },
         )
         .await
@@ -279,7 +277,6 @@ mod tests {
             Step {
                 root: &root,
                 transition: registration(&root, 8, registered.new_root),
-                revision: cursor.advance_revision().unwrap(),
             },
         )
         .await
@@ -317,20 +314,15 @@ mod tests {
         assert!(!restarted.is_ready());
 
         let tx = db.begin().await.unwrap();
-        let path = proof::path(&tx, &root, 0).await.unwrap();
-        let sentinel = RingStore::new(&tx, root.program)
-            .member(&[0; 32])
-            .await
-            .unwrap()
-            .unwrap();
+        let replayed = RingStore::new(&tx, root.program);
+        let path = replayed.tree().path(&root.root, 0).await.unwrap();
+        let sentinel = replayed.member(&[0; 32]).await.unwrap().unwrap();
         assert_eq!(sentinel.hash().unwrap(), path.leaf);
-        assert_eq!(path.root(0).unwrap(), root.root);
         apply(
-            &RingStore::new(&tx, root.program),
+            &replayed,
             Step {
                 root: &root,
                 transition: registration(&root, 8, registered.new_root),
-                revision: restarted.advance_revision().unwrap(),
             },
         )
         .await
@@ -345,9 +337,9 @@ mod tests {
     #[tokio::test]
     async fn key_lookup_fails_closed_before_rpc_when_index_or_root_is_stale() {
         let (db, root, mut cursor) = fixture().await;
-        let rpc = RpcClient::new("http://127.0.0.1:1".into());
+        let rpc = SolanaRpc::new("http://127.0.0.1:1".into());
         let request = RingMemberProofRequest {
-            ring_program_id: Pubkey::new_from_array(root.program).into(),
+            ring_program_id: Address::new_from_array(root.program).into(),
             member: Hash(member(4)),
             expected_root: Hash(root.root),
             expected_next_index: 1,

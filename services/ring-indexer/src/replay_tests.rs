@@ -1,18 +1,28 @@
-use super::tests::{field, initialize_root, member};
-use super::*;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex},
+};
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use custom_ring_interface::{
-    instruction::tag, CustomRingProof, KeyRegistryRoot, RegisterKeyIxData, RegisteredKey,
+    instruction::tag, pda, CustomRingProof, KeyRegistryRoot, RegisterKeyIxData, RegisteredKey,
+    KEY_REGISTRY_EMPTY_ROOT as EMPTY_ROOT,
 };
 use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
-use photon_indexer::migration::{MigratorTrait, RingsMigrator};
-use sea_orm::Database;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, sync::Mutex};
+use solana_address::Address;
 use zolana_indexer_api::Hash;
+use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
 use zolana_ring_indexer::rpc::RingMemberProofRequest;
 
-/// Mutable confirmed RPC history, including failures between replay commits.
+use crate::{
+    indexer::{Indexer, Progress, Readiness, StartSlot},
+    key_registry,
+    rpc::SolanaRpc,
+    storage::{self, RingCursor, RingRoot, RingStore},
+    tests::{database, field, initialize_root, member},
+};
+
 #[derive(Default)]
 struct Chain {
     blocks: BTreeMap<u64, Value>,
@@ -20,7 +30,7 @@ struct Chain {
     failed_block: Option<u64>,
 }
 
-async fn rpc(chain: Arc<Mutex<Chain>>) -> (Arc<RpcClient>, ServerHandle) {
+async fn rpc(chain: Arc<Mutex<Chain>>) -> (Arc<SolanaRpc>, ServerHandle) {
     let server = jsonrpsee::server::ServerBuilder::default()
         .build("127.0.0.1:0")
         .await
@@ -68,26 +78,32 @@ async fn rpc(chain: Arc<Mutex<Chain>>) -> (Arc<RpcClient>, ServerHandle) {
         .register_method("getAccountInfo", |params, chain, _| {
             let (address, _): (String, Value) = params.parse()?;
             Ok::<_, ErrorObjectOwned>(
-                json!({"value": chain.lock().unwrap().accounts.get(&address)}),
+                json!({"context": {"slot": 1}, "value": chain.lock().unwrap().accounts.get(&address)}),
             )
         })
         .unwrap();
-    module.register_method("getMultipleAccounts", |params, chain, _| {
-        let (addresses, _): (Vec<String>, Value) = params.parse()?;
-        let chain = chain.lock().unwrap();
-        Ok::<_, ErrorObjectOwned>(json!({"value": addresses.iter().map(|address| chain.accounts.get(address)).collect::<Vec<_>>()}))
-    }).unwrap();
+    module
+        .register_method("getMultipleAccounts", |params, chain, _| {
+            let (addresses, _): (Vec<String>, Value) = params.parse()?;
+            let chain = chain.lock().unwrap();
+            let accounts = addresses
+                .iter()
+                .map(|address| chain.accounts.get(address))
+                .collect::<Vec<_>>();
+            Ok::<_, ErrorObjectOwned>(json!({"context": {"slot": 1}, "value": accounts}))
+        })
+        .unwrap();
     (
-        Arc::new(RpcClient::new(format!("http://{address}"))),
+        Arc::new(SolanaRpc::new(format!("http://{address}"))),
         server.start(module),
     )
 }
 
-fn account(owner: Pubkey, data: &[u8]) -> Value {
+fn account(owner: Address, data: &[u8]) -> Value {
     json!({"lamports": 1, "owner": owner.to_string(), "data": [STANDARD.encode(data), "base64"], "executable": false, "rentEpoch": 0})
 }
 
-fn root_account(program: Pubkey, root: [u8; 32], next_index: u64) -> Value {
+fn root_account(program: Address, root: [u8; 32], next_index: u64) -> Value {
     let mut history = [[0u8; 32]; custom_ring_interface::KEY_REGISTRY_ROOT_HISTORY];
     history[0] = root;
     account(
@@ -102,12 +118,12 @@ fn root_account(program: Pubkey, root: [u8; 32], next_index: u64) -> Value {
     )
 }
 
-fn activation(program: Pubkey, active: bool) -> Value {
+fn activation(program: Address, active: bool) -> Value {
     account(
         zolana_interface::pda::shielded_pool_program_id(),
         bytemuck::bytes_of(&RingConfig {
             discriminator: RING_CONFIG,
-            authority: Pubkey::default(),
+            authority: Address::default(),
             program_id: program,
             activated: u8::from(active),
             paused: 0,
@@ -124,7 +140,7 @@ fn block(slot: u64, transactions: Vec<Value>) -> Value {
 }
 
 /// Archived transactions must pass the production RPC decoder.
-fn transaction(program: Pubkey, accounts: &[Pubkey], data: &[u8]) -> Value {
+fn transaction(program: Address, accounts: &[Address], data: &[u8]) -> Value {
     let mut bytes = vec![1];
     bytes.extend_from_slice(&[1; 64]);
     bytes.extend_from_slice(&[1, 0, 1, (accounts.len() + 1) as u8]);
@@ -152,14 +168,8 @@ fn transaction(program: Pubkey, accounts: &[Pubkey], data: &[u8]) -> Value {
 }
 
 /// Initialization and first registration precede the global tip.
-async fn late_ring() -> (
-    CustomRingIndexer,
-    Arc<Mutex<Chain>>,
-    ServerHandle,
-    Pubkey,
-    [u8; 32],
-) {
-    let program = Pubkey::new_from_array([11; 32]);
+async fn late_ring() -> (Indexer, Arc<Mutex<Chain>>, ServerHandle, Address, [u8; 32]) {
+    let program = Address::new_from_array([11; 32]);
     let address = pda::key_registry_root(&program).0;
     let mut tree = zolana_ring_key_registry::KeyRegistryTree::new().unwrap();
     let key = RegisteredKey {
@@ -204,11 +214,11 @@ async fn late_ring() -> (
                     vec![transaction(
                         program,
                         &[
-                            Pubkey::new_from_array([1; 32]),
-                            Pubkey::new_from_array([2; 32]),
-                            Pubkey::new_from_array([3; 32]),
+                            Address::new_from_array([1; 32]),
+                            Address::new_from_array([2; 32]),
+                            Address::new_from_array([3; 32]),
                             address,
-                            Pubkey::default(),
+                            Address::default(),
                         ],
                         &[tag::CREATE_KEY_REGISTRY_ROOT],
                     )],
@@ -221,8 +231,8 @@ async fn late_ring() -> (
                     vec![transaction(
                         program,
                         &[
-                            Pubkey::new_from_array([5; 32]),
-                            Pubkey::new_from_array([3; 32]),
+                            Address::new_from_array([5; 32]),
+                            Address::new_from_array([3; 32]),
                             address,
                         ],
                         &data,
@@ -244,14 +254,7 @@ async fn late_ring() -> (
         failed_block: None,
     }));
     let (rpc, handle) = rpc(chain.clone()).await;
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    RingsMigrator::up(&db, None).await.unwrap();
-    let indexer = CustomRingIndexer {
-        db: Arc::new(db),
-        rpc,
-        start: StartSlot::Explicit(0),
-        block_fetches: 4,
-    };
+    let indexer = replay_indexer(Arc::new(database().await), rpc);
     assert!(matches!(
         indexer.synchronize().await.unwrap(),
         Progress::CaughtUp
@@ -293,12 +296,7 @@ async fn replay_resumes_after_a_committed_initialization_and_restart() {
         EMPTY_ROOT
     );
     chain.lock().unwrap().failed_block = None;
-    let restarted = CustomRingIndexer {
-        db: indexer.db.clone(),
-        rpc: indexer.rpc.clone(),
-        start: StartSlot::Explicit(0),
-        block_fetches: 4,
-    };
+    let restarted = replay_indexer(indexer.db.clone(), indexer.rpc.clone());
     for _ in 0..2 {
         assert!(matches!(
             restarted.synchronize().await.unwrap(),
@@ -358,7 +356,7 @@ async fn rollback_rewinds_an_incomplete_replay_before_canonical_reindex() {
 #[tokio::test]
 async fn a_stalled_replay_does_not_starve_another_pending_ring() {
     let (indexer, chain, handle, stalled, _) = late_ring().await;
-    let healthy = Pubkey::new_from_array([12; 32]);
+    let healthy = Address::new_from_array([12; 32]);
     let address = pda::key_registry_root(&healthy).0;
     {
         let mut chain = chain.lock().unwrap();
@@ -376,11 +374,11 @@ async fn a_stalled_replay_does_not_starve_another_pending_ring() {
                 vec![transaction(
                     healthy,
                     &[
-                        Pubkey::new_from_array([1; 32]),
-                        Pubkey::new_from_array([2; 32]),
-                        Pubkey::new_from_array([3; 32]),
+                        Address::new_from_array([1; 32]),
+                        Address::new_from_array([2; 32]),
+                        Address::new_from_array([3; 32]),
                         address,
-                        Pubkey::default(),
+                        Address::default(),
                     ],
                     &[tag::CREATE_KEY_REGISTRY_ROOT],
                 )],
@@ -494,27 +492,26 @@ async fn missing_archived_initialization_never_completes_a_replay() {
 async fn post_init_root_faults_are_local_and_ahead_roots_are_not_quarantined() {
     for invalid in [
         None,
-        Some(account(Pubkey::default(), &[0; 42])),
-        Some(account(Pubkey::new_from_array([11; 32]), &[0; 3])),
+        Some(account(Address::default(), &[0; 42])),
+        Some(account(Address::new_from_array([11; 32]), &[0; 3])),
     ] {
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        RingsMigrator::up(&db, None).await.unwrap();
-        let mut cursor = CustomRingCursor::new(0);
-        let faulty = initialize_root(&db, &mut cursor, [11; 32]).await;
-        let healthy = initialize_root(&db, &mut cursor, [12; 32]).await;
-        let ahead = initialize_root(&db, &mut cursor, [13; 32]).await;
+        let db = database().await;
+        let cursor = RingCursor::new(0);
+        let faulty = initialize_root(&db, [11; 32]).await;
+        let healthy = initialize_root(&db, [12; 32]).await;
+        let ahead = initialize_root(&db, [13; 32]).await;
         let mut accounts = HashMap::from([
             (
-                Pubkey::new_from_array(healthy.address).to_string(),
-                root_account(Pubkey::new_from_array(healthy.program), healthy.root, 1),
+                Address::new_from_array(healthy.address).to_string(),
+                root_account(Address::new_from_array(healthy.program), healthy.root, 1),
             ),
             (
-                Pubkey::new_from_array(ahead.address).to_string(),
-                root_account(Pubkey::new_from_array(ahead.program), field(9), 2),
+                Address::new_from_array(ahead.address).to_string(),
+                root_account(Address::new_from_array(ahead.program), field(9), 2),
             ),
         ]);
         if let Some(value) = invalid {
-            accounts.insert(Pubkey::new_from_array(faulty.address).to_string(), value);
+            accounts.insert(Address::new_from_array(faulty.address).to_string(), value);
         }
         let chain = Arc::new(Mutex::new(Chain {
             blocks: BTreeMap::from([(1, block(1, vec![]))]),
@@ -522,12 +519,7 @@ async fn post_init_root_faults_are_local_and_ahead_roots_are_not_quarantined() {
             failed_block: None,
         }));
         let (rpc, handle) = rpc(chain).await;
-        let indexer = CustomRingIndexer {
-            db: Arc::new(db),
-            rpc,
-            start: StartSlot::Explicit(0),
-            block_fetches: 4,
-        };
+        let indexer = replay_indexer(Arc::new(db), rpc);
         storage::save_cursor(indexer.db.as_ref(), &cursor)
             .await
             .unwrap();
@@ -551,7 +543,7 @@ async fn post_init_root_faults_are_local_and_ahead_roots_are_not_quarantined() {
             .fault
             .is_none());
         let request = |root: &RingRoot| RingMemberProofRequest {
-            ring_program_id: Pubkey::new_from_array(root.program).into(),
+            ring_program_id: Address::new_from_array(root.program).into(),
             member: Hash(member(7)),
             expected_root: Hash(root.root),
             expected_next_index: 1,
@@ -582,5 +574,15 @@ async fn post_init_root_faults_are_local_and_ahead_roots_are_not_quarantined() {
             .is_none());
         handle.stop().unwrap();
         handle.stopped().await;
+    }
+}
+
+fn replay_indexer(db: Arc<sea_orm::DatabaseConnection>, rpc: Arc<SolanaRpc>) -> Indexer {
+    Indexer {
+        db,
+        rpc,
+        start: Some(StartSlot::Slot(0)),
+        block_fetches: 4,
+        readiness: Readiness::default(),
     }
 }

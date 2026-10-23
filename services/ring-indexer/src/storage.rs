@@ -1,23 +1,15 @@
 use anyhow::{bail, Context, Result};
-use sea_orm::{ConnectionTrait, DatabaseTransaction, Statement, Value};
+use sea_orm::{
+    AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
+    IsolationLevel, Statement, TransactionTrait, Value,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use solana_pubkey::Pubkey;
+use solana_address::Address;
 use thiserror::Error;
 use zolana_indexer_api::Hash;
+use zolana_ring_indexer::key_registry::MemberKey;
 
-use super::{key_registry::MemberKey, spend_record::SpendUndo};
-use custom_ring_interface::KEY_REGISTRY_HEIGHT;
-use photon_indexer::{
-    common::rings_tree::StoredTreeKind,
-    ingester::{
-        persist::{persist_leaf_nodes, LeafNode},
-        typedefs::block_info::BlockMetadata,
-    },
-};
-
-/// Fixed by deployed databases.
-pub(crate) const KEY_REGISTRY_TREE: StoredTreeKind = StoredTreeKind::extension(3);
-pub(crate) const KEY_REGISTRY_LEVELS: u32 = KEY_REGISTRY_HEIGHT as u32 + 1;
+use crate::{block::BlockMetadata, spend_record::SpendUndo, tree::RegistryTree};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RingRoot {
@@ -30,22 +22,19 @@ pub(crate) struct RingRoot {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct CustomRingCursor {
+pub(crate) struct RingCursor {
     pub start_slot: u64,
     pub scanned_slot: u64,
     pub tip: Option<BlockMetadata>,
-    /// Rollback writes must increase the storage sequence.
-    pub revision: u64,
     ready: bool,
 }
 
-impl CustomRingCursor {
+impl RingCursor {
     pub fn new(start_slot: u64) -> Self {
         Self {
             start_slot,
             scanned_slot: start_slot,
             tip: None,
-            revision: 0,
             ready: false,
         }
     }
@@ -62,15 +51,6 @@ impl CustomRingCursor {
     pub async fn resume<C: ConnectionTrait>(&mut self, conn: &C) -> Result<()> {
         self.ready = true;
         save_cursor(conn, self).await
-    }
-
-    pub fn advance_revision(&mut self) -> Result<u64> {
-        self.revision = self
-            .revision
-            .checked_add(1)
-            .filter(|revision| i64::try_from(*revision).is_ok())
-            .context("custom ring storage revision exhausted")?;
-        Ok(self.revision)
     }
 }
 
@@ -131,11 +111,27 @@ pub(crate) enum PredecessorError {
     Storage(#[from] anyhow::Error),
 }
 
-const CURSOR_TABLE: &str = "custom_ring_cursor";
-const JOURNAL_TABLE: &str = "custom_ring_blocks";
-const PENDING_TABLE: &str = "custom_ring_pending";
-const ROOTS_TABLE: &str = "ring_key_registry_roots";
-const MEMBERS_TABLE: &str = "ring_key_registry_members";
+const CURSOR_TABLE: &str = "ring_cursor";
+const JOURNAL_TABLE: &str = "ring_blocks";
+const PENDING_TABLE: &str = "ring_pending";
+const ROOTS_TABLE: &str = "ring_registry_roots";
+const MEMBERS_TABLE: &str = "ring_registry_members";
+
+/// Lookups read every table from one Postgres snapshot.
+pub(crate) async fn begin_read(
+    db: &DatabaseConnection,
+) -> Result<DatabaseTransaction, sea_orm::DbErr> {
+    match db.get_database_backend() {
+        DatabaseBackend::Postgres => {
+            db.begin_with_config(
+                Some(IsolationLevel::RepeatableRead),
+                Some(AccessMode::ReadOnly),
+            )
+            .await
+        }
+        _ => db.begin().await,
+    }
+}
 
 pub(crate) async fn save_pending<C: ConnectionTrait>(conn: &C, value: &PendingRing) -> Result<()> {
     conn.execute(statement(
@@ -201,7 +197,7 @@ pub(crate) async fn delete_pending<C: ConnectionTrait>(conn: &C, program: &[u8; 
     Ok(())
 }
 
-pub(crate) async fn cursor<C: ConnectionTrait>(conn: &C) -> Result<Option<CustomRingCursor>> {
+pub(crate) async fn cursor<C: ConnectionTrait>(conn: &C) -> Result<Option<RingCursor>> {
     read_json(
         conn,
         &format!("SELECT state FROM {CURSOR_TABLE} WHERE id=1"),
@@ -210,10 +206,7 @@ pub(crate) async fn cursor<C: ConnectionTrait>(conn: &C) -> Result<Option<Custom
     .await
 }
 
-pub(crate) async fn save_cursor<C: ConnectionTrait>(
-    conn: &C,
-    value: &CustomRingCursor,
-) -> Result<()> {
+pub(crate) async fn save_cursor<C: ConnectionTrait>(conn: &C, value: &RingCursor) -> Result<()> {
     conn.execute(statement(
         conn,
         &format!(
@@ -286,25 +279,20 @@ pub(crate) async fn roots<C: ConnectionTrait>(conn: &C) -> Result<Vec<RingRoot>>
     .await
 }
 
-pub(crate) async fn rollback(
-    tx: &DatabaseTransaction,
-    cursor: &mut CustomRingCursor,
-) -> Result<()> {
+pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) -> Result<()> {
     let tip = cursor
         .tip
         .as_ref()
-        .context("cannot rewind before the custom ring start")?;
-    let journal = journal(tx, tip.slot)
-        .await?
-        .context("custom ring journal gap")?;
+        .context("cannot rewind before the ring index start")?;
+    let journal = journal(tx, tip.slot).await?.context("ring journal gap")?;
     tx.execute(statement(
         tx,
         &format!("DELETE FROM {PENDING_TABLE} WHERE slot=$1"),
         vec![i64::try_from(journal.metadata.slot)?.into()],
     ))
     .await?;
-    super::spend_record::restore(tx, &journal.undo.spend_records).await?;
-    restore(tx, cursor, &journal.undo.key_registry).await?;
+    crate::spend_record::restore(tx, &journal.undo.spend_records).await?;
+    restore(tx, &journal.undo.key_registry).await?;
     // Partial replay must rewind with the block that advanced it.
     for mut candidate in pending(tx).await? {
         if candidate
@@ -328,22 +316,14 @@ pub(crate) async fn rollback(
     cursor.suspend(tx).await
 }
 
-async fn restore(
-    tx: &DatabaseTransaction,
-    cursor: &mut CustomRingCursor,
-    undos: &[Undo],
-) -> Result<()> {
+async fn restore(tx: &DatabaseTransaction, undos: &[Undo]) -> Result<()> {
     for undo in undos.iter().rev() {
         let store = RingStore::new(tx, undo.program);
         match &undo.before {
             Some(before) => {
-                if !undo.leaves.is_empty() {
-                    let root = store
-                        .write_leaves(&before.address, &undo.leaves, cursor.advance_revision()?)
-                        .await?;
-                    if root != before.root {
-                        bail!("key registry rollback root mismatch");
-                    }
+                if !undo.leaves.is_empty() && store.tree().write(&undo.leaves).await? != before.root
+                {
+                    bail!("key registry rollback root mismatch");
                 }
                 store.save_root(before).await?;
                 for restore in &undo.members {
@@ -354,11 +334,11 @@ async fn restore(
                 }
             }
             None => {
-                let created = store
+                store
                     .root()
                     .await?
                     .context("created key registry missing on rollback")?;
-                store.delete_tree(&created.address).await?;
+                store.tree().delete().await?;
                 store.delete_members().await?;
                 store.delete_root().await?;
             }
@@ -377,12 +357,12 @@ impl<'c, C: ConnectionTrait> RingStore<'c, C> {
         Self { conn, program }
     }
 
-    pub fn conn(&self) -> &'c C {
-        self.conn
-    }
-
     pub fn program(&self) -> [u8; 32] {
         self.program
+    }
+
+    pub fn tree(&self) -> RegistryTree<'c, C> {
+        RegistryTree::new(self.conn, self.program)
     }
 
     pub async fn root(&self) -> Result<Option<RingRoot>> {
@@ -414,7 +394,7 @@ impl<'c, C: ConnectionTrait> RingStore<'c, C> {
     pub async fn quarantine(&self, root: RingRoot, reason: String) -> Result<Undo> {
         log::warn!(
             "key registry of ring {} quarantined ({reason})",
-            Pubkey::new_from_array(self.program)
+            Address::new_from_array(self.program)
         );
         self.save_root(&RingRoot {
             fault: Some(reason),
@@ -507,54 +487,9 @@ impl<'c, C: ConnectionTrait> RingStore<'c, C> {
             .await?;
         Ok(())
     }
-
-    pub async fn delete_tree(&self, tree: &[u8; 32]) -> Result<()> {
-        self.conn
-            .execute(statement(
-                self.conn,
-                "DELETE FROM state_trees WHERE tree=$1 AND tree_kind=$2",
-                vec![tree.to_vec().into(), i32::from(KEY_REGISTRY_TREE).into()],
-            ))
-            .await?;
-        Ok(())
-    }
 }
 
-impl RingStore<'_, DatabaseTransaction> {
-    pub async fn write_leaves(
-        &self,
-        tree: &[u8; 32],
-        leaves: &[LeafWrite],
-        revision: u64,
-    ) -> Result<[u8; 32]> {
-        let kind = KEY_REGISTRY_TREE;
-        let leaves = leaves
-            .iter()
-            .map(|leaf| LeafNode {
-                tree: tree.to_vec(),
-                tree_kind: kind,
-                leaf_index: leaf.index,
-                hash: Hash(leaf.hash),
-                seq: Some(revision),
-            })
-            .collect();
-        persist_leaf_nodes(self.conn, leaves, KEY_REGISTRY_LEVELS).await?;
-        let row = self
-            .conn
-            .query_one(statement(
-                self.conn,
-                "SELECT hash FROM state_trees WHERE tree=$1 AND tree_kind=$2 AND node_idx=1",
-                vec![tree.to_vec().into(), i32::from(kind).into()],
-            ))
-            .await?
-            .context("key registry root missing")?;
-        let hash: Vec<u8> = row.try_get("", "hash")?;
-        hash.try_into()
-            .map_err(|_| anyhow::anyhow!("invalid key registry root length"))
-    }
-}
-
-pub(super) fn statement<C: ConnectionTrait>(conn: &C, sql: &str, values: Vec<Value>) -> Statement {
+pub(crate) fn statement<C: ConnectionTrait>(conn: &C, sql: &str, values: Vec<Value>) -> Statement {
     Statement::from_sql_and_values(conn.get_database_backend(), sql, values)
 }
 

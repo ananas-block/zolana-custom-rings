@@ -1,0 +1,73 @@
+name: ring-indexer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/ring-indexer/**"
+      - "program-libs/**"
+      - "sdk-libs/indexer/**"
+      - "zolana"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ring-indexer.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "services/ring-indexer/**"
+      - "program-libs/**"
+      - "sdk-libs/indexer/**"
+      - "zolana"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ring-indexer.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  RING_INDEXER_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+jobs:
+  test:
+    name: tests / ring indexer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: ./zolana/.github/actions/setup-rust
+        with:
+          install-just: "false"
+          shared-key: ring-indexer
+          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      # The ignored test migrates the Postgres service both ways.
+      - name: Run ring indexer tests on SQLite and Postgres
+        run: cargo test --locked -p ring-indexer --all-targets --features surfpool-fixture -- --include-ignored

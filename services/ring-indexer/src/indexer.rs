@@ -1,93 +1,109 @@
-//! A rollback never changes SPP state.
-
-mod api;
-mod error;
-mod extension;
-mod key_registry;
-mod proof;
-mod spend_record;
-mod storage;
-
-use std::{collections::HashMap, ops::RangeInclusive, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::RangeInclusive,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use custom_ring_interface::{
     instruction::{accounts, tag},
-    pda, KeyRegistryRoot, PolicyConfig, KEY_REGISTRY_ROOT, POLICY_CONFIG,
+    pda, KeyRegistryRoot, PolicyConfig, KEY_REGISTRY_EMPTY_ROOT, KEY_REGISTRY_ROOT, POLICY_CONFIG,
 };
 use futures::{stream, StreamExt};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use solana_account::Account;
-use solana_pubkey::Pubkey;
+use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
 use thiserror::Error;
 use zolana_hasher::HasherError;
-use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
-
-pub use error::RingApiError;
-pub use extension::CustomRings;
-use key_registry::{MemberKey, Registration};
-use photon_indexer::{
-    ingester::typedefs::block_info::{
-        parse_ui_confirmed_blocked, BlockInfo, BlockMetadata, Instruction, InstructionGroup,
-        TransactionInfo,
-    },
-    rpc::{RpcClient, RpcError},
+use zolana_interface::state::{
+    discriminator::{RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
+    read_tree_id, tree_account_size, RingConfig,
 };
-use spend_record::{SpendRing, SpendStore, SpendUndo};
-use storage::{
-    BlockJournal, BlockUndo, CustomRingCursor, LeafWrite, PendingRing, PredecessorError, RingRoot,
-    RingStore, Undo,
+
+use crate::{
+    block::{BlockInfo, BlockMetadata, Instruction, TransactionInfo},
+    event::{ParsedTransaction, SppEvent, Subtree},
+    key_registry::{self, MemberKey, Step},
+    rpc::{RpcError, SolanaRpc},
+    spend_record::{self, SpendRing, SpendStore, SpendUndo},
+    storage::{
+        self, BlockJournal, BlockUndo, LeafWrite, PendingRing, PredecessorError, RingCursor,
+        RingRoot, RingStore, Undo,
+    },
 };
 
 const MAX_RETRY_DELAY_SECS: u64 = 15;
 const GET_BLOCKS_PAGE: u64 = 4096;
-/// Blocks fetched before a batch is applied, at least this many.
-const MIN_BLOCK_BATCH: usize = 32;
+/// Lower bound on the blocks fetched before a batch is applied.
+pub(crate) const MIN_BLOCK_BATCH: usize = 32;
 const ACCOUNTS_PER_REQUEST: usize = 100;
 /// Journal rows older than the deepest confirmed fork are pruned.
 const JOURNAL_RETENTION_SLOTS: u64 = 8_192;
 /// A ring activated after its pending root expired needs a reindex.
 const PENDING_TTL_SLOTS: u64 = 43_200;
-const EMPTY_ROOT: [u8; 32] = custom_ring_interface::KEY_REGISTRY_EMPTY_ROOT;
 
-#[derive(Clone, Copy, Debug)]
-enum StartSlot {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartSlot {
     /// Refused when the stored cursor started elsewhere.
-    Explicit(u64),
-    Derived(u64),
+    Slot(u64),
+    /// The confirmed slot when the index is created.
+    Latest,
 }
 
-impl StartSlot {
-    fn slot(self) -> u64 {
-        match self {
-            Self::Explicit(slot) | Self::Derived(slot) => slot,
+impl FromStr for StartSlot {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "latest" => Ok(Self::Latest),
+            slot => slot.parse().map(Self::Slot),
         }
     }
 }
 
-struct CustomRingIndexer {
-    db: Arc<DatabaseConnection>,
-    rpc: Arc<RpcClient>,
-    start: StartSlot,
-    /// Concurrent `getBlock` requests, photon's `--max-concurrent-block-fetches`.
-    block_fetches: usize,
+/// Set once the index first reaches the confirmed tip.
+#[derive(Clone, Debug, Default)]
+pub struct Readiness(Arc<AtomicBool>);
+
+impl Readiness {
+    pub fn is_ready(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn mark(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+pub(crate) struct Indexer {
+    pub db: Arc<DatabaseConnection>,
+    pub rpc: Arc<SolanaRpc>,
+    /// `None` resumes the stored cursor only.
+    pub start: Option<StartSlot>,
+    /// Concurrent `getBlock` requests.
+    pub block_fetches: usize,
+    pub readiness: Readiness,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Progress {
+pub(crate) enum Progress {
     CaughtUp,
     Behind,
 }
 
-impl CustomRingIndexer {
-    /// Two rounds of fetches per batch: enough to keep the fetch overhead
-    /// small, few enough blocks to hold in memory at a backfill setting.
+impl Indexer {
+    /// Two rounds of fetches per batch bound the blocks held in memory.
     fn batch_len(&self) -> usize {
         MIN_BLOCK_BATCH.max(self.block_fetches.saturating_mul(2))
     }
 
-    fn spawn(self) -> tokio::task::JoinHandle<()> {
+    pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut delay = 1;
             loop {
@@ -96,11 +112,14 @@ impl CustomRingIndexer {
                         delay = 1;
                         continue;
                     }
-                    Ok(Progress::CaughtUp) => delay = 1,
+                    Ok(Progress::CaughtUp) => {
+                        self.readiness.mark();
+                        delay = 1;
+                    }
                     Err(error) => {
-                        log::error!("custom ring indexer failed ({error:#})");
+                        log::error!("ring indexer failed ({error:#})");
                         if let Err(error) = self.suspend().await {
-                            log::error!("cannot mark custom ring lookups unavailable ({error:#})");
+                            log::error!("cannot mark ring lookups unavailable ({error:#})");
                         }
                         delay = (delay * 2).min(MAX_RETRY_DELAY_SECS);
                     }
@@ -110,18 +129,18 @@ impl CustomRingIndexer {
         })
     }
 
-    async fn synchronize(&self) -> Result<Progress> {
+    pub(crate) async fn synchronize(&self) -> Result<Progress> {
         let db = self.db.as_ref();
         let mut cursor = self.cursor().await?;
-        // 1. Rewind orphaned commits before resuming any per-ring replay.
+        // Orphaned commits rewind before any per-ring replay resumes.
         while let Some(tip) = &cursor.tip {
             if self.canonical(tip).await? {
                 break;
             }
             self.rewind_tip(&mut cursor).await?;
         }
-        self.replay_pending(&mut cursor).await?;
-        // 2. Scan from the canonical tip to include slots filled by a fork.
+        self.replay_pending(&cursor).await?;
+        // Scanning from the canonical tip includes slots a fork filled.
         cursor.scanned_slot = cursor
             .tip
             .as_ref()
@@ -142,7 +161,7 @@ impl CustomRingIndexer {
                     .as_ref()
                     .is_some_and(|tip| !tip.is_parent_of(&block.metadata))
                 {
-                    bail!("custom ring parent mismatch");
+                    bail!("ring block parent mismatch");
                 }
                 let tx = db.begin().await?;
                 self.apply_block(&tx, &block, &mut cursor).await?;
@@ -156,28 +175,31 @@ impl CustomRingIndexer {
         if cursor.scanned_slot < target {
             return Ok(Progress::Behind);
         }
-        // 3. Invalid ring accounts must not serve proofs.
+        // Invalid ring accounts must not serve proofs.
         self.check_roots(&cursor, target).await?;
         cursor.resume(db).await?;
         Ok(Progress::CaughtUp)
     }
 
-    async fn cursor(&self) -> Result<CustomRingCursor> {
+    /// The cursor stores the last scanned slot, one before the first indexed one.
+    pub(crate) async fn cursor(&self) -> Result<RingCursor> {
         let db = self.db.as_ref();
-        match storage::cursor(db).await? {
-            Some(cursor) => {
-                if let StartSlot::Explicit(slot) = self.start {
-                    if cursor.start_slot != slot {
-                        bail!(
-                            "the stored custom ring index starts after slot {}, not {slot}",
-                            cursor.start_slot
-                        );
-                    }
-                }
-                Ok(cursor)
+        match (storage::cursor(db).await?, self.start) {
+            (Some(cursor), Some(StartSlot::Slot(slot)))
+                if cursor.start_slot != slot.saturating_sub(1) =>
+            {
+                bail!(
+                    "the stored ring index starts after slot {}, not before slot {slot}",
+                    cursor.start_slot
+                )
             }
-            None => {
-                let cursor = CustomRingCursor::new(self.start.slot());
+            (Some(cursor), _) => Ok(cursor),
+            (None, start) => {
+                let scanned = match start.context("the ring index is empty, pass a start slot")? {
+                    StartSlot::Slot(slot) => slot.saturating_sub(1),
+                    StartSlot::Latest => self.rpc.get_slot().await?,
+                };
+                let cursor = RingCursor::new(scanned);
                 storage::save_cursor(db, &cursor).await?;
                 Ok(cursor)
             }
@@ -192,7 +214,7 @@ impl CustomRingIndexer {
         Ok(())
     }
 
-    async fn rewind_tip(&self, cursor: &mut CustomRingCursor) -> Result<()> {
+    pub(crate) async fn rewind_tip(&self, cursor: &mut RingCursor) -> Result<()> {
         let db = self.db.as_ref();
         cursor.suspend(db).await?;
         let tx = db.begin().await?;
@@ -214,15 +236,15 @@ impl CustomRingIndexer {
         }
     }
 
-    async fn replay_pending(&self, cursor: &mut CustomRingCursor) -> Result<()> {
+    async fn replay_pending(&self, cursor: &RingCursor) -> Result<()> {
         let db = self.db.as_ref();
-        let Some(tip) = cursor.tip.clone() else {
+        let Some(tip) = &cursor.tip else {
             return Ok(());
         };
         let pending = storage::pending(db).await?;
         let programs = pending
             .iter()
-            .map(|candidate| Pubkey::new_from_array(candidate.program))
+            .map(|candidate| Address::new_from_array(candidate.program))
             .collect::<Vec<_>>();
         let registered = registered_rings(&self.rpc, &programs).await?;
         for (candidate, registered) in pending.into_iter().zip(registered) {
@@ -234,11 +256,11 @@ impl CustomRingIndexer {
                 }
                 continue;
             }
-            if let Err(error) = self.replay_ring(cursor, &candidate, &tip).await {
+            if let Err(error) = self.replay_ring(&candidate, tip).await {
                 // The checkpoint confines replay retries to the affected ring.
                 log::warn!(
                     "ring {} replay paused ({error:#})",
-                    Pubkey::new_from_array(candidate.program)
+                    Address::new_from_array(candidate.program)
                 );
             }
         }
@@ -246,18 +268,13 @@ impl CustomRingIndexer {
     }
 
     /// Other rings keep serving, only the candidate's instructions are applied.
-    async fn replay_ring(
-        &self,
-        cursor: &mut CustomRingCursor,
-        candidate: &PendingRing,
-        tip: &BlockMetadata,
-    ) -> Result<()> {
+    async fn replay_ring(&self, candidate: &PendingRing, tip: &BlockMetadata) -> Result<()> {
         let db = self.db.as_ref();
         let mut candidate = candidate.clone();
-        // 1. Resume only after the last durable replay block remains canonical.
+        // Resume only while the last durable replay block remains canonical.
         if let Some(checkpoint) = &candidate.replayed_tip {
             if !self.canonical(checkpoint).await? {
-                bail!("ring replay checkpoint is no longer canonical; waiting for rollback");
+                bail!("ring replay checkpoint is no longer canonical, waiting for rollback");
             }
         }
         let mut start = candidate
@@ -293,16 +310,15 @@ impl CustomRingIndexer {
                     }) {
                         bail!("ring replay crossed a confirmed fork");
                     }
-                    // 2. Replay progress and undo data must commit together.
+                    // Replay progress and undo data must commit together.
                     let tx = db.begin().await?;
                     let undo = self
-                        .index_block(&tx, &block, cursor, Scope::Ring(candidate.program))
+                        .index_block(&tx, &block, Scope::Ring(candidate.program))
                         .await?;
                     if let Some(mut journal) = journal {
                         journal.undo.extend(undo);
                         storage::save_journal(&tx, &journal).await?;
                     }
-                    storage::save_cursor(&tx, cursor).await?;
                     candidate.replayed_tip = Some(block.metadata.clone());
                     storage::checkpoint_pending(&tx, &candidate).await?;
                     tx.commit().await?;
@@ -310,11 +326,11 @@ impl CustomRingIndexer {
             }
             start = end.checked_add(1).context("slot overflow")?;
         }
-        // 3. Serve the ring only after replay reaches the global tip.
+        // Serve the ring only after replay reaches the global tip.
         if !candidate.replayed_tip.as_ref().is_some_and(|checkpoint| {
             checkpoint.slot == tip.slot && checkpoint.blockhash == tip.blockhash
         }) {
-            bail!("ring replay has not reached the confirmed custom ring tip");
+            bail!("ring replay has not reached the confirmed ring tip");
         }
         storage::delete_pending(db, &candidate.program).await
     }
@@ -323,20 +339,20 @@ impl CustomRingIndexer {
         stream::iter(slots)
             .map(|slot| async move {
                 let block = self.rpc.get_block(slot, TransactionDetails::Full).await?;
-                Ok(parse_ui_confirmed_blocked(block, slot)?)
+                Ok(BlockInfo::parse(block, slot)?)
             })
             .buffered(self.block_fetches.max(1))
             .collect()
             .await
     }
 
-    async fn apply_block(
+    pub(crate) async fn apply_block(
         &self,
         tx: &DatabaseTransaction,
         block: &BlockInfo,
-        cursor: &mut CustomRingCursor,
+        cursor: &mut RingCursor,
     ) -> Result<()> {
-        let undo = self.index_block(tx, block, cursor, Scope::Every).await?;
+        let undo = self.index_block(tx, block, Scope::Every).await?;
         storage::save_journal(
             tx,
             &BlockJournal {
@@ -355,12 +371,10 @@ impl CustomRingIndexer {
         &self,
         tx: &DatabaseTransaction,
         block: &BlockInfo,
-        cursor: &mut CustomRingCursor,
         scope: Scope,
     ) -> Result<BlockUndo> {
         BlockWork {
             tx,
-            cursor,
             block,
             scope,
             env: BlockEnv {
@@ -373,13 +387,13 @@ impl CustomRingIndexer {
         .await
     }
 
-    async fn check_roots(&self, cursor: &CustomRingCursor, target: u64) -> Result<()> {
+    async fn check_roots(&self, cursor: &RingCursor, target: u64) -> Result<()> {
         let db = self.db.as_ref();
         for root in storage::roots(db).await? {
             if root.fault.is_some() || storage::pending_ring(db, &root.program).await?.is_some() {
                 continue;
             }
-            match load_root(&self.rpc, &Pubkey::new_from_array(root.program)).await {
+            match load_root(&self.rpc, &Address::new_from_array(root.program)).await {
                 // Each proof request checks the exact current root.
                 Ok(_) => {}
                 Err(ApplyError::Retry(error)) => return Err(error),
@@ -390,11 +404,11 @@ impl CustomRingIndexer {
                     let tip = cursor
                         .tip
                         .as_ref()
-                        .context("root exists without a custom ring tip")?;
+                        .context("root exists without a ring index tip")?;
                     let tx = db.begin().await?;
                     let mut journal = storage::journal(&tx, tip.slot)
                         .await?
-                        .context("custom ring journal gap")?;
+                        .context("ring journal gap")?;
                     let undo = RingStore::new(&tx, root.program)
                         .quarantine(root, reason)
                         .await?;
@@ -423,18 +437,14 @@ impl Scope {
     }
 }
 
-fn instruction_view(instruction: &Instruction) -> zolana_ring_indexer::InstructionView<'_> {
+pub(crate) fn instruction_view(
+    instruction: &Instruction,
+) -> zolana_ring_indexer::InstructionView<'_> {
     zolana_ring_indexer::InstructionView {
         program_id: &instruction.program_id,
         accounts: &instruction.accounts,
         data: &instruction.data,
     }
-}
-
-pub(crate) struct Step<'a> {
-    pub root: &'a RingRoot,
-    pub transition: Registration,
-    pub revision: u64,
 }
 
 #[derive(Debug, Error)]
@@ -490,7 +500,7 @@ pub(crate) struct ChainRoot {
     pub next_index: u64,
 }
 
-pub(crate) async fn load_root(rpc: &RpcClient, program: &Pubkey) -> Result<ChainRoot, ApplyError> {
+pub(crate) async fn load_root(rpc: &SolanaRpc, program: &Address) -> Result<ChainRoot, ApplyError> {
     let (address, bump) = pda::key_registry_root(program);
     let account = ring_account(rpc.get_account(&address).await)?;
     if account.owner != *program {
@@ -513,18 +523,18 @@ pub(crate) async fn load_root(rpc: &RpcClient, program: &Pubkey) -> Result<Chain
 }
 
 pub(crate) struct BlockEnv<'a> {
-    rpc: &'a RpcClient,
+    rpc: &'a SolanaRpc,
     policies: HashMap<[u8; 32], PolicyConfig>,
     tree_ids: HashMap<[u8; 32], u16>,
 }
 
 impl BlockEnv<'_> {
     /// One read per ring and block, a ring without a policy is at fault.
-    pub(crate) async fn policy(&mut self, program: &Pubkey) -> Result<PolicyConfig, ApplyError> {
+    pub(crate) async fn policy(&mut self, program: &Address) -> Result<PolicyConfig, ApplyError> {
         if let Some(policy) = self.policies.get(&program.to_bytes()) {
             return Ok(*policy);
         }
-        let address = Pubkey::find_program_address(&[PolicyConfig::SEED], program).0;
+        let address = Address::find_program_address(&[PolicyConfig::SEED], program).0;
         let account = ring_account(self.rpc.get_account(&address).await)?;
         if account.owner != *program {
             return Err(fault("policy config has the wrong owner"));
@@ -539,12 +549,12 @@ impl BlockEnv<'_> {
     }
 
     /// A leaf hashes under the id of the tree it lands in.
-    pub(crate) async fn tree_id(&mut self, tree: &Pubkey) -> Result<u16, ApplyError> {
+    pub(crate) async fn tree_id(&mut self, tree: &Address) -> Result<u16, ApplyError> {
         if let Some(id) = self.tree_ids.get(&tree.to_bytes()) {
             return Ok(*id);
         }
         let account = ring_account(self.rpc.get_account(tree).await)?;
-        let id = photon_indexer::monitor::tree_metadata_sync::rings_tree_id(*tree, &account)
+        let id = spp_tree_id(&account)
             .filter(|id| zolana_interface::pda::tree(*id).to_bytes() == tree.to_bytes())
             .ok_or_else(|| fault("output tree is not the SPP tree of its id"))?;
         self.tree_ids.insert(tree.to_bytes(), id);
@@ -552,25 +562,74 @@ impl BlockEnv<'_> {
     }
 }
 
-pub(crate) struct Invocation<'a> {
-    pub instruction: &'a Instruction,
-    pub subtree: TransactionInfo,
-    pub slot: u64,
+fn spp_tree_id(account: &Account) -> Option<u16> {
+    (account.owner == zolana_interface::pda::shielded_pool_program_id()
+        && account.data.len() == tree_account_size()
+        && account.data.first() == Some(&TREE_ACCOUNT_DISCRIMINATOR))
+    .then(|| read_tree_id(&account.data))
+    .flatten()
 }
 
-struct Invocations<'a> {
+pub(crate) struct Invocation<'a> {
+    pub instruction: &'a Instruction,
     transaction: &'a TransactionInfo,
-    instructions: Vec<&'a Instruction>,
+    subtree: Subtree,
+    slot: u64,
+}
+
+impl Invocation<'_> {
+    /// Sibling invocations cannot supply a transition's SPP event.
+    pub(crate) fn event(&self) -> Result<SppEvent, ApplyError> {
+        let events = ParsedTransaction::new(self.transaction)
+            .and_then(|parsed| parsed.events(&self.subtree, self.transaction.signature, self.slot))
+            .map_err(|error| fault(error.to_string()))?;
+        let [event] = <[SppEvent; 1]>::try_from(events)
+            .map_err(|_| fault("record update must have exactly one descendant SPP event"))?;
+        Ok(event)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn descendants(&self) -> &[Instruction] {
+        &self.transaction.instruction_groups[self.subtree.group].inner_instructions
+            [self.subtree.span.clone()]
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Position {
+    group: usize,
+    /// `None` for the outer instruction.
+    inner: Option<usize>,
+}
+
+pub(crate) struct Invocations<'a> {
+    transaction: &'a TransactionInfo,
+    instructions: Vec<(Position, &'a Instruction)>,
     slot: u64,
 }
 
 impl<'a> Invocations<'a> {
-    fn new(transaction: &'a TransactionInfo, slot: u64) -> Self {
+    pub(crate) fn new(transaction: &'a TransactionInfo, slot: u64) -> Self {
         let instructions = transaction
             .instruction_groups
             .iter()
-            .flat_map(|group| {
-                std::iter::once(&group.outer_instruction).chain(group.inner_instructions.iter())
+            .enumerate()
+            .flat_map(|(group, instructions)| {
+                std::iter::once((
+                    Position { group, inner: None },
+                    &instructions.outer_instruction,
+                ))
+                .chain(instructions.inner_instructions.iter().enumerate().map(
+                    move |(inner, instruction)| {
+                        (
+                            Position {
+                                group,
+                                inner: Some(inner),
+                            },
+                            instruction,
+                        )
+                    },
+                ))
             })
             .collect();
         Self {
@@ -581,38 +640,41 @@ impl<'a> Invocations<'a> {
     }
 
     fn instructions(&self) -> impl Iterator<Item = (usize, &'a Instruction)> + '_ {
-        self.instructions.iter().copied().enumerate()
+        self.instructions
+            .iter()
+            .map(|(_, instruction)| *instruction)
+            .enumerate()
     }
 
-    /// Sibling invocations cannot supply a transition's SPP event.
-    fn invocation(&self, position: usize) -> Result<Invocation<'a>, ApplyError> {
-        let (instruction, rest) = self
+    pub(crate) fn invocation(&self, index: usize) -> Result<Invocation<'a>, ApplyError> {
+        let &(position, instruction) = self
             .instructions
-            .get(position..)
-            .and_then(<[&Instruction]>::split_first)
+            .get(index)
             .context("invocation position out of range")?;
         let depth = instruction
             .stack_height
             .ok_or_else(|| fault("invocation has no stack height"))?;
-        let mut children = Vec::new();
-        for child in rest {
+        let start = position.inner.map_or(0, |inner| inner + 1);
+        let mut end = start;
+        for child in self.transaction.instruction_groups[position.group]
+            .inner_instructions
+            .get(start..)
+            .unwrap_or_default()
+        {
             let child_depth = child
                 .stack_height
                 .ok_or_else(|| fault("descendant has no stack height"))?;
             if child_depth <= depth {
                 break;
             }
-            children.push((*child).clone());
+            end += 1;
         }
         Ok(Invocation {
             instruction,
-            subtree: TransactionInfo {
-                instruction_groups: vec![InstructionGroup {
-                    outer_instruction: (*instruction).clone(),
-                    inner_instructions: children,
-                }],
-                signature: self.transaction.signature,
-                error: None,
+            transaction: self.transaction,
+            subtree: Subtree {
+                group: position.group,
+                span: start..end,
             },
             slot: self.slot,
         })
@@ -621,7 +683,6 @@ impl<'a> Invocations<'a> {
 
 struct BlockWork<'a> {
     tx: &'a DatabaseTransaction,
-    cursor: &'a mut CustomRingCursor,
     block: &'a BlockInfo,
     scope: Scope,
     env: BlockEnv<'a>,
@@ -703,10 +764,10 @@ impl BlockWork<'_> {
         let invocations = Invocations::new(transaction, self.block.metadata.slot);
         for (position, instruction) in invocations.instructions() {
             let program = instruction.program_id.to_bytes();
-            let Some(tag) = instruction.data.first().copied() else {
+            let Some(first) = instruction.data.first().copied() else {
                 continue;
             };
-            if !self.scope.covers(&program) || !spend_record::TAGS.contains(&tag) {
+            if !self.scope.covers(&program) || !spend_record::TAGS.contains(&first) {
                 continue;
             }
             if matches!(self.scope, Scope::Every)
@@ -718,7 +779,7 @@ impl BlockWork<'_> {
             // A ring's first registration opens its records.
             let ring = match store.ring().await? {
                 Some(ring) => ring,
-                None if tag == custom_ring_interface::instruction::tag::REGISTER_SPEND => {
+                None if first == tag::REGISTER_SPEND => {
                     if !self.admit(program).await? {
                         continue;
                     }
@@ -747,7 +808,7 @@ impl BlockWork<'_> {
 
     /// `false` parks an inactive ring for replay once it activates.
     async fn admit(&mut self, program: [u8; 32]) -> Result<bool> {
-        if registered_ring(self.env.rpc, &Pubkey::new_from_array(program)).await? {
+        if registered_ring(self.env.rpc, &Address::new_from_array(program)).await? {
             return Ok(true);
         }
         if matches!(self.scope, Scope::Ring(_)) {
@@ -771,7 +832,7 @@ impl BlockWork<'_> {
         store: &RingStore<'_, DatabaseTransaction>,
         address: [u8; 32],
     ) -> Result<Option<Undo>> {
-        let program = Pubkey::new_from_array(store.program());
+        let program = Address::new_from_array(store.program());
         if !self.admit(store.program()).await? {
             return Ok(None);
         }
@@ -785,7 +846,7 @@ impl BlockWork<'_> {
         let root = RingRoot {
             program: store.program(),
             address,
-            root: EMPTY_ROOT,
+            root: KEY_REGISTRY_EMPTY_ROOT,
             next_index: 1,
             fault: None,
         };
@@ -800,16 +861,13 @@ impl BlockWork<'_> {
         }
         let sentinel = MemberKey::sentinel();
         let computed = store
-            .write_leaves(
-                &address,
-                &[LeafWrite {
-                    index: 0,
-                    hash: sentinel.hash()?,
-                }],
-                self.cursor.advance_revision()?,
-            )
+            .tree()
+            .write(&[LeafWrite {
+                index: 0,
+                hash: sentinel.hash()?,
+            }])
             .await?;
-        if computed != EMPTY_ROOT {
+        if computed != KEY_REGISTRY_EMPTY_ROOT {
             bail!("key registry sentinel root mismatch");
         }
         store.save_root(&root).await?;
@@ -830,15 +888,10 @@ impl BlockWork<'_> {
         let Some(transition) = key_registry::transition(&invocation)? else {
             return Ok(None);
         };
-        let revision = self.cursor.advance_revision()?;
         let savepoint = self.tx.begin().await?;
         let applied = key_registry::apply(
             &RingStore::new(&savepoint, root.program),
-            Step {
-                root,
-                transition,
-                revision,
-            },
+            Step { root, transition },
         )
         .await;
         match applied {
@@ -862,11 +915,11 @@ fn initialization(instruction: &Instruction) -> Option<[u8; 32]> {
     (named == Some(&root)).then_some(root.to_bytes())
 }
 
-async fn registered_ring(rpc: &RpcClient, program: &Pubkey) -> Result<bool> {
+async fn registered_ring(rpc: &SolanaRpc, program: &Address) -> Result<bool> {
     Ok(registered_rings(rpc, std::slice::from_ref(program)).await? == [true])
 }
 
-async fn registered_rings(rpc: &RpcClient, programs: &[Pubkey]) -> Result<Vec<bool>> {
+async fn registered_rings(rpc: &SolanaRpc, programs: &[Address]) -> Result<Vec<bool>> {
     let mut registered = Vec::with_capacity(programs.len());
     for chunk in programs.chunks(ACCOUNTS_PER_REQUEST) {
         let addresses = chunk
@@ -881,7 +934,7 @@ async fn registered_rings(rpc: &RpcClient, programs: &[Pubkey]) -> Result<Vec<bo
     Ok(registered)
 }
 
-fn activated_ring_config(account: &Account, program: &Pubkey) -> bool {
+fn activated_ring_config(account: &Account, program: &Address) -> bool {
     account.owner == zolana_interface::pda::shielded_pool_program_id()
         && bytemuck::try_from_bytes::<RingConfig>(&account.data).is_ok_and(|config| {
             config.discriminator == RING_CONFIG
@@ -890,13 +943,13 @@ fn activated_ring_config(account: &Account, program: &Pubkey) -> bool {
         })
 }
 
-struct BlockBatch {
-    slots: Vec<u64>,
-    scanned_slot: u64,
+pub(crate) struct BlockBatch {
+    pub slots: Vec<u64>,
+    pub scanned_slot: u64,
 }
 
-async fn block_batch(
-    rpc: &RpcClient,
+pub(crate) async fn block_batch(
+    rpc: &SolanaRpc,
     slots: RangeInclusive<u64>,
     batch_len: usize,
 ) -> Result<BlockBatch> {
@@ -926,7 +979,7 @@ async fn block_batch(
     }
 }
 
-async fn confirmed_page(rpc: &RpcClient, range: RangeInclusive<u64>) -> Result<Vec<u64>> {
+async fn confirmed_page(rpc: &SolanaRpc, range: RangeInclusive<u64>) -> Result<Vec<u64>> {
     let page = rpc.get_blocks(range.clone()).await?;
     if page.iter().any(|slot| !range.contains(slot))
         || page.windows(2).any(|pair| pair[0] >= pair[1])
@@ -935,8 +988,3 @@ async fn confirmed_page(rpc: &RpcClient, range: RangeInclusive<u64>) -> Result<V
     }
     Ok(page)
 }
-
-#[cfg(test)]
-mod replay_tests;
-#[cfg(test)]
-mod tests;

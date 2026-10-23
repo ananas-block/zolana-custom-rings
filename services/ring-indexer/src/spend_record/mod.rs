@@ -1,50 +1,36 @@
-pub(super) mod parser;
-
 use anyhow::{anyhow, Result};
 use custom_ring_interface::instruction::tag;
-use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, QueryResult, TransactionTrait,
-};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, QueryResult};
 use serde::{Deserialize, Serialize};
-use solana_pubkey::Pubkey;
-use solana_signature::{Signature, SIGNATURE_BYTES};
-use zolana_indexer_api::SerializableSignature;
-use zolana_ring_indexer::rpc::{
-    GetRingSpendRecordResponse, RingSpendRecord, RingSpendRecordRequest,
+use solana_address::Address;
+use zolana_indexer_api::ShieldedTransaction;
+use zolana_ring_indexer::{
+    rpc::{GetRingSpendRecordResponse, RingSpendRecord, RingSpendRecordRequest},
+    spend_record::{self, Rail, Reconstruction},
 };
 use zolana_ring_key_registry::FIELD_MAX;
 
-use super::{
+use crate::{
     api::{canonical_context, internal},
-    fault,
-    storage::{self, statement, CustomRingCursor},
-    ApplyError, BlockEnv, Invocation,
-};
-use crate::error::RingApiError;
-use parser::Rail;
-use photon_indexer::{
-    api::{
-        error::PhotonApiError, method::rings::shielded_transaction_at,
-        set_transaction_isolation_if_needed,
-    },
-    rpc::RpcClient,
+    error::RingApiError,
+    indexer::{fault, instruction_view, ApplyError, BlockEnv, Invocation},
+    rpc::SolanaRpc,
+    storage::{self, statement, RingCursor},
 };
 
-pub(super) const TAGS: [u8; 2] = [tag::REGISTER_SPEND, tag::TRANSACT];
+pub(crate) const TAGS: [u8; 2] = [tag::REGISTER_SPEND, tag::TRANSACT];
 
-const RINGS_TABLE: &str = "ring_spend_record_rings";
+const RINGS_TABLE: &str = "ring_spend_rings";
 const RECORDS_TABLE: &str = "ring_spend_records";
-const RECORD_COLUMNS: &str = "member,nullifier,signature,event_index,output_index,slot";
+const RECORD_COLUMNS: &str = "member,nullifier,output_index,shielded_transaction";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RecordRow {
     pub member: [u8; 32],
     /// Revealed by the transfer that spends the record.
     pub nullifier: [u8; 32],
-    pub signature: SerializableSignature,
-    pub event_index: u16,
     pub output_index: u16,
-    pub slot: u64,
+    pub transaction: ShieldedTransaction,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,7 +44,7 @@ pub(crate) enum SpendUndo {
     Recorded {
         program: [u8; 32],
         member: [u8; 32],
-        before: Option<RecordRow>,
+        before: Option<Box<RecordRow>>,
     },
 }
 
@@ -67,16 +53,16 @@ pub(crate) struct SpendRing {
     pub fault: Option<String>,
 }
 
-pub(super) enum Update {
+pub(crate) enum Update {
     Register(RecordRow),
     Transfer {
-        spent: RecordRow,
+        spent: Box<RecordRow>,
         successor: RecordRow,
     },
 }
 
 impl Update {
-    pub(super) async fn apply(
+    pub(crate) async fn apply(
         self,
         store: &SpendStore<'_, DatabaseTransaction>,
     ) -> Result<Option<SpendUndo>, ApplyError> {
@@ -103,7 +89,7 @@ impl Update {
     }
 }
 
-pub(super) async fn restore(tx: &DatabaseTransaction, undos: &[SpendUndo]) -> Result<()> {
+pub(crate) async fn restore(tx: &DatabaseTransaction, undos: &[SpendUndo]) -> Result<()> {
     for undo in undos.iter().rev() {
         match undo {
             SpendUndo::Opened { program } => SpendStore::new(tx, *program).close().await?,
@@ -128,19 +114,20 @@ pub(super) async fn restore(tx: &DatabaseTransaction, undos: &[SpendUndo]) -> Re
 
 pub(crate) async fn lookup(
     db: &DatabaseConnection,
-    rpc: &RpcClient,
+    rpc: &SolanaRpc,
     request: RingSpendRecordRequest,
 ) -> Result<GetRingSpendRecordResponse, RingApiError> {
     if request.member.0 == [0; 32] || request.member.0 >= FIELD_MAX {
-        return Err(PhotonApiError::ValidationError("invalid spend record member".into()).into());
+        return Err(RingApiError::InvalidRequest(
+            "invalid spend record member".into(),
+        ));
     }
-    let tx = db.begin().await?;
-    set_transaction_isolation_if_needed(&tx).await?;
+    let tx = storage::begin_read(db).await?;
     let cursor = storage::cursor(&tx)
         .await
         .map_err(internal)?
-        .filter(CustomRingCursor::is_ready)
-        .ok_or_else(|| out_of_sync("custom ring indexer is catching up or recovering"))?;
+        .filter(RingCursor::is_ready)
+        .ok_or_else(|| out_of_sync("ring indexer is catching up or recovering"))?;
     let program = request.ring_program_id.0.to_bytes();
     if storage::pending_ring(&tx, &program)
         .await
@@ -159,30 +146,20 @@ pub(crate) async fn lookup(
             store.record(&request.member.0).await.map_err(internal)?
         }
     };
-    let record = match row {
-        Some(row) => {
-            let transaction = shielded_transaction_at(
-                &tx,
-                <[u8; SIGNATURE_BYTES]>::from(row.signature.0),
-                row.event_index,
-            )
-            .await?
-            .ok_or_else(|| out_of_sync("record transaction is not indexed yet"))?;
-            Some(RingSpendRecord {
-                transaction,
-                output_index: row.output_index,
-            })
-        }
-        None => None,
-    };
     tx.commit().await?;
     let context = canonical_context(rpc, cursor.tip.as_ref())
         .await
         .map_err(out_of_sync)?;
-    Ok(GetRingSpendRecordResponse { context, record })
+    Ok(GetRingSpendRecordResponse {
+        context,
+        record: row.map(|row| RingSpendRecord {
+            transaction: row.transaction,
+            output_index: row.output_index,
+        }),
+    })
 }
 
-pub(super) struct SpendStore<'c, C> {
+pub(crate) struct SpendStore<'c, C> {
     conn: &'c C,
     program: [u8; 32],
 }
@@ -224,7 +201,7 @@ impl<'c, C: ConnectionTrait> SpendStore<'c, C> {
     pub async fn quarantine(&self, reason: String) -> Result<SpendUndo> {
         log::warn!(
             "spend records of ring {} quarantined ({reason})",
-            solana_pubkey::Pubkey::new_from_array(self.program)
+            Address::new_from_array(self.program)
         );
         self.set_fault(Some(reason)).await?;
         Ok(SpendUndo::Quarantined {
@@ -308,22 +285,17 @@ impl<'c, C: ConnectionTrait> SpendStore<'c, C> {
             .execute(statement(
                 self.conn,
                 &format!(
-                    "INSERT INTO {RECORDS_TABLE}(program,{RECORD_COLUMNS}) \
-                     VALUES($1,$2,$3,$4,$5,$6,$7) \
+                    "INSERT INTO {RECORDS_TABLE}(program,{RECORD_COLUMNS}) VALUES($1,$2,$3,$4,$5) \
                      ON CONFLICT(program,member) DO UPDATE SET nullifier=excluded.nullifier,\
-                     signature=excluded.signature,event_index=excluded.event_index,\
-                     output_index=excluded.output_index,slot=excluded.slot"
+                     output_index=excluded.output_index,\
+                     shielded_transaction=excluded.shielded_transaction"
                 ),
                 vec![
                     self.program.to_vec().into(),
                     row.member.to_vec().into(),
                     row.nullifier.to_vec().into(),
-                    <[u8; SIGNATURE_BYTES]>::from(row.signature.0)
-                        .to_vec()
-                        .into(),
-                    i32::from(row.event_index).into(),
                     i32::from(row.output_index).into(),
-                    i64::try_from(row.slot)?.into(),
+                    serde_json::to_string(&row.transaction)?.into(),
                 ],
             ))
             .await?;
@@ -344,52 +316,50 @@ impl<'c, C: ConnectionTrait> SpendStore<'c, C> {
 
 impl SpendStore<'_, DatabaseTransaction> {
     /// A transfer is a record update only when it spends a record held here.
-    pub(super) async fn advance(
+    pub(crate) async fn advance(
         &self,
         invocation: &Invocation<'_>,
         env: &mut BlockEnv<'_>,
     ) -> Result<Option<SpendUndo>, ApplyError> {
-        let Some(rail) = parser::decode(invocation.instruction).map_err(invalid)? else {
+        let Some(rail) =
+            spend_record::decode(instruction_view(invocation.instruction)).map_err(invalid)?
+        else {
             return Ok(None);
         };
-        let event = parser::event(invocation).map_err(invalid)?;
+        let event = invocation.event()?;
         let spent = match rail {
             Rail::Register { .. } => None,
-            Rail::Transfer => {
-                let nullifiers = event
-                    .nullifiers
-                    .iter()
-                    .map(|input| input.nullifier)
-                    .collect::<Vec<_>>();
-                let Some(spent) = self.spent_by(&nullifiers).await? else {
-                    return Ok(None);
-                };
-                Some(spent)
-            }
+            Rail::Transfer => match self.spent_by(&event.nullifiers()).await? {
+                Some(spent) => Some(spent),
+                None => return Ok(None),
+            },
         };
-        let policy = env.policy(&invocation.instruction.program_id).await?;
-        let output_tree_id = env
-            .tree_id(&Pubkey::new_from_array(event.output_tree))
-            .await?;
-        let successor = parser::Reconstruction {
-            invocation,
+        let program = invocation.instruction.program_id;
+        let policy = env.policy(&program).await?;
+        let output_tree_id = env.tree_id(&event.output_tree()).await?;
+        let transaction = event
+            .transaction(program, output_tree_id)
+            .map_err(|error| fault(error.to_string()))?;
+        let successor = Reconstruction {
+            instruction: instruction_view(invocation.instruction),
             rail,
-            event: &event,
             policy: &policy,
-            output_tree_id,
+            event: &transaction,
+            source_instruction_tag: event.source_instruction_tag,
         }
         .reconstruct()
         .map_err(invalid)?;
         let successor = RecordRow {
             member: successor.member,
             nullifier: successor.nullifier,
-            signature: event.signature.into(),
-            event_index: u16::try_from(event.event_index).map_err(|error| invalid(error.into()))?,
             output_index: successor.output_index,
-            slot: event.slot,
+            transaction,
         };
         match spent {
-            Some(spent) => Update::Transfer { spent, successor },
+            Some(spent) => Update::Transfer {
+                spent: Box::new(spent),
+                successor,
+            },
             None => Update::Register(successor),
         }
         .apply(self)
@@ -398,22 +368,17 @@ impl SpendStore<'_, DatabaseTransaction> {
 }
 
 fn record_row(row: &QueryResult) -> Result<RecordRow> {
-    let bytes = |column: &str| -> Result<Vec<u8>> { Ok(row.try_get("", column)?) };
     let hash = |column: &str| -> Result<[u8; 32]> {
-        bytes(column)?
+        row.try_get::<Vec<u8>>("", column)?
             .try_into()
             .map_err(|_| anyhow!("stored {column} is not 32 bytes"))
     };
-    let signature: [u8; SIGNATURE_BYTES] = bytes("signature")?
-        .try_into()
-        .map_err(|_| anyhow!("stored signature has the wrong length"))?;
+    let transaction: String = row.try_get("", "shielded_transaction")?;
     Ok(RecordRow {
         member: hash("member")?,
         nullifier: hash("nullifier")?,
-        signature: Signature::from(signature).into(),
-        event_index: u16::try_from(row.try_get::<i32>("", "event_index")?)?,
         output_index: u16::try_from(row.try_get::<i32>("", "output_index")?)?,
-        slot: u64::try_from(row.try_get::<i64>("", "slot")?)?,
+        transaction: serde_json::from_str(&transaction)?,
     })
 }
 
@@ -426,4 +391,4 @@ fn out_of_sync(reason: impl std::fmt::Display) -> RingApiError {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

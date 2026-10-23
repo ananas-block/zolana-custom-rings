@@ -1,5 +1,4 @@
-use jsonrpsee::types::ErrorObjectOwned;
-use photon_indexer::api::error::PhotonApiError;
+use jsonrpsee::types::{error::ErrorCode, ErrorObjectOwned};
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingRpcError;
 
@@ -15,26 +14,42 @@ pub enum RingApiError {
     MemberAlreadyRegistered,
     #[error("spend records are out of sync ({0})")]
     SpendRecordOutOfSync(String),
-    #[error(transparent)]
-    Photon(#[from] PhotonApiError),
+    #[error("invalid request ({0})")]
+    InvalidRequest(String),
+    #[error("internal error ({0})")]
+    Internal(String),
 }
 
 impl From<sea_orm::DbErr> for RingApiError {
     fn from(error: sea_orm::DbErr) -> Self {
-        Self::Photon(error.into())
+        Self::Internal(error.to_string())
     }
 }
 
 impl From<RingApiError> for ErrorObjectOwned {
     fn from(error: RingApiError) -> Self {
-        let refusal = match error {
-            RingApiError::Photon(error) => return error.into(),
+        let refusal = match &error {
             RingApiError::OutOfSync(_) => RingRpcError::KeyRegistryOutOfSync,
             RingApiError::RootChanged => RingRpcError::KeyRegistryRootChanged,
             RingApiError::MemberUnregistered => RingRpcError::MemberUnregistered,
             RingApiError::MemberAlreadyRegistered => RingRpcError::MemberAlreadyRegistered,
             RingApiError::SpendRecordOutOfSync(_) => RingRpcError::SpendRecordOutOfSync,
+            RingApiError::InvalidRequest(_) => {
+                return Self::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    error.to_string(),
+                    None::<()>,
+                )
+            }
+            RingApiError::Internal(reason) => {
+                log::error!("ring lookup failed ({reason})");
+                return Self::owned(
+                    ErrorCode::InternalError.code(),
+                    "internal server error",
+                    None::<()>,
+                );
+            }
         };
-        ErrorObjectOwned::owned(refusal.code(), error.to_string(), None::<()>)
+        Self::owned(refusal.code(), error.to_string(), None::<()>)
     }
 }
