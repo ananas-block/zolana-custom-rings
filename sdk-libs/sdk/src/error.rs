@@ -263,7 +263,7 @@ impl From<RingIndexerError> for RingError {
 }
 
 impl RingError {
-    /// Photon trails or passed the chain state the read was asked under.
+    /// The ring indexer trails or passed the chain state the read was asked under.
     pub fn is_projection_lag(&self) -> bool {
         matches!(
             self,

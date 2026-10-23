@@ -1,3 +1,4 @@
+// Package ringtest holds the host helpers and fixtures the ring twin packages share.
 package ringtest
 
 import (
@@ -44,4 +45,43 @@ func ToBigInts(values []frontend.Variable) []*big.Int {
 		out[i] = AsBigInt(value)
 	}
 	return out
+}
+
+// AssetField is hash_bytes(asset_address).
+func AssetField(t testing.TB, assetAddress [32]byte) *big.Int {
+	t.Helper()
+	asset, err := protocol.AssetField(assetAddress)
+	return spptest.MustHash(t, asset, err)
+}
+
+// Scalar is byte i = seed ^ i with a 0x01 lead byte, the fixture every cross-language vector derives from.
+func Scalar(seed byte) [32]byte {
+	var out [32]byte
+	for i := range out {
+		out[i] = seed ^ byte(i)
+	}
+	out[0] = 0x01
+	return out
+}
+
+// Repeat is 32 copies of one byte.
+func Repeat(value byte) [32]byte {
+	var out [32]byte
+	for i := range out {
+		out[i] = value
+	}
+	return out
+}
+
+// HashBytes is protocol.HashBytes with the test failing on a hashing error.
+func HashBytes(t testing.TB, bytes []byte) *big.Int {
+	t.Helper()
+	hash, err := protocol.HashBytes(bytes)
+	return spptest.MustHash(t, hash, err)
+}
+
+func SetBytes(dst []frontend.Variable, src []byte) {
+	for i, b := range src {
+		dst[i] = int(b)
+	}
 }

@@ -16,9 +16,11 @@ const WORKSPACE_ENV: &str = "ZOLANA_RING_WORKSPACE";
 pub(crate) const WRONG_TARGET: &str = "workspace artifacts are only supported on localnet";
 const SURFPOOL_ENV: &str = "SURFPOOL_BIN";
 const PROVER_KEYS_ENV: &str = "ZOLANA_PROVER_KEYS_DIR";
+const PHOTON_PORT_ENV: &str = "ZOLANA_LOCALNET_PHOTON_PORT";
 const ZOLANA_BIN: &str = "zolana/target/debug/zolana";
 const PHOTON_BIN: &str = "target/debug/photon";
 const RING_RPC_BIN: &str = "target/debug/ring-rpc";
+const RING_INDEXER_BIN: &str = "target/debug/ring-indexer";
 const XTASK_BIN: &str = "zolana/target/debug/xtask";
 const PROVER_BIN: &str = "target/prover-server";
 const SHIELDED_POOL_SO: &str = "zolana/target/deploy/shielded_pool_program.so";
@@ -75,6 +77,24 @@ impl Workspace {
         self.artifact(RING_RPC_BIN)
     }
 
+    pub fn ring_indexer(&self) -> Result<PathBuf> {
+        self.artifact(RING_INDEXER_BIN)
+    }
+
+    pub fn photon_port(&self, indexer_port: u16) -> Result<u16> {
+        env::var(PHOTON_PORT_ENV)
+            .ok()
+            .and_then(|port| port.parse().ok())
+            .filter(|port| *port != indexer_port)
+            .with_context(|| {
+                format!("set {PHOTON_PORT_ENV} to a free port other than the ring indexer port")
+            })
+    }
+
+    pub fn scope(&self) -> &Path {
+        &self.scope
+    }
+
     /// The workspace `zolana` cli, pointed at the workspace services and keys.
     pub fn command(&self) -> Result<Command> {
         let mut command = Command::new(self.artifact(ZOLANA_BIN)?);
@@ -116,6 +136,7 @@ impl Workspace {
             ZOLANA_BIN,
             PHOTON_BIN,
             RING_RPC_BIN,
+            RING_INDEXER_BIN,
             XTASK_BIN,
             PROVER_BIN,
             SHIELDED_POOL_SO,

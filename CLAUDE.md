@@ -11,7 +11,7 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   the zolana side first, then move the pin with `just zolana-bump <commit>`.
 - The layout mirrors zolana: `programs/custom-ring`, `program-libs/{interface,
   policy,member-registry}`, `sdk-libs/{client,indexer,sdk,transaction,ts}`,
-  `program-tests/custom-ring`, `services/{photon,ring-rpc}`, `cli`, `xtask`.
+  `program-tests/custom-ring`, `services/{ring-indexer,ring-rpc}`, `cli`, `xtask`.
 - The ring verifying keys are committed in `program-libs/interface/src`, and
   `just check-custom-ring-keys` diffs them against the ring prover's export of
   the keys `prover/ring/proving-keys.lock` pins.

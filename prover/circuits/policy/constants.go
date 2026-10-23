@@ -33,6 +33,3 @@ const (
 	GuardAboveAmount        = 1
 	GuardAboveAmountByAsset = 2
 )
-
-// MemberOutputs are the member key capacities, every output opens its own owner and asset entry.
-var MemberOutputs = [...]int{2, 4, 8, 16}

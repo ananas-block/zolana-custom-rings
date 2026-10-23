@@ -7,6 +7,7 @@ import {
   PAGE_LIMIT,
   equalBytes,
   bytesKey,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { ownerHash } from "@heliuslabs/zolana/keypair";

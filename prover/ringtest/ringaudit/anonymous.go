@@ -6,13 +6,14 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// Stream is the host twin of base.StreamWires.
+// Stream is the host twin of audit.StreamWires.
 type Stream struct {
 	Tag   *big.Int
 	Inbox bool
@@ -29,23 +30,22 @@ type AnonymousOutput struct {
 // Anchor is the first contact of the pair slot and its place in the state tree.
 type Anchor struct {
 	// Owner is the owner hash the first contact commits.
-	Owner          *big.Int
-	TreeID         uint16
-	Asset          *big.Int
-	Amount         uint64
-	Blinding       *big.Int
-	SlotSecret     *big.Int
-	FirstNullifier *big.Int
-	SlotIndex      int
-	Epoch          uint64
-	Index          uint64
-	LeafIndex      uint64
+	Owner        *big.Int
+	TreeID       uint16
+	Asset        *big.Int
+	Amount       uint64
+	Blinding     *big.Int
+	RingDataHash *big.Int
+	SlotSecret   *big.Int
+	Epoch        uint64
+	Index        uint64
+	LeafIndex    uint64
 }
 
 // AnonymousAudit is an anonymous audit witness with every derived value explicit, the statement rebuilds from its fields.
 type AnonymousAudit struct {
 	Transfer
-	Shape             base.AnonymousAuditShape
+	Shape             audit.AnonymousAuditShape
 	Outputs           []AnonymousOutput
 	SenderKey         [32]byte
 	SenderNullifierPk *big.Int
@@ -78,18 +78,18 @@ var anonymousOutputs = map[int][]int{
 }
 
 // NewAnonymousAudit spends two sender UTXOs, one on a class of one input, into the anonymousOutputs slots of its output count, input 1 a default-ring note on an entry shape.
-func NewAnonymousAudit(t testing.TB, shape base.AnonymousAuditShape) AnonymousAudit {
+func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousAudit {
 	t.Helper()
 	a := AnonymousAudit{
 		Transfer:          newTransfer(t),
 		Shape:             shape,
-		SenderKey:         Repeat(0xa1),
+		SenderKey:         ringtest.Repeat(0xa1),
 		SenderNullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)),
 		PrivateTxBlinding: big.NewInt(0x5b1d),
 		Epoch:             1000,
 		InputCount:        2,
 	}
-	a.SenderCommitment = SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
+	a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
 	a.Inputs = make([]Utxo, shape.InputClass)
 	for i := range a.Inputs {
 		a.Inputs[i] = Dummy(3, big.NewInt(0x9000+int64(i)))
@@ -111,31 +111,21 @@ func NewAnonymousAudit(t testing.TB, shape base.AnonymousAuditShape) AnonymousAu
 		switch kind {
 		case kindPair:
 			slot := Recipient(t, 0, i, 70)
-			a.Outputs = append(a.Outputs, a.NewPayment(t, slot, Stream{Pair: true, Index: 2, Tag: PairTag(t, PairKey(t, a.Anchor.SlotSecret), a.Epoch, 2)}))
+			a.Outputs = append(a.Outputs, a.NewPayment(t, slot, Stream{Pair: true, Index: 2, Tag: ringprotocol.PairTag(t, ringprotocol.PairKey(t, a.Anchor.SlotSecret), a.Epoch, 2)}))
 		case kindInbox:
 			slot := Recipient(t, 1+byte(inboxes%2), i, 30+uint64(i))
-			stream := Stream{Inbox: true, Index: inboxes, Tag: InboxTag(t, InboxKey(t, a.RingProgramID, slot.RecipientKey), a.Epoch, inboxes)}
+			stream := Stream{Inbox: true, Index: inboxes, Tag: ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, slot.RecipientKey), a.Epoch, inboxes)}
 			a.Outputs = append(a.Outputs, a.NewPayment(t, slot, stream))
 			inboxes++
 		case kindSelf:
-			a.Outputs = append(a.Outputs, a.NewPayment(t, a.Change(t, i), Stream{Self: true, Tag: LowTag(big.NewInt(0xc4a9e))}))
+			a.Outputs = append(a.Outputs, a.NewPayment(t, a.Change(t, i), Stream{Self: true, Tag: ringprotocol.LowTag(big.NewInt(0xc4a9e))}))
 		case kindExit:
 			a.Outputs = append(a.Outputs, AnonymousOutput{DeliveredOutput: a.NewExit(t, i), Stream: Stream{Tag: big.NewInt(0)}})
 		case kindDummy:
-			a.Outputs = append(a.Outputs, AnonymousOutput{DeliveredOutput: a.newDummy(t, i), Stream: Stream{Tag: LowTag(big.NewInt(0xd0d0 + int64(i)))}})
+			a.Outputs = append(a.Outputs, AnonymousOutput{DeliveredOutput: a.newDummy(t, i), Stream: Stream{Tag: ringprotocol.LowTag(big.NewInt(0xd0d0 + int64(i)))}})
 		}
 	}
 	a.Layout = Layout{Exits: hasExit(deliveredUtxos(a.Outputs)), FullOpenings: shape.FullOpenings}
-	return a
-}
-
-// AtInputCount publishes count inputs, every input past them a dummy.
-func (a AnonymousAudit) AtInputCount(count int) AnonymousAudit {
-	a.InputCount = count
-	a.Inputs = slices.Clone(a.Inputs)
-	for i := count; i < len(a.Inputs); i++ {
-		a.Inputs[i] = Dummy(3, big.NewInt(0x9000+int64(i)))
-	}
 	return a
 }
 
@@ -150,7 +140,7 @@ func (a AnonymousAudit) SenderUtxo(t testing.TB, ringID *big.Int, amount uint64,
 	t.Helper()
 	return Utxo{
 		Domain: protocol.UtxoDomain, TreeID: 3, OwnerPkHash: a.SenderPkHash(t), NullifierPk: a.SenderNullifierPk,
-		Asset: AssetField(t, Repeat(0x0a)), Amount: amount, Blinding: big.NewInt(blinding),
+		Asset: ringtest.AssetField(t, ringtest.Repeat(0x0a)), Amount: amount, Blinding: big.NewInt(blinding),
 		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: ringID,
 	}
 }
@@ -159,16 +149,16 @@ func (a AnonymousAudit) SenderUtxo(t testing.TB, ringID *big.Int, amount uint64,
 func (a AnonymousAudit) Change(t testing.TB, i int) DeliverySlot {
 	t.Helper()
 	return DeliverySlot{
-		Index: i, RecipientKey: XPublicKey(t, Scalar(0x66)), OwnerKey: a.SenderKey,
-		NullifierPk: a.SenderNullifierPk, AssetAddress: Repeat(0x0a), Amount: 15,
+		Index: i, RecipientKey: ringprotocol.XPublicKey(t, ringtest.Scalar(0x66)), OwnerKey: a.SenderKey,
+		NullifierPk: a.SenderNullifierPk, AssetAddress: ringtest.Repeat(0x0a), Amount: 15,
 	}
 }
 
-// NewPayment delivers a ring output whose blinding binds stream.Tag.
+// NewPayment delivers a ring output whose ring data binds stream.Tag.
 func (a AnonymousAudit) NewPayment(t testing.TB, slot DeliverySlot, stream Stream) AnonymousOutput {
 	t.Helper()
 	return AnonymousOutput{
-		DeliveredOutput: a.NewRingOutput(t, slot, func(secret *big.Int) *big.Int { return AnonymousRingSecret(t, secret, stream.Tag) }),
+		DeliveredOutput: a.NewRingOutput(t, slot, func(secret *big.Int) *big.Int { return ringprotocol.AnonymousRingData(t, secret, stream.Tag) }),
 		Stream:          stream,
 	}
 }
@@ -177,28 +167,23 @@ func (a AnonymousAudit) NewPayment(t testing.TB, slot DeliverySlot, stream Strea
 func (a AnonymousAudit) NewAnchor(t testing.TB, payee DeliverySlot, epoch, index uint64) *Anchor {
 	t.Helper()
 	earlier := a.Transfer
-	earlier.Keys = earlier.Keys.WithRawTxScalar(t, Clamped(Scalar(0x44)))
+	earlier.Keys = earlier.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44)))
 	earlier.FirstNullifier = big.NewInt(0x2f2f)
+	earlier = earlier.withSeed(t)
 	anchor := &Anchor{
-		TreeID:         4,
-		Asset:          AssetField(t, Repeat(0x0a)),
-		Amount:         7,
-		SlotSecret:     earlier.DeliveredSlotSecret(t, payee.RecipientKey, 1),
-		FirstNullifier: earlier.FirstNullifier,
-		SlotIndex:      1,
-		Epoch:          epoch,
-		Index:          index,
-		LeafIndex:      37,
+		TreeID:     4,
+		Asset:      ringtest.AssetField(t, ringtest.Repeat(0x0a)),
+		Amount:     7,
+		Blinding:   earlier.Blinding(t, 1),
+		SlotSecret: earlier.DeliveredSlotSecret(t, payee.RecipientKey, 1),
+		Epoch:      epoch,
+		Index:      index,
+		LeafIndex:  37,
 	}
 	anchor.Owner = spptest.MustOwnerHash(t, ringtest.MustSolanaPkField(t, payee.OwnerKey), payee.NullifierPk)
-	anchor.Blinding = anchor.FirstContactBlinding(t, InboxTag(t, InboxKey(t, a.RingProgramID, payee.RecipientKey), epoch, index))
+	firstTag := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, payee.RecipientKey), epoch, index)
+	anchor.RingDataHash = ringprotocol.AnonymousRingData(t, anchor.SlotSecret, firstTag)
 	return anchor
-}
-
-// FirstContactBlinding is the anonymous ring output blinding of the first contact under its first tag.
-func (anchor Anchor) FirstContactBlinding(t testing.TB, firstTag *big.Int) *big.Int {
-	t.Helper()
-	return RingBlinding(t, anchor.FirstNullifier, AnonymousRingSecret(t, anchor.SlotSecret, firstTag), anchor.SlotIndex)
 }
 
 // FirstContactRoot is the state root holding the first contact, 0 without an anchor.
@@ -216,7 +201,7 @@ func (a AnonymousAudit) firstContactTree(t testing.TB) (*big.Int, protocol.State
 	leaf := spptest.MustUtxoHash(t, protocol.Utxo{
 		Domain: big.NewInt(protocol.UtxoDomain), Owner: a.Anchor.Owner, Asset: a.Anchor.Asset,
 		Amount: new(big.Int).SetUint64(a.Anchor.Amount), Blinding: a.Anchor.Blinding,
-		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: a.RingProgramID,
+		DataHash: big.NewInt(0), RingDataHash: a.Anchor.RingDataHash, RingProgramID: a.RingProgramID,
 	}, big.NewInt(int64(a.Anchor.TreeID)))
 	root, proofs := spptest.MustBuildSparseStateTree(t, map[uint64]*big.Int{a.Anchor.LeafIndex: leaf})
 	return root, proofs[a.Anchor.LeafIndex]
@@ -287,28 +272,28 @@ func (a AnonymousAudit) DisclosureOf(t testing.TB, records []*big.Int) []*big.In
 		nullifierPks = append(nullifierPks, live(output.Utxo, output.Utxo.NullifierPk))
 		slotBytes = append(slotBytes, output.slotBytes(t, output.RecipientKey[:])...)
 	}
-	head := slices.Concat(nullifierPks, PackDisclosure(slotBytes))
+	head := slices.Concat(nullifierPks, ringprotocol.PackDisclosure(slotBytes))
 	if a.Layout.FullOpenings {
 		var amounts []byte
 		for _, input := range a.Inputs {
 			amounts = binary.BigEndian.AppendUint64(amounts, live(input, new(big.Int).SetUint64(input.Amount)).Uint64())
 		}
-		head = slices.Concat([]*big.Int{a.Inputs[0].NullifierPk}, head, PackDisclosure(amounts))
+		head = slices.Concat([]*big.Int{a.Inputs[0].NullifierPk}, head, ringprotocol.PackDisclosure(amounts))
 	}
 	return a.Keys.Disclose(t, a.Salt, slices.Concat(a.seedOut(a.Layout), head, records))
 }
 
-// Circuit is the base assignment proving the statement.
-func (a AnonymousAudit) Circuit(t testing.TB) *base.AnonymousAuditCircuit {
+// Circuit is the audit assignment proving the statement.
+func (a AnonymousAudit) Circuit(t testing.TB) *audit.AnonymousAuditCircuit {
 	t.Helper()
-	c, err := base.NewAnonymousAuditCircuit(a.Shape)
+	c, err := audit.NewAnonymousAuditCircuit(a.Shape)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.PublicInputHash = spptest.MustHashChain4(t, a.Statement(t))
 	c.AuditWires = a.wires(a.Layout)
 	for i, output := range a.Outputs {
-		c.Outputs[i] = base.AnonymousOutputWires{DeliveryWires: output.wires(), Stream: base.StreamWires{
+		c.Outputs[i] = audit.AnonymousOutputWires{DeliveryWires: output.wires(), Stream: audit.StreamWires{
 			Tag: output.Stream.Tag, Inbox: ringtest.Bit(output.Stream.Inbox), Pair: ringtest.Bit(output.Stream.Pair),
 			Self: ringtest.Bit(output.Stream.Self), Index: output.Stream.Index,
 		}}
@@ -316,7 +301,7 @@ func (a AnonymousAudit) Circuit(t testing.TB) *base.AnonymousAuditCircuit {
 	c.PrivateTxHash = a.PrivateTxHash(t)
 	c.PrivateTxBlinding = a.PrivateTxBlinding
 	if a.Shape.FullOpenings {
-		setBytes(c.SenderKey, a.SenderKey[:])
+		ringtest.SetBytes(c.SenderKey, a.SenderKey[:])
 	}
 	c.InputCount = a.InputCount
 	for i, input := range a.Inputs {
@@ -330,9 +315,9 @@ func (a AnonymousAudit) Circuit(t testing.TB) *base.AnonymousAuditCircuit {
 }
 
 // anchorWires opens the first contact, zero without an anchor.
-func (a AnonymousAudit) anchorWires(t testing.TB) base.AnchorWires {
+func (a AnonymousAudit) anchorWires(t testing.TB) audit.AnchorWires {
 	t.Helper()
-	w := base.AnchorWires{TreeID: 0, Asset: 0, Amount: 0, SlotSecret: 0, FirstNullifier: 0, SlotIndex: 0, Epoch: 0, Index: 0, PathIndex: 0}
+	w := audit.AnchorWires{TreeID: 0, Asset: 0, Amount: 0, SlotSecret: 0, Blinding: 0, Epoch: 0, Index: 0, PathIndex: 0}
 	for i := range w.Path {
 		w.Path[i] = 0
 	}
@@ -340,9 +325,9 @@ func (a AnonymousAudit) anchorWires(t testing.TB) base.AnchorWires {
 		return w
 	}
 	_, proof := a.firstContactTree(t)
-	w = base.AnchorWires{
+	w = audit.AnchorWires{
 		TreeID: int(a.Anchor.TreeID), Asset: a.Anchor.Asset, Amount: a.Anchor.Amount, SlotSecret: a.Anchor.SlotSecret,
-		FirstNullifier: a.Anchor.FirstNullifier, SlotIndex: a.Anchor.SlotIndex, Epoch: a.Anchor.Epoch, Index: a.Anchor.Index,
+		Blinding: a.Anchor.Blinding, Epoch: a.Anchor.Epoch, Index: a.Anchor.Index,
 		PathIndex: proof.PathIndex,
 	}
 	for i, sibling := range proof.PathElements {
@@ -368,19 +353,19 @@ func spentHashes(t testing.TB, utxos []Utxo) []*big.Int {
 	return hashes
 }
 
-// CommitmentRecords mirrors the commitment tail of base.
+// CommitmentRecords mirrors the commitment tail of audit.
 func CommitmentRecords(hashes []*big.Int) []*big.Int {
 	records := []*big.Int{hashes[0]}
 	var prefixes []*big.Int
 	for _, hash := range hashes[1:] {
-		prefixes = append(prefixes, new(big.Int).Rsh(hash, 8*(32-base.InputPrefixLen)))
+		prefixes = append(prefixes, new(big.Int).Rsh(hash, 8*(32-audit.InputPrefixLen)))
 	}
 	for k := 0; k < len(prefixes); k += 2 {
 		second := big.NewInt(0)
 		if k+1 < len(prefixes) {
 			second = prefixes[k+1]
 		}
-		records = append(records, new(big.Int).Add(new(big.Int).Lsh(prefixes[k], base.InputPrefixBits), second))
+		records = append(records, new(big.Int).Add(new(big.Int).Lsh(prefixes[k], audit.InputPrefixBits), second))
 	}
 	return records
 }

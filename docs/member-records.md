@@ -3,7 +3,7 @@
 A ring keeps its lists in member records, and a registered owner's record binds
 its escrowed nullifier key. The records form the ring's member registry, a
 4-ary indexed Merkle tree that belongs to the ring alone. The ring program
-keeps the tree's recent roots on chain, and Photon stores the records. Members
+keeps the tree's recent roots on chain, and the ring indexer stores the records. Members
 queue their writes on chain, and an apply proof moves the tree to its next
 root. The config authority's writes apply in their own instruction and raise
 the registry's root floor, so a revocation applies to every later transfer. A
@@ -130,10 +130,10 @@ before a curator write still lands.
 
 ## Indexing
 
-Photon reads the queued writes from the write instructions and replays every
+The ring indexer reads the queued writes from the write instructions and replays every
 application over its copy of the tree. It compares the resulting root and
 next leaf with the instruction's values. A mismatch stops the ring's
-projection, and Photon then refuses the ring's record reads. Clients check
+projection, and the ring indexer then refuses the ring's record reads. Clients check
 every opening against a root the registry holds before they prove.
 
 ## With the CLI and the SDKs

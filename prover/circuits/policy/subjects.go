@@ -4,13 +4,13 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/records"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
 type Entry struct {
-	Own     records.QuadOpening
-	Curator records.QuadOpening
+	Own     registry.QuadOpening
+	Curator registry.QuadOpening
 }
 
 type subjectView struct {
@@ -46,7 +46,7 @@ func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, me
 	// 2. The same holds under curator_root whenever a list reads from the curator registry.
 	curator, _ := e.Curator.Resolve(api, api.Mul(cond, sources.anyForeign), p.CuratorRoot, member)
 	// 3. A record's list bitmap splits bit per list, bit i marks list i+1.
-	ownBits, curatorBits := api.ToBinary(own, records.ListBits), api.ToBinary(curator, records.ListBits)
+	ownBits, curatorBits := api.ToBinary(own, registry.ListBits), api.ToBinary(curator, registry.ListBits)
 	view := subjectView{escrowKey: escrowKey}
 	for i := range view.onList {
 		view.onList[i] = api.Select(sources.foreign[i], curatorBits[i], ownBits[i])
@@ -58,7 +58,7 @@ func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, me
 func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
 	for o, out := range outputs {
 		escrowed := api.Mul(out.utxo, keyEscrow)
-		key := records.EscrowKey(api, out.nullifierPk, p.Outputs[o].CtHash)
+		key := registry.EscrowKey(api, out.nullifierPk, p.Outputs[o].CtHash)
 		// The owner's record escrows Poseidon(nullifier_pk, ct_hash), an absent owner resolves zero and never matches.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: owners[o].escrowKey, B: key})
 	}

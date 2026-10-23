@@ -10,6 +10,7 @@ import {
   concatBytes,
   copyBytes,
   u32be,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 import type { MessageData } from "@heliuslabs/zolana/interface";
 import {

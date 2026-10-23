@@ -37,7 +37,7 @@ record, and an absent member reads as on no list.
 A record is never removed. A write that clears every bit leaves an empty
 bitmap in place, so removal is an ordinary write and absence keeps one
 provable shape. The records are public. Every write names its member and its
-bits on chain, and Photon replays the writes into its copy of the tree.
+bits on chain, and the ring indexer replays the writes into its copy of the tree.
 
 ## Writers, the queue and the apply proof
 
@@ -222,7 +222,7 @@ fails.
    sources only after they reproduce `policy_hash`.
 2. It collects its members, the sender, every output's owner and, under an
    asset rule, every output's asset.
-3. It reads their openings from Photon under the newest own root and, with a
+3. It reads their openings from the ring indexer under the newest own root and, with a
    curator, the newest curator root. It checks every opening against the
    root before it uses it. A lying indexer stalls proving but cannot steer
    the answer.

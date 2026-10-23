@@ -114,27 +114,51 @@ fn bring_up_workspace(
         );
     }
     let ports = ports(urls)?;
-    let [rpc, photon, prover, ring_rpc] = ports;
+    let [rpc, indexer, prover, ring_rpc] = ports;
     if !replace {
         answering(ports.into_iter().zip(services))?;
         return check_prover_serves_custom_ring(&urls.prover);
     }
     let addr = local(ring_rpc);
     ensure!(!answers(addr), "{addr} stays busy, stop the listener on it");
-    if !answers(local(rpc)) {
+    let photon = workspace.photon_port(indexer)?;
+    let fresh_chain = !answers(local(rpc));
+    if fresh_chain {
         let snapshots = workspace.account_snapshots()?;
         let mut command = workspace.command()?;
         command
-            .args(["dev", "start", "--local"])
+            .args(["dev", "start", "--local", "--skip-prover"])
+            .args(["--rpc-port", &rpc.to_string()])
+            .args(["--photon-port", &photon.to_string()])
             .args(["--photon-start-slot", "0", "--account-dir"])
             .arg(snapshots)
             .arg("--sbf-program")
             .arg(zolana_interface::pda::shielded_pool_program_id().to_string())
-            .arg(workspace.shielded_pool_so()?);
-        let dev_start = dev_start(&mut command, [rpc, photon, prover]);
-        ZOLANA.named("workspace zolana dev start").run(dev_start)?;
+            .arg(workspace.shielded_pool_so()?)
+            .args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
+        ZOLANA
+            .named("workspace zolana dev start")
+            .run(&mut command)?;
     }
-    answering([(photon, &urls.indexer), (prover, &urls.prover)])?;
+    answering([(photon, &format!("http://127.0.0.1:{photon}"))])?;
+    RingIndexer {
+        workspace,
+        urls,
+        port: indexer,
+        photon,
+        fresh_chain,
+    }
+    .start()?;
+    if !answers(local(prover)) {
+        let mut command = workspace.command()?;
+        command
+            .args(["dev", "prover", "start"])
+            .args(["--prover-port", &prover.to_string()])
+            .args(["--indexer-url", &urls.indexer]);
+        ZOLANA
+            .named("workspace zolana dev prover start")
+            .run(&mut command)?;
+    }
     check_prover_serves_custom_ring(&urls.prover)?;
     keys::ensure(auditor_key)?;
     ui::heading(icon::RING, "workspace services ready");
@@ -142,6 +166,62 @@ fn bring_up_workspace(
     line("next", next);
     let ring_rpc_binary = workspace.ring_rpc()?;
     RING_RPC.run(&mut serve(&ring_rpc_binary, config, ring_rpc, auditor_key))
+}
+
+struct RingIndexer<'a> {
+    workspace: &'a Workspace,
+    urls: &'a Urls,
+    port: u16,
+    photon: u16,
+    /// A new chain needs a new index.
+    fresh_chain: bool,
+}
+
+impl RingIndexer<'_> {
+    /// Replaces a ring indexer the cli started, a listener it did not start is refused.
+    fn start(self) -> Result<()> {
+        let scope = self.workspace.scope();
+        stop_owned_listener(scope, self.port)?;
+        let data = scope.join("ring-indexer");
+        if self.fresh_chain {
+            file::remove_dir_all(&data)?;
+        }
+        file::create_dir_all(&data)?;
+        let log = data.join("ring-indexer.log");
+        let shown = log.display();
+        let open = || {
+            File::options()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .with_context(|| format!("cannot open the log {shown}"))
+        };
+        let db_url = format!("sqlite://{}?mode=rwc", data.join("index.db").display());
+        let mut command = Command::new(self.workspace.ring_indexer()?);
+        command
+            .args(["--db-url", &db_url, "--rpc-url", &self.urls.rpc])
+            .args(["--photon-url", &format!("http://127.0.0.1:{}", self.photon)])
+            .args(["--port", &self.port.to_string(), "--start-slot", "0"])
+            .stdin(Stdio::null())
+            .stdout(open()?)
+            .stderr(open()?);
+        spawn_owned(scope, "ring-indexer", &mut command)?;
+        let ready = probe::service_url(&self.urls.indexer, "/ready");
+        let http = probe::http(POLL, POLL);
+        let served = wait_until(READY_TIMEOUT, POLL, || {
+            http.get(&ready)
+                .send()
+                .is_ok_and(|response| response.status().is_success())
+        });
+        let addr = local(self.port);
+        ensure!(
+            served,
+            "the ring indexer did not answer on {addr} within {READY_TIMEOUT:?}, see {shown}"
+        );
+        let (url, photon) = (&self.urls.indexer, self.photon);
+        line("indexer", format_args!("{url} in front of photon on port {photon}"));
+        Ok(())
+    }
 }
 
 fn answering<'a>(services: impl IntoIterator<Item = (u16, &'a String)>) -> Result<()> {

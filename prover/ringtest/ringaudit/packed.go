@@ -6,8 +6,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -20,12 +21,6 @@ type PackedAudit struct {
 	Outputs   []Utxo
 	OwnerKeys [][32]byte
 	Layout    Layout
-}
-
-// NewPackedAudit publishes min(capacity, 3) outputs, ring outputs carrying data around one exit at slot 1.
-func NewPackedAudit(t testing.TB, capacity int) PackedAudit {
-	t.Helper()
-	return PackedAuditOf(t, capacity, min(capacity, 3), 1)
 }
 
 // PackedAuditOf publishes nOut outputs, the exits slots leaving the ring and ring outputs carrying data elsewhere.
@@ -42,10 +37,10 @@ func PackedAuditOf(t testing.TB, capacity, nOut int, exits ...int) PackedAudit {
 		case i >= p.NOut:
 			p.Outputs[i] = unpublished()
 		case slices.Contains(exits, i):
-			p.OwnerKeys[i] = Repeat(0xe5)
+			p.OwnerKeys[i] = ringtest.Repeat(0xe5)
 			p.Outputs[i] = p.NewExit(t, i).Utxo
 		default:
-			p.OwnerKeys[i] = Repeat(0xb2 + byte(i))
+			p.OwnerKeys[i] = ringtest.Repeat(0xb2 + byte(i))
 			p.Outputs[i] = p.NewRingOutput(t, i)
 		}
 	}
@@ -58,17 +53,10 @@ func (p PackedAudit) NewRingOutput(t testing.TB, i int) Utxo {
 	t.Helper()
 	return Utxo{
 		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, p.OwnerKeys[i]),
-		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(20+int64(i))), Asset: AssetField(t, Repeat(0x0a)),
-		Amount: 100 + uint64(i), Blinding: p.RingBlinding(t, i),
+		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(20+int64(i))), Asset: ringtest.AssetField(t, ringtest.Repeat(0x0a)),
+		Amount: 100 + uint64(i), Blinding: p.Blinding(t, i),
 		DataHash: big.NewInt(0x61 + int64(i)), RingDataHash: big.NewInt(0x71 + int64(i)), RingProgramID: p.RingProgramID,
 	}
-}
-
-// RingBlinding is the TXRB blinding of slot i under the CRRC secret of its CRAS slot secret.
-func (p PackedAudit) RingBlinding(t testing.TB, i int) *big.Int {
-	t.Helper()
-	secret := PackedSlotSecret(t, p.Keys.txViewingSk, p.Salt, i, p.FirstNullifier)
-	return RingBlinding(t, p.FirstNullifier, ConfidentialRingSecret(t, secret), i)
 }
 
 // Statement mirrors the packed audit preimage, head ‖ output_chain, disclosure_chain.
@@ -102,15 +90,15 @@ func (p PackedAudit) Disclosure(t testing.TB) []*big.Int {
 		if !p.Layout.DataFree {
 			fields = append(fields, live(output, output.DataHash), live(output, output.RingDataHash))
 		}
-		fields = append(fields, PackDisclosure(keyAndAmount)...)
+		fields = append(fields, ringprotocol.PackDisclosure(keyAndAmount)...)
 	}
 	return p.Keys.Disclose(t, p.Salt, fields)
 }
 
-// Circuit is the base assignment proving the statement.
-func (p PackedAudit) Circuit(t testing.TB) *base.PackedAuditCircuit {
+// Circuit is the audit assignment proving the statement.
+func (p PackedAudit) Circuit(t testing.TB) *audit.PackedAuditCircuit {
 	t.Helper()
-	c, err := base.NewPackedAuditCircuit(len(p.Outputs))
+	c, err := audit.NewPackedAuditCircuit(len(p.Outputs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +107,7 @@ func (p PackedAudit) Circuit(t testing.TB) *base.PackedAuditCircuit {
 	c.NOut = p.NOut
 	for i, output := range p.Outputs {
 		c.Outputs[i] = output.Wires()
-		setBytes(c.OwnerKeys[i][:], p.OwnerKeys[i][:])
+		ringtest.SetBytes(c.OwnerKeys[i][:], p.OwnerKeys[i][:])
 	}
 	return c
 }

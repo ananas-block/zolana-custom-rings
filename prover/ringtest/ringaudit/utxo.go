@@ -4,12 +4,12 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// Utxo is one slot opening, the host twin of base.UtxoWires.
+// Utxo is one slot opening, the host twin of shared.UtxoWires.
 type Utxo struct {
 	Domain        int64
 	TreeID        uint16
@@ -51,7 +51,7 @@ func (u Utxo) isRingOutput() bool {
 	return u.isUtxo() && u.RingProgramID.Sign() != 0
 }
 
-// Owner mirrors the owner hash base opens, zero off a UTXO.
+// Owner mirrors the owner hash shared.UtxoWires.Open derives, zero off a UTXO.
 func (u Utxo) Owner(t testing.TB) *big.Int {
 	t.Helper()
 	if !u.isUtxo() {
@@ -60,7 +60,7 @@ func (u Utxo) Owner(t testing.TB) *big.Int {
 	return spptest.MustOwnerHash(t, u.OwnerPkHash, u.NullifierPk)
 }
 
-// Hash mirrors the slot hash base binds.
+// Hash mirrors the slot hash shared.UtxoWires.Open binds.
 func (u Utxo) Hash(t testing.TB) *big.Int {
 	t.Helper()
 	return spptest.MustUtxoHash(t, protocol.Utxo{
@@ -78,8 +78,8 @@ func (u Utxo) spentHash(t testing.TB) *big.Int {
 	return u.Hash(t)
 }
 
-func (u Utxo) Wires() base.UtxoWires {
-	return base.UtxoWires{
+func (u Utxo) Wires() shared.UtxoWires {
+	return shared.UtxoWires{
 		Domain: u.Domain, TreeID: int(u.TreeID), OwnerPkHash: u.OwnerPkHash, NullifierPk: u.NullifierPk,
 		Asset: u.Asset, Amount: new(big.Int).SetUint64(u.Amount), Blinding: u.Blinding,
 		DataHash: u.DataHash, RingDataHash: u.RingDataHash, RingProgramID: u.RingProgramID,

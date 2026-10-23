@@ -5,7 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -40,12 +41,10 @@ func DeliveredAuditOf(t testing.TB, capacity int, exits ...int) DeliveredAudit {
 	return d
 }
 
-// NewConfidentialOutput delivers slot i to fixture recipient i mod 3 under its CRRC ring secret.
+// NewConfidentialOutput delivers slot i to fixture recipient i mod 3 with no ring data.
 func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
-	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(secret *big.Int) *big.Int {
-		return ConfidentialRingSecret(t, secret)
-	})
+	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(*big.Int) *big.Int { return big.NewInt(0) })
 }
 
 // Statement mirrors the delivered audit preimage, head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain.
@@ -78,13 +77,13 @@ func (d DeliveredAudit) Disclosure(t testing.TB) []*big.Int {
 		}
 		slotBytes = append(slotBytes, bytes...)
 	}
-	return d.Keys.Disclose(t, d.Salt, slices.Concat(d.seedOut(d.Layout), nullifierPks, PackDisclosure(slotBytes)))
+	return d.Keys.Disclose(t, d.Salt, slices.Concat(d.seedOut(d.Layout), nullifierPks, ringprotocol.PackDisclosure(slotBytes)))
 }
 
-// Circuit is the base assignment proving the statement.
-func (d DeliveredAudit) Circuit(t testing.TB) *base.DeliveredAuditCircuit {
+// Circuit is the audit assignment proving the statement.
+func (d DeliveredAudit) Circuit(t testing.TB) *audit.DeliveredAuditCircuit {
 	t.Helper()
-	c, err := base.NewDeliveredAuditCircuit(len(d.Outputs))
+	c, err := audit.NewDeliveredAuditCircuit(len(d.Outputs))
 	if err != nil {
 		t.Fatal(err)
 	}

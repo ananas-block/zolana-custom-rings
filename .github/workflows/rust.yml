@@ -195,6 +195,7 @@ jobs:
             target/prover-server
             target/debug/zolana-ring
             target/debug/photon
+            target/debug/ring-indexer
           if-no-files-found: error
           retention-days: 1
 
@@ -287,7 +288,7 @@ jobs:
         with:
           name: localnet-tests-${{ github.sha }}
           path: target/nextest-archives
-      - run: chmod 0755 zolana/target/debug/zolana zolana/target/debug/xtask target/prover-server target/debug/zolana-ring target/debug/photon
+      - run: chmod 0755 zolana/target/debug/zolana zolana/target/debug/xtask target/prover-server target/debug/zolana-ring target/debug/photon target/debug/ring-indexer
       - name: Cache Squads smart account binary
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: squads-cache
@@ -298,8 +299,9 @@ jobs:
         if: steps.squads-cache.outputs.cache-hit != 'true'
         run: just zolana::fetch-smart-account
       - run: just ${{ matrix.recipe }}
-      - name: Dump prover and photon logs on failure
+      - name: Dump prover, photon and ring indexer logs on failure
         if: failure()
         run: |
           find . -name prover-server.log -print -exec tail -200 {} \; 2>/dev/null || echo "(no prover log)"
           find . -name photon.log -print -exec tail -100 {} \; 2>/dev/null || echo "(no photon log)"
+          find . -name ring-indexer.log -print -exec tail -100 {} \; 2>/dev/null || echo "(no ring indexer log)"

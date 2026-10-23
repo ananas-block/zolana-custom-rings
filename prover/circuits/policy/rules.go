@@ -6,7 +6,7 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type outputTotals struct {
@@ -46,12 +46,12 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 			enabled := api.Mul(onOutput, api.Select(rule.onAsset, outputs[o].utxo, liveOwner[o]))
 			refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.assets[o], s.owners[o]))
 			// An asset guarded rule needs an inline limit for the output's asset.
-			shared.AssertWhen(api, api.Mul(enabled, rule.assetGuard), limits[o].found)
+			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), limits[o].found)
 			total := api.Select(rule.onAsset, totals[o].byAsset, totals[o].byOwner)
 			scalar := api.Mul(rule.scalarGuard, cmp.atMost(api, total, rule.threshold))
 			exempt := api.Or(scalar, api.Mul(rule.assetGuard, assetExempt[o]))
 			// A subject the lists refuse needs its amounts within the rule's guard.
-			shared.AssertWhen(api, api.Mul(enabled, refused), exempt)
+			transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
 		}
 	}
 }

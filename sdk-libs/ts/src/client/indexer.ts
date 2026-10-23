@@ -50,7 +50,7 @@ type Hash = indexerTypes.Hash;
 
 const { hash, hashBytes } = indexerScalars;
 
-/** Photon's ring projection codes, Rust `zolana_ring_indexer::rpc::RingRpcError`. */
+/** The ring indexer's refusal codes, Rust `zolana_ring_indexer::rpc::RingRpcError`. */
 const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
   [-32070, "RING_REGISTRY_OUT_OF_SYNC"],
   [-32071, "RING_REGISTRY_ROOT_CHANGED"],

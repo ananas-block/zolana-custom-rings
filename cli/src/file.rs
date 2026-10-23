@@ -1,6 +1,6 @@
 //! One place the cli touches a path and names it in the failure.
 
-use std::{fs, path::Path};
+use std::{fs, io, path::Path};
 
 use anyhow::{anyhow, Context as _, Result};
 use solana_keypair::Keypair;
@@ -16,6 +16,16 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
 
 pub fn create_dir_all(path: &Path) -> Result<()> {
     fs::create_dir_all(path).with_context(|| format!("cannot write {}", path.display()))
+}
+
+/// A missing directory is already removed.
+pub fn remove_dir_all(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            Err(anyhow::Error::new(error).context(format!("cannot write {}", path.display())))
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn read_keypair(path: &Path) -> Result<Keypair> {

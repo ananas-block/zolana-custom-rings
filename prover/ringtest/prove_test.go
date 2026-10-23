@@ -1,6 +1,7 @@
 package ringtest_test
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -8,19 +9,21 @@ import (
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
+	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 )
 
 func TestPackedAuditAndMemberPolicyProve(t *testing.T) {
-	audit, err := base.NewPackedAuditCircuit(2)
+	packed, err := audit.NewPackedAuditCircuit(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, audit, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
+	requireProves(t, packed, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
 	member, err := policy.NewMemberPolicyCircuit(2)
 	if err != nil {
 		t.Fatal(err)
@@ -29,12 +32,72 @@ func TestPackedAuditAndMemberPolicyProve(t *testing.T) {
 }
 
 func TestAnonymousAuditTransferProves(t *testing.T) {
-	shape := base.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	audit, err := base.NewAnonymousAuditCircuit(shape)
+	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
+	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, audit, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
+	requireProves(t, anonymous, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
+}
+
+func TestAuditsPinBlindingAndRingData(t *testing.T) {
+	packed, err := audit.NewPackedAuditCircuit(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
+	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("packed blinding off the CRBS seed", func(t *testing.T) {
+		p := ringaudit.PackedAuditOf(t, 2, 2)
+		honest := p.Circuit(t)
+		p.SeedOut = big.NewInt(0x5eed)
+		for i := range p.Outputs {
+			p.Outputs[i].Blinding = p.Blinding(t, i)
+		}
+		requireRefused(t, packed, honest, p.Circuit(t))
+	})
+	t.Run("delivered ring data", func(t *testing.T) {
+		delivered, err := audit.NewDeliveredAuditCircuit(8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := ringaudit.NewDeliveredAudit(t, 8)
+		honest := d.Circuit(t)
+		d.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
+		requireRefused(t, delivered, honest, d.Circuit(t))
+	})
+	t.Run("body naming another blinding", func(t *testing.T) {
+		a := ringaudit.NewAnonymousAudit(t, shape)
+		honest := a.Circuit(t)
+		a.Outputs[0].Body[0] ^= 1
+		requireRefused(t, anonymous, honest, a.Circuit(t))
+	})
+	t.Run("ring data off CRAT", func(t *testing.T) {
+		a := ringaudit.NewAnonymousAudit(t, shape)
+		honest := a.Circuit(t)
+		a.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
+		requireRefused(t, anonymous, honest, a.Circuit(t))
+	})
+	t.Run("anchor off the first contact's tag", func(t *testing.T) {
+		a := ringaudit.NewAnonymousAudit(t, shape)
+		honest := a.Circuit(t)
+		a.Anchor.RingDataHash = ringprotocol.AnonymousRingData(t, a.Anchor.SlotSecret, big.NewInt(7))
+		requireRefused(t, anonymous, honest, a.Circuit(t))
+	})
+}
+
+// requireRefused fails unless honest solves and forged, the same fixture with one value changed, does not.
+func requireRefused(t *testing.T, circuit, honest, forged frontend.Circuit) {
+	t.Helper()
+	if err := test.IsSolved(circuit, honest, ecc.BN254.ScalarField()); err != nil {
+		t.Fatalf("the honest witness failed: %v", err)
+	}
+	if test.IsSolved(circuit, forged, ecc.BN254.ScalarField()) == nil {
+		t.Fatal("the circuit accepted the forged witness")
+	}
 }
 
 func requireProves(t *testing.T, circuit, assignment frontend.Circuit) {

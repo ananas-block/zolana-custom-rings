@@ -8,7 +8,7 @@ import (
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type comparator struct {
@@ -19,7 +19,7 @@ type comparator struct {
 
 // comparator sizes width for m outputs against one public net, each within the u64 SPP range checks.
 func (p *Policy) comparator(rc frontend.Rangechecker) comparator {
-	return comparator{rc: rc, width: shared.AmountBits + bits.Len(uint(len(p.Outputs)+1))}
+	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(len(p.Outputs)+1))}
 }
 
 // atMost returns total <= threshold, the caller bounds their difference below 2^width in magnitude.

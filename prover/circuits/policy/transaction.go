@@ -3,14 +3,13 @@ package policy
 import (
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
 // OutputWires adds the key ciphertext hash the owner's record escrows, read only under key escrow.
 type OutputWires struct {
-	base.UtxoWires
+	shared.UtxoWires
 	CtHash frontend.Variable
 }
 
@@ -23,7 +22,7 @@ type utxoView struct {
 }
 
 // openInputs reopens the delegate's inputs and chains their UTXO hashes as SPP does.
-func openInputs(api frontend.API, wires []base.UtxoWires) ([]utxoView, frontend.Variable) {
+func openInputs(api frontend.API, wires []shared.UtxoWires) ([]utxoView, frontend.Variable) {
 	inputs := make([]utxoView, len(wires))
 	hashes := make([]frontend.Variable, len(wires))
 	for i, w := range wires {
@@ -43,12 +42,12 @@ func (p *Policy) openOutputs(api frontend.API, inputChain frontend.Variable) []u
 	}
 	outputChain := gadget.NonZeroHashChain(api, hashes)
 	// The outputs are the ones SPP settles, the SPP proof binds the same private_tx_hash.
-	api.AssertIsEqual(p.PrivateTxHash, ringgadget.PrivateTxHashFromChains(api, inputChain, outputChain, p.AddressChain, p.PrivateTxBlinding))
+	api.AssertIsEqual(p.PrivateTxHash, privateTxHashFromChains(api, inputChain, outputChain, p.AddressChain, p.PrivateTxBlinding))
 	return outputs
 }
 
 // open reads a slot through its SPP hash, a slot of another kind contributes nothing to private_tx_hash.
-func open(api frontend.API, w base.UtxoWires) utxoView {
+func open(api frontend.API, w shared.UtxoWires) utxoView {
 	opened := w.Open(api)
 	return utxoView{
 		ownerPkHash:   w.OwnerPkHash,
@@ -59,4 +58,9 @@ func open(api frontend.API, w base.UtxoWires) utxoView {
 		utxo:          opened.Utxo,
 		hash:          api.Mul(opened.Utxo, opened.Hash),
 	}
+}
+
+// privateTxHashFromChains requires each chain to be the NonZeroHashChain of its slot list.
+func privateTxHashFromChains(api frontend.API, inputChain, outputChain, addressChain, blinding frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, addressChain, blinding})
 }

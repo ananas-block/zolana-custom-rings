@@ -165,10 +165,6 @@ export function openRingDepositOpening(
   }
 }
 
-function isZero(bytes: Uint8Array): boolean {
-  return bytes.every((byte) => byte === 0);
-}
-
 export function ringDepositContextHash(ring: Address, tree: Address, sppWire: Uint8Array): Bytes32 {
   return hashChain([
     ringIdField(ring),
