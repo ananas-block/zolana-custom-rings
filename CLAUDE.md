@@ -10,7 +10,7 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   into it, so a zolana change and its ring change build together locally. Land
   the zolana side first, then move the pin with `just zolana-bump <commit>`.
 - The layout mirrors zolana: `programs/custom-ring`, `program-libs/{interface,
-  policy,key-registry}`, `sdk-libs/{client,indexer,sdk,transaction,ts}`,
+  policy,member-registry}`, `sdk-libs/{client,indexer,sdk,transaction,ts}`,
   `program-tests/custom-ring`, `services/{photon,ring-rpc}`, `cli`, `xtask`.
 - The ring verifying keys are committed in `program-libs/interface/src`, and
   `just check-custom-ring-keys` diffs them against the ring prover's export of

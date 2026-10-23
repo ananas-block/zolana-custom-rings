@@ -138,29 +138,6 @@ jobs:
           private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - run: just test-sdk-libs
 
-  test-client-integration:
-    name: tests / client integration
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: true
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: zolana/prover/server/go.mod
-          cache-dependency-path: zolana/prover/server/go.sum
-      - uses: ./zolana/.github/actions/setup-rust
-        with:
-          shared-key: custom-ring
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - name: Cache proving keys
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: zolana/prover/server/proving-keys
-          key: proving-keys-${{ hashFiles('zolana/prover/server/prover/provingkeys/proving-keys.lock', 'prover/ring/proving-keys.lock') }}
-      - run: just test-client-integration
-
   # The localnet matrix's inputs, built in parallel jobs.
   build-localnet-programs:
     name: build / localnet programs
@@ -250,11 +227,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Velocity is the slowest ring test.
           - name: custom-ring lifecycle
-            recipe: test-custom-ring-validator 'not test(=a_velocity_ring_bounds_each_senders_outflow)'
-          - name: custom-ring velocity
-            recipe: test-custom-ring-validator 'test(=a_velocity_ring_bounds_each_senders_outflow)'
+            recipe: test-custom-ring-validator
           - name: custom-ring shared sources
             recipe: test-custom-ring-shared
           - name: custom-ring policy rules

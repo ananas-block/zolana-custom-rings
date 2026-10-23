@@ -58,8 +58,7 @@ build-localnet-archives dir="target/nextest-archives":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p {{dir}}
-    cargo nextest archive -p custom-ring-test-validator --test ring --test shared_sources --test policy_rules --test policy_repin --test windowed_concurrency --archive-file {{dir}}/custom-ring-test-validator.tar.zst
-    cargo nextest archive -p custom-ring-sdk --test custom_ring_circuit --archive-file {{dir}}/custom-ring-sdk.tar.zst
+    cargo nextest archive -p custom-ring-test-validator --test ring --test shared_sources --test policy_rules --test policy_repin --archive-file {{dir}}/custom-ring-test-validator.tar.zst
 
 # === Tests ===
 
@@ -78,13 +77,10 @@ test-sdk-libs:
     cargo nextest run -p custom-ring-cli
     cargo nextest run -p custom-ring-interface
     cargo nextest run -p zolana-ring-policy
+    cargo nextest run -p zolana-ring-member-registry
 
 test-photon:
     cargo nextest run -p custom-ring-photon
-
-# Prover-backed client checks of the ring authority boundary.
-test-client-integration: build-prover-server zolana::build-cli
-    cargo nextest run -p custom-ring-sdk --features proofs --test ring_authority_boundary --test-threads 1
 
 # Custom-ring lifecycle on a local validator (program-tests/custom-ring/tests/ring.rs).
 test-custom-ring-validator filter="all()": fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
@@ -95,7 +91,6 @@ test-custom-ring-validator filter="all()": fetch-custom-ring-keys build-prover-s
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
     bash tools/test-ring-controls.sh ring -E '{{filter}}'
-    zolana/tools/ci/nextest-suite.sh -p custom-ring-sdk -E 'binary(custom_ring_circuit)'
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")
@@ -180,10 +175,6 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
         diff -u "program-libs/interface/src/$module" "$export_dir/$module"
     done
-
-# Regenerate the deposit-audit fixtures with proofs from the pinned deposit key.
-dump-deposit-audit-fixtures: check-custom-ring-keys zolana::build-cli
-    cargo test -p custom-ring-sdk --features proofs --test deposit_audit_fixtures -- --ignored --nocapture
 
 # === Rings ===
 

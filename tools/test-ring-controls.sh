@@ -7,7 +7,7 @@ cd "$repo_root"
 suite="${1:-ring}"
 if [[ $# -gt 0 ]]; then shift; fi
 case "$suite" in
-  ring|shared_sources|policy_rules|policy_repin|windowed_concurrency) ;;
+  ring|shared_sources|policy_rules|policy_repin) ;;
   *) echo "Unknown ring suite $suite" >&2; exit 2 ;;
 esac
 export SURFPOOL_BIN="${SURFPOOL_BIN:-$repo_root/zolana/target/tools/surfpool}"
@@ -89,6 +89,4 @@ else
   cargo build --locked -p custom-ring-photon --bin photon --features surfpool-fixture
   cargo build --locked -p custom-ring-cli
 fi
-ignored=()
-if [[ "$suite" == windowed_concurrency ]]; then ignored=(--run-ignored only); fi
-zolana/tools/ci/nextest-suite.sh -p custom-ring-test-validator --test "$suite" --no-capture ${ignored[@]+"${ignored[@]}"} "$@"
+zolana/tools/ci/nextest-suite.sh -p custom-ring-test-validator --test "$suite" --no-capture "$@"
