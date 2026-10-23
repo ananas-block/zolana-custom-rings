@@ -15,9 +15,10 @@ The zolana notes above apply here, with their paths read under `zolana/`.
 - The ring verifying keys are committed in `program-libs/interface/src`, and
   `just check-custom-ring-keys` diffs them against the ring prover's export of
   the keys `prover/ring/proving-keys.lock` pins.
-- The Go module `prover/` registers the ring circuits and their key pins
-  (`prover/ring/proving-keys.lock`) with the zolana prover and builds the ring
-  prover, `just build-prover-server`. The justfile exports its `PROVER_BIN`.
+- The Go module `prover/` holds the ring circuits in `prover/circuits` and
+  builds the ring prover, `just build-prover-server`. `prover/cmd/prover`
+  registers no ring circuit, so the ring prover serves the SPP circuits only.
+  The justfile exports its `PROVER_BIN`.
 - Shared vectors stay in `zolana/test-vectors`. Vectors only ring code reads
   live in `test-vectors/`.
 

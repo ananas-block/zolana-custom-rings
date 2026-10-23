@@ -25,7 +25,7 @@ The ring stack builds on zolana, pinned as the `zolana` submodule. Clone with
 `git clone --recursive`, or run `git submodule update --init` after a plain
 clone. The ring crates depend on the zolana crates by path into `zolana/`, so
 an edit in the submodule checkout builds here at once. The Go module `prover/`
-holds the ring circuits and links them into the zolana prover.
+holds the ring circuits. The ring prover it builds registers no ring circuit.
 `just build-prover-server` builds that ring prover, and the justfile points
 every prover it starts at it. Zolana recipes run through the `zolana` module, as in
 `just zolana::build-cli`. A change to both repositories lands in zolana first,
@@ -38,12 +38,12 @@ not on zolana `main` or a `release/*` branch.
    [`PolicyConfig`](program-libs/interface/src/state.rs) pins their hash, sources and address tree.
 2. [`transaction.go`](prover/circuits/policy/transaction.go)
    binds private slot openings to SPP's transaction hash.
-   [`list_facts.go`](prover/circuits/policy/list_facts.go)
-   proves entry state, and [`evaluate.go`](prover/circuits/policy/evaluate.go)
+   [`subjects.go`](prover/circuits/policy/subjects.go)
+   opens the member records, and [`rules.go`](prover/circuits/policy/rules.go)
    applies the rules to those openings.
-3. [`velocity.go`](prover/circuits/policy/velocity.go)
-   accounts for outflow and binds windowed counters to the spent record and its
-   successor.
+3. [`outflow.go`](prover/circuits/policy/outflow.go)
+   bounds each limited asset's outflow within one transfer and sets
+   `approval_required` above its co-sign bound.
 4. [`transact.rs`](programs/custom-ring/src/instructions/transact.rs) binds the proof to
    trusted accounts and the clock, checks public controls, and forwards the
    settlement to SPP.
@@ -290,8 +290,7 @@ shared_secret = Poseidon("CR_S", dh_lo, dh_hi, eph_pk_lo, eph_pk_hi, auditor_pk_
 ciphertext    = AES-256-CTR(KeySchedule(shared_secret, label), plaintext)
 ```
 
-`"CR_S"` is the ASCII tag read as a big-endian `u32`.
-[`pack.go`](prover/circuits/base/pack.go) splits the
+`"CR_S"` is the ASCII tag read as a big-endian `u32`. The proof splits the
 32-byte `dh` and the 33-byte tagged keys into `lo` and `hi`. The ten-byte label
 separates the uses. `CRING/adt1` seals the transaction viewing key of a
 transfer, `CRING/nfk1` seals a nullifier key for `register_key`, and
@@ -301,26 +300,22 @@ A transfer publishes exactly one `MessageData` under the auditor key's `u`, and
 it is the last message. Its data is `eph_pk(33) || ciphertext(32) ||
 disclosure`, where `ciphertext` seals the clamped `tx_viewing_sk`. The base
 proof shows that the ciphertext opens to the secret behind `tx_viewing_pk`. Its
-single public input chains the twelve elements the package doc of
-[`circuit.go`](prover/circuits/base/circuit.go) lists,
-and the program recomputes the chain with
+single public input chains twelve elements, and the program recomputes the
+chain with
 [`CustomRingBasePublicInput::hash`](program-libs/interface/src/base_public_input.rs).
 
 The disclosure fields open the transfer under a stream keyed by
 `tx_viewing_sk` and the transaction salt. Published field `j` is plaintext
 field `j` plus `Poseidon("CR_OD", sk_lo, sk_hi, salt, j)` in the BN254 field,
-with `tx_viewing_sk` split as `pack.go` splits `dh`. The proof chains the
-published fields into `disclosure_hash`. In an `Off` or `Registry` ring the
-disclosure is four output slots of nine fields each, the note opening
-[`disclosure.go`](prover/circuits/base/disclosure.go)
-lists.
+with `tx_viewing_sk` split as `dh` is. The proof chains the published fields
+into `disclosure_hash`. In an `Off` or `Registry` ring the disclosure is four
+output slots of nine fields each, one note opening per slot.
 
 In an `Anonymous` ring the disclosure opens the whole spend. A header names the
 sender identity, then one slot follows per published input and one per
 published output. Each slot is zero padded to whole 31-byte chunks, so `n_in`
 inputs and `n_out` outputs give `2 + 3·n_in + 8·n_out` fields.
-[`anonymous_disclosure.go`](prover/circuits/base/anonymous_disclosure.go)
-gives the byte layout. The proof binds every real input owner to the sender
+The proof binds every real input owner to the sender
 identity and every real output owner to its disclosed identity. A ring-bound
 output must have a Solana identity, tag `0x53`, and every disclosed viewing key
 must be a canonical tagged X25519 key. The proof also reopens
