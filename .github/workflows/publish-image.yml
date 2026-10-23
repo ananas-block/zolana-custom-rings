@@ -35,7 +35,7 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    uses: helius-labs/zolana/.github/workflows/publish-service-image.yml@13d976a0f3b060670f7378ecc9c6eda9f80def0b
+    uses: helius-labs/zolana/.github/workflows/publish-service-image.yml@d34aa490bb886f60b77f63bdde610f731bc8f154
     with:
       service: ${{ inputs.service }}
       channel: ${{ inputs.channel }}

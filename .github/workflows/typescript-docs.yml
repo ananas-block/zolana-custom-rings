@@ -20,7 +20,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
-    uses: helius-labs/zolana/.github/workflows/typescript-docs.yml@13d976a0f3b060670f7378ecc9c6eda9f80def0b
+    uses: helius-labs/zolana/.github/workflows/typescript-docs.yml@d34aa490bb886f60b77f63bdde610f731bc8f154
     with:
       package_dir: sdk-libs/ts
       tag_prefix: ts-sdk-v
