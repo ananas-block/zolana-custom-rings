@@ -26,6 +26,7 @@ import {
   checkedBytes,
   concatBytes,
   u32be,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 
 /** Rust `AUDIT_ENC_INFO`. */
@@ -471,10 +472,6 @@ function anonymousPlaintextLength(shape: AuditDisclosureShape): number | undefin
     shape.inputs * DISCLOSURE_INPUT_LEN +
     shape.outputs * DISCLOSURE_OUTPUT_LEN
   );
-}
-
-function isZero(bytes: Uint8Array): boolean {
-  return bytes.every((byte) => byte === 0);
 }
 
 function checkedUnsigned(value: bigint, max: bigint, name: string): bigint {

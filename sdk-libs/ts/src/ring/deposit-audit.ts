@@ -7,6 +7,7 @@ import {
   bigIntBytes,
   equalBytes,
   hashChain,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes96 } from "@heliuslabs/zolana";
@@ -143,10 +144,6 @@ export function openRingDepositOpening(
     shared?.fill(0);
     plaintext?.fill(0);
   }
-}
-
-function isZero(bytes: Uint8Array): boolean {
-  return bytes.every((byte) => byte === 0);
 }
 
 export function ringDepositContextHash(ring: Address, tree: Address, sppWire: Uint8Array): Bytes32 {

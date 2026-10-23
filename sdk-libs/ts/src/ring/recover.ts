@@ -19,6 +19,7 @@ import {
   readMergeOutputBody,
   decodeRingDepositOutput,
   bytesKey,
+  isZero,
 } from "@heliuslabs/zolana/internal";
 import {
   type AssetRegistry,
@@ -262,10 +263,6 @@ export async function recoverRingMemberNotes(
     ),
     unsupportedDeposits: Object.freeze(unsupportedDeposits),
   });
-}
-
-function isZero(bytes: Uint8Array): boolean {
-  return bytes.every((byte) => byte === 0);
 }
 
 async function recoverDeposits(
