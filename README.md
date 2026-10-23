@@ -9,33 +9,46 @@ services. Every custom ring is audited. The custom-ring circuit binds each
 transfer to the ring's auditor and the program accepts no transact without
 that proof.
 
-`program` is the ring program, `sdk` the Rust client for it, `cli` the
-`zolana-ring` operator binary, `test` the lifecycle test on a local validator,
-`examples` one `ring.toml` per worked policy. The ring RPC in
-`services/ring-rpc` holds the auditor key, `custom-rings/client` is the auditor
-side it is built on. A custom-rings release (`just release-custom-rings <tag>
---upload --prerelease`) ships `zolana-ring`, the ring program, the ring
+`programs/custom-ring` is the ring program, `sdk-libs/sdk` the Rust client for
+it, `cli` the `zolana-ring` operator binary, `program-tests/custom-ring` the
+lifecycle test on a local validator, `examples` one `ring.toml` per worked
+policy. The ring RPC in `services/ring-rpc` holds the auditor key,
+`sdk-libs/client` is the auditor side it is built on. A custom-rings release
+(`just release <tag> --upload --prerelease`) ships `zolana-ring`, the ring program, the ring
 proving keys and the ring RPC together, the CLI deploys the binary of the
 release it was built from. One released binary serves every ring, the rules
 are data `init` pins from `ring.toml`.
 
+## Working with zolana
+
+The ring stack builds on zolana, pinned as the `zolana` submodule. Clone with
+`git clone --recursive`, or run `git submodule update --init` after a plain
+clone. The ring crates depend on the zolana crates by path into `zolana/`, so
+an edit in the submodule checkout builds here at once. The Go module `prover/`
+holds the ring circuits and links them into the zolana prover.
+`just build-prover-server` builds that ring prover, and the justfile points
+every prover it starts at it. Zolana recipes run through the `zolana` module, as in
+`just zolana::build-cli`. A change to both repositories lands in zolana first,
+then `just zolana-bump <commit>` moves the pin here. CI refuses a pin that is
+not on zolana `main` or a `release/*` branch.
+
 ## Reading the proof boundary
 
-1. [`RuleTable`](policy/src/rule_table.rs) defines the obligations.
-   [`PolicyConfig`](interface/src/state.rs) pins their hash, sources and address tree.
-2. [`transaction.go`](../prover/server/custom_rings/circuits/policy/transaction.go)
+1. [`RuleTable`](program-libs/policy/src/rule_table.rs) defines the obligations.
+   [`PolicyConfig`](program-libs/interface/src/state.rs) pins their hash, sources and address tree.
+2. [`transaction.go`](prover/circuits/policy/transaction.go)
    binds private slot openings to SPP's transaction hash.
-   [`list_facts.go`](../prover/server/custom_rings/circuits/policy/list_facts.go)
-   proves entry state, and [`evaluate.go`](../prover/server/custom_rings/circuits/policy/evaluate.go)
+   [`list_facts.go`](prover/circuits/policy/list_facts.go)
+   proves entry state, and [`evaluate.go`](prover/circuits/policy/evaluate.go)
    applies the rules to those openings.
-3. [`velocity.go`](../prover/server/custom_rings/circuits/policy/velocity.go)
+3. [`velocity.go`](prover/circuits/policy/velocity.go)
    accounts for outflow and binds windowed counters to the spent record and its
    successor.
-4. [`transact.rs`](program/src/instructions/transact.rs) binds the proof to
+4. [`transact.rs`](programs/custom-ring/src/instructions/transact.rs) binds the proof to
    trusted accounts and the clock, checks public controls, and forwards the
    settlement to SPP.
-5. [`transfer.rs`](sdk/src/transfer.rs) assembles the client proof inputs.
-   [`indexer`](indexer/src/lib.rs) validates spend-record and key transitions
+5. [`transfer.rs`](sdk-libs/sdk/src/transfer.rs) assembles the client proof inputs.
+   [`indexer`](sdk-libs/indexer/src/lib.rs) validates spend-record and key transitions
    and builds the key registry's Merkle overlay. Photon owns block fetching,
    persistence and replay. Clients validate its exact-root key-registry proofs
    before using them.
@@ -177,7 +190,7 @@ version and window. Photon serves each member's latest record through
 Ring controls require a fresh deployment. No state migration is provided.
 The compressed policy statement also requires matching program verification
 keys, prover keys and SDKs. Install the keys pinned by
-`prover/server/prover/provingkeys/proving-keys.lock` together with the program.
+`prover/ring/proving-keys.lock` together with the program.
 
 ## How auditor visibility works
 
@@ -268,7 +281,7 @@ public depositor and amount.
 The transfer, key-registration and deposit ciphertexts for the auditor share
 one X25519 envelope. A fresh ephemeral key agrees a secret with the auditor
 key. The Poseidon key schedule of
-[`symmetric_apply`](../sdk-libs/keypair/src/encryption.rs) turns the secret
+[`symmetric_apply`](zolana/sdk-libs/keypair/src/encryption.rs) turns the secret
 into an AES-256-CTR key and nonce:
 
 ```
@@ -278,7 +291,7 @@ ciphertext    = AES-256-CTR(KeySchedule(shared_secret, label), plaintext)
 ```
 
 `"CR_S"` is the ASCII tag read as a big-endian `u32`.
-[`pack.go`](../prover/server/custom_rings/circuits/base/pack.go) splits the
+[`pack.go`](prover/circuits/base/pack.go) splits the
 32-byte `dh` and the 33-byte tagged keys into `lo` and `hi`. The ten-byte label
 separates the uses. `CRING/adt1` seals the transaction viewing key of a
 transfer, `CRING/nfk1` seals a nullifier key for `register_key`, and
@@ -289,9 +302,9 @@ it is the last message. Its data is `eph_pk(33) || ciphertext(32) ||
 disclosure`, where `ciphertext` seals the clamped `tx_viewing_sk`. The base
 proof shows that the ciphertext opens to the secret behind `tx_viewing_pk`. Its
 single public input chains the twelve elements the package doc of
-[`circuit.go`](../prover/server/custom_rings/circuits/base/circuit.go) lists,
+[`circuit.go`](prover/circuits/base/circuit.go) lists,
 and the program recomputes the chain with
-[`CustomRingBasePublicInput::hash`](interface/src/base_public_input.rs).
+[`CustomRingBasePublicInput::hash`](program-libs/interface/src/base_public_input.rs).
 
 The disclosure fields open the transfer under a stream keyed by
 `tx_viewing_sk` and the transaction salt. Published field `j` is plaintext
@@ -299,14 +312,14 @@ field `j` plus `Poseidon("CR_OD", sk_lo, sk_hi, salt, j)` in the BN254 field,
 with `tx_viewing_sk` split as `pack.go` splits `dh`. The proof chains the
 published fields into `disclosure_hash`. In an `Off` or `Registry` ring the
 disclosure is four output slots of nine fields each, the note opening
-[`disclosure.go`](../prover/server/custom_rings/circuits/base/disclosure.go)
+[`disclosure.go`](prover/circuits/base/disclosure.go)
 lists.
 
 In an `Anonymous` ring the disclosure opens the whole spend. A header names the
 sender identity, then one slot follows per published input and one per
 published output. Each slot is zero padded to whole 31-byte chunks, so `n_in`
 inputs and `n_out` outputs give `2 + 3·n_in + 8·n_out` fields.
-[`anonymous_disclosure.go`](../prover/server/custom_rings/circuits/base/anonymous_disclosure.go)
+[`anonymous_disclosure.go`](prover/circuits/base/anonymous_disclosure.go)
 gives the byte layout. The proof binds every real input owner to the sender
 identity and every real output owner to its disclosed identity. A ring-bound
 output must have a Solana identity, tag `0x53`, and every disclosed viewing key
@@ -325,7 +338,7 @@ the ring program id, the destination tree and the exact SPP deposit bytes. It
 also binds the anonymous flag, each owner commitment, the hash of its encrypted
 opening and both keys. In `Registry` mode it binds the key-registry root each
 slot opens its escrowed key against.
-[`DepositPublicInput::hash`](interface/src/deposit.rs) fixes the order.
+[`DepositPublicInput::hash`](program-libs/interface/src/deposit.rs) fixes the order.
 
 ## Prerequisites
 
@@ -350,22 +363,21 @@ ring-localnet` needs this repository's localnet prerequisites instead.
 ### Workspace localnet
 
 Build the workspace CLI, Photon, ring RPC, xtask, prover and SBF programs first.
-The ring keys must match `prover/server/prover/provingkeys/proving-keys.lock`.
+The ring keys must match `prover/ring/proving-keys.lock`.
 Local mode verifies these files and fetches no custom-rings release.
 
 ```sh
-cargo build -p photon-indexer --bin photon --features surfpool-fixture,custom-rings
-export ZOLANA_RING_WORKSPACE=/absolute/path/to/zolana
+cargo build -p custom-ring-photon --bin photon --features surfpool-fixture
+export ZOLANA_RING_WORKSPACE=/absolute/path/to/zolana-custom-rings
 export ZOLANA_PROCESS_SCOPE_DIR="$(mktemp -d)"
 export SURFPOOL_BIN=/absolute/path/to/pinned/surfpool
 export ZOLANA_RING_SURFPOOL_FIXTURE=1
 "$ZOLANA_RING_WORKSPACE/target/debug/zolana-ring" dev
 ```
 
-The `custom-rings` feature compiles the custom ring worker and RPC methods.
-Photon runs the worker and serves those methods unless it is started with
-`--disable-custom-rings`. Plain Photon builds have no custom ring
-dependencies.
+`custom-ring-photon` runs the custom ring worker and serves its RPC methods
+unless it is started with `--disable-custom-rings`. zolana's Photon has no
+custom ring code.
 
 The fixture feature repairs Surfpool's synthetic parent block hashes on
 loopback RPC only, opted in with `ZOLANA_RING_SURFPOOL_FIXTURE=1`. Production
@@ -384,8 +396,8 @@ the RPC, Photon and prover ports from `ring.toml`. Only task-owned process
 receipts authorize a stop.
 
 `just test-custom-ring-validator` installs the pinned Surfpool under
-`target/tools` unless `SURFPOOL_BIN` names one, runs under its own temporary
-process scope and verifies the ring keys in `prover/server/proving-keys`
+`zolana/target/tools` unless `SURFPOOL_BIN` names one, runs under its own temporary
+process scope and verifies the ring keys in `zolana/prover/server/proving-keys`
 against the lock. Ports default to 40899 (RPC), 40784 (Photon) and 43001
 (prover) plus `ZOLANA_PORT_OFFSET`, `RING_TEST_RPC_PORT`,
 `RING_TEST_PHOTON_PORT` and `RING_TEST_PROVER_PORT` override them. An occupied
@@ -434,7 +446,7 @@ the catalogue, the bundled `cli/catalogue.toml` per cluster merged with every
 ring registered with SPP on the target that pins a policy,
 `--catalogue <path or URL>` (`RING_CATALOGUE`) replaces the bundled file. The
 policy grammar and the worked examples are in
-[`docs/ring-policy.md`](../docs/ring-policy.md). In the ring,
+[`docs/ring-policy.md`](docs/ring-policy.md). In the ring,
 `zolana-ring devnet` picks devnet and probes its services, `zolana-ring
 localnet` picks localnet and starts them. `zolana-ring deploy` downloads the
 ring program of the release the CLI came from, checks it against the lockfile
@@ -585,7 +597,7 @@ for those deposits as `unsupported_deposits`
 (`unsupportedDeposits` in TypeScript), with ownership and spent status unknown.
 Recovered notes are not a complete balance when either list is nonempty.
 
-The TypeScript ring SDK in `@heliuslabs/zolana` (`sdk-libs/ts/src/ring`)
+The TypeScript ring SDK `@heliuslabs/zolana-custom-rings` (`sdk-libs/ts`)
 builds unsigned V1 transfers, withdrawals, exits, delegate moves and merges. Builders
 read the ring's tier and policy, fetch list proofs from every tree its entries live in, and
 include the required audit and policy proofs. Money inputs come from

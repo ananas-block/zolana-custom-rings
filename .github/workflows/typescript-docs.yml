@@ -1,0 +1,29 @@
+name: typescript SDK docs
+
+on:
+  push:
+    tags:
+      - "ts-sdk-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SDK version to build, without the leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    uses: helius-labs/zolana/.github/workflows/typescript-docs.yml@2e1460ed324af121aa635712e520d18d57e80400
+    with:
+      package_dir: sdk-libs/ts
+      tag_prefix: ts-sdk-v
+      public_base_url: https://helius-labs.github.io/zolana-custom-rings/ts-sdk
+      zolana_dir: zolana
+      version: ${{ inputs.version }}

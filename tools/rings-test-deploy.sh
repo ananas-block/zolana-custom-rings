@@ -59,7 +59,7 @@ ring_rpc_port=8785
 redis_image="public.ecr.aws/docker/library/redis:7.4.4-alpine3.21"
 fetch_image="public.ecr.aws/docker/library/alpine:3.21"
 # The prover embeds this lockfile, so reading the prefix here keeps the two aligned.
-published_keys="https://d3gbdb0egjwcw9.cloudfront.net/$(python3 -c "import json;print(json.load(open('$(dirname "$0")/../prover/server/prover/provingkeys/proving-keys.lock'))['prefix'])")"
+published_keys="https://d3gbdb0egjwcw9.cloudfront.net/$(python3 -c "import json;print(json.load(open('$(dirname "$0")/../zolana/prover/server/prover/provingkeys/proving-keys.lock'))['prefix'])")"
 
 aws_() { aws --region "$region" "$@"; }
 
@@ -117,7 +117,7 @@ ensure_role() {
 
 # Runs in the fetch container before the prover starts.
 key_fetch_script() {
-    local lock="prover/server/prover/provingkeys/proving-keys.lock"
+    local lock="zolana/prover/server/prover/provingkeys/proving-keys.lock"
     local name sha
     printf 'set -eu\ncd /keys\n'
     # shellcheck disable=SC2016
@@ -304,7 +304,7 @@ up() {
         tag="$prover_tag"; repository=zolana-prover
         [[ "$service" == prover ]] || { tag="$ring_rpc_tag"; repository=zolana-ring-rpc; }
         if ! aws_ ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag" >/dev/null 2>&1; then
-            tools/publish-image.sh "$service" --repository "$repository" --tag "$tag" --push >&2
+            zolana/tools/publish-image.sh "$service" --repository "$repository" --tag "$tag" --push >&2
         fi
     done
 

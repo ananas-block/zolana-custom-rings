@@ -1,0 +1,125 @@
+name: typescript
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  SBF_TOOLS_VERSION: v1.54
+
+jobs:
+  check:
+    name: typescript / check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check:ts
+      - run: npm run docs:ts
+      - name: Verify the published package
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          npm pack --workspace @heliuslabs/zolana --pack-destination "$tmp"
+          npm pack --workspace @heliuslabs/zolana-custom-rings --pack-destination "$tmp"
+          set -- "$tmp"/heliuslabs-zolana-[0-9]*.tgz
+          test "$#" -eq 1
+          core="$1"
+          set -- "$tmp"/heliuslabs-zolana-custom-rings-*.tgz
+          test "$#" -eq 1
+          ring="$1"
+          printf '{"private":true,"type":"module"}\n' > "$tmp/package.json"
+          kit_range="$(node -p "require('./sdk-libs/ts/package.json').peerDependencies['@solana/kit']")"
+          npm --prefix "$tmp" install "$core" "$ring" "@solana/kit@$kit_range" --ignore-scripts
+          cat > "$tmp/smoke.mts" <<'TS'
+          import type { ZolanaClientConfig } from "@heliuslabs/zolana";
+          import { createCustomRingClient, type RingTransferClient } from "@heliuslabs/zolana-custom-rings";
+          const config: ZolanaClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
+          const client: RingTransferClient = await createCustomRingClient(config);
+          void client;
+          TS
+          ./node_modules/.bin/tsc \
+            --noEmit --strict --exactOptionalPropertyTypes --skipLibCheck \
+            --target es2022 --module nodenext --moduleResolution nodenext \
+            "$tmp/smoke.mts"
+          (
+            cd "$tmp"
+            node --input-type=module <<'NODE'
+          const ring = await import("@heliuslabs/zolana-custom-rings");
+          await Promise.all(
+            ["client", "keypair"].map((subpath) => import(`@heliuslabs/zolana-custom-rings/${subpath}`)),
+          );
+          if (!ring.buildRingTransferTransaction || !ring.customRingDepositPayload) process.exit(1);
+          await ring.createCustomRingClient({ solanaRpcUrl: "http://127.0.0.1:8899" });
+          NODE
+          )
+
+  e2e:
+    name: typescript / e2e
+    runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 120
+    env:
+      AGAVE_VERSION: v4.2.2
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # The ring prover links zolana's Go prover.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: prover/go.mod
+          cache-dependency-path: |
+            prover/go.sum
+            zolana/prover/server/go.sum
+      - uses: ./zolana/.github/actions/setup-rust
+        with:
+          shared-key: typescript-e2e
+          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      - uses: ./zolana/.github/actions/install-anza
+        with:
+          version: ${{ env.AGAVE_VERSION }}
+      - uses: ./zolana/.github/actions/install-sbf-tools
+        with:
+          version: ${{ env.SBF_TOOLS_VERSION }}
+      - name: Cache proving keys
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: zolana/prover/server/proving-keys
+          key: proving-keys-${{ hashFiles('zolana/prover/server/prover/provingkeys/proving-keys.lock', 'prover/ring/proving-keys.lock') }}
+      # The e2e suite starts a localnet, whose backend is surfpool.
+      - name: Cache surfpool
+        id: surfpool-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: zolana/target/tools/surfpool
+          key: surfpool-${{ runner.os }}-${{ hashFiles('zolana/justfile') }}
+      - name: Install surfpool
+        if: steps.surfpool-cache.outputs.cache-hit != 'true'
+        run: just zolana::install-surfpool
+      - run: npm ci
+      - run: just test-ts-e2e
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          find target/ts-sdk-e2e -name '*.log' -print -exec tail -200 {} \; 2>/dev/null || echo "(no logs)"

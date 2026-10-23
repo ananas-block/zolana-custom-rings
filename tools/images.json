@@ -1,0 +1,29 @@
+{
+  "source": "https://github.com/helius-labs/zolana-custom-rings",
+  "services": {
+    "ring-rpc": {
+      "repository": "zolana-ring-rpc",
+      "context": ".",
+      "file": "services/ring-rpc/Dockerfile",
+      "title": "Zolana Ring RPC",
+      "description": "Zolana custom ring audit RPC",
+      "smoke": "docker run --rm \"$image\" --help >/dev/null && test \"$(docker run --rm --entrypoint id \"$image\" -u)\" = 10002"
+    },
+    "ring-photon": {
+      "repository": "zolana-ring-photon",
+      "context": ".",
+      "file": "services/photon/Dockerfile",
+      "title": "Zolana Ring Photon",
+      "description": "Zolana shielded-pool indexer with the custom ring extension",
+      "smoke": "zolana/tools/check-photon-image.sh \"$image\""
+    },
+    "prover": {
+      "repository": "zolana-prover",
+      "context": "zolana/prover/server",
+      "file": "zolana/prover/server/Dockerfile.light",
+      "title": "Zolana Prover",
+      "description": "Zolana Groth16 proving server with the custom ring circuits",
+      "smoke": "docker run --rm \"$image\" --help >/dev/null"
+    }
+  }
+}

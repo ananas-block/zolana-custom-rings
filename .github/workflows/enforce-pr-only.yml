@@ -1,0 +1,12 @@
+name: enforce-pr-only
+
+on:
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  enforce:
+    uses: helius-labs/zolana/.github/workflows/enforce-pr-only.yml@2e1460ed324af121aa635712e520d18d57e80400

@@ -1,0 +1,44 @@
+name: prover
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prover/**"
+      - "zolana"
+      - ".github/workflows/prover.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "prover/**"
+      - "zolana"
+      - ".github/workflows/prover.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-tests:
+    name: prover / go test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: prover
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: prover/go.mod
+          cache-dependency-path: prover/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      # Tests that need the release proving keys skip, test-custom-ring-keys runs them.
+      - run: go test ./... -timeout 50m

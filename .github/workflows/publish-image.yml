@@ -1,0 +1,44 @@
+name: publish-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Which image to publish
+        required: true
+        default: ring-rpc
+        type: choice
+        options: [ring-rpc, ring-photon]
+      channel:
+        description: >-
+          release enforces the commit-naming tag and requires the commit to be
+          on main; preview allows a branch build under any tag
+        required: true
+        default: preview
+        type: choice
+        options: [preview, release]
+      image_tag:
+        description: Tag to publish. For release, <service>-zolana-<12-char commit>
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-production-${{ inputs.service }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: helius-labs/zolana/.github/workflows/publish-service-image.yml@2e1460ed324af121aa635712e520d18d57e80400
+    with:
+      service: ${{ inputs.service }}
+      channel: ${{ inputs.channel }}
+      image_tag: ${{ inputs.image_tag }}
+      submodules: true
+      release_source_check: zolana/tools/check-release-source.sh

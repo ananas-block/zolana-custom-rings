@@ -10,20 +10,21 @@ case "$suite" in
   ring|shared_sources|policy_rules|policy_repin|windowed_concurrency) ;;
   *) echo "Unknown ring suite $suite" >&2; exit 2 ;;
 esac
-export SURFPOOL_BIN="${SURFPOOL_BIN:-$repo_root/target/tools/surfpool}"
+export SURFPOOL_BIN="${SURFPOOL_BIN:-$repo_root/zolana/target/tools/surfpool}"
 
 export ZOLANA_PROCESS_SCOPE_DIR
 ZOLANA_PROCESS_SCOPE_DIR="$(mktemp -d -t zolana-ring-tests.XXXXXX)"
 export ZOLANA_RING_SURFPOOL_FIXTURE=1
-export ZOLANA_CLI_BIN="$repo_root/target/debug/zolana"
+export ZOLANA_CLI_BIN="$repo_root/zolana/target/debug/zolana"
 export ZOLANA_PHOTON_BIN="$repo_root/target/debug/photon"
 export PROVER_BIN="$repo_root/target/prover-server"
 for binary in "$ZOLANA_CLI_BIN" "$PROVER_BIN" "$SURFPOOL_BIN"; do
   [[ -x "$binary" ]] || { echo "Missing executable $binary" >&2; exit 1; }
 done
-for artifact in custom_ring_program shielded_pool_program zolana_user_registry squads_smart_account_program; do
-  [[ -s "target/deploy/$artifact.so" ]] || {
-    echo "Build target/deploy/$artifact.so with the just localnet test recipe" >&2
+for artifact in target/deploy/custom_ring_program zolana/target/deploy/shielded_pool_program \
+  zolana/target/deploy/zolana_user_registry zolana/target/deploy/squads_smart_account_program; do
+  [[ -s "$artifact.so" ]] || {
+    echo "Build $artifact.so with the just localnet test recipe" >&2
     exit 1
   }
 done
@@ -32,7 +33,7 @@ port_offset="${ZOLANA_PORT_OFFSET:-0}"
 export ZOLANA_LOCALNET_RPC_PORT="${RING_TEST_RPC_PORT:-$((40899 + port_offset))}"
 export ZOLANA_LOCALNET_PHOTON_PORT="${RING_TEST_PHOTON_PORT:-$((40784 + port_offset))}"
 prover_port="${RING_TEST_PROVER_PORT:-$((43001 + port_offset))}"
-# DEFAULT_METRICS_PORT minus DEFAULT_PROVER_PORT, cli/src/config.rs.
+# DEFAULT_METRICS_PORT minus DEFAULT_PROVER_PORT, zolana/cli/src/config.rs.
 prover_metrics_offset=6997
 metrics_port=$((prover_port + prover_metrics_offset))
 for port in "$ZOLANA_LOCALNET_RPC_PORT" "$ZOLANA_LOCALNET_PHOTON_PORT" "$prover_port"; do
@@ -56,8 +57,8 @@ for port in "$ZOLANA_LOCALNET_RPC_PORT" "$((ZOLANA_LOCALNET_RPC_PORT + 1))" \
 done
 
 # The ring keys are verified in place, the transfer keys download beside them once.
-lock="prover/server/prover/provingkeys/proving-keys.lock"
-keys_dir="$repo_root/prover/server/proving-keys"
+lock="prover/ring/proving-keys.lock"
+keys_dir="$repo_root/zolana/prover/server/proving-keys"
 for key in $(jq -r '.keys | keys[] | select(startswith("custom_ring_"))' "$lock"); do
   file="$keys_dir/$key"
   expected="$(jq -er --arg name "$key" '.keys[$name].sha256' "$lock")"
@@ -85,9 +86,9 @@ if [[ -n "${ZOLANA_PREBUILT:-}" ]]; then
     [[ -x "$binary" ]] || { echo "Missing prebuilt executable $binary, unset ZOLANA_PREBUILT to build it" >&2; exit 1; }
   done
 else
-  cargo build --locked -p photon-indexer --bin photon --features surfpool-fixture,custom-rings
+  cargo build --locked -p custom-ring-photon --bin photon --features surfpool-fixture
   cargo build --locked -p custom-ring-cli
 fi
 ignored=()
 if [[ "$suite" == windowed_concurrency ]]; then ignored=(--run-ignored only); fi
-tools/ci/nextest-suite.sh -p custom-ring-test-validator --test "$suite" --no-capture ${ignored[@]+"${ignored[@]}"} "$@"
+zolana/tools/ci/nextest-suite.sh -p custom-ring-test-validator --test "$suite" --no-capture ${ignored[@]+"${ignored[@]}"} "$@"
