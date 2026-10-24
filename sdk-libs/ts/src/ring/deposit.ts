@@ -34,7 +34,7 @@ import { checkSignersHideOwner } from "./anonymous.js";
 import type { RingProgramConfig } from "./codecs.js";
 import { fetchRingProgramConfig } from "./config.js";
 import { DEPOSIT_DEMAND, checkRingCoSigner } from "./cosign.js";
-import { RING_DEPOSIT_AUDIT_SLOTS, type RingDepositCapsule } from "./deposit-capsule.js";
+import { type RingDepositCapsule } from "./deposit-capsule.js";
 import {
   ringDepositContextHash,
   ringDepositPublicInputHash,
@@ -216,10 +216,7 @@ export class PreparedRingDeposit {
         : undefined;
       const anonymous = this.#ownerKey !== undefined;
       const commitment = this.#deposit.ownerUtxoHash;
-      const first = <T>(value: T, padding: T): readonly T[] =>
-        Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, index) =>
-          index === 0 ? value : padding,
-        );
+      const first = <T>(value: T, _padding: T): readonly T[] => [value];
       const request: DepositProofRequest = {
         kind: "deposit",
         publicInputHash: ringDepositPublicInputHash({

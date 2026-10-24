@@ -600,6 +600,8 @@ pub enum DecryptedInputRing {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedWithdrawal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screened_owner: Option<SerializablePubkey>,
     /// A token account for an SPL leg, a wallet for a SOL leg.
     pub recipient: SerializablePubkey,
     pub asset: SerializablePubkey,
@@ -775,6 +777,9 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
             withdrawals: withdrawals
                 .into_iter()
                 .map(|withdrawal| DecryptedWithdrawal {
+                    screened_owner: withdrawal
+                        .screened_owner
+                        .map(|owner| owner.to_bytes().into()),
                     recipient: withdrawal.recipient.to_bytes().into(),
                     asset: withdrawal.asset.to_bytes().into(),
                     amount: withdrawal.amount,

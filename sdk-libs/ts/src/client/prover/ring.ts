@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { InterfaceError } from "@heliuslabs/zolana/interface";
-import { bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
+import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { RING_OUTFLOW_LIMIT_SLOTS, type PresentRecordOpening } from "./types.js";
 import { ClientError } from "@heliuslabs/zolana/client";
@@ -135,6 +135,9 @@ export interface PolicySubjectEntry {
 
 /** Go `PolicyParams`, one owner and one asset entry per output. */
 export interface PolicyProofInputs extends PolicyTableProofInputs {
+  readonly withdrawalCount: number;
+  readonly withdrawalHash: Bytes32;
+  readonly withdrawals: readonly Readonly<{ owner: Bytes32; asset: Bytes32; amount: bigint }>[];
   readonly privateTxHash: Bytes32;
   readonly policyHash: Bytes32;
   readonly ringId: Bytes32;
@@ -179,6 +182,7 @@ export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
 
 /** Go `AnonymousAuditParams`, `inputs` fill the input class. */
 export interface AnonymousAuditProofRequest extends AuditEnvelopeProofInputs {
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
   readonly kind: "anonymousAudit";
   readonly publicInputHash: Bytes32;
   readonly outputs: readonly AnonymousSlotProofInputs[];
@@ -254,6 +258,7 @@ export interface DepositProofRequest {
 
 /** Go `MergeAnonymousParams`. */
 export interface AnonymousMergeProofRequest {
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
   readonly kind: "anonymousMerge";
   readonly publicInputHash: Bytes32;
   readonly privateTxHash: Bytes32;
@@ -298,10 +303,16 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
         outputs: listLength(request.outputs),
       };
     case "memberPolicy":
-      return { family: "memberPolicy", outputs: listLength(request.outputs) };
+      return {
+        family: "memberPolicy",
+        outputs: listLength(request.outputs),
+        withdrawals: listLength(request.withdrawals),
+        ownOnly: request.sources.every((s) => s.registry.every((b) => b === 0)),
+      };
     case "delegatePolicy":
       return {
         family: "delegatePolicy",
+        ownOnly: request.sources.every((s) => s.registry.every((b) => b === 0)),
         inputs: listLength(request.inputs),
         outputs: listLength(request.outputs),
       };
@@ -310,7 +321,7 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
-      return { family: "deposit" };
+      return { family: "deposit", capacity: depositCapacity(request.count) };
     case "anonymousMerge":
       return { family: "anonymousMerge", width: listLength(request.inputs) };
     default:
@@ -350,6 +361,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     case "anonymousAudit":
       return {
         ...head,
+        partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
         ...envelopeJson(request),
         outputs: request.outputs.map((output, i) => anonymousSlotJson(output, `outputs[${i}]`)),
         privateTxHash: field(request.privateTxHash, "privateTxHash"),
@@ -410,23 +422,27 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         contextHash: field(request.contextHash, "contextHash"),
         count: integer(request.count, "count", 1, RING_DEPOSIT_AUDIT_SLOTS),
         ...(flag(request.anonymous) ? { anonymous: true } : {}),
-        ownerPkHashes: fields(request.ownerPkHashes, RING_DEPOSIT_AUDIT_SLOTS, "ownerPkHashes"),
+        ownerPkHashes: fields(
+          request.ownerPkHashes,
+          depositCapacity(request.count),
+          "ownerPkHashes",
+        ),
         ...(request.ownerKeys === undefined
           ? {}
           : {
-              ownerKeys: sized(request.ownerKeys, RING_DEPOSIT_AUDIT_SLOTS, "ownerKeys").map(
+              ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
                 (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
               ),
             }),
-        nullifierPks: fields(request.nullifierPks, RING_DEPOSIT_AUDIT_SLOTS, "nullifierPks"),
+        nullifierPks: fields(request.nullifierPks, depositCapacity(request.count), "nullifierPks"),
         blindingSecrets: fields(
           request.blindingSecrets,
-          RING_DEPOSIT_AUDIT_SLOTS,
+          depositCapacity(request.count),
           "blindingSecrets",
         ),
-        ctHashes: fields(request.ctHashes, RING_DEPOSIT_AUDIT_SLOTS, "ctHashes"),
-        members: sized(request.members, RING_DEPOSIT_AUDIT_SLOTS, "members").map((member, i) =>
-          member === undefined ? null : recordJson(member, `members[${i}]`),
+        ctHashes: fields(request.ctHashes, depositCapacity(request.count), "ctHashes"),
+        members: sized(request.members, depositCapacity(request.count), "members").map(
+          (member, i) => (member === undefined ? null : recordJson(member, `members[${i}]`)),
         ),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
@@ -436,6 +452,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     case "anonymousMerge":
       return {
         ...head,
+        partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
         privateTxHash: field(request.privateTxHash, "privateTxHash"),
         outputUtxoHash: field(request.outputUtxoHash, "outputUtxoHash"),
         firstNullifier: field(request.firstNullifier, "firstNullifier"),
@@ -464,7 +481,7 @@ const ZERO = new Uint8Array(32) as Bytes32;
 
 /** One write takes the 1-write key, 2 to `APPLY_BATCH` the batch key, any other count none. */
 function applyCapacity(count: number): number {
-  return count >= 2 && count <= APPLY_BATCH ? APPLY_BATCH : count;
+  return [1, 2, 4, 8, APPLY_BATCH].find((n) => count <= n) ?? count;
 }
 
 /** A list width no key serves fails here, before any encoding. */
@@ -547,8 +564,20 @@ function anchorJson(anchor: FirstContactAnchor): Json {
 }
 
 function policyJson(policy: PolicyProofInputs): Json {
-  const outputs = policy.outputs.length;
+  const outputs = policy.outputs.length + policy.withdrawals.length;
   return {
+    withdrawalCount: integer(
+      policy.withdrawalCount,
+      "withdrawalCount",
+      0,
+      policy.withdrawals.length,
+    ),
+    withdrawalHash: field(policy.withdrawalHash, "withdrawalHash"),
+    withdrawals: policy.withdrawals.map((w) => ({
+      owner: field(w.owner, "withdrawal.owner"),
+      asset: field(w.asset, "withdrawal.asset"),
+      amount: withdrawalAmount(w.amount),
+    })),
     privateTxHash: field(policy.privateTxHash, "privateTxHash"),
     policyHash: field(policy.policyHash, "policyHash"),
     ringId: field(policy.ringId, "ringId"),
@@ -749,4 +778,17 @@ function flag(value: boolean): boolean {
 
 function byteWidth(maximum: number): number {
   return maximum <= U8_MAX ? 1 : maximum <= U32_MAX ? 4 : 8;
+}
+
+function depositCapacity(count: number): number {
+  return [1, 2, 4, RING_DEPOSIT_AUDIT_SLOTS].find((n) => count <= n) ?? count;
+}
+
+/** The circuit bounds this canonical field to u64; JSON numbers cannot carry that full range. */
+function withdrawalAmount(amount: bigint): string {
+  if (typeof amount !== "bigint" || amount < 0n || amount > 0xffff_ffff_ffff_ffffn)
+    throw new ClientError("CLIENT_INVALID_INTEGER", {
+      details: { field: "withdrawal.amount", length: 8 },
+    });
+  return field(bigIntBytes(amount) as Bytes32, "withdrawal.amount");
 }

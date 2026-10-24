@@ -22,6 +22,8 @@ pub mod state;
 pub mod statement;
 pub mod stream;
 pub mod transact;
+pub mod withdrawals;
+pub use withdrawals::*;
 
 // At the crate root, the generated modules keep their public paths.
 #[cfg(feature = "verifying-keys")]

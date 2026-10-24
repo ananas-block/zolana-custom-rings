@@ -38,9 +38,11 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 	t.Helper()
 	anonymous, escrow := mode == ModeAnonymous, mode == ModeRegistry
 	keys, registry := ringaudit.DefaultKeys(t), ringregistry.New(t)
-	c := &circuits.DepositCircuit{
-		ContextHash: big.NewInt(0xabcdef), Count: count, Anonymous: ringtest.Bit(anonymous), KeyEscrow: ringtest.Bit(escrow), MemberRegistryRoot: 0,
+	c, err := circuits.NewDepositCircuit(circuits.MaxDeposits)
+	if err != nil {
+		t.Fatal(err)
 	}
+	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow), 0
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
@@ -100,4 +102,22 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 	chain = append(chain, sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, ringtest.AsBigInt(c.KeyEscrow), ringtest.AsBigInt(c.MemberRegistryRoot))
 	c.PublicInputHash = spptest.MustHashChain(t, chain)
 	return &Deposit{Circuit: c}
+}
+
+// BuildCapacity keeps the fixed statement while witnessing only the compiled prefix.
+func BuildCapacity(t testing.TB, capacity, count int, mode RingMode) *Deposit {
+	t.Helper()
+	if count > capacity {
+		t.Fatal("count exceeds deposit capacity")
+	}
+	d := Build(t, count, mode)
+	c := d.Circuit
+	c.Capacity = capacity
+	c.OwnerPkHashes = c.OwnerPkHashes[:capacity]
+	c.OwnerKeys = c.OwnerKeys[:capacity]
+	c.NullifierPks = c.NullifierPks[:capacity]
+	c.BlindingSecrets = c.BlindingSecrets[:capacity]
+	c.CtHashes = c.CtHashes[:capacity]
+	c.Members = c.Members[:capacity]
+	return d
 }

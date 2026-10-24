@@ -23,7 +23,7 @@ import (
 const ApplyBatch = 16
 
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/key_catalog.rs.
-var ApplyWidths = []int{1, ApplyBatch}
+var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
 // QueueEntry's EscrowKey is zero except on a RegisterKey write.
 type QueueEntry struct {

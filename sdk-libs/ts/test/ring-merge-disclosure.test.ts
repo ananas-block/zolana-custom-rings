@@ -69,6 +69,11 @@ describe("anonymous ring merge disclosure (test-vectors/ring-merge-anonymous.jso
     expect(() => openRingMergeDisclosure(auditor, disclosure(), otherSalt)).toThrow();
 
     const hash = ringMergeAnonymousPublicInputHash({
+      partyIdentities: vector.request.partyIdentities.map((value) => bytes<Bytes32>(value, 32)) as [
+        Bytes32,
+        Bytes32,
+        Bytes32,
+      ],
       privateTxHash: bytes(vector.request.privateTxHash, 32),
       outputUtxoHash: bytes(vector.request.outputUtxoHash, 32),
       firstNullifier: bytes(vector.request.firstNullifier, 32),
@@ -162,6 +167,7 @@ describe("anonymous ring merge disclosure (test-vectors/ring-merge-anonymous.jso
     const field = (value: string) => bytes<Bytes32>(value, 32);
     const body = ringProofRequestBody({
       kind: "anonymousMerge",
+      partyIdentities: request.partyIdentities.map(field) as [Bytes32, Bytes32, Bytes32],
       publicInputHash: field(request.publicInputHash),
       privateTxHash: field(request.privateTxHash),
       outputUtxoHash: field(request.outputUtxoHash),

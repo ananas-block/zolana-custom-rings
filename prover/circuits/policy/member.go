@@ -26,11 +26,27 @@ type MemberPolicyCircuit struct {
 	Policy
 }
 
+type MemberShape struct {
+	Outputs, Withdrawals int
+	OwnOnly              bool
+}
+
+var WithdrawalCapacities = []int{0, 1, 2, 4, 8, 16, 32}
+
 func NewMemberPolicyCircuit(outputs int) (*MemberPolicyCircuit, error) {
+	return NewMemberPolicyCircuitWith(MemberShape{Outputs: outputs})
+}
+
+func NewMemberPolicyCircuitWith(shape MemberShape) (*MemberPolicyCircuit, error) {
+	outputs := shape.Outputs
+	if !slices.Contains(WithdrawalCapacities, shape.Withdrawals) {
+		return nil, fmt.Errorf("policy: unsupported withdrawal capacity %d", shape.Withdrawals)
+	}
+
 	if !slices.Contains(MemberOutputs[:], outputs) {
 		return nil, fmt.Errorf("policy: no member key for %d outputs", outputs)
 	}
-	return &MemberPolicyCircuit{Policy: newPolicy(outputs)}, nil
+	return &MemberPolicyCircuit{Policy: newPolicy(outputs, shape.Withdrawals, shape.OwnOnly)}, nil
 }
 
 func (c *MemberPolicyCircuit) Define(api frontend.API) error {
@@ -41,14 +57,16 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
 	t := c.Table.decode(api, rc, c.PolicyHash)
+	c.assertOwnOnly(api)
 	// 2. The outputs open private_tx_hash beside the input chain SPP proves.
 	outputs := c.openOutputs(api, c.InputChain)
 	// 3. One sender, the owner signer, or on an anonymous ring the sender its commitment hides.
 	sender := c.sender(api)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
-	s := c.resolveSubjects(api, t, sender, outputs)
+	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
+	s := c.resolveSubjects(api, t, sender, payments)
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, outputs)
+	c.assertRules(api, cmp, t, s, payments)
 	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
 	c.assertApproval(api, c.constrainOutflow(api, cmp, t, sender, outputs))
 	// 7. Under key escrow every output owner escrows the output's nullifier key.

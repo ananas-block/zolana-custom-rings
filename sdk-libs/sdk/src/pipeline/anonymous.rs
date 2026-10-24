@@ -346,6 +346,8 @@ fn leaves_refused(contact: &SentFirstContact, tree: Address) -> RingError {
 pub(crate) struct HiddenOwner(pub Address);
 
 pub(crate) struct AnonymousSpend<'a> {
+    pub party_identities: [[u8; 32]; 3],
+    pub token_owner: Option<Address>,
     signer: &'a SigningKey,
     ring: Address,
     staged_slot: u64,
@@ -526,13 +528,33 @@ impl Anonymous<'_> {
         owner.check_signers(core::iter::once(self.owner.transaction.payer()).chain(co_signer))?;
         self.owner.check_settlement_accounts()?;
         self.owner.check_payer_funds_deposits()?;
-        AnonymousExits {
-            transfers: &self.owner.transaction.interface_transfers()?,
+        let transfers = self.owner.transaction.interface_transfers()?;
+        let token_owner = AnonymousExits {
+            transfers: &transfers,
             hidden_owner: &owner.0,
             named_owner: self.exit_token_owner,
         }
         .token_owner(client)
         .await?;
+        let sol_owner = transfers.iter().find_map(|transfer| match transfer {
+            SettlementTransfer::Sol {
+                user_sol_account, ..
+            } if !transfer.is_deposit() => Some(*user_sol_account),
+            _ => None,
+        });
+        if sol_owner
+            .zip(token_owner)
+            .is_some_and(|(sol, token)| sol != token)
+        {
+            return Err(CustomRingError::AnonymousExitDestinationsDiffer.into());
+        }
+        let destination = token_owner.or(sol_owner);
+        let party_identities = custom_ring_interface::AnonymousParties {
+            payer: self.owner.transaction.payer().as_array(),
+            cosigner: co_signer.as_ref().map(Address::as_array),
+            exit_destination: destination.as_ref().map(Address::as_array),
+        }
+        .identities()?;
         // Tags bind slots, the slot order is fixed before any stream is read.
         let transaction = self.owner.transaction.clone();
         let shape = self.owner.shape(&sender)?;
@@ -599,6 +621,8 @@ impl Anonymous<'_> {
             owner_signers: Vec::new(),
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::Anonymous(Box::new(AnonymousSpend {
+                party_identities,
+                token_owner,
                 signer: self.signer,
                 ring: ring.program_id(),
                 staged_slot,

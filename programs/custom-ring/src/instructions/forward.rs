@@ -54,7 +54,15 @@ pub fn process_merge_ix(
     // 4. A bad SPP proof point is refused before the disclosure pairing.
     let spp_body = request.spp_merge_body()?;
     // 5. An anonymous merge proves its owner's opening to the auditor, an escrow-mode merge its record.
+    let parties = custom_ring_interface::AnonymousParties {
+        payer: spp_accounts[RING_MERGE_PAYER_INDEX].address().as_array(),
+        cosigner: config.co_signer().map(Address::as_array),
+        exit_destination: None,
+    }
+    .identities()
+    .map_err(CustomRingError::from)?;
     MergeAudit {
+        party_identities: &parties,
         program_id,
         config: &config,
         anonymous,

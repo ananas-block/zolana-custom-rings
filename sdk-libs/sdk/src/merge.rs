@@ -134,8 +134,11 @@ impl PreparedCustomRingMerge {
         if config.mode != RingMode::Anonymous {
             return Ok(());
         }
-        HiddenOwner::of(&self.inner.signing_pubkey)?
-            .check_signers(signers.into_iter().chain(merge_co_signer(config)?))
+        HiddenOwner::of(&self.inner.signing_pubkey)?.check_signers(
+            signers
+                .into_iter()
+                .chain(config.co_signer.as_ref().map(|c| c.signer)),
+        )
     }
 
     fn anonymous_width(&self) -> Result<usize, RingError> {
@@ -149,12 +152,14 @@ impl PreparedCustomRingMerge {
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         mut self,
         input: MergeProofInput,
+        payer: Address,
         client: &RingClient<R, I>,
     ) -> Result<ProvenCustomRingMerge, RingError> {
         let config = self.ring.require_config(client.zolana()).await?;
         self.ring.require_active(client.zolana()).await?;
         let anonymous = config.mode == RingMode::Anonymous;
         if anonymous {
+            self.check_public_signers([payer], &config)?;
             self.anonymous_width()?;
         }
         let input_tree_id = tree_id(client.zolana(), input.input_tree).await?;
@@ -193,6 +198,12 @@ impl PreparedCustomRingMerge {
         let disclosure = match anonymous {
             true => Some(
                 AnonymousMergeDisclosure {
+                    party_identities: custom_ring_interface::AnonymousParties {
+                        payer: payer.as_array(),
+                        cosigner: config.co_signer.as_ref().map(|c| c.signer.as_array()),
+                        exit_destination: None,
+                    }
+                    .identities()?,
                     ring: self.ring,
                     auditor: config.auditor_pubkey,
                     merge: &self.inner,
@@ -361,6 +372,7 @@ impl CustomRingMergeInstruction {
 /// The auditor's opening of an anonymous merge, proven against the SPP merge it precedes.
 #[must_use]
 struct AnonymousMergeDisclosure<'a> {
+    party_identities: [[u8; 32]; 3],
     ring: CustomRing,
     auditor: X25519Pubkey,
     merge: &'a MergeProofInputs,
@@ -401,6 +413,7 @@ impl AnonymousMergeDisclosure<'_> {
         let first_nullifier = *self.spp.nullifiers.first().ok_or(ClientError::NoInputs)?;
         let ring_program_id = self.ring.ring_id()?;
         let public_input_hash = MergeAnonymousPublicInput {
+            party_identities: &self.party_identities,
             private_tx_hash: &self.spp.private_tx_hash,
             output_utxo_hash: &self.spp.output_utxo_hash,
             first_nullifier: &first_nullifier,
@@ -427,6 +440,7 @@ impl AnonymousMergeDisclosure<'_> {
             })
             .collect::<Result<_, TransactionError>>()?;
         let body = MergeAnonymous {
+            party_identities: self.party_identities,
             public_input_hash,
             private_tx_hash: self.spp.private_tx_hash,
             output_utxo_hash: self.spp.output_utxo_hash,

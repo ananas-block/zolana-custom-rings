@@ -521,7 +521,7 @@ describe("ring deposit builder", () => {
         }),
       );
       expect(request.memberRegistryRoot).toEqual(recordTree([escrowedMember(recipient)]).root);
-      expect(request.blindingSecrets.slice(1)).toEqual(Array(7).fill(field(0n)));
+      expect(request.blindingSecrets).toHaveLength(1);
       expect(proven.roots).toEqual([
         { ringProgramId: RING, rootIndex: 0, root: recordTree([escrowedMember(recipient)]).root },
       ]);

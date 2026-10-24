@@ -348,6 +348,10 @@ impl<'a> Pipeline<'a> {
         let policy = match config.has_policy {
             true => Some(
                 PolicyRead {
+                    token_owner_hint: match &spend {
+                        Spend::Anonymous(a) => a.token_owner,
+                        _ => None,
+                    },
                     ring: self.ring,
                     config,
                     rail: ring_rail,
@@ -412,6 +416,7 @@ impl<'a> Pipeline<'a> {
         parts.disclosure = sealed.fields.clone();
         parts.approval_required = approval_required;
         parts.policy = policy.as_ref().map(|policy| OwnedPolicyProof {
+            spl_withdrawal_owners: policy.spl_withdrawal_owners.clone(),
             proof: zeroed_proof(),
             own_root_index: policy.own.index,
             curator_root_index: policy.curator.map(|curator| curator.root.index),
@@ -536,6 +541,7 @@ impl Unwitnessed<'_> {
         let first_contact_root = anchor.as_ref().map_or([0; 32], |anchor| anchor.bound.root);
         let audit_public_input_hash = ParsedTransact::new(frame.parts.data())?
             .audit_statement(AuditBinding {
+                party_identities: &anonymous.map_or([[0; 32]; 3], |a| a.party_identities),
                 ring_id: &frame.ring_id,
                 auditor_pubkey: auditor.as_bytes(),
                 epoch: epoch.unwrap_or_default(),
@@ -549,6 +555,7 @@ impl Unwitnessed<'_> {
             .as_ref()
             .and_then(|policy| policy.sender_commitment);
         let statement = anonymous.map(|anonymous| AnonymousStatement {
+            party_identities: anonymous.party_identities,
             private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             sender_commitment: sender_commitment.unwrap_or_default(),

@@ -81,9 +81,9 @@ func deliveredKeyName(capacity int) string {
 
 func anonymousKeyName(shape audit.AnonymousAuditShape) string {
 	if shape.FullOpenings {
-		return fmt.Sprintf("custom_ring_audit_anonymous_entry_%d_%d", shape.InputClass, shape.Outputs)
+		return fmt.Sprintf("custom_ring_audit_anonymous_entry_v2_%d_%d", shape.InputClass, shape.Outputs)
 	}
-	return fmt.Sprintf("custom_ring_audit_anonymous_%d_%d", shape.InputClass, shape.Outputs)
+	return fmt.Sprintf("custom_ring_audit_anonymous_v2_%d_%d", shape.InputClass, shape.Outputs)
 }
 
 func (c *compiledAudit) requireSolved(t *testing.T, assignment frontend.Circuit) {

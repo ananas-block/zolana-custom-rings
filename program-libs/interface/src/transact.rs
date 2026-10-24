@@ -97,16 +97,21 @@ impl RingRail {
 
     pub fn of(tag: InstructionTag, mode: RingMode) -> Result<Self, CustomRingError> {
         match (tag, mode) {
-            (InstructionTag::Transact, RingMode::Anonymous) => Ok(Self::Anonymous),
-            (InstructionTag::Transact, RingMode::Off | RingMode::Registry) => {
-                Ok(Self::Confidential)
+            (InstructionTag::Transact | InstructionTag::LegacyTransact, RingMode::Anonymous) => {
+                Ok(Self::Anonymous)
             }
-            (InstructionTag::DelegateTransact, RingMode::Anonymous) => {
-                Err(CustomRingError::AnonymousRingRefused)
-            }
-            (InstructionTag::DelegateTransact, RingMode::Off | RingMode::Registry) => {
-                Ok(Self::Delegate)
-            }
+            (
+                InstructionTag::Transact | InstructionTag::LegacyTransact,
+                RingMode::Off | RingMode::Registry,
+            ) => Ok(Self::Confidential),
+            (
+                InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
+                RingMode::Anonymous,
+            ) => Err(CustomRingError::AnonymousRingRefused),
+            (
+                InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
+                RingMode::Off | RingMode::Registry,
+            ) => Ok(Self::Delegate),
             _ => Err(CustomRingError::InvalidInstructionData),
         }
     }
@@ -244,6 +249,8 @@ impl AuditShape {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyProof<'a> {
+    /// Token owners checked on chain, in SPL withdrawal order (v2 only).
+    pub spl_withdrawal_owners: &'a [[u8; 32]],
     pub proof: &'a CustomRingProof,
     pub own_root_index: u8,
     /// Set exactly when a source names the curator registry.
@@ -553,6 +560,7 @@ impl<'a> ParsedTransact<'a> {
                 epoch: binding.epoch,
                 first_contact_root: binding.first_contact_root,
                 sender_commitment: data.sender_commitment(),
+                party_identities: binding.party_identities,
             }),
         };
         Ok(AuditStatement {
@@ -576,6 +584,7 @@ impl<'a> ParsedTransact<'a> {
 /// What the program supplies beside the data for the audit statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditBinding<'a> {
+    pub party_identities: &'a [[u8; 32]; 3],
     /// `hash_bytes` of the ring program id.
     pub ring_id: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
@@ -633,6 +642,22 @@ pub struct RingTransactData<'a> {
 impl<'a> RingTransactData<'a> {
     /// Every length fixed by the flags, the shape and the counts, trailing bytes refused.
     pub fn parse(data: &'a [u8], rail: RingRail) -> Result<ParsedTransact<'a>, CustomRingError> {
+        Self::parse_version(data, rail, false)
+    }
+
+    /// Historical decoding only. The upgraded program rejects the legacy instruction tags.
+    pub fn parse_legacy(
+        data: &'a [u8],
+        rail: RingRail,
+    ) -> Result<ParsedTransact<'a>, CustomRingError> {
+        Self::parse_version(data, rail, true)
+    }
+
+    fn parse_version(
+        data: &'a [u8],
+        rail: RingRail,
+        legacy: bool,
+    ) -> Result<ParsedTransact<'a>, CustomRingError> {
         let mut bytes = Bytes::new(data, CustomRingError::RingTransactLength);
         let flags = TransactFlags(bytes.byte()?);
         flags.check(rail)?;
@@ -640,9 +665,10 @@ impl<'a> RingTransactData<'a> {
         let input_count = header.input_count;
         let shape = rail.audit_shape(&header)?;
         let audit_proof = bytes.pod()?;
-        let policy = match flags.has(transact_flag::POLICY) {
+        let mut policy = match flags.has(transact_flag::POLICY) {
             false => None,
             true => Some(PolicyProof {
+                spl_withdrawal_owners: &[],
                 proof: bytes.pod()?,
                 own_root_index: bytes.byte()?,
                 curator_root_index: flags
@@ -665,6 +691,12 @@ impl<'a> RingTransactData<'a> {
         let tx_viewing_u = bytes.array()?;
         let salt = bytes.array()?;
         let interface_transfers = bytes.interface_transfers()?;
+        if !legacy {
+            if let Some(policy) = &mut policy {
+                policy.spl_withdrawal_owners =
+                    bytes.fields(crate::spl_withdrawal_count(&interface_transfers))?;
+            }
+        }
         let data_hash = flags
             .has(transact_flag::DATA_HASH)
             .then(|| bytes.array())
@@ -801,6 +833,16 @@ impl<'a> RingTransactData<'a> {
             )
             .map_err(|_| CustomRingError::InvalidInstructionData)?,
         );
+        if let Some(policy) = &self.policy {
+            if policy.spl_withdrawal_owners.len()
+                != crate::spl_withdrawal_count(&self.interface_transfers)
+            {
+                return Err(CustomRingError::RingTransactLength);
+            }
+            for owner in policy.spl_withdrawal_owners {
+                out.extend_from_slice(owner);
+            }
+        }
         for hash in [self.data_hash, self.ring_data_hash].into_iter().flatten() {
             out.extend_from_slice(hash);
         }

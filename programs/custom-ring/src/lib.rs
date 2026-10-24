@@ -31,6 +31,9 @@ pub fn process_instruction(
         InstructionTag::Transact | InstructionTag::DelegateTransact => {
             process_transact_ix(program_id, accounts, ix_data, ix_tag)
         }
+        InstructionTag::LegacyTransact | InstructionTag::LegacyDelegateTransact => {
+            Err(CustomRingError::InvalidInstructionData.into())
+        }
         InstructionTag::Deposit => Err(CustomRingError::DepositAuditRequired.into()),
         // The audited prefix layout starts at the tag byte.
         InstructionTag::AuditedDeposit => {

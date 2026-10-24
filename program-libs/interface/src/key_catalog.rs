@@ -26,9 +26,12 @@ pub enum RingCircuit {
     },
     /// A statement bit reads the sender.
     MemberPolicy {
+        withdrawals: u8,
+        own_only: bool,
         outputs: u8,
     },
     DelegatePolicy {
+        own_only: bool,
         inputs: u8,
         outputs: u8,
     },
@@ -36,7 +39,9 @@ pub enum RingCircuit {
         writes: u8,
     },
     RegisterKey,
-    Deposit,
+    Deposit {
+        capacity: u8,
+    },
     AnonymousMerge {
         width: u8,
     },
@@ -63,19 +68,47 @@ impl RingCircuit {
         }
     }
 
-    pub const fn policy(rail: RingRail, n_in: u8, n_out: u8) -> Self {
+    pub const fn policy(
+        rail: RingRail,
+        n_in: u8,
+        n_out: u8,
+        withdrawals: u8,
+        own_only: bool,
+    ) -> Self {
         match rail {
-            RingRail::Confidential | RingRail::Anonymous => Self::MemberPolicy { outputs: n_out },
+            RingRail::Confidential | RingRail::Anonymous => Self::MemberPolicy {
+                outputs: n_out,
+                withdrawals: withdrawal_capacity(withdrawals),
+                own_only,
+            },
             RingRail::Delegate => Self::DelegatePolicy {
+                own_only,
                 inputs: n_in,
                 outputs: n_out,
             },
         }
     }
 
+    pub const fn deposit(count: u8) -> Self {
+        Self::Deposit {
+            capacity: match count {
+                0..=1 => 1,
+                2 => 2,
+                3..=4 => 4,
+                _ => 8,
+            },
+        }
+    }
+
     pub const fn apply_records(pending: u64) -> Self {
         Self::ApplyRecords {
-            writes: if pending == 1 { 1 } else { APPLY_BATCH as u8 },
+            writes: match pending {
+                0..=1 => 1,
+                2 => 2,
+                3..=4 => 4,
+                5..=8 => 8,
+                _ => APPLY_BATCH as u8,
+            },
         }
     }
 }
@@ -110,6 +143,19 @@ fn key_suffixed(name: &str, separator: &str) -> String {
     match name.ends_with("key") {
         true => name.to_owned(),
         false => format!("{name}{separator}key"),
+    }
+}
+
+/// Smallest compiled capacity covering the public withdrawal count.
+pub const fn withdrawal_capacity(count: u8) -> u8 {
+    match count {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3..=4 => 4,
+        5..=8 => 8,
+        9..=16 => 16,
+        _ => 32,
     }
 }
 

@@ -90,6 +90,8 @@ export type PendingFirstContact = Omit<SentFirstContact, "leafIndex">;
 
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */
 export interface AnonymousSpendValues {
+  readonly tokenOwner?: Address;
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
   readonly epoch: bigint;
   readonly anchor?: PendingAnchor;
   /** The inbox payments, each becomes its address's newest first contact once it lands. */
@@ -298,6 +300,9 @@ async function assembleStagedTransfer<T>(
     const policy = config.hasPolicy
       ? await readPolicy(
           {
+            ...(spend.anonymous?.tokenOwner === undefined
+              ? {}
+              : { tokenOwnerHint: spend.anonymous.tokenOwner }),
             client,
             ringProgramId,
             config,
@@ -443,6 +448,7 @@ async function proveAssembled(
     ringId,
     publicInputHash: auditStatementHash(
       ringAuditStatement(preview, {
+        partyIdentities: anonymous?.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
         ringId,
         auditorPubkey: auditor.toBytes(),
         epoch: anonymous?.epoch ?? 0n,
@@ -454,6 +460,7 @@ async function proveAssembled(
       ? {}
       : {
           anonymous: anonymousAuditValues({
+            partyIdentities: anonymous.partyIdentities,
             privateTxHash,
             privateTxBlinding: assembled.privateTxBlinding,
             senderCommitment: commitment,
@@ -635,6 +642,7 @@ function previewData(
           policy: {
             proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
             ownRootIndex: input.policy.inputs.own.rootIndex,
+            splWithdrawalOwners: input.policy.inputs.splWithdrawalOwners,
             ...(input.policy.inputs.curator === undefined
               ? {}
               : { curatorRootIndex: input.policy.inputs.curator.root.rootIndex }),
@@ -752,6 +760,7 @@ function anonymousAuditValues(
     privateTxHash: Bytes32;
     privateTxBlinding: Bytes32;
     senderCommitment: Bytes32 | undefined;
+    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
     epoch: bigint;
     anchor: AnchorWitness | undefined;
   }>,
@@ -760,6 +769,7 @@ function anonymousAuditValues(
     privateTxHash: input.privateTxHash,
     privateTxBlinding: input.privateTxBlinding,
     senderCommitment: input.senderCommitment ?? zeroField(),
+    partyIdentities: input.partyIdentities,
     epoch: input.epoch,
     firstContactRoot: input.anchor?.root ?? zeroField(),
     ...(input.anchor === undefined ? {} : { anchor: input.anchor.request }),

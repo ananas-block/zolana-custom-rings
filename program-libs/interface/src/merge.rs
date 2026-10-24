@@ -14,7 +14,7 @@ use crate::{
 /// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.
 pub const MERGE_DISCLOSURE_HEADER_LEN: usize = 32 + 32 + 32 + 8 + 32;
 pub const MERGE_DISCLOSURE_INFO: &[u8; 10] = b"CRING/mrg1";
-pub const MERGE_ANONYMOUS_PUBLIC_INPUT_ELEMENTS: usize = 12;
+pub const MERGE_ANONYMOUS_PUBLIC_INPUT_ELEMENTS: usize = 15;
 const MERGE_ANONYMOUS_DOMAIN: &[u8; 4] = b"CRMG";
 
 /// SPP merge widths whose anonymous merge, disclosure and nullifier accounts fit one v1 transaction.
@@ -149,6 +149,7 @@ impl<'a> MergeDisclosureRef<'a> {
 
 /// The anonymous merge statement, `prover/server/custom_rings/circuits/merge/circuit.go`.
 pub struct MergeAnonymousPublicInput<'a> {
+    pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
     pub output_utxo_hash: &'a [u8; 32],
     pub first_nullifier: &'a [u8; 32],
@@ -185,6 +186,9 @@ impl MergeAnonymousPublicInput<'_> {
             hash_bytes(self.ciphertext)?,
             right_align(self.salt),
             create_hash_chain_4_from_slice(self.fields)?,
+            self.party_identities[0],
+            self.party_identities[1],
+            self.party_identities[2],
         ])
     }
 }
@@ -211,6 +215,7 @@ mod tests {
             .map(array)
             .collect();
         let statement = MergeAnonymousPublicInput {
+            party_identities: &core::array::from_fn(|i| array(&request["partyIdentities"][i])),
             private_tx_hash: &array(&request["privateTxHash"]),
             output_utxo_hash: &array(&request["outputUtxoHash"]),
             first_nullifier: &array(&request["firstNullifier"]),

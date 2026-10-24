@@ -80,6 +80,8 @@ type AnonymousAuditCircuit struct {
 	// FirstContactRoot is the state root the anchor opens under, 0 without a pair slot.
 	FirstContactRoot frontend.Variable
 	Anchor           AnchorWires
+	// Payer, configured co-signer and withdrawal owner; absent optional parties are zero.
+	PartyIdentities [3]frontend.Variable
 }
 
 type anonymousSlot struct {
@@ -125,6 +127,7 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutDataFree, c.Shape.layout())
 	// 2. Every ring output body opens for its recipient and every slot takes its stream.
 	senderPkHash := c.senderPkHash(api)
+	shared.AssertAnonymousParties(api, senderPkHash, c.PartyIdentities)
 	slots := make([]anonymousSlot, len(c.Outputs))
 	outputSlots := make([]outputSlot, len(c.Outputs))
 	for i, output := range c.Outputs {
@@ -313,6 +316,7 @@ func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, tagChain frontend.Variable) frontend.Variable {
 	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires),
 		outputChain, bodyChain, disclosureChain, c.PrivateTxHash, tagChain, c.Epoch, c.FirstContactRoot, c.SenderCommitment,
+		c.PartyIdentities[0], c.PartyIdentities[1], c.PartyIdentities[2],
 	))
 }
 

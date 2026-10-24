@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     key_catalog::RingCircuit, AuditBinding, CustomRingError, ParsedTransact, PolicyStatement,
-    RingMode, RingProgramConfig, ANONYMOUS_PARTIES,
+    RingMode, RingProgramConfig,
 };
 use pinocchio::{error::ProgramError, Address, ProgramResult};
 use zolana_ring_policy::ring_id_field;
@@ -26,6 +26,11 @@ impl RingStatements<'_> {
         let audit_statement = self
             .transfer
             .audit_statement(AuditBinding {
+                party_identities: self
+                    .accounts
+                    .anonymous_parties
+                    .as_ref()
+                    .unwrap_or(&[[0; 32]; 3]),
                 ring_id: &ring_id,
                 auditor_pubkey: &self.config.auditor_pubkey,
                 epoch: self.epoch,
@@ -34,9 +39,6 @@ impl RingStatements<'_> {
             })?
             .hash()
             .map_err(CustomRingError::from)?;
-        if let Some(parties) = &self.accounts.anonymous_parties {
-            bind_anonymous_parties(parties)?;
-        }
         // Both keys resolve before either pairing.
         let policy = self.policy_proof(&ring_id)?;
         let data = self.transfer.data();
@@ -61,7 +63,11 @@ impl RingStatements<'_> {
         let slots = &self.accounts.public_slots;
         let public_assets = slots.asset_fields().map_err(CustomRingError::from)?;
         let public_amounts = slots.amount_fields().map_err(CustomRingError::from)?;
+        let withdrawal_hash =
+            custom_ring_interface::policy_withdrawal_hash(&self.accounts.withdrawals)
+                .map_err(CustomRingError::from)?;
         let statement = PolicyStatement {
+            withdrawal_hash: &withdrawal_hash,
             key: data.rail.policy_key(),
             private_tx_hash: data.private_tx_hash,
             policy_hash: &roots.policy_hash,
@@ -79,7 +85,13 @@ impl RingStatements<'_> {
         Ok(Some(RingProof {
             proof: roots.proof,
             statement,
-            key: ring_key(RingCircuit::policy(data.rail, data.n_in, data.n_out))?,
+            key: ring_key(RingCircuit::policy(
+                data.rail,
+                data.n_in,
+                data.n_out,
+                self.accounts.withdrawals.len() as u8,
+                roots.own_only,
+            ))?,
         }))
     }
 }
@@ -87,9 +99,4 @@ impl RingStatements<'_> {
 /// Registry mode alone, its policy proof escrows every output nullifier key.
 pub(super) fn escrows_keys(config: &RingProgramConfig) -> Result<bool, CustomRingError> {
     Ok(config.mode()? == RingMode::Registry)
-}
-
-/// The parties the anonymous audit statement must prove apart from the hidden owner, unbound by its keys.
-fn bind_anonymous_parties(_parties: &[[u8; 32]; ANONYMOUS_PARTIES]) -> ProgramResult {
-    Ok(())
 }

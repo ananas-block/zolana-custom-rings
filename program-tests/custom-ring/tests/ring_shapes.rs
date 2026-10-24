@@ -1,5 +1,5 @@
-//! Every ring proving key lands on localnet, and every keyed shape of every rail settles or is
-//! refused before proving as too large.
+//! Every transfer shape of the five basic rails settles or is refused before proving as too large.
+//! Registry sources and withdrawal/batch capacities have separate circuit and verifier tests.
 
 use super::*;
 use custom_ring_interface::{
@@ -77,14 +77,28 @@ impl Coverage {
         }
     }
 
-    fn assert_every_key(&self) {
+    fn assert_transfer_keys(&self) {
         let missing: Vec<RingCircuit> = RING_KEYS
             .iter()
             .map(|key| key.circuit)
+            .filter(|circuit| match circuit {
+                RingCircuit::MemberPolicy {
+                    withdrawals,
+                    own_only,
+                    ..
+                } => *withdrawals == 0 && *own_only,
+                RingCircuit::DelegatePolicy { own_only, .. } => *own_only,
+                RingCircuit::Deposit { capacity } => *capacity == 1,
+                RingCircuit::ApplyRecords { writes } => matches!(writes, 1 | 2),
+                _ => true,
+            })
             .filter(|circuit| !self.circuits.contains(circuit))
             .collect();
         assert!(missing.is_empty(), "no landed operation proved {missing:?}");
-        assert_eq!(self.circuits.len(), RING_KEYS.len());
+        assert!(self
+            .circuits
+            .iter()
+            .all(|circuit| RING_KEYS.iter().any(|key| key.circuit == *circuit)));
     }
 }
 
@@ -306,7 +320,7 @@ impl ShapeRing<'_> {
             RingRail::Anonymous => utxos.deposit_hidden_from(&env.payer)?,
             RingRail::Confidential | RingRail::Delegate => utxos.deposit_from(&env.payer)?,
         };
-        coverage.cover(RingCircuit::Deposit);
+        coverage.cover(RingCircuit::deposit(1));
         deposited
             .into_iter()
             .map(|utxo| indexed_note(utxo, &env.sender.keypair, env, env.tree))
@@ -346,7 +360,9 @@ impl ShapeRing<'_> {
         let data = parsed.data();
         coverage.cover(RingCircuit::audit(parsed.layout(), data.n_out));
         if data.policy.is_some() {
-            coverage.cover(RingCircuit::policy(data.rail, data.n_in, data.n_out));
+            coverage.cover(RingCircuit::policy(
+                data.rail, data.n_in, data.n_out, 0, true,
+            ));
         }
         let tag = instruction
             .data
@@ -482,7 +498,7 @@ fn ring_openings(outputs: &[SppProofOutputUtxo]) -> Result<Vec<Opened>> {
 }
 
 #[test]
-fn every_ring_key_lands_and_every_keyed_shape_settles() -> Result<()> {
+fn every_basic_transfer_key_lands_and_every_keyed_shape_settles() -> Result<()> {
     let extra: Vec<Address> = (1..Column::ALL.len())
         .map(|_| Keypair::new().pubkey())
         .collect();
@@ -502,6 +518,6 @@ fn every_ring_key_lands_and_every_keyed_shape_settles() -> Result<()> {
             ring.merges(&mut coverage)?;
         }
     }
-    coverage.assert_every_key();
+    coverage.assert_transfer_keys();
     Ok(())
 }

@@ -38,6 +38,7 @@ import {
 import type { RingProgramConfig } from "./codecs.js";
 import { fetchRingProgramConfig, requireActiveRing } from "./config.js";
 import { RingError } from "./error.js";
+import { anonymousPartyIdentities } from "./parties.js";
 import {
   proveStagedTransfer,
   type ProvenRingTransfer,
@@ -305,6 +306,15 @@ export class AnonymousTransfer {
       },
       context,
     );
+    const solExit = prepared.interfaceTransfers.find((t) => t.kind === "sol" && !t.isDeposit);
+    const destination = solExit?.kind === "sol" ? solExit.userSolAccount : exitTokenOwner;
+    if (destination !== undefined && exitTokenOwner !== undefined && destination !== exitTokenOwner)
+      throw new RingError("RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER");
+    const partyIdentities = anonymousPartyIdentities(
+      prepared.payer,
+      config.coSigner?.signer,
+      destination,
+    );
     // Tags bind slots, the slot order is fixed before any stream is read.
     const stagedSlot = await client.getSlot(context);
     const epoch = tagEpoch(stagedSlot);
@@ -351,6 +361,8 @@ export class AnonymousTransfer {
               proveContext,
             ),
           anonymous: {
+            ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
+            partyIdentities,
             epoch,
             ...(plan.anchor === undefined
               ? {}

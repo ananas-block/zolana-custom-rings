@@ -241,7 +241,7 @@ pub fn load_anonymous_exit(
     anonymous_exit_destination(transfers, &accounts)
 }
 
-struct LoadedSettlement<'a>(&'a AccountView);
+pub(crate) struct LoadedSettlement<'a>(pub &'a AccountView);
 
 impl SettlementAccount for LoadedSettlement<'_> {
     fn address(&self) -> &Address {

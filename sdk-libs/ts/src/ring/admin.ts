@@ -47,7 +47,9 @@ import { checkTransactionFits } from "../flows/compile.js";
 export const RingInstructionTag = Object.freeze({
   createConfig: 1,
   initSppRingConfig: 2,
-  transact: 3,
+  transact: 43,
+  legacyTransact: 3,
+  legacyDelegateTransact: 25,
   grantReadAccess: 4,
   revokeReadAccess: 5,
   setAuthority: 6,
@@ -60,7 +62,7 @@ export const RingInstructionTag = Object.freeze({
   clearCoSigner: 21,
   merge: InstructionTag.ringMergeTransact,
   setDelegate: 24,
-  delegateTransact: 25,
+  delegateTransact: 44,
   setCoSigner: 27,
   createMemberRegistry: 28,
   registerKey: 29,
@@ -85,6 +87,8 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.setPolicySource:
     case RingInstructionTag.setPolicyRules:
       return POLICY_UNITS;
+    case RingInstructionTag.legacyTransact:
+    case RingInstructionTag.legacyDelegateTransact:
     case RingInstructionTag.transact:
     case RingInstructionTag.merge:
     case RingInstructionTag.delegateTransact:

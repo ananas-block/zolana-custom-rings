@@ -692,6 +692,7 @@ describe("anonymous ring merge", () => {
       expect(data.slice(34 + 1 + 192 + 33 + 32 + 1 + 32 * 13)).toEqual(compactBody(spp));
       expect(
         ringMergeAnonymousPublicInputHash({
+          partyIdentities: request.partyIdentities,
           privateTxHash: spp.privateTxHash,
           outputUtxoHash: spp.outputUtxoHash,
           firstNullifier: spp.nullifiers[0]!,
