@@ -371,6 +371,13 @@ impl<'a> Pipeline<'a> {
         if co_signer.is_some_and(|co_signer| owner_signers.contains(&co_signer)) {
             return Err(CustomRingError::CoSignerIsOwner.into());
         }
+        let delegate = match spend {
+            Spend::Delegate { delegate } => Some(delegate),
+            Spend::Owner | Spend::Anonymous(_) => None,
+        };
+        if co_signer.is_some() && co_signer == delegate {
+            return Err(CustomRingError::CoSignerIsDelegate.into());
+        }
         let anonymous = match &spend {
             Spend::Anonymous(anonymous) => Some(anonymous),
             Spend::Owner | Spend::Delegate { .. } => None,
@@ -396,10 +403,7 @@ impl<'a> Pipeline<'a> {
                 .as_ref()
                 .and_then(|policy| policy.curator.map(|curator| curator.address)),
             co_signer,
-            delegate: match spend {
-                Spend::Delegate { delegate } => Some(delegate),
-                Spend::Owner | Spend::Anonymous(_) => None,
-            },
+            delegate,
             anchor_tree: anonymous.and_then(|anonymous| anonymous.anchor_tree()),
         };
         let mut parts = preview(&proof_inputs)?;
@@ -692,8 +696,9 @@ impl ProvenRingTransfer {
             return self.instruction();
         };
         let current_epoch = tag_epoch(slot);
+        // A slot before the proof's epoch is a lagging node's read.
         let previous_epoch = match current_epoch.checked_sub(proof_epoch) {
-            Some(0) => false,
+            None | Some(0) => false,
             Some(1) => true,
             _ => {
                 return Err(RingError::EpochPassed {

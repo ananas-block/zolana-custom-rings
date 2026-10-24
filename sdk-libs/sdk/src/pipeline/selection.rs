@@ -28,7 +28,7 @@ pub(super) fn payment_total(amounts: impl IntoIterator<Item = u64>) -> Result<u6
     match amounts
         .into_iter()
         .try_fold(0u64, u64::checked_add)
-        .ok_or(RingError::OutflowOverflow)?
+        .ok_or(RingError::PaymentOverflow)?
     {
         0 => Err(TransactionError::ZeroSpendAmount.into()),
         total => Ok(total),

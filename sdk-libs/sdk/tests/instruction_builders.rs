@@ -746,3 +746,16 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
         );
     }
 }
+
+#[test]
+fn a_list_shared_twice_is_refused() {
+    let rules = RuleTable::builder()
+        .rule(Rule::require(Subject::Sender, ListId::Allow))
+        .build();
+    let first = CustomRing::new(Address::new_from_array([38; 32]));
+    let second = CustomRing::new(Address::new_from_array([39; 32]));
+    assert!(matches!(
+        policy(&rules, &[(ListId::Allow, first), (ListId::Allow, second)]).create(),
+        Err(RingError::DuplicateSharedSource(ListId::Allow))
+    ));
+}

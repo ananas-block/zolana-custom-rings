@@ -539,13 +539,13 @@ impl RingOperation<'_> {
     }
 }
 
-/// A failed lookup cannot release the attempt, an expiry needs a fresh absent lookup.
+/// Past expiry a fresh absent lookup releases the attempt and a failed one surfaces.
 async fn outcome(
     client: &(impl AsyncRpc + ?Sized),
     signature: Signature,
     last_valid_block_height: u64,
 ) -> Result<Outcome, RingError> {
-    if let Some(outcome) = observe(client, signature).await {
+    if let Ok(Some(outcome)) = observe(client, signature).await {
         return Ok(outcome);
     }
     if client.get_block_height().await? <= last_valid_block_height {
@@ -553,16 +553,17 @@ async fn outcome(
     }
     // The transaction can land between the first lookup and the expiry check.
     Ok(observe(client, signature)
-        .await
+        .await?
         .unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
 }
 
-/// `None` for a signature the cluster does not know, `Unknown` for an unresolved lookup.
-async fn observe(client: &(impl AsyncRpc + ?Sized), signature: Signature) -> Option<Outcome> {
-    let Ok(statuses) = client.get_signature_statuses(vec![signature]).await else {
-        return Some(Outcome::Unknown);
-    };
-    decode_status(statuses)
+/// `None` for a signature the cluster does not know.
+async fn observe(
+    client: &(impl AsyncRpc + ?Sized),
+    signature: Signature,
+) -> Result<Option<Outcome>, RingError> {
+    let statuses = client.get_signature_statuses(vec![signature]).await?;
+    Ok(decode_status(statuses))
 }
 
 fn transaction_error(error: ClientError) -> Option<TransactionError> {

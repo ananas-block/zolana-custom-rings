@@ -79,6 +79,26 @@ impl Owner<'_> {
         Ok(())
     }
 
+    /// The anonymous rail takes no SPP signer but the payer.
+    pub(super) fn check_payer_funds_deposits(&self) -> Result<(), RingError> {
+        let payer = self.transaction.payer();
+        let transfers = self.transaction.interface_transfers()?;
+        let mut funders = transfers
+            .iter()
+            .zip(&self.interface_transfer_accounts)
+            .filter_map(|(transfer, accounts)| match accounts {
+                TransactInterfaceTransferAccounts::Sol(sol) => {
+                    transfer.is_deposit().then_some(sol.recipient)
+                }
+                TransactInterfaceTransferAccounts::SplDeposit(spl) => Some(spl.token_authority),
+                TransactInterfaceTransferAccounts::SplWithdrawal(_) => None,
+            });
+        match funders.any(|funder| funder != payer) {
+            true => Err(CustomRingError::InvalidAnonymousSigner.into()),
+            false => Ok(()),
+        }
+    }
+
     pub(super) async fn stage<R: AsyncRpc + ?Sized>(
         &self,
         _ring: CustomRing,

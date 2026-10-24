@@ -13,7 +13,7 @@ use zolana_client::ComputeBudgetConfig;
 use zolana_interface::pda;
 use zolana_keypair::X25519Pubkey;
 use zolana_ring_client::ReaderKey;
-use zolana_ring_policy::{ListId, Rule, RuleTable, SourceMap};
+use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, SourceMap};
 
 use crate::{
     submission::check_transaction_size, CoSignThreshold, CustomRing, CustomRingConfig, RingError,
@@ -287,11 +287,15 @@ impl PolicyRules<'_> {
             shared_sources,
         } = self;
         let referenced = rules.referenced();
-        if let Some((list_id, _)) = shared_sources
-            .iter()
-            .find(|(list_id, _)| !referenced.contains(*list_id))
-        {
-            return Err(RingError::UnreferencedList(*list_id));
+        let mut named = ListSet::EMPTY;
+        for &(list_id, _) in shared_sources {
+            if !referenced.contains(list_id) {
+                return Err(RingError::UnreferencedList(list_id));
+            }
+            if named.contains(list_id) {
+                return Err(RingError::DuplicateSharedSource(list_id));
+            }
+            named = named.union(ListSet::single(list_id));
         }
         let mut curators: Vec<CustomRing> = Vec::new();
         let mut entries = Vec::new();

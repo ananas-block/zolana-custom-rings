@@ -154,7 +154,7 @@ pub(crate) struct PackedAudit {
     pub owner_keys: Vec<[u8; 32]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeliveredOutput {
     pub output: Opening,
@@ -187,7 +187,7 @@ pub(crate) struct Stream {
     pub index: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct AnonymousOutput {
     #[serde(flatten)]
     pub delivered: DeliveredOutput,
@@ -397,7 +397,7 @@ impl Serialize for PolicyTable<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputOpening {
     #[serde(flatten)]

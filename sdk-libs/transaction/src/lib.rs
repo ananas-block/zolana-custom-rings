@@ -156,6 +156,9 @@ impl AnonymousSlots {
                 {
                     Err(RingRailError::RingAddressExit { slot_index: index })
                 }
+                Some(owner) if owner.signing_pubkey == sender.signing_pubkey => {
+                    Err(RingRailError::RingSenderExit { slot_index: index })
+                }
                 Some(_) => Ok(AnonymousSlot::Exit),
                 None => Ok(AnonymousSlot::Dummy {
                     tag: self.free_tag(index)?,

@@ -95,6 +95,8 @@ pub enum RingError {
     HashMismatch,
     #[error("the table does not reference the list {0:?}")]
     UnreferencedList(ListId),
+    #[error("the shared sources name the list {0:?} twice")]
+    DuplicateSharedSource(ListId),
     #[error("curator registry {address} is not an initialized member registry")]
     InvalidCuratorRegistry { address: Address },
     #[error("the write names member {member:?} twice")]
@@ -172,6 +174,8 @@ pub enum RingError {
     },
     #[error("an outflow sum overflows")]
     OutflowOverflow,
+    #[error("the payments' total overflows")]
+    PaymentOverflow,
     #[error("a public deposit of {asset:?} exceeds what leaves the sender")]
     DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]

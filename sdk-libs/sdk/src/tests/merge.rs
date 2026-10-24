@@ -88,3 +88,39 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
         .check_public_signers([owner.pubkey()], &confidential)
         .is_ok());
 }
+
+#[tokio::test]
+async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
+    use custom_ring_interface::{compute_unit_limit, InstructionTag};
+    use solana_address::Address;
+    use zolana_client::ComputeBudgetConfig;
+    let owner = keypair(1);
+    let utxos = (0..crate::MAX_RING_MERGE_INPUTS as u64)
+        .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
+        .collect();
+    let merge = RingMergeOperation::new(
+        CustomRingMerge::new(ring(), utxos, None)
+            .unwrap()
+            .encrypt(&owner)
+            .unwrap(),
+        MergeProofInput {
+            nullifier_key: owner.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID),
+        },
+    );
+    let config = ring()
+        .require_config(&Chain::ring(RingSettings {
+            co_signer: Some((Address::new_from_array([0x46; 32]), CoSignScope::TRANSFERS)),
+            ..RingSettings::new(RingMode::Registry)
+        }))
+        .await
+        .unwrap();
+    let payer = Address::new_from_array([7; 32]);
+    crate::submission::check_transaction_size(
+        &payer,
+        &merge.preview_instruction(payer, &config).unwrap(),
+        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
+    )
+    .unwrap();
+}

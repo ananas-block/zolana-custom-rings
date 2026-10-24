@@ -33,6 +33,10 @@ use crate::{
     CustomRing, RingError, RingSubmission, SettledSubmission,
 };
 
+#[cfg(test)]
+#[path = "tests/deposit.rs"]
+mod tests;
+
 #[derive(Clone, Copy)]
 pub enum DepositRecipient<'a> {
     /// The member finds the note under its viewing key's tag.
@@ -64,12 +68,11 @@ pub struct RingDepositReceipt {
 }
 
 /// A deposit whose note and auditor ciphertext are fixed, the proof is not.
+#[must_use]
 pub struct PreparedRingDeposit {
     ring: CustomRing,
-    tree: Address,
-    depositor: Address,
+    spp: Instruction,
     cosigner: Option<Address>,
-    deposit: RingAssetDeposit,
     utxo: Utxo,
     disclosure: DepositDisclosure,
 }
@@ -196,8 +199,6 @@ impl RingDeposit<'_> {
         }
         Ok(PreparedRingDeposit {
             ring: self.ring,
-            tree: self.tree,
-            depositor: self.payer.pubkey(),
             cosigner,
             utxo: Utxo {
                 owner: address.signing_pubkey,
@@ -223,7 +224,7 @@ impl RingDeposit<'_> {
                 auditor: config.auditor_pubkey,
                 escrow: config.mode == RingMode::Registry,
             },
-            deposit,
+            spp,
         })
     }
 
@@ -319,13 +320,7 @@ impl PreparedRingDeposit {
         proof: CustomRingProof,
         root: Option<BoundRoot>,
     ) -> Result<Instruction, RingError> {
-        let mut instruction = zolana_program::instruction::RingDeposit {
-            tree: self.tree,
-            depositor: self.depositor,
-            ring_program_id: self.ring.program_id(),
-            deposits: vec![self.deposit.clone()],
-        }
-        .instruction()?;
+        let mut instruction = self.spp.clone();
         let prefix = AuditedDepositPrefix {
             tag: tag::AUDITED_DEPOSIT,
             proof,
@@ -434,102 +429,4 @@ pub async fn fetch_asset_id_async<R: AsyncRpc + ?Sized>(
         return Err(invalid());
     }
     Ok(registry.asset_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use solana_signature::Signature;
-    use zolana_client::{OutputContext, OutputSlot, ShieldedTransaction};
-    use zolana_interface::pda;
-    use zolana_ring_keys::RingKeys;
-
-    use super::*;
-    use crate::tests::support::{keypair, ring, Chain, RingSettings, TREE_ID};
-
-    /// An indexer that shows every counter of the first window taken moves no deposit tag.
-    #[tokio::test]
-    async fn a_deposit_takes_the_stored_counter_whatever_the_indexer_shows() {
-        let member = keypair(1);
-        let payer = keypair(9);
-        let first_window: Vec<u64> = (0..64).collect();
-        let chain = member
-            .sender_view_tags(&first_window)
-            .unwrap()
-            .into_iter()
-            .zip(0u8..)
-            .fold(
-                Chain::ring(RingSettings::new(RingMode::Anonymous)),
-                |chain, (view_tag, seed)| {
-                    chain.with_transaction(ShieldedTransaction {
-                        slot: 1,
-                        tx_signature: Signature::from([seed; 64]),
-                        event_index: Some(0),
-                        tx_viewing_pk: None,
-                        salt: None,
-                        output_slots: vec![OutputSlot {
-                            view_tag,
-                            output_context: OutputContext {
-                                hash: [seed; 32],
-                                tree_id: TREE_ID,
-                                leaf_index: u64::from(seed),
-                            },
-                            payload: Vec::new(),
-                        }],
-                        messages: Vec::new(),
-                        nullifiers: Vec::new(),
-                        proofless: true,
-                        ring_config: None,
-                        ring_program_id: None,
-                    })
-                },
-            );
-        let state = AnonymousRingState::new(ring().program_id(), 0);
-        let prepared = RingDeposit {
-            ring: ring(),
-            payer: &payer,
-            recipient: DepositRecipient::Anonymous {
-                keys: &member,
-                state: &state,
-            },
-            tree: pda::tree(TREE_ID),
-            asset: DepositAsset::Sol,
-            amount: 5,
-            cosigner: None,
-        }
-        .prepare(&chain)
-        .await
-        .unwrap();
-        assert_eq!(
-            prepared.deposit.view_tag,
-            member.sender_view_tags(&[state.deposit_next()]).unwrap()[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_deposit_refuses_the_state_of_another_ring() {
-        let member = keypair(1);
-        let payer = keypair(9);
-        let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
-        let other = Address::new_from_array([0x47; 32]);
-        let state = AnonymousRingState::new(other, 0);
-        let refused = RingDeposit {
-            ring: ring(),
-            payer: &payer,
-            recipient: DepositRecipient::Anonymous {
-                keys: &member,
-                state: &state,
-            },
-            tree: pda::tree(TREE_ID),
-            asset: DepositAsset::Sol,
-            amount: 5,
-            cosigner: None,
-        }
-        .prepare(&chain)
-        .await;
-        assert!(matches!(
-            refused,
-            Err(RingError::ForeignRingState { state, ring: paid })
-                if state == other && paid == ring().program_id()
-        ));
-    }
 }

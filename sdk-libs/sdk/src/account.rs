@@ -328,9 +328,8 @@ impl CustomRingConfig {
         tag_epoch(self.created_slot)
     }
 
-    /// `None` when the authority writes or the ring charges no fee.
     pub fn insert_fee_for(&self, writer: &Address) -> Option<u64> {
-        (self.insert_fee != 0 && *writer != self.authority).then_some(self.insert_fee)
+        self.account.insert_fee_for(writer)
     }
 }
 

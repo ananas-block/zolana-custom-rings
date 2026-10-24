@@ -82,7 +82,7 @@ impl<T: Serialize + Sync> ProveRequest for RingRequest<'_, T> {
 }
 
 /// Sized before it is written, a reallocation would leave the secrets in freed memory.
-pub(crate) fn secret_json_body<T: Serialize + ?Sized>(
+pub fn secret_json_body<T: Serialize + ?Sized>(
     value: &T,
 ) -> Result<Zeroizing<String>, ClientError> {
     let encoding = |error: serde_json::Error| ClientError::Prover(error.to_string());

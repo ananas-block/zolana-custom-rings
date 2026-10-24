@@ -7,7 +7,10 @@ use custom_ring_interface::{
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::{rpc::STATE_TREE_HEIGHT, AsyncRpc, ClientError, MerkleProof, Shape};
+use zolana_client::{
+    rpc::STATE_TREE_HEIGHT, AsyncRpc, ClientError, IndexerRpcConfig, MerkleProof,
+    RingHistoryOptions, Shape,
+};
 use zolana_hasher::{
     primitives::{hash_bytes, right_align},
     Hasher, Poseidon,
@@ -347,6 +350,8 @@ pub(crate) struct HiddenOwner(pub Address);
 
 pub(crate) struct AnonymousSpend<'a> {
     signer: &'a SigningKey,
+    ring: Address,
+    staged_slot: u64,
     pub epoch: u64,
     pair: Option<PairAnchor>,
     pub first_contacts: Vec<PendingFirstContact>,
@@ -427,11 +432,32 @@ impl AnonymousSpend<'_> {
         };
         let contact = &pair.contact;
         let tree = pda::tree(contact.tree_id);
+        // Every pinned leaf predates the staging slot.
+        let staged = Some(IndexerRpcConfig::at_slot(self.staged_slot));
         let proofs = match client
-            .get_merkle_proofs(tree, pair.leaves.to_vec(), None)
+            .get_merkle_proofs(tree, pair.leaves.to_vec(), staged)
             .await
         {
-            Err(ClientError::Indexer(_)) => return Err(leaves_refused(contact, tree)),
+            Err(ClientError::Indexer(_)) => {
+                // An error names no slot, a ring history read proves the indexer reached it.
+                client
+                    .get_shielded_transactions_by_ring(
+                        RingHistoryOptions {
+                            ring_program_id: self.ring,
+                            cursor: None,
+                            limit: Some(1),
+                        },
+                        staged,
+                    )
+                    .await?;
+                match client
+                    .get_merkle_proofs(tree, pair.leaves.to_vec(), staged)
+                    .await
+                {
+                    Err(ClientError::Indexer(_)) => return Err(leaves_refused(contact, tree)),
+                    answer => answer?.proofs,
+                }
+            }
             answer => answer?.proofs,
         };
         let proof = PinnedProofs { pair, tree, proofs }.anchor()?;
@@ -502,6 +528,7 @@ impl Anonymous<'_> {
         let co_signer = config.co_signer.as_ref().map(|co_signer| co_signer.signer);
         owner.check_signers(core::iter::once(self.owner.transaction.payer()).chain(co_signer))?;
         self.owner.check_settlement_accounts()?;
+        self.owner.check_payer_funds_deposits()?;
         AnonymousExits {
             transfers: &self.owner.transaction.interface_transfers()?,
             hidden_owner: &owner.0,
@@ -515,7 +542,8 @@ impl Anonymous<'_> {
             Some(shape) => shape,
             None => canonical_shape(&transaction, &sender)?,
         };
-        let epoch = tag_epoch(client.get_slot().await?);
+        let staged_slot = client.get_slot().await?;
+        let epoch = tag_epoch(staged_slot);
         let first_nullifier = *transaction.first_nullifier();
         let tx_viewing_key = transaction_key(keys, first_nullifier)?;
         let issued: Vec<u32> = self
@@ -578,6 +606,8 @@ impl Anonymous<'_> {
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::Anonymous(Box::new(AnonymousSpend {
                 signer: self.signer,
+                ring: ring.program_id(),
+                staged_slot,
                 epoch,
                 pair,
                 first_contacts,

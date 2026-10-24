@@ -31,4 +31,6 @@ pub enum RingRailError {
         "exit {slot_index} names a ring address viewing key, its scheme 3 body would publish it"
     )]
     RingAddressExit { slot_index: usize },
+    #[error("exit {slot_index} pays the hidden sender, its owner tag would publish the sender")]
+    RingSenderExit { slot_index: usize },
 }

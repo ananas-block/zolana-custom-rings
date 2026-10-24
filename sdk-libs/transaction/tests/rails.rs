@@ -306,20 +306,39 @@ fn an_anonymous_payment_refuses_ring_data_of_its_own() {
     ));
 }
 
+fn unplanned_rail(sender: &ShieldedKeypair, tx_key: ViewingKey) -> RingOutputRail {
+    RingOutputRail::new(
+        tx_key,
+        RingDelivery::Anonymous(Box::new(AnonymousSlots::new(
+            sender.viewing_key.ring_change_key(&RING).unwrap().pubkey(),
+        ))),
+    )
+}
+
+#[test]
+fn an_exit_to_the_hidden_sender_is_refused() {
+    let sender = keypair(1);
+    let (mut tx, tx_key) = ring_transfer(&sender, false);
+    let other_view = ShieldedAddress {
+        viewing_pubkey: address(&keypair(2)).viewing_pubkey,
+        ..address(&sender)
+    };
+    tx.transfer_with_ring(&other_view, Mint::SOL, 2, None)
+        .unwrap();
+    assert!(matches!(
+        unplanned_rail(&sender, tx_key).encrypt(tx, &address(&sender)),
+        Err(E::RingSenderExit { slot_index: 0 })
+    ));
+}
+
 #[test]
 fn an_anonymous_ring_output_to_another_owner_needs_a_stream_slot() {
     let sender = keypair(1);
     let (recipient, _) = ring_address(&keypair(2));
     let (mut tx, tx_key) = ring_transfer(&sender, false);
     tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(
-        tx_key,
-        RingDelivery::Anonymous(Box::new(AnonymousSlots::new(
-            sender.viewing_key.ring_change_key(&RING).unwrap().pubkey(),
-        ))),
-    );
     assert!(matches!(
-        rail.encrypt(tx, &address(&sender)),
+        unplanned_rail(&sender, tx_key).encrypt(tx, &address(&sender)),
         Err(E::UnplannedRingOutput { slot_index: 0 })
     ));
 }

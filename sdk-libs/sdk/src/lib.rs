@@ -1,5 +1,5 @@
-//! Instruction builders, proofs and submission for the custom ring program.
-//! A blocking caller runs an operation as `zolana.block_on(op.prove(zolana.as_async()))`.
+//! Instruction builders, proofs and submission for the custom ring program, a blocking caller
+//! wraps an operation in `zolana.block_on(op.prove(zolana.as_async()))`.
 
 mod account;
 mod admin;
@@ -29,6 +29,7 @@ pub use custom_ring_interface::{
 };
 pub use zolana_program::instruction::{DepositAsset, DepositSplAccounts};
 
+pub use crate::prover::secret_json_body;
 pub use crate::{
     account::{
         CoSignThreshold, CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy,
@@ -46,7 +47,8 @@ pub use crate::{
     error::RingError,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, PreparedCustomRingMerge,
-        ProvenCustomRingMerge, RingMergeOperation, MAX_MERGE_INPUTS, MERGE_DEFAULT_INPUT_COUNT,
+        ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
+        MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
         shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer,

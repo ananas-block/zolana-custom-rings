@@ -507,7 +507,7 @@ fn cli_merges_twenty_four_custom_ring_utxos() -> Result<()> {
 /// The widest `merge --count` still fits one transaction, the proof pads its spare slots.
 #[test]
 fn cli_merges_maximum_custom_ring_utxos() -> Result<()> {
-    cli_merge_fragments(&[3_000_000; custom_ring_sdk::MAX_MERGE_INPUTS])
+    cli_merge_fragments(&[3_000_000; custom_ring_sdk::MAX_RING_MERGE_INPUTS])
 }
 
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {

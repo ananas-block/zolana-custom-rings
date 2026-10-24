@@ -1,5 +1,5 @@
 mod account;
-mod deposit;
+mod limits;
 mod merge;
 mod records;
 mod register_key;

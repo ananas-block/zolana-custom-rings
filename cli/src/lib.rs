@@ -523,7 +523,7 @@ pub struct MergeArgs {
     #[arg(
         long,
         default_value_t = MERGE_DEFAULT_INPUT_COUNT as u64,
-        value_parser = clap::value_parser!(u64).range(2..=custom_ring_sdk::MAX_MERGE_INPUTS as u64)
+        value_parser = clap::value_parser!(u64).range(2..=custom_ring_sdk::MAX_RING_MERGE_INPUTS as u64)
     )]
     pub count: u64,
     #[command(flatten)]

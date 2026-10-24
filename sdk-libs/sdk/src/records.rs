@@ -21,7 +21,7 @@ use zolana_ring_indexer::rpc::{
     MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
-use zolana_ring_policy::{ListSet, ListWrite, Member, Writer};
+use zolana_ring_policy::{ListWrite, Member, Writer};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -515,12 +515,8 @@ impl MemberWrite<'_> {
 }
 
 fn check_writer(write: ListWrite, writer: Writer) -> Result<(), RingError> {
-    let writable = match writer {
-        Writer::Member => ListSet::MEMBER_WRITES,
-        Writer::Authority => ListSet::AUTHORITY_WRITES,
-    };
     let lists = write.set().union(write.clear());
-    match lists.difference(writable).iter().next() {
+    match lists.difference(writer.writable()).iter().next() {
         Some(list) => Err(RingError::ListNotWritable { list, writer }),
         None => Ok(()),
     }

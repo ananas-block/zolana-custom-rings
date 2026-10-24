@@ -27,10 +27,6 @@ use zolana_transaction::{
     ShieldedKeys, SppProofOutputUtxo, WalletUtxo,
 };
 
-pub use zolana_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
-/// Custom forwarding leaves room for 50 real inputs in a minimal v1 transaction.
-pub const MAX_MERGE_INPUTS: usize = 50;
-
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     pipeline::HiddenOwner,
@@ -39,6 +35,10 @@ use crate::{
     submission::BoundRoot,
     tree_id, CustomRing, CustomRingConfig, RingError,
 };
+
+pub use zolana_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
+/// The most real inputs a ring merge forwards in one v1 transaction.
+pub const MAX_RING_MERGE_INPUTS: usize = 50;
 
 #[must_use]
 #[derive(Clone)]
@@ -53,10 +53,10 @@ impl CustomRingMerge {
         inputs: Vec<WalletUtxo>,
         output_ring_data_hash: Option<[u8; 32]>,
     ) -> Result<Self, TransactionError> {
-        if inputs.len() > MAX_MERGE_INPUTS {
+        if inputs.len() > MAX_RING_MERGE_INPUTS {
             return Err(TransactionError::TooManyInputs {
                 got: inputs.len(),
-                max: MAX_MERGE_INPUTS,
+                max: MAX_RING_MERGE_INPUTS,
             });
         }
         let inner =
@@ -111,103 +111,6 @@ pub struct ProvenCustomRingMerge {
     pub output_hash: [u8; 32],
     pub input_count: usize,
     pub merged_amount: u64,
-}
-
-/// The auditor's opening of an anonymous merge, proven against the SPP merge it precedes.
-#[must_use]
-struct AnonymousMergeDisclosure<'a> {
-    ring: CustomRing,
-    auditor: X25519Pubkey,
-    merge: &'a MergeProofInputs,
-    nullifier_key: &'a NullifierKey,
-    spp: &'a MergeTransactIxData,
-}
-
-impl AnonymousMergeDisclosure<'_> {
-    async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        self,
-        client: &RingClient<R, I>,
-    ) -> Result<MergeDisclosure, RingError> {
-        let merge = self.merge;
-        let width =
-            u8::try_from(merge.input_utxos.len()).map_err(|_| ClientError::UnsupportedShape {
-                n_in: merge.input_utxos.len(),
-                n_out: 1,
-            })?;
-        let owner_key = merge.signing_pubkey.as_ed25519()?;
-        let output = &merge.output_utxo;
-        let opening = MergeOpening {
-            owner_key,
-            nullifier_pk: self.nullifier_key.pubkey()?,
-            mint: *output.asset.asset.as_array(),
-            amount: output.amount,
-            output_blinding: output.blinding,
-            input_commitments: merge
-                .input_utxos
-                .iter()
-                .map(|input| match input.is_dummy() {
-                    true => [0; 32],
-                    false => input.utxo_hash,
-                })
-                .collect(),
-        };
-        let sealed =
-            MergeDisclosureEncryption::new(&opening, merge.output_ciphertext_salt, &self.auditor)?;
-        let first_nullifier = *self.spp.nullifiers.first().ok_or(ClientError::NoInputs)?;
-        let ring_program_id = self.ring.ring_id()?;
-        let public_input_hash = MergeAnonymousPublicInput {
-            private_tx_hash: &self.spp.private_tx_hash,
-            output_utxo_hash: &self.spp.output_utxo_hash,
-            first_nullifier: &first_nullifier,
-            ring_id: &ring_program_id,
-            auditor_pk: self.auditor.as_bytes(),
-            eph_pk: sealed.eph_pk.as_bytes(),
-            ciphertext: &sealed.ciphertext,
-            salt: &merge.output_ciphertext_salt,
-            fields: &sealed.fields,
-        }
-        .hash()?;
-        let inputs = merge
-            .input_utxos
-            .iter()
-            .map(|input| {
-                let utxo = ProofInputUtxo::try_from(input)?;
-                Ok(MergeSlot {
-                    domain: utxo.domain,
-                    tree_id: utxo.tree_id,
-                    amount: utxo.amount,
-                    blinding: utxo.blinding,
-                    ring_data_hash: utxo.ring_data_hash,
-                })
-            })
-            .collect::<Result<_, TransactionError>>()?;
-        let body = MergeAnonymous {
-            public_input_hash,
-            private_tx_hash: self.spp.private_tx_hash,
-            output_utxo_hash: self.spp.output_utxo_hash,
-            first_nullifier,
-            ring_program_id,
-            auditor_pk: self.auditor,
-            salt: right_align(&merge.output_ciphertext_salt),
-            eph_sk: sealed.ephemeral_sk,
-            disclosure_key: sealed.disclosure_key,
-            owner_key,
-            nullifier_secret: Zeroizing::new(right_align(&self.nullifier_key.secret())),
-            mint_chunks: pack_be::<32, 2>(output.asset.asset.as_array()),
-            inputs,
-            output_tree_id: tree_id_field(merge.output_tree_id),
-            output_ring_data_hash: output.ring_data_hash.unwrap_or_default(),
-        };
-        let proof = RingRequest::new(RingCircuit::AnonymousMerge { width }, &body)?
-            .prove(client, public_input_hash)
-            .await?;
-        Ok(MergeDisclosure {
-            proof: to_instruction_proof(proof)?,
-            eph_pk: *sealed.eph_pk.as_bytes(),
-            ciphertext: sealed.ciphertext,
-            fields: sealed.fields,
-        })
-    }
 }
 
 impl PreparedCustomRingMerge {
@@ -452,6 +355,103 @@ impl CustomRingMergeInstruction {
         );
         instruction.accounts.splice(0..0, prefix);
         Ok(instruction)
+    }
+}
+
+/// The auditor's opening of an anonymous merge, proven against the SPP merge it precedes.
+#[must_use]
+struct AnonymousMergeDisclosure<'a> {
+    ring: CustomRing,
+    auditor: X25519Pubkey,
+    merge: &'a MergeProofInputs,
+    nullifier_key: &'a NullifierKey,
+    spp: &'a MergeTransactIxData,
+}
+
+impl AnonymousMergeDisclosure<'_> {
+    async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<R, I>,
+    ) -> Result<MergeDisclosure, RingError> {
+        let merge = self.merge;
+        let width =
+            u8::try_from(merge.input_utxos.len()).map_err(|_| ClientError::UnsupportedShape {
+                n_in: merge.input_utxos.len(),
+                n_out: 1,
+            })?;
+        let owner_key = merge.signing_pubkey.as_ed25519()?;
+        let output = &merge.output_utxo;
+        let opening = MergeOpening {
+            owner_key,
+            nullifier_pk: self.nullifier_key.pubkey()?,
+            mint: *output.asset.asset.as_array(),
+            amount: output.amount,
+            output_blinding: output.blinding,
+            input_commitments: merge
+                .input_utxos
+                .iter()
+                .map(|input| match input.is_dummy() {
+                    true => [0; 32],
+                    false => input.utxo_hash,
+                })
+                .collect(),
+        };
+        let sealed =
+            MergeDisclosureEncryption::new(&opening, merge.output_ciphertext_salt, &self.auditor)?;
+        let first_nullifier = *self.spp.nullifiers.first().ok_or(ClientError::NoInputs)?;
+        let ring_program_id = self.ring.ring_id()?;
+        let public_input_hash = MergeAnonymousPublicInput {
+            private_tx_hash: &self.spp.private_tx_hash,
+            output_utxo_hash: &self.spp.output_utxo_hash,
+            first_nullifier: &first_nullifier,
+            ring_id: &ring_program_id,
+            auditor_pk: self.auditor.as_bytes(),
+            eph_pk: sealed.eph_pk.as_bytes(),
+            ciphertext: &sealed.ciphertext,
+            salt: &merge.output_ciphertext_salt,
+            fields: &sealed.fields,
+        }
+        .hash()?;
+        let inputs = merge
+            .input_utxos
+            .iter()
+            .map(|input| {
+                let utxo = ProofInputUtxo::try_from(input)?;
+                Ok(MergeSlot {
+                    domain: utxo.domain,
+                    tree_id: utxo.tree_id,
+                    amount: utxo.amount,
+                    blinding: utxo.blinding,
+                    ring_data_hash: utxo.ring_data_hash,
+                })
+            })
+            .collect::<Result<_, TransactionError>>()?;
+        let body = MergeAnonymous {
+            public_input_hash,
+            private_tx_hash: self.spp.private_tx_hash,
+            output_utxo_hash: self.spp.output_utxo_hash,
+            first_nullifier,
+            ring_program_id,
+            auditor_pk: self.auditor,
+            salt: right_align(&merge.output_ciphertext_salt),
+            eph_sk: sealed.ephemeral_sk,
+            disclosure_key: sealed.disclosure_key,
+            owner_key,
+            nullifier_secret: Zeroizing::new(right_align(&self.nullifier_key.secret())),
+            mint_chunks: pack_be::<32, 2>(output.asset.asset.as_array()),
+            inputs,
+            output_tree_id: tree_id_field(merge.output_tree_id),
+            output_ring_data_hash: output.ring_data_hash.unwrap_or_default(),
+        };
+        let proof = RingRequest::new(RingCircuit::AnonymousMerge { width }, &body)?
+            .prove(client, public_input_hash)
+            .await?;
+        Ok(MergeDisclosure {
+            proof: to_instruction_proof(proof)?,
+            eph_pk: *sealed.eph_pk.as_bytes(),
+            ciphertext: sealed.ciphertext,
+            fields: sealed.fields,
+        })
     }
 }
 
