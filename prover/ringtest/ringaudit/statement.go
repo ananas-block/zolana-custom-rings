@@ -25,7 +25,6 @@ type AuditHead struct {
 	Layout int64
 }
 
-// Elements is CRAU, n0, ring_id, pack_be(0x04 ‖ tx_u), pack_be(auditor_pubkey), pack_be(0x04 ‖ eph_u), hash_bytes(sealed), salt, layout.
 func (h AuditHead) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	txLo, txHi := ringprotocol.Pack33(ringprotocol.Tagged(h.TxViewingU[:]))
@@ -73,13 +72,13 @@ type AnonymousTail struct {
 	SenderCommitment *big.Int
 }
 
-// PackedStatement mirrors AuditKind::Packed, head ‖ output_chain, disclosure_chain.
+// PackedStatement mirrors AuditKind::Packed.
 func PackedStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
 	t.Helper()
 	return append(head.Elements(t), outputChain(t, outputs), spptest.MustHashChain4(t, disclosure))
 }
 
-// DeliveredStatement mirrors AuditKind::Delivered, head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain.
+// DeliveredStatement mirrors AuditKind::Delivered.
 func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
 	t.Helper()
 	var keys []*big.Int
@@ -94,8 +93,7 @@ func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), spptest.MustHashChain4(t, keys))
 }
 
-// AnonymousStatement mirrors AuditKind::Anonymous, head ‖ output_chain, body_chain, disclosure_chain,
-// private_tx_hash, tag_chain, epoch, first_contact_root, sender_commitment.
+// AnonymousStatement mirrors AuditKind::Anonymous.
 func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
 	t.Helper()
 	tags := make([]*big.Int, len(outputs))

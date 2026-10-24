@@ -10,6 +10,7 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -38,13 +39,11 @@ func XPrivateKey(t testing.TB, scalar [32]byte) *ecdh.PrivateKey {
 	return key
 }
 
-// XPublicKey is the X25519 u of scalar.
 func XPublicKey(t testing.TB, scalar [32]byte) [32]byte {
 	t.Helper()
 	return [32]byte(XPrivateKey(t, scalar).PublicKey().Bytes())
 }
 
-// Tagged is the 0x04 || u encoding of an X25519 key.
 func Tagged(key []byte) [33]byte {
 	var out [33]byte
 	out[0] = 4
@@ -70,6 +69,19 @@ func AuditStreamKeys(t testing.TB, secret *big.Int) (key [32]byte, nonce [12]byt
 	copy(key[:31], head[1:])
 	key[31] = tail[19]
 	copy(nonce[:], tail[20:])
+	return key, nonce
+}
+
+// KeySchedule mirrors ve.KeySchedule for an info string of at most 31 bytes.
+func KeySchedule(t testing.TB, secret *big.Int, info string) (key [32]byte, nonce [12]byte) {
+	t.Helper()
+	siloed := ringtest.MustPoseidonHash(t, Tag(ve.DomSepSilo), secret, new(big.Int).SetBytes([]byte(info)))
+	keyLo := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey), siloed))
+	keyHi := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey+1), siloed))
+	nonceRaw := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepNonce), siloed))
+	copy(key[:16], keyHi[16:])
+	copy(key[16:], keyLo[16:])
+	copy(nonce[:], nonceRaw[20:])
 	return key, nonce
 }
 

@@ -5,8 +5,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/consensys/gnark-crypto/ecc"
-
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
@@ -72,10 +70,22 @@ type Sealed struct {
 	CiphertextHash *big.Int
 }
 
+// Seal mirrors shared.Envelope.Seal under the key schedule of info.
+func (k Keys) Seal(t testing.TB, plaintext []byte, info string) Sealed {
+	t.Helper()
+	return k.Sealed(t, k.EnvelopeCiphertext(t, plaintext, info))
+}
+
+func (k Keys) EnvelopeCiphertext(t testing.TB, plaintext []byte, info string) []byte {
+	t.Helper()
+	key, nonce := ringprotocol.KeySchedule(t, k.envelopeSecret(t), info)
+	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
+}
+
 // SealAuditStream mirrors shared.Envelope.SealAuditStream.
 func (k Keys) SealAuditStream(t testing.TB, plaintext []byte) Sealed {
 	t.Helper()
-	return k.sealed(t, k.auditStreamCiphertext(t, plaintext))
+	return k.Sealed(t, k.auditStreamCiphertext(t, plaintext))
 }
 
 // AuditHead is the statement head of a transfer sealing the transaction viewing key under the audit stream.
@@ -101,13 +111,7 @@ func (k Keys) auditStreamCiphertext(t testing.TB, plaintext []byte) []byte {
 // Disclose adds the CROD pad of the transaction key and salt to every field.
 func (k Keys) Disclose(t testing.TB, salt [16]byte, fields []*big.Int) []*big.Int {
 	t.Helper()
-	pad := ringprotocol.DisclosurePad(t, shared.DisclosurePadDomain, k.txViewingSk, salt, len(fields))
-	ciphertext := make([]*big.Int, len(fields))
-	for i, field := range fields {
-		ciphertext[i] = new(big.Int).Add(field, pad[i])
-		ciphertext[i].Mod(ciphertext[i], ecc.BN254.ScalarField())
-	}
-	return ciphertext
+	return ringprotocol.Disclose(t, shared.DisclosurePadDomain, k.txViewingSk, salt, fields)
 }
 
 // envelopeSecret is Poseidon(CR_S, pack_be(dh), pack_be(eph), pack_be(auditor)) of the envelope.
@@ -119,7 +123,7 @@ func (k Keys) envelopeSecret(t testing.TB) *big.Int {
 	return ringtest.MustPoseidonHash(t, ringprotocol.Tag(shared.DomSepCRShared), dhLo, dhHi, ephLo, ephHi, auditorLo, auditorHi)
 }
 
-func (k Keys) sealed(t testing.TB, ciphertext []byte) Sealed {
+func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 	t.Helper()
 	ephLo, ephHi := ringprotocol.Pack33(k.ephPk)
 	auditorLo, auditorHi := ringprotocol.Pack33(ringprotocol.Tagged(k.auditorPk[:]))

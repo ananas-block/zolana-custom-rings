@@ -8,12 +8,12 @@ import (
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 )
@@ -102,10 +102,7 @@ func requireRefused(t *testing.T, circuit, honest, forged frontend.Circuit) {
 
 func requireProves(t *testing.T, circuit, assignment frontend.Circuit) {
 	t.Helper()
-	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit, frontend.WithCompressThreshold(300))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cs := ringkey.Compile(t, circuit)
 	pk, vk, err := groth16.Setup(cs)
 	if err != nil {
 		t.Fatal(err)

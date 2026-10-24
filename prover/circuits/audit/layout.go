@@ -29,7 +29,7 @@ type auditLayout struct {
 	free, fixed int
 }
 
-// layoutChoice is one flag assignment, selected is 1 exactly when the statement's flags equal set.
+// selected is 1 exactly when the statement's varied flags equal those of set.
 type layoutChoice struct {
 	set      int
 	selected frontend.Variable
@@ -52,7 +52,7 @@ func decodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) a
 	if free&fixed != 0 {
 		panic("audit: a layout flag is both free and fixed")
 	}
-	// ToBinary over the four flags refuses a layout value past them.
+	// The decomposition bounds the layout to its flags.
 	l := auditLayout{flags: [layoutBits]frontend.Variable(api.ToBinary(layout, layoutBits)), free: free, fixed: fixed}
 	for i, flag := range l.flags {
 		if free&(1<<i) == 0 {

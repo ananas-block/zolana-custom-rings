@@ -90,6 +90,12 @@ func (o Opening) RecordWires() registry.QuadRecordOpening {
 	return registry.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), Path: o.Path.Wires()}
 }
 
+// UnreadRecordWires is the zero opening a proof assigns where it reads no record.
+func UnreadRecordWires() registry.QuadRecordOpening {
+	zero := big.NewInt(0)
+	return Opening{Record: Record{Next: zero, Lists: zero, EscrowKey: zero}, Path: zeroPath()}.RecordWires()
+}
+
 // Value lies inside Mask, as the program queues an entry.
 type Entry struct {
 	Member, Mask, Value, EscrowKey *big.Int
@@ -160,11 +166,11 @@ func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	if masked(zero, e).Sign() == 0 && e.EscrowKey.Sign() == 0 {
 		return w
 	}
-	return r.insert(t, e)
+	return r.Insert(t, e)
 }
 
-// insert relinks the low record to e's member and appends e's record.
-func (r *Registry) insert(t testing.TB, e Entry) Write {
+// Insert relinks the low record to e's member and appends e's record, an empty record included.
+func (r *Registry) Insert(t testing.TB, e Entry) Write {
 	t.Helper()
 	zero := big.NewInt(0)
 	index, _ := r.find(e.Member)

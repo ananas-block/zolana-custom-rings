@@ -20,12 +20,7 @@ import (
 // 2. Membership is not proven, a merge consolidates one owner's notes and moves no value between parties.
 // 3. Only the auditor opens the disclosure of the owner key, nullifier key, mint, amount, output blinding and every input commitment.
 
-const (
-	// MergeHeaderBytes is owner key, nullifier pk, mint, amount and output blinding, the output opening.
-	MergeHeaderBytes = 32 + 32 + 32 + 8 + 32
-)
-
-// MergeInput is one merge slot, the owner, asset and ring program come from the circuit.
+// MergeInput carries no owner, asset or ring program, every slot takes the circuit's.
 type MergeInput struct {
 	Domain       frontend.Variable
 	TreeID       frontend.Variable
@@ -75,16 +70,14 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 	if len(c.Inputs) != c.NumInputs {
 		return fmt.Errorf("merge: input count mismatch: got %d want %d", len(c.Inputs), c.NumInputs)
 	}
-	// 1. One owner, the Solana identity of the disclosed key under the secret's nullifier key, and one asset,
-	// the mint whose chunks bound to 31 and 1 bytes give it one 32-byte opening.
+	// 1. One owner from the disclosed key and the secret's nullifier key, one asset whose 31 and 1 byte chunks open to one mint.
 	ownerPkHash := gadget.SolanaOwnerIdentity(api, c.OwnerKey)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{c.NullifierSecret})
 	ownerHash := gadget.PoseidonHash(api, []frontend.Variable{ownerPkHash, nullifierPk})
 	asset := gadget.HashChain(api, c.MintChunks[:])
 	mint := slices.Concat(gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[0], 31*8)), gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[1], 8)))
 
-	// 2. Every slot is a UTXO of that owner, asset and ring with no data, or a dummy, and slot zero yields
-	// the public first nullifier.
+	// 2. Every slot is a dataless UTXO of that owner, asset and ring or a dummy, slot zero yields the public first nullifier.
 	inputHashes := make([]frontend.Variable, c.NumInputs)
 	addressNullifiers := make([]frontend.Variable, c.NumInputs)
 	sum := frontend.Variable(0)
@@ -99,7 +92,7 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 			Amount: in.Amount, Blinding: in.Blinding, DataHash: 0, RingDataHash: in.RingDataHash,
 			RingProgramID: api.Select(isDummy, 0, c.RingProgramID),
 		}
-		// A dummy carries nothing but its blinding, so it hides no amount.
+		// private_tx_hash leaves a dummy's fields unbound.
 		transaction.AssertWhen(api, isDummy, utxo.CheckDummy(api))
 		hash := transaction.UtxoHashCircuit(api, utxo, in.TreeID)
 		inputHashes[i] = api.Select(isDummy, 0, hash)

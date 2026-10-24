@@ -1,5 +1,5 @@
 {
-  "description": "Published field counts of the audit disclosures, one record per layout, each a host disclosure the base circuit solves. packed takes the published outputs and the exits, key_escrow and data_free flags, delivered the capacity and the exits and key_escrow flags, anonymous the audit key, its input class, the published input count, the output count and the exits flag. Produced by prover/server/custom_rings/circuits/base/disclosure_test.go with WRITE_AUDIT_VECTORS=1.",
+  "description": "Published field counts of the audit disclosures, each record a host disclosure the audit circuit solves. packed takes the published outputs and the exits, key_escrow and data_free flags, delivered the capacity and the exits and key_escrow flags, anonymous the audit key, its input class, the published input count, the output count and the exits flag. Produced by prover/circuits/audit/disclosure_test.go with WRITE_AUDIT_VECTORS=1.",
   "packed": [
     {
       "outputs": 3,

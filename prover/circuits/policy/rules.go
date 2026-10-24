@@ -17,7 +17,6 @@ type assetLimit struct {
 	found, threshold frontend.Variable
 }
 
-// assertRules requires every enabled rule to hold for the sender and for every live output owner and asset, or an amount guard to exempt it.
 func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s subjects, outputs []utxoView) {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
@@ -56,7 +55,7 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 	}
 }
 
-// sumOutputs totals every output's group, each output pair compares owner and asset once.
+// sumOutputs gives each output the totals of every output sharing its owner, its asset or both.
 func sumOutputs(api frontend.API, outputs []utxoView, liveOwner []frontend.Variable) []outputTotals {
 	ownerAmounts, assetAmounts := make([]frontend.Variable, len(outputs)), make([]frontend.Variable, len(outputs))
 	totals := make([]outputTotals, len(outputs))

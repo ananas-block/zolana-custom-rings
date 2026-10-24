@@ -15,6 +15,7 @@ type Count struct {
 	first  int
 }
 
+// SelectCount needs first 0 or 1.
 func SelectCount(api frontend.API, count frontend.Variable, first, n int) Count {
 	c := Count{OneHot: make([]frontend.Variable, n), Active: make([]frontend.Variable, first+n-1), first: first}
 	// 1. Each flag is set exactly when the count equals its candidate.
@@ -34,12 +35,11 @@ func SelectCount(api frontend.API, count frontend.Variable, first, n int) Count 
 	return c
 }
 
-// Candidate is the count OneHot[k] flags.
 func (c Count) Candidate(k int) int {
 	return c.first + k
 }
 
-// HashPrefix4 is HashChain4 over values[:k+1] when oneHot sets only flag k, a flag fixed to zero hashes nothing.
+// HashPrefix4 is HashChain4 over values[:k+1] when oneHot sets only flag k.
 func HashPrefix4(api frontend.API, values, oneHot []frontend.Variable) frontend.Variable {
 	if len(oneHot) != len(values) {
 		panic("hash prefix needs one flag per prefix length")

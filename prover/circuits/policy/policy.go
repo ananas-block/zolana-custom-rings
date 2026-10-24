@@ -36,8 +36,7 @@ type Policy struct {
 	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
 	SenderPkHash frontend.Variable
 
-	SenderEntry Entry
-	// OwnerEntries[o] and AssetEntries[o] open output o's owner and asset.
+	SenderEntry  Entry
 	OwnerEntries []Entry
 	AssetEntries []Entry
 }
@@ -56,7 +55,6 @@ func newPolicy(outputs int) Policy {
 	}
 }
 
-// validate checks the slices against the shape a constructor sizes, before a step indexes them.
 func (p *Policy) validate() error {
 	outputs, owners, assets := len(p.Outputs), len(p.OwnerEntries), len(p.AssetEntries)
 	if outputs == 0 || owners != outputs || assets != outputs {

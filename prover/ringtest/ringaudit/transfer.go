@@ -28,19 +28,19 @@ func newTransfer(t testing.TB) Transfer {
 	t.Helper()
 	ringProgram := ringtest.Repeat(0x90)
 	tr := Transfer{
-		Keys:           DefaultKeys(t),
 		FirstNullifier: big.NewInt(0x1f1f),
 		RingProgramID:  ringtest.HashBytes(t, ringProgram[:]),
 	}
 	for i := range tr.Salt {
 		tr.Salt[i] = 0xa0 + byte(i)
 	}
-	return tr.withSeed(t)
+	return tr.WithKeys(t, DefaultKeys(t))
 }
 
-// withSeed sets SeedOut over the blinding seed the transaction viewing key and salt fix.
-func (tr Transfer) withSeed(t testing.TB) Transfer {
+// WithKeys rederives SeedOut, the CRBS blinding seed follows tx_viewing_sk.
+func (tr Transfer) WithKeys(t testing.TB, keys Keys) Transfer {
 	t.Helper()
+	tr.Keys = keys
 	seedOut, err := protocol.OutputBlindingSeed(tr.FirstNullifier, ringprotocol.BlindingSeed(t, tr.Keys.txViewingSk, tr.Salt))
 	tr.SeedOut = spptest.MustHash(t, seedOut, err)
 	return tr
@@ -118,7 +118,7 @@ func (tr Transfer) NewExit(t testing.TB, i int) DeliveredOutput {
 	}}
 }
 
-// newDummy pads a slot with random key and body bytes.
+// newDummy pads a slot with arbitrary key and body bytes.
 func (tr Transfer) newDummy(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
 	d := DeliveredOutput{Utxo: Dummy(OutputTreeID, tr.Blinding(t, i)), RecipientKey: ringtest.Repeat(0xd1 + byte(i))}
@@ -167,7 +167,7 @@ func (o DeliveredOutput) statementOutput(t testing.TB) StatementOutput {
 	return StatementOutput{Hash: o.Utxo.Hash(t), Exit: o.Utxo.isExit(), U: o.RecipientKey, Body: o.Body[:]}
 }
 
-// slotBytes mirrors audit slotDisclosure, owner_key ‖ ringTail on a ring output, asset ‖ u64be(amount) on an exit.
+// slotBytes mirrors audit slotDisclosure.
 func (o DeliveredOutput) slotBytes(t testing.TB, ringTail []byte) []byte {
 	t.Helper()
 	out := make([]byte, 32+len(ringTail))

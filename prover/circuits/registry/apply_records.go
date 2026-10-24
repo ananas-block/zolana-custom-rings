@@ -14,22 +14,18 @@ import (
 )
 
 // Properties:
-// 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly
-// the Count writes whose chain runs from ChainStart to ChainEnd.
-// 2. A write keeps every list bit outside its mask while the program keeps Value inside
-// Mask, and never replaces a registered escrow key.
-// 3. An absent member is inserted after its low record at exactly the next index, and a
-// write that would leave its record empty inserts nothing.
+// 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
+// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask, and never replaces a registered escrow key.
+// 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
 // 4. The statement binds both roots, both next indexes, both chain ends and the count.
 
-// ApplyBatch is the write capacity of the wide apply key, mirrored by APPLY_BATCH in
-// program-libs/interface/src/member_registry.rs.
+// ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/member_registry.rs.
 const ApplyBatch = 16
 
-// ApplyWidths are the write capacities the apply keys ship.
+// ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/key_catalog.rs.
 var ApplyWidths = []int{1, ApplyBatch}
 
-// QueueEntry is one queued write, EscrowKey zero but for a RegisterKey write.
+// QueueEntry's EscrowKey is zero except on a RegisterKey write.
 type QueueEntry struct {
 	Member    frontend.Variable
 	Mask      frontend.Variable
@@ -42,7 +38,7 @@ func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey})
 }
 
-// RecordWrite applies one entry, Slot opening the member's leaf or the empty leaf an insert takes.
+// RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
 type RecordWrite struct {
 	Entry     QueueEntry
 	Exists    frontend.Variable
@@ -57,7 +53,6 @@ type RecordWrite struct {
 	Low       QuadPath
 }
 
-// ApplyRecordsCircuit applies the first Count of NumWrites queued writes to OldRoot.
 type ApplyRecordsCircuit struct {
 	NumWrites int `gnark:"-"`
 
@@ -108,13 +103,11 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 
 // apply moves s by w while active is set, an unset active leaves it.
 func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
-	// 1. List bits outside the mask keep their old value, the chain binds Value to the
-	// program's write and the program keeps it inside the mask.
+	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
 	lists := api.Add(keptLists(api, w.OldLists, w.Entry.Mask), w.Entry.Value)
 	// 2. A registered escrow key is final, a later key leaves it.
 	escrow := api.Select(api.IsZero(w.OldEscrow), w.Entry.EscrowKey, w.OldEscrow)
-	// 3. An absent member lies strictly inside its low record's link under the running root,
-	// no such link exists for a present member, and its old fields are empty.
+	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
 	ringgadget.AssertOrderedWhen(api, absent, w.LowMember, w.Entry.Member, w.LowNext)
@@ -127,13 +120,11 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	// 4. Only a nonempty new record is inserted, an empty one leaves the member absent.
 	insert := api.Mul(absent, api.Or(ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow)))
 	update := api.Mul(active, w.Exists)
-	// 5. An insert relinks the low record to the member and takes the empty leaf at exactly
-	// the next index, linking on to the low record's old next.
+	// 5. An insert relinks the low record to the member and takes the empty leaf at the next index, linking on to the low record's old next.
 	linked := api.Select(insert, relinkedRoot, s.root)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Slot.Index, B: s.next})
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.OldNext, B: w.LowNext})
-	// 6. An update or insert replaces the slot's old leaf under the running root, a no-op
-	// leaves the root, and an insert's old leaf is the empty leaf 0.
+	// 6. An update or insert replaces the slot's old leaf under the running root, an insert's old leaf is the empty leaf 0.
 	before := api.Select(w.Exists, Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow}.Hash(api), 0)
 	after := Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow}.Hash(api)
 	opened, written := w.Slot.Update(api, before, after)
@@ -159,8 +150,7 @@ func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable 
 	return kept
 }
 
-// statement is [CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end,
-// count], rebuilt by the program through program-libs/interface/src/statement.rs.
+// statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/statement.rs.
 func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
 	return []frontend.Variable{
 		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,

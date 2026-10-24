@@ -13,7 +13,6 @@ type QuadOpening struct {
 	Next      frontend.Variable
 	Lists     frontend.Variable
 	EscrowKey frontend.Variable
-	// The low record of an absent member, its link brackets the member.
 	LowMember frontend.Variable
 	LowNext   frontend.Variable
 	LowLists  frontend.Variable
@@ -21,8 +20,7 @@ type QuadOpening struct {
 	Path      QuadPath
 }
 
-// Resolve returns the member's lists and escrow key, zero for an absent member or an
-// unset cond, and binds the opening to root while the boolean cond is set.
+// Resolve returns the member's lists and escrow key, zero for an absent member or an unset cond, binding the opening to root while the boolean cond is set.
 func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) (lists, escrowKey frontend.Variable) {
 	// A fixed-shape circuit opens no record for a slot it never reads.
 	if ringgadget.IsConstantZero(api, cond) {
@@ -37,8 +35,7 @@ func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Varia
 		Lists:     api.Select(o.Present, o.Lists, o.LowLists),
 		EscrowKey: api.Select(o.Present, o.EscrowKey, o.LowEscrow),
 	}
-	// 3. An absent member lies strictly inside the low record's link, a link no present member
-	// falls inside, and its lists and escrow key are zero.
+	// 3. An absent member lies strictly inside its low record's link, and its lists and escrow key are zero.
 	absent := api.Mul(cond, api.Sub(1, o.Present))
 	ringgadget.AssertOrderedWhen(api, absent, o.LowMember, member, o.LowNext)
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: o.Lists})
@@ -55,7 +52,7 @@ type QuadRecordOpening struct {
 	Path      QuadPath
 }
 
-// AssertPresent opens the sentinel for member 0, the caller keeps member nonzero.
+// AssertPresent opens the sentinel for member 0, the caller refuses member 0 directly or through the sentinel's zero escrow key.
 func (o QuadRecordOpening) AssertPresent(api frontend.API, cond, root, member frontend.Variable) {
 	leaf := Record{Member: member, Next: o.Next, Lists: o.Lists, EscrowKey: o.EscrowKey}.Hash(api)
 	// The leaf names member, an absent member or another member's record fails the fold.

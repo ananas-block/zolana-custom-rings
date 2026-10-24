@@ -68,7 +68,7 @@ const (
 
 // Tag stream bounds, mirrored by program-libs/interface/src/stream.rs and sdk-libs/ts/src/keypair/ring-stream.ts.
 const (
-	// EpochSlots is the tag epoch length, the program sets epoch = slot / EpochSlots.
+	// EpochSlots is the tag epoch length, the program takes slot / EpochSlots or the epoch before it.
 	EpochSlots = 1 << 18
 	// StreamIndexBits bounds inbox and pair indexes alike, one range check serves every slot.
 	StreamIndexBits = 6

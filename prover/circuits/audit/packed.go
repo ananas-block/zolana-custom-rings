@@ -83,8 +83,9 @@ func (c *PackedAuditCircuit) Define(api frontend.API) error {
 	}
 	// 7. SeedOut opens the disclosure exactly when an exit needs it.
 	layout.assertExits(api, slots)
+	// 8. Only the holder of tx_viewing_sk opens the disclosure of every published slot.
 	statement := c.statement(api, envelope, ringgadget.HashPrefix4(api, hashes, nOut.OneHot), c.disclosure(api, envelope, layout, nOut, records))
-	// 8. The one public input commits the statement the program rebuilds.
+	// 9. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, statement)
 	return nil
 }

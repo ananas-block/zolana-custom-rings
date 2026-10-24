@@ -47,7 +47,6 @@ func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutp
 	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(*big.Int) *big.Int { return big.NewInt(0) })
 }
 
-// Statement mirrors the delivered audit preimage, head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain.
 func (d DeliveredAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
 	return DeliveredStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t))
