@@ -23,6 +23,7 @@ Deliberate burns, unusable recipient keys and voluntary loss of funds are outsid
 | TypeScript anonymous receive | Complete receive/sync and the skipped live integration scenario. | Recipient discovers and spends anonymous payments across supported stream layouts. |
 | TypeScript sync errors | Key-provider failures are caught and unresolved assets can disappear from the report. Define explicit partial/error results. | Failed reads are visible and retryable without presenting a complete stale report. |
 | Sync performance | Replace repeated full-history scans with resumable cursors. | Restart, reorg and pagination tests preserve discovery and spent status. |
+| Prover key cache | Zolana's lazy key manager retains every loaded key. Add a bounded cache for services that prove many shapes; the exhaustive localnet test restarts its prover between shapes. | Memory stays bounded across the full key catalog without interrupting active proofs. |
 | Auditor CLI pagination | Restore earlier transfer openings when resuming with `--cursor`; the current seed scan supplies only deposits and merges. | A resumed audit resolves inputs from previous pages and fails explicitly if that history is unavailable. |
 | Confidential escrow merges | Currently rejected by the verifier. Design support separately. | Complete escrow disclosure and verification before enabling this operation. |
 | Documentation | Reconcile API descriptions, proof shapes/counts and broken links with the implementation. | Examples compile and generated counts match the current circuit catalog. |

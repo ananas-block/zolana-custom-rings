@@ -6,7 +6,10 @@ use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
     ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
 };
-use custom_ring_test_validator::{policy::RingNotes, shared::setup_with_extra_rings};
+use custom_ring_test_validator::{
+    policy::RingNotes,
+    shared::{restart_prover, setup_with_extra_rings},
+};
 use zolana_client::{Shape, SPP_SUPPORTED_SHAPES};
 
 const UTXO_AMOUNT: u64 = 1_000_000;
@@ -231,6 +234,7 @@ impl ShapeRing<'_> {
             .into_iter()
             .filter(|shape| self.column.keyed(*shape))
         {
+            restart_prover()?;
             let transfer = ShapeTransfer {
                 shape,
                 inputs: self.utxos(1, coverage)?,
@@ -260,6 +264,7 @@ impl ShapeRing<'_> {
     fn entries(&self, coverage: &mut Coverage) -> Result<()> {
         let env = self.env;
         for outputs in ANONYMOUS_ENTRY_OUTPUTS {
+            restart_prover()?;
             let utxo = DefaultRingDeposit {
                 depositor: &env.sender.keypair,
                 tree: env.tree,
@@ -282,6 +287,7 @@ impl ShapeRing<'_> {
         let tree_id = env.tree_id(env.tree)?;
         let mut count = 2;
         for width in ANONYMOUS_MERGE_WIDTHS {
+            restart_prover()?;
             let prepared = CustomRingMerge::new(self.ring, self.utxos(count, coverage)?, None)?
                 .with_output_tree_id(tree_id)
                 .encrypt(&env.sender.keypair)?;
