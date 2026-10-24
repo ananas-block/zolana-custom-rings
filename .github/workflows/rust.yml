@@ -1,24 +1,11 @@
-name: rust
+name: ci
 
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - ".gitignore"
-      - "sdk-libs/ts/**"
-      - "package.json"
-      - "package-lock.json"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-      - ".gitignore"
-      - "sdk-libs/ts/**"
-      - "package.json"
-      - "package-lock.json"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,12 +17,74 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
   RUST_BACKTRACE: "1"
   RUSTFLAGS: "-D warnings"
-  SBF_TOOLS_VERSION: v1.54
   NEXTEST_PROFILE: ci
+  AGAVE_VERSION: v4.2.2
+  SBF_TOOLS_VERSION: v1.54
+  NODE_VERSION: "24"
 
 jobs:
+  # Push and dispatch runs take every path, a draft pull request takes none.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.gate.outputs.rust }}
+      ts: ${{ steps.gate.outputs.ts }}
+      stack: ${{ steps.gate.outputs.stack }}
+      build: ${{ steps.gate.outputs.build }}
+    steps:
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            rust:
+              - '**'
+              - '!sdk-libs/ts/**'
+              - '!package.json'
+              - '!package-lock.json'
+              - '!docs/**'
+              - '!**/*.md'
+            ts:
+              - 'sdk-libs/ts/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'zolana'
+              - '.github/**'
+            stack:
+              - '**'
+              - '!program-tests/**'
+              - '!docs/**'
+              - '!**/*.md'
+      - id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          RUST: ${{ steps.filter.outputs.rust }}
+          TS: ${{ steps.filter.outputs.ts }}
+          STACK: ${{ steps.filter.outputs.stack }}
+        run: |
+          for name in RUST TS STACK; do
+            value="${!name}"
+            if [[ "$EVENT" != pull_request ]]; then
+              value=true
+            elif [[ "$DRAFT" == true ]]; then
+              value=false
+            fi
+            printf -v "$name" '%s' "$value"
+            echo "${name,,}=$value" >> "$GITHUB_OUTPUT"
+          done
+          build=false
+          if [[ "$RUST" == true || "$STACK" == true ]]; then build=true; fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   # A release image or key must come from a zolana commit on main or release/*.
   zolana-pin:
     name: zolana pin
@@ -49,29 +98,28 @@ jobs:
 
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - name: Install workspace Rust toolchain
-        run: rustup show active-toolchain
+      - run: rustup show active-toolchain
       - run: cargo fmt --all -- --check
 
   machete:
     name: cargo-machete
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - uses: ./.github/actions/setup
         with:
-          shared-key: machete
-          install-just: "false"
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+          rust: "true"
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           tool: cargo-machete
@@ -79,157 +127,245 @@ jobs:
 
   clippy:
     name: clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - uses: ./.github/actions/setup
         with:
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+          rust: "true"
+          rust-cache: lint
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - run: just clippy
 
   check:
     name: cargo check (workspace)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - uses: ./.github/actions/setup
         with:
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+          rust: "true"
+          rust-cache: lint
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - run: just check-all
-
-  test-program:
-    name: tests / custom-ring program
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    env:
-      AGAVE_VERSION: v4.2.2
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
-        with:
-          shared-key: litesvm
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - uses: ./zolana/.github/actions/install-anza
-        with:
-          version: ${{ env.AGAVE_VERSION }}
-      - uses: ./zolana/.github/actions/install-sbf-tools
-        with:
-          version: ${{ env.SBF_TOOLS_VERSION }}
-      - run: just test-program-fast
 
   test-sdk-libs:
     name: tests / sdk-libs
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - uses: ./.github/actions/setup
         with:
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+          rust: "true"
+          rust-cache: sdk-libs
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - run: just test-sdk-libs
 
-  # The localnet matrix's inputs, built in parallel jobs.
-  build-localnet-programs:
-    name: build / localnet programs
+  test-program:
+    name: tests / custom-ring program
+    needs: [changes, programs]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     env:
-      AGAVE_VERSION: v4.2.2
+      ZOLANA_PREBUILT: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - uses: ./.github/actions/setup
         with:
-          shared-key: litesvm
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - uses: ./zolana/.github/actions/install-anza
+          rust: "true"
+          rust-cache: program-tests
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      - uses: ./.github/actions/artifact
         with:
-          version: ${{ env.AGAVE_VERSION }}
-      - uses: ./zolana/.github/actions/install-sbf-tools
-        with:
-          version: ${{ env.SBF_TOOLS_VERSION }}
-      - run: just build-programs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: localnet-programs-${{ github.sha }}
-          path: |
-            target/deploy/*.so
-            zolana/target/deploy/*.so
-          if-no-files-found: error
-          retention-days: 1
+          name: ring_program
+          mode: restore
+      - run: just test-program-fast
 
-  build-localnet-tools:
-    name: build / localnet tools
+  programs:
+    name: build / programs
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - id: zolana
+        uses: ./.github/actions/artifact
         with:
-          go-version-file: zolana/prover/server/go.mod
-          cache-dependency-path: zolana/prover/server/go.sum
-      - uses: ./zolana/.github/actions/setup-rust
+          name: zolana_programs
+          mode: lookup
+      - id: ring
+        uses: ./.github/actions/artifact
         with:
-          shared-key: localnet-photon
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - run: just build-localnet-tools
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          name: ring_program
+          mode: lookup
+      - if: steps.zolana.outputs.hit != 'true' || steps.ring.outputs.hit != 'true'
+        uses: ./.github/actions/setup
         with:
-          name: localnet-tools-${{ github.sha }}
-          path: |
-            zolana/target/debug/zolana
-            zolana/target/debug/xtask
-            target/prover-server
-            target/debug/zolana-ring
-            target/debug/photon
-            target/debug/ring-indexer
-          if-no-files-found: error
-          retention-days: 1
+          rust: "true"
+          rust-cache: programs
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+          solana: "true"
+          sbf: "true"
+      - if: steps.zolana.outputs.hit != 'true'
+        run: just build-spp-programs
+      - if: steps.zolana.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: zolana_programs
+          mode: save
+      - if: steps.ring.outputs.hit != 'true'
+        run: just build-ring-program
+      - if: steps.ring.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: ring_program
+          mode: save
 
-  build-localnet-tests:
-    name: build / localnet suites
+  zolana-tools:
+    name: build / zolana cli
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: ./zolana/.github/actions/setup-rust
+      - id: cached
+        uses: ./.github/actions/artifact
         with:
-          shared-key: localnet-photon
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - run: just build-localnet-archives
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          name: zolana_tools
+          mode: lookup
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/setup
         with:
-          name: localnet-tests-${{ github.sha }}
-          path: target/nextest-archives/
-          if-no-files-found: error
-          retention-days: 1
+          rust: "true"
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      - if: steps.cached.outputs.hit != 'true'
+        run: just build-zolana-tools
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: zolana_tools
+          mode: save
 
-  test-localnet:
+  photon:
+    name: build / photon
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - id: cached
+        uses: ./.github/actions/artifact
+        with:
+          name: photon
+          mode: lookup
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/setup
+        with:
+          rust: "true"
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      - if: steps.cached.outputs.hit != 'true'
+        run: just build-photon
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: photon
+          mode: save
+
+  prover:
+    name: build / prover
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - id: cached
+        uses: ./.github/actions/artifact
+        with:
+          name: prover
+          mode: lookup
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/setup
+        with:
+          go: "true"
+      - if: steps.cached.outputs.hit != 'true'
+        run: just build-prover-server
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: prover
+          mode: save
+
+  ring-tools:
+    name: build / ring tools
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - id: cached
+        uses: ./.github/actions/artifact
+        with:
+          name: ring_tools
+          mode: lookup
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/setup
+        with:
+          rust: "true"
+          rust-cache: ring-tools
+          token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
+      - if: steps.cached.outputs.hit != 'true'
+        run: just build-ring-tools build-localnet-archives
+      - if: steps.cached.outputs.hit != 'true'
+        uses: ./.github/actions/artifact
+        with:
+          name: ring_tools
+          mode: save
+
+  localnet:
     name: tests / localnet / ${{ matrix.name }}
+    needs: [changes, programs, zolana-tools, photon, prover, ring-tools]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    needs: [build-localnet-programs, build-localnet-tools, build-localnet-tests]
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: custom-ring lifecycle
-            recipe: test-custom-ring-validator
+          - name: custom-ring lifecycle 1/3
+            recipe: test-custom-ring-validator 'all()' --partition slice:1/3
+          - name: custom-ring lifecycle 2/3
+            recipe: test-custom-ring-validator 'all()' --partition slice:2/3
+          - name: custom-ring lifecycle 3/3
+            recipe: test-custom-ring-validator 'all()' --partition slice:3/3
           - name: custom-ring shared sources
             recipe: test-custom-ring-shared
           - name: custom-ring policy rules
@@ -237,7 +373,6 @@ jobs:
           - name: custom-ring policy re-pin
             recipe: test-custom-ring-repin
     env:
-      AGAVE_VERSION: v4.2.2
       ZOLANA_PREBUILT: "1"
       ZOLANA_XTASK_BIN: ${{ github.workspace }}/zolana/target/debug/xtask
       ZOLANA_NEXTEST_ARCHIVE_DIR: target/nextest-archives
@@ -245,59 +380,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: true
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: ./.github/actions/setup
         with:
-          go-version-file: zolana/prover/server/go.mod
-          cache-dependency-path: zolana/prover/server/go.sum
-      - uses: ./zolana/.github/actions/setup-rust
-        with:
-          shared-key: localnet-photon
-          private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
-      - uses: ./zolana/.github/actions/install-anza
-        with:
-          version: ${{ env.AGAVE_VERSION }}
-      - uses: ./zolana/.github/actions/install-sbf-tools
-        with:
-          version: ${{ env.SBF_TOOLS_VERSION }}
-      - name: Cache proving keys
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: zolana/prover/server/proving-keys
-          key: proving-keys-${{ hashFiles('zolana/prover/server/prover/provingkeys/proving-keys.lock', 'prover/ring/proving-keys.lock') }}
-      - name: Cache surfpool
-        id: surfpool-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: zolana/target/tools/surfpool
-          key: surfpool-${{ runner.os }}-${{ hashFiles('zolana/justfile') }}
-      - name: Install surfpool
-        if: steps.surfpool-cache.outputs.cache-hit != 'true'
-        run: just zolana::install-surfpool
-      - name: Download prebuilt programs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: localnet-programs-${{ github.sha }}
-          path: .
-      - name: Download prebuilt tools
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: localnet-tools-${{ github.sha }}
-          path: .
-      - name: Download prebuilt localnet suites
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: localnet-tests-${{ github.sha }}
-          path: target/nextest-archives
-      - run: chmod 0755 zolana/target/debug/zolana zolana/target/debug/xtask target/prover-server target/debug/zolana-ring target/debug/photon target/debug/ring-indexer
-      - name: Cache Squads smart account binary
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        id: squads-cache
-        with:
-          path: zolana/target/deploy/squads_smart_account_program.so
-          key: squads-smart-account-SMRTzfY6DfH5ik3TKiyLFfXexV8uSG3d2UksSCYdunG
-      - name: Fetch Squads smart account binary
-        if: steps.squads-cache.outputs.cache-hit != 'true'
-        run: just zolana::fetch-smart-account
+          rust: "true"
+          solana: "true"
+      - uses: ./.github/actions/stack
       - run: just ${{ matrix.recipe }}
       - name: Dump prover, photon and ring indexer logs on failure
         if: failure()
@@ -305,3 +392,115 @@ jobs:
           find . -name prover-server.log -print -exec tail -200 {} \; 2>/dev/null || echo "(no prover log)"
           find . -name photon.log -print -exec tail -100 {} \; 2>/dev/null || echo "(no photon log)"
           find . -name ring-indexer.log -print -exec tail -100 {} \; 2>/dev/null || echo "(no ring indexer log)"
+
+  ts-check:
+    name: typescript / check
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup
+        with:
+          node: "true"
+      - run: npm ci
+      - run: npm run check:ts
+      - run: npm run docs:ts
+      - name: Verify the published package
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          npm pack --workspace @heliuslabs/zolana --pack-destination "$tmp"
+          npm pack --workspace @heliuslabs/zolana-custom-rings --pack-destination "$tmp"
+          set -- "$tmp"/heliuslabs-zolana-[0-9]*.tgz
+          test "$#" -eq 1
+          core="$1"
+          set -- "$tmp"/heliuslabs-zolana-custom-rings-*.tgz
+          test "$#" -eq 1
+          ring="$1"
+          printf '{"private":true,"type":"module"}\n' > "$tmp/package.json"
+          kit_range="$(node -p "require('./sdk-libs/ts/package.json').peerDependencies['@solana/kit']")"
+          npm --prefix "$tmp" install "$core" "$ring" "@solana/kit@$kit_range" --ignore-scripts
+          cat > "$tmp/smoke.mts" <<'TS'
+          import type { ZolanaClientConfig } from "@heliuslabs/zolana";
+          import { createCustomRingClient, type RingTransferClient } from "@heliuslabs/zolana-custom-rings";
+          const config: ZolanaClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
+          const client: RingTransferClient = await createCustomRingClient(config);
+          void client;
+          TS
+          ./node_modules/.bin/tsc \
+            --noEmit --strict --exactOptionalPropertyTypes --skipLibCheck \
+            --target es2022 --module nodenext --moduleResolution nodenext \
+            "$tmp/smoke.mts"
+          (
+            cd "$tmp"
+            node --input-type=module <<'NODE'
+          const ring = await import("@heliuslabs/zolana-custom-rings");
+          await Promise.all(
+            ["client", "keypair"].map((subpath) => import(`@heliuslabs/zolana-custom-rings/${subpath}`)),
+          );
+          if (!ring.buildRingTransferTransaction || !ring.customRingDepositPayload) process.exit(1);
+          await ring.createCustomRingClient({ solanaRpcUrl: "http://127.0.0.1:8899" });
+          NODE
+          )
+
+  e2e:
+    name: typescript / ${{ matrix.name }}
+    needs: [changes, programs, zolana-tools, photon, prover, ring-tools]
+    if: needs.changes.outputs.stack == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e ring controls
+            recipe: test-ts-ring-controls
+          - name: e2e flows
+            recipe: test-ts-e2e --exclude test/e2e/ring-controls.live.test.ts
+    env:
+      ZOLANA_PREBUILT: "1"
+      ZOLANA_XTASK_BIN: ${{ github.workspace }}/zolana/target/debug/xtask
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup
+        with:
+          solana: "true"
+          node: "true"
+      - uses: ./.github/actions/stack
+      - run: npm ci
+      - run: just ${{ matrix.recipe }}
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          find target/ts-sdk-e2e -name '*.log' -print -exec tail -200 {} \; 2>/dev/null || echo "(no logs)"
+
+  result:
+    name: ci result
+    if: always()
+    needs:
+      - changes
+      - zolana-pin
+      - fmt
+      - machete
+      - clippy
+      - check
+      - test-sdk-libs
+      - test-program
+      - programs
+      - zolana-tools
+      - photon
+      - prover
+      - ring-tools
+      - localnet
+      - ts-check
+      - e2e
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

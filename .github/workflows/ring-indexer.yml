@@ -25,6 +25,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/ring-indexer.yml"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
