@@ -21,7 +21,6 @@ import (
 // 6. The disclosure opens a ring output's owner key and every UTXO's nullifier key, LayoutEscrow leaves the keys to the policy's escrow records.
 // 7. Every exit discloses its full opening, SeedOut and slots of 40 bytes appear exactly when a UTXO exits.
 
-// DeliveredAuditCircuit proves every confidential ring output body opens for its recipient.
 type DeliveredAuditCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	Capacity        int               `gnark:"-"`
@@ -64,13 +63,14 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	}
 	// 5. SeedOut and the exit bytes of every slot appear exactly when a UTXO exits.
 	layout.assertExits(api, slots)
+	// 6. Only the holder of tx_viewing_sk opens the disclosure of every slot.
 	statement := c.statement(api, envelope,
 		gadget.HashChain4(api, hashes),
 		gadget.HashChain4(api, bodyHashes),
 		c.disclosure(api, envelope, layout, nullifierPks, slotBytes),
 		gadget.HashChain4(api, recipientKeys),
 	)
-	// 6. The one public input commits the statement the program rebuilds.
+	// 7. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, statement)
 	return nil
 }

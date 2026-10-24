@@ -40,7 +40,7 @@ func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
 	outputs := c.openOutputs(api, inputChain)
 	// 3. A delegate move spends one member, the sender.
 	sender := c.sender(api, inputs)
-	// 4. The sender and every output's owner and asset are opened under own_root, and under curator_root when a list is foreign.
+	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	s := c.resolveSubjects(api, t, sender, outputs)
 	// 5. Every enabled rule holds for its subjects.
 	c.assertRules(api, cmp, t, s, outputs)

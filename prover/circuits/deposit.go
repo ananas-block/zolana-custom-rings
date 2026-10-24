@@ -15,14 +15,10 @@ import (
 )
 
 // Properties:
-// 1. The first Count of 1..8 owner commitments open to (owner hash, blinding, owner key)
-// AES-CTR encrypted to AuditorPk, the padding slots carry nothing.
-// 2. Every blinding is Poseidon(CRDB, BlindingSecret), so no deposit opens as the first
-// contact of an anonymous pair stream.
-// 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit
-// names none.
-// 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key
-// the owner's nullifier key and ciphertext hash name.
+// 1. The first Count of 1..8 owner commitments open to (owner hash, blinding, owner key) AES-CTR encrypted to AuditorPk, the padding slots carry nothing.
+// 2. Every blinding is Poseidon(CRDB, BlindingSecret), so no deposit opens as the first contact of an anonymous pair stream.
+// 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit names none.
+// 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
 
 const (
 	MaxDeposits = 8
@@ -49,7 +45,7 @@ type DepositCircuit struct {
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {
-	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1 and a zero root without escrow.
+	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1.
 	count := ringgadget.SelectCount(api, c.Count, 1, MaxDeposits)
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, MaxDeposits)
@@ -65,8 +61,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		c.Members[i].AssertPresent(api, escrowed, c.MemberRegistryRoot, c.OwnerPkHashes[i])
 		key := registry.EscrowKey(api, c.NullifierPks[i], c.CtHashes[i])
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: c.Members[i].EscrowKey, B: key})
-		// 4. An anonymous slot's owner hash is the owner identity of its key, the envelope's cipher
-		// bounds the key bytes, any other slot discloses no key.
+		// 4. An anonymous slot's owner hash is its key's identity, the envelope bounds the key bytes, any other slot discloses no key.
 		anonymous := api.Mul(c.Anonymous, active)
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: anonymous, A: c.OwnerPkHashes[i], B: gadget.SolanaOwnerIdentityBounded(api, c.OwnerKeys[i])})
 		for _, b := range c.OwnerKeys[i] {
@@ -80,16 +75,13 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		ownerBytes, blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, owner), ringgadget.FieldToBytesBEWith(api, rc, blinding)
 		plaintext = slices.Concat(plaintext, ownerBytes[:], blindingBytes[:], c.OwnerKeys[i][:])
 	}
-	// 7. The statement binds every commitment SPP receives to the ciphertext the auditor opens,
-	// the cipher bounds every ciphertext byte.
+	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, the cipher bounds its bytes.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.Seal(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))
 	return nil
 }
 
-// statement is [CRDP, context, count, anonymous, (commitment, ct_hash) per slot, aud0,
-// aud1, eph0, eph1, key_escrow, registry_root], a zero pair per padding slot, mirrored by
-// DepositPublicInput::hash in program-libs/interface/src/deposit.rs.
+// statement mirrors DepositPublicInput::elements in program-libs/interface/src/deposit.rs.
 func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
 	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count, c.Anonymous}
 	for i, commitment := range commitments {

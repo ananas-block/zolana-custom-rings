@@ -14,7 +14,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// Envelope encrypts Plaintext to the X25519 key AuditorPk under the ephemeral secret EphSk, fresh per envelope or the keystream repeats.
+// EphSk must be fresh per envelope, a reuse under one auditor key repeats the keystream.
 type Envelope struct {
 	Plaintext []frontend.Variable
 	EphSk     [32]frontend.Variable
@@ -23,7 +23,7 @@ type Envelope struct {
 	Info string
 }
 
-// Sealed carries both tagged keys packed with gadget.PackBytesBE and the ciphertext, every ciphertext byte bounded to 8 bits by the cipher's tables.
+// Every Ciphertext byte is bounded to 8 bits by the cipher's tables.
 type Sealed struct {
 	Auditor, Eph, Ciphertext []frontend.Variable
 }
@@ -80,7 +80,6 @@ func AgreeCanonical(api frontend.API, scalar, peer [32]frontend.Variable) [32]fr
 	return x25519.ECDH(api, scalar, peer)
 }
 
-// Tagged is the 0x04 ‖ u encoding of an X25519 key.
 func Tagged(u [32]frontend.Variable) []frontend.Variable {
 	return append([]frontend.Variable{4}, u[:]...)
 }

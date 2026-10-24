@@ -54,7 +54,6 @@ func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, me
 	return view
 }
 
-// assertEscrow requires under key escrow every UTXO output's owner record to escrow the output's nullifier key.
 func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
 	for o, out := range outputs {
 		escrowed := api.Mul(out.utxo, keyEscrow)

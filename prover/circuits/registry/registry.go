@@ -1,5 +1,4 @@
-// Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records
-// form one list sorted by member, and the writes the ring program queues and applies to it.
+// Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes the ring program queues and applies to it.
 package registry
 
 import (
@@ -8,7 +7,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// The tree shape mirrors program-libs/interface/src/member_registry.rs and must stay in sync with it.
+// The tree shape mirrors program-libs/interface/src/member_registry.rs.
 const (
 	Height    = 10
 	Arity     = 4
@@ -30,8 +29,7 @@ func (r Record) Hash(api frontend.API) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey})
 }
 
-// EscrowKey is Poseidon(nullifier_pk, ct_hash), the record field RegisterKey fills, mirrored by
-// EscrowKey::hash in program-libs/interface/src/member_registry.rs.
+// EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/member_registry.rs.
 func EscrowKey(api frontend.API, nullifierPk, ciphertextHash frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{nullifierPk, ciphertextHash})
 }
@@ -46,6 +44,7 @@ func (p QuadPath) Root(api frontend.API, leaf frontend.Variable) frontend.Variab
 }
 
 func (p QuadPath) Update(api frontend.API, oldLeaf, newLeaf frontend.Variable) (oldRoot, newRoot frontend.Variable) {
+	// One index decomposition places the old and the new leaf in the same slot.
 	digits := p.digits(api)
 	return p.fold(api, digits, oldLeaf), p.fold(api, digits, newLeaf)
 }

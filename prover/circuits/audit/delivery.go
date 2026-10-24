@@ -40,11 +40,10 @@ func openDelivered(api frontend.API, d DeliveryWires) outputSlot {
 	return slot
 }
 
-// recipientKey is the key a slot agrees with, RecipientKey on a ring output and the base point on any other slot.
 func recipientKey(api frontend.API, slot outputSlot, key [32]frontend.Variable) [32]frontend.Variable {
 	var u [32]frontend.Variable
 	for j := range u {
-		// A slot without a recipient agrees with the base point, a gated key could still leave the ladder unsatisfiable.
+		// A slot without a recipient agrees with the base point, the ladder stays satisfiable on every slot.
 		u[j] = api.Select(slot.ring, key[j], basepointByte(j))
 	}
 	return u
@@ -68,9 +67,9 @@ func (w AuditWires) deliver(api frontend.API, rc frontend.Rangechecker, e auditE
 		FirstNullifier: w.FirstNullifier,
 	}.Secret(api)
 	key, nonce := shared.AuditStreamKeySchedule(api, secret)
+	// 5. A ring output's body is the encryption of its opening, the recipient and the auditor decrypt the same bytes.
 	amount := uintBytes(api, d.Output.Amount, 8)
 	for j, b := range aes.NewCipher(api, key).CTREncrypt(nonce, slices.Concat(blinding[:], amount)) {
-		// 5. A ring output's body is the encryption of its opening, the recipient and the auditor decrypt the same bytes.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: d.Body[j], B: b})
 	}
 	// 6. A ring output's owner is the identity of the key the disclosure names.
@@ -88,6 +87,7 @@ func (w AuditWires) deliver(api frontend.API, rc frontend.Rangechecker, e auditE
 // slotDisclosure is owner_key ‖ ringTail on a ring output, asset ‖ u64be(amount) zero padded to its width on an exit.
 func slotDisclosure(api frontend.API, rc frontend.Rangechecker, o DeliveryWires, d delivery, ringTail []frontend.Variable) []frontend.Variable {
 	bytes := slices.Concat(masked(api, d.ring, o.OwnerKey[:]), masked(api, d.ring, ringTail))
+	// An exit discloses its asset as the one 32-byte encoding below q.
 	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(d.exit, o.Output.Asset))
 	exit := slices.Concat(asset[:], masked(api, d.exit, d.amount))
 	for j, b := range exit {
@@ -97,7 +97,6 @@ func slotDisclosure(api frontend.API, rc frontend.Rangechecker, o DeliveryWires,
 	return bytes
 }
 
-// basepointByte is byte j of the X25519 base point u = 9.
 func basepointByte(j int) frontend.Variable {
 	if j == 0 {
 		return 9

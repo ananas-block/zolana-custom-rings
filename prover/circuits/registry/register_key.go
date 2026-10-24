@@ -9,10 +9,8 @@ import (
 )
 
 // Properties:
-// 1. The nullifier key is Poseidon of the 31-byte nullifier secret the envelope seals to
-// AuditorPk, so the auditor recovers the secret behind the escrowed key.
-// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext
-// hash, and the program queues the escrow write Poseidon(nullifier_pk, ct_hash) from them.
+// 1. The nullifier key is Poseidon of the 31-byte nullifier secret the envelope seals to AuditorPk, so the auditor recovers the secret behind the escrowed key.
+// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext hash, and the program queues the escrow write Poseidon(nullifier_pk, ct_hash) from them.
 // 3. No registry record and no UTXO owner is opened, the queue applies the write later.
 
 type RegisterKeyCircuit struct {
@@ -35,8 +33,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// statement is [CRRG, member, nullifier_pk, aud0, aud1, eph0, eph1, ct_hash], rebuilt by the
-// program through program-libs/interface/src/statement.rs.
+// statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk frontend.Variable, sealed shared.Sealed) []frontend.Variable {
 	return []frontend.Variable{
 		shared.RegisterKeyDomain, c.Member, nullifierPk, sealed.Auditor[0], sealed.Auditor[1], sealed.Eph[0], sealed.Eph[1],

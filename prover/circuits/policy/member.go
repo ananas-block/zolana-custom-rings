@@ -12,7 +12,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// MemberOutputs are the member key capacities, every output opens its own owner and asset entry.
 var MemberOutputs = [...]int{2, 4, 8, 16}
 
 type MemberPolicyCircuit struct {
@@ -22,7 +21,7 @@ type MemberPolicyCircuit struct {
 	ApprovalRequired frontend.Variable
 	KeyEscrow        frontend.Variable
 	Sender           frontend.Variable
-	// InputChain stays opaque, SPP's single owner signer or the anonymous audit proof binds every input to the sender.
+	// InputChain stays opaque, the program's sole owner signer or the anonymous audit proof binds every input to the sender.
 	InputChain frontend.Variable
 	Policy
 }
@@ -46,7 +45,7 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	outputs := c.openOutputs(api, c.InputChain)
 	// 3. One sender, the owner signer, or on an anonymous ring the sender its commitment hides.
 	sender := c.sender(api)
-	// 4. The sender and every output's owner and asset are opened under own_root, and under curator_root when a list is foreign.
+	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	s := c.resolveSubjects(api, t, sender, outputs)
 	// 5. Every enabled rule holds for its subjects.
 	c.assertRules(api, cmp, t, s, outputs)

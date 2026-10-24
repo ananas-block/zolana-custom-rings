@@ -24,7 +24,7 @@ type Table struct {
 	LimitCount   frontend.Variable
 }
 
-// SourceWires is slot i of the source map, list i+1 and its registry field, zero for the ring's own.
+// SourceWires slot i sources list i+1, a zero Registry names the ring's own registry.
 type SourceWires struct {
 	ListID   frontend.Variable
 	Registry frontend.Variable
@@ -61,7 +61,7 @@ type ruleFields struct {
 	scalarGuard, assetGuard    frontend.Variable
 }
 
-// ruleParts lays out a rule row from its low byte as Row does, subject, mode, list mask, guard, threshold, alternative mask.
+// ruleParts mirrors Row in program-libs/policy/src/rule_table.rs, read from the low byte of the big-endian field.
 var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 64}, {96, 8}}
 
 // decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).

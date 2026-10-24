@@ -39,18 +39,15 @@ type AnonymousOutputWires struct {
 	Stream StreamWires
 }
 
-// StreamWires places one anonymous slot in a tag stream, a ring output takes exactly one of Inbox, Pair and Self.
 type StreamWires struct {
 	// Tag is low128 of the stream digest on an inbox or pair slot, free on any other slot.
 	Tag   frontend.Variable
 	Inbox frontend.Variable
 	Pair  frontend.Variable
-	// Self marks change of the hidden sender.
 	Self  frontend.Variable
 	Index frontend.Variable
 }
 
-// AnchorWires opens the first contact whose slot secret keys the transfer's one pair stream.
 type AnchorWires struct {
 	TreeID frontend.Variable
 	Asset  frontend.Variable
@@ -64,7 +61,6 @@ type AnchorWires struct {
 	Path       [transaction.StateTreeHeight]frontend.Variable
 }
 
-// AnonymousAuditCircuit is the audit of anonymous transfers, one key per shape.
 type AnonymousAuditCircuit struct {
 	PublicInputHash frontend.Variable   `gnark:",public"`
 	Shape           AnonymousAuditShape `gnark:"-"`
@@ -74,7 +70,7 @@ type AnonymousAuditCircuit struct {
 	PrivateTxBlinding frontend.Variable
 	// SenderKey is the hidden owner's Ed25519 key on an entry key, a commitment key carries none.
 	SenderKey []frontend.Variable
-	// InputCount is the published nullifier count, from 1 to the input class.
+	// InputCount equals the published nullifier count on an entry key and lies within one of it on a commitment key.
 	InputCount frontend.Variable
 	Inputs     []shared.UtxoWires
 	// SenderCommitment is 0 on an audit-only transfer and Poseidon(CRSC, sender_pk_hash, PrivateTxBlinding) under a policy.
@@ -187,7 +183,7 @@ func (c *AnonymousAuditCircuit) deliverSlot(api frontend.API, rc frontend.Rangec
 	api.AssertIsBoolean(s.Pair)
 	api.AssertIsBoolean(s.Self)
 	api.AssertIsEqual(api.Add(s.Inbox, s.Pair, s.Self), slot.ring)
-	// 3. Every stream position is below 64, the bound a recipient scans per stream and epoch.
+	// 3. Every stream position fits StreamIndexBits, the bound a recipient scans per stream and epoch.
 	rc.Check(s.Index, shared.StreamIndexBits)
 	// 4. A self slot is change of the hidden sender, its tag stays free.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: s.Self, A: o.Output.OwnerPkHash, B: senderPkHash})
@@ -250,7 +246,7 @@ func (c *AnonymousAuditCircuit) assertTag(api frontend.API, rc frontend.Rangeche
 
 // spend proves every spent UTXO is the hidden sender's and lies below the published count.
 func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker, senderPkHash frontend.Variable) spentInputs {
-	// 1. The input count lies in [1, InputClass], the published field count pins it up to one trailing dummy on a commitment key.
+	// 1. The published field count pins the input count, up to one trailing dummy on a commitment key.
 	spent := spentInputs{count: ringgadget.SelectCount(api, c.InputCount, 1, c.Shape.InputClass)}
 	var openings [][]frontend.Variable
 	previousUtxo := frontend.Variable(1)
@@ -270,7 +266,7 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 			// 5. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
 			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.RingProgramID, B: c.RingProgramID})
 			if i > 0 {
-				// 6. A UTXO follows only a UTXO, dummies close the published inputs and an even count's closing half stays zero.
+				// 6. A UTXO follows only a UTXO, keeping an even count's closing half zero.
 				abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
 			}
 			previousUtxo = opened.Utxo

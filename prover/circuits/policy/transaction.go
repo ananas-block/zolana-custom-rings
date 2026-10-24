@@ -46,7 +46,6 @@ func (p *Policy) openOutputs(api frontend.API, inputChain frontend.Variable) []u
 	return outputs
 }
 
-// open reads a slot through its SPP hash, a slot of another kind contributes nothing to private_tx_hash.
 func open(api frontend.API, w shared.UtxoWires) utxoView {
 	opened := w.Open(api)
 	return utxoView{

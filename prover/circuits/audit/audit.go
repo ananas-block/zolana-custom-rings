@@ -81,7 +81,6 @@ type auditEnvelope struct {
 	sealedHash        frontend.Variable
 }
 
-// outputSlot sorts a live UTXO into a ring output or an exit, a dummy or an unpublished slot is neither.
 type outputSlot struct {
 	shared.OpenedUtxo
 	live frontend.Variable
@@ -157,7 +156,6 @@ func uintBytes(api frontend.API, value frontend.Variable, n int) []frontend.Vari
 	return gadget.BitsToBytesBE(api, api.ToBinary(value, 8*n))
 }
 
-// masked multiplies every byte by the bit flag, zeroing a slot the disclosure does not open.
 func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {
 	out := make([]frontend.Variable, len(bytes))
 	for i, b := range bytes {
