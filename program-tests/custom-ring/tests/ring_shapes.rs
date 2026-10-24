@@ -499,6 +499,25 @@ fn ring_openings(outputs: &[SppProofOutputUtxo]) -> Result<Vec<Opened>> {
 }
 
 #[test]
+fn anonymous_sixteen_output_transfer_settles() -> Result<()> {
+    let env = setup()?;
+    let mut coverage = Coverage::default();
+    let ring = ColumnSetup {
+        env: &env,
+        column: Column::Anonymous,
+        program: custom_ring_program_id()?,
+    }
+    .configure(&mut coverage)?;
+    ring.settled(
+        ShapeTransfer {
+            shape: Shape::IN1_OUT16,
+            inputs: ring.utxos(1, &mut coverage)?,
+        },
+        &mut coverage,
+    )
+}
+
+#[test]
 fn every_basic_transfer_key_lands_and_every_keyed_shape_settles() -> Result<()> {
     let extra: Vec<Address> = (1..Column::ALL.len())
         .map(|_| Keypair::new().pubkey())
