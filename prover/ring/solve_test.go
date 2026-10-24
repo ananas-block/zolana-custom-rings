@@ -37,7 +37,6 @@ const (
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
 	for _, circuit := range []common.CircuitType{packedKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
-			t.Parallel()
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
 			if err := test.IsSolved(circuitOf(), decodePayload(t, circuit, payload), ecc.BN254.ScalarField()); err != nil {

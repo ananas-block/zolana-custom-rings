@@ -41,7 +41,6 @@ func writeSolved(t *testing.T, paths map[common.CircuitType]string) {
 	t.Helper()
 	for circuit, path := range paths {
 		t.Run(string(circuit), func(t *testing.T) {
-			t.Parallel()
 			encoded, err := json.MarshalIndent(hostRequest(t, keyOf(t, circuit)), "", "  ")
 			if err != nil {
 				t.Fatal(err)

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/consensys/gnark/constraint"
@@ -67,7 +66,6 @@ func TestEveryKeyIsRegisteredAndPinned(t *testing.T) {
 func TestRingKeysCompileToTheVerifiedShape(t *testing.T) {
 	for _, key := range Keys {
 		t.Run(string(key.Circuit), func(t *testing.T) {
-			t.Parallel()
 			cs := compileRing(t, key.Circuit)
 			if public := cs.GetNbPublicVariables() - 1; public != 1 {
 				t.Errorf("%d public inputs, the program verifies one", public)
@@ -98,18 +96,13 @@ func TestRingKeysCarryTheCompiledCircuits(t *testing.T) {
 	}
 }
 
-var compiled sync.Map
-
+// Compiled fresh each call, the CI runner holds one large circuit at a time.
 func compileRing(t testing.TB, circuit common.CircuitType) constraint.ConstraintSystem {
 	t.Helper()
-	if cs, ok := compiled.Load(circuit); ok {
-		return cs.(constraint.ConstraintSystem)
-	}
 	cs, err := extensionOf(t, circuit).R1CS()
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled.Store(circuit, cs)
 	return cs
 }
 
