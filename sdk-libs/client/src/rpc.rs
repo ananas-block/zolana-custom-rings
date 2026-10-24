@@ -641,7 +641,7 @@ pub enum PagedRead {
 pub struct ReadTarget {
     /// The genesis hash.
     pub cluster: [u8; 32],
-    /// The key `health` reports.
+    /// The ring rpc's signing key.
     pub service: Address,
     pub ring: Address,
 }

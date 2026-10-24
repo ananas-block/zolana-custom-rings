@@ -18,7 +18,7 @@ use zolana_ring_policy::ListId;
 use crate::{AuditError, SealedNullifierKey};
 
 /// A member's record, or the low record bracketing its absence, read under one root.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MemberOpeningRead {
     pub opening: RecordOpening,
     /// The nullifier secret a registered member sealed to the auditor.
@@ -37,7 +37,7 @@ pub struct RegistryTip {
     pub next_index: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EscrowedRecord<'a> {
     pub record: &'a MemberRecord,
     pub path: &'a QuadPath,

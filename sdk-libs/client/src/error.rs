@@ -86,6 +86,8 @@ pub enum AuditError {
     IncompleteScan,
     #[error("indexer page names neither a next cursor nor a scan frontier")]
     ScanFrontierMissing,
+    #[error("indexer page holds more rows than its request allowed")]
+    PageOverflow,
     #[error("a verified anonymous merge disclosure does not open its settled output")]
     MergeDisclosureMismatch,
     #[error("merge audit exceeded its key-search work budget")]

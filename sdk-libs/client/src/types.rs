@@ -17,9 +17,7 @@ use zolana_transaction::{
     OutputContext,
 };
 
-use crate::AuditError;
-
-const REDACTED: &str = "<redacted>";
+use crate::{AuditError, REDACTED};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditedTransaction {
@@ -311,7 +309,7 @@ impl fmt::Debug for AuditedUtxo {
             data_hash,
             ring_data_hash,
         } = self;
-        f.debug_struct("AuditedNote")
+        f.debug_struct("AuditedUtxo")
             .field("owner_key", owner_key)
             .field("nullifier_pk", nullifier_pk)
             .field("asset", asset)
@@ -337,7 +335,7 @@ impl fmt::Debug for KnownUtxo {
             ring_data_hash,
             tree_id,
         } = self;
-        f.debug_struct("KnownNote")
+        f.debug_struct("KnownUtxo")
             .field("owner_key", owner_key)
             .field("owner", owner)
             .field("asset", asset)

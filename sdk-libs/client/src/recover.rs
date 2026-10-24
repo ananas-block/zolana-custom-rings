@@ -35,6 +35,8 @@ use crate::{
     AuditError,
 };
 
+const SPEND_PAGE_SIZE: NonZeroU32 = NonZeroU32::new(PAGE_LIMIT as u32).unwrap();
+
 #[must_use = "run the recovery explicitly"]
 pub struct RingRecovery<'a> {
     ring_program_id: Address,
@@ -544,6 +546,7 @@ impl<'a> MemberRecovery<'a> {
             let page = Pages {
                 cursor: None,
                 max_pages: budget,
+                page_size: SPEND_PAGE_SIZE,
             }
             .read(|cursor| {
                 read.set(read.get() + 1);
@@ -552,7 +555,7 @@ impl<'a> MemberRecovery<'a> {
                         .get_shielded_transactions_by_nullifiers(
                             batch.to_vec(),
                             cursor,
-                            None,
+                            Some(SPEND_PAGE_SIZE.get()),
                             config,
                         )
                         .await?;

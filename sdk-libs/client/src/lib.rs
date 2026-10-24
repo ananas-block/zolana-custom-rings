@@ -24,6 +24,8 @@ mod scan;
 pub mod tags;
 mod types;
 
+pub(crate) const REDACTED: &str = "<redacted>";
+
 pub use crate::anonymous::{
     AnonymousRingScan, AnonymousRingState, AnonymousRingSync, AnonymousRingUtxo, AnonymousStream,
     DecoyLeaf, IssuedAddress, PairAnchor, PaymentStream, PaymentTag, ReceivedAnchor,

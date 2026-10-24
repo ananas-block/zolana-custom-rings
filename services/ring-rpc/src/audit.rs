@@ -650,7 +650,9 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
             })
             .await
             .map_err(|error| match error {
-                AuditError::ScanFrontierMissing => RingRpcError::InvalidIndexerResponse,
+                AuditError::ScanFrontierMissing | AuditError::PageOverflow => {
+                    RingRpcError::InvalidIndexerResponse
+                }
                 error => error.into(),
             })?;
         validate_merge_page(&page, self.page)?;

@@ -347,6 +347,69 @@ fn nonzero_padding_is_refused() {
 }
 
 #[test]
+fn disclosures_and_input_openings_print_no_blinding_or_seed() {
+    let hidden = [0xb1; 32];
+    let input = AnonymousInputOpening {
+        asset: field(1),
+        amount: 2,
+        blinding: hidden,
+    };
+    let seeded = |disclosure: AuditDisclosure| match disclosure {
+        AuditDisclosure::Packed {
+            layout, outputs, ..
+        } => AuditDisclosure::Packed {
+            layout,
+            seed_out: Some(hidden),
+            outputs,
+        },
+        AuditDisclosure::Delivered {
+            layout, outputs, ..
+        } => AuditDisclosure::Delivered {
+            layout,
+            seed_out: Some(hidden),
+            outputs,
+        },
+        AuditDisclosure::Anonymous(disclosure) => AuditDisclosure::Anonymous(AnonymousDisclosure {
+            seed_out: Some(hidden),
+            ..disclosure
+        }),
+    };
+    let printed = [
+        format!("{input:?}"),
+        format!("{:?}", seeded(packed(false, false).0)),
+        format!("{:?}", seeded(delivered().0)),
+        format!("{:?}", seeded(anonymous().0)),
+    ];
+    let hidden = format!("{hidden:?}");
+    for printed in printed {
+        assert!(!printed.contains(&hidden[1..hidden.len() - 1]), "{printed}");
+        assert!(printed.contains(REDACTED), "{printed}");
+    }
+}
+
+#[test]
+fn a_nonzero_closing_prefix_half_is_refused() {
+    let (commitment, exits) = anonymous_commitment();
+    let fields = commitment.fields().unwrap();
+    for leading_byte in [0, 1] {
+        let mut closed = fields.clone();
+        let pair = closed.last_mut().unwrap();
+        pair[15] = leading_byte;
+        pair[31] = 1;
+        assert!(matches!(
+            AuditDisclosure::decode(
+                PublishedOutputs {
+                    layout: commitment.layout(),
+                    exits: &exits,
+                },
+                &closed,
+            ),
+            Err(AuditError::DisclosurePadding)
+        ));
+    }
+}
+
+#[test]
 fn a_disclosure_off_its_layout_is_refused() {
     let (disclosure, exits) = delivered();
     let fields = disclosure.fields().unwrap();

@@ -10,14 +10,14 @@ use zolana_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
 use zolana_keypair::{random_salt, X25519Keypair, X25519Pubkey};
 
 use super::{open_stream, seal_stream, Result, StreamSchedule};
-use crate::{AuditError, DisclosurePad};
+use crate::{AuditError, DisclosurePad, REDACTED};
 
 /// ASCII "CR_MD", the Go `MergeDisclosureDomain`, a merge pad never repeats an output pad.
 const MERGE_DISCLOSURE_DOMAIN: u64 = 0x4352_5f4d44;
 const MERGE_SCHEDULE: StreamSchedule = StreamSchedule::Labelled(MERGE_DISCLOSURE_INFO);
 
 /// What an anonymous merge discloses, enough to recompute its output commitment.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MergeOpening {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
@@ -26,6 +26,27 @@ pub struct MergeOpening {
     pub output_blinding: [u8; 32],
     /// One per circuit slot, zero for padding.
     pub input_commitments: Vec<[u8; 32]>,
+}
+
+impl core::fmt::Debug for MergeOpening {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self {
+            owner_key,
+            nullifier_pk,
+            mint,
+            amount,
+            output_blinding: _,
+            input_commitments,
+        } = self;
+        f.debug_struct("MergeOpening")
+            .field("owner_key", owner_key)
+            .field("nullifier_pk", nullifier_pk)
+            .field("mint", mint)
+            .field("amount", amount)
+            .field("output_blinding", &REDACTED)
+            .field("input_commitments", input_commitments)
+            .finish()
+    }
 }
 
 /// The sealed disclosure key and masked fields of one merge, with the secrets its proof witnesses.
@@ -259,5 +280,22 @@ pub(crate) mod tests {
             open_merge_disclosure(&auditor, &sealed.eph_pk, &sealed.ciphertext, other_salt, &sealed.fields),
             Ok(wrong) if wrong == opening
         ));
+    }
+
+    #[test]
+    fn a_merge_opening_prints_no_blinding() {
+        let blinding = [0xb1; 32];
+        let opening = MergeOpening {
+            owner_key: [3; 32],
+            nullifier_pk: [4; 32],
+            mint: [5; 32],
+            amount: 6,
+            output_blinding: blinding,
+            input_commitments: vec![[7; 32]],
+        };
+        let printed = format!("{opening:?}");
+        let hidden = format!("{blinding:?}");
+        assert!(!printed.contains(&hidden[1..hidden.len() - 1]), "{printed}");
+        assert!(printed.contains(REDACTED), "{printed}");
     }
 }

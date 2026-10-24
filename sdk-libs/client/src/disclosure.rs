@@ -16,7 +16,7 @@ use zolana_transaction::field::{field_add, field_sub};
 
 use crate::{
     encryption::{open_stream, seal_stream, StreamSchedule},
-    AuditError,
+    AuditError, REDACTED,
 };
 
 const KEY_BYTES: usize = 32;
@@ -173,11 +173,26 @@ pub enum AnonymousOutputOpening {
 }
 
 /// A spent UTXO of the hidden sender, its data hashes zero.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct AnonymousInputOpening {
     pub asset: [u8; 32],
     pub amount: u64,
     pub blinding: [u8; 32],
+}
+
+impl core::fmt::Debug for AnonymousInputOpening {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self {
+            asset,
+            amount,
+            blinding: _,
+        } = self;
+        f.debug_struct("AnonymousInputOpening")
+            .field("asset", asset)
+            .field("amount", amount)
+            .field("blinding", &REDACTED)
+            .finish()
+    }
 }
 
 /// A `None` input is a dummy.
@@ -216,7 +231,7 @@ impl AnonymousInputs {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AnonymousDisclosure {
     pub layout: AnonymousLayout,
     pub seed_out: Option<[u8; 32]>,
@@ -225,7 +240,7 @@ pub struct AnonymousDisclosure {
 }
 
 /// `seed_out` is present exactly when an output exits.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AuditDisclosure {
     /// A `None` output is a dummy.
     Packed {
@@ -239,6 +254,51 @@ pub enum AuditDisclosure {
         outputs: Vec<DeliveredOutputOpening>,
     },
     Anonymous(AnonymousDisclosure),
+}
+
+impl core::fmt::Debug for AnonymousDisclosure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self {
+            layout,
+            seed_out,
+            outputs,
+            inputs,
+        } = self;
+        f.debug_struct("AnonymousDisclosure")
+            .field("layout", layout)
+            .field("seed_out", &seed_out.map(|_| REDACTED))
+            .field("outputs", outputs)
+            .field("inputs", inputs)
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for AuditDisclosure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Packed {
+                layout,
+                seed_out,
+                outputs,
+            } => f
+                .debug_struct("Packed")
+                .field("layout", layout)
+                .field("seed_out", &seed_out.map(|_| REDACTED))
+                .field("outputs", outputs)
+                .finish(),
+            Self::Delivered {
+                layout,
+                seed_out,
+                outputs,
+            } => f
+                .debug_struct("Delivered")
+                .field("layout", layout)
+                .field("seed_out", &seed_out.map(|_| REDACTED))
+                .field("outputs", outputs)
+                .finish(),
+            Self::Anonymous(disclosure) => f.debug_tuple("Anonymous").field(disclosure).finish(),
+        }
+    }
 }
 
 /// A ring slot and an exit share a byte width, the exit bitmap tells them apart.
