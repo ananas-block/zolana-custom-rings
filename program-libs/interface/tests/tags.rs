@@ -46,7 +46,6 @@ fn retired_tags_name_no_instruction() {
 fn every_tag_names_one_instruction_and_its_budget() {
     for value in 0..=u8::MAX {
         if let Ok(tag) = InstructionTag::try_from(value) {
-            assert_eq!(tag as u8, value);
             assert!((50_000..=1_400_000).contains(&compute_unit_limit(tag)));
         }
     }

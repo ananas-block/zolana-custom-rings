@@ -1,5 +1,3 @@
-//! Fixtures the vector tests share.
-
 /// The `b` point of groth16-solana's own proof fixture, big-endian and uncompressed.
 pub fn spp_b() -> [u8; 128] {
     let mut point = [0u8; 128];

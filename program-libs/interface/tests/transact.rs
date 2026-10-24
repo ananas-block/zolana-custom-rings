@@ -1,5 +1,4 @@
-//! `test-vectors/ring-transact-expansion.json`, compact ring transact data and the SPP
-//! data and external data hash the ring program forwards for it.
+//! Pins `test-vectors/ring-transact-expansion.json` for the TS SDK and the ring program tests.
 
 mod common;
 
@@ -26,7 +25,7 @@ use zolana_event::{
     CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
 };
 use zolana_interface::{
-    instruction::{InterfaceTransfer, OwnerTag, TransactIxData, TreeContext},
+    instruction::{InterfaceTransfer, OwnerTag, TreeContext},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };
 use zolana_ring_policy::{ListId, Member, OutflowLimit, RuleTable};
@@ -57,7 +56,6 @@ struct Case {
     external_data_hash: String,
 }
 
-/// Owned bytes every case borrows from.
 struct Fixture {
     proofs: [CustomRingProof; 2],
     spp_proof: PlainGroth16Proof,
@@ -162,8 +160,6 @@ impl Fixture {
         data
     }
 
-    /// A registry-mode policy ring's two-output transfer with an exit, both data hashes, two legs
-    /// and two trees.
     fn confidential_packed(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.key_escrow = true;
@@ -201,7 +197,6 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
-    /// An audit-only ring's eight delivered slots, two of them data-free exits.
     fn confidential_delivered(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 1, 8);
         data.data_free = true;
@@ -214,7 +209,6 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
-    /// An anonymous policy transfer from the previous epoch with a pair-anchored slot.
     fn anonymous(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 3, 4);
         data.policy = Some(PolicyProof {
@@ -244,7 +238,6 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
-    /// An audit-only anonymous transfer spending a default-ring note under the entry key.
     fn anonymous_entry(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 2, 2);
         data.full_openings = true;
@@ -257,7 +250,6 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
-    /// A data-free delegate move, every output a packed ring output.
     fn delegate(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Delegate, 2, 2);
         data.key_escrow = true;
@@ -412,9 +404,7 @@ fn ring_transact_expansion_vector() {
             .unwrap()
             .into_data();
         assert_eq!(data.encode().unwrap(), compact, "{}", case.name);
-        let expanded = hex::decode(&case.transact_ix_data).unwrap();
-        let spp = TransactIxData::deserialize(&expanded).unwrap();
-        assert_eq!(spp, data.expand(&config).unwrap(), "{}", case.name);
+        let spp = data.expand(&config).unwrap();
         assert_eq!(spp.proof.b, common::spp_b());
         assert_eq!(&spp.salt, data.salt, "{}", case.name);
         assert_eq!(spp.messages[0].view_tag, config.auditor_pubkey[1..]);
@@ -444,7 +434,7 @@ fn ring_transact_expansion_vector() {
             assert!(body.is_some(), "{} output framing", case.name);
         }
         let mut forwarded = vec![data.rail.spp_tag()];
-        forwarded.extend(&expanded);
+        forwarded.extend(spp.serialize().unwrap());
         assert_eq!(hex::encode(forwarded), case.spp_instruction_data);
     }
 }
@@ -687,6 +677,15 @@ fn the_policy_proof_follows_the_registry() {
         registry: Address::new_from_array([3; 32]),
     };
     registry.sources = sources;
+    let mut uncurated = packed.clone();
+    uncurated.policy = uncurated.policy.map(|policy| PolicyProof {
+        curator_root_index: None,
+        ..policy
+    });
+    assert_eq!(
+        uncurated.check_policy(Some(&registry)),
+        Err(CustomRingError::FlagNotAllowed)
+    );
     assert_eq!(
         packed.check_policy(Some(&registry)),
         Err(CustomRingError::UnexpectedApproval)

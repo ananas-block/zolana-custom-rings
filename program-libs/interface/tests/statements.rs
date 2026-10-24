@@ -1,5 +1,4 @@
-//! `test-vectors/ring-statements.json`, every ring statement's elements and its
-//! public input `HashChain4(elements)`, read by the circuits and the program.
+//! Pins `test-vectors/ring-statements.json` for the Go circuits and the TS SDK.
 
 use custom_ring_interface::{
     stream::{RingTag, TAG_LEN},
@@ -55,7 +54,6 @@ struct AuditCase {
     public_input_hash: String,
 }
 
-/// The values of one published slot a statement reads.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct OutputCase {
     /// `packed`, `delivered`, `anonymous` or `exit`.

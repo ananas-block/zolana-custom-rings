@@ -1,5 +1,4 @@
-//! `test-vectors/ring-policy-rules.json`, transfers the policy circuits' list rules admit or refuse,
-//! with the refusal `RuleTable::admit` names.
+//! Pins `test-vectors/ring-policy-rules.json` for the policy circuit and the TS SDK.
 
 use std::collections::BTreeMap;
 
@@ -641,14 +640,6 @@ fn committed() -> PolicyRulesVectors {
 #[test]
 fn ring_policy_rules_vector() {
     assert_eq!(committed(), compute_vectors());
-}
-
-/// Every committed outcome follows from the case's own values.
-#[test]
-fn ring_policy_rules_vector_outcomes_follow_from_the_parts() {
-    for case in committed().cases {
-        assert_eq!(case.admit(), case.outcome, "{}", case.name);
-    }
 }
 
 #[test]

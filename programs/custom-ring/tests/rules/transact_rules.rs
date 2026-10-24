@@ -802,16 +802,21 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     ));
 }
 
-/// The payer withdraws `amount` SOL as the one owner, `prefix` after the config.
-fn withdraw(ring: &mut Ring, amount: u64, prefix: Vec<AccountMeta>, signers: &[&Keypair]) -> Sent {
+/// The payer withdraws each `legs` amount in SOL as the one owner, `prefix` after the config.
+fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[&Keypair]) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount }];
+    data.interface_transfers = legs
+        .iter()
+        .map(|amount| InterfaceTransfer::SolWithdrawal { amount: *amount })
+        .collect();
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
-    spp.extend([
-        AccountMeta::new(Address::new_unique(), false),
-        AccountMeta::new(Address::new_unique(), false),
-    ]);
+    for transfer in &data.interface_transfers {
+        spp.extend(
+            (0..transfer.settlement_account_count())
+                .map(|_| AccountMeta::new(Address::new_unique(), false)),
+        );
+    }
     send(
         ring,
         tag::TRANSACT,
@@ -832,11 +837,11 @@ fn a_withdrawal_above_its_threshold_demands_the_co_signer() {
     let co_signer = Keypair::new();
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(&mut ring, &co_signer.pubkey(), 4, vec![SOL_THRESHOLD]);
-    reaches_verification(withdraw(&mut ring, 100, Vec::new(), &[]));
+    reaches_verification(withdraw(&mut ring, &[100], Vec::new(), &[]));
     refused(
         withdraw(
             &mut ring,
-            101,
+            &[101],
             vec![AccountMeta::new_readonly(co_signer.pubkey(), false)],
             &[],
         ),
@@ -844,10 +849,20 @@ fn a_withdrawal_above_its_threshold_demands_the_co_signer() {
     );
     reaches_verification(withdraw(
         &mut ring,
-        101,
+        &[101],
         vec![AccountMeta::new_readonly(co_signer.pubkey(), true)],
         &[&co_signer],
     ));
+    reaches_verification(withdraw(&mut ring, &[60], Vec::new(), &[]));
+    refused(
+        withdraw(
+            &mut ring,
+            &[60, 60],
+            vec![AccountMeta::new_readonly(co_signer.pubkey(), false)],
+            &[],
+        ),
+        CustomRingError::MissingCoSigner,
+    );
 }
 
 #[test]
@@ -855,11 +870,11 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let owner = ring.payer.insecure_clone();
     set_co_signer(&mut ring, &owner.pubkey(), 4, vec![SOL_THRESHOLD]);
-    reaches_verification(withdraw(&mut ring, 100, Vec::new(), &[]));
+    reaches_verification(withdraw(&mut ring, &[100], Vec::new(), &[]));
     refused(
         withdraw(
             &mut ring,
-            1_000,
+            &[1_000],
             vec![AccountMeta::new_readonly(owner.pubkey(), true)],
             &[&owner],
         ),

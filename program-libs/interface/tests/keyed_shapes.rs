@@ -1,5 +1,4 @@
-//! The anonymous classes are the ones `test-vectors/ring_keyed_shapes.json` lists, the Go base
-//! keys test reads the same file.
+//! Pins the anonymous classes and shapes in `test-vectors/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
 
 use custom_ring_interface::{
     AnonymousSpend, ANONYMOUS_AUDIT_CLASSES, ANONYMOUS_ENTRY_CLASS, ANONYMOUS_ENTRY_OUTPUTS,
@@ -37,7 +36,6 @@ fn the_anonymous_classes_are_the_shared_vector() {
     );
 }
 
-/// The anonymous rail publishes every input of its shape, so a class serves a shape's whole input count.
 #[test]
 fn a_class_serves_exactly_the_listed_anonymous_shapes() {
     let pinned: Vec<[usize; 2]> =

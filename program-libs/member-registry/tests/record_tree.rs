@@ -199,7 +199,6 @@ fn records_rebuild_the_tree_they_came_from() {
     );
 }
 
-/// A store holding only what `sibling_positions` names for a batch, as the indexer preloads it.
 #[derive(Default)]
 struct PreloadedStore {
     next_index: u64,

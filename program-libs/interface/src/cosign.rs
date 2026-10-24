@@ -60,3 +60,74 @@ impl CoSignDemand {
         Ok(in_scope.then_some(co_signer))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytemuck::Zeroable;
+    use zolana_interface::instruction::InterfaceTransfer;
+
+    use super::*;
+    use crate::WithdrawalThresholdRow;
+
+    const CO_SIGNER: Address = Address::new_from_array([7; 32]);
+    const USDC: [u8; 32] = [9; 32];
+
+    fn config(scope: CoSignScope, thresholds: &[([u8; 32], u64)]) -> RingProgramConfig {
+        let mut config = RingProgramConfig::zeroed();
+        config.co_signer = CO_SIGNER;
+        config.co_sign_scope = scope.bits();
+        config.threshold_count = thresholds.len() as u8;
+        for (row, (mint, amount)) in config.thresholds.iter_mut().zip(thresholds) {
+            *row = WithdrawalThresholdRow {
+                mint: Address::new_from_array(*mint),
+                amount: amount.to_le_bytes(),
+            };
+        }
+        config
+    }
+
+    fn sol(amount: u64) -> PublicLeg {
+        PublicLeg {
+            transfer: InterfaceTransfer::SolWithdrawal { amount },
+            mint: None,
+        }
+    }
+
+    fn usdc(amount: u64) -> PublicLeg {
+        PublicLeg {
+            transfer: InterfaceTransfer::SplWithdrawal {
+                amount,
+                spl_interface_bump: 255,
+            },
+            mint: Some(USDC),
+        }
+    }
+
+    #[test]
+    fn withdrawals_sum_per_mint_and_a_scoped_class_or_an_unlisted_mint_demands_the_co_signer() {
+        let deposit = PublicLeg {
+            transfer: InterfaceTransfer::SolDeposit { amount: 5 },
+            mint: None,
+        };
+        let sol_only = config(CoSignScope::WITHDRAWALS, &[(SOL_ASSET_ADDRESS, 100)]);
+        let both = config(
+            CoSignScope::WITHDRAWALS,
+            &[(SOL_ASSET_ADDRESS, 100), (USDC, 100)],
+        );
+        let deposits = config(CoSignScope::DEPOSITS, &[]);
+        for (legs, config, demanded) in [
+            (vec![sol(60)], &sol_only, None),
+            (vec![sol(60), sol(60)], &sol_only, Some(CO_SIGNER)),
+            (vec![usdc(1)], &sol_only, Some(CO_SIGNER)),
+            (vec![sol(60), usdc(60)], &both, None),
+            (vec![deposit], &deposits, Some(CO_SIGNER)),
+            (vec![deposit], &sol_only, None),
+        ] {
+            assert_eq!(
+                CoSignDemand::transact(false, &legs).signer(config),
+                Ok(demanded),
+                "{legs:?}"
+            );
+        }
+    }
+}

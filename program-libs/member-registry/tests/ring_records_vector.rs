@@ -1,5 +1,4 @@
-//! `test-vectors/ring-records.json`, record queue writes as the program receives them and
-//! the applications that fold them into the tree, read by the apply circuit and Photon.
+//! Pins `test-vectors/ring-records.json` for the Go circuits, Photon and the TS SDK.
 
 use custom_ring_interface::{
     queue_chain, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
@@ -106,7 +105,6 @@ struct Opening {
     path: Path,
 }
 
-/// One write as an instruction queues it.
 enum Queued {
     Member {
         signer: [u8; 32],
@@ -218,7 +216,6 @@ fn key(signer_seed: u8, key_seed: u8) -> Queued {
     }
 }
 
-/// The queue and the tree the applications run over.
 struct Registry {
     tree: MemberRegistryTree,
     position: u64,

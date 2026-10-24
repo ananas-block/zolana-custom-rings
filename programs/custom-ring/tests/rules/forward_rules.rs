@@ -4,8 +4,9 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     merge_disclosure_field_count, tag, AuditedDepositPrefix, CoSignScope, CustomRingError,
     CustomRingMergeIxData, MemberRegistry, MergeDisclosure, RingDepositAuditCapsule,
-    AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
-    RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
+    AUDIT_CIPHERTEXT_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
+    RING_MERGE_RING_CONFIG_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -139,34 +140,37 @@ fn an_anonymous_merge_carries_its_disclosure() {
     );
 }
 
-/// One SOL output, its audit capsule at `slot_index`.
-fn deposit_with_capsule(slot_index: u8) -> RingDepositIxData {
+fn deposit_entry(slot_index: u8, eph_pk: &[u8; 33]) -> RingDepositEntry {
     let capsule = RingDepositAuditCapsule {
         slot_index,
-        eph_pk: &auditor_pubkey(),
+        eph_pk,
         ciphertext: &[3; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN],
         recipient_ciphertext: &[],
     }
     .encode();
+    RingDepositEntry {
+        asset_index: 0,
+        view_tag: [1; 32],
+        owner_utxo_hash: [0x0f; 32],
+        amount: 10,
+        ring_data_hash: [0; 32],
+        encrypted: EncryptedRingDepositData {
+            tx_viewing_pk: auditor_pubkey(),
+            salt: [2; 16],
+            ciphertext: capsule,
+        },
+    }
+}
+
+fn deposit_of(deposits: Vec<RingDepositEntry>) -> RingDepositIxData {
     RingDepositIxData {
         assets: vec![DepositAssetKind::Sol],
-        deposits: vec![RingDepositEntry {
-            asset_index: 0,
-            view_tag: [1; 32],
-            owner_utxo_hash: [0x0f; 32],
-            amount: 10,
-            ring_data_hash: [0; 32],
-            encrypted: EncryptedRingDepositData {
-                tx_viewing_pk: auditor_pubkey(),
-                salt: [2; 16],
-                ciphertext: capsule,
-            },
-        }],
+        deposits,
     }
 }
 
 pub fn ring_deposit() -> RingDepositIxData {
-    deposit_with_capsule(0)
+    deposit_of(vec![deposit_entry(0, &auditor_pubkey())])
 }
 
 /// `registry` the root index a Registry-mode ring binds, the registry account follows the config.
@@ -352,7 +356,11 @@ fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {
         ring.send(truncated, &[]),
         CustomRingError::InvalidDepositData,
     );
-    let misplaced = deposit_instruction(&ring, None, &deposit_with_capsule(1));
+    let misplaced = deposit_instruction(
+        &ring,
+        None,
+        &deposit_of(vec![deposit_entry(1, &auditor_pubkey())]),
+    );
     refused(
         ring.send(misplaced, &[]),
         CustomRingError::InvalidDepositDisclosure,
@@ -361,6 +369,38 @@ fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {
     unhashable.deposits[0].owner_utxo_hash = [0xff; 32];
     let instruction = deposit_instruction(&ring, None, &unhashable);
     refused(ring.send(instruction, &[]), CustomRingError::HashingFailed);
+}
+
+#[test]
+fn every_deposit_capsule_opens_under_one_key_at_its_own_index() {
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let key = auditor_pubkey();
+    let mut other = key;
+    other[1] ^= 1;
+    let mut mistagged = key;
+    mistagged[0] = 0x02;
+    let mut bare = deposit_entry(1, &key);
+    bare.encrypted.ciphertext[0] ^= 1;
+    let mut send = |entries| {
+        let instruction = deposit_instruction(&ring, None, &deposit_of(entries));
+        ring.send(instruction, &[])
+    };
+    for refused_entries in [
+        vec![deposit_entry(0, &key), deposit_entry(1, &other)],
+        vec![deposit_entry(0, &key), deposit_entry(0, &key)],
+        vec![deposit_entry(0, &key), bare],
+        vec![deposit_entry(0, &mistagged)],
+        Vec::new(),
+        (0..=MAX_RING_DEPOSIT_AUDIT_SLOTS as u8)
+            .map(|slot| deposit_entry(slot, &key))
+            .collect(),
+    ] {
+        refused(
+            send(refused_entries),
+            CustomRingError::InvalidDepositDisclosure,
+        );
+    }
+    reaches_verification(send(vec![deposit_entry(0, &key), deposit_entry(1, &key)]));
 }
 
 #[test]

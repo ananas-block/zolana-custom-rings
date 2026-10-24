@@ -2,10 +2,13 @@
 
 mod common;
 
+use std::ops::Range;
+
 use custom_ring_interface::{
     merge_disclosure_field_count, CustomRingError, CustomRingMergeIxData, CustomRingMergeIxDataRef,
     CustomRingProof, MergeDisclosure, PlainGroth16Proof,
 };
+use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use zolana_interface::instruction::instruction_data::merge_transact::{
     MergeOutputEncryption, MergeProof, MergeTransactIxData,
 };
@@ -87,12 +90,20 @@ fn disclosure_len(request: &CustomRingMergeIxData) -> usize {
     })
 }
 
+fn compressed_b(bytes: &[u8]) -> Range<usize> {
+    let b = alt_bn128_g2_compress_be(&common::spp_b()).unwrap();
+    let start = bytes
+        .windows(b.len())
+        .position(|window| window == b)
+        .expect("the request carries b compressed");
+    start..start + b.len()
+}
+
 #[test]
 fn a_compressed_point_off_the_curve_is_refused() {
     let mut bytes = request(None).serialize().unwrap();
-    // Root index, ring data hash, the absent disclosure, then expiry and `a` precede `b`.
-    let b = 1 + 32 + 1 + 8 + 32;
-    bytes[b..b + 64].fill(0xff);
+    let b = compressed_b(&bytes);
+    bytes[b].fill(0xff);
     let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
     assert_eq!(
         view.spp_merge_body(),
@@ -105,6 +116,11 @@ fn framing_errors_are_refused_before_or_by_the_spp_parser() {
     let bytes = request(None).serialize().unwrap();
     let mut tag = bytes.clone();
     tag[33] = 2;
-    assert!(CustomRingMergeIxDataRef::from_bytes(&tag).is_err());
-    assert!(CustomRingMergeIxDataRef::from_bytes(&bytes[..1 + 32 + 1 + 8 + 32 + 63]).is_err());
+    let truncated = &bytes[..compressed_b(&bytes).end - 1];
+    for refused in [&tag[..], truncated] {
+        assert_eq!(
+            CustomRingMergeIxDataRef::from_bytes(refused).err(),
+            Some(CustomRingError::InvalidInstructionData)
+        );
+    }
 }

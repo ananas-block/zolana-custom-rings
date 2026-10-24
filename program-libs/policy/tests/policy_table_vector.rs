@@ -443,7 +443,6 @@ fn ring_policy_table_vector() {
     assert_eq!(committed(), compute_vectors());
 }
 
-/// Builds each committed case from its parts and decodes it from its rows.
 #[test]
 fn ring_policy_table_parts_encode_and_decode() {
     for case in committed().cases {

@@ -111,6 +111,14 @@ fn decode_refuses_values_no_setter_writes() {
         MemberRegistry::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(&registry)),
         None
     );
+    registry.history_cursor = 0;
+    registry.next_index = (MEMBER_REGISTRY_CAPACITY as u32).to_le_bytes();
+    assert!(MemberRegistry::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(&registry)).is_some());
+    registry.next_index = (MEMBER_REGISTRY_CAPACITY as u32 + 1).to_le_bytes();
+    assert_eq!(
+        MemberRegistry::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(&registry)),
+        None
+    );
     let mut queue = RecordQueue::new(253);
     queue.head = 1u64.to_le_bytes();
     assert_eq!(
@@ -169,7 +177,14 @@ fn a_curator_root_below_the_floor_lives_only_through_the_grace_window() {
         below.curator_root(1, raised_at + GRACE_SLOTS),
         Err(CustomRingError::CuratorRootStale)
     );
-    // A second raise inside the window refuses roots below the first raise.
+    let at_the_prior_floor = Floors {
+        applied: 3,
+        floor: 5,
+        prior_floor: 3,
+        floor_slot: raised_at,
+    }
+    .registry();
+    assert_eq!(at_the_prior_floor.curator_root(1, raised_at), Ok([9; 32]));
     let raised_twice = Floors {
         applied: 4,
         floor: 6,
@@ -238,6 +253,13 @@ fn anyone_applies_a_full_or_aged_member_queue_only() {
         Err(CustomRingError::ApplyNotDue)
     );
     assert_eq!(partial.apply_due(queued_at + APPLY_DELAY_SLOTS), Ok(()));
+    let mut trickled = queue_with(1, queued_at);
+    for byte in 2..MEMBER_QUEUE_LIMIT as u8 {
+        trickled
+            .push(&entry(byte), queued_at + APPLY_DELAY_SLOTS - 1)
+            .unwrap();
+    }
+    assert_eq!(trickled.apply_due(queued_at + APPLY_DELAY_SLOTS), Ok(()));
     assert_eq!(
         queue_with(MEMBER_QUEUE_LIMIT, queued_at).apply_due(queued_at),
         Ok(())
@@ -285,7 +307,7 @@ fn an_application_moves_the_head_past_every_pending_write() {
     let mut registry = MemberRegistry::new(254, 0);
     let mut queue = RecordQueue::new(253);
     let mut chain = [0u8; 32];
-    // Three rounds of 12 writes wrap the 16 checkpoints of the ring buffer.
+    // The rounds wrap the `QUEUE_CAPACITY` checkpoints.
     for round in 0..3u8 {
         for byte in 0..12u8 {
             let write = entry(round * 12 + byte + 1);

@@ -1,6 +1,4 @@
-//! Pins `test-vectors/ring-tags.json` and `test-vectors/ring-secrets.json` for
-//! the Go circuits and the TS SDK, the ignored `print_ring_tag_vectors` and
-//! `print_ring_secret_vectors` regenerate them.
+//! Pins `test-vectors/ring-tags.json` and `test-vectors/ring-secrets.json` for the Go circuits and the TS SDK.
 
 use std::collections::BTreeSet;
 
@@ -87,7 +85,6 @@ fn print_ring_secret_vectors() {
     println!("{}", serde_json::to_string_pretty(&vectors).expect("json"));
 }
 
-/// One sender, one recipient address and one transaction shared by both files.
 struct Scenario {
     ring_program_id: [u8; 32],
     tx_viewing_secret: [u8; 32],

@@ -1,5 +1,4 @@
-//! Pins every ring verifying key to the proving key `proving-keys.lock` names, and the
-//! generated key catalog to the circuits the program selects.
+//! Pins ring verifying keys to `proving-keys.lock` and the key catalog to the program's circuits.
 #![cfg(feature = "verifying-keys")]
 
 use std::collections::BTreeSet;
@@ -38,7 +37,6 @@ fn ring_verifying_keys_pin_the_locked_proving_keys() {
     }
 }
 
-/// One generation pins every catalog key, each with its verifying key.
 #[test]
 fn every_catalog_key_is_locked_with_its_verifying_key() {
     let catalog: BTreeSet<String> = RING_KEYS.iter().map(|key| key.file_name()).collect();
@@ -106,7 +104,6 @@ fn selectable_circuits() -> BTreeSet<String> {
         .collect()
 }
 
-/// The Go catalog keys exactly the circuits the program selects, and the lookup finds a verifying key for every pinned one.
 #[test]
 fn key_catalog_matches_circuits() {
     let catalog: BTreeSet<String> = RING_KEYS
