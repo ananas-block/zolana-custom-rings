@@ -1431,7 +1431,6 @@ dependencies = [
  "bytemuck",
  "curve25519-dalek",
  "custom-ring-interface",
- "ed25519-dalek",
  "futures",
  "hex",
  "http",
