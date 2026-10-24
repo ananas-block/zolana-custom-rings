@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana/prover/server/prover/common"
@@ -162,4 +165,28 @@ func decodePayload(t testing.TB, circuit common.CircuitType, payload []byte) fro
 		t.Fatalf("%s: %v", circuit, err)
 	}
 	return assignment
+}
+
+// solvedWitness decodes payload as the server does, the error is the compiled key's solve.
+func solvedWitness(t testing.TB, circuit common.CircuitType, payload []byte) (witness.Witness, error) {
+	t.Helper()
+	full, err := frontend.NewWitness(decodePayload(t, circuit, payload), ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatalf("%s: %v", circuit, err)
+	}
+	_, err = compileRing(t, circuit).Solve(full)
+	return full, err
+}
+
+func decodeParams(t testing.TB, circuit common.CircuitType, params any) frontend.Circuit {
+	t.Helper()
+	return decodePayload(t, circuit, mustMarshal(t, params))
+}
+
+func verifyProof(ps *common.ExtensionProofSystem, proof *common.Proof, assignment frontend.Circuit) error {
+	witness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField(), frontend.PublicOnly())
+	if err != nil {
+		return err
+	}
+	return groth16.Verify(proof.Proof, ps.VerifyingKey, witness)
 }

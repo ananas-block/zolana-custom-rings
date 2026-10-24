@@ -14,7 +14,7 @@ import (
 func TestDecodeNamesEveryMissingValue(t *testing.T) {
 	for _, key := range Keys {
 		_, err := decode(key.Circuit, []byte(`{"circuitType":"`+string(key.Circuit)+`"}`))
-		if err == nil || !strings.Contains(err.Error(), "PublicInputHash: missing") {
+		if err == nil || !strings.Contains(err.Error(), `missing field "publicInputHash"`) {
 			t.Errorf("%s: an empty request decoded: %v", key.Circuit, err)
 		}
 	}
@@ -22,7 +22,7 @@ func TestDecodeNamesEveryMissingValue(t *testing.T) {
 
 // Each case changes one value of an honest request.
 func TestDecodeRejectsMalformedRequests(t *testing.T) {
-	requests := map[common.CircuitType]any{packedKey: hostRequests[packedKey](t), batchKey: hostRequests[batchKey](t)}
+	requests := map[common.CircuitType]any{packedKey: hostRequest(t, keyOf(t, packedKey)), batchKey: hostRequest(t, keyOf(t, batchKey))}
 	output := func(m map[string]any) map[string]any { return m["outputs"].([]any)[0].(map[string]any) }
 	write := func(m map[string]any) map[string]any { return m["writes"].([]any)[0].(map[string]any) }
 	modulus := "0x" + ecc.BN254.ScalarField().Text(16)
@@ -38,7 +38,10 @@ func TestDecodeRejectsMalformedRequests(t *testing.T) {
 		{"unknown nested field", packedKey, func(m map[string]any) { output(m)["owner"] = m["firstNullifier"] }, `unknown field "owner"`},
 		{"field name in another case", packedKey, func(m map[string]any) { m["FirstNullifier"] = m["firstNullifier"]; delete(m, "firstNullifier") }, `unknown field "FirstNullifier"`},
 		{"null count", packedKey, func(m map[string]any) { m["nOut"] = nil }, "nOut: null value"},
-		{"missing field", packedKey, func(m map[string]any) { delete(m, "firstNullifier") }, "FirstNullifier: missing"},
+		{"missing field", packedKey, func(m map[string]any) { delete(m, "firstNullifier") }, `missing field "firstNullifier"`},
+		{"missing count", packedKey, func(m map[string]any) { delete(m, "nOut") }, `missing field "nOut"`},
+		{"missing layout", packedKey, func(m map[string]any) { delete(m, "layout") }, `missing field "layout"`},
+		{"missing flag", batchKey, func(m map[string]any) { delete(write(m), "exists") }, `writes: [0]: missing field "exists"`},
 		{"null field", packedKey, func(m map[string]any) { m["firstNullifier"] = nil }, "FirstNullifier: missing"},
 		{"field at the modulus", packedKey, func(m map[string]any) { m["firstNullifier"] = modulus }, canonical},
 		{"uppercase hex", packedKey, func(m map[string]any) { m["auditorPk"] = strings.ToUpper(m["auditorPk"].(string)) }, canonical},

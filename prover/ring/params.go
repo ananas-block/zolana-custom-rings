@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/helius-labs/zolana/prover/server/prover/common"
@@ -292,7 +293,7 @@ type AnonymousMergeParams struct {
 	OutputRingDataHash Field        `json:"outputRingDataHash"`
 }
 
-// Unmarshal decodes a request whose keys name fields of v exactly and once, with nothing after it.
+// Unmarshal refuses an unknown or repeated key, a missing key without omitempty and trailing data.
 func Unmarshal(data []byte, v any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := strictly(decoder, reflect.TypeOf(v).Elem(), 0); err != nil {
@@ -346,8 +347,11 @@ func strictObject(decoder *json.Decoder, t reflect.Type, token json.Token, depth
 	if token != json.Delim('{') {
 		return errors.New("expected an object")
 	}
-	fields := make(map[string]reflect.Type)
-	jsonFields(t, fields)
+	fields := jsonFields(t, nil)
+	byName := make(map[string]jsonField, len(fields))
+	for _, field := range fields {
+		byName[field.name] = field
+	}
 	seen := make(map[string]bool, len(fields))
 	for decoder.More() {
 		key, err := decoder.Token()
@@ -355,7 +359,7 @@ func strictObject(decoder *json.Decoder, t reflect.Type, token json.Token, depth
 			return err
 		}
 		name, _ := key.(string)
-		field, known := fields[name]
+		field, known := byName[name]
 		if !known {
 			return fmt.Errorf("unknown field %q", name)
 		}
@@ -363,12 +367,19 @@ func strictObject(decoder *json.Decoder, t reflect.Type, token json.Token, depth
 			return fmt.Errorf("repeated field %q", name)
 		}
 		seen[name] = true
-		if err := strictly(decoder, field, depth+1); err != nil {
+		if err := strictly(decoder, field.typ, depth+1); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	_, err := decoder.Token()
-	return err
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	for _, field := range fields {
+		if !field.optional && !seen[field.name] {
+			return fmt.Errorf("missing field %q", field.name)
+		}
+	}
+	return nil
 }
 
 func strictArray(decoder *json.Decoder, t reflect.Type, token json.Token, depth int) error {
@@ -384,13 +395,19 @@ func strictArray(decoder *json.Decoder, t reflect.Type, token json.Token, depth 
 	return err
 }
 
-// jsonFields maps t's JSON keys to their types, promoting untagged embedded structs as encoding/json does.
-func jsonFields(t reflect.Type, fields map[string]reflect.Type) {
+type jsonField struct {
+	name     string
+	typ      reflect.Type
+	optional bool
+}
+
+// jsonFields promotes untagged embedded structs as encoding/json does.
+func jsonFields(t reflect.Type, fields []jsonField) []jsonField {
 	for i := range t.NumField() {
 		field := t.Field(i)
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
 		if field.Anonymous && name == "" && field.Type.Kind() == reflect.Struct {
-			jsonFields(field.Type, fields)
+			fields = jsonFields(field.Type, fields)
 			continue
 		}
 		if name == "-" || !field.IsExported() {
@@ -399,6 +416,7 @@ func jsonFields(t reflect.Type, fields map[string]reflect.Type) {
 		if name == "" {
 			name = field.Name
 		}
-		fields[name] = field.Type
+		fields = append(fields, jsonField{name: name, typ: field.Type, optional: slices.Contains(strings.Split(options, ","), "omitempty")})
 	}
+	return fields
 }

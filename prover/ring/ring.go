@@ -33,8 +33,7 @@ func (k Key) extension() common.ExtensionCircuit {
 	case DeliveredAudit:
 		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
 	case AnonymousAudit, AnonymousEntryAudit:
-		shape := audit.AnonymousAuditShape{InputClass: k.Inputs, Outputs: k.Outputs, FullOpenings: k.Family == AnonymousEntryAudit}
-		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, shape)
+		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
 	case MemberPolicy:
 		return bind[MemberPolicyParams](k, policy.NewMemberPolicyCircuit, k.Outputs)
 	case DelegatePolicy:

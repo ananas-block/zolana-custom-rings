@@ -8,10 +8,11 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -28,40 +29,16 @@ const (
 	delegateKey  common.CircuitType = "custom-ring-policy-delegate-2x2"
 	applyKey     common.CircuitType = "custom-ring-apply-records-1"
 	batchKey     common.CircuitType = "custom-ring-apply-records-16"
+	registerKey  common.CircuitType = "custom-ring-register-key"
+	depositKey   common.CircuitType = "custom-ring-deposit"
+	mergeKey     common.CircuitType = "custom-ring-merge-anonymous-8"
 )
 
-// hostRequests covers one shape per family with a ringtest twin.
-var hostRequests = map[common.CircuitType]func(t testing.TB) any{
-	packedKey: func(t testing.TB) any {
-		return requestOf[PackedAuditParams](t, packedKey, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
-	},
-	deliveredKey: func(t testing.TB) any {
-		return requestOf[DeliveredAuditParams](t, deliveredKey, ringaudit.NewDeliveredAudit(t, 8).Circuit(t))
-	},
-	anonymousKey: func(t testing.TB) any {
-		shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-		return requestOf[AnonymousAuditParams](t, anonymousKey, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
-	},
-	entryKey: func(t testing.TB) any {
-		shape := audit.AnonymousAuditShape{InputClass: 8, Outputs: 2, FullOpenings: true}
-		return requestOf[AnonymousAuditParams](t, entryKey, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
-	},
-	memberKey: func(t testing.TB) any {
-		return requestOf[MemberPolicyParams](t, memberKey, ringpolicy.Confidential().Build(t).Assignment())
-	},
-	delegateKey: func(t testing.TB) any {
-		world := ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2})
-		return requestOf[DelegatePolicyParams](t, delegateKey, world.Build(t).Assignment())
-	},
-	applyKey: func(t testing.TB) any { return applyRequest(t, applyKey, 1) },
-	batchKey: func(t testing.TB) any { return applyRequest(t, batchKey, 16) },
-}
-
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for circuit, request := range hostRequests {
+	for _, circuit := range []common.CircuitType{packedKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			t.Parallel()
-			payload := mustMarshal(t, request(t))
+			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
 			if err := test.IsSolved(circuitOf(), decodePayload(t, circuit, payload), ecc.BN254.ScalarField()); err != nil {
 				t.Fatal(err)
@@ -76,6 +53,48 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 			}
 		})
 	}
+}
+
+func hostRequest(t testing.TB, k Key) any {
+	t.Helper()
+	switch k.Family {
+	case PackedAudit:
+		return requestOf[PackedAuditParams](t, k.Circuit, ringaudit.NewPackedAudit(t, k.Outputs).Circuit(t))
+	case DeliveredAudit:
+		return requestOf[DeliveredAuditParams](t, k.Circuit, ringaudit.NewDeliveredAudit(t, k.Outputs).Circuit(t))
+	case AnonymousAudit, AnonymousEntryAudit:
+		return requestOf[AnonymousAuditParams](t, k.Circuit, ringaudit.NewAnonymousAudit(t, k.anonymousShape()).Circuit(t))
+	case MemberPolicy:
+		world, ok := ringpolicy.MemberWorlds[k.Outputs]
+		if !ok {
+			t.Fatalf("no member world for %d outputs", k.Outputs)
+		}
+		return requestOf[MemberPolicyParams](t, k.Circuit, world().Build(t).Assignment())
+	case DelegatePolicy:
+		world := ringpolicy.Delegate(transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
+		return requestOf[DelegatePolicyParams](t, k.Circuit, world.Build(t).Assignment())
+	case ApplyRecords:
+		return applyRequest(t, k.Circuit, k.Inputs)
+	case RegisterKey:
+		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
+	case Deposit:
+		return requestOf[DepositParams](t, k.Circuit, ringdeposit.Build(t, 2, ringdeposit.ModeRegistry).Circuit)
+	case AnonymousMerge:
+		return requestOf[AnonymousMergeParams](t, k.Circuit, ringmerge.Build(t, k.Inputs).Circuit)
+	}
+	t.Fatalf("no host request for ring family %d", k.Family)
+	return nil
+}
+
+func keyOf(t testing.TB, circuit common.CircuitType) Key {
+	t.Helper()
+	for _, key := range Keys {
+		if key.Circuit == circuit {
+			return key
+		}
+	}
+	t.Fatalf("%s is no catalog key", circuit)
+	return Key{}
 }
 
 // applyRequest inserts members up to the key's capacity, a full batch then rewrites one of them and skips an empty record.
@@ -130,5 +149,33 @@ func flatPath(path ringregistry.Path) []Field {
 	return flat
 }
 
+func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.Int) *RegisterKeyParams {
+	t.Helper()
+	keys := ringaudit.DefaultKeys(t)
+	secret := ringtest.Scalar(0x07)
+	secret[0] = 0
+	sealed := keys.Seal(t, secret[:], shared.NfKeyEncInfo)
+	nullifierPk := spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:]))
+	eph, auditor := keys.EphSk(), keys.AuditorPk()
+	return &RegisterKeyParams{
+		RequestHead: RequestHead{
+			CircuitType: circuit,
+			PublicInputHash: fb(spptest.MustHashChain4(t, []*big.Int{
+				big.NewInt(shared.RegisterKeyDomain), member, nullifierPk,
+				sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
+			})),
+		},
+		Member: fb(member), NullifierSecret: secret[:], EphSk: eph[:], AuditorPk: auditor[:],
+	}
+}
+
 func fi(v int64) Field    { return Field{big.NewInt(v)} }
 func fb(v *big.Int) Field { return Field{new(big.Int).Set(v)} }
+
+func fieldsOf(values []*big.Int) []Field {
+	out := make([]Field, len(values))
+	for i, value := range values {
+		out[i] = fb(value)
+	}
+	return out
+}

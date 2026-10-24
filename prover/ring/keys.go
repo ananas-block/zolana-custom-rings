@@ -80,6 +80,10 @@ func keys() []Key {
 	return keys
 }
 
+func (k Key) anonymousShape() audit.AnonymousAuditShape {
+	return audit.AnonymousAuditShape{InputClass: k.Inputs, Outputs: k.Outputs, FullOpenings: k.Family == AnonymousEntryAudit}
+}
+
 func ringAuthorityShapes() []protocol.Shape {
 	return slices.DeleteFunc(slices.Clone(protocol.SupportedShapes), func(s protocol.Shape) bool {
 		return !common.ProofShape{

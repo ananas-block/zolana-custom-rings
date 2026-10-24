@@ -20,13 +20,15 @@ type Keys struct {
 	dh          [32]byte
 }
 
+func AuditorSk() [32]byte { return ringtest.Scalar(0x33) }
+
 func DefaultKeys(t testing.TB) Keys {
 	t.Helper()
 	txViewingSk := ringprotocol.Clamped(ringtest.Scalar(0x11))
 	ephSk := ringtest.Scalar(0x22)
 	txPriv := ringprotocol.XPrivateKey(t, txViewingSk)
 	ephPriv := ringprotocol.XPrivateKey(t, ephSk)
-	auditorPriv := ringprotocol.XPrivateKey(t, ringtest.Scalar(0x33))
+	auditorPriv := ringprotocol.XPrivateKey(t, AuditorSk())
 
 	dh, err := ephPriv.ECDH(auditorPriv.PublicKey())
 	if err != nil {
@@ -60,6 +62,10 @@ func (k Keys) EphSk() [32]byte {
 
 func (k Keys) AuditorPk() [32]byte {
 	return k.auditorPk
+}
+
+func (k Keys) EphPk() [33]byte {
+	return k.ephPk
 }
 
 type Sealed struct {
