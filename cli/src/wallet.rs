@@ -13,7 +13,9 @@ use serde::Deserialize;
 use solana_address::Address;
 use zolana_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
 use zolana_keypair::{x25519::X25519_PUBKEY_LEN, ShieldedKeypair, X25519Pubkey};
-use zolana_ring_client::{delivered::resolve_pending, AnonymousRingState, AnonymousRingSync};
+use zolana_ring_client::{
+    delivered::resolve_pending, AnonymousRingState, AnonymousRingSync, RingConfidentialScan,
+};
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
 use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
@@ -240,6 +242,29 @@ impl ScanAt<'_> {
             .with_indexer_config(config)
             .fetch(zolana.indexer())?;
         let mut spendable = owned.spendable;
+        let ring_notes = |assets: &RingAssets| {
+            zolana.block_on(async {
+                RingConfidentialScan::new(keys, assets)
+                    .with_indexer_config(config)
+                    .fetch(zolana.as_async().indexer(), &owned.history.transactions)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+        };
+        let mut notes = ring_notes(assets)?;
+        if !notes.pending.is_empty() {
+            notes = ring_notes(&(self.chain_assets)()?)?;
+        }
+        let notes = notes.owned.spendable();
+        for utxo in notes.utxos() {
+            if !spendable
+                .utxos()
+                .any(|held| held.utxo_hash == utxo.utxo_hash)
+            {
+                spendable.utxos_with_data.push(utxo.clone());
+            }
+        }
+        spendable.unknown_asset_ids.extend(notes.unknown_asset_ids);
         let Some(store) = self.store else {
             return Ok(spendable);
         };
