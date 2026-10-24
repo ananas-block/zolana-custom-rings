@@ -574,6 +574,11 @@ async fn a_pending_ring_outlives_the_ttl_only_while_its_registry_is_on_chain() {
         .await
         .unwrap();
     assert!(pending.is_none());
+    let calls = || chain.lock().unwrap().upstream_calls;
+    let before = calls();
+    indexer.synchronize().await.unwrap();
+    // The tip check and the batched registration read, the kept registry is not read again.
+    assert_eq!(calls() - before, 2);
     let registration = RingProgram(kept).registration(Address::new_from_array([5; 32]), 5);
     {
         let mut chain = chain.lock().unwrap();

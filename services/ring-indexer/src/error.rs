@@ -8,8 +8,6 @@ pub enum RingApiError {
     OutOfSync(String),
     #[error("member registry root changed")]
     RootChanged,
-    #[error("member has no record in the member registry")]
-    MemberUnregistered,
     #[error("member registry page has an index gap or inconsistent leaf")]
     PageGap,
     #[error("record queue moved under the request")]
@@ -31,7 +29,6 @@ impl From<RingApiError> for ErrorObjectOwned {
         let refusal = match &error {
             RingApiError::OutOfSync(_) => RingRpcError::RegistryOutOfSync,
             RingApiError::RootChanged => RingRpcError::RegistryRootChanged,
-            RingApiError::MemberUnregistered => RingRpcError::MemberUnregistered,
             RingApiError::PageGap => RingRpcError::RegistryPageGap,
             RingApiError::QueueChanged => RingRpcError::RecordQueueChanged,
             RingApiError::InvalidRequest(_) => {

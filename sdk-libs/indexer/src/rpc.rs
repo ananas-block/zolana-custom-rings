@@ -12,8 +12,6 @@ pub enum RingRpcError {
     RegistryOutOfSync = -32070,
     #[error("the ring member registry root has changed")]
     RegistryRootChanged = -32071,
-    #[error("the member has no record in the ring member registry")]
-    MemberUnregistered = -32072,
     #[error("the ring member registry page has an index gap or inconsistent leaf")]
     RegistryPageGap = -32075,
     #[error("the ring record queue moved under the request")]
@@ -21,10 +19,9 @@ pub enum RingRpcError {
 }
 
 impl RingRpcError {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::RegistryOutOfSync,
         Self::RegistryRootChanged,
-        Self::MemberUnregistered,
         Self::RegistryPageGap,
         Self::RecordQueueChanged,
     ];
@@ -331,7 +328,7 @@ mod tests {
     fn error_codes_are_stable() {
         assert_eq!(
             RingRpcError::ALL.map(RingRpcError::code),
-            [-32070, -32071, -32072, -32075, -32076]
+            [-32070, -32071, -32075, -32076]
         );
         for error in RingRpcError::ALL {
             assert_eq!(
@@ -339,6 +336,7 @@ mod tests {
                 Some(error)
             );
         }
+        assert_eq!(RingRpcError::from_code(-32072), None);
         assert_eq!(RingRpcError::from_code(-32603), None);
     }
 }

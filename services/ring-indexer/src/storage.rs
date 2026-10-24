@@ -150,6 +150,9 @@ pub(crate) struct PendingRing {
     pub blockhash: Hash,
     /// Last historical block committed with the ring's index changes.
     pub replayed_tip: Option<BlockMetadata>,
+    /// Kept past the TTL without another account read.
+    #[serde(default)]
+    pub registry_seen: bool,
 }
 
 /// Every table a ring's records project into, keyed by `program` first.

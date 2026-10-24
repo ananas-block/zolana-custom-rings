@@ -334,7 +334,6 @@ fn ring_errors_keep_their_wire_codes() {
     for (error, code) in [
         (RingApiError::OutOfSync(String::new()), -32070),
         (RingApiError::RootChanged, -32071),
-        (RingApiError::MemberUnregistered, -32072),
         (RingApiError::PageGap, -32075),
         (RingApiError::QueueChanged, -32076),
         (RingApiError::InvalidRequest(String::new()), -32600),

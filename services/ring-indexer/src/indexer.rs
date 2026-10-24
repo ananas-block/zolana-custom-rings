@@ -239,10 +239,24 @@ impl Indexer {
         for (candidate, registered) in pending.into_iter().zip(registered) {
             if !registered {
                 if candidate.replayed_tip.is_none()
+                    && !candidate.registry_seen
                     && candidate.slot < tip.slot.saturating_sub(PENDING_TTL_SLOTS)
-                    && !registry_on_chain(&self.rpc, &candidate).await?
                 {
-                    storage::delete_pending(db, &candidate.program).await?;
+                    match registry_on_chain(&self.rpc, &candidate).await {
+                        Ok(true) => {
+                            let seen = PendingRing {
+                                registry_seen: true,
+                                ..candidate
+                            };
+                            storage::checkpoint_pending(db, &seen).await?;
+                        }
+                        Ok(false) => storage::delete_pending(db, &candidate.program).await?,
+                        // A failed read defers the candidate alone.
+                        Err(error) => log::warn!(
+                            "ring {} registry check deferred ({error:#})",
+                            Address::new_from_array(candidate.program)
+                        ),
+                    }
                 }
                 continue;
             }
@@ -639,6 +653,7 @@ impl BlockWork<'_> {
                 slot: self.block.metadata.slot,
                 blockhash: self.block.metadata.blockhash.clone(),
                 replayed_tip: None,
+                registry_seen: false,
             },
         )
         .await?;
