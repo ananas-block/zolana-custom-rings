@@ -504,15 +504,20 @@ fn cli_merges_twenty_four_custom_ring_utxos() -> Result<()> {
     cli_merge_fragments(&[3_000_000; 24])
 }
 
-/// The widest `merge --count` still fits one transaction, the proof pads its spare slots.
+/// A requested count above the anonymous key's width leaves the excess notes unspent.
 #[test]
-fn cli_merges_maximum_custom_ring_utxos() -> Result<()> {
+fn cli_caps_anonymous_merge_at_supported_width() -> Result<()> {
     cli_merge_fragments(&[3_000_000; custom_ring_sdk::MAX_RING_MERGE_INPUTS])
 }
 
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let count = amounts.len().to_string();
-    let total: u64 = amounts.iter().sum();
+    let merged_count = amounts.len().min(
+        *custom_ring_interface::ANONYMOUS_MERGE_WIDTHS
+            .last()
+            .unwrap(),
+    );
+    let total: u64 = amounts[..merged_count].iter().sum();
     let env = setup()?;
     let tree = env.register_default_tree()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
@@ -522,7 +527,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         env: &env,
         ring_rpc: "http://127.0.0.1:1",
         policy: None,
-        mode: ModeName::Confidential,
+        mode: ModeName::Anonymous,
     })?;
     project.run(&["init"])?;
 
@@ -536,12 +541,16 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         "{empty_text}"
     );
     let sender = project.demo_sender()?;
+    let state = AnonymousRingState::new(ring.program_id(), 0);
 
     for &amount in amounts {
         let deposit = RingDeposit {
             ring,
             payer: &env.payer,
-            recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+            recipient: DepositRecipient::Anonymous {
+                keys: &sender,
+                state: &state,
+            },
             tree,
             asset: DepositAsset::Sol,
             amount,
@@ -551,25 +560,31 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         custom_ring_cli::wait_for_indexed_transaction(&env.client, receipt.signature)?;
     }
 
-    let output = project.run(&["merge", "--count", &count])?;
+    let output = project.run(&[
+        "--fee-payer-keypair",
+        "upgrade.json",
+        "merge",
+        "--count",
+        &count,
+    ])?;
     for line in [
-        format!("inputs      {count}"),
+        format!("inputs      {merged_count}"),
         format!("amount      {total}"),
         "merge preserves value".to_owned(),
     ] {
         assert!(output.contains(&line), "{line} in\n{output}");
     }
 
-    let scan = zolana_client::UtxoScan::new(&sender, &env.assets)
-        .with_ring_deposit_payload(ring.program_id(), zolana_ring_client::deposit_payload)
-        .fetch(env.client.indexer())?;
+    let mut wallet = RingWallet::new(&sender, env.ring_assets()?, state);
+    wallet.sync(&env)?;
+    let mut actual: Vec<_> = wallet.unspent().map(|note| note.utxo.amount).collect();
+    let mut expected = amounts[merged_count..].to_vec();
+    expected.push(total);
+    actual.sort_unstable();
+    expected.sort_unstable();
     assert_eq!(
-        scan.spendable
-            .utxos()
-            .map(|utxo| utxo.utxo.amount)
-            .collect::<Vec<_>>(),
-        vec![total],
-        "a scan apart from the cli finds every input spent and the whole value merged"
+        actual, expected,
+        "an independent scan finds the merged value and any unselected notes"
     );
 
     let signature = output
@@ -669,6 +684,11 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
     );
 
     // 3. `audit` opens the payment, its hidden sender and the recipient's output.
+    let signature = paid
+        .lines()
+        .find_map(|line| line.strip_prefix("transact")?.trim().parse().ok())
+        .context("transfer CLI did not print its confirmed signature")?;
+    custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
     let auditor_key = auditor_key
         .to_str()
         .context("the auditor key path is utf-8")?;
@@ -999,6 +1019,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,
@@ -1114,6 +1135,7 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         "the on-chain tx_viewing_pk is the sender's"
     );
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature,
@@ -1147,6 +1169,7 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature: hop.signature,
@@ -1300,6 +1323,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
 
     // 4. The auditor opens the hidden sender, its inputs and both outputs.
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk).with_mode(RingMode::Anonymous),
         auditor: &auditor,
         signature: indexed.tx_signature,
@@ -1381,7 +1405,55 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         "a payment on index 0 issues it"
     );
 
-    // 8. The sender's second payment rides the pair stream its first one anchored.
+    // 8. Pairing needs seven other sent leaves, discovered by the sender's scan.
+    let recipient_key = env.recipient.keypair.viewing_pubkey();
+    let decoy_recipient = ShieldedKeypair::new_ed25519()?;
+    let decoy_address = ring_address(&decoy_recipient, ring_program, 0)?;
+    let mut pair_wallet = RingWallet::new(&env.sender.keypair, env.ring_assets()?, sender_ring);
+    for _ in 0..32 {
+        pair_wallet.sync(&env)?;
+        let epoch = custom_ring_interface::stream::tag_epoch(rpc.get_slot()?);
+        if pair_wallet
+            .state
+            .pair_anchor(&recipient_key, epoch)
+            .is_some()
+        {
+            break;
+        }
+        let RingDepositReceipt { signature, utxo } = env.run(
+            RingDeposit {
+                ring,
+                payer,
+                recipient: DepositRecipient::Anonymous {
+                    keys: &env.sender.keypair,
+                    state: &pair_wallet.state,
+                },
+                tree: env.tree,
+                asset: DepositAsset::Sol,
+                amount: 1,
+                cosigner: None,
+            }
+            .send(env.client.ring_client()),
+        )?;
+        custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
+        PaymentLanding {
+            transfer: AnonymousPayment {
+                ring,
+                sender: &env.sender.keypair,
+                state: &pair_wallet.state,
+                payer,
+                inputs: vec![indexed_note(utxo, &env.sender.keypair, &env, env.tree)?],
+                to: decoy_address.clone(),
+                amount: 1,
+            }
+            .transfer()?,
+            payer,
+            auditor_tag,
+        }
+        .land(&env)?
+        .record(&mut pair_wallet.state)?;
+    }
+    let sender_ring = pair_wallet.state;
     let transfer = AnonymousPayment {
         ring,
         sender: &env.sender.keypair,
@@ -1504,6 +1576,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     // 1. A separate depositor funds the hidden note, the owner signs nothing.
     let sender = &env.sender.keypair;
     let depositor = env.funded_keypair()?;
+    env.fund(depositor.pubkey(), RING_DEPOSIT_B)?;
     let deposited = RingNotes {
         ring,
         owner: sender,
@@ -1561,6 +1634,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     }
     .land(&env)?;
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(config.mode),
         auditor: &auditor,
         signature: landed.indexed.tx_signature,
@@ -1639,6 +1713,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -1704,6 +1779,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -1860,6 +1936,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -1915,6 +1992,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: hop.signature,
@@ -2002,6 +2080,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -2117,6 +2196,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: withdrawal.signature,
@@ -2204,6 +2284,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan().with_escrowed_keys(escrowed),
                 auditor: &auditor,
                 signature,
@@ -2708,6 +2789,7 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
     }
     .send(&env)?;
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,
@@ -3089,6 +3171,7 @@ impl AsyncHopParity<'_> {
 }
 
 struct AuditLookup<'a> {
+    ring: Address,
     scan: RingScan,
     auditor: &'a X25519Keypair,
     signature: Signature,
@@ -3096,14 +3179,33 @@ struct AuditLookup<'a> {
 
 impl AuditLookup<'_> {
     fn run(self, env: &TestEnv) -> Result<AuditedTransaction> {
+        custom_ring_cli::wait_for_indexed_transaction(&env.client, self.signature)?;
         let client = env.client.as_async();
+        let created = env.client.block_on(
+            zolana_ring_client::CreatedUtxoScan::new(self.ring, self.auditor)
+                .run(client.indexer(), client.rpc()),
+        )?;
+        ensure!(
+            created.next_cursor.is_none(),
+            "created-note history is incomplete"
+        );
         env.client
-            .block_on(self.scan.audit(
-                self.auditor,
-                client.indexer(),
-                client.rpc(),
-                &env.ring_assets()?,
-            ))?
+            .block_on(
+                self.scan
+                    .with_known_utxos(
+                        created
+                            .utxos
+                            .into_iter()
+                            .map(|note| (note.commitment, note.utxo))
+                            .collect(),
+                    )
+                    .audit(
+                        self.auditor,
+                        client.indexer(),
+                        client.rpc(),
+                        &env.ring_assets()?,
+                    ),
+            )?
             .transactions
             .into_iter()
             .find(|tx| tx.tx_signature == self.signature)

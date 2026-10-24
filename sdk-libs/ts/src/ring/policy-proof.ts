@@ -1,3 +1,9 @@
+import {
+  readPolicyWithdrawals,
+  policyWithdrawalHash,
+  withdrawalCapacity,
+  type PolicyWithdrawal,
+} from "./withdrawals.js";
 /** The policy half of a ring transfer, the ring's table and every subject's record under the roots the statement binds, Rust `pipeline::policy`. */
 import { ringInputOpening, ringOutputOpening } from "../client/prover/assembly.js";
 import {
@@ -55,6 +61,8 @@ export type PolicyReadClient = Pick<ChainReader, "getAccount"> &
 
 /** The ring's table, its roots and every subject's openings, read before the statement, Rust `PolicyInputs`. */
 export interface PolicyInputs {
+  readonly withdrawals: readonly PolicyWithdrawal[];
+  readonly splWithdrawalOwners: readonly Bytes32[];
   readonly pinned: PinnedPolicy;
   readonly own: BoundRoot;
   /** The curator registry account and the root bound from it. */
@@ -83,6 +91,7 @@ export interface PolicyProving {
 /** Rust `PolicyRead::read`, `sender` is the owner identity the rules read as the sender. */
 export async function readPolicy(
   input: Readonly<{
+    tokenOwnerHint?: Address;
     client: PolicyReadClient;
     ringProgramId: Address;
     config: RingProgramConfig;
@@ -108,6 +117,12 @@ export async function readPolicy(
             root: currentRoot(read.ringProgramId, read.registry),
           };
         })();
+  const { withdrawals, splWithdrawalOwners } = await readPolicyWithdrawals(
+    client,
+    proofInputs.externalData.interfaceTransfers,
+    input.tokenOwnerHint,
+    context,
+  );
   const outputs = proofInputs.outputs;
   const assetRules = pinned.table.rules.some((rule) => rule.subject === "asset");
   const owners = outputs.map((output) =>
@@ -116,7 +131,13 @@ export async function readPolicy(
   const assets = outputs.map((output) =>
     assetRules && !output.isDummy() ? memberOfAsset(output.asset) : undefined,
   );
-  const members = uniqueMembers([input.sender, ...owners, ...assets]);
+  const members = uniqueMembers([
+    input.sender,
+    ...owners,
+    ...assets,
+    ...withdrawals.map((w) => w.owner),
+    ...withdrawals.filter(() => assetRules).map((w) => w.asset),
+  ]);
   const ownReads = await openingsByMember(client, own, members, context);
   const curatorReads =
     curator === undefined
@@ -142,13 +163,16 @@ export async function readPolicy(
   );
   const refusal = admitTransfer(pinned.table, pinned.sources, {
     sender: lists(input.sender),
-    outputs: live.map(({ output, slotIndex }) => ({
-      owner: owners[slotIndex] ?? ZERO_32,
-      asset: memberOfAsset(output.asset),
-      amount: output.amount,
-      ownerLists: lists(owners[slotIndex]),
-      assetLists: lists(assets[slotIndex]),
-    })),
+    outputs: [
+      ...live.map(({ output, slotIndex }) => ({
+        owner: owners[slotIndex] ?? ZERO_32,
+        asset: memberOfAsset(output.asset),
+        amount: output.amount,
+        ownerLists: lists(owners[slotIndex]),
+        assetLists: lists(assets[slotIndex]),
+      })),
+      ...withdrawals.map((w) => ({ ...w, ownerLists: lists(w.owner), assetLists: lists(w.asset) })),
+    ],
   });
   if (refusal !== undefined)
     throw ruleUnsatisfied(
@@ -174,11 +198,16 @@ export async function readPolicy(
         });
   return Object.freeze({
     pinned,
+    withdrawals,
+    splWithdrawalOwners,
     own,
     ...(curator === undefined ? {} : { curator }),
     senderEntry: entry(input.sender),
-    ownerEntries: Object.freeze(owners.map(entry)),
-    assetEntries: Object.freeze(assets.map(entry)),
+    ownerEntries: Object.freeze([...owners.map(entry), ...withdrawals.map((w) => entry(w.owner))]),
+    assetEntries: Object.freeze([
+      ...assets.map(entry),
+      ...withdrawals.map((w) => entry(assetRules ? w.asset : undefined)),
+    ]),
     ctHashes: Object.freeze(ctHashes),
     approvalRequired,
     keyEscrow,
@@ -189,6 +218,7 @@ export async function readPolicy(
 export function policyPublicInputHash(policy: PolicyInputs, proving: PolicyProving): Bytes32 {
   const key = policyKey(proving.rail);
   return policyStatementHash({
+    withdrawalHash: policyWithdrawalHash(policy.withdrawals),
     key,
     privateTxHash: proving.privateTxHash,
     policyHash: policy.pinned.policyHash,
@@ -211,7 +241,19 @@ export function policyProofRequest(
   const { proofInputs } = proving;
   const publicInputHash = policyPublicInputHash(policy, proving);
   const privateTx = sppPrivateTxHashInput(proofInputs);
+  const capacity = withdrawalCapacity(policy.withdrawals.length);
+  const padding = capacity - policy.withdrawals.length;
   const params = {
+    withdrawalCount: policy.withdrawals.length,
+    withdrawalHash: policyWithdrawalHash(policy.withdrawals),
+    withdrawals: [
+      ...policy.withdrawals,
+      ...Array.from({ length: padding }, () => ({
+        owner: zeroField(),
+        asset: zeroField(),
+        amount: 0n,
+      })),
+    ],
     ...policyTableProofInputs(policy.pinned.table, policy.pinned.sources),
     privateTxHash: proving.privateTxHash,
     policyHash: policy.pinned.policyHash,
@@ -231,8 +273,14 @@ export function policyProofRequest(
     }),
     senderPkHash: proving.senderPkHash,
     senderEntry: policy.senderEntry,
-    ownerEntries: policy.ownerEntries,
-    assetEntries: policy.assetEntries,
+    ownerEntries: [
+      ...policy.ownerEntries,
+      ...Array.from({ length: padding }, () => ({ own: undefined, curator: undefined })),
+    ],
+    assetEntries: [
+      ...policy.assetEntries,
+      ...Array.from({ length: padding }, () => ({ own: undefined, curator: undefined })),
+    ],
   };
   if (proving.rail === "delegate")
     return Object.freeze({

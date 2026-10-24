@@ -14,7 +14,11 @@ import (
 )
 
 func solveDeposit(c *circuits.DepositCircuit) error {
-	return test.IsSolved(&circuits.DepositCircuit{}, c, ecc.BN254.ScalarField())
+	shape, err := circuits.NewDepositCircuit(c.Capacity)
+	if err != nil {
+		return err
+	}
+	return test.IsSolved(shape, c, ecc.BN254.ScalarField())
 }
 
 // The program builds one flag combination per ring mode, escrow only on a registry ring.
@@ -73,5 +77,38 @@ func TestDepositRefusals(t *testing.T) {
 }
 
 func TestDepositKey(t *testing.T) {
-	ringkey.RequirePinned(t, "custom_ring_deposit", ringkey.Compile(t, &circuits.DepositCircuit{}))
+	ringkey.RequirePinned(t, "custom_ring_deposit_8", ringkey.Compile(t, depositCircuit(t, circuits.MaxDeposits)))
+}
+
+func depositCircuit(t *testing.T, capacity int) *circuits.DepositCircuit {
+	t.Helper()
+	c, err := circuits.NewDepositCircuit(capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestDepositCapacitiesPreserveStatementsAndBoundCounts(t *testing.T) {
+	for _, capacity := range circuits.DepositCapacities {
+		for _, count := range []int{1, capacity} {
+			for _, mode := range []ringdeposit.RingMode{ringdeposit.ModeRegistry, ringdeposit.ModeAnonymous, ringdeposit.ModeOff} {
+				small := ringdeposit.BuildCapacity(t, capacity, count, mode)
+				full := ringdeposit.Build(t, count, mode)
+				if ringtest.AsBigInt(small.Circuit.PublicInputHash).Cmp(ringtest.AsBigInt(full.Circuit.PublicInputHash)) != 0 {
+					t.Fatal("capacity changed deposit statement")
+				}
+				if err := solveDeposit(small.Circuit); err != nil {
+					t.Fatalf("capacity %d count %d: %v", capacity, count, err)
+				}
+			}
+		}
+		for _, count := range []int{0, capacity + 1} {
+			bad := ringdeposit.BuildCapacity(t, capacity, 1, ringdeposit.ModeRegistry)
+			bad.Circuit.Count = count
+			if solveDeposit(bad.Circuit) == nil {
+				t.Fatalf("capacity %d accepted count %d", capacity, count)
+			}
+		}
+	}
 }

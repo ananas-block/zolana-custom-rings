@@ -59,6 +59,7 @@ export type RingRail = "confidential" | "anonymous" | "delegate";
 
 /** The policy proof and the roots it binds. */
 export interface PolicyProof {
+  readonly splWithdrawalOwners: readonly Bytes32[];
   readonly proof: Uint8Array;
   readonly ownRootIndex: number;
   /** Set exactly when a source names the curator registry. */
@@ -150,9 +151,13 @@ export interface RingTransactConfig {
 
 /** The rail of the ring instruction `tag` under `mode`, Rust `RingRail::of`. */
 export function ringRailOf(tag: number, mode: RingMode): RingRail {
-  if (tag === RingInstructionTag.transact)
+  if (tag === RingInstructionTag.transact || tag === RingInstructionTag.legacyTransact)
     return mode === "anonymous" ? "anonymous" : "confidential";
-  if (tag !== RingInstructionTag.delegateTransact) throw invalid("InvalidInstructionData");
+  if (
+    tag !== RingInstructionTag.delegateTransact &&
+    tag !== RingInstructionTag.legacyDelegateTransact
+  )
+    throw invalid("InvalidInstructionData");
   if (mode === "anonymous") throw invalid("AnonymousRingRefused");
   return "delegate";
 }
@@ -254,6 +259,15 @@ export const RingTransactData = Object.freeze({
     const bytes = new Reader(data);
     try {
       return readCompact(bytes, rail);
+    } catch (error) {
+      throw shortRead(error, "RingTransactLength");
+    }
+  },
+
+  /** Historical decoding only; the upgraded program rejects legacy tags. */
+  parseLegacy(data: Uint8Array, rail: RingRail): RingTransactData {
+    try {
+      return readCompact(new Reader(data), rail, true);
     } catch (error) {
       throw shortRead(error, "RingTransactLength");
     }
@@ -470,14 +484,14 @@ function exactly(published: number, outputs: number, layout: DisclosureLayout): 
   return Object.freeze(layout);
 }
 
-function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
+function readCompact(bytes: Reader, rail: RingRail, legacy = false): RingTransactData {
   const flags = bytes.u8("flags");
   checkFlags(flags, rail);
   const header = readHeader(bytes, rail);
   const { nIn, nOut, inputCount } = header;
   const shape = auditShape(rail, header);
   const auditProof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "auditProof");
-  const policy = has(flags, Flag.policy)
+  let policy = has(flags, Flag.policy)
     ? readPolicy(bytes, has(flags, Flag.curator), rail === "anonymous")
     : undefined;
   const anchor = has(flags, Flag.anchor)
@@ -491,6 +505,15 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
       readInterfaceTransfer(bytes),
     ),
   );
+  if (policy !== undefined && !legacy)
+    policy = Object.freeze({
+      ...policy,
+      splWithdrawalOwners: Object.freeze(
+        interfaceTransfers
+          .filter((t) => t.kind === "splWithdrawal")
+          .map(() => field32(bytes, "splWithdrawalOwner")),
+      ),
+    });
   const dataHash = has(flags, Flag.dataHash) ? field32(bytes, "dataHash") : undefined;
   const ringDataHash = has(flags, Flag.ringDataHash) ? field32(bytes, "ringDataHash") : undefined;
   const outputCount = shape.fixedOutputs ?? bytes.u8("outputCount");
@@ -561,6 +584,7 @@ function readPolicy(bytes: Reader, curator: boolean, anonymous: boolean): Policy
   return Object.freeze({
     proof,
     ownRootIndex,
+    splWithdrawalOwners: Object.freeze([]),
     ...(curatorRootIndex === undefined ? {} : { curatorRootIndex }),
     ...(senderCommitment === undefined ? {} : { senderCommitment }),
   });
@@ -684,6 +708,14 @@ function writeCompact(data: RingTransactData): Uint8Array {
     .bytes(data.salt, 16, "salt")
     .u8(data.interfaceTransfers.length, "interfaceTransfers.length");
   for (const transfer of data.interfaceTransfers) writeInterfaceTransfer(out, transfer);
+  if (data.policy !== undefined) {
+    if (
+      data.policy.splWithdrawalOwners.length !==
+      data.interfaceTransfers.filter((t) => t.kind === "splWithdrawal").length
+    )
+      throw invalid("RingTransactLength");
+    for (const owner of data.policy.splWithdrawalOwners) out.bytes(owner, 32, "splWithdrawalOwner");
+  }
   for (const hash of [data.dataHash, data.ringDataHash])
     if (hash !== undefined) out.bytes(hash, 32, "hash");
   if (shape.fixedOutputs === undefined) out.u8(data.outputs.length, "outputCount");

@@ -404,6 +404,11 @@ describe("ring-statements.json", () => {
     vector.kind === "anonymous"
       ? {
           kind: "anonymous",
+          partyIdentities: (vector.party_identities ?? []).map(field) as [
+            Bytes32,
+            Bytes32,
+            Bytes32,
+          ],
           privateTxHash: field(vector.private_tx_hash ?? ""),
           epoch: BigInt(vector.epoch ?? 0),
           firstContactRoot: field(vector.first_contact_root ?? ""),
@@ -441,6 +446,7 @@ describe("ring-statements.json", () => {
             ? { kind: "member" as const, anonymous: vector.anonymous === true }
             : { kind: "delegate" as const },
         privateTxHash: field(vector.private_tx_hash),
+        withdrawalHash: field(vector.withdrawal_hash),
         policyHash: field(vector.policy_hash),
         ringId: field(vector.ring_id),
         approvalRequired: vector.approval_required,

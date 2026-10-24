@@ -97,6 +97,7 @@ type Anchor struct {
 
 type AnonymousAuditParams struct {
 	RequestHead
+	PartyIdentities []Field `json:"partyIdentities"`
 	AuditParams
 	Outputs           []AnonymousOutput `json:"outputs"`
 	PrivateTxHash     Field             `json:"privateTxHash"`
@@ -166,14 +167,23 @@ type Entry struct {
 	Curator *MemberOpening `json:"curator"`
 }
 
+type Withdrawal struct {
+	Owner  Field `json:"owner"`
+	Asset  Field `json:"asset"`
+	Amount Field `json:"amount"`
+}
+
 type PolicyParams struct {
-	PrivateTxHash Field   `json:"privateTxHash"`
-	PolicyHash    Field   `json:"policyHash"`
-	RingProgramID Field   `json:"ringId"`
-	OwnRoot       Field   `json:"ownRoot"`
-	CuratorRoot   Field   `json:"curatorRoot"`
-	PublicAssets  []Field `json:"publicAssets"`
-	PublicAmounts []Field `json:"publicAmounts"`
+	WithdrawalCount uint8        `json:"withdrawalCount"`
+	WithdrawalHash  Field        `json:"withdrawalHash"`
+	Withdrawals     []Withdrawal `json:"withdrawals"`
+	PrivateTxHash   Field        `json:"privateTxHash"`
+	PolicyHash      Field        `json:"policyHash"`
+	RingProgramID   Field        `json:"ringId"`
+	OwnRoot         Field        `json:"ownRoot"`
+	CuratorRoot     Field        `json:"curatorRoot"`
+	PublicAssets    []Field      `json:"publicAssets"`
+	PublicAmounts   []Field      `json:"publicAmounts"`
 	PolicyTable
 	AddressChain      Field           `json:"addressChain"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
@@ -277,6 +287,7 @@ type MergeInput struct {
 // AnonymousMergeParams discloses an anonymous ring's SPP merge to its auditor.
 type AnonymousMergeParams struct {
 	RequestHead
+	PartyIdentities    []Field      `json:"partyIdentities"`
 	PrivateTxHash      Field        `json:"privateTxHash"`
 	OutputUtxoHash     Field        `json:"outputUtxoHash"`
 	FirstNullifier     Field        `json:"firstNullifier"`

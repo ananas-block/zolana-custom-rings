@@ -373,7 +373,7 @@ async function splExitOwner(
   return control.owner;
 }
 
-async function splDestination(
+export async function splDestination(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
     transfer: Extract<SettlementTransfer, { kind: "spl" }>;

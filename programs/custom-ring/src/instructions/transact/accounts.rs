@@ -21,6 +21,7 @@ use crate::instructions::{
 const REGISTRY_INDEX: usize = 1;
 
 pub(super) struct PolicyRoots<'a> {
+    pub own_only: bool,
     pub proof: &'a CustomRingProof,
     pub policy_hash: [u8; 32],
     pub own_root: [u8; 32],
@@ -34,6 +35,7 @@ pub(super) struct TransactAccounts<'a> {
     /// The anonymous rail's party identities, `None` on the other rails.
     pub anonymous_parties: Option<[[u8; 32]; ANONYMOUS_PARTIES]>,
     pub public_slots: PublicSlots,
+    pub withdrawals: Vec<custom_ring_interface::PolicyWithdrawal>,
     /// Index of the first forwarded SPP account.
     pub spp: usize,
     pub ring_auth: PlacedRingAuth,
@@ -70,6 +72,7 @@ impl<'a> TransactCheck<'a> {
         );
         let policy = match binding {
             Some(binding) => Some(PolicyRoots {
+                own_only: binding.curator.is_none(),
                 proof: binding.proof.proof,
                 policy_hash: binding.policy_hash,
                 own_root: binding.own_root,
@@ -146,6 +149,17 @@ impl<'a> TransactCheck<'a> {
             }
         }
         let public_slots = legs.slots()?;
+        let withdrawals = match data.policy {
+            Some(policy) => custom_ring_interface::policy_withdrawals(
+                &data.interface_transfers,
+                &window
+                    .iter()
+                    .map(crate::instructions::loader::LoadedSettlement)
+                    .collect::<Vec<_>>(),
+                policy.spl_withdrawal_owners,
+            )?,
+            None => Vec::new(),
+        };
         // SPP settles any exit, the anonymous rail leaves only to a destination that names one key.
         let anonymous_parties = match self.signer {
             RailSigner::Payer => {
@@ -169,6 +183,7 @@ impl<'a> TransactCheck<'a> {
             sender,
             anonymous_parties,
             public_slots,
+            withdrawals,
             spp: prefix.spp,
             ring_auth,
         })

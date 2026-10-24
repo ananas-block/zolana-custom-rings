@@ -22,11 +22,11 @@ export type RingKeyCircuit =
   | Readonly<{ family: "anonymousAudit"; inputClass: number; outputs: number }>
   /** Opens every spent UTXO, the key of a transfer spending a default-ring note. */
   | Readonly<{ family: "anonymousEntryAudit"; inputClass: number; outputs: number }>
-  | Readonly<{ family: "memberPolicy"; outputs: number }>
-  | Readonly<{ family: "delegatePolicy"; inputs: number; outputs: number }>
+  | Readonly<{ family: "memberPolicy"; outputs: number; withdrawals: number; ownOnly: boolean }>
+  | Readonly<{ family: "delegatePolicy"; inputs: number; outputs: number; ownOnly: boolean }>
   | Readonly<{ family: "applyRecords"; writes: number }>
   | Readonly<{ family: "registerKey" }>
-  | Readonly<{ family: "deposit" }>
+  | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "anonymousMerge"; width: number }>;
 
 /** Rust `RING_KEYS`, every ring key in its order, `name` the circuit type the prover serves. */
@@ -52,7 +52,7 @@ export const RING_KEYS: readonly Readonly<{
           (inputClass) =>
             [
               { family: "anonymousAudit", inputClass, outputs },
-              `custom-ring-audit-anonymous-${inputClass}-${outputs}`,
+              `custom-ring-audit-anonymous-v2-${inputClass}-${outputs}`,
             ] as const,
         ),
       ),
@@ -60,30 +60,40 @@ export const RING_KEYS: readonly Readonly<{
         (outputs) =>
           [
             { family: "anonymousEntryAudit", inputClass: ANONYMOUS_ENTRY_CLASS, outputs },
-            `custom-ring-audit-anonymous-entry-${ANONYMOUS_ENTRY_CLASS}-${outputs}`,
+            `custom-ring-audit-anonymous-entry-v2-${ANONYMOUS_ENTRY_CLASS}-${outputs}`,
           ] as const,
       ),
-      [{ family: "memberPolicy", outputs: 2 }, "custom-ring-policy-member-2"],
-      [{ family: "memberPolicy", outputs: 4 }, "custom-ring-policy-member-4"],
-      [{ family: "memberPolicy", outputs: 8 }, "custom-ring-policy-member-8"],
-      [{ family: "memberPolicy", outputs: 16 }, "custom-ring-policy-member-16"],
-      // Go `ringKeys` sizes the delegate keys by the SPP ring authority rule.
-      ...RING_AUTHORITY_SHAPES.map(
-        ({ inputs, outputs }) =>
-          [
-            { family: "delegatePolicy", inputs, outputs },
-            `custom-ring-policy-delegate-${inputs}x${outputs}`,
-          ] as const,
+      ...[2, 4, 8, 16].flatMap((outputs) =>
+        [0, 1, 2, 4, 8, 16, 32].flatMap((withdrawals) =>
+          [false, true].map(
+            (ownOnly) =>
+              [
+                { family: "memberPolicy", outputs, withdrawals, ownOnly },
+                `custom-ring-policy-member-v2-${outputs}-w${withdrawals}-${ownOnly ? "own" : "curator"}`,
+              ] as const,
+          ),
+        ),
       ),
-      ...[1, APPLY_BATCH].map(
+      ...RING_AUTHORITY_SHAPES.flatMap(({ inputs, outputs }) =>
+        [false, true].map(
+          (ownOnly) =>
+            [
+              { family: "delegatePolicy", inputs, outputs, ownOnly },
+              `custom-ring-policy-delegate-v2-${inputs}x${outputs}-${ownOnly ? "own" : "curator"}`,
+            ] as const,
+        ),
+      ),
+      ...[1, 2, 4, 8, APPLY_BATCH].map(
         (writes) =>
           [{ family: "applyRecords", writes }, `custom-ring-apply-records-${writes}`] as const,
       ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
-      [{ family: "deposit" }, "custom-ring-deposit"],
+      ...[1, 2, 4, 8].map(
+        (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
+      ),
       ...ANONYMOUS_MERGE_WIDTHS.map(
         (width) =>
-          [{ family: "anonymousMerge", width }, `custom-ring-merge-anonymous-${width}`] as const,
+          [{ family: "anonymousMerge", width }, `custom-ring-merge-anonymous-v2-${width}`] as const,
       ),
     ] as const
   ).map(([circuit, name]) =>
@@ -119,8 +129,14 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
   switch (left.family) {
     case "packedAudit":
     case "deliveredAudit":
-    case "memberPolicy":
       return right.family === left.family && right.outputs === left.outputs;
+    case "memberPolicy":
+      return (
+        right.family === left.family &&
+        right.outputs === left.outputs &&
+        right.withdrawals === left.withdrawals &&
+        right.ownOnly === left.ownOnly
+      );
     case "anonymousAudit":
     case "anonymousEntryAudit":
       return (
@@ -131,6 +147,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
     case "delegatePolicy":
       return (
         right.family === left.family &&
+        right.ownOnly === left.ownOnly &&
         right.inputs === left.inputs &&
         right.outputs === left.outputs
       );
@@ -139,7 +156,8 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
     case "anonymousMerge":
       return right.family === left.family && right.width === left.width;
     case "registerKey":
-    case "deposit":
       return right.family === left.family;
+    case "deposit":
+      return right.family === left.family && right.capacity === left.capacity;
   }
 }

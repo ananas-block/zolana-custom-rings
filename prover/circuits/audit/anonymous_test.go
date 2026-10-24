@@ -307,3 +307,20 @@ func inboxStream(t *testing.T, a ringaudit.AnonymousAudit, slot ringaudit.Delive
 	tag := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, slot.RecipientKey), a.Epoch, index)
 	return ringaudit.Stream{Inbox: true, Index: index, Tag: tag}
 }
+
+// Rebinding a forbidden party into a valid statement cannot bypass the circuit.
+func TestAnonymousParties(t *testing.T) {
+	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, entryShape} {
+		c := compileAnonymous(t, shape)
+		for i := range 3 {
+			a := ringaudit.NewAnonymousAudit(t, shape)
+			a.PartyIdentities[i] = a.SenderPkHash(t)
+			c.refuse(t, a.Circuit(t))
+			a.PartyIdentities[i] = big.NewInt(0)
+			c.requireSolved(t, a.Circuit(t))
+			assignment := a.Circuit(t)
+			assignment.PartyIdentities[i] = 99 // differs from the verifier's bound identity
+			c.refuseStatementOf(t, assignment, a.Statement(t))
+		}
+	}
+}

@@ -1,3 +1,4 @@
+import { anonymousPartyIdentities } from "./parties.js";
 import type { Instruction } from "@solana/kit";
 
 import type {
@@ -311,6 +312,7 @@ async function buildRingMerge(
     if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
     const disclosure = await proveMergeDisclosure(
       {
+        partyIdentities: anonymousPartyIdentities(params.feePayer, config.coSigner?.signer),
         keys: params.keys,
         ringProgramId: params.ringProgramId,
         auditor: config.auditorPublicKey,
@@ -344,6 +346,7 @@ function escrowMerge(ringProgramId: Address): never {
 /** Only the key holder adds the nullifier secret. */
 async function proveMergeDisclosure(
   input: Readonly<{
+    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
     keys: Partial<RingSecretProver>;
     ringProgramId: Address;
     auditor: X25519PublicKey;

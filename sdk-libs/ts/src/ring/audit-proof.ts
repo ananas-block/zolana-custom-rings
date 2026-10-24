@@ -54,6 +54,7 @@ export interface SealedAudit {
 
 /** The anonymous audit statement's values beside the envelope, Rust `AnonymousStatement`. */
 export interface AnonymousAuditValues {
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
   readonly privateTxHash: Bytes32;
   readonly privateTxBlinding: Bytes32;
   /** Zero outside a policy ring. */
@@ -191,6 +192,7 @@ export function auditProofRequest(
           ),
         ],
         senderCommitment: statement.senderCommitment,
+        partyIdentities: statement.partyIdentities,
         epoch: statement.epoch,
         firstContactRoot: statement.firstContactRoot,
         ...(statement.anchor === undefined ? {} : { anchor: statement.anchor }),

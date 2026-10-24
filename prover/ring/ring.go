@@ -35,15 +35,15 @@ func (k Key) extension() common.ExtensionCircuit {
 	case AnonymousAudit, AnonymousEntryAudit:
 		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
 	case MemberPolicy:
-		return bind[MemberPolicyParams](k, policy.NewMemberPolicyCircuit, k.Outputs)
+		return bind[MemberPolicyParams](k, policy.NewMemberPolicyCircuitWith, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
 	case DelegatePolicy:
-		return bind[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuit, transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
+		return bind[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuitWith, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
-		return bind[DepositParams](k, unsized[circuits.DepositCircuit], struct{}{})
+		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
 	case AnonymousMerge:
 		return bind[AnonymousMergeParams](k, circuits.NewAnonymousMergeCircuit, k.Inputs)
 	}

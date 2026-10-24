@@ -197,6 +197,8 @@ impl ConfirmedDeposit {
 /// One public settlement leg out of the ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingWithdrawal {
+    /// The policy-screened owner from confirmed v2 metadata, absent for legacy/audit-only frames.
+    pub screened_owner: Option<Address>,
     /// A token account for an SPL leg, a wallet for a SOL leg.
     pub recipient: Address,
     pub asset: Address,
@@ -233,18 +235,72 @@ pub fn ring_event_origin_in(
     };
     let event = reconstruct_general_event(source, &emitted.data)
         .map_err(|error| AuditError::InvalidConfirmedEvent(format!("{error:?}")))?;
+    let transact = confirmed_transact(groups, source, ring);
+    let mut withdrawals = if ring_invoked {
+        ring_withdrawals_of(&[source])?
+    } else {
+        Vec::new()
+    };
+    if let Some(frame) = &transact {
+        bind_withdrawal_owners(source, frame, &mut withdrawals)?;
+    }
     Ok(RingOrigin {
         ring_invoked,
         event: ConfirmedEvent::new(kind, event),
         signers: Vec::new(),
-        withdrawals: match ring_invoked {
-            true => ring_withdrawals_of(&[source])?,
-            false => Vec::new(),
-        },
+        withdrawals,
         deposits: confirmed_deposits(groups, source, ring)?,
         merge_disclosure: confirmed_merge_disclosure(groups, source, ring),
-        transact: confirmed_transact(groups, source, ring),
+        transact,
     })
+}
+
+/// Read checked owner snapshots from the confirmed direct caller, without RPC account reads.
+fn bind_withdrawal_owners(
+    source: &ParsedInstruction,
+    frame: &[u8],
+    withdrawals: &mut [RingWithdrawal],
+) -> Result<(), AuditError> {
+    if withdrawals.is_empty() {
+        return Ok(());
+    }
+    let invalid = |e: CustomRingError| AuditError::InvalidTransactData(e.to_string());
+    let (&tag, payload) = frame.split_first().ok_or(AuditError::MissingRingTransact)?;
+    if matches!(
+        tag,
+        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
+    ) {
+        return Ok(());
+    }
+    let (spp, _) = TransactIxDataRef::parse_with_external_data_prefix(&source.data[1..])
+        .map_err(|e| AuditError::InvalidTransactData(e.to_string()))?;
+    let mode = if spp.circuit.is_anonymous() {
+        RingMode::Anonymous
+    } else {
+        RingMode::Off
+    };
+    let rail = InstructionTag::try_from(tag)
+        .and_then(|tag| RingRail::of(tag, mode))
+        .map_err(invalid)?;
+    let parsed = RingTransactData::parse(payload, rail).map_err(invalid)?;
+    let Some(policy) = parsed.data().policy else {
+        return Ok(());
+    };
+    if parsed.data().interface_transfers != spp.interface_transfers {
+        return Err(AuditError::ConfirmedEventMismatch);
+    }
+    let mut owners = policy.spl_withdrawal_owners.iter();
+    for withdrawal in withdrawals {
+        withdrawal.screened_owner = Some(if withdrawal.asset == SOL_MINT {
+            withdrawal.recipient
+        } else {
+            Address::new_from_array(*owners.next().ok_or(AuditError::SettlementAccounts)?)
+        });
+    }
+    if owners.next().is_some() {
+        return Err(AuditError::SettlementAccounts);
+    }
+    Ok(())
 }
 
 fn confirmed_transact(
@@ -262,7 +318,12 @@ fn confirmed_transact(
     (caller.program_id == ring
         && matches!(
             caller.data.first(),
-            Some(&(ring_tag::TRANSACT | ring_tag::DELEGATE_TRANSACT))
+            Some(
+                &(ring_tag::TRANSACT
+                    | ring_tag::DELEGATE_TRANSACT
+                    | ring_tag::LEGACY_TRANSACT
+                    | ring_tag::LEGACY_DELEGATE_TRANSACT)
+            )
         ))
     .then(|| caller.data.clone())
 }
@@ -273,9 +334,15 @@ pub(crate) fn frame_layout(mode: RingMode, frame: &[u8]) -> Result<DisclosureLay
     let rail = InstructionTag::try_from(tag)
         .and_then(|tag| RingRail::of(tag, mode))
         .map_err(invalid)?;
-    RingTransactData::parse(data, rail)
-        .map(|parsed| parsed.layout())
-        .map_err(invalid)
+    let parsed = if matches!(
+        tag,
+        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
+    ) {
+        RingTransactData::parse_legacy(data, rail)
+    } else {
+        RingTransactData::parse(data, rail)
+    };
+    parsed.map(|parsed| parsed.layout()).map_err(invalid)
 }
 
 /// The ring merge forwards `output_ring_data_hash || body` behind the tag.
@@ -454,6 +521,7 @@ fn ring_withdrawals_of(
                 InterfaceTransfer::SolWithdrawal { amount } => (
                     sol_interface,
                     RingWithdrawal {
+                        screened_owner: None,
                         recipient: group[1],
                         asset: SOL_MINT,
                         amount,
@@ -462,6 +530,7 @@ fn ring_withdrawals_of(
                 InterfaceTransfer::SplWithdrawal { amount, .. } => (
                     cpi_authority,
                     RingWithdrawal {
+                        screened_owner: None,
                         recipient: group[3],
                         asset: group[1],
                         amount,

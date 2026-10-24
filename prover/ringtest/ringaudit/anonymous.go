@@ -51,6 +51,7 @@ type AnonymousAudit struct {
 	PrivateTxBlinding *big.Int
 	// SenderCommitment is 0 on an audit-only transfer.
 	SenderCommitment *big.Int
+	PartyIdentities  [3]*big.Int
 	Epoch            uint64
 	InputCount       int
 	Inputs           []Utxo
@@ -85,6 +86,7 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 		SenderNullifierPk: spptest.MustNullifierPk(t, big.NewInt(7)),
 		PrivateTxBlinding: big.NewInt(0x5b1d),
 		Epoch:             1000,
+		PartyIdentities:   [3]*big.Int{big.NewInt(11), big.NewInt(12), big.NewInt(0)},
 		InputCount:        2,
 	}
 	a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
@@ -231,6 +233,7 @@ func (a AnonymousAudit) Tail(t testing.TB) AnonymousTail {
 		Epoch:            a.Epoch,
 		FirstContactRoot: a.FirstContactRoot(t),
 		SenderCommitment: a.SenderCommitment,
+		PartyIdentities:  a.PartyIdentities,
 	}
 }
 
@@ -312,6 +315,9 @@ func (a AnonymousAudit) Circuit(t testing.TB) *audit.AnonymousAuditCircuit {
 		c.Inputs[i] = input.Wires()
 	}
 	c.SenderCommitment = a.SenderCommitment
+	for i, party := range a.PartyIdentities {
+		c.PartyIdentities[i] = party
+	}
 	c.Epoch = a.Epoch
 	c.FirstContactRoot = a.FirstContactRoot(t)
 	c.Anchor = a.anchorWires(t)

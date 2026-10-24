@@ -60,7 +60,9 @@ const PROOF_UNITS: u32 = 1_400_000;
 instruction_tags! {
     CreateConfig = CREATE_CONFIG: 1 => ACCOUNT_UNITS,
     InitSppRingConfig = INIT_SPP_RING_CONFIG: 2 => ACCOUNT_UNITS,
-    Transact = TRANSACT: 3 => PROOF_UNITS,
+    /// Historical v1 frame, decoding only after the v2 upgrade.
+    LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
+    Transact = TRANSACT: 43 => PROOF_UNITS,
     /// Always refused, deposits go through `AuditedDeposit`.
     Deposit = DEPOSIT: zolana_interface::instruction::tag::RING_DEPOSIT => 200_000,
     Merge = MERGE: zolana_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
@@ -78,7 +80,8 @@ instruction_tags! {
     // Tags 22, 23 and 26 are retired, never reuse them.
     SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
     /// Tag 3 data over the SPP authority rail, signed by the delegate.
-    DelegateTransact = DELEGATE_TRANSACT: 25 => PROOF_UNITS,
+    LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
+    DelegateTransact = DELEGATE_TRANSACT: 44 => PROOF_UNITS,
     CreateMemberRegistry = CREATE_MEMBER_REGISTRY: 28 => ACCOUNT_UNITS,
     RegisterKey = REGISTER_KEY: 29 => PROOF_UNITS,
     // Tag 30 is retired, never reuse it.

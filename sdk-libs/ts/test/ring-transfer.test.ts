@@ -1,3 +1,4 @@
+import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
 import { AccountRole, type Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
@@ -428,6 +429,7 @@ describe("policy ring", () => {
     const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
     expect(policy?.publicInputHash).toEqual(
       policyStatementHash({
+        withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "member", anonymous: false },
         privateTxHash: data.privateTxHash,
         policyHash: registry.policyHash,
@@ -657,6 +659,7 @@ describe("delegate rail", () => {
     const zero = new Uint8Array(32) as Bytes32;
     expect(policy?.publicInputHash).toEqual(
       policyStatementHash({
+        withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "delegate" },
         privateTxHash: data.privateTxHash,
         policyHash: registry.policyHash,

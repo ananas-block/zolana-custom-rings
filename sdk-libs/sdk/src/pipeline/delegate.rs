@@ -1,7 +1,7 @@
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
 use zolana_client::AsyncRpc;
-use zolana_interface::shape::Shape;
+use zolana_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
 use zolana_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use zolana_ring_transaction::RingOutputRail;
 use zolana_transaction::{
@@ -227,7 +227,16 @@ impl Delegated<'_> {
         }
         let shape = match self.shape {
             Some(shape) => shape,
-            None => canonical_shape(&transaction, &self.source)?,
+            None => {
+                let needed = canonical_shape(&transaction, &self.source)?;
+                RING_AUTHORITY_WIDTHS
+                    .into_iter()
+                    .find(|&width| width >= needed.n_inputs() && width >= needed.n_outputs())
+                    .map(|width| Shape::new(width, width))
+                    .ok_or(RingError::ShapeUnkeyed {
+                        rail: RingRail::Delegate,
+                    })?
+            }
         };
         let delivery = packed_or_delivered(shape.n_outputs(), RingRail::Delegate)?;
         // The delegate holds no viewing key of the member, a fresh transaction key seals the move.

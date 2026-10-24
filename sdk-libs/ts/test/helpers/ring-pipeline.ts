@@ -635,6 +635,14 @@ export function checkAudit(
         epoch: binding.epoch ?? 0n,
         firstContactRoot: binding.firstContactRoot ?? (new Uint8Array(32) as Bytes32),
         keyEscrow: fixture.keyEscrow,
+        partyIdentities:
+          audit?.kind === "anonymousAudit"
+            ? audit.partyIdentities
+            : [
+                new Uint8Array(32) as Bytes32,
+                new Uint8Array(32) as Bytes32,
+                new Uint8Array(32) as Bytes32,
+              ],
       }),
     ),
   );

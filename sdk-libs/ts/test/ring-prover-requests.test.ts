@@ -1,3 +1,4 @@
+import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -273,8 +274,19 @@ function policy(item: Json): PolicyProofInputs {
       ...(output["ctHash"] === undefined ? {} : { ctHash: field(output["ctHash"]) }),
     };
   });
+  const withdrawals = list(item["withdrawals"]).map((value) => {
+    const leg = record(value);
+    return {
+      owner: field(leg["owner"]),
+      asset: field(leg["asset"]),
+      amount: BigInt(String(leg["amount"])),
+    };
+  });
   const senderPkHash = field(item["senderPkHash"]);
   return {
+    withdrawalCount: count(item["withdrawalCount"]),
+    withdrawalHash: field(item["withdrawalHash"]),
+    withdrawals,
     privateTxHash: field(item["privateTxHash"]),
     policyHash: field(item["policyHash"]),
     ringId: field(item["ringId"]),
@@ -306,10 +318,10 @@ function policy(item: Json): PolicyProofInputs {
     senderPkHash,
     senderEntry: entry(item["senderEntry"], senderPkHash),
     ownerEntries: list(item["ownerEntries"]).map((value, i) =>
-      entry(value, outputs[i]?.ownerPkHash ?? ZERO),
+      entry(value, outputs[i]?.ownerPkHash ?? withdrawals[i - outputs.length]?.owner ?? ZERO),
     ),
     assetEntries: list(item["assetEntries"]).map((value, i) =>
-      entry(value, outputs[i]?.asset ?? ZERO),
+      entry(value, outputs[i]?.asset ?? withdrawals[i - outputs.length]?.asset ?? ZERO),
     ),
   };
 }
@@ -362,6 +374,7 @@ function request(item: Json): RingProofRequest {
   if (circuitType.startsWith("custom-ring-audit-anonymous-"))
     return {
       kind: "anonymousAudit",
+      partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
       publicInputHash,
       ...envelope(item),
       outputs: list(item["outputs"]).map(anonymousSlot),
@@ -416,7 +429,7 @@ function request(item: Json): RingProofRequest {
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
     };
-  if (circuitType === "custom-ring-deposit") {
+  if (circuitType.startsWith("custom-ring-deposit-")) {
     const ownerPkHashes = fields(item["ownerPkHashes"]);
     return {
       kind: "deposit",
@@ -444,6 +457,7 @@ function request(item: Json): RingProofRequest {
     const ownerKey = bytes<Bytes32>(item["ownerKey"], 32);
     return {
       kind: "anonymousMerge",
+      partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
       publicInputHash,
       privateTxHash: field(item["privateTxHash"]),
       outputUtxoHash: field(item["outputUtxoHash"]),
@@ -601,10 +615,27 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
     expect(ringCircuitType(ringProofCircuit(typed))).toBe(circuitType);
   });
 
+  it("encodes the full u64 withdrawal range exactly and rejects overflow", () => {
+    const base = request(golden("custom-ring-policy-member-v2-2-w2-own"));
+    if (base.kind !== "memberPolicy") throw new Error("member policy fixture");
+    const leg = base.withdrawals[0]!;
+    const body = ringProofRequestBody({
+      ...base,
+      withdrawals: [{ ...leg, amount: 0xffff_ffff_ffff_ffffn }, base.withdrawals[1]!],
+    });
+    expect((body["withdrawals"] as { amount: string }[])[0]?.amount).toBe(
+      "0x" + "00".repeat(24) + "ff".repeat(8),
+    );
+    for (const amount of [-1n, 1n << 64n])
+      expect(() =>
+        ringProofRequestBody({ ...base, withdrawals: [{ ...leg, amount }, base.withdrawals[1]!] }),
+      ).toThrow();
+  });
+
   it("names the deposit key the prover loads and refuses a shape no ring key serves", () => {
-    expect(ringProvingKey({ family: "deposit" })).toEqual({
-      name: "custom_ring_deposit.key",
-      sha256: RING_PROVING_KEY_SHA256S["custom_ring_deposit.key"],
+    expect(ringProvingKey({ family: "deposit", capacity: 8 })).toEqual({
+      name: "custom_ring_deposit_8.key",
+      sha256: RING_PROVING_KEY_SHA256S["custom_ring_deposit_8.key"],
     });
     expect(() => ringProvingKey({ family: "packedAudit", outputs: 3 })).toThrow(
       expect.objectContaining({ code: "INTERFACE_INVALID_SHAPE" }),
@@ -656,8 +687,8 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
   });
 
   it("sends the sender key on the entry key alone", () => {
-    const commitment = request(golden("custom-ring-audit-anonymous-4-2"));
-    const entry = request(golden("custom-ring-audit-anonymous-entry-8-2"));
+    const commitment = request(golden("custom-ring-audit-anonymous-v2-4-2"));
+    const entry = request(golden("custom-ring-audit-anonymous-entry-v2-8-2"));
     if (commitment.kind !== "anonymousAudit" || entry.kind !== "anonymousAudit")
       throw new Error("anonymous goldens");
     expect(ringProofRequestBody(commitment)).not.toHaveProperty("senderKey");
@@ -952,6 +983,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         disclosure,
         kind: {
           kind: "anonymous",
+          partyIdentities: typed.partyIdentities,
           privateTxHash: typed.privateTxHash,
           epoch: typed.epoch,
           firstContactRoot: typed.firstContactRoot,
@@ -994,7 +1026,11 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         if (output.ctHash !== undefined && owner !== undefined)
           expect(hex(owner.escrowKey)).toBe(hex(poseidon([output.nullifierPk, output.ctHash])));
       });
+      expect(typed.withdrawalHash).toEqual(
+        policyWithdrawalHash(typed.withdrawals.slice(0, typed.withdrawalCount)),
+      );
       const statement = {
+        withdrawalHash: typed.withdrawalHash,
         privateTxHash: typed.privateTxHash,
         policyHash: typed.policyHash,
         ringId: typed.ringId,

@@ -4,7 +4,9 @@ use std::fmt;
 
 use anyhow::{Context as _, Result};
 use solana_address::Address;
-use zolana_ring_client::{AuditedTransaction, OutputOpening, RingScan};
+use zolana_ring_client::{
+    AuditError, AuditedTransaction, CreatedUtxoScan, OutputOpening, RingScan,
+};
 
 use crate::{
     controls::ring_auditor_key,
@@ -30,6 +32,21 @@ pub fn run(ctx: &Context, args: AuditArgs) -> Result<()> {
         scan = scan.with_cursor(hex::decode(cursor).context("the cursor is not hex")?);
     }
     let chain = ctx.chain();
+    if config.mode == custom_ring_interface::RingMode::Anonymous {
+        let created = ctx.block(
+            CreatedUtxoScan::new(ctx.ring.program_id(), &auditor).run(chain.indexer(), chain.rpc()),
+        )?;
+        if created.next_cursor.is_some() {
+            return Err(AuditError::IncompleteScan.into());
+        }
+        scan = scan.with_known_utxos(
+            created
+                .utxos
+                .into_iter()
+                .map(|note| (note.commitment, note.utxo))
+                .collect(),
+        );
+    }
     let page = ctx.block(scan.audit(&auditor, chain.indexer(), chain.rpc(), &assets))?;
     for transaction in &page.transactions {
         print(transaction);

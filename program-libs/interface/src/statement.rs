@@ -52,6 +52,7 @@ impl AuditHead<'_> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnonymousAudit<'a> {
+    pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
     pub epoch: u64,
     /// Zero without a pair-anchored slot.
@@ -110,6 +111,9 @@ impl AuditStatement<'_> {
                     right_align(&anonymous.epoch.to_be_bytes()),
                     *anonymous.first_contact_root,
                     *anonymous.sender_commitment,
+                    anonymous.party_identities[0],
+                    anonymous.party_identities[1],
+                    anonymous.party_identities[2],
                 ]);
             }
         }
@@ -140,6 +144,7 @@ pub enum PolicyKey {
 /// A policy ring transfer's policy proof, mirror `prover/server/custom_rings/circuits/policy`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyStatement<'a> {
+    pub withdrawal_hash: &'a [u8; 32],
     pub key: PolicyKey,
     pub private_tx_hash: &'a [u8; 32],
     pub policy_hash: &'a [u8; 32],
@@ -178,6 +183,7 @@ impl PolicyStatement<'_> {
         for (asset, amount) in self.public_assets.iter().zip(self.public_amounts) {
             elements.extend([*asset, *amount]);
         }
+        elements.extend([right_align(&[2]), *self.withdrawal_hash]);
         elements
     }
 

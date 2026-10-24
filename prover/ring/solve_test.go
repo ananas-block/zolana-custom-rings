@@ -23,15 +23,15 @@ import (
 const (
 	packedKey    common.CircuitType = "custom-ring-audit-packed-2"
 	deliveredKey common.CircuitType = "custom-ring-audit-delivered-8"
-	anonymousKey common.CircuitType = "custom-ring-audit-anonymous-4-2"
-	entryKey     common.CircuitType = "custom-ring-audit-anonymous-entry-8-2"
-	memberKey    common.CircuitType = "custom-ring-policy-member-2"
-	delegateKey  common.CircuitType = "custom-ring-policy-delegate-2x2"
+	anonymousKey common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
+	entryKey     common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
+	memberKey    common.CircuitType = "custom-ring-policy-member-v2-2-w0-curator"
+	delegateKey  common.CircuitType = "custom-ring-policy-delegate-v2-2x2-curator"
 	applyKey     common.CircuitType = "custom-ring-apply-records-1"
 	batchKey     common.CircuitType = "custom-ring-apply-records-16"
 	registerKey  common.CircuitType = "custom-ring-register-key"
-	depositKey   common.CircuitType = "custom-ring-deposit"
-	mergeKey     common.CircuitType = "custom-ring-merge-anonymous-8"
+	depositKey   common.CircuitType = "custom-ring-deposit-8"
+	mergeKey     common.CircuitType = "custom-ring-merge-anonymous-v2-8"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
@@ -68,16 +68,33 @@ func hostRequest(t testing.TB, k Key) any {
 		if !ok {
 			t.Fatalf("no member world for %d outputs", k.Outputs)
 		}
-		return requestOf[MemberPolicyParams](t, k.Circuit, world().Build(t).Assignment())
+		w := world()
+		w.WithdrawalCapacity, w.OwnOnly = k.Withdrawals, k.OwnOnly
+		if !k.OwnOnly {
+			w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+			w.Curator = w.Own
+		}
+		for range k.Withdrawals {
+			w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1})
+		}
+		if k.Withdrawals > 0 {
+			w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -int64(k.Withdrawals)}}
+		}
+		return requestOf[MemberPolicyParams](t, k.Circuit, w.Build(t).Assignment())
 	case DelegatePolicy:
 		world := ringpolicy.Delegate(transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
+		world.OwnOnly = k.OwnOnly
+		if !k.OwnOnly {
+			world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+			world.Curator = world.Own
+		}
 		return requestOf[DelegatePolicyParams](t, k.Circuit, world.Build(t).Assignment())
 	case ApplyRecords:
 		return applyRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
-		return requestOf[DepositParams](t, k.Circuit, ringdeposit.Build(t, 2, ringdeposit.ModeRegistry).Circuit)
+		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildCapacity(t, k.Inputs, k.Inputs, ringdeposit.ModeRegistry).Circuit)
 	case AnonymousMerge:
 		return requestOf[AnonymousMergeParams](t, k.Circuit, ringmerge.Build(t, k.Inputs).Circuit)
 	}
