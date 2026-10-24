@@ -357,13 +357,15 @@ export async function indexedKeys<T>(read: () => Promise<T>): Promise<T> {
     try {
       return await read();
     } catch (cause) {
-      const code =
+      // The ring indexer refuses under the RingError's own code.
+      const codes =
         cause instanceof ClientError
-          ? cause.code
+          ? [cause.code]
           : cause instanceof RingError
-            ? cause.causeCode
-            : undefined;
-      if (code === undefined || !lagging.has(code) || Date.now() > deadline) throw cause;
+            ? [cause.code, cause.causeCode]
+            : [];
+      if (!codes.some((code) => code !== undefined && lagging.has(code)) || Date.now() > deadline)
+        throw cause;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
