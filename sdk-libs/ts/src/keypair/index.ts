@@ -6,7 +6,7 @@ export {
   sealTransactionViewingSecret,
 } from "./audit.js";
 export type { AuditorEnvelope, AuditorMessage } from "./audit.js";
-export { RingKeyError, type RingKeyErrorCode } from "./error.js";
+export { RING_KEY_ERROR_RUST_VARIANT, RingKeyError, type RingKeyErrorCode } from "./error.js";
 export {
   MAX_PAIRING_ROWS,
   MAX_RING_ADDRESS_PAYLOAD_LENGTH,

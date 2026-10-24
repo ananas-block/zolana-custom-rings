@@ -188,9 +188,13 @@ export {
   AnonymousRingState,
 } from "../transaction/wallet/anonymous-state.js";
 export type {
+  DecoyLeaf,
+  IndexedSpend,
   IssuedAddress,
+  PairAnchor,
   ReceivedAnchor,
   SentFirstContact,
+  SerializedAnonymousRingState,
 } from "../transaction/wallet/anonymous-state.js";
 export { issueRingAddress, ringAddressOf } from "../wallet/anonymous.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../transaction/wallet/ring-keys.js";
