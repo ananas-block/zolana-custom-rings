@@ -59,7 +59,7 @@ use custom_ring_test_validator::{
     ring_wallet::RingWallet,
     shared::{
         custom_ring_program_id, prover_url, send, send_expecting_rejection, setup, ExpectRejection,
-        RegisterRing, RejectedTransact, TestEnv, Tier, USDC_ASSET_ID,
+        RegisterRing, RejectedTransact, TestEnv, Tier, WalletSync, USDC_ASSET_ID,
     },
 };
 use solana_address::Address;
@@ -98,7 +98,7 @@ use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
 };
-use zolana_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
+use zolana_test_utils::wallet::Wallet;
 use zolana_test_utils::{
     localnet::isolated_temp_path,
     smart_account,
@@ -973,14 +973,14 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
 
     // 9. Normal operation is undisturbed: the recipient still discovers its
     //    output through `Wallet::sync` on its own view tag, with no auditor key.
-    let recipient_authority =
-        KeypairWalletAuthority::new(Address::default(), &env.recipient.keypair);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(SOL_MINT, RING_TRANSFER_AMOUNT, Some(ring_program))],
@@ -1129,14 +1129,14 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         "auditor decrypts both output amounts"
     );
 
-    let recipient_authority =
-        KeypairWalletAuthority::new(Address::default(), &env.recipient.keypair);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     let received = unspent_utxo(&env.recipient.wallet, RING_TRANSFER_AMOUNT)?;
     let hop = AsyncHopParity {
         ring,
@@ -1598,7 +1598,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
     let recipient_address = recipient.shielded_address()?;
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
     let scan = || RingScan::new(ring_program, auditor.pubkey());
 
     // 1. Entry, a default-ring deposit is spent into ring-bound notes.
@@ -1652,12 +1651,14 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ],
         "entry outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&entry.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&entry.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(SOL_MINT, ENTRY_AMOUNT, Some(ring_program))],
@@ -1715,12 +1716,14 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ],
         "exit outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&exit.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&exit.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -1803,7 +1806,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     let recipient = &env.recipient.keypair;
     let sender_address = sender.shielded_address()?;
     let recipient_address = recipient.shielded_address()?;
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
     let scan = || RingScan::new(ring_program, auditor.pubkey());
     let ring_utxo = |owner, amount, blinding| Note {
         owner,
@@ -1870,12 +1872,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "entry outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&entry.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&entry.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(usdc, USDC_ENTRY_AMOUNT, Some(ring_program))],
@@ -1923,12 +1927,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "hop outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&hop.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&hop.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2008,12 +2014,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "exit outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&exit.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&exit.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2121,12 +2129,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "withdrawal outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&withdrawal.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&withdrawal.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2203,12 +2213,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         vec![moved_note.opened(0)?],
         "delegate move outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2604,13 +2616,13 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         "the delegate spent the note"
     );
     let mut member_wallet = Wallet::new(member_address, env.assets.clone())?;
-    let member_authority = KeypairWalletAuthority::new(Address::default(), member);
-    member_wallet.sync(
-        &member_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    WalletSync {
+        wallet: &mut member_wallet,
+        keys: member,
+        assets: &env.ring_assets()?,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&member_wallet),
         vec![(SOL_MINT, SEND, Some(ring_program))],
@@ -2671,13 +2683,14 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         "the old-tree note is spent"
     );
 
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&migrated.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&migrated.indexed),
+    }
+    .sync()?;
     let received = unspent_utxo(&env.recipient.wallet, ENTRY_AMOUNT)?;
     let mut prepared = ConfidentialTransaction::new_with_ring(
         vec![indexed_note(received, recipient, &env, env.tree)?],

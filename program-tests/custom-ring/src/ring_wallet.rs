@@ -4,7 +4,7 @@ use anyhow::Result;
 use solana_address::Address;
 use zolana_client::{IndexerRpcConfig, Rpc, UtxoScan};
 use zolana_keypair::ShieldedKeypair;
-use zolana_ring_client::{AnonymousRingState, AnonymousRingSync};
+use zolana_ring_client::{AnonymousRingState, AnonymousRingSync, RingConfidentialScan};
 use zolana_ring_transaction::RingAssets;
 use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
@@ -65,8 +65,19 @@ impl<'a> RingWallet<'a> {
         if synced.pending_assets.is_empty() {
             self.state = synced.state;
         }
+        let notes = env
+            .client
+            .block_on(async {
+                RingConfidentialScan::new(self.keys, &self.assets)
+                    .with_indexer_config(config)
+                    .fetch(env.client.as_async().indexer(), &owned.history.transactions)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })?
+            .owned
+            .spendable();
         let mut spendable = owned.spendable;
-        for utxo in &self.kept {
+        for utxo in self.kept.iter().chain(notes.utxos()) {
             if !spendable
                 .utxos()
                 .any(|held| held.utxo_hash == utxo.utxo_hash)

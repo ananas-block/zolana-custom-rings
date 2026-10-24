@@ -38,17 +38,17 @@ use zolana_program_test::{
     create_tree_instructions,
     localnet::{LocalnetPorts, LocalnetValidator, UpgradeableProgram},
 };
-use zolana_ring_client::MemberOpeningRead;
+use zolana_ring_client::{open_ring_confidential, MemberOpeningRead};
 use zolana_ring_policy::{ListId, Member, RuleTable};
 use zolana_ring_transaction::RingAssets;
-use zolana_test_utils::wallet::Wallet;
+use zolana_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
 use zolana_test_utils::{
     localnet::{isolated_temp_path, localnet_indexer_url, localnet_rpc_url, WorkspaceArtifacts},
     prover::spawn_workspace_prover,
     smart_account::{self, ProtocolSigners, StandardSigners},
     spl::{create_mint, RegisterSplAsset},
 };
-use zolana_transaction::{AssetRegistry, Mint};
+use zolana_transaction::{AssetRegistry, Mint, ShieldedTransaction};
 use zolana_user_registry_interface::user_registry_program_id;
 
 use crate::ring_indexer::RingIndexerLaunch;
@@ -220,6 +220,34 @@ impl std::ops::Deref for TestWallet {
 impl std::ops::DerefMut for TestWallet {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.wallet
+    }
+}
+
+/// zolana's wallet sync, then the scheme 10 and 11 ring notes it skips.
+pub struct WalletSync<'a> {
+    pub wallet: &'a mut Wallet,
+    pub keys: &'a ShieldedKeypair,
+    pub assets: &'a RingAssets,
+    pub transactions: &'a [ShieldedTransaction],
+}
+
+impl WalletSync<'_> {
+    pub fn sync(self) -> Result<()> {
+        let authority = KeypairWalletAuthority::new(Address::default(), self.keys);
+        self.wallet
+            .sync(&authority, self.transactions, 0, DEFAULT_TAG_WINDOW)?;
+        let notes = open_ring_confidential(self.keys, self.assets, self.transactions)?;
+        for utxo in notes.owned.utxos {
+            if !self
+                .wallet
+                .utxos
+                .iter()
+                .any(|held| held.utxo_hash == utxo.utxo_hash)
+            {
+                self.wallet.utxos.push(utxo);
+            }
+        }
+        Ok(())
     }
 }
 
