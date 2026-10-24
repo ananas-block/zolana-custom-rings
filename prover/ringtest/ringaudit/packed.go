@@ -23,6 +23,11 @@ type PackedAudit struct {
 	Layout    Layout
 }
 
+func NewPackedAudit(t testing.TB, capacity int) PackedAudit {
+	t.Helper()
+	return PackedAuditOf(t, capacity, min(capacity, 3), 1)
+}
+
 // PackedAuditOf publishes nOut outputs, the exits slots leaving the ring and ring outputs carrying data elsewhere.
 func PackedAuditOf(t testing.TB, capacity, nOut int, exits ...int) PackedAudit {
 	t.Helper()
@@ -59,7 +64,6 @@ func (p PackedAudit) NewRingOutput(t testing.TB, i int) Utxo {
 	}
 }
 
-// Statement mirrors the packed audit preimage, head ‖ output_chain, disclosure_chain.
 func (p PackedAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
 	return PackedStatement(t, p.AuditHead(t, p.Layout), p.StatementOutputs(t), p.Disclosure(t))

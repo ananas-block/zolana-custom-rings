@@ -54,7 +54,7 @@ func AssetField(t testing.TB, assetAddress [32]byte) *big.Int {
 	return spptest.MustHash(t, asset, err)
 }
 
-// Scalar is byte i = seed ^ i with a 0x01 lead byte, the fixture every cross-language vector derives from.
+// Scalar is byte i = seed ^ i with a 0x01 lead byte, mirrored by scalar in sdk-libs/client/tests/common/transfer.rs.
 func Scalar(seed byte) [32]byte {
 	var out [32]byte
 	for i := range out {
@@ -73,7 +73,6 @@ func Repeat(value byte) [32]byte {
 	return out
 }
 
-// HashBytes is protocol.HashBytes with the test failing on a hashing error.
 func HashBytes(t testing.TB, bytes []byte) *big.Int {
 	t.Helper()
 	hash, err := protocol.HashBytes(bytes)

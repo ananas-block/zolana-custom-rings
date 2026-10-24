@@ -42,7 +42,6 @@ type Anchor struct {
 	LeafIndex    uint64
 }
 
-// AnonymousAudit is an anonymous audit witness with every derived value explicit, the statement rebuilds from its fields.
 type AnonymousAudit struct {
 	Transfer
 	Shape             audit.AnonymousAuditShape
@@ -60,7 +59,6 @@ type AnonymousAudit struct {
 	Layout Layout
 }
 
-// Fixture streams of the anonymous outputs, by output count.
 const (
 	kindPair = iota
 	kindInbox
@@ -77,7 +75,7 @@ var anonymousOutputs = map[int][]int{
 		kindInbox, kindDummy, kindDummy, kindDummy, kindDummy, kindDummy, kindDummy, kindDummy},
 }
 
-// NewAnonymousAudit spends two sender UTXOs, one on a class of one input, into the anonymousOutputs slots of its output count, input 1 a default-ring note on an entry shape.
+// NewAnonymousAudit spends two sender UTXOs, one on a class of one input, input 1 from the default ring on an entry shape.
 func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousAudit {
 	t.Helper()
 	a := AnonymousAudit{
@@ -92,7 +90,7 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 	a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
 	a.Inputs = make([]Utxo, shape.InputClass)
 	for i := range a.Inputs {
-		a.Inputs[i] = Dummy(3, big.NewInt(0x9000+int64(i)))
+		a.Inputs[i] = spareInput(i)
 	}
 	a.Inputs[0] = a.SenderUtxo(t, a.RingProgramID, 100, 51)
 	switch {
@@ -126,6 +124,15 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 		}
 	}
 	a.Layout = Layout{Exits: hasExit(deliveredUtxos(a.Outputs)), FullOpenings: shape.FullOpenings}
+	return a
+}
+
+func (a AnonymousAudit) AtInputCount(count int) AnonymousAudit {
+	a.InputCount = count
+	a.Inputs = slices.Clone(a.Inputs)
+	for i := count; i < len(a.Inputs); i++ {
+		a.Inputs[i] = spareInput(i)
+	}
 	return a
 }
 
@@ -167,9 +174,8 @@ func (a AnonymousAudit) NewPayment(t testing.TB, slot DeliverySlot, stream Strea
 func (a AnonymousAudit) NewAnchor(t testing.TB, payee DeliverySlot, epoch, index uint64) *Anchor {
 	t.Helper()
 	earlier := a.Transfer
-	earlier.Keys = earlier.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44)))
 	earlier.FirstNullifier = big.NewInt(0x2f2f)
-	earlier = earlier.withSeed(t)
+	earlier = earlier.WithKeys(t, earlier.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44))))
 	anchor := &Anchor{
 		TreeID:     4,
 		Asset:      ringtest.AssetField(t, ringtest.Repeat(0x0a)),
@@ -213,8 +219,6 @@ func (a AnonymousAudit) PrivateTxHash(t testing.TB) *big.Int {
 	return spptest.MustPrivateTxHash(t, spentHashes(t, a.Inputs), spentHashes(t, deliveredUtxos(a.Outputs)), nil, a.PrivateTxBlinding)
 }
 
-// Statement mirrors the anonymous audit preimage, head ‖ output_chain, body_chain, disclosure_chain,
-// private_tx_hash, tag_chain, epoch, first_contact_root, sender_commitment.
 func (a AnonymousAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
 	return AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.Disclosure(t), a.Tail(t))
@@ -368,4 +372,8 @@ func CommitmentRecords(hashes []*big.Int) []*big.Int {
 		records = append(records, new(big.Int).Add(new(big.Int).Lsh(prefixes[k], audit.InputPrefixBits), second))
 	}
 	return records
+}
+
+func spareInput(i int) Utxo {
+	return Dummy(3, big.NewInt(0x9000+int64(i)))
 }

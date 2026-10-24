@@ -70,7 +70,6 @@ func InboxTagDigest(t testing.TB, inboxKey *big.Int, epoch, index uint64) *big.I
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.InboxTagDomain), inboxKey, new(big.Int).SetUint64(epoch), new(big.Int).SetUint64(index))
 }
 
-// InboxTag is the low TagLen bytes of the inbox tag digest.
 func InboxTag(t testing.TB, inboxKey *big.Int, epoch, index uint64) *big.Int {
 	t.Helper()
 	return LowTag(InboxTagDigest(t, inboxKey, epoch, index))
