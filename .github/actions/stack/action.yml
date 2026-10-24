@@ -1,0 +1,58 @@
+name: Localnet stack
+description: Restore the prebuilt localnet stack, surfpool, the Squads program and the pinned proving keys.
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/artifact
+      with:
+        name: zolana_programs
+        mode: restore
+    - uses: ./.github/actions/artifact
+      with:
+        name: ring_program
+        mode: restore
+    - uses: ./.github/actions/artifact
+      with:
+        name: zolana_tools
+        mode: restore
+    - uses: ./.github/actions/artifact
+      with:
+        name: photon
+        mode: restore
+    - uses: ./.github/actions/artifact
+      with:
+        name: prover
+        mode: restore
+    - uses: ./.github/actions/artifact
+      with:
+        name: ring_tools
+        mode: restore
+    - id: surfpool
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: zolana/target/tools/surfpool
+        key: surfpool-${{ runner.os }}-${{ hashFiles('zolana/justfile') }}
+    - if: steps.surfpool.outputs.cache-hit != 'true'
+      shell: bash
+      run: just zolana::install-surfpool
+    - id: squads
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: zolana/target/deploy/squads_smart_account_program.so
+        key: squads-smart-account-SMRTzfY6DfH5ik3TKiyLFfXexV8uSG3d2UksSCYdunG
+    - if: steps.squads.outputs.cache-hit != 'true'
+      shell: bash
+      run: just zolana::fetch-smart-account
+    - id: keys
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: zolana/prover/server/proving-keys
+        key: ring-proving-keys-${{ hashFiles('prover/ring/proving-keys.lock', 'zolana/prover/server/prover/provingkeys/proving-keys.lock') }}
+    - shell: bash
+      run: just fetch-custom-ring-keys
+    # A pull request entry would evict the main entries.
+    - if: steps.keys.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: zolana/prover/server/proving-keys
+        key: ${{ steps.keys.outputs.cache-primary-key }}

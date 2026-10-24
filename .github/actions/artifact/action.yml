@@ -1,0 +1,34 @@
+name: Build artifact
+description: Look up, restore or save one content addressed build artifact of tools/ci/artifact.sh.
+inputs:
+  name:
+    description: Artifact name.
+    required: true
+  mode:
+    description: lookup, restore or save.
+    required: true
+outputs:
+  hit:
+    description: The cache holds the artifact.
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - id: spec
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: tools/ci/artifact.sh "$NAME" >> "$GITHUB_OUTPUT"
+    - id: restore
+      if: inputs.mode != 'save'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        key: ${{ steps.spec.outputs.key }}
+        path: ${{ steps.spec.outputs.path }}
+        lookup-only: ${{ inputs.mode == 'lookup' }}
+        fail-on-cache-miss: ${{ inputs.mode == 'restore' }}
+    - if: inputs.mode == 'save'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        key: ${{ steps.spec.outputs.key }}
+        path: ${{ steps.spec.outputs.path }}
