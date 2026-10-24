@@ -47,6 +47,7 @@ struct Ledger {
     transactions: Vec<ShieldedTransaction>,
     deposits: Vec<EncryptedUtxoMatch>,
     queried: Mutex<Vec<[u8; 32]>>,
+    mints: Vec<Mint>,
 }
 
 struct DepositedUtxo {
@@ -58,6 +59,7 @@ struct Payment {
     owner: ShieldedAddress,
     recipient: X25519Pubkey,
     tag: RingTag,
+    asset: Mint,
     amount: u64,
 }
 
@@ -156,7 +158,7 @@ impl Ledger {
             let ring_data_hash = delivered_ring_data(&slot_secret, Some(&payment.tag)).unwrap();
             let hash = Utxo {
                 owner: payment.owner.signing_pubkey,
-                asset: Mint::SOL,
+                asset: payment.asset,
                 amount: payment.amount,
                 blinding,
                 ring_program_id: Some(RING),
@@ -211,6 +213,7 @@ impl Ledger {
                 owner: wallet.keys.shielded_address().unwrap(),
                 recipient: wallet.address_key(),
                 tag: wallet.inbox_tag(epoch, 0),
+                asset: Mint::SOL,
                 amount: 70,
             }],
             slot: slot_of(epoch),
@@ -343,6 +346,7 @@ impl Member {
         ScanAt {
             keys: &self.keys,
             assets: &assets,
+            chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
             ring: RING,
             slot,
             store: Some(&self.store),
@@ -377,6 +381,7 @@ fn an_anonymous_scan_adds_inbox_payments_and_the_change_of_a_default_ring_spend(
                 .unwrap()
                 .pubkey(),
             tag: RingTag::from_bytes([0x5c; TAG_LEN]),
+            asset: Mint::SOL,
             amount: 30,
         }],
         slot: slot_of(EPOCH + 1),
@@ -395,6 +400,39 @@ fn an_anonymous_scan_adds_inbox_payments_and_the_change_of_a_default_ring_spend(
     let issued: Vec<u32> = stored.issued().iter().map(|issued| issued.index).collect();
     assert_eq!(issued, [0]);
     assert!(stored.scanned_epoch().is_some());
+}
+
+#[test]
+fn a_note_in_a_mint_registered_after_the_registry_read_is_kept() {
+    let wallet = Member::new(1, "pending-mint");
+    let mint = Mint {
+        asset: Address::new_from_array([0x6d; 32]),
+        asset_id: 9,
+    };
+    let mut ledger = Ledger {
+        mints: vec![mint],
+        ..Ledger::default()
+    };
+    let paid = ledger.transfer(RingTransfer {
+        sender: &keypair(2),
+        nullifiers: vec![[0x11; 32]],
+        payments: vec![Payment {
+            owner: wallet.keys.shielded_address().unwrap(),
+            recipient: wallet.address_key(),
+            tag: wallet.inbox_tag(EPOCH, 0),
+            asset: mint,
+            amount: 70,
+        }],
+        slot: slot_of(EPOCH),
+        leaf: 10,
+    });
+    let zolana = ledger.client();
+    assert_eq!(wallet.scan(&zolana, slot_of(EPOCH + 9)), paid);
+    assert_eq!(
+        wallet.scan(&zolana, slot_of(EPOCH + 11)),
+        paid,
+        "the kept note"
+    );
 }
 
 #[test]

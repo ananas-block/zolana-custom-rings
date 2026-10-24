@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "port {} is held by a process this cli did not start",
+                "port {} is held by a process the cli did not start",
                 addr.port()
             )
         );

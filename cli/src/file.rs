@@ -3,6 +3,7 @@
 use std::{fs, io, path::Path};
 
 use anyhow::{anyhow, Context as _, Result};
+use custom_ring_sdk::secret_json_body;
 use solana_keypair::Keypair;
 use zolana_secret_file::{create_new, Visibility};
 
@@ -44,7 +45,26 @@ pub fn read_or_create_keypair(path: &Path) -> Result<Keypair> {
 
 /// Owner-only and never over an existing file.
 pub fn write_keypair(keypair: &Keypair, path: &Path) -> Result<()> {
-    let json = serde_json::to_string(&keypair.to_bytes().to_vec())?;
+    let json = secret_json_body(&keypair.to_bytes()[..])?;
     create_new(path, json.as_bytes(), Visibility::Secret)
         .with_context(|| format!("cannot write keypair {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use solana_signer::Signer;
+
+    use super::*;
+
+    #[test]
+    fn a_written_keypair_reads_back() {
+        let dir = std::env::temp_dir().join(format!("ring-keypair-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sender.json");
+        let keypair = Keypair::new();
+        write_keypair(&keypair, &path).unwrap();
+        assert_eq!(read_keypair(&path).unwrap().pubkey(), keypair.pubkey());
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

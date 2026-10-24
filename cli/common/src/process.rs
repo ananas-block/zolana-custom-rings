@@ -54,7 +54,7 @@ pub fn stop_owned_listener(scope: &Path, port: u16) -> Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     ensure!(
         wait_until(TERMINATION_GRACE_PERIOD, POLL, || !answers(addr)),
-        "port {port} is held by a process this cli did not start"
+        "port {port} is held by a process the cli did not start"
     );
     Ok(())
 }

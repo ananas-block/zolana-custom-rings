@@ -103,7 +103,7 @@ fn a_foreign_listener_is_left_running_and_reported() {
     let error = stop_owned_listener(&scope, port).expect_err("foreign listener");
     assert_eq!(
         error.to_string(),
-        format!("port {port} is held by a process this cli did not start")
+        format!("port {port} is held by a process the cli did not start")
     );
     drop(listener);
     stop_owned_listener(&scope, port).expect("free port");

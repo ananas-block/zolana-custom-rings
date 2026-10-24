@@ -13,7 +13,7 @@ use serde::Deserialize;
 use solana_address::Address;
 use zolana_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
 use zolana_keypair::{x25519::X25519_PUBKEY_LEN, ShieldedKeypair, X25519Pubkey};
-use zolana_ring_client::{AnonymousRingState, AnonymousRingSync};
+use zolana_ring_client::{delivered::resolve_pending, AnonymousRingState, AnonymousRingSync};
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
 use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
@@ -52,6 +52,8 @@ pub struct WalletScan<'a> {
 struct ScanAt<'a> {
     keys: &'a ShieldedKeypair,
     assets: &'a RingAssets,
+    /// Read only when a found note's mint is missing from `assets`.
+    chain_assets: &'a dyn Fn() -> Result<RingAssets>,
     ring: Address,
     /// The indexer answers only after it holds the slot.
     slot: u64,
@@ -216,6 +218,7 @@ impl WalletScan<'_> {
         ScanAt {
             keys: self.keys,
             assets: self.assets,
+            chain_assets: &|| crate::assets::ring_assets(ctx.rpc()),
             ring: ctx.ring.program_id(),
             slot: ctx.rpc().get_slot()?,
             store: store.as_ref(),
@@ -251,7 +254,7 @@ impl ScanAt<'_> {
             }
         };
         let kept = kept.unwrap_or_default();
-        let synced = zolana.block_on(async {
+        let mut synced = zolana.block_on(async {
             AnonymousRingSync::new(keys, assets)
                 .with_indexer_config(config)
                 .with_deposit_payload(zolana_ring_client::deposit_payload)
@@ -261,6 +264,15 @@ impl ScanAt<'_> {
                 .await
                 .map_err(anyhow::Error::from)
         })?;
+        // The saved state moves past a pending note, no later scan reads it again.
+        if !synced.pending_assets.is_empty() {
+            resolve_pending(
+                keys,
+                &mut synced.decrypted,
+                &mut synced.pending_assets,
+                &(self.chain_assets)()?,
+            )?;
+        }
         let found = verify_owned(keys, &synced.decrypted)?
             .spendable()
             .with_transaction_keys(keys)?;

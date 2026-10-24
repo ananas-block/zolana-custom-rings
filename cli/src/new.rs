@@ -44,10 +44,21 @@ pub fn run(args: NewArgs, ask: &mut dyn Ask, catalogue: Option<&str>) -> Result<
     let answers = Wizard {
         ask: &mut *ask,
         curators: &mut |target: Target, rpc_url: &str| live_catalogue(catalogue, target, rpc_url),
-        localnet: urls(&local(8899), &local(8784), &local(3001), &local(8785)),
+        localnet: Urls {
+            rpc: local(8899),
+            indexer: local(8784),
+            prover: local(3001),
+            ring_rpc: local(8785),
+            ring_rpc_pubkey: None,
+            prover_tee_policy: None,
+        },
         devnet: Urls {
+            rpc: DEVNET_RPC.to_owned(),
+            indexer: DEVNET_INDEXER.to_owned(),
+            prover: DEVNET_PROVER.to_owned(),
+            ring_rpc: DEVNET_RING_RPC.to_owned(),
             ring_rpc_pubkey: Some(DEVNET_RING_RPC_PUBKEY.to_owned()),
-            ..urls(DEVNET_RPC, DEVNET_INDEXER, DEVNET_PROVER, DEVNET_RING_RPC)
+            prover_tee_policy: None,
         },
     }
     .run(args.name, preset)?;
@@ -104,17 +115,6 @@ fn refuse_existing(dir: &Path) -> Result<()> {
         dir.display()
     );
     Ok(())
-}
-
-fn urls(rpc: &str, indexer: &str, prover: &str, ring_rpc: &str) -> Urls {
-    Urls {
-        rpc: rpc.to_owned(),
-        indexer: indexer.to_owned(),
-        prover: prover.to_owned(),
-        ring_rpc: ring_rpc.to_owned(),
-        ring_rpc_pubkey: None,
-        prover_tee_policy: None,
-    }
 }
 
 /// Only the default path is created, any other missing path is the operator's to mount.

@@ -40,6 +40,13 @@ pub(crate) struct ProgramBinary {
     pub sha256: [u8; 32],
 }
 
+#[must_use]
+struct ProgramUpload<'a> {
+    authority: &'a Keypair,
+    program_keypair: &'a Path,
+    program_so: &'a Path,
+}
+
 pub fn run(ctx: &mut Context, args: DeployArgs) -> Result<()> {
     let workspace = Workspace::from_env()?;
     ensure!(
@@ -59,79 +66,86 @@ pub fn run(ctx: &mut Context, args: DeployArgs) -> Result<()> {
     line("binary", program_so.display());
     let authority = ctx.config.upgrade_authority()?;
     let program_keypair = ctx.path(&args.program_keypair);
-    let outcome = upload(ctx, &authority, &program_keypair, &program_so)?;
+    let outcome = ProgramUpload {
+        authority: &authority,
+        program_keypair: &program_keypair,
+        program_so: &program_so,
+    }
+    .send(ctx)?;
     let program = ctx.ring.program_id();
     println!("{outcome} {program} under {}", authority.pubkey());
     Ok(())
 }
 
-/// The first deploy reads the program keypair, an upgrade checks the configs it keeps.
-fn upload(
-    ctx: &Context,
-    authority: &Keypair,
-    program_keypair: &Path,
-    program_so: &Path,
-) -> Result<&'static str> {
-    let binary = ProgramBinary::read(program_so)?;
-    let program = ctx.ring.program_id();
-    let deployed = program_data(ctx)?;
-    match &deployed {
-        Some(data) => {
-            check_upgrade_authority(program, data, authority.pubkey())?;
-            if binary.deployed_sha256(ctx)? == Some(binary.sha256) {
-                return Ok("present");
+impl ProgramUpload<'_> {
+    /// The first deploy reads the program keypair, an upgrade checks the configs it keeps.
+    fn send(self, ctx: &Context) -> Result<&'static str> {
+        let Self {
+            authority,
+            program_keypair,
+            program_so,
+        } = self;
+        let binary = ProgramBinary::read(program_so)?;
+        let program = ctx.ring.program_id();
+        let deployed = program_data(ctx)?;
+        match &deployed {
+            Some(data) => {
+                check_upgrade_authority(program, data, authority.pubkey())?;
+                if binary.deployed_sha256(ctx)? == Some(binary.sha256) {
+                    return Ok("present");
+                }
+                let ring_config = ctx.rpc().get_account(ctx.ring.config_pda())?;
+                ensure_ring_config_compatible(program, ring_config.as_ref())?;
+                let registry = ctx.rpc().get_account(ctx.ring.registry_pda())?;
+                ensure_registry_compatible(program, registry.as_ref())?;
             }
-            let ring_config = ctx.rpc().get_account(ctx.ring.config_pda())?;
-            ensure_ring_config_compatible(program, ring_config.as_ref())?;
-            let registry = ctx.rpc().get_account(ctx.ring.registry_pda())?;
-            ensure_registry_compatible(program, registry.as_ref())?;
+            None => {
+                let found = file::read_keypair(program_keypair)
+                    .context("the first deploy needs the program keypair")?
+                    .pubkey();
+                ensure!(
+                    found == program,
+                    "program keypair is {found}, ring.toml names {program}"
+                );
+            }
         }
-        None => {
-            let found = file::read_keypair(program_keypair)
-                .context("the first deploy needs the program keypair")?
-                .pubkey();
-            ensure!(
-                found == program,
-                "program keypair is {found}, ring.toml names {program}"
-            );
+        // A short balance fails before the loader writes.
+        let required = required_balance(ctx.rpc(), binary.len, deployed.as_ref())?;
+        ctx.fund(authority.pubkey(), required)?;
+        if let Some(data) = deployed.filter(|data| binary.len > data.capacity) {
+            let bytes = (binary.len - data.capacity).max(MIN_EXTEND_BYTES);
+            println!("extending program data by {bytes} bytes");
+            let extend = extend_program(&program, Some(&authority.pubkey()), u32::try_from(bytes)?);
+            ctx.send(&[authority], &[extend])?;
         }
+        let authority_keypair = expand_tilde(ctx.config.upgrade_authority_keypair())?;
+        let mut command = Command::new("solana");
+        // RPC only, the TPU client wants a websocket port another service may hold.
+        command
+            .args(["program", "deploy", "--use-rpc", "--url"])
+            .arg(&ctx.config.urls().rpc)
+            .arg("--keypair")
+            .arg(&authority_keypair)
+            .arg("--upgrade-authority")
+            .arg(&authority_keypair)
+            .arg("--program-id");
+        match deployed {
+            Some(_) => command.arg(program.to_string()),
+            None => command.arg(program_keypair),
+        };
+        SOLANA
+            .named("solana program deploy")
+            .run(command.arg(program_so))?;
+        ctx.rpc()
+            .assert_executable(&program)
+            .with_context(|| format!("program {program} is not executable after deploy"))?;
+        binary.verify_deployed(ctx)?;
+        let slot = program_data(ctx)?
+            .with_context(|| not_program_data(ctx))?
+            .slot;
+        wait_until_usable(ctx.rpc(), program, slot)?;
+        Ok(deployed.map_or("deployed", |_| "upgraded"))
     }
-    // A short balance fails before the loader writes.
-    let required = required_balance(ctx.rpc(), binary.len, deployed.as_ref())?;
-    ctx.fund(authority.pubkey(), required)?;
-    if let Some(data) = deployed.filter(|data| binary.len > data.capacity) {
-        let bytes = (binary.len - data.capacity).max(MIN_EXTEND_BYTES);
-        println!("extending program data by {bytes} bytes");
-        let extend = extend_program(&program, Some(&authority.pubkey()), u32::try_from(bytes)?);
-        ctx.send(&[authority], &[extend])?;
-    }
-    let authority_keypair = expand_tilde(ctx.config.upgrade_authority_keypair())?;
-    let mut command = Command::new("solana");
-    // RPC only, the TPU client wants a websocket port another service may hold.
-    command
-        .args(["program", "deploy", "--use-rpc", "--url"])
-        .arg(&ctx.config.urls().rpc)
-        .arg("--keypair")
-        .arg(&authority_keypair)
-        .arg("--upgrade-authority")
-        .arg(&authority_keypair)
-        .arg("--program-id");
-    match deployed {
-        Some(_) => command.arg(program.to_string()),
-        None => command.arg(program_keypair),
-    };
-    SOLANA
-        .named("solana program deploy")
-        .run(command.arg(program_so))?;
-    ctx.rpc()
-        .assert_executable(&program)
-        .with_context(|| format!("program {program} is not executable after deploy"))?;
-    binary.verify_deployed(ctx)?;
-    let slot = program_data(ctx)?
-        .with_context(|| not_program_data(ctx))?
-        .slot;
-    wait_until_usable(ctx.rpc(), program, slot)?;
-    Ok(deployed.map_or("deployed", |_| "upgraded"))
 }
 
 /// `None` when the program is not deployed under the upgradeable loader.
