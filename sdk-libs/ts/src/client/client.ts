@@ -4,45 +4,35 @@ import {
   fromClientCause,
   checkedServiceUrl,
   ProverClient,
-  checkedContextSlot,
 } from "@heliuslabs/zolana/internal";
 import {
   initializePoseidon,
+  type Address,
+  type Bytes32,
   type RequestContext,
   ClientError,
   type ZolanaClientConfig,
 } from "@heliuslabs/zolana";
-import {
-  ZolanaClient,
-  type ProofResolution,
-  type ProvingKeyReport,
-  type Proof,
-} from "@heliuslabs/zolana/client";
-import type {
-  CustomRingBaseProofRequest,
-  CustomRingCompressedPolicyProofRequest,
-  CustomRingDepositProofRequest,
-  CustomRingPolicyProofRequest,
-  CustomRingRegisterKeyProofRequest,
-} from "./prover/types.js";
+import { ZolanaClient, type ProvingKeyReport } from "@heliuslabs/zolana/client";
+
 import { RingError } from "../ring/error.js";
 import { RingIndexer } from "./indexer.js";
 import type {
-  IndexedDepositClient,
-  IndexedDepositInputs,
-  IndexedPolicyClient,
-  IndexedPolicyInputs,
-  RingKeyRegistryEntry,
-  RingKeyRegistryReader,
-  RingKeyRegistryRegisterProof,
+  RecordWrite,
+  RingApplyProofInputs,
+  RingMemberOpenings,
+  RingMemberPage,
+  RingMemberPageRequest,
   RingMemberProofRequest,
-  RingMemberRequest,
+  RingMemberRecordResult,
   RingProver,
-  RingSpendRecordLookup,
-  RingSpendRecordReader,
+  RingQueueState,
+  RingRecordReader,
+  RingRegistryState,
 } from "./ports.js";
 import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
+import type { RingProofRequest } from "./prover/ring.js";
 
 /** Initializes Poseidon, the constructor alone does not. */
 export async function createCustomRingClient(
@@ -52,15 +42,7 @@ export async function createCustomRingClient(
   return new CustomRingClient(config);
 }
 
-export class CustomRingClient
-  extends ZolanaClient
-  implements
-    RingProver,
-    RingKeyRegistryReader,
-    RingSpendRecordReader,
-    IndexedPolicyClient,
-    IndexedDepositClient
-{
+export class CustomRingClient extends ZolanaClient implements RingProver, RingRecordReader {
   readonly #ringProver: CustomRingProver;
   readonly #ringIndexer: RingIndexer;
 
@@ -86,102 +68,59 @@ export class CustomRingClient
     );
   }
 
-  getRingSpendRecord(
-    request: RingMemberRequest,
-    context?: RequestContext,
-  ): Promise<RingSpendRecordLookup> {
-    return this.#ringIndexer.getRingSpendRecord(request, context);
-  }
-
-  getRingKeyRegistryEntry(
+  getRingMemberRecord(
     request: RingMemberProofRequest,
     context?: RequestContext,
-  ): Promise<RingKeyRegistryEntry> {
-    return this.#ringIndexer.getRingKeyRegistryEntry(request, context);
+  ): Promise<RingMemberRecordResult> {
+    return this.#ringIndexer.getRingMemberRecord(request, context);
   }
 
-  getRingKeyRegistryRegisterProof(
-    request: RingMemberProofRequest,
+  getRingMemberRecords(
+    request: RingMemberPageRequest,
     context?: RequestContext,
-  ): Promise<RingKeyRegistryRegisterProof> {
-    return this.#ringIndexer.getRingKeyRegistryRegisterProof(request, context);
+  ): Promise<RingMemberPage> {
+    return this.#ringIndexer.getRingMemberRecords(request, context);
   }
 
-  proveIndexedRingPolicy(
-    inputs: IndexedPolicyInputs,
+  getRingMemberRegistryRoot(
+    request: Readonly<{ ringProgramId: Address }>,
     context?: RequestContext,
-  ): Promise<Readonly<{ proof: Uint8Array; resolution: ProofResolution }>> {
-    return proving(async () => {
-      const result = await this.#ringProver.proveIndexedPolicy(
-        this.#withMinContextSlot(inputs),
-        context,
-      );
-      return Object.freeze({ proof: customRingProof(result.proof), resolution: result.resolution });
-    });
+  ): Promise<RingRegistryState> {
+    return this.#ringIndexer.getRingMemberRegistryRoot(request, context);
   }
 
-  proveIndexedRingDeposit(
-    inputs: IndexedDepositInputs,
+  getRingMemberOpenings(
+    request: Readonly<{
+      ringProgramId: Address;
+      members: readonly Bytes32[];
+      expectedRoot: Bytes32;
+    }>,
     context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() =>
-      this.#ringProver.proveIndexedDeposit(this.#withMinContextSlot(inputs), context),
-    );
+  ): Promise<RingMemberOpenings> {
+    return this.#ringIndexer.getRingMemberOpenings(request, context);
   }
 
-  proveCustomRingPolicy(
-    inputs: CustomRingPolicyProofRequest,
+  getRingRecordQueue(
+    request: Readonly<{ ringProgramId: Address }>,
     context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingPolicy(inputs, context));
+  ): Promise<RingQueueState> {
+    return this.#ringIndexer.getRingRecordQueue(request, context);
   }
 
-  proveCustomRingCompressedPolicy(
-    inputs: CustomRingCompressedPolicyProofRequest,
+  getRingApplyProofInputs(
+    request: Readonly<{ ringProgramId: Address; authorityWrites: readonly RecordWrite[] }>,
     context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingCompressedPolicy(inputs, context));
+  ): Promise<RingApplyProofInputs> {
+    return this.#ringIndexer.getRingApplyProofInputs(request, context);
   }
 
-  proveCustomRingRegisterKey(
-    inputs: CustomRingRegisterKeyProofRequest,
-    context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingRegisterKey(inputs, context));
-  }
-
-  proveCustomRingDelegatePolicy(
-    inputs: CustomRingPolicyProofRequest,
-    context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingDelegatePolicy(inputs, context));
-  }
-
-  proveCustomRingBase(
-    inputs: CustomRingBaseProofRequest,
-    context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingBase(inputs, context));
-  }
-
-  proveCustomRingDeposit(
-    inputs: CustomRingDepositProofRequest,
-    context?: RequestContext,
-  ): Promise<Uint8Array> {
-    return provingRing(() => this.#ringProver.proveCustomRingDeposit(inputs, context));
+  /** One ring proof, the 192-byte `CustomRingProof` the ring program verifies. */
+  proveRing(request: RingProofRequest, context?: RequestContext): Promise<Uint8Array> {
+    return proving(async () => customRingProof(await this.#ringProver.proveRing(request, context)));
   }
 
   checkRingProvingKeys(context?: RequestContext): Promise<ProvingKeyReport> {
     return proving(() => this.#ringProver.checkProvingKeys(context));
-  }
-
-  /** Mirrors `ZolanaClient`'s own floor, `indexerConfig.requireSlot`. */
-  #withMinContextSlot<T extends Readonly<{ minContextSlot?: bigint }>>(inputs: T): T {
-    const requested = checkedContextSlot(inputs.minContextSlot);
-    const required = this.indexerConfig.requireSlot;
-    return required === undefined || (requested !== undefined && requested >= required)
-      ? inputs
-      : { ...inputs, minContextSlot: required };
   }
 }
 
@@ -191,8 +130,4 @@ async function proving<T>(run: () => Promise<T>): Promise<T> {
   } catch (cause) {
     throw cause instanceof RingError ? cause : fromClientCause(cause);
   }
-}
-
-function provingRing(run: () => Promise<Proof>): Promise<Uint8Array> {
-  return proving(async () => customRingProof(await run()));
 }

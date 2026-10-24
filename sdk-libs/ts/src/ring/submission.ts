@@ -1,3 +1,4 @@
+import { bytesKey } from "@heliuslabs/zolana/internal";
 import {
   assertIsFullySignedTransaction,
   assertIsTransactionWithinSizeLimit,
@@ -13,30 +14,44 @@ import {
 import {
   isClientError,
   runKitRpc,
-  bytesKey,
   type UtxoReservation,
   equalBytes,
   assertVersion1Transaction,
 } from "@heliuslabs/zolana/internal";
-import type { KitRpcAccess, SlotReader } from "@heliuslabs/zolana/client";
-import type { RingSubmissionStatus, RingSubmissionTransport } from "../client/ports.js";
+import type { ChainReader, KitRpcAccess, SlotReader } from "@heliuslabs/zolana/client";
 import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/zolana/wallet";
-import type { Bytes32, RequestContext, Wallet, WalletUtxo } from "@heliuslabs/zolana";
-import type { Transaction } from "@heliuslabs/zolana/interface";
-import type { PendingWalletSubmission } from "@heliuslabs/zolana/transaction";
+import type { Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
+import {
+  type Wallet,
+  type WalletUtxo,
+  type PendingWalletSubmission,
+} from "@heliuslabs/zolana/transaction";
+import type { RingSubmissionStatus, RingSubmissionTransport } from "../client/ports.js";
+import { tagEpoch } from "../keypair/ring-stream.js";
+import { fetchRingMemberRegistry } from "./config.js";
 import { RingError, RingProgramError } from "./error.js";
+import type { PendingFirstContact, RingBoundState } from "./pipeline.js";
+import { anchorState } from "./trees.js";
 
 /** Keeps the signed intent and validity bounds of one transaction attempt. */
-export interface RingSubmissionAttempt {
+export interface RingSubmissionAttempt extends RingBoundState {
   readonly transaction: Transaction;
   readonly lastValidBlockHeight: bigint;
   readonly intentHash: Bytes32;
   readonly ringInstructionIndex: number;
-  readonly window?: Readonly<{ index: bigint; slots: bigint }>;
+  /** Each inbox payment of an anonymous transfer, recorded with the leaf it lands at. */
+  readonly firstContacts?: readonly PendingFirstContact[];
 }
 
 export type RingSubmissionResult =
-  | Readonly<{ kind: "confirmed"; signature: Signature; slot: bigint; attempts: number }>
+  | Readonly<{
+      kind: "confirmed";
+      signature: Signature;
+      slot: bigint;
+      attempts: number;
+      /** Those of the attempt that landed, none for a reconciled submission. */
+      firstContacts: readonly PendingFirstContact[];
+    }>
   | Readonly<{ kind: "unknown"; signature: Signature; attempts: number }>
   | Readonly<{
       kind: "failed";
@@ -61,13 +76,15 @@ export interface ReservationHold {
 }
 
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
-/** Answers whether the slot clock left the window a rejected policy proof was built for. */
-export type RingSubmissionWindowChanged = (
-  window: NonNullable<RingSubmissionAttempt["window"]>,
-  context?: RequestContext,
-) => Promise<boolean>;
 
 const MAX_ATTEMPTS = 3;
+/** Rust `retryable`, a fresh proof fixes a root under a raised floor, an emptied slot or a batch that no longer fits. */
+const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
+  RingProgramError.rootBelowFloor,
+  RingProgramError.curatorRootStale,
+  RingProgramError.rootIndexEmpty,
+  RingProgramError.authorityBatchTooLarge,
+]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
 /** Resolves each broadcast before retrying an unchanged payment intent. */
@@ -75,7 +92,8 @@ export class RingTransactionSubmission {
   readonly #intent: Bytes32;
   readonly #build: RingSubmissionBuild;
   readonly #reservation: ReservationHold;
-  readonly #windowChanged: RingSubmissionWindowChanged;
+  readonly #registry: Pick<ChainReader, "getAccount"> | undefined;
+  readonly #clock: SlotReader | undefined;
   readonly #wallet: Wallet | undefined;
   readonly #id: string;
   readonly #utxoHashes: readonly Bytes32[];
@@ -91,8 +109,11 @@ export class RingTransactionSubmission {
     input: Readonly<{
       first: RingSubmissionAttempt;
       build: RingSubmissionBuild;
-      windowChanged: RingSubmissionWindowChanged;
       reservation?: ReservationHold;
+      /** Reads the bound registries and anchor tree when a proof fails. */
+      registry?: Pick<ChainReader, "getAccount">;
+      /** Reads the slot when a proof of a bound epoch fails. */
+      clock?: SlotReader;
       wallet?: Wallet;
       reservationId?: string;
       utxoHashes?: readonly Bytes32[];
@@ -102,7 +123,8 @@ export class RingTransactionSubmission {
     this.#intent = new Uint8Array(input.first.intentHash) as Bytes32;
     this.#build = input.build;
     this.#reservation = input.reservation ?? NO_RESERVATION;
-    this.#windowChanged = input.windowChanged;
+    this.#registry = input.registry;
+    this.#clock = input.clock;
     this.#wallet = input.wallet;
     this.#id = input.reservationId ?? bytesKey(crypto.getRandomValues(new Uint8Array(16)));
     this.#utxoHashes = (input.utxoHashes ?? []).map((hash) => new Uint8Array(hash) as Bytes32);
@@ -116,7 +138,8 @@ export class RingTransactionSubmission {
         retry: RingSubmissionBuildState,
         context?: RequestContext,
       ) => Promise<RingSubmissionAttempt>;
-      windowChanged: RingSubmissionWindowChanged;
+      registry?: Pick<ChainReader, "getAccount">;
+      clock?: SlotReader;
     }>,
     context?: RequestContext,
   ): Promise<RingTransactionSubmission> {
@@ -133,13 +156,14 @@ export class RingTransactionSubmission {
       first,
       build,
       wallet: input.wallet,
+      ...(input.registry === undefined ? {} : { registry: input.registry }),
+      ...(input.clock === undefined ? {} : { clock: input.clock }),
       ...(retry.reservation === undefined
         ? {}
         : {
             reservationId: retry.reservation.id,
             utxoHashes: retry.reservation.utxoHashes,
           }),
-      windowChanged: input.windowChanged,
       reservation: {
         release: () => {
           if (retry.reservation !== undefined) {
@@ -184,6 +208,28 @@ export class RingTransactionSubmission {
       await savePersistedWallet(this.#persistence);
       this.#persistedSignature = signature;
     }
+  }
+
+  /** Rust `BoundState::moved`. */
+  async #moved(context?: RequestContext): Promise<boolean> {
+    const { roots = [], policy, anchor, epoch } = this.#attempt;
+    const chain = this.#registry;
+    if (chain !== undefined) {
+      for (const bound of roots) {
+        const registry = await fetchRingMemberRegistry(chain, bound.ringProgramId, context);
+        const held = registry.history[bound.rootIndex];
+        if (held === undefined || !equalBytes(held.root, bound.root)) return true;
+      }
+      if (policy !== undefined) {
+        const registry = await fetchRingMemberRegistry(chain, policy.ringProgramId, context);
+        if (!equalBytes(registry.policyHash, policy.policyHash)) return true;
+      }
+      // A paused tree refuses every proof, proving again cannot land.
+      if (anchor !== undefined && (await anchorState(chain, anchor, context)) === "moved")
+        return true;
+    }
+    if (epoch === undefined || this.#clock === undefined) return false;
+    return tagEpoch(await this.#clock.getSlot(context)) > epoch;
   }
 
   async #settleFailed(): Promise<void> {
@@ -249,25 +295,27 @@ export class RingTransactionSubmission {
         }
         if (status.kind === "confirmed") {
           this.#terminal = true;
-          return { kind: "confirmed", signature, slot: status.slot, attempts: this.#attempts };
+          return {
+            kind: "confirmed",
+            signature,
+            slot: status.slot,
+            attempts: this.#attempts,
+            firstContacts: this.#attempt.firstContacts ?? [],
+          };
         }
+        const ringCode =
+          status.kind === "failed" && status.instructionIndex === this.#attempt.ringInstructionIndex
+            ? status.customCode
+            : undefined;
+        // A failed registry, tree or slot read keeps the signature pending for the next call.
+        const moved =
+          ringCode === RingProgramError.proofVerificationFailed && (await this.#moved(context));
         this.#pending = undefined;
         await this.#settleFailed();
-        const ringFailure =
-          status.kind === "failed" &&
-          status.instructionIndex === this.#attempt.ringInstructionIndex;
-        let retry =
+        const retry =
           status.kind === "expired" ||
-          (status.kind === "failed" &&
-            ringFailure &&
-            status.customCode === RingProgramError.staleKeyRegistryRoot);
-        if (
-          status.kind === "failed" &&
-          ringFailure &&
-          status.customCode === RingProgramError.proofVerificationFailed &&
-          this.#attempt.window !== undefined
-        )
-          retry = await this.#windowChanged(this.#attempt.window, context);
+          moved ||
+          (ringCode !== undefined && STALE_PROOF_CODES.has(ringCode));
         if (!retry || this.#attempts >= MAX_ATTEMPTS) {
           this.#terminal = true;
           this.#reservation.release();
@@ -327,6 +375,7 @@ export async function reconcileRingSubmissions(
         signature: pending.signature,
         attempts: pending.attempts,
         slot: status.slot,
+        firstContacts: [],
       });
     } else {
       input.wallet._releaseReservation(pending.id);
@@ -353,11 +402,6 @@ function failedSubmission(
       ? {}
       : { customCode: status.customCode }),
   };
-}
-
-/** @internal A rejected policy proof is rebuilt only once the slot clock left its window. */
-export function windowChangedOn(client: SlotReader): RingSubmissionWindowChanged {
-  return async (window, context) => (await client.getSlot(context)) / window.slots !== window.index;
 }
 
 /** @internal */

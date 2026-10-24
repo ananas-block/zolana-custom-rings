@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeSet,
     ops::RangeInclusive,
     str::FromStr,
     sync::{
@@ -9,32 +9,24 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
-use custom_ring_interface::{
-    instruction::{accounts, tag},
-    pda, KeyRegistryRoot, PolicyConfig, KEY_REGISTRY_EMPTY_ROOT, KEY_REGISTRY_ROOT, POLICY_CONFIG,
-};
+use anyhow::{anyhow, bail, Context, Result};
+use custom_ring_interface::{instruction::tag, MemberRegistry, RecordQueue, RingAccount};
 use futures::{stream, StreamExt};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use solana_account::Account;
 use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
 use thiserror::Error;
-use zolana_hasher::HasherError;
-use zolana_interface::state::{
-    discriminator::{RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
-    read_tree_id, tree_account_size, RingConfig,
-};
+use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
+use zolana_ring_indexer::records::{self, RecordCall, RecordChange, RegistryAccounts};
 
 use crate::{
     block::{BlockInfo, BlockMetadata, Instruction, TransactionInfo},
-    event::{ParsedTransaction, SppEvent, Subtree},
-    key_registry::{self, MemberKey, Step},
+    member_registry::{self, Projection},
     rpc::{RpcError, SolanaRpc},
-    spend_record::{self, SpendRing, SpendStore, SpendUndo},
     storage::{
-        self, BlockJournal, BlockUndo, LeafWrite, PendingRing, PredecessorError, RingCursor,
-        RingRoot, RingStore, Undo,
+        self, BlockJournal, BlockUndo, HistoryRoot, PendingRing, RegistryState, RegistryStore,
+        RingCursor, Undo,
     },
 };
 
@@ -45,8 +37,8 @@ pub(crate) const MIN_BLOCK_BATCH: usize = 32;
 const ACCOUNTS_PER_REQUEST: usize = 100;
 /// Journal rows older than the deepest confirmed fork are pruned.
 const JOURNAL_RETENTION_SLOTS: u64 = 8_192;
-/// A ring activated after its pending root expired needs a reindex.
-const PENDING_TTL_SLOTS: u64 = 43_200;
+/// Only a pending ring without its registry and queue on chain expires.
+pub(crate) const PENDING_TTL_SLOTS: u64 = 43_200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartSlot {
@@ -141,10 +133,7 @@ impl Indexer {
         }
         self.replay_pending(&cursor).await?;
         // Scanning from the canonical tip includes slots a fork filled.
-        cursor.scanned_slot = cursor
-            .tip
-            .as_ref()
-            .map_or(cursor.start_slot, |tip| tip.slot);
+        cursor.scanned_slot = cursor.tip_slot();
         let target = self.rpc.get_slot().await?;
         if cursor.scanned_slot < target {
             cursor.suspend(db).await?;
@@ -170,13 +159,13 @@ impl Indexer {
             cursor.scanned_slot = batch.scanned_slot;
             storage::save_cursor(db, &cursor).await?;
             let pruned_below = cursor.scanned_slot.saturating_sub(JOURNAL_RETENTION_SLOTS);
-            storage::prune_journal(db, pruned_below).await?;
+            storage::prune(db, pruned_below).await?;
         }
         if cursor.scanned_slot < target {
             return Ok(Progress::Behind);
         }
         // Invalid ring accounts must not serve proofs.
-        self.check_roots(&cursor, target).await?;
+        self.check_registries(&cursor, target).await?;
         cursor.resume(db).await?;
         Ok(Progress::CaughtUp)
     }
@@ -250,9 +239,24 @@ impl Indexer {
         for (candidate, registered) in pending.into_iter().zip(registered) {
             if !registered {
                 if candidate.replayed_tip.is_none()
+                    && !candidate.registry_seen
                     && candidate.slot < tip.slot.saturating_sub(PENDING_TTL_SLOTS)
                 {
-                    storage::delete_pending(db, &candidate.program).await?;
+                    match registry_on_chain(&self.rpc, &candidate).await {
+                        Ok(true) => {
+                            let seen = PendingRing {
+                                registry_seen: true,
+                                ..candidate
+                            };
+                            storage::checkpoint_pending(db, &seen).await?;
+                        }
+                        Ok(false) => storage::delete_pending(db, &candidate.program).await?,
+                        // A failed read defers the candidate alone.
+                        Err(error) => log::warn!(
+                            "ring {} registry check deferred ({error:#})",
+                            Address::new_from_array(candidate.program)
+                        ),
+                    }
                 }
                 continue;
             }
@@ -352,7 +356,8 @@ impl Indexer {
         block: &BlockInfo,
         cursor: &mut RingCursor,
     ) -> Result<()> {
-        let undo = self.index_block(tx, block, Scope::Every).await?;
+        let scope = Scope::every(tx).await?;
+        let undo = self.index_block(tx, block, scope).await?;
         storage::save_journal(
             tx,
             &BlockJournal {
@@ -377,24 +382,24 @@ impl Indexer {
             tx,
             block,
             scope,
-            env: BlockEnv {
-                rpc: &self.rpc,
-                policies: HashMap::new(),
-                tree_ids: HashMap::new(),
-            },
+            env: BlockEnv { rpc: &self.rpc },
         }
         .run()
         .await
     }
 
-    async fn check_roots(&self, cursor: &RingCursor, target: u64) -> Result<()> {
+    async fn check_registries(&self, cursor: &RingCursor, target: u64) -> Result<()> {
         let db = self.db.as_ref();
-        for root in storage::roots(db).await? {
-            if root.fault.is_some() || storage::pending_ring(db, &root.program).await?.is_some() {
+        for state in storage::registries(db).await? {
+            if state.fault.is_some() || storage::pending_ring(db, &state.program).await?.is_some() {
                 continue;
             }
-            match load_root(&self.rpc, &Address::new_from_array(root.program)).await {
-                // Each proof request checks the exact current root.
+            let read = ChainRead {
+                state: &state,
+                min_slot: target,
+            };
+            match read.load(&self.rpc).await {
+                // Each read checks the exact accounts it serves.
                 Ok(_) => {}
                 Err(ApplyError::Retry(error)) => return Err(error),
                 Err(ApplyError::Fault(reason)) => {
@@ -404,15 +409,15 @@ impl Indexer {
                     let tip = cursor
                         .tip
                         .as_ref()
-                        .context("root exists without a ring index tip")?;
+                        .context("registry exists without a ring index tip")?;
                     let tx = db.begin().await?;
                     let mut journal = storage::journal(&tx, tip.slot)
                         .await?
                         .context("ring journal gap")?;
-                    let undo = RingStore::new(&tx, root.program)
-                        .quarantine(root, reason)
+                    let undo = RegistryStore::new(&tx, state.program)
+                        .quarantine(state, reason)
                         .await?;
-                    journal.undo.key_registry.push(undo);
+                    journal.undo.records.push(undo);
                     storage::save_journal(&tx, &journal).await?;
                     tx.commit().await?;
                 }
@@ -422,24 +427,58 @@ impl Indexer {
     }
 }
 
-#[derive(Clone, Copy)]
 enum Scope {
-    Every,
+    /// A pending ring waits for its own replay.
+    Every {
+        registries: BTreeSet<[u8; 32]>,
+        pending: BTreeSet<[u8; 32]>,
+    },
     Ring([u8; 32]),
 }
 
 impl Scope {
-    fn covers(self, program: &[u8; 32]) -> bool {
+    async fn every(tx: &DatabaseTransaction) -> Result<Self> {
+        Ok(Self::Every {
+            registries: storage::registry_programs(tx).await?,
+            pending: storage::pending_programs(tx).await?,
+        })
+    }
+
+    fn covers(&self, instruction: &Instruction) -> bool {
+        let program = instruction.program_id.as_array();
         match self {
-            Self::Every => true,
-            Self::Ring(ring) => ring == *program,
+            Self::Every {
+                registries,
+                pending,
+            } => {
+                let creation = instruction.data.first() == Some(&tag::CREATE_MEMBER_REGISTRY);
+                !pending.contains(program) && (creation || registries.contains(program))
+            }
+            Self::Ring(ring) => ring == program,
+        }
+    }
+
+    fn holds(&self, program: &[u8; 32]) -> bool {
+        match self {
+            Self::Every { registries, .. } => registries.contains(program),
+            Self::Ring(ring) => ring == program,
+        }
+    }
+
+    fn hold(&mut self, program: [u8; 32]) {
+        if let Self::Every { registries, .. } = self {
+            registries.insert(program);
+        }
+    }
+
+    fn park(&mut self, program: [u8; 32]) {
+        if let Self::Every { pending, .. } = self {
+            pending.insert(program);
         }
     }
 }
 
-pub(crate) fn instruction_view(
-    instruction: &Instruction,
-) -> zolana_ring_indexer::InstructionView<'_> {
+fn instruction_view(instruction: &Instruction) -> zolana_ring_indexer::InstructionView<'_> {
     zolana_ring_indexer::InstructionView {
         program_id: &instruction.program_id,
         accounts: &instruction.accounts,
@@ -468,217 +507,83 @@ impl From<RpcError> for ApplyError {
     }
 }
 
-impl From<HasherError> for ApplyError {
-    fn from(error: HasherError) -> Self {
-        fault(format!("hashing failed ({error:?})"))
-    }
-}
-
-impl From<PredecessorError> for ApplyError {
-    fn from(error: PredecessorError) -> Self {
-        match error {
-            PredecessorError::NotAbsent => fault(error.to_string()),
-            PredecessorError::Storage(error) => Self::Retry(error),
-        }
-    }
-}
-
 pub(crate) fn fault(reason: impl Into<String>) -> ApplyError {
     ApplyError::Fault(reason.into())
 }
 
-/// A missing or foreign ring account is the ring's fault.
-fn ring_account(result: Result<Account, RpcError>) -> Result<Account, ApplyError> {
-    match result {
-        Err(RpcError::InvalidAccount(reason)) => Err(fault(reason)),
-        other => Ok(other?),
+/// A database failure retries, any other storage error is the ring's deterministic inconsistency.
+pub(crate) fn from_storage(error: anyhow::Error) -> ApplyError {
+    if error.chain().any(|cause| cause.is::<sea_orm::DbErr>()) {
+        return ApplyError::Retry(error);
+    }
+    fault(format!("{error:#}"))
+}
+
+pub(crate) struct ChainRegistry {
+    pub registry: Box<MemberRegistry>,
+    pub queue: Box<RecordQueue>,
+}
+
+impl ChainRegistry {
+    pub fn holds(&self, root: &HistoryRoot) -> bool {
+        self.registry
+            .history
+            .get(usize::from(root.history_index))
+            .is_some_and(|entry| entry.root == root.root && entry.applied() == root.applied)
+    }
+
+    /// Every field outside the policy, the projection replays no policy write.
+    pub fn records_match(&self, state: &RegistryState) -> bool {
+        let projected = &*state.registry;
+        let chain = MemberRegistry {
+            policy_hash: projected.policy_hash,
+            sources: projected.sources,
+            rules: projected.rules,
+            generation: projected.generation,
+            generation_slot: projected.generation_slot,
+            ..*self.registry
+        };
+        chain == *projected
+    }
+
+    pub fn queue_matches(&self, state: &RegistryState) -> bool {
+        self.queue == state.queue
+            && self.registry.current_root() == state.registry.current_root()
+            && self.registry.next_index == state.registry.next_index
     }
 }
 
-pub(crate) struct ChainRoot {
-    pub root: [u8; 32],
-    pub next_index: u64,
+pub(crate) struct ChainRead<'s> {
+    pub state: &'s RegistryState,
+    pub min_slot: u64,
 }
 
-pub(crate) async fn load_root(rpc: &SolanaRpc, program: &Address) -> Result<ChainRoot, ApplyError> {
-    let (address, bump) = pda::key_registry_root(program);
-    let account = ring_account(rpc.get_account(&address).await)?;
-    if account.owner != *program {
-        return Err(fault("key registry root has the wrong owner"));
+impl ChainRead<'_> {
+    /// A missing or foreign registry or queue account is the ring's fault.
+    pub async fn load(self, rpc: &SolanaRpc) -> Result<ChainRegistry, ApplyError> {
+        let program = Address::new_from_array(self.state.program);
+        let addresses =
+            [self.state.registry_address, self.state.queue_address].map(Address::new_from_array);
+        let read = rpc
+            .get_multiple_accounts_from_slot(&addresses, self.min_slot)
+            .await?;
+        let [registry, queue] = <[Option<Account>; 2]>::try_from(read)
+            .map_err(|accounts| anyhow!("RPC answered {} accounts for 2", accounts.len()))?;
+        let registry = registry
+            .and_then(|account| MemberRegistry::decode(&account.owner, &program, &account.data))
+            .ok_or_else(|| fault("member registry is not the ring's initialized account"))?;
+        let queue = queue
+            .and_then(|account| RecordQueue::decode(&account.owner, &program, &account.data))
+            .ok_or_else(|| fault("record queue is not the ring's initialized account"))?;
+        Ok(ChainRegistry {
+            registry: Box::new(registry),
+            queue: Box::new(queue),
+        })
     }
-    let root = bytemuck::try_from_bytes::<KeyRegistryRoot>(&account.data)
-        .map_err(|_| fault("key registry root has the wrong layout"))?;
-    if root.discriminator != KEY_REGISTRY_ROOT || root.bump != bump {
-        return Err(fault(
-            "key registry root has the wrong discriminator or bump",
-        ));
-    }
-    let current = root
-        .root()
-        .ok_or_else(|| fault("key registry root has no current root"))?;
-    Ok(ChainRoot {
-        root: current,
-        next_index: root.next_index(),
-    })
 }
 
 pub(crate) struct BlockEnv<'a> {
     rpc: &'a SolanaRpc,
-    policies: HashMap<[u8; 32], PolicyConfig>,
-    tree_ids: HashMap<[u8; 32], u16>,
-}
-
-impl BlockEnv<'_> {
-    /// One read per ring and block, a ring without a policy is at fault.
-    pub(crate) async fn policy(&mut self, program: &Address) -> Result<PolicyConfig, ApplyError> {
-        if let Some(policy) = self.policies.get(&program.to_bytes()) {
-            return Ok(*policy);
-        }
-        let address = Address::find_program_address(&[PolicyConfig::SEED], program).0;
-        let account = ring_account(self.rpc.get_account(&address).await)?;
-        if account.owner != *program {
-            return Err(fault("policy config has the wrong owner"));
-        }
-        let policy = bytemuck::try_from_bytes::<PolicyConfig>(&account.data)
-            .map_err(|_| fault("policy config has the wrong layout"))?;
-        if policy.discriminator != POLICY_CONFIG {
-            return Err(fault("policy config has the wrong discriminator"));
-        }
-        self.policies.insert(program.to_bytes(), *policy);
-        Ok(*policy)
-    }
-
-    /// A leaf hashes under the id of the tree it lands in.
-    pub(crate) async fn tree_id(&mut self, tree: &Address) -> Result<u16, ApplyError> {
-        if let Some(id) = self.tree_ids.get(&tree.to_bytes()) {
-            return Ok(*id);
-        }
-        let account = ring_account(self.rpc.get_account(tree).await)?;
-        let id = spp_tree_id(&account)
-            .filter(|id| zolana_interface::pda::tree(*id).to_bytes() == tree.to_bytes())
-            .ok_or_else(|| fault("output tree is not the SPP tree of its id"))?;
-        self.tree_ids.insert(tree.to_bytes(), id);
-        Ok(id)
-    }
-}
-
-fn spp_tree_id(account: &Account) -> Option<u16> {
-    (account.owner == zolana_interface::pda::shielded_pool_program_id()
-        && account.data.len() == tree_account_size()
-        && account.data.first() == Some(&TREE_ACCOUNT_DISCRIMINATOR))
-    .then(|| read_tree_id(&account.data))
-    .flatten()
-}
-
-pub(crate) struct Invocation<'a> {
-    pub instruction: &'a Instruction,
-    transaction: &'a TransactionInfo,
-    subtree: Subtree,
-    slot: u64,
-}
-
-impl Invocation<'_> {
-    /// Sibling invocations cannot supply a transition's SPP event.
-    pub(crate) fn event(&self) -> Result<SppEvent, ApplyError> {
-        let events = ParsedTransaction::new(self.transaction)
-            .and_then(|parsed| parsed.events(&self.subtree, self.transaction.signature, self.slot))
-            .map_err(|error| fault(error.to_string()))?;
-        let [event] = <[SppEvent; 1]>::try_from(events)
-            .map_err(|_| fault("record update must have exactly one descendant SPP event"))?;
-        Ok(event)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn descendants(&self) -> &[Instruction] {
-        &self.transaction.instruction_groups[self.subtree.group].inner_instructions
-            [self.subtree.span.clone()]
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Position {
-    group: usize,
-    /// `None` for the outer instruction.
-    inner: Option<usize>,
-}
-
-pub(crate) struct Invocations<'a> {
-    transaction: &'a TransactionInfo,
-    instructions: Vec<(Position, &'a Instruction)>,
-    slot: u64,
-}
-
-impl<'a> Invocations<'a> {
-    pub(crate) fn new(transaction: &'a TransactionInfo, slot: u64) -> Self {
-        let instructions = transaction
-            .instruction_groups
-            .iter()
-            .enumerate()
-            .flat_map(|(group, instructions)| {
-                std::iter::once((
-                    Position { group, inner: None },
-                    &instructions.outer_instruction,
-                ))
-                .chain(instructions.inner_instructions.iter().enumerate().map(
-                    move |(inner, instruction)| {
-                        (
-                            Position {
-                                group,
-                                inner: Some(inner),
-                            },
-                            instruction,
-                        )
-                    },
-                ))
-            })
-            .collect();
-        Self {
-            transaction,
-            instructions,
-            slot,
-        }
-    }
-
-    fn instructions(&self) -> impl Iterator<Item = (usize, &'a Instruction)> + '_ {
-        self.instructions
-            .iter()
-            .map(|(_, instruction)| *instruction)
-            .enumerate()
-    }
-
-    pub(crate) fn invocation(&self, index: usize) -> Result<Invocation<'a>, ApplyError> {
-        let &(position, instruction) = self
-            .instructions
-            .get(index)
-            .context("invocation position out of range")?;
-        let depth = instruction
-            .stack_height
-            .ok_or_else(|| fault("invocation has no stack height"))?;
-        let start = position.inner.map_or(0, |inner| inner + 1);
-        let mut end = start;
-        for child in self.transaction.instruction_groups[position.group]
-            .inner_instructions
-            .get(start..)
-            .unwrap_or_default()
-        {
-            let child_depth = child
-                .stack_height
-                .ok_or_else(|| fault("descendant has no stack height"))?;
-            if child_depth <= depth {
-                break;
-            }
-            end += 1;
-        }
-        Ok(Invocation {
-            instruction,
-            transaction: self.transaction,
-            subtree: Subtree {
-                group: position.group,
-                span: start..end,
-            },
-            slot: self.slot,
-        })
-    }
 }
 
 struct BlockWork<'a> {
@@ -691,117 +596,44 @@ struct BlockWork<'a> {
 impl BlockWork<'_> {
     async fn run(mut self) -> Result<BlockUndo> {
         let mut undo = BlockUndo::default();
-        for transaction in &self.block.transactions {
-            if transaction.error.is_some() {
-                continue;
+        let block = self.block;
+        for transaction in block.transactions.iter().filter(|tx| tx.error.is_none()) {
+            for instruction in instructions(transaction) {
+                self.project(instruction, &mut undo.records).await?;
             }
-            self.index_spend_records(transaction, &mut undo.spend_records)
-                .await?;
-            self.index_key_registry(transaction, &mut undo.key_registry)
-                .await?;
         }
         Ok(undo)
     }
 
-    async fn index_key_registry(
-        &mut self,
-        transaction: &TransactionInfo,
-        undo: &mut Vec<Undo>,
-    ) -> Result<()> {
-        let tx = self.tx;
-        let invocations = Invocations::new(transaction, self.block.metadata.slot);
-        for (position, instruction) in invocations.instructions() {
-            let program = instruction.program_id.to_bytes();
-            if !self.scope.covers(&program) {
-                continue;
-            }
-            let initializes = match instruction.data.first() {
-                Some(&tag::CREATE_KEY_REGISTRY_ROOT) => true,
-                Some(&tag::REGISTER_KEY) => false,
-                _ => continue,
-            };
-            if matches!(self.scope, Scope::Every)
-                && storage::pending_ring(tx, &program).await?.is_some()
-            {
-                continue;
-            }
-            let store = RingStore::new(tx, program);
-            if initializes {
-                if let Some(address) = initialization(instruction) {
-                    undo.extend(self.initialize(&store, address).await?);
-                }
-                continue;
-            }
-            let Some(root) = store.root().await? else {
-                continue;
-            };
-            if root.fault.is_some() {
-                continue;
-            }
-            let outcome = async {
-                let invocation = invocations.invocation(position)?;
-                self.advance(&root, invocation).await
-            }
-            .await;
-            match outcome {
-                Ok(Some(entry)) => undo.push(entry),
-                Ok(None) => {}
-                Err(ApplyError::Fault(reason)) => {
-                    undo.push(store.quarantine(root, reason).await?);
-                }
-                Err(ApplyError::Retry(error)) => return Err(error),
-            }
+    async fn project(&mut self, instruction: &Instruction, undo: &mut Vec<Undo>) -> Result<()> {
+        if !self.scope.covers(instruction) {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    async fn index_spend_records(
-        &mut self,
-        transaction: &TransactionInfo,
-        undo: &mut Vec<SpendUndo>,
-    ) -> Result<()> {
-        let tx = self.tx;
-        let invocations = Invocations::new(transaction, self.block.metadata.slot);
-        for (position, instruction) in invocations.instructions() {
-            let program = instruction.program_id.to_bytes();
-            let Some(first) = instruction.data.first().copied() else {
-                continue;
-            };
-            if !self.scope.covers(&program) || !spend_record::TAGS.contains(&first) {
-                continue;
+        let program = instruction.program_id.to_bytes();
+        let Some(call) = records::decode(instruction_view(instruction)).transpose() else {
+            return Ok(());
+        };
+        let store = RegistryStore::new(self.tx, program);
+        let change = match call {
+            Ok(RecordCall::Create(accounts)) => {
+                undo.extend(self.initialize(&store, &accounts).await?);
+                return Ok(());
             }
-            if matches!(self.scope, Scope::Every)
-                && storage::pending_ring(tx, &program).await?.is_some()
-            {
-                continue;
-            }
-            let store = SpendStore::new(tx, program);
-            // A ring's first registration opens its records.
-            let ring = match store.ring().await? {
-                Some(ring) => ring,
-                None if first == tag::REGISTER_SPEND => {
-                    if !self.admit(program).await? {
-                        continue;
-                    }
-                    undo.push(store.open().await?);
-                    SpendRing { fault: None }
-                }
-                None => continue,
-            };
-            if ring.fault.is_some() {
-                continue;
-            }
-            let outcome = async {
-                let invocation = invocations.invocation(position)?;
-                store.advance(&invocation, &mut self.env).await
-            }
-            .await;
-            match outcome {
-                Ok(Some(entry)) => undo.push(entry),
-                Ok(None) => {}
-                Err(ApplyError::Fault(reason)) => undo.push(store.quarantine(reason).await?),
-                Err(ApplyError::Retry(error)) => return Err(error),
-            }
+            Ok(RecordCall::Change(change)) => Ok(*change),
+            Err(_) if !self.scope.holds(&program) => return Ok(()),
+            Err(error) => Err(fault(error.to_string())),
+        };
+        let Some(state) = store.state().await?.filter(|state| state.fault.is_none()) else {
+            return Ok(());
+        };
+        let outcome = match change {
+            Ok(change) => self.advance(state.clone(), change).await,
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Ok(()) => undo.push(store.undo(Some(state))),
+            Err(ApplyError::Fault(reason)) => undo.push(store.quarantine(state, reason).await?),
+            Err(ApplyError::Retry(error)) => return Err(error),
         }
         Ok(())
     }
@@ -821,102 +653,94 @@ impl BlockWork<'_> {
                 slot: self.block.metadata.slot,
                 blockhash: self.block.metadata.blockhash.clone(),
                 replayed_tip: None,
+                registry_seen: false,
             },
         )
         .await?;
+        self.scope.park(program);
         Ok(false)
     }
 
     async fn initialize(
         &mut self,
-        store: &RingStore<'_, DatabaseTransaction>,
-        address: [u8; 32],
+        store: &RegistryStore<'_, DatabaseTransaction>,
+        accounts: &RegistryAccounts,
     ) -> Result<Option<Undo>> {
-        let program = Address::new_from_array(store.program());
-        if !self.admit(store.program()).await? {
+        let slot = self.block.metadata.slot;
+        let state = member_registry::created(store.program, slot);
+        if *accounts != state.accounts() || !self.admit(store.program).await? {
             return Ok(None);
         }
-        if let Some(existing) = store.root().await? {
-            return Ok(Some(
-                store
-                    .quarantine(existing, "initialized twice".into())
-                    .await?,
-            ));
+        if let Some(existing) = store.state().await? {
+            let reason = "initialized twice".into();
+            return Ok(Some(store.quarantine(existing, reason).await?));
         }
-        let root = RingRoot {
-            program: store.program(),
-            address,
-            root: KEY_REGISTRY_EMPTY_ROOT,
-            next_index: 1,
-            fault: None,
+        let read = ChainRead {
+            state: &state,
+            min_slot: slot,
         };
-        match load_root(self.env.rpc, &program).await {
-            Ok(_) => {}
+        match read.load(self.env.rpc).await {
+            Ok(_) => member_registry::create(store, &state).await?,
             Err(ApplyError::Fault(reason)) => {
-                let mut created = store.quarantine(root, reason).await?;
-                created.before = None;
-                return Ok(Some(created));
+                store.quarantine(state, reason).await?;
             }
             Err(ApplyError::Retry(error)) => return Err(error),
         }
-        let sentinel = MemberKey::sentinel();
-        let computed = store
-            .tree()
-            .write(&[LeafWrite {
-                index: 0,
-                hash: sentinel.hash()?,
-            }])
-            .await?;
-        if computed != KEY_REGISTRY_EMPTY_ROOT {
-            bail!("key registry sentinel root mismatch");
-        }
-        store.save_root(&root).await?;
-        store.save_member(&sentinel).await?;
-        Ok(Some(Undo {
-            program: root.program,
-            before: None,
-            members: vec![],
-            leaves: vec![],
-        }))
+        self.scope.hold(store.program);
+        Ok(Some(store.undo(None)))
     }
 
+    /// A refused change writes no row.
     async fn advance(
         &mut self,
-        root: &RingRoot,
-        invocation: Invocation<'_>,
-    ) -> Result<Option<Undo>, ApplyError> {
-        let Some(transition) = key_registry::transition(&invocation)? else {
-            return Ok(None);
-        };
+        mut state: RegistryState,
+        change: RecordChange,
+    ) -> Result<(), ApplyError> {
         let savepoint = self.tx.begin().await?;
-        let applied = key_registry::apply(
-            &RingStore::new(&savepoint, root.program),
-            Step { root, transition },
-        )
-        .await;
-        match applied {
-            Ok(entry) => {
-                savepoint.commit().await?;
-                Ok(Some(entry))
-            }
-            Err(error) => {
-                savepoint.rollback().await?;
-                Err(error)
-            }
+        let store = RegistryStore::new(&savepoint, state.program);
+        let projection = Projection {
+            store: &store,
+            state: &mut state,
+            slot: self.block.metadata.slot,
+        };
+        let saved = match projection.project(change).await {
+            Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
+            Err(error) => Err(error),
+        };
+        match saved {
+            Ok(()) => savepoint.commit().await?,
+            Err(_) => savepoint.rollback().await?,
         }
+        saved
     }
 }
 
-fn initialization(instruction: &Instruction) -> Option<[u8; 32]> {
-    let root = pda::key_registry_root(&instruction.program_id).0;
-    let named = instruction
-        .accounts
-        .get(accounts::CREATE_KEY_REGISTRY_ROOT_ROOT);
-    (named == Some(&root)).then_some(root.to_bytes())
+/// Collected, an iterator held across an await leaves the block future not `Send`.
+fn instructions(transaction: &TransactionInfo) -> Vec<&Instruction> {
+    transaction
+        .instruction_groups
+        .iter()
+        .flat_map(|group| {
+            std::iter::once(&group.outer_instruction).chain(group.inner_instructions.iter())
+        })
+        .collect()
 }
 
 async fn registered_ring(rpc: &SolanaRpc, program: &Address) -> Result<bool> {
     Ok(registered_rings(rpc, std::slice::from_ref(program)).await? == [true])
+}
+
+async fn registry_on_chain(rpc: &SolanaRpc, ring: &PendingRing) -> Result<bool> {
+    let state = member_registry::created(ring.program, ring.slot);
+    let read = ChainRead {
+        state: &state,
+        min_slot: ring.slot,
+    };
+    match read.load(rpc).await {
+        Ok(_) => Ok(true),
+        Err(ApplyError::Fault(_)) => Ok(false),
+        Err(ApplyError::Retry(error)) => Err(error),
+    }
 }
 
 async fn registered_rings(rpc: &SolanaRpc, programs: &[Address]) -> Result<Vec<bool>> {

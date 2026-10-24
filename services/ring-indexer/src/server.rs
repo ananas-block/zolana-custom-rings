@@ -28,17 +28,25 @@ use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
 use zolana_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::method::{
-    GetRingKeyRegistryEntry, GetRingKeyRegistryRegisterProof, GetRingSpendRecord,
+    GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
+    GetRingMemberRegistryRoot, GetRingRecordQueue,
 };
 use zolana_rpc_http::MethodPathLayer;
 
-use crate::{indexer::Readiness, key_registry, rpc::SolanaRpc, spend_record};
+use crate::{
+    api::{self, CachedChain},
+    indexer::Readiness,
+    rpc::SolanaRpc,
+};
 
 /// Served here, every other call goes to Photon untouched.
-pub const RING_METHODS: [&str; 3] = [
-    GetRingKeyRegistryEntry::NAME,
-    GetRingKeyRegistryRegisterProof::NAME,
-    GetRingSpendRecord::NAME,
+pub const RING_METHODS: [&str; 6] = [
+    GetRingMemberRecord::NAME,
+    GetRingMemberRecords::NAME,
+    GetRingMemberOpenings::NAME,
+    GetRingMemberRegistryRoot::NAME,
+    GetRingRecordQueue::NAME,
+    GetRingApplyProofInputs::NAME,
 ];
 
 const MAX_BODY_BYTES: u32 = TEN_MB_SIZE_BYTES;
@@ -106,39 +114,40 @@ impl Server {
             .await?;
         Ok((
             server.local_addr()?,
-            server.start(ring_methods(Lookups { db, rpc })?),
+            server.start(ring_methods(Lookups {
+                db,
+                chain: CachedChain::new(rpc),
+            })?),
         ))
     }
 }
 
 struct Lookups {
     db: Arc<DatabaseConnection>,
-    rpc: Arc<SolanaRpc>,
+    chain: CachedChain,
+}
+
+macro_rules! register {
+    ($module:ident, $($method:ty => $read:path,)+) => {
+        $($module.register_async_method(<$method>::NAME, |params, lookups, _| async move {
+            $read(&lookups.db, &lookups.chain, params.parse()?)
+                .await
+                .map_err(ErrorObjectOwned::from)
+        })?;)+
+    };
 }
 
 fn ring_methods(lookups: Lookups) -> Result<RpcModule<Lookups>> {
     let mut module = RpcModule::new(lookups);
-    module.register_async_method(
-        GetRingKeyRegistryEntry::NAME,
-        |params, lookups, _| async move {
-            key_registry::lookup(&lookups.db, &lookups.rpc, params.parse()?)
-                .await
-                .map_err(ErrorObjectOwned::from)
-        },
-    )?;
-    module.register_async_method(
-        GetRingKeyRegistryRegisterProof::NAME,
-        |params, lookups, _| async move {
-            key_registry::register(&lookups.db, &lookups.rpc, params.parse()?)
-                .await
-                .map_err(ErrorObjectOwned::from)
-        },
-    )?;
-    module.register_async_method(GetRingSpendRecord::NAME, |params, lookups, _| async move {
-        spend_record::lookup(&lookups.db, &lookups.rpc, params.parse()?)
-            .await
-            .map_err(ErrorObjectOwned::from)
-    })?;
+    register!(
+        module,
+        GetRingMemberRecord => api::member_record,
+        GetRingMemberRecords => api::member_records,
+        GetRingMemberOpenings => api::member_openings,
+        GetRingMemberRegistryRoot => api::registry_root,
+        GetRingRecordQueue => api::record_queue,
+        GetRingApplyProofInputs => api::apply_proof_inputs,
+    );
     Ok(module)
 }
 

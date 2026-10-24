@@ -80,8 +80,7 @@ build-localnet-archives dir="target/nextest-archives":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p {{dir}}
-    cargo nextest archive -p custom-ring-test-validator --test ring --test shared_sources --test policy_rules --test policy_repin --test windowed_concurrency --archive-file {{dir}}/custom-ring-test-validator.tar.zst
-    cargo nextest archive -p custom-ring-sdk --test custom_ring_circuit --archive-file {{dir}}/custom-ring-sdk.tar.zst
+    cargo nextest archive -p custom-ring-test-validator --test ring --test shared_sources --test policy_rules --test policy_repin --archive-file {{dir}}/custom-ring-test-validator.tar.zst
 
 # === Tests ===
 
@@ -100,13 +99,10 @@ test-sdk-libs:
     cargo nextest run -p custom-ring-cli
     cargo nextest run -p custom-ring-interface
     cargo nextest run -p zolana-ring-policy
+    cargo nextest run -p zolana-ring-member-registry
 
 test-ring-indexer:
     cargo nextest run -p ring-indexer
-
-# Prover-backed client checks of the ring authority boundary.
-test-client-integration: build-prover-server zolana::build-cli
-    cargo nextest run -p custom-ring-sdk --features proofs --test ring_authority_boundary --test-threads 1
 
 # Custom-ring lifecycle on a local validator (program-tests/custom-ring/tests/ring.rs).
 test-custom-ring-validator filter="all()": fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
@@ -117,7 +113,6 @@ test-custom-ring-validator filter="all()": fetch-custom-ring-keys build-prover-s
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
     bash tools/test-ring-controls.sh ring -E '{{filter}}'
-    zolana/tools/ci/nextest-suite.sh -p custom-ring-sdk -E 'binary(custom_ring_circuit)'
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")
@@ -139,15 +134,15 @@ _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-progra
 
 # === Keys ===
 
-# zolana's prover with the ring circuits linked in.
+# zolana's prover, built from the ring Go module.
 build-prover-server:
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     mkdir -p target
     cd prover && sh ../zolana/prover/server/build-release.sh ../target/prover-server ./cmd/prover
 
-# Go circuit and proof tests, a proof must verify under the committed VERIFYINGKEY.
-test-custom-ring: fetch-custom-ring-keys
+# Go circuit and proof tests.
+test-custom-ring:
     cd prover && go test ./... -count=1
 
 # Ring keys and transfer shapes must match their lockfiles.
@@ -202,14 +197,6 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
         diff -u "program-libs/interface/src/$module" "$export_dir/$module"
     done
-
-# Rotate the ring proving keys, their verifying keys and the ring lockfile.
-regen-custom-ring-keys:
-    prover/scripts/generate_keys_custom_ring.sh "{{spp-keys-dir}}" "$PWD/program-libs/interface/src"
-
-# Regenerate the deposit-audit fixtures with proofs from the pinned deposit key.
-dump-deposit-audit-fixtures: check-custom-ring-keys zolana::build-cli
-    cargo test -p custom-ring-sdk --features proofs --test deposit_audit_fixtures -- --ignored --nocapture
 
 # === Rings ===
 
@@ -494,18 +481,12 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
     subject = "sender"
     forbid = "frozen"
     TOML
-    cargo run -q -p zolana-ring-rpc -- keygen --out "$ring_dir/auditor.key"
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
-      init --auditor-pubkey-file "auditor.key.pub"
-    # Reads are grant only, the ring authority included.
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
-      reader grant "$ring_authority"
-
-    # Local mode, the served key is the one the ring config pins.
+    # Derived mode, the suites deploy their own rings and take each auditor key from the service.
+    cargo run -q -p zolana-ring-rpc -- keygen --kind root --out "$ring_dir/root.secret"
     cargo build -q -p zolana-ring-rpc --target-dir target
     nohup target/debug/ring-rpc serve --port {{localnet-ring-rpc-port}} \
       --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-      --auditor-key-file "$ring_dir/auditor.key" --ring-program-id "$ring_program_id" \
+      --root-secret-file "$ring_dir/root.secret" \
       --allow-origin "$ring_origin" --webauthn-rp-id localhost \
       > "$workdir/ring-rpc.log" 2>&1 &
     printf 'waiting for ring rpc %s ' "$ring_rpc_url"
@@ -520,6 +501,12 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
       exit 1
     fi
     echo " ready"
+    # This recipe started the service, its key needs no pin.
+    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+      init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc
+    # Reads are grant only, the ring authority included.
+    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+      reader grant "$ring_authority"
     # The ring-status probe, otherwise exercised only against a hosted rpc.
     cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" rpc-check
 

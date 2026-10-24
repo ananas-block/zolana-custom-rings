@@ -30,9 +30,8 @@ below-threshold private transfer lands without the co-signer, and an
 above-threshold transfer requires it. Transfer-scoped approval is enabled later
 for the delegate checks.
 
-The rollover case advances the dedicated stack's clock after proof creation.
-It checks one proof rebuild, reset counters and one settled balance change.
-The process scope must exist and the RPC URL must match its configured port.
+A transfer above an outflow cap is refused before proving, and the delegate
+move passes the cap untouched.
 
 The runner uses `zolana/target/debug/zolana` and `target/deploy/custom_ring_program.so`
 from the repository root, `just test-ts-ring-controls` builds both and starts the stack.

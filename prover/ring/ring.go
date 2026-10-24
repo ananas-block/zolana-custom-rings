@@ -1,151 +1,98 @@
+// Package ring registers the custom ring circuits with the SPP prover server.
 package ring
 
 import (
 	_ "embed"
+	"fmt"
 
-	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 
-	base "github.com/helius-labs/zolana-custom-rings/prover/circuits/base"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/deposit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 	"github.com/helius-labs/zolana/prover/server/prover/provingkeys"
 )
 
-const (
-	// CustomRingBaseCircuitType proves the custom ring's audit statement only.
-	CustomRingBaseCircuitType common.CircuitType = "custom-ring-base"
-
-	// CustomRingPolicyCircuitType folds the audit statement with policy
-	// enforcement in one proof and one verification per transact.
-	CustomRingPolicyCircuitType         common.CircuitType = "custom-ring-policy"
-	CustomRingDelegatePolicyCircuitType common.CircuitType = "custom-ring-delegate-policy"
-
-	// Windowed members must seal their successor counters for disclosure.
-	CustomRingCompressedPolicyCircuitType common.CircuitType = "custom-ring-compressed-policy"
-
-	// Key registration inserts a member's auditor-encrypted nullifier key at the cursor.
-	CustomRingKeyRegisterCircuitType common.CircuitType = "custom-ring-register-key"
-
-	// Deposit openings must be encrypted for the configured auditor.
-	CustomRingDepositCircuitType common.CircuitType = "custom-ring-deposit"
-)
-
-const CustomRingPolicyKeyFile = "custom_ring_policy.key"
-const CustomRingDelegatePolicyKeyFile = "custom_ring_delegate_policy.key"
-
-const CustomRingBaseKeyFile = "custom_ring_base.key"
-
-const CustomRingCompressedPolicyKeyFile = "custom_ring_compressed_policy.key"
-
-const CustomRingKeyRegisterKeyFile = "custom_ring_register_key.key"
-const CustomRingDepositKeyFile = "custom_ring_deposit.key"
-
-// Pins every ring key, all of them release assets.
-//
 //go:embed proving-keys.lock
 var lockfile []byte
 
-var (
-	policyRing = common.ExtensionCircuit{
-		Type:    CustomRingPolicyCircuitType,
-		KeyFile: CustomRingPolicyKeyFile,
-		Circuit: func() frontend.Circuit { return &policy.CustomRingPolicyCircuit{} },
-		Request: func() common.ExtensionRequest { return new(PolicyParameters) },
-	}
-	baseRing = common.ExtensionCircuit{
-		Type:    CustomRingBaseCircuitType,
-		KeyFile: CustomRingBaseKeyFile,
-		Circuit: func() frontend.Circuit { return &base.CustomRingBaseCircuit{} },
-		Request: func() common.ExtensionRequest { return new(BaseParameters) },
-	}
-	delegatePolicyRing = common.ExtensionCircuit{
-		Type:    CustomRingDelegatePolicyCircuitType,
-		KeyFile: CustomRingDelegatePolicyKeyFile,
-		Circuit: func() frontend.Circuit { return &policy.CustomRingDelegatePolicyCircuit{} },
-		Request: func() common.ExtensionRequest { return new(DelegatePolicyParameters) },
-	}
-	compressedPolicyRing = common.ExtensionCircuit{
-		Type:    CustomRingCompressedPolicyCircuitType,
-		KeyFile: CustomRingCompressedPolicyKeyFile,
-		Circuit: func() frontend.Circuit { return &policy.CompressedPolicyCircuit{} },
-		Request: func() common.ExtensionRequest { return new(CompressedPolicyParameters) },
-	}
-	keyRegisterRing = common.ExtensionCircuit{
-		Type:    CustomRingKeyRegisterCircuitType,
-		KeyFile: CustomRingKeyRegisterKeyFile,
-		Circuit: func() frontend.Circuit { return &policy.KeyRegisterCircuit{} },
-		Request: func() common.ExtensionRequest { return new(KeyRegisterParameters) },
-	}
-	depositRing = common.ExtensionCircuit{
-		Type:    CustomRingDepositCircuitType,
-		KeyFile: CustomRingDepositKeyFile,
-		Circuit: func() frontend.Circuit { return &deposit.CustomRingDepositCircuit{} },
-		Request: func() common.ExtensionRequest { return new(DepositParameters) },
-	}
-)
-
-var RingCircuits = []common.ExtensionCircuit{
-	policyRing,
-	baseRing,
-	delegatePolicyRing,
-	compressedPolicyRing,
-	keyRegisterRing,
-	depositRing,
-}
-
 func init() {
-	for _, circuit := range RingCircuits {
-		common.RegisterExtension(circuit)
+	for _, key := range Keys {
+		common.RegisterExtension(key.extension())
 	}
 	provingkeys.Register(lockfile)
 }
 
-func R1CSPolicy() (constraint.ConstraintSystem, error) {
-	return policyRing.R1CS()
+func (k Key) extension() common.ExtensionCircuit {
+	switch k.Family {
+	case PackedAudit:
+		return bind[PackedAuditParams](k, audit.NewPackedAuditCircuit, k.Outputs)
+	case DeliveredAudit:
+		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
+	case AnonymousAudit, AnonymousEntryAudit:
+		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
+	case MemberPolicy:
+		return bind[MemberPolicyParams](k, policy.NewMemberPolicyCircuitWith, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
+	case DelegatePolicy:
+		return bind[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuitWith, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
+	case ApplyRecords:
+		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
+	case RegisterKey:
+		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
+	case Deposit:
+		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
+	case AnonymousMerge:
+		return bind[AnonymousMergeParams](k, circuits.NewAnonymousMergeCircuit, k.Inputs)
+	}
+	panic(fmt.Sprintf("ring: no circuit for ring family %d", k.Family))
 }
 
-func R1CSBase() (constraint.ConstraintSystem, error) {
-	return baseRing.R1CS()
+func bind[P headed, S any, C frontend.Circuit](k Key, constructor func(S) (C, error), shape S) common.ExtensionCircuit {
+	build := func() (frontend.Circuit, error) { return constructor(shape) }
+	return common.ExtensionCircuit{
+		Type:    k.Circuit,
+		KeyFile: k.KeyFile(),
+		Circuit: func() frontend.Circuit {
+			circuit, err := build()
+			if err != nil {
+				// Every catalog shape comes from its constructor's own list.
+				panic(err)
+			}
+			return circuit
+		},
+		Request: func() common.ExtensionRequest { return &request[P]{circuit: k.Circuit, build: build} },
+	}
 }
 
-func R1CSDelegatePolicy() (constraint.ConstraintSystem, error) {
-	return delegatePolicyRing.R1CS()
+func unsized[C any](struct{}) (*C, error) {
+	return new(C), nil
 }
 
-func R1CSCompressedPolicy() (constraint.ConstraintSystem, error) {
-	return compressedPolicyRing.R1CS()
+// request decodes strictly on the server's encoding/json path.
+type request[P headed] struct {
+	circuit common.CircuitType
+	build   func() (frontend.Circuit, error)
+	params  P
 }
 
-func R1CSKeyRegister() (constraint.ConstraintSystem, error) {
-	return keyRegisterRing.R1CS()
+func (r *request[P]) UnmarshalJSON(data []byte) error {
+	if err := Unmarshal(data, &r.params); err != nil {
+		return err
+	}
+	if got := r.params.head().CircuitType; got != r.circuit {
+		return fmt.Errorf("custom-ring: a %s request on the %s key", got, r.circuit)
+	}
+	return nil
 }
 
-func R1CSDeposit() (constraint.ConstraintSystem, error) {
-	return depositRing.R1CS()
-}
-
-func (p *PolicyParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
-}
-
-func (p *BaseParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
-}
-
-func (p *DelegatePolicyParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
-}
-
-func (p *CompressedPolicyParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
-}
-
-func (p *KeyRegisterParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
-}
-
-func (p *DepositParameters) Assignment() (frontend.Circuit, error) {
-	return p.CreateWitness()
+// Assignment fails for a request that leaves a circuit value unset or sizes a slice off the key's shape.
+func (r *request[P]) Assignment() (frontend.Circuit, error) {
+	assignment, err := r.build()
+	if err != nil {
+		return nil, err
+	}
+	return assignment, assign(assignment, &r.params)
 }

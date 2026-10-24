@@ -1,0 +1,11 @@
+name: Free runner disk
+description: The proving keys and the builds overflow the default runner disk.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+          /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+        sudo docker image prune --all --force
+        df -h /
