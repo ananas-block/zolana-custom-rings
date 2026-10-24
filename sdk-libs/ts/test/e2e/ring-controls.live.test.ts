@@ -1,7 +1,7 @@
 import { X25519Keypair, ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { SPL_TOKEN_2022_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
+import { ZERO_NULLIFIER_PK, withdrawalSetupInstructions } from "@heliuslabs/zolana/internal";
 import {
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
@@ -361,7 +361,7 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           }),
         ),
         client,
-        [sender.signer, cosigner],
+        [sender.signer],
       );
       await sync(client, sender);
       // A single transfer above the SOL cap is refused before any proof.
@@ -550,6 +550,15 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           .find((ring) => ring.ringProgramId === ringProgramId)
           ?.assets.find((balance) => balance.mint === SOL_MINT)?.amount,
       ).toBe(1_200_000_000n);
+      // Policy proves the token account's current owner; create the destination first.
+      for (const instruction of await withdrawalSetupInstructions({
+        payer: authority.address,
+        recipient: authority.address,
+        asset: harness.token2022Mint,
+        splTokenProgram: SPL_TOKEN_2022_PROGRAM_ID,
+      })) {
+        await sendInstruction(client, instruction, authority);
+      }
       await settle(
         await indexedKeys(() =>
           createRingWithdrawalSubmission({

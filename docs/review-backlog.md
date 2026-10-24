@@ -1,7 +1,7 @@
 # PR 5 review follow-up
 
 Implementation base: PR 5 at `2bd20ae9c343ac5292c085e5c51a39828048dee7`.
-Work is isolated on `codex/pr5-circuit-policy`.
+Work is isolated on `alex/circuit-policy`.
 
 ## Required circuit guarantees
 
@@ -25,7 +25,7 @@ Deliberate burns, unusable recipient keys and voluntary loss of funds are outsid
 | Sync performance | Replace repeated full-history scans with resumable cursors. | Restart, reorg and pagination tests preserve discovery and spent status. |
 | Confidential escrow merges | Currently rejected by the verifier. Design support separately. | Complete escrow disclosure and verification before enabling this operation. |
 | Documentation | Reconcile API descriptions, proof shapes/counts and broken links with the implementation. | Examples compile and generated counts match the current circuit catalog. |
-| CI baseline | Pin gate rejected the inherited submodule branch; TS live tests failed at RPC `signTransaction`. | Fix and run the pinned runtime integration suite, including real proofs. |
+| CI baseline | The stack now pins merged Zolana, selects keyed delegate shapes, loads created notes for CLI audits, and uses the required signers and existing withdrawal accounts in live fixtures. | Full CI on the final commit, including real proofs and live validator/indexer flows. |
 | Confidential withdrawal setup | Add explicit per-destination owner hints for creating an SPL ATA in the same transaction. Current policy assembly requires an existing token account; anonymous withdrawals can use their validated named-owner hint. | A hint is bound to the expected ATA/mint and execution checks its actual owner. |
 | Auditor disclosure | Measure an independent disclosure of amount and blinding before removing recipient ECDH/AES constraints. Anonymous ring data also depends on the derived slot secret. | Auditor reconstructs every output commitment without recipient secrets; cross-language vectors and adversarial tests demonstrate the replacement. |
 

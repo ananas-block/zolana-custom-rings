@@ -383,6 +383,7 @@ impl ShapeRing<'_> {
             CUSTOM_RING_TRANSACT_CU_LIMIT,
         )?;
         let audited = AuditLookup {
+            ring: self.ring.program_id(),
             scan: RingScan::new(self.ring.program_id(), self.auditor.pubkey())
                 .with_mode(self.mode)
                 .with_escrowed_keys(self.escrowed.clone()),

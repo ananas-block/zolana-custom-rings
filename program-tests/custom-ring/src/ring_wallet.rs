@@ -61,10 +61,8 @@ impl<'a> RingWallet<'a> {
                 self.kept.push(utxo.clone());
             }
         }
-        // A pending note keeps the old state, the scanned one would skip its epoch for good.
-        if synced.pending_assets.is_empty() {
-            self.state = synced.state;
-        }
+        // These fixtures register every asset. Unresolved trial decryptions are not owned notes.
+        self.state = synced.state;
         let notes = env
             .client
             .block_on(async {

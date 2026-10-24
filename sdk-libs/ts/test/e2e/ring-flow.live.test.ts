@@ -8,13 +8,14 @@ import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from
 import { describe, expect, it } from "vitest";
 import { SPL_TOKEN_2022_PROGRAM_ID, buildDepositTransaction } from "@heliuslabs/zolana";
 import { createCustomRingClient } from "../../src/client/client.js";
-import { sha256 } from "@heliuslabs/zolana/internal";
+import { addressBytes, sha256 } from "@heliuslabs/zolana/internal";
 import {
   signSendAndConfirm,
   signerFromWalletFile,
   tokenBalance,
 } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import { P256ReaderKey } from "../../src/ring/reader.js";
+import { ListId } from "../../src/ring/advanced.js";
 import type { DecryptedRingTransaction } from "../../src/ring/rpc.js";
 import {
   RingError,
@@ -42,6 +43,7 @@ import {
   sendInstruction,
   sync,
   waitForAudited,
+  writeList,
 } from "./ring-live-helpers.js";
 
 /** Every opened output, an exit outside the ring. */
@@ -417,7 +419,7 @@ describe("ring flow", () => {
     // The remaining ring UTXO settles a public withdrawal into the funding account.
     await sync(client, recipient);
     const before = await tokenBalance(client, fundingTokenAccount);
-    const withdrawalTransaction = await buildRingWithdrawalTransaction({
+    const withdrawal = {
       client,
       ringProgramId,
       wallet: recipient.wallet,
@@ -427,7 +429,17 @@ describe("ring flow", () => {
       asset: mint,
       amount: withdrawn,
       splTokenProgram: SPL_TOKEN_2022_PROGRAM_ID,
+    };
+    await expect(buildRingWithdrawalTransaction(withdrawal)).rejects.toMatchObject({
+      code: "RING_BUILD_WITHDRAWAL",
+      causeCode: "RING_POLICY_RULE_UNSATISFIED",
     });
+    await writeList(client, ringProgramId, authoritySigner, {
+      listId: ListId.allow,
+      tag: addressBytes(mintAuthority.address),
+      state: "active",
+    });
+    const withdrawalTransaction = await buildRingWithdrawalTransaction(withdrawal);
     const withdrawalSignature = await signSendAndConfirm(client, withdrawalTransaction, [
       recipient.signer,
     ]);

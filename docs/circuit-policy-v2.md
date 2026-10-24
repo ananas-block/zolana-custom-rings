@@ -1,6 +1,6 @@
 # Circuit policy v2
 
-Implemented on `codex/pr5-circuit-policy`, based on PR 5 commit
+Implemented on `alex/circuit-policy`, based on PR 5 commit
 `2bd20ae9c343ac5292c085e5c51a39828048dee7`.
 
 ## Guarantees and scope
@@ -99,10 +99,10 @@ Keys were generated locally with the pinned gnark setup tooling and exported to
 the committed Rust verifiers. The lockfile and TypeScript pins identify the exact
 artifacts. Setup is randomized: regenerating keys produces different artifacts.
 
-The lockfile's `custom-ring-keys-policy-v2` release URL is the intended publication
-location. **That release has not been published by this change.** The complete
-local set is in `target/circuit-policy-keys`. Publish these exact keys before
-merging or deployment; until then, a clean runner cannot download the new keys.
+The lockfile pins the public
+[policy-v2 key release](https://github.com/helius-labs/zolana/releases/tag/custom-ring-keys-policy-v2).
+Its files must match the prepared set in `target/circuit-policy-keys` byte for byte.
+Publication of every pinned artifact is required before merging or deployment.
 The installed-key CI job fails on missing keys and verifies every verifier export,
 compiled circuit, generated proof and mutated public statement.
 
@@ -136,6 +136,8 @@ Deploy the program, prover and both SDKs as one versioned change after publicati
 - The TypeScript package passes format, lint, changelog, types, tests, build and
   distribution checks. Targeted historical tests include both legacy tags and
   confirmed withdrawal-owner snapshots.
-- Workspace checks cover all targets. Clippy with warnings denied passes for the
-  modified Rust crates. Full live validator/indexer flows were not rerun; their
-  inherited pin/runtime follow-ups remain in the review backlog.
+- Workspace checks cover all targets. Clippy with warnings denied passes.
+- Live integration covers anonymous deposits, inbox and pair payments, same-owner
+  merges, auditor reconstruction, delegate moves and public withdrawal screening.
+  Merge readiness requires the full CI suite on the final commit; local checks
+  alone do not establish it.
