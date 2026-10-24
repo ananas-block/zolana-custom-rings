@@ -3,13 +3,15 @@ use thiserror::Error;
 use zolana_api::{ApiError, BlockingInsideRuntime, ZolanaApi};
 use zolana_client::{
     indexer::{indexer_error, AsyncZolanaIndexer, ZolanaIndexer},
-    ClientError,
+    AsyncZolanaClient, Blocking, ClientError, ZolanaClient,
 };
 use zolana_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::{
-    method::{GetRingKeyRegistryEntry, GetRingKeyRegistryRegisterProof, GetRingSpendRecord},
-    GetRingKeyRegistryEntryResponse, GetRingKeyRegistryRegisterProofResponse,
-    GetRingSpendRecordResponse, RingMemberProofRequest, RingRpcError, RingSpendRecordRequest,
+    method::{
+        GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
+        GetRingMemberRegistryRoot, GetRingRecordQueue,
+    },
+    RingRpcError,
 };
 
 #[derive(Debug, Error)]
@@ -26,101 +28,89 @@ impl From<BlockingInsideRuntime> for RingIndexerError {
     }
 }
 
-pub trait RingIndexer {
-    fn get_ring_spend_record(
-        &self,
-        _request: RingSpendRecordRequest,
-    ) -> Result<GetRingSpendRecordResponse, RingIndexerError> {
-        Err(unsupported::<GetRingSpendRecord>())
-    }
+macro_rules! ring_indexer {
+    ($($name:ident => $method:ty),+ $(,)?) => {
+        pub trait RingIndexer {
+            $(fn $name(
+                &self,
+                _request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                Err(unsupported::<$method>())
+            })+
+        }
 
-    fn get_ring_key_registry_entry(
-        &self,
-        _request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
-        Err(unsupported::<GetRingKeyRegistryEntry>())
-    }
+        #[async_trait]
+        pub trait AsyncRingIndexer: Send + Sync {
+            $(async fn $name(
+                &self,
+                _request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                Err(unsupported::<$method>())
+            })+
+        }
 
-    fn get_ring_key_registry_register_proof(
-        &self,
-        _request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryRegisterProofResponse, RingIndexerError> {
-        Err(unsupported::<GetRingKeyRegistryRegisterProof>())
-    }
+        impl RingIndexer for ZolanaIndexer {
+            $(fn $name(
+                &self,
+                request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                self.runtime().block_on(call::<$method>(self.api(), request))
+            })+
+        }
+
+        #[async_trait]
+        impl AsyncRingIndexer for AsyncZolanaIndexer {
+            $(async fn $name(
+                &self,
+                request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                call::<$method>(self.api(), request).await
+            })+
+        }
+
+        impl<R, I: RingIndexer> RingIndexer for ZolanaClient<R, I> {
+            $(fn $name(
+                &self,
+                request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                self.indexer().$name(request)
+            })+
+        }
+
+        #[async_trait]
+        impl<I: RingIndexer + Send + Sync + 'static> AsyncRingIndexer for Blocking<I> {
+            $(async fn $name(
+                &self,
+                request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                let indexer = self.clone();
+                tokio::task::spawn_blocking(move || indexer.inner().$name(request))
+                    .await
+                    .map_err(|error| {
+                        ClientError::Rpc(format!("blocking call failed: {error}"))
+                    })?
+            })+
+        }
+
+        #[async_trait]
+        impl<R: Send + Sync, I: AsyncRingIndexer> AsyncRingIndexer for AsyncZolanaClient<R, I> {
+            $(async fn $name(
+                &self,
+                request: <$method as RpcMethod>::Request,
+            ) -> Result<<$method as RpcMethod>::Response, RingIndexerError> {
+                self.indexer().$name(request).await
+            })+
+        }
+    };
 }
 
-#[async_trait]
-pub trait AsyncRingIndexer: Send + Sync {
-    async fn get_ring_spend_record(
-        &self,
-        _request: RingSpendRecordRequest,
-    ) -> Result<GetRingSpendRecordResponse, RingIndexerError> {
-        Err(unsupported::<GetRingSpendRecord>())
-    }
-
-    async fn get_ring_key_registry_entry(
-        &self,
-        _request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
-        Err(unsupported::<GetRingKeyRegistryEntry>())
-    }
-
-    async fn get_ring_key_registry_register_proof(
-        &self,
-        _request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryRegisterProofResponse, RingIndexerError> {
-        Err(unsupported::<GetRingKeyRegistryRegisterProof>())
-    }
-}
-
-impl RingIndexer for ZolanaIndexer {
-    fn get_ring_spend_record(
-        &self,
-        request: RingSpendRecordRequest,
-    ) -> Result<GetRingSpendRecordResponse, RingIndexerError> {
-        self.runtime()
-            .block_on(call::<GetRingSpendRecord>(self.api(), request))
-    }
-
-    fn get_ring_key_registry_entry(
-        &self,
-        request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
-        self.runtime()
-            .block_on(call::<GetRingKeyRegistryEntry>(self.api(), request))
-    }
-
-    fn get_ring_key_registry_register_proof(
-        &self,
-        request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryRegisterProofResponse, RingIndexerError> {
-        self.runtime()
-            .block_on(call::<GetRingKeyRegistryRegisterProof>(self.api(), request))
-    }
-}
-
-#[async_trait]
-impl AsyncRingIndexer for AsyncZolanaIndexer {
-    async fn get_ring_spend_record(
-        &self,
-        request: RingSpendRecordRequest,
-    ) -> Result<GetRingSpendRecordResponse, RingIndexerError> {
-        call::<GetRingSpendRecord>(self.api(), request).await
-    }
-
-    async fn get_ring_key_registry_entry(
-        &self,
-        request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryEntryResponse, RingIndexerError> {
-        call::<GetRingKeyRegistryEntry>(self.api(), request).await
-    }
-
-    async fn get_ring_key_registry_register_proof(
-        &self,
-        request: RingMemberProofRequest,
-    ) -> Result<GetRingKeyRegistryRegisterProofResponse, RingIndexerError> {
-        call::<GetRingKeyRegistryRegisterProof>(self.api(), request).await
-    }
+ring_indexer! {
+    get_ring_member_record => GetRingMemberRecord,
+    get_ring_member_records => GetRingMemberRecords,
+    get_ring_member_openings => GetRingMemberOpenings,
+    get_ring_member_registry_root => GetRingMemberRegistryRoot,
+    get_ring_record_queue => GetRingRecordQueue,
+    get_ring_apply_proof_inputs => GetRingApplyProofInputs,
 }
 
 async fn call<M: RpcMethod>(
@@ -152,11 +142,11 @@ mod tests {
 
     use http::{HeaderMap, StatusCode};
     use serde_json::{json, Value};
-    use solana_signature::Signature;
     use zolana_api::{
         BlockingHttpClient, BlockingZolanaApi, HttpClient, HttpFuture, HttpRequest, HttpResponse,
     };
     use zolana_indexer_api::{Hash, SerializablePubkey};
+    use zolana_ring_indexer::rpc::GetRingRecordQueueRequest;
 
     use super::*;
 
@@ -206,65 +196,62 @@ mod tests {
         json!({"id": "test-account", "jsonrpc": "2.0", "result": result})
     }
 
-    fn query() -> RingSpendRecordRequest {
-        RingSpendRecordRequest {
+    fn query() -> GetRingRecordQueueRequest {
+        GetRingRecordQueueRequest {
             ring_program_id: SerializablePubkey::from([1; 32]),
-            member: Hash([2; 32]),
         }
     }
 
+    fn queue_result(slot: u64) -> Value {
+        rpc_result(json!({
+            "context": {"blockTime": 90, "slot": slot},
+            "head": 3,
+            "tail": 4,
+            "chainHead": Hash([5; 32]),
+            "entries": [{
+                "position": 3,
+                "member": Hash([2; 32]),
+                "mask": 1,
+                "value": 1,
+                "escrowKey": Hash([0; 32]),
+                "slot": slot - 1,
+            }],
+        }))
+    }
+
     #[test]
-    fn spend_record_transport_returns_the_indexed_record() {
-        let http = Canned::new(rpc_result(json!({
-            "context": {"blockTime": 90, "slot": 20},
-            "record": {
-                "transaction": {
-                    "slot": 18,
-                    "txSignature": Signature::from([7; 64]).to_string(),
-                    "eventIndex": 1,
-                    "outputSlots": [],
-                    "messages": [],
-                    "nullifiers": [],
-                    "proofless": false,
-                },
-                "outputIndex": 2,
-            },
-        })));
+    fn record_queue_transport_returns_the_pending_writes() {
+        let http = Canned::new(queue_result(20));
         let indexer = ZolanaIndexer::with_api(BlockingZolanaApi::with_client(
             "http://indexer",
             http.clone(),
         ));
-        let response = indexer.get_ring_spend_record(query()).unwrap();
+        let response = indexer.get_ring_record_queue(query()).unwrap();
         let (url, body) = http.sent();
-        assert_eq!(url, "http://indexer/getRingSpendRecord");
-        assert_eq!(body["method"], "getRingSpendRecord");
+        assert_eq!(url, "http://indexer/getRingRecordQueue");
+        assert_eq!(body["method"], "getRingRecordQueue");
         assert_eq!(body["params"], serde_json::to_value(query()).unwrap());
         assert_eq!(response.context.slot, 20);
-        let record = response.record.unwrap();
-        assert_eq!(record.output_index, 2);
-        assert_eq!(record.transaction.slot, 18);
-        assert_eq!(record.transaction.event_index, Some(1));
+        assert_eq!((response.head, response.tail), (3, 4));
+        assert_eq!(response.entries[0].member, Hash([2; 32]));
     }
 
     #[tokio::test]
-    async fn async_spend_record_transport_reads_an_unregistered_member_as_none() {
-        let http = Canned::new(rpc_result(json!({
-            "context": {"blockTime": 90, "slot": 21},
-            "record": null,
-        })));
+    async fn async_record_queue_transport_returns_the_pending_writes() {
+        let http = Canned::new(queue_result(21));
         let indexer =
             AsyncZolanaIndexer::with_api(ZolanaApi::with_client("http://indexer", http.clone()));
-        let response = indexer.get_ring_spend_record(query()).await.unwrap();
-        assert_eq!(http.sent().1["method"], "getRingSpendRecord");
+        let response = indexer.get_ring_record_queue(query()).await.unwrap();
+        assert_eq!(http.sent().1["method"], "getRingRecordQueue");
         assert_eq!(response.context.slot, 21);
-        assert!(response.record.is_none());
+        assert_eq!(response.entries.len(), 1);
     }
 
     #[test]
     fn preserves_ring_error_codes() {
         for expected in RingRpcError::ALL {
             let error = ring_error(ApiError::JsonRpc {
-                method: GetRingSpendRecord::NAME,
+                method: GetRingRecordQueue::NAME,
                 code: Some(i64::from(expected.code())),
                 message: Some("projection error".into()),
             });
@@ -274,7 +261,7 @@ mod tests {
             );
         }
         let other = ring_error(ApiError::JsonRpc {
-            method: GetRingSpendRecord::NAME,
+            method: GetRingRecordQueue::NAME,
             code: Some(-32603),
             message: Some("internal".into()),
         });

@@ -25,7 +25,7 @@ const (
 )
 
 type Statement struct {
-	keys           ringaudit.Keys
+	Keys           ringaudit.Keys
 	Circuit        *circuits.AnonymousMergeCircuit
 	ownerKey       [32]byte
 	OwnerPkHash    *big.Int
@@ -36,11 +36,12 @@ type Statement struct {
 	InputHashes    []*big.Int
 	FirstNf        *big.Int
 	OutputHash     *big.Int
-	outputBlinding *big.Int
+	OutputBlinding *big.Int
 	PrivateTxHash  *big.Int
-	disclosureKey  [32]byte
+	DisclosureKey  [32]byte
 	// SPP output ciphertext salt, the disclosure pad reuses it.
-	salt [16]byte
+	Salt      [16]byte
+	Plaintext []byte
 	// Masked disclosure chunks the ring instruction carries.
 	Fields []*big.Int
 }
@@ -48,15 +49,15 @@ type Statement struct {
 // Build is a two-input merge padded to width slots under the default audit keys.
 func Build(t testing.TB, width int) *Statement {
 	t.Helper()
-	s := &Statement{keys: ringaudit.DefaultKeys(t), secret: big.NewInt(19)}
-	for i := range s.salt {
-		s.salt[i] = byte(0x50 + i)
+	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(19)}
+	for i := range s.Salt {
+		s.Salt[i] = byte(0x50 + i)
 	}
 	for i := range s.Mint {
 		s.Mint[i] = byte(0xc0 + i)
 	}
-	for i := range s.disclosureKey {
-		s.disclosureKey[i] = byte(0x40 ^ i)
+	for i := range s.DisclosureKey {
+		s.DisclosureKey[i] = byte(0x40 ^ i)
 	}
 	for i := range s.ownerKey {
 		s.ownerKey[i] = byte(0xa0 + i)
@@ -93,18 +94,18 @@ func Build(t testing.TB, width int) *Statement {
 		}
 	}
 	sum := new(big.Int).Add(s.Amounts[0], s.Amounts[1])
-	s.outputBlinding = ringtest.MustPoseidonHash(t, big.NewInt(mergeshared.MergeOutputBlindingDomainV1), s.secret, s.FirstNf)
+	s.OutputBlinding = ringtest.MustPoseidonHash(t, big.NewInt(mergeshared.MergeOutputBlindingDomainV1), s.secret, s.FirstNf)
 	s.OutputHash = spptest.MustUtxoHash(t, protocol.Utxo{
-		Domain: big.NewInt(protocol.UtxoDomain), Owner: ownerHash, Asset: asset, Amount: sum, Blinding: s.outputBlinding,
+		Domain: big.NewInt(protocol.UtxoDomain), Owner: ownerHash, Asset: asset, Amount: sum, Blinding: s.OutputBlinding,
 		DataHash: big.NewInt(0), RingDataHash: ringData, RingProgramID: ringProgramID,
 	}, big.NewInt(outputTreeID))
 	s.PrivateTxHash = s.PrivateTx(t, s.InputHashes)
 
-	eph, auditor := s.keys.EphSk(), s.keys.AuditorPk()
+	eph, auditor := s.Keys.EphSk(), s.Keys.AuditorPk()
 	ringtest.SetBytes(c.OwnerKey[:], s.ownerKey[:])
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
-	ringtest.SetBytes(c.DisclosureKey[:], s.disclosureKey[:])
+	ringtest.SetBytes(c.DisclosureKey[:], s.DisclosureKey[:])
 	c.NullifierSecret = s.secret
 	chunks := protocol.MintChunks(s.Mint)
 	c.MintChunks = [2]frontend.Variable{chunks[0], chunks[1]}
@@ -115,6 +116,7 @@ func Build(t testing.TB, width int) *Statement {
 	c.PrivateTxHash = s.PrivateTxHash
 	c.OutputUtxoHash = s.OutputHash
 	c.FirstNullifier = s.FirstNf
+	c.PartyIdentities = [3]frontend.Variable{11, 12, 0}
 	s.bind(t)
 	return s
 }
@@ -132,7 +134,7 @@ func (s *Statement) PrivateTx(t testing.TB, inputHashes []*big.Int) *big.Int {
 
 func (s *Statement) bind(t testing.TB) {
 	t.Helper()
-	nullifierPk, outputBlinding := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.outputBlinding)
+	nullifierPk, outputBlinding := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.OutputBlinding)
 	var amount [8]byte
 	new(big.Int).Add(s.Amounts[0], s.Amounts[1]).FillBytes(amount[:])
 	plaintext := slices.Concat(s.ownerKey[:], nullifierPk[:], s.Mint[:], amount[:], outputBlinding[:])
@@ -143,29 +145,31 @@ func (s *Statement) bind(t testing.TB) {
 	if want := disclosureBytes(len(s.Circuit.Inputs)); len(plaintext) != want {
 		t.Fatalf("plaintext %d bytes, want %d", len(plaintext), want)
 	}
-	s.Fields = ringprotocol.Disclose(t, shared.MergeDisclosureDomain, s.disclosureKey, s.salt, ringprotocol.PackDisclosure(plaintext))
+	s.Plaintext = plaintext
+	s.Fields = ringprotocol.Disclose(t, shared.MergeDisclosureDomain, s.DisclosureKey, s.Salt, ringprotocol.PackDisclosure(plaintext))
 	s.Rebind(t)
 }
 
 // saltField is the salt right aligned in one field, as SPP binds it.
 func (s *Statement) saltField() *big.Int {
-	return new(big.Int).SetBytes(s.salt[:])
+	return new(big.Int).SetBytes(s.Salt[:])
 }
 
-// elements mirrors MergeAnonymousPublicInput::elements.
-func (s *Statement) elements(t testing.TB) []*big.Int {
+// Elements mirrors MergeAnonymousPublicInput::elements.
+func (s *Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
-	sealed := s.keys.Seal(t, s.disclosureKey[:], shared.MergeEncInfo)
+	sealed := s.Keys.Seal(t, s.DisclosureKey[:], shared.MergeEncInfo)
 	return []*big.Int{
 		big.NewInt(shared.MergeStatementDomain), s.PrivateTxHash, s.OutputHash, s.FirstNf, ringtest.AsBigInt(s.Circuit.RingProgramID),
 		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields),
+		ringtest.AsBigInt(s.Circuit.PartyIdentities[0]), ringtest.AsBigInt(s.Circuit.PartyIdentities[1]), ringtest.AsBigInt(s.Circuit.PartyIdentities[2]),
 	}
 }
 
 // Rebind rehashes the statement over the host values as set, Fields included.
 func (s *Statement) Rebind(t testing.TB) {
 	t.Helper()
-	s.Circuit.PublicInputHash = spptest.MustHashChain(t, s.elements(t))
+	s.Circuit.PublicInputHash = spptest.MustHashChain(t, s.Elements(t))
 }
 
 // disclosureBytes mirrors merge_disclosure_len in program-libs/interface/src/merge.rs.

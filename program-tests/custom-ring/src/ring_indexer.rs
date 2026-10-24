@@ -82,13 +82,13 @@ impl RingIndexerLaunch<'_> {
     }
 }
 
-fn port(url: &str) -> Result<u16> {
+pub(crate) fn port(url: &str) -> Result<u16> {
     url.rsplit_once(':')
         .and_then(|(_, port)| port.trim_end_matches('/').parse().ok())
         .with_context(|| format!("{url} names no port"))
 }
 
-fn stop_listener(port: u16) -> Result<()> {
+pub(crate) fn stop_listener(port: u16) -> Result<()> {
     let listeners = Command::new("lsof")
         .args(["-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
         .output()

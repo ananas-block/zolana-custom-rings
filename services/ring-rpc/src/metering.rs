@@ -23,7 +23,7 @@ use jsonrpsee::{
 };
 use tower::{Layer, Service};
 
-use crate::api::{RingDepositsRequest, DEPOSITS_PAGE_LIMIT, RING_DEPOSITS};
+use zolana_ring_client::rpc::{RingDepositsRequest, DEPOSITS_PAGE_LIMIT, RING_DEPOSITS};
 
 const METERING_UNITS_HEADER: &str = "x-helius-metering-units";
 

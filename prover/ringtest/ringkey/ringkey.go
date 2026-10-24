@@ -2,6 +2,8 @@
 package ringkey
 
 import (
+	_ "embed"
+	"encoding/json"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -10,26 +12,17 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
-// Pinned holds constraint counts by key file name.
-var Pinned = map[string]int{
-	"custom_ring_audit_packed_2":            52874,
-	"custom_ring_audit_packed_4":            63019,
-	"custom_ring_audit_delivered_8":         281902,
-	"custom_ring_audit_delivered_16":        518961,
-	"custom_ring_audit_anonymous_4_2":       123506,
-	"custom_ring_audit_anonymous_32_2":      171225,
-	"custom_ring_audit_anonymous_1_16":      552649,
-	"custom_ring_audit_anonymous_entry_8_2": 138040,
-	"custom_ring_policy_member_2":           48455,
-	"custom_ring_policy_member_16":          286047,
-	"custom_ring_policy_delegate_2x2":       50089,
-	"custom_ring_apply_records_1":           15492,
-	"custom_ring_apply_records_16":          232892,
-	"custom_ring_register_key":              36991,
-	"custom_ring_deposit":                   148936,
-	"custom_ring_merge_anonymous_8":         56192,
-	"custom_ring_merge_anonymous_24":        81698,
-}
+//go:embed constraints.json
+var constraintCounts []byte
+
+// Pinned holds measured constraint counts by key file stem.
+var Pinned = func() map[string]int {
+	var counts map[string]int
+	if err := json.Unmarshal(constraintCounts, &counts); err != nil {
+		panic(err)
+	}
+	return counts
+}()
 
 // Compile takes the compress threshold of the zolana ring prover.
 func Compile(t testing.TB, circuit frontend.Circuit) constraint.ConstraintSystem {

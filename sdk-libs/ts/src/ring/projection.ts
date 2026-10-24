@@ -1,10 +1,7 @@
-import type { RingErrorCode } from "./error.js";
-
-export const KEY_REGISTRY_PROJECTION_ERRORS: ReadonlySet<string> = new Set<RingErrorCode>([
-  "RING_KEY_REGISTRY_OUT_OF_SYNC",
-  "RING_KEY_REGISTRY_ROOT_CHANGED",
-]);
-
-export const SPEND_RECORD_PROJECTION_ERRORS: ReadonlySet<string> = new Set<RingErrorCode>([
-  "RING_SPEND_RECORD_OUT_OF_SYNC",
+/** Rust `RingError::is_projection_lag`, the answer holds only for the state it was asked under. */
+export const MEMBER_REGISTRY_PROJECTION_ERRORS: ReadonlySet<string> = new Set([
+  "CLIENT_INDEXER_PROOF_DATA_NOT_READY",
+  "RING_REGISTRY_OUT_OF_SYNC",
+  "RING_REGISTRY_ROOT_CHANGED",
+  "RING_RECORD_QUEUE_CHANGED",
 ]);

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	_ "github.com/helius-labs/zolana-custom-rings/prover/ring"
 	"github.com/helius-labs/zolana/prover/server/app"
 	"github.com/helius-labs/zolana/prover/server/logging"
 )

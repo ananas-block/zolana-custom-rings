@@ -155,10 +155,32 @@ func TestAnonymousMergeCost(t *testing.T) {
 	for _, width := range circuits.MergeWidths {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			cs := ringkey.Compile(t, mergeCircuit(t, width))
-			ringkey.RequirePinned(t, fmt.Sprintf("custom_ring_merge_anonymous_%d", width), cs)
+			ringkey.RequirePinned(t, fmt.Sprintf("custom_ring_merge_anonymous_v2_%d", width), cs)
 			if err := solveMerge(t, cs, ringmerge.Build(t, width).Circuit); err != nil {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestAnonymousMergeParties(t *testing.T) {
+	for _, width := range circuits.MergeWidths {
+		for i := range 3 {
+			s := ringmerge.Build(t, width)
+			s.Circuit.PartyIdentities[i] = s.OwnerPkHash
+			s.Rebind(t)
+			if test.IsSolved(mergeCircuit(t, width), s.Circuit, ecc.BN254.ScalarField()) == nil {
+				t.Fatal("owner accepted as public party")
+			}
+			s.Circuit.PartyIdentities[i] = 0
+			s.Rebind(t)
+			if err := test.IsSolved(mergeCircuit(t, width), s.Circuit, ecc.BN254.ScalarField()); err != nil {
+				t.Fatal(err)
+			}
+			s.Circuit.PartyIdentities[i] = 99
+			if test.IsSolved(mergeCircuit(t, width), s.Circuit, ecc.BN254.ScalarField()) == nil {
+				t.Fatal("unbound party accepted")
+			}
+		}
 	}
 }

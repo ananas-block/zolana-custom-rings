@@ -46,6 +46,7 @@ type AnonymousMergeCircuit struct {
 	EphSk              [32]frontend.Variable
 	DisclosureKey      [32]frontend.Variable
 	OwnerKey           [32]frontend.Variable
+	PartyIdentities    [3]frontend.Variable
 	NullifierSecret    frontend.Variable
 	MintChunks         [2]frontend.Variable
 	Inputs             []MergeInput
@@ -72,6 +73,9 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 	}
 	// 1. One owner from the disclosed key and the secret's nullifier key, one asset whose 31 and 1 byte chunks open to one mint.
 	ownerPkHash := gadget.SolanaOwnerIdentity(api, c.OwnerKey)
+	shared.AssertAnonymousParties(api, ownerPkHash, c.PartyIdentities)
+	// A merge has no public withdrawal.
+	api.AssertIsEqual(c.PartyIdentities[2], 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{c.NullifierSecret})
 	ownerHash := gadget.PoseidonHash(api, []frontend.Variable{ownerPkHash, nullifierPk})
 	asset := gadget.HashChain(api, c.MintChunks[:])
@@ -150,5 +154,6 @@ func (c *AnonymousMergeCircuit) statement(api frontend.API, sealed shared.Sealed
 		sealed.Auditor,
 		sealed.Eph,
 		[]frontend.Variable{gadget.HashBoundedBytes(api, sealed.Ciphertext), c.Salt, gadget.HashChain4(api, fields)},
+		c.PartyIdentities[:],
 	)
 }

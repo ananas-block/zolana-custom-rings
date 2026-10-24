@@ -8,13 +8,15 @@ import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from
 import { describe, expect, it } from "vitest";
 import { SPL_TOKEN_2022_PROGRAM_ID, buildDepositTransaction } from "@heliuslabs/zolana";
 import { createCustomRingClient } from "../../src/client/client.js";
-import { sha256 } from "@heliuslabs/zolana/internal";
+import { addressBytes, sha256 } from "@heliuslabs/zolana/internal";
 import {
   signSendAndConfirm,
   signerFromWalletFile,
   tokenBalance,
 } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import { P256ReaderKey } from "../../src/ring/reader.js";
+import { ListId } from "../../src/ring/advanced.js";
+import type { DecryptedRingTransaction } from "../../src/ring/rpc.js";
 import {
   RingError,
   RingRpc,
@@ -25,22 +27,40 @@ import {
   fetchReaderGrant,
   fetchRingProgramConfig,
   grantReadAccessInstruction,
-  memberOfTag,
   messageSignerReader,
   revokeReadAccessInstruction,
   readerKeyBytes,
   type RingReadSigner,
+  type RingReadTarget,
 } from "../../src/ring/index.js";
 import {
   airdrop,
   enrolInAllow,
   freshActor,
+  indexedKeys,
   keypairSignerFromFile,
   requiredEnv,
+  ringReadTarget,
   sendInstruction,
   sync,
   waitForAudited,
+  writeList,
 } from "./ring-live-helpers.js";
+
+/** Every opened output, an exit outside the ring. */
+function openedOutputs(item: DecryptedRingTransaction | undefined, ringProgramId: Address) {
+  return (item?.outputs ?? []).flatMap(({ opening }) =>
+    opening.kind === "dummy"
+      ? []
+      : [
+          {
+            amount: opening.utxo.amount,
+            mint: opening.utxo.mint,
+            ringProgramId: opening.kind === "ring" ? ringProgramId : undefined,
+          },
+        ],
+  );
+}
 
 /** The WebAuthn envelope a browser would produce on `origin`, signed with a software P-256 key. */
 function syntheticPasskey(origin: string): RingReadSigner & { readonly publicKey: P256ReaderKey } {
@@ -72,12 +92,12 @@ function syntheticPasskey(origin: string): RingReadSigner & { readonly publicKey
 
 async function ringReadError(
   ringRpc: RingRpc,
-  ringProgramId: Address,
+  target: RingReadTarget,
   signer: KeyPairSigner | RingReadSigner,
 ) {
   try {
     await ringRpc.getDecryptedTransactions({
-      ringProgramId,
+      target,
       signer: "reader" in signer ? signer : messageSignerReader(signer),
     });
   } catch (error) {
@@ -97,8 +117,9 @@ describe("ring flow", () => {
       tree: address(requiredEnv("ZOLANA_TREE")),
     });
     const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
+    const target = await ringReadTarget(ringRpc, ringProgramId);
     const health = await ringRpc.health();
-    expect(health.mode).toBe("local");
+    expect(health.mode).toBe("derived");
 
     const sender = await freshActor(client);
     const recipient = await freshActor(client);
@@ -115,7 +136,7 @@ describe("ring flow", () => {
         client,
         ringProgramId,
         feePayer: sender.signer.address,
-        recipient: sender.keypair.shieldedAddress(),
+        recipient: { kind: "confidential", address: sender.keypair.shieldedAddress() },
         amount: deposited,
       });
       await signSendAndConfirm(client, deposit, [sender.signer]);
@@ -125,15 +146,17 @@ describe("ring flow", () => {
       sender.wallet.utxos().filter((entry) => entry.utxo.ringProgramId === ringProgramId),
     ).toHaveLength(2);
 
-    const transfer = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: sender.wallet,
-      keys: sender.keys,
-      feePayer: sender.signer.address,
-      recipient: recipient.keypair.shieldedAddress(),
-      amount,
-    });
+    const transfer = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: sender.wallet,
+        keys: sender.keys,
+        feePayer: sender.signer.address,
+        recipient: recipient.keypair.shieldedAddress(),
+        amount,
+      }),
+    );
     const signature = await signSendAndConfirm(client, transfer, [sender.signer]);
 
     // The indexer lags, so the page is polled.
@@ -142,7 +165,7 @@ describe("ring flow", () => {
     let audited;
     for (let attempt = 0; attempt < 120 && audited === undefined; attempt++) {
       const ringView = await ringRpc.getDecryptedTransactions({
-        ringProgramId,
+        target,
         signer: messageSignerReader(authoritySigner),
       });
       audited = ringView.items.find((item) => item.signature === signature);
@@ -150,30 +173,24 @@ describe("ring flow", () => {
     }
     expect(audited).toBeDefined();
     // The 3x deposit is the covering UTXO, and the change slot keeps 2x.
-    const amounts = [...(audited?.outputs.map((output) => output.amount) ?? [])].sort((a, b) =>
-      a < b ? -1 : 1,
-    );
+    const outputs = openedOutputs(audited, ringProgramId);
+    const amounts = outputs.map((output) => output.amount).sort((a, b) => (a < b ? -1 : 1));
     expect(amounts).toEqual([amount, amount * 2n]);
-    expect(audited?.outputs.map((output) => output.ringProgramId)).toEqual([
-      ringProgramId,
-      ringProgramId,
-    ]);
+    expect(outputs.map((output) => output.ringProgramId)).toEqual([ringProgramId, ringProgramId]);
 
     // Ring reads go to the ring indexer at the URL the SPP reads use.
-    const member = memberOfTag(sender.keypair.shieldedAddress().confidentialViewTag());
-    let spendRecord;
-    for (let attempt = 0; attempt < 120 && spendRecord === undefined; attempt++) {
+    let registry;
+    for (let attempt = 0; attempt < 120 && registry === undefined; attempt++) {
       try {
-        spendRecord = await client.getRingSpendRecord({ ringProgramId, member });
+        registry = await client.getRingMemberRegistryRoot({ ringProgramId });
       } catch (error) {
-        if (!(error instanceof RingError) || error.code !== "RING_SPEND_RECORD_OUT_OF_SYNC") {
+        if (!(error instanceof RingError) || error.code !== "RING_REGISTRY_OUT_OF_SYNC") {
           throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    expect(spendRecord?.record).toBeNull();
-    expect(spendRecord?.context.slot).toBeGreaterThan(0n);
+    expect(registry?.context.slot).toBeGreaterThan(0n);
 
     // Participants read their own side from wallet sync.
     await airdrop(client, recipient.signer.address);
@@ -187,38 +204,39 @@ describe("ring flow", () => {
     expect(change.every((entry) => entry.utxo.ringProgramId === ringProgramId)).toBe(true);
 
     // The received UTXO spends inside the ring again.
-    const hop = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: recipient.wallet,
-      keys: recipient.keys,
-      feePayer: recipient.signer.address,
-      recipient: sender.keypair.shieldedAddress(),
-      amount: amount / 2n,
-    });
+    const hop = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: recipient.wallet,
+        keys: recipient.keys,
+        feePayer: recipient.signer.address,
+        recipient: sender.keypair.shieldedAddress(),
+        amount: amount / 2n,
+      }),
+    );
     const hopSignature = await signSendAndConfirm(client, hop, [recipient.signer]);
     let hopAudited;
     for (let attempt = 0; attempt < 120 && hopAudited === undefined; attempt++) {
       const ringView = await ringRpc.getDecryptedTransactions({
-        ringProgramId,
+        target,
         signer: messageSignerReader(authoritySigner),
       });
       hopAudited = ringView.items.find((item) => item.signature === hopSignature);
       if (hopAudited === undefined) await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    expect(hopAudited?.outputs.map((output) => output.ringProgramId)).toEqual([
+    const hopOutputs = openedOutputs(hopAudited, ringProgramId);
+    expect(hopOutputs.map((output) => output.ringProgramId)).toEqual([
       ringProgramId,
       ringProgramId,
     ]);
     // The hop pays half the UTXO onward, and the change slot keeps the rest.
-    const hopAmounts = [...(hopAudited?.outputs.map((output) => output.amount) ?? [])].sort(
-      (a, b) => (a < b ? -1 : 1),
-    );
+    const hopAmounts = hopOutputs.map((output) => output.amount).sort((a, b) => (a < b ? -1 : 1));
     expect(hopAmounts).toEqual([amount / 2n, amount / 2n]);
 
     // A delegated reader reads after the grant and not after the revoke.
     const delegate = (await freshActor(client)).signer;
-    expect(await ringReadError(ringRpc, ringProgramId, delegate)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, delegate)).toBe(-32600);
     await sendInstruction(
       client,
       await grantReadAccessInstruction({
@@ -231,11 +249,11 @@ describe("ring flow", () => {
     );
     expect(await fetchReaderGrant(client, ringProgramId, delegate.address)).toBe(true);
     const delegatedView = await ringRpc.getDecryptedTransactions({
-      ringProgramId,
+      target,
       signer: messageSignerReader(delegate),
     });
     expect(delegatedView.items.map((item) => item.signature)).toContain(signature);
-    expect(await ringReadError(ringRpc, ringProgramId, sender.signer)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, sender.signer)).toBe(-32600);
     await sendInstruction(
       client,
       await revokeReadAccessInstruction({
@@ -247,11 +265,11 @@ describe("ring flow", () => {
       authoritySigner,
     );
     expect(await fetchReaderGrant(client, ringProgramId, delegate.address)).toBe(false);
-    expect(await ringReadError(ringRpc, ringProgramId, delegate)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, delegate)).toBe(-32600);
 
     // The same through a passkey.
     const passkey = syntheticPasskey(process.env.RING_ORIGIN ?? "http://localhost:3000");
-    expect(await ringReadError(ringRpc, ringProgramId, passkey)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, passkey)).toBe(-32600);
     await sendInstruction(
       client,
       await grantReadAccessInstruction({
@@ -264,12 +282,12 @@ describe("ring flow", () => {
     );
     expect(await fetchReaderGrant(client, ringProgramId, passkey.publicKey)).toBe(true);
     const passkeyView = await ringRpc.getDecryptedTransactions({
-      ringProgramId,
+      target,
       signer: passkey,
     });
     expect(passkeyView.items.map((item) => item.signature)).toContain(signature);
     const elsewhere = syntheticPasskey("http://evil.example");
-    expect(await ringReadError(ringRpc, ringProgramId, elsewhere)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, elsewhere)).toBe(-32600);
     await sendInstruction(
       client,
       await revokeReadAccessInstruction({
@@ -280,7 +298,7 @@ describe("ring flow", () => {
       }),
       authoritySigner,
     );
-    expect(await ringReadError(ringRpc, ringProgramId, passkey)).toBe(-32600);
+    expect(await ringReadError(ringRpc, target, passkey)).toBe(-32600);
   }, 600_000);
 
   it("carries a token-2022 mint in from the default ring, back out, and into a public withdrawal", async () => {
@@ -296,6 +314,7 @@ describe("ring flow", () => {
       tree: address(requiredEnv("ZOLANA_TREE")),
     });
     const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
+    const target = await ringReadTarget(ringRpc, ringProgramId);
     const authoritySigner = await keypairSignerFromFile(requiredEnv("RING_AUTHORITY_KEYPAIR"));
     const mintAuthority = await signerFromWalletFile(requiredEnv("ZOLANA_TEST_AUTHORITY_WALLET"));
 
@@ -331,26 +350,24 @@ describe("ring flow", () => {
     ]);
 
     // Entry. The default UTXO funds a ring transfer.
-    const entryTransaction = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: sender.wallet,
-      keys: sender.keys,
-      feePayer: sender.signer.address,
-      recipient: recipient.keypair.shieldedAddress(),
-      asset: mint,
-      amount: entry,
-      inputs: "default",
-    });
-    const entrySignature = await signSendAndConfirm(client, entryTransaction, [sender.signer]);
-    const entryAudited = await waitForAudited(
-      ringRpc,
-      ringProgramId,
-      authoritySigner,
-      entrySignature,
+    const entryTransaction = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: sender.wallet,
+        keys: sender.keys,
+        feePayer: sender.signer.address,
+        recipient: recipient.keypair.shieldedAddress(),
+        asset: mint,
+        amount: entry,
+        inputs: "default",
+      }),
     );
-    expect(entryAudited.outputs.map((output) => output.asset)).toEqual([mint, mint]);
-    expect(entryAudited.outputs.map((output) => output.ringProgramId)).toEqual([
+    const entrySignature = await signSendAndConfirm(client, entryTransaction, [sender.signer]);
+    const entryAudited = await waitForAudited(ringRpc, target, authoritySigner, entrySignature);
+    const entryOutputs = openedOutputs(entryAudited, ringProgramId);
+    expect(entryOutputs.map((output) => output.mint)).toEqual([mint, mint]);
+    expect(entryOutputs.map((output) => output.ringProgramId)).toEqual([
       ringProgramId,
       ringProgramId,
     ]);
@@ -368,16 +385,18 @@ describe("ring flow", () => {
     // transaction beside the two proofs and the framed outputs.
     const relayer = await generateKeyPairSigner();
     await airdrop(client, relayer.address);
-    const exitTransaction = await buildRingExitTransaction({
-      client,
-      ringProgramId,
-      wallet: recipient.wallet,
-      keys: recipient.keys,
-      feePayer: relayer.address,
-      recipient: sender.keypair.shieldedAddress(),
-      asset: mint,
-      amount: exit,
-    });
+    const exitTransaction = await indexedKeys(() =>
+      buildRingExitTransaction({
+        client,
+        ringProgramId,
+        wallet: recipient.wallet,
+        keys: recipient.keys,
+        feePayer: relayer.address,
+        recipient: sender.keypair.shieldedAddress(),
+        asset: mint,
+        amount: exit,
+      }),
+    );
     const exitSigners = Object.keys(exitTransaction.signatures);
     expect(exitSigners).toHaveLength(2);
     expect(exitSigners[0]).toBe(relayer.address);
@@ -385,14 +404,12 @@ describe("ring flow", () => {
       relayer,
       recipient.signer,
     ]);
-    const exitAudited = await waitForAudited(
-      ringRpc,
-      ringProgramId,
-      authoritySigner,
-      exitSignature,
-    );
+    const exitAudited = await waitForAudited(ringRpc, target, authoritySigner, exitSignature);
     const exitRings = new Map(
-      exitAudited.outputs.map((output) => [output.amount, output.ringProgramId]),
+      openedOutputs(exitAudited, ringProgramId).map((output) => [
+        output.amount,
+        output.ringProgramId,
+      ]),
     );
     expect(exitRings.has(exit)).toBe(true);
     expect(exitRings.get(exit)).toBeUndefined();
@@ -411,7 +428,7 @@ describe("ring flow", () => {
     // The remaining ring UTXO settles a public withdrawal into the funding account.
     await sync(client, recipient);
     const before = await tokenBalance(client, fundingTokenAccount);
-    const withdrawalTransaction = await buildRingWithdrawalTransaction({
+    const withdrawal = {
       client,
       ringProgramId,
       wallet: recipient.wallet,
@@ -421,11 +438,25 @@ describe("ring flow", () => {
       asset: mint,
       amount: withdrawn,
       splTokenProgram: SPL_TOKEN_2022_PROGRAM_ID,
+    };
+    await expect(
+      indexedKeys(() => buildRingWithdrawalTransaction(withdrawal)),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_WITHDRAWAL",
+      causeCode: "RING_POLICY_RULE_UNSATISFIED",
     });
+    await writeList(client, ringProgramId, authoritySigner, {
+      listId: ListId.allow,
+      tag: addressBytes(mintAuthority.address),
+      state: "active",
+    });
+    const withdrawalTransaction = await indexedKeys(() =>
+      buildRingWithdrawalTransaction(withdrawal),
+    );
     const withdrawalSignature = await signSendAndConfirm(client, withdrawalTransaction, [
       recipient.signer,
     ]);
-    await waitForAudited(ringRpc, ringProgramId, authoritySigner, withdrawalSignature);
+    await waitForAudited(ringRpc, target, authoritySigner, withdrawalSignature);
     expect((await tokenBalance(client, fundingTokenAccount)) - before).toBe(withdrawn);
   }, 600_000);
 });

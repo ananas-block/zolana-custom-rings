@@ -70,6 +70,7 @@ type AnonymousTail struct {
 	Epoch            uint64
 	FirstContactRoot *big.Int
 	SenderCommitment *big.Int
+	PartyIdentities  [3]*big.Int
 }
 
 // PackedStatement mirrors AuditKind::Packed.
@@ -105,7 +106,7 @@ func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 	}
 	return append(head.Elements(t),
 		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash,
-		spptest.MustHashChain4(t, tags), new(big.Int).SetUint64(tail.Epoch), tail.FirstContactRoot, tail.SenderCommitment)
+		spptest.MustHashChain4(t, tags), new(big.Int).SetUint64(tail.Epoch), tail.FirstContactRoot, tail.SenderCommitment, tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
 }
 
 func outputChain(t testing.TB, outputs []StatementOutput) *big.Int {

@@ -2,6 +2,7 @@
 package circuits
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -28,27 +29,40 @@ const (
 
 // DepositCircuit binds every deposited owner commitment to an opening encrypted for the auditor.
 type DepositCircuit struct {
+	Capacity           int               `gnark:"-"`
 	PublicInputHash    frontend.Variable `gnark:",public"`
 	ContextHash        frontend.Variable
 	Count              frontend.Variable
 	Anonymous          frontend.Variable
-	OwnerPkHashes      [MaxDeposits]frontend.Variable
-	OwnerKeys          [MaxDeposits][32]frontend.Variable
-	NullifierPks       [MaxDeposits]frontend.Variable
-	BlindingSecrets    [MaxDeposits]frontend.Variable
+	OwnerPkHashes      []frontend.Variable
+	OwnerKeys          [][32]frontend.Variable
+	NullifierPks       []frontend.Variable
+	BlindingSecrets    []frontend.Variable
 	EphSk              [32]frontend.Variable
 	AuditorPk          [32]frontend.Variable
 	KeyEscrow          frontend.Variable
 	MemberRegistryRoot frontend.Variable
-	CtHashes           [MaxDeposits]frontend.Variable
-	Members            [MaxDeposits]registry.QuadRecordOpening
+	CtHashes           []frontend.Variable
+	Members            []registry.QuadRecordOpening
+}
+
+var DepositCapacities = []int{1, 2, 4, 8}
+
+func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
+	if !slices.Contains(DepositCapacities, capacity) {
+		return nil, fmt.Errorf("deposit: unsupported capacity %d", capacity)
+	}
+	return &DepositCircuit{Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), CtHashes: make([]frontend.Variable, capacity), Members: make([]registry.QuadRecordOpening, capacity)}, nil
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {
+	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity {
+		return fmt.Errorf("deposit: capacity/witness mismatch")
+	}
 	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1.
-	count := ringgadget.SelectCount(api, c.Count, 1, MaxDeposits)
+	count := ringgadget.SelectCount(api, c.Count, 1, c.Capacity)
 	rc := rangecheck.New(api)
-	commitments := make([]frontend.Variable, MaxDeposits)
+	commitments := make([]frontend.Variable, c.Capacity)
 	var plaintext []frontend.Variable
 	for i := range commitments {
 		active := count.Active[i]
@@ -87,6 +101,10 @@ func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, com
 	for i, commitment := range commitments {
 		ciphertext := gadget.HashBoundedBytes(api, sealed.Ciphertext[i*DepositOpeningBytes:(i+1)*DepositOpeningBytes])
 		chain = append(chain, api.Mul(count.Active[i], commitment), api.Mul(count.Active[i], ciphertext))
+	}
+	// The public statement keeps all eight pairs. Missing slots are constants.
+	for i := len(commitments); i < MaxDeposits; i++ {
+		chain = append(chain, 0, 0)
 	}
 	return slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot})
 }

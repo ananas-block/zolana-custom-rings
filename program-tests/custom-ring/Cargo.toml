@@ -10,9 +10,6 @@ anyhow = { workspace = true }
 bincode = { workspace = true }
 custom-ring-cli = { workspace = true }
 custom-ring-interface = { workspace = true }
-# The auditor side under test: `audit_ring_transactions` is the call whose
-# returned plaintexts the lifecycle asserts against what the sender sent.
-custom-ring-program = { workspace = true }
 custom-ring-sdk = { workspace = true }
 hex = { workspace = true }
 solana-address = { workspace = true }
@@ -32,15 +29,15 @@ zolana-interface = { workspace = true }
 zolana-program = { workspace = true, features = ["protocol-instructions"] }
 zolana-keypair = { workspace = true }
 zolana-program-test = { workspace = true, features = ["localnet"] }
-zolana-ring-client = { workspace = true, features = ["solana-rpc"] }
-zolana-ring-transaction = { workspace = true }
+zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
+zolana-ring-keys = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-rpc = { workspace = true }
+zolana-ring-transaction = { workspace = true }
 zolana-test-utils = { workspace = true }
 zolana-transaction = { workspace = true }
 zolana-tree = { workspace = true }
 zolana-user-registry-interface = { workspace = true, features = ["solana"] }
-zeroize = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -62,6 +59,3 @@ path = "tests/policy_rules.rs"
 name = "policy_repin"
 path = "tests/policy_repin.rs"
 
-[[test]]
-name = "windowed_concurrency"
-path = "tests/windowed_concurrency.rs"

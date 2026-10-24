@@ -10,7 +10,7 @@ import (
 
 type Entry struct {
 	Own     registry.QuadOpening
-	Curator registry.QuadOpening
+	Curator []registry.QuadOpening
 }
 
 type subjectView struct {
@@ -44,7 +44,10 @@ func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, me
 	// 1. The member's record, or the low record proving it absent, lies under own_root.
 	own, escrowKey := e.Own.Resolve(api, cond, p.OwnRoot, member)
 	// 2. The same holds under curator_root whenever a list reads from the curator registry.
-	curator, _ := e.Curator.Resolve(api, api.Mul(cond, sources.anyForeign), p.CuratorRoot, member)
+	var curator frontend.Variable = 0
+	if !p.OwnOnly {
+		curator, _ = e.Curator[0].Resolve(api, api.Mul(cond, sources.anyForeign), p.CuratorRoot, member)
+	}
 	// 3. A record's list bitmap splits bit per list, bit i marks list i+1.
 	ownBits, curatorBits := api.ToBinary(own, registry.ListBits), api.ToBinary(curator, registry.ListBits)
 	view := subjectView{escrowKey: escrowKey}
@@ -60,5 +63,23 @@ func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, own
 		key := registry.EscrowKey(api, out.nullifierPk, p.Outputs[o].CtHash)
 		// The owner's record escrows Poseidon(nullifier_pk, ct_hash), an absent owner resolves zero and never matches.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: owners[o].escrowKey, B: key})
+	}
+}
+
+func newEntry(ownOnly bool) Entry {
+	e := Entry{}
+	if !ownOnly {
+		e.Curator = make([]registry.QuadOpening, 1)
+	}
+	return e
+}
+
+func (p *Policy) assertOwnOnly(api frontend.API) {
+	if !p.OwnOnly {
+		return
+	}
+	api.AssertIsEqual(p.CuratorRoot, 0)
+	for _, source := range p.Sources {
+		api.AssertIsEqual(source.Registry, 0)
 	}
 }

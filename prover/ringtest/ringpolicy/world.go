@@ -36,6 +36,9 @@ var curatorRegistry = big.NewInt(0xc0ffee)
 type World struct {
 	// Outputs is the member key's capacity, zero selects the delegate key of Shape.
 	Outputs                                int
+	WithdrawalCapacity                     int
+	OwnOnly                                bool
+	Withdrawals                            []Slot
 	Shape                                  transaction.Shape
 	Anonymous, KeyEscrow, ApprovalRequired bool
 	Sender                                 int64

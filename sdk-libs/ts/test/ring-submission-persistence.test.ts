@@ -1,32 +1,39 @@
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import {
-  LocalKeys,
-  type Bytes32,
-  ShieldedKeypair,
-  SOL_MINT,
-  Utxo,
-  Wallet,
-  deserializeWallet,
-  serializeWallet,
-  loadPersistedWallet,
-  walletSnapshotCipher,
-} from "@heliuslabs/zolana";
+import { X25519Keypair, ShieldedKeypair } from "@heliuslabs/zolana/keypair";
+import { LocalKeys } from "@heliuslabs/zolana/client";
 import {
   compileUnsignedTransaction,
   reserveEntries,
   DEFAULT_RESERVATION_TTL_MS,
   treeAddress,
 } from "@heliuslabs/zolana/internal";
-import { ringConfigPda } from "../src/interface/pda/index.js";
-import { AssetRegistry, ProofInputUtxo } from "@heliuslabs/zolana/transaction";
-import { savePersistedWallet } from "@heliuslabs/zolana/wallet";
-import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { ringTransferClient } from "./helpers/clients.js";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import {
+  SOL_MINT,
+  AssetRegistry,
+  Utxo,
+  ProofInputUtxo,
+  Wallet,
+  deserializeWallet,
+  serializeWallet,
+} from "@heliuslabs/zolana/transaction";
+import {
+  loadPersistedWallet,
+  savePersistedWallet,
+  walletSnapshotCipher,
+} from "@heliuslabs/zolana/wallet";
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { afterEach, expect, it, vi } from "vitest";
+
+import { ringConfigPda } from "../src/interface/pda/index.js";
 import { buildRingTransferTransaction } from "../src/ring/transfer.js";
 import { RingTransactionSubmission, reconcileRingSubmissions } from "../src/ring/submission.js";
-import { ringProgramConfigData, ownedAccount } from "./helpers/ring-accounts.js";
+import { ringTransferClient } from "./helpers/clients.js";
+import { BLOCKHASH } from "../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import {
+  ownedAccount,
+  ringProgramConfigData,
+  sppRingRegistration,
+} from "./helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -64,6 +71,8 @@ afterEach(() => vi.restoreAllMocks());
 it("binds high level ring transfers to the configured nonzero tree", async () => {
   const f = funded(7);
   const [config, bump] = await ringConfigPda(RING);
+  const authority = f.owner.shieldedAddress().solanaAddress();
+  const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
   let outputTreeId: number | undefined;
   const client = ringTransferClient({
     tree: treeAddress(7),
@@ -73,7 +82,7 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
         ? ownedAccount(
             RING,
             ringProgramConfigData({
-              authority: f.owner.shieldedAddress().solanaAddress(),
+              authority,
               auditorPublicKey: X25519Keypair.fromBytes(new Uint8Array(32).fill(9))
                 .publicKey()
                 .toBytes(),
@@ -81,7 +90,9 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
               hasPolicy: false,
             }),
           )
-        : undefined,
+        : key === ringAuth
+          ? registration
+          : undefined,
     proveRingTransact: async (inputs) => {
       outputTreeId = inputs.outputTreeId;
       throw new Error("prover boundary reached");
@@ -117,7 +128,6 @@ it("retains unknown submissions after the lease interval and confirmation until 
   vi.spyOn(Date, "now").mockImplementation(() => now);
   const submission = await RingTransactionSubmission.fromBuilder({
     wallet: f.wallet,
-    windowChanged: async () => false,
     build: async (retry) => {
       retry.entries = [f.entry];
       retry.reservation = reserveEntries(f.wallet, retry.entries, retry.lifetime);
@@ -187,7 +197,6 @@ async function persistedFixture(count = 1) {
   const payer = await generateKeyPairSigner();
   const submission = await RingTransactionSubmission.fromBuilder({
     wallet: f.wallet,
-    windowChanged: async () => false,
     build: async (retry) => {
       retry.entries = f.wallet.utxos();
       retry.reservation ??= reserveEntries(f.wallet, retry.entries, retry.lifetime);

@@ -8,6 +8,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	circuitregistry "github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
@@ -32,13 +33,13 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	t.Helper()
 	var b Witness
 	if w.Outputs != 0 {
-		c, err := policy.NewMemberPolicyCircuit(w.Outputs)
+		c, err := policy.NewMemberPolicyCircuitWith(policy.MemberShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly})
 		if err != nil {
 			t.Fatal(err)
 		}
 		b.Member = c
 	} else {
-		c, err := policy.NewDelegatePolicyCircuit(w.Shape)
+		c, err := policy.NewDelegatePolicyCircuitWith(policy.DelegateShape{Shape: w.Shape, OwnOnly: w.OwnOnly})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -47,7 +48,11 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	p := b.Policy()
 	own, curator := registry(t, w.Own), registry(t, w.Curator)
 	entry := func(member int64) policy.Entry {
-		return policy.Entry{Own: own.Opening(big.NewInt(member)).Wires(), Curator: curator.Opening(big.NewInt(member)).Wires()}
+		e := policy.Entry{Own: own.Opening(big.NewInt(member)).Wires()}
+		if !w.OwnOnly {
+			e.Curator = []circuitregistry.QuadOpening{curator.Opening(big.NewInt(member)).Wires()}
+		}
+		return e
 	}
 	p.Table = rows.Wires()
 	p.PolicyHash = TableHash(t, p.Table)
@@ -70,6 +75,12 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 			p.Outputs[o].CtHash = ctHash(s.Owner)
 		}
 		p.OwnerEntries[o], p.AssetEntries[o] = entry(s.Owner), entry(s.Asset)
+	}
+	p.WithdrawalCount = len(w.Withdrawals)
+	for i := range p.Withdrawals {
+		s := pick(w.Withdrawals, i)
+		p.Withdrawals[i] = policy.WithdrawalWires{Owner: s.Owner, Asset: s.Asset, Amount: s.Amount}
+		p.OwnerEntries[len(p.Outputs)+i], p.AssetEntries[len(p.Outputs)+i] = entry(s.Owner), entry(s.Asset)
 	}
 	if b.Delegate != nil {
 		for i := range b.Delegate.Inputs {
@@ -127,6 +138,12 @@ func (b Witness) Rehash(t testing.TB) {
 // Rebind recomputes the public input after a statement value changes.
 func (b Witness) Rebind(t testing.TB) {
 	t.Helper()
+	p := b.Policy()
+	fields := []*big.Int{big.NewInt(policy.WithdrawalDomain), ringtest.AsBigInt(p.WithdrawalCount)}
+	for _, w := range p.Withdrawals[:int(ringtest.AsBigInt(p.WithdrawalCount).Int64())] {
+		fields = append(fields, ringtest.AsBigInt(w.Owner), ringtest.AsBigInt(w.Asset), ringtest.AsBigInt(w.Amount))
+	}
+	p.WithdrawalHash = spptest.MustHashChain4(t, fields)
 	if c := b.Member; c != nil {
 		c.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(c.Statement()))
 		return

@@ -1,28 +1,41 @@
+import { RingInstructionTag } from "./admin.js";
 import { getBase58Encoder } from "@solana/kit";
+
 import {
   runKitRpc,
   type SolanaRpc,
   wireDecoder,
   Reader,
+  Writer,
   sha256,
+  addressBytes,
+  encodeBase58,
+  treeAddress,
   decodeRingDepositInstructionData,
   equalBytes,
+  encodeMergeOutputData,
 } from "@heliuslabs/zolana/internal";
 import {
   MAX_CACHE_WRITES,
+  INPUT_TREES,
   InstructionTag,
   SHIELDED_POOL_CPI_AUTHORITY,
-  SOL_INTERFACE,
-  type InterfaceTransfer,
-} from "@heliuslabs/zolana/interface";
-import {
   SHIELDED_POOL_PROGRAM_ID,
-  type Address,
-  type Bytes32,
-  type RequestContext,
-  type Signature,
-  SOL_MINT,
-} from "@heliuslabs/zolana";
+  SOL_INTERFACE,
+} from "@heliuslabs/zolana/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type {
+  Address,
+  Bytes16,
+  Bytes32,
+  Bytes33,
+  Bytes64,
+  InterfaceTransfer,
+  RequestContext,
+  Signature,
+} from "@heliuslabs/zolana/interface";
+import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
 import {
   AUDITED_RING_DEPOSIT_TAG,
@@ -31,29 +44,99 @@ import {
   RING_DEPOSIT_AUDIT_SLOTS,
   type RingDepositCapsule,
 } from "./deposit-capsule.js";
+import type { DisclosureLayout } from "../interface/ring-disclosure-layout.js";
 
 import { RingError } from "./error.js";
+import {
+  readRingMergeDisclosure,
+  writeRingMergeDisclosure,
+  type RingMergeDisclosure,
+} from "./merge-disclosure.js";
+import { RingTransactData, ringRailOf } from "./transact.js";
+import { decompressG2, readMergeData, writeInterfaceTransfer } from "../interface/codecs.js";
 
 const base58Encoder = getBase58Encoder();
 
-/** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never `false`. */
+/** Mirrors Rust `ConfirmedEventKind`, the confirmed instruction selects it, never indexer metadata. */
+export type ConfirmedEventKind = "deposit" | "transfer" | "merge";
+
+/** Rust `RingOrigin` after `bind_transaction`, the indexed event bound to its confirmed instruction. */
+export type ConfirmedRingTransaction =
+  | Readonly<{
+      kind: "transfer";
+      transaction: IndexedShieldedTransaction;
+      /** Rust `ConfirmedEvent::input_tree_ids`, an input spent from a tree other than the output tree has no id. */
+      inputTreeIds: readonly (number | undefined)[];
+      /** The layout the ring program verified the audit proof under, read from its confirmed instruction. */
+      layout: DisclosureLayout;
+    }>
+  | Readonly<{
+      kind: "deposit";
+      transaction: IndexedShieldedTransaction;
+      /** The capsule bindings of the audited deposit behind the event, empty for a plain one. */
+      deposits: readonly ConfirmedDeposit[];
+    }>
+  | Readonly<{
+      kind: "merge";
+      transaction: IndexedShieldedTransaction;
+      /** The anonymous merge disclosure whose proof the direct ring caller verified. */
+      disclosure?: RingMergeDisclosure;
+    }>;
+
+/** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never absent. */
 export interface TransactionOrigin {
-  ringInvoked(
-    signature: Signature,
-    eventIndex: number,
+  /** Binds indexed data to the exact confirmed transfer, deposit or merge. Other-ring events return undefined. */
+  confirmedTransaction(
+    transaction: IndexedShieldedTransaction,
     ring: Address,
     context?: RequestContext,
-  ): Promise<boolean>;
+  ): Promise<ConfirmedRingTransaction | undefined>;
 }
 
-/** Confirmed audited-deposit data, separate from a boolean ring-origin check. */
-export interface AuditedDepositSource {
-  confirmedDeposits(
-    signature: Signature,
-    eventIndex: number,
-    ring: Address,
-    context?: RequestContext,
-  ): Promise<readonly ConfirmedDeposit[]>;
+/** The ring forwards `ringDataHash || body` with the body's `b` decompressed. */
+function confirmedMergeDisclosureOf(found: TrustedEvent): RingMergeDisclosure | undefined {
+  const wrapper = found.wrapper;
+  if (
+    found.source.data[0] !== InstructionTag.ringMergeTransact ||
+    wrapper?.data[0] !== InstructionTag.ringMergeTransact
+  )
+    return undefined;
+  const request = new Reader(wrapper.data.subarray(2));
+  const ringDataHash = request.bytes(32, "merge.ringDataHash");
+  const disclosure = readRingMergeDisclosure(request);
+  if (disclosure === undefined) return undefined;
+  const prefix = 2 + 32 + writeRingMergeDisclosure(new Writer(), disclosure).finish().length;
+  const forwarded = found.source.data;
+  if (
+    !equalBytes(forwarded.subarray(1, 33), ringDataHash) ||
+    !equalBytes(
+      forwarded.subarray(FORWARDED_MERGE_PREFIX),
+      sppMergeBody(wrapper.data.subarray(prefix)),
+    )
+  )
+    throw invalid("merge.disclosure");
+  return disclosure;
+}
+
+/** `tag || ringDataHash` ahead of the forwarded SPP merge body. */
+const FORWARDED_MERGE_PREFIX = 1 + 32;
+/** `expiry_unix_ts u64 || proof.a` ahead of `proof.b`, Rust `MERGE_B_OFFSET`. */
+const MERGE_B_OFFSET = 8 + 32;
+
+/** Rust `CustomRingMergeIxDataRef::spp_merge_body`, the compact body with `proof.b` decompressed. */
+function sppMergeBody(compact: Uint8Array): Uint8Array {
+  if (compact.length < MERGE_B_OFFSET + 64) throw invalid("merge.body");
+  let b: Uint8Array;
+  try {
+    b = decompressG2(compact.slice(MERGE_B_OFFSET, MERGE_B_OFFSET + 64) as Bytes64);
+  } catch (cause) {
+    throw new RingError("RING_ORIGIN_DECODE", { details: { path: "merge.proof.b" }, cause });
+  }
+  const body = new Uint8Array(compact.length + 64);
+  body.set(compact.subarray(0, MERGE_B_OFFSET), 0);
+  body.set(b, MERGE_B_OFFSET);
+  body.set(compact.subarray(MERGE_B_OFFSET + 64), MERGE_B_OFFSET + 128);
+  return body;
 }
 
 const CONFIRMED_DEPOSIT = Symbol("confirmed audited deposit");
@@ -91,40 +174,16 @@ export class ConfirmedDeposit {
     if (record(wire["meta"], "meta")["err"] !== null) throw invalid("meta.err");
     const encoded = record(wire["transaction"], "transaction.transaction");
     if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
-    if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex > 0xffff)
-      throw invalid("eventIndex");
-    let index = 0;
-    for (const group of confirmedInstructionGroups(transaction)) {
-      const stack: OriginInstruction[] = [group.outer];
-      for (const instruction of group.inner) {
-        const height = instruction.stackHeight;
-        if (height === undefined || height < 2 || height > stack.length + 1)
-          throw invalid("stackHeight");
-        stack.length = height - 1;
-        const source = stack[height - 2];
-        const wrapper = stack[height - 3];
-        if (
-          instruction.programId === SHIELDED_POOL_PROGRAM_ID &&
-          instruction.data[0] === InstructionTag.emitEvent &&
-          source?.programId === SHIELDED_POOL_PROGRAM_ID &&
-          isEventSourceTag(source.data[0])
-        ) {
-          if (index++ === eventIndex) {
-            if (
-              source.data[0] !== InstructionTag.ringDeposit ||
-              wrapper?.programId !== ring ||
-              wrapper.data[0] !== AUDITED_RING_DEPOSIT_TAG
-            )
-              return [];
-            if (!equalBytes(wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), source.data))
-              throw invalid("auditedDeposit");
-            return ConfirmedDeposit.#decode(source.data);
-          }
-        }
-        stack.push(instruction);
-      }
-    }
-    throw invalid("eventIndex");
+    const found = ringEventIn(confirmedInstructionGroups(transaction), eventIndex, ring);
+    if (
+      found === undefined ||
+      found.source.data[0] !== InstructionTag.ringDeposit ||
+      found.wrapper?.data[0] !== AUDITED_RING_DEPOSIT_TAG
+    )
+      return [];
+    if (!equalBytes(found.wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), found.source.data))
+      throw invalid("auditedDeposit");
+    return ConfirmedDeposit.#decode(found.source.data);
   }
 
   /** The digest covers the entire capsule, including recipient ciphertext and slot. */
@@ -170,6 +229,8 @@ export interface OriginInstructionGroup {
 
 /** Mirrors Rust `RingWithdrawal`, one public settlement leg out of the ring. */
 export interface RingWithdrawal {
+  /** Checked at execution, read from confirmed v2 policy metadata. */
+  readonly screenedOwner?: Address;
   /** The wallet of a SOL leg, the credited token account of an SPL leg. */
   readonly recipient: Address;
   readonly asset: Address;
@@ -196,26 +257,14 @@ export function ringInstructionsIn(
   groups: readonly OriginInstructionGroup[],
   ring: Address,
 ): readonly OriginInstruction[] {
-  const found: OriginInstruction[] = [];
-  for (const group of groups) {
-    const callers: Address[] = [group.outer.programId];
-    for (const inner of group.inner) {
-      const height = inner.stackHeight;
-      if (height === undefined) {
-        throw new RingError("RING_ORIGIN_STACK", { details: { reason: "missing stack height" } });
-      }
-      const parentDepth = height - 2;
-      if (!Number.isInteger(parentDepth) || parentDepth < 0 || parentDepth >= callers.length) {
-        throw new RingError("RING_ORIGIN_STACK", { details: { reason: "no parent", height } });
-      }
-      if (inner.programId === SHIELDED_POOL_PROGRAM_ID && callers[parentDepth] === ring) {
-        found.push(inner);
-      }
-      callers.length = parentDepth + 1;
-      callers.push(inner.programId);
-    }
-  }
-  return Object.freeze(found);
+  return Object.freeze(
+    instructionAncestry(groups)
+      .filter(
+        ({ instruction, parent }) =>
+          instruction.programId === SHIELDED_POOL_PROGRAM_ID && parent?.programId === ring,
+      )
+      .map(({ instruction }) => instruction),
+  );
 }
 
 /** Mirrors Rust `ring_invoked_in`. */
@@ -223,56 +272,67 @@ export function ringInvokedIn(groups: readonly OriginInstructionGroup[], ring: A
   return ringInstructionsIn(groups, ring).length > 0;
 }
 
-/** Checks the ring caller of one trusted SPP event. */
-export function ringEventInvokedIn(
+interface TrustedEvent {
+  readonly source: OriginInstruction;
+  readonly event: OriginInstruction;
+  readonly wrapper: OriginInstruction | undefined;
+}
+
+function ringEventIn(
   groups: readonly OriginInstructionGroup[],
   eventIndex: number,
   ring: Address,
-): boolean {
-  if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex > 0xffff) {
-    throw new RingError("RING_ORIGIN_DECODE", { details: { path: "eventIndex" } });
-  }
-  const source = trustedEventSources(groups)[eventIndex];
-  if (source === undefined) {
-    throw new RingError("RING_ORIGIN_DECODE", { details: { path: "eventIndex" } });
-  }
-  return ringInstructionsIn(groups, ring).includes(source);
+): TrustedEvent | undefined {
+  if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex > 0xffff)
+    throw invalid("eventIndex");
+  const found = trustedEvents(groups)[eventIndex];
+  if (found === undefined) throw invalid("eventIndex");
+  return found.wrapper?.programId === ring ? found : undefined;
 }
 
-function trustedEventSources(
-  groups: readonly OriginInstructionGroup[],
-): readonly OriginInstruction[] {
-  const sources: OriginInstruction[] = [];
+/** One checked execution stack owns direct caller and exact self-CPI event attribution. */
+function instructionAncestry(groups: readonly OriginInstructionGroup[]): readonly Readonly<{
+  instruction: OriginInstruction;
+  parent: OriginInstruction | undefined;
+  grandparent: OriginInstruction | undefined;
+}>[] {
+  const ancestry = [];
   for (const group of groups) {
-    group.inner.forEach((instruction, index) => {
-      if (
-        instruction.programId !== SHIELDED_POOL_PROGRAM_ID ||
-        instruction.data[0] !== InstructionTag.emitEvent
-      ) {
-        return;
-      }
-      const parent = eventParent(group, index);
-      if (parent?.programId === SHIELDED_POOL_PROGRAM_ID && isEventSourceTag(parent.data[0])) {
-        sources.push(parent);
-      }
-    });
+    const stack = [group.outer];
+    for (const instruction of group.inner) {
+      const height = instruction.stackHeight;
+      if (height === undefined)
+        throw new RingError("RING_ORIGIN_STACK", {
+          details: { reason: "missing stack height" },
+        });
+      if (!Number.isInteger(height) || height < 2 || height > stack.length + 1)
+        throw new RingError("RING_ORIGIN_STACK", {
+          details: { reason: "no parent", height },
+        });
+      stack.length = height - 1;
+      ancestry.push({
+        instruction,
+        parent: stack[height - 2],
+        grandparent: stack[height - 3],
+      });
+      stack.push(instruction);
+    }
   }
-  return sources;
+  return ancestry;
 }
 
-function eventParent(
-  group: OriginInstructionGroup,
-  eventIndex: number,
-): OriginInstruction | undefined {
-  const event = group.inner[eventIndex];
-  const height = event?.stackHeight;
-  if (height === undefined || height < 2) return undefined;
-  const parentHeight = height - 1;
-  for (let index = eventIndex - 1; index >= 0; index--) {
-    const candidate = group.inner[index];
-    if (candidate?.stackHeight === parentHeight) return candidate;
+function trustedEvents(groups: readonly OriginInstructionGroup[]): readonly TrustedEvent[] {
+  const events: TrustedEvent[] = [];
+  for (const { instruction, parent, grandparent } of instructionAncestry(groups)) {
+    if (
+      instruction.programId === SHIELDED_POOL_PROGRAM_ID &&
+      instruction.data[0] === InstructionTag.emitEvent &&
+      parent?.programId === SHIELDED_POOL_PROGRAM_ID &&
+      isEventSourceTag(parent.data[0])
+    )
+      events.push({ source: parent, event: instruction, wrapper: grandparent });
   }
-  return parentHeight === 1 ? group.outer : undefined;
+  return events;
 }
 
 function isEventSourceTag(value: number | undefined): boolean {
@@ -315,8 +375,7 @@ export function ringWithdrawalsOf(
 
 /**
  * Mirrors Rust `ConfirmedInstructionGroups::from_confirmed_transaction` over a
- * `getTransaction` JSON result. Version 1 lists every account in the message,
- * so a lookup table's loaded addresses are rejected.
+ * `getTransaction` JSON result.
  */
 export function confirmedInstructionGroups(
   transaction: unknown,
@@ -325,16 +384,8 @@ export function confirmedInstructionGroups(
   const encoded = record(wire["transaction"], "transaction.transaction");
   const message = record(encoded["message"], "transaction.transaction.message");
   const meta = record(wire["meta"], "transaction.meta");
-  const accountKeys = addresses(message["accountKeys"], "message.accountKeys");
-  const loaded = meta["loadedAddresses"];
-  if (loaded !== undefined && loaded !== null) {
-    const loadedRecord = record(loaded, "meta.loadedAddresses");
-    const writable = addresses(loadedRecord["writable"], "meta.loadedAddresses.writable");
-    const readonly = addresses(loadedRecord["readonly"], "meta.loadedAddresses.readonly");
-    if (writable.length > 0 || readonly.length > 0) {
-      throw invalid("meta.loadedAddresses");
-    }
-  }
+  if (meta["err"] !== null) throw invalid("meta.err");
+  const accountKeys = messageAccountKeys(message, meta);
   const groups = list(message["instructions"], "message.instructions").map(
     (instruction, index): { outer: OriginInstruction; inner: OriginInstruction[] } => ({
       outer: parsed(accountKeys, instruction, `message.instructions[${index}]`),
@@ -361,8 +412,47 @@ export function confirmedInstructionGroups(
     );
   });
   return groups.map((group) =>
-    Object.freeze({ outer: Object.freeze(group.outer), inner: Object.freeze(group.inner) }),
+    Object.freeze({
+      outer: Object.freeze(group.outer),
+      inner: Object.freeze(group.inner),
+    }),
   );
+}
+
+/** Static keys, then the loaded writable and readonly addresses, the order instruction indexes count in. */
+function messageAccountKeys(
+  message: Readonly<Record<string, unknown>>,
+  meta: Readonly<Record<string, unknown>>,
+): readonly Address[] {
+  const statics = addresses(message["accountKeys"], "message.accountKeys");
+  const lookups = message["addressTableLookups"];
+  const tables =
+    lookups === undefined || lookups === null
+      ? []
+      : list(lookups, "message.addressTableLookups").map((lookup, index) =>
+          record(lookup, `message.addressTableLookups[${index}]`),
+        );
+  const loaded = meta["loadedAddresses"];
+  if (loaded === undefined || loaded === null) {
+    if (tables.length > 0) throw invalid("meta.loadedAddresses");
+    return statics;
+  }
+  const loadedRecord = record(loaded, "meta.loadedAddresses");
+  const writable = addresses(loadedRecord["writable"], "meta.loadedAddresses.writable");
+  const readonly = addresses(loadedRecord["readonly"], "meta.loadedAddresses.readonly");
+  const indexes = (key: "writableIndexes" | "readonlyIndexes") =>
+    tables.reduce(
+      (count, table, index) =>
+        count + list(table[key], `message.addressTableLookups[${index}].${key}`).length,
+      0,
+    );
+  // Each lookup index loads one address, any other count names accounts no lookup loaded.
+  if (
+    writable.length !== indexes("writableIndexes") ||
+    readonly.length !== indexes("readonlyIndexes")
+  )
+    throw invalid("meta.loadedAddresses");
+  return [...statics, ...writable, ...readonly];
 }
 
 /** The public settlement legs a confirmed transaction paid out of `ring`. */
@@ -370,7 +460,43 @@ export function confirmedRingWithdrawals(
   transaction: unknown,
   ring: Address,
 ): readonly RingWithdrawal[] {
-  return ringWithdrawalsOf(ringInstructionsIn(confirmedInstructionGroups(transaction), ring));
+  const groups = confirmedInstructionGroups(transaction);
+  return Object.freeze(
+    instructionAncestry(groups).flatMap(({ instruction, parent }) => {
+      if (parent?.programId !== ring || instruction.programId !== SHIELDED_POOL_PROGRAM_ID)
+        return [];
+      const withdrawals = ringWithdrawalsOf([instruction]);
+      if (withdrawals.length === 0) return withdrawals;
+      const tag = parent.data[0];
+      if (tag !== RingInstructionTag.transact && tag !== RingInstructionTag.delegateTransact)
+        return withdrawals;
+      const source = settlementDataOf(instruction);
+      if (source === undefined) return withdrawals;
+      const frame = RingTransactData.parse(
+        parent.data.subarray(1),
+        ringRailOf(tag, source.anonymous ? "anonymous" : "off"),
+      );
+      if (frame.policy === undefined) return withdrawals;
+      const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
+        const writer = new Writer();
+        for (const leg of legs) writeInterfaceTransfer(writer, leg);
+        return writer.finish();
+      };
+      if (!equalBytes(encodeLegs(frame.interfaceTransfers), encodeLegs(source.transfers)))
+        throw invalid("withdrawal.transfers");
+      let index = 0;
+      const bound = withdrawals.map((leg) => {
+        const raw = leg.asset === SOL_MINT ? undefined : frame.policy?.splWithdrawalOwners[index++];
+        if (leg.asset !== SOL_MINT && raw === undefined) throw invalid("withdrawal.owner");
+        return Object.freeze({
+          ...leg,
+          screenedOwner: raw === undefined ? leg.recipient : encodeBase58(raw),
+        });
+      });
+      if (index !== frame.policy.splWithdrawalOwners.length) throw invalid("withdrawal.owner");
+      return bound;
+    }),
+  );
 }
 
 /**
@@ -385,49 +511,39 @@ export function senderOf(
   return signers.find((signer) => owned.has(signer));
 }
 
-/** Mirrors the Rust `TransactionOrigin` impl for `SolanaRpc`. */
-export class RpcTransactionOrigin implements TransactionOrigin, AuditedDepositSource {
+/** Mirrors the Rust `TransactionOrigin` impl for `SolanaRpc`, one read per signature. */
+export class RpcTransactionOrigin implements TransactionOrigin {
   readonly #rpc: SolanaRpc;
   readonly #transactions = new Map<Signature, Promise<unknown>>();
+  static readonly #MAX_TRANSACTIONS = 4096;
 
   constructor(rpc: SolanaRpc) {
     this.#rpc = rpc;
   }
 
-  async ringInvoked(
-    signature: Signature,
-    eventIndex: number,
+  async confirmedTransaction(
+    transaction: IndexedShieldedTransaction,
     ring: Address,
     context?: RequestContext,
-  ): Promise<boolean> {
-    return ringEventInvokedIn(
-      confirmedInstructionGroups(await this.#transaction(signature, context)),
-      eventIndex,
-      ring,
-    );
-  }
-
-  async confirmedDeposits(
-    signature: Signature,
-    eventIndex: number,
-    ring: Address,
-    context?: RequestContext,
-  ): Promise<readonly ConfirmedDeposit[]> {
-    return ConfirmedDeposit.fromTransaction(
-      await this.#transaction(signature, context),
-      signature,
-      eventIndex,
-      ring,
-    );
+  ): Promise<ConfirmedRingTransaction | undefined> {
+    const confirmed = await this.#transaction(transaction.txSignature, context);
+    return bindConfirmedTransaction(confirmed, transaction, ring);
   }
 
   #transaction(signature: Signature, context?: RequestContext): Promise<unknown> {
+    // A caller's cancellation or timeout must not govern another caller's read.
+    if (context?.signal !== undefined || context?.timeoutMs !== undefined)
+      return this.#fetch(signature, context);
     const known = this.#transactions.get(signature);
     if (known !== undefined) return known;
     const pending = this.#fetch(signature, context).catch((error: unknown) => {
-      this.#transactions.delete(signature);
+      if (this.#transactions.get(signature) === pending) this.#transactions.delete(signature);
       throw error;
     });
+    if (this.#transactions.size >= RpcTransactionOrigin.#MAX_TRANSACTIONS) {
+      const oldest = this.#transactions.keys().next().value;
+      if (oldest !== undefined) this.#transactions.delete(oldest);
+    }
     this.#transactions.set(signature, pending);
     return pending;
   }
@@ -445,33 +561,280 @@ export class RpcTransactionOrigin implements TransactionOrigin, AuditedDepositSo
       });
     }
     if (transaction === null || transaction === undefined)
-      throw new RingError("RING_ORIGIN_UNAVAILABLE", { details: { transactionId: signature } });
+      throw new RingError("RING_ORIGIN_UNAVAILABLE", {
+        details: { transactionId: signature },
+      });
+    const wire = record(transaction, "transaction");
+    const encoded = record(wire["transaction"], "transaction.transaction");
+    if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
     return transaction;
   }
 }
 
-/** One lookup per event and ring. */
-export class CachedTransactionOrigin implements TransactionOrigin {
-  readonly #origin: TransactionOrigin;
-  readonly #known = new Map<string, boolean>();
+interface ConfirmedEventData extends Pick<
+  ConfirmedTransferData,
+  "outputs" | "messages" | "nullifiers"
+> {
+  readonly kind: ConfirmedEventKind;
+  /** SPP proved the transfer on the anonymous rail. */
+  readonly anonymous?: boolean;
+  readonly txViewingPk?: Bytes33;
+  readonly salt?: Bytes16;
+  readonly outputTree: Address;
+  readonly firstLeaf: bigint;
+  /** The tree each input of a transfer spends from. */
+  readonly inputTrees: readonly Address[];
+}
 
-  constructor(origin: TransactionOrigin) {
-    this.#origin = origin;
-  }
+/** The compact transfer and merge events carry the execution-assigned tree positions. */
+function readEventLocation(
+  event: Reader,
+): Readonly<{ trees: readonly Address[]; outputTree: Address; firstLeaf: bigint }> {
+  const count = event.u32("event.inputTrees.length");
+  if (count < 1 || count > INPUT_TREES) throw invalid("event.inputTrees.length");
+  const trees = Array.from({ length: count }, () => {
+    const tree = encodeBase58(event.bytes(32, "event.inputTree"));
+    event.u64("event.inputTree.firstInputQueueSeq");
+    return tree;
+  });
+  return {
+    trees,
+    outputTree: encodeBase58(event.bytes(32, "event.outputTree")),
+    firstLeaf: event.u64("event.firstOutputLeafIndex"),
+  };
+}
 
-  async ringInvoked(
-    signature: Signature,
-    eventIndex: number,
-    ring: Address,
-    context?: RequestContext,
-  ): Promise<boolean> {
-    const key = `${signature}:${String(eventIndex)}:${ring}`;
-    const known = this.#known.get(key);
-    if (known !== undefined) return known;
-    const invoked = await this.#origin.ringInvoked(signature, eventIndex, ring, context);
-    this.#known.set(key, invoked);
-    return invoked;
+/** Mirrors zolana_event_parser::reconstruct_general_event without trusting indexer fields. */
+function readConfirmedEvent(
+  source: OriginInstruction,
+  emitted: OriginInstruction,
+): ConfirmedEventData | undefined {
+  const event = new Reader(emitted.data.slice(1));
+  const kind = event.u8("event.kind");
+  const tag = source.data[0];
+  if (tag === InstructionTag.ringTransact || tag === InstructionTag.ringAuthorityTransact) {
+    if (kind !== 2) throw invalid("event.kind");
+    const data = readTransferData(new Reader(source.data.slice(1)), source.accounts);
+    const { trees, outputTree, firstLeaf } = readEventLocation(event);
+    event.done();
+    const inputTrees = data.inputTreeIndexes.map((index) => {
+      const tree = trees[index];
+      if (tree === undefined) throw invalid("input.treeIndex");
+      return tree;
+    });
+    return { ...data, outputTree, firstLeaf, kind: "transfer", inputTrees };
   }
+  if (tag === InstructionTag.ringMergeTransact) {
+    if (kind !== 3) throw invalid("event.kind");
+    const data = new Reader(source.data.slice(1));
+    const ringDataHash = data.bytes(32, "merge.ringDataHash") as Bytes32;
+    const merge = readMergeData(data);
+    data.done();
+    const { salt, ciphertext } = merge.outputEncryption;
+    const payload = encodeMergeOutputData({ ringDataHash, salt, ciphertext });
+    const { outputTree, firstLeaf } = readEventLocation(event);
+    const viewTag = event.bytes(32, "merge.viewTag") as Bytes32;
+    event.done();
+    return {
+      outputTree,
+      firstLeaf,
+      kind: "merge",
+      inputTrees: [],
+      nullifiers: merge.nullifiers,
+      messages: [],
+      outputs: [{ hash: merge.outputUtxoHash, viewTag, payload }],
+    };
+  }
+  if (tag !== InstructionTag.ringDeposit) return undefined;
+  if (kind !== 1) throw invalid("event.kind");
+  // Deposit emits a complete Borsh GeneralEvent. Counts are bounded by the instruction's u8 vectors.
+  const count = (name: string): number => {
+    const length = event.u32(name);
+    if (length > 255) throw invalid(name);
+    return length;
+  };
+  const payload = (): Uint8Array => {
+    const length = event.u32("event.data.length");
+    if (length > 0xffff) throw invalid("event.data.length");
+    return event.bytes(length, "event.data");
+  };
+  const nullifiers = Array.from({ length: count("event.inputs.length") }, () => {
+    event.bytes(40, "event.inputTreeAndSequence");
+    return event.bytes(32, "event.nullifier") as Bytes32;
+  });
+  const outputs = Array.from({ length: count("event.outputs.length") }, () => ({
+    viewTag: event.bytes(32, "event.viewTag") as Bytes32,
+    hash: event.bytes(32, "event.outputHash") as Bytes32,
+    payload: payload(),
+  }));
+  const messages = Array.from({ length: count("event.messages.length") }, () => ({
+    viewTag: event.bytes(32, "event.messageTag") as Bytes32,
+    data: payload(),
+  }));
+  if (event.bytes(49, "event.zeroViewingKeyAndSalt").some((byte) => byte !== 0))
+    throw invalid("event.depositKey");
+  const firstLeaf = event.u64("event.firstOutputLeafIndex");
+  const outputTree = encodeBase58(event.bytes(32, "event.outputTree"));
+  for (let index = 0, length = count("event.transfers.length"); index < length; index++) {
+    event.bool("event.transfer.isDeposit");
+    event.u64("event.transfer.amount");
+    event.option("event.transfer.asset", (reader) => reader.bytes(32, "event.transfer.asset"));
+  }
+  event.done();
+  return {
+    kind: "deposit",
+    inputTrees: [],
+    outputTree,
+    firstLeaf,
+    outputs,
+    messages,
+    nullifiers,
+  };
+}
+
+/** Reconstructs the exact indexed view from its successful SPP source and self-CPI event. */
+function bindConfirmedTransaction(
+  confirmed: unknown,
+  indexed: IndexedShieldedTransaction,
+  ring: Address,
+): ConfirmedRingTransaction | undefined {
+  if (indexed.eventIndex === undefined) throw invalid("eventIndex");
+  const found = ringEventIn(confirmedInstructionGroups(confirmed), indexed.eventIndex, ring);
+  if (found === undefined) return undefined;
+  try {
+    const data = readConfirmedEvent(found.source, found.event);
+    if (data === undefined) return undefined;
+    const { outputTree, firstLeaf } = data;
+    const rawSlot = record(confirmed, "transaction")["slot"];
+    // Solana Kit promotes RPC u64 values to bigint. Raw JSON fixtures use number/string.
+    const slot = typeof rawSlot === "bigint" ? rawSlot : integer(rawSlot, "slot");
+    if (slot < 0n || slot > 0xffff_ffff_ffff_ffffn) throw invalid("slot");
+    const proofless = data.kind === "deposit";
+    if (
+      indexed.slot !== slot ||
+      indexed.proofless !== proofless ||
+      indexed.ringProgramId !== ring ||
+      (data.txViewingPk === undefined
+        ? indexed.txViewingPublicKey !== undefined
+        : indexed.txViewingPublicKey === undefined ||
+          !equalBytes(indexed.txViewingPublicKey.toBytes(), data.txViewingPk)) ||
+      (indexed.salt === undefined
+        ? data.salt?.some((byte) => byte !== 0) === true
+        : data.salt === undefined || !equalBytes(indexed.salt, data.salt)) ||
+      indexed.nullifiers.length !== data.nullifiers.length ||
+      indexed.nullifiers.some(
+        (nullifier, index) => !equalBytes(nullifier, data.nullifiers[index]!),
+      ) ||
+      indexed.messages.length !== data.messages.length ||
+      indexed.messages.some((message, index) => {
+        const expected = data.messages[index]!;
+        return (
+          !equalBytes(message.viewTag, expected.viewTag) || !equalBytes(message.data, expected.data)
+        );
+      }) ||
+      indexed.outputSlots.length !== data.outputs.length
+    )
+      throw invalid("indexedTransfer");
+    const outputSlots = data.outputs.map((output, index) => {
+      const published = indexed.outputSlots[index]!;
+      const treeId = published.outputContext.treeId;
+      const leafIndex = firstLeaf + BigInt(index);
+      if (
+        treeId === undefined ||
+        treeAddress(treeId) !== outputTree ||
+        leafIndex > 0xffff_ffff_ffff_ffffn ||
+        published.outputContext.tree !== outputTree ||
+        published.outputContext.leafIndex !== leafIndex ||
+        !equalBytes(published.outputContext.hash, output.hash) ||
+        !equalBytes(published.viewTag, output.viewTag) ||
+        !equalBytes(published.payload, output.payload)
+      )
+        throw invalid("indexedTransfer.output");
+      return Object.freeze({
+        viewTag: output.viewTag,
+        payload: output.payload,
+        outputContext: Object.freeze({
+          tree: outputTree,
+          treeId,
+          leafIndex,
+          hash: output.hash,
+        }),
+      });
+    });
+    const transaction: IndexedShieldedTransaction = Object.freeze({
+      slot,
+      txSignature: indexed.txSignature,
+      eventIndex: indexed.eventIndex,
+      ringProgramId: ring,
+      proofless,
+      ...(data.txViewingPk === undefined
+        ? {}
+        : { txViewingPublicKey: X25519PublicKey.fromBytes(data.txViewingPk) }),
+      ...(data.salt === undefined ? {} : { salt: data.salt }),
+      outputSlots: Object.freeze(outputSlots),
+      messages: Object.freeze(data.messages),
+      nullifiers: Object.freeze(data.nullifiers),
+    });
+    if (data.kind === "deposit")
+      return Object.freeze({
+        kind: data.kind,
+        transaction,
+        deposits: ConfirmedDeposit.fromTransaction(
+          confirmed,
+          indexed.txSignature,
+          indexed.eventIndex,
+          ring,
+        ),
+      });
+    if (data.kind === "merge") {
+      const disclosure = confirmedMergeDisclosureOf(found);
+      return Object.freeze({
+        kind: data.kind,
+        transaction,
+        ...(disclosure === undefined ? {} : { disclosure }),
+      });
+    }
+    // Rust `ConfirmedEvent::input_tree_ids`, the event names any other tree by its account alone.
+    const outputTreeId = outputSlots[0]?.outputContext.treeId;
+    return Object.freeze({
+      kind: data.kind,
+      transaction,
+      inputTreeIds: Object.freeze(
+        data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
+      ),
+      layout: boundLayout(found, {
+        anonymous: data.anonymous === true,
+        outputs: outputSlots.length,
+        inputs: data.nullifiers.length,
+      }),
+    });
+  } catch (cause) {
+    if (cause instanceof RingError) throw cause;
+    throw new RingError("RING_ORIGIN_DECODE", {
+      details: { path: "confirmedTransaction" },
+      cause,
+    });
+  }
+}
+
+/** The disclosure layout of the ring's own `Transact` or `DelegateTransact`, the frame the program verified. */
+function boundLayout(
+  found: TrustedEvent,
+  published: Readonly<{ anonymous: boolean; outputs: number; inputs: number }>,
+): DisclosureLayout {
+  const instruction = found.wrapper?.data;
+  const tag = instruction?.[0];
+  if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
+  // Only an anonymous ring emits an anonymous transfer.
+  const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "off");
+  const data = [RingInstructionTag.legacyTransact, RingInstructionTag.legacyDelegateTransact].some(
+    (legacy) => legacy === tag,
+  )
+    ? RingTransactData.parseLegacy(instruction.subarray(1), rail)
+    : RingTransactData.parse(instruction.subarray(1), rail);
+  if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
+    throw invalid("transfer.instruction");
+  return RingTransactData.disclosureLayout(data);
 }
 
 /** Mirrors Rust `settlement_width`, the accounts `append_interface_transfer_accounts` adds. */
@@ -487,7 +850,11 @@ function withdrawalLeg(
   if (transfer.kind === "solWithdrawal") {
     const recipient = group[1];
     if (group[0] !== SOL_INTERFACE || recipient === undefined) throw invalid("settlementAccounts");
-    return Object.freeze({ recipient, asset: SOL_MINT, amount: transfer.amount });
+    return Object.freeze({
+      recipient,
+      asset: SOL_MINT,
+      amount: transfer.amount,
+    });
   }
   if (transfer.kind === "splWithdrawal") {
     const asset = group[1];
@@ -507,45 +874,72 @@ function withdrawalLeg(
  */
 function settlementDataOf(
   instruction: OriginInstruction,
-): { transfers: readonly InterfaceTransfer[]; cacheAccountCount: number } | undefined {
-  if (instruction.data[0] !== InstructionTag.ringTransact) return undefined;
+):
+  | { transfers: readonly InterfaceTransfer[]; cacheAccountCount: number; anonymous: boolean }
+  | undefined {
+  const tag = instruction.data[0];
+  if (tag !== InstructionTag.ringTransact && tag !== InstructionTag.ringAuthorityTransact)
+    return undefined;
   try {
-    return readSettlementData(new Reader(instruction.data.slice(1)));
+    return readTransferData(new Reader(instruction.data.slice(1)), instruction.accounts);
   } catch (cause) {
-    throw new RingError("RING_ORIGIN_DECODE", { details: { path: "ringTransact" }, cause });
+    throw new RingError("RING_ORIGIN_DECODE", {
+      details: { path: "ringTransact" },
+      cause,
+    });
   }
 }
 
-function readSettlementData(reader: Reader): {
+interface ConfirmedTransferData {
   transfers: readonly InterfaceTransfer[];
   cacheAccountCount: number;
-} {
+  txViewingPk: Bytes33;
+  salt: Bytes16;
+  outputs: readonly Readonly<{
+    hash: Bytes32;
+    viewTag: Bytes32;
+    payload: Uint8Array;
+  }>[];
+  messages: readonly Readonly<{ viewTag: Bytes32; data: Uint8Array }>[];
+  nullifiers: readonly Bytes32[];
+  /** Per input, its position in the event's input trees. */
+  inputTreeIndexes: readonly number[];
+  anonymous: boolean;
+}
+
+/** One parser owns both settlement extraction and audited transfer authentication. */
+function readTransferData(reader: Reader, accounts: readonly Address[]): ConfirmedTransferData {
   reader.u64("expiryUnixTs");
-  reader.bytes(33, "txViewingPk");
-  reader.bytes(16, "salt");
+  const txViewingPk = reader.bytes(33, "txViewingPk") as Bytes33;
+  const salt = reader.bytes(16, "salt") as Bytes16;
   const count = reader.u8("interfaceTransfers.length");
   const transfers = Array.from({ length: count }, () => readInterfaceTransfer(reader));
   reader.option("dataHash", (input) => input.bytes(32, "dataHash"));
   reader.option("ringDataHash", (input) => input.bytes(32, "ringDataHash"));
-  const outputs = reader.u8("outputs.length");
-  for (let index = 0; index < outputs; index += 1) {
-    reader.bytes(32, "output.utxoHash");
+  const outputs = Array.from({ length: reader.u8("outputs.length") }, () => {
+    const hash = reader.bytes(32, "output.utxoHash") as Bytes32;
     const ownerKind = reader.u8("output.ownerTag.kind");
     if (ownerKind !== 0 && ownerKind !== 1) throw invalid("output.ownerTag.kind");
-    reader.bytes(ownerKind === 0 ? 32 : 1, "output.ownerTag");
-    reader.option("output.data", (input) =>
+    let viewTag: Bytes32;
+    if (ownerKind === 0) viewTag = reader.bytes(32, "output.ownerTag") as Bytes32;
+    else {
+      const account = accounts[reader.u8("output.ownerTag.index")];
+      if (account === undefined) throw invalid("output.ownerTag.account");
+      viewTag = addressBytes(account) as Bytes32;
+    }
+    const payload = reader.option("output.data", (input) =>
       input.bytes(input.u16("output.data.length"), "output.data"),
     );
-  }
-  const messages = reader.u8("messages.length");
-  for (let index = 0; index < messages; index += 1) {
-    reader.bytes(32, "message.viewTag");
-    reader.bytes(reader.u16("message.data.length"), "message.data");
-  }
+    return { hash, viewTag, payload: payload ?? new Uint8Array() };
+  });
+  const messages = Array.from({ length: reader.u8("messages.length") }, () => ({
+    viewTag: reader.bytes(32, "message.viewTag") as Bytes32,
+    data: reader.bytes(reader.u16("message.data.length"), "message.data"),
+  }));
   reader.bytes(32, "privateTxHash");
   // CircuitId's u16 tags and payloads match the Rust wire format.
   const circuit = reader.u16("circuit.kind");
-  if (circuit !== 1 && circuit !== 3 && circuit !== 5 && circuit !== 6) {
+  if (circuit !== 1 && circuit !== 2 && circuit !== 3 && circuit !== 5 && circuit !== 6) {
     throw invalid("circuit.kind");
   }
   reader.bytes(3, "circuit.shape");
@@ -565,10 +959,23 @@ function readSettlementData(reader: Reader): {
     cacheAccountCount = (reads === 0n ? 0 : 1) + (writes ? 2 : 0);
   }
   reader.bytes(192, "proof");
-  reader.bytes(reader.u8("inputs.length") * 33, "inputs");
+  const inputs = Array.from({ length: reader.u8("inputs.length") }, () => ({
+    nullifier: reader.bytes(32, "input.nullifier") as Bytes32,
+    treeIndex: reader.u8("input.treeIndex"),
+  }));
   reader.bytes(reader.u8("treeContexts.length") * 4, "treeContexts");
   reader.done();
-  return { transfers, cacheAccountCount };
+  return {
+    transfers,
+    cacheAccountCount,
+    txViewingPk,
+    salt,
+    outputs,
+    messages,
+    nullifiers: inputs.map((input) => input.nullifier),
+    inputTreeIndexes: inputs.map((input) => input.treeIndex),
+    anonymous: circuit === 3 || circuit === 6,
+  };
 }
 
 function readInterfaceTransfer(reader: Reader): InterfaceTransfer {
@@ -615,7 +1022,10 @@ function bytes(fields: Record<string, unknown>, path: string): Uint8Array {
   try {
     return new Uint8Array(base58Encoder.encode(data));
   } catch (cause) {
-    throw new RingError("RING_ORIGIN_DECODE", { details: { path: `${path}.data` }, cause });
+    throw new RingError("RING_ORIGIN_DECODE", {
+      details: { path: `${path}.data` },
+      cause,
+    });
   }
 }
 
@@ -628,7 +1038,9 @@ function programId(accountKeys: readonly Address[], instruction: unknown, path: 
 
 function stackHeight(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new RingError("RING_ORIGIN_STACK", { details: { reason: "invalid stack height" } });
+    throw new RingError("RING_ORIGIN_STACK", {
+      details: { reason: "invalid stack height" },
+    });
   }
   return value;
 }
@@ -641,4 +1053,4 @@ function invalid(path: string): RingError {
   return new RingError("RING_ORIGIN_DECODE", { details: { path } });
 }
 
-const { record, list, address: decodeAddress } = wireDecoder(invalid);
+const { record, list, integer, address: decodeAddress } = wireDecoder(invalid);

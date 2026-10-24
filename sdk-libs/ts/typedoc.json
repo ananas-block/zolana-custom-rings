@@ -1,7 +1,12 @@
 {
   "$schema": "https://typedoc.org/schema.json",
   "name": "@heliuslabs/zolana-custom-rings",
-  "entryPoints": ["src/index.ts", "src/client/index.ts", "src/keypair/index.ts"],
+  "entryPoints": [
+    "src/index.ts",
+    "src/ring-advanced.ts",
+    "src/client/index.ts",
+    "src/keypair/index.ts"
+  ],
   "entryPointStrategy": "resolve",
   "basePath": "src",
   "out": "../../target/typedoc",

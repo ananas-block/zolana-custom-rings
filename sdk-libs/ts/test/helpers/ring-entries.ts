@@ -1,79 +1,13 @@
-import { type Address, type Signature } from "@solana/kit";
+import { type Address } from "@solana/kit";
 import { expect, vi } from "vitest";
+
 import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/zolana/client";
-import { SHIELDED_POOL_PROGRAM_ID, type Bytes32 } from "@heliuslabs/zolana";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+
 import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { filled, treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
-import {
-  RingListNamespace,
-  encodeListEntry,
-  type EntryState,
-  type ListEntry,
-  type ListId,
-  type Member,
-} from "../../src/ring/policy.js";
-
-export interface Lineage {
-  readonly spenders: readonly IndexedShieldedTransaction[];
-  readonly live: ListEntry;
-  readonly utxoHash: Bytes32;
-  readonly nullifier: Bytes32;
-  readonly address: Bytes32;
-}
-
-/** One version per state, each spending the previous, the first spends the address. */
-export function lineage(
-  input: Readonly<{
-    namespace: Address;
-    tree: Address;
-    treeId?: number;
-    listId: ListId;
-    member: Member;
-    states: readonly EntryState[];
-  }>,
-): Lineage {
-  const namespace = RingListNamespace.of(input.namespace, input.treeId ?? 0);
-  const address = namespace.entryAddress(input);
-  let spent = address;
-  const spenders: IndexedShieldedTransaction[] = [];
-  let last: Readonly<{ entry: ListEntry; utxoHash: Bytes32; nullifier: Bytes32 }> | undefined;
-  input.states.forEach((state, version) => {
-    const entry: ListEntry = {
-      listId: input.listId,
-      member: input.member,
-      state,
-      version: BigInt(version),
-      contentHash: filled(0) as Bytes32,
-      blinding: filled(version + 1) as Bytes32,
-    };
-    const hashes = namespace.entryHashes(entry, input.treeId ?? 0);
-    spenders.push({
-      slot: 5n,
-      txSignature: String(version).repeat(87) as Signature,
-      outputSlots: [
-        {
-          viewTag: filled(0) as Bytes32,
-          outputContext: { hash: hashes.utxoHash, tree: input.tree, leafIndex: BigInt(version) },
-          payload: encodeListEntry(entry),
-        },
-      ],
-      messages: [],
-      nullifiers: [spent],
-      proofless: false,
-    });
-    spent = hashes.nullifier;
-    last = { entry, utxoHash: hashes.utxoHash, nullifier: hashes.nullifier };
-  });
-  if (last === undefined) throw new Error("a lineage needs one state");
-  return {
-    spenders,
-    live: last.entry,
-    utxoHash: last.utxoHash,
-    nullifier: last.nullifier,
-    address,
-  };
-}
 
 export interface HistoryRoot {
   readonly value: Bytes32;

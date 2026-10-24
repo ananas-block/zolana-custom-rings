@@ -126,33 +126,35 @@ impl SolanaRpc {
         }
     }
 
-    pub async fn get_account(&self, address: &Address) -> Result<Account, RpcError> {
-        let response: Response<Option<UiAccount>> = self
-            .call(
-                RpcRequest::GetAccountInfo,
-                json!([address.to_string(), account_config()]),
-            )
-            .await?;
-        decode_account(
-            response
-                .value
-                .ok_or_else(|| RpcError::InvalidAccount(format!("{address} does not exist")))?,
-        )
-    }
-
     pub async fn get_multiple_accounts(
         &self,
         addresses: &[Address],
+    ) -> Result<Vec<Option<Account>>, RpcError> {
+        self.multiple_accounts(addresses, account_config()).await
+    }
+
+    /// The node refuses to answer from a bank older than `min_context_slot`.
+    pub async fn get_multiple_accounts_from_slot(
+        &self,
+        addresses: &[Address],
+        min_context_slot: u64,
+    ) -> Result<Vec<Option<Account>>, RpcError> {
+        let mut config = account_config();
+        config["minContextSlot"] = min_context_slot.into();
+        self.multiple_accounts(addresses, config).await
+    }
+
+    async fn multiple_accounts(
+        &self,
+        addresses: &[Address],
+        config: Value,
     ) -> Result<Vec<Option<Account>>, RpcError> {
         let addresses = addresses
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         let response: Response<Vec<Option<UiAccount>>> = self
-            .call(
-                RpcRequest::GetMultipleAccounts,
-                json!([addresses, account_config()]),
-            )
+            .call(RpcRequest::GetMultipleAccounts, json!([addresses, config]))
             .await?;
         response
             .value

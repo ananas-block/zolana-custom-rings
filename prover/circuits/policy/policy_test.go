@@ -349,7 +349,7 @@ func policyKeys() []policyKey {
 	for _, width := range delegateWidths {
 		shape := transaction.Shape{NInputs: width, NOutputs: width}
 		keys = append(keys, policyKey{
-			name:    fmt.Sprintf("custom_ring_policy_delegate_%dx%d", width, width),
+			name:    fmt.Sprintf("custom_ring_policy_delegate_v2_%dx%d_curator", width, width),
 			budget:  budget(delegateBudget, width),
 			circuit: delegate(shape),
 			honest:  func() ringpolicy.World { return ringpolicy.Delegate(shape) },
@@ -359,7 +359,7 @@ func policyKeys() []policyKey {
 }
 
 func memberKeyName(outputs int) string {
-	return fmt.Sprintf("custom_ring_policy_member_%d", outputs)
+	return fmt.Sprintf("custom_ring_policy_member_v2_%d_w0_curator", outputs)
 }
 
 func member(outputs int) func() (frontend.Circuit, error) {

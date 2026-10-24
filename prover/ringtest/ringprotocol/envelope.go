@@ -75,6 +75,9 @@ func AuditStreamKeys(t testing.TB, secret *big.Int) (key [32]byte, nonce [12]byt
 // KeySchedule mirrors ve.KeySchedule for an info string of at most 31 bytes.
 func KeySchedule(t testing.TB, secret *big.Int, info string) (key [32]byte, nonce [12]byte) {
 	t.Helper()
+	if len(info) > 31 {
+		t.Fatalf("info %q packs into more than one field", info)
+	}
 	siloed := ringtest.MustPoseidonHash(t, Tag(ve.DomSepSilo), secret, new(big.Int).SetBytes([]byte(info)))
 	keyLo := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey), siloed))
 	keyHi := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey+1), siloed))
