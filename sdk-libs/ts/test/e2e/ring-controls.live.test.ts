@@ -1,7 +1,11 @@
 import { X25519Keypair, ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { SPL_TOKEN_2022_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import { ZERO_NULLIFIER_PK, withdrawalSetupInstructions } from "@heliuslabs/zolana/internal";
+import {
+  ZERO_NULLIFIER_PK,
+  addressBytes,
+  withdrawalSetupInstructions,
+} from "@heliuslabs/zolana/internal";
 import {
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
@@ -550,6 +554,11 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           .find((ring) => ring.ringProgramId === ringProgramId)
           ?.assets.find((balance) => balance.mint === SOL_MINT)?.amount,
       ).toBe(1_200_000_000n);
+      await writeList(client, ringProgramId, authority, {
+        listId: ListId.allow,
+        tag: addressBytes(authority.address),
+        state: "active",
+      });
       // Policy proves the token account's current owner; create the destination first.
       for (const instruction of await withdrawalSetupInstructions({
         payer: authority.address,

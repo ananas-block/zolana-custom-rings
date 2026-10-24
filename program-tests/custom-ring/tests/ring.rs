@@ -684,6 +684,11 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
     );
 
     // 3. `audit` opens the payment, its hidden sender and the recipient's output.
+    let signature = paid
+        .lines()
+        .find_map(|line| line.strip_prefix("transact")?.trim().parse().ok())
+        .context("transfer CLI did not print its confirmed signature")?;
+    custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
     let auditor_key = auditor_key
         .to_str()
         .context("the auditor key path is utf-8")?;
