@@ -40,4 +40,4 @@ jobs:
           cache-dependency-path: prover/go.sum
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      - run: go test ./... -timeout 50m
+      - run: go test -p 1 ./... -timeout 50m
