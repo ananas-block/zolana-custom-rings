@@ -197,6 +197,8 @@ export type {
   SerializedAnonymousRingState,
 } from "../transaction/wallet/anonymous-state.js";
 export { issueRingAddress, ringAddressOf } from "../wallet/anonymous.js";
+export { openRingNotes, syncRingWallet } from "../wallet/ring-sync.js";
+export type { RingNotes, RingSyncClient } from "../wallet/ring-sync.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../transaction/wallet/ring-keys.js";
 export type {
   RingDeliveryRequest,

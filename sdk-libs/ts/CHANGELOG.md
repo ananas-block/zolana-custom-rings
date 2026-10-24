@@ -46,6 +46,9 @@ Added
 - `CustomRingClient.checkRingProvingKeys()` compares the prover's ring keys
   with `RING_PROVING_KEY_SHA256S`, the keys the package pins, and refuses a
   differing digest with `CLIENT_PROVER_PROVING_KEYS_MISMATCH`.
+- `syncRingWallet` runs `syncWallet`, then adds to the wallet the packed and
+  delivered ring notes `syncWallet` skips, each marked spent once a spend of it
+  is indexed, and `openRingNotes` opens those notes from given transactions.
 
 Fixed
 

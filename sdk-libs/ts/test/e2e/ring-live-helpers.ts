@@ -21,14 +21,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { ClientError } from "@heliuslabs/zolana/client";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import {
-  LocalKeys,
-  ShieldedKeypair,
-  SigningKey,
-  Wallet,
-  syncWallet,
-  type Bytes32,
-} from "@heliuslabs/zolana";
+import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@heliuslabs/zolana";
 import type { MemberRecord } from "../../src/interface/member-registry.js";
 import {
   ListId,
@@ -55,10 +48,13 @@ import {
   grantReadAccessInstruction,
   initSppRingConfigInstruction,
   listWrite,
+  LocalRingKeys,
   messageSignerReader,
   registryCurrentRoot,
   ringAuthAddress,
   ringComputeUnitLimit,
+  ringWalletKeys,
+  syncRingWallet,
   type RingReadTarget,
 } from "../../src/ring/index.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/ring/projection.js";
@@ -274,10 +270,10 @@ export function auditedRingAmounts(
 }
 
 export async function sync(client: CustomRingClient, actor: Actor): Promise<void> {
-  await syncWallet({
+  await syncRingWallet({
     client,
     wallet: actor.wallet,
-    keys: actor.keys,
+    keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
     config: {
       depositPayloadDecoder: customRingDepositPayload,
       requireSlot: await currentSlot(client),

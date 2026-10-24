@@ -23,15 +23,19 @@ indexer, over the same attested prover session. `checkRingProvingKeys()`
 compares the prover's Ring keys with the keys the package pins, run it before
 the first Ring proof.
 
-Wallet sync opens an audited Ring deposit only through the Ring capsule
-decoder:
+`syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes it
+skips into the wallet. Keys that are also `RingKeys` open delivered notes too.
+An audited Ring deposit opens only through the Ring capsule decoder:
 
 ```ts
-import { syncWallet } from "@heliuslabs/zolana";
-import { createCustomRingClient, customRingDepositPayload } from "@heliuslabs/zolana-custom-rings";
+import {
+  createCustomRingClient,
+  customRingDepositPayload,
+  syncRingWallet,
+} from "@heliuslabs/zolana-custom-rings";
 
 const client = await createCustomRingClient({ solanaRpcUrl });
-await syncWallet({
+await syncRingWallet({
   client,
   wallet,
   keys,
