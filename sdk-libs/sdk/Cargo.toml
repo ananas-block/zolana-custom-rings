@@ -9,7 +9,6 @@ proofs = ["zolana-client/proofs"]
 
 [dependencies]
 async-trait = { workspace = true }
-ed25519-dalek = { workspace = true }
 zolana-event.workspace = true
 custom-ring-interface = { workspace = true }
 bytemuck = { workspace = true }
