@@ -2,14 +2,15 @@
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
 use zolana_client::{AsyncRpc, SettlementAccountValidation};
-use zolana_keypair::NullifierKey;
+use zolana_interface::shape::Shape;
+use zolana_keypair::{NullifierKey, ShieldedAddress};
 use zolana_program::instruction::TransactInterfaceTransferAccounts;
 use zolana_ring_transaction::RingOutputRail;
 use zolana_transaction::instructions::transact::ConfidentialTransaction;
 
 use super::{
-    canonical_shape, packed_or_delivered, pad_under_rail, sealed, transaction_key, Rail, RailKind,
-    RingSender, RingTransfer, Spend, Staged, TransferAuthority,
+    canonical_shape, packed_or_delivered, pad_under_rail, sealed, shape_keyed, transaction_key,
+    Rail, RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -19,6 +20,7 @@ pub struct Owner<'a> {
     pub(super) nullifier_key: Option<&'a NullifierKey>,
     pub(super) transaction: ConfidentialTransaction,
     pub(super) interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
+    pub(super) shape: Option<Shape>,
 }
 
 pub struct CustomRingTransferInput<'a> {
@@ -49,6 +51,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 nullifier_key: input.nullifier_key,
                 transaction: input.transaction,
                 interface_transfer_accounts: Vec::new(),
+                shape: None,
             },
         }
     }
@@ -61,9 +64,28 @@ impl<'a> RingTransfer<Owner<'a>> {
         self.rail.interface_transfer_accounts = accounts;
         self
     }
+
+    /// Unset, staging pads to the smallest supported shape.
+    pub fn with_shape(mut self, shape: Shape) -> Result<Self, RingError> {
+        if !shape_keyed(RingRail::Confidential, shape) {
+            return Err(RingError::ShapeUnkeyed {
+                rail: RingRail::Confidential,
+            });
+        }
+        self.rail.shape = Some(shape);
+        Ok(self)
+    }
 }
 
 impl Owner<'_> {
+    /// The rail pads under its own blinding seed, a caller never pads.
+    pub(super) fn shape(&self, sender: &ShieldedAddress) -> Result<Shape, RingError> {
+        match self.shape {
+            Some(shape) => Ok(shape),
+            None => canonical_shape(&self.transaction, sender),
+        }
+    }
+
     pub(super) fn check_settlement_accounts(&self) -> Result<(), RingError> {
         let transfers: Vec<_> = self
             .transaction
@@ -110,8 +132,8 @@ impl Owner<'_> {
         }
         let sender = self.sender.address()?;
         self.check_settlement_accounts()?;
+        let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
-        let shape = canonical_shape(&transaction, &sender)?;
         let delivery = packed_or_delivered(shape.n_outputs(), RingRail::Confidential)?;
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);

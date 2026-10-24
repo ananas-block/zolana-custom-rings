@@ -1023,15 +1023,15 @@ impl Transfer<'_> {
                         transaction.transfer(&payment.to, self.payments.mint, payment.amount)?;
                     }
                 }
-                if let Some(shape) = shape {
-                    transaction.pad_utxos(shape, &self.sender.shielded_address()?)?;
-                }
-                let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+                let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
                     ring: ctx.ring,
                     sender: self.sender,
                     nullifier_key: Some(&self.sender.nullifier_key),
                     transaction,
                 });
+                if let Some(shape) = shape {
+                    transfer = transfer.with_shape(shape)?;
+                }
                 // The owner signs its spends, it pays the transaction too.
                 TopUp {
                     funder: self.payer,

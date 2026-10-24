@@ -850,10 +850,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         &env.recipient.keypair.shielded_address()?,
         RING_TRANSFER_AMOUNT,
     )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let transfer = CustomRingTransfer::new(CustomRingTransferInput {
         ring,
         sender: &env.sender.keypair,
@@ -1099,10 +1095,6 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
     prepared.transfer_sol(
         &env.recipient.keypair.shielded_address()?,
         RING_TRANSFER_AMOUNT,
-    )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
     )?;
     let transfer = CustomRingTransfer::new(CustomRingTransferInput {
         ring,
@@ -1605,7 +1597,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     .send(&env.client)?;
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
-    let sender_address = sender.shielded_address()?;
     let recipient_address = recipient.shielded_address()?;
     let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
     let scan = || RingScan::new(ring_program, auditor.pubkey());
@@ -1623,10 +1614,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     let mut prepared =
         ConfidentialTransaction::new_with_ring(vec![entry_input], sender.pubkey(), ring_program)?;
     prepared.transfer_sol(&recipient_address, ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let entry = OwnerTransfer {
         ring,
         sender,
@@ -1689,10 +1676,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         env.assets.mint(&SOL_MINT)?,
         EXIT_AMOUNT,
         None,
-    )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
     )?;
     let exit = OwnerTransfer {
         ring,
@@ -1770,7 +1753,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         REFUSED_AMOUNT,
         Some(FOREIGN_RING),
     )?;
-    foreign_output.pad_utxos(canonical_shape(1, 2)?, &sender_address)?;
     expect_foreign_ring(prove(foreign_output), FOREIGN_RING)?;
 
     let foreign_note = Note {
@@ -1786,7 +1768,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ring_program,
     )?;
     foreign_input.transfer_sol(&recipient_address, REFUSED_AMOUNT)?;
-    foreign_input.pad_utxos(canonical_shape(1, 2)?, &sender_address)?;
     expect_foreign_ring(prove(foreign_input), FOREIGN_RING)?;
 
     Ok(())
@@ -1855,10 +1836,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     let mut prepared =
         ConfidentialTransaction::new_with_ring(vec![entry_input], sender.pubkey(), ring_program)?;
     prepared.transfer(&recipient_address, usdc, USDC_ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let entry = OwnerTransfer {
         ring,
         sender,
@@ -1912,10 +1889,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ring_program,
     )?;
     prepared.transfer(&recipient_address, usdc, USDC_HOP_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let hop = OwnerTransfer {
         ring,
         sender,
@@ -1998,10 +1971,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         USDC_EXIT_AMOUNT,
         None,
     )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let exit = OwnerTransfer {
         ring,
         sender,
@@ -2082,10 +2051,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         )?;
         transfer.withdraw(usdc, USDC_WITHDRAW_AMOUNT, recipient_usdc)?;
         transfer.transfer(&recipient_address, usdc, USDC_FINAL_SEND)?;
-        transfer.pad_utxos(
-            canonical_shape(transfer.inputs().len(), 2)?,
-            &sender_address,
-        )?;
         Ok(transfer)
     };
     let settlement =
@@ -2307,10 +2272,6 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
             ConfidentialTransaction::new_with_ring(vec![input], sender.pubkey(), ring_program)?
                 .with_output_tree_id(tree_id)?;
         transfer.transfer_sol(&recipient, amount)?;
-        transfer.pad_utxos(
-            canonical_shape(transfer.inputs().len(), 2)?,
-            &sender_address,
-        )?;
         Ok(transfer)
     };
     let prove = |transaction: ConfidentialTransaction| {
@@ -2479,10 +2440,6 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         ConfidentialTransaction::new_with_ring(vec![input], member.pubkey(), ring_program)?
             .with_output_tree_id(tree_id)?;
     transfer.transfer_sol(&member_address, SEND)?;
-    transfer.pad_utxos(
-        canonical_shape(transfer.inputs().len(), 2)?,
-        &member_address,
-    )?;
     OwnerTransfer {
         ring,
         sender: member,
@@ -2553,7 +2510,6 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         )?
         .with_output_tree_id(tree_id)?;
         transfer.transfer_sol(to, 1)?;
-        transfer.pad_utxos(canonical_shape(1, 2)?, &member_address)?;
         Ok(transfer)
     };
 
@@ -2700,10 +2656,6 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
     )?
     .with_output_tree_id(env.tree_id(env.tree)?)?;
     prepared.transfer_sol(&recipient.shielded_address()?, ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender.shielded_address()?,
-    )?;
     let migrated = OwnerTransfer {
         ring,
         sender,
@@ -2733,10 +2685,6 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         ring_program,
     )?;
     prepared.transfer_sol(&sender.shielded_address()?, SECOND_HOP_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &recipient.shielded_address()?,
-    )?;
     let hop = OwnerTransfer {
         ring,
         sender: recipient,
@@ -3041,10 +2989,6 @@ fn second_hop(env: &TestEnv, received: Utxo) -> Result<ConfidentialTransaction> 
         ring,
     )?;
     hop.transfer_sol(&env.sender.keypair.shielded_address()?, SECOND_HOP_AMOUNT)?;
-    hop.pad_utxos(
-        canonical_shape(hop.inputs().len(), 2)?,
-        &env.recipient.keypair.shielded_address()?,
-    )?;
     Ok(hop)
 }
 

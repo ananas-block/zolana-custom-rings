@@ -409,8 +409,7 @@ impl ShapeRing<'_> {
                 for _ in payments {
                     transaction.transfer_sol(&recipient, amount)?;
                 }
-                transaction.pad_utxos(shape, &sender.shielded_address()?)?;
-                env.run(owner_transfer(transaction).prove(client))
+                env.run(owner_transfer(transaction).with_shape(shape)?.prove(client))
             }
             RingRail::Anonymous => {
                 let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)

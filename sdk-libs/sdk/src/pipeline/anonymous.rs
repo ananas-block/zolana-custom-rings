@@ -33,7 +33,6 @@ use zolana_transaction::{
 };
 
 use super::{
-    canonical_shape,
     owner::{CustomRingTransferInput, Owner},
     pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
@@ -93,7 +92,6 @@ pub struct Anonymous<'a> {
     /// Keyed by the output slot each payment created.
     payments: Vec<(u32, AnonymousPayment)>,
     exit_token_owner: Option<Address>,
-    shape: Option<Shape>,
     tag_rng: fn() -> Box<dyn rand_core::CryptoRng + Send>,
 }
 
@@ -122,7 +120,6 @@ impl<'a> RingTransfer<Owner<'a>> {
                 state,
                 payments: Vec::new(),
                 exit_token_owner: None,
-                shape: None,
                 tag_rng: os_tag_rng,
             },
         }
@@ -161,7 +158,7 @@ impl RingTransfer<Anonymous<'_>> {
             }
             .into());
         }
-        self.rail.shape = Some(shape);
+        self.rail.owner.shape = Some(shape);
         Ok(self)
     }
 
@@ -538,10 +535,7 @@ impl Anonymous<'_> {
         .await?;
         // Tags bind slots, the slot order is fixed before any stream is read.
         let transaction = self.owner.transaction.clone();
-        let shape = match self.shape {
-            Some(shape) => shape,
-            None => canonical_shape(&transaction, &sender)?,
-        };
+        let shape = self.owner.shape(&sender)?;
         let staged_slot = client.get_slot().await?;
         let epoch = tag_epoch(staged_slot);
         let first_nullifier = *transaction.first_nullifier();
