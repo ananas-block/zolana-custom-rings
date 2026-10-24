@@ -10,8 +10,13 @@ import { isOffCurveAddress, type MessagePartialSigner } from "@solana/kit";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
+  ClientError,
+  DEFAULT_INDEXER_RPC_CONFIG,
+  attempts,
   isClientError,
   isRetryable,
+  pollUntil,
+  ZERO_32,
   SYSTEM_PROGRAM,
   addressBytes,
   checkedAddress,
@@ -43,7 +48,12 @@ import type { RingAddress } from "../keypair/ring-address.js";
 export { ANCHOR_DECOYS } from "../transaction/wallet/anonymous-state.js";
 
 import { RingError, wrapRingError, type RingErrorCode } from "./error.js";
-import { spendsDefaultRing, type AnchorWitness, type PendingFirstContact } from "./pipeline.js";
+import {
+  spendsDefaultRing,
+  type AnchorWitness,
+  type PendingAnchor,
+  type PendingFirstContact,
+} from "./pipeline.js";
 import type { RingOutputRail } from "./rail.js";
 import { signMessage } from "./rpc.js";
 import { anchorState } from "./trees.js";
@@ -148,10 +158,10 @@ export async function anonymousExitTokenOwner(
   return tokenOwner;
 }
 
-/** Rust `check_anonymous_slots`, AnonymousRingEddsa keeps its owners hidden, a note leaves only to the default ring. */
+/** Rust `check_anonymous_slots`, only uncached noncompact notes in and Ed25519 owners out. */
 export function checkAnonymousSlots(proofInputs: SppProofInputs): void {
   const inputOpen = proofInputs.inputUtxos.some(
-    (input) => input.cacheSlot !== undefined || input.isCompact(),
+    (input) => input.cacheSlot !== undefined || input.isCompact() || input.isAddress(),
   );
   const outputOpen = proofInputs.outputs.some(
     (output) =>
@@ -169,21 +179,36 @@ export function checkEntryInputs(proofInputs: SppProofInputs): void {
     if (input.isDummy()) return;
     if (input.utxo.ringProgramId !== undefined)
       throw new RingError("RING_ENTRY_RING_INPUT", { details: { index } });
-    if (input.dataHash !== undefined || input.ringDataHash !== undefined)
+    if (!carriesNoData([input.dataHash, input.ringDataHash]))
       throw new RingError("RING_ENTRY_INPUT_DATA", { details: { index } });
   });
 }
 
-/** The first contact's path at a root its tree holds, fetched beside its pinned decoys, Rust `Anonymous::anchor`. */
-export async function anchorWitness(
-  input: Readonly<{
-    client: Pick<ProofReader, "getMerkleProofs"> & Pick<ChainReader, "getAccount">;
-    anchor: PairAnchor;
-  }>,
-  context?: RequestContext,
+/** Rust `carries_no_data`, a zero hash commits like an absent one. */
+export function carriesNoData(hashes: readonly (Bytes32 | undefined)[]): boolean {
+  return hashes.every((hash) => hash === undefined || equalBytes(hash, ZERO_32));
+}
+
+type AnchorClient = Pick<ProofReader, "getMerkleProofs"> & Pick<ChainReader, "getAccount">;
+
+export function pendingAnchor(
+  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint }>,
+): PendingAnchor {
+  const tree = treeAddress(input.anchor.contact.treeId);
+  const pending: PendingAnchor = {
+    tree,
+    read: (context) => anchorWitness({ ...input, tree }, context),
+  };
+  return Object.freeze(pending);
+}
+
+/** The first contact's path at a root its tree holds, fetched beside its pinned decoys, Rust `AnonymousSpend::anchor`. */
+async function anchorWitness(
+  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint; tree: Address }>,
+  context: RequestContext | undefined,
 ): Promise<AnchorWitness> {
-  const { contact, leaves } = input.anchor;
-  const tree = treeAddress(contact.treeId);
+  const { anchor: pair, stagedSlot, tree } = input;
+  const { contact, leaves } = pair;
   await initializePoseidon();
   const refused = (cause?: unknown): RingError =>
     wrapRingError("RING_ANCHOR_INVALID", cause, {
@@ -193,13 +218,35 @@ export async function anchorWitness(
         .map((byte) => byte.toString(16).padStart(2, "0"))
         .join(""),
     });
-  const response = await input.client
-    .getMerkleProofs(tree, leaves, undefined, context)
-    .catch((cause: unknown) => {
-      if (isClientError(cause) && cause.code === "CLIENT_INDEXER" && !isRetryable(cause))
-        throw refused(cause);
-      throw cause;
-    });
+  let latest = 0n;
+  // An indexer at or past the staging slot holds every pinned leaf, a missing one is refused.
+  const response = await pollUntil(
+    () => input.client.getMerkleProofs(tree, leaves, DEFAULT_INDEXER_RPC_CONFIG, context),
+    (answer) => {
+      latest = answer.context.slot;
+      return latest >= stagedSlot;
+    },
+    {
+      retryErrors: false,
+      ...(context === undefined ? {} : { context }),
+      onTimeout: (poll) =>
+        new ClientError("CLIENT_INDEXER_NOT_CAUGHT_UP", {
+          details: {
+            target: stagedSlot.toString(),
+            latest: latest.toString(),
+            attempts: attempts(poll),
+          },
+        }),
+    },
+  ).catch((cause: unknown) => {
+    if (
+      isClientError(cause) &&
+      (cause.code === "CLIENT_INVALID_RPC_RESPONSE" ||
+        (cause.code === "CLIENT_INDEXER" && !isRetryable(cause)))
+    )
+      throw refused(cause);
+    throw cause;
+  });
   // A fault on any pinned leaf refuses the read alike.
   const proofs = leaves.map((leaf) =>
     response.proofs.find((candidate) => equalBytes(candidate.leaf, leaf)),

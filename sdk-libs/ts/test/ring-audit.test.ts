@@ -500,6 +500,25 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     ).toMatchObject({ kind: "opened", ring: { kind: "ring", commitment: later } });
   });
 
+  it("counts a note the store names twice under a prefix once", () => {
+    const entry = vectorOf("anonymous", "commitment");
+    const vector = anonymousCase("commitment");
+    const assets = new AssetRegistry();
+    const index = spentUtxos(vector, assets);
+    const later = field(need(vector.inputs[1], "input 1").commitment);
+    const doubled = {
+      utxo: (commitment) => index.utxo(commitment),
+      withPrefix: (ownerKey, prefix) => [
+        ...index.withPrefix(ownerKey, prefix),
+        ...index.withPrefix(ownerKey, prefix),
+      ],
+    } satisfies KnownUtxos;
+    expect(audit(entry, { assets, knownUtxos: doubled }).inputs[1]?.opening).toMatchObject({
+      kind: "opened",
+      ring: { kind: "ring", commitment: later },
+    });
+  });
+
   it("opens k inputs under one prefix from k notes and lists every candidate past k", () => {
     const vector = anonymousCase("commitment");
     const known = spentUtxos(vector, new AssetRegistry());

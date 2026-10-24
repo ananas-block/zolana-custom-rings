@@ -25,6 +25,7 @@ import {
   type PolicySource,
   type Rule,
   type RuleGuard,
+  type RuleTable,
 } from "../src/ring/policy.js";
 import { RingError } from "../src/ring/error.js";
 import { memberRegistryData } from "./helpers/ring-accounts.js";
@@ -457,6 +458,32 @@ describe("rule table builder", () => {
     }
   });
 
+  it("names the first refusal in Rust's order, a stored table alike", () => {
+    const limit = { asset: memberOfAsset(ASSET_MINT), cap: 1n, cosignAbove: 0n };
+    const cases: readonly [string, Parameters<typeof buildRuleTable>[0]][] = [
+      ["DuplicateRule", { rules: [requireAllow, requireAllow], limits: [limit, limit] }],
+      ["DuplicateRule", { rules: [requireAllow, above(requireAllow, 10n), rule("asset", [], [])] }],
+      [
+        "DuplicateInlineAsset",
+        {
+          rules: [{ ...requireAllow, guard: { kind: "aboveAmountByAsset" } }],
+          inlineAssets: [asset, asset, filled(5)],
+          inlineLimits: [5n, 5n, 0n],
+        },
+      ],
+    ];
+    for (const [expected, input] of cases) {
+      expect(reason(() => buildRuleTable(input))).toBe(expected);
+    }
+    const stored = {
+      rules: [requireAllow, requireAllow].map(encodeRule),
+      inlineAssets: [],
+      inlineLimits: [],
+      limits: [{ ...limit, asset: filled(0) }],
+    };
+    expect(reason(() => decodeRuleTable(stored))).toBe("DuplicateRule");
+  });
+
   it("shares member witnesses across rules without the retired ten-answer limit", () => {
     expect(
       buildRuleTable({
@@ -508,6 +535,27 @@ describe("policy hash", () => {
         limits: [{ asset: memberOfAsset(ASSET_MINT), cap: 0n, cosignAbove: 0n }],
       }),
     ).toThrow(expect.objectContaining({ details: { reason: "LimitWithoutBound" } }));
+  });
+
+  it("reads a stored limit's asset as a member and refuses the zero pad", () => {
+    const row = { asset: memberOfAsset(ASSET_MINT), cap: 1n, cosignAbove: 0n };
+    const stored = { rules: [], inlineAssets: [], inlineLimits: [], limits: [row] };
+    expect(decodeRuleTable(stored).limits).toEqual([row]);
+    expect(() => decodeRuleTable({ ...stored, limits: [{ ...row, asset: filled(0) }] })).toThrow(
+      expect.objectContaining({ details: { reason: "ZeroLimitAsset" } }),
+    );
+  });
+
+  it("refuses a hand-built table its builder refuses before hashing it", () => {
+    const table: RuleTable = {
+      rules: Array.from({ length: 17 }, () => forbid("sender", ListId.frozen)),
+      inlineAssets: [],
+      inlineLimits: [],
+      limits: [],
+    };
+    expect(reason(() => policyTableHash(table, owners([[ListId.frozen, records]])))).toBe(
+      "TooManyRules",
+    );
   });
 
   it("fails closed on a referenced list without a source", () => {

@@ -54,7 +54,6 @@ const { hash, hashBytes } = indexerScalars;
 const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
   [-32070, "RING_REGISTRY_OUT_OF_SYNC"],
   [-32071, "RING_REGISTRY_ROOT_CHANGED"],
-  [-32072, "RING_MEMBER_UNREGISTERED"],
   [-32075, "RING_REGISTRY_PAGE_GAP"],
   [-32076, "RING_RECORD_QUEUE_CHANGED"],
 ]);

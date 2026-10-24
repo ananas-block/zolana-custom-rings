@@ -26,11 +26,11 @@ import {
 import { tagEpoch } from "../keypair/ring-stream.js";
 
 import {
-  anchorWitness,
   anonymousExitTokenOwner,
   checkAnonymousSigner,
   checkAnonymousSlots,
   checkEntryInputs,
+  pendingAnchor,
   pendingFirstContacts,
   type AnonymousPayment,
   type AnonymousSpendSigner,
@@ -48,7 +48,7 @@ import {
 } from "./pipeline.js";
 import { AnonymousSlots, RingOutputRail, type RingDelivery } from "./rail.js";
 import { isRingKeys, type RingKeys } from "../transaction/wallet/ring-keys.js";
-import { type AnonymousRingState } from "../transaction/wallet/anonymous-state.js";
+import type { AnonymousRingState, PairAnchor } from "../transaction/wallet/anonymous-state.js";
 import { TagAllocation } from "../wallet/anonymous.js";
 
 /** @internal */
@@ -306,7 +306,8 @@ export class AnonymousTransfer {
       context,
     );
     // Tags bind slots, the slot order is fixed before any stream is read.
-    const epoch = tagEpoch(await client.getSlot(context));
+    const stagedSlot = await client.getSlot(context);
+    const epoch = tagEpoch(stagedSlot);
     const plan = await this.#plan({ keys, prepared, epoch }, context);
     const rail = new RingOutputRail(
       await transactionKey(keys, sender, prepared, context),
@@ -321,11 +322,11 @@ export class AnonymousTransfer {
         instructionDiscriminator: InstructionTag.ringTransact,
       });
       checkAnonymousSlots(proofInputs);
+      const foreign = proofInputs.inputUtxos.findIndex(
+        (spent) => !spent.isDummy() && !spent.utxo.owner.equals(sender.signingPublicKey),
+      );
+      if (foreign >= 0) throw new RingError("RING_MIXED_OWNERS", { details: { index: foreign } });
       checkEntryInputs(proofInputs);
-      const anchor =
-        plan.anchor === undefined
-          ? undefined
-          : await anchorWitness({ client, anchor: plan.anchor }, context);
       const staged: StagedTransfer = {
         proofInputs,
         rail,
@@ -351,7 +352,9 @@ export class AnonymousTransfer {
             ),
           anonymous: {
             epoch,
-            ...(anchor === undefined ? {} : { anchor }),
+            ...(plan.anchor === undefined
+              ? {}
+              : { anchor: pendingAnchor({ client, anchor: plan.anchor, stagedSlot }) }),
             firstContacts: pendingFirstContacts({
               rail,
               proofInputs,
@@ -385,7 +388,7 @@ export class AnonymousTransfer {
     Readonly<{
       slots: AnonymousSlots;
       payments: ReadonlyMap<number, AnonymousPayment>;
-      anchor?: Parameters<typeof anchorWitness>[0]["anchor"];
+      anchor?: PairAnchor;
     }>
   > {
     const { keys, prepared } = input;
@@ -400,7 +403,7 @@ export class AnonymousTransfer {
     );
     const payments = paymentSlots(prepared, this.#payments);
     const allocation = new TagAllocation(this.#state, input.epoch);
-    let anchor: Parameters<typeof anchorWitness>[0]["anchor"] | undefined;
+    let anchor: PairAnchor | undefined;
     for (const [slotIndex, payment] of payments) {
       const tag = allocation.allocate(payment.to, this.#tagRandom);
       if (tag.stream.kind === "pair") anchor = tag.stream.anchor;

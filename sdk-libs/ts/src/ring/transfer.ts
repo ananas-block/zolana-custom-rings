@@ -44,7 +44,7 @@ import { anonymousAuditKey } from "../interface/ring-disclosure-layout.js";
 import { RingAddress } from "../keypair/ring-address.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "./admin.js";
-import type { AnonymousPayment, AnonymousSpendSigner } from "./anonymous.js";
+import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from "./anonymous.js";
 import { fetchRingProgramConfig } from "./config.js";
 import { RingError, wrapRingError } from "./error.js";
 import { boundState } from "./pipeline.js";
@@ -240,7 +240,7 @@ export function selectRingInputs(
     ringProgramId: Address;
     asset: Address;
     amount: bigint;
-    inputs: "ring" | "ring-or-default" | "default";
+    inputs: "ring" | "ring-or-default" | "default" | "entry";
     tree: Address;
     maxInputs: number;
   }>,
@@ -256,11 +256,13 @@ export function selectRingInputs(
     policy: {
       eligible: (entry) => {
         if (!unreserved(reserved)(entry)) return false;
-        if (entry.utxo.ringProgramId === ringProgramId) return inputs !== "default";
+        if (entry.utxo.ringProgramId === ringProgramId)
+          return inputs === "ring" || inputs === "ring-or-default";
         return (
           inputs !== "ring" &&
           entry.utxo.ringProgramId === undefined &&
-          entry.ringDataHash === undefined
+          entry.ringDataHash === undefined &&
+          (inputs !== "entry" || carriesNoData([entry.dataHash]))
         );
       },
       ordering: "largestFirst",
@@ -552,15 +554,15 @@ function selectAnonymousInputs(
   pool: Omit<Parameters<typeof selectRingInputs>[0], "inputs" | "maxInputs">,
   selection: "ring" | "ring-or-default" | "default",
 ): readonly WalletUtxo[] {
-  const select = (inputs: "ring" | "default") =>
+  const select = (inputs: "ring" | "entry") =>
     selectRingInputs({ ...pool, inputs, maxInputs: anonymousInputCap(inputs) });
-  if (selection !== "ring-or-default") return select(selection);
+  if (selection !== "ring-or-default") return select(selection === "ring" ? "ring" : "entry");
   try {
     return select("ring");
   } catch (ringAlone) {
     if (!unfunded(ringAlone)) throw ringAlone;
     try {
-      return select("default");
+      return select("entry");
     } catch (defaultAlone) {
       if (!unfunded(defaultAlone)) throw defaultAlone;
       throw ringAlone;
@@ -576,8 +578,8 @@ function unfunded(cause: unknown): boolean {
 }
 
 /** Padded inputs are published, the widest two-output shape an anonymous key serves bounds a spend. */
-function anonymousInputCap(selection: "ring" | "default"): number {
-  const spendsDefaultRing = selection === "default";
+function anonymousInputCap(selection: "ring" | "entry"): number {
+  const spendsDefaultRing = selection === "entry";
   return Math.max(
     ...SPP_SUPPORTED_SHAPES.filter(
       (shape) =>

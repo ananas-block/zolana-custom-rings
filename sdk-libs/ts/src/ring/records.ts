@@ -105,11 +105,12 @@ export async function memberListWriteInstruction(
   }>,
   config: RingProgramConfig,
 ): Promise<Instruction> {
-  checkWriter(write.lists, "member");
+  const lists = listWrite(write.lists);
+  checkWriter(lists, "member");
   const member = signerAddress(write.member);
   const accounts = await recordAccounts(write.ringProgramId, write.member, false);
   const data = new Writer().u8(RingInstructionTag.writeRecords, "tag");
-  writeMaxFee(writeLists(data, write.lists), config);
+  writeMaxFee(writeLists(data, lists), config);
   return {
     programAddress: write.ringProgramId,
     accounts: [...accounts, ...feeAccounts(config, member, write.payer)],
@@ -130,11 +131,12 @@ export class AuthorityListWrite {
 
   /** `member` is any record key, an owner identity or an asset. */
   withWrite(member: Member, write: ListWrite): AuthorityListWrite {
-    checkWriter(write, "authority");
+    const lists = listWrite(write);
+    checkWriter(lists, "authority");
     checkMember(member);
     if (this.#writes.some((known) => equalBytes(known.member, member)))
       throw listWriteInvalid("Duplicate");
-    return this.#holding([...this.#writes, Object.freeze({ member, write })]);
+    return this.#holding([...this.#writes, Object.freeze({ member, write: lists })]);
   }
 
   writes(): readonly Readonly<{ member: Member; write: ListWrite }>[] {

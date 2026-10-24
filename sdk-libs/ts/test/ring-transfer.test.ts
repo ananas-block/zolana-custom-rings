@@ -20,7 +20,6 @@ import {
   SOL_MINT,
   ConfidentialTransfer,
   WithdrawalTarget,
-  assetField,
   decodeConfidential,
   Utxo,
   Wallet,
@@ -41,6 +40,7 @@ import type { ProvenRingTransfer } from "../src/ring/pipeline.js";
 import {
   ListId,
   buildRuleTable,
+  memberOfAsset,
   memberOfIdentity,
   recordBit,
   type RuleTable,
@@ -371,7 +371,7 @@ describe("policy ring", () => {
           guard: { kind: "always" },
         },
       ],
-      limits: [{ asset: assetField(SOL_MINT), ...limit }],
+      limits: [{ asset: memberOfAsset(SOL_MINT), ...limit }],
     });
 
   async function curatedRing(

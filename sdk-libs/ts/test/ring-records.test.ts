@@ -276,6 +276,34 @@ describe("member list writes", () => {
       expect.objectContaining({ details: { reason: "SetAndCleared" } }),
     );
   });
+
+  it("refuses a hand-built write that changes nothing or both ways before either writer signs", async () => {
+    const [, bump] = await ringConfigPda(RING);
+    const config = decodeRingProgramConfig(configBytes(bump, 0n));
+    const authority = new AuthorityListWrite({ ringProgramId: RING, authority: AUTHORITY });
+    const member = memberOfIdentity(field("01".repeat(32)));
+    for (const [listId, writer] of [
+      [ListId.recovery, "member"],
+      [ListId.allow, "authority"],
+    ] as const)
+      for (const [lists, reason] of [
+        [{ set: [], clear: [] }, "Empty"],
+        [{ set: [listId], clear: [listId] }, "SetAndCleared"],
+      ] as const) {
+        const refused = expect.objectContaining({
+          code: "RING_LIST_WRITE_INVALID",
+          details: { reason },
+        });
+        if (writer === "member")
+          await expect(
+            memberListWriteInstruction(
+              { ringProgramId: RING, payer: PAYER, member: MEMBER, lists },
+              config,
+            ),
+          ).rejects.toThrow(refused);
+        else expect(() => authority.withWrite(member, lists)).toThrow(refused);
+      }
+  });
 });
 
 describe("authority list writes", () => {

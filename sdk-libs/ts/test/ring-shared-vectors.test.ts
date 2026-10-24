@@ -48,8 +48,10 @@ import {
   buildRuleTable,
   decodeRule,
   decodeRuleTable,
+  memberOfIdentity,
   policyTableFields,
   policyTableHash,
+  type OutflowLimit,
   type RecordLists,
   type RuleRefusal,
 } from "../src/ring/policy.js";
@@ -288,7 +290,7 @@ describe("ring-policy-table.json", () => {
     readonly rules: readonly Bytes32[];
     readonly inlineAssets: readonly Bytes32[];
     readonly inlineLimits: readonly bigint[];
-    readonly limits: readonly Readonly<{ asset: Bytes32; cap: bigint; cosignAbove: bigint }>[];
+    readonly limits: readonly OutflowLimit[];
     readonly fields: readonly string[];
     readonly policyHash: string;
   }
@@ -332,7 +334,7 @@ describe("ring-policy-table.json", () => {
         inlineAssets: list(item["inline_assets"]).map((asset) => field(text32(asset))),
         inlineLimits: list(item["inline_limits"]).map(integer),
         limits: list(item["limits"]).map((limit) => ({
-          asset: field(text32(object(limit)["asset"])),
+          asset: memberOfIdentity(field(text32(object(limit)["asset"]))),
           cap: integer(object(limit)["cap"]),
           cosignAbove: integer(object(limit)["cosign_above"]),
         })),

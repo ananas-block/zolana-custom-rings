@@ -2,10 +2,12 @@ import { type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
 import { RING_PROVING_KEY_SHA256S } from "./ring-proving-keys.js";
+import { APPLY_BATCH } from "./member-registry.js";
 import {
   ANONYMOUS_AUDIT_CLASSES,
   ANONYMOUS_ENTRY_CLASS,
   ANONYMOUS_ENTRY_OUTPUTS,
+  ANONYMOUS_MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
   PACKED_AUDIT_CAPACITIES,
 } from "./ring-disclosure-layout.js";
@@ -73,12 +75,16 @@ export const RING_KEYS: readonly Readonly<{
             `custom-ring-policy-delegate-${inputs}x${outputs}`,
           ] as const,
       ),
-      [{ family: "applyRecords", writes: 1 }, "custom-ring-apply-records-1"],
-      [{ family: "applyRecords", writes: 16 }, "custom-ring-apply-records-16"],
+      ...[1, APPLY_BATCH].map(
+        (writes) =>
+          [{ family: "applyRecords", writes }, `custom-ring-apply-records-${writes}`] as const,
+      ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
       [{ family: "deposit" }, "custom-ring-deposit"],
-      [{ family: "anonymousMerge", width: 8 }, "custom-ring-merge-anonymous-8"],
-      [{ family: "anonymousMerge", width: 24 }, "custom-ring-merge-anonymous-24"],
+      ...ANONYMOUS_MERGE_WIDTHS.map(
+        (width) =>
+          [{ family: "anonymousMerge", width }, `custom-ring-merge-anonymous-${width}`] as const,
+      ),
     ] as const
   ).map(([circuit, name]) =>
     Object.freeze({ circuit: Object.freeze<RingKeyCircuit>(circuit), name }),

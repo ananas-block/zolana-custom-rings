@@ -11,8 +11,5 @@ export const RING_SOURCE_SLOTS = 8;
 export const RING_OUTFLOW_LIMIT_SLOTS = 8;
 export const RING_STATE_PATH_LENGTH = 32;
 
-/** Rust `ANONYMOUS_MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
-export const ANONYMOUS_MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
-
 /** A member's record in a member registry, the opening a ring merge proves. */
 export type PresentRecordOpening = Extract<RecordOpening, { kind: "present" }>;

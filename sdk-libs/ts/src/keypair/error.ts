@@ -1,7 +1,7 @@
 import { fieldU32, hideCause, sanitizeDetails, U64_MAX } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana";
 
-/** Rust `zolana_ring_keys::RingKeyError`, the ring key APIs' refusals. */
+/** Rust `zolana_ring_keys::RingKeyError` variants, another enum's variant written `Enum::Variant`. */
 export const RING_KEY_ERROR_RUST_VARIANT = Object.freeze({
   KEYPAIR_INVALID_RING_ADDRESS_SCHEME: "InvalidRingAddressScheme",
   KEYPAIR_INVALID_RING_ADDRESS_BASE58: "InvalidRingAddressBase58",
@@ -14,11 +14,11 @@ export const RING_KEY_ERROR_RUST_VARIANT = Object.freeze({
   KEYPAIR_INVALID_RING_PAYMENT_AMOUNT: "InvalidRingPaymentAmount",
   KEYPAIR_INVALID_RING_PAYMENT_MINT: "InvalidRingPaymentMint",
   KEYPAIR_INVALID_RING_PAYMENT_LABEL: "InvalidRingPaymentLabel",
-  KEYPAIR_TAG_INDEX_OUT_OF_RANGE: "IndexOutOfRange",
-  KEYPAIR_NONCANONICAL_FIELD: "NoncanonicalField",
-  KEYPAIR_DISCLOSURE_SHAPE: "DisclosureShape",
-  KEYPAIR_DISCLOSURE_PADDING: "DisclosurePadding",
-  KEYPAIR_DISCLOSURE_FIELD: "DisclosureField",
+  KEYPAIR_TAG_INDEX_OUT_OF_RANGE: "StreamError::IndexOutOfRange",
+  KEYPAIR_NONCANONICAL_FIELD: "StreamError::NoncanonicalField",
+  KEYPAIR_DISCLOSURE_SHAPE: "AuditError::DisclosureLayout",
+  KEYPAIR_DISCLOSURE_PADDING: "AuditError::DisclosurePadding",
+  KEYPAIR_DISCLOSURE_FIELD: "AuditError::DisclosureField",
   KEYPAIR_INVALID_LENGTH: null,
 } as const);
 

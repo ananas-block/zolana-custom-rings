@@ -9,8 +9,8 @@ export {
   ringProvingKey,
 } from "../interface/proving-keys.js";
 export type { RingKeyCircuit } from "../interface/proving-keys.js";
+export { ANONYMOUS_MERGE_WIDTHS } from "../interface/ring-disclosure-layout.js";
 export {
-  ANONYMOUS_MERGE_WIDTHS,
   RING_INLINE_ASSET_SLOTS,
   RING_OUTFLOW_LIMIT_SLOTS,
   RING_RULE_SLOTS,

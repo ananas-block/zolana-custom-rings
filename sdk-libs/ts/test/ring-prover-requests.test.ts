@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   ringProofCircuit,
   ringProofRequestBody,
+  ringRequestKey,
   type AnonymousSlotProofInputs,
   type AuditEnvelopeProofInputs,
   type DeliveredSlotProofInputs,
@@ -15,7 +16,7 @@ import {
   type RingSlotOpening,
 } from "../src/client/prover/ring.js";
 import { type PresentRecordOpening } from "../src/client/prover/types.js";
-import { solanaOwnerIdentity, PROVING_KEY_SHA256S } from "@heliuslabs/zolana/internal";
+import { solanaOwnerIdentity } from "@heliuslabs/zolana/internal";
 import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import {
@@ -32,7 +33,12 @@ import type {
   RecordOpening,
   RecordWriteProofInput,
 } from "../src/interface/member-registry.js";
-import { RING_KEYS, ringCircuitType, ringProvingKey } from "../src/interface/proving-keys.js";
+import {
+  RING_KEYS,
+  RING_PROVING_KEY_SHA256S,
+  ringCircuitType,
+  ringProvingKey,
+} from "../src/interface/proving-keys.js";
 import { auditSharedSecret, symmetricAuditApply } from "../src/keypair/audit.js";
 import type { AuditLayout } from "../src/interface/ring-disclosure-layout.js";
 import {
@@ -57,7 +63,12 @@ import {
   replayRecordWrites,
   verifyRecordOpening,
 } from "../src/ring/member-registry.js";
-import { buildRuleTable, decodeRule, policyTableHash } from "../src/ring/policy.js";
+import {
+  buildRuleTable,
+  decodeRule,
+  memberOfIdentity,
+  policyTableHash,
+} from "../src/ring/policy.js";
 import { sealNullifierKeyWith } from "../src/ring/register-key.js";
 import {
   applyRecordsStatementHash,
@@ -593,7 +604,7 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
   it("names the deposit key the prover loads and refuses a shape no ring key serves", () => {
     expect(ringProvingKey({ family: "deposit" })).toEqual({
       name: "custom_ring_deposit.key",
-      sha256: PROVING_KEY_SHA256S["custom_ring_deposit.key"],
+      sha256: RING_PROVING_KEY_SHA256S["custom_ring_deposit.key"],
     });
     expect(() => ringProvingKey({ family: "packedAudit", outputs: 3 })).toThrow(
       expect.objectContaining({ code: "INTERFACE_INVALID_SHAPE" }),
@@ -630,6 +641,18 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
     expect(() => ringProofRequestBody({ ...base, ownerKeys: [ZERO] })).toThrow(
       expect.objectContaining({ code: "CLIENT_INVALID_LENGTH" }),
     );
+    const unknown = { ...base };
+    Reflect.set(unknown, "kind", "packedAuditV2");
+    const loose = { ...base };
+    Reflect.set(loose, "outputs", { length: base.outputs.length });
+    for (const malformed of [unknown, loose]) {
+      expect(() => ringProofRequestBody(malformed)).toThrow(
+        expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }),
+      );
+      expect(() => ringRequestKey(malformed)).toThrow(
+        expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }),
+      );
+    }
   });
 
   it("sends the sender key on the entry key alone", () => {
@@ -950,7 +973,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         inlineAssets: typed.inlineAssets.slice(0, typed.inlineCount),
         inlineLimits: typed.inlineLimits.slice(0, typed.inlineCount).map(amountOf),
         limits: typed.limits.slice(0, typed.limitCount).map((limit) => ({
-          asset: limit.asset,
+          asset: memberOfIdentity(limit.asset),
           cap: amountOf(limit.cap),
           cosignAbove: amountOf(limit.cosignAbove),
         })),

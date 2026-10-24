@@ -938,16 +938,21 @@ function ringNotes(
   prefix: InputPrefix,
 ): readonly PrefixNote[] {
   const { known, sender, first, ringId } = source;
+  const seen = new Set<string>();
   return known.withPrefix(sender, prefix).flatMap((commitment) => {
     const utxo = known.utxo(commitment);
     // The circuit binds every spent UTXO to the prefix and to the owner key of spent UTXO 0.
-    return utxo !== undefined &&
-      !equalBytes(commitment, first) &&
-      inputPrefix(commitment) === prefix &&
-      equalBytes(utxo.ownerKey, sender) &&
-      equalBytes(knownUtxoHash(utxo, ringId), commitment)
-      ? [Object.freeze({ commitment, utxo })]
-      : [];
+    if (
+      utxo === undefined ||
+      equalBytes(commitment, first) ||
+      inputPrefix(commitment) !== prefix ||
+      !equalBytes(utxo.ownerKey, sender) ||
+      !equalBytes(knownUtxoHash(utxo, ringId), commitment) ||
+      seen.has(bytesKey(commitment))
+    )
+      return [];
+    seen.add(bytesKey(commitment));
+    return [Object.freeze({ commitment, utxo })];
   });
 }
 

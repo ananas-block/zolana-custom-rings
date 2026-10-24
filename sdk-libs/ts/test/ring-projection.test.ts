@@ -61,7 +61,7 @@ describe("ring projection consistency", () => {
   });
 
   it("does not retry terminal projection answers", async () => {
-    const terminal = new RingError("RING_MEMBER_UNREGISTERED", {
+    const terminal = new RingError("RING_REGISTRY_PAGE_GAP", {
       details: { method: "projection" },
     });
     const read = vi.fn<() => Promise<never>>().mockRejectedValue(terminal);

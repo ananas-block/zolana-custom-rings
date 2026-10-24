@@ -177,7 +177,6 @@ describe("ring member registry wire", () => {
     for (const [rpcCode, code] of [
       [-32070, "RING_REGISTRY_OUT_OF_SYNC"],
       [-32071, "RING_REGISTRY_ROOT_CHANGED"],
-      [-32072, "RING_MEMBER_UNREGISTERED"],
       [-32075, "RING_REGISTRY_PAGE_GAP"],
       [-32076, "RING_RECORD_QUEUE_CHANGED"],
     ] as const) {
@@ -186,6 +185,12 @@ describe("ring member registry wire", () => {
       await expect(
         indexer.getRingApplyProofInputs({ ringProgramId: RING, authorityWrites: [] }),
       ).rejects.toMatchObject({ code });
+    }
+    for (const retired of [-32072, -32073]) {
+      const indexer = indexerFor({ error: { code: retired, message: "private diagnostics" } });
+      await expect(indexer.getRingMemberRecord(request)).rejects.toMatchObject({
+        code: "CLIENT_INDEXER",
+      });
     }
   });
 

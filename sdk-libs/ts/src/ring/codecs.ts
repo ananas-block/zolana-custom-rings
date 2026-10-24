@@ -22,7 +22,6 @@ import {
 import { tagEpoch } from "../keypair/ring-stream.js";
 
 import { RingError } from "./error.js";
-import type { OutflowLimit } from "./policy.js";
 
 /** Mirrors Rust `RingMode`, set once at creation and never cleared. */
 export type RingMode = "off" | "registry" | "anonymous";
@@ -87,7 +86,7 @@ export interface EncodedRuleTable {
   readonly rules: readonly Bytes32[];
   readonly inlineAssets: readonly Bytes32[];
   readonly inlineLimits: readonly bigint[];
-  readonly limits: readonly OutflowLimit[];
+  readonly limits: readonly Readonly<{ asset: Bytes32; cap: bigint; cosignAbove: bigint }>[];
 }
 
 /** Rust `MemberRegistry`, what every policy transfer reads of the ring's lists. */
@@ -145,12 +144,12 @@ export const GRACE_SLOTS = 750n;
 export const DEFAULT_INSERT_FEE = 1_000_000n;
 
 const RING_MODES: readonly RingMode[] = ["off", "registry", "anonymous"];
-const RING_PROGRAM_CONFIG_DISCRIMINATOR = 10;
-const RING_PROGRAM_CONFIG_SIZE = 471;
-const MEMBER_REGISTRY_DISCRIMINATOR = 11;
-const MEMBER_REGISTRY_SIZE = 3094;
-const RECORD_QUEUE_DISCRIMINATOR = 12;
-const RECORD_QUEUE_SIZE = 698;
+export const RING_PROGRAM_CONFIG_DISCRIMINATOR = 10;
+export const RING_PROGRAM_CONFIG_SIZE = 471;
+export const MEMBER_REGISTRY_DISCRIMINATOR = 11;
+export const MEMBER_REGISTRY_SIZE = 3094;
+export const RECORD_QUEUE_DISCRIMINATOR = 12;
+export const RECORD_QUEUE_SIZE = 698;
 
 /** Mirrors Rust `CustomRingConfig::new` over `RingProgramConfig::valid`. */
 export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {

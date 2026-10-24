@@ -79,13 +79,19 @@ export interface AnchorWitness extends BoundAnchor {
   readonly request: FirstContactAnchor;
 }
 
+/** Read only once the transfer is approved. */
+export interface PendingAnchor {
+  readonly tree: Address;
+  read(context: RequestContext | undefined): Promise<AnchorWitness>;
+}
+
 /** An inbox payment's first contact, the leaf it lands at known only after confirmation, Rust `PendingFirstContact`. */
 export type PendingFirstContact = Omit<SentFirstContact, "leafIndex">;
 
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */
 export interface AnonymousSpendValues {
   readonly epoch: bigint;
-  readonly anchor?: AnchorWitness;
+  readonly anchor?: PendingAnchor;
   /** The inbox payments, each becomes its address's newest first contact once it lands. */
   readonly firstContacts: readonly PendingFirstContact[];
 }
@@ -350,12 +356,8 @@ async function assembleStagedTransfer<T>(
             anonymous:
               anonymous.anchor === undefined
                 ? {}
-                : {
-                    anchor: {
-                      tree: anchorSlot(accounts, config.hasPolicy),
-                      rootIndex: anonymous.anchor.rootIndex,
-                    },
-                  },
+                : // The path's root index is read after approval, its width is fixed.
+                  { anchor: { tree: anchorSlot(accounts, config.hasPolicy), rootIndex: 0 } },
           }),
     });
     // The program's expansion must reproduce the external data the SPP proof binds.
@@ -409,8 +411,16 @@ async function proveAssembled(
   const { rail, sender, spend } = staged;
   const ringRail = spend.rail;
   const anonymous = spend.anonymous;
-  const { proofInputs, policy, coSigner, privateTxHash, commitment, preview, ringId } = assembled;
+  const { proofInputs, policy, coSigner, privateTxHash, commitment, ringId } = assembled;
   const auditor = config.auditorPublicKey;
+  const anchor = await anonymous?.anchor?.read(context);
+  const preview =
+    anchor === undefined || assembled.preview.anchor === undefined
+      ? assembled.preview
+      : Object.freeze({
+          ...assembled.preview,
+          anchor: Object.freeze({ ...assembled.preview.anchor, rootIndex: anchor.rootIndex }),
+        });
   const policyRequest =
     policy === undefined
       ? undefined
@@ -436,7 +446,7 @@ async function proveAssembled(
         ringId,
         auditorPubkey: auditor.toBytes(),
         epoch: anonymous?.epoch ?? 0n,
-        firstContactRoot: anonymous?.anchor?.root ?? zeroField(),
+        firstContactRoot: anchor?.root ?? zeroField(),
         keyEscrow: config.keyEscrow,
       }),
     ),
@@ -447,7 +457,8 @@ async function proveAssembled(
             privateTxHash,
             privateTxBlinding: assembled.privateTxBlinding,
             senderCommitment: commitment,
-            spend: anonymous,
+            epoch: anonymous.epoch,
+            anchor,
           }),
         }),
   });
@@ -487,13 +498,13 @@ async function proveAssembled(
     ...(policy === undefined
       ? {}
       : { policy: Object.freeze({ ringProgramId, policyHash: policy.pinned.policyHash }) }),
-    ...(anonymous?.anchor === undefined
+    ...(anchor === undefined
       ? {}
       : {
           anchor: Object.freeze({
-            tree: anonymous.anchor.tree,
-            rootIndex: anonymous.anchor.rootIndex,
-            root: anonymous.anchor.root,
+            tree: anchor.tree,
+            rootIndex: anchor.rootIndex,
+            root: anchor.root,
           }),
         }),
     ...(anonymous === undefined ? {} : { epoch: anonymous.epoch }),
@@ -741,16 +752,17 @@ function anonymousAuditValues(
     privateTxHash: Bytes32;
     privateTxBlinding: Bytes32;
     senderCommitment: Bytes32 | undefined;
-    spend: AnonymousSpendValues;
+    epoch: bigint;
+    anchor: AnchorWitness | undefined;
   }>,
 ): AnonymousAuditValues {
   return Object.freeze({
     privateTxHash: input.privateTxHash,
     privateTxBlinding: input.privateTxBlinding,
     senderCommitment: input.senderCommitment ?? zeroField(),
-    epoch: input.spend.epoch,
-    firstContactRoot: input.spend.anchor?.root ?? zeroField(),
-    ...(input.spend.anchor === undefined ? {} : { anchor: input.spend.anchor.request }),
+    epoch: input.epoch,
+    firstContactRoot: input.anchor?.root ?? zeroField(),
+    ...(input.anchor === undefined ? {} : { anchor: input.anchor.request }),
   });
 }
 

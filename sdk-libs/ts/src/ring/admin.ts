@@ -22,16 +22,19 @@ import {
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
 } from "../interface/pda/index.js";
+import { isSmallOrder } from "../keypair/x25519.js";
 
 import {
   RING_COSIGN_SCOPE_MASK,
   RING_COSIGN_THRESHOLD_SLOTS,
   RING_COSIGN_WITHDRAWALS,
   type RingCoSignThreshold,
+  type RingProgramConfig,
 } from "./codecs.js";
 import { ringProgramDataAddress } from "./config.js";
 import { RingError } from "./error.js";
 import {
+  buildRuleTable,
   checkedListId,
   encodeRule,
   policySourceLists,
@@ -123,6 +126,8 @@ export async function createRingConfigInstruction(
     kind: RingKind;
   }>,
 ): Promise<Instruction> {
+  if (isSmallOrder(input.auditorPublicKey))
+    throw new RingError("RING_CONFIG_INVALID", { details: { reason: "InvalidAuditorPubkey" } });
   const [config, programData] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
     ringProgramDataAddress(input.ringProgramId),
@@ -148,7 +153,7 @@ export async function initSppRingConfigInstruction(
     ringProgramId: Address;
     payer: SignerAccount;
     authority: SignerAccount;
-    hasPolicy: boolean;
+    config: RingProgramConfig;
   }>,
 ): Promise<Instruction> {
   const [config, protocolConfig, ringAuth, registry] = await Promise.all([
@@ -165,7 +170,7 @@ export async function initSppRingConfigInstruction(
     meta(ringAuth, false, true),
     meta(SYSTEM_PROGRAM, false, false),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
-    ...(input.hasPolicy ? [meta(registry, false, false)] : []),
+    ...(input.config.hasPolicy ? [meta(registry, false, false)] : []),
   ]);
 }
 
@@ -404,7 +409,8 @@ async function policyTableInstruction(
   tag: typeof RingInstructionTag.createPolicy | typeof RingInstructionTag.setPolicyRules,
   input: RingPolicyTableInput & Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
 ): Promise<Instruction> {
-  const referenced = policySourceLists(input.table.rules);
+  const table = buildRuleTable(input.table);
+  const referenced = policySourceLists(table.rules);
   const shared = input.sharedSources ?? [];
   const seen = new Set<ListId>();
   for (const source of shared) {
@@ -422,7 +428,7 @@ async function policyTableInstruction(
       .u8(curator === undefined ? 0 : 1 + curators.indexOf(curator), "source");
   }
   if (curators.length > 1) throw sourceInvalid("MultipleCurators");
-  const { rules, inlineAssets, inlineLimits, limits } = input.table;
+  const { rules, inlineAssets, inlineLimits, limits } = table;
   writer.u8(rules.length, "rules.length");
   for (const rule of rules) writer.bytes(encodeRule(rule), 32, "rule");
   writer.u8(inlineAssets.length, "inlineAssets.length");
@@ -468,16 +474,17 @@ function checkCoSigner(
   scope: number,
   thresholds: readonly RingCoSignThreshold[],
 ): void {
-  const reason = equalBytes(addressBytes(signer, "signer"), ZERO_32)
-    ? "InvalidCoSigner"
-    : !Number.isInteger(scope) || scope === 0 || (scope & ~RING_COSIGN_SCOPE_MASK) !== 0
+  const reason =
+    !Number.isInteger(scope) || scope === 0 || (scope & ~RING_COSIGN_SCOPE_MASK) !== 0
       ? "InvalidCoSignerScope"
-      : thresholds.length > RING_COSIGN_THRESHOLD_SLOTS ||
-          new Set(thresholds.map((row) => row.mint)).size !== thresholds.length
-        ? "InvalidCoSignerThresholds"
-        : thresholds.length > 0 && (scope & RING_COSIGN_WITHDRAWALS) === 0
-          ? "ThresholdsWithoutWithdrawals"
-          : undefined;
+      : equalBytes(addressBytes(signer, "signer"), ZERO_32)
+        ? "InvalidCoSigner"
+        : thresholds.length > RING_COSIGN_THRESHOLD_SLOTS ||
+            new Set(thresholds.map((row) => row.mint)).size !== thresholds.length
+          ? "InvalidCoSignerThresholds"
+          : thresholds.length > 0 && (scope & RING_COSIGN_WITHDRAWALS) === 0
+            ? "ThresholdsWithoutWithdrawals"
+            : undefined;
   if (reason !== undefined) throw new RingError("RING_CO_SIGNER_INVALID", { details: { reason } });
 }
 

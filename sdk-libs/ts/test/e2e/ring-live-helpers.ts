@@ -6,6 +6,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   createKeyPairSignerFromBytes,
   createSolanaRpc,
+  generateKeyPairSigner,
   getBase58Encoder,
   lamports,
   type Address,
@@ -43,11 +44,15 @@ import {
   RingError,
   RingInstructionTag,
   RingProgramBinary,
+  RingRpc,
   buildRingCreatePolicyTransaction,
+  checkedReaderKey,
   createMemberRegistryInstruction,
   createRingConfigInstruction,
   deployRingProgram,
   fetchRingMemberRegistry,
+  fetchRingProgramConfig,
+  grantReadAccessInstruction,
   initSppRingConfigInstruction,
   listWrite,
   messageSignerReader,
@@ -55,10 +60,15 @@ import {
   ringAuthAddress,
   ringComputeUnitLimit,
   type RingReadTarget,
-  type RingRpc,
 } from "../../src/ring/index.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/ring/projection.js";
-import { currentSlot, signSendAndConfirm, waitForSignature, type Actor } from "./live-helpers.js";
+import {
+  currentSlot,
+  liveHarness,
+  signSendAndConfirm,
+  waitForSignature,
+  type Actor,
+} from "./live-helpers.js";
 
 export function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -183,7 +193,7 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
       ringProgramId,
       payer: authority,
       authority,
-      hasPolicy: table !== undefined,
+      config: await fetchRingProgramConfig(client, ringProgramId),
     }),
     authority,
   );
@@ -203,6 +213,64 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
     }),
     governance,
   );
+}
+
+export interface ReadableRing {
+  readonly client: CustomRingClient;
+  readonly ringProgramId: Address;
+  readonly authority: KeyPairSigner;
+  readonly ringRpc: RingRpc;
+  readonly target: RingReadTarget;
+}
+
+export async function readableRing(
+  kind:
+    | Readonly<{ kind: "auditOnly" | "anonymous" }>
+    | Readonly<{ kind: "anonymousPolicy"; table: RuleTable }>,
+): Promise<ReadableRing> {
+  const { client } = await liveHarness("client");
+  const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
+  if ((await ringRpc.health()).mode !== "derived")
+    throw new Error("the ring suites need a ring rpc that derives each ring's auditor key");
+  const authority = (await freshActor(client)).signer;
+  const program = await generateKeyPairSigner();
+  const ringProgramId = program.address;
+  for (let i = 0; i < 6; i++) await airdrop(client, authority.address);
+  await createRing(client, {
+    program,
+    authority,
+    auditor: { releasedBy: ringRpc },
+    authorityTransact: false,
+    ...kind,
+  });
+  // Reads are grant only, the ring authority included.
+  await sendInstruction(
+    client,
+    await grantReadAccessInstruction({
+      ringProgramId,
+      payer: authority,
+      authority,
+      reader: checkedReaderKey(authority.address),
+    }),
+    authority,
+  );
+  const target = await ringReadTarget(ringRpc, ringProgramId);
+  return { client, ringProgramId, authority, ringRpc, target };
+}
+
+export function ringHoldings(actor: Actor, ringProgramId: Address): bigint {
+  return actor.wallet
+    .utxos()
+    .filter((entry) => !entry.spent && entry.utxo.ringProgramId === ringProgramId)
+    .reduce((total, entry) => total + entry.utxo.amount, 0n);
+}
+
+export function auditedRingAmounts(
+  item: Awaited<ReturnType<typeof waitForAudited>>,
+): readonly bigint[] {
+  return item.outputs
+    .flatMap(({ opening }) => (opening.kind === "ring" ? [opening.utxo.amount] : []))
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 export async function sync(client: CustomRingClient, actor: Actor): Promise<void> {

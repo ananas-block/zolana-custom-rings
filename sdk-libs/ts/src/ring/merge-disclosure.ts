@@ -1,7 +1,6 @@
 import type { Address } from "@solana/kit";
 
 import type { PreparedMergeInputs } from "@heliuslabs/zolana/client";
-import { ANONYMOUS_MERGE_WIDTHS } from "../client/prover/types.js";
 import {
   hashBytes,
   hashChain4,
@@ -35,7 +34,11 @@ import {
   sealMergeDisclosureFields,
 } from "../keypair/audit.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
-import { DISCLOSURE_CHUNK_BYTES, packedChunks } from "../interface/ring-disclosure-layout.js";
+import {
+  ANONYMOUS_MERGE_WIDTHS,
+  DISCLOSURE_CHUNK_BYTES,
+  packedChunks,
+} from "../interface/ring-disclosure-layout.js";
 import { RingError } from "./error.js";
 
 /** Rust `MERGE_DISCLOSURE_INFO`, the envelope of the disclosure key. */

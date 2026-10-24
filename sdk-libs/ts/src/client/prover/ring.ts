@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { InterfaceError } from "@heliuslabs/zolana/interface";
-import { bytesField } from "@heliuslabs/zolana/internal";
+import { bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { RING_OUTFLOW_LIMIT_SLOTS, type PresentRecordOpening } from "./types.js";
 import { ClientError } from "@heliuslabs/zolana/client";
@@ -15,7 +15,11 @@ import {
   type RecordOpening,
   type RecordWriteProofInput,
 } from "../../interface/member-registry.js";
-import { ringCircuitType, type RingKeyCircuit } from "../../interface/proving-keys.js";
+import {
+  ringCircuitType,
+  ringProvingKey,
+  type RingKeyCircuit,
+} from "../../interface/proving-keys.js";
 import { RING_DEPOSIT_AUDIT_SLOTS } from "../../interface/ring-deposit-capsule.js";
 import { auditLayoutValue, type AuditLayout } from "../../interface/ring-disclosure-layout.js";
 import { RING_DELIVERED_BODY_LEN } from "../../interface/output.js";
@@ -284,32 +288,38 @@ export type RingProofRequest =
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
     case "packedAudit":
-      return { family: "packedAudit", outputs: request.outputs.length };
+      return { family: "packedAudit", outputs: listLength(request.outputs) };
     case "deliveredAudit":
-      return { family: "deliveredAudit", outputs: request.outputs.length };
+      return { family: "deliveredAudit", outputs: listLength(request.outputs) };
     case "anonymousAudit":
       return {
         family: request.layout.fullOpenings ? "anonymousEntryAudit" : "anonymousAudit",
-        inputClass: request.inputs.length,
-        outputs: request.outputs.length,
+        inputClass: listLength(request.inputs),
+        outputs: listLength(request.outputs),
       };
     case "memberPolicy":
-      return { family: "memberPolicy", outputs: request.outputs.length };
+      return { family: "memberPolicy", outputs: listLength(request.outputs) };
     case "delegatePolicy":
       return {
         family: "delegatePolicy",
-        inputs: request.inputs.length,
-        outputs: request.outputs.length,
+        inputs: listLength(request.inputs),
+        outputs: listLength(request.outputs),
       };
     case "applyRecords":
-      return { family: "applyRecords", writes: applyCapacity(request.writes.length) };
+      return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
       return { family: "deposit" };
     case "anonymousMerge":
-      return { family: "anonymousMerge", width: request.inputs.length };
+      return { family: "anonymousMerge", width: listLength(request.inputs) };
+    default:
+      throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   }
+}
+
+export function ringRequestKey(request: RingProofRequest): ExpectedProvingKey {
+  return proofInput(() => ringProvingKey(ringProofCircuit(request)));
 }
 
 /** The body the prover's strict decoder accepts, keys in Go declaration order. */
@@ -698,6 +708,11 @@ function entrySenderKey(request: AnonymousAuditProofRequest): Readonly<{ senderK
   if ((senderKey !== undefined) !== flag(request.layout.fullOpenings))
     throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   return senderKey === undefined ? {} : { senderKey: hexBytes(senderKey, 32, "senderKey") };
+}
+
+function listLength(values: readonly unknown[]): number {
+  if (!Array.isArray(values)) throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
+  return values.length;
 }
 
 function sized<T>(values: readonly T[], length: number, name: string): readonly T[] {

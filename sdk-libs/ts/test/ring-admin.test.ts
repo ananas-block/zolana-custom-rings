@@ -5,7 +5,12 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import { SYSTEM_PROGRAM, addressBytes, protocolConfigAddress } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  ShieldedKeypair,
+  SigningKey,
+  X25519Keypair,
+  X25519PublicKey,
+} from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
   ringConfigAddress,
@@ -126,19 +131,38 @@ describe("ring setup", () => {
     ).rejects.toMatchObject({ code: "RING_CONFIG_INVALID", details: { reason: "kind" } });
   });
 
+  it("refuses a low-order auditor key like Rust `InvalidAuditorPubkey`", async () => {
+    await expect(
+      createRingConfigInstruction({
+        ringProgramId: RING,
+        payer: PAYER,
+        authority: AUTHORITY,
+        auditorPublicKey: X25519PublicKey.fromBytes(Uint8Array.of(4, 1, ...new Uint8Array(31))),
+        kind: "auditOnly",
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_CONFIG_INVALID",
+      details: { reason: "InvalidAuditorPubkey" },
+    });
+  });
+
   it("registers with the pool, a policy ring naming its registry", async () => {
-    const policy = await initSppRingConfigInstruction({
-      ringProgramId: RING,
-      payer: PAYER,
-      authority: AUTHORITY,
-      hasPolicy: true,
-    });
-    const auditOnly = await initSppRingConfigInstruction({
-      ringProgramId: RING,
-      payer: PAYER,
-      authority: AUTHORITY,
-      hasPolicy: false,
-    });
+    const register = (hasPolicy: boolean) =>
+      initSppRingConfigInstruction({
+        ringProgramId: RING,
+        payer: PAYER,
+        authority: AUTHORITY,
+        config: decodeRingProgramConfig(
+          ringProgramConfigData({
+            authority: AUTHORITY,
+            auditorPublicKey: X25519Keypair.generate().publicKey().toBytes(),
+            bump: 254,
+            hasPolicy,
+          }),
+        ),
+      });
+    const policy = await register(true);
+    const auditOnly = await register(false);
     const head = [
       [PAYER, SIGN_WRITE],
       [AUTHORITY, SIGN],
@@ -290,6 +314,11 @@ describe("config writes", () => {
     ["a zero signer", { signer: address("11111111111111111111111111111111") }, "InvalidCoSigner"],
     ["an empty scope", { scope: 0 }, "InvalidCoSignerScope"],
     ["an unknown scope bit", { scope: 8 }, "InvalidCoSignerScope"],
+    [
+      "a zero signer under an empty scope, the scope read first like Rust",
+      { signer: address("11111111111111111111111111111111"), scope: 0 },
+      "InvalidCoSignerScope",
+    ],
     [
       "a repeated mint",
       {
@@ -465,6 +494,20 @@ describe("policy writes", () => {
           });
     },
   );
+
+  it("refuses a hand-built table its builder refuses before the authority signs", async () => {
+    for (const write of [createRingPolicyInstruction, setRingPolicyRulesInstruction])
+      await expect(
+        write({
+          ringProgramId: RING,
+          authority: AUTHORITY,
+          table: { rules: [...RULES, ...RULES], inlineAssets: [], inlineLimits: [], limits: [] },
+        }),
+      ).rejects.toMatchObject({
+        code: "RING_RULE_TABLE_INVALID",
+        details: { reason: "DuplicateRule" },
+      });
+  });
 
   it("re-points one list at a curator or back at the ring", async () => {
     const curator = await setRingPolicySourceInstruction({

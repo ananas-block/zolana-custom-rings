@@ -13,7 +13,7 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../src/keypair/ring-stream.js";
 import { knownUtxoHash, type KnownUtxo } from "../src/ring/audit.js";
 import { passkeyReader } from "../src/ring/passkey.js";
@@ -1013,6 +1013,7 @@ describe("audited UTXO read", () => {
       dataHash: getAddressDecoder().decode(utxo.dataHash),
       ringDataHash: getAddressDecoder().decode(utxo.ringDataHash),
       treeId: utxo.treeId,
+      ...(utxo.mint === undefined ? {} : { mint: utxo.mint }),
     };
   }
 
@@ -1100,6 +1101,7 @@ describe("audited UTXO read", () => {
     ["neither a nullifier key nor an owner hash", (utxo) => delete utxo["nullifierPk"]],
     ["a tree id past u16", (utxo) => (utxo["treeId"] = 65_536)],
     ["a blinding outside the field", (utxo) => (utxo["blinding"] = addressOf(0xff))],
+    ["a mint its asset field does not derive", (utxo) => (utxo["mint"] = addressOf(9))],
   ])("refuses an opening with %s", async (_name, edit) => {
     await initializePoseidon();
     const utxoHash = knownUtxoHash(keyed, ringIdField(addressOf(7)));
@@ -1108,6 +1110,14 @@ describe("audited UTXO read", () => {
     await expect(readUtxos([utxoHash], [view(utxoHash, utxo)])).rejects.toMatchObject({
       code: "RING_RPC",
     });
+  });
+
+  it("keeps the mint an opening's asset field derives from", async () => {
+    await initializePoseidon();
+    const minted: KnownUtxo = { ...keyed, asset: assetField(addressOf(9)), mint: addressOf(9) };
+    const utxoHash = knownUtxoHash(minted, ringIdField(addressOf(7)));
+    const { page } = await readUtxos([utxoHash], [view(utxoHash, wireUtxo(minted))]);
+    expect(page.utxos[0]?.utxo).toEqual(minted);
   });
 
   it("refuses an answer at another position than its hash", async () => {

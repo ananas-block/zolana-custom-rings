@@ -98,8 +98,8 @@ export interface Rule {
 
 /** Mirrors Rust `OutflowLimit`, a zero bound is no bound. */
 export interface OutflowLimit {
-  /** `hash_bytes` of the mint. */
-  readonly asset: Bytes32;
+  /** `memberOfAsset` of the mint. */
+  readonly asset: Member;
   /** The most one transfer moves out. */
   readonly cap: bigint;
   /** The co-signer signs an outflow above it. */
@@ -241,12 +241,7 @@ export function decodeRuleTable(config: EncodedRuleTable): RuleTable {
   if (config.inlineLimits.length !== config.inlineAssets.length) {
     throw ruleTableInvalid("MissingAssetLimit");
   }
-  return checkedRuleTable({
-    rules: config.rules.map(decodeRule),
-    inlineAssets: config.inlineAssets,
-    inlineLimits: config.inlineLimits,
-    limits: config.limits,
-  });
+  return checkedRuleTable({ ...config, rules: config.rules.map(decodeRule) });
 }
 
 export interface RuleTableInput {
@@ -256,29 +251,14 @@ export interface RuleTableInput {
   readonly limits?: readonly OutflowLimit[];
 }
 
-/** Mirrors Rust `RuleTableBuilder::try_build`. */
+/** Mirrors Rust `RuleTableBuilder::try_build`, writers and hashes rerun it on a hand-built table. */
 export function buildRuleTable(input: RuleTableInput): RuleTable {
-  const inlineAssets = input.inlineAssets ?? [];
-  const inlineLimits = input.inlineLimits ?? [];
-  if (input.rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
-  if (inlineLimits.length > RING_INLINE_ASSET_SLOTS) throw ruleTableInvalid("TooManyInlineAssets");
-  if (inlineAssets.some((asset) => asset.length !== 32)) {
-    throw ruleTableInvalid("InlineAssetLength");
-  }
-  if (inlineLimits.some((limit) => limit < 0n || limit > U64_MAX)) {
-    throw ruleTableInvalid("LimitRange");
-  }
-  const table = checkedRuleTable({
+  return checkedRuleTable({
     rules: input.rules,
-    inlineAssets,
-    inlineLimits: inlineAssets.map((_, index) => inlineLimits[index] ?? 0n),
+    inlineAssets: input.inlineAssets ?? [],
+    inlineLimits: input.inlineLimits ?? [],
     limits: input.limits ?? [],
   });
-  const perAssetGuard = table.rules.some((rule) => rule.guard.kind === "aboveAmountByAsset");
-  if (perAssetGuard ? inlineLimits.length !== inlineAssets.length : inlineLimits.length !== 0) {
-    throw ruleTableInvalid(perAssetGuard ? "MissingAssetLimit" : "AssetLimitWithoutGuard");
-  }
-  return table;
 }
 
 /** Mirrors Rust `RuleTable::encode`, counted rows without the zero padding. */
@@ -291,58 +271,75 @@ export function encodeRuleTable(table: RuleTable): EncodedRuleTable {
   });
 }
 
-/** The invariants both `decode` and `try_build` enforce. */
-function checkedRuleTable(table: RuleTable): RuleTable {
+/** Rust `try_build` in its order, a decoded and a built table refuse alike. */
+function checkedRuleTable(
+  table: Omit<EncodedRuleTable, "rules"> & Readonly<{ rules: readonly Rule[] }>,
+): RuleTable {
   const { rules, inlineAssets, inlineLimits, limits } = table;
-  checkLimits(limits);
-  if (inlineAssets.length > RING_INLINE_ASSET_SLOTS) throw ruleTableInvalid("TooManyInlineAssets");
+  if (rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
+  if (
+    inlineAssets.length > RING_INLINE_ASSET_SLOTS ||
+    inlineLimits.length > RING_INLINE_ASSET_SLOTS
+  )
+    throw ruleTableInvalid("TooManyInlineAssets");
+  if (limits.length > RING_OUTFLOW_LIMIT_SLOTS) throw ruleTableInvalid("TooManyOutflowLimits");
+  if (inlineAssets.some((asset) => asset.length !== 32))
+    throw ruleTableInvalid("InlineAssetLength");
+  if (inlineLimits.some((limit) => limit < 0n || limit > U64_MAX))
+    throw ruleTableInvalid("LimitRange");
   if (inlineAssets.some((asset) => equalBytes(asset, ZERO_32))) {
     throw ruleTableInvalid("ZeroInlineAsset");
   }
-  for (const rule of rules) checkRule(rule);
   const signatures = new Set<string>();
-  let perAssetGuard = false;
   for (const rule of rules) {
+    checkRule(rule);
     const signature = ruleSignature(rule);
     if (signatures.has(signature)) throw ruleTableInvalid("DuplicateRule");
     signatures.add(signature);
-    if (rule.guard.kind === "aboveAmountByAsset") perAssetGuard = true;
   }
-  const pool = inlineAssets.length;
-  if (!perAssetGuard && pool > 0) throw ruleTableInvalid("PoolWithoutInlineRule");
+  const perAssetGuard = rules.some((rule) => rule.guard.kind === "aboveAmountByAsset");
+  if (!perAssetGuard && inlineAssets.length > 0) throw ruleTableInvalid("PoolWithoutInlineRule");
   if (perAssetGuard) {
-    if (pool === 0 || inlineLimits.some((limit) => limit === 0n)) {
+    if (inlineAssets.length === 0 || inlineLimits.length !== inlineAssets.length) {
       throw ruleTableInvalid("MissingAssetLimit");
     }
-    const assets = new Set(inlineAssets.map((asset) => bytesKey(asset)));
-    if (assets.size !== pool) throw ruleTableInvalid("DuplicateInlineAsset");
-  } else if (inlineLimits.some((limit) => limit !== 0n)) {
+    const pool = new Set<string>();
+    inlineAssets.forEach((asset, index) => {
+      if (inlineLimits[index] === 0n) throw ruleTableInvalid("MissingAssetLimit");
+      if (pool.has(bytesKey(asset))) throw ruleTableInvalid("DuplicateInlineAsset");
+      pool.add(bytesKey(asset));
+    });
+  } else if (inlineLimits.length !== 0) {
     throw ruleTableInvalid("AssetLimitWithoutGuard");
   }
   return Object.freeze({
     rules: Object.freeze([...rules]),
     inlineAssets: Object.freeze([...inlineAssets]),
     inlineLimits: Object.freeze([...inlineLimits]),
-    limits: Object.freeze(limits.map((limit) => Object.freeze({ ...limit }))),
+    limits: checkedLimits(limits),
   });
 }
 
-/** Mirrors the limit checks of Rust `RuleTableBuilder::try_build`. */
-function checkLimits(limits: readonly OutflowLimit[]): void {
-  if (limits.length > RING_OUTFLOW_LIMIT_SLOTS) throw ruleTableInvalid("TooManyOutflowLimits");
+/** Mirrors the limit checks Rust `RuleTableBuilder::try_build` runs last. */
+function checkedLimits(limits: EncodedRuleTable["limits"]): readonly OutflowLimit[] {
   const assets = new Set<string>();
-  for (const limit of limits) {
-    if (limit.asset.length !== 32 || equalBytes(limit.asset, ZERO_32)) {
-      throw ruleTableInvalid("ZeroLimitAsset");
-    }
-    for (const bound of [limit.cap, limit.cosignAbove]) {
-      if (bound < 0n || bound > U64_MAX) throw ruleTableInvalid("LimitRange");
-    }
-    if (limit.cap === 0n && limit.cosignAbove === 0n) throw ruleTableInvalid("LimitWithoutBound");
-    const key = bytesKey(limit.asset);
-    if (assets.has(key)) throw ruleTableInvalid("DuplicateLimitAsset");
-    assets.add(key);
-  }
+  return Object.freeze(
+    limits.map((limit) => {
+      if (limit.asset.length !== 32 || equalBytes(limit.asset, ZERO_32)) {
+        throw ruleTableInvalid("ZeroLimitAsset");
+      }
+      // The zero check proves the Member brand.
+      const asset = limit.asset as Member;
+      for (const bound of [limit.cap, limit.cosignAbove]) {
+        if (bound < 0n || bound > U64_MAX) throw ruleTableInvalid("LimitRange");
+      }
+      if (limit.cap === 0n && limit.cosignAbove === 0n) throw ruleTableInvalid("LimitWithoutBound");
+      const key = bytesKey(asset);
+      if (assets.has(key)) throw ruleTableInvalid("DuplicateLimitAsset");
+      assets.add(key);
+      return Object.freeze({ asset, cap: limit.cap, cosignAbove: limit.cosignAbove });
+    }),
+  );
 }
 
 function ruleSignature(rule: Rule): string {
@@ -531,9 +528,10 @@ const POLICY_TABLE_RATE = 11;
 
 /** The table at its slot widths, every slot past a count zero, the one layout the hash and the policy proof read. */
 export function policyTableProofInputs(
-  table: RuleTable,
+  input: RuleTable,
   sources: readonly PolicySource[],
 ): PolicyTableProofInputs {
+  const table = buildRuleTable(input);
   const owners = checkedSourceOwners(sources);
   for (const listId of referencedLists(table.rules)) {
     if (owners[listId - 1]?.listId !== listId) throw sourceInvalid("MissingSource", { listId });
