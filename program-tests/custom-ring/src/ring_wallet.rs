@@ -61,7 +61,10 @@ impl<'a> RingWallet<'a> {
                 self.kept.push(utxo.clone());
             }
         }
-        self.state = synced.state;
+        // A pending note keeps the old state, the scanned one would skip its epoch for good.
+        if synced.pending_assets.is_empty() {
+            self.state = synced.state;
+        }
         let mut spendable = owned.spendable;
         for utxo in &self.kept {
             if !spendable

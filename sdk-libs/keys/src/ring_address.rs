@@ -93,11 +93,20 @@ impl Default for Pairing {
 }
 
 /// Shared off chain, never published, `recipient.viewing_pubkey` keys the inbox stream.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RingAddress {
     pub recipient: ShieldedAddress,
     pub ring_program_id: Address,
     pub pairing: Pairing,
+}
+
+impl fmt::Debug for RingAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingAddress")
+            .field("ring_program_id", &self.ring_program_id)
+            .field("pairing", &self.pairing)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RingAddress {

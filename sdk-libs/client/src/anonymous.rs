@@ -35,10 +35,8 @@ use crate::{
     },
     deposit_payload, exactly_one,
     tags::{indices, IndexerReads, TagWindow, DEFAULT_TAG_WINDOW},
-    AnonymousError,
+    AnonymousError, REDACTED,
 };
-
-const REDACTED: &str = "<redacted>";
 
 /// Unused addresses past the highest issued or used one that a scan still reads.
 pub const ADDRESS_GAP: u32 = 20;
@@ -532,15 +530,19 @@ impl AnonymousRingState {
     /// Keeps the lowest and highest leaf of each tree and spreads the rest evenly between them.
     fn remember_decoys<'a>(
         &mut self,
-        transactions: impl IntoIterator<Item = &'a ShieldedTransaction>,
+        signed_spends: impl IntoIterator<Item = &'a ShieldedTransaction>,
+        owned: &HashSet<[u8; 32]>,
     ) {
         let ring = self.ring;
-        // Only a leaf shaped as a first contact hides one among its decoys.
-        for slot in transactions
+        // A decoy has an anchor's shape, a scheme 9 output the wallet signed and does not hold.
+        for slot in signed_spends
             .into_iter()
             .filter(|tx| tx.ring_program_id == Some(ring))
             .flat_map(|tx| &tx.output_slots)
-            .filter(|slot| ring_delivered_body(slot, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG).is_some())
+            .filter(|slot| {
+                ring_delivered_body(slot, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG).is_some()
+                    && !owned.contains(&slot.output_context.hash)
+            })
         {
             let context = &slot.output_context;
             let leaves = self.decoys.entry(context.tree_id).or_default();
@@ -553,6 +555,7 @@ impl AnonymousRingState {
             }
         }
         for leaves in self.decoys.values_mut() {
+            leaves.retain(|leaf| !owned.contains(&leaf.hash));
             if leaves.len() > DECOYS_PER_TREE {
                 let last = leaves.len() - 1;
                 *leaves = (0..DECOYS_PER_TREE)
@@ -682,6 +685,7 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousRingSync<'a, K> {
             transactions: Vec::new(),
             tagged: HashSet::new(),
             spends: HashSet::new(),
+            signed_spends: HashSet::new(),
             deposits: HashSet::new(),
         };
         let mut reads = IndexerReads::configured(indexer, self.config);
@@ -696,9 +700,22 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousRingSync<'a, K> {
             utxos,
             added,
             transactions,
+            signed_spends,
             ..
         } = scan;
-        state.remember_decoys(&transactions);
+        let owned: HashSet<[u8; 32]> = self
+            .held
+            .iter()
+            .map(|held| held.utxo_hash)
+            .chain(decrypted.utxos.iter().map(|utxo| utxo.utxo_hash))
+            .chain(pending.iter().map(|pending| pending.note.utxo_hash))
+            .collect();
+        state.remember_decoys(
+            transactions
+                .iter()
+                .filter(|tx| signed_spends.contains(&event_key(tx))),
+            &owned,
+        );
         // A transfer proven in epoch e lands until e + 1 ends under the previous-epoch flag.
         let persisted = reads.persisted_slot().map_or(open, tag_epoch).min(open);
         if let Some(scanned) = persisted
@@ -847,6 +864,7 @@ struct Scan<'s, 'a, K: ?Sized> {
     tagged: HashSet<(Signature, Option<u16>)>,
     /// Spends, a tagged transaction that spends a note still carries change.
     spends: HashSet<(Signature, Option<u16>)>,
+    signed_spends: HashSet<(Signature, Option<u16>)>,
     /// A deposit counts once, a replay under a later counter moves nothing.
     deposits: HashSet<[u8; 32]>,
 }
@@ -1139,6 +1157,8 @@ impl<K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, K> {
                 }
             }
         }
+        self.signed_spends
+            .extend(signed.iter().copied().map(event_key));
         // An earlier payment extends the window a later one is checked against.
         signed.sort_by_key(|tx| tx.slot);
         for tx in signed {
@@ -1308,8 +1328,12 @@ fn fresh(
 ) -> Vec<ShieldedTransaction> {
     transactions
         .into_iter()
-        .filter(|tx| seen.insert((tx.tx_signature, tx.event_index)))
+        .filter(|tx| seen.insert(event_key(tx)))
         .collect()
+}
+
+fn event_key(tx: &ShieldedTransaction) -> (Signature, Option<u16>) {
+    (tx.tx_signature, tx.event_index)
 }
 
 fn slot_index(position: usize) -> Result<u32, AnonymousError> {

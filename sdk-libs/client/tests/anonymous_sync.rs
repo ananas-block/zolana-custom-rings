@@ -1319,14 +1319,21 @@ fn outsider_row(seed: u8, view_tags: &[[u8; 32]], first_leaf: u64) -> ShieldedTr
                     tree_id: TREE,
                     leaf_index,
                 },
-                payload: Vec::new(),
+                payload: borsh::to_vec(&OutputDataEncoding::Encrypted(
+                    [
+                        &[EncryptedScheme::RingAnonymous.as_byte()][..],
+                        &[0x5a; RING_DELIVERED_BODY_LEN],
+                    ]
+                    .concat(),
+                ))
+                .unwrap(),
             })
             .collect(),
         messages: Vec::new(),
         nullifiers: Vec::new(),
-        proofless: true,
+        proofless: false,
         ring_config: None,
-        ring_program_id: None,
+        ring_program_id: Some(RING),
     }
 }
 
@@ -1580,13 +1587,87 @@ async fn outsider_rows_under_the_wallets_tags_join_no_decoy_set() {
         .await
         .unwrap();
     found(&scan, own.utxo_hash);
+    assert!(scan.state.decoys(TREE).is_empty());
+}
+
+#[tokio::test]
+async fn a_decoy_pool_holds_only_unheld_outputs_of_the_wallets_own_spends() {
+    let fixture = Fixture::new();
+    let recipient = address_key(&fixture.recipient, 0);
+    let (inbound, mut paid) = RingTransfer {
+        sender: &fixture.sender,
+        nullifiers: vec![nullifier(10)],
+        payments: vec![
+            Payment {
+                owner: fixture.recipient_owner(),
+                recipient,
+                tag: inbox_tag(recipient, CREATION, 0),
+                amount: 70,
+            },
+            Payment {
+                owner: fixture.sender.shielded_address().unwrap(),
+                recipient: fixture
+                    .sender
+                    .viewing_key
+                    .ring_change_key(&RING)
+                    .unwrap()
+                    .pubkey(),
+                tag: RingTag::from_bytes([0x6c; TAG_LEN]),
+                amount: 5,
+            },
+        ],
+        slot: slot_of(CREATION),
+        leaf: 10,
+    }
+    .build();
+    fixture.indexer.publish(inbound);
+    let first = paid.remove(0);
+    let spent = fixture
+        .recipient
+        .nullifier(&first.utxo_hash, &first.blinding)
+        .unwrap();
+    let outsider = address_key(&keypair(9), 0);
+    let change_key = fixture
+        .recipient
+        .viewing_key
+        .ring_change_key(&RING)
+        .unwrap()
+        .pubkey();
+    let (tx, delivered) = RingTransfer {
+        sender: &fixture.recipient,
+        nullifiers: vec![spent],
+        payments: vec![
+            Payment {
+                owner: keypair(9).shielded_address().unwrap(),
+                recipient: outsider,
+                tag: inbox_tag(outsider, CREATION + 1, 0),
+                amount: 30,
+            },
+            Payment {
+                owner: fixture.recipient_owner(),
+                recipient: change_key,
+                tag: RingTag::from_bytes([0x5c; TAG_LEN]),
+                amount: 40,
+            },
+        ],
+        slot: slot_of(CREATION + 1),
+        leaf: 20,
+    }
+    .build();
+    fixture.indexer.publish(tx);
+    let assets = RingAssets::new([]).unwrap();
+    let scan = AnonymousRingSync::new(&fixture.recipient, &assets)
+        .fetch(&fixture.indexer, &fixture.state(), slot_of(CREATION + 2))
+        .await
+        .unwrap();
+    found(&scan, delivered[1].utxo_hash);
     let decoys: Vec<[u8; 32]> = scan
         .state
         .decoys(TREE)
         .iter()
         .map(|leaf| leaf.hash)
         .collect();
-    assert_eq!(decoys, [own.utxo_hash]);
+    assert_eq!(decoys, [delivered[0].utxo_hash]);
 }
 
 /// Dust first contacts cost pair tags for `PAIR_IDLE_EPOCHS`, then the state forgets them.

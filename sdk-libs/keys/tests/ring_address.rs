@@ -253,6 +253,20 @@ fn request_round_trips_every_field() {
 }
 
 #[test]
+fn a_ring_address_prints_no_recipient_key() {
+    let address = fixture_address(rows());
+    let request = RingPaymentRequest::new(address.clone());
+    for printed in [format!("{address:?}"), format!("{request:?}")] {
+        for key in [
+            format!("{:?}", address.recipient.viewing_pubkey),
+            format!("{:?}", address.recipient.signing_pubkey),
+        ] {
+            assert!(!printed.contains(&key), "{printed}");
+        }
+    }
+}
+
+#[test]
 #[ignore = "regenerates test-vectors/ring_address.json; run with --nocapture and commit the output"]
 fn print_ring_address_vectors() {
     println!("{}", serde_json::to_string_pretty(&compute()).unwrap());
