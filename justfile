@@ -481,18 +481,12 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
     subject = "sender"
     forbid = "frozen"
     TOML
-    cargo run -q -p zolana-ring-rpc -- keygen --out "$ring_dir/auditor.key"
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
-      init --auditor-pubkey-file "auditor.key.pub"
-    # Reads are grant only, the ring authority included.
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
-      reader grant "$ring_authority"
-
-    # Local mode, the served key is the one the ring config pins.
+    # Derived mode, the suites deploy their own rings and take each auditor key from the service.
+    cargo run -q -p zolana-ring-rpc -- keygen --kind root --out "$ring_dir/root.secret"
     cargo build -q -p zolana-ring-rpc --target-dir target
     nohup target/debug/ring-rpc serve --port {{localnet-ring-rpc-port}} \
       --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-      --auditor-key-file "$ring_dir/auditor.key" --ring-program-id "$ring_program_id" \
+      --root-secret-file "$ring_dir/root.secret" \
       --allow-origin "$ring_origin" --webauthn-rp-id localhost \
       > "$workdir/ring-rpc.log" 2>&1 &
     printf 'waiting for ring rpc %s ' "$ring_rpc_url"
@@ -507,6 +501,12 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
       exit 1
     fi
     echo " ready"
+    # This recipe started the service, its key needs no pin.
+    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+      init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc
+    # Reads are grant only, the ring authority included.
+    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+      reader grant "$ring_authority"
     # The ring-status probe, otherwise exercised only against a hosted rpc.
     cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" rpc-check
 
