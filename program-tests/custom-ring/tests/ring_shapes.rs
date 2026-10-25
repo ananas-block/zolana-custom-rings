@@ -190,10 +190,21 @@ impl<'a> ColumnSetup<'a> {
             RingMode::Registry => members
                 .into_iter()
                 .map(|member| {
-                    let nullifier_pk = env
-                        .member_record(ring, owner_member(member)?)?
-                        .nullifier_pk
-                        .context("the member's record escrows no nullifier key")?;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+                    let nullifier_pk = loop {
+                        match env
+                            .member_record(ring, owner_member(member)?)
+                            .and_then(|read| {
+                                read.nullifier_pk
+                                    .context("the member's record escrows no nullifier key")
+                            }) {
+                            Ok(key) => break key,
+                            Err(error) if std::time::Instant::now() >= deadline => {
+                                return Err(error).context("member escrow was not indexed in time")
+                            }
+                            Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+                        }
+                    };
                     Ok((
                         member.signing_pubkey().confidential_view_tag()?,
                         nullifier_pk,
