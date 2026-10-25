@@ -15,7 +15,7 @@ import {
 import { pack33 } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
 import { EncryptedScheme, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
-import { ringIdField } from "../crypto/ring-stream.js";
+import { ringIdField } from "../crypto/derivation/ring-stream.js";
 import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
@@ -24,7 +24,7 @@ import {
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
   type RingDepositCapsule,
 } from "../protocol/codec/deposit-capsule.js";
-import { auditSharedSecret } from "../crypto/audit.js";
+import { auditSharedSecret } from "../crypto/audit/audit.js";
 import { RingError } from "../protocol/error.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 

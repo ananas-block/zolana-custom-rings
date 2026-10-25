@@ -25,7 +25,7 @@ import type { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { IndexedShieldedTransaction, OutputContext } from "@heliuslabs/zolana/transaction";
 import { ownerUtxoHash, type TreeId } from "@heliuslabs/zolana/transaction";
 import { MEMBER_REGISTRY_CAPACITY } from "../../protocol/membership/member-registry.js";
-import { ringIdField } from "../../crypto/ring-stream.js";
+import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { registryCurrentRoot } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
@@ -35,7 +35,7 @@ import {
   openRingMergeDisclosure,
   type RingMergeDisclosure,
   type RingMergeOpening,
-} from "../../crypto/merge-disclosure.js";
+} from "../../crypto/audit/merge-disclosure.js";
 import { MemberOpeningRead } from "../../protocol/membership/member-opening.js";
 import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";

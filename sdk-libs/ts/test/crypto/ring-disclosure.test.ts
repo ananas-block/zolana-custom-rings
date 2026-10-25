@@ -12,8 +12,8 @@ import {
   disclosureFieldCount,
   type DisclosureLayout,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
-import type * as Audit from "../../src/crypto/audit.js";
-import { maskDisclosure, unmaskDisclosure } from "../../src/crypto/audit.js";
+import type * as Audit from "../../src/crypto/audit/audit.js";
+import { maskDisclosure, unmaskDisclosure } from "../../src/crypto/audit/audit.js";
 import {
   anonymousCommitments,
   decodeDisclosure,
@@ -24,8 +24,8 @@ import {
   splitInputPrefixPair,
   type InputPrefix,
   type RingDisclosure,
-} from "../../src/crypto/ring-disclosure.js";
-import { RingDomain } from "../../src/crypto/ring-domain.js";
+} from "../../src/crypto/audit/ring-disclosure.js";
+import { RingDomain } from "../../src/crypto/derivation/ring-domain.js";
 
 const packing = vi.hoisted(
   (): { blocks: Uint8Array[]; chunks: Uint8Array[]; unpacked: Uint8Array[] } => ({
@@ -34,7 +34,7 @@ const packing = vi.hoisted(
     unpacked: [],
   }),
 );
-vi.mock("../../src/crypto/audit.js", async (importOriginal) => {
+vi.mock("../../src/crypto/audit/audit.js", async (importOriginal) => {
   const actual = await importOriginal<typeof Audit>();
   return {
     ...actual,

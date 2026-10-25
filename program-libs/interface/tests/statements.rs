@@ -1,4 +1,4 @@
-//! Pins `test-vectors/ring-statements.json` for the Go circuits and the TS SDK.
+//! Pins `test-vectors/proof/ring-statements.json` for the Go circuits and the TS SDK.
 
 use custom_ring_interface::{
     stream::{RingTag, TAG_LEN},
@@ -16,7 +16,7 @@ use zolana_ring_policy::{Member, OutflowLimit};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/ring-statements.json"
+    "/../../test-vectors/proof/ring-statements.json"
 );
 /// `q - 1200`, the amount field of a 1200 withdrawal.
 const WITHDRAWAL_1200: &str = "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593effffb51";
@@ -534,7 +534,7 @@ fn ring_statements_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/ring-statements.json"]
+#[ignore = "rewrites test-vectors/proof/ring-statements.json"]
 fn write_ring_statements_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");

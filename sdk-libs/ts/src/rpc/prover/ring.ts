@@ -23,7 +23,7 @@ import {
 import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
 import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
-import { J_INBOX } from "../../crypto/ring-stream.js";
+import { J_INBOX } from "../../crypto/derivation/ring-stream.js";
 import {
   RING_INLINE_ASSET_SLOTS,
   RING_RULE_SLOTS,

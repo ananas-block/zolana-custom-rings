@@ -61,11 +61,51 @@ func TestGoldenRequestsAssignTheRecordedWitness(t *testing.T) {
 
 func goldenFiles(t testing.TB) []string {
 	t.Helper()
-	files, err := filepath.Glob("testdata/*.json")
+	var files []string
+	err := filepath.WalkDir("testdata", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(path) == ".json" {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no fixtures: %v", err)
 	}
+	sort.Strings(files)
 	return files
+}
+
+func goldenPath(name string) string {
+	var family string
+	switch {
+	case strings.HasPrefix(name, "custom-ring-audit-anonymous-entry-"):
+		family = "audit/entry"
+	case strings.HasPrefix(name, "custom-ring-audit-anonymous-v2-"):
+		parts := strings.Split(name, "-")
+		outputs := parts[len(parts)-1]
+		if outputs != "2" && outputs != "4" && outputs != "8" && outputs != "16" {
+			panic("unknown anonymous audit shape: " + name)
+		}
+		family = "audit/anonymous/outputs_" + outputs
+	case strings.HasPrefix(name, "custom-ring-audit-"):
+		family = "audit"
+	case strings.HasPrefix(name, "custom-ring-policy-member-"):
+		family = "policy/member"
+	case strings.HasPrefix(name, "custom-ring-policy-delegate-"):
+		family = "policy/delegate"
+	case strings.HasPrefix(name, "custom-ring-apply-records-"), name == "custom-ring-register-key":
+		family = "records"
+	case strings.HasPrefix(name, "custom-ring-deposit-"):
+		family = "deposit"
+	case strings.HasPrefix(name, "custom-ring-merge-"):
+		family = "merge"
+	default:
+		panic("unknown ring golden family: " + name)
+	}
+	return filepath.Join("testdata", family, name+".json")
 }
 
 func readDigests(t *testing.T) map[string]string {

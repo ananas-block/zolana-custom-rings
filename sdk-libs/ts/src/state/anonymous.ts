@@ -3,7 +3,7 @@ import type { Address, Bytes16, RequestContext } from "@heliuslabs/zolana";
 import { bytesKey, bytesToBigInt, U64_MAX } from "@heliuslabs/zolana/internal";
 import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
-import { Pairing, RingAddress } from "../crypto/ring-address.js";
+import { Pairing, RingAddress } from "../crypto/keys/ring-address.js";
 import {
   J_INBOX,
   J_PAIR,
@@ -14,7 +14,7 @@ import {
   ringIdField,
   tagIndex,
   type TagIndex,
-} from "../crypto/ring-stream.js";
+} from "../crypto/derivation/ring-stream.js";
 import { RingError } from "../protocol/error.js";
 import { AnonymousRingState, type PairAnchor } from "./anonymous-state.js";
 import type { RingKeys } from "./ring-keys.js";

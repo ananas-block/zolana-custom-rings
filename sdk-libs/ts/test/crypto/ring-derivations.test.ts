@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import secrets from "../../../../test-vectors/ring-secrets.json" with { type: "json" };
-import tags from "../../../../test-vectors/ring-tags.json" with { type: "json" };
+import secrets from "../../../../test-vectors/wallet/ring-secrets.json" with { type: "json" };
+import tags from "../../../../test-vectors/wallet/ring-tags.json" with { type: "json" };
 import {
   BN254_SCALAR_ORDER,
   hashBytes,
@@ -18,7 +18,7 @@ import {
   X25519Keypair,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
-import { RingDomain, depositBlinding } from "../../src/crypto/ring-domain.js";
+import { RingDomain, depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import { RING_DELIVERED_BODY_LEN } from "../../src/protocol/transaction/output.js";
 import {
   EPOCH_SLOTS,
@@ -35,12 +35,12 @@ import {
   senderCommitment,
   tagEpoch,
   tagIndex,
-} from "../../src/crypto/ring-stream.js";
+} from "../../src/crypto/derivation/ring-stream.js";
 import {
   anonymousRingData,
   ringBlindingSeed,
   ringOutputBlinding,
-} from "../../src/crypto/blinding.js";
+} from "../../src/crypto/derivation/blinding.js";
 
 /** The epoch ring-secrets.json tags its anonymous outputs in. */
 const SECRETS_TAG_EPOCH = 6734n;

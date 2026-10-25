@@ -35,9 +35,13 @@ import {
   ringTagField,
   ringTagFromOwnerTag,
   type TagIndex,
-} from "../../crypto/ring-stream.js";
+} from "../../crypto/derivation/ring-stream.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
-import { anonymousRingData, ringBlindedOutputs, ringBlindingSeed } from "../../crypto/blinding.js";
+import {
+  anonymousRingData,
+  ringBlindedOutputs,
+  ringBlindingSeed,
+} from "../../crypto/derivation/blinding.js";
 import { RingError } from "../../protocol/error.js";
 import { ringTransactOutput, type RingOutput } from "../../protocol/transaction/transact.js";
 

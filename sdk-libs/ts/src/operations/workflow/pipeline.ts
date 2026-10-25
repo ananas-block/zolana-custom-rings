@@ -27,7 +27,7 @@ import {
   ringMemberRegistryAddress,
 } from "../../protocol/pda/index.js";
 import type { AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
-import { ringIdField, senderCommitment, tagEpoch } from "../../crypto/ring-stream.js";
+import { ringIdField, senderCommitment, tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import {

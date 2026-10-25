@@ -52,7 +52,7 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 			PublicInputHash    string   `json:"public_input_hash"`
 		} `json:"deposit"`
 	}
-	ringtest.ReadVector(t, "ring-statements.json", &vectors)
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
 	v := vectors.Deposit
 	if len(v.OwnerUtxoHashes) != len(v.Ciphertexts) || len(v.OwnerUtxoHashes) == 0 || len(v.OwnerUtxoHashes) > MaxDeposits {
 		t.Fatalf("%d commitments for %d ciphertexts", len(v.OwnerUtxoHashes), len(v.Ciphertexts))

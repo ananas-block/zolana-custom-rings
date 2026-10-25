@@ -13,7 +13,7 @@ import {
 import type { ViewingKeyLike, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { TransactionError, type Data } from "@heliuslabs/zolana/transaction";
 
-import { symmetricAuditApply } from "../../crypto/audit.js";
+import { symmetricAuditApply } from "../../crypto/audit/audit.js";
 import { checkedCounter } from "../../crypto/error.js";
 
 /** The schemes a ring output publishes, 10 and 11 ring-owned, SPP stores both unparsed. */

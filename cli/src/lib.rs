@@ -15,11 +15,11 @@ pub use context::*;
 #[path = "runtime/chain.rs"]
 mod chain;
 
-#[path = "commands/wallet/address.rs"]
+#[path = "commands/wallet/identity/address.rs"]
 pub mod address;
 #[path = "commands/wallet/assets.rs"]
 pub mod assets;
-#[path = "commands/wallet/audit.rs"]
+#[path = "commands/wallet/notes/audit.rs"]
 pub mod audit;
 #[path = "commands/ring/authority.rs"]
 pub mod authority;
@@ -35,19 +35,19 @@ pub mod delegate;
 pub mod deploy;
 #[path = "runtime/file.rs"]
 pub mod file;
-#[path = "commands/wallet/fund.rs"]
+#[path = "commands/wallet/notes/fund.rs"]
 pub mod fund;
 #[path = "commands/ring/init.rs"]
 pub mod init;
-#[path = "commands/wallet/keys.rs"]
+#[path = "commands/wallet/identity/keys.rs"]
 pub mod keys;
-#[path = "commands/wallet/list.rs"]
+#[path = "commands/wallet/notes/list.rs"]
 pub mod list;
 #[path = "commands/ring/localnet.rs"]
 pub mod localnet;
 #[path = "commands/membership/member.rs"]
 pub mod member;
-#[path = "commands/wallet/merge.rs"]
+#[path = "commands/wallet/notes/merge.rs"]
 pub mod merge;
 #[path = "commands/ring/new.rs"]
 pub mod new;
@@ -67,7 +67,7 @@ pub mod ring_rpc;
 pub mod status;
 #[path = "runtime/tool.rs"]
 pub mod tool;
-#[path = "commands/wallet/transact.rs"]
+#[path = "commands/wallet/notes/transact.rs"]
 pub mod transact;
 #[path = "ui/terminal.rs"]
 pub mod ui;

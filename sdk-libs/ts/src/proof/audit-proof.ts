@@ -18,7 +18,7 @@ import {
   type AuditLayout,
   type DisclosureLayout,
 } from "../protocol/codec/ring-disclosure-layout.js";
-import { auditorMessageData, sealTransactionViewingSecret } from "../crypto/audit.js";
+import { auditorMessageData, sealTransactionViewingSecret } from "../crypto/audit/audit.js";
 import {
   anonymousCommitments,
   sealRingDisclosure,
@@ -27,9 +27,9 @@ import {
   type DeliveredOutputOpening,
   type PackedOutputOpening,
   type RingDisclosure,
-} from "../crypto/ring-disclosure.js";
+} from "../crypto/audit/ring-disclosure.js";
 import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
-import { ringTagField } from "../crypto/ring-stream.js";
+import { ringTagField } from "../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../protocol/error.js";
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";

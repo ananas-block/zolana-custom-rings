@@ -1,6 +1,6 @@
 import type { Address } from "@solana/kit";
 
-import { RingDomain, domainField } from "../../crypto/ring-domain.js";
+import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import type { PolicyTableProofInputs } from "../../rpc/prover/ring.js";
 import { RING_OUTFLOW_LIMIT_SLOTS } from "../../rpc/prover/types.js";
 import {

@@ -74,7 +74,7 @@ import {
   wipeRingMergeDisclosureRequest,
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
-} from "../../crypto/merge-disclosure.js";
+} from "../../crypto/audit/merge-disclosure.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,

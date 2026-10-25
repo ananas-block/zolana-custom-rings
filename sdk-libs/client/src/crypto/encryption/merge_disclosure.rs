@@ -176,7 +176,7 @@ pub(crate) mod tests {
         pub(crate) fn load() -> Self {
             Self(
                 serde_json::from_str(include_str!(
-                    "../../../../../test-vectors/ring-merge-anonymous.json"
+                    "../../../../../test-vectors/merge/ring-merge-anonymous.json"
                 ))
                 .expect("vector"),
             )

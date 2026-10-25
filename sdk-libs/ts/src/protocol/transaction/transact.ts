@@ -23,7 +23,7 @@ import type {
   TransactOutput,
   TreeContext,
 } from "@heliuslabs/zolana/interface";
-import { packBytesBe } from "../../crypto/hasher.js";
+import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
 import {
   DELIVERED_AUDIT_CAPACITIES,
@@ -33,7 +33,7 @@ import {
   type AuditLayout,
   type DisclosureLayout,
 } from "../codec/ring-disclosure-layout.js";
-import { TAG_LEN, ringTagField, tagEpoch } from "../../crypto/ring-stream.js";
+import { TAG_LEN, ringTagField, tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag } from "../../operations/management/admin.js";
 import type { RingMode } from "../codec/ring-codecs.js";

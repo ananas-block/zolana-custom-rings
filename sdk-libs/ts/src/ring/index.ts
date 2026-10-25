@@ -297,8 +297,8 @@ export {
   openedUtxo,
   recoverTransactionViewingKey,
 } from "../operations/audit/audit.js";
-export { inputPrefix } from "../crypto/ring-disclosure.js";
-export type { InputPrefix } from "../crypto/ring-disclosure.js";
+export { inputPrefix } from "../crypto/audit/ring-disclosure.js";
+export type { InputPrefix } from "../crypto/audit/ring-disclosure.js";
 export type {
   AuditedInput,
   AuditedInputOpening,
@@ -333,8 +333,8 @@ export {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
   ringMergeAnonymousPublicInputHash,
-} from "../crypto/merge-disclosure.js";
-export type { RingMergeDisclosure, RingMergeOpening } from "../crypto/merge-disclosure.js";
+} from "../crypto/audit/merge-disclosure.js";
+export type { RingMergeDisclosure, RingMergeOpening } from "../crypto/audit/merge-disclosure.js";
 export { recoverRingMemberNotes } from "../operations/workflow/recover.js";
 export type {
   RecoveredRingNotes,
@@ -419,4 +419,4 @@ export {
   revokeReadAccessInstruction,
 } from "../operations/management/reader-access.js";
 export type { ReadAccessRecord, ReaderKey } from "../operations/management/reader-access.js";
-export { createPasskey, passkeyReader, type Passkey } from "../crypto/passkey.js";
+export { createPasskey, passkeyReader, type Passkey } from "../crypto/keys/passkey.js";

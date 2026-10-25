@@ -31,7 +31,7 @@ import {
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
 } from "../../protocol/pda/index.js";
-import { auditSharedSecret } from "../../crypto/audit.js";
+import { auditSharedSecret } from "../../crypto/audit/audit.js";
 
 import { RingInstructionTag } from "./admin.js";
 import {

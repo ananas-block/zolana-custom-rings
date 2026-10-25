@@ -51,7 +51,7 @@ import {
   readRingMergeDisclosure,
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
-} from "../../crypto/merge-disclosure.js";
+} from "../../crypto/audit/merge-disclosure.js";
 import { RingTransactData, ringRailOf } from "./transact.js";
 import { decompressG2, readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 

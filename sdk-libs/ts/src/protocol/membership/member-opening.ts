@@ -26,7 +26,7 @@ import {
   type RecordWriteProofInput,
 } from "./member-registry.js";
 
-import { RingDomain, domainField } from "../../crypto/ring-domain.js";
+import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import { ListId, recordBit } from "./policy.js";
 import type { ApplyRecordsStatement } from "../proof/statement.js";

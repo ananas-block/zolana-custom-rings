@@ -13,7 +13,7 @@ import {
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { TransactionError } from "@heliuslabs/zolana/transaction";
 
-import { Pairing } from "../crypto/ring-address.js";
+import { Pairing } from "../crypto/keys/ring-address.js";
 import {
   J_PAIR,
   K_PAIR_EPOCHS,
@@ -23,7 +23,7 @@ import {
   tagEpoch,
   tagIndex,
   type TagIndex,
-} from "../crypto/ring-stream.js";
+} from "../crypto/derivation/ring-stream.js";
 import { RingError } from "../protocol/error.js";
 
 function hex(bytes: Uint8Array): string {

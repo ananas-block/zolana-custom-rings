@@ -42,7 +42,7 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 			PublicInputHash string `json:"public_input_hash"`
 		} `json:"register_key"`
 	}
-	ringtest.ReadVector(t, "ring-statements.json", &vectors)
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
 	v := vectors.RegisterKey
 	witness := &keyStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash),

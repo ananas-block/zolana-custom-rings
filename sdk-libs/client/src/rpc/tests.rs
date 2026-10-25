@@ -410,7 +410,7 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
         foreign_body_and_low_order_key: serde_json::Value,
     }
     let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/ring_rpc_payload_errors.json"
+        "../../../../test-vectors/rpc/ring_rpc_payload_errors.json"
     ))
     .expect("vector");
     // A new kind fails to compile here, `kinds` and the vector must then name it.

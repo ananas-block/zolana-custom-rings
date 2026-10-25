@@ -28,7 +28,7 @@ import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, Data, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { DepositClient } from "@heliuslabs/zolana/wallet";
 import type { DepositProofRequest } from "../../rpc/prover/ring.js";
-import { depositBlinding } from "../../crypto/ring-domain.js";
+import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
 import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";

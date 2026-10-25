@@ -6,10 +6,10 @@ import {
   rightAlign,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { packBytesBe } from "../../crypto/hasher.js";
+import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
-import { RingDomain, domainField } from "../../crypto/ring-domain.js";
+import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import {
   RingTransactData,

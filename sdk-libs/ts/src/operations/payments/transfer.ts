@@ -41,7 +41,7 @@ import {
 import type { UtxoReservation } from "@heliuslabs/zolana/internal";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { anonymousAuditKey } from "../../protocol/codec/ring-disclosure-layout.js";
-import { RingAddress } from "../../crypto/ring-address.js";
+import { RingAddress } from "../../crypto/keys/ring-address.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from "./anonymous.js";

@@ -1,5 +1,6 @@
 import { policyWithdrawalHash } from "../../src/proof/withdrawals.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -40,7 +41,7 @@ import {
   ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
-import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit.js";
+import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit/audit.js";
 import type { AuditLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   anonymousCommitments,
@@ -48,7 +49,7 @@ import {
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
   type PackedOutputOpening,
-} from "../../src/crypto/ring-disclosure.js";
+} from "../../src/crypto/audit/ring-disclosure.js";
 import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
 import {
   deliveredSlotSecret,
@@ -58,7 +59,7 @@ import {
   pairTag,
   senderCommitment,
   tagIndex,
-} from "../../src/crypto/ring-stream.js";
+} from "../../src/crypto/derivation/ring-stream.js";
 import {
   applyRecordsStatement,
   replayRecordWrites,
@@ -83,15 +84,26 @@ import {
   anonymousRingData,
   ringBlindingSeed,
   ringOutputBlinding,
-} from "../../src/crypto/blinding.js";
+} from "../../src/crypto/derivation/blinding.js";
 
 const GOLDENS = new URL("../../../../prover/ring/testdata/", import.meta.url);
+const HAS_GOLDENS = existsSync(GOLDENS);
+const GOLDEN_FILES = HAS_GOLDENS
+  ? readdirSync(GOLDENS, { recursive: true }).filter(
+      (name): name is string => typeof name === "string" && name.endsWith(".json"),
+    )
+  : [];
+const GOLDEN_BY_CIRCUIT = new Map(
+  GOLDEN_FILES.map((file) => [basename(file, ".json"), file] as const),
+);
 const ZERO = new Uint8Array(32) as Bytes32;
 
 type Json = Readonly<Record<string, unknown>>;
 
 function golden(circuitType: string): Json {
-  return record(JSON.parse(readFileSync(new URL(`${circuitType}.json`, GOLDENS), "utf8")));
+  const file = GOLDEN_BY_CIRCUIT.get(circuitType);
+  if (file === undefined) throw new Error(`missing golden for ${circuitType}`);
+  return record(JSON.parse(readFileSync(new URL(file, GOLDENS), "utf8")));
 }
 
 function record(value: unknown): Json {
@@ -590,13 +602,7 @@ function stateRoot(leaf: Bytes32, index: bigint, path: readonly Bytes32[]): Byte
 }
 
 // The Go ring prover goldens live outside the repository.
-const HAS_GOLDENS = existsSync(GOLDENS);
-const CIRCUIT_TYPES = HAS_GOLDENS
-  ? readdirSync(GOLDENS)
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => name.slice(0, -".json".length))
-      .sort()
-  : [];
+const CIRCUIT_TYPES = [...GOLDEN_BY_CIRCUIT.keys()].sort();
 
 describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens", () => {
   it("lists every ring key of ring_keys.rs and names one for each golden", () => {

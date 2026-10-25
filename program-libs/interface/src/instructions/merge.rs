@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn the_statement_matches_the_go_vector() {
         let vector: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../test-vectors/ring-merge-anonymous.json"
+            "../../../../test-vectors/merge/ring-merge-anonymous.json"
         ))
         .unwrap();
         let bytes = |value: &serde_json::Value| -> Vec<u8> {

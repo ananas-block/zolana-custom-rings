@@ -48,7 +48,7 @@ type statementOutputVector struct {
 // The host builders every honest witness solves against rebuild the program's audit statements of the Rust vector.
 func TestAuditStatementsMatchRustVectors(t *testing.T) {
 	var vectors statementVectors
-	ringtest.ReadVector(t, "ring-statements.json", &vectors)
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
 	kinds := map[string]bool{}
 	for _, v := range vectors.Audit {
 		t.Run(v.Kind, func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestAnonymousShapesAreTheSharedVector(t *testing.T) {
 			Outputs []int `json:"outputs"`
 		} `json:"anonymous_entry"`
 	}
-	ringtest.ReadVector(t, "ring_keyed_shapes.json", &vector)
+	ringtest.ReadVector(t, "proof/ring_keyed_shapes.json", &vector)
 	var commitment, entry []audit.AnonymousAuditShape
 	for _, row := range vector.Classes {
 		for _, class := range row.Classes {
@@ -159,7 +159,7 @@ func TestCommitmentTailIsTheRustDisclosure(t *testing.T) {
 			Plaintext []string `json:"plaintext"`
 		} `json:"cases"`
 	}
-	ringtest.ReadVector(t, "audit-disclosure-anonymous.json", &vectors)
+	ringtest.ReadVector(t, "audit/audit-disclosure-anonymous.json", &vectors)
 	covered := 0
 	for _, c := range vectors.Cases {
 		if c.Key != "commitment" {

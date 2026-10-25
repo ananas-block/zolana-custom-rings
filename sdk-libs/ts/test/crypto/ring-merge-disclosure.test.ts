@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import vector from "../../../../test-vectors/ring-merge-anonymous.json" with { type: "json" };
+import vector from "../../../../test-vectors/merge/ring-merge-anonymous.json" with { type: "json" };
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { Reader, Writer, addressBytes, encodeBase58 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
@@ -16,7 +16,7 @@ import {
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
   type RingMergeOpening,
-} from "../../src/crypto/merge-disclosure.js";
+} from "../../src/crypto/audit/merge-disclosure.js";
 
 function bytes<T extends Uint8Array>(value: string, length: number): T {
   const decoded = Uint8Array.from(Buffer.from(value.replace(/^0x/, ""), "hex"));
@@ -44,7 +44,7 @@ function opening(): RingMergeOpening {
   };
 }
 
-describe("anonymous ring merge disclosure (test-vectors/ring-merge-anonymous.json)", () => {
+describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymous.json)", () => {
   it("opens the Go disclosure and hashes the Go statement", async () => {
     await initializePoseidon();
     const auditor = X25519Keypair.fromBytes(bytes(vector.auditor_sk, 32));

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { Pairing, RingAddress, RingPaymentRequest } from "../../src/crypto/ring-address.js";
+import { Pairing, RingAddress, RingPaymentRequest } from "../../src/crypto/keys/ring-address.js";
 import { ringAddressKey } from "../../src/state/ring-keys.js";
 import { RingKeyError } from "../../src/crypto/error.js";
 import {
@@ -29,7 +29,10 @@ type ValidCase = Readonly<{
 type RejectedCase = Readonly<{ name: string; uri: string; error: string }>;
 
 const vectors = JSON.parse(
-  readFileSync(new URL("../../../../test-vectors/ring_address.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../../../test-vectors/wallet/ring_address.json", import.meta.url),
+    "utf8",
+  ),
 ) as Readonly<{ valid: readonly ValidCase[]; rejected: readonly RejectedCase[] }>;
 
 function bytes(value: string): Uint8Array {
@@ -51,7 +54,7 @@ function rustVariant(run: () => unknown): string {
   throw new Error("expected a key error");
 }
 
-describe("shared ring address vectors (test-vectors/ring_address.json)", () => {
+describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", () => {
   it("parses and prints every valid request", () => {
     expect(vectors.valid.length).toBeGreaterThanOrEqual(3);
     for (const vector of vectors.valid) {

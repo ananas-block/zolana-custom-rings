@@ -15,7 +15,7 @@ use crate::client::{RingClient, RingIndexerBackend};
 use crate::RingError;
 
 #[cfg(test)]
-#[path = "../tests/prover.rs"]
+#[path = "../tests/rpc/prover.rs"]
 mod tests;
 
 pub(crate) struct RingRequest<'a, T> {

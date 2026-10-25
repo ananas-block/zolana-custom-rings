@@ -64,9 +64,9 @@ import {
   ringConfigPda,
   ringMemberRegistryPda,
 } from "../../src/protocol/pda/index.js";
-import { openTransactionViewingSecret } from "../../src/crypto/audit.js";
-import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/ring-disclosure.js";
-import { ringIdField, ringTagField } from "../../src/crypto/ring-stream.js";
+import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
+import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
+import { ringIdField, ringTagField } from "../../src/crypto/derivation/ring-stream.js";
 import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
 import type {
   RingCoSigner,
@@ -105,14 +105,14 @@ import {
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
 import { decodeRingPacked, readRingOutput } from "../../src/protocol/transaction/output.js";
-import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/blinding.js";
+import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
 import {
   LocalRingKeys,
   ringWalletKeys,
   type RingKeys,
   type RingRecipientKey,
 } from "../../src/state/ring-keys.js";
-import { x25519FromU } from "../../src/crypto/x25519.js";
+import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
 export const TREE = treeAddress(TREE_ID);

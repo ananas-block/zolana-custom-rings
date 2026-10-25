@@ -28,7 +28,7 @@ func (v *vectorHex) UnmarshalJSON(data []byte) error {
 func (v vectorHex) int() *big.Int { return new(big.Int).SetBytes(v) }
 
 func TestRingSecretsMatchTheRustVectors(t *testing.T) {
-	data, err := os.ReadFile("../../test-vectors/ring-secrets.json")
+	data, err := os.ReadFile("../../test-vectors/wallet/ring-secrets.json")
 	if err != nil {
 		t.Fatal(err)
 	}

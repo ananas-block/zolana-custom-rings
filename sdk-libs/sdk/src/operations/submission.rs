@@ -27,7 +27,7 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "../tests/submission.rs"]
+#[path = "../tests/operations/submission.rs"]
 mod tests;
 
 pub(crate) fn check_transaction_size(

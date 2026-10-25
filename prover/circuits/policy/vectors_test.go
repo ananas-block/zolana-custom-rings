@@ -95,7 +95,7 @@ func TestPolicyTableMatchesRustVectors(t *testing.T) {
 		Version int           `json:"version"`
 		Cases   []tableVector `json:"cases"`
 	}
-	ringtest.ReadVector(t, "ring-policy-table.json", &vectors)
+	ringtest.ReadVector(t, "policy/ring-policy-table.json", &vectors)
 	if vectors.Version != policy.PolicyTableVersion || len(vectors.Cases) == 0 {
 		t.Fatalf("version %d with %d cases, want version %d", vectors.Version, len(vectors.Cases), policy.PolicyTableVersion)
 	}
@@ -150,7 +150,7 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 	var vectors struct {
 		Cases []ruleVector `json:"cases"`
 	}
-	ringtest.ReadVector(t, "ring-policy-rules.json", &vectors)
+	ringtest.ReadVector(t, "policy/ring-policy-rules.json", &vectors)
 	if len(vectors.Cases) == 0 {
 		t.Fatal("no policy rule vectors")
 	}
@@ -211,7 +211,7 @@ func TestPolicyStatementsMatchRustVectors(t *testing.T) {
 	var vectors struct {
 		Policy []statementVector `json:"policy"`
 	}
-	ringtest.ReadVector(t, "ring-statements.json", &vectors)
+	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
 	if len(vectors.Policy) == 0 {
 		t.Fatal("no policy statement vectors")
 	}

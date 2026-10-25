@@ -36,7 +36,7 @@ import {
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
 import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/membership/member-registry.js";
-import { ringIdField, ringTagFromOwnerTag } from "../crypto/ring-stream.js";
+import { ringIdField, ringTagFromOwnerTag } from "../crypto/derivation/ring-stream.js";
 
 import {
   DUMMY_INPUT,

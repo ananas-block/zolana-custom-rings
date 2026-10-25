@@ -14,7 +14,7 @@ use zolana_transaction::{
 use crate::{prover::fe, RingError, REDACTED};
 
 #[cfg(test)]
-#[path = "../tests/request.rs"]
+#[path = "../tests/rpc/request.rs"]
 mod tests;
 
 /// One transaction slot as SPP hashes it, its owner split into the identity and the nullifier key.

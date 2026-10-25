@@ -339,9 +339,10 @@ fn cached_settlement_vectors_match_rust_and_exclude_the_cache() {
         }
     }
     let circuits: Vec<_> = circuits.into_iter().chain(writing).collect();
-    let vectors: Vec<_> = include_str!("../../../../../test-vectors/cached_ring_settlement.hex")
-        .lines()
-        .collect();
+    let vectors: Vec<_> =
+        include_str!("../../../../../test-vectors/settlement/cached_ring_settlement.hex")
+            .lines()
+            .collect();
     assert_eq!(vectors.len(), circuits.len());
     for (circuit, encoded) in circuits.into_iter().zip(vectors) {
         assert_settlement_vector(circuit, encoded);
@@ -364,7 +365,7 @@ fn anonymous_settlement_vector_matches_rust_and_has_no_cache() {
     );
     assert_settlement_vector(
         circuit,
-        include_str!("../../../../../test-vectors/anonymous_ring_settlement.hex").trim(),
+        include_str!("../../../../../test-vectors/settlement/anonymous_ring_settlement.hex").trim(),
     );
 }
 
@@ -1129,7 +1130,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../test-vectors/ring-transact-expansion.json"
+        "../../../../../test-vectors/proof/ring-transact-expansion.json"
     ))
     .unwrap();
     let bytes = hex::decode(vectors["cases"][0]["compact"].as_str().unwrap()).unwrap();

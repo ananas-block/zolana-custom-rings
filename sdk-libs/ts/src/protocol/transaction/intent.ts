@@ -17,7 +17,7 @@ import {
   type TransactionIntent,
 } from "@heliuslabs/zolana/transaction";
 
-import { RingAddress } from "../../crypto/ring-address.js";
+import { RingAddress } from "../../crypto/keys/ring-address.js";
 import { RingError } from "../error.js";
 
 export type RingAnonymousTransferIntent = Readonly<{

@@ -35,7 +35,7 @@ func TestMergeAnonymousCatalogShipsSppWidths(t *testing.T) {
 }
 
 // Rust and TypeScript pin the same file.
-const mergeVectorPath = "../../test-vectors/ring-merge-anonymous.json"
+const mergeVectorPath = "../../test-vectors/merge/ring-merge-anonymous.json"
 
 const mergeVectorDescription = "Known-answer vector for the anonymous ring merge disclosure and statement, width 8. " +
 	"plaintext = owner_key(32) || nullifier_pk(32) || mint(32) || amount u64 big-endian || output_blinding(32) || input_commitments(8 x 32), " +
@@ -106,7 +106,7 @@ func TestMergeAnonymousVectorPinsHostAndCircuit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != string(encoded) {
-		t.Fatal("the host mirror disagrees with test-vectors/ring-merge-anonymous.json, rewrite it with WRITE_AUDIT_VECTORS=1")
+		t.Fatal("the host mirror disagrees with test-vectors/merge/ring-merge-anonymous.json, rewrite it with WRITE_AUDIT_VECTORS=1")
 	}
 	var pinned mergeVector
 	if err := json.Unmarshal(raw, &pinned); err != nil {

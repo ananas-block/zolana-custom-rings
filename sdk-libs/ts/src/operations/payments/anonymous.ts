@@ -44,7 +44,7 @@ import {
   type SettlementTransfer,
   type SppProofInputs,
 } from "@heliuslabs/zolana/transaction";
-import type { RingAddress } from "../../crypto/ring-address.js";
+import type { RingAddress } from "../../crypto/keys/ring-address.js";
 export { ANCHOR_DECOYS } from "../../state/anonymous-state.js";
 
 import { RingError, wrapRingError, type RingErrorCode } from "../../protocol/error.js";

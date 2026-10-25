@@ -46,7 +46,7 @@ import {
   openTransactionViewingSecret,
   parseAuditorMessage,
   type AuditorMessage,
-} from "../../crypto/audit.js";
+} from "../../crypto/audit/audit.js";
 import {
   inputPrefix,
   openRingDisclosure,
@@ -55,15 +55,23 @@ import {
   type InputPrefix,
   type PackedOutputOpening,
   type RingDisclosure,
-} from "../../crypto/ring-disclosure.js";
-import { deliveredSlotSecret, ringIdField, ringTagFromOwnerTag } from "../../crypto/ring-stream.js";
+} from "../../crypto/audit/ring-disclosure.js";
+import {
+  deliveredSlotSecret,
+  ringIdField,
+  ringTagFromOwnerTag,
+} from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../../protocol/error.js";
 import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
-import { anonymousRingData, ringBlindingSeed, ringOutputBlinding } from "../../crypto/blinding.js";
+import {
+  anonymousRingData,
+  ringBlindingSeed,
+  ringOutputBlinding,
+} from "../../crypto/derivation/blinding.js";
 import { dummyUtxoHash, fieldUtxoHash } from "../../protocol/membership/utxo-hash.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
-import { x25519FromU } from "../../crypto/x25519.js";
+import { x25519FromU } from "../../crypto/keys/x25519.js";
 
 /** Rust `AuditedUtxo`, an opening whose UTXO hash the audit rebuilt. */
 export interface AuditedUtxo {

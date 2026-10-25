@@ -5,7 +5,7 @@ import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interf
 import type { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { OutputSlot } from "@heliuslabs/zolana/transaction";
 import type { RingDepositOutput } from "@heliuslabs/zolana/internal";
-import { ringIdField } from "../../crypto/ring-stream.js";
+import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import {
   knownUtxoHash,

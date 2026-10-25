@@ -34,7 +34,7 @@ use crate::{
 };
 
 #[cfg(test)]
-#[path = "../tests/deposit.rs"]
+#[path = "../tests/operations/deposit.rs"]
 mod tests;
 
 #[derive(Clone, Copy)]

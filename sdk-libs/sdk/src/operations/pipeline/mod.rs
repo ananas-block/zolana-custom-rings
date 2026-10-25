@@ -9,7 +9,7 @@ mod policy;
 mod selection;
 mod spp;
 #[cfg(test)]
-#[path = "../../tests/pipeline.rs"]
+#[path = "../../tests/operations/pipeline.rs"]
 mod tests;
 
 use custom_ring_interface::{

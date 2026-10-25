@@ -20,7 +20,7 @@ import {
 
 import { extended } from "../operations/workflow/extended.js";
 import { checkedCounter, u32Field } from "../crypto/error.js";
-import { deliveredSlotSecret } from "../crypto/ring-stream.js";
+import { deliveredSlotSecret } from "../crypto/derivation/ring-stream.js";
 
 const encoder = new TextEncoder();
 const addressEncoder = getAddressEncoder();

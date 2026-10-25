@@ -33,7 +33,7 @@ import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { RingMemberProofRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
 import { ringConfigPda, ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
-import { depositBlinding } from "../../src/crypto/ring-domain.js";
+import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_TRANSFERS,
@@ -128,7 +128,7 @@ describe("deposit disclosure", () => {
   });
 
   const golden = new URL(
-    "../../../../prover/ring/testdata/custom-ring-deposit.json",
+    "../../../../prover/ring/testdata/deposit/custom-ring-deposit.json",
     import.meta.url,
   );
   // The Go ring prover goldens live outside the repository.

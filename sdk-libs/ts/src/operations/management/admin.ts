@@ -22,7 +22,7 @@ import {
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
 } from "../../protocol/pda/index.js";
-import { isSmallOrder } from "../../crypto/x25519.js";
+import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
 import {
   RING_COSIGN_SCOPE_MASK,

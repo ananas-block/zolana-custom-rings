@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn field_counts_are_the_go_vector() {
         let vector: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../test-vectors/ring-disclosure-counts.json"
+            "../../../../test-vectors/audit/ring-disclosure-counts.json"
         ))
         .unwrap();
         let records = |kind: &str| vector[kind].as_array().unwrap().iter();

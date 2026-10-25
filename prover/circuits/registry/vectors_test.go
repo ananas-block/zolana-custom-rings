@@ -13,7 +13,7 @@ import (
 // The host twin builds the Rust witnesses and the circuit accepts them.
 func TestApplyRecordsMatchesRustVectors(t *testing.T) {
 	var v ringregistry.Vector
-	ringtest.ReadVector(t, "ring-records.json", &v)
+	ringtest.ReadVector(t, "registry/ring-records.json", &v)
 	members := ringregistry.New(t)
 	if members.Root().Cmp(v.EmptyRoot.Int) != 0 {
 		t.Fatalf("empty root %x, Rust %x", members.Root(), v.EmptyRoot.Int)

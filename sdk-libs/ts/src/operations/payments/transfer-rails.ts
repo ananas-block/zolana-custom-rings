@@ -23,7 +23,7 @@ import {
   DELIVERED_AUDIT_CAPACITIES,
   PACKED_AUDIT_CAPACITIES,
 } from "../../protocol/codec/ring-disclosure-layout.js";
-import { tagEpoch } from "../../crypto/ring-stream.js";
+import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import {
   anonymousExitTokenOwner,

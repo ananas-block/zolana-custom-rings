@@ -10,8 +10,8 @@ export {
   parseAuditorMessage,
   unmaskDisclosure,
   unpackDisclosure,
-} from "../crypto/audit.js";
-export type { AuditorMessage, DisclosurePad } from "../crypto/audit.js";
+} from "../crypto/audit/audit.js";
+export type { AuditorMessage, DisclosurePad } from "../crypto/audit/audit.js";
 export {
   ANONYMOUS_AUDIT_CLASSES,
   ANONYMOUS_ENTRY_CLASS,
@@ -60,7 +60,7 @@ export {
   openRingDisclosure,
   sealRingDisclosure,
   splitInputPrefixPair,
-} from "../crypto/ring-disclosure.js";
+} from "../crypto/audit/ring-disclosure.js";
 export type {
   AnonymousInputOpening,
   AnonymousInputs,
@@ -71,7 +71,7 @@ export type {
   PackedOutputOpening,
   PublishedOutputs,
   RingDisclosure,
-} from "../crypto/ring-disclosure.js";
+} from "../crypto/audit/ring-disclosure.js";
 export {
   EPOCH_SLOTS,
   J_INBOX,
@@ -90,8 +90,8 @@ export {
   senderCommitment,
   tagEpoch,
   tagIndex,
-} from "../crypto/ring-stream.js";
-export type { DeliveredSlot, TagIndex } from "../crypto/ring-stream.js";
+} from "../crypto/derivation/ring-stream.js";
+export type { DeliveredSlot, TagIndex } from "../crypto/derivation/ring-stream.js";
 export {
   RING_DELIVERED_BODY_LEN,
   openDeliveredBody,
@@ -107,7 +107,7 @@ export {
   type RingDeliveryOpening,
   type RingDeliverySlot,
   type RingNoteOwner,
-} from "../crypto/blinding.js";
+} from "../crypto/derivation/blinding.js";
 
 export {
   PLAIN_GROTH16_PROOF_LENGTH,

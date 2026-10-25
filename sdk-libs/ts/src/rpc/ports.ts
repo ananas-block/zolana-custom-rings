@@ -22,7 +22,7 @@ import type {
   RecordOpening,
 } from "../protocol/membership/member-registry.js";
 import type { RingTransactInstructionData } from "../protocol/proof/circuit.js";
-import type { RingMergeDisclosureRequest } from "../crypto/merge-disclosure.js";
+import type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
 export interface RingMemberRequest {

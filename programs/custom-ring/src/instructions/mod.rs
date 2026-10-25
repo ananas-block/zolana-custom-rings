@@ -2,17 +2,17 @@
 mod apply_records;
 #[path = "records/authority_write_records.rs"]
 mod authority_write_records;
-#[path = "configuration/create_config.rs"]
+#[path = "configuration/setup/create_config.rs"]
 mod create_config;
-#[path = "configuration/create_member_registry.rs"]
+#[path = "configuration/setup/create_member_registry.rs"]
 mod create_member_registry;
-#[path = "configuration/create_policy.rs"]
+#[path = "configuration/setup/create_policy.rs"]
 mod create_policy;
 #[path = "settlement/deposit_audit.rs"]
 mod deposit_audit;
 #[path = "settlement/forward.rs"]
 mod forward;
-#[path = "configuration/init_spp_ring_config.rs"]
+#[path = "configuration/setup/init_spp_ring_config.rs"]
 mod init_spp_ring_config;
 #[path = "settlement/insert_fee.rs"]
 mod insert_fee;
@@ -26,23 +26,23 @@ mod merge_disclosure;
 mod policy_binding;
 #[path = "verification/public_legs.rs"]
 mod public_legs;
-#[path = "configuration/read_access.rs"]
+#[path = "configuration/access/read_access.rs"]
 mod read_access;
 #[path = "records/register_key.rs"]
 mod register_key;
-#[path = "configuration/set_authority.rs"]
+#[path = "configuration/access/set_authority.rs"]
 mod set_authority;
-#[path = "configuration/set_cosigner.rs"]
+#[path = "configuration/access/set_cosigner.rs"]
 mod set_cosigner;
-#[path = "configuration/set_delegate.rs"]
+#[path = "configuration/access/set_delegate.rs"]
 mod set_delegate;
-#[path = "configuration/set_insert_fee.rs"]
+#[path = "configuration/policy/set_insert_fee.rs"]
 mod set_insert_fee;
-#[path = "configuration/set_paused.rs"]
+#[path = "configuration/access/set_paused.rs"]
 mod set_paused;
-#[path = "configuration/set_policy_rules.rs"]
+#[path = "configuration/policy/set_policy_rules.rs"]
 mod set_policy_rules;
-#[path = "configuration/set_policy_source.rs"]
+#[path = "configuration/policy/set_policy_source.rs"]
 mod set_policy_source;
 mod transact;
 #[path = "verification/verifier.rs"]

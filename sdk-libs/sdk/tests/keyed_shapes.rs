@@ -1,4 +1,4 @@
-//! `shape_keyed` names exactly the shapes `test-vectors/ring_keyed_shapes.json` lists per rail.
+//! `shape_keyed` names exactly the shapes `test-vectors/proof/ring_keyed_shapes.json` lists per rail.
 
 use custom_ring_interface::RingRail;
 use custom_ring_sdk::shape_keyed;
@@ -6,8 +6,10 @@ use zolana_client::SPP_SUPPORTED_SHAPES;
 
 #[test]
 fn every_rail_keys_the_shapes_the_shared_vector_lists() {
-    let vector: serde_json::Value =
-        serde_json::from_str(include_str!("../../../test-vectors/ring_keyed_shapes.json")).unwrap();
+    let vector: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../test-vectors/proof/ring_keyed_shapes.json"
+    ))
+    .unwrap();
     for (rail, list) in [
         (RingRail::Confidential, "confidential_ring"),
         (RingRail::Anonymous, "anonymous_ring"),

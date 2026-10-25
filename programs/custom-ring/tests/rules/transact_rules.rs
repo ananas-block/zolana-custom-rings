@@ -521,11 +521,11 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
     );
 }
 
-/// The compact bytes of a `test-vectors/ring-transact-expansion.json` case.
+/// The compact bytes of a `test-vectors/proof/ring-transact-expansion.json` case.
 fn vector_case(name: &str) -> Vec<u8> {
     let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-vectors/ring-transact-expansion.json"
+        "/../../test-vectors/proof/ring-transact-expansion.json"
     )))
     .unwrap();
     let case = vectors["cases"]

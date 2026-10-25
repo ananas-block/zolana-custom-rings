@@ -43,7 +43,7 @@ export type {
   RingProofRequest,
   RingSlotOpening,
 } from "../rpc/prover/ring.js";
-export type { RingMergeDisclosureRequest } from "../crypto/merge-disclosure.js";
+export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
   AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,

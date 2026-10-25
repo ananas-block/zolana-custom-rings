@@ -27,7 +27,7 @@ import {
   type PendingWalletSubmission,
 } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
-import { tagEpoch } from "../../crypto/ring-stream.js";
+import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import type { PendingFirstContact, RingBoundState } from "./pipeline.js";

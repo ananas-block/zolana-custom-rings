@@ -19,7 +19,7 @@ import {
   MEMBER_REGISTRY_CAPACITY,
   MEMBER_REGISTRY_ROOT_HISTORY,
 } from "../membership/member-registry.js";
-import { tagEpoch } from "../../crypto/ring-stream.js";
+import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../error.js";
 

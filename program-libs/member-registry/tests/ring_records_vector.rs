@@ -1,4 +1,4 @@
-//! Pins `test-vectors/ring-records.json` for the Go circuits, Photon and the TS SDK.
+//! Pins `test-vectors/registry/ring-records.json` for the Go circuits, Photon and the TS SDK.
 
 use custom_ring_interface::{
     queue_chain, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
@@ -14,7 +14,7 @@ use zolana_ring_policy::{ListChange, ListId, ListSet, Writer};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/ring-records.json"
+    "/../../test-vectors/registry/ring-records.json"
 );
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -448,7 +448,7 @@ fn ring_records_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/ring-records.json"]
+#[ignore = "rewrites test-vectors/registry/ring-records.json"]
 fn write_ring_records_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
