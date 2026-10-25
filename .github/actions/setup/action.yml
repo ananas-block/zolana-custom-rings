@@ -25,6 +25,7 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/free-runner-disk
     - if: inputs.token != ''
       shell: bash
       env:

@@ -6,10 +6,7 @@ use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
     ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
 };
-use custom_ring_test_validator::{
-    policy::RingNotes,
-    shared::{restart_prover, setup_with_extra_rings},
-};
+use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
 use zolana_client::{Shape, SPP_SUPPORTED_SHAPES};
 
 const UTXO_AMOUNT: u64 = 1_000_000;
@@ -24,14 +21,6 @@ enum Column {
 }
 
 impl Column {
-    const ALL: [Self; 5] = [
-        Self::Confidential,
-        Self::ConfidentialPolicy,
-        Self::Anonymous,
-        Self::AnonymousPolicy,
-        Self::Delegate,
-    ];
-
     fn tier(self) -> Tier {
         match self {
             Self::Confidential => Tier::AuditOnly,
@@ -80,7 +69,7 @@ impl Coverage {
         }
     }
 
-    fn assert_transfer_keys(&self) {
+    fn assert_transfer_keys(&self, column: Column) {
         let missing: Vec<RingCircuit> = RING_KEYS
             .iter()
             .map(|key| key.circuit)
@@ -94,6 +83,25 @@ impl Coverage {
                 RingCircuit::Deposit { capacity } => *capacity == 1,
                 RingCircuit::ApplyRecords { writes } => matches!(writes, 1 | 2),
                 _ => true,
+            })
+            // Each required key belongs to one independently runnable sweep.
+            .filter(|circuit| {
+                let owner = match circuit {
+                    RingCircuit::PackedAudit { .. }
+                    | RingCircuit::DeliveredAudit { .. }
+                    | RingCircuit::Deposit { .. } => Column::Confidential,
+                    RingCircuit::AnonymousAudit { .. }
+                    | RingCircuit::AnonymousEntryAudit { .. }
+                    | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,
+                    RingCircuit::MemberPolicy { .. } | RingCircuit::RegisterKey => {
+                        Column::ConfidentialPolicy
+                    }
+                    RingCircuit::ApplyRecords { writes: 1 } => Column::ConfidentialPolicy,
+                    RingCircuit::ApplyRecords { .. } | RingCircuit::DelegatePolicy { .. } => {
+                        Column::Delegate
+                    }
+                };
+                owner == column
             })
             .filter(|circuit| !self.circuits.contains(circuit))
             .collect();
@@ -524,26 +532,44 @@ fn anonymous_sixteen_output_transfer_settles() -> Result<()> {
 }
 
 #[test]
-fn every_basic_transfer_key_lands_and_every_keyed_shape_settles() -> Result<()> {
-    let extra: Vec<Address> = (1..Column::ALL.len())
-        .map(|_| Keypair::new().pubkey())
-        .collect();
-    let env = setup_with_extra_rings(&extra)?;
-    let programs = core::iter::once(custom_ring_program_id()?).chain(extra);
+fn sweep_confidential() -> Result<()> {
+    sweep(Column::Confidential)
+}
+
+#[test]
+fn sweep_confidential_policy() -> Result<()> {
+    sweep(Column::ConfidentialPolicy)
+}
+
+#[test]
+fn sweep_anonymous() -> Result<()> {
+    sweep(Column::Anonymous)
+}
+
+#[test]
+fn sweep_anonymous_policy() -> Result<()> {
+    sweep(Column::AnonymousPolicy)
+}
+
+#[test]
+fn sweep_delegate() -> Result<()> {
+    sweep(Column::Delegate)
+}
+
+fn sweep(column: Column) -> Result<()> {
+    let env = setup()?;
     let mut coverage = Coverage::default();
-    for (column, program) in Column::ALL.into_iter().zip(programs) {
-        let ring = ColumnSetup {
-            env: &env,
-            column,
-            program,
-        }
-        .configure(&mut coverage)?;
-        ring.sweep(&mut coverage)?;
-        if column == Column::Anonymous {
-            ring.entries(&mut coverage)?;
-            ring.merges(&mut coverage)?;
-        }
+    let ring = ColumnSetup {
+        env: &env,
+        column,
+        program: custom_ring_program_id()?,
     }
-    coverage.assert_transfer_keys();
+    .configure(&mut coverage)?;
+    ring.sweep(&mut coverage)?;
+    if column == Column::Anonymous {
+        ring.entries(&mut coverage)?;
+        ring.merges(&mut coverage)?;
+    }
+    coverage.assert_transfer_keys(column);
     Ok(())
 }

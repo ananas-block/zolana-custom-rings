@@ -7,7 +7,12 @@
 //! also registers one SPL mint, named USDC in the tests, under asset id 2,
 //! with the mint authority parked on the payer.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{Zolana, ZolanaServices};
@@ -420,7 +425,7 @@ pub fn restart_prover() -> Result<()> {
     let receipt = std::fs::read_to_string(scope.join("prover-server.owner"))?;
     let pid = receipt.lines().next().context("prover ownership receipt")?;
     let port = crate::ring_indexer::port(&prover_url())?;
-    let listener = std::process::Command::new("lsof")
+    let listener = Command::new("lsof")
         .args(["-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
         .output()?;
     ensure!(
@@ -428,6 +433,25 @@ pub fn restart_prover() -> Result<()> {
         "the test scope does not own the prover on port {port}"
     );
     crate::ring_indexer::stop_listener(port)?;
+    // A closed socket does not mean the CLI's ownership receipt is dead yet.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = Command::new("ps")
+            .args(["-p", pid, "-o", "stat="])
+            .output()?;
+        if !state.status.success()
+            || String::from_utf8_lossy(&state.stdout)
+                .trim()
+                .starts_with('Z')
+        {
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "the previous prover has not exited"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
     start_prover(Path::new(&std::env::var("ZOLANA_CLI_BIN")?))
 }
 

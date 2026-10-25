@@ -25,11 +25,11 @@ filter = "package(custom-ring-test-validator)"
 test-group = "serial-validator"
 retries = 2
 
-# This sweep proves, settles and audits every supported shape across five rails.
+# Each rail proves, settles and audits every supported shape in its own CI job.
 [[profile.default.overrides]]
-filter = "test(=shapes::every_basic_transfer_key_lands_and_every_keyed_shape_settles)"
-slow-timeout = { period = "60s", terminate-after = 120 }
+filter = "test(shapes::sweep_)"
+slow-timeout = { period = "60s", terminate-after = 45 }
 
 [[profile.ci.overrides]]
-filter = "test(=shapes::every_basic_transfer_key_lands_and_every_keyed_shape_settles)"
-slow-timeout = { period = "60s", terminate-after = 120 }
+filter = "test(shapes::sweep_)"
+slow-timeout = { period = "60s", terminate-after = 45 }

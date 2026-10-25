@@ -39,7 +39,7 @@ esac
 
 digest="$(
   {
-    printf '%s\n' "${ImageOS:-local}" "${AGAVE_VERSION:?}" "${SBF_TOOLS_VERSION:?}" \
+    printf '%s\n' "${ImageOS:-local}" "${RUNNER_ARCH:-$(uname -m)}" "${AGAVE_VERSION:?}" "${SBF_TOOLS_VERSION:?}" \
       "${RUSTFLAGS:-}" "${CARGO_PROFILE_DEV_DEBUG:-}"
     git ls-files -s -- "${common[@]}" "${inputs[@]}"
   } | sha256sum | cut -c1-40

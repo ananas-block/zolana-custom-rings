@@ -225,18 +225,18 @@ jobs:
           sbf: "true"
       - if: steps.zolana.outputs.hit != 'true'
         run: just build-spp-programs
-      - if: steps.zolana.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: zolana_programs
           mode: save
+          cached: ${{ steps.zolana.outputs.hit }}
       - if: steps.ring.outputs.hit != 'true'
         run: just build-ring-program
-      - if: steps.ring.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: ring_program
           mode: save
+          cached: ${{ steps.ring.outputs.hit }}
 
   zolana-tools:
     name: build / zolana cli
@@ -260,11 +260,11 @@ jobs:
           token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - if: steps.cached.outputs.hit != 'true'
         run: just build-zolana-tools
-      - if: steps.cached.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: zolana_tools
           mode: save
+          cached: ${{ steps.cached.outputs.hit }}
 
   photon:
     name: build / photon
@@ -288,11 +288,11 @@ jobs:
           token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - if: steps.cached.outputs.hit != 'true'
         run: just build-photon
-      - if: steps.cached.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: photon
           mode: save
+          cached: ${{ steps.cached.outputs.hit }}
 
   prover:
     name: build / prover
@@ -315,11 +315,11 @@ jobs:
           go: "true"
       - if: steps.cached.outputs.hit != 'true'
         run: just build-prover-server
-      - if: steps.cached.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: prover
           mode: save
+          cached: ${{ steps.cached.outputs.hit }}
 
   ring-tools:
     name: build / ring tools
@@ -344,11 +344,11 @@ jobs:
           token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - if: steps.cached.outputs.hit != 'true'
         run: just build-ring-tools build-localnet-archives
-      - if: steps.cached.outputs.hit != 'true'
-        uses: ./.github/actions/artifact
+      - uses: ./.github/actions/artifact
         with:
           name: ring_tools
           mode: save
+          cached: ${{ steps.cached.outputs.hit }}
 
   localnet:
     name: tests / localnet / ${{ matrix.name }}
@@ -361,11 +361,21 @@ jobs:
       matrix:
         include:
           - name: custom-ring lifecycle 1/3
-            recipe: test-custom-ring-validator 'all()' --partition slice:1/3
+            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:1/3
           - name: custom-ring lifecycle 2/3
-            recipe: test-custom-ring-validator 'all()' --partition slice:2/3
+            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:2/3
           - name: custom-ring lifecycle 3/3
-            recipe: test-custom-ring-validator 'all()' --partition slice:3/3
+            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:3/3
+          - name: confidential shapes
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_confidential)'
+          - name: confidential policy shapes
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_confidential_policy)'
+          - name: anonymous shapes
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_anonymous)'
+          - name: anonymous policy shapes
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_anonymous_policy)'
+          - name: delegate shapes
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_delegate)'
           - name: custom-ring shared sources
             recipe: test-custom-ring-shared
           - name: custom-ring policy rules
