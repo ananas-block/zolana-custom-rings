@@ -36,6 +36,8 @@ struct OutputOwner {
 }
 
 pub(super) struct PolicyInputs {
+    pub spl_withdrawal_owners: Vec<[u8; 32]>,
+    withdrawals: Vec<custom_ring_interface::PolicyWithdrawal>,
     rules: EncodedRuleTable,
     sources: SourceMap,
     pub policy_hash: [u8; 32],
@@ -57,6 +59,7 @@ pub(super) struct BoundCurator {
 }
 
 pub(super) struct PolicyRead<'a> {
+    pub token_owner_hint: Option<Address>,
     pub ring: CustomRing,
     pub config: &'a CustomRingConfig,
     pub rail: RingRail,
@@ -79,6 +82,12 @@ impl PolicyRead<'_> {
             Some(address) => Some(BoundCurator::read(client, address).await?),
             None => None,
         };
+        let (withdrawals, spl_withdrawal_owners) = read_withdrawals(
+            client,
+            &self.inputs.external_data.interface_transfers,
+            self.token_owner_hint,
+        )
+        .await?;
         let outputs = &self.inputs.output_utxos;
         let asset_rules = pinned
             .table
@@ -109,6 +118,8 @@ impl PolicyRead<'_> {
         let members: BTreeSet<[u8; 32]> = core::iter::once(self.sender)
             .chain(owners.iter().flatten().map(|owner| owner.member))
             .chain(assets.iter().flatten().copied())
+            .chain(withdrawals.iter().map(|w| w.owner))
+            .chain(withdrawals.iter().filter(|_| asset_rules).map(|w| w.asset))
             .collect();
         let members: Vec<[u8; 32]> = members.into_iter().collect();
         let own_reads = RecordReads {
@@ -140,7 +151,7 @@ impl PolicyRead<'_> {
                 curator: curator_reads.as_ref().map_or(0, on),
             }
         };
-        let subjects = outputs
+        let mut subjects = outputs
             .iter()
             .zip(&owners)
             .filter_map(|(output, owner)| owner.map(|owner| (output, owner)))
@@ -155,6 +166,13 @@ impl PolicyRead<'_> {
                 })
             })
             .collect::<Result<Vec<_>, RingError>>()?;
+        subjects.extend(withdrawals.iter().map(|w| OutputSubjects {
+            owner: w.owner,
+            asset: w.asset,
+            amount: w.amount,
+            owner_lists: lists(w.owner),
+            asset_lists: lists(w.asset),
+        }));
         pinned.table.admit(
             &pinned.sources,
             &TransferSubjects {
@@ -206,18 +224,28 @@ impl PolicyRead<'_> {
             }
             .approval_required(pinned.table.limits())?,
         };
+        let mut owner_entries: Vec<_> = owners
+            .iter()
+            .map(|owner| entry(owner.map(|owner| owner.member)))
+            .collect();
+        let mut asset_entries: Vec<_> = assets.iter().map(|asset| entry(*asset)).collect();
+        owner_entries.extend(withdrawals.iter().map(|w| entry(Some(w.owner))));
+        asset_entries.extend(
+            withdrawals
+                .iter()
+                .map(|w| entry(asset_rules.then_some(w.asset))),
+        );
         Ok(PolicyInputs {
+            withdrawals,
+            spl_withdrawal_owners,
             rules: registry.rules,
             sources: pinned.sources,
             policy_hash: pinned.policy_hash,
             own,
             curator,
             sender_entry: entry(Some(self.sender)),
-            owner_entries: owners
-                .iter()
-                .map(|owner| entry(owner.map(|owner| owner.member)))
-                .collect(),
-            asset_entries: assets.iter().map(|asset| entry(*asset)).collect(),
+            owner_entries,
+            asset_entries,
             ct_hashes,
             approval_required,
             key_escrow,
@@ -249,6 +277,7 @@ impl PolicyInputs {
         let key = proving.rail.policy_key();
         let delegate = key == PolicyKey::Delegate;
         Ok(PolicyStatement {
+            withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&self.withdrawals)?,
             key,
             private_tx_hash: &proving.private_tx_hash,
             policy_hash: &self.policy_hash,
@@ -270,7 +299,13 @@ impl PolicyInputs {
         proving: &PolicyProving<'_>,
     ) -> Result<custom_ring_interface::CustomRingProof, RingError> {
         let inputs = proving.inputs;
-        let circuit = RingCircuit::policy(proving.rail, proving.n_in, proving.n_out);
+        let circuit = RingCircuit::policy(
+            proving.rail,
+            proving.n_in,
+            proving.n_out,
+            self.withdrawals.len() as u8,
+            self.curator.is_none(),
+        );
         let public_input_hash = self.statement(proving)?;
         let outputs = inputs
             .output_utxos
@@ -288,7 +323,26 @@ impl PolicyInputs {
             .iter()
             .map(|input| input.private_tx_address_nullifier())
             .collect();
+        let capacity = usize::from(custom_ring_interface::key_catalog::withdrawal_capacity(
+            self.withdrawals.len() as u8,
+        ));
+        let mut withdrawals = self.withdrawals.clone();
+        withdrawals.resize(capacity, custom_ring_interface::PolicyWithdrawal::default());
+        let mut owner_entries = self.owner_entries.clone();
+        let mut asset_entries = self.asset_entries.clone();
+        owner_entries.resize(outputs.len() + capacity, Entry::default());
+        asset_entries.resize(outputs.len() + capacity, Entry::default());
         let params = PolicyParams {
+            withdrawal_count: self.withdrawals.len() as u8,
+            withdrawal_hash: custom_ring_interface::policy_withdrawal_hash(&self.withdrawals)?,
+            withdrawals: withdrawals
+                .iter()
+                .map(|w| crate::request::PolicyWithdrawalRequest {
+                    owner: w.owner,
+                    asset: w.asset,
+                    amount: zolana_hasher::primitives::right_align(&w.amount.to_be_bytes()),
+                })
+                .collect(),
             private_tx_hash: proving.private_tx_hash,
             policy_hash: self.policy_hash,
             ring_id: proving.ring_id,
@@ -305,8 +359,8 @@ impl PolicyInputs {
             outputs,
             sender_pk_hash: proving.sender_pk_hash,
             sender_entry: self.sender_entry.clone(),
-            owner_entries: self.owner_entries.clone(),
-            asset_entries: self.asset_entries.clone(),
+            owner_entries,
+            asset_entries,
         };
         let proof = match proving.rail {
             RingRail::Delegate => {
@@ -360,4 +414,73 @@ impl BoundCurator {
             root: BoundRoot::current(CustomRing::new(account.owner), registry),
         })
     }
+}
+
+/// Resolve token owners once; the program checks the snapshot again at execution.
+async fn read_withdrawals<R: AsyncRpc + ?Sized>(
+    client: &R,
+    transfers: &[zolana_transaction::instructions::transact::SettlementTransfer],
+    hint: Option<Address>,
+) -> Result<(Vec<custom_ring_interface::PolicyWithdrawal>, Vec<[u8; 32]>), RingError> {
+    use zolana_interface::{SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
+    use zolana_transaction::instructions::transact::SettlementTransfer;
+    let mut payments = Vec::new();
+    let mut owners = Vec::new();
+    for transfer in transfers.iter().filter(|t| !t.is_deposit()) {
+        let payment = match *transfer {
+            SettlementTransfer::Sol {
+                user_sol_account,
+                amount,
+                ..
+            } => custom_ring_interface::PolicyWithdrawal::new(
+                user_sol_account.as_array(),
+                None,
+                amount,
+            )?,
+            SettlementTransfer::Spl {
+                mint,
+                user_spl_token,
+                amount,
+                ..
+            } => {
+                let invalid = || RingError::AnonymousExitTokenAccountInvalid(user_spl_token);
+                let owner = match client.get_account(user_spl_token).await? {
+                    Some(account) => {
+                        if ![SPL_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID]
+                            .contains(account.owner.as_array())
+                        {
+                            return Err(invalid());
+                        }
+                        let token =
+                            custom_ring_interface::TokenAccountState::unpack(&account.data)?;
+                        if token.mint != mint.to_bytes() {
+                            return Err(invalid());
+                        }
+                        *token.control.owner()
+                    }
+                    None => {
+                        let owner = hint.ok_or_else(invalid)?;
+                        let program = client
+                            .get_account(mint)
+                            .await?
+                            .map(|a| a.owner)
+                            .ok_or_else(invalid)?;
+                        if ![SPL_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID]
+                            .contains(program.as_array())
+                            || zolana_interface::pda::associated_token_address_with_program(
+                                &owner, &mint, &program,
+                            ) != user_spl_token
+                        {
+                            return Err(invalid());
+                        }
+                        owner.to_bytes()
+                    }
+                };
+                owners.push(owner);
+                custom_ring_interface::PolicyWithdrawal::new(&owner, Some(mint.as_array()), amount)?
+            }
+        };
+        payments.push(payment);
+    }
+    Ok((payments, owners))
 }

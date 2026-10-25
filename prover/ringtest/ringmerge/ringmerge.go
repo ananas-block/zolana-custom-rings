@@ -116,6 +116,7 @@ func Build(t testing.TB, width int) *Statement {
 	c.PrivateTxHash = s.PrivateTxHash
 	c.OutputUtxoHash = s.OutputHash
 	c.FirstNullifier = s.FirstNf
+	c.PartyIdentities = [3]frontend.Variable{11, 12, 0}
 	s.bind(t)
 	return s
 }
@@ -161,6 +162,7 @@ func (s *Statement) Elements(t testing.TB) []*big.Int {
 	return []*big.Int{
 		big.NewInt(shared.MergeStatementDomain), s.PrivateTxHash, s.OutputHash, s.FirstNf, ringtest.AsBigInt(s.Circuit.RingProgramID),
 		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields),
+		ringtest.AsBigInt(s.Circuit.PartyIdentities[0]), ringtest.AsBigInt(s.Circuit.PartyIdentities[1]), ringtest.AsBigInt(s.Circuit.PartyIdentities[2]),
 	}
 }
 

@@ -50,6 +50,7 @@ struct AuditCase {
     epoch: Option<u64>,
     first_contact_root: Option<String>,
     sender_commitment: Option<String>,
+    party_identities: Option<Vec<String>>,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -66,6 +67,7 @@ struct OutputCase {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct PolicyCase {
+    withdrawal_hash: String,
     /// `member` or `delegate`.
     key: String,
     anonymous: Option<bool>,
@@ -252,6 +254,7 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
         epoch: anonymous.map(|anonymous| anonymous.epoch),
         first_contact_root: anonymous.map(|anonymous| hex::encode(anonymous.first_contact_root)),
         sender_commitment: anonymous.map(|anonymous| hex::encode(anonymous.sender_commitment)),
+        party_identities: anonymous.map(|anonymous| hexes(anonymous.party_identities)),
         elements: hexes(&statement.elements().unwrap()),
         public_input_hash: hex::encode(statement.hash().unwrap()),
     }
@@ -279,6 +282,7 @@ fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
         PolicyKey::Delegate => ("delegate", None),
     };
     PolicyCase {
+        withdrawal_hash: hex::encode(statement.withdrawal_hash),
         key: key.to_string(),
         anonymous,
         private_tx_hash: hex::encode(statement.private_tx_hash),
@@ -304,6 +308,7 @@ fn compute_vectors() -> StatementVectors {
         values.anonymous_outputs(),
     );
     let anonymous_tail = AuditKind::Anonymous(AnonymousAudit {
+        party_identities: &[right_aligned(11), right_aligned(12), [0; 32]],
         private_tx_hash: &values.fields[3],
         epoch: 6_734,
         first_contact_root: &values.fields[4],
@@ -376,6 +381,7 @@ fn compute_vectors() -> StatementVectors {
     let owner_signer = solana_owner_identity(&[0x42; 32]).unwrap();
     let zero = [0u8; 32];
     let confidential = PolicyStatement {
+        withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&[]).unwrap(),
         key: PolicyKey::Member { anonymous: false },
         private_tx_hash: &values.fields[3],
         policy_hash: &values.fields[6],
@@ -514,13 +520,13 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(lengths, [14, 16, 20, 20]);
+    assert_eq!(lengths, [14, 16, 23, 23]);
     let policy: Vec<usize> = committed
         .policy
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(policy, [16, 16, 15]);
+    assert_eq!(policy, [18, 18, 17]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS

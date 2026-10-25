@@ -8,13 +8,14 @@ import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from
 import { describe, expect, it } from "vitest";
 import { SPL_TOKEN_2022_PROGRAM_ID, buildDepositTransaction } from "@heliuslabs/zolana";
 import { createCustomRingClient } from "../../src/client/client.js";
-import { sha256 } from "@heliuslabs/zolana/internal";
+import { addressBytes, sha256 } from "@heliuslabs/zolana/internal";
 import {
   signSendAndConfirm,
   signerFromWalletFile,
   tokenBalance,
 } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import { P256ReaderKey } from "../../src/ring/reader.js";
+import { ListId } from "../../src/ring/advanced.js";
 import type { DecryptedRingTransaction } from "../../src/ring/rpc.js";
 import {
   RingError,
@@ -36,12 +37,14 @@ import {
   airdrop,
   enrolInAllow,
   freshActor,
+  indexedKeys,
   keypairSignerFromFile,
   requiredEnv,
   ringReadTarget,
   sendInstruction,
   sync,
   waitForAudited,
+  writeList,
 } from "./ring-live-helpers.js";
 
 /** Every opened output, an exit outside the ring. */
@@ -143,15 +146,17 @@ describe("ring flow", () => {
       sender.wallet.utxos().filter((entry) => entry.utxo.ringProgramId === ringProgramId),
     ).toHaveLength(2);
 
-    const transfer = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: sender.wallet,
-      keys: sender.keys,
-      feePayer: sender.signer.address,
-      recipient: recipient.keypair.shieldedAddress(),
-      amount,
-    });
+    const transfer = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: sender.wallet,
+        keys: sender.keys,
+        feePayer: sender.signer.address,
+        recipient: recipient.keypair.shieldedAddress(),
+        amount,
+      }),
+    );
     const signature = await signSendAndConfirm(client, transfer, [sender.signer]);
 
     // The indexer lags, so the page is polled.
@@ -199,15 +204,17 @@ describe("ring flow", () => {
     expect(change.every((entry) => entry.utxo.ringProgramId === ringProgramId)).toBe(true);
 
     // The received UTXO spends inside the ring again.
-    const hop = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: recipient.wallet,
-      keys: recipient.keys,
-      feePayer: recipient.signer.address,
-      recipient: sender.keypair.shieldedAddress(),
-      amount: amount / 2n,
-    });
+    const hop = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: recipient.wallet,
+        keys: recipient.keys,
+        feePayer: recipient.signer.address,
+        recipient: sender.keypair.shieldedAddress(),
+        amount: amount / 2n,
+      }),
+    );
     const hopSignature = await signSendAndConfirm(client, hop, [recipient.signer]);
     let hopAudited;
     for (let attempt = 0; attempt < 120 && hopAudited === undefined; attempt++) {
@@ -343,17 +350,19 @@ describe("ring flow", () => {
     ]);
 
     // Entry. The default UTXO funds a ring transfer.
-    const entryTransaction = await buildRingTransferTransaction({
-      client,
-      ringProgramId,
-      wallet: sender.wallet,
-      keys: sender.keys,
-      feePayer: sender.signer.address,
-      recipient: recipient.keypair.shieldedAddress(),
-      asset: mint,
-      amount: entry,
-      inputs: "default",
-    });
+    const entryTransaction = await indexedKeys(() =>
+      buildRingTransferTransaction({
+        client,
+        ringProgramId,
+        wallet: sender.wallet,
+        keys: sender.keys,
+        feePayer: sender.signer.address,
+        recipient: recipient.keypair.shieldedAddress(),
+        asset: mint,
+        amount: entry,
+        inputs: "default",
+      }),
+    );
     const entrySignature = await signSendAndConfirm(client, entryTransaction, [sender.signer]);
     const entryAudited = await waitForAudited(ringRpc, target, authoritySigner, entrySignature);
     const entryOutputs = openedOutputs(entryAudited, ringProgramId);
@@ -376,16 +385,18 @@ describe("ring flow", () => {
     // transaction beside the two proofs and the framed outputs.
     const relayer = await generateKeyPairSigner();
     await airdrop(client, relayer.address);
-    const exitTransaction = await buildRingExitTransaction({
-      client,
-      ringProgramId,
-      wallet: recipient.wallet,
-      keys: recipient.keys,
-      feePayer: relayer.address,
-      recipient: sender.keypair.shieldedAddress(),
-      asset: mint,
-      amount: exit,
-    });
+    const exitTransaction = await indexedKeys(() =>
+      buildRingExitTransaction({
+        client,
+        ringProgramId,
+        wallet: recipient.wallet,
+        keys: recipient.keys,
+        feePayer: relayer.address,
+        recipient: sender.keypair.shieldedAddress(),
+        asset: mint,
+        amount: exit,
+      }),
+    );
     const exitSigners = Object.keys(exitTransaction.signatures);
     expect(exitSigners).toHaveLength(2);
     expect(exitSigners[0]).toBe(relayer.address);
@@ -417,7 +428,7 @@ describe("ring flow", () => {
     // The remaining ring UTXO settles a public withdrawal into the funding account.
     await sync(client, recipient);
     const before = await tokenBalance(client, fundingTokenAccount);
-    const withdrawalTransaction = await buildRingWithdrawalTransaction({
+    const withdrawal = {
       client,
       ringProgramId,
       wallet: recipient.wallet,
@@ -427,7 +438,21 @@ describe("ring flow", () => {
       asset: mint,
       amount: withdrawn,
       splTokenProgram: SPL_TOKEN_2022_PROGRAM_ID,
+    };
+    await expect(
+      indexedKeys(() => buildRingWithdrawalTransaction(withdrawal)),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_WITHDRAWAL",
+      causeCode: "RING_POLICY_RULE_UNSATISFIED",
     });
+    await writeList(client, ringProgramId, authoritySigner, {
+      listId: ListId.allow,
+      tag: addressBytes(mintAuthority.address),
+      state: "active",
+    });
+    const withdrawalTransaction = await indexedKeys(() =>
+      buildRingWithdrawalTransaction(withdrawal),
+    );
     const withdrawalSignature = await signSendAndConfirm(client, withdrawalTransaction, [
       recipient.signer,
     ]);

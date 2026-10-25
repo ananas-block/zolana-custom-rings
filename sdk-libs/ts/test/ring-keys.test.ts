@@ -6,7 +6,7 @@ import {
   ShieldedKeypair,
   SigningKey,
   ViewingKey,
-  ed25519DerivationPayload,
+  ed25519DerivationMessage,
   isDerivationInput,
 } from "@heliuslabs/zolana/keypair";
 import { LocalShieldedKeys } from "@heliuslabs/zolana/transaction";
@@ -32,8 +32,11 @@ describe("LocalShieldedKeys from a derivation seed", () => {
     );
     const localViewing = local.viewingPublicKeys()[0]?.toBytes();
     expect(derived.viewingPublicKeys()[0]?.toBytes()).toEqual(localViewing);
-    // The bare payload is a derivation input too, what browser wallets sign.
-    expect(isDerivationInput(ed25519DerivationPayload())).toBe(true);
+    expect(
+      isDerivationInput(
+        ed25519DerivationMessage(signing.publicKey().toBytes().subarray(1) as Bytes32),
+      ),
+    ).toBe(true);
     // The hash-free path a page without Poseidon takes.
     expect(ViewingKey.fromDerivationSeed(signing.derivationSeed()).publicKey().toBytes()).toEqual(
       localViewing,

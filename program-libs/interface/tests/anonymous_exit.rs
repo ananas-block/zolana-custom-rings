@@ -229,3 +229,73 @@ fn an_absent_party_is_a_zero_identity() {
         ])
     );
 }
+
+#[test]
+fn policy_withdrawals_authenticate_live_owners_and_preserve_order() {
+    use custom_ring_interface::{policy_withdrawal_hash, policy_withdrawals, PolicyWithdrawal};
+    let spl = InterfaceTransfer::SplWithdrawal {
+        amount: 9,
+        spl_interface_bump: 0,
+    };
+    let sol = InterfaceTransfer::SolWithdrawal { amount: 7 };
+    let mut group = spl_group(
+        ON_CURVE,
+        token_account(|state| {
+            // Ordinary policy payments may use shared accounts; screening names the actual owner.
+            state.delegate = PodCOption::some([3; 32].into());
+        }),
+    );
+    group[spl.mint_account_position().unwrap()].address = Address::new_from_array(MINT);
+    let mut accounts = sol_group(Address::new_from_array(OWNER), vec![]);
+    accounts.extend(group);
+    let legs = policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).unwrap();
+    assert_eq!(
+        legs,
+        [
+            PolicyWithdrawal::new(&OWNER, None, 7).unwrap(),
+            PolicyWithdrawal::new(&OWNER, Some(&MINT), 9).unwrap()
+        ]
+    );
+    let hash = policy_withdrawal_hash(&legs).unwrap();
+    assert_ne!(hash, policy_withdrawal_hash(&[legs[1], legs[0]]).unwrap());
+    assert_ne!(hash, policy_withdrawal_hash(&legs[..1]).unwrap());
+    for owners in [vec![], vec![[8; 32]], vec![OWNER, OWNER]] {
+        assert!(policy_withdrawals(&[sol, spl], &accounts, &owners).is_err());
+    }
+    assert!(policy_withdrawals(&[spl, sol], &accounts, &[OWNER]).is_err());
+    // Account ownership changing between preparation and execution invalidates the metadata.
+    accounts[5].data = token_account(|state| state.owner = [8; 32].into());
+    assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+    accounts[5].data = token_account(|state| state.mint = [8; 32].into());
+    assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+    accounts[5].data = token_account(|state| state.state = 0);
+    assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+    accounts[5].data.clear();
+    assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+    accounts[5].data = token_account(|_| {});
+    accounts[5].owner = SYSTEM_PROGRAM_ID;
+    assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+}
+
+#[test]
+fn policy_deposits_are_not_screened_and_zero_withdrawals_are_refused() {
+    use custom_ring_interface::policy_withdrawals;
+    let deposits = [
+        InterfaceTransfer::SolDeposit { amount: 8 },
+        InterfaceTransfer::SplDeposit {
+            amount: 9,
+            spl_interface_bump: 0,
+        },
+    ];
+    let groups: Vec<_> = deposits
+        .iter()
+        .flat_map(|leg| (0..leg.settlement_account_count()).map(|_| filler()))
+        .collect();
+    assert_eq!(policy_withdrawals(&deposits, &groups, &[]).unwrap(), []);
+    assert!(policy_withdrawals(
+        &[InterfaceTransfer::SolWithdrawal { amount: 0 }],
+        &sol_group(ON_CURVE, vec![]),
+        &[]
+    )
+    .is_err());
+}

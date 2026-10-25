@@ -101,10 +101,12 @@ impl AnonymousSpend {
 
     /// The smallest commitment class holding the inputs, `None` when no key serves them.
     fn commitment_class(self) -> Option<usize> {
-        ANONYMOUS_AUDIT_CLASSES
-            .iter()
-            .find(|(capacity, _)| *capacity == self.outputs)
-            .and_then(|(_, classes)| classes.iter().copied().find(|class| *class >= self.inputs))
+        for (capacity, classes) in ANONYMOUS_AUDIT_CLASSES {
+            if capacity == self.outputs {
+                return classes.iter().copied().find(|class| *class >= self.inputs);
+            }
+        }
+        None
     }
 }
 

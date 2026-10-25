@@ -70,9 +70,9 @@ describe("RING_PROVING_KEY_SHA256S", () => {
   it("names the key file the prover proves each ring circuit with", () => {
     expect([
       ringProvingKey({ family: "registerKey" }),
-      ringProvingKey({ family: "deposit" }),
+      ringProvingKey({ family: "deposit", capacity: 8 }),
     ]).toEqual(
-      ["custom_ring_register_key.key", "custom_ring_deposit.key"].map((name) => ({
+      ["custom_ring_register_key.key", "custom_ring_deposit_8.key"].map((name) => ({
         name,
         sha256: lock.keys[name]?.sha256,
       })),

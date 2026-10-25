@@ -103,8 +103,9 @@ impl OwnedOutput {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OwnedPolicyProof {
+    pub spl_withdrawal_owners: Vec<[u8; 32]>,
     pub proof: CustomRingProof,
     pub own_root_index: u8,
     pub curator_root_index: Option<u8>,
@@ -157,6 +158,7 @@ impl TransactParts {
             n_out: self.n_out,
             audit_proof: &self.audit_proof,
             policy: self.policy.as_ref().map(|policy| PolicyProof {
+                spl_withdrawal_owners: &policy.spl_withdrawal_owners,
                 proof: &policy.proof,
                 own_root_index: policy.own_root_index,
                 curator_root_index: policy.curator_root_index,

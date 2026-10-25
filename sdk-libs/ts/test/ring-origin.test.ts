@@ -420,6 +420,55 @@ function settlementTransaction(outer: readonly unknown[], inner: readonly unknow
 const SOL_LEG = { recipient: RECIPIENT, asset: SOL_MINT, amount: 7n };
 
 describe("confirmedRingWithdrawals", () => {
+  it("reads screened owners from confirmed metadata without token-account RPC reads", () => {
+    const transfers: InterfaceTransfer[] = [
+      { kind: "solWithdrawal", amount: 7n },
+      { kind: "splWithdrawal", amount: 9n, splInterfaceBump: 254 },
+    ];
+    const frame: RingTransactData = {
+      ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
+      interfaceTransfers: transfers,
+      policy: {
+        proof: new Uint8Array(192),
+        ownRootIndex: 0,
+        splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
+      },
+    };
+    const source = poolInstruction(transfers, [
+      SOL_INTERFACE,
+      RECIPIENT,
+      SHIELDED_POOL_CPI_AUTHORITY,
+      MINT,
+      SPL_INTERFACE,
+      TOKEN_ACCOUNT,
+      TOKEN_PROGRAM,
+    ]);
+    const confirmed = (data: RingTransactData) =>
+      settlementTransaction(
+        [
+          {
+            programIdIndex: keyIndex(RING),
+            accounts: [],
+            data: getBase58Decoder().decode(ringInstructionData(data)),
+          },
+        ],
+        [source],
+      );
+    expect(confirmedRingWithdrawals(confirmed(frame), RING)).toEqual([
+      { ...SOL_LEG, screenedOwner: RECIPIENT },
+      { recipient: TOKEN_ACCOUNT, asset: MINT, amount: 9n, screenedOwner: DEPOSITOR },
+    ]);
+    expect(() =>
+      confirmedRingWithdrawals(
+        confirmed({
+          ...frame,
+          interfaceTransfers: [{ kind: "solWithdrawal", amount: 8n }, transfers[1]!],
+        }),
+        RING,
+      ),
+    ).toThrow();
+  });
+
   it("names the recipient of a SOL withdrawal", () => {
     const transaction = settlementTransaction(
       [callerInstruction(RING)],
@@ -827,8 +876,8 @@ describe("RpcTransactionOrigin", () => {
   );
 
   it.each([
-    [3, InstructionTag.ringTransact],
-    [25, InstructionTag.ringAuthorityTransact],
+    [43, InstructionTag.ringTransact],
+    [44, InstructionTag.ringAuthorityTransact],
   ])("binds a transfer under the ring's outer tag %i", async (outer, tag) => {
     const { indexed, confirmed, frame, ringData } = transferFixture(1, tag);
     expect(ringData[0]).toBe(outer);
@@ -837,6 +886,22 @@ describe("RpcTransactionOrigin", () => {
     ).resolves.toMatchObject({
       kind: "transfer",
       transaction: indexed,
+      layout: RingTransactData.disclosureLayout(frame),
+    });
+  });
+
+  it.each([
+    [3, InstructionTag.ringTransact],
+    [25, InstructionTag.ringAuthorityTransact],
+  ])("still decodes historical transfer tag %i", async (tag, inner) => {
+    const { indexed, confirmed, ringData, frame } = transferFixture(1, inner);
+    const legacy = ringData.slice();
+    legacy[0] = tag!;
+    confirmed.transaction.message.instructions[0]!.data = getBase58Decoder().decode(legacy);
+    await expect(
+      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
+    ).resolves.toMatchObject({
+      kind: "transfer",
       layout: RingTransactData.disclosureLayout(frame),
     });
   });

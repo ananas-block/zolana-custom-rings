@@ -89,6 +89,7 @@ impl Fixture {
             n_out,
             audit_proof: &self.proofs[0],
             policy: policy.then(|| PolicyProof {
+                spl_withdrawal_owners: &[],
                 proof: &self.proofs[1],
                 own_root_index: 0,
                 curator_root_index: None,
@@ -1432,5 +1433,74 @@ fn an_anonymous_spend_leaves_to_one_destination_that_names_one_key() {
     refused(
         anonymous_exit(&mut ring, &[spl], spl_group),
         CustomRingError::AnonymousExitTokenAccountInvalid,
+    );
+}
+
+#[test]
+fn legacy_transfer_tags_cannot_select_the_weaker_statements() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
+    for old in [tag::LEGACY_TRANSACT, tag::LEGACY_DELEGATE_TRANSACT] {
+        let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
+        refused(
+            send(&mut ring, old, Vec::new(), data.encode().unwrap(), spp, &[]),
+            CustomRingError::InvalidInstructionData,
+        );
+    }
+}
+
+#[test]
+fn policy_spl_metadata_must_match_the_live_token_owner() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Policy);
+    let mint = Address::new_unique();
+    let token = Address::new_unique();
+    let owner = Address::new_unique();
+    let token_program = Address::new_from_array(zolana_interface::SPL_TOKEN_PROGRAM_ID);
+    let mut token_data = vec![0; zolana_interface::SPL_TOKEN_ACCOUNT_LEN];
+    token_data[..32].copy_from_slice(mint.as_ref());
+    token_data[32..64].copy_from_slice(owner.as_ref());
+    // The base SPL token account's state byte follows its delegate COption.
+    token_data[108] = zolana_interface::SPL_TOKEN_ACCOUNT_INITIALIZED;
+    ring.store(token, token_program, token_data.clone());
+    let owners = [owner.to_bytes()];
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.interface_transfers = vec![InterfaceTransfer::SplWithdrawal {
+        amount: 5,
+        spl_interface_bump: 255,
+    }];
+    data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners;
+    let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
+    spp.extend([
+        AccountMeta::new_readonly(
+            Address::new_from_array(zolana_interface::SHIELDED_POOL_CPI_AUTHORITY),
+            false,
+        ),
+        AccountMeta::new_readonly(mint, false),
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new(token, false),
+        AccountMeta::new_readonly(token_program, false),
+    ]);
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSACT,
+        vec![registry_meta()],
+        data.encode().unwrap(),
+        spp.clone(),
+        &[],
+    ));
+    token_data[32..64].copy_from_slice(Address::new_unique().as_ref());
+    ring.store(token, token_program, token_data);
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSACT,
+            vec![registry_meta()],
+            data.encode().unwrap(),
+            spp,
+            &[],
+        ),
+        CustomRingError::InvalidSettlementAccounts,
     );
 }

@@ -17,9 +17,9 @@ type comparator struct {
 	width int
 }
 
-// comparator sizes width for m outputs against one public net, each within the u64 SPP range checks.
+// comparator bounds gross output/withdrawal sums and the existing public net, each leg bounded to u64.
 func (p *Policy) comparator(rc frontend.Rangechecker) comparator {
-	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(len(p.Outputs)+1))}
+	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(len(p.Outputs)+len(p.Withdrawals)+1))}
 }
 
 // atMost returns total <= threshold, the caller bounds their difference below 2^width in magnitude.

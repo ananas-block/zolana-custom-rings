@@ -16,7 +16,19 @@ func TestWriteGoldenRequests(t *testing.T) {
 	}
 	paths := map[common.CircuitType]string{}
 	for _, path := range goldenFiles(t) {
-		paths[common.CircuitType(strings.TrimSuffix(filepath.Base(path), ".json"))] = path
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var head RequestHead
+		if err := json.Unmarshal(payload, &head); err != nil {
+			t.Fatal(err)
+		}
+		name := string(head.CircuitType)
+		paths[common.CircuitType(name)] = path
+	}
+	for _, name := range []common.CircuitType{"custom-ring-policy-member-v2-2-w0-own", "custom-ring-policy-member-v2-2-w2-own", "custom-ring-policy-member-v2-2-w2-curator", "custom-ring-policy-member-v2-2-w32-own", "custom-ring-deposit-1", "custom-ring-deposit-2", "custom-ring-deposit-4", "custom-ring-apply-records-2", "custom-ring-apply-records-4", "custom-ring-apply-records-8"} {
+		paths[name] = filepath.Join("testdata", string(name)+".json")
 	}
 	writeSolved(t, paths)
 }
@@ -41,7 +53,6 @@ func writeSolved(t *testing.T, paths map[common.CircuitType]string) {
 	t.Helper()
 	for circuit, path := range paths {
 		t.Run(string(circuit), func(t *testing.T) {
-			t.Parallel()
 			encoded, err := json.MarshalIndent(hostRequest(t, keyOf(t, circuit)), "", "  ")
 			if err != nil {
 				t.Fatal(err)

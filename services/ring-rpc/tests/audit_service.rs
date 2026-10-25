@@ -510,11 +510,13 @@ impl TransactionSource for StaticSource {
                 transact: self.frames.lock().unwrap().get(&signature).cloned(),
                 withdrawals: vec![
                     RingWithdrawal {
+                        screened_owner: None,
                         recipient: RECIPIENT,
                         asset: SOL_MINT,
                         amount: WITHDRAWN,
                     },
                     RingWithdrawal {
+                        screened_owner: None,
                         recipient: TOKEN_ACCOUNT,
                         asset: MINT,
                         amount: SPL_WITHDRAWN,
@@ -993,11 +995,13 @@ async fn granted_reader_opens_audited_transfers_and_reports_the_rest() {
         item.withdrawals,
         vec![
             DecryptedWithdrawal {
+                screened_owner: None,
                 recipient: RECIPIENT.to_bytes().into(),
                 asset: SOL_MINT.to_bytes().into(),
                 amount: WITHDRAWN,
             },
             DecryptedWithdrawal {
+                screened_owner: None,
                 recipient: TOKEN_ACCOUNT.to_bytes().into(),
                 asset: MINT.to_bytes().into(),
                 amount: SPL_WITHDRAWN,

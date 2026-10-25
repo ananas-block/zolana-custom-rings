@@ -1,3 +1,4 @@
+import { RingInstructionTag } from "./admin.js";
 import { getBase58Encoder } from "@solana/kit";
 
 import {
@@ -52,7 +53,7 @@ import {
   type RingMergeDisclosure,
 } from "./merge-disclosure.js";
 import { RingTransactData, ringRailOf } from "./transact.js";
-import { decompressG2, readMergeData } from "../interface/codecs.js";
+import { decompressG2, readMergeData, writeInterfaceTransfer } from "../interface/codecs.js";
 
 const base58Encoder = getBase58Encoder();
 
@@ -228,6 +229,8 @@ export interface OriginInstructionGroup {
 
 /** Mirrors Rust `RingWithdrawal`, one public settlement leg out of the ring. */
 export interface RingWithdrawal {
+  /** Checked at execution, read from confirmed v2 policy metadata. */
+  readonly screenedOwner?: Address;
   /** The wallet of a SOL leg, the credited token account of an SPL leg. */
   readonly recipient: Address;
   readonly asset: Address;
@@ -457,7 +460,43 @@ export function confirmedRingWithdrawals(
   transaction: unknown,
   ring: Address,
 ): readonly RingWithdrawal[] {
-  return ringWithdrawalsOf(ringInstructionsIn(confirmedInstructionGroups(transaction), ring));
+  const groups = confirmedInstructionGroups(transaction);
+  return Object.freeze(
+    instructionAncestry(groups).flatMap(({ instruction, parent }) => {
+      if (parent?.programId !== ring || instruction.programId !== SHIELDED_POOL_PROGRAM_ID)
+        return [];
+      const withdrawals = ringWithdrawalsOf([instruction]);
+      if (withdrawals.length === 0) return withdrawals;
+      const tag = parent.data[0];
+      if (tag !== RingInstructionTag.transact && tag !== RingInstructionTag.delegateTransact)
+        return withdrawals;
+      const source = settlementDataOf(instruction);
+      if (source === undefined) return withdrawals;
+      const frame = RingTransactData.parse(
+        parent.data.subarray(1),
+        ringRailOf(tag, source.anonymous ? "anonymous" : "off"),
+      );
+      if (frame.policy === undefined) return withdrawals;
+      const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
+        const writer = new Writer();
+        for (const leg of legs) writeInterfaceTransfer(writer, leg);
+        return writer.finish();
+      };
+      if (!equalBytes(encodeLegs(frame.interfaceTransfers), encodeLegs(source.transfers)))
+        throw invalid("withdrawal.transfers");
+      let index = 0;
+      const bound = withdrawals.map((leg) => {
+        const raw = leg.asset === SOL_MINT ? undefined : frame.policy?.splWithdrawalOwners[index++];
+        if (leg.asset !== SOL_MINT && raw === undefined) throw invalid("withdrawal.owner");
+        return Object.freeze({
+          ...leg,
+          screenedOwner: raw === undefined ? leg.recipient : encodeBase58(raw),
+        });
+      });
+      if (index !== frame.policy.splWithdrawalOwners.length) throw invalid("withdrawal.owner");
+      return bound;
+    }),
+  );
 }
 
 /**
@@ -788,7 +827,11 @@ function boundLayout(
   if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
   // Only an anonymous ring emits an anonymous transfer.
   const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "off");
-  const data = RingTransactData.parse(instruction.subarray(1), rail);
+  const data = [RingInstructionTag.legacyTransact, RingInstructionTag.legacyDelegateTransact].some(
+    (legacy) => legacy === tag,
+  )
+    ? RingTransactData.parseLegacy(instruction.subarray(1), rail)
+    : RingTransactData.parse(instruction.subarray(1), rail);
   if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
     throw invalid("transfer.instruction");
   return RingTransactData.disclosureLayout(data);
@@ -831,7 +874,9 @@ function withdrawalLeg(
  */
 function settlementDataOf(
   instruction: OriginInstruction,
-): { transfers: readonly InterfaceTransfer[]; cacheAccountCount: number } | undefined {
+):
+  | { transfers: readonly InterfaceTransfer[]; cacheAccountCount: number; anonymous: boolean }
+  | undefined {
   const tag = instruction.data[0];
   if (tag !== InstructionTag.ringTransact && tag !== InstructionTag.ringAuthorityTransact)
     return undefined;

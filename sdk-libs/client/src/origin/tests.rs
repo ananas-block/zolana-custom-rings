@@ -295,6 +295,7 @@ fn withdrawals_read_from_instruction_groups_without_a_transaction() {
     assert_eq!(
         ring_withdrawals_in(&groups, RING).expect("walk"),
         vec![RingWithdrawal {
+            screened_owner: None,
             recipient: RECIPIENT,
             asset: SOL_MINT,
             amount: 77,
@@ -439,11 +440,13 @@ fn assert_settlement_vector(circuit: CircuitId, encoded: &str) {
         ring_withdrawals_in(&groups, RING).expect("settlement"),
         vec![
             RingWithdrawal {
+                screened_owner: None,
                 recipient: RECIPIENT,
                 asset: SOL_MINT,
                 amount: 7
             },
             RingWithdrawal {
+                screened_owner: None,
                 recipient: TOKEN_ACCOUNT,
                 asset: MINT,
                 amount: 9
@@ -590,6 +593,7 @@ fn sol_withdrawal_reports_its_recipient_and_amount() {
     assert_eq!(
         origin.withdrawals,
         vec![RingWithdrawal {
+            screened_owner: None,
             recipient: RECIPIENT,
             asset: SOL_MINT,
             amount: 4_200,
@@ -617,6 +621,7 @@ fn spl_withdrawal_reports_its_mint_and_token_account() {
     assert_eq!(
         origin.withdrawals,
         vec![RingWithdrawal {
+            screened_owner: None,
             recipient: TOKEN_ACCOUNT,
             asset: MINT,
             amount: 9,
@@ -647,11 +652,13 @@ fn mixed_spl_and_sol_legs_are_both_reported() {
         origin.withdrawals,
         vec![
             RingWithdrawal {
+                screened_owner: None,
                 recipient: TOKEN_ACCOUNT,
                 asset: MINT,
                 amount: 9,
             },
             RingWithdrawal {
+                screened_owner: None,
                 recipient: RECIPIENT,
                 asset: SOL_MINT,
                 amount: 11,
@@ -1116,4 +1123,53 @@ fn rpc_origin_binds_the_confirmed_slot() {
         origin.bind_transaction(&mut indexed, RING),
         Err(AuditError::ConfirmedEventMismatch)
     ));
+}
+
+#[test]
+fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts() {
+    use custom_ring_interface::{RingRail, RingTransactData};
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../test-vectors/ring-transact-expansion.json"
+    ))
+    .unwrap();
+    let bytes = hex::decode(vectors["cases"][0]["compact"].as_str().unwrap()).unwrap();
+    let parsed = RingTransactData::parse(&bytes, RingRail::Confidential).unwrap();
+    let mut data = parsed.data().clone();
+    let owners = [[0x61; 32]];
+    let transfers = vec![
+        InterfaceTransfer::SolWithdrawal { amount: 7 },
+        InterfaceTransfer::SplWithdrawal {
+            amount: 9,
+            spl_interface_bump: 0,
+        },
+    ];
+    data.interface_transfers = transfers.clone();
+    data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners;
+    let mut frame = vec![ring_tag::TRANSACT];
+    frame.extend(data.encode().unwrap());
+    let mut source = instruction(POOL, 2);
+    source.data = ring_transact_bytes(transfers);
+    let mut legs = vec![
+        RingWithdrawal {
+            screened_owner: None,
+            recipient: RECIPIENT,
+            asset: SOL_MINT,
+            amount: 7,
+        },
+        RingWithdrawal {
+            screened_owner: None,
+            recipient: TOKEN_ACCOUNT,
+            asset: MINT,
+            amount: 9,
+        },
+    ];
+    // No account backend is involved, so changing or closing TOKEN_ACCOUNT later cannot alter this.
+    bind_withdrawal_owners(&source, &frame, &mut legs).unwrap();
+    assert_eq!(legs[0].screened_owner, Some(RECIPIENT));
+    assert_eq!(
+        legs[1].screened_owner,
+        Some(Address::new_from_array(owners[0]))
+    );
+    source.data = ring_transact_bytes(vec![InterfaceTransfer::SolWithdrawal { amount: 8 }]);
+    assert!(bind_withdrawal_owners(&source, &frame, &mut legs).is_err());
 }

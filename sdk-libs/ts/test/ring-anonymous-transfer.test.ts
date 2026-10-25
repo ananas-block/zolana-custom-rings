@@ -1,3 +1,4 @@
+import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
 import { AccountState, getTokenEncoder } from "@solana-program/token";
 import {
   AccountRole,
@@ -270,7 +271,7 @@ describe("anonymous ring payment", () => {
     checkDisclosure(fixture, call, data, sender.keypair.shieldedAddress());
     checkRingBlindings(call, data);
     const { audit, circuit } = anonymousAudit(fixture);
-    expect(circuit).toBe("custom-ring-audit-anonymous-4-2");
+    expect(circuit).toBe("custom-ring-audit-anonymous-v2-4-2");
     expect([audit.inputCount, audit.inputs.length]).toEqual([1, 4]);
     expect(audit.outputs.map((slot) => [slot.stream.inbox, slot.stream.self])).toEqual([
       [false, true],
@@ -790,7 +791,7 @@ describe("anonymous ring exits and entries", () => {
     const disclosure = checkDisclosure(fixture, call, data, sender.keypair.shieldedAddress());
     expect(disclosure.kind === "anonymous" && disclosure.inputs.kind).toBe("openings");
     const { audit, circuit } = anonymousAudit(fixture);
-    expect(circuit).toBe("custom-ring-audit-anonymous-entry-8-2");
+    expect(circuit).toBe("custom-ring-audit-anonymous-entry-v2-8-2");
     expect([audit.layout.fullOpenings, audit.inputs.length]).toEqual([true, 8]);
   });
 
@@ -1643,6 +1644,7 @@ describe("anonymous rail on a policy ring", () => {
     const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
     expect(policy.publicInputHash).toEqual(
       policyStatementHash({
+        withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "member", anonymous: true },
         privateTxHash: data.privateTxHash,
         policyHash: decodeRingMemberRegistry(registryAccount.data).policyHash,
@@ -1749,7 +1751,7 @@ describe("anonymous entry key bound", () => {
     const { data } = await expanded(fixture, proven, "anonymous");
     expect(data.fullOpenings).toBe(true);
     expect(data.nullifiers).toHaveLength(8);
-    expect(anonymousAudit(fixture).circuit).toBe("custom-ring-audit-anonymous-entry-8-2");
+    expect(anonymousAudit(fixture).circuit).toBe("custom-ring-audit-anonymous-entry-v2-8-2");
   });
 
   it("refuses a ninth default-ring note before any proof", async () => {

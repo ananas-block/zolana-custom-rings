@@ -20,11 +20,22 @@ type DelegatePolicyCircuit struct {
 
 var delegateRail = railValues{approvalRequired: 0, keyEscrow: 1, sender: 0}
 
+type DelegateShape struct {
+	transaction.Shape
+	OwnOnly bool
+}
+
 func NewDelegatePolicyCircuit(shape transaction.Shape) (*DelegatePolicyCircuit, error) {
+	return NewDelegatePolicyCircuitWith(DelegateShape{Shape: shape})
+}
+
+func NewDelegatePolicyCircuitWith(s DelegateShape) (*DelegatePolicyCircuit, error) {
+	shape := s.Shape
+
 	if err := shape.Validate(); err != nil {
 		return nil, fmt.Errorf("policy: no delegate key, %w", err)
 	}
-	return &DelegatePolicyCircuit{Inputs: make([]shared.UtxoWires, shape.NInputs), Policy: newPolicy(shape.NOutputs)}, nil
+	return &DelegatePolicyCircuit{Inputs: make([]shared.UtxoWires, shape.NInputs), Policy: newPolicy(shape.NOutputs, 0, s.OwnOnly)}, nil
 }
 
 func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
@@ -35,15 +46,17 @@ func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
 	t := c.Table.decode(api, rc, c.PolicyHash)
+	c.assertOwnOnly(api)
 	// 2. The reopened inputs and the outputs open private_tx_hash.
 	inputs, inputChain := openInputs(api, c.Inputs)
 	outputs := c.openOutputs(api, inputChain)
 	// 3. A delegate move spends one member, the sender.
 	sender := c.sender(api, inputs)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
-	s := c.resolveSubjects(api, t, sender, outputs)
+	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
+	s := c.resolveSubjects(api, t, sender, payments)
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, outputs)
+	c.assertRules(api, cmp, t, s, payments)
 	// 6. The key fixes approval_required to 0, the program authorizes the configured delegate signer instead.
 	// 7. The key fixes key_escrow to 1, every output owner escrows the output's nullifier key.
 	c.assertEscrow(api, delegateRail.keyEscrow, s.owners, outputs)

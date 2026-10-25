@@ -1,6 +1,7 @@
 //! The custom ring auditor client, free of test utilities so the end-to-end test runs its path.
 
 pub mod anonymous;
+mod confidential;
 mod created;
 mod decrypt;
 pub mod delivered;
@@ -36,6 +37,7 @@ pub use crate::anonymous::{
 pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
 pub use crate::tags::{IndexerReads, TagWindow, DEFAULT_TAG_WINDOW, TAGS_PER_REQUEST};
 pub use crate::{
+    confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
     created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
     decrypt::{EscrowedKeys, KnownUtxos, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},

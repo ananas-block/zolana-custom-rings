@@ -54,7 +54,8 @@ fn every_catalog_key_is_locked_with_its_verifying_key() {
 
 /// Every circuit the program selects for a supported shape, as the generated catalog spells it.
 fn selectable_circuits() -> BTreeSet<String> {
-    let mut circuits = vec![RingCircuit::RegisterKey, RingCircuit::Deposit];
+    let mut circuits = vec![RingCircuit::RegisterKey];
+    circuits.extend((1..=8).map(RingCircuit::deposit));
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
         let outputs = n_out as u8;
@@ -85,13 +86,25 @@ fn selectable_circuits() -> BTreeSet<String> {
                 }
             }
         }
-        circuits.push(RingCircuit::policy(
-            RingRail::Confidential,
-            n_in as u8,
-            outputs,
-        ));
-        if shape.is_ring_authority() {
-            circuits.push(RingCircuit::policy(RingRail::Delegate, n_in as u8, outputs));
+        for own_only in [false, true] {
+            for withdrawals in 0..=32 {
+                circuits.push(RingCircuit::policy(
+                    RingRail::Confidential,
+                    n_in as u8,
+                    outputs,
+                    withdrawals,
+                    own_only,
+                ));
+            }
+            if shape.is_ring_authority() {
+                circuits.push(RingCircuit::policy(
+                    RingRail::Delegate,
+                    n_in as u8,
+                    outputs,
+                    0,
+                    own_only,
+                ));
+            }
         }
     }
     circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_records));

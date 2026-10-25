@@ -177,6 +177,7 @@ pub(crate) enum AuditBody {
 }
 
 pub(crate) struct AnonymousStatement {
+    pub party_identities: [[u8; 32]; 3],
     pub private_tx_hash: [u8; 32],
     pub private_tx_blinding: [u8; 32],
     pub sender_commitment: [u8; 32],
@@ -253,6 +254,7 @@ impl AuditProving<'_> {
                     .collect::<Result<Vec<_>, _>>()?;
                 openings.resize(class, Opening::default());
                 AuditBody::Anonymous(Box::new(AnonymousAudit {
+                    party_identities: statement.party_identities,
                     public_input_hash: self.public_input_hash,
                     audit,
                     outputs: self

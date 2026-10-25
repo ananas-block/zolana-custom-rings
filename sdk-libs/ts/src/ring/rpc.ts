@@ -486,6 +486,7 @@ export interface DecryptedRingOutput {
 
 /** A public settlement leg. Value left the ring to a plain account. */
 export interface DecryptedRingWithdrawal {
+  readonly screenedOwner?: Address;
   /** A token account for an SPL leg, a wallet for a SOL leg. */
   readonly recipient: Address;
   /** The mint of an SPL leg or the native SOL mint. */
@@ -1165,6 +1166,9 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
         const path = `withdrawals[${index}]`;
         const leg = record(entry, path);
         return Object.freeze({
+          ...(leg["screenedOwner"] === undefined
+            ? {}
+            : { screenedOwner: address(leg["screenedOwner"], `${path}.screenedOwner`) }),
           recipient: address(leg["recipient"], `${path}.recipient`),
           asset: address(leg["asset"], `${path}.asset`),
           amount: u64(leg["amount"], `${path}.amount`),

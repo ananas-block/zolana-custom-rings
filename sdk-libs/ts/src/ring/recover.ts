@@ -385,7 +385,7 @@ async function followSpends(
 }
 
 /** Every transaction spending one of `nullifiers`, `budget` bounds the queries. */
-async function spendingTransactions(
+export async function spendingTransactions(
   client: Pick<IndexerReader, "getShieldedTransactionsByNullifiers">,
   nullifiers: readonly Bytes32[],
   budget: { remaining: number },

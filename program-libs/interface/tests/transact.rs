@@ -164,6 +164,7 @@ impl Fixture {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.key_escrow = true;
         data.policy = Some(PolicyProof {
+            spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
             own_root_index: 7,
             curator_root_index: Some(3),
@@ -212,6 +213,7 @@ impl Fixture {
     fn anonymous(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 3, 4);
         data.policy = Some(PolicyProof {
+            spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
             own_root_index: 31,
             curator_root_index: None,
@@ -273,6 +275,7 @@ impl Fixture {
 
     fn delegate_policy(&self) -> PolicyProof<'_> {
         PolicyProof {
+            spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
             own_root_index: 0,
             curator_root_index: None,
@@ -679,6 +682,7 @@ fn the_policy_proof_follows_the_registry() {
     registry.sources = sources;
     let mut uncurated = packed.clone();
     uncurated.policy = uncurated.policy.map(|policy| PolicyProof {
+        spl_withdrawal_owners: &[],
         curator_root_index: None,
         ..policy
     });
@@ -830,6 +834,7 @@ fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
     let data = parsed.data();
     let binding = AuditBinding {
+        party_identities: &[[0; 32]; 3],
         ring_id: &fixture.fields[60],
         auditor_pubkey: &config().auditor_pubkey,
         epoch: 41,
@@ -861,6 +866,7 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
     let fixture = Fixture::new();
     let config = config();
     let binding = |key_escrow| AuditBinding {
+        party_identities: &[[0; 32]; 3],
         ring_id: &fixture.fields[60],
         auditor_pubkey: &config.auditor_pubkey,
         epoch: 0,
@@ -895,4 +901,31 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
         statement(&fixture.with_disclosure(delegate), true),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+#[test]
+fn withdrawal_owner_metadata_is_required_in_transfer_order() {
+    let fixture = Fixture::new();
+    let owners = [[0x61; 32], [0x62; 32]];
+    let mut data = fixture.confidential_packed();
+    data.interface_transfers = vec![
+        InterfaceTransfer::SplWithdrawal {
+            amount: 7,
+            spl_interface_bump: 0,
+        },
+        InterfaceTransfer::SolDeposit { amount: 100 },
+        InterfaceTransfer::SplWithdrawal {
+            amount: 8,
+            spl_interface_bump: 0,
+        },
+    ];
+    assert!(data.encode().is_err());
+    data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners;
+    let encoded = data.encode().unwrap();
+    let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
+    assert_eq!(parsed.data().policy.unwrap().spl_withdrawal_owners, owners);
+    assert_eq!(parsed.data().interface_transfers, data.interface_transfers);
+    assert!(RingTransactData::parse_legacy(&encoded, RingRail::Confidential).is_err());
+    data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners[..1];
+    assert!(data.encode().is_err());
 }

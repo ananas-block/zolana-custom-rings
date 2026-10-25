@@ -17,6 +17,7 @@ type statementVectors struct {
 }
 
 type auditStatementVector struct {
+	PartyIdentities  []string                `json:"party_identities"`
 	Kind             string                  `json:"kind"`
 	FirstNullifier   string                  `json:"first_nullifier"`
 	RingProgramID    string                  `json:"ring_id"`
@@ -90,6 +91,7 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 					Epoch:            v.Epoch,
 					FirstContactRoot: ringtest.VectorField(t, v.FirstContactRoot),
 					SenderCommitment: ringtest.VectorField(t, v.SenderCommitment),
+					PartyIdentities:  [3]*big.Int{ringtest.VectorField(t, v.PartyIdentities[0]), ringtest.VectorField(t, v.PartyIdentities[1]), ringtest.VectorField(t, v.PartyIdentities[2])},
 				})
 			default:
 				t.Fatalf("unknown audit kind %q", v.Kind)

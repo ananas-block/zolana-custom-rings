@@ -27,10 +27,7 @@ use zolana_ring_policy::{
     ListChange, ListId, ListSet, Member, OutflowLimit, Rule, RuleTable, Subject,
 };
 use zolana_test_utils::test_validator_asserts::wait_for_merkle_proof;
-use zolana_transaction::{
-    instructions::transact::{ConfidentialTransaction, Shape},
-    Utxo,
-};
+use zolana_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
 
 use crate::shared::{
     custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, TestEnv, Tier,
@@ -217,7 +214,6 @@ impl PolicyTransfer<'_> {
         )?
         .with_output_tree_id(tree_id)?;
         transfer.transfer_sol(&self.recipient.shielded_address()?, self.amount)?;
-        transfer.pad_utxos(Shape::IN1_OUT2, &self.sender.shielded_address()?)?;
         let transfer = CustomRingTransfer::new(CustomRingTransferInput {
             ring: self.ring,
             sender: self.sender,

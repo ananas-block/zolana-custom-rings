@@ -7,9 +7,9 @@
 //! also registers one SPL mint, named USDC in the tests, under asset id 2,
 //! with the mint authority parked on the payer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{Zolana, ZolanaServices};
 use custom_ring_sdk::{
     compute_unit_limit, CreateConfig, CreateMemberRegistry, CustomRing, InitSppRingConfig,
@@ -38,17 +38,17 @@ use zolana_program_test::{
     create_tree_instructions,
     localnet::{LocalnetPorts, LocalnetValidator, UpgradeableProgram},
 };
-use zolana_ring_client::MemberOpeningRead;
+use zolana_ring_client::{open_ring_confidential, MemberOpeningRead};
 use zolana_ring_policy::{ListId, Member, RuleTable};
 use zolana_ring_transaction::RingAssets;
-use zolana_test_utils::wallet::Wallet;
+use zolana_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
 use zolana_test_utils::{
     localnet::{isolated_temp_path, localnet_indexer_url, localnet_rpc_url, WorkspaceArtifacts},
     prover::spawn_workspace_prover,
     smart_account::{self, ProtocolSigners, StandardSigners},
     spl::{create_mint, RegisterSplAsset},
 };
-use zolana_transaction::{AssetRegistry, Mint};
+use zolana_transaction::{AssetRegistry, Mint, ShieldedTransaction};
 use zolana_user_registry_interface::user_registry_program_id;
 
 use crate::ring_indexer::RingIndexerLaunch;
@@ -223,6 +223,34 @@ impl std::ops::DerefMut for TestWallet {
     }
 }
 
+/// zolana's wallet sync, then the scheme 10 and 11 ring notes it skips.
+pub struct WalletSync<'a> {
+    pub wallet: &'a mut Wallet,
+    pub keys: &'a ShieldedKeypair,
+    pub assets: &'a RingAssets,
+    pub transactions: &'a [ShieldedTransaction],
+}
+
+impl WalletSync<'_> {
+    pub fn sync(self) -> Result<()> {
+        let authority = KeypairWalletAuthority::new(Address::default(), self.keys);
+        self.wallet
+            .sync(&authority, self.transactions, 0, DEFAULT_TAG_WINDOW)?;
+        let notes = open_ring_confidential(self.keys, self.assets, self.transactions)?;
+        for utxo in notes.owned.utxos {
+            if !self
+                .wallet
+                .utxos
+                .iter()
+                .any(|held| held.utxo_hash == utxo.utxo_hash)
+            {
+                self.wallet.utxos.push(utxo);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub enum Tier {
     AuditOnly,
     AnonymousAuditOnly,
@@ -385,6 +413,46 @@ pub fn prover_url() -> String {
     }
 }
 
+/// Bound the exhaustive shape sweep's key cache without resetting chain state.
+/// Only the prover recorded by the isolated test harness may be stopped.
+pub fn restart_prover() -> Result<()> {
+    let scope = PathBuf::from(std::env::var_os("ZOLANA_PROCESS_SCOPE_DIR").context("test scope")?);
+    let receipt = std::fs::read_to_string(scope.join("prover-server.owner"))?;
+    let pid = receipt.lines().next().context("prover ownership receipt")?;
+    let port = crate::ring_indexer::port(&prover_url())?;
+    let listener = std::process::Command::new("lsof")
+        .args(["-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+        .output()?;
+    ensure!(
+        String::from_utf8_lossy(&listener.stdout).trim() == pid,
+        "the test scope does not own the prover on port {port}"
+    );
+    crate::ring_indexer::stop_listener(port)?;
+    start_prover(Path::new(&std::env::var("ZOLANA_CLI_BIN")?))
+}
+
+fn start_prover(cli: &Path) -> Result<()> {
+    // A prover that takes its proof data from the client needs no indexer.
+    let indexer = match ProverClient::local().proof_data_source() {
+        ProofDataSource::Client => IndexerRequirement::Optional,
+        ProofDataSource::Prover => IndexerRequirement::Required,
+    };
+    if let Some(keys) = std::env::var_os("ZOLANA_PROVER_KEYS_DIR") {
+        ProverLaunch::new_with_cli(cli)
+            .and_then(|launch| launch.with_keys_dir(keys))
+            .and_then(|launch| match indexer {
+                IndexerRequirement::Required => {
+                    launch.with_indexer(localnet_indexer_url(), indexer).spawn()
+                }
+                IndexerRequirement::Optional => launch.spawn(),
+            })
+            .context("start the isolated ring prover")?;
+    } else {
+        spawn_workspace_prover(indexer);
+    }
+    Ok(())
+}
+
 pub fn setup() -> Result<TestEnv> {
     setup_with_extra_rings(&[])
 }
@@ -459,23 +527,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
     .spawn()
     .context("start the ring indexer")?;
 
-    // A prover that takes its proof data from the client needs no indexer.
-    let indexer = match ProverClient::local().proof_data_source() {
-        ProofDataSource::Client => IndexerRequirement::Optional,
-        ProofDataSource::Prover => IndexerRequirement::Required,
-    };
-    if let Some(keys) = std::env::var_os("ZOLANA_PROVER_KEYS_DIR") {
-        let ring_indexer = localnet_indexer_url();
-        ProverLaunch::new_with_cli(&validator.cli_bin)
-            .and_then(|launch| launch.with_keys_dir(keys))
-            .and_then(|launch| match indexer {
-                IndexerRequirement::Required => launch.with_indexer(ring_indexer, indexer).spawn(),
-                IndexerRequirement::Optional => launch.spawn(),
-            })
-            .context("start the isolated ring prover")?;
-    } else {
-        spawn_workspace_prover(indexer);
-    }
+    start_prover(&validator.cli_bin)?;
 
     let rpc_url = localnet_rpc_url();
     let indexer_url = localnet_indexer_url();

@@ -1,8 +1,6 @@
 //! The ring prover's request bodies, field for field the Go `prover/custom_ring` params.
 
-use custom_ring_interface::{
-    QueueEntry, MAX_RING_DEPOSIT_AUDIT_SLOTS, QUAD_ARITY, RING_DELIVERED_BODY_LEN,
-};
+use custom_ring_interface::{QueueEntry, QUAD_ARITY, RING_DELIVERED_BODY_LEN};
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
 use zolana_keypair::{PublicKey, X25519Pubkey};
@@ -244,6 +242,8 @@ impl core::fmt::Debug for Anchor {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AnonymousAudit {
+    #[serde(serialize_with = "fe::seq")]
+    pub party_identities: [[u8; 32]; 3],
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
     #[serde(flatten)]
@@ -409,6 +409,10 @@ pub(crate) struct OutputOpening {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PolicyParams<'a> {
+    pub withdrawal_count: u8,
+    #[serde(with = "fe")]
+    pub withdrawal_hash: [u8; 32],
+    pub withdrawals: Vec<PolicyWithdrawalRequest>,
     #[serde(with = "fe")]
     pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -608,6 +612,8 @@ impl core::fmt::Debug for MergeSlot {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MergeAnonymous {
+    #[serde(serialize_with = "fe::seq")]
+    pub party_identities: [[u8; 32]; 3],
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -678,16 +684,16 @@ pub(crate) struct DepositRequest {
     #[serde(skip_serializing_if = "core::ops::Not::not")]
     pub anonymous: bool,
     #[serde(serialize_with = "fe::seq")]
-    pub owner_pk_hashes: [[u8; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS],
+    pub owner_pk_hashes: [[u8; 32]; 1],
     #[serde(serialize_with = "option_seq", skip_serializing_if = "Option::is_none")]
-    pub owner_keys: Option<[[u8; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS]>,
+    pub owner_keys: Option<[[u8; 32]; 1]>,
     #[serde(serialize_with = "fe::seq")]
-    pub nullifier_pks: [[u8; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS],
+    pub nullifier_pks: [[u8; 32]; 1],
     #[serde(serialize_with = "zeroizing_seq")]
-    pub blinding_secrets: Zeroizing<[[u8; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS]>,
+    pub blinding_secrets: Zeroizing<[[u8; 32]; 1]>,
     #[serde(serialize_with = "fe::seq")]
-    pub ct_hashes: [[u8; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS],
-    pub members: [Option<RecordOpeningRequest>; MAX_RING_DEPOSIT_AUDIT_SLOTS],
+    pub ct_hashes: [[u8; 32]; 1],
+    pub members: [Option<RecordOpeningRequest>; 1],
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]
@@ -748,4 +754,14 @@ mod option_field {
             None => serializer.serialize_none(),
         }
     }
+}
+
+#[derive(Serialize)]
+pub(crate) struct PolicyWithdrawalRequest {
+    #[serde(with = "fe")]
+    pub owner: [u8; 32],
+    #[serde(with = "fe")]
+    pub asset: [u8; 32],
+    #[serde(with = "fe")]
+    pub amount: [u8; 32],
 }

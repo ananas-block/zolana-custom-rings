@@ -241,6 +241,7 @@ fn page(
     nullifiers: Vec<[u8; 32]>,
 ) -> GetDecryptedTransactionsResponse {
     let withdrawal = RingWithdrawal {
+        screened_owner: None,
         recipient: Address::new_from_array([10; 32]),
         asset: Address::new_from_array([4; 32]),
         amount: 5,

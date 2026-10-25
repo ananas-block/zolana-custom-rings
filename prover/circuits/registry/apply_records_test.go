@@ -335,10 +335,10 @@ func TestApplyRecordsKeys(t *testing.T) {
 	for _, n := range registry.ApplyWidths {
 		ringkey.RequirePinned(t, fmt.Sprintf("custom_ring_apply_records_%d", n), ringkey.Compile(t, applyCircuit(t, n)))
 	}
-	if _, err := registry.NewApplyRecordsCircuit(2); err == nil {
+	if _, err := registry.NewApplyRecordsCircuit(3); err == nil {
 		t.Fatal("built a capacity no apply key ships")
 	}
-	unchecked := &registry.ApplyRecordsCircuit{NumWrites: 2, Writes: make([]registry.RecordWrite, 2)}
+	unchecked := &registry.ApplyRecordsCircuit{NumWrites: 3, Writes: make([]registry.RecordWrite, 3)}
 	if _, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, unchecked); err == nil {
 		t.Fatal("compiled a capacity no apply key ships")
 	}

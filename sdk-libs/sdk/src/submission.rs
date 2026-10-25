@@ -504,7 +504,7 @@ impl RingOperation<'_> {
                     operation
                         .prepared
                         .clone()
-                        .prove(operation.input.clone(), client)
+                        .prove(operation.input.clone(), payer, client)
                 })
                 .await?;
                 proved(

@@ -46,6 +46,7 @@ export type AuditKind =
       firstContactRoot: Bytes32;
       /** Zero outside a policy ring. */
       senderCommitment: Bytes32;
+      partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
     }>;
 
 /** Every ring transfer's audit proof, Rust `AuditStatement`. */
@@ -64,6 +65,7 @@ export type PolicyKey =
 
 /** A policy ring transfer's policy proof, Rust `PolicyStatement`. */
 export interface PolicyStatement {
+  readonly withdrawalHash: Bytes32;
   readonly key: PolicyKey;
   readonly privateTxHash: Bytes32;
   readonly policyHash: Bytes32;
@@ -137,6 +139,7 @@ export function auditStatementElements(statement: AuditStatement): readonly Byte
         u64Field(kind.epoch, "epoch"),
         checkedBytes<Bytes32>(kind.firstContactRoot, 32, "first contact root"),
         checkedBytes<Bytes32>(kind.senderCommitment, 32, "sender commitment"),
+        ...kind.partyIdentities,
       ];
   }
 }
@@ -147,6 +150,7 @@ export function auditStatementHash(statement: AuditStatement): Bytes32 {
 
 /** What the program supplies beside the data for the audit statement, Rust `AuditBinding`. */
 export interface AuditBinding {
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
   /** `hash_bytes` of the ring program id. */
   readonly ringId: Bytes32;
   readonly auditorPubkey: Bytes33;
@@ -168,6 +172,7 @@ export function ringAuditStatement(data: RingTransactData, binding: AuditBinding
       ? {
           kind: "anonymous",
           privateTxHash: data.privateTxHash,
+          partyIdentities: binding.partyIdentities,
           epoch: binding.epoch,
           firstContactRoot: binding.firstContactRoot,
           senderCommitment: data.policy?.senderCommitment ?? (new Uint8Array(32) as Bytes32),
@@ -216,6 +221,8 @@ export function policyStatementElements(statement: PolicyStatement): readonly By
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
     ]),
+    bigIntBytes(2n) as Bytes32,
+    checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash"),
   ];
 }
 

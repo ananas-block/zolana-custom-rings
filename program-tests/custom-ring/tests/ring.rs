@@ -59,7 +59,7 @@ use custom_ring_test_validator::{
     ring_wallet::RingWallet,
     shared::{
         custom_ring_program_id, prover_url, send, send_expecting_rejection, setup, ExpectRejection,
-        RegisterRing, RejectedTransact, TestEnv, Tier, USDC_ASSET_ID,
+        RegisterRing, RejectedTransact, TestEnv, Tier, WalletSync, USDC_ASSET_ID,
     },
 };
 use solana_address::Address;
@@ -98,7 +98,7 @@ use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
 };
-use zolana_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
+use zolana_test_utils::wallet::Wallet;
 use zolana_test_utils::{
     localnet::isolated_temp_path,
     smart_account,
@@ -504,15 +504,20 @@ fn cli_merges_twenty_four_custom_ring_utxos() -> Result<()> {
     cli_merge_fragments(&[3_000_000; 24])
 }
 
-/// The widest `merge --count` still fits one transaction, the proof pads its spare slots.
+/// A requested count above the anonymous key's width leaves the excess notes unspent.
 #[test]
-fn cli_merges_maximum_custom_ring_utxos() -> Result<()> {
+fn cli_caps_anonymous_merge_at_supported_width() -> Result<()> {
     cli_merge_fragments(&[3_000_000; custom_ring_sdk::MAX_RING_MERGE_INPUTS])
 }
 
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let count = amounts.len().to_string();
-    let total: u64 = amounts.iter().sum();
+    let merged_count = amounts.len().min(
+        *custom_ring_interface::ANONYMOUS_MERGE_WIDTHS
+            .last()
+            .unwrap(),
+    );
+    let total: u64 = amounts[..merged_count].iter().sum();
     let env = setup()?;
     let tree = env.register_default_tree()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
@@ -522,7 +527,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         env: &env,
         ring_rpc: "http://127.0.0.1:1",
         policy: None,
-        mode: ModeName::Confidential,
+        mode: ModeName::Anonymous,
     })?;
     project.run(&["init"])?;
 
@@ -536,12 +541,16 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         "{empty_text}"
     );
     let sender = project.demo_sender()?;
+    let state = AnonymousRingState::new(ring.program_id(), 0);
 
     for &amount in amounts {
         let deposit = RingDeposit {
             ring,
             payer: &env.payer,
-            recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+            recipient: DepositRecipient::Anonymous {
+                keys: &sender,
+                state: &state,
+            },
             tree,
             asset: DepositAsset::Sol,
             amount,
@@ -551,25 +560,31 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         custom_ring_cli::wait_for_indexed_transaction(&env.client, receipt.signature)?;
     }
 
-    let output = project.run(&["merge", "--count", &count])?;
+    let output = project.run(&[
+        "--fee-payer-keypair",
+        "upgrade.json",
+        "merge",
+        "--count",
+        &count,
+    ])?;
     for line in [
-        format!("inputs      {count}"),
+        format!("inputs      {merged_count}"),
         format!("amount      {total}"),
         "merge preserves value".to_owned(),
     ] {
         assert!(output.contains(&line), "{line} in\n{output}");
     }
 
-    let scan = zolana_client::UtxoScan::new(&sender, &env.assets)
-        .with_ring_deposit_payload(ring.program_id(), zolana_ring_client::deposit_payload)
-        .fetch(env.client.indexer())?;
+    let mut wallet = RingWallet::new(&sender, env.ring_assets()?, state);
+    wallet.sync(&env)?;
+    let mut actual: Vec<_> = wallet.unspent().map(|note| note.utxo.amount).collect();
+    let mut expected = amounts[merged_count..].to_vec();
+    expected.push(total);
+    actual.sort_unstable();
+    expected.sort_unstable();
     assert_eq!(
-        scan.spendable
-            .utxos()
-            .map(|utxo| utxo.utxo.amount)
-            .collect::<Vec<_>>(),
-        vec![total],
-        "a scan apart from the cli finds every input spent and the whole value merged"
+        actual, expected,
+        "an independent scan finds the merged value and any unselected notes"
     );
 
     let signature = output
@@ -669,6 +684,11 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
     );
 
     // 3. `audit` opens the payment, its hidden sender and the recipient's output.
+    let signature = paid
+        .lines()
+        .find_map(|line| line.strip_prefix("transact")?.trim().parse().ok())
+        .context("transfer CLI did not print its confirmed signature")?;
+    custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
     let auditor_key = auditor_key
         .to_str()
         .context("the auditor key path is utf-8")?;
@@ -850,10 +870,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         &env.recipient.keypair.shielded_address()?,
         RING_TRANSFER_AMOUNT,
     )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let transfer = CustomRingTransfer::new(CustomRingTransferInput {
         ring,
         sender: &env.sender.keypair,
@@ -977,14 +993,14 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
 
     // 9. Normal operation is undisturbed: the recipient still discovers its
     //    output through `Wallet::sync` on its own view tag, with no auditor key.
-    let recipient_authority =
-        KeypairWalletAuthority::new(Address::default(), &env.recipient.keypair);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(SOL_MINT, RING_TRANSFER_AMOUNT, Some(ring_program))],
@@ -1003,6 +1019,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,
@@ -1100,10 +1117,6 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         &env.recipient.keypair.shielded_address()?,
         RING_TRANSFER_AMOUNT,
     )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let transfer = CustomRingTransfer::new(CustomRingTransferInput {
         ring,
         sender,
@@ -1122,6 +1135,7 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         "the on-chain tx_viewing_pk is the sender's"
     );
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature,
@@ -1137,14 +1151,14 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         "auditor decrypts both output amounts"
     );
 
-    let recipient_authority =
-        KeypairWalletAuthority::new(Address::default(), &env.recipient.keypair);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     let received = unspent_utxo(&env.recipient.wallet, RING_TRANSFER_AMOUNT)?;
     let hop = AsyncHopParity {
         ring,
@@ -1155,6 +1169,7 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature: hop.signature,
@@ -1308,6 +1323,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
 
     // 4. The auditor opens the hidden sender, its inputs and both outputs.
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk).with_mode(RingMode::Anonymous),
         auditor: &auditor,
         signature: indexed.tx_signature,
@@ -1389,7 +1405,55 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         "a payment on index 0 issues it"
     );
 
-    // 8. The sender's second payment rides the pair stream its first one anchored.
+    // 8. Pairing needs seven other sent leaves, discovered by the sender's scan.
+    let recipient_key = env.recipient.keypair.viewing_pubkey();
+    let decoy_recipient = ShieldedKeypair::new_ed25519()?;
+    let decoy_address = ring_address(&decoy_recipient, ring_program, 0)?;
+    let mut pair_wallet = RingWallet::new(&env.sender.keypair, env.ring_assets()?, sender_ring);
+    for _ in 0..32 {
+        pair_wallet.sync(&env)?;
+        let epoch = custom_ring_interface::stream::tag_epoch(rpc.get_slot()?);
+        if pair_wallet
+            .state
+            .pair_anchor(&recipient_key, epoch)
+            .is_some()
+        {
+            break;
+        }
+        let RingDepositReceipt { signature, utxo } = env.run(
+            RingDeposit {
+                ring,
+                payer,
+                recipient: DepositRecipient::Anonymous {
+                    keys: &env.sender.keypair,
+                    state: &pair_wallet.state,
+                },
+                tree: env.tree,
+                asset: DepositAsset::Sol,
+                amount: 1,
+                cosigner: None,
+            }
+            .send(env.client.ring_client()),
+        )?;
+        custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
+        PaymentLanding {
+            transfer: AnonymousPayment {
+                ring,
+                sender: &env.sender.keypair,
+                state: &pair_wallet.state,
+                payer,
+                inputs: vec![indexed_note(utxo, &env.sender.keypair, &env, env.tree)?],
+                to: decoy_address.clone(),
+                amount: 1,
+            }
+            .transfer()?,
+            payer,
+            auditor_tag,
+        }
+        .land(&env)?
+        .record(&mut pair_wallet.state)?;
+    }
+    let sender_ring = pair_wallet.state;
     let transfer = AnonymousPayment {
         ring,
         sender: &env.sender.keypair,
@@ -1512,6 +1576,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     // 1. A separate depositor funds the hidden note, the owner signs nothing.
     let sender = &env.sender.keypair;
     let depositor = env.funded_keypair()?;
+    env.fund(depositor.pubkey(), RING_DEPOSIT_B)?;
     let deposited = RingNotes {
         ring,
         owner: sender,
@@ -1569,6 +1634,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     }
     .land(&env)?;
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(config.mode),
         auditor: &auditor,
         signature: landed.indexed.tx_signature,
@@ -1605,9 +1671,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     .send(&env.client)?;
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
-    let sender_address = sender.shielded_address()?;
     let recipient_address = recipient.shielded_address()?;
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
     let scan = || RingScan::new(ring_program, auditor.pubkey());
 
     // 1. Entry, a default-ring deposit is spent into ring-bound notes.
@@ -1623,10 +1687,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     let mut prepared =
         ConfidentialTransaction::new_with_ring(vec![entry_input], sender.pubkey(), ring_program)?;
     prepared.transfer_sol(&recipient_address, ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let entry = OwnerTransfer {
         ring,
         sender,
@@ -1653,6 +1713,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -1665,12 +1726,14 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ],
         "entry outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&entry.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&entry.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(SOL_MINT, ENTRY_AMOUNT, Some(ring_program))],
@@ -1689,10 +1752,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         env.assets.mint(&SOL_MINT)?,
         EXIT_AMOUNT,
         None,
-    )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
     )?;
     let exit = OwnerTransfer {
         ring,
@@ -1720,6 +1779,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -1732,12 +1792,14 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ],
         "exit outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&exit.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&exit.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -1770,7 +1832,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         REFUSED_AMOUNT,
         Some(FOREIGN_RING),
     )?;
-    foreign_output.pad_utxos(canonical_shape(1, 2)?, &sender_address)?;
     expect_foreign_ring(prove(foreign_output), FOREIGN_RING)?;
 
     let foreign_note = Note {
@@ -1786,7 +1847,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         ring_program,
     )?;
     foreign_input.transfer_sol(&recipient_address, REFUSED_AMOUNT)?;
-    foreign_input.pad_utxos(canonical_shape(1, 2)?, &sender_address)?;
     expect_foreign_ring(prove(foreign_input), FOREIGN_RING)?;
 
     Ok(())
@@ -1822,7 +1882,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     let recipient = &env.recipient.keypair;
     let sender_address = sender.shielded_address()?;
     let recipient_address = recipient.shielded_address()?;
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
     let scan = || RingScan::new(ring_program, auditor.pubkey());
     let ring_utxo = |owner, amount, blinding| Note {
         owner,
@@ -1855,10 +1914,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     let mut prepared =
         ConfidentialTransaction::new_with_ring(vec![entry_input], sender.pubkey(), ring_program)?;
     prepared.transfer(&recipient_address, usdc, USDC_ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let entry = OwnerTransfer {
         ring,
         sender,
@@ -1881,6 +1936,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -1893,12 +1949,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "entry outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&entry.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&entry.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![(usdc, USDC_ENTRY_AMOUNT, Some(ring_program))],
@@ -1912,10 +1970,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ring_program,
     )?;
     prepared.transfer(&recipient_address, usdc, USDC_HOP_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let hop = OwnerTransfer {
         ring,
         sender,
@@ -1938,6 +1992,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: hop.signature,
@@ -1950,12 +2005,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "hop outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&hop.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&hop.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -1998,10 +2055,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         USDC_EXIT_AMOUNT,
         None,
     )?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender_address,
-    )?;
     let exit = OwnerTransfer {
         ring,
         sender,
@@ -2027,6 +2080,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -2039,12 +2093,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "exit outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&exit.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&exit.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2082,10 +2138,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         )?;
         transfer.withdraw(usdc, USDC_WITHDRAW_AMOUNT, recipient_usdc)?;
         transfer.transfer(&recipient_address, usdc, USDC_FINAL_SEND)?;
-        transfer.pad_utxos(
-            canonical_shape(transfer.inputs().len(), 2)?,
-            &sender_address,
-        )?;
         Ok(transfer)
     };
     let settlement =
@@ -2144,6 +2196,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: withdrawal.signature,
@@ -2156,12 +2209,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         ],
         "withdrawal outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&withdrawal.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&withdrawal.indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2229,6 +2284,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
+                ring: ring_program,
                 scan: scan().with_escrowed_keys(escrowed),
                 auditor: &auditor,
                 signature,
@@ -2238,12 +2294,14 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         vec![moved_note.opened(0)?],
         "delegate move outputs"
     );
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&env.recipient.wallet),
         vec![
@@ -2307,10 +2365,6 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
             ConfidentialTransaction::new_with_ring(vec![input], sender.pubkey(), ring_program)?
                 .with_output_tree_id(tree_id)?;
         transfer.transfer_sol(&recipient, amount)?;
-        transfer.pad_utxos(
-            canonical_shape(transfer.inputs().len(), 2)?,
-            &sender_address,
-        )?;
         Ok(transfer)
     };
     let prove = |transaction: ConfidentialTransaction| {
@@ -2479,10 +2533,6 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         ConfidentialTransaction::new_with_ring(vec![input], member.pubkey(), ring_program)?
             .with_output_tree_id(tree_id)?;
     transfer.transfer_sol(&member_address, SEND)?;
-    transfer.pad_utxos(
-        canonical_shape(transfer.inputs().len(), 2)?,
-        &member_address,
-    )?;
     OwnerTransfer {
         ring,
         sender: member,
@@ -2553,7 +2603,6 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         )?
         .with_output_tree_id(tree_id)?;
         transfer.transfer_sol(to, 1)?;
-        transfer.pad_utxos(canonical_shape(1, 2)?, &member_address)?;
         Ok(transfer)
     };
 
@@ -2648,13 +2697,13 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         "the delegate spent the note"
     );
     let mut member_wallet = Wallet::new(member_address, env.assets.clone())?;
-    let member_authority = KeypairWalletAuthority::new(Address::default(), member);
-    member_wallet.sync(
-        &member_authority,
-        std::slice::from_ref(&indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    WalletSync {
+        wallet: &mut member_wallet,
+        keys: member,
+        assets: &env.ring_assets()?,
+        transactions: std::slice::from_ref(&indexed),
+    }
+    .sync()?;
     assert_eq!(
         sorted_unspent_notes(&member_wallet),
         vec![(SOL_MINT, SEND, Some(ring_program))],
@@ -2700,10 +2749,6 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
     )?
     .with_output_tree_id(env.tree_id(env.tree)?)?;
     prepared.transfer_sol(&recipient.shielded_address()?, ENTRY_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &sender.shielded_address()?,
-    )?;
     let migrated = OwnerTransfer {
         ring,
         sender,
@@ -2719,13 +2764,14 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         "the old-tree note is spent"
     );
 
-    let recipient_authority = KeypairWalletAuthority::new(Address::default(), recipient);
-    env.recipient.wallet.sync(
-        &recipient_authority,
-        std::slice::from_ref(&migrated.indexed),
-        0,
-        DEFAULT_TAG_WINDOW,
-    )?;
+    let assets = env.ring_assets()?;
+    WalletSync {
+        wallet: &mut env.recipient.wallet,
+        keys: &env.recipient.keypair,
+        assets: &assets,
+        transactions: std::slice::from_ref(&migrated.indexed),
+    }
+    .sync()?;
     let received = unspent_utxo(&env.recipient.wallet, ENTRY_AMOUNT)?;
     let mut prepared = ConfidentialTransaction::new_with_ring(
         vec![indexed_note(received, recipient, &env, env.tree)?],
@@ -2733,10 +2779,6 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         ring_program,
     )?;
     prepared.transfer_sol(&sender.shielded_address()?, SECOND_HOP_AMOUNT)?;
-    prepared.pad_utxos(
-        canonical_shape(prepared.inputs().len(), 2)?,
-        &recipient.shielded_address()?,
-    )?;
     let hop = OwnerTransfer {
         ring,
         sender: recipient,
@@ -2747,6 +2789,7 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
     }
     .send(&env)?;
     let audited = AuditLookup {
+        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,
@@ -3041,10 +3084,6 @@ fn second_hop(env: &TestEnv, received: Utxo) -> Result<ConfidentialTransaction> 
         ring,
     )?;
     hop.transfer_sol(&env.sender.keypair.shielded_address()?, SECOND_HOP_AMOUNT)?;
-    hop.pad_utxos(
-        canonical_shape(hop.inputs().len(), 2)?,
-        &env.recipient.keypair.shielded_address()?,
-    )?;
     Ok(hop)
 }
 
@@ -3132,6 +3171,7 @@ impl AsyncHopParity<'_> {
 }
 
 struct AuditLookup<'a> {
+    ring: Address,
     scan: RingScan,
     auditor: &'a X25519Keypair,
     signature: Signature,
@@ -3139,14 +3179,33 @@ struct AuditLookup<'a> {
 
 impl AuditLookup<'_> {
     fn run(self, env: &TestEnv) -> Result<AuditedTransaction> {
+        custom_ring_cli::wait_for_indexed_transaction(&env.client, self.signature)?;
         let client = env.client.as_async();
+        let created = env.client.block_on(
+            zolana_ring_client::CreatedUtxoScan::new(self.ring, self.auditor)
+                .run(client.indexer(), client.rpc()),
+        )?;
+        ensure!(
+            created.next_cursor.is_none(),
+            "created-note history is incomplete"
+        );
         env.client
-            .block_on(self.scan.audit(
-                self.auditor,
-                client.indexer(),
-                client.rpc(),
-                &env.ring_assets()?,
-            ))?
+            .block_on(
+                self.scan
+                    .with_known_utxos(
+                        created
+                            .utxos
+                            .into_iter()
+                            .map(|note| (note.commitment, note.utxo))
+                            .collect(),
+                    )
+                    .audit(
+                        self.auditor,
+                        client.indexer(),
+                        client.rpc(),
+                        &env.ring_assets()?,
+                    ),
+            )?
             .transactions
             .into_iter()
             .find(|tx| tx.tx_signature == self.signature)

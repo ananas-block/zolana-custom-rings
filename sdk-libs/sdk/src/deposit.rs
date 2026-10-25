@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     domain::deposit_blinding, key_catalog::RingCircuit, tag, AuditedDepositPrefix, CoSignScope,
     CustomRingError, CustomRingProof, DepositContext, DepositPublicInput, RingDepositAuditCapsule,
-    RingMode, MAX_RING_DEPOSIT_AUDIT_SLOTS,
+    RingMode,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -303,7 +303,7 @@ impl PreparedRingDeposit {
                 None => None,
             };
             let body = disclosure.body(root.map(|root| root.root), record.as_ref())?;
-            let proof = RingRequest::new(RingCircuit::Deposit, &*body)?
+            let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
             Ok(BoundDeposit {
@@ -379,13 +379,8 @@ impl DepositDisclosure {
             member_registry_root: root.as_ref(),
         }
         .hash()?;
-        let first = |value: [u8; 32]| {
-            let mut slots = [[0; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS];
-            slots[0] = value;
-            slots
-        };
-        let mut members: [Option<RecordOpeningRequest>; MAX_RING_DEPOSIT_AUDIT_SLOTS] =
-            Default::default();
+        let first = |value: [u8; 32]| [value];
+        let mut members: [Option<RecordOpeningRequest>; 1] = Default::default();
         members[0] = record.map(|record| record.opening.clone());
         Ok(Box::new(DepositRequest {
             public_input_hash,

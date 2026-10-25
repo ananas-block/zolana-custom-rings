@@ -145,6 +145,7 @@ export function openRingMergeDisclosure(
 /** Rust `MergeAnonymousPublicInput::hash`, the statement the ring program verifies. */
 export function ringMergeAnonymousPublicInputHash(
   input: Readonly<{
+    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
     privateTxHash: Bytes32;
     outputUtxoHash: Bytes32;
     firstNullifier: Bytes32;
@@ -166,6 +167,7 @@ export function ringMergeAnonymousPublicInputHash(
     hashBytes(input.disclosure.ciphertext) as Bytes32,
     rightAlign(input.salt),
     hashChain4(input.disclosure.fields) as Bytes32,
+    ...input.partyIdentities,
   ]);
 }
 
@@ -253,6 +255,7 @@ export type RingMergeDisclosureRequest = Omit<AnonymousMergeProofRequest, "nulli
 /** Rust `AnonymousMergeDisclosure::prove`, the statement binds the proved SPP merge `spp`. */
 export function ringMergeDisclosureRequest(
   input: Readonly<{
+    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
     ringProgramId: Address;
     auditor: X25519PublicKey;
     prepared: PreparedMerge;
@@ -289,7 +292,9 @@ export function ringMergeDisclosureRequest(
     const field = (value: bigint): Bytes32 => bigIntBytes(value) as Bytes32;
     const request = Object.freeze({
       kind: "anonymousMerge" as const,
+      partyIdentities: input.partyIdentities,
       publicInputHash: ringMergeAnonymousPublicInputHash({
+        partyIdentities: input.partyIdentities,
         privateTxHash: spp.privateTxHash,
         outputUtxoHash: spp.outputUtxoHash,
         firstNullifier,

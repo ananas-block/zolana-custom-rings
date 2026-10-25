@@ -13,6 +13,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 /// An anonymous merge names its owner only to the auditor, the proof binds that opening to the SPP body.
 #[must_use]
 pub(crate) struct MergeAudit<'a> {
+    pub party_identities: &'a [[u8; 32]; 3],
     pub program_id: &'a Address,
     pub config: &'a RingProgramConfig,
     pub anonymous: bool,
@@ -51,6 +52,7 @@ impl MergeAudit<'_> {
             .ok_or(CustomRingError::InvalidInstructionData)?;
         let MergeOutputEncryption::PoseidonCtrV1 { salt, .. } = &merge.output_encryption;
         let public_input = MergeAnonymousPublicInput {
+            party_identities: self.party_identities,
             private_tx_hash: merge.private_tx_hash,
             output_utxo_hash: merge.output_utxo_hash,
             first_nullifier,

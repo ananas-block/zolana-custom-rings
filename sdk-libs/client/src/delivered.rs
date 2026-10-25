@@ -243,14 +243,14 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
 }
 
 /// What [`open_delivered`] kept, the notes in a registered mint and the ones held back.
-struct OpenedDelivered {
-    found: Vec<WalletUtxo>,
-    pending: Vec<PendingUtxo>,
+pub(crate) struct OpenedDelivered {
+    pub(crate) found: Vec<WalletUtxo>,
+    pub(crate) pending: Vec<PendingUtxo>,
     finds: Vec<RingDeliveredFind>,
 }
 
 /// Opens every candidate under its own slot secret, nothing is absorbed here.
-fn open_delivered(
+pub(crate) fn open_delivered(
     address: &ShieldedAddress,
     assets: &RingAssets,
     candidates: &[RingDeliveredCandidate<'_>],

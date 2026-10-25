@@ -3,12 +3,13 @@ package ring
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sync"
+	"strings"
 	"testing"
 
 	"github.com/consensys/gnark/constraint"
@@ -67,8 +68,8 @@ func TestEveryKeyIsRegisteredAndPinned(t *testing.T) {
 func TestRingKeysCompileToTheVerifiedShape(t *testing.T) {
 	for _, key := range Keys {
 		t.Run(string(key.Circuit), func(t *testing.T) {
-			t.Parallel()
 			cs := compileRing(t, key.Circuit)
+			ringkey.RequirePinned(t, strings.TrimSuffix(key.KeyFile(), ".key"), cs)
 			if public := cs.GetNbPublicVariables() - 1; public != 1 {
 				t.Errorf("%d public inputs, the program verifies one", public)
 			}
@@ -98,18 +99,13 @@ func TestRingKeysCarryTheCompiledCircuits(t *testing.T) {
 	}
 }
 
-var compiled sync.Map
-
+// Compiled fresh each call, the CI runner holds one large circuit at a time.
 func compileRing(t testing.TB, circuit common.CircuitType) constraint.ConstraintSystem {
 	t.Helper()
-	if cs, ok := compiled.Load(circuit); ok {
-		return cs.(constraint.ConstraintSystem)
-	}
 	cs, err := extensionOf(t, circuit).R1CS()
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled.Store(circuit, cs)
 	return cs
 }
 
@@ -122,6 +118,9 @@ func loadRingSystem(t testing.TB, circuit common.CircuitType) *common.ExtensionP
 	}
 	path := filepath.Join(dir, keyOf(t, circuit).KeyFile())
 	if _, err := os.Stat(path); err != nil {
+		if os.Getenv("REQUIRE_RING_KEYS") == "1" {
+			t.Fatalf("required key %s is not available: %v", path, err)
+		}
 		t.Skipf("%s is not available", path)
 	}
 	loaded, err := common.ReadSystemFromFile(path)
