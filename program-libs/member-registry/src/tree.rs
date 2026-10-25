@@ -87,6 +87,7 @@ pub struct RecordWriteProofInput {
     pub old_next: [u8; 32],
     pub old_lists: u64,
     pub old_escrow: [u8; 32],
+    pub old_mint_policy: zolana_ring_policy::MintPolicy,
     /// The record's leaf, an absent member's `next_index` leaf after the relink or low leaf when full.
     pub slot: QuadPath,
     /// An absent member's low record and its path before the relink, empty for a present member.
@@ -240,6 +241,7 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
                 old_next: record.next,
                 old_lists: record.lists,
                 old_escrow: record.escrow_key,
+                old_mint_policy: record.mint_policy,
                 slot,
                 low: MemberRecord::default(),
                 low_path: QuadPath::default(),
@@ -258,6 +260,7 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
             next: low.next,
             lists: 0,
             escrow_key: [0; 32],
+            mint_policy: zolana_ring_policy::MintPolicy::EMPTY,
         }
         .written(entry);
         let absent = |slot| RecordWriteProofInput {
@@ -266,6 +269,7 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
             old_next: low.next,
             old_lists: 0,
             old_escrow: [0; 32],
+            old_mint_policy: zolana_ring_policy::MintPolicy::EMPTY,
             slot,
             low,
             low_path,

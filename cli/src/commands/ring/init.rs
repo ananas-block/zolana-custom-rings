@@ -373,6 +373,7 @@ impl PolicyPin<'_> {
         };
         let pinned = policy::pinned(ctx)?;
         policy::verify_rows(policy, &pinned).context(POLICY_DRIFT)?;
+        crate::records::write_mint_policies(ctx, &policy::mint_changes(ctx, policy)?)?;
         let mut pointed = false;
         for (list, curator) in &policy.shared_sources {
             let outcome = if pinned.registry.registry_for(*list)

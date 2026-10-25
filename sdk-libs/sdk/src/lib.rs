@@ -48,8 +48,8 @@ pub use zolana_program::instruction::{DepositAsset, DepositSplAccounts};
 pub use crate::prover::secret_json_body;
 pub use crate::{
     account::{
-        CoSignThreshold, CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy,
-        QueueStatus, RegistryRoot, RegistryStatus, RingRegistration, RingStatus,
+        CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, QueueStatus, RegistryRoot,
+        RegistryStatus, RingRegistration, RingStatus,
     },
     admin::{
         CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig, PolicyRules,

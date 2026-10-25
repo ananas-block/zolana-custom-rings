@@ -28,7 +28,7 @@ use zolana_interface::{
     instruction::{InterfaceTransfer, OwnerTag, TreeContext},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };
-use zolana_ring_policy::{ListId, Member, OutflowLimit, RuleTable};
+use zolana_ring_policy::ListId;
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -106,6 +106,7 @@ impl Fixture {
 
     fn base(&self, rail: RingRail, n_in: u8, n_out: u8) -> RingTransactData<'_> {
         RingTransactData {
+            withdrawal_exemption: Default::default(),
             rail,
             n_in,
             n_out,
@@ -692,16 +693,9 @@ fn the_policy_proof_follows_the_registry() {
     );
     assert_eq!(
         packed.check_policy(Some(&registry)),
-        Err(CustomRingError::UnexpectedApproval)
+        Err(CustomRingError::PolicyNotSet)
     );
-    registry.rules = RuleTable::builder()
-        .limits(&[
-            OutflowLimit::of(&Member::asset(&Address::new_from_array([1; 32])).unwrap())
-                .with_cap(10)
-                .with_cosign_above(5),
-        ])
-        .build()
-        .encode();
+
     assert_eq!(
         packed.check_policy(Some(&registry)),
         Err(CustomRingError::PolicyNotSet)
@@ -928,4 +922,32 @@ fn withdrawal_owner_metadata_is_required_in_transfer_order() {
     assert!(RingTransactData::parse_legacy(&encoded, RingRail::Confidential).is_err());
     data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners[..1];
     assert!(data.encode().is_err());
+}
+
+#[test]
+fn withdrawal_exemption_suffix_round_trips_and_rejects_partial_proofs() {
+    use custom_ring_interface::WithdrawalExemptionProof;
+    let fixture = Fixture::new();
+    let exemption = WithdrawalExemptionProof {
+        proof: CustomRingProof::zeroed(),
+        root_index: 7,
+    };
+    let (_, mut data) = fixture
+        .cases()
+        .into_iter()
+        .find(|(_, data)| data.rail == RingRail::Confidential)
+        .unwrap();
+    let bare = data.encode().unwrap();
+    data.withdrawal_exemption = Some(&exemption);
+    let encoded = data.encode().unwrap();
+    assert_eq!(encoded.len(), bare.len() + WithdrawalExemptionProof::SIZE);
+    let parsed = RingTransactData::parse(&encoded, data.rail).unwrap();
+    assert_eq!(parsed.data().withdrawal_exemption, Some(&exemption));
+    assert_eq!(parsed.data().encode().unwrap(), encoded);
+    for length in [bare.len() + 1, encoded.len() - 1] {
+        assert_eq!(
+            RingTransactData::parse(&encoded[..length], data.rail),
+            Err(CustomRingError::RingTransactLength)
+        );
+    }
 }

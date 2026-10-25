@@ -1,19 +1,8 @@
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
-import { RING_OUTFLOW_LIMIT_SLOTS } from "../../rpc/prover/types.js";
-import {
-  Reader,
-  encodeBase58,
-  ZERO_32,
-  bytesToBigInt,
-  equalBytes,
-} from "@heliuslabs/zolana/internal";
+import { Reader, encodeBase58, ZERO_32, equalBytes } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import {
-  RING_INLINE_ASSET_SLOTS,
-  RING_RULE_SLOTS,
-  RING_SOURCE_SLOTS,
-} from "../../rpc/prover/types.js";
+import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
@@ -51,21 +40,12 @@ export interface RingCoSigner {
   readonly signer: Address;
   /** `RING_COSIGN_*` bits. */
   readonly scope: number;
-  readonly thresholds: readonly RingCoSignThreshold[];
-}
-
-/** SOL under the zero address. */
-export interface RingCoSignThreshold {
-  readonly mint: Address;
-  readonly amount: bigint;
 }
 
 export const RING_COSIGN_TRANSFERS = 1;
 export const RING_COSIGN_DEPOSITS = 2;
 export const RING_COSIGN_WITHDRAWALS = 4;
 export const RING_COSIGN_SCOPE_MASK = 7;
-/** Rust `MAX_CO_SIGNER_THRESHOLDS`. */
-export const RING_COSIGN_THRESHOLD_SLOTS = 8;
 
 /** Rust `RootEntry`, `applied` the queue position the application reached. */
 export interface RingRootEntry {
@@ -84,9 +64,6 @@ export interface RingSourceSlot {
 /** Rust `EncodedRuleTable`, counted rows without their zero padding. */
 export interface EncodedRuleTable {
   readonly rules: readonly Bytes32[];
-  readonly inlineAssets: readonly Bytes32[];
-  readonly inlineLimits: readonly bigint[];
-  readonly limits: readonly Readonly<{ asset: Bytes32; cap: bigint; cosignAbove: bigint }>[];
 }
 
 /** Rust `MemberRegistry`, what every policy transfer reads of the ring's lists. */
@@ -145,9 +122,9 @@ export const DEFAULT_INSERT_FEE = 1_000_000n;
 
 const RING_MODES: readonly RingMode[] = ["off", "registry", "anonymous"];
 export const RING_PROGRAM_CONFIG_DISCRIMINATOR = 10;
-export const RING_PROGRAM_CONFIG_SIZE = 471;
+export const RING_PROGRAM_CONFIG_SIZE = 150;
 export const MEMBER_REGISTRY_DISCRIMINATOR = 11;
-export const MEMBER_REGISTRY_SIZE = 3094;
+export const MEMBER_REGISTRY_SIZE = 2388;
 export const RECORD_QUEUE_DISCRIMINATOR = 12;
 export const RECORD_QUEUE_SIZE = 698;
 
@@ -167,19 +144,12 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
   const insertFee = reader.u64("insertFee");
   const coSigner = reader.bytes(32, "coSigner");
   const scope = reader.u8("coSignScope");
-  const thresholdCount = reader.u8("thresholdCount");
-  const rows = Array.from({ length: RING_COSIGN_THRESHOLD_SLOTS }, () =>
-    Object.freeze({
-      mint: encodeBase58(reader.bytes(32, "threshold.mint")),
-      amount: reader.u64("threshold.amount"),
-    }),
-  );
   const delegate = reader.bytes(32, "delegate");
   const createdSlot = reader.u64("createdSlot");
   reader.done();
-  if (mode === undefined || hasPolicy > 1 || thresholdCount > RING_COSIGN_THRESHOLD_SLOTS)
+  if (mode === undefined || hasPolicy > 1)
     throw new RingError("RING_CONFIG_INVALID", {
-      details: { mode: modeByte, hasPolicy, thresholdCount },
+      details: { mode: modeByte, hasPolicy },
     });
   const signer = equalBytes(coSigner, ZERO_32) ? undefined : encodeBase58(coSigner);
   if (signer !== undefined && !validScope(scope))
@@ -200,7 +170,6 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
           coSigner: Object.freeze({
             signer,
             scope,
-            thresholds: Object.freeze(rows.slice(0, thresholdCount)),
           }),
         }),
     ...(equalBytes(delegate, ZERO_32) ? {} : { delegate: encodeBase58(delegate) }),
@@ -405,40 +374,7 @@ function validScope(scope: number): boolean {
 /** Mirrors Rust `EncodedRuleTable::decode`, every slot past a count zero. */
 function readEncodedRuleTable(reader: Reader): EncodedRuleTable {
   const rules = countedRows(reader, RING_RULE_SLOTS, "rules");
-  const inlineAssets = countedRows(reader, RING_INLINE_ASSET_SLOTS, "inlineAssets");
-  const inlineLimits = countedLimits(
-    reader,
-    inlineAssets.length,
-    RING_INLINE_ASSET_SLOTS,
-    "inlineLimits",
-  );
-  const limitAssets = countedRows(reader, RING_OUTFLOW_LIMIT_SLOTS, "limitAssets");
-  const limitCaps = countedLimits(
-    reader,
-    limitAssets.length,
-    RING_OUTFLOW_LIMIT_SLOTS,
-    "limitCaps",
-  );
-  const limitCosign = countedLimits(
-    reader,
-    limitAssets.length,
-    RING_OUTFLOW_LIMIT_SLOTS,
-    "limitCosign",
-  );
-  return Object.freeze({
-    rules,
-    inlineAssets,
-    inlineLimits,
-    limits: Object.freeze(
-      limitAssets.map((asset, index) =>
-        Object.freeze({
-          asset,
-          cap: limitCaps[index] ?? 0n,
-          cosignAbove: limitCosign[index] ?? 0n,
-        }),
-      ),
-    ),
-  });
+  return Object.freeze({ rules });
 }
 
 function countedRows(reader: Reader, slots: number, field: string): readonly Bytes32[] {
@@ -453,21 +389,6 @@ function countedRows(reader: Reader, slots: number, field: string): readonly Byt
       details: { field, padding: true },
     });
   return Object.freeze(rows.slice(0, count));
-}
-
-/** Big endian, Rust `u64::from_be_bytes`. */
-function countedLimits(
-  reader: Reader,
-  count: number,
-  slots: number,
-  field: string,
-): readonly bigint[] {
-  const limits = Array.from({ length: slots }, () => bytesToBigInt(reader.bytes(8, field)));
-  if (limits.slice(count).some((limit) => limit !== 0n))
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
-      details: { field, padding: true },
-    });
-  return Object.freeze(limits.slice(0, count));
 }
 
 function registryEntry(registry: RingMemberRegistry, index: number): RingRootEntry {

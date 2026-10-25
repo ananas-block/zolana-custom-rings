@@ -22,7 +22,7 @@ holds both kinds, and an owner key and a mint with equal bytes stay distinct
 members.
 
 A record holds the member, the next member in sort order, a bitmap of lists
-and an escrow key. Eight lists exist, and each list has one writer:
+an escrow key and four per-mint amounts. Eight lists exist, and each list has one writer:
 
 - The config authority writes `Allow`, `Block`, `Frozen`, `Reader` and
   `Approval`.
@@ -35,7 +35,7 @@ a rule reads.
 The tree starts with a sentinel record at leaf 0. Every member lies strictly
 between the sentinel and the largest field element, so every absent member has
 a present low record that brackets it. A proof of absence opens that low
-record. An absent member reads as an empty bitmap and no escrow key.
+record. An absent member reads as an empty bitmap, no escrow key and zero mint settings.
 
 ## Writes
 
@@ -59,10 +59,34 @@ second one before proving. An anonymous ring refuses key registration. See
 [Creating an anonymous ring](anonymous-rings.md#creating-an-anonymous-ring).
 
 The config authority writes with `AuthorityWriteRecords`. One instruction
-carries 1 to `APPLY_BATCH` writes over the authority lists and an apply proof.
+carries 1 to `APPLY_BATCH` writes over authority lists or mint settings and an apply proof.
 The program appends the writes behind every pending write. The proof then
 applies the whole queue in one step, so the authority's writes apply in the
 same transaction.
+
+## Mint settings
+
+Each asset record stores `threshold`, `cap`, `cosign_above` and
+`withdrawal_threshold`, all unsigned 64-bit amounts. The first three pack into
+one 192-bit field; the withdrawal threshold occupies another field. The leaf
+is `Poseidon(member, next, lists, escrow_key, packed_mint_policy, withdrawal_threshold)`.
+The queue entry hash is
+`Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`.
+Bit 192 of `mint_policy_write` distinguishes an explicit replacement from a
+list/key write that preserves all four settings. An explicit all-zero value
+clears settings while preserving lists and the escrow key. Member writes and
+key registrations cannot change mint settings.
+
+Use Rust `AuthorityListWrite::with_mint_policy` or TypeScript
+`AuthorityListWrite.withMintPolicy`. Settings use the ring's own registry even
+when a curator supplies lists. There is no per-policy mint count; the existing
+registry capacity and write batch sizes apply. Audit-only rings can create a
+registry to configure withdrawal exemptions without enabling list policy.
+
+The CLI keeps `limits` in policy TOML and writes the resulting records.
+`cosigner set` replaces withdrawal thresholds while preserving the other three
+settings. `cosigner clear` removes the signer but retains the records. A later
+`cosigner set` replaces those retained withdrawal thresholds.
 
 ## Applying the queue
 
@@ -169,3 +193,18 @@ the new queue fails with `AuthorityBatchSplit`.
 A transfer that binds an old root fails once `ROOT_HISTORY` later applications
 replace it in the history. Both SDKs prove again when a bound root leaves the
 history.
+
+## Protocol transition
+
+This layout is incompatible with earlier four-field leaves, five-field queue
+hashes and the inline mint arrays. The rule-table hash uses version 12. The
+config is 150 bytes and the registry account is 2,388 bytes. `SetCoSigner`
+carries only signer and scope; an authority record write adds a 33-byte optional
+mint-setting replacement. Transfers may append a 193-byte withdrawal exemption
+proof and root index.
+
+Deploy the matching program, SDK, indexer and pinned keys together for fresh
+rings. Existing rings require an explicit account/tree migration before an
+upgrade; this PR does not provide one. The indexer SQL migration adds storage
+columns only. Reindexing old instructions under the new leaf format does not
+preserve old on-chain roots and is not a migration.

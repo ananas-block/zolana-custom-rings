@@ -135,6 +135,7 @@ impl PendingWrites {
                 mask: entry.mask,
                 value: entry.value,
                 escrow_key: entry.escrow_key.0,
+                mint_policy: entry.mint_policy,
             })
             .collect();
         let chain = entries
@@ -238,6 +239,7 @@ pub(crate) mod fixtures {
                 openings: vec![RingMemberOpening {
                     present,
                     record: RingMemberRecordView {
+                        mint_policy: Default::default(),
                         member: Hash(record.member),
                         next: Hash(record.next),
                         lists: record.lists,
@@ -336,6 +338,7 @@ mod tests {
 
     fn write(member: u8, mask: u64, value: u64) -> QueueEntry {
         QueueEntry {
+            mint_policy: Default::default(),
             member: *Member::owner_tag(&[member; 32]).unwrap().as_bytes(),
             mask,
             value,
@@ -352,6 +355,7 @@ mod tests {
             entries: (queue.head()..)
                 .zip(writes)
                 .map(|(position, write)| RingQueueEntryView {
+                    mint_policy: Default::default(),
                     position,
                     member: Hash(write.member),
                     mask: write.mask,
@@ -413,4 +417,83 @@ mod tests {
         let other = Member::owner_tag(&[2; 32]).unwrap();
         assert!(!PendingWrites(vec![registration]).registers(&other));
     }
+}
+
+/// All nonzero mint settings, authenticated under one complete registry snapshot.
+pub(crate) fn mint_policies(
+    ctx: &Context,
+) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
+    use zolana_ring_client::records::RegistryTip;
+    use zolana_ring_indexer::rpc::{
+        GetRingMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
+    };
+    let registry = ctx.block(ctx.ring.require_registry(ctx.chain()))?;
+    let tip = RegistryTip {
+        root: registry.current_root(),
+        root_index: registry.history_cursor,
+        next_index: u64::from(registry.next_index()),
+    };
+    let mut result = std::collections::BTreeMap::new();
+    let mut index = 1;
+    while index < tip.next_index {
+        let page = ctx
+            .zolana
+            .indexer()
+            .get_ring_member_records(GetRingMemberRecordsRequest {
+                ring_program_id: ctx.ring.program_id().into(),
+                expected_root: tip.root.into(),
+                expected_next_index: tip.next_index,
+                start_index: index,
+                limit: MAX_RING_MEMBER_PAGE_LIMIT,
+            })?;
+        ensure!(
+            tip.covers(&page, index),
+            "the indexer served an incomplete registry page"
+        );
+        for row in page.records {
+            let member = row.record.member.0;
+            let read = MemberOpeningRead::verify(
+                &RingMemberOpening {
+                    present: true,
+                    record: row.record,
+                    path: row.path,
+                },
+                &tip.root,
+                &member,
+            )?;
+            let policy = read.record().expect("verified present record").mint_policy;
+            if policy != zolana_ring_policy::MintPolicy::EMPTY {
+                result.insert(member, policy);
+            }
+            index += 1;
+        }
+    }
+    Ok(result)
+}
+
+/// Authority writes are applied immediately, in the same batches as list changes.
+pub(crate) fn write_mint_policies(
+    ctx: &Context,
+    desired: &std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>,
+) -> Result<()> {
+    use custom_ring_sdk::AuthorityListWrite;
+    let authority = ctx.funded_authority()?;
+    let mut sent = 0;
+    let changes: Vec<_> = desired.iter().collect();
+    while sent < changes.len() {
+        let writes = changes[sent..].iter().try_fold(
+            AuthorityListWrite::new(ctx.ring, authority.pubkey()),
+            |batch, (member, policy)| {
+                batch.with_mint_policy(Member::from_bytes(**member)?, **policy)
+            },
+        )?;
+        let batch = writes
+            .batches(queue(&ctx.zolana, ctx.ring)?.pending())
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no mint write batch"))?;
+        sent += batch.writes().len();
+        ctx.submit(batch, authority, &[])?;
+    }
+    Ok(())
 }

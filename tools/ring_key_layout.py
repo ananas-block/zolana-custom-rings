@@ -29,6 +29,6 @@ def verifier_relative_path(module: str) -> Path:
         return Path("deposit") / file
     if name.startswith("merge_"):
         return Path("merge") / file
-    if name.startswith(("apply_records_", "register_key_")):
+    if name.startswith(("apply_records_", "register_key_", "withdrawal_exemption_")):
         return Path("records") / file
     raise ValueError(f"unknown ring verifier family: {module}")

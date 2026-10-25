@@ -3,8 +3,8 @@ use custom_ring_interface::{
     queue_chain, AppliedAt, ApplyRecordsIxData, CustomRingError, MemberRegistry,
     PendingApplication, QueueEntry, RecordQueue, RingAccount, RingProgramConfig, SourceSlot,
     WriteRecordsIxData, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
-    MAX_CO_SIGNER_THRESHOLDS, MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY,
-    MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS, QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
+    MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS,
+    QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
 };
 use solana_address::Address;
 use zolana_hasher::primitives::right_align;
@@ -92,11 +92,6 @@ fn decode_refuses_values_no_setter_writes() {
     let decodes = |config: &RingProgramConfig| {
         RingProgramConfig::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(config)).is_some()
     };
-    let mut thresholds = config();
-    thresholds.threshold_count = MAX_CO_SIGNER_THRESHOLDS as u8;
-    assert!(decodes(&thresholds));
-    thresholds.threshold_count += 1;
-    assert!(!decodes(&thresholds));
     let mut mode = config();
     mode.mode = 3;
     assert!(!decodes(&mode));

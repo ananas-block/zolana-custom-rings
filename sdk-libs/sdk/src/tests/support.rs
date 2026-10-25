@@ -538,6 +538,7 @@ impl Registry {
                 .hash()
                 .unwrap();
                 let view = RingMemberRecordView {
+                    mint_policy: Default::default(),
                     member: Hash(member),
                     next: Hash([0; 32]),
                     lists: *lists,
@@ -566,6 +567,7 @@ impl Registry {
                 .map_or(MemberRecord::SENTINEL.next, |(next, _)| *next);
             view.next = Hash(next);
             records.push(MemberRecord {
+                mint_policy: Default::default(),
                 member,
                 next,
                 lists: view.lists,
@@ -577,6 +579,26 @@ impl Registry {
             tree: MemberRegistryTree::from_records(records).unwrap(),
             views,
         }
+    }
+
+    pub(crate) fn with_mint(
+        mut self,
+        mint: Address,
+        policy: zolana_ring_policy::MintPolicy,
+    ) -> Self {
+        self.tree
+            .apply(
+                [0; 32],
+                &[custom_ring_interface::QueueEntry {
+                    member: *zolana_ring_policy::Member::asset(&mint).unwrap().as_bytes(),
+                    mask: 0,
+                    value: 0,
+                    escrow_key: [0; 32],
+                    mint_policy: Some(policy),
+                }],
+            )
+            .unwrap();
+        self
     }
 
     pub(crate) fn root(&self) -> [u8; 32] {
@@ -607,19 +629,23 @@ impl Registry {
             RecordOpening::Present { record, path } => (true, record, path),
             RecordOpening::Absent { low, path } => (false, low, path),
         };
-        let view = match present {
-            true => self.views[member].clone(),
-            false => RingMemberRecordView {
+        let mut view = self
+            .views
+            .get(&record.member)
+            .cloned()
+            .unwrap_or(RingMemberRecordView {
                 member: Hash(record.member),
                 next: Hash(record.next),
                 lists: record.lists,
                 escrow_key: Hash(record.escrow_key),
+                mint_policy: record.mint_policy,
                 owner_pubkey: None,
                 nullifier_pk: None,
                 eph_pk: None,
                 ciphertext: None,
-            },
-        };
+            });
+        view.next = Hash(record.next);
+        view.mint_policy = record.mint_policy;
         RingMemberOpening {
             present,
             record: view,

@@ -39,6 +39,7 @@ pub enum RingCircuit {
         writes: u8,
     },
     RegisterKey,
+    WithdrawalExemption,
     Deposit {
         capacity: u8,
     },

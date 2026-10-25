@@ -1,3 +1,4 @@
+import type { MintPolicy } from "../membership/mint-policy.js";
 import type { Address } from "@heliuslabs/zolana";
 import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
 
@@ -108,6 +109,7 @@ function memberFields(record: WireObject) {
     next: checkedHash(record["next"], "next"),
     lists: wireInteger(record["lists"], "lists", 0n, (1n << 64n) - 1n),
     escrowKey: checkedHash(record["escrowKey"], "escrowKey"),
+    mintPolicy: decodeMintPolicy(record["mintPolicy"]),
   };
 }
 
@@ -117,6 +119,7 @@ function sealedMemberRecord(value: unknown, path: string): RingMemberRecordView 
     "next",
     "lists",
     "escrowKey",
+    "mintPolicy",
     "ownerPubkey",
     "nullifierPk",
     "ephPk",
@@ -306,13 +309,22 @@ export function decodeRingRecordQueue(value: unknown): RingRecordQueueResponse {
   const head = unboundedU64(row["head"], "head");
   const tail = unboundedU64(row["tail"], "tail");
   const entries = array(row["entries"], "entries", (entry, path) => {
-    const item = object(entry, path, ["position", "member", "mask", "value", "escrowKey", "slot"]);
+    const item = object(entry, path, [
+      "position",
+      "member",
+      "mask",
+      "value",
+      "escrowKey",
+      "mintPolicy",
+      "slot",
+    ]);
     return {
       position: unboundedU64(item["position"], `${path}.position`),
       member: checkedHash(item["member"], `${path}.member`),
       mask: u64(item["mask"], `${path}.mask`),
       value: u64(item["value"], `${path}.value`),
       escrowKey: checkedHash(item["escrowKey"], `${path}.escrowKey`),
+      mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
       slot: unboundedU64(item["slot"], `${path}.slot`),
     };
   });
@@ -346,6 +358,18 @@ export function encodeRingApplyProofInputsRequest(value: RingApplyProofInputsReq
         member: checkedHash(write.member, `${path}.member`),
         mask: toU64(write.mask, `${path}.mask`),
         value: toU64(write.value, `${path}.value`),
+        mintPolicy:
+          write.mintPolicy === null
+            ? null
+            : {
+                threshold: toU64(write.mintPolicy.threshold, "threshold"),
+                cap: toU64(write.mintPolicy.cap, "cap"),
+                cosignAbove: toU64(write.mintPolicy.cosignAbove, "cosignAbove"),
+                withdrawalThreshold: toU64(
+                  write.mintPolicy.withdrawalThreshold,
+                  "withdrawalThreshold",
+                ),
+              },
       };
     }),
   };
@@ -376,10 +400,12 @@ export function decodeRingApplyProofInputs(value: unknown): RingApplyProofInputs
         "mask",
         "value",
         "escrowKey",
+        "mintPolicy",
         "exists",
         "oldNext",
         "oldLists",
         "oldEscrow",
+        "oldMintPolicy",
         "slot",
         "low",
         "lowPath",
@@ -389,10 +415,12 @@ export function decodeRingApplyProofInputs(value: unknown): RingApplyProofInputs
         mask: u64(item["mask"], `${path}.mask`),
         value: u64(item["value"], `${path}.value`),
         escrowKey: checkedHash(item["escrowKey"], `${path}.escrowKey`),
+        mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
         exists: boolean(item["exists"], `${path}.exists`),
         oldNext: checkedHash(item["oldNext"], `${path}.oldNext`),
         oldLists: unboundedU64(item["oldLists"], `${path}.oldLists`),
         oldEscrow: checkedHash(item["oldEscrow"], `${path}.oldEscrow`),
+        oldMintPolicy: decodeMintPolicy(item["oldMintPolicy"]),
         slot: recordPath(item["slot"], `${path}.slot`),
         low: sealedMemberRecord(item["low"], `${path}.low`),
         lowPath: recordPath(item["lowPath"], `${path}.lowPath`),
@@ -405,4 +433,20 @@ export function encodeRingMemberRegistryRootRequest(
   value: Readonly<{ ringProgramId: Address }>,
 ): WireObject {
   return { ringProgramId: checkedAddress(value.ringProgramId, "ringProgramId") };
+}
+
+function decodeMintPolicy(value: unknown): MintPolicy {
+  const row = object(value, "mintPolicy", [
+    "threshold",
+    "cap",
+    "cosignAbove",
+    "withdrawalThreshold",
+  ]);
+  const amount = (key: string) => wireInteger(row[key], `mintPolicy.${key}`, 0n, (1n << 64n) - 1n);
+  return Object.freeze({
+    threshold: amount("threshold"),
+    cap: amount("cap"),
+    cosignAbove: amount("cosignAbove"),
+    withdrawalThreshold: amount("withdrawalThreshold"),
+  });
 }

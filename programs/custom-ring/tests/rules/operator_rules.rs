@@ -4,8 +4,8 @@ use custom_ring_interface::{
     stream::{tag_epoch, EPOCH_SLOTS},
     tag, CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, ReadAccessRecord,
     ReaderIxData, RingKind, RingMode, RingProgramConfig, SetCoSignerIxData, SetPausedIxData,
-    SetPolicySourceIxData, WithdrawalThreshold, WriteRecordsIxData, DEFAULT_INSERT_FEE,
-    READER_KEY_P256, READ_ACCESS_RECORD_PDA_SEED,
+    SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE, READER_KEY_P256,
+    READ_ACCESS_RECORD_PDA_SEED,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -22,19 +22,8 @@ use crate::common::{
 };
 use crate::transact_rules::SPP;
 
-fn set_co_signer_data(signer: [u8; 32], scope: u8, mints: &[[u8; 32]]) -> Vec<u8> {
-    wincode::serialize(&SetCoSignerIxData {
-        signer,
-        scope,
-        thresholds: mints
-            .iter()
-            .map(|mint| WithdrawalThreshold {
-                mint: *mint,
-                amount: 10,
-            })
-            .collect(),
-    })
-    .unwrap()
+fn set_co_signer_data(signer: [u8; 32], scope: u8, _mints: &[[u8; 32]]) -> Vec<u8> {
+    wincode::serialize(&SetCoSignerIxData { signer, scope }).unwrap()
 }
 
 fn authority_send(ring: &mut Ring, instruction: Instruction) -> Sent {
@@ -119,7 +108,7 @@ fn the_config_records_the_slot_it_was_created_in() {
 }
 
 #[test]
-fn the_co_signer_lives_in_the_config_with_distinct_thresholds() {
+fn the_co_signer_and_scope_live_in_the_config() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let authority = ring.authority.pubkey();
     let usdc = [7; 32];
@@ -147,30 +136,6 @@ fn the_co_signer_lives_in_the_config_with_distinct_thresholds() {
         ),
         CustomRingError::InvalidCoSigner,
     );
-    refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 4, &[usdc, usdc]),
-            ),
-        ),
-        CustomRingError::InvalidCoSignerThresholds,
-    );
-    refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 3, &[usdc]),
-            ),
-        ),
-        CustomRingError::ThresholdsWithoutWithdrawals,
-    );
     within_budget(
         InstructionTag::SetCoSigner,
         authority_send(
@@ -185,7 +150,6 @@ fn the_co_signer_lives_in_the_config_with_distinct_thresholds() {
     );
     let config: RingProgramConfig = ring.read(&config_pda());
     assert_eq!(config.co_signer(), Some(&Address::new_from_array([1; 32])));
-    assert_eq!(config.threshold(&Address::new_from_array(usdc)), Some(10));
     within_budget(
         InstructionTag::ClearCoSigner,
         authority_send(
@@ -194,7 +158,7 @@ fn the_co_signer_lives_in_the_config_with_distinct_thresholds() {
         ),
     );
     let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!((config.co_signer(), config.thresholds().len()), (None, 0));
+    assert_eq!(config.co_signer(), None);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
@@ -811,12 +775,13 @@ fn a_source_write_names_a_known_list() {
 fn a_table_write_decodes_and_counts_its_generation_on_the_own_registry() {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.pubkey();
-    let mut zero_asset = allow_list_table(Vec::new());
-    zero_asset.inline_assets = vec![[0; 32]];
+    let mut malformed = allow_list_table(Vec::new());
+    malformed.sources.clear();
+    malformed.rules[0] = [0; 32];
     refused(
         authority_send(
             &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, zero_asset, &[]),
+            policy_write(tag::SET_POLICY_RULES, &authority, malformed, &[]),
         ),
         CustomRingError::InvalidPolicyRules,
     );

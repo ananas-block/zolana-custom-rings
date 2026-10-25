@@ -40,6 +40,8 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bind[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuitWith, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
+	case WithdrawalExemption:
+		return bind[WithdrawalExemptionParams](k, unsized[policy.WithdrawalExemptionCircuit], struct{}{})
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:

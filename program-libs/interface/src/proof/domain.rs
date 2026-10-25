@@ -36,6 +36,9 @@ pub const REGISTER_KEY: u32 = 0x4352_5247;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 
+/// `"CRWX"`
+pub const WITHDRAWAL_EXEMPTION: u32 = 0x4352_5758;
+
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
 }

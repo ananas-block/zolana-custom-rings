@@ -6,6 +6,7 @@ import (
 
 	"github.com/consensys/gnark/frontend"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -40,9 +41,10 @@ type Policy struct {
 	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
 	SenderPkHash frontend.Variable
 
-	SenderEntry  Entry
-	OwnerEntries []Entry
-	AssetEntries []Entry
+	SenderEntry        Entry
+	OwnerEntries       []Entry
+	AssetEntries       []Entry
+	PublicAssetEntries [transaction.NPublicSlots]registry.QuadOpening
 }
 
 type railValues struct {

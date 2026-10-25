@@ -120,21 +120,10 @@ type Source struct {
 	Registry Field `json:"registry"`
 }
 
-type OutflowLimit struct {
-	Asset       Field `json:"asset"`
-	Cap         Field `json:"cap"`
-	CosignAbove Field `json:"cosignAbove"`
-}
-
 type PolicyTable struct {
-	Sources      []Source       `json:"sources"`
-	PolicyLen    uint8          `json:"policyLen"`
-	Rules        []Field        `json:"rules"`
-	InlineAssets []Field        `json:"inlineAssets"`
-	InlineLimits []Field        `json:"inlineLimits"`
-	InlineCount  uint8          `json:"inlineCount"`
-	Limits       []OutflowLimit `json:"limits"`
-	LimitCount   uint8          `json:"limitCount"`
+	Sources   []Source `json:"sources"`
+	PolicyLen uint8    `json:"policyLen"`
+	Rules     []Field  `json:"rules"`
 }
 
 type OutputOpening struct {
@@ -145,21 +134,25 @@ type OutputOpening struct {
 
 // RecordOpening opens a member's record in a member registry, Path the three siblings of every level from the leaf up in child order.
 type RecordOpening struct {
-	Next      Field   `json:"next"`
-	Lists     uint64  `json:"lists"`
-	EscrowKey Field   `json:"escrowKey"`
-	Index     uint64  `json:"index"`
-	Path      []Field `json:"path"`
+	Next                Field   `json:"next"`
+	Lists               uint64  `json:"lists"`
+	EscrowKey           Field   `json:"escrowKey"`
+	MintPolicy          Field   `json:"mintPolicy"`
+	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	Index               uint64  `json:"index"`
+	Path                []Field `json:"path"`
 }
 
 // MemberOpening proves a member present, or absent under its low record, nil only for a slot that is no live UTXO.
 type MemberOpening struct {
 	Present bool `json:"present"`
 	RecordOpening
-	LowMember Field  `json:"lowMember"`
-	LowNext   Field  `json:"lowNext"`
-	LowLists  uint64 `json:"lowLists"`
-	LowEscrow Field  `json:"lowEscrow"`
+	LowMember              Field  `json:"lowMember"`
+	LowNext                Field  `json:"lowNext"`
+	LowLists               uint64 `json:"lowLists"`
+	LowEscrow              Field  `json:"lowEscrow"`
+	LowMintPolicy          Field  `json:"lowMintPolicy"`
+	LowWithdrawalThreshold Field  `json:"lowWithdrawalThreshold"`
 }
 
 type Entry struct {
@@ -191,8 +184,9 @@ type PolicyParams struct {
 	SenderPkHash      Field           `json:"senderPkHash"`
 	SenderEntry       Entry           `json:"senderEntry"`
 	// OwnerEntries[o] and AssetEntries[o] open output o's owner and asset.
-	OwnerEntries []Entry `json:"ownerEntries"`
-	AssetEntries []Entry `json:"assetEntries"`
+	OwnerEntries       []Entry          `json:"ownerEntries"`
+	AssetEntries       []Entry          `json:"assetEntries"`
+	PublicAssetEntries []*MemberOpening `json:"publicAssetEntries"`
 }
 
 type MemberPolicyParams struct {
@@ -212,25 +206,31 @@ type DelegatePolicyParams struct {
 }
 
 type QueueEntry struct {
-	Member    Field  `json:"member"`
-	Mask      uint64 `json:"mask"`
-	Value     uint64 `json:"value"`
-	EscrowKey Field  `json:"escrowKey"`
+	Member              Field  `json:"member"`
+	Mask                uint64 `json:"mask"`
+	Value               uint64 `json:"value"`
+	EscrowKey           Field  `json:"escrowKey"`
+	MintPolicy          Field  `json:"mintPolicy"`
+	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
 }
 
 type RecordWrite struct {
-	Entry     QueueEntry `json:"entry"`
-	Exists    bool       `json:"exists"`
-	OldNext   Field      `json:"oldNext"`
-	OldLists  uint64     `json:"oldLists"`
-	OldEscrow Field      `json:"oldEscrow"`
+	Entry                  QueueEntry `json:"entry"`
+	Exists                 bool       `json:"exists"`
+	OldNext                Field      `json:"oldNext"`
+	OldLists               uint64     `json:"oldLists"`
+	OldEscrow              Field      `json:"oldEscrow"`
+	OldMintPolicy          Field      `json:"oldMintPolicy"`
+	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
-	Index     uint64  `json:"index"`
-	Path      []Field `json:"path"`
-	LowMember Field   `json:"lowMember"`
-	LowNext   Field   `json:"lowNext"`
-	LowLists  uint64  `json:"lowLists"`
-	LowEscrow Field   `json:"lowEscrow"`
+	Index                  uint64  `json:"index"`
+	Path                   []Field `json:"path"`
+	LowMember              Field   `json:"lowMember"`
+	LowNext                Field   `json:"lowNext"`
+	LowLists               uint64  `json:"lowLists"`
+	LowEscrow              Field   `json:"lowEscrow"`
+	LowMintPolicy          Field   `json:"lowMintPolicy"`
+	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
 	// LowIndex and LowPath open the low record.
 	LowIndex uint64  `json:"lowIndex"`
 	LowPath  []Field `json:"lowPath"`
@@ -430,4 +430,12 @@ func jsonFields(t reflect.Type, fields []jsonField) []jsonField {
 		fields = append(fields, jsonField{name: name, typ: field.Type, optional: slices.Contains(strings.Split(options, ","), "omitempty")})
 	}
 	return fields
+}
+
+type WithdrawalExemptionParams struct {
+	RequestHead
+	Root    Field            `json:"root"`
+	Assets  []Field          `json:"assets"`
+	Amounts []Field          `json:"amounts"`
+	Entries []*MemberOpening `json:"entries"`
 }

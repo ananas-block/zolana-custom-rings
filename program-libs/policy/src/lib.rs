@@ -2,16 +2,18 @@
 
 mod list;
 mod member;
+mod mint;
 mod rule_table;
 mod rules;
 
 pub use list::{ListChange, ListId, ListSet, ListWrite, ListWriteError, Writer};
 pub use member::{Member, MemberError};
+pub use mint::MintPolicy;
 pub use rule_table::{
     EncodedRuleTable, Guard, Mode, OutflowLimit, PolicySource, PolicyTableError, Rule, RuleSource,
     RuleTable, RuleTableBuilder, RuleTableError, SourceMap, SourceMapError, Subject, TableParts,
-    MAX_INLINE_ASSETS, MAX_OUTFLOW_LIMITS, MAX_RULES, MAX_SOURCES, N_FOREIGN, POLICY_TABLE_DOMAIN,
-    POLICY_TABLE_FIELDS, POLICY_TABLE_VERSION,
+    MAX_RULES, MAX_SOURCES, N_FOREIGN, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS,
+    POLICY_TABLE_VERSION,
 };
 pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
 

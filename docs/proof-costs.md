@@ -21,6 +21,9 @@ rotation.
 - A merge proves SPP's ring merge statement. An anonymous ring adds a merge
   disclosure statement.
 - Key registration and record application each prove their own statement.
+- A withdrawal below configured thresholds can add a withdrawal exemption proof
+  to waive withdrawal-scoped co-signing. Supplying the demanded co-signer needs
+  no exemption proof.
 
 ## SPP statements
 
@@ -40,7 +43,9 @@ pin the current compiled counts.
 ## Policy statements
 
 A member policy proof opens the sender's record and records for each output's
-owner and asset. A delegate policy proof also reopens spent notes. The
+owner and asset, and each nonzero public asset. Mint settings reuse these
+authenticated asset records; proof work depends on the transaction shape rather
+than the number of configured mints. A delegate policy proof also reopens spent notes. The
 [policy key tests](../prover/circuits/policy/policy_test.go) enforce budgets for
 the small output shapes; transaction size limits the wider shapes.
 
@@ -50,3 +55,22 @@ Record application, key registration, audited deposits and anonymous merge
 disclosures have separate keys. The [registry tests](../prover/circuits/registry/registry_test.go)
 pin opening constraints. Verify the current cost of any other key by compiling
 it with the [ring key tests](../prover/ring/keys_test.go).
+
+## Mint-record transition
+
+Measured BN254 constraints before and after removing the three eight-mint tables:
+
+| Circuit | Before | With mint records |
+| --- | ---: | ---: |
+| Member policy, 2 outputs, own registry, no public withdrawal metadata | 30,923 | 41,334 |
+| Member policy, 2 outputs, curator | 49,039 | 59,776 |
+| Member policy, 16 outputs, own registry | 167,536 | 183,813 |
+| Apply 16 records | 232,892 | 240,828 |
+| Deposit 8 | 148,936 | 149,392 |
+| Withdrawal exemption, up to 3 distinct withdrawn mints | — | 12,102 |
+
+The three public asset openings add a fixed cost to member policy proofs.
+Leaf openings also hash two additional fields. Audit encryption circuits are
+unchanged. Adding configured mints increases registry storage, not these circuit
+sizes. The current counts are pinned in
+[`constraints.json`](../prover/ringtest/ringkey/constraints.json).

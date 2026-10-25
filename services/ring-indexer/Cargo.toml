@@ -43,6 +43,7 @@ tracing-subscriber = { workspace = true }
 zolana-indexer-api = { workspace = true }
 zolana-interface = { workspace = true }
 zolana-ring-indexer = { workspace = true }
+zolana-ring-policy = { workspace = true }
 zolana-rpc-http = { workspace = true }
 
 [dev-dependencies]
@@ -50,4 +51,3 @@ base64 = { workspace = true }
 hex = { workspace = true }
 hyper-util = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
-zolana-ring-policy = { workspace = true }

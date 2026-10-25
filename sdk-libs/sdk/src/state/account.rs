@@ -35,18 +35,10 @@ pub struct CustomRingConfig {
     account: RingProgramConfig,
 }
 
-/// SOL under the zero address, a mint without a row always needs the co-signer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CoSignThreshold {
-    pub mint: Address,
-    pub amount: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingCoSigner {
     pub signer: Address,
     pub scope: CoSignScope,
-    pub thresholds: Vec<CoSignThreshold>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,14 +286,6 @@ impl CustomRingConfig {
             Some(signer) => Some(CustomRingCoSigner {
                 signer: *signer,
                 scope: account.co_sign_scope().ok_or_else(invalid)?,
-                thresholds: account
-                    .thresholds()
-                    .iter()
-                    .map(|row| CoSignThreshold {
-                        mint: row.mint,
-                        amount: row.amount(),
-                    })
-                    .collect(),
             }),
             None => None,
         };

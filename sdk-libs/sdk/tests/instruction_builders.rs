@@ -6,14 +6,14 @@ use custom_ring_interface::{
     CreateConfigIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef, MemberWriteIxData,
     MergeDisclosure, PolicyTableIxData, ReadAccessRecord, ReaderIxData, RingMode,
     RingProgramConfig, SetCoSignerIxData, SetInsertFeeIxData, SetPausedIxData,
-    SetPolicySourceIxData, SourceSpec, WithdrawalThreshold, AUDIT_CIPHERTEXT_LEN,
-    DEFAULT_INSERT_FEE, READ_ACCESS_RECORD_PDA_SEED, RING_PROGRAM_CONFIG, SOL_ASSET_ADDRESS,
+    SetPolicySourceIxData, SourceSpec, AUDIT_CIPHERTEXT_LEN, DEFAULT_INSERT_FEE,
+    READ_ACCESS_RECORD_PDA_SEED, RING_PROGRAM_CONFIG,
 };
 use custom_ring_sdk::{
-    tag, CoSignScope, CoSignThreshold, CreateConfig, CreateMemberRegistry, CustomRing,
-    CustomRingConfig, CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite,
-    PolicyRules, RevokeReader, RingError, RingKind, SetAuthority, SetCoSigner, SetDelegate,
-    SetSourceOwner, SourceOwner,
+    tag, CoSignScope, CreateConfig, CreateMemberRegistry, CustomRing, CustomRingConfig,
+    CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite, PolicyRules,
+    RevokeReader, RingError, RingKind, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner,
+    SourceOwner,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -31,8 +31,8 @@ use zolana_keypair::{SigningKey, X25519Keypair};
 use zolana_program::instruction::MergeRing;
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{
-    ListChange, ListId, ListSet, Member, OutflowLimit, PolicyTableError, Rule, RuleTable,
-    RuleTableError, Subject, TableParts, Writer,
+    ListChange, ListId, ListSet, PolicyTableError, Rule, RuleTable, RuleTableError, Subject,
+    TableParts, Writer,
 };
 
 /// The system program is the all-zero address.
@@ -337,21 +337,12 @@ fn co_signer_writes_take_the_authority_and_the_writable_config() {
         AccountMeta::new(ring().config_pda(), false),
     ];
     let signer = Address::new_from_array([32; 32]);
-    let mint = Address::new_from_array([33; 32]);
-    let thresholds = [
-        CoSignThreshold { mint, amount: 100 },
-        CoSignThreshold {
-            mint: Address::default(),
-            amount: 5,
-        },
-    ];
     let scope = CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS;
     let set = SetCoSigner {
         ring: ring(),
         authority: authority(),
         signer,
         scope,
-        thresholds: &thresholds,
     }
     .instruction()
     .unwrap();
@@ -363,16 +354,6 @@ fn co_signer_writes_take_the_authority_and_the_writable_config() {
         SetCoSignerIxData {
             signer: signer.to_bytes(),
             scope: scope.bits(),
-            thresholds: vec![
-                WithdrawalThreshold {
-                    mint: mint.to_bytes(),
-                    amount: 100,
-                },
-                WithdrawalThreshold {
-                    mint: [0; 32],
-                    amount: 5,
-                },
-            ],
         }
     );
     let clear = ring().clear_cosigner(authority());
@@ -468,11 +449,6 @@ fn a_policy_table_names_its_curator_once_and_reproduces_the_pinned_table() {
         .rule(Rule::require(Subject::Sender, ListId::Allow))
         .rule(Rule::forbid(Subject::Sender, ListId::Block))
         .rule(Rule::forbid(Subject::OutputOwner, ListId::Frozen))
-        .limits(&[OutflowLimit::of(
-            &Member::asset(&Address::new_from_array(SOL_ASSET_ADDRESS)).unwrap(),
-        )
-        .with_cap(1_000)
-        .with_cosign_above(500)])
         .build();
     let curator = CustomRing::new(Address::new_from_array([36; 32]));
     let shared = [(ListId::Frozen, curator), (ListId::Allow, curator)];
@@ -507,14 +483,7 @@ fn a_policy_table_names_its_curator_once_and_reproduces_the_pinned_table() {
                 }
             )
         );
-        let stored = TableParts {
-            rows: &table.rules,
-            inline_assets: &table.inline_assets,
-            inline_limits: &table.inline_limits,
-            limits: &table.limits,
-        }
-        .encode()
-        .unwrap();
+        let stored = TableParts { rows: &table.rules }.encode().unwrap();
         assert_eq!(stored, rules.encode());
     }
 }

@@ -1,3 +1,5 @@
+import { EMPTY_MINT_POLICY } from "../protocol/membership/mint-policy.js";
+import type { RecordOpening } from "../protocol/membership/member-registry.js";
 import {
   readPolicyWithdrawals,
   policyWithdrawalHash,
@@ -74,6 +76,7 @@ export interface PolicyInputs {
   readonly senderEntry: PolicySubjectEntry;
   readonly ownerEntries: readonly PolicySubjectEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
+  readonly publicAssetEntries: readonly (RecordOpening | undefined)[];
   /** The escrowed key ciphertext hash of every UTXO output's owner, under key escrow. */
   readonly ctHashes: readonly (Bytes32 | undefined)[];
   readonly approvalRequired: boolean;
@@ -128,19 +131,19 @@ export async function readPolicy(
     context,
   );
   const outputs = proofInputs.outputs;
-  const assetRules = pinned.table.rules.some((rule) => rule.subject === "asset");
   const owners = outputs.map((output) =>
     output.ownerAddress?.signingPublicKey.ownerProofInputHash(),
   );
   const assets = outputs.map((output) =>
-    assetRules && !output.isDummy() ? memberOfAsset(output.asset) : undefined,
+    !output.isDummy() ? memberOfAsset(output.asset) : undefined,
   );
   const members = uniqueMembers([
     input.sender,
     ...owners,
     ...assets,
     ...withdrawals.map((w) => w.owner),
-    ...withdrawals.filter(() => assetRules).map((w) => w.asset),
+    ...withdrawals.map((w) => w.asset),
+    ...input.publicSlots.assets.filter((asset) => !equalBytes(asset, ZERO_32)),
   ]);
   const ownReads = await openingsByMember(client, own, members, context);
   const curatorReads =
@@ -162,6 +165,8 @@ export async function readPolicy(
       curator: curator?.record()?.lists ?? 0n,
     });
   };
+  const mintPolicy = (asset: Bytes32 | undefined) =>
+    reads(asset).own?.record()?.mintPolicy ?? EMPTY_MINT_POLICY;
   const live = outputs.flatMap((output, slotIndex) =>
     output.isDummy() ? [] : [{ output, slotIndex }],
   );
@@ -174,8 +179,14 @@ export async function readPolicy(
         amount: output.amount,
         ownerLists: lists(owners[slotIndex]),
         assetLists: lists(assets[slotIndex]),
+        mintPolicy: mintPolicy(assets[slotIndex]),
       })),
-      ...withdrawals.map((w) => ({ ...w, ownerLists: lists(w.owner), assetLists: lists(w.asset) })),
+      ...withdrawals.map((w) => ({
+        ...w,
+        ownerLists: lists(w.owner),
+        assetLists: lists(w.asset),
+        mintPolicy: mintPolicy(w.asset),
+      })),
     ],
   });
   if (refusal !== undefined)
@@ -198,7 +209,21 @@ export async function readPolicy(
           ringProgramId,
           proofInputs,
           publicSlots: input.publicSlots,
-          limits: pinned.table.limits,
+          limits: uniqueMembers([
+            ...assets,
+            ...input.publicSlots.assets.filter((asset) => !equalBytes(asset, ZERO_32)),
+          ]).flatMap((asset) => {
+            const policy = mintPolicy(asset);
+            return policy.cap === 0n && policy.cosignAbove === 0n
+              ? []
+              : [
+                  {
+                    asset: asset as OutflowLimit["asset"],
+                    cap: policy.cap,
+                    cosignAbove: policy.cosignAbove,
+                  },
+                ];
+          }),
         });
   return Object.freeze({
     pinned,
@@ -208,10 +233,12 @@ export async function readPolicy(
     ...(curator === undefined ? {} : { curator }),
     senderEntry: entry(input.sender),
     ownerEntries: Object.freeze([...owners.map(entry), ...withdrawals.map((w) => entry(w.owner))]),
-    assetEntries: Object.freeze([
-      ...assets.map(entry),
-      ...withdrawals.map((w) => entry(assetRules ? w.asset : undefined)),
-    ]),
+    assetEntries: Object.freeze([...assets.map(entry), ...withdrawals.map((w) => entry(w.asset))]),
+    publicAssetEntries: Object.freeze(
+      input.publicSlots.assets.map((asset) =>
+        equalBytes(asset, ZERO_32) ? undefined : entry(asset).own,
+      ),
+    ),
     ctHashes: Object.freeze(ctHashes),
     approvalRequired,
     keyEscrow,
@@ -277,6 +304,7 @@ export function policyProofRequest(
     }),
     senderPkHash: proving.senderPkHash,
     senderEntry: policy.senderEntry,
+    publicAssetEntries: policy.publicAssetEntries,
     ownerEntries: [
       ...policy.ownerEntries,
       ...Array.from({ length: padding }, () => ({ own: undefined, curator: undefined })),
@@ -385,7 +413,7 @@ function ruleUnsatisfied(refusal: RuleRefusal, live: readonly number[]): RingErr
 }
 
 /** Rust `BoundRoot::current`, the newest root of the registry. */
-function currentRoot(ringProgramId: Address, registry: RingMemberRegistry): BoundRoot {
+export function currentRoot(ringProgramId: Address, registry: RingMemberRegistry): BoundRoot {
   return Object.freeze({
     ringProgramId,
     rootIndex: registry.historyCursor,

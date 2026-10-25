@@ -16,12 +16,7 @@ type Table struct {
 	Sources   [NSources]SourceWires
 	PolicyLen frontend.Variable
 	// Each rule is its 32-byte row read as one field.
-	Rules        [NRules]frontend.Variable
-	InlineAssets [NInlineAssets]frontend.Variable
-	InlineLimits [NInlineAssets]frontend.Variable
-	InlineCount  frontend.Variable
-	Limits       [NOutflowLimits]OutflowLimitWires
-	LimitCount   frontend.Variable
+	Rules [NRules]frontend.Variable
 }
 
 // SourceWires slot i sources list i+1, a zero Registry names the ring's own registry.
@@ -30,17 +25,10 @@ type SourceWires struct {
 	Registry frontend.Variable
 }
 
-// OutflowLimitWires bounds one asset's outflow per transfer, a zero cap or co-sign bound is off.
-type OutflowLimitWires struct {
-	Asset       frontend.Variable
-	Cap         frontend.Variable
-	CosignAbove frontend.Variable
-}
-
 type tableView struct {
-	rules                                 [NRules]ruleFields
-	ruleActive, inlineActive, limitActive []frontend.Variable
-	sources                               sourceView
+	rules      [NRules]ruleFields
+	ruleActive []frontend.Variable
+	sources    sourceView
 	// assetRules is set when an active rule reads asset lists.
 	assetRules frontend.Variable
 	// scalarOwner is set when an active owner rule carries a scalar guard.
@@ -70,12 +58,10 @@ func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash fro
 	api.AssertIsEqual(policyHash, t.hash(api))
 	// 2. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
-		ruleActive:   ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
-		inlineActive: ringgadget.SelectCount(api, t.InlineCount, 0, NInlineAssets+1).Active,
-		limitActive:  ringgadget.SelectCount(api, t.LimitCount, 0, NOutflowLimits+1).Active,
-		sources:      t.readSources(api),
-		assetRules:   0,
-		scalarOwner:  0,
+		ruleActive:  ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
+		sources:     t.readSources(api),
+		assetRules:  0,
+		scalarOwner: 0,
 	}
 	// 3. Every rule decodes once, the flags later steps gate on fold over the active rules.
 	for i, packed := range t.Rules {
@@ -94,12 +80,10 @@ func (t Table) Fields() []frontend.Variable {
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}
-	fields = append(fields, t.PolicyLen, t.InlineCount, t.LimitCount)
+	fields = append(fields, t.PolicyLen)
 	fields = append(fields, t.Rules[:]...)
-	fields = append(fields, t.InlineAssets[:]...)
-	fields = append(fields, t.InlineLimits[:]...)
-	for _, limit := range t.Limits {
-		fields = append(fields, limit.Asset, limit.Cap, limit.CosignAbove)
+	for len(fields) < PolicyTableFields {
+		fields = append(fields, 0)
 	}
 	return fields
 }

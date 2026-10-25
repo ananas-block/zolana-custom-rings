@@ -45,10 +45,27 @@ pub fn run(ctx: &Context, command: PolicyCommand) -> Result<()> {
             let title = format!("policy {}", ctx.ring.registry_pda());
             ui::heading(icon::POLICY, &title);
             print_pinned(ctx.ring, &pinned);
+            for (member, policy) in crate::records::mint_policies(ctx)? {
+                line(
+                    "mint record",
+                    format_args!(
+                        "{} threshold {} cap {} co-sign {} withdrawal {}",
+                        hex::encode(member),
+                        policy.threshold,
+                        policy.cap,
+                        policy.cosign_above,
+                        policy.withdrawal_threshold
+                    ),
+                );
+            }
         }
         PolicyCommand::Check => {
             let (compiled, pinned) = (compiled(ctx)?, pinned(ctx)?);
             verify_rows(&compiled, &pinned)?;
+            ensure!(
+                mint_changes(ctx, &compiled)?.is_empty(),
+                "mint settings differ from ring.toml"
+            );
             verify_sources(ctx.ring, &compiled, &pinned)?;
             line("policy", "matches ring.toml");
             line("generation", pinned.registry.generation());
@@ -154,7 +171,8 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
     let (compiled, current) = (compiled(ctx)?, pinned(ctx)?);
     let verified = verify_rows(&compiled, &current)
         .and_then(|()| verify_sources(ctx.ring, &compiled, &current));
-    if verified.is_ok() {
+    let mint_changes = mint_changes(ctx, &compiled)?;
+    if verified.is_ok() && mint_changes.is_empty() {
         line("policy", "already present");
         return Ok(());
     }
@@ -163,6 +181,7 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
     }
     ui::heading(icon::PIN, &format!("re-pin the table of {program}"));
     print_diff(&current.policy.table, &compiled.rules);
+    line("mint record updates", mint_changes.len());
     for (list_id, curator) in &compiled.shared_sources {
         let curator = curator.program_id();
         line(list_id.name(), format_args!("curator {curator}"));
@@ -183,6 +202,7 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
     }
     .replace()?;
     ctx.send(&[authority], &[replace])?;
+    crate::records::write_mint_policies(ctx, &mint_changes)?;
     let (before, after) = (
         current.registry.generation(),
         pinned(ctx)?.registry.generation(),
@@ -193,7 +213,7 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
 }
 
 fn table_lines(table: &RuleTable) -> Vec<Line> {
-    let mut lines: Vec<Line> = table
+    let lines: Vec<Line> = table
         .rules()
         .iter()
         .enumerate()
@@ -202,35 +222,7 @@ fn table_lines(table: &RuleTable) -> Vec<Line> {
             text: describe(rule),
         })
         .collect();
-    if !table.is_empty() {
-        lines.extend(amount_guard_lines(table));
-    }
-    lines.extend(limit_lines(table));
     lines
-}
-
-fn amount_guard_lines(table: &RuleTable) -> Vec<Line> {
-    let count = Line {
-        label: "amount guards".to_owned(),
-        text: format!("{} mint thresholds", table.inline_assets().len()),
-    };
-    let guard = |(asset, threshold): (&[u8; 32], &u64)| Line {
-        label: "guard".to_owned(),
-        text: format!("asset {} above {threshold}", hex::encode(asset)),
-    };
-    let guards = table.inline_assets().iter().zip(table.inline_limits());
-    std::iter::once(count).chain(guards.map(guard)).collect()
-}
-
-fn limit_lines(table: &RuleTable) -> Vec<Line> {
-    table
-        .limits()
-        .iter()
-        .map(|limit| Line {
-            label: "limit".to_owned(),
-            text: describe_limit(limit),
-        })
-        .collect()
 }
 
 fn print_diff(old: &RuleTable, new: &RuleTable) {
@@ -243,12 +235,6 @@ fn print_diff(old: &RuleTable, new: &RuleTable) {
             line(label, describe(rule));
         }
     }
-    if old.inline_assets() != new.inline_assets() || old.inline_limits() != new.inline_limits() {
-        amount_guard_lines(new).iter().for_each(Line::print);
-    }
-    if old.limits() != new.limits() {
-        limit_lines(new).iter().for_each(Line::print);
-    }
 }
 
 impl Line {
@@ -257,32 +243,30 @@ impl Line {
     }
 }
 
+/// Replacing policy settings preserves the independent withdrawal co-sign threshold.
+pub(crate) fn mint_changes(
+    ctx: &Context,
+    compiled: &CompiledPolicy,
+) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
+    let current = crate::records::mint_policies(ctx)?;
+    let mut desired = compiled.mint_policies.clone();
+    for (member, old) in &current {
+        desired.entry(*member).or_default().withdrawal_threshold = old.withdrawal_threshold;
+    }
+    desired.retain(|member, policy| *policy != current.get(member).copied().unwrap_or_default());
+    Ok(desired)
+}
+
 #[cfg(test)]
 mod tests {
-    use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, Subject};
-
     use super::*;
-
+    use zolana_ring_policy::{ListId, Rule, Subject};
     #[test]
-    fn a_table_of_outflow_limits_alone_lists_each_limit() {
-        let limit = OutflowLimit::of(&Member::from_bytes([3; 32]).unwrap()).with_cap(1000);
-        let limits_only = RuleTable::builder().limits(&[limit]).build();
-        assert_eq!(
-            table_lines(&limits_only),
-            [Line {
-                label: "limit".to_owned(),
-                text: describe_limit(&limit),
-            }]
-        );
-        let with_rule = RuleTable::builder()
+    fn table_lines_show_only_rules() {
+        let table = RuleTable::builder()
             .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
-            .limits(&[limit])
             .build();
-        let labels: Vec<String> = table_lines(&with_rule)
-            .into_iter()
-            .map(|line| line.label)
-            .collect();
-        assert_eq!(labels, ["rule 1", "amount guards", "limit"]);
+        assert_eq!(table_lines(&table).len(), 1);
         assert!(table_lines(&RuleTable::empty()).is_empty());
     }
 }

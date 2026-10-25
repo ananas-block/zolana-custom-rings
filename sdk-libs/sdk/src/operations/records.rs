@@ -179,7 +179,7 @@ impl MemberListWrite {
 pub struct AuthorityListWrite {
     ring: CustomRing,
     authority: Address,
-    writes: Vec<(Member, ListWrite)>,
+    writes: Vec<RecordWriteData>,
 }
 
 #[must_use]
@@ -210,14 +210,42 @@ impl AuthorityListWrite {
     /// `member` is any record key, an owner identity or an asset.
     pub fn with_write(mut self, member: Member, write: ListWrite) -> Result<Self, RingError> {
         check_writer(write, Writer::Authority)?;
-        if self.writes.iter().any(|(known, _)| *known == member) {
-            return Err(RingError::DuplicateListWrite { member });
-        }
-        self.writes.push((member, write));
+        self.push(RecordWriteData {
+            member: *member.as_bytes(),
+            lists: WriteRecordsIxData::new(write),
+            mint_policy: [0; 33],
+        })?;
         Ok(self)
     }
 
-    pub fn writes(&self) -> &[(Member, ListWrite)] {
+    /// Replaces the mint's threshold, cap and co-sign setting under the same root as its lists.
+    pub fn with_mint_policy(
+        mut self,
+        member: Member,
+        policy: zolana_ring_policy::MintPolicy,
+    ) -> Result<Self, RingError> {
+        let mut mint_policy = [0; 33];
+        mint_policy[0] = 1;
+        mint_policy[1..].copy_from_slice(&policy.bytes());
+        self.push(RecordWriteData {
+            member: *member.as_bytes(),
+            mint_policy,
+            ..RecordWriteData::default()
+        })?;
+        Ok(self)
+    }
+
+    fn push(&mut self, write: RecordWriteData) -> Result<(), RingError> {
+        if self.writes.iter().any(|known| known.member == write.member) {
+            return Err(RingError::DuplicateListWrite {
+                member: Member::from_bytes(write.member)?,
+            });
+        }
+        self.writes.push(write);
+        Ok(())
+    }
+
+    pub fn writes(&self) -> &[RecordWriteData] {
         &self.writes
     }
 
@@ -255,14 +283,7 @@ impl AuthorityListWrite {
         if config.authority != self.authority {
             return Err(CustomRingError::UnauthorizedAuthority.into());
         }
-        let writes: Vec<RecordWriteData> = self
-            .writes
-            .iter()
-            .map(|(member, write)| RecordWriteData {
-                member: *member.as_bytes(),
-                lists: WriteRecordsIxData::new(*write),
-            })
-            .collect();
+        let writes = &self.writes;
         let entries = writes
             .iter()
             .map(RecordWriteData::entry)
@@ -284,6 +305,7 @@ impl AuthorityListWrite {
                     member: Hash(entry.member),
                     mask: entry.mask,
                     value: entry.value,
+                    mint_policy: entry.mint_policy,
                 })
                 .collect();
             let inputs = Application::read(self.ring, client.zolana(), views).await?;
@@ -295,7 +317,7 @@ impl AuthorityListWrite {
         let mut data = vec![tag::AUTHORITY_WRITE_RECORDS];
         data.extend(
             AuthorityWriteRecordsIxData {
-                writes: &writes,
+                writes,
                 apply: &apply,
             }
             .encode()?,

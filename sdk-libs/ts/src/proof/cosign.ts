@@ -52,6 +52,7 @@ export function demandedCoSigner(
     ringProgramId: Address;
     configured: RingCoSigner | undefined;
     approvalRequired: boolean;
+    withdrawalExempt?: boolean;
     transfers: readonly SettlementTransfer[];
     /** Empty on the anonymous and delegate rails. */
     ownerSigners: readonly Address[];
@@ -65,6 +66,7 @@ export function demandedCoSigner(
     supplied: input.configured?.signer,
     demand: transactDemand(input.transfers),
     approvalRequired: input.approvalRequired,
+    withdrawalExempt: input.withdrawalExempt ?? false,
   });
   const demanded = supplied === undefined ? undefined : signerAddress(supplied);
   // Rust `CoSignerIsOwner` and `CoSignerIsDelegate`, dual control needs a second key.
@@ -87,6 +89,7 @@ export function checkRingCoSigner(
     supplied: SignerAccount | undefined;
     demand: CoSignDemand;
     approvalRequired: boolean;
+    withdrawalExempt?: boolean;
   }>,
 ): SignerAccount | undefined {
   const { configured } = input;
@@ -94,7 +97,11 @@ export function checkRingCoSigner(
     if (input.approvalRequired) throw coSignerRequired(input, "approvalWithoutCoSigner");
     return undefined;
   }
-  if (!input.approvalRequired && !inScope(configured, input.demand)) return undefined;
+  if (
+    !input.approvalRequired &&
+    !inScope(configured, input.demand, input.withdrawalExempt ?? false)
+  )
+    return undefined;
   if (input.supplied === undefined) throw coSignerRequired(input, "missing");
   if (signerAddress(input.supplied) !== configured.signer)
     throw coSignerRequired(input, "mismatch");
@@ -102,14 +109,15 @@ export function checkRingCoSigner(
 }
 
 /** A shared class demands the co-signer, a withdrawal only above its mint's threshold or without a row. */
-function inScope(configured: RingCoSigner, demand: CoSignDemand): boolean {
+function inScope(
+  configured: RingCoSigner,
+  demand: CoSignDemand,
+  withdrawalExempt: boolean,
+): boolean {
   const classes = configured.scope & demand.classes;
   if ((classes & (RING_COSIGN_TRANSFERS | RING_COSIGN_DEPOSITS)) !== 0) return true;
   if ((classes & RING_COSIGN_WITHDRAWALS) === 0) return false;
-  return demand.withdrawals.some((withdrawal) => {
-    const threshold = configured.thresholds.find((row) => row.mint === withdrawal.mint);
-    return threshold === undefined || withdrawal.amount > threshold.amount;
-  });
+  return !withdrawalExempt && demand.withdrawals.length > 0;
 }
 
 function coSignerRequired(

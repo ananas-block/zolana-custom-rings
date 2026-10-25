@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY, type MintPolicy } from "../../src/protocol/membership/mint-policy.js";
 import { type RingMemberOpening, type RingSealedKey } from "../../src/rpc/ports.js";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/zolana/internal";
@@ -13,6 +14,7 @@ import { FIELD_MAX, memberRecordHash } from "../../src/protocol/membership/membe
 export interface FixtureRecord {
   readonly member: Bytes32;
   readonly lists: bigint;
+  readonly mintPolicy?: MintPolicy;
   readonly escrowKey?: Bytes32;
   readonly sealed?: RingSealedKey;
 }
@@ -23,10 +25,17 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
     bytesToBigInt(a.member) < bytesToBigInt(b.member) ? -1 : 1,
   );
   const rows: MemberRecord[] = [
-    { member: ZERO_32, lists: 0n, escrowKey: ZERO_32, next: sorted[0]?.member ?? FIELD_MAX },
+    {
+      mintPolicy: EMPTY_MINT_POLICY,
+      member: ZERO_32,
+      lists: 0n,
+      escrowKey: ZERO_32,
+      next: sorted[0]?.member ?? FIELD_MAX,
+    },
     ...sorted.map((record, index) => ({
       member: record.member,
       lists: record.lists,
+      mintPolicy: record.mintPolicy ?? EMPTY_MINT_POLICY,
       escrowKey: record.escrowKey ?? ZERO_32,
       next: sorted[index + 1]?.member ?? FIELD_MAX,
     })),

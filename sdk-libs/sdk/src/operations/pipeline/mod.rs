@@ -11,6 +11,7 @@ mod spp;
 #[cfg(test)]
 #[path = "../../tests/operations/pipeline.rs"]
 mod tests;
+mod withdrawals;
 
 use custom_ring_interface::{
     compute_unit_limit,
@@ -235,6 +236,7 @@ struct Frame {
     sealed: SealedAudit,
     published_inputs: usize,
     policy: Option<PolicyInputs>,
+    withdrawal_exemption: Option<withdrawals::Exemption>,
     private_tx_blinding: [u8; 32],
     sender_pk_hash: [u8; 32],
     public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
@@ -370,8 +372,17 @@ impl<'a> Pipeline<'a> {
             .is_some_and(|policy| policy.approval_required);
         let transfers = &proof_inputs.external_data.interface_transfers;
         let legs: Vec<_> = transfers.iter().map(public_leg).collect();
+        let demand = CoSignDemand::transact(approval_required, &legs);
+        let withdrawal_exemption = withdrawals::Exemption::read(
+            self.ring,
+            config,
+            &demand,
+            policy.as_ref().map(|policy| policy.own),
+            client.zolana(),
+        )
+        .await?;
         let co_signer =
-            CoSignDemand::transact(approval_required, &legs).signer(config.account())?;
+            demand.signer_with_exemption(config.account(), withdrawal_exemption.is_some())?;
         if co_signer.is_some_and(|co_signer| owner_signers.contains(&co_signer)) {
             return Err(CustomRingError::CoSignerIsOwner.into());
         }
@@ -402,7 +413,8 @@ impl<'a> Pipeline<'a> {
             output_tree: trees.output,
             owner_signers,
             interface_transfer_accounts,
-            registry: config.has_policy.then(|| self.ring.registry_pda()),
+            registry: (config.has_policy || withdrawal_exemption.is_some())
+                .then(|| self.ring.registry_pda()),
             curator: policy
                 .as_ref()
                 .and_then(|policy| policy.curator.map(|curator| curator.address)),
@@ -415,6 +427,12 @@ impl<'a> Pipeline<'a> {
         parts.sealed = sealed.sealed;
         parts.disclosure = sealed.fields.clone();
         parts.approval_required = approval_required;
+        parts.withdrawal_exemption = withdrawal_exemption.as_ref().map(|exemption| {
+            custom_ring_interface::WithdrawalExemptionProof {
+                proof: zeroed_proof(),
+                root_index: exemption.root.index,
+            }
+        });
         parts.policy = policy.as_ref().map(|policy| OwnedPolicyProof {
             spl_withdrawal_owners: policy.spl_withdrawal_owners.clone(),
             proof: zeroed_proof(),
@@ -466,6 +484,7 @@ impl<'a> Pipeline<'a> {
                 sealed,
                 published_inputs,
                 policy,
+                withdrawal_exemption,
                 private_tx_blinding,
                 sender_pk_hash,
                 public_assets,
@@ -573,6 +592,12 @@ impl Unwitnessed<'_> {
                 .flat_map(|policy| {
                     core::iter::once(policy.own).chain(policy.curator.map(|curator| curator.root))
                 })
+                .chain(
+                    frame
+                        .withdrawal_exemption
+                        .iter()
+                        .map(|exemption| exemption.root),
+                )
                 .collect(),
             policy: frame.policy.as_ref().map(|policy| BoundPolicy {
                 ring,
@@ -646,11 +671,18 @@ impl Assembled {
                 None => Ok::<_, RingError>(None),
             }
         };
+        let withdrawal_proof = async {
+            match &frame.withdrawal_exemption {
+                Some(exemption) => Ok(Some(exemption.prove(client).await?)),
+                None => Ok::<_, RingError>(None),
+            }
+        };
         // No proof is an input to another, every request goes out at once.
-        let (proven_spp, audit_proof, policy_proof) = futures::try_join!(
+        let (proven_spp, audit_proof, policy_proof, withdrawal_proof) = futures::try_join!(
             boxed(|| self.spp.prove(client, frame.published_inputs)),
             boxed(|| audit.prove(client)),
             boxed(|| policy_proof),
+            boxed(|| withdrawal_proof),
         )?;
         let Frame {
             ring,
@@ -663,6 +695,10 @@ impl Assembled {
         } = self.frame;
         parts.audit_proof = audit_proof;
         if let (Some(owned), Some(proof)) = (parts.policy.as_mut(), policy_proof) {
+            owned.proof = proof;
+        }
+        if let (Some(owned), Some(proof)) = (parts.withdrawal_exemption.as_mut(), withdrawal_proof)
+        {
             owned.proof = proof;
         }
         parts.spp_proof = proven_spp.proof;
@@ -766,6 +802,7 @@ fn preview_parts(preview: PreviewParts<'_>) -> TransactParts {
         n_out: preview.n_out,
         audit_proof: zeroed_proof(),
         policy: None,
+        withdrawal_exemption: None,
         approval_required: false,
         previous_epoch: false,
         anchor: None,

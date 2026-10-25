@@ -141,6 +141,7 @@ pub struct GetRingApplyProofInputsRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingListWriteView {
+    pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
     pub member: Hash,
     pub mask: u64,
     /// Lies inside `mask`.
@@ -179,6 +180,7 @@ pub struct RingMemberRecordView {
     /// AES-256-CTR ciphertext of the nullifier secret, 32 bytes.
     #[serde(default)]
     pub ciphertext: Option<Base64String>,
+    pub mint_policy: zolana_ring_policy::MintPolicy,
 }
 
 /// A leaf index and the three siblings of every level in ascending child order, leaf level first.
@@ -271,6 +273,7 @@ pub struct RingQueueEntryView {
     /// Zero except on a RegisterKey write.
     pub escrow_key: Hash,
     pub slot: u64,
+    pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,11 +302,13 @@ pub struct RingRecordWriteView {
     pub old_next: Hash,
     pub old_lists: u64,
     pub old_escrow: Hash,
+    pub old_mint_policy: zolana_ring_policy::MintPolicy,
     /// The member's leaf, for an absent member the append leaf after its low record relinks.
     pub slot: RingRecordPathView,
     /// An absent member's low record, empty for a present member.
     pub low: RingMemberRecordView,
     pub low_path: RingRecordPathView,
+    pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

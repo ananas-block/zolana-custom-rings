@@ -1,3 +1,4 @@
+import type { MintPolicy } from "./mint-policy.js";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
 /** Rust `QUAD_ARITY` and `QUAD_HEIGHT`, the 4-ary record tree of a ring's member registry. */
@@ -10,7 +11,7 @@ export const MEMBER_REGISTRY_ROOT_HISTORY = 32;
 /** Rust `APPLY_BATCH`, the writes the larger apply key proves and the record queue holds. */
 export const APPLY_BATCH = 16;
 
-/** One leaf, `Poseidon(member, next, lists, escrow_key)`, Rust `MemberRecord`. */
+/** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold)`, Rust `MemberRecord`. */
 export interface MemberRecord {
   readonly member: Bytes32;
   readonly next: Bytes32;
@@ -18,6 +19,7 @@ export interface MemberRecord {
   readonly lists: bigint;
   /** Zero until the member registers a key. */
   readonly escrowKey: Bytes32;
+  readonly mintPolicy: MintPolicy;
 }
 
 /** A leaf index and three siblings per level in ascending child order, leaf level first. */
@@ -37,6 +39,7 @@ export interface QueueEntry {
   readonly mask: bigint;
   readonly value: bigint;
   readonly escrowKey: Bytes32;
+  readonly mintPolicy?: MintPolicy;
 }
 
 /** One queued write's apply proof input, Rust `RecordWriteProofInput`. */
@@ -47,6 +50,7 @@ export interface RecordWriteProofInput {
   readonly oldNext: Bytes32;
   readonly oldLists: bigint;
   readonly oldEscrow: Bytes32;
+  readonly oldMintPolicy: MintPolicy;
   /** The record's leaf, for an absent member the leaf at `next_index`. */
   readonly slot: QuadPath;
   /** An absent member's low record and its path before the relink, empty for a present member. */

@@ -22,9 +22,24 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
         ring,
         payer: &env.payer,
         auditor_pubkey: auditor_pk,
-        tier: Tier::policy(&OUTFLOW_LIMIT),
+        tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
+    land(
+        &env,
+        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
+            Member::asset(&Address::new_from_array(
+                custom_ring_interface::SOL_ASSET_ADDRESS,
+            ))?,
+            zolana_ring_policy::MintPolicy {
+                cap: LIMIT_CAP,
+                cosign_above: LIMIT_COSIGN_ABOVE,
+                ..Default::default()
+            },
+        )?,
+        &env.payer,
+        &[],
+    )?;
     let sender = &env.sender.keypair;
     let sender_address = sender.shielded_address()?;
     let recipient = env.recipient.keypair.shielded_address()?;
@@ -82,7 +97,6 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
             authority: env.payer.pubkey(),
             signer: cosigner.pubkey(),
             scope: CoSignScope::WITHDRAWALS,
-            thresholds: &[],
         }
         .instruction()?],
     )?;

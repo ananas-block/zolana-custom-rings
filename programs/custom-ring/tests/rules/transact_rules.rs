@@ -7,8 +7,8 @@ use custom_ring_interface::{
     stream::{RingTag, EPOCH_SLOTS, TAG_LEN},
     tag, transact_flag, AnchorRoot, AnonymousProofData, AppliedAt, CustomRingError,
     CustomRingProof, InputTrees, MemberRegistry, PlainGroth16Proof, PolicyProof, RingOutput,
-    RingProgramConfig, RingRail, RingTransactData, WithdrawalThreshold, GRACE_SLOTS,
-    MEMBER_REGISTRY_PDA_SEED, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    RingProgramConfig, RingRail, RingTransactData, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -84,6 +84,7 @@ impl Fixture {
         policy: bool,
     ) -> RingTransactData<'_> {
         let mut data = RingTransactData {
+            withdrawal_exemption: Default::default(),
             rail,
             n_in,
             n_out,
@@ -768,7 +769,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let co_signer = Keypair::new();
     let mut ring = Ring::new(Setup::AuditOnly);
-    set_co_signer(&mut ring, &co_signer.pubkey(), 1, Vec::new());
+    set_co_signer(&mut ring, &co_signer.pubkey(), 1);
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     refused(
         send(
@@ -805,8 +806,19 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
 
 /// The payer withdraws each `legs` amount in SOL as the one owner, `prefix` after the config.
 fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[&Keypair]) -> Sent {
+    withdraw_with_exemption(ring, legs, prefix, signers, None)
+}
+
+fn withdraw_with_exemption(
+    ring: &mut Ring,
+    legs: &[u64],
+    prefix: Vec<AccountMeta>,
+    signers: &[&Keypair],
+    exemption: Option<&custom_ring_interface::WithdrawalExemptionProof>,
+) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
+    data.withdrawal_exemption = exemption;
     data.interface_transfers = legs
         .iter()
         .map(|amount| InterfaceTransfer::SolWithdrawal { amount: *amount })
@@ -828,17 +840,11 @@ fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[
     )
 }
 
-const SOL_THRESHOLD: WithdrawalThreshold = WithdrawalThreshold {
-    mint: [0; 32],
-    amount: 100,
-};
-
 #[test]
-fn a_withdrawal_above_its_threshold_demands_the_co_signer() {
+fn a_withdrawal_without_an_exemption_proof_demands_the_co_signer() {
     let co_signer = Keypair::new();
     let mut ring = Ring::new(Setup::AuditOnly);
-    set_co_signer(&mut ring, &co_signer.pubkey(), 4, vec![SOL_THRESHOLD]);
-    reaches_verification(withdraw(&mut ring, &[100], Vec::new(), &[]));
+    set_co_signer(&mut ring, &co_signer.pubkey(), 4);
     refused(
         withdraw(
             &mut ring,
@@ -854,7 +860,6 @@ fn a_withdrawal_above_its_threshold_demands_the_co_signer() {
         vec![AccountMeta::new_readonly(co_signer.pubkey(), true)],
         &[&co_signer],
     ));
-    reaches_verification(withdraw(&mut ring, &[60], Vec::new(), &[]));
     refused(
         withdraw(
             &mut ring,
@@ -870,8 +875,7 @@ fn a_withdrawal_above_its_threshold_demands_the_co_signer() {
 fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let owner = ring.payer.insecure_clone();
-    set_co_signer(&mut ring, &owner.pubkey(), 4, vec![SOL_THRESHOLD]);
-    reaches_verification(withdraw(&mut ring, &[100], Vec::new(), &[]));
+    set_co_signer(&mut ring, &owner.pubkey(), 4);
     refused(
         withdraw(
             &mut ring,
@@ -884,14 +888,14 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
 }
 
 #[test]
-fn the_approval_flag_needs_an_outflow_limit_and_a_co_signer() {
+fn the_approval_flag_requires_the_co_signer() {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.approval_required = true;
     let mut ring = Ring::new(Setup::Policy);
     refused(
         confidential(&mut ring, vec![registry_meta()], &data),
-        CustomRingError::UnexpectedApproval,
+        CustomRingError::ApprovalWithoutCoSigner,
     );
     let mut limited = Ring::new(Setup::LimitedPolicy);
     refused(
@@ -922,13 +926,13 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
         )
     };
     let owner = ring.payer.insecure_clone();
-    set_co_signer(&mut ring, &owner.pubkey(), 4, Vec::new());
+    set_co_signer(&mut ring, &owner.pubkey(), 4);
     refused(
         co_signed(&mut ring, &owner),
         CustomRingError::CoSignerIsOwner,
     );
     let co_signer = Keypair::new();
-    set_co_signer(&mut ring, &co_signer.pubkey(), 4, Vec::new());
+    set_co_signer(&mut ring, &co_signer.pubkey(), 4);
     reaches_verification(co_signed(&mut ring, &co_signer));
 }
 
@@ -1224,13 +1228,13 @@ fn a_delegate_move_co_signed_by_the_delegate_is_refused() {
             &[co_signer, &delegate],
         )
     };
-    set_co_signer(&mut ring, &delegate.pubkey(), 1, Vec::new());
+    set_co_signer(&mut ring, &delegate.pubkey(), 1);
     refused(
         co_signed(&mut ring, &delegate),
         CustomRingError::CoSignerIsDelegate,
     );
     let co_signer = Keypair::new();
-    set_co_signer(&mut ring, &co_signer.pubkey(), 1, Vec::new());
+    set_co_signer(&mut ring, &co_signer.pubkey(), 1);
     reaches_verification(co_signed(&mut ring, &co_signer));
 }
 
@@ -1503,4 +1507,37 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
         ),
         CustomRingError::InvalidSettlementAccounts,
     );
+}
+
+#[test]
+fn withdrawal_exemptions_must_prove_under_the_own_floor() {
+    use bytemuck::Zeroable;
+    use custom_ring_interface::WithdrawalExemptionProof;
+    let mut ring = Ring::new(Setup::AuditOnly);
+    set_co_signer(&mut ring, &Keypair::new().pubkey(), 4);
+    let base: MemberRegistry = ring.read(&registry_pda());
+    let exemption = WithdrawalExemptionProof {
+        proof: custom_ring_interface::CustomRingProof::zeroed(),
+        root_index: 1,
+    };
+    ring.write(&registry_pda(), &floored(&base, 4, 5));
+    refused(
+        withdraw_with_exemption(
+            &mut ring,
+            &[60, 60],
+            vec![registry_meta()],
+            &[],
+            Some(&exemption),
+        ),
+        CustomRingError::RootBelowFloor,
+    );
+    ring.write(&registry_pda(), &floored(&base, 5, 5));
+    // A matching root index alone cannot waive the signature; the proof is checked.
+    reaches_verification(withdraw_with_exemption(
+        &mut ring,
+        &[60, 60],
+        vec![registry_meta()],
+        &[],
+        Some(&exemption),
+    ));
 }

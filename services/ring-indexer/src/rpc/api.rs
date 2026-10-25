@@ -286,6 +286,7 @@ pub(crate) async fn record_queue(
             mask: entry.write.entry.mask,
             value: entry.write.entry.value,
             escrow_key: Hash(entry.write.entry.escrow_key),
+            mint_policy: entry.write.entry.mint_policy,
             slot: entry.slot,
         })
         .collect();
@@ -315,6 +316,12 @@ pub(crate) async fn apply_proof_inputs(
             RecordWriteData {
                 member: write.member.0,
                 lists,
+                mint_policy: write.mint_policy.map_or([0; 33], |policy| {
+                    let mut bytes = [0; 33];
+                    bytes[0] = 1;
+                    bytes[1..].copy_from_slice(&policy.bytes());
+                    bytes
+                }),
             }
             .entry()
         })
@@ -594,6 +601,7 @@ fn member_view(record: &MemberRecord) -> RingMemberRecordView {
         next: Hash(record.next),
         lists: record.lists,
         escrow_key: Hash(record.escrow_key),
+        mint_policy: record.mint_policy,
         owner_pubkey: None,
         nullifier_pk: None,
         eph_pk: None,
@@ -607,10 +615,12 @@ fn write_view(write: &RecordWriteProofInput) -> RingRecordWriteView {
         mask: write.entry.mask,
         value: write.entry.value,
         escrow_key: Hash(write.entry.escrow_key),
+        mint_policy: write.entry.mint_policy,
         exists: write.exists,
         old_next: Hash(write.old_next),
         old_lists: write.old_lists,
         old_escrow: Hash(write.old_escrow),
+        old_mint_policy: write.old_mint_policy,
         slot: path_view(&write.slot),
         low: member_view(&write.low),
         low_path: path_view(&write.low_path),

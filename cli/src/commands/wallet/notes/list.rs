@@ -582,9 +582,12 @@ mod tests {
             || Ok(pending.next().expect("one queue read per batch")),
             |batch| {
                 batches.sizes.push(batch.writes().len());
-                batches
-                    .order
-                    .extend(batch.writes().iter().map(|(member, _)| *member));
+                batches.order.extend(
+                    batch
+                        .writes()
+                        .iter()
+                        .map(|write| Member::from_bytes(write.member).unwrap()),
+                );
                 Ok(())
             },
         )

@@ -135,13 +135,17 @@ of the last one.
 
 `zolana-ring policy show` prints the pinned table and its generation. `policy
 check` compares it with `ring.toml`, and `policy set` replaces it after a
-confirmation. An empty `[policy]` table pins no rule and no limit, and a later
-`policy set` adds them.
+confirmation. An empty `[policy]` table pins no rule and clears policy mint settings.
+`policy set` replaces the recipient thresholds and outflow limits while preserving
+withdrawal co-sign thresholds. Multiple record batches are separate transactions;
+configuration replacement is not atomic across the table and those batches.
 
 ## Limits
 
-A table holds at most 16 rules, 8 mint thresholds and 8 outflow limits. A
-policy transfer has exactly one sender, so it never spends the notes of two
+A table holds at most 16 rules. Mint thresholds, outflow limits and withdrawal
+co-sign thresholds live in authenticated asset records, with no separate
+eight-mint limit. They share the registry's `2^20 - 1` usable leaves with list
+and key records. A policy transfer has exactly one sender, so it never spends the notes of two
 owners.
 
 Transaction size limits the shapes each rail serves. See

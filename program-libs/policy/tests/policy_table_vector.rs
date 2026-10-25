@@ -3,9 +3,8 @@
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use zolana_ring_policy::{
-    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, OutflowLimit,
-    PolicySource, Rule, RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_INLINE_ASSETS,
-    MAX_OUTFLOW_LIMITS, MAX_RULES, POLICY_TABLE_VERSION,
+    registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource, Rule,
+    RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES, POLICY_TABLE_VERSION,
 };
 
 const VECTORS: &str = concat!(
@@ -29,9 +28,6 @@ struct Case {
     rules: Vec<String>,
     /// `rules[i]` split into its parts.
     rule_parts: Vec<RuleParts>,
-    inline_assets: Vec<String>,
-    inline_limits: Vec<u64>,
-    limits: Vec<Limit>,
     fields: Vec<String>,
     policy_hash: String,
 }
@@ -78,13 +74,6 @@ enum GuardTag {
     Always,
     AboveAmount,
     AboveAmountByAsset,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct Limit {
-    asset: String,
-    cap: u64,
-    cosign_above: u64,
 }
 
 impl Case {
@@ -152,22 +141,6 @@ impl RuleParts {
     }
 }
 
-impl Limit {
-    fn new(limit: &OutflowLimit) -> Self {
-        Self {
-            asset: hex::encode(limit.asset()),
-            cap: limit.cap,
-            cosign_above: limit.cosign_above,
-        }
-    }
-
-    fn outflow_limit(&self) -> OutflowLimit {
-        OutflowLimit::of(&Member::from_bytes(bytes(&self.asset)).expect("asset member"))
-            .with_cap(self.cap)
-            .with_cosign_above(self.cosign_above)
-    }
-}
-
 struct Xorshift(u64);
 
 impl Xorshift {
@@ -203,22 +176,6 @@ impl Xorshift {
         asset(self.bytes())
     }
 
-    fn limits(&mut self, count: usize) -> Vec<OutflowLimit> {
-        (0..count)
-            .map(|_| {
-                let bound = 1 + self.below(1 << 40);
-                let (cap, cosign_above) = match self.below(3) {
-                    0 => (bound, 0),
-                    1 => (0, bound),
-                    _ => (bound, 1 + self.below(bound)),
-                };
-                OutflowLimit::of(&asset_member(self.bytes()))
-                    .with_cap(cap)
-                    .with_cosign_above(cosign_above)
-            })
-            .collect()
-    }
-
     fn table(&mut self) -> Option<RuleTable> {
         let mut builder = RuleTable::builder();
         for _ in 0..=self.below(3) {
@@ -230,13 +187,17 @@ impl Xorshift {
             };
             builder = builder.rule(Rule::any_of(subject, present, absent));
         }
-        let (mut assets, mut limits) = (Vec::new(), Vec::new());
         match self.below(3) {
             0 => {}
             1 => {
                 let count = 1 + self.below(3) as usize;
-                assets = (0..count).map(|_| self.asset()).collect();
-                limits = (0..count).map(|_| 1 + self.below(u64::MAX - 1)).collect();
+                // Preserve the deterministic random stream of the shared cases.
+                for _ in 0..count {
+                    self.asset();
+                }
+                for _ in 0..count {
+                    self.below(u64::MAX - 1);
+                }
                 let present = self.lists(ListSet::EMPTY);
                 builder =
                     builder.rule(Rule::require_any(Subject::OutputOwner, present).above_by_asset());
@@ -248,19 +209,7 @@ impl Xorshift {
                 );
             }
         }
-        let outflow = match self.below(3) {
-            0 => Vec::new(),
-            _ => {
-                let count = 1 + self.below(3) as usize;
-                self.limits(count)
-            }
-        };
-        builder
-            .inline_assets(&assets)
-            .inline_limits(&limits)
-            .limits(&outflow)
-            .try_build()
-            .ok()
+        builder.try_build().ok()
     }
 
     /// One curator registry at most, every other referenced list is the ring's own.
@@ -294,14 +243,7 @@ fn full_table(rng: &mut Xorshift) -> (RuleTable, SourceMap) {
     for rule in sender_rules.take(MAX_RULES - 1) {
         builder = builder.rule(rule);
     }
-    let assets: Vec<[u8; 32]> = (0..MAX_INLINE_ASSETS).map(|_| rng.asset()).collect();
-    let limits: Vec<u64> = (0..MAX_INLINE_ASSETS as u64).map(|i| 1 + i).collect();
-    let outflow = rng.limits(MAX_OUTFLOW_LIMITS);
-    let table = builder
-        .inline_assets(&assets)
-        .inline_limits(&limits)
-        .limits(&outflow)
-        .build();
+    let table = builder.build();
     let curator = registry_field(&rng.bytes()).expect("registry field");
     let entries: Vec<(ListId, [u8; 32])> = ListId::ALL
         .into_iter()
@@ -339,14 +281,6 @@ fn full_width_table() -> (RuleTable, SourceMap) {
             .above_by_asset(),
         )
         .rule(Rule::forbid(Subject::OutputOwner, ListId::Reader).above(1 << 63))
-        .inline_assets(&[asset([0x11; 32]), asset([0x12; 32])])
-        .inline_limits(&[1, u64::MAX])
-        .limits(&[
-            OutflowLimit::of(&asset_member([0x13; 32]))
-                .with_cap(u64::MAX)
-                .with_cosign_above(1),
-            OutflowLimit::of(&asset_member([0x14; 32])).with_cosign_above(u64::MAX),
-        ])
         .build();
     let curator = registry_field(&[0x15; 32]).expect("registry field");
     let entries: Vec<(ListId, [u8; 32])> = ListId::ALL
@@ -385,9 +319,6 @@ fn case(name: &str, table: &RuleTable, sources: &SourceMap) -> Case {
             .map(|rule| hex::encode(rule.encoded()))
             .collect(),
         rule_parts: table.rules().iter().map(RuleParts::new).collect(),
-        inline_assets: table.inline_assets().iter().map(hex::encode).collect(),
-        inline_limits: table.inline_limits().to_vec(),
-        limits: table.limits().iter().map(Limit::new).collect(),
         fields: encoded.fields(sources).iter().map(hex::encode).collect(),
         policy_hash: hex::encode(encoded.hash(sources).expect("policy hash")),
     }
@@ -419,7 +350,7 @@ fn compute_vectors() -> PolicyTableVectors {
         description: "The 77 policy table fields and their hash, acc = 0 then \
                       acc = Poseidon(acc, fields[11c..11c + 11]) for c = 0..7. Fields are \
                       CRTB, the version, list id and registry field per source slot, the rule, \
-                      inline and limit counts, 16 rule rows, 8 inline assets, 8 inline limits, \
+                      16 rule rows and zero padding to four rate-11 blocks. \
                       then asset, cap and cosign per limit row, every slot past a count zero. \
                       rule_parts splits each rule row read as one big-endian field from its low \
                       byte, subject, mode, mask and guard one byte each, the u64 threshold, then \
@@ -446,32 +377,18 @@ fn ring_policy_table_vector() {
 #[test]
 fn ring_policy_table_parts_encode_and_decode() {
     for case in committed().cases {
-        let inline_assets: Vec<[u8; 32]> = case
-            .inline_assets
-            .iter()
-            .map(|value| bytes(value))
-            .collect();
-        let limits: Vec<OutflowLimit> = case.limits.iter().map(Limit::outflow_limit).collect();
         let built = case
             .rule_parts
             .iter()
             .fold(RuleTable::builder(), |builder, parts| {
                 builder.rule(parts.rule())
             })
-            .inline_assets(&inline_assets)
-            .inline_limits(&case.inline_limits)
-            .limits(&limits)
             .try_build()
             .expect("the parts build a table");
         let rows: Vec<[u8; 32]> = case.rules.iter().map(|row| bytes(row)).collect();
-        let stored = TableParts {
-            rows: &rows,
-            inline_assets: &inline_assets,
-            inline_limits: &case.inline_limits,
-            limits: &limits,
-        }
-        .encode()
-        .expect("the rows fit the table");
+        let stored = TableParts { rows: &rows }
+            .encode()
+            .expect("the rows fit the table");
         assert_eq!(built.encode(), stored, "{}", case.name);
         let sources = case.source_map();
         assert_eq!(

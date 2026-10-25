@@ -1840,7 +1840,6 @@ async fn an_approval_its_owner_would_co_sign_is_refused_before_proving() {
     let rules = RuleTable::builder()
         .rule(Rule::require(Subject::Sender, ListId::Allow))
         .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
-        .limits(&[limit])
         .build();
     // The deposit scope leaves the approval as the transfer's only demand.
     let settings = RingSettings {
@@ -1849,7 +1848,16 @@ async fn an_approval_its_owner_would_co_sign_is_refused_before_proving() {
         ..RingSettings::new(RingMode::Registry)
     };
     let client = Chain::ring(settings)
-        .with_registry(Registry::new(&[(&sender, 1), (&recipient, 1)]), &rules)
+        .with_registry(
+            Registry::new(&[(&sender, 1), (&recipient, 1)]).with_mint(
+                Mint::SOL.asset,
+                zolana_ring_policy::MintPolicy {
+                    cosign_above: limit.cosign_above,
+                    ..Default::default()
+                },
+            ),
+            &rules,
+        )
         .client();
     let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
     transaction
@@ -2602,4 +2610,81 @@ fn a_payment_total_past_a_u64_is_refused() {
         super::selection::payment_total([u64::MAX, 1]),
         Err(RingError::PaymentOverflow)
     ));
+}
+
+#[tokio::test]
+async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
+    use crate::tests::support::Registry;
+    use custom_ring_interface::{CoSignScope, PublicLeg};
+    use zolana_interface::instruction::InterfaceTransfer;
+    use zolana_ring_policy::{MintPolicy, RuleTable};
+    let mut registry = Registry::new(&[]);
+    for i in 1..=12 {
+        registry = registry.with_mint(
+            Address::new_from_array([i; 32]),
+            MintPolicy {
+                withdrawal_threshold: 100,
+                ..MintPolicy::EMPTY
+            },
+        );
+    }
+    let chain = Chain::ring(RingSettings {
+        co_signer: Some((Address::new_from_array([77; 32]), CoSignScope::WITHDRAWALS)),
+        ..RingSettings::new(RingMode::Off)
+    })
+    .with_registry(registry, &RuleTable::empty());
+    let config = ring().require_config(&chain).await.unwrap();
+    let leg = |amount| PublicLeg {
+        transfer: InterfaceTransfer::SplWithdrawal {
+            spl_interface_bump: 0,
+            amount,
+        },
+        mint: Some([9; 32]),
+    };
+    let demand = CoSignDemand::transact(false, &[leg(40), leg(60)]);
+    let exemption = withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+        .await
+        .unwrap();
+    assert!(
+        exemption.is_some(),
+        "ninth mint at its threshold is exempt on an audit-only ring"
+    );
+    let demand = CoSignDemand::transact(
+        false,
+        &[
+            leg(60),
+            leg(60),
+            PublicLeg {
+                transfer: InterfaceTransfer::SplDeposit {
+                    spl_interface_bump: 0,
+                    amount: 100,
+                },
+                mint: Some([9; 32]),
+            },
+        ],
+    );
+    assert!(
+        withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+            .await
+            .unwrap()
+            .is_none(),
+        "deposits never offset gross withdrawals"
+    );
+    let demand = CoSignDemand::transact(
+        false,
+        &[PublicLeg {
+            transfer: InterfaceTransfer::SplWithdrawal {
+                spl_interface_bump: 0,
+                amount: 1,
+            },
+            mint: Some([13; 32]),
+        }],
+    );
+    assert!(
+        withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+            .await
+            .unwrap()
+            .is_none(),
+        "missing records still require the co-signer"
+    );
 }

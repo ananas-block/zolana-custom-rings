@@ -749,11 +749,23 @@ fn sum(payments: &[Payment<&ShieldedAddress>]) -> Result<u64> {
 impl Outflow {
     /// Under the pinned policy's limits, an audit-only ring pins none.
     fn demand(self, ctx: &Context) -> Result<Demand> {
-        let policy = ctx.block(ctx.ring.pinned_policy(ctx.chain()))?;
-        let limits = policy
-            .as_ref()
-            .map_or(&[][..], |policy| policy.table.limits());
-        self.demand_under(limits)
+        if !ctx.ring_config()?.has_policy {
+            return self.demand_under(&[]);
+        }
+        let member = Member::asset(&self.mint)?;
+        let read = crate::records::read_one(
+            &ctx.zolana,
+            custom_ring_sdk::MemberRecords {
+                ring: ctx.ring,
+                members: &[member],
+            },
+        )?;
+        let policy = read
+            .record()
+            .map_or(Default::default(), |record| record.mint_policy);
+        self.demand_under(&[OutflowLimit::of(&member)
+            .with_cap(policy.cap)
+            .with_cosign_above(policy.cosign_above)])
     }
 
     /// Refused past a nonzero cap before anything is deposited, approval past a nonzero bound.

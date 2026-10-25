@@ -4,7 +4,7 @@ use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CreateConfigIxData, InstructionTag, PolicyTableIxData,
     ReaderIxData, RingKind, SetCoSignerIxData, SetInsertFeeIxData, SetPausedIxData,
-    SetPolicySourceIxData, SourceSpec, WithdrawalThreshold,
+    SetPolicySourceIxData, SourceSpec,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -15,9 +15,7 @@ use zolana_keypair::X25519Pubkey;
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, SourceMap};
 
-use crate::{
-    submission::check_transaction_size, CoSignThreshold, CustomRing, CustomRingConfig, RingError,
-};
+use crate::{submission::check_transaction_size, CustomRing, CustomRingConfig, RingError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceOwner {
@@ -85,12 +83,11 @@ pub struct SetAuthority {
 
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SetCoSigner<'a> {
+pub struct SetCoSigner {
     pub ring: CustomRing,
     pub authority: Address,
     pub signer: Address,
     pub scope: CoSignScope,
-    pub thresholds: &'a [CoSignThreshold],
 }
 
 /// Runs under the upgrade authority, the delegate signs and is permanent.
@@ -213,19 +210,11 @@ impl SetAuthority {
     }
 }
 
-impl SetCoSigner<'_> {
+impl SetCoSigner {
     pub fn instruction(self) -> Result<Instruction, RingError> {
         let body = SetCoSignerIxData {
             signer: self.signer.to_bytes(),
             scope: self.scope.bits(),
-            thresholds: self
-                .thresholds
-                .iter()
-                .map(|threshold| WithdrawalThreshold {
-                    mint: threshold.mint.to_bytes(),
-                    amount: threshold.amount,
-                })
-                .collect(),
         };
         body.check()?;
         let data = tagged(tag::SET_CO_SIGNER, &body)?;
@@ -333,9 +322,6 @@ impl PolicyRules<'_> {
             &PolicyTableIxData {
                 sources,
                 rules: rules.rules().iter().map(Rule::encoded).collect(),
-                inline_assets: rules.inline_assets().to_vec(),
-                inline_limits: rules.inline_limits().to_vec(),
-                limits: rules.limits().to_vec(),
             },
         )?;
         let instruction = ring.ix(accounts, data);

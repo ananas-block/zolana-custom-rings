@@ -91,6 +91,8 @@ func hostRequest(t testing.TB, k Key) any {
 		return requestOf[DelegatePolicyParams](t, k.Circuit, world.Build(t).Assignment())
 	case ApplyRecords:
 		return applyRequest(t, k.Circuit, k.Inputs)
+	case WithdrawalExemption:
+		return requestOf[WithdrawalExemptionParams](t, k.Circuit, ringpolicy.Exemption(t))
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
@@ -137,13 +139,13 @@ func applyRequest(t testing.TB, circuit common.CircuitType, capacity int) *Apply
 	chain := p.ChainStart.Int
 	for i, e := range entries {
 		w := members.Apply(t, e)
-		hash := ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey)
+		hash := ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, big.NewInt(0), big.NewInt(0))
 		chain = ringtest.MustPoseidonHash(t, chain, hash)
 		p.Writes[i] = &RecordWrite{
-			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey)},
-			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow),
+			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fi(0), WithdrawalThreshold: fi(0)},
+			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fi(0), OldWithdrawalThreshold: fi(0),
 			Index: w.Slot.Index, Path: flatPath(w.Slot),
-			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey),
+			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fi(0), LowWithdrawalThreshold: fi(0),
 			LowIndex: w.LowPath.Index, LowPath: flatPath(w.LowPath),
 		}
 	}

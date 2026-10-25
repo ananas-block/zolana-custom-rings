@@ -266,6 +266,7 @@ mod tests {
     fn applied_members_need_every_position_seen_pending() {
         let store = AuditStore::default();
         let entry = |position: u64| RingQueueEntryView {
+            mint_policy: Default::default(),
             position,
             member: Hash([position as u8; 32]),
             mask: 0,

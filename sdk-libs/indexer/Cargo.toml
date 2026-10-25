@@ -12,4 +12,4 @@ solana-address = { workspace = true, features = ["curve25519"] }
 thiserror.workspace = true
 zolana-indexer-api.workspace = true
 zolana-ring-member-registry.workspace = true
-zolana-ring-policy.workspace = true
+zolana-ring-policy = { workspace = true, features = ["serde"] }

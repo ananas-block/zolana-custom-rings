@@ -38,7 +38,11 @@ import {
   type SealedAudit,
 } from "../../proof/audit-proof.js";
 import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
-import { demandedCoSigner } from "../../proof/cosign.js";
+import {
+  readWithdrawalExemption,
+  type WithdrawalExemption,
+} from "../../proof/withdrawal-exemption.js";
+import { demandedCoSigner, transactDemand } from "../../proof/cosign.js";
 import { RingError } from "../../protocol/error.js";
 import {
   policyProofRequest,
@@ -218,6 +222,7 @@ interface AssembledTransfer {
   readonly slots: PublicSlots;
   readonly senderPkHash: Bytes32;
   readonly policy: PolicyInputs | undefined;
+  readonly withdrawalExemption: WithdrawalExemption | undefined;
   readonly approvalRequired: boolean;
   readonly coSigner: Address | undefined;
   readonly privateTxHash: Bytes32;
@@ -315,7 +320,19 @@ async function assembleStagedTransfer<T>(
         )
       : undefined;
     const approvalRequired = policy?.approvalRequired ?? false;
+    const withdrawalExemption = await readWithdrawalExemption(
+      {
+        client,
+        ringProgramId,
+        config,
+        demand: transactDemand(proofInputs.externalData.interfaceTransfers),
+        approvalRequired,
+        own: policy?.own,
+      },
+      context,
+    );
     const coSigner = demandedCoSigner({
+      withdrawalExempt: withdrawalExemption !== undefined,
       ringProgramId,
       configured: config.coSigner,
       approvalRequired,
@@ -355,6 +372,7 @@ async function assembleStagedTransfer<T>(
       privateTxHash,
       approvalRequired,
       ...(policy === undefined ? {} : { policy: { inputs: policy, senderCommitment: commitment } }),
+      ...(withdrawalExemption === undefined ? {} : { withdrawalExemption }),
       ...(anonymous === undefined
         ? {}
         : {
@@ -362,7 +380,15 @@ async function assembleStagedTransfer<T>(
               anonymous.anchor === undefined
                 ? {}
                 : // The path's root index is read after approval, its width is fixed.
-                  { anchor: { tree: anchorSlot(accounts, config.hasPolicy), rootIndex: 0 } },
+                  {
+                    anchor: {
+                      tree: anchorSlot(
+                        accounts,
+                        config.hasPolicy || withdrawalExemption !== undefined,
+                      ),
+                      rootIndex: 0,
+                    },
+                  },
           }),
     });
     // The program's expansion must reproduce the external data the SPP proof binds.
@@ -392,6 +418,7 @@ async function assembleStagedTransfer<T>(
         slots,
         senderPkHash,
         policy,
+        withdrawalExemption,
         approvalRequired,
         coSigner,
         privateTxHash,
@@ -473,6 +500,7 @@ async function proveAssembled(
     ProvenRingTransact | ProvenAnonymousRingTransact,
     Uint8Array,
     Uint8Array | undefined,
+    Uint8Array | undefined,
   ];
   try {
     // Each request runs in its own async call, a synchronous throw never strands another proof.
@@ -481,11 +509,15 @@ async function proveAssembled(
       (async () => client.proveRing(auditRequest, context))(),
       (async () =>
         policyRequest === undefined ? undefined : client.proveRing(policyRequest, context))(),
+      (async () =>
+        assembled.withdrawalExemption === undefined
+          ? undefined
+          : client.proveRing(assembled.withdrawalExemption.request, context))(),
     ]);
   } finally {
     wipeAuditRequest(auditRequest);
   }
-  const [spp, auditProof, policyProof] = proofs;
+  const [spp, auditProof, policyProof, withdrawalProof] = proofs;
   const data = provenData({
     preview,
     spp: spp.data,
@@ -493,6 +525,7 @@ async function proveAssembled(
     publishedInputs: assembled.publishedInputs,
     auditProof,
     ...(policyProof === undefined ? {} : { policyProof }),
+    ...(withdrawalProof === undefined ? {} : { withdrawalProof }),
   });
   return new ProvenRingTransfer({
     ringProgramId,
@@ -501,7 +534,10 @@ async function proveAssembled(
     outputs: proofInputs.outputs,
     ...(coSigner === undefined ? {} : { coSigner }),
     approvalRequired: assembled.approvalRequired,
-    roots: policy === undefined ? [] : boundRoots(policy),
+    roots: [
+      ...(policy === undefined ? [] : boundRoots(policy)),
+      ...(assembled.withdrawalExemption === undefined ? [] : [assembled.withdrawalExemption.root]),
+    ],
     ...(policy === undefined
       ? {}
       : { policy: Object.freeze({ ringProgramId, policyHash: policy.pinned.policyHash }) }),
@@ -544,7 +580,8 @@ export async function ringTransactInstruction(
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
   });
   const prefix: AccountMeta[] = [meta(config, false, false)];
-  if (data.policy !== undefined) prefix.push(meta(registry, false, false));
+  if (data.policy !== undefined || data.withdrawalExemption !== undefined)
+    prefix.push(meta(registry, false, false));
   if (accounts.curator !== undefined) prefix.push(meta(accounts.curator, false, false));
   if (accounts.coSigner !== undefined) prefix.push(meta(accounts.coSigner, true, false));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));
@@ -620,6 +657,7 @@ function previewData(
     privateTxHash: Bytes32;
     approvalRequired: boolean;
     policy?: Readonly<{ inputs: PolicyInputs; senderCommitment: Bytes32 | undefined }>;
+    withdrawalExemption?: WithdrawalExemption;
     anonymous?: Readonly<{ anchor?: Readonly<{ tree: number; rootIndex: number }> }>;
   }>,
 ): RingTransactData {
@@ -649,6 +687,14 @@ function previewData(
             ...(input.policy.senderCommitment === undefined
               ? {}
               : { senderCommitment: input.policy.senderCommitment }),
+          },
+        }),
+    ...(input.withdrawalExemption === undefined
+      ? {}
+      : {
+          withdrawalExemption: {
+            proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+            rootIndex: input.withdrawalExemption.root.rootIndex,
           },
         }),
     approvalRequired: input.approvalRequired,
@@ -697,6 +743,7 @@ function provenData(
     publishedInputs: number;
     auditProof: Uint8Array;
     policyProof?: Uint8Array;
+    withdrawalProof?: Uint8Array;
   }>,
 ): RingTransactData {
   const { preview, spp } = input;
@@ -745,6 +792,9 @@ function provenData(
   return Object.freeze({
     ...preview,
     auditProof: input.auditProof,
+    ...(preview.withdrawalExemption === undefined || input.withdrawalProof === undefined
+      ? {}
+      : { withdrawalExemption: { ...preview.withdrawalExemption, proof: input.withdrawalProof } }),
     ...(preview.policy === undefined || input.policyProof === undefined
       ? {}
       : { policy: { ...preview.policy, proof: input.policyProof } }),

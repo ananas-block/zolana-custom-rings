@@ -68,7 +68,6 @@ import {
 import {
   buildRuleTable,
   decodeRule,
-  memberOfIdentity,
   policyTableHash,
 } from "../../src/protocol/membership/policy.js";
 import { sealNullifierKeyWith } from "../../src/operations/management/register-key.js";
@@ -186,6 +185,7 @@ function presentRecord(value: unknown, member: Bytes32): PresentRecordOpening {
   return {
     kind: "present",
     record: {
+      mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
       member,
       next: field(item["next"]),
       lists: BigInt(count(item["lists"])),
@@ -202,6 +202,7 @@ function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefin
   return {
     kind: "absent",
     low: {
+      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
@@ -316,18 +317,9 @@ function policy(item: Json): PolicyProofInputs {
     }),
     policyLen: count(item["policyLen"]),
     rules: fields(item["rules"]),
-    inlineAssets: fields(item["inlineAssets"]),
-    inlineLimits: fields(item["inlineLimits"]),
-    inlineCount: count(item["inlineCount"]),
-    limits: list(item["limits"]).map((value) => {
-      const limit = record(value);
-      return {
-        asset: field(limit["asset"]),
-        cap: field(limit["cap"]),
-        cosignAbove: field(limit["cosignAbove"]),
-      };
-    }),
-    limitCount: count(item["limitCount"]),
+    publicAssetEntries: list(item["publicAssetEntries"]).map((value, i) =>
+      memberOpening(value, fields(item["publicAssets"])[i] ?? ZERO),
+    ),
     addressChain: field(item["addressChain"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
     outputs,
@@ -346,6 +338,7 @@ function write(value: unknown): RecordWriteProofInput {
   const item = record(value);
   const queued = record(item["entry"]);
   return {
+    oldMintPolicy: mintSettings(item["oldMintPolicy"], item["oldWithdrawalThreshold"]),
     entry: {
       member: field(queued["member"]),
       mask: BigInt(count(queued["mask"])),
@@ -358,6 +351,7 @@ function write(value: unknown): RecordWriteProofInput {
     oldEscrow: field(item["oldEscrow"]),
     slot: quadPath(item["index"], item["path"]),
     low: {
+      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
@@ -435,6 +429,17 @@ function request(item: Json): RingProofRequest {
       chainStart: field(item["chainStart"]),
       chainEnd: field(item["chainEnd"]),
       writes: list(item["writes"]).slice(0, count(item["count"])).map(write),
+    };
+  if (circuitType === "custom-ring-withdrawal-exemption")
+    return {
+      kind: "withdrawalExemption",
+      publicInputHash,
+      root: field(item["root"]),
+      assets: fields(item["assets"]),
+      amounts: fields(item["amounts"]),
+      entries: list(item["entries"]).map((entry, i) =>
+        memberOpening(entry, fields(item["assets"])[i] ?? ZERO),
+      ),
     };
   if (circuitType === "custom-ring-register-key")
     return {
@@ -1012,13 +1017,6 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         throw new Error("policy golden");
       const table = buildRuleTable({
         rules: typed.rules.slice(0, typed.policyLen).map(decodeRule),
-        inlineAssets: typed.inlineAssets.slice(0, typed.inlineCount),
-        inlineLimits: typed.inlineLimits.slice(0, typed.inlineCount).map(amountOf),
-        limits: typed.limits.slice(0, typed.limitCount).map((limit) => ({
-          asset: memberOfIdentity(limit.asset),
-          cap: amountOf(limit.cap),
-          cosignAbove: amountOf(limit.cosignAbove),
-        })),
       });
       expect(hex(policyTableHash(table, typed.sources))).toBe(hex(typed.policyHash));
       const own = (
@@ -1085,4 +1083,15 @@ function slotSecret(
     outputIndex,
     firstNullifier: envelope.firstNullifier,
   });
+}
+
+function mintSettings(packed: unknown, withdrawal: unknown) {
+  const value = amountOf(field(packed));
+  const mask = (1n << 64n) - 1n;
+  return {
+    threshold: (value >> 128n) & mask,
+    cap: (value >> 64n) & mask,
+    cosignAbove: value & mask,
+    withdrawalThreshold: amountOf(field(withdrawal)),
+  };
 }

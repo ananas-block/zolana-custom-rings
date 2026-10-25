@@ -3,8 +3,7 @@ use custom_ring_interface::{
     compute_unit_limit, tag, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
     CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, MemberWriteIxData,
     PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
-    WithdrawalThreshold, WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED,
-    RECORD_QUEUE_PDA_SEED,
+    WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -296,7 +295,7 @@ pub fn allow_list_table(limits: Vec<OutflowLimit>) -> PolicyTableIxData {
 }
 
 /// One rule requiring `list` of every output owner, sourced from the ring's own registry.
-pub fn list_table(list: ListId, limits: Vec<OutflowLimit>) -> PolicyTableIxData {
+pub fn list_table(list: ListId, _limits: Vec<OutflowLimit>) -> PolicyTableIxData {
     let table = RuleTable::builder()
         .rule(Rule::require(Subject::OutputOwner, list))
         .build()
@@ -307,9 +306,6 @@ pub fn list_table(list: ListId, limits: Vec<OutflowLimit>) -> PolicyTableIxData 
             source: 0,
         }],
         rules: table.rules[..usize::from(table.rule_count)].to_vec(),
-        inline_assets: Vec::new(),
-        inline_limits: Vec::new(),
-        limits,
     }
 }
 
@@ -436,17 +432,11 @@ pub fn config_write(
     instruction(accounts, tagged(tag, body))
 }
 
-pub fn set_co_signer(
-    ring: &mut Ring,
-    co_signer: &Address,
-    scope: u8,
-    thresholds: Vec<WithdrawalThreshold>,
-) {
+pub fn set_co_signer(ring: &mut Ring, co_signer: &Address, scope: u8) {
     let authority = ring.authority.insecure_clone();
     let data = SetCoSignerIxData {
         signer: co_signer.to_bytes(),
         scope,
-        thresholds,
     };
     ring.send(
         config_write(

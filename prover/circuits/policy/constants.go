@@ -2,17 +2,15 @@ package policy
 
 // Table capacities, mirrored by program-libs/policy/src/rule_table/mod.rs.
 const (
-	NRules         = 16
-	NInlineAssets  = 8
-	NSources       = 8
-	NOutflowLimits = 8
+	NRules   = 16
+	NSources = 8
 )
 
 // Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
 const (
 	// PolicyTableVersion enters the table hash, every layout change bumps it.
-	PolicyTableVersion = 11
-	PolicyTableFields  = 2 + 2*NSources + 3 + NRules + 2*NInlineAssets + 3*NOutflowLimits
+	PolicyTableVersion = 12
+	PolicyTableFields  = 44
 	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
 	PolicyTableRate = 11
 )

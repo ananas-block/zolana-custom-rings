@@ -19,7 +19,7 @@ type resolveCircuit struct {
 }
 
 func (c *resolveCircuit) Define(api frontend.API) error {
-	lists, escrowKey := c.Opening.Resolve(api, c.Cond, c.Root, c.Member)
+	lists, escrowKey, _, _ := c.Opening.Resolve(api, c.Cond, c.Root, c.Member)
 	api.AssertIsEqual(lists, c.Lists)
 	api.AssertIsEqual(escrowKey, c.EscrowKey)
 	return nil

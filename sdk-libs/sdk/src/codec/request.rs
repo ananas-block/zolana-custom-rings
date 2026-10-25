@@ -3,6 +3,7 @@
 use custom_ring_interface::{QueueEntry, QUAD_ARITY, RING_DELIVERED_BODY_LEN};
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
+use zolana_hasher::primitives::right_align;
 use zolana_keypair::{PublicKey, X25519Pubkey};
 use zolana_ring_member_registry::{MemberRecord, QuadPath, RecordOpening, RecordWriteProofInput};
 use zolana_ring_policy::{EncodedRuleTable, SourceMap, MAX_SOURCES};
@@ -278,6 +279,10 @@ pub(crate) struct MemberOpening {
     pub lists: u64,
     #[serde(with = "fe")]
     pub escrow_key: [u8; 32],
+    #[serde(with = "fe")]
+    pub mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub withdrawal_threshold: [u8; 32],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -288,6 +293,10 @@ pub(crate) struct MemberOpening {
     pub low_lists: u64,
     #[serde(with = "fe")]
     pub low_escrow: [u8; 32],
+    #[serde(with = "fe")]
+    pub low_mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub low_withdrawal_threshold: [u8; 32],
 }
 
 impl From<&RecordOpening> for MemberOpening {
@@ -298,24 +307,36 @@ impl From<&RecordOpening> for MemberOpening {
                 next: record.next,
                 lists: record.lists,
                 escrow_key: record.escrow_key,
+                mint_policy: record.mint_policy.field(),
+                withdrawal_threshold: right_align(
+                    &record.mint_policy.withdrawal_threshold.to_be_bytes(),
+                ),
                 index: path.index,
                 path: *path,
                 low_member: [0; 32],
                 low_next: [0; 32],
                 low_lists: 0,
                 low_escrow: [0; 32],
+                low_mint_policy: [0; 32],
+                low_withdrawal_threshold: [0; 32],
             },
             RecordOpening::Absent { low, path } => Self {
                 present: false,
                 next: [0; 32],
                 lists: 0,
                 escrow_key: [0; 32],
+                mint_policy: [0; 32],
+                withdrawal_threshold: [0; 32],
                 index: path.index,
                 path: *path,
                 low_member: low.member,
                 low_next: low.next,
                 low_lists: low.lists,
                 low_escrow: low.escrow_key,
+                low_mint_policy: low.mint_policy.field(),
+                low_withdrawal_threshold: right_align(
+                    &low.mint_policy.withdrawal_threshold.to_be_bytes(),
+                ),
             },
         }
     }
@@ -344,30 +365,12 @@ impl Serialize for PolicyTable<'_> {
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
-        struct Limit {
-            #[serde(with = "fe")]
-            asset: [u8; 32],
-            #[serde(with = "fe")]
-            cap: [u8; 32],
-            #[serde(with = "fe")]
-            cosign_above: [u8; 32],
-        }
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
         struct Table<'a> {
             sources: [Source; MAX_SOURCES],
             policy_len: u8,
             #[serde(serialize_with = "fe::seq")]
             rules: &'a [[u8; 32]],
-            #[serde(serialize_with = "fe::seq")]
-            inline_assets: &'a [[u8; 32]],
-            #[serde(serialize_with = "fe::seq")]
-            inline_limits: Vec<[u8; 32]>,
-            inline_count: u8,
-            limits: Vec<Limit>,
-            limit_count: u8,
         }
-        use zolana_hasher::primitives::right_align;
         let rules = self.rules;
         let slots = self.sources.slots();
         Table {
@@ -377,21 +380,6 @@ impl Serialize for PolicyTable<'_> {
             }),
             policy_len: rules.rule_count,
             rules: &rules.rules,
-            inline_assets: &rules.inline_assets,
-            inline_limits: rules.inline_limits.iter().map(right_align).collect(),
-            inline_count: rules.inline_count,
-            limits: rules
-                .limit_assets
-                .iter()
-                .zip(&rules.limit_caps)
-                .zip(&rules.limit_cosign)
-                .map(|((asset, cap), cosign)| Limit {
-                    asset: *asset,
-                    cap: right_align(cap),
-                    cosign_above: right_align(cosign),
-                })
-                .collect(),
-            limit_count: rules.limit_count,
         }
         .serialize(serializer)
     }
@@ -439,6 +427,7 @@ pub(crate) struct PolicyParams<'a> {
     pub sender_entry: Entry,
     pub owner_entries: Vec<Entry>,
     pub asset_entries: Vec<Entry>,
+    pub public_asset_entries: Vec<Option<MemberOpening>>,
 }
 
 #[derive(Serialize)]
@@ -477,6 +466,10 @@ pub(crate) struct RecordWrite {
     pub old_lists: u64,
     #[serde(with = "fe")]
     pub old_escrow: [u8; 32],
+    #[serde(with = "fe")]
+    pub old_mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub old_withdrawal_threshold: [u8; 32],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -487,6 +480,10 @@ pub(crate) struct RecordWrite {
     pub low_lists: u64,
     #[serde(with = "fe")]
     pub low_escrow: [u8; 32],
+    #[serde(with = "fe")]
+    pub low_mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub low_withdrawal_threshold: [u8; 32],
     pub low_index: u64,
     #[serde(serialize_with = "path")]
     pub low_path: QuadPath,
@@ -501,6 +498,10 @@ pub(crate) struct QueueEntryRequest {
     pub value: u64,
     #[serde(with = "fe")]
     pub escrow_key: [u8; 32],
+    #[serde(with = "fe")]
+    pub mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub withdrawal_threshold: [u8; 32],
 }
 
 impl From<&QueueEntry> for QueueEntryRequest {
@@ -510,6 +511,14 @@ impl From<&QueueEntry> for QueueEntryRequest {
             mask: entry.mask,
             value: entry.value,
             escrow_key: entry.escrow_key,
+            mint_policy: entry.mint_policy_field(),
+            withdrawal_threshold: right_align(
+                &entry
+                    .mint_policy
+                    .unwrap_or_default()
+                    .withdrawal_threshold
+                    .to_be_bytes(),
+            ),
         }
     }
 }
@@ -521,6 +530,7 @@ impl From<&RecordWriteProofInput> for RecordWrite {
             next: low_next,
             lists: low_lists,
             escrow_key: low_escrow,
+            mint_policy: low_mint_policy,
         } = write.low;
         Self {
             entry: (&write.entry).into(),
@@ -528,12 +538,20 @@ impl From<&RecordWriteProofInput> for RecordWrite {
             old_next: write.old_next,
             old_lists: write.old_lists,
             old_escrow: write.old_escrow,
+            old_mint_policy: write.old_mint_policy.field(),
+            old_withdrawal_threshold: right_align(
+                &write.old_mint_policy.withdrawal_threshold.to_be_bytes(),
+            ),
             index: write.slot.index,
             path: write.slot,
             low_member,
             low_next,
             low_lists,
             low_escrow,
+            low_mint_policy: low_mint_policy.field(),
+            low_withdrawal_threshold: right_align(
+                &low_mint_policy.withdrawal_threshold.to_be_bytes(),
+            ),
             low_index: write.low_path.index,
             low_path: write.low_path,
         }
@@ -655,6 +673,10 @@ pub(crate) struct RecordOpeningRequest {
     pub lists: u64,
     #[serde(with = "fe")]
     pub escrow_key: [u8; 32],
+    #[serde(with = "fe")]
+    pub mint_policy: [u8; 32],
+    #[serde(with = "fe")]
+    pub withdrawal_threshold: [u8; 32],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -666,6 +688,10 @@ impl RecordOpeningRequest {
             next: record.next,
             lists: record.lists,
             escrow_key: record.escrow_key,
+            mint_policy: record.mint_policy.field(),
+            withdrawal_threshold: right_align(
+                &record.mint_policy.withdrawal_threshold.to_be_bytes(),
+            ),
             index: path.index,
             path: *path,
         }
@@ -764,4 +790,18 @@ pub(crate) struct PolicyWithdrawalRequest {
     pub asset: [u8; 32],
     #[serde(with = "fe")]
     pub amount: [u8; 32],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WithdrawalExemption {
+    #[serde(with = "fe")]
+    pub public_input_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub root: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub assets: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    #[serde(serialize_with = "fe::seq")]
+    pub amounts: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    pub entries: Vec<Option<MemberOpening>>,
 }

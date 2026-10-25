@@ -481,7 +481,7 @@ describe("ring merge", () => {
       wallet,
       keys: remote(local),
       proofDataSource: "client",
-      coSigner: { signer: cosigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+      coSigner: { signer: cosigner, scope: RING_COSIGN_TRANSFERS },
     });
     const approve = vi.fn(approveUnattended);
     try {
@@ -734,9 +734,7 @@ describe("anonymous ring merge", () => {
           keys: local,
           proofDataSource: "client",
           anonymous: true,
-          ...(coSigned
-            ? { coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS, thresholds: [] } }
-            : {}),
+          ...(coSigned ? { coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS } } : {}),
         });
         await expect(
           buildRingMergeTransaction({

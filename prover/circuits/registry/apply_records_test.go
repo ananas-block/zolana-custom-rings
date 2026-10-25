@@ -63,7 +63,7 @@ func (b *batch) bind(t *testing.T) {
 // entryHash mirrors registry.QueueEntry.Hash.
 func entryHash(t *testing.T, e ringregistry.Entry) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, policyValue(e.MintPolicy), policyValue(e.WithdrawalThreshold))
 }
 
 func writeWires(w ringregistry.Write) registry.RecordWrite {
@@ -73,17 +73,21 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 		exists = 1
 	}
 	return registry.RecordWrite{
-		Entry:     registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey},
-		Exists:    exists,
-		OldNext:   w.OldNext,
-		OldLists:  w.OldLists,
-		OldEscrow: w.OldEscrow,
-		Slot:      w.Slot.Wires(),
-		LowMember: w.Low.Member,
-		LowNext:   w.Low.Next,
-		LowLists:  w.Low.Lists,
-		LowEscrow: w.Low.EscrowKey,
-		Low:       w.LowPath.Wires(),
+		Entry:                  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold)},
+		Exists:                 exists,
+		OldNext:                w.OldNext,
+		OldLists:               w.OldLists,
+		OldEscrow:              w.OldEscrow,
+		OldMintPolicy:          policyValue(w.OldMintPolicy),
+		OldWithdrawalThreshold: policyValue(w.OldWithdrawalThreshold),
+		Slot:                   w.Slot.Wires(),
+		LowMember:              w.Low.Member,
+		LowNext:                w.Low.Next,
+		LowLists:               w.Low.Lists,
+		LowEscrow:              w.Low.EscrowKey,
+		LowMintPolicy:          policyValue(w.Low.MintPolicy),
+		LowWithdrawalThreshold: policyValue(w.Low.WithdrawalThreshold),
+		Low:                    w.LowPath.Wires(),
 	}
 }
 
@@ -351,4 +355,11 @@ func applyCircuit(t *testing.T, writes int) *registry.ApplyRecordsCircuit {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func policyValue(value *big.Int) *big.Int {
+	if value == nil {
+		return big.NewInt(0)
+	}
+	return value
 }

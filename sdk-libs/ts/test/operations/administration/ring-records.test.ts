@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { address, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -90,6 +91,7 @@ function path(vector: VectorPath): QuadPath {
 
 function record(vector: VectorRecord): MemberRecord {
   return {
+    mintPolicy: EMPTY_MINT_POLICY,
     member: field(vector.member),
     next: field(vector.next),
     lists: BigInt(vector.lists),
@@ -99,6 +101,7 @@ function record(vector: VectorRecord): MemberRecord {
 
 function inputs(application: Application): ApplyProofInputs {
   const writes: RecordWriteProofInput[] = application.writes.map((write) => ({
+    oldMintPolicy: EMPTY_MINT_POLICY,
     entry: {
       member: field(write.member),
       mask: BigInt(write.mask),
@@ -328,6 +331,7 @@ describe("authority list writes", () => {
           ...field(write.member),
           ...u64le(BigInt(write.mask)),
           ...u64le(BigInt(write.value)),
+          ...new Uint8Array(33),
         ]),
         ...PROOF,
         ...field(vector.new_root),
@@ -485,13 +489,20 @@ describe("full registry", () => {
       chainEnd: queueChain(ZERO, entry),
       writes: [
         {
+          oldMintPolicy: EMPTY_MINT_POLICY,
           entry,
           exists: true,
           oldNext: record.next,
           oldLists: record.lists,
           oldEscrow: ZERO,
           slot: tree.path(1),
-          low: { member: ZERO, next: ZERO, lists: 0n, escrowKey: ZERO },
+          low: {
+            mintPolicy: EMPTY_MINT_POLICY,
+            member: ZERO,
+            next: ZERO,
+            lists: 0n,
+            escrowKey: ZERO,
+          },
           lowPath: tree.path(0),
         },
       ],
@@ -511,6 +522,7 @@ describe("full registry", () => {
       chainEnd: queueChain(ZERO, inserted),
       writes: [
         {
+          oldMintPolicy: EMPTY_MINT_POLICY,
           entry: inserted,
           exists: false,
           oldNext: itemAt(tree.rows, 0).next,
@@ -541,6 +553,7 @@ describe("full registry", () => {
       chainEnd: queueChain(ZERO, entry),
       writes: [
         {
+          oldMintPolicy: EMPTY_MINT_POLICY,
           entry,
           exists: false,
           oldNext: itemAt(tree.rows, 0).next,

@@ -26,9 +26,6 @@ import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
 import {
   RING_COSIGN_SCOPE_MASK,
-  RING_COSIGN_THRESHOLD_SLOTS,
-  RING_COSIGN_WITHDRAWALS,
-  type RingCoSignThreshold,
   type RingProgramConfig,
 } from "../../protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../protocol/membership/config.js";
@@ -225,18 +222,13 @@ export async function setRingCoSignerInstruction(
     signer: Address;
     /** A nonzero subset of the `RING_COSIGN_*` bits. */
     scope: number;
-    thresholds?: readonly RingCoSignThreshold[];
   }>,
 ): Promise<Instruction> {
-  const thresholds = input.thresholds ?? [];
-  checkCoSigner(input.signer, input.scope, thresholds);
+  checkCoSigner(input.signer, input.scope);
   const writer = new Writer()
     .u8(RingInstructionTag.setCoSigner, "tag")
     .bytes(addressBytes(input.signer, "signer"), 32, "signer")
-    .u8(input.scope, "scope")
-    .u8(thresholds.length, "thresholds.length");
-  for (const row of thresholds)
-    writer.bytes(addressBytes(row.mint, "mint"), 32, "mint").u64(row.amount, "amount");
+    .u8(input.scope, "scope");
   return configWriteInstruction(input, writer.finish());
 }
 
@@ -404,19 +396,9 @@ async function policyTableInstruction(
       .u8(curator === undefined ? 0 : 1 + curators.indexOf(curator), "source");
   }
   if (curators.length > 1) throw sourceInvalid("MultipleCurators");
-  const { rules, inlineAssets, inlineLimits, limits } = table;
+  const { rules } = table;
   writer.u8(rules.length, "rules.length");
   for (const rule of rules) writer.bytes(encodeRule(rule), 32, "rule");
-  writer.u8(inlineAssets.length, "inlineAssets.length");
-  for (const asset of inlineAssets) writer.bytes(asset, 32, "inlineAsset");
-  writer.u8(inlineLimits.length, "inlineLimits.length");
-  for (const limit of inlineLimits) writer.u64(limit, "inlineLimit");
-  writer.u8(limits.length, "limits.length");
-  for (const limit of limits)
-    writer
-      .bytes(limit.asset, 32, "limit.asset")
-      .u64(limit.cap, "limit.cap")
-      .u64(limit.cosignAbove, "limit.cosignAbove");
   const [accounts, curatorAccounts] = await Promise.all([
     policyWriteMetas(input.ringProgramId, input.authority),
     Promise.all(curators.map((curator) => curatorRegistry(input.ringProgramId, curator))),
@@ -445,22 +427,13 @@ function checkFits(payer: SignerAccount, instruction: Instruction, computeUnitLi
 }
 
 /** Mirrors the program's `SetCoSigner` refusals before the authority signs. */
-function checkCoSigner(
-  signer: Address,
-  scope: number,
-  thresholds: readonly RingCoSignThreshold[],
-): void {
+function checkCoSigner(signer: Address, scope: number): void {
   const reason =
     !Number.isInteger(scope) || scope === 0 || (scope & ~RING_COSIGN_SCOPE_MASK) !== 0
       ? "InvalidCoSignerScope"
       : equalBytes(addressBytes(signer, "signer"), ZERO_32)
         ? "InvalidCoSigner"
-        : thresholds.length > RING_COSIGN_THRESHOLD_SLOTS ||
-            new Set(thresholds.map((row) => row.mint)).size !== thresholds.length
-          ? "InvalidCoSignerThresholds"
-          : thresholds.length > 0 && (scope & RING_COSIGN_WITHDRAWALS) === 0
-            ? "ThresholdsWithoutWithdrawals"
-            : undefined;
+        : undefined;
   if (reason !== undefined) throw new RingError("RING_CO_SIGNER_INVALID", { details: { reason } });
 }
 

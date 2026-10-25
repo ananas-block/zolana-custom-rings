@@ -17,7 +17,6 @@ use crate::{
     ApplyRecordsIxData, ReaderKeyBytes, TAGGED_X25519_KEY_LEN,
 };
 
-pub const MAX_CO_SIGNER_THRESHOLDS: usize = 8;
 /// Roots a transfer proof may bind, applications in between leave it provable.
 pub const ROOT_HISTORY: usize = 32;
 /// One slot per list the enum can name, all eight enter the hash.
@@ -112,8 +111,7 @@ ring_accounts! {
     RingProgramConfig = RING_PROGRAM_CONFIG: 10, CONFIG_PDA_SEED: b"config",
         ConfigNotInitialized, ConfigAlreadyInitialized, InvalidConfigPda,
         |config: &RingProgramConfig| config.mode().is_ok()
-            && config.has_policy <= 1
-            && usize::from(config.threshold_count) <= MAX_CO_SIGNER_THRESHOLDS;
+            && config.has_policy <= 1;
     MemberRegistry = MEMBER_REGISTRY: 11, MEMBER_REGISTRY_PDA_SEED: b"members",
         InvalidMemberRegistry, MemberRegistryAlreadyExists, InvalidMemberRegistry,
         |registry: &MemberRegistry| usize::from(registry.history_cursor) < ROOT_HISTORY
@@ -135,7 +133,6 @@ macro_rules! le_getters {
 }
 
 le_getters! {
-    WithdrawalThresholdRow { amount: u64 }
     RingProgramConfig { insert_fee: u64, created_slot: u64 }
     MemberRegistry {
         next_index: u32, floor: u64, prior_floor: u64, floor_slot: u64, generation: u32,
@@ -178,8 +175,6 @@ pub struct RingProgramConfig {
     pub co_signer: Address,
     /// [`CoSignScope`] bits, zero without a co-signer.
     pub co_sign_scope: u8,
-    pub threshold_count: u8,
-    pub thresholds: [WithdrawalThresholdRow; MAX_CO_SIGNER_THRESHOLDS],
     /// Zero without a delegate.
     pub delegate: Address,
     /// Little endian, the slot `CreateConfig` ran in.
@@ -225,20 +220,6 @@ impl RingProgramConfig {
     /// `None` without a co-signer, every set scope bit is a known class.
     pub const fn co_sign_scope(&self) -> Option<CoSignScope> {
         CoSignScope::new(self.co_sign_scope)
-    }
-
-    /// Empty for an overlong count, an unlisted mint always needs the co-signer.
-    pub fn thresholds(&self) -> &[WithdrawalThresholdRow] {
-        self.thresholds
-            .get(..usize::from(self.threshold_count))
-            .unwrap_or_default()
-    }
-
-    pub fn threshold(&self, mint: &Address) -> Option<u64> {
-        self.thresholds()
-            .iter()
-            .find(|row| &row.mint == mint)
-            .map(WithdrawalThresholdRow::amount)
     }
 
     pub fn delegate(&self) -> Option<&Address> {
@@ -288,15 +269,6 @@ impl BitOr for CoSignScope {
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
     }
-}
-
-/// Summed per transaction, exceeding it needs the co-signer.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct WithdrawalThresholdRow {
-    pub mint: Address,
-    /// Little endian.
-    pub amount: [u8; 8],
 }
 
 /// `applied` is the queue head right after the application that pushed the root.
@@ -652,19 +624,18 @@ impl PendingApplication<'_> {
 }
 
 const _: () = assert!(ReadAccessRecord::SIZE == 36);
-const _: () = assert!(RingProgramConfig::SIZE == 471);
+const _: () = assert!(RingProgramConfig::SIZE == 150);
 const _: () = assert!(core::mem::offset_of!(RingProgramConfig, insert_fee) == 69);
 const _: () = assert!(core::mem::offset_of!(RingProgramConfig, co_signer) == 77);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, thresholds) == 111);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 431);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 463);
+const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 110);
+const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 142);
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
-const _: () = assert!(MemberRegistry::SIZE == 3094);
+const _: () = assert!(MemberRegistry::SIZE == 2388);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, next_index) == 3);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, history) == 31);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, policy_hash) == 1567);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, rules) == 1863);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, generation_slot) == 3086);
+const _: () = assert!(core::mem::offset_of!(MemberRegistry, generation_slot) == 2380);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
 const _: () = assert!(RecordQueue::SIZE == 698);
 const _: () = assert!(core::mem::offset_of!(RecordQueue, next_apply_slot) == 690);

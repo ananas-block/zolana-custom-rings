@@ -722,6 +722,7 @@ fn vector_path(path: &Value) -> RingRecordPathView {
 
 fn vector_record(record: &Value) -> RingMemberRecordView {
     RingMemberRecordView {
+        mint_policy: Default::default(),
         member: Hash(bytes32(&record["member"])),
         next: Hash(bytes32(&record["next"])),
         lists: number(&record["lists"]),
@@ -735,6 +736,8 @@ fn vector_record(record: &Value) -> RingMemberRecordView {
 
 fn vector_write(write: &Value) -> RingRecordWriteView {
     RingRecordWriteView {
+        mint_policy: Default::default(),
+        old_mint_policy: Default::default(),
         member: Hash(bytes32(&write["member"])),
         mask: number(&write["mask"]),
         value: number(&write["value"]),
@@ -773,6 +776,7 @@ fn recorded(application: &Value) -> ApplyRecordsIxData {
 
 fn wire_record(record: &RingMemberRecordView) -> MemberRecord {
     MemberRecord {
+        mint_policy: record.mint_policy,
         member: record.member.0,
         next: record.next.0,
         lists: record.lists,
@@ -857,6 +861,7 @@ impl GrowingRing {
                     .unwrap()
                     .iter()
                     .map(|write| RecordWriteData {
+                        mint_policy: [0; 33],
                         member: bytes32(&write["member"]),
                         lists: vector_lists(write),
                     })
@@ -920,6 +925,7 @@ async fn replay_applies_queue_and_matches_roots() {
             .unwrap()
             .iter()
             .map(|write| RingQueueEntryView {
+                mint_policy: Default::default(),
                 position: number(&write["position"]),
                 member: Hash(bytes32(&write["member"])),
                 mask: number(&write["mask"]),
@@ -935,6 +941,7 @@ async fn replay_applies_queue_and_matches_roots() {
             .unwrap()
             .iter()
             .map(|write| RingListWriteView {
+                mint_policy: Default::default(),
                 member: Hash(bytes32(&write["member"])),
                 mask: number(&write["mask"]),
                 value: number(&write["value"]),
@@ -1208,6 +1215,7 @@ impl AuthorityGrowth {
         let allow = zolana_ring_policy::ListId::Allow.record_bit();
         for member in members {
             let write = RecordWriteData {
+                mint_policy: [0; 33],
                 member: *member,
                 lists: WriteRecordsIxData {
                     mask: allow.to_le_bytes(),
@@ -1499,4 +1507,80 @@ fn replay_indexer(db: Arc<DatabaseConnection>, rpc: Arc<SolanaRpc>) -> Indexer {
         block_fetches: 4,
         readiness: Readiness::default(),
     }
+}
+
+#[tokio::test]
+async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
+    use zolana_ring_policy::MintPolicy;
+    let mut ring = GrowingRing::created(Address::new_from_array([39; 32])).await;
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let mut chain = [0; 32];
+    let policy = MintPolicy {
+        threshold: u64::MAX,
+        cap: 500,
+        cosign_above: 100,
+        withdrawal_threshold: 200,
+    };
+    let members: Vec<_> = (1..=12)
+        .map(|i| {
+            *Member::asset(&Address::new_from_array([i; 32]))
+                .unwrap()
+                .as_bytes()
+        })
+        .collect();
+    for member in &members {
+        let mut write = RecordWriteData {
+            member: *member,
+            ..Default::default()
+        };
+        write.mint_policy[0] = 1;
+        write.mint_policy[1..].copy_from_slice(&policy.bytes());
+        let inputs = tree.apply(chain, &[write.entry().unwrap()]).unwrap();
+        chain = inputs.chain_end;
+        ring.land(vec![ring.program.authority(
+            &[write],
+            &apply_data(inputs.new_root, inputs.new_next_index),
+        )])
+        .await;
+    }
+    // A later list-only write must preserve all four settings in storage and paths.
+    let write = RecordWriteData {
+        member: members[8],
+        lists: WriteRecordsIxData {
+            mask: 1u64.to_le_bytes(),
+            value: 1u64.to_le_bytes(),
+        },
+        ..Default::default()
+    };
+    let inputs = tree.apply(chain, &[write.entry().unwrap()]).unwrap();
+    ring.land(vec![ring.program.authority(
+        &[write],
+        &apply_data(inputs.new_root, inputs.new_next_index),
+    )])
+    .await;
+    ring.publish().await;
+    let page = api::member_records(
+        ring.indexer.db.as_ref(),
+        ring.indexer.rpc.as_ref(),
+        GetRingMemberRecordsRequest {
+            ring_program_id: ring.program.0.into(),
+            expected_root: Hash(tree.root().unwrap()),
+            expected_next_index: 13,
+            start_index: 1,
+            limit: 16,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.records.len(), 12);
+    for row in page.records {
+        assert_eq!(row.record.mint_policy, policy);
+        assert_eq!(
+            wire_path(&row.path)
+                .root(wire_record(&row.record).hash().unwrap())
+                .unwrap(),
+            tree.root().unwrap()
+        );
+    }
+    ring.stop().await;
 }

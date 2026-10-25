@@ -32,6 +32,7 @@ fn writes(count: u8) -> AuthorityListWrite {
 
 fn entry(byte: u8) -> QueueEntry {
     QueueEntry {
+        mint_policy: Default::default(),
         member: *member(byte).as_bytes(),
         mask: 1,
         value: 1,
@@ -62,7 +63,12 @@ fn authority_writes_split_into_batches_beside_the_pending_member_writes() {
     let batches = writes(20).batches(10);
     let members: Vec<Member> = batches
         .iter()
-        .flat_map(|batch| batch.writes().iter().map(|(member, _)| *member))
+        .flat_map(|batch| {
+            batch
+                .writes()
+                .iter()
+                .map(|write| Member::from_bytes(write.member).unwrap())
+        })
         .collect();
     assert_eq!(members, (1..=20).map(member).collect::<Vec<_>>());
 }

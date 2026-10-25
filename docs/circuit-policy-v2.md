@@ -1,5 +1,9 @@
 # Circuit policy v2
 
+The subsequent [mint-record transition](member-records.md#protocol-transition)
+updates this deployment: the catalog now has 96 keys and mint settings live
+in records. Counts and validation results below describe the earlier v2 baseline.
+
 Implemented on `alex/circuit-policy`, based on PR 5 commit
 `2bd20ae9c343ac5292c085e5c51a39828048dee7`.
 

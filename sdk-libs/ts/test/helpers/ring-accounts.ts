@@ -1,7 +1,7 @@
 import { getAddressDecoder, type Address } from "@solana/kit";
 
 import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { Writer, addressBytes, bigIntBytes } from "@heliuslabs/zolana/internal";
+import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ringAuthAddress } from "../../src/protocol/pda/index.js";
@@ -72,7 +72,6 @@ export function ringProgramConfigData(
     createdSlot?: bigint;
   }>,
 ): Uint8Array {
-  const thresholds = input.coSigner?.thresholds ?? [];
   const writer = new Writer()
     .u8(10, "discriminator")
     .bytes(addressBytes(input.authority))
@@ -82,12 +81,7 @@ export function ringProgramConfigData(
     .u8(MODES.indexOf(input.mode ?? "off"), "mode")
     .u64(input.insertFee ?? 0n, "insertFee")
     .bytes(addressBytes(input.coSigner?.signer ?? ZERO_ADDRESS))
-    .u8(input.coSigner?.scope ?? 0, "coSignScope")
-    .u8(thresholds.length, "thresholdCount");
-  for (let slot = 0; slot < 8; slot += 1) {
-    const row = thresholds[slot];
-    writer.bytes(addressBytes(row?.mint ?? ZERO_ADDRESS)).u64(row?.amount ?? 0n, "amount");
-  }
+    .u8(input.coSigner?.scope ?? 0, "coSignScope");
   return writer
     .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
     .u64(input.createdSlot ?? 0n, "createdSlot")
@@ -129,27 +123,8 @@ export function memberRegistryData(
   const sources = input.sources ?? LIST_IDS.map(() => ({ listId: 0, registry: ZERO_ADDRESS }));
   for (const source of sources)
     writer.u8(source.listId, "listId").bytes(addressBytes(source.registry));
-  const table = input.table ?? { rules: [], inlineAssets: [], inlineLimits: [], limits: [] };
+  const table = input.table ?? { rules: [] };
   counted(writer, table.rules.map(encodeRule), 16);
-  counted(writer, table.inlineAssets, 8);
-  padded(writer, table.inlineLimits.map(be64), 8, 8);
-  counted(
-    writer,
-    table.limits.map((limit) => limit.asset),
-    8,
-  );
-  padded(
-    writer,
-    table.limits.map((limit) => be64(limit.cap)),
-    8,
-    8,
-  );
-  padded(
-    writer,
-    table.limits.map((limit) => be64(limit.cosignAbove)),
-    8,
-    8,
-  );
   return writer
     .u32(input.generation ?? 0, "generation")
     .u64(0n, "generationSlot")
@@ -190,8 +165,4 @@ function counted(writer: Writer, rows: readonly Uint8Array[], slots: number): vo
 function padded(writer: Writer, rows: readonly Uint8Array[], slots: number, width: number): void {
   for (const row of rows) writer.bytes(row, width);
   writer.bytes(new Uint8Array(width * (slots - rows.length)));
-}
-
-function be64(value: bigint): Uint8Array {
-  return bigIntBytes(value, 8);
 }
