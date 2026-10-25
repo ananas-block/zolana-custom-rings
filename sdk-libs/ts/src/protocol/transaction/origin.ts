@@ -475,7 +475,7 @@ export function confirmedRingWithdrawals(
       if (source === undefined) return withdrawals;
       const frame = RingTransactData.parse(
         parent.data.subarray(1),
-        ringRailOf(tag, source.anonymous ? "anonymous" : "off"),
+        ringRailOf(tag, source.anonymous ? "anonymous" : "confidential"),
       );
       if (frame.policy === undefined) return withdrawals;
       const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
@@ -827,7 +827,7 @@ function boundLayout(
   const tag = instruction?.[0];
   if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
   // Only an anonymous ring emits an anonymous transfer.
-  const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "off");
+  const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "confidential");
   const data = [RingInstructionTag.legacyTransact, RingInstructionTag.legacyDelegateTransact].some(
     (legacy) => legacy === tag,
   )

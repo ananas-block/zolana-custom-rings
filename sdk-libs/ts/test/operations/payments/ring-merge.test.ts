@@ -320,7 +320,7 @@ async function ringMergeParams({
               auditorPublicKey: mergeAuditor.publicKey().toBytes(),
               bump: configBump,
               hasPolicy: false,
-              mode: anonymous ? "anonymous" : "registry",
+              mode: anonymous ? "anonymous" : "confidentialEscrow",
               ...(coSigner === undefined ? {} : { coSigner }),
             }),
           );

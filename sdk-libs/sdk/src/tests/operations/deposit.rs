@@ -31,7 +31,7 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     let member = keypair(1);
     let payer = keypair(9);
     let anonymous = Chain::ring(RingSettings::new(RingMode::Anonymous));
-    let confidential = Chain::ring(RingSettings::new(RingMode::Off));
+    let confidential = Chain::ring(RingSettings::new(RingMode::Confidential));
     let address = member.shielded_address().unwrap();
     let state = AnonymousRingState::new(ring().program_id(), 0);
     let hidden = DepositRecipient::Anonymous {
@@ -66,7 +66,7 @@ async fn an_escrowed_ring_refuses_a_deposit_to_a_member_without_an_escrowed_key(
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(
         Registry::new(&[(&registered, 1)]),
@@ -97,7 +97,7 @@ async fn a_deposit_names_the_co_signer_a_deposit_scope_demands() {
             solana_signer::Signer::pubkey(&co_signer),
             CoSignScope::DEPOSITS,
         )),
-        ..RingSettings::new(RingMode::Off)
+        ..RingSettings::new(RingMode::Confidential)
     });
     let recipient = DepositRecipient::Confidential(member.shielded_address().unwrap());
     assert!(matches!(
@@ -132,7 +132,7 @@ async fn a_co_signer_outside_the_deposit_scope_does_not_sign() {
     ] {
         let chain = Chain::ring(RingSettings {
             co_signer: Some((solana_signer::Signer::pubkey(&co_signer), scope)),
-            ..RingSettings::new(RingMode::Off)
+            ..RingSettings::new(RingMode::Confidential)
         });
         let named = RingDeposit {
             cosigner: Some(&co_signer),

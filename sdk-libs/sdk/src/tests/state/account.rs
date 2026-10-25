@@ -9,7 +9,7 @@ async fn the_status_carries_the_pinned_registry_and_the_creation_epoch() {
     let client = Chain::ring(RingSettings {
         has_policy: true,
         created_slot: 7 * EPOCH_SLOTS + 3,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
     .client();
@@ -21,7 +21,7 @@ async fn the_status_carries_the_pinned_registry_and_the_creation_epoch() {
 
 #[tokio::test]
 async fn a_config_with_an_unknown_mode_byte_is_an_invalid_account() {
-    let settings = RingSettings::new(RingMode::Off);
+    let settings = RingSettings::new(RingMode::Confidential);
     let mut config = settings.config();
     config.mode = 7;
     let chain = Chain::ring(settings).with(ring().config_pda(), account(program(), &config));

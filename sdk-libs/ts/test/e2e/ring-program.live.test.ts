@@ -92,7 +92,7 @@ describe("ring program", () => {
     );
     expect(config.authority).toBe(operator.address);
     expect(config.hasPolicy).toBe(false);
-    expect(config.mode).toBe("off");
+    expect(config.mode).toBe("confidential");
     expect(config.insertFee).toBe(DEFAULT_INSERT_FEE);
   }, 900_000);
 });

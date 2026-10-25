@@ -189,9 +189,9 @@ pub struct RingProgramConfig {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RingMode {
-    Off = 0,
+    Confidential = 0,
     /// Escrows every output nullifier key in the registry.
-    Registry = 1,
+    ConfidentialEscrow = 1,
     /// Hides the sender and discloses every opening to the auditor.
     Anonymous = 2,
 }
@@ -201,8 +201,8 @@ impl TryFrom<u8> for RingMode {
 
     fn try_from(byte: u8) -> Result<Self, CustomRingError> {
         match byte {
-            0 => Ok(Self::Off),
-            1 => Ok(Self::Registry),
+            0 => Ok(Self::Confidential),
+            1 => Ok(Self::ConfidentialEscrow),
             2 => Ok(Self::Anonymous),
             _ => Err(CustomRingError::InvalidRingMode),
         }

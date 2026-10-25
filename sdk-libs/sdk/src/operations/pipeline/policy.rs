@@ -194,7 +194,7 @@ impl PolicyRead<'_> {
                 curator: curator_reads.as_ref().and_then(find),
             }
         };
-        let key_escrow = self.config.mode == RingMode::Registry;
+        let key_escrow = self.config.mode == RingMode::ConfidentialEscrow;
         let ct_hashes = owners
             .iter()
             .map(|owner| {

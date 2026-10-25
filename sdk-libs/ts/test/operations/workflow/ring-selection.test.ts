@@ -303,7 +303,7 @@ describe("selectRingInputs", () => {
 
 describe("ring approval summary", () => {
   /** An active ring, every build reaches its approval and stops at the prover. */
-  async function approvalClient(_keypair: ShieldedKeypair, mode: RingMode = "off") {
+  async function approvalClient(_keypair: ShieldedKeypair, mode: RingMode = "confidential") {
     const [config, bump] = await ringConfigPda(RING);
     const [ringAuth, registration] = await sppRingRegistration({
       authority: PAYER,

@@ -448,7 +448,7 @@ fn record_payer<'a>(ctx: &'a Context, member: &'a Keypair) -> Result<&'a Keypair
     let mode = ctx.ring_config()?.mode;
     match mode {
         RingMode::Anonymous => ctx.member_payer(mode, member.pubkey()),
-        RingMode::Off | RingMode::Registry => Ok(member),
+        RingMode::Confidential | RingMode::ConfidentialEscrow => Ok(member),
     }
 }
 

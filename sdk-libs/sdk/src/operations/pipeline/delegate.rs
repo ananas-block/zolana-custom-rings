@@ -195,7 +195,7 @@ impl Delegated<'_> {
             }
             Some(_) => {}
         }
-        if config.mode != RingMode::Registry || !config.has_policy {
+        if config.mode != RingMode::ConfidentialEscrow || !config.has_policy {
             return Err(RingError::DelegateRequiresEscrow);
         }
         if self.source_key.pubkey()? != self.source.nullifier_pubkey {

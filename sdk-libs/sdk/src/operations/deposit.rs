@@ -222,7 +222,7 @@ impl RingDeposit<'_> {
                 blinding_secret,
                 encryption,
                 auditor: config.auditor_pubkey,
-                escrow: config.mode == RingMode::Registry,
+                escrow: config.mode == RingMode::ConfidentialEscrow,
             },
             spp,
         })

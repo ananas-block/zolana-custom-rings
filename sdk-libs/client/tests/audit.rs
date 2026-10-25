@@ -1088,12 +1088,12 @@ fn the_layout_comes_from_the_ring_frame() {
     };
     assert_eq!(
         origin(Some(built.frame.clone()))
-            .disclosure_layout(RingMode::Off)
+            .disclosure_layout(RingMode::Confidential)
             .unwrap(),
         built.layout
     );
     assert!(matches!(
-        origin(None).disclosure_layout(RingMode::Off),
+        origin(None).disclosure_layout(RingMode::Confidential),
         Err(AuditError::MissingRingTransact)
     ));
     // An anonymous ring parses a `Transact` frame under its own rail.

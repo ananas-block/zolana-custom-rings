@@ -51,7 +51,7 @@ export async function checkEscrowedRecipients(
   context?: RequestContext,
 ): Promise<void> {
   const config = await fetchRingProgramConfig(input.client, input.ringProgramId, context);
-  if (config.mode !== "registry") return;
+  if (config.mode !== "confidentialEscrow") return;
   const owners = input.recipients.map((recipient) =>
     recipient.signingPublicKey.ownerProofInputHash(),
   );
