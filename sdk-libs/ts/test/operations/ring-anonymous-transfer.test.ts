@@ -53,10 +53,13 @@ import {
   Wallet,
   type SppProofInputs,
 } from "@heliuslabs/zolana/transaction";
-import { approveRingUnattended, type RingApprovalRequest } from "../../src/protocol/intent.js";
+import {
+  approveRingUnattended,
+  type RingApprovalRequest,
+} from "../../src/protocol/transaction/intent.js";
 import { ringProofCircuit } from "../../src/rpc/prover/ring.js";
 import { ringMemberRegistryAddress } from "../../src/protocol/pda/index.js";
-import { ringCircuitType } from "../../src/protocol/proving-keys.js";
+import { ringCircuitType } from "../../src/protocol/proof/proving-keys.js";
 import { Pairing, type RingAddress } from "../../src/crypto/ring-address.js";
 import {
   EPOCH_SLOTS,
@@ -76,22 +79,28 @@ import {
   checkAnonymousSlots,
   signingKeySpendSigner,
   type AnonymousSpendSigner,
-} from "../../src/operations/anonymous.js";
-import { RING_COSIGN_TRANSFERS, decodeRingMemberRegistry } from "../../src/protocol/ring-codecs.js";
+} from "../../src/operations/payments/anonymous.js";
+import {
+  RING_COSIGN_TRANSFERS,
+  decodeRingMemberRegistry,
+} from "../../src/protocol/codec/ring-codecs.js";
 import {
   ListId,
   buildRuleTable,
   memberOfAsset,
   memberOfIdentity,
-} from "../../src/protocol/policy.js";
-import { policyStatementHash } from "../../src/protocol/statement.js";
-import type { ProvenRingTransfer } from "../../src/operations/pipeline.js";
-import { CustomRingTransfer, type AnonymousTransfer } from "../../src/operations/transfer-rails.js";
+} from "../../src/protocol/membership/policy.js";
+import { policyStatementHash } from "../../src/protocol/proof/statement.js";
+import type { ProvenRingTransfer } from "../../src/operations/workflow/pipeline.js";
+import {
+  CustomRingTransfer,
+  type AnonymousTransfer,
+} from "../../src/operations/payments/transfer-rails.js";
 import {
   buildRingTransferTransaction,
   buildRingWithdrawalTransaction,
-} from "../../src/operations/transfer.js";
-import { RingTransactData } from "../../src/protocol/transact.js";
+} from "../../src/operations/payments/transfer.js";
+import { RingTransactData } from "../../src/protocol/transaction/transact.js";
 
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 
@@ -117,8 +126,8 @@ import {
   type Fixture,
   type RingFixtureOptions,
 } from "../helpers/ring-pipeline.js";
-import { publicAmountFields, publicSlots } from "../../src/protocol/spp.js";
-import { TREE_STATE_PAUSED } from "../../src/protocol/codecs.js";
+import { publicAmountFields, publicSlots } from "../../src/protocol/transaction/spp.js";
+import { TREE_STATE_PAUSED } from "../../src/protocol/codec/codecs.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import { AnonymousRingState, type SentFirstContact } from "../../src/state/anonymous-state.js";
 import { ringAddressOf } from "../../src/state/anonymous.js";

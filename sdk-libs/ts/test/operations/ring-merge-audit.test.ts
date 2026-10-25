@@ -23,12 +23,12 @@ import { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 import { ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
-import { auditRingMerges, openDisclosedMerge } from "../../src/operations/audit-merge.js";
+import { auditRingMerges, openDisclosedMerge } from "../../src/operations/audit/audit-merge.js";
 import type { RingMergeDisclosure } from "../../src/crypto/merge-disclosure.js";
-import { escrowKeyHash } from "../../src/protocol/member-opening.js";
-import { memberOfTag } from "../../src/protocol/policy.js";
-import type { TransactionOrigin } from "../../src/protocol/origin.js";
-import { sealNullifierKey } from "../../src/operations/register-key.js";
+import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
+import { memberOfTag } from "../../src/protocol/membership/policy.js";
+import type { TransactionOrigin } from "../../src/protocol/transaction/origin.js";
+import { sealNullifierKey } from "../../src/operations/management/register-key.js";
 import {
   kitReads,
   solanaRpcReads,

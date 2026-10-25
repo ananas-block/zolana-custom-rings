@@ -15,7 +15,7 @@ describe("ring error codes", () => {
 describe("RING_KEY_ERROR_RUST_VARIANT", () => {
   const sources = new Map([
     ["RingKeyError", "../../../keys/src/error.rs"],
-    ["StreamError", "../../../../program-libs/interface/src/stream.rs"],
+    ["StreamError", "../../../../program-libs/interface/src/codec/stream.rs"],
     ["AuditError", "../../../client/src/error.rs"],
   ]);
   const variants = (name: string): readonly string[] => {

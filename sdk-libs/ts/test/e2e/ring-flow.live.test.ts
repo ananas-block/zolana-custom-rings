@@ -14,7 +14,7 @@ import {
   signerFromWalletFile,
   tokenBalance,
 } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
-import { P256ReaderKey } from "../../src/operations/reader-access.js";
+import { P256ReaderKey } from "../../src/operations/management/reader-access.js";
 import type { DecryptedRingTransaction } from "../../src/rpc/ring-rpc.js";
 import { ListId } from "../../src/ring/advanced.js";
 import {

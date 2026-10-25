@@ -33,7 +33,7 @@ import {
   type FieldRange,
   type PackedFields,
   type PackedLayout,
-} from "../protocol/ring-disclosure-layout.js";
+} from "../protocol/codec/ring-disclosure-layout.js";
 
 import { maskDisclosure, packDisclosure, unmaskDisclosure, unpackDisclosure } from "./audit.js";
 import { RingDomain } from "./ring-domain.js";

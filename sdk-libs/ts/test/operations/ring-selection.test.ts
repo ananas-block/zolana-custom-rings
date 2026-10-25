@@ -7,7 +7,7 @@ import {
   approveRingUnattended,
   type RingApprovalHandler,
   type RingApprovalRequest,
-} from "../../src/protocol/intent.js";
+} from "../../src/protocol/transaction/intent.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { address, type Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
@@ -16,11 +16,11 @@ import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
   selectRingInputs,
-} from "../../src/operations/transfer.js";
+} from "../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../helpers/clients.js";
 import { ringProgramConfigData, sppRingRegistration } from "../helpers/ring-accounts.js";
-import { signingKeySpendSigner } from "../../src/operations/anonymous.js";
-import type { RingMode } from "../../src/protocol/ring-codecs.js";
+import { signingKeySpendSigner } from "../../src/operations/payments/anonymous.js";
+import type { RingMode } from "../../src/protocol/codec/ring-codecs.js";
 import { ringConfigPda } from "../../src/protocol/pda/index.js";
 import { AnonymousRingState } from "../../src/state/anonymous-state.js";
 

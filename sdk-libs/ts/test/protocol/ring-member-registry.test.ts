@@ -28,10 +28,13 @@ import {
   AUTHORITY_RESERVED_LEAVES,
   MEMBER_QUEUE_LIMIT,
   type RingMode,
-} from "../../src/protocol/ring-codecs.js";
-import { MEMBER_REGISTRY_CAPACITY } from "../../src/protocol/member-registry.js";
-import { MEMBER_REGISTRY_EMPTY_ROOT, escrowKeyHash } from "../../src/protocol/member-opening.js";
-import { memberOfTag } from "../../src/protocol/policy.js";
+} from "../../src/protocol/codec/ring-codecs.js";
+import { MEMBER_REGISTRY_CAPACITY } from "../../src/protocol/membership/member-registry.js";
+import {
+  MEMBER_REGISTRY_EMPTY_ROOT,
+  escrowKeyHash,
+} from "../../src/protocol/membership/member-opening.js";
+import { memberOfTag } from "../../src/protocol/membership/policy.js";
 import {
   NullifierKeyEscrow,
   RegisterKey,
@@ -40,8 +43,8 @@ import {
   openRingSealedKey,
   sealNullifierKey,
   sealNullifierKeyWith,
-} from "../../src/operations/register-key.js";
-import { registerKeyStatementHash } from "../../src/protocol/statement.js";
+} from "../../src/operations/management/register-key.js";
+import { registerKeyStatementHash } from "../../src/protocol/proof/statement.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
 import {
   memberRegistryData,

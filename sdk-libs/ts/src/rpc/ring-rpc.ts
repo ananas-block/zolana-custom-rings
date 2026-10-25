@@ -35,7 +35,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
-import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/member-registry.js";
+import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/membership/member-registry.js";
 import { ringIdField, ringTagFromOwnerTag } from "../crypto/ring-stream.js";
 
 import {
@@ -49,20 +49,20 @@ import {
   type OutputOpening,
   type OutputPayloadError,
   type OutputPayloadErrorKind,
-} from "../operations/audit.js";
+} from "../operations/audit/audit.js";
 import type {
   AuditedRingMerge,
   MergeKeys,
   UnresolvedRingMerge,
-} from "../operations/audit-merge.js";
-import type { RingRootEntry } from "../protocol/ring-codecs.js";
+} from "../operations/audit/audit-merge.js";
+import type { RingRootEntry } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import {
   checkedReaderKey,
   readerKeyBytes,
   readerKeyFromBytes,
-} from "../operations/reader-access.js";
-import { memberOfTag } from "../protocol/policy.js";
+} from "../operations/management/reader-access.js";
+import { memberOfTag } from "../protocol/membership/policy.js";
 
 const base58Decoder = getBase58Decoder();
 const base64Decoder = getBase64Decoder();
@@ -534,7 +534,7 @@ export type {
   OutputOpening,
   OutputPayloadError,
   OutputPayloadErrorKind,
-} from "../operations/audit.js";
+} from "../operations/audit/audit.js";
 
 /** Mirrors Rust `SkippedReason`, `unseenInput` an anonymous input naming a UTXO the service has not opened. */
 export type SkippedReason = "missingAuditorMessage" | "invalidAuditData" | "unseenInput";

@@ -14,7 +14,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// RingMode mirrors RingMode in program-libs/interface/src/state.rs, the flags DepositPublicInput binds follow it.
+// RingMode mirrors RingMode in program-libs/interface/src/accounts/state.rs, the flags DepositPublicInput binds follow it.
 type RingMode int
 
 const (

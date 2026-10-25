@@ -3,7 +3,7 @@
 Each proving key fixes a circuit family and its input and output width. A shape
 such as 2x4 has two inputs and four outputs. The available ring keys are defined
 by the [Go key catalog](../prover/ring/keys.go), mirrored by the
-[Rust key catalog](../program-libs/interface/src/key_catalog.rs), and pinned by
+[Rust key catalog](../program-libs/interface/src/proof/key_catalog.rs), and pinned by
 [proving-keys.lock](../prover/ring/proving-keys.lock). Use those files when
 choosing a shape; a copied constraint count can become stale after a key
 rotation.

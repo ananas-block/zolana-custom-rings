@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { address, getBase58Decoder, type Address, type Signature } from "@solana/kit";
-import { encodeRingTransactInstructionData } from "../../src/protocol/circuit.js";
+import { encodeRingTransactInstructionData } from "../../src/protocol/proof/circuit.js";
 
 import { wireDecoder, Writer, addressBytes, treeAddress } from "@heliuslabs/zolana/internal";
 import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
@@ -28,9 +28,9 @@ import {
   ringWithdrawalsOf,
   RpcTransactionOrigin,
   type OriginInstructionGroup,
-} from "../../src/protocol/origin.js";
-import { RingInstructionTag } from "../../src/operations/admin.js";
-import { RingTransactData } from "../../src/protocol/transact.js";
+} from "../../src/protocol/transaction/origin.js";
+import { RingInstructionTag } from "../../src/operations/management/admin.js";
+import { RingTransactData } from "../../src/protocol/transaction/transact.js";
 import { solanaRpcReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringFrame, ringInstructionData } from "../helpers/ring-frame.js";
 

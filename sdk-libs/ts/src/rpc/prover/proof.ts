@@ -1,4 +1,4 @@
-import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/custom-ring-proof.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import { ClientError } from "@heliuslabs/zolana";
 import { compressG2 } from "@heliuslabs/zolana/internal";
 import { compressProof, type Proof } from "@heliuslabs/zolana/client";

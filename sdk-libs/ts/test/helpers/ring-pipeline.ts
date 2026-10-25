@@ -25,7 +25,7 @@ import type {
 import {
   encodeRingTransactInstructionData,
   type RingTransactInstructionData,
-} from "../../src/protocol/circuit.js";
+} from "../../src/protocol/proof/circuit.js";
 import {
   prepareTransfer,
   SYSTEM_PROGRAM,
@@ -67,10 +67,17 @@ import {
 import { openTransactionViewingSecret } from "../../src/crypto/audit.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/ring-disclosure.js";
 import { ringIdField, ringTagField } from "../../src/crypto/ring-stream.js";
-import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/admin.js";
-import type { RingCoSigner, RingMode, RingSourceSlot } from "../../src/protocol/ring-codecs.js";
-import type { ProvenRingTransfer, RingTransactionFrame } from "../../src/operations/pipeline.js";
-import type { RingTransferApproval } from "../../src/operations/transfer-rails.js";
+import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
+import type {
+  RingCoSigner,
+  RingMode,
+  RingSourceSlot,
+} from "../../src/protocol/codec/ring-codecs.js";
+import type {
+  ProvenRingTransfer,
+  RingTransactionFrame,
+} from "../../src/operations/workflow/pipeline.js";
+import type { RingTransferApproval } from "../../src/operations/payments/transfer-rails.js";
 import {
   LIST_IDS,
   policySourceOwners,
@@ -78,9 +85,9 @@ import {
   referencedLists,
   type ListId,
   type RuleTable,
-} from "../../src/protocol/policy.js";
-import { auditStatementHash, ringAuditStatement } from "../../src/protocol/statement.js";
-import { RingTransactData, type RingRail } from "../../src/protocol/transact.js";
+} from "../../src/protocol/membership/policy.js";
+import { auditStatementHash, ringAuditStatement } from "../../src/protocol/proof/statement.js";
+import { RingTransactData, type RingRail } from "../../src/protocol/transaction/transact.js";
 
 import {
   matchesPage,
@@ -95,9 +102,9 @@ import {
   ringProgramConfigData,
   sppRingRegistration,
 } from "./ring-accounts.js";
-import { settlementAccounts } from "../../src/protocol/spp.js";
-import { checkTransactionFits } from "../../src/operations/compile.js";
-import { decodeRingPacked, readRingOutput } from "../../src/protocol/output.js";
+import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
+import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
+import { decodeRingPacked, readRingOutput } from "../../src/protocol/transaction/output.js";
 import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/blinding.js";
 import {
   LocalRingKeys,

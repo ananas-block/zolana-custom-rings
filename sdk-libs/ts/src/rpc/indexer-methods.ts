@@ -13,7 +13,7 @@ import {
   encodeRingMemberProofRequest,
   encodeRingMemberRecordsRequest,
   encodeRingMemberRegistryRootRequest,
-} from "../protocol/indexer-codec.js";
+} from "../protocol/indexer/indexer-codec.js";
 import type {
   RingApplyProofInputsRequest,
   RingApplyProofInputsResponse,
@@ -25,7 +25,7 @@ import type {
   RingMemberRecordsRequest,
   RingRecordQueueResponse,
   RingRegistryStateResponse,
-} from "../protocol/indexer-types.js";
+} from "../protocol/indexer/indexer-types.js";
 
 export const getRingMemberRecordMethod: MethodDescriptor<
   RingMemberProofRequest,

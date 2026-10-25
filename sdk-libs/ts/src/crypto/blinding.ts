@@ -17,10 +17,10 @@ import {
   type TreeId,
 } from "@heliuslabs/zolana/transaction";
 
-import { openDeliveredBody } from "../protocol/output.js";
+import { openDeliveredBody } from "../protocol/transaction/output.js";
 import { domainHash, RingDomain } from "./ring-domain.js";
 import { packedSecret, ringTagField } from "./ring-stream.js";
-import { withOutputFields } from "../protocol/proof-output.js";
+import { withOutputFields } from "../protocol/proof/proof-output.js";
 
 /** SPP's `blinding_seed`, the seed of every ring output's TXOB blinding. */
 export function ringBlindingSeed(txViewingSecret: Bytes32, salt: Bytes16): Bytes32 {

@@ -5,19 +5,22 @@ import { Writer, addressBytes, bigIntBytes } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ringAuthAddress } from "../../src/protocol/pda/index.js";
-import { APPLY_BATCH, MEMBER_REGISTRY_ROOT_HISTORY } from "../../src/protocol/member-registry.js";
+import {
+  APPLY_BATCH,
+  MEMBER_REGISTRY_ROOT_HISTORY,
+} from "../../src/protocol/membership/member-registry.js";
 import type {
   RingCoSigner,
   RingMode,
   RingSourceSlot,
   RingRootEntry,
-} from "../../src/protocol/ring-codecs.js";
+} from "../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
   encodeRule,
   referencedLists,
   type RuleTable,
-} from "../../src/protocol/policy.js";
+} from "../../src/protocol/membership/policy.js";
 
 export const ZERO_ADDRESS = getAddressDecoder().decode(new Uint8Array(32));
 

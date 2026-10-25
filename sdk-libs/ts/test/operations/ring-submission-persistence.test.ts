@@ -25,11 +25,11 @@ import { address, generateKeyPairSigner, signTransactionWithSigners } from "@sol
 import { afterEach, expect, it, vi } from "vitest";
 
 import { ringConfigPda } from "../../src/protocol/pda/index.js";
-import { buildRingTransferTransaction } from "../../src/operations/transfer.js";
+import { buildRingTransferTransaction } from "../../src/operations/payments/transfer.js";
 import {
   RingTransactionSubmission,
   reconcileRingSubmissions,
-} from "../../src/operations/submission.js";
+} from "../../src/operations/workflow/submission.js";
 import { ringTransferClient } from "../helpers/clients.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {

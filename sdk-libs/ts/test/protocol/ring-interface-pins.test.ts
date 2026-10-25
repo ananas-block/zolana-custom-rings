@@ -2,9 +2,13 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { APPLY_BATCH, QUAD_ARITY, QUAD_HEIGHT } from "../../src/protocol/member-registry.js";
+import {
+  APPLY_BATCH,
+  QUAD_ARITY,
+  QUAD_HEIGHT,
+} from "../../src/protocol/membership/member-registry.js";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
-import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/admin.js";
+import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
 import {
   APPLY_DELAY_SLOTS,
   AUTHORITY_RESERVED_LEAVES,
@@ -17,7 +21,7 @@ import {
   RECORD_QUEUE_SIZE,
   RING_PROGRAM_CONFIG_DISCRIMINATOR,
   RING_PROGRAM_CONFIG_SIZE,
-} from "../../src/protocol/ring-codecs.js";
+} from "../../src/protocol/codec/ring-codecs.js";
 
 function rust(file: string): string {
   return readFileSync(
@@ -42,7 +46,7 @@ function camel(name: string): string {
 
 describe("ring interface pins", () => {
   it("tags and budgets every instruction like Rust `instruction_tags!`", () => {
-    const source = rust("instruction.rs");
+    const source = rust("instructions/instruction.rs");
     const units = new Map(
       [...source.matchAll(/^const ([A-Z_]+): u32 = ([\d_]+);$/gmu)].map(
         ([, name = "", value = ""]) => [name, integer(value)] as const,
@@ -68,7 +72,7 @@ describe("ring interface pins", () => {
   it("bounds the record queue and registry like Rust `member_registry`", () => {
     const constants = new Map(
       [
-        ...rust("member_registry.rs").matchAll(
+        ...rust("accounts/member_registry.rs").matchAll(
           /^pub const ([A-Z_]+): (?:u64|usize) = ([\d_ <]+);$/gmu,
         ),
       ].map(([, name = "", value = ""]) => [name, integer(value)] as const),
@@ -84,7 +88,7 @@ describe("ring interface pins", () => {
   });
 
   it("reads each ring account at the discriminator and size Rust asserts", () => {
-    const source = rust("state.rs");
+    const source = rust("accounts/state.rs");
     const discriminator = (name: string): number =>
       Number(new RegExp(`^ {4}${name} = [A-Z_]+: (\\d+),`, "mu").exec(source)?.[1]);
     const size = (name: string): number =>

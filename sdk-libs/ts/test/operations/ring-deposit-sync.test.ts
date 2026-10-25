@@ -17,8 +17,8 @@ import {
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
 import { decryptTransactions, EncryptedScheme } from "@heliuslabs/zolana/transaction";
 import { encodeOutputData, encodeRingDepositPlaintext } from "@heliuslabs/zolana/internal";
-import { encodeRingDepositCapsule } from "../../src/protocol/deposit-capsule.js";
-import { customRingDepositPayload } from "../../src/protocol/deposit-payload.js";
+import { encodeRingDepositCapsule } from "../../src/protocol/codec/deposit-capsule.js";
+import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 
 const OWNER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
 const TREE = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");

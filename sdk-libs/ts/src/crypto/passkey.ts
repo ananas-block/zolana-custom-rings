@@ -1,7 +1,11 @@
 import { sha256 } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../protocol/error.js";
-import { P256ReaderKey, checkedReaderKey, readerKeyBytes } from "../operations/reader-access.js";
+import {
+  P256ReaderKey,
+  checkedReaderKey,
+  readerKeyBytes,
+} from "../operations/management/reader-access.js";
 import type { RingReadSigner, WebAuthnSignature } from "../rpc/ring-rpc.js";
 
 export interface Passkey {

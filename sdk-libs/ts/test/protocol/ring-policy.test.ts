@@ -4,7 +4,7 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { decodeRingMemberRegistry } from "../../src/protocol/ring-codecs.js";
+import { decodeRingMemberRegistry } from "../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
   ListId,
@@ -26,7 +26,7 @@ import {
   type Rule,
   type RuleGuard,
   type RuleTable,
-} from "../../src/protocol/policy.js";
+} from "../../src/protocol/membership/policy.js";
 import { RingError } from "../../src/protocol/error.js";
 import { memberRegistryData } from "../helpers/ring-accounts.js";
 

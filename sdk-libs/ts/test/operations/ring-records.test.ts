@@ -14,23 +14,28 @@ import type {
   MemberRecord,
   QuadPath,
   RecordWriteProofInput,
-} from "../../src/protocol/member-registry.js";
+} from "../../src/protocol/membership/member-registry.js";
 import {
   ringConfigPda,
   ringMemberRegistryPda,
   ringRecordQueuePda,
 } from "../../src/protocol/pda/index.js";
-import { decodeRingProgramConfig } from "../../src/protocol/ring-codecs.js";
-import { LIST_IDS, ListId, memberOfIdentity, recordBit } from "../../src/protocol/policy.js";
-import { MEMBER_REGISTRY_CAPACITY } from "../../src/protocol/member-registry.js";
-import { queueChain } from "../../src/protocol/member-opening.js";
+import { decodeRingProgramConfig } from "../../src/protocol/codec/ring-codecs.js";
+import {
+  LIST_IDS,
+  ListId,
+  memberOfIdentity,
+  recordBit,
+} from "../../src/protocol/membership/policy.js";
+import { MEMBER_REGISTRY_CAPACITY } from "../../src/protocol/membership/member-registry.js";
+import { queueChain } from "../../src/protocol/membership/member-opening.js";
 import {
   AuthorityListWrite,
   RecordApplication,
   listWrite,
   memberListWriteInstruction,
   type ListWrite,
-} from "../../src/operations/record-writes.js";
+} from "../../src/operations/management/record-writes.js";
 import { recordTree } from "../helpers/member-registry.js";
 import {
   memberRegistryData,

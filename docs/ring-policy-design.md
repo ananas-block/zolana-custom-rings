@@ -22,7 +22,7 @@ curator bans Mr. Evil. Mr. Crazy transfers.
 ## The member record
 
 A **member** is the field element a UTXO opening carries for an owner or an
-asset, defined in [Member registry](../program-libs/interface/src/member_registry.rs). One member space
+asset, defined in [Member registry](../program-libs/interface/src/accounts/member_registry.rs). One member space
 therefore serves every rule subject. One list holds owners and assets side by
 side, and an owner key and a mint with equal bytes stay distinct members.
 
@@ -32,7 +32,7 @@ records by member, and leaf 0 holds a sentinel whose link spans the field.
 Every member lies strictly inside that link, so an absent member always has a
 present low record whose link brackets it. A proof of absence opens that low
 record, and an absent member reads as on no list.
-[Member registry](../program-libs/interface/src/member_registry.rs) fixes the layouts and the tree.
+[Member registry](../program-libs/interface/src/accounts/member_registry.rs) fixes the layouts and the tree.
 
 A record is never removed. A write that clears every bit leaves an empty
 bitmap in place, so removal is an ordinary write and absence keeps one

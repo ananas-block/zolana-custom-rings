@@ -34,16 +34,21 @@ import {
   setRingPolicyRulesInstruction,
   setRingPolicySourceInstruction,
   type RingKind,
-} from "../../src/operations/admin.js";
-import { decodeRingProgramConfig } from "../../src/protocol/ring-codecs.js";
-import { ringProgramDataAddress } from "../../src/protocol/config.js";
-import { ListId, buildRuleTable, encodeRule, type Rule } from "../../src/protocol/policy.js";
+} from "../../src/operations/management/admin.js";
+import { decodeRingProgramConfig } from "../../src/protocol/codec/ring-codecs.js";
+import { ringProgramDataAddress } from "../../src/protocol/membership/config.js";
+import {
+  ListId,
+  buildRuleTable,
+  encodeRule,
+  type Rule,
+} from "../../src/protocol/membership/policy.js";
 import {
   grantReadAccessInstruction,
   readAccessRecordAddress,
   readerKeyBytes,
   revokeReadAccessInstruction,
-} from "../../src/operations/reader-access.js";
+} from "../../src/operations/management/reader-access.js";
 
 import { solanaRpcReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringProgramConfigData } from "../helpers/ring-accounts.js";

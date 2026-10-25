@@ -15,8 +15,11 @@ import { SYSTEM_PROGRAM, addressBytes, sha256 } from "@heliuslabs/zolana/interna
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ClientError } from "@heliuslabs/zolana/client";
 import { ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
-import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "../../src/protocol/config.js";
-import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../src/protocol/member-opening.js";
+import {
+  BPF_LOADER_UPGRADEABLE_ID,
+  ringProgramDataAddress,
+} from "../../src/protocol/membership/config.js";
+import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../src/protocol/membership/member-opening.js";
 import {
   CLOCK_SYSVAR as CLOCK,
   RENT_SYSVAR as RENT,
@@ -32,7 +35,7 @@ import {
   upgradeInstruction,
   verifyRingProgram,
   writeBufferInstruction,
-} from "../../src/protocol/program.js";
+} from "../../src/protocol/transaction/program.js";
 
 import { BLOCKHASH, solanaRpcReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { memberRegistryData, ownedAccount } from "../helpers/ring-accounts.js";

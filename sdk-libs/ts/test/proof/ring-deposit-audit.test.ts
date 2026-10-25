@@ -39,12 +39,12 @@ import {
   RING_COSIGN_TRANSFERS,
   type RingCoSigner,
   type RingMode,
-} from "../../src/protocol/ring-codecs.js";
+} from "../../src/protocol/codec/ring-codecs.js";
 import {
   PreparedRingDeposit,
   type RingDepositClient,
   type RingDepositParams,
-} from "../../src/operations/deposit.js";
+} from "../../src/operations/payments/deposit.js";
 import {
   openRingDepositOpening,
   ringDepositContextHash,
@@ -54,12 +54,12 @@ import {
 import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
-} from "../../src/protocol/deposit-capsule.js";
-import { ringDepositInstruction } from "../../src/protocol/deposit-instruction.js";
-import { decryptRingDepositUtxo } from "../../src/protocol/deposit-payload.js";
-import { escrowKeyHash } from "../../src/protocol/member-opening.js";
-import { ConfirmedDeposit } from "../../src/protocol/origin.js";
-import { ListId, recordBit } from "../../src/protocol/policy.js";
+} from "../../src/protocol/codec/deposit-capsule.js";
+import { ringDepositInstruction } from "../../src/protocol/transaction/deposit-instruction.js";
+import { decryptRingDepositUtxo } from "../../src/protocol/transaction/deposit-payload.js";
+import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
+import { ConfirmedDeposit } from "../../src/protocol/transaction/origin.js";
+import { ListId, recordBit } from "../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";

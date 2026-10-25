@@ -15,11 +15,14 @@ import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/custom-ring-proof.js";
-import { createdRingUtxos, scanCreatedRingUtxos } from "../../src/operations/created-utxos.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
+import {
+  createdRingUtxos,
+  scanCreatedRingUtxos,
+} from "../../src/operations/workflow/created-utxos.js";
 import { sealRingDepositOpenings } from "../../src/proof/deposit-audit.js";
 import { sealRingMergeDisclosure } from "../../src/crypto/merge-disclosure.js";
-import { ConfirmedDeposit, type TransactionOrigin } from "../../src/protocol/origin.js";
+import { ConfirmedDeposit, type TransactionOrigin } from "../../src/protocol/transaction/origin.js";
 import { ringAuditReader } from "../helpers/clients.js";
 import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction, ringDepositPayload } from "../helpers/confirmed-deposits.js";

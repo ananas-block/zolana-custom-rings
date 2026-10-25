@@ -5,9 +5,12 @@ import type { IndexerReader } from "@heliuslabs/zolana/client";
 import { PAGE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
 
-import { nextScanCursor } from "../operations/audit.js";
+import { nextScanCursor } from "../operations/audit/audit.js";
 import { RingError } from "../protocol/error.js";
-import type { ConfirmedRingTransaction, TransactionOrigin } from "../protocol/origin.js";
+import type {
+  ConfirmedRingTransaction,
+  TransactionOrigin,
+} from "../protocol/transaction/origin.js";
 
 export interface ScanLimits {
   readonly pageSize: number;

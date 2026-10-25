@@ -3,7 +3,7 @@ import { parseCheckedProof } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana";
 import type { Proof, ProvingKeyReport } from "@heliuslabs/zolana/client";
 
-import { RING_PROVING_KEY_SHA256S } from "../../protocol/proving-keys.js";
+import { RING_PROVING_KEY_SHA256S } from "../../protocol/proof/proving-keys.js";
 import { ringProofRequestBody, ringRequestKey, type RingProofRequest } from "./ring.js";
 
 export class CustomRingProver {

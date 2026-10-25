@@ -9,7 +9,7 @@ import {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   type RingCoSigner,
-} from "../protocol/ring-codecs.js";
+} from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 
 /** Describes the operation classes and withdrawal amounts requiring approval. */

@@ -10,7 +10,7 @@ import statements from "../../../../test-vectors/ring-statements.json" with { ty
 import expansion from "../../../../test-vectors/ring-transact-expansion.json" with { type: "json" };
 import { solanaOwnerIdentity, encodeBase58, hashChain } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
-import { encodeRingTransactInstructionData } from "../../src/protocol/circuit.js";
+import { encodeRingTransactInstructionData } from "../../src/protocol/proof/circuit.js";
 import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../src/crypto/audit.js";
 import {
@@ -25,7 +25,7 @@ import {
   anonymousFields,
   type AnonymousAuditKey,
   type AuditLayout,
-} from "../../src/protocol/ring-disclosure-layout.js";
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { decodeDisclosure } from "../../src/crypto/ring-disclosure.js";
 import {
   APPLY_BATCH,
@@ -34,7 +34,7 @@ import {
   type QuadPath,
   type QueueEntry,
   type RecordWriteProofInput,
-} from "../../src/protocol/member-registry.js";
+} from "../../src/protocol/membership/member-registry.js";
 import {
   applyRecordsStatement,
   escrowEntry,
@@ -42,7 +42,7 @@ import {
   queueEntryHash,
   replayRecordWrites,
   verifyRecordOpening,
-} from "../../src/protocol/member-opening.js";
+} from "../../src/protocol/membership/member-opening.js";
 import {
   admitTransfer,
   buildRuleTable,
@@ -54,7 +54,7 @@ import {
   type OutflowLimit,
   type RecordLists,
   type RuleRefusal,
-} from "../../src/protocol/policy.js";
+} from "../../src/protocol/membership/policy.js";
 import {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
@@ -65,22 +65,22 @@ import {
   registerKeyStatementElements,
   registerKeyStatementHash,
   type AuditKind,
-} from "../../src/protocol/statement.js";
+} from "../../src/protocol/proof/statement.js";
 import { depositStatementElements, ringDepositContextHash } from "../../src/proof/deposit-audit.js";
-import { RingInstructionTag } from "../../src/operations/admin.js";
+import { RingInstructionTag } from "../../src/operations/management/admin.js";
 import {
   RingTransactData,
   ringRail,
   ringRailOf,
   type RingOutput,
   type RingRail,
-} from "../../src/protocol/transact.js";
+} from "../../src/protocol/transaction/transact.js";
 import { TAG_LEN, ringTagField, ringTagFromOwnerTag } from "../../src/crypto/ring-stream.js";
 import {
   RING_AUTHORITY_MAX_INPUTS,
   RING_AUTHORITY_SHAPES,
   ringAuthorityShape,
-} from "../../src/protocol/spp.js";
+} from "../../src/protocol/transaction/spp.js";
 
 function bytes<T extends Uint8Array>(value: string, length?: number): T {
   const decoded = Uint8Array.from(Buffer.from(value, "hex"));

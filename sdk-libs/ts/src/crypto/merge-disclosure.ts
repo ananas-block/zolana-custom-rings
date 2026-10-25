@@ -33,12 +33,12 @@ import {
   openMergeDisclosureFields,
   sealMergeDisclosureFields,
 } from "./audit.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../protocol/custom-ring-proof.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../protocol/proof/custom-ring-proof.js";
 import {
   ANONYMOUS_MERGE_WIDTHS,
   DISCLOSURE_CHUNK_BYTES,
   packedChunks,
-} from "../protocol/ring-disclosure-layout.js";
+} from "../protocol/codec/ring-disclosure-layout.js";
 import { RingError } from "../protocol/error.js";
 
 /** Rust `MERGE_DISCLOSURE_INFO`, the envelope of the disclosure key. */

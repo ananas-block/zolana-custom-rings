@@ -23,13 +23,13 @@ import type {
   RingMemberOpeningView as WireRingMemberOpeningView,
   RingRecordPathView as WireRingRecordPathView,
   RingRegistryRootView as WireRingRegistryRootView,
-} from "../protocol/indexer-types.js";
+} from "../protocol/indexer/indexer-types.js";
 import type {
   MemberRecord,
   QuadPath,
   QueueEntry,
   RecordOpening,
-} from "../protocol/member-registry.js";
+} from "../protocol/membership/member-registry.js";
 import type {
   RecordWrite,
   RingApplyProofInputs,

@@ -6,8 +6,8 @@ import {
   QUAD_HEIGHT,
   type MemberRecord,
   type QuadPath,
-} from "../../src/protocol/member-registry.js";
-import { FIELD_MAX, memberRecordHash } from "../../src/protocol/member-opening.js";
+} from "../../src/protocol/membership/member-registry.js";
+import { FIELD_MAX, memberRecordHash } from "../../src/protocol/membership/member-opening.js";
 
 /** One record the fixture holds, its key escrow served beside it when `sealed` is set. */
 export interface FixtureRecord {

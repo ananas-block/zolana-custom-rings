@@ -5,7 +5,7 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import { Reader, Writer, addressBytes, encodeBase58 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { DISCLOSURE_CHUNK_BYTES } from "../../src/protocol/ring-disclosure-layout.js";
+import { DISCLOSURE_CHUNK_BYTES } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { ringProofRequestBody } from "../../src/rpc/prover/ring.js";
 import {
   mergeDisclosureFieldCount,

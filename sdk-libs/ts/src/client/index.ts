@@ -1,15 +1,15 @@
 export { CustomRingClient, createCustomRingClient } from "../rpc/client.js";
 export { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 export { customRingProof } from "../rpc/prover/proof.js";
-export { CUSTOM_RING_PROOF_LENGTH } from "../protocol/custom-ring-proof.js";
+export { CUSTOM_RING_PROOF_LENGTH } from "../protocol/proof/custom-ring-proof.js";
 export {
   RING_KEYS,
   RING_PROVING_KEY_SHA256S,
   ringCircuitType,
   ringProvingKey,
-} from "../protocol/proving-keys.js";
-export type { RingKeyCircuit } from "../protocol/proving-keys.js";
-export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/ring-disclosure-layout.js";
+} from "../protocol/proof/proving-keys.js";
+export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
+export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export {
   RING_INLINE_ASSET_SLOTS,
   RING_OUTFLOW_LIMIT_SLOTS,

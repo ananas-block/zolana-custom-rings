@@ -18,11 +18,11 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { decodeRingPacked, readRingOutput, RingScheme } from "../protocol/output.js";
-import { nextScanCursor } from "../operations/audit.js";
+import { decodeRingPacked, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
+import { nextScanCursor } from "../operations/audit/audit.js";
 import { openRingDelivery } from "../crypto/blinding.js";
-import { spendingTransactions } from "../operations/recover.js";
-import { outputTreeId } from "../protocol/trees.js";
+import { spendingTransactions } from "../operations/workflow/recover.js";
+import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
 
 export interface RingNotes {

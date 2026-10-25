@@ -12,6 +12,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+from ring_key_layout import verifier_relative_path
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -44,10 +45,13 @@ def main():
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             modules = list(pool.map(export,sorted(names)))
         for module in modules:
-            (interface/module).write_bytes((temp/module).read_bytes())
+            target = interface/verifier_relative_path(module)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((temp/module).read_bytes())
         # Obsolete verifiers are not retained as aliases for stronger statements.
-        for path in interface.glob('*_verifying_key.rs'):
-            if path.name not in modules:
+        expected = {verifier_relative_path(module) for module in modules}
+        for path in interface.rglob('*_verifying_key.rs'):
+            if path.relative_to(interface) not in expected:
                 path.unlink()
     lock = {'release':args.release.rstrip('/'),'keys':prepared['keys']}
     (ROOT/'prover/ring/proving-keys.lock').write_text(json.dumps(lock,indent=2)+'\n')

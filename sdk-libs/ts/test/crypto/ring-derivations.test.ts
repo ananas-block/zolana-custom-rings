@@ -19,7 +19,7 @@ import {
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import { RingDomain, depositBlinding } from "../../src/crypto/ring-domain.js";
-import { RING_DELIVERED_BODY_LEN } from "../../src/protocol/output.js";
+import { RING_DELIVERED_BODY_LEN } from "../../src/protocol/transaction/output.js";
 import {
   EPOCH_SLOTS,
   J_INBOX,

@@ -17,7 +17,7 @@ import {
   anonymousKeyClass,
   type AuditLayout,
   type DisclosureLayout,
-} from "../protocol/ring-disclosure-layout.js";
+} from "../protocol/codec/ring-disclosure-layout.js";
 import { auditorMessageData, sealTransactionViewingSecret } from "../crypto/audit.js";
 import {
   anonymousCommitments,
@@ -28,11 +28,11 @@ import {
   type PackedOutputOpening,
   type RingDisclosure,
 } from "../crypto/ring-disclosure.js";
-import { RING_DELIVERED_BODY_LEN } from "../protocol/output.js";
+import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
 import { ringTagField } from "../crypto/ring-stream.js";
 
 import { RingError } from "../protocol/error.js";
-import type { PublishedSlot, RingOutputRail } from "../operations/output-rail.js";
+import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
 
 /** The envelope and the masked disclosure every audit statement binds, Rust `SealedAudit`. */
 export interface SealedAudit {

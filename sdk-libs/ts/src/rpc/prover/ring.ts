@@ -14,15 +14,15 @@ import {
   type QueueEntry,
   type RecordOpening,
   type RecordWriteProofInput,
-} from "../../protocol/member-registry.js";
+} from "../../protocol/membership/member-registry.js";
 import {
   ringCircuitType,
   ringProvingKey,
   type RingKeyCircuit,
-} from "../../protocol/proving-keys.js";
-import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/ring-deposit-capsule.js";
-import { auditLayoutValue, type AuditLayout } from "../../protocol/ring-disclosure-layout.js";
-import { RING_DELIVERED_BODY_LEN } from "../../protocol/output.js";
+} from "../../protocol/proof/proving-keys.js";
+import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
+import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
+import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
 import { J_INBOX } from "../../crypto/ring-stream.js";
 import {
   RING_INLINE_ASSET_SLOTS,
@@ -30,7 +30,7 @@ import {
   RING_SOURCE_SLOTS,
   RING_STATE_PATH_LENGTH,
 } from "./types.js";
-import { N_PUBLIC_SLOTS } from "../../protocol/spp.js";
+import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
 
 /** Go `Opening`, one transaction slot as the ring circuits open it. */
 export interface RingSlotOpening {

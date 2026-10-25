@@ -1,15 +1,15 @@
 import { type RingRecordReader } from "./ports.js";
 import { type PresentRecordOpening } from "./prover/types.js";
-import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer-limits.js";
+import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import { waitForProjection, equalBytes } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
-import { registryCurrentRoot } from "../protocol/ring-codecs.js";
-import { fetchRingMemberRegistry, fetchRingProgramConfig } from "../protocol/config.js";
+import { registryCurrentRoot } from "../protocol/codec/ring-codecs.js";
+import { fetchRingMemberRegistry, fetchRingProgramConfig } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
-import { MemberOpeningRead, ownerEscrowed } from "../protocol/member-opening.js";
+import { MemberOpeningRead, ownerEscrowed } from "../protocol/membership/member-opening.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &

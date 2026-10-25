@@ -8,7 +8,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/domain.rs and sdk-libs/ts/src/crypto/ring-domain.ts.
+// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/ring-domain.ts.
 const (
 	// AuditStatementDomain = "CRAU"
 	AuditStatementDomain = 0x43524155
@@ -58,7 +58,7 @@ const (
 
 // Key schedule labels, distinct per ciphertext kind.
 const (
-	// AuditEncInfo is the audit stream schedule tag, mirrored by AUDIT_STREAM_INFO in program-libs/interface/src/anonymous_output.rs.
+	// AuditEncInfo is the audit stream schedule tag, mirrored by AUDIT_STREAM_INFO in program-libs/interface/src/codec/anonymous_output.rs.
 	AuditEncInfo = "CRING/adt1"
 	// NfKeyEncInfo separates the key ciphertext from the audit one, mirrored by NF_KEY_ENC_INFO in sdk-libs/client/src/crypto/encryption/mod.rs.
 	NfKeyEncInfo   = "CRING/nfk1"
@@ -66,7 +66,7 @@ const (
 	MergeEncInfo   = "CRING/mrg1"
 )
 
-// Tag stream bounds, mirrored by program-libs/interface/src/stream.rs and sdk-libs/ts/src/crypto/ring-stream.ts.
+// Tag stream bounds, mirrored by program-libs/interface/src/codec/stream.rs and sdk-libs/ts/src/crypto/ring-stream.ts.
 const (
 	// EpochSlots is the tag epoch length, the program takes slot / EpochSlots or the epoch before it.
 	EpochSlots = 1 << 18

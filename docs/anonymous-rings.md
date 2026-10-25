@@ -11,7 +11,7 @@ first contact to that recipient.
 
 The byte layouts and derivations this guide names are in
 [Ring Address](../sdk-libs/keys/src/ring_address.rs),
-[Ring outputs](../program-libs/interface/src/anonymous_output.rs) and the
+[Ring outputs](../program-libs/interface/src/codec/anonymous_output.rs) and the
 [Ring Program Interface](../zolana/docs/spec.md#ring-program-interface).
 
 ## Roles
@@ -118,7 +118,7 @@ confirms, the sender records it as the address's newest first contact.
 A pair-tagged slot proves its first contact under a root the program reads from
 the root history of an SPP state tree. Both SDKs fetch the first contact's path
 in one request beside the paths of its decoys. The decoys are outputs of the
-same ring and tree in the [anonymous form](../program-libs/interface/src/anonymous_output.rs)
+same ring and tree in the [anonymous form](../program-libs/interface/src/codec/anonymous_output.rs)
 that the wallet's scans saw and pinned under those rules. Every read names the
 same leaves in the same order and does not mark the first contact.
 
@@ -175,7 +175,7 @@ form, a tag and a body. An exit is a default-ring output under its owner's tag.
 
 An anonymous ring settles a member transfer on SPP's `AnonymousRingEddsa`
 rail. The hidden owner signs the
-[ring spend message](../program-libs/interface/src/statement.rs). The circuit
+[ring spend message](../program-libs/interface/src/proof/statement.rs). The circuit
 verifies the signature and checks that the ring program id the owner signs is
 the transfer's ring.
 

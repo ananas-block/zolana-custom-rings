@@ -22,7 +22,7 @@ import {
   encryptRingPacked,
   RingScheme,
   sealDeliveredBody,
-} from "../../src/protocol/output.js";
+} from "../../src/protocol/transaction/output.js";
 import { deliveredSlotSecret } from "../../src/crypto/ring-stream.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { openRingNotes } from "../../src/state/ring-sync.js";

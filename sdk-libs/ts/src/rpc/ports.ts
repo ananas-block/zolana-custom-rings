@@ -20,8 +20,8 @@ import type {
   QuadPath,
   QueueEntry,
   RecordOpening,
-} from "../protocol/member-registry.js";
-import type { RingTransactInstructionData } from "../protocol/circuit.js";
+} from "../protocol/membership/member-registry.js";
+import type { RingTransactInstructionData } from "../protocol/proof/circuit.js";
 import type { RingMergeDisclosureRequest } from "../crypto/merge-disclosure.js";
 import type { RingProofRequest } from "./prover/ring.js";
 

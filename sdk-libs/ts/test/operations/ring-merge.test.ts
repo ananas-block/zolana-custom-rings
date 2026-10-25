@@ -62,12 +62,12 @@ import {
   ringConfigPda,
   ringMemberRegistryPda,
 } from "../../src/protocol/pda/index.js";
-import { RING_COSIGN_TRANSFERS, type RingCoSigner } from "../../src/protocol/ring-codecs.js";
+import { RING_COSIGN_TRANSFERS, type RingCoSigner } from "../../src/protocol/codec/ring-codecs.js";
 import {
   MAX_RING_MERGE_INPUTS,
   buildRingMergeTransaction,
   ringMergeInstruction,
-} from "../../src/operations/merge.js";
+} from "../../src/operations/payments/merge.js";
 import {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
@@ -75,8 +75,8 @@ import {
   ringMergeAnonymousPublicInputHash,
   type RingMergeDisclosureRequest,
 } from "../../src/crypto/merge-disclosure.js";
-import { escrowKeyHash } from "../../src/protocol/member-opening.js";
-import { ListId, recordBit } from "../../src/protocol/policy.js";
+import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
+import { ListId, recordBit } from "../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { stateTree } from "../helpers/state-tree.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
@@ -85,7 +85,7 @@ import {
   ownedAccount,
   ringProgramConfigData,
 } from "../helpers/ring-accounts.js";
-import { decompressG2 } from "../../src/protocol/codecs.js";
+import { decompressG2 } from "../../src/protocol/codec/codecs.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 /** The registry's newest root sits at this history slot. */

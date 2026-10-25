@@ -28,10 +28,10 @@ import {
   registryCurrentRoot,
   type RingMemberRegistry,
   type RingProgramConfig,
-} from "../protocol/ring-codecs.js";
-import { fetchCuratorRegistry, fetchRingMemberRegistry } from "../protocol/config.js";
+} from "../protocol/codec/ring-codecs.js";
+import { fetchCuratorRegistry, fetchRingMemberRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
-import { ownerEscrowed, type MemberOpeningRead } from "../protocol/member-opening.js";
+import { ownerEscrowed, type MemberOpeningRead } from "../protocol/membership/member-opening.js";
 import {
   admitTransfer,
   memberOfAsset,
@@ -41,11 +41,11 @@ import {
   type PinnedPolicy,
   type RecordLists,
   type RuleRefusal,
-} from "../protocol/policy.js";
+} from "../protocol/membership/policy.js";
 import { readMemberOpenings } from "../rpc/registered-record.js";
-import { policyStatementHash, type PolicyKey } from "../protocol/statement.js";
-import type { RingRail } from "../protocol/transact.js";
-import { publicAmountFields, type PublicSlots } from "../protocol/spp.js";
+import { policyStatementHash, type PolicyKey } from "../protocol/proof/statement.js";
+import type { RingRail } from "../protocol/transaction/transact.js";
+import { publicAmountFields, type PublicSlots } from "../protocol/transaction/spp.js";
 
 /** The registry root a statement names by its history slot. */
 export interface BoundRoot {

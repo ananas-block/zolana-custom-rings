@@ -10,7 +10,7 @@ import {
   recordBit,
   type RuleTable,
 } from "../../src/ring/advanced.js";
-import { customRingDepositPayload } from "../../src/protocol/deposit-payload.js";
+import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 import {
   AuthorityListWrite,
   RingInstructionTag,

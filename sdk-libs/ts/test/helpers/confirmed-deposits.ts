@@ -8,11 +8,11 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import { SHIELDED_POOL_PROGRAM_ID, type Bytes16, type Bytes32 } from "@heliuslabs/zolana";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/custom-ring-proof.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import {
   encodeRingDepositCapsule,
   type RingDepositCapsule,
-} from "../../src/protocol/deposit-capsule.js";
+} from "../../src/protocol/codec/deposit-capsule.js";
 
 /** Borsh `RingDepositOutput`, the capsule as its ciphertext. */
 export function ringDepositPayload(

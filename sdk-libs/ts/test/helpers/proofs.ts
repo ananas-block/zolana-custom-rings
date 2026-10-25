@@ -1,4 +1,4 @@
-import { RING_PROVING_KEY_SHA256S } from "../../src/protocol/proving-keys.js";
+import { RING_PROVING_KEY_SHA256S } from "../../src/protocol/proof/proving-keys.js";
 import { proofFor as sppProofFor } from "../../../../zolana/sdk-libs/ts/test/helpers/proofs.js";
 
 const ZERO_POINT = ["0x0", "0x0"];

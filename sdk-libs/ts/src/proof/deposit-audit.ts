@@ -23,10 +23,10 @@ import {
   RING_DEPOSIT_OPENING_LENGTH,
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
   type RingDepositCapsule,
-} from "../protocol/deposit-capsule.js";
+} from "../protocol/codec/deposit-capsule.js";
 import { auditSharedSecret } from "../crypto/audit.js";
 import { RingError } from "../protocol/error.js";
-import { ConfirmedDeposit } from "../protocol/origin.js";
+import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 
 const INFO = new TextEncoder().encode("CRING/dep1");
 const OPENING_LENGTH = RING_DEPOSIT_OPENING_LENGTH;

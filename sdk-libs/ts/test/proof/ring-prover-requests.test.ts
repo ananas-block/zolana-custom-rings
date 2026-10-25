@@ -33,15 +33,15 @@ import type {
   QuadPath,
   RecordOpening,
   RecordWriteProofInput,
-} from "../../src/protocol/member-registry.js";
+} from "../../src/protocol/membership/member-registry.js";
 import {
   RING_KEYS,
   RING_PROVING_KEY_SHA256S,
   ringCircuitType,
   ringProvingKey,
-} from "../../src/protocol/proving-keys.js";
+} from "../../src/protocol/proof/proving-keys.js";
 import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit.js";
-import type { AuditLayout } from "../../src/protocol/ring-disclosure-layout.js";
+import type { AuditLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   anonymousCommitments,
   sealRingDisclosure,
@@ -49,7 +49,7 @@ import {
   type DeliveredOutputOpening,
   type PackedOutputOpening,
 } from "../../src/crypto/ring-disclosure.js";
-import { sealDeliveredBody } from "../../src/protocol/output.js";
+import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
 import {
   deliveredSlotSecret,
   inboxKey,
@@ -63,22 +63,22 @@ import {
   applyRecordsStatement,
   replayRecordWrites,
   verifyRecordOpening,
-} from "../../src/protocol/member-opening.js";
+} from "../../src/protocol/membership/member-opening.js";
 import {
   buildRuleTable,
   decodeRule,
   memberOfIdentity,
   policyTableHash,
-} from "../../src/protocol/policy.js";
-import { sealNullifierKeyWith } from "../../src/operations/register-key.js";
+} from "../../src/protocol/membership/policy.js";
+import { sealNullifierKeyWith } from "../../src/operations/management/register-key.js";
 import {
   applyRecordsStatementHash,
   auditStatementHash,
   policyStatementHash,
   registerKeyStatementHash,
   type AuditHead,
-} from "../../src/protocol/statement.js";
-import type { RingOutput } from "../../src/protocol/transact.js";
+} from "../../src/protocol/proof/statement.js";
+import type { RingOutput } from "../../src/protocol/transaction/transact.js";
 import {
   anonymousRingData,
   ringBlindingSeed,
@@ -601,7 +601,7 @@ const CIRCUIT_TYPES = HAS_GOLDENS
 describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens", () => {
   it("lists every ring key of ring_keys.rs and names one for each golden", () => {
     const rust = readFileSync(
-      new URL("../../../../program-libs/interface/src/ring_keys.rs", import.meta.url),
+      new URL("../../../../program-libs/interface/src/proof/ring_keys.rs", import.meta.url),
       "utf8",
     );
     const names = [...rust.matchAll(/name: "([a-z0-9-]+)"/gu)].map((match) => match[1]);

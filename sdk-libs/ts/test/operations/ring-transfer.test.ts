@@ -25,7 +25,10 @@ import {
   Utxo,
   Wallet,
 } from "@heliuslabs/zolana/transaction";
-import { approveRingUnattended, type RingApprovalRequest } from "../../src/protocol/intent.js";
+import {
+  approveRingUnattended,
+  type RingApprovalRequest,
+} from "../../src/protocol/transaction/intent.js";
 import { ringConfigAddress, ringMemberRegistryAddress } from "../../src/protocol/pda/index.js";
 import { ringIdField } from "../../src/crypto/ring-stream.js";
 import {
@@ -33,11 +36,11 @@ import {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   decodeRingMemberRegistry,
-} from "../../src/protocol/ring-codecs.js";
-import { escrowKeyHash } from "../../src/protocol/member-opening.js";
+} from "../../src/protocol/codec/ring-codecs.js";
+import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
 import { checkEscrowedRecipients, readMemberRecords } from "../../src/rpc/registered-record.js";
 import { sealAudit } from "../../src/proof/audit-proof.js";
-import type { ProvenRingTransfer } from "../../src/operations/pipeline.js";
+import type { ProvenRingTransfer } from "../../src/operations/workflow/pipeline.js";
 import {
   ListId,
   buildRuleTable,
@@ -45,12 +48,15 @@ import {
   memberOfIdentity,
   recordBit,
   type RuleTable,
-} from "../../src/protocol/policy.js";
-import { buildRingDelegateTransferTransaction } from "../../src/operations/delegate.js";
-import { buildRingTransferTransaction } from "../../src/operations/transfer.js";
-import { RingOutputRail } from "../../src/operations/output-rail.js";
-import { CustomRingTransfer, DelegateTransfer } from "../../src/operations/transfer-rails.js";
-import { policyStatementHash } from "../../src/protocol/statement.js";
+} from "../../src/protocol/membership/policy.js";
+import { buildRingDelegateTransferTransaction } from "../../src/operations/management/delegate.js";
+import { buildRingTransferTransaction } from "../../src/operations/payments/transfer.js";
+import { RingOutputRail } from "../../src/operations/payments/output-rail.js";
+import {
+  CustomRingTransfer,
+  DelegateTransfer,
+} from "../../src/operations/payments/transfer-rails.js";
+import { policyStatementHash } from "../../src/protocol/proof/statement.js";
 
 import { BLOCKHASH, kitReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 
@@ -80,7 +86,7 @@ import {
   publicSlots,
   RING_AUTHORITY_MAX_INPUTS,
   RING_AUTHORITY_SHAPES,
-} from "../../src/protocol/spp.js";
+} from "../../src/protocol/transaction/spp.js";
 
 const assets = new AssetRegistry();
 const EMPTY_TABLE: RuleTable = buildRuleTable({ rules: [] });

@@ -13,17 +13,17 @@ import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../src/rpc/ports.js";
 import { EPOCH_SLOTS, tagIndex } from "../../src/crypto/ring-stream.js";
 import { RingProgramError } from "../../src/protocol/error.js";
-import type { PendingFirstContact } from "../../src/operations/pipeline.js";
+import type { PendingFirstContact } from "../../src/operations/workflow/pipeline.js";
 import {
   createKitRingSubmissionTransport,
   RingTransactionSubmission,
   type RingSubmissionAttempt,
-} from "../../src/operations/submission.js";
+} from "../../src/operations/workflow/submission.js";
 import { ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
 import { BLOCKHASH, kitReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { memberRegistryData, ownedAccount } from "../helpers/ring-accounts.js";
 import { ANCHOR_ROOT_INDEX, anchorTreeAccount } from "../helpers/ring-pipeline.js";
-import { TREE_STATE_PAUSED } from "../../src/protocol/codecs.js";
+import { TREE_STATE_PAUSED } from "../../src/protocol/codec/codecs.js";
 
 const HASH = new Uint8Array(32) as Bytes32;
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");

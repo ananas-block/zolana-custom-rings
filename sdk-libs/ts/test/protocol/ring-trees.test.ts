@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { treeAddress } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { ringTreeIdResolver } from "../../src/protocol/trees.js";
+import { ringTreeIdResolver } from "../../src/protocol/membership/trees.js";
 import { ownedAccount } from "../helpers/ring-accounts.js";
 import { treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 

@@ -15,9 +15,9 @@ import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../../src/crypto/ring-stream.js";
-import { knownUtxoHash, type KnownUtxo } from "../../src/operations/audit.js";
+import { knownUtxoHash, type KnownUtxo } from "../../src/operations/audit/audit.js";
 import { passkeyReader } from "../../src/crypto/passkey.js";
-import { memberOfTag } from "../../src/protocol/policy.js";
+import { memberOfTag } from "../../src/protocol/membership/policy.js";
 import {
   P256ReaderKey,
   checkedReaderKey,
@@ -29,7 +29,7 @@ import {
   readerKeyFromBytes,
   readerKeyToString,
   type ReaderKey,
-} from "../../src/operations/reader-access.js";
+} from "../../src/operations/management/reader-access.js";
 import {
   RING_AUDITED_UTXOS_LIMIT,
   RING_PAYLOAD_ERROR_KINDS,

@@ -10,8 +10,11 @@ import {
   decodeRingRegistryState,
   encodeRingMemberProofRequest,
   encodeRingMemberRecordsRequest,
-} from "../../src/protocol/indexer-codec.js";
-import { MEMBER_REGISTRY_CAPACITY, QUAD_HEIGHT } from "../../src/protocol/member-registry.js";
+} from "../../src/protocol/indexer/indexer-codec.js";
+import {
+  MEMBER_REGISTRY_CAPACITY,
+  QUAD_HEIGHT,
+} from "../../src/protocol/membership/member-registry.js";
 import { RingIndexer } from "../../src/rpc/indexer.js";
 
 const { hash } = indexerScalars;

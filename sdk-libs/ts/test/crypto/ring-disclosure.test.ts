@@ -11,7 +11,7 @@ import {
   deliveredFields,
   disclosureFieldCount,
   type DisclosureLayout,
-} from "../../src/protocol/ring-disclosure-layout.js";
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
 import type * as Audit from "../../src/crypto/audit.js";
 import { maskDisclosure, unmaskDisclosure } from "../../src/crypto/audit.js";
 import {

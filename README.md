@@ -49,7 +49,7 @@ nullifiers. [Proof costs](docs/proof-costs.md) lists the statements by operation
 Each proving key fixes an input and output width; a shape such as 2x4 has two
 inputs and four outputs. The available widths depend on the rail and proof
 family. See [proof costs](docs/proof-costs.md) and the pinned
-[key catalog](program-libs/interface/src/key_catalog.rs).
+[key catalog](program-libs/interface/src/proof/key_catalog.rs).
 
 ## Threat
 

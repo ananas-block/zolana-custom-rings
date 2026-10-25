@@ -28,10 +28,10 @@ import {
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import { AssetRegistry, SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
-import { encodeRingOutput, RingScheme } from "../../src/protocol/output.js";
+import { encodeRingOutput, RingScheme } from "../../src/protocol/transaction/output.js";
 import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/custom-ring-proof.js";
-import type { DisclosureLayout } from "../../src/protocol/ring-disclosure-layout.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
+import type { DisclosureLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   auditSharedSecret,
   auditorMessageData,
@@ -56,22 +56,22 @@ import {
   type KnownUtxo,
   type KnownUtxos,
   type OutputOpening,
-} from "../../src/operations/audit.js";
+} from "../../src/operations/audit/audit.js";
 import { sealRingDepositOpenings } from "../../src/proof/deposit-audit.js";
 import { sealRingMergeDisclosure } from "../../src/crypto/merge-disclosure.js";
 import {
   ConfirmedDeposit,
   type ConfirmedRingTransaction,
   type TransactionOrigin,
-} from "../../src/protocol/origin.js";
-import { recoverRingMemberNotes } from "../../src/operations/recover.js";
+} from "../../src/protocol/transaction/origin.js";
+import { recoverRingMemberNotes } from "../../src/operations/workflow/recover.js";
 import { ringAuditReader } from "../helpers/clients.js";
 import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction, ringDepositPayload } from "../helpers/confirmed-deposits.js";
 import {
   CONFIDENTIAL_DATA_FREE_BODY_LEN,
   RING_PACKED_DATA_FREE_BODY_LEN,
-} from "../../src/protocol/output.js";
+} from "../../src/protocol/transaction/output.js";
 import { x25519FromU } from "../../src/crypto/x25519.js";
 
 await initializePoseidon();

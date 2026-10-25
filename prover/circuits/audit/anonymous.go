@@ -291,7 +291,7 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 	return spent
 }
 
-// disclosure is the anonymous disclosure the layout selects, mirrored by DisclosureLayout::Anonymous in program-libs/interface/src/disclosure.rs.
+// disclosure is the anonymous disclosure the layout selects, mirrored by DisclosureLayout::Anonymous in program-libs/interface/src/proof/disclosure.rs.
 //
 //	SeedOut under LayoutExits, then on a commitment key
 //	nullifier_pk per output, pack_disclosure(slot bytes per output), hash of input 0, prefix pairs of the other published inputs
@@ -310,7 +310,7 @@ func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 	})
 }
 
-// statement is the anonymous audit preimage, mirrored by AuditStatement::elements under AuditKind::Anonymous in program-libs/interface/src/statement.rs.
+// statement is the anonymous audit preimage, mirrored by AuditStatement::elements under AuditKind::Anonymous in program-libs/interface/src/proof/statement.rs.
 //
 //	head ‖ output_chain, body_chain, disclosure_chain, private_tx_hash, tag_chain, epoch, first_contact_root, sender_commitment
 func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, tagChain frontend.Variable) frontend.Variable {

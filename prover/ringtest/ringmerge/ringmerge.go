@@ -172,7 +172,7 @@ func (s *Statement) Rebind(t testing.TB) {
 	s.Circuit.PublicInputHash = spptest.MustHashChain(t, s.Elements(t))
 }
 
-// disclosureBytes mirrors merge_disclosure_len in program-libs/interface/src/merge.rs.
+// disclosureBytes mirrors merge_disclosure_len in program-libs/interface/src/instructions/merge.rs.
 func disclosureBytes(inputs int) int {
 	return 32 + 32 + 32 + 8 + 32 + 32*inputs
 }

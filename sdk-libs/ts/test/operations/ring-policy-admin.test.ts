@@ -9,14 +9,19 @@ import {
   ringMemberRegistryAddress,
   ringMemberRegistryPda,
 } from "../../src/protocol/pda/index.js";
-import type { RingSourceSlot } from "../../src/protocol/ring-codecs.js";
-import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../src/protocol/member-opening.js";
-import { LIST_IDS, ListId, buildRuleTable, type Rule } from "../../src/protocol/policy.js";
+import type { RingSourceSlot } from "../../src/protocol/codec/ring-codecs.js";
+import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../src/protocol/membership/member-opening.js";
+import {
+  LIST_IDS,
+  ListId,
+  buildRuleTable,
+  type Rule,
+} from "../../src/protocol/membership/policy.js";
 import {
   buildRingCreatePolicyTransaction,
   buildRingSetPolicyRulesTransaction,
   buildRingSetPolicySourceTransaction,
-} from "../../src/operations/policy-admin.js";
+} from "../../src/operations/management/policy-admin.js";
 import {
   ZERO_ADDRESS,
   memberRegistryData,

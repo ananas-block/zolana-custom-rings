@@ -5,7 +5,7 @@ export {
   MEMBER_REGISTRY_ROOT_HISTORY,
   QUAD_ARITY,
   QUAD_HEIGHT,
-} from "./protocol/member-registry.js";
+} from "./protocol/membership/member-registry.js";
 export type {
   ApplyProofInputs,
   MemberRecord,
@@ -13,4 +13,4 @@ export type {
   QueueEntry,
   RecordOpening,
   RecordWriteProofInput,
-} from "./protocol/member-registry.js";
+} from "./protocol/membership/member-registry.js";

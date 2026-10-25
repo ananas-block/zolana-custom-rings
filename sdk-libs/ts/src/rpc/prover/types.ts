@@ -1,6 +1,6 @@
-import type { RecordOpening } from "../../protocol/member-registry.js";
+import type { RecordOpening } from "../../protocol/membership/member-registry.js";
 
-export { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/ring-deposit-capsule.js";
+export { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
 
 /** Rust `MAX_RULES` and `MAX_INLINE_ASSETS`, the fixed rule table width. */
 export const RING_RULE_SLOTS = 16;

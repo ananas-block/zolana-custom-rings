@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { compressProof, parseProof } from "@heliuslabs/zolana/client";
 import { customRingProof } from "../../src/rpc/prover/proof.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/custom-ring-proof.js";
-import { RING_PROVING_KEY_SHA256S, ringProvingKey } from "../../src/protocol/proving-keys.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
+import { RING_PROVING_KEY_SHA256S, ringProvingKey } from "../../src/protocol/proof/proving-keys.js";
 import { RingError, wrapRingError } from "../../src/protocol/error.js";
 
 const ZERO_POINT = ["0x0", "0x0"];

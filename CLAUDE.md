@@ -17,6 +17,8 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   crypto or proof, RPC, state or storage, operations, and CLI UI. Keep a small
   package flat when each source file already has one clear purpose. Rust crate
   roots and TypeScript package entrypoints keep the public paths stable.
+- Split crowded layers by their own purpose: commands by audience, protocol
+  files by concept, and generated verifiers by circuit family and shape.
 - Name a module for the work it owns, such as `output-rail`, `transfer-rails`,
   `ring-directory`, or `known_utxo_index`, rather than a broad noun that also
   describes another module. Integration cases live in behavior-named test

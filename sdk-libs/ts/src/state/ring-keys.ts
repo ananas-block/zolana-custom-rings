@@ -18,7 +18,7 @@ import {
   type ShieldedKeys,
 } from "@heliuslabs/zolana/transaction";
 
-import { extended } from "../operations/extended.js";
+import { extended } from "../operations/workflow/extended.js";
 import { checkedCounter, u32Field } from "../crypto/error.js";
 import { deliveredSlotSecret } from "../crypto/ring-stream.js";
 
