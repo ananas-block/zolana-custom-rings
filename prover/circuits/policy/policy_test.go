@@ -425,3 +425,57 @@ func requireForgeryRefused(t *testing.T, hint solver.Hint, forge func(q *big.Int
 	}
 	hintattack.RequireConstraintRejection(t, err)
 }
+
+func TestMintThresholdsAndOutflowHaveNoEightRecordLimit(t *testing.T) {
+	world := func() ringpolicy.World {
+		w := assetGuarded()
+		w.Table.Inline = nil
+		w.Table.Limits = nil
+		for i := int64(0); i < 12; i++ {
+			asset := int64(3000) + i
+			w.Table.Inline = append(w.Table.Inline, ringpolicy.InlineLimit{Asset: asset, Limit: 500})
+			w.Table.Limits = append(w.Table.Limits, ringpolicy.OutflowLimit{Asset: asset, Cap: 1000, CosignAbove: 500})
+		}
+		for i := range w.Slots {
+			w.Slots[i].Asset = 3009
+		}
+		return w
+	}
+	requireSolved(t, world().Build(t))
+	t.Run("ninth threshold still enforces lists", func(t *testing.T) {
+		w := world()
+		w.Slots[0].Amount = 501
+		w.ApprovalRequired = true
+		b := w.Build(t)
+		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			t.Fatal("unlisted recipient above threshold admitted")
+		}
+	})
+	t.Run("public-only mint cannot omit its cap", func(t *testing.T) {
+		w := world()
+		w.Public = []ringpolicy.PublicSlot{{Asset: 3011, Amount: -1001}}
+		w.ApprovalRequired = true
+		b := w.Build(t)
+		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			t.Fatal("twelfth mint's cap ignored")
+		}
+	})
+	t.Run("public-only mint requires co-sign approval", func(t *testing.T) {
+		w := world()
+		w.Public = []ringpolicy.PublicSlot{{Asset: 3011, Amount: -501}}
+		w.ApprovalRequired = true
+		requireSolved(t, w.Build(t))
+		w.ApprovalRequired = false
+		b := w.Build(t)
+		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			t.Fatal("twelfth mint's co-sign threshold ignored")
+		}
+	})
+	t.Run("settings cannot be forged", func(t *testing.T) {
+		b := world().Build(t)
+		b.Member.AssetEntries[0].Own.MintPolicy = 0
+		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			t.Fatal("forged settings admitted")
+		}
+	})
+}

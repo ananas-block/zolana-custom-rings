@@ -163,6 +163,7 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
         next: view.next.0,
         lists: view.lists,
         escrow_key: view.escrow_key.0,
+        mint_policy: view.mint_policy,
     }
 }
 
@@ -211,11 +212,13 @@ fn record_write(view: &RingRecordWriteView) -> Result<RecordWriteProofInput, Aud
             mask: view.mask,
             value: view.value,
             escrow_key: view.escrow_key.0,
+            mint_policy: view.mint_policy,
         },
         exists: view.exists,
         old_next: view.old_next.0,
         old_lists: view.old_lists,
         old_escrow: view.old_escrow.0,
+        old_mint_policy: view.old_mint_policy,
         slot: quad_path(&view.slot)?,
         low: member_record(&view.low),
         low_path: quad_path(&view.low_path)?,

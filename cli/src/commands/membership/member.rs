@@ -376,6 +376,7 @@ mod tests {
         let member = member();
         let other = *Member::owner_tag(&[5; 32]).unwrap().as_bytes();
         let advanced = tree(&[QueueEntry {
+            mint_policy: Default::default(),
             member: other,
             mask: 1,
             value: 1,

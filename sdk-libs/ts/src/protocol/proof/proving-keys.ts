@@ -26,6 +26,7 @@ export type RingKeyCircuit =
   | Readonly<{ family: "delegatePolicy"; inputs: number; outputs: number; ownOnly: boolean }>
   | Readonly<{ family: "applyRecords"; writes: number }>
   | Readonly<{ family: "registerKey" }>
+  | Readonly<{ family: "withdrawalExemption" }>
   | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "anonymousMerge"; width: number }>;
 
@@ -88,6 +89,7 @@ export const RING_KEYS: readonly Readonly<{
           [{ family: "applyRecords", writes }, `custom-ring-apply-records-${writes}`] as const,
       ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
+      [{ family: "withdrawalExemption" }, "custom-ring-withdrawal-exemption"],
       ...[1, 2, 4, 8].map(
         (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
       ),
@@ -155,6 +157,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
       return right.family === left.family && right.writes === left.writes;
     case "anonymousMerge":
       return right.family === left.family && right.width === left.width;
+    case "withdrawalExemption":
     case "registerKey":
       return right.family === left.family;
     case "deposit":

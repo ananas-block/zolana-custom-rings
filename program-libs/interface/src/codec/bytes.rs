@@ -87,11 +87,4 @@ impl<'a> Bytes<'a> {
     pub(crate) const fn rest(self) -> &'a [u8] {
         self.data
     }
-
-    pub(crate) fn finish(self) -> Result<(), CustomRingError> {
-        match self.data {
-            [] => Ok(()),
-            _ => Err(self.short),
-        }
-    }
 }

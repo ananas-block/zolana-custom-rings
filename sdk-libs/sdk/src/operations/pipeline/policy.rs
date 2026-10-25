@@ -12,7 +12,7 @@ use zolana_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
 use zolana_interface::N_PUBLIC_SLOTS;
 use zolana_ring_client::{records::MemberOpeningRead, AsyncRingIndexer};
 use zolana_ring_policy::{
-    EncodedRuleTable, Member, OutputSubjects, RecordLists, SourceMap, Subject, TransferSubjects,
+    EncodedRuleTable, Member, OutputSubjects, RecordLists, SourceMap, TransferSubjects,
 };
 use zolana_transaction::instructions::transact::SppProofInputs;
 
@@ -46,6 +46,7 @@ pub(super) struct PolicyInputs {
     sender_entry: Entry,
     owner_entries: Vec<Entry>,
     asset_entries: Vec<Entry>,
+    public_asset_entries: Vec<Option<MemberOpening>>,
     /// The escrowed key ciphertext hash of every UTXO output's owner, under key escrow.
     ct_hashes: Vec<Option<[u8; 32]>>,
     pub approval_required: bool,
@@ -89,11 +90,6 @@ impl PolicyRead<'_> {
         )
         .await?;
         let outputs = &self.inputs.output_utxos;
-        let asset_rules = pinned
-            .table
-            .rules()
-            .iter()
-            .any(|rule| rule.subject == Subject::Asset);
         let owners = outputs
             .iter()
             .map(|output| {
@@ -110,8 +106,8 @@ impl PolicyRead<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         let assets = outputs
             .iter()
-            .map(|output| match (asset_rules, output.is_dummy()) {
-                (true, false) => Ok(Some(*Member::asset(&output.asset.asset)?.as_bytes())),
+            .map(|output| match output.is_dummy() {
+                false => Ok(Some(*Member::asset(&output.asset.asset)?.as_bytes())),
                 _ => Ok(None),
             })
             .collect::<Result<Vec<_>, RingError>>()?;
@@ -119,7 +115,13 @@ impl PolicyRead<'_> {
             .chain(owners.iter().flatten().map(|owner| owner.member))
             .chain(assets.iter().flatten().copied())
             .chain(withdrawals.iter().map(|w| w.owner))
-            .chain(withdrawals.iter().filter(|_| asset_rules).map(|w| w.asset))
+            .chain(withdrawals.iter().map(|w| w.asset))
+            .chain(
+                self.public_assets
+                    .iter()
+                    .copied()
+                    .filter(|asset| *asset != [0; 32]),
+            )
             .collect();
         let members: Vec<[u8; 32]> = members.into_iter().collect();
         let own_reads = RecordReads {
@@ -151,6 +153,14 @@ impl PolicyRead<'_> {
                 curator: curator_reads.as_ref().map_or(0, on),
             }
         };
+        let mint_policy = |asset: &[u8; 32]| {
+            own_reads
+                .get(asset)
+                .and_then(MemberOpeningRead::record)
+                .map_or(zolana_ring_policy::MintPolicy::EMPTY, |record| {
+                    record.mint_policy
+                })
+        };
         let mut subjects = outputs
             .iter()
             .zip(&owners)
@@ -163,6 +173,7 @@ impl PolicyRead<'_> {
                     amount: output.amount,
                     owner_lists: lists(owner.member),
                     asset_lists: lists(asset),
+                    mint_policy: mint_policy(&asset),
                 })
             })
             .collect::<Result<Vec<_>, RingError>>()?;
@@ -172,6 +183,7 @@ impl PolicyRead<'_> {
             amount: w.amount,
             owner_lists: lists(w.owner),
             asset_lists: lists(w.asset),
+            mint_policy: mint_policy(&w.asset),
         }));
         pinned.table.admit(
             &pinned.sources,
@@ -213,6 +225,29 @@ impl PolicyRead<'_> {
                     .transpose()
             })
             .collect::<Result<Vec<_>, RingError>>()?;
+        let limit_assets: BTreeSet<_> = assets
+            .iter()
+            .flatten()
+            .copied()
+            .chain(
+                self.public_assets
+                    .iter()
+                    .copied()
+                    .filter(|asset| *asset != [0; 32]),
+            )
+            .collect();
+        let limits = limit_assets
+            .iter()
+            .filter_map(|asset| {
+                let policy = mint_policy(asset);
+                (policy.cap != 0 || policy.cosign_above != 0).then(|| {
+                    let member = Member::from_bytes(*asset).expect("verified record member");
+                    zolana_ring_policy::OutflowLimit::of(&member)
+                        .with_cap(policy.cap)
+                        .with_cosign_above(policy.cosign_above)
+                })
+            })
+            .collect::<Vec<_>>();
         let approval_required = match self.rail {
             RingRail::Delegate => false,
             RingRail::Confidential | RingRail::Anonymous => Outflows {
@@ -222,7 +257,7 @@ impl PolicyRead<'_> {
                 public_assets: self.public_assets,
                 public_amounts: self.public_amounts,
             }
-            .approval_required(pinned.table.limits())?,
+            .approval_required(&limits)?,
         };
         let mut owner_entries: Vec<_> = owners
             .iter()
@@ -230,11 +265,7 @@ impl PolicyRead<'_> {
             .collect();
         let mut asset_entries: Vec<_> = assets.iter().map(|asset| entry(*asset)).collect();
         owner_entries.extend(withdrawals.iter().map(|w| entry(Some(w.owner))));
-        asset_entries.extend(
-            withdrawals
-                .iter()
-                .map(|w| entry(asset_rules.then_some(w.asset))),
-        );
+        asset_entries.extend(withdrawals.iter().map(|w| entry(Some(w.asset))));
         Ok(PolicyInputs {
             withdrawals,
             spl_withdrawal_owners,
@@ -246,6 +277,11 @@ impl PolicyRead<'_> {
             sender_entry: entry(Some(self.sender)),
             owner_entries,
             asset_entries,
+            public_asset_entries: self
+                .public_assets
+                .iter()
+                .map(|asset| entry((*asset != [0; 32]).then_some(*asset)).own)
+                .collect(),
             ct_hashes,
             approval_required,
             key_escrow,
@@ -361,6 +397,7 @@ impl PolicyInputs {
             sender_entry: self.sender_entry.clone(),
             owner_entries,
             asset_entries,
+            public_asset_entries: self.public_asset_entries.clone(),
         };
         let proof = match proving.rail {
             RingRail::Delegate => {

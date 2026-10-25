@@ -951,12 +951,20 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
             authority: env.payer.pubkey(),
             signer: cosigner.pubkey(),
             scope: CoSignScope::WITHDRAWALS,
-            thresholds: &[CoSignThreshold {
-                mint: usdc,
-                amount: USDC_WITHDRAW_AMOUNT - 1,
-            }],
         }
         .instruction()?],
+    )?;
+    land(
+        &env,
+        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
+            Member::asset(&usdc)?,
+            zolana_ring_policy::MintPolicy {
+                withdrawal_threshold: USDC_WITHDRAW_AMOUNT - 1,
+                ..Default::default()
+            },
+        )?,
+        &env.payer,
+        &[],
     )?;
     let withdraw = || -> Result<ConfidentialTransaction> {
         let mut transfer = ConfidentialTransaction::new_with_ring(

@@ -13,10 +13,6 @@ type outputTotals struct {
 	byOwner, byAsset, byOwnerAndAsset frontend.Variable
 }
 
-type assetLimit struct {
-	found, threshold frontend.Variable
-}
-
 func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s subjects, outputs []utxoView) {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
@@ -25,10 +21,9 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 	}
 	// 2. An asset guard exempts an owner whose outputs of one asset stay within the asset's inline limit.
 	totals := sumOutputs(api, outputs, liveOwner)
-	limits, assetExempt := make([]assetLimit, len(outputs)), make([]frontend.Variable, len(outputs))
-	for o, out := range outputs {
-		limits[o] = p.inlineLimit(api, t, out.asset)
-		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, limits[o].threshold)
+	assetExempt := make([]frontend.Variable, len(outputs))
+	for o := range outputs {
+		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, s.mintPolicies[o].threshold)
 	}
 	// 3. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
 	for i, left := range outputs {
@@ -45,7 +40,7 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 			enabled := api.Mul(onOutput, api.Select(rule.onAsset, outputs[o].utxo, liveOwner[o]))
 			refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.assets[o], s.owners[o]))
 			// An asset guarded rule needs an inline limit for the output's asset.
-			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), limits[o].found)
+			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, s.mintPolicies[o].threshold))
 			total := api.Select(rule.onAsset, totals[o].byAsset, totals[o].byOwner)
 			scalar := api.Mul(rule.scalarGuard, cmp.atMost(api, total, rule.threshold))
 			exempt := api.Or(scalar, api.Mul(rule.assetGuard, assetExempt[o]))
@@ -77,17 +72,6 @@ func sumOutputs(api frontend.API, outputs []utxoView, liveOwner []frontend.Varia
 		}
 	}
 	return totals
-}
-
-// inlineLimit is the active inline row naming asset, the program keeps inline assets pairwise distinct so at most one matches.
-func (p *Policy) inlineLimit(api frontend.API, t tableView, asset frontend.Variable) assetLimit {
-	limit := assetLimit{found: 0, threshold: 0}
-	for i, inline := range p.InlineAssets {
-		match := api.Mul(t.inlineActive[i], api.IsZero(api.Sub(inline, asset)))
-		limit.found = api.Add(limit.found, match)
-		limit.threshold = api.Add(limit.threshold, api.Mul(match, p.InlineLimits[i]))
-	}
-	return limit
 }
 
 // refuses is set when no list admits the subject, neither a present list it is on nor an absent list it is off.

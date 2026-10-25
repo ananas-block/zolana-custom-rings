@@ -26,8 +26,8 @@ asset, defined in [Member registry](../program-libs/interface/src/accounts/membe
 therefore serves every rule subject. One list holds owners and assets side by
 side, and an owner key and a mint with equal bytes stay distinct members.
 
-A record holds a member, the next member above it, a list bitmap and an escrow
-key. One opening answers every list for its member. The links order the
+A record holds a member, the next member above it, a list bitmap, an escrow
+key and four per-mint amounts. One opening answers every list for its member. The links order the
 records by member, and leaf 0 holds a sentinel whose link spans the field.
 Every member lies strictly inside that link, so an absent member always has a
 present low record whose link brackets it. A proof of absence opens that low
@@ -70,8 +70,8 @@ and [The insert fee](member-records.md#the-insert-fee).
 ## The table, the source map, and one hash
 
 The rule table arrives as instruction data and lives in the member registry.
-`CreatePolicy` and `SetPolicyRules` carry the rows, the mint thresholds, the
-outflow limits and the source specs. The program encodes and validates them,
+`CreatePolicy` and `SetPolicyRules` carry the rule rows and source specs.
+Mint thresholds and outflow limits are authority writes to asset records. The program encodes and validates them,
 and an illegal table fails the instruction and never reaches the account. The
 CLI builds the same table from `ring.toml` through `RuleTableBuilder::try_build`
 first and names the refused row. The builder refuses duplicate rules by
@@ -182,15 +182,16 @@ cover that case.
 An amount guard exempts a subject whose total stays at or below the threshold.
 An owner rule sums each owner's outputs and an asset rule each asset's outputs,
 so a payment split across slots does not escape the guard. A per-asset guard
-groups the outputs by owner and mint and reads each mint's threshold from the
-table. A wallet paying a blocked member cannot omit the convicting record.
+groups gross payments by owner and mint and reads each mint's threshold from
+its authenticated record in the ring's own registry. A wallet paying a blocked member cannot omit the convicting record.
 Every subject demands an opening under a root the program accepts, and an
 absent member opens only through a low record that brackets it.
 
-Public legs live in SPP's public slots, outside the list rules. The program
-computes each asset's net public amount from the public legs and their
-settlement accounts, and binds it in the statement. The outflow limits below
-count withdrawals through it.
+Public withdrawals also satisfy owner and asset list rules; deposits never
+offset their amount guards. The program binds public withdrawal owners and
+amounts from settlement accounts. Separately, net public amounts feed the
+outflow calculation. Every nonzero public asset opens its own mint settings,
+even when no private output carries that asset.
 
 ## Roots and revocation
 
@@ -250,8 +251,13 @@ through `set_ring_activation`, and nothing in the ring program can. No
 instruction changes the tier or the auditor, and the program stays upgradeable.
 
 **Co-signing** is a signer check. The ring stores one co-signer with a scope
-over transfers, deposits and withdrawals, and per-mint thresholds for
-withdrawals summed over the legs of one transaction. Every transact and merge
+over transfers, deposits and withdrawals. Withdrawal thresholds live in mint
+records, including on audit-only rings. An optional withdrawal exemption proof
+opens the actual withdrawn mints under an own-registry root at or above the
+floor and bounds each gross total by its threshold. Missing or zero thresholds
+never exempt positive withdrawals; deposits cannot reduce these totals. This
+proof waives only withdrawal-scoped co-signing, never transfers, deposits or
+the approval bit. Every transact and merge
 is a transfer, and a public leg adds its class, so a shielded transfer cannot
 hide behind a small deposit. The proof-bound approval bit demands the same
 signer whatever the scope. A transfer refuses a co-signer that is one of its
@@ -281,8 +287,9 @@ owner's escrow record under a named root. A merge outside an anonymous ring
 opens the owner's escrowed key through SPP's merge proof.
 
 **Outflow limits** bound a sender's outflow per mint in one transfer. The
-policy proof bounds the outflow of each limited mint by the rule in
-[Policy proof](../program-libs/policy/src/rule_table/mod.rs). A zero cap or threshold leaves that bound
+policy proof opens the settings of every real output asset and nonzero public
+asset, then bounds the total outflow by its authenticated
+[MintPolicy](../program-libs/policy/src/mint.rs). A zero cap or threshold leaves that bound
 off. The ring keeps no counter, so a sender may move up to the cap in every
 transfer. The program demands the configured co-signer when the transfer sets
 the approval bit.

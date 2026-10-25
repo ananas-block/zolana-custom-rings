@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY, mintPolicyField, mintPolicyWriteField } from "./mint-policy.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { type RingMemberOpening, type RingSealedKey } from "../../rpc/ports.js";
@@ -35,7 +36,7 @@ import type { ApplyRecordsStatement } from "../proof/statement.js";
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
 /** Rust `MEMBER_REGISTRY_EMPTY_ROOT`, the tree holding only the sentinel, a registry's first root. */
 export const MEMBER_REGISTRY_EMPTY_ROOT = hexToBytes(
-  "26becf712db619da223ecf9b8fd6c19a6f81f281e4d7acec9d6ab3af79722946",
+  "0771d415ec42a482ed0169394bd583c89f08f5377bb20a45b240f7d241cd9841",
 ) as Bytes32;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -53,6 +54,7 @@ export const SENTINEL_RECORD: MemberRecord = Object.freeze({
   next: FIELD_MAX,
   lists: 0n,
   escrowKey: ZERO_32,
+  mintPolicy: EMPTY_MINT_POLICY,
 });
 
 /** The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly. */
@@ -69,6 +71,8 @@ export function memberRecordHash(record: MemberRecord): Bytes32 {
     checkedBytes<Bytes32>(record.next, 32, "record next"),
     u64Field(record.lists, "lists"),
     checkedBytes<Bytes32>(record.escrowKey, 32, "record escrow key"),
+    mintPolicyField(record.mintPolicy),
+    u64Field(record.mintPolicy.withdrawalThreshold, "withdrawal threshold"),
   ]);
 }
 
@@ -188,7 +192,7 @@ export function escrowEntry(member: Bytes32, key: EscrowKey): QueueEntry {
   });
 }
 
-/** `Poseidon(CRQW, member, mask, value, escrow_key)`. */
+/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`. */
 export function queueEntryHash(entry: QueueEntry): Bytes32 {
   return poseidon([
     domainField(RingDomain.queueWrite),
@@ -196,6 +200,8 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
     u64Field(entry.mask, "mask"),
     u64Field(entry.value, "value"),
     checkedBytes<Bytes32>(entry.escrowKey, 32, "entry escrow key"),
+    mintPolicyWriteField(entry.mintPolicy),
+    u64Field(entry.mintPolicy?.withdrawalThreshold ?? 0n, "withdrawal threshold"),
   ]);
 }
 
@@ -253,6 +259,7 @@ function writtenRecord(record: MemberRecord, entry: QueueEntry): MemberRecord {
   return Object.freeze({
     ...record,
     lists: (record.lists & ~entry.mask & U64_MAX) | entry.value,
+    mintPolicy: entry.mintPolicy ?? record.mintPolicy,
     escrowKey: equalBytes(record.escrowKey, ZERO_32) ? entry.escrowKey : record.escrowKey,
   });
 }
@@ -269,6 +276,7 @@ function replayWrite(
       next: write.oldNext,
       lists: write.oldLists,
       escrowKey: write.oldEscrow,
+      mintPolicy: write.oldMintPolicy,
     };
     if (!equalBytes(quadPathRoot(write.slot, memberRecordHash(record)), root))
       invalid("RootMismatch");
@@ -279,17 +287,30 @@ function replayWrite(
     !brackets(low, entry.member) ||
     !equalBytes(write.oldNext, low.next) ||
     write.oldLists !== 0n ||
-    !equalBytes(write.oldEscrow, ZERO_32)
+    !equalBytes(write.oldEscrow, ZERO_32) ||
+    !equalBytes(mintPolicyField(write.oldMintPolicy), ZERO_32) ||
+    write.oldMintPolicy.withdrawalThreshold !== 0n
   )
     invalid("NotBracketed");
   if (!equalBytes(quadPathRoot(write.lowPath, memberRecordHash(low)), root))
     invalid("RootMismatch");
   const inserted = writtenRecord(
-    { member: entry.member, next: low.next, lists: 0n, escrowKey: ZERO_32 },
+    {
+      member: entry.member,
+      next: low.next,
+      lists: 0n,
+      escrowKey: ZERO_32,
+      mintPolicy: EMPTY_MINT_POLICY,
+    },
     entry,
   );
   // An empty record is never inserted, the write proves the absence and keeps the root.
-  if (inserted.lists === 0n && equalBytes(inserted.escrowKey, ZERO_32)) {
+  if (
+    inserted.lists === 0n &&
+    equalBytes(inserted.escrowKey, ZERO_32) &&
+    equalBytes(mintPolicyField(inserted.mintPolicy), ZERO_32) &&
+    inserted.mintPolicy.withdrawalThreshold === 0n
+  ) {
     // The circuit range-checks a no-op's slot and nothing else.
     checkedIndex(write.slot.index);
     return [root, nextIndex];

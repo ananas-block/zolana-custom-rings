@@ -163,7 +163,8 @@ const RECORD_TABLES: [&str; 5] = [
     "ring_record_nodes",
     "ring_record_queue",
 ];
-const RECORD_COLUMNS: &str = "leaf_index, member, next_member, lists, escrow_key, seal";
+const RECORD_COLUMNS: &str =
+    "leaf_index, member, next_member, lists, escrow_key, seal, mint_policy";
 
 /// Lookups read every table from one Postgres snapshot.
 pub(crate) async fn begin_read(
@@ -407,7 +408,7 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         for stored in records {
             let record = &stored.record.record;
             let sql = "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,\
-                       lists,escrow_key,seal) VALUES($1,$2,$3,$4,$5,$6,$7,$8)";
+                       lists,escrow_key,seal,mint_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
             let values = vec![
                 int(stored.record.index)?,
                 int(applied)?,
@@ -416,6 +417,7 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
                 int(record.lists)?,
                 bytes(&record.escrow_key),
                 seal_value(stored.seal.as_ref())?,
+                serde_json::to_string(&record.mint_policy)?.into(),
             ];
             self.exec(sql, values).await?;
         }
@@ -489,7 +491,8 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
 
     /// Fails on a gap in `positions`.
     pub async fn entries(&self, positions: Range<u64>) -> Result<Vec<StoredEntry>> {
-        let sql = "SELECT position, member, mask, value, escrow_key, slot, chain, seal \
+        let sql =
+            "SELECT position, member, mask, value, escrow_key, slot, chain, seal, mint_policy \
                    FROM ring_record_queue WHERE program=$1 AND position>=$2 AND position<$3 \
                    ORDER BY position";
         let values = vec![int(positions.start)?, int(positions.end)?];
@@ -502,12 +505,13 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
 
     pub async fn save_entry(&self, entry: &StoredEntry) -> Result<()> {
         let sql = "INSERT INTO ring_record_queue(program,position,member,mask,value,escrow_key,\
-                   slot,chain,seal) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
+                   slot,chain,seal,mint_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
         let QueueEntry {
             member,
             mask,
             value,
             escrow_key,
+            mint_policy,
         } = entry.write.entry;
         let values = vec![
             int(entry.position)?,
@@ -518,6 +522,10 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
             int(entry.slot)?,
             bytes(&entry.chain),
             seal_value(entry.write.seal.as_ref())?,
+            mint_policy
+                .map(|policy| serde_json::to_string(&policy))
+                .transpose()?
+                .into(),
         ];
         self.exec(sql, values).await
     }
@@ -622,6 +630,7 @@ fn stored_record(row: &QueryResult) -> Result<StoredRecord> {
                 next: field(row, "next_member")?,
                 lists: uint(row, "lists")?,
                 escrow_key: field(row, "escrow_key")?,
+                mint_policy: read_mint_policy(row)?.unwrap_or_default(),
             },
         },
         seal: seal(row)?,
@@ -637,6 +646,7 @@ fn stored_entry(row: &QueryResult) -> Result<StoredEntry> {
                 mask: uint(row, "mask")?,
                 value: uint(row, "value")?,
                 escrow_key: field(row, "escrow_key")?,
+                mint_policy: read_mint_policy(row)?,
             },
             seal: seal(row)?,
         },
@@ -731,4 +741,9 @@ mod account_image {
             .map(|account| Box::new(*account))
             .ok_or_else(|| D::Error::custom("invalid account image"))
     }
+}
+
+fn read_mint_policy(row: &QueryResult) -> Result<Option<zolana_ring_policy::MintPolicy>> {
+    let value = row.try_get::<Option<String>>("", "mint_policy")?;
+    Ok(value.as_deref().map(serde_json::from_str).transpose()?)
 }

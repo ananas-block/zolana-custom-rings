@@ -68,7 +68,7 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	// 5. Every enabled rule holds for its subjects.
 	c.assertRules(api, cmp, t, s, payments)
 	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
-	c.assertApproval(api, c.constrainOutflow(api, cmp, t, sender, outputs))
+	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, s.mintPolicies[:len(outputs)]))
 	// 7. Under key escrow every output owner escrows the output's nullifier key.
 	c.assertEscrow(api, c.KeyEscrow, s.owners, outputs)
 	// 8. The one public input is the statement the program rebuilds.

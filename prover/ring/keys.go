@@ -27,6 +27,7 @@ const (
 	RegisterKey
 	Deposit
 	AnonymousMerge
+	WithdrawalExemption
 )
 
 type Key struct {
@@ -85,6 +86,7 @@ func keys() []Key {
 		add(ApplyRecords, writes, 0)
 	}
 	add(RegisterKey, 0, 0)
+	add(WithdrawalExemption, 0, 0)
 	for _, capacity := range circuits.DepositCapacities {
 		add(Deposit, capacity, 0)
 	}
@@ -127,6 +129,8 @@ func (k Key) circuitType() common.CircuitType {
 		return named("policy-delegate-v2-%dx%d-%s", k.Inputs, k.Outputs, k.sourceName())
 	case ApplyRecords:
 		return named("apply-records-%d", k.Inputs)
+	case WithdrawalExemption:
+		return named("withdrawal-exemption")
 	case RegisterKey:
 		return named("register-key")
 	case Deposit:

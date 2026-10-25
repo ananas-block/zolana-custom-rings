@@ -7,25 +7,21 @@ use crate::{field_u8, ListId, ListSet, Member};
 
 /// Rule slots compiled into the circuit, a new value rotates the proving key.
 pub const MAX_RULES: usize = 16;
-/// Mint threshold slots per table, a circuit width.
-pub const MAX_INLINE_ASSETS: usize = 8;
 /// Source slots, one per list the enum can name.
 pub const MAX_SOURCES: usize = 8;
 /// Curator registries one policy may read lists from, a circuit width.
 pub const N_FOREIGN: usize = 1;
-/// Outflow limit slots per table, a circuit width.
-pub const MAX_OUTFLOW_LIMITS: usize = 8;
 /// Enters `policy_hash`, bump it with any change of the encoding below.
-pub const POLICY_TABLE_VERSION: u8 = 11;
+pub const POLICY_TABLE_VERSION: u8 = 12;
 /// `"CRTB"`, the first field of the table hash, `domain::POLICY_TABLE` of the interface.
 pub const POLICY_TABLE_DOMAIN: u32 = 0x4352_5442;
 pub const POLICY_TABLE_FIELDS: usize =
-    5 + 2 * MAX_SOURCES + MAX_RULES + 2 * MAX_INLINE_ASSETS + 3 * MAX_OUTFLOW_LIMITS;
+    (3 + 2 * MAX_SOURCES + MAX_RULES).div_ceil(POLICY_TABLE_RATE) * POLICY_TABLE_RATE;
 /// Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum.
 pub(crate) const POLICY_TABLE_RATE: usize = 11;
 
 const _: () =
-    assert!(POLICY_TABLE_FIELDS == 77 && POLICY_TABLE_FIELDS.is_multiple_of(POLICY_TABLE_RATE));
+    assert!(POLICY_TABLE_FIELDS == 44 && POLICY_TABLE_FIELDS.is_multiple_of(POLICY_TABLE_RATE));
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PolicySource {
@@ -462,11 +458,6 @@ impl OutflowLimit {
 pub struct RuleTable {
     rules: [Rule; MAX_RULES],
     len: u8,
-    inline_assets: [[u8; 32]; MAX_INLINE_ASSETS],
-    inline_limits: [u64; MAX_INLINE_ASSETS],
-    inline_len: u8,
-    limits: [OutflowLimit; MAX_OUTFLOW_LIMITS],
-    limit_len: u8,
 }
 
 impl RuleTable {
@@ -474,11 +465,6 @@ impl RuleTable {
         Self {
             rules: [Rule::disabled(); MAX_RULES],
             len: 0,
-            inline_assets: [[0u8; 32]; MAX_INLINE_ASSETS],
-            inline_limits: [0; MAX_INLINE_ASSETS],
-            inline_len: 0,
-            limits: [OutflowLimit::EMPTY; MAX_OUTFLOW_LIMITS],
-            limit_len: 0,
         }
     }
 
@@ -486,26 +472,11 @@ impl RuleTable {
         RuleTableBuilder {
             table: Self::empty(),
             rule_count: 0,
-            member_count: 0,
-            limit_count: 0,
-            outflow_count: 0,
         }
     }
 
     pub fn rules(&self) -> &[Rule] {
         &self.rules[..usize::from(self.len)]
-    }
-
-    pub fn inline_assets(&self) -> &[[u8; 32]] {
-        &self.inline_assets[..usize::from(self.inline_len)]
-    }
-
-    pub fn inline_limits(&self) -> &[u64] {
-        &self.inline_limits[..usize::from(self.inline_len)]
-    }
-
-    pub fn limits(&self) -> &[OutflowLimit] {
-        &self.limits[..usize::from(self.limit_len)]
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -525,16 +496,11 @@ impl RuleTable {
     pub fn encode(&self) -> EncodedRuleTable {
         let mut encoded = EncodedRuleTable {
             rule_count: self.len,
-            inline_count: self.inline_len,
-            inline_assets: self.inline_assets,
-            inline_limits: self.inline_limits.map(u64::to_be_bytes),
-            limit_count: self.limit_len,
             ..EncodedRuleTable::default()
         };
         for (row, rule) in encoded.rules.iter_mut().zip(self.rules()) {
             *row = rule.encoded();
         }
-        encoded.write_limit_columns(self.limits());
         encoded
     }
 
@@ -548,9 +514,6 @@ impl RuleTable {
 pub struct RuleTableBuilder {
     table: RuleTable,
     rule_count: usize,
-    member_count: usize,
-    limit_count: usize,
-    outflow_count: usize,
 }
 
 impl RuleTableBuilder {
@@ -560,115 +523,27 @@ impl RuleTableBuilder {
         self
     }
 
-    #[must_use]
-    pub const fn inline_assets(mut self, members: &[[u8; 32]]) -> Self {
-        push(
-            &mut self.table.inline_assets,
-            &mut self.member_count,
-            members,
-        );
-        self
-    }
-
-    #[must_use]
-    pub const fn inline_limits(mut self, limits: &[u64]) -> Self {
-        push(&mut self.table.inline_limits, &mut self.limit_count, limits);
-        self
-    }
-
-    #[must_use]
-    pub const fn limits(mut self, limits: &[OutflowLimit]) -> Self {
-        push(&mut self.table.limits, &mut self.outflow_count, limits);
-        self
-    }
-
     pub const fn try_build(mut self) -> Result<RuleTable, RuleTableError> {
         if self.rule_count > MAX_RULES {
             return Err(RuleTableError::TooManyRules);
         }
-        if self.member_count > MAX_INLINE_ASSETS {
-            return Err(RuleTableError::TooManyInlineAssets);
-        }
-        if self.limit_count > MAX_INLINE_ASSETS {
-            return Err(RuleTableError::TooManyInlineAssets);
-        }
-        if self.outflow_count > MAX_OUTFLOW_LIMITS {
-            return Err(RuleTableError::TooManyOutflowLimits);
-        }
         self.table.len = self.rule_count as u8;
-        self.table.inline_len = self.member_count as u8;
-        self.table.limit_len = self.outflow_count as u8;
-        let table = self.table;
-        let mut m = 0;
-        while m < self.member_count {
-            if is_zero(&table.inline_assets[m]) {
-                return Err(RuleTableError::ZeroInlineAsset);
-            }
-            m += 1;
-        }
-        let mut per_asset_guard = false;
         let mut i = 0;
         while i < self.rule_count {
-            let rule = table.rules[i];
+            let rule = self.table.rules[i];
             if let Err(error) = rule.check() {
                 return Err(error);
             }
             let mut j = 0;
             while j < i {
-                if table.rules[j].signature() == rule.signature() {
+                if self.table.rules[j].signature() == rule.signature() {
                     return Err(RuleTableError::DuplicateRule);
                 }
                 j += 1;
             }
-            if matches!(rule.guard, Guard::AboveAmountByAsset) {
-                per_asset_guard = true;
-            }
             i += 1;
         }
-        if !per_asset_guard && self.member_count > 0 {
-            return Err(RuleTableError::PoolWithoutInlineRule);
-        }
-
-        if per_asset_guard {
-            if self.member_count == 0 || self.limit_count != self.member_count {
-                return Err(RuleTableError::MissingAssetLimit);
-            }
-            let mut i = 0;
-            while i < self.member_count {
-                if table.inline_limits[i] == 0 {
-                    return Err(RuleTableError::MissingAssetLimit);
-                }
-                let mut j = 0;
-                while j < i {
-                    if equal(&table.inline_assets[j], &table.inline_assets[i]) {
-                        return Err(RuleTableError::DuplicateInlineAsset);
-                    }
-                    j += 1;
-                }
-                i += 1;
-            }
-        } else if self.limit_count != 0 {
-            return Err(RuleTableError::AssetLimitWithoutGuard);
-        }
-        let mut v = 0;
-        while v < self.outflow_count {
-            let limit = table.limits[v];
-            if is_zero(&limit.asset) {
-                return Err(RuleTableError::ZeroLimitAsset);
-            }
-            if limit.cap == 0 && limit.cosign_above == 0 {
-                return Err(RuleTableError::LimitWithoutBound);
-            }
-            let mut w = 0;
-            while w < v {
-                if equal(&table.limits[w].asset, &limit.asset) {
-                    return Err(RuleTableError::DuplicateLimitAsset);
-                }
-                w += 1;
-            }
-            v += 1;
-        }
-        Ok(table)
+        Ok(self.table)
     }
 
     pub const fn build(self) -> RuleTable {
@@ -691,34 +566,12 @@ const fn push<T: Copy, const N: usize>(slots: &mut [T; N], len: &mut usize, item
     }
 }
 
-const fn is_zero(bytes: &[u8; 32]) -> bool {
-    equal(bytes, &[0u8; 32])
-}
-
-const fn equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    let mut i = 0;
-    while i < left.len() {
-        if left[i] != right[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// Rows past `rule_count` and members past `inline_count` stay zero.
+/// Rows past `rule_count` stay zero. Mint settings live in asset records.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct EncodedRuleTable {
     pub rule_count: u8,
     pub rules: [[u8; 32]; MAX_RULES],
-    pub inline_count: u8,
-    pub inline_assets: [[u8; 32]; MAX_INLINE_ASSETS],
-    pub inline_limits: [[u8; 8]; MAX_INLINE_ASSETS],
-    pub limit_count: u8,
-    pub limit_assets: [[u8; 32]; MAX_OUTFLOW_LIMITS],
-    pub limit_caps: [[u8; 8]; MAX_OUTFLOW_LIMITS],
-    pub limit_cosign: [[u8; 8]; MAX_OUTFLOW_LIMITS],
 }
 
 /// Wire parts of a table, `encode` checks the counts and `decode` the rest.
@@ -726,43 +579,18 @@ pub struct EncodedRuleTable {
 #[derive(Clone, Copy, Debug)]
 pub struct TableParts<'a> {
     pub rows: &'a [[u8; 32]],
-    pub inline_assets: &'a [[u8; 32]],
-    pub inline_limits: &'a [u64],
-    pub limits: &'a [OutflowLimit],
 }
 
 impl TableParts<'_> {
     pub fn encode(self) -> Result<EncodedRuleTable, RuleTableError> {
-        let Self {
-            rows,
-            inline_assets: inline,
-            inline_limits: limits,
-            limits: outflow,
-        } = self;
-        if rows.len() > MAX_RULES {
+        if self.rows.len() > MAX_RULES {
             return Err(RuleTableError::TooManyRules);
         }
-        if inline.len() > MAX_INLINE_ASSETS || limits.len() > MAX_INLINE_ASSETS {
-            return Err(RuleTableError::TooManyInlineAssets);
-        }
-        if limits.len() != inline.len() {
-            return Err(RuleTableError::MissingAssetLimit);
-        }
-        if outflow.len() > MAX_OUTFLOW_LIMITS {
-            return Err(RuleTableError::TooManyOutflowLimits);
-        }
         let mut encoded = EncodedRuleTable {
-            rule_count: rows.len() as u8,
-            inline_count: inline.len() as u8,
-            limit_count: outflow.len() as u8,
+            rule_count: self.rows.len() as u8,
             ..EncodedRuleTable::default()
         };
-        encoded.rules[..rows.len()].copy_from_slice(rows);
-        encoded.inline_assets[..inline.len()].copy_from_slice(inline);
-        for (dst, limit) in encoded.inline_limits.iter_mut().zip(limits) {
-            *dst = limit.to_be_bytes();
-        }
-        encoded.write_limit_columns(outflow);
+        encoded.rules[..self.rows.len()].copy_from_slice(self.rows);
         Ok(encoded)
     }
 }
@@ -770,35 +598,15 @@ impl TableParts<'_> {
 impl EncodedRuleTable {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    pub const fn has_limits(&self) -> bool {
-        self.limit_count != 0
-    }
-
     pub fn decode(&self) -> Result<RuleTable, RuleTableError> {
-        let Counted {
-            rows,
-            members,
-            limits,
-        } = self.counted()?;
-        if !zero_past(&self.rules, rows.len())
-            || !zero_past(&self.inline_assets, members.len())
-            || !zero_past(&self.inline_limits, limits.len())
-        {
+        let rows = self
+            .rules
+            .get(..usize::from(self.rule_count))
+            .ok_or(RuleTableError::TooManyRules)?;
+        if !zero_past(&self.rules, rows.len()) {
             return Err(RuleTableError::NonZeroPadding);
         }
-        let outflow = self.outflow_limits()?;
-        let count = outflow.len();
-        if !zero_past(&self.limit_assets, count)
-            || !zero_past(&self.limit_caps, count)
-            || !zero_past(&self.limit_cosign, count)
-        {
-            return Err(RuleTableError::NonZeroPadding);
-        }
-        let limits: Vec<u64> = limits.iter().copied().map(u64::from_be_bytes).collect();
-        let mut builder = RuleTable::builder()
-            .inline_assets(members)
-            .inline_limits(&limits)
-            .limits(&outflow);
+        let mut builder = RuleTable::builder();
         for row in rows {
             builder = builder.rule(Rule::decode(row)?);
         }
@@ -838,11 +646,6 @@ impl EncodedRuleTable {
             right_align(&POLICY_TABLE_DOMAIN.to_be_bytes()),
             field_u8(POLICY_TABLE_VERSION),
         ];
-        let counts = [
-            field_u8(self.rule_count),
-            field_u8(self.inline_count),
-            field_u8(self.limit_count),
-        ];
         let values = header
             .into_iter()
             .chain(
@@ -851,19 +654,8 @@ impl EncodedRuleTable {
                     .iter()
                     .flat_map(|slot| [field_u8(slot.list_id), slot.registry]),
             )
-            .chain(counts)
-            .chain(self.rules.iter().copied())
-            .chain(self.inline_assets.iter().copied())
-            .chain(self.inline_limits.iter().map(right_align))
-            .chain(
-                self.limit_assets
-                    .iter()
-                    .zip(&self.limit_caps)
-                    .zip(&self.limit_cosign)
-                    .flat_map(|((asset, cap), cosign)| {
-                        [*asset, right_align(cap), right_align(cosign)]
-                    }),
-            );
+            .chain([field_u8(self.rule_count)])
+            .chain(self.rules.iter().copied());
         let mut fields = [[0u8; 32]; POLICY_TABLE_FIELDS];
         for (field, value) in fields.iter_mut().zip(values) {
             *field = value;
@@ -886,66 +678,13 @@ impl EncodedRuleTable {
         }
         Ok(acc)
     }
-
-    fn counted(&self) -> Result<Counted<'_>, RuleTableError> {
-        Ok(Counted {
-            rows: self
-                .rules
-                .get(..usize::from(self.rule_count))
-                .ok_or(RuleTableError::TooManyRules)?,
-            members: self
-                .inline_assets
-                .get(..usize::from(self.inline_count))
-                .ok_or(RuleTableError::TooManyInlineAssets)?,
-            limits: self
-                .inline_limits
-                .get(..usize::from(self.inline_count))
-                .ok_or(RuleTableError::TooManyInlineAssets)?,
-        })
-    }
-
-    fn outflow_limits(&self) -> Result<Vec<OutflowLimit>, RuleTableError> {
-        let assets = self
-            .limit_assets
-            .get(..usize::from(self.limit_count))
-            .ok_or(RuleTableError::TooManyOutflowLimits)?;
-        let limits = assets
-            .iter()
-            .zip(&self.limit_caps)
-            .zip(&self.limit_cosign)
-            .map(|((asset, cap), cosign)| OutflowLimit {
-                asset: *asset,
-                cap: u64::from_be_bytes(*cap),
-                cosign_above: u64::from_be_bytes(*cosign),
-            });
-        Ok(limits.collect())
-    }
-
-    fn write_limit_columns(&mut self, limits: &[OutflowLimit]) {
-        let columns = self
-            .limit_assets
-            .iter_mut()
-            .zip(&mut self.limit_caps)
-            .zip(&mut self.limit_cosign);
-        for (((asset, cap), cosign), limit) in columns.zip(limits) {
-            *asset = limit.asset;
-            *cap = limit.cap.to_be_bytes();
-            *cosign = limit.cosign_above.to_be_bytes();
-        }
-    }
-}
-
-struct Counted<'a> {
-    rows: &'a [[u8; 32]],
-    members: &'a [[u8; 32]],
-    limits: &'a [[u8; 8]],
 }
 
 fn zero_past<const N: usize>(slots: &[[u8; N]], len: usize) -> bool {
     slots[len..].iter().all(|slot| *slot == [0u8; N])
 }
 
-const _: () = assert!(EncodedRuleTable::SIZE == 1219);
+const _: () = assert!(EncodedRuleTable::SIZE == 513);
 const _: () = assert!(core::mem::align_of::<EncodedRuleTable>() == 1);
 
 #[cfg(test)]

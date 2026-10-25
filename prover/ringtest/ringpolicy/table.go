@@ -16,7 +16,7 @@ import (
 type Rows struct {
 	Sources                           []policy.SourceWires
 	Rules, InlineAssets, InlineLimits []frontend.Variable
-	Limits                            []policy.OutflowLimitWires
+	Limits                            []MintLimit
 }
 
 func (r Rule) Packed() *big.Int {
@@ -41,15 +41,9 @@ func (r Rows) Wires() policy.Table {
 	for i := range table.Sources {
 		table.Sources[i] = pad(r.Sources, i, policy.SourceWires{ListID: 0, Registry: 0})
 	}
-	table.PolicyLen, table.InlineCount, table.LimitCount = len(r.Rules), len(r.InlineAssets), len(r.Limits)
+	table.PolicyLen = len(r.Rules)
 	for i := range table.Rules {
 		table.Rules[i] = pad(r.Rules, i, 0)
-	}
-	for i := range table.InlineAssets {
-		table.InlineAssets[i], table.InlineLimits[i] = pad(r.InlineAssets, i, 0), pad(r.InlineLimits, i, 0)
-	}
-	for i := range table.Limits {
-		table.Limits[i] = pad(r.Limits, i, policy.OutflowLimitWires{Asset: 0, Cap: 0, CosignAbove: 0})
 	}
 	return table
 }
@@ -76,7 +70,9 @@ func (table Table) rows() Rows {
 		r.InlineAssets, r.InlineLimits = append(r.InlineAssets, inline.Asset), append(r.InlineLimits, inline.Limit)
 	}
 	for _, limit := range table.Limits {
-		r.Limits = append(r.Limits, policy.OutflowLimitWires{Asset: limit.Asset, Cap: limit.Cap, CosignAbove: limit.CosignAbove})
+		r.Limits = append(r.Limits, MintLimit{Asset: limit.Asset, Cap: limit.Cap, CosignAbove: limit.CosignAbove})
 	}
 	return r
 }
+
+type MintLimit struct{ Asset, Cap, CosignAbove frontend.Variable }

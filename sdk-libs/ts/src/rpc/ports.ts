@@ -1,3 +1,4 @@
+import type { MintPolicy } from "../protocol/membership/mint-policy.js";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana";
 import type { Bytes64, Transaction } from "@heliuslabs/zolana/interface";
@@ -75,6 +76,7 @@ export interface RingQueueState {
 
 /** An authority list write, the queue entry without an escrow key. */
 export interface RecordWrite {
+  readonly mintPolicy?: MintPolicy;
   readonly member: Bytes32;
   readonly mask: bigint;
   readonly value: bigint;

@@ -4,8 +4,8 @@ use std::path::Path;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    CoSignScope, CoSignThreshold, CustomRingCoSigner, CustomRingConfig, GrantReader, RevokeReader,
-    RingMode, RingRegistration, SetCoSigner, SetDelegate,
+    CoSignScope, CustomRingCoSigner, CustomRingConfig, GrantReader, RevokeReader, RingMode,
+    RingRegistration, SetCoSigner, SetDelegate,
 };
 use solana_address::Address;
 use solana_signer::Signer;
@@ -13,7 +13,7 @@ use zolana_client::Rpc;
 use zolana_keypair::X25519Keypair;
 
 use crate::{
-    config::{Base58Address, CoSignClass, CoSignerSpec, Mint},
+    config::{Base58Address, CoSignClass, CoSignerSpec},
     file,
     fund::MIN_AUTHORITY_BALANCE,
     keys, line, policy,
@@ -62,13 +62,8 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
             let scope = spec
                 .scope()
                 .context("the co-signer gates no operation class")?;
-            let thresholds: Vec<_> = (spec.thresholds.iter())
-                .map(|row| CoSignThreshold {
-                    mint: row.mint.0,
-                    amount: row.above,
-                })
-                .collect();
-            check_thresholds(scope, &thresholds)?;
+            let thresholds = &spec.thresholds;
+            check_thresholds(scope, thresholds)?;
             DualControl {
                 cosigner: Some(spec.key.0),
                 delegate: ctx.ring_config()?.delegate,
@@ -80,10 +75,25 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                 authority: authority.pubkey(),
                 signer: spec.key.0,
                 scope,
-                thresholds: &thresholds,
             }
             .instruction()?;
+            let current = crate::records::mint_policies(ctx)?;
+            let mut desired = current.clone();
+            for policy in desired.values_mut() {
+                policy.withdrawal_threshold = 0;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for row in thresholds {
+                let member = *zolana_ring_policy::Member::asset(&row.mint.0)?.as_bytes();
+                ensure!(seen.insert(member), "duplicate withdrawal threshold mint");
+                desired.entry(member).or_default().withdrawal_threshold = row.above;
+            }
+            desired.retain(|member, policy| {
+                *policy != current.get(member).copied().unwrap_or_default()
+            });
+            // Set the co-signer before applying its threshold records.
             ctx.send(&[authority], &[set])?;
+            crate::records::write_mint_policies(ctx, &desired)?;
             line("co-signer", format_args!("{} set", spec.key));
         }
         CoSignerCommand::Clear => {
@@ -98,7 +108,21 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
         CoSignerCommand::Show => {}
     }
     match ctx.ring_config()?.co_signer {
-        Some(cosigner) => print_cosigner(&cosigner),
+        Some(cosigner) => {
+            print_cosigner(&cosigner);
+            for (member, policy) in crate::records::mint_policies(ctx)? {
+                if policy.withdrawal_threshold != 0 {
+                    line(
+                        "withdrawal threshold",
+                        format_args!(
+                            "{} above {}",
+                            hex::encode(member),
+                            policy.withdrawal_threshold
+                        ),
+                    );
+                }
+            }
+        }
         None => line("co-signer", "none"),
     }
     Ok(())
@@ -112,12 +136,6 @@ pub(crate) fn print_cosigner(cosigner: &CustomRingCoSigner) {
         .collect();
     line("co-signer", cosigner.signer);
     line("scope", scope.join(","));
-    for threshold in &cosigner.thresholds {
-        line(
-            "threshold",
-            format_args!("{} above {}", Mint(threshold.mint), threshold.amount),
-        );
-    }
 }
 
 pub fn insert_fee(ctx: &Context, command: InsertFeeCommand) -> Result<()> {
@@ -303,7 +321,7 @@ impl RentFloor {
     }
 }
 
-fn check_thresholds(scope: CoSignScope, thresholds: &[CoSignThreshold]) -> Result<()> {
+fn check_thresholds(scope: CoSignScope, thresholds: &[crate::config::ThresholdSpec]) -> Result<()> {
     ensure!(
         thresholds.is_empty() || scope.contains(CoSignScope::WITHDRAWALS),
         "co-signer thresholds bound withdrawals, add the withdrawals class to the scope"
@@ -326,9 +344,9 @@ mod tests {
 
     #[test]
     fn co_signer_thresholds_need_the_withdrawal_scope() {
-        let row = [CoSignThreshold {
-            mint: Address::default(),
-            amount: 5,
+        let row = [crate::config::ThresholdSpec {
+            mint: Base58Address(Address::default()),
+            above: 5,
         }];
         assert!(check_thresholds(CoSignScope::TRANSFERS, &row).is_err());
         let withdrawals = CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS;

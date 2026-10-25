@@ -693,7 +693,7 @@ describe("ring deposit builder", () => {
     try {
       const covered = await fixture({
         mode: "confidential",
-        coSigner: { signer: cosigner, scope: RING_COSIGN_DEPOSITS, thresholds: [] },
+        coSigner: { signer: cosigner, scope: RING_COSIGN_DEPOSITS },
       });
       const deposit = { kind: "confidential", address: recipient.shieldedAddress() } as const;
       await expect(
@@ -704,7 +704,7 @@ describe("ring deposit builder", () => {
       );
       const outside = await fixture({
         mode: "confidential",
-        coSigner: { signer: cosigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+        coSigner: { signer: cosigner, scope: RING_COSIGN_TRANSFERS },
       });
       const unsigned = await PreparedRingDeposit.prepare(
         params(outside.client, deposit, { cosigner }),

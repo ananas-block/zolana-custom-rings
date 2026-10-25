@@ -14,3 +14,5 @@ export type {
   RecordOpening,
   RecordWriteProofInput,
 } from "./protocol/membership/member-registry.js";
+
+export { EMPTY_MINT_POLICY, type MintPolicy } from "./protocol/membership/mint-policy.js";

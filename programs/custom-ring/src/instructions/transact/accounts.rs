@@ -58,14 +58,39 @@ impl<'a> TransactCheck<'a> {
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let legs = PublicLegs::new(&data.interface_transfers, window)?;
-        let co_signer = CoSignDemand::transact(data.approval_required, legs.legs()).signer(config);
-        let binding = match config.has_policy() {
-            true => data.check_policy(Some(&*load_registry(
+        let registry = if config.has_policy() || data.withdrawal_exemption.is_some() {
+            Some(load_registry(
                 self.program_id,
                 account_at(accounts, REGISTRY_INDEX)?,
-            )?))?,
-            false => data.check_policy(None)?,
+            )?)
+        } else {
+            None
         };
+        let demand = CoSignDemand::transact(data.approval_required, legs.legs());
+        if let Some(exemption) = data.withdrawal_exemption {
+            let root = registry
+                .as_ref()
+                .ok_or(CustomRingError::InvalidMemberRegistry)?
+                .own_root(exemption.root_index)?;
+            crate::instructions::verifier::RingProof {
+                proof: &exemption.proof,
+                statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
+                    root, &demand,
+                )?
+                .hash()
+                .map_err(CustomRingError::from)?,
+                key: crate::instructions::verifier::ring_key(
+                    custom_ring_interface::key_catalog::RingCircuit::WithdrawalExemption,
+                )?,
+            }
+            .verify()?;
+        }
+        let co_signer = demand.signer_with_exemption(config, data.withdrawal_exemption.is_some());
+        let binding = data.check_policy(if config.has_policy() {
+            registry.as_deref()
+        } else {
+            None
+        })?;
         let prefix = self.prefix(
             binding.and_then(|binding| binding.curator),
             co_signer.as_ref().ok().copied().flatten(),
@@ -190,7 +215,10 @@ impl<'a> TransactCheck<'a> {
     }
 
     fn prefix(&self, curator: Option<CuratorRoot>, co_signer: Option<Address>) -> Prefix {
-        let mut next = Cursor(REGISTRY_INDEX + usize::from(self.config.has_policy()));
+        let mut next = Cursor(
+            REGISTRY_INDEX
+                + usize::from(self.config.has_policy() || self.data.withdrawal_exemption.is_some()),
+        );
         let curator = curator.map(|root| next.slot(root));
         let co_signer = co_signer.map(|expected| next.slot(expected));
         let signer = match self.signer {

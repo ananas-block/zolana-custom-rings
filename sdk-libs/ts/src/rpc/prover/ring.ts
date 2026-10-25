@@ -1,9 +1,14 @@
+import {
+  EMPTY_MINT_POLICY,
+  mintPolicyField,
+  mintPolicyWriteField,
+} from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { RING_OUTFLOW_LIMIT_SLOTS, type PresentRecordOpening } from "./types.js";
+import { type PresentRecordOpening } from "./types.js";
 import { ClientError } from "@heliuslabs/zolana/client";
 import {
   APPLY_BATCH,
@@ -24,12 +29,7 @@ import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-caps
 import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
 import { J_INBOX } from "../../crypto/derivation/ring-stream.js";
-import {
-  RING_INLINE_ASSET_SLOTS,
-  RING_RULE_SLOTS,
-  RING_SOURCE_SLOTS,
-  RING_STATE_PATH_LENGTH,
-} from "./types.js";
+import { RING_RULE_SLOTS, RING_SOURCE_SLOTS, RING_STATE_PATH_LENGTH } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
 
 /** Go `Opening`, one transaction slot as the ring circuits open it. */
@@ -115,11 +115,6 @@ export interface PolicyTableProofInputs {
   readonly sources: readonly PolicySourceProofInput[];
   readonly policyLen: number;
   readonly rules: readonly Bytes32[];
-  readonly inlineAssets: readonly Bytes32[];
-  readonly inlineLimits: readonly Bytes32[];
-  readonly inlineCount: number;
-  readonly limits: readonly OutflowLimitProofInput[];
-  readonly limitCount: number;
 }
 
 /** Go `OutputOpening`, `ctHash` absent without key escrow. */
@@ -152,6 +147,7 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly senderEntry: PolicySubjectEntry;
   readonly ownerEntries: readonly PolicySubjectEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
+  readonly publicAssetEntries: readonly (RecordOpening | undefined)[];
 }
 
 /** Go `MergeInput`, one SPP merge slot. */
@@ -278,7 +274,17 @@ export interface AnonymousMergeProofRequest {
   readonly outputRingDataHash: Bytes32;
 }
 
+export interface WithdrawalExemptionProofRequest {
+  readonly kind: "withdrawalExemption";
+  readonly publicInputHash: Bytes32;
+  readonly root: Bytes32;
+  readonly assets: readonly Bytes32[];
+  readonly amounts: readonly Bytes32[];
+  readonly entries: readonly (RecordOpening | undefined)[];
+}
+
 export type RingProofRequest =
+  | WithdrawalExemptionProofRequest
   | PackedAuditProofRequest
   | DeliveredAuditProofRequest
   | AnonymousAuditProofRequest
@@ -318,6 +324,8 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
       };
     case "applyRecords":
       return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
+    case "withdrawalExemption":
+      return { family: "withdrawalExemption" };
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
@@ -408,6 +416,18 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         }),
       };
     }
+    case "withdrawalExemption":
+      if (request.entries.length !== N_PUBLIC_SLOTS)
+        throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
+      return {
+        ...head,
+        root: field(request.root, "root"),
+        assets: fields(request.assets, N_PUBLIC_SLOTS, "assets"),
+        amounts: fields(request.amounts, N_PUBLIC_SLOTS, "amounts"),
+        entries: request.entries.map((entry, i) =>
+          entry === undefined ? null : memberOpeningJson(entry, `entries[${i}]`),
+        ),
+      };
     case "registerKey":
       return {
         ...head,
@@ -591,15 +611,6 @@ function policyJson(policy: PolicyProofInputs): Json {
     })),
     policyLen: integer(policy.policyLen, "policyLen", 0, RING_RULE_SLOTS),
     rules: fields(policy.rules, RING_RULE_SLOTS, "rules"),
-    inlineAssets: fields(policy.inlineAssets, RING_INLINE_ASSET_SLOTS, "inlineAssets"),
-    inlineLimits: fields(policy.inlineLimits, RING_INLINE_ASSET_SLOTS, "inlineLimits"),
-    inlineCount: integer(policy.inlineCount, "inlineCount", 0, RING_INLINE_ASSET_SLOTS),
-    limits: sized(policy.limits, RING_OUTFLOW_LIMIT_SLOTS, "limits").map((limit, i) => ({
-      asset: field(limit.asset, `limits[${i}].asset`),
-      cap: field(limit.cap, `limits[${i}].cap`),
-      cosignAbove: field(limit.cosignAbove, `limits[${i}].cosignAbove`),
-    })),
-    limitCount: integer(policy.limitCount, "limitCount", 0, RING_OUTFLOW_LIMIT_SLOTS),
     addressChain: field(policy.addressChain, "addressChain"),
     privateTxBlinding: field(policy.privateTxBlinding, "privateTxBlinding"),
     outputs: policy.outputs.map((output, i) => ({
@@ -615,6 +626,9 @@ function policyJson(policy: PolicyProofInputs): Json {
     ),
     assetEntries: sized(policy.assetEntries, outputs, "assetEntries").map((entry, i) =>
       entryJson(entry, `assetEntries[${i}]`),
+    ),
+    publicAssetEntries: sized(policy.publicAssetEntries, N_PUBLIC_SLOTS, "publicAssetEntries").map(
+      (opening, i) => memberOpeningJson(opening, `publicAssetEntries[${i}]`),
     ),
   };
 }
@@ -639,11 +653,27 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
     next: field(record?.next ?? ZERO, `${name}.next`),
     lists: u64(record?.lists ?? 0n, `${name}.lists`),
     escrowKey: field(record?.escrowKey ?? ZERO, `${name}.escrowKey`),
+    mintPolicy: field(
+      mintPolicyField(record?.mintPolicy ?? EMPTY_MINT_POLICY),
+      `${name}.mintPolicy`,
+    ),
+    withdrawalThreshold: field(
+      bigIntBytes(record?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
+      `${name}.withdrawalThreshold`,
+    ),
     ...quadPathJson(opening.path, name, "index", "path"),
     lowMember: field(low?.member ?? ZERO, `${name}.lowMember`),
     lowNext: field(low?.next ?? ZERO, `${name}.lowNext`),
     lowLists: u64(low?.lists ?? 0n, `${name}.lowLists`),
     lowEscrow: field(low?.escrowKey ?? ZERO, `${name}.lowEscrow`),
+    lowMintPolicy: field(
+      mintPolicyField(low?.mintPolicy ?? EMPTY_MINT_POLICY),
+      `${name}.lowMintPolicy`,
+    ),
+    lowWithdrawalThreshold: field(
+      bigIntBytes(low?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
+      `${name}.lowWithdrawalThreshold`,
+    ),
   };
 }
 
@@ -654,6 +684,11 @@ export function recordJson(opening: PresentRecordOpening, name: string): Json {
     next: field(opening.record.next, `${name}.next`),
     lists: u64(opening.record.lists, `${name}.lists`),
     escrowKey: field(opening.record.escrowKey, `${name}.escrowKey`),
+    mintPolicy: field(mintPolicyField(opening.record.mintPolicy), `${name}.mintPolicy`),
+    withdrawalThreshold: field(
+      bigIntBytes(opening.record.mintPolicy.withdrawalThreshold, 32) as Bytes32,
+      `${name}.withdrawalThreshold`,
+    ),
     ...quadPathJson(opening.path, name, "index", "path"),
   };
 }
@@ -665,11 +700,21 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
     oldNext: field(write.oldNext, `${name}.oldNext`),
     oldLists: u64(write.oldLists, `${name}.oldLists`),
     oldEscrow: field(write.oldEscrow, `${name}.oldEscrow`),
+    oldMintPolicy: field(mintPolicyField(write.oldMintPolicy), `${name}.oldMintPolicy`),
+    oldWithdrawalThreshold: field(
+      bigIntBytes(write.oldMintPolicy.withdrawalThreshold, 32) as Bytes32,
+      `${name}.oldWithdrawalThreshold`,
+    ),
     ...quadPathJson(write.slot, name, "index", "path"),
     lowMember: field(write.low.member, `${name}.lowMember`),
     lowNext: field(write.low.next, `${name}.lowNext`),
     lowLists: u64(write.low.lists, `${name}.lowLists`),
     lowEscrow: field(write.low.escrowKey, `${name}.lowEscrow`),
+    lowMintPolicy: field(mintPolicyField(write.low.mintPolicy), `${name}.lowMintPolicy`),
+    lowWithdrawalThreshold: field(
+      bigIntBytes(write.low.mintPolicy.withdrawalThreshold, 32) as Bytes32,
+      `${name}.lowWithdrawalThreshold`,
+    ),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
   };
 }
@@ -680,6 +725,11 @@ function queueEntryJson(entry: QueueEntry, name: string): Json {
     mask: u64(entry.mask, `${name}.mask`),
     value: u64(entry.value, `${name}.value`),
     escrowKey: field(entry.escrowKey, `${name}.escrowKey`),
+    mintPolicy: field(mintPolicyWriteField(entry.mintPolicy), `${name}.mintPolicy`),
+    withdrawalThreshold: field(
+      bigIntBytes(entry.mintPolicy?.withdrawalThreshold ?? 0n, 32) as Bytes32,
+      `${name}.withdrawalThreshold`,
+    ),
   };
 }
 

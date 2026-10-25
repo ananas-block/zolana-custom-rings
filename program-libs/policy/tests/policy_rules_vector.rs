@@ -150,6 +150,7 @@ fn curator() -> [u8; 32] {
 struct Spec {
     name: &'static str,
     table: RuleTableBuilder,
+    thresholds: Vec<([u8; 32], u64)>,
     /// Lists a curator registry serves, every other referenced list is the ring's own.
     curated: ListSet,
     own: Vec<([u8; 32], u64)>,
@@ -200,8 +201,12 @@ impl Spec {
                 .iter()
                 .map(|rule| hex::encode(rule.encoded()))
                 .collect(),
-            inline_assets: table.inline_assets().iter().map(hex::encode).collect(),
-            inline_limits: table.inline_limits().to_vec(),
+            inline_assets: self
+                .thresholds
+                .iter()
+                .map(|(asset, _)| hex::encode(asset))
+                .collect(),
+            inline_limits: self.thresholds.iter().map(|(_, limit)| *limit).collect(),
             own_records: records(&own),
             curator_records: records(&curated),
             sender: hex::encode(sender()),
@@ -232,15 +237,10 @@ impl Case {
             .iter()
             .map(|asset| bytes(asset))
             .collect();
-        let table = TableParts {
-            rows: &rows,
-            inline_assets: &inline_assets,
-            inline_limits: &self.inline_limits,
-            limits: &[],
-        }
-        .encode()
-        .and_then(|encoded| encoded.decode())
-        .expect("the rows decode");
+        let table = TableParts { rows: &rows }
+            .encode()
+            .and_then(|encoded| encoded.decode())
+            .expect("the rows decode");
         let slots: Vec<PolicySource> = self
             .sources
             .iter()
@@ -265,6 +265,13 @@ impl Case {
                     owner,
                     asset,
                     amount: output.amount,
+                    mint_policy: zolana_ring_policy::MintPolicy {
+                        threshold: inline_assets
+                            .iter()
+                            .position(|mint| *mint == asset)
+                            .map_or(0, |i| self.inline_limits[i]),
+                        ..Default::default()
+                    },
                     owner_lists: lists_of(&owner),
                     asset_lists: lists_of(&asset),
                 }
@@ -300,6 +307,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_empty_table_admits_any_transfer",
             table: RuleTable::builder(),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
@@ -309,6 +317,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_sender_on_the_required_list_passes",
             table: require(Subject::Sender, ListId::Allow),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW)],
             curated_records: vec![],
@@ -318,6 +327,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_absent_sender_misses_the_required_list",
             table: require(Subject::Sender, ListId::Allow),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -327,6 +337,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_sender_on_a_forbidden_list_is_refused",
             table: forbid(Subject::Sender, ListId::Block),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), BLOCK)],
             curated_records: vec![],
@@ -339,6 +350,7 @@ fn specs() -> Vec<Spec> {
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), FROZEN)],
             curated_records: vec![],
@@ -351,6 +363,7 @@ fn specs() -> Vec<Spec> {
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), BLOCK | FROZEN)],
             curated_records: vec![],
@@ -363,6 +376,7 @@ fn specs() -> Vec<Spec> {
                 Subject::Sender,
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW)],
             curated_records: vec![],
@@ -372,6 +386,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_owner_off_the_required_list_is_refused_at_its_output",
             table: owner_allow(),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -381,6 +396,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_zero_owner_carries_no_owner_obligation",
             table: owner_allow(),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -394,6 +410,7 @@ fn specs() -> Vec<Spec> {
                 ListSet::single(ListId::Allow),
                 ListSet::single(ListId::Frozen),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -407,6 +424,7 @@ fn specs() -> Vec<Spec> {
                 ListSet::single(ListId::Allow),
                 ListSet::single(ListId::Frozen),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), FROZEN)],
             curated_records: vec![],
@@ -420,6 +438,7 @@ fn specs() -> Vec<Spec> {
                 ListSet::single(ListId::Allow),
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), BLOCK)],
             curated_records: vec![],
@@ -433,6 +452,7 @@ fn specs() -> Vec<Spec> {
                 ListSet::single(ListId::Allow),
                 ListSet::of(&[ListId::Block, ListId::Frozen]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), BLOCK | FROZEN)],
             curated_records: vec![],
@@ -445,6 +465,7 @@ fn specs() -> Vec<Spec> {
                 Subject::OutputOwner,
                 ListSet::of(&[ListId::Allow, ListId::Approval]),
             )),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), APPROVAL)],
             curated_records: vec![],
@@ -454,6 +475,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_off_the_required_list_is_refused_at_its_output",
             table: require(Subject::Asset, ListId::Allow),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(asset_x(), ALLOW)],
             curated_records: vec![],
@@ -463,6 +485,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_rule_screens_a_zero_owner_output",
             table: forbid(Subject::Asset, ListId::Block),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(asset_y(), BLOCK)],
             curated_records: vec![],
@@ -472,6 +495,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_curated_list_reads_the_curator_record_not_the_own_record",
             table: forbid(Subject::Sender, ListId::Block),
+            thresholds: vec![],
             curated: ListSet::single(ListId::Block),
             own: vec![(sender(), BLOCK)],
             curated_records: vec![],
@@ -481,6 +505,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_curated_list_refuses_a_sender_the_curator_blocks",
             table: forbid(Subject::Sender, ListId::Block),
+            thresholds: vec![],
             curated: ListSet::single(ListId::Block),
             own: vec![],
             curated_records: vec![(sender(), BLOCK)],
@@ -490,6 +515,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "a_curated_asset_list_refuses_the_asset_the_curator_blocks",
             table: forbid(Subject::Asset, ListId::Block),
+            thresholds: vec![],
             curated: ListSet::single(ListId::Block),
             own: vec![(asset_y(), BLOCK)],
             curated_records: vec![(asset_x(), BLOCK)],
@@ -499,6 +525,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "own_and_curated_lists_apply_side_by_side",
             table: owner_allow().rule(Rule::forbid(Subject::OutputOwner, ListId::Block)),
+            thresholds: vec![],
             curated: ListSet::single(ListId::Block),
             own: vec![(owner_a(), ALLOW | BLOCK), (owner_b(), ALLOW)],
             curated_records: vec![(owner_b(), BLOCK)],
@@ -509,6 +536,7 @@ fn specs() -> Vec<Spec> {
             name: "a_scalar_owner_guard_exempts_an_owner_total_at_the_threshold",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
@@ -519,6 +547,7 @@ fn specs() -> Vec<Spec> {
             name: "a_scalar_owner_guard_sums_both_outputs_of_the_owner",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
@@ -529,6 +558,7 @@ fn specs() -> Vec<Spec> {
             name: "a_scalar_owner_guard_refuses_two_assets_whatever_the_lists",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -539,6 +569,7 @@ fn specs() -> Vec<Spec> {
             name: "a_scalar_asset_guard_sums_the_asset_across_owners",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::Asset, ListId::Allow).above(100)),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(asset_x(), ALLOW)],
             curated_records: vec![],
@@ -552,9 +583,8 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_guard_exempts_an_owner_within_the_asset_limit",
             table: RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-                .inline_assets(&[asset_x()])
-                .inline_limits(&[50]),
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
+            thresholds: vec![(asset_x(), 50)],
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
@@ -564,9 +594,8 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_guard_sums_one_owner_and_one_asset_past_the_limit",
             table: RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-                .inline_assets(&[asset_x()])
-                .inline_limits(&[50]),
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
+            thresholds: vec![(asset_x(), 50)],
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
@@ -576,9 +605,8 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_guard_refuses_an_asset_without_a_limit_whatever_the_lists",
             table: RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-                .inline_assets(&[asset_x()])
-                .inline_limits(&[50]),
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
+            thresholds: vec![(asset_x(), 50)],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -588,9 +616,8 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "an_asset_guard_asks_no_limit_of_a_zero_owner_output",
             table: RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-                .inline_assets(&[asset_x()])
-                .inline_limits(&[50]),
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
+            thresholds: vec![(asset_x(), 50)],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
@@ -602,6 +629,7 @@ fn specs() -> Vec<Spec> {
             table: require(Subject::Sender, ListId::Allow)
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
                 .rule(Rule::forbid(Subject::Asset, ListId::Block)),
+            thresholds: vec![],
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW), (owner_a(), ALLOW), (asset_x(), BLOCK)],
             curated_records: vec![],
@@ -614,7 +642,7 @@ fn specs() -> Vec<Spec> {
 fn compute_vectors() -> PolicyRulesVectors {
     PolicyRulesVectors {
         description: "Transfers the policy circuits' list rules admit or refuse. Each case \
-                      carries the table rows and inline limits as ring-policy-table.json does, \
+                      carries table rows and mint thresholds installed into asset records, \
                       the eight source slots, the records of the ring's own and of the curator \
                       registry by member, the sender member and every UTXO output's owner, asset \
                       and amount. A subject reads list i + 1 from the curator record when source \
@@ -623,7 +651,7 @@ fn compute_vectors() -> PolicyRulesVectors {
                       or off any list of its absent set. A zero owner carries no owner obligation. \
                       A scalar guard exempts an owner's or an asset's output total at or below the \
                       threshold, on an owner rule every output carries one asset. An asset guard \
-                      needs an inline limit for each live owner's output asset and exempts the \
+                      needs a record threshold for each live owner's output asset and exempts the \
                       owner's total of that asset within it. The outcome is pass, or the first \
                       refusal in table order then output order, a mixed asset refusal first. \
                       Produced by program-libs/policy/tests/policy_rules_vector.rs."

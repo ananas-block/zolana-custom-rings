@@ -151,6 +151,7 @@ impl Queued {
             )
             .expect("escrow write"),
             Self::Authority { member, set, clear } => RecordWriteData {
+                mint_policy: [0; 33],
                 member: *member,
                 lists: lists(*set, *clear),
             }
@@ -425,7 +426,7 @@ fn compute_vectors() -> RecordVectors {
                       applications that fold them into the 4-ary member record tree. A \
                       member or register-key write's member is owner_identity(signer), an \
                       escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry \
-                      hash is Poseidon(CRQW, member, mask, value, escrow_key) and chain(p) = \
+                      hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold) and chain(p) = \
                       Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an \
                       application are its pending writes then its authority writes, each with \
                       the apply circuit's proof inputs. Paths list three siblings per level, \

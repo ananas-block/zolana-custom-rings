@@ -1209,12 +1209,14 @@ impl EscrowRegistry {
             .hash()
             .expect("escrow key");
             records.push(MemberRecord {
+                mint_policy: Default::default(),
                 member: *member,
                 next: next(position + 1),
                 lists: 0,
                 escrow_key,
             });
             views.push(RingMemberRecordView {
+                mint_policy: Default::default(),
                 member: Hash(*member),
                 next: Hash(next(position + 1)),
                 lists: 0,
@@ -1260,6 +1262,7 @@ impl EscrowRegistry {
             .iter()
             .zip(self.applied..)
             .map(|(utxo, position)| RingQueueEntryView {
+                mint_policy: Default::default(),
                 position,
                 member: Hash(
                     *Member::owner_tag(&utxo.owner_key)

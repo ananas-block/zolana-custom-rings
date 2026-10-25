@@ -37,8 +37,17 @@ impl CoSignDemand {
         }
     }
 
-    /// A shared class demands the co-signer, withdrawals only for a mint past or without its threshold.
+    /// A shared class demands the co-signer unless a verified exemption is supplied.
     pub fn signer(&self, config: &RingProgramConfig) -> Result<Option<Address>, CustomRingError> {
+        self.signer_with_exemption(config, false)
+    }
+
+    /// Only a verified registry proof may waive the withdrawal class.
+    pub fn signer_with_exemption(
+        &self,
+        config: &RingProgramConfig,
+        withdrawal_exempt: bool,
+    ) -> Result<Option<Address>, CustomRingError> {
         let co_signer = config.co_signer().copied();
         if self.approval_required {
             return co_signer
@@ -52,82 +61,100 @@ impl CoSignDemand {
         let in_scope = shared(CoSignScope::TRANSFERS)
             || shared(CoSignScope::DEPOSITS)
             || (shared(CoSignScope::WITHDRAWALS)
-                && self.withdrawals.iter().any(|(mint, total)| {
-                    config
-                        .threshold(mint)
-                        .is_none_or(|threshold| *total > u128::from(threshold))
-                }));
+                && !withdrawal_exempt
+                && !self.withdrawals.is_empty());
         Ok(in_scope.then_some(co_signer))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WithdrawalExemptionStatement {
+    pub root: [u8; 32],
+    pub assets: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    pub amounts: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+}
+impl WithdrawalExemptionStatement {
+    pub fn new(root: [u8; 32], demand: &CoSignDemand) -> Result<Self, CustomRingError> {
+        let mut result = Self {
+            root,
+            assets: [[0; 32]; zolana_interface::N_PUBLIC_SLOTS],
+            amounts: [[0; 32]; zolana_interface::N_PUBLIC_SLOTS],
+        };
+        if demand.withdrawals.len() > result.assets.len() {
+            return Err(CustomRingError::InvalidInstructionData);
+        }
+        for (i, (mint, amount)) in demand.withdrawals.iter().enumerate() {
+            result.assets[i] = *zolana_ring_policy::Member::asset(mint)
+                .map_err(|_| CustomRingError::InvalidInstructionData)?
+                .as_bytes();
+            result.amounts[i] = zolana_hasher::primitives::right_align(&amount.to_be_bytes());
+        }
+        Ok(result)
+    }
+    pub fn hash(&self) -> Result<[u8; 32], zolana_hasher::HasherError> {
+        let mut fields = vec![
+            crate::domain::field(crate::domain::WITHDRAWAL_EXEMPTION),
+            self.root,
+        ];
+        for i in 0..self.assets.len() {
+            fields.extend([self.assets[i], self.amounts[i]]);
+        }
+        zolana_hasher::hash_chain::create_hash_chain_4_from_slice(&fields)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use bytemuck::Zeroable;
     use zolana_interface::instruction::InterfaceTransfer;
-
-    use super::*;
-    use crate::WithdrawalThresholdRow;
-
-    const CO_SIGNER: Address = Address::new_from_array([7; 32]);
-    const USDC: [u8; 32] = [9; 32];
-
-    fn config(scope: CoSignScope, thresholds: &[([u8; 32], u64)]) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
-        config.co_signer = CO_SIGNER;
-        config.co_sign_scope = scope.bits();
-        config.threshold_count = thresholds.len() as u8;
-        for (row, (mint, amount)) in config.thresholds.iter_mut().zip(thresholds) {
-            *row = WithdrawalThresholdRow {
-                mint: Address::new_from_array(*mint),
-                amount: amount.to_le_bytes(),
-            };
-        }
-        config
-    }
-
-    fn sol(amount: u64) -> PublicLeg {
-        PublicLeg {
-            transfer: InterfaceTransfer::SolWithdrawal { amount },
-            mint: None,
-        }
-    }
-
-    fn usdc(amount: u64) -> PublicLeg {
-        PublicLeg {
-            transfer: InterfaceTransfer::SplWithdrawal {
-                amount,
-                spl_interface_bump: 255,
-            },
-            mint: Some(USDC),
-        }
-    }
-
     #[test]
-    fn withdrawals_sum_per_mint_and_a_scoped_class_or_an_unlisted_mint_demands_the_co_signer() {
-        let deposit = PublicLeg {
-            transfer: InterfaceTransfer::SolDeposit { amount: 5 },
-            mint: None,
-        };
-        let sol_only = config(CoSignScope::WITHDRAWALS, &[(SOL_ASSET_ADDRESS, 100)]);
-        let both = config(
-            CoSignScope::WITHDRAWALS,
-            &[(SOL_ASSET_ADDRESS, 100), (USDC, 100)],
-        );
-        let deposits = config(CoSignScope::DEPOSITS, &[]);
-        for (legs, config, demanded) in [
-            (vec![sol(60)], &sol_only, None),
-            (vec![sol(60), sol(60)], &sol_only, Some(CO_SIGNER)),
-            (vec![usdc(1)], &sol_only, Some(CO_SIGNER)),
-            (vec![sol(60), usdc(60)], &both, None),
-            (vec![deposit], &deposits, Some(CO_SIGNER)),
-            (vec![deposit], &sol_only, None),
-        ] {
+    fn exemption_waives_only_withdrawals_and_gross_totals_ignore_deposits() {
+        let legs = [
+            PublicLeg {
+                transfer: InterfaceTransfer::SolWithdrawal { amount: 60 },
+                mint: None,
+            },
+            PublicLeg {
+                transfer: InterfaceTransfer::SolWithdrawal { amount: 60 },
+                mint: None,
+            },
+            PublicLeg {
+                transfer: InterfaceTransfer::SolDeposit { amount: 100 },
+                mint: None,
+            },
+        ];
+        let mut demand = CoSignDemand::transact(false, &legs);
+        assert_eq!(demand.withdrawals, vec![(Address::default(), 120)]);
+        let mut config = RingProgramConfig::zeroed();
+        config.co_signer = Address::new_from_array([7; 32]);
+        config.co_sign_scope = CoSignScope::WITHDRAWALS.bits();
+        assert_eq!(demand.signer(&config), Ok(Some(config.co_signer)));
+        assert_eq!(demand.signer_with_exemption(&config, true), Ok(None));
+        for scope in [CoSignScope::TRANSFERS, CoSignScope::DEPOSITS] {
+            config.co_sign_scope = scope.bits();
             assert_eq!(
-                CoSignDemand::transact(false, &legs).signer(config),
-                Ok(demanded),
-                "{legs:?}"
+                demand.signer_with_exemption(&config, true),
+                Ok(Some(config.co_signer))
             );
         }
+        config.co_sign_scope = CoSignScope::WITHDRAWALS.bits();
+        demand.approval_required = true;
+        assert_eq!(
+            demand.signer_with_exemption(&config, true),
+            Ok(Some(config.co_signer))
+        );
+        let hash = WithdrawalExemptionStatement::new([1; 32], &demand)
+            .unwrap()
+            .hash()
+            .unwrap();
+        demand.withdrawals[0].1 -= 1;
+        assert_ne!(
+            hash,
+            WithdrawalExemptionStatement::new([1; 32], &demand)
+                .unwrap()
+                .hash()
+                .unwrap()
+        );
     }
 }

@@ -5,7 +5,7 @@ use zolana_hasher::{
     primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
     Hasher, HasherError, Poseidon,
 };
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, MintPolicy};
 
 use crate::{domain, error::CustomRingError, AUDIT_CIPHERTEXT_LEN};
 
@@ -35,8 +35,8 @@ pub const FIELD_MAX: [u8; 32] = {
 
 /// Root of the tree holding only the sentinel, the first history entry of a registry.
 pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
-    0x26, 0xbe, 0xcf, 0x71, 0x2d, 0xb6, 0x19, 0xda, 0x22, 0x3e, 0xcf, 0x9b, 0x8f, 0xd6, 0xc1, 0x9a,
-    0x6f, 0x81, 0xf2, 0x81, 0xe4, 0xd7, 0xac, 0xec, 0x9d, 0x6a, 0xb3, 0xaf, 0x79, 0x72, 0x29, 0x46,
+    0x07, 0x71, 0xd4, 0x15, 0xec, 0x42, 0xa4, 0x82, 0xed, 0x01, 0x69, 0x39, 0x4b, 0xd5, 0x83, 0xc8,
+    0x9f, 0x08, 0xf5, 0x37, 0x7b, 0xb2, 0x0a, 0x45, 0xb2, 0x40, 0xf7, 0xd2, 0x41, 0xcd, 0x98, 0x41,
 ];
 
 const _: () = assert!(QUEUE_CAPACITY as u64 == 2 * MEMBER_QUEUE_LIMIT);
@@ -69,6 +69,8 @@ pub struct QueueEntry {
     pub mask: u64,
     pub value: u64,
     pub escrow_key: [u8; 32],
+    /// Only authority writes replace mint settings; list and key writes preserve them.
+    pub mint_policy: Option<MintPolicy>,
 }
 
 impl QueueEntry {
@@ -80,10 +82,11 @@ impl QueueEntry {
             mask: bit,
             value: bit,
             escrow_key: key.hash()?,
+            mint_policy: None,
         })
     }
 
-    /// `Poseidon(CRQW, member, mask, value, escrow_key)`, mirror
+    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`, mirror
     /// `prover/server/custom_rings/circuits/registry/apply.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[
@@ -92,7 +95,24 @@ impl QueueEntry {
             &right_align(&self.mask.to_be_bytes()),
             &right_align(&self.value.to_be_bytes()),
             &self.escrow_key,
+            &self.mint_policy_field(),
+            &right_align(
+                &self
+                    .mint_policy
+                    .unwrap_or_default()
+                    .withdrawal_threshold
+                    .to_be_bytes(),
+            ),
         ])
+    }
+
+    /// Bit 192 distinguishes a replacement (including clearing) from no change.
+    pub fn mint_policy_field(&self) -> [u8; 32] {
+        self.mint_policy.map_or([0; 32], |policy| {
+            let mut field = policy.field();
+            field[7] = 1;
+            field
+        })
     }
 }
 

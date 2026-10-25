@@ -190,6 +190,8 @@ pub mod policy_member_v2_8_w8_curator_verifying_key;
 pub mod policy_member_v2_8_w8_own_verifying_key;
 #[path = "records/register_key_verifying_key.rs"]
 pub mod register_key_verifying_key;
+#[path = "records/withdrawal_exemption_verifying_key.rs"]
+pub mod withdrawal_exemption_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_audit_packed_2.key",
@@ -546,6 +548,10 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_register_key.key",
         register_key_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+    ),
+    (
+        "custom_ring_withdrawal_exemption.key",
+        withdrawal_exemption_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_deposit_1.key",
@@ -980,6 +986,9 @@ pub fn verifying_key(
             Some(&apply_records_16_verifying_key::VERIFYINGKEY)
         }
         key_catalog::RingCircuit::RegisterKey => Some(&register_key_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::WithdrawalExemption => {
+            Some(&withdrawal_exemption_verifying_key::VERIFYINGKEY)
+        }
         key_catalog::RingCircuit::Deposit { capacity: 1 } => {
             Some(&deposit_1_verifying_key::VERIFYINGKEY)
         }

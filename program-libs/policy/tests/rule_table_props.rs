@@ -67,18 +67,7 @@ proptest! {
     #[test]
     fn an_admitted_rule_round_trips_through_its_row(rule in rule()) {
         let decoded = Rule::decode(&rule.encoded());
-        let admitted = RuleTable::builder()
-            .rule(rule)
-            .inline_assets(&[[7u8; 32]])
-            .inline_limits(&[1])
-            .try_build()
-            .is_ok()
-            || RuleTable::builder().rule(rule).try_build().is_ok()
-            || RuleTable::builder()
-                .rule(rule)
-                .inline_assets(&[[7u8; 32]])
-                .try_build()
-                .is_ok();
+        let admitted = RuleTable::builder().rule(rule).try_build().is_ok();
         match decoded {
             Ok(decoded) => prop_assert_eq!(decoded, rule),
             Err(_) => prop_assert!(!admitted),

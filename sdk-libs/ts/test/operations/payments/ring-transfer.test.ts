@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import { AccountRole, type Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
@@ -287,7 +288,7 @@ describe("confidential rail", () => {
     });
     const scoped = async (signer: Address) => {
       const fixture = await ringFixture({
-        coSigner: { signer, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+        coSigner: { signer, scope: RING_COSIGN_TRANSFERS },
       });
       return { fixture, proven: prove(fixture, sender, transferTo(fixture, sender, [recipient])) };
     };
@@ -302,8 +303,14 @@ describe("confidential rail", () => {
       coSigner: {
         signer: owner,
         scope: RING_COSIGN_WITHDRAWALS,
-        thresholds: [{ mint: SOL_MINT, amount: 200n }],
       },
+      records: [
+        {
+          member: memberOfAsset(SOL_MINT),
+          lists: 0n,
+          mintPolicy: { ...EMPTY_MINT_POLICY, withdrawalThreshold: 200n },
+        },
+      ],
     });
     const withdraw = (amount: bigint) => {
       const transfer = transferTo(fixture, sender, []);
@@ -311,7 +318,13 @@ describe("confidential rail", () => {
       transfer.withdraw(SOL_MINT, amount, WithdrawalTarget.sol({ recipient: target }));
       return prove(fixture, sender, transfer, TransactWithdrawal.sol({ recipient: target }));
     };
-    expect((await withdraw(200n)).coSigner).toBeUndefined();
+    const exempt = await withdraw(200n);
+    expect(exempt.coSigner).toBeUndefined();
+    const { data } = await expanded(fixture, exempt, "confidential");
+    expect(data.withdrawalExemption).toBeDefined();
+    expect(fixture.ringRequests.some((request) => request.kind === "withdrawalExemption")).toBe(
+      true,
+    );
     await expect(withdraw(201n)).rejects.toThrow(isOwner);
     expect(fixture.sppCalls).toHaveLength(1);
   });
@@ -369,7 +382,7 @@ describe("confidential rail", () => {
 });
 
 describe("policy ring", () => {
-  const allowOwners = (limit: Readonly<{ cap: bigint; cosignAbove: bigint }>): RuleTable =>
+  const allowOwners = (): RuleTable =>
     buildRuleTable({
       rules: [
         {
@@ -378,7 +391,6 @@ describe("policy ring", () => {
           guard: { kind: "always" },
         },
       ],
-      limits: [{ asset: memberOfAsset(SOL_MINT), ...limit }],
     });
 
   async function curatedRing(
@@ -389,7 +401,14 @@ describe("policy ring", () => {
     }> = {},
   ) {
     return ringFixture({
-      table: allowOwners({ cap: options.cap ?? 0n, cosignAbove: 100n }),
+      table: allowOwners(),
+      records: [
+        {
+          member: memberOfAsset(SOL_MINT),
+          lists: 0n,
+          mintPolicy: { ...EMPTY_MINT_POLICY, cap: options.cap ?? 0n, cosignAbove: 100n },
+        },
+      ],
       curator: {
         lists: [ListId.allow],
         records: owners.map((owner) => ({
@@ -397,9 +416,7 @@ describe("policy ring", () => {
           lists: 1n,
         })),
       },
-      ...(options.coSigner === undefined
-        ? {}
-        : { coSigner: { ...options.coSigner, thresholds: [] } }),
+      ...(options.coSigner === undefined ? {} : { coSigner: { ...options.coSigner } }),
     });
   }
 
@@ -582,8 +599,15 @@ describe("policy ring", () => {
     const recipient = ShieldedKeypair.generate();
     const fixture = await ringFixture({
       mode: "confidentialEscrow",
-      table: allowOwners({ cap: 0n, cosignAbove: 100n }),
-      records: escrowed([sender]),
+      table: allowOwners(),
+      records: [
+        ...escrowed([sender]),
+        {
+          member: memberOfAsset(SOL_MINT),
+          lists: 0n,
+          mintPolicy: { ...EMPTY_MINT_POLICY, cosignAbove: 100n },
+        },
+      ],
       curator: {
         lists: [ListId.allow],
         records: [
@@ -774,7 +798,7 @@ describe("delegate rail", () => {
       table: EMPTY_TABLE,
       delegate,
       records: escrowed([source, recipient]),
-      coSigner: { signer: delegate, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+      coSigner: { signer: delegate, scope: RING_COSIGN_TRANSFERS },
     });
     await expect(
       move({ fixture, delegate, source, recipients: [recipient] }).prove(fixture.client),
@@ -853,7 +877,7 @@ describe("delegate move builder", () => {
       delegate,
       records: escrowed([source, ...recipients]),
       ...(input.coSigner === true
-        ? { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] } }
+        ? { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } }
         : {}),
     });
     const wallet = new Wallet({ identity: source.shieldedAddress() });
@@ -1020,7 +1044,7 @@ describe("ring transfer builder", () => {
 
   it("refuses a missing or another co-signer before approval and any proof", async () => {
     const coSigner = randomAddress();
-    const ring = { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] } };
+    const ring = { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } };
     for (const [cosigner, reason] of [
       [undefined, "missing"],
       [randomAddress(), "mismatch"],

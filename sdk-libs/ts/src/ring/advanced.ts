@@ -244,3 +244,5 @@ export type {
   TransferSubject,
   TransferSubjects,
 } from "../protocol/membership/policy.js";
+
+export { EMPTY_MINT_POLICY, type MintPolicy } from "../protocol/membership/mint-policy.js";

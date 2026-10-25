@@ -299,7 +299,7 @@ func (v tableRows) rows() ringpolicy.Rows {
 		rows.InlineAssets, rows.InlineLimits = append(rows.InlineAssets, asset.Int), append(rows.InlineLimits, v.InlineLimits[i])
 	}
 	for _, limit := range v.Limits {
-		rows.Limits = append(rows.Limits, policy.OutflowLimitWires{Asset: limit.Asset.Int, Cap: limit.Cap, CosignAbove: limit.CosignAbove})
+		rows.Limits = append(rows.Limits, ringpolicy.MintLimit{Asset: limit.Asset.Int, Cap: limit.Cap, CosignAbove: limit.CosignAbove})
 	}
 	return rows
 }

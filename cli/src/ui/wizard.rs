@@ -601,8 +601,7 @@ pub(crate) mod tests {
         assert!(policy
             .compile(Target::Devnet)
             .expect("compiles")
-            .rules
-            .inline_assets()
+            .mint_policies
             .is_empty());
     }
 
@@ -740,8 +739,15 @@ pub(crate) mod tests {
         .expect("wizard");
         let policy = answers.policy.expect("policy tier");
         let compiled = policy.compile(Target::Localnet).expect("compiles");
-        assert_eq!(compiled.rules.inline_assets().len(), 2);
-        assert_eq!(compiled.rules.inline_limits(), [1_000_000_000, 1_000_000]);
+        assert_eq!(compiled.mint_policies.len(), 2);
+        assert_eq!(
+            compiled
+                .mint_policies
+                .values()
+                .map(|p| p.threshold)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([1_000_000_000, 1_000_000])
+        );
     }
 
     #[test]
@@ -763,7 +769,7 @@ pub(crate) mod tests {
             .compile(Target::Localnet)
             .expect("compiles");
         assert_eq!(compiled.rules.rules().len(), 1);
-        assert!(compiled.rules.inline_assets().is_empty());
+        assert!(compiled.mint_policies.is_empty());
     }
 
     #[test]
@@ -790,7 +796,14 @@ pub(crate) mod tests {
         let policy = answers.policy.expect("policy tier");
         let compiled = policy.compile(Target::Localnet).expect("compiles");
         assert_eq!(compiled.rules.rules().len(), 1);
-        assert_eq!(compiled.rules.inline_limits(), [5]);
+        assert_eq!(
+            compiled
+                .mint_policies
+                .values()
+                .map(|p| p.threshold)
+                .collect::<Vec<_>>(),
+            [5]
+        );
     }
 
     #[test]
@@ -847,7 +860,7 @@ pub(crate) mod tests {
             .expect("policy")
             .compile(Target::Localnet)
             .expect("compiles");
-        assert!(compiled.rules.inline_assets().is_empty());
+        assert!(compiled.mint_policies.is_empty());
         assert_eq!(compiled.rules.rules().len(), 1);
     }
 

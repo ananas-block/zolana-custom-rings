@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
-use zolana_ring_policy::{ListSet, ListWrite, OutflowLimit, Writer};
+use zolana_ring_policy::{ListSet, ListWrite, Writer};
 
 use crate::{
     error::CustomRingError,
@@ -134,52 +134,27 @@ pub struct SetPausedIxData {
     pub paused: bool,
 }
 
-/// Public withdrawal total per mint that requires approval when exceeded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct WithdrawalThreshold {
-    pub mint: [u8; 32],
-    pub amount: u64,
-}
-
 /// Requires co-signing for the selected public operations.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SetCoSignerIxData {
     pub signer: [u8; 32],
     /// [`CoSignScope`](crate::CoSignScope) bits.
     pub scope: u8,
-    #[wincode(with = "containers::Vec<WithdrawalThreshold, FixIntLen<u8>>")]
-    pub thresholds: Vec<WithdrawalThreshold>,
 }
 
 impl SetCoSignerIxData {
-    /// The scope a stored co-signer takes, thresholds name distinct mints under the withdrawal scope.
+    /// The scope a stored co-signer takes.
     pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
         let scope =
             crate::CoSignScope::new(self.scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
         if self.signer == [0; 32] {
             return Err(CustomRingError::InvalidCoSigner);
         }
-        let repeated = || {
-            self.thresholds
-                .iter()
-                .enumerate()
-                .any(|(index, threshold)| {
-                    self.thresholds[..index]
-                        .iter()
-                        .any(|earlier| earlier.mint == threshold.mint)
-                })
-        };
-        if self.thresholds.len() > crate::MAX_CO_SIGNER_THRESHOLDS || repeated() {
-            return Err(CustomRingError::InvalidCoSignerThresholds);
-        }
-        if !self.thresholds.is_empty() && !scope.contains(crate::CoSignScope::WITHDRAWALS) {
-            return Err(CustomRingError::ThresholdsWithoutWithdrawals);
-        }
         Ok(scope)
     }
 }
 
-/// Emulated field arithmetic adds one BSB22 commitment, its point and proof of knowledge are mandatory.
+/// The circuit uses one BSB22 commitment; its point and proof of knowledge are mandatory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]
 #[repr(C)]
 pub struct CustomRingProof {
@@ -227,12 +202,6 @@ pub struct PolicyTableIxData {
     pub sources: Vec<SourceSpec>,
     #[wincode(with = "containers::Vec<[u8; 32], FixIntLen<u8>>")]
     pub rules: Vec<[u8; 32]>,
-    #[wincode(with = "containers::Vec<[u8; 32], FixIntLen<u8>>")]
-    pub inline_assets: Vec<[u8; 32]>,
-    #[wincode(with = "containers::Vec<u64, FixIntLen<u8>>")]
-    pub inline_limits: Vec<u64>,
-    #[wincode(with = "containers::Vec<OutflowLimit, FixIntLen<u8>>")]
-    pub limits: Vec<OutflowLimit>,
 }
 
 /// `source` 0 is the ring's own registry, 1 the single trailing curator member registry.
@@ -259,11 +228,19 @@ pub struct MemberWriteIxData {
 }
 
 /// One authority write inside `AuthorityWriteRecords`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct RecordWriteData {
     pub member: [u8; 32],
     pub lists: WriteRecordsIxData,
+    /// A replacement flag followed by four big-endian u64 amounts; all zero preserves settings.
+    pub mint_policy: [u8; 33],
+}
+
+impl Default for RecordWriteData {
+    fn default() -> Self {
+        Self::zeroed()
+    }
 }
 
 /// Tag 41, the proof that applies every pending write.
@@ -368,6 +345,7 @@ impl WriteRecordsIxData {
             mask,
             value,
             escrow_key: [0; 32],
+            mint_policy: None,
         })
     }
 }
@@ -376,7 +354,23 @@ impl RecordWriteData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
     pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
-        self.lists.entry(self.member, Writer::Authority)
+        check_member(&self.member)?;
+        let mut entry = if self.lists == WriteRecordsIxData::default() {
+            QueueEntry {
+                member: self.member,
+                ..QueueEntry::default()
+            }
+        } else {
+            self.lists.entry(self.member, Writer::Authority)?
+        };
+        entry.mint_policy = match self.mint_policy[0] {
+            0 if self.mint_policy == [0; 33] && entry.mask != 0 => None,
+            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(
+                self.mint_policy[1..].try_into().unwrap(),
+            )),
+            _ => return Err(CustomRingError::InvalidInstructionData),
+        };
+        Ok(entry)
     }
 }
 
@@ -431,7 +425,7 @@ fn write_count(count: usize) -> Result<u8, CustomRingError> {
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
 const _: () = assert!(MemberWriteIxData::SIZE == 24);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
-const _: () = assert!(RecordWriteData::SIZE == 48);
+const _: () = assert!(RecordWriteData::SIZE == 81);
 const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
 const _: () = assert!(RegisterKeyIxData::SIZE == 296);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
@@ -481,6 +475,7 @@ mod tests {
     fn the_authority_writes_only_the_authority_lists() {
         let write = |mask| {
             RecordWriteData {
+                mint_policy: [0; 33],
                 member: right_align(&[9]),
                 lists: lists(mask, 0),
             }

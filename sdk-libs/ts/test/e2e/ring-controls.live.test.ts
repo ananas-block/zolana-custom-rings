@@ -15,6 +15,7 @@ import {
 import { describe, expect, it } from "vitest";
 import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
 import {
+  AuthorityListWrite,
   NullifierKeyEscrow,
   RegisterKey,
   RingInstructionTag,
@@ -40,7 +41,13 @@ import {
   buildRingDepositTransaction,
   type RingTransactionSubmission,
 } from "../../src/ring/index.js";
-import { ListId, buildRuleTable, memberOfAsset, memberOfTag } from "../../src/ring/advanced.js";
+import {
+  EMPTY_MINT_POLICY,
+  ListId,
+  buildRuleTable,
+  memberOfAsset,
+  memberOfTag,
+} from "../../src/ring/advanced.js";
 import { liveHarness, signSendAndConfirm } from "./live-helpers.js";
 import {
   airdrop,
@@ -117,23 +124,6 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
               guard: { kind: "always" },
             },
           ],
-          limits: [
-            {
-              asset: memberOfAsset(SOL_MINT),
-              cap: 500_000_000n,
-              cosignAbove: 300_000_000n,
-            },
-            {
-              asset: memberOfAsset(harness.mint),
-              cap: 300n,
-              cosignAbove: 90n,
-            },
-            {
-              asset: memberOfAsset(harness.token2022Mint),
-              cap: 500n,
-              cosignAbove: 190n,
-            },
-          ],
         }),
         authorityTransact: true,
       });
@@ -150,9 +140,35 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           authority,
           signer: cosigner.address,
           scope: RING_COSIGN_WITHDRAWALS,
-          thresholds: [{ mint: SOL_MINT, amount: 100_000_000n }],
         }),
         authority,
+      );
+      const mintSettings = await new AuthorityListWrite({
+        ringProgramId,
+        authority: authority.address,
+      })
+        .withMintPolicy(memberOfAsset(SOL_MINT), {
+          ...EMPTY_MINT_POLICY,
+          cap: 500_000_000n,
+          cosignAbove: 300_000_000n,
+          withdrawalThreshold: 100_000_000n,
+        })
+        .withMintPolicy(memberOfAsset(harness.mint), {
+          ...EMPTY_MINT_POLICY,
+          cap: 300n,
+          cosignAbove: 90n,
+        })
+        .withMintPolicy(memberOfAsset(harness.token2022Mint), {
+          ...EMPTY_MINT_POLICY,
+          cap: 500n,
+          cosignAbove: 190n,
+        })
+        .prove(client);
+      await sendInstruction(
+        client,
+        mintSettings.instruction,
+        authority,
+        ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
       );
       const sender = await freshActor(client),
         recipient = await freshActor(client),
@@ -161,8 +177,8 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
       await airdrop(client, recipient.signer.address);
       await enrolInAllow(client, ringProgramId, authority, [sender, recipient, unregistered]);
       const listed = await fetchRingMemberRegistry(client, ringProgramId);
-      // The sentinel and all three listed members already occupy registry leaves.
-      expect(listed.nextIndex).toBe(4);
+      // The sentinel, three mint settings and three listed members occupy leaves.
+      expect(listed.nextIndex).toBe(7);
       // Key escrow is on, every note owner registers before receiving.
       for (const member of [sender, recipient]) {
         const nullifierKey = member.keypair.nullifierKey();

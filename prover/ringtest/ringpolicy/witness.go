@@ -47,6 +47,34 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	p := b.Policy()
 	own, curator := registry(t, w.Own), registry(t, w.Curator)
+	mintPolicies := map[string]*big.Int{}
+	assets := map[string]*big.Int{}
+	for i, a := range rows.InlineAssets {
+		asset := ringtest.AsBigInt(a)
+		key := asset.String()
+		assets[key] = asset
+		mintPolicies[key] = new(big.Int).Lsh(ringtest.AsBigInt(rows.InlineLimits[i]), 128)
+	}
+	for _, limit := range rows.Limits {
+		asset := ringtest.AsBigInt(limit.Asset)
+		key := asset.String()
+		assets[key] = asset
+		if mintPolicies[key] == nil {
+			mintPolicies[key] = big.NewInt(0)
+		}
+		mintPolicies[key].Or(mintPolicies[key], new(big.Int).Lsh(ringtest.AsBigInt(limit.Cap), 64))
+		mintPolicies[key].Or(mintPolicies[key], ringtest.AsBigInt(limit.CosignAbove))
+	}
+	keys := make([]string, 0, len(assets))
+	for key := range assets {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		update := new(big.Int).Or(mintPolicies[key], new(big.Int).Lsh(big.NewInt(1), 192))
+		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update})
+	}
+
 	entry := func(member int64) policy.Entry {
 		e := policy.Entry{Own: own.Opening(big.NewInt(member)).Wires()}
 		if !w.OwnOnly {
@@ -65,6 +93,9 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		if k < len(w.Public) {
 			p.PublicAssets[k], p.PublicAmounts[k] = w.Public[k].Asset, protocol.SignedToField(big.NewInt(w.Public[k].Amount))
 		}
+	}
+	for k, asset := range p.PublicAssets {
+		p.PublicAssetEntries[k] = own.Opening(ringtest.AsBigInt(asset)).Wires()
 	}
 	p.AddressChain, p.PrivateTxBlinding, p.SenderPkHash = 0, privateTxBlinding, w.Sender
 	p.SenderEntry = entry(w.Sender)

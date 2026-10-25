@@ -1,10 +1,5 @@
 use super::*;
 
-const ASSETS: &[[u8; 32]] = &[[3u8; 32]];
-const POOL: [[u8; 32]; MAX_INLINE_ASSETS] = [
-    [1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32], [6u8; 32], [7u8; 32], [8u8; 32],
-];
-
 const TABLE: RuleTable = RuleTable::builder()
     .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
     .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
@@ -19,41 +14,6 @@ const GROUP: RuleTable = RuleTable::builder()
         ListSet::of(&[ListId::Allow, ListId::Frozen]),
     ))
     .build();
-
-const LIMIT: OutflowLimit = OutflowLimit {
-    asset: [3u8; 32],
-    cap: 1000,
-    cosign_above: 400,
-};
-const LIMITED: RuleTable = RuleTable::builder().limits(&[LIMIT]).build();
-
-fn outflow_limits(count: u8) -> Vec<OutflowLimit> {
-    (1..=count)
-        .map(|byte| OutflowLimit {
-            asset: [byte; 32],
-            ..LIMIT
-        })
-        .collect()
-}
-
-fn from_parts(rows: &[[u8; 32]], inline: &[[u8; 32]]) -> Result<EncodedRuleTable, RuleTableError> {
-    let limits = [0; MAX_INLINE_ASSETS];
-    from_parts_with_limits(rows, inline, &limits[..inline.len().min(MAX_INLINE_ASSETS)])
-}
-
-fn from_parts_with_limits(
-    rows: &[[u8; 32]],
-    inline: &[[u8; 32]],
-    limits: &[u64],
-) -> Result<EncodedRuleTable, RuleTableError> {
-    TableParts {
-        rows,
-        inline_assets: inline,
-        inline_limits: limits,
-        limits: &[],
-    }
-    .encode()
-}
 
 fn sources(entries: &[(ListId, [u8; 32])]) -> SourceMap {
     SourceMap::new(entries).unwrap()
@@ -96,7 +56,6 @@ fn the_table_keeps_declaration_order_and_the_pool() {
     assert_eq!(rules[0].subject, Subject::OutputOwner);
     assert_eq!(rules[1].primary_mode(), Mode::Absent);
     assert_eq!(rules[2], Rule::require(Subject::Asset, ListId::Allow));
-    assert!(TABLE.inline_assets().is_empty());
     assert_eq!(RuleTable::empty(), EMPTY);
     assert!(EMPTY.is_empty());
     assert_eq!(EMPTY.encode(), EncodedRuleTable::default());
@@ -393,24 +352,6 @@ fn policy_hash_binds_the_sources_and_the_inline_members() {
 }
 
 #[test]
-fn per_asset_limits_round_trip_and_bind_the_hash() {
-    const LIMITS: RuleTable = RuleTable::builder()
-        .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-        .inline_assets(&[[3u8; 32], [4u8; 32]])
-        .inline_limits(&[5, 7])
-        .build();
-    const OTHER: RuleTable = RuleTable::builder()
-        .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-        .inline_assets(&[[3u8; 32], [4u8; 32]])
-        .inline_limits(&[5, 8])
-        .build();
-    let map = sources(&[(ListId::Allow, [4u8; 32])]);
-    assert_eq!(LIMITS.inline_limits(), &[5, 7]);
-    assert_eq!(LIMITS.encode().decode(), Ok(LIMITS));
-    assert_ne!(LIMITS.hash(&map).unwrap(), OTHER.hash(&map).unwrap());
-}
-
-#[test]
 fn validation_refuses_an_overlong_count_and_a_rule_without_a_source() {
     let map = sources(&[(ListId::Allow, [4u8; 32]), (ListId::Frozen, [4u8; 32])]);
     assert_eq!(TABLE.encode().validate(&map), Ok(TABLE));
@@ -452,46 +393,6 @@ fn validation_refuses_a_rule_over_a_list_its_members_write() {
 }
 
 #[test]
-fn table_fields_follow_the_circuit_order() {
-    const FULL: RuleTable = RuleTable::builder()
-        .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-        .inline_assets(&[[3u8; 32]])
-        .inline_limits(&[9])
-        .limits(&[LIMIT])
-        .build();
-    let map = sources(&[(ListId::Allow, [4u8; 32])]);
-    let fields = FULL.encode().fields(&map);
-    assert_eq!(fields[0], right_align(b"CRTB"));
-    assert_eq!(fields[1], field_u8(POLICY_TABLE_VERSION));
-    assert_eq!((fields[2], fields[3]), (field_u8(1), [4u8; 32]));
-    assert_eq!(fields[4], [0u8; 32]);
-    assert_eq!(fields[18..21], [field_u8(1), field_u8(1), field_u8(1)]);
-    assert_eq!(fields[21], FULL.rules()[0].encoded());
-    assert_eq!(fields[37], [3u8; 32]);
-    assert_eq!(fields[45], right_align(&9u64.to_be_bytes()));
-    assert_eq!(
-        fields[53..56],
-        [
-            LIMIT.asset,
-            right_align(&1000u64.to_be_bytes()),
-            right_align(&400u64.to_be_bytes())
-        ]
-    );
-    assert!(fields[56..].iter().all(|field| *field == [0u8; 32]));
-}
-
-#[test]
-fn the_hash_absorbs_the_last_source_and_the_last_limit_field() {
-    let map = SourceMap::default();
-    let baseline = LIMITED.hash(&map).unwrap();
-    let last_source = sources(&[(ListId::Escrow, [6u8; 32])]);
-    assert_ne!(baseline, LIMITED.hash(&last_source).unwrap());
-    let mut last_cosign = LIMITED.encode();
-    last_cosign.limit_cosign[MAX_OUTFLOW_LIMITS - 1] = 1u64.to_be_bytes();
-    assert_ne!(baseline, last_cosign.hash(&map).unwrap());
-}
-
-#[test]
 fn an_empty_table_hashes_the_empty_map() {
     let baseline = EMPTY.hash(&SourceMap::default()).unwrap();
     let with_slot = sources(&[(ListId::Allow, [4u8; 32])]);
@@ -521,266 +422,6 @@ fn the_source_map_is_positional_and_rejects_duplicates() {
 }
 
 #[test]
-fn a_full_image_round_trips() {
-    let table = with_rules(
-        RuleTable::builder()
-            .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
-            .inline_assets(&POOL)
-            .inline_limits(&[1; MAX_INLINE_ASSETS]),
-        sender_rules().take(MAX_RULES - 1),
-    )
-    .build();
-    let encoded = table.encode();
-    assert_eq!(usize::from(encoded.rule_count), MAX_RULES);
-    assert_eq!(usize::from(encoded.inline_count), MAX_INLINE_ASSETS);
-    assert_eq!(encoded.decode(), Ok(table));
-    assert_eq!(encoded.referenced(), ListSet::from_bits(u8::MAX));
-    let rows: Vec<[u8; 32]> = table.rules().iter().map(Rule::encoded).collect();
-    assert_eq!(
-        from_parts_with_limits(&rows, &POOL, &[1; MAX_INLINE_ASSETS]),
-        Ok(encoded)
-    );
-    let seventeen: Vec<[u8; 32]> = rows.iter().chain(&rows[..1]).copied().collect();
-    assert_eq!(
-        from_parts(&seventeen, &POOL),
-        Err(RuleTableError::TooManyRules)
-    );
-    let nine: Vec<[u8; 32]> = POOL.iter().chain(&POOL[..1]).copied().collect();
-    assert_eq!(
-        from_parts(&rows, &nine),
-        Err(RuleTableError::TooManyInlineAssets)
-    );
-    assert_eq!(
-        from_parts_with_limits(&rows, &POOL, &[1]),
-        Err(RuleTableError::MissingAssetLimit)
-    );
-}
-
-#[test]
-fn padding_past_the_counts_must_be_zero() {
-    let mut row_padding = TABLE.encode();
-    row_padding.rules[3][0] = 1;
-    assert_eq!(row_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut member_padding = TABLE.encode();
-    member_padding.inline_assets[1][31] = 1;
-    assert_eq!(member_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut limit_padding = TABLE.encode();
-    limit_padding.inline_limits[1][7] = 1;
-    assert_eq!(limit_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut rule_count = TABLE.encode();
-    rule_count.rule_count = MAX_RULES as u8 + 1;
-    assert_eq!(rule_count.decode(), Err(RuleTableError::TooManyRules));
-    let mut inline_count = TABLE.encode();
-    inline_count.inline_count = MAX_INLINE_ASSETS as u8 + 1;
-    assert_eq!(
-        inline_count.decode(),
-        Err(RuleTableError::TooManyInlineAssets)
-    );
-    let mut row = TABLE.encode();
-    row.rules[1][31] = 3;
-    assert_eq!(row.decode(), Err(RuleTableError::ExitDestination));
-}
-
-#[test]
-fn try_build_names_each_refusal_and_build_panics_with_its_message() {
-    let inline = RuleTable::builder()
-        .rule(Rule::require(Subject::Asset, ListId::Allow))
-        .inline_assets(ASSETS);
-    let cases = [
-        (
-            with_rules(
-                RuleTable::builder(),
-                sender_rules().chain([Rule::require(Subject::Asset, ListId::Allow)]),
-            ),
-            RuleTableError::TooManyRules,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::Asset, ListId::Allow))
-                .inline_assets(&POOL)
-                .inline_assets(ASSETS),
-            RuleTableError::TooManyInlineAssets,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::Asset, ListId::Allow))
-                .inline_assets(&[[0u8; 32]]),
-            RuleTableError::ZeroInlineAsset,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule {
-                    subject: Subject::Sender,
-                    source: RuleSource::Lists {
-                        present: ListSet::EMPTY,
-                        absent: ListSet::EMPTY,
-                    },
-                    guard: Guard::Always,
-                })
-                .inline_assets(ASSETS),
-            RuleTableError::EmptyLists,
-        ),
-        (
-            RuleTable::builder().rule(Rule::require_any(Subject::Asset, ListSet::EMPTY)),
-            RuleTableError::EmptyLists,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
-                .inline_assets(ASSETS),
-            RuleTableError::PoolWithoutInlineRule,
-        ),
-        (
-            RuleTable::builder().rule(Rule::forbid_all(Subject::Sender, ListSet::EMPTY)),
-            RuleTableError::EmptyLists,
-        ),
-        (
-            RuleTable::builder().rule(Rule::any_of(
-                Subject::OutputOwner,
-                ListSet::single(ListId::Allow),
-                ListSet::of(&[ListId::Allow, ListId::Block]),
-            )),
-            RuleTableError::ListInBothSets,
-        ),
-        (
-            RuleTable::builder().rule(Rule::forbid(Subject::Sender, ListId::Frozen).above(10)),
-            RuleTableError::SenderGuard,
-        ),
-        (
-            RuleTable::builder().rule(Rule::require(Subject::ExitDestination, ListId::Allow)),
-            RuleTableError::ExitDestination,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Approval).above(0)),
-            RuleTableError::ZeroThreshold,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::Asset, ListId::Approval).above_by_asset()),
-            RuleTableError::PerAssetGuardNotOwner,
-        ),
-        (
-            RuleTable::builder()
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(10)),
-            RuleTableError::DuplicateRule,
-        ),
-        (
-            inline
-                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(7))
-                .inline_assets(&[[4u8; 32]]),
-            RuleTableError::PoolWithoutInlineRule,
-        ),
-        (
-            RuleTable::builder().limits(&outflow_limits(MAX_OUTFLOW_LIMITS as u8 + 1)),
-            RuleTableError::TooManyOutflowLimits,
-        ),
-        (
-            RuleTable::builder().limits(&[OutflowLimit {
-                asset: [0u8; 32],
-                ..LIMIT
-            }]),
-            RuleTableError::ZeroLimitAsset,
-        ),
-        (
-            RuleTable::builder().limits(&[OutflowLimit {
-                cap: 0,
-                cosign_above: 0,
-                ..LIMIT
-            }]),
-            RuleTableError::LimitWithoutBound,
-        ),
-        (
-            RuleTable::builder().limits(&[LIMIT, LIMIT]),
-            RuleTableError::DuplicateLimitAsset,
-        ),
-    ];
-    for (builder, expected) in cases {
-        assert_eq!(builder.try_build(), Err(expected), "{expected:?}");
-        let payload = std::panic::catch_unwind(|| builder.build()).unwrap_err();
-        assert_eq!(
-            payload.downcast_ref::<String>().map(String::as_str),
-            Some(expected.message()),
-            "{expected:?}"
-        );
-    }
-}
-
-#[test]
-fn outflow_limits_round_trip_and_bind_the_hash() {
-    let map = SourceMap::default();
-    assert_eq!(LIMITED.limits(), &[LIMIT]);
-    assert_eq!(LIMITED.encode().decode(), Ok(LIMITED));
-    assert!(LIMITED.encode().has_limits());
-    assert!(!EMPTY.encode().has_limits());
-    let eight = outflow_limits(MAX_OUTFLOW_LIMITS as u8);
-    let full = RuleTable::builder().limits(&eight).build();
-    assert_eq!(full.limits(), eight.as_slice());
-    assert_eq!(full.encode().decode(), Ok(full));
-    let baseline = LIMITED.hash(&map).unwrap();
-    let other_cap = RuleTable::builder()
-        .limits(&[OutflowLimit { cap: 1001, ..LIMIT }])
-        .build();
-    let other_cosign = RuleTable::builder()
-        .limits(&[OutflowLimit {
-            cosign_above: 401,
-            ..LIMIT
-        }])
-        .build();
-    let other_asset = RuleTable::builder()
-        .limits(&[OutflowLimit {
-            asset: [4u8; 32],
-            ..LIMIT
-        }])
-        .build();
-    for other in [other_cap, other_cosign, other_asset, EMPTY] {
-        assert_ne!(baseline, other.hash(&map).unwrap());
-    }
-}
-
-#[test]
-fn limit_padding_past_the_count_must_be_zero() {
-    let map = SourceMap::default();
-    let mut asset_padding = LIMITED.encode();
-    asset_padding.limit_assets[1][31] = 1;
-    assert_eq!(asset_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut cap_padding = LIMITED.encode();
-    cap_padding.limit_caps[1][7] = 1;
-    assert_eq!(cap_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut cosign_padding = LIMITED.encode();
-    cosign_padding.limit_cosign[1][7] = 1;
-    assert_eq!(cosign_padding.decode(), Err(RuleTableError::NonZeroPadding));
-    let mut limit_count = LIMITED.encode();
-    limit_count.limit_count = MAX_OUTFLOW_LIMITS as u8 + 1;
-    assert_eq!(
-        limit_count.validate(&map),
-        Err(PolicyTableError::Table(
-            RuleTableError::TooManyOutflowLimits
-        ))
-    );
-}
-
-#[test]
-fn table_parts_pack_the_limit_section_and_check_its_width() {
-    let parts = TableParts {
-        rows: &[],
-        inline_assets: &[],
-        inline_limits: &[],
-        limits: &[LIMIT],
-    };
-    assert_eq!(parts.encode(), Ok(LIMITED.encode()));
-    assert_eq!(
-        TableParts {
-            limits: &outflow_limits(MAX_OUTFLOW_LIMITS as u8 + 1),
-            ..parts
-        }
-        .encode(),
-        Err(RuleTableError::TooManyOutflowLimits)
-    );
-}
-
-#[test]
 fn signatures_ignore_the_guard_and_bind_both_sets() {
     let mixed = Rule::any_of(
         Subject::OutputOwner,
@@ -806,47 +447,6 @@ fn signatures_ignore_the_guard_and_bind_both_sets() {
 }
 
 #[test]
-fn per_asset_limits_fail_closed_when_incomplete_or_ambiguous() {
-    let rule = Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset();
-    assert_eq!(
-        RuleTable::builder().rule(rule).try_build(),
-        Err(RuleTableError::MissingAssetLimit)
-    );
-    assert_eq!(
-        RuleTable::builder()
-            .rule(rule)
-            .inline_assets(&[[3u8; 32]])
-            .inline_limits(&[0])
-            .try_build(),
-        Err(RuleTableError::MissingAssetLimit)
-    );
-    assert_eq!(
-        RuleTable::builder()
-            .rule(rule)
-            .inline_assets(&[[3u8; 32], [3u8; 32]])
-            .inline_limits(&[5, 7])
-            .try_build(),
-        Err(RuleTableError::DuplicateInlineAsset)
-    );
-    assert_eq!(
-        RuleTable::builder()
-            .rule(Rule::require(Subject::Sender, ListId::Allow).above_by_asset())
-            .inline_assets(&[[3u8; 32]])
-            .inline_limits(&[5])
-            .try_build(),
-        Err(RuleTableError::PerAssetGuardNotOwner)
-    );
-    assert_eq!(
-        RuleTable::builder()
-            .rule(Rule::require(Subject::Asset, ListId::Allow))
-            .inline_assets(&[[3u8; 32]])
-            .inline_limits(&[5])
-            .try_build(),
-        Err(RuleTableError::PoolWithoutInlineRule)
-    );
-}
-
-#[test]
 #[should_panic(expected = "duplicate rule")]
 fn duplicate_rules_are_rejected() {
     let _ = RuleTable::builder()
@@ -860,15 +460,6 @@ fn duplicate_rules_are_rejected() {
 fn sender_guards_are_rejected() {
     let _ = RuleTable::builder()
         .rule(Rule::forbid(Subject::Sender, ListId::Frozen).above(10))
-        .build();
-}
-
-#[test]
-#[should_panic(expected = "zero is the padding value")]
-fn zero_inline_members_are_rejected() {
-    let _ = RuleTable::builder()
-        .rule(Rule::require(Subject::Asset, ListId::Allow))
-        .inline_assets(&[[0u8; 32]])
         .build();
 }
 
@@ -901,4 +492,42 @@ fn an_asset_rule_reads_lists_and_refuses_an_empty_mask() {
     );
     let forbid = Rule::forbid(Subject::Asset, ListId::Block);
     assert_eq!(Rule::decode(&forbid.encoded()), Ok(forbid));
+}
+
+#[test]
+fn table_fields_bind_sources_and_all_rules_without_mint_tables() {
+    let table = with_rules(RuleTable::builder(), sender_rules().take(MAX_RULES)).build();
+    let map = SourceMap::default();
+    let fields = table.encode().fields(&map);
+    assert_eq!(fields.len(), 44);
+    assert_eq!(fields[0], right_align(b"CRTB"));
+    assert_eq!(fields[1], field_u8(12));
+    assert_eq!(fields[18], field_u8(16));
+    assert_eq!(fields[34], table.rules()[15].encoded());
+    assert!(fields[35..].iter().all(|field| *field == [0; 32]));
+    assert_eq!(table.encode().decode(), Ok(table));
+    let hash = table.hash(&map).unwrap();
+    let mut changed = table.encode();
+    changed.rules[15][20] ^= 1;
+    assert_ne!(hash, changed.hash(&map).unwrap());
+    assert_ne!(
+        hash,
+        table.hash(&sources(&[(ListId::Escrow, [6; 32])])).unwrap()
+    );
+    let mut padded = TABLE.encode();
+    padded.rules[3][0] = 1;
+    assert_eq!(padded.decode(), Err(RuleTableError::NonZeroPadding));
+}
+#[test]
+fn per_asset_guards_are_configured_independently_of_mint_records() {
+    let table = RuleTable::builder()
+        .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset())
+        .build();
+    assert_eq!(table.encode().decode(), Ok(table));
+    assert_eq!(
+        RuleTable::builder()
+            .rule(Rule::require(Subject::Sender, ListId::Allow).above_by_asset())
+            .try_build(),
+        Err(RuleTableError::PerAssetGuardNotOwner)
+    );
 }

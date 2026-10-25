@@ -40,7 +40,9 @@ def main():
         pinned = previous["keys"].get(filename)
         start = time.monotonic()
         if not path.exists():
-            temporary = path.with_suffix(".partial")
+            staging = args.keys_dir / ".setup"
+            staging.mkdir(exist_ok=True)
+            temporary = staging / filename
             if pinned is not None:
                 url = previous["release"] + "/" + filename
                 with urllib.request.urlopen(url, timeout=60) as source, temporary.open("wb") as out:

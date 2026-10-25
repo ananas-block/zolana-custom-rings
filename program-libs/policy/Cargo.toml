@@ -6,7 +6,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { workspace = true, optional = true }
 bytemuck = { workspace = true }
 solana-address = { workspace = true }
 thiserror = { workspace = true }

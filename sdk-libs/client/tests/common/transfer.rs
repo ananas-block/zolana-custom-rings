@@ -505,6 +505,7 @@ impl Transfer {
             commitment_pok: zero,
         };
         let data = RingTransactData {
+            withdrawal_exemption: Default::default(),
             rail,
             n_in: shape.n_inputs() as u8,
             n_out: shape.n_outputs() as u8,

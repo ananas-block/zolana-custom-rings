@@ -697,7 +697,10 @@ ring_rpc = "http://127.0.0.1:8785"
     #[test]
     fn key_escrow_reads_as_the_confidential_ring_it_was_created_as() {
         assert_eq!(ModeName::of(RingMode::Confidential), ModeName::Confidential);
-        assert_eq!(ModeName::of(RingMode::ConfidentialEscrow), ModeName::Confidential);
+        assert_eq!(
+            ModeName::of(RingMode::ConfidentialEscrow),
+            ModeName::Confidential
+        );
         assert_eq!(ModeName::of(RingMode::Anonymous), ModeName::Anonymous);
     }
 

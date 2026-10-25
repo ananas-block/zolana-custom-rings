@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use thiserror::Error;
 use zolana_ring_policy::{
-    Guard, ListId, ListSet, Member, MemberError, Mode, OutflowLimit, Rule, RuleSource, RuleTable,
-    RuleTableError, Subject, Writer, MAX_INLINE_ASSETS, MAX_OUTFLOW_LIMITS, MAX_RULES,
+    Guard, ListId, ListSet, Member, MemberError, MintPolicy, Mode, OutflowLimit, Rule, RuleSource,
+    RuleTable, RuleTableError, Subject, Writer, MAX_RULES,
 };
 
 use crate::{
@@ -89,6 +89,7 @@ named_enum! {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledPolicy {
     pub rules: RuleTable,
+    pub mint_policies: BTreeMap<[u8; 32], MintPolicy>,
     pub shared_sources: Vec<(ListId, CustomRing)>,
 }
 
@@ -115,8 +116,6 @@ pub enum PolicyError {
     EmptyAny,
     #[error("{count} rules exceed the {MAX_RULES} rows of the table")]
     TooManyRules { count: usize },
-    #[error("{count} mint thresholds exceed the {MAX_INLINE_ASSETS} slots of the table")]
-    TooManyAssets { count: usize },
     #[error("the {} source {list} serves no rule", cluster.as_str())]
     UnreferencedSource { list: ListName, cluster: Target },
     #[error("rule {} takes no amount guard, a sender has no output amount", rule + 1)]
@@ -140,8 +139,6 @@ pub enum PolicyError {
     },
     #[error("rule {} is refused, {message}", rule + 1)]
     Refused { rule: usize, message: &'static str },
-    #[error("{count} outflow limits exceed the {MAX_OUTFLOW_LIMITS} slots of the table")]
-    TooManyLimits { count: usize },
     #[error("outflow limit {} asset {mint} derives no member", row + 1)]
     LimitAsset {
         row: usize,
@@ -448,10 +445,6 @@ impl PolicySpec {
             .enumerate()
             .map(|(index, rule)| rule.rule(index, &mut assets, &mut limits))
             .collect::<Result<Vec<_>, _>>()?;
-        let count = assets.len();
-        if count > MAX_INLINE_ASSETS {
-            return Err(PolicyError::TooManyAssets { count });
-        }
         Ok(PolicyRows {
             rules,
             assets,
@@ -461,7 +454,9 @@ impl PolicySpec {
     }
 
     pub fn compile(&self, cluster: Target) -> Result<CompiledPolicy, PolicyError> {
-        let rules = compile_rows(&self.rows()?)?;
+        let rows = self.rows()?;
+        let rules = compile_rows(&rows)?;
+        let mint_policies = rows.mint_policies()?;
         let referenced = rules.referenced();
         let shared_sources = self
             .sources
@@ -474,6 +469,7 @@ impl PolicySpec {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CompiledPolicy {
             rules,
+            mint_policies,
             shared_sources,
         })
     }
@@ -502,10 +498,6 @@ impl CompiledPolicy {
 
 impl PolicySpec {
     fn outflow_limits(&self) -> Result<Vec<OutflowLimit>, PolicyError> {
-        let count = self.limits.len();
-        if count > MAX_OUTFLOW_LIMITS {
-            return Err(PolicyError::TooManyLimits { count });
-        }
         let limit = |(row, spec): (usize, &LimitSpec)| {
             let mint = spec.asset.0;
             let refused = |source| PolicyError::LimitAsset { row, mint, source };
@@ -518,11 +510,42 @@ impl PolicySpec {
 }
 
 impl PolicyRows {
+    fn mint_policies(&self) -> Result<BTreeMap<[u8; 32], MintPolicy>, PolicyError> {
+        let refused = |message| PolicyError::LimitsRefused { message };
+        let mut policies = BTreeMap::<[u8; 32], MintPolicy>::new();
+        for (asset, threshold) in self.assets.iter().zip(&self.limits) {
+            if *threshold == 0
+                || policies
+                    .insert(
+                        *asset,
+                        MintPolicy {
+                            threshold: *threshold,
+                            ..MintPolicy::EMPTY
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(refused(
+                    "mint thresholds must be nonzero and name distinct assets",
+                ));
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for limit in &self.outflow {
+            if !seen.insert(*limit.asset()) {
+                return Err(refused("outflow limits must name distinct assets"));
+            }
+            if limit.cap == 0 && limit.cosign_above == 0 {
+                return Err(refused(RuleTableError::LimitWithoutBound.message()));
+            }
+            let policy = policies.entry(*limit.asset()).or_default();
+            policy.cap = limit.cap;
+            policy.cosign_above = limit.cosign_above;
+        }
+        Ok(policies)
+    }
     fn build(&self, rule_count: usize) -> Result<RuleTable, RuleTableError> {
-        let builder = RuleTable::builder()
-            .inline_assets(&self.assets)
-            .inline_limits(&self.limits)
-            .limits(&self.outflow);
+        let builder = RuleTable::builder();
         self.rules[..rule_count]
             .iter()
             .fold(builder, |builder, rule| builder.rule(*rule))
@@ -626,6 +649,29 @@ mod tests {
     }
 
     #[test]
+    fn twenty_mints_compile_into_records() {
+        let mints: Vec<_> = (1..=20)
+            .map(|i| Address::new_from_array([i; 32]).to_string())
+            .collect();
+        let outflow = mints
+            .iter()
+            .map(|mint| format!(r#"{{asset = "{mint}", cap = 1000, cosign_above = 500}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let thresholds = mints
+            .iter()
+            .map(|mint| format!(r#"{{asset = "{mint}", above = 100}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let policy = compiled(&format!("limits = [{outflow}]\n[[rules]]\nsubject = \"output-owner\"\nrequire = \"allow\"\nlimits = [{thresholds}]\n")).unwrap();
+        assert_eq!(policy.mint_policies.len(), 20);
+        assert!(policy
+            .mint_policies
+            .values()
+            .all(|p| (p.threshold, p.cap, p.cosign_above) == (100, 1000, 500)));
+    }
+
+    #[test]
     fn limits_bound_each_transfer() {
         let policy = compiled(&format!(
             r#"
@@ -633,7 +679,7 @@ limits = [{{ asset = "{MINT}", cap = 1000 }}]
 "#
         ))
         .expect("compiles");
-        let limits = policy.rules.limits();
+        let limits = policy.mint_policies.values().collect::<Vec<_>>();
         assert_eq!(limits.len(), 1);
         assert_eq!((limits[0].cap, limits[0].cosign_above), (1000, 0));
     }
@@ -703,7 +749,7 @@ above = 1000000
             rows[3],
             Rule::require(Subject::OutputOwner, ListId::Allow).above(1_000_000)
         );
-        assert!(policy.rules.inline_assets().is_empty());
+        assert!(policy.mint_policies.is_empty());
         assert_eq!(
             policy.shared_sources,
             vec![(
@@ -740,8 +786,15 @@ limits = [
             policy.rules.rules(),
             &[Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()]
         );
-        assert_eq!(policy.rules.inline_assets().len(), 2);
-        assert_eq!(policy.rules.inline_limits(), &[1_000_000, 2_000_000]);
+        assert_eq!(policy.mint_policies.len(), 2);
+        assert_eq!(
+            policy
+                .mint_policies
+                .values()
+                .map(|p| p.threshold)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([1_000_000, 2_000_000])
+        );
     }
 
     #[test]

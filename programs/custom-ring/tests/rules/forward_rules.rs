@@ -244,7 +244,6 @@ fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
         &mut ring,
         &co_signer.pubkey(),
         CoSignScope::TRANSFERS.bits(),
-        Vec::new(),
     );
     let merge = merge_instruction(&ring, Some(0));
     refused(
@@ -255,12 +254,7 @@ fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
         ring.send(with_co_signer(merge, MERGE_SPP), &[&co_signer]),
         CustomRingError::EscrowMergeUnverified,
     );
-    set_co_signer(
-        &mut ring,
-        &co_signer.pubkey(),
-        CoSignScope::DEPOSITS.bits(),
-        Vec::new(),
-    );
+    set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::DEPOSITS.bits());
     let deposit = deposit_instruction(&ring, None, &ring_deposit());
     refused(
         ring.send(deposit.clone(), &[]),

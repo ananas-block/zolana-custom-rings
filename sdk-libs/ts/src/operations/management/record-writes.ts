@@ -1,3 +1,8 @@
+import {
+  mintPolicyField,
+  mintPolicyWriteField,
+  type MintPolicy,
+} from "../../protocol/membership/mint-policy.js";
 import type { AccountMeta, Address, Instruction } from "@solana/kit";
 
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
@@ -10,6 +15,7 @@ import {
   type SignerAccount,
   Writer,
   ZERO_32,
+  bigIntBytes,
   equalBytes,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
@@ -132,7 +138,8 @@ export async function memberListWriteInstruction(
 export class AuthorityListWrite {
   readonly #ringProgramId: Address;
   readonly #authority: Address;
-  #writes: readonly Readonly<{ member: Member; write: ListWrite }>[] = Object.freeze([]);
+  #writes: readonly Readonly<{ member: Member; write?: ListWrite; mintPolicy?: MintPolicy }>[] =
+    Object.freeze([]);
 
   constructor(input: Readonly<{ ringProgramId: Address; authority: Address }>) {
     this.#ringProgramId = input.ringProgramId;
@@ -149,7 +156,19 @@ export class AuthorityListWrite {
     return this.#holding([...this.#writes, Object.freeze({ member, write: lists })]);
   }
 
-  writes(): readonly Readonly<{ member: Member; write: ListWrite }>[] {
+  /** Replaces all mint settings; zero values clear the corresponding settings. */
+  withMintPolicy(member: Member, mintPolicy: MintPolicy): AuthorityListWrite {
+    checkMember(member);
+    mintPolicyField(mintPolicy);
+    if (this.#writes.some((known) => equalBytes(known.member, member)))
+      throw listWriteInvalid("Duplicate");
+    return this.#holding([
+      ...this.#writes,
+      Object.freeze({ member, mintPolicy: Object.freeze({ ...mintPolicy }) }),
+    ]);
+  }
+
+  writes(): readonly Readonly<{ member: Member; write?: ListWrite; mintPolicy?: MintPolicy }>[] {
     return this.#writes;
   }
 
@@ -174,7 +193,12 @@ export class AuthorityListWrite {
         throw new RingError("RING_UNAUTHORIZED_AUTHORITY", {
           details: { authority: this.#authority },
         });
-      const entries = this.#writes.map(({ member, write }) => queueEntry(member, write));
+      const entries = this.#writes.map(({ member, write, mintPolicy }) => ({
+        ...(write === undefined
+          ? { member, mask: 0n, value: 0n, escrowKey: ZERO_32 }
+          : queueEntry(member, write)),
+        ...(mintPolicy === undefined ? {} : { mintPolicy }),
+      }));
       const application = await waitForProjection(
         async (attemptContext) => {
           const { registry, queue } = await chainState(client, this.#ringProgramId, attemptContext);
@@ -198,8 +222,13 @@ export class AuthorityListWrite {
       const data = new Writer()
         .u8(RingInstructionTag.authorityWriteRecords, "tag")
         .u8(entries.length, "writes.length");
-      for (const { member, write } of this.#writes)
-        writeLists(data.bytes(member, 32, "member"), write);
+      for (const { member, write, mintPolicy } of this.#writes) {
+        data.bytes(member, 32, "member");
+        if (write === undefined) data.bytes(new Uint8Array(16));
+        else writeLists(data, write);
+        data.bytes(mintPolicyWriteField(mintPolicy).subarray(7));
+        data.bytes(bigIntBytes(mintPolicy?.withdrawalThreshold ?? 0n, 8));
+      }
       data.bytes(await proveApplication(client, application.inputs, context));
       return Object.freeze({
         instruction: {
@@ -215,7 +244,9 @@ export class AuthorityListWrite {
   }
 
   /** `writes` passed `withWrite`. */
-  #holding(writes: readonly Readonly<{ member: Member; write: ListWrite }>[]): AuthorityListWrite {
+  #holding(
+    writes: readonly Readonly<{ member: Member; write?: ListWrite; mintPolicy?: MintPolicy }>[],
+  ): AuthorityListWrite {
     const next = new AuthorityListWrite({
       ringProgramId: this.#ringProgramId,
       authority: this.#authority,
@@ -325,7 +356,12 @@ async function readApplication(
   const response = await input.client.getRingApplyProofInputs(
     {
       ringProgramId: input.ringProgramId,
-      authorityWrites: authority.map(({ member, mask, value }) => ({ member, mask, value })),
+      authorityWrites: authority.map(({ member, mask, value, mintPolicy }) => ({
+        member,
+        mask,
+        value,
+        ...(mintPolicy === undefined ? {} : { mintPolicy }),
+      })),
     },
     context,
   );
@@ -439,7 +475,14 @@ function sameEntry(entry: QueueEntry, expected: QueueEntry | undefined): boolean
     equalBytes(entry.member, expected.member) &&
     entry.mask === expected.mask &&
     entry.value === expected.value &&
-    equalBytes(entry.escrowKey, expected.escrowKey)
+    equalBytes(entry.escrowKey, expected.escrowKey) &&
+    (expected.mintPolicy === undefined
+      ? entry.mintPolicy === undefined
+      : entry.mintPolicy !== undefined &&
+        entry.mintPolicy.threshold === expected.mintPolicy.threshold &&
+        entry.mintPolicy.cap === expected.mintPolicy.cap &&
+        entry.mintPolicy.cosignAbove === expected.mintPolicy.cosignAbove &&
+        entry.mintPolicy.withdrawalThreshold === expected.mintPolicy.withdrawalThreshold)
   );
 }
 

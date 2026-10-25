@@ -1,8 +1,8 @@
+import type { MintPolicy } from "./mint-policy.js";
 import type { Address } from "@solana/kit";
 
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import type { PolicyTableProofInputs } from "../../rpc/prover/ring.js";
-import { RING_OUTFLOW_LIMIT_SLOTS } from "../../rpc/prover/types.js";
 import {
   hashBytes,
   solanaOwnerIdentity,
@@ -15,15 +15,10 @@ import {
   decodeAddress,
   poseidon,
   rightAlign,
-  bytesKey,
   equalBytes,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  RING_INLINE_ASSET_SLOTS,
-  RING_RULE_SLOTS,
-  RING_SOURCE_SLOTS,
-} from "../../rpc/prover/types.js";
+import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 
 import {
   registryCurator,
@@ -112,13 +107,9 @@ export interface PolicySource {
   readonly registry: Bytes32;
 }
 
-/** One limit per inline asset, zero outside a per-asset guard. */
+/** Rules and their list sources; per-mint amounts live in authenticated asset records. */
 export interface RuleTable {
   readonly rules: readonly Rule[];
-  readonly inlineAssets: readonly Bytes32[];
-  readonly inlineLimits: readonly bigint[];
-  /** At most one per mint, each bounds a transfer's outflow of it. */
-  readonly limits: readonly OutflowLimit[];
 }
 
 const U64_MAX = (1n << 64n) - 1n;
@@ -238,36 +229,21 @@ function checkRule(rule: Rule): void {
 /** Mirrors Rust `EncodedRuleTable::decode`, the padding is checked by `decodeRingMemberRegistry`. */
 export function decodeRuleTable(config: EncodedRuleTable): RuleTable {
   if (config.rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
-  if (config.inlineLimits.length !== config.inlineAssets.length) {
-    throw ruleTableInvalid("MissingAssetLimit");
-  }
   return checkedRuleTable({ ...config, rules: config.rules.map(decodeRule) });
 }
 
 export interface RuleTableInput {
   readonly rules: readonly Rule[];
-  readonly inlineAssets?: readonly Bytes32[];
-  readonly inlineLimits?: readonly bigint[];
-  readonly limits?: readonly OutflowLimit[];
 }
 
-/** Mirrors Rust `RuleTableBuilder::try_build`, writers and hashes rerun it on a hand-built table. */
 export function buildRuleTable(input: RuleTableInput): RuleTable {
-  return checkedRuleTable({
-    rules: input.rules,
-    inlineAssets: input.inlineAssets ?? [],
-    inlineLimits: input.inlineLimits ?? [],
-    limits: input.limits ?? [],
-  });
+  return checkedRuleTable(input);
 }
 
 /** Mirrors Rust `RuleTable::encode`, counted rows without the zero padding. */
 export function encodeRuleTable(table: RuleTable): EncodedRuleTable {
   return Object.freeze({
     rules: Object.freeze(table.rules.map(encodeRule)),
-    inlineAssets: table.inlineAssets,
-    inlineLimits: table.inlineLimits,
-    limits: table.limits,
   });
 }
 
@@ -275,21 +251,8 @@ export function encodeRuleTable(table: RuleTable): EncodedRuleTable {
 function checkedRuleTable(
   table: Omit<EncodedRuleTable, "rules"> & Readonly<{ rules: readonly Rule[] }>,
 ): RuleTable {
-  const { rules, inlineAssets, inlineLimits, limits } = table;
+  const { rules } = table;
   if (rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
-  if (
-    inlineAssets.length > RING_INLINE_ASSET_SLOTS ||
-    inlineLimits.length > RING_INLINE_ASSET_SLOTS
-  )
-    throw ruleTableInvalid("TooManyInlineAssets");
-  if (limits.length > RING_OUTFLOW_LIMIT_SLOTS) throw ruleTableInvalid("TooManyOutflowLimits");
-  if (inlineAssets.some((asset) => asset.length !== 32))
-    throw ruleTableInvalid("InlineAssetLength");
-  if (inlineLimits.some((limit) => limit < 0n || limit > U64_MAX))
-    throw ruleTableInvalid("LimitRange");
-  if (inlineAssets.some((asset) => equalBytes(asset, ZERO_32))) {
-    throw ruleTableInvalid("ZeroInlineAsset");
-  }
   const signatures = new Set<string>();
   for (const rule of rules) {
     checkRule(rule);
@@ -297,49 +260,7 @@ function checkedRuleTable(
     if (signatures.has(signature)) throw ruleTableInvalid("DuplicateRule");
     signatures.add(signature);
   }
-  const perAssetGuard = rules.some((rule) => rule.guard.kind === "aboveAmountByAsset");
-  if (!perAssetGuard && inlineAssets.length > 0) throw ruleTableInvalid("PoolWithoutInlineRule");
-  if (perAssetGuard) {
-    if (inlineAssets.length === 0 || inlineLimits.length !== inlineAssets.length) {
-      throw ruleTableInvalid("MissingAssetLimit");
-    }
-    const pool = new Set<string>();
-    inlineAssets.forEach((asset, index) => {
-      if (inlineLimits[index] === 0n) throw ruleTableInvalid("MissingAssetLimit");
-      if (pool.has(bytesKey(asset))) throw ruleTableInvalid("DuplicateInlineAsset");
-      pool.add(bytesKey(asset));
-    });
-  } else if (inlineLimits.length !== 0) {
-    throw ruleTableInvalid("AssetLimitWithoutGuard");
-  }
-  return Object.freeze({
-    rules: Object.freeze([...rules]),
-    inlineAssets: Object.freeze([...inlineAssets]),
-    inlineLimits: Object.freeze([...inlineLimits]),
-    limits: checkedLimits(limits),
-  });
-}
-
-/** Mirrors the limit checks Rust `RuleTableBuilder::try_build` runs last. */
-function checkedLimits(limits: EncodedRuleTable["limits"]): readonly OutflowLimit[] {
-  const assets = new Set<string>();
-  return Object.freeze(
-    limits.map((limit) => {
-      if (limit.asset.length !== 32 || equalBytes(limit.asset, ZERO_32)) {
-        throw ruleTableInvalid("ZeroLimitAsset");
-      }
-      // The zero check proves the Member brand.
-      const asset = limit.asset as Member;
-      for (const bound of [limit.cap, limit.cosignAbove]) {
-        if (bound < 0n || bound > U64_MAX) throw ruleTableInvalid("LimitRange");
-      }
-      if (limit.cap === 0n && limit.cosignAbove === 0n) throw ruleTableInvalid("LimitWithoutBound");
-      const key = bytesKey(asset);
-      if (assets.has(key)) throw ruleTableInvalid("DuplicateLimitAsset");
-      assets.add(key);
-      return Object.freeze({ asset, cap: limit.cap, cosignAbove: limit.cosignAbove });
-    }),
-  );
+  return Object.freeze({ rules: Object.freeze([...rules]) });
 }
 
 function ruleSignature(rule: Rule): string {
@@ -386,6 +307,7 @@ export interface OutputSubjects {
   readonly amount: bigint;
   readonly ownerLists: RecordLists;
   readonly assetLists: RecordLists;
+  readonly mintPolicy: MintPolicy;
 }
 
 /** Rust `TransferSubjects`, the UTXO outputs in slot order with every dummy left out. */
@@ -453,8 +375,7 @@ export function admitTransfer(
     const onAsset = rule.subject === "asset";
     for (const [position, output] of outputs.entries()) {
       if (!onAsset && equalBytes(output.owner, ZERO_32)) continue;
-      const inline = table.inlineAssets.findIndex((asset) => equalBytes(asset, output.asset));
-      const limit = inline < 0 ? undefined : table.inlineLimits[inline];
+      const limit = output.mintPolicy.threshold === 0n ? undefined : output.mintPolicy.threshold;
       if (rule.guard.kind === "aboveAmountByAsset" && limit === undefined)
         return { kind: "noAssetLimit", rule: index, output: position };
       const liveOwner = (other: OutputSubjects): boolean =>
@@ -522,7 +443,7 @@ function sourceInvalid(reason: string, details: Readonly<Record<string, unknown>
 }
 
 /** Rust `POLICY_TABLE_VERSION`, the second field of the table hash. */
-export const POLICY_TABLE_VERSION = 11;
+export const POLICY_TABLE_VERSION = 12;
 /** Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum. */
 const POLICY_TABLE_RATE = 11;
 
@@ -545,20 +466,6 @@ export function policyTableProofInputs(
     sources: owners,
     policyLen: table.rules.length,
     rules: slot(table.rules, RING_RULE_SLOTS, encodeRule, ZERO_32),
-    inlineAssets: slot(table.inlineAssets, RING_INLINE_ASSET_SLOTS, (asset) => asset, ZERO_32),
-    inlineLimits: slot(table.inlineLimits, RING_INLINE_ASSET_SLOTS, fieldU64, ZERO_32),
-    inlineCount: table.inlineAssets.length,
-    limits: slot(
-      table.limits,
-      RING_OUTFLOW_LIMIT_SLOTS,
-      (limit) => ({
-        asset: limit.asset,
-        cap: fieldU64(limit.cap),
-        cosignAbove: fieldU64(limit.cosignAbove),
-      }),
-      { asset: ZERO_32, cap: ZERO_32, cosignAbove: ZERO_32 },
-    ),
-    limitCount: table.limits.length,
   });
 }
 
@@ -573,12 +480,8 @@ export function policyTableFields(
     fieldU8(POLICY_TABLE_VERSION),
     ...slots.sources.flatMap((owner) => [fieldU8(owner.listId), owner.registry]),
     fieldU8(slots.policyLen),
-    fieldU8(slots.inlineCount),
-    fieldU8(slots.limitCount),
     ...slots.rules,
-    ...slots.inlineAssets,
-    ...slots.inlineLimits,
-    ...slots.limits.flatMap((limit) => [limit.asset, limit.cap, limit.cosignAbove]),
+    ...Array<Bytes32>(9).fill(ZERO_32),
   ]);
 }
 
@@ -669,8 +572,4 @@ function entryInvalid(reason: string): RingError {
 
 function fieldU8(value: number): Bytes32 {
   return rightAlign(Uint8Array.of(value));
-}
-
-function fieldU64(value: bigint): Bytes32 {
-  return rightAlign(bigIntBytes(value, 8));
 }

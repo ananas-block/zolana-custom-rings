@@ -16,6 +16,7 @@ fn member(byte: u8) -> [u8; 32] {
 
 fn write(byte: u8, mask: u64, value: u64) -> QueueEntry {
     QueueEntry {
+        mint_policy: Default::default(),
         member: member(byte),
         mask,
         value,
@@ -26,6 +27,7 @@ fn write(byte: u8, mask: u64, value: u64) -> QueueEntry {
 fn escrow(byte: u8, key: u8) -> QueueEntry {
     let bit = ListId::Escrow.record_bit();
     QueueEntry {
+        mint_policy: Default::default(),
         member: member(byte),
         mask: bit,
         value: bit,
@@ -318,6 +320,7 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
     let present = IndexedRecord {
         index: 5,
         record: MemberRecord {
+            mint_policy: Default::default(),
             member: member(10),
             next: FIELD_MAX,
             lists: ALLOW,
@@ -347,5 +350,52 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
     assert_eq!(
         full.apply([0; 32], &[write(7, frozen, frozen)]),
         Err(RecordTreeError::Full)
+    );
+}
+
+#[test]
+fn mint_settings_survive_relinks_list_and_key_writes_and_clear_explicitly() {
+    use zolana_ring_policy::MintPolicy;
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let policy = MintPolicy {
+        threshold: 10,
+        cap: 20,
+        cosign_above: 15,
+        withdrawal_threshold: u64::MAX,
+    };
+    tree.apply(
+        [0; 32],
+        &[QueueEntry {
+            mint_policy: Some(policy),
+            ..write(5, 0, 0)
+        }],
+    )
+    .unwrap();
+    tree.apply(
+        [0; 32],
+        &[
+            write(7, ALLOW, ALLOW),
+            write(5, BLOCK, BLOCK),
+            escrow(5, 0x31),
+        ],
+    )
+    .unwrap();
+    let before = record(&tree, 5).unwrap();
+    assert_eq!(before.mint_policy, policy);
+    assert_eq!(before.next, member(7));
+    tree.apply(
+        [0; 32],
+        &[QueueEntry {
+            mint_policy: Some(MintPolicy::EMPTY),
+            ..write(5, 0, 0)
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        record(&tree, 5).unwrap(),
+        MemberRecord {
+            mint_policy: MintPolicy::EMPTY,
+            ..before
+        }
     );
 }

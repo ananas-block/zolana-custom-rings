@@ -53,6 +53,7 @@ async fn a_full_member_queue_refuses_a_key_before_proving() {
     let member = keypair(1);
     let pending: Vec<QueueEntry> = (1..=MEMBER_QUEUE_LIMIT as u8)
         .map(|byte| QueueEntry {
+            mint_policy: Default::default(),
             member: *Member::owner_tag(&[byte; 32]).unwrap().as_bytes(),
             mask: 1,
             value: 1,

@@ -674,6 +674,7 @@ mod tests {
 
     fn record_view(record: &MemberRecord) -> RingMemberRecordView {
         RingMemberRecordView {
+            mint_policy: Default::default(),
             member: Hash(record.member),
             next: Hash(record.next),
             lists: record.lists,
@@ -708,6 +709,7 @@ mod tests {
             .map(|index| match index {
                 1 => QueueEntry::escrow(member(index), &escrow),
                 _ => Ok(QueueEntry {
+                    mint_policy: Default::default(),
                     member: member(index),
                     mask: list,
                     value: list,
@@ -770,6 +772,7 @@ mod tests {
             next_index: 8,
         };
         let record = RingMemberRecordView {
+            mint_policy: Default::default(),
             member: Hash([1; 32]),
             next: Hash([2; 32]),
             lists: 0,

@@ -24,6 +24,7 @@ pub struct OutputSubjects {
     pub amount: u64,
     pub owner_lists: RecordLists,
     pub asset_lists: RecordLists,
+    pub mint_policy: crate::MintPolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -66,7 +67,6 @@ impl RuleTable {
         let foreign = foreign_lists(sources);
         for (index, rule) in self.rules().iter().enumerate() {
             let check = RuleCheck {
-                table: self,
                 outputs: transfer.outputs,
                 foreign,
                 index,
@@ -100,14 +100,6 @@ impl RuleTable {
             Err(RuleRefusal::MixedAssets { rule, output })
         })
     }
-
-    /// The rows name distinct assets.
-    fn asset_limit(&self, asset: &[u8; 32]) -> Option<u64> {
-        self.inline_assets()
-            .iter()
-            .zip(self.inline_limits())
-            .find_map(|(inline, limit)| (inline == asset).then_some(*limit))
-    }
 }
 
 impl fmt::Display for TransferSubject {
@@ -129,7 +121,6 @@ impl RecordLists {
 }
 
 struct RuleCheck<'a> {
-    table: &'a RuleTable,
     outputs: &'a [OutputSubjects],
     foreign: ListSet,
     index: usize,
@@ -143,7 +134,7 @@ impl RuleCheck<'_> {
         if !on_asset && output.owner == [0; 32] {
             return Ok(());
         }
-        let limit = self.table.asset_limit(&output.asset);
+        let limit = (output.mint_policy.threshold != 0).then_some(output.mint_policy.threshold);
         if self.rule.guard == Guard::AboveAmountByAsset && limit.is_none() {
             return Err(RuleRefusal::NoAssetLimit {
                 rule: self.index,

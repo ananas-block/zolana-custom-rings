@@ -1,9 +1,10 @@
 use custom_ring_interface::{QueueEntry, FIELD_MAX};
 use zolana_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
+use zolana_ring_policy::MintPolicy;
 
 use crate::RecordTreeError;
 
-/// One leaf, `Poseidon(member, next, lists, escrow_key)`, mirror `prover/server/circuits/records`.
+/// One authenticated leaf, including packed mint settings and its withdrawal threshold.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemberRecord {
     pub member: [u8; 32],
@@ -12,6 +13,7 @@ pub struct MemberRecord {
     pub lists: u64,
     /// `EscrowKey::hash` once registered, zero before.
     pub escrow_key: [u8; 32],
+    pub mint_policy: MintPolicy,
 }
 
 impl MemberRecord {
@@ -21,6 +23,7 @@ impl MemberRecord {
         next: FIELD_MAX,
         lists: 0,
         escrow_key: [0; 32],
+        mint_policy: MintPolicy::EMPTY,
     };
 
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
@@ -29,6 +32,8 @@ impl MemberRecord {
             &self.next,
             &right_align(&self.lists.to_be_bytes()),
             &self.escrow_key,
+            &self.mint_policy.field(),
+            &right_align(&self.mint_policy.withdrawal_threshold.to_be_bytes()),
         ])
     }
 
@@ -43,12 +48,13 @@ impl MemberRecord {
         Self {
             lists: (self.lists & !entry.mask) | entry.value,
             escrow_key,
+            mint_policy: entry.mint_policy.unwrap_or(self.mint_policy),
             ..self
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lists == 0 && self.escrow_key == [0; 32]
+        self.lists == 0 && self.escrow_key == [0; 32] && self.mint_policy == MintPolicy::EMPTY
     }
 
     pub fn brackets(&self, member: &[u8; 32]) -> bool {

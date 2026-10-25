@@ -127,50 +127,50 @@ func newQuadPath(index uint64, flat []Field) quadPath {
 
 // recordView mirrors registry.QuadRecordOpening field for field.
 type recordView struct {
-	Next, EscrowKey Field
-	Lists           uint64
-	Path            quadPath
+	Next, EscrowKey, MintPolicy, WithdrawalThreshold Field
+	Lists                                            uint64
+	Path                                             quadPath
 }
 
 func (r RecordOpening) view() any {
-	return recordView{Next: r.Next, EscrowKey: r.EscrowKey, Lists: r.Lists, Path: newQuadPath(r.Index, r.Path)}
+	return recordView{Next: r.Next, EscrowKey: r.EscrowKey, MintPolicy: r.MintPolicy, WithdrawalThreshold: r.WithdrawalThreshold, Lists: r.Lists, Path: newQuadPath(r.Index, r.Path)}
 }
 
 // memberView mirrors registry.QuadOpening field for field.
 type memberView struct {
-	Present                       bool
-	Next, EscrowKey               Field
-	Lists                         uint64
-	LowMember, LowNext, LowEscrow Field
-	LowLists                      uint64
-	Path                          quadPath
+	Present                                                              bool
+	Next, EscrowKey, MintPolicy, WithdrawalThreshold                     Field
+	Lists                                                                uint64
+	LowMember, LowNext, LowEscrow, LowMintPolicy, LowWithdrawalThreshold Field
+	LowLists                                                             uint64
+	Path                                                                 quadPath
 }
 
 func (m MemberOpening) view() any {
 	return memberView{
-		Present: m.Present, Next: m.Next, EscrowKey: m.EscrowKey, Lists: m.Lists,
-		LowMember: m.LowMember, LowNext: m.LowNext, LowEscrow: m.LowEscrow, LowLists: m.LowLists,
+		Present: m.Present, Next: m.Next, EscrowKey: m.EscrowKey, MintPolicy: m.MintPolicy, WithdrawalThreshold: m.WithdrawalThreshold, Lists: m.Lists,
+		LowMember: m.LowMember, LowNext: m.LowNext, LowEscrow: m.LowEscrow, LowMintPolicy: m.LowMintPolicy, LowWithdrawalThreshold: m.LowWithdrawalThreshold, LowLists: m.LowLists,
 		Path: newQuadPath(m.Index, m.Path),
 	}
 }
 
 // writeView mirrors registry.RecordWrite field for field.
 type writeView struct {
-	Entry                         QueueEntry
-	Exists                        bool
-	OldNext, OldEscrow            Field
-	OldLists                      uint64
-	Slot                          quadPath
-	LowMember, LowNext, LowEscrow Field
-	LowLists                      uint64
-	Low                           quadPath
+	Entry                                                                QueueEntry
+	Exists                                                               bool
+	OldNext, OldEscrow, OldMintPolicy, OldWithdrawalThreshold            Field
+	OldLists                                                             uint64
+	Slot                                                                 quadPath
+	LowMember, LowNext, LowEscrow, LowMintPolicy, LowWithdrawalThreshold Field
+	LowLists                                                             uint64
+	Low                                                                  quadPath
 }
 
 func (w RecordWrite) view() any {
 	return writeView{
-		Entry: w.Entry, Exists: w.Exists, OldNext: w.OldNext, OldEscrow: w.OldEscrow, OldLists: w.OldLists,
+		Entry: w.Entry, Exists: w.Exists, OldNext: w.OldNext, OldEscrow: w.OldEscrow, OldMintPolicy: w.OldMintPolicy, OldWithdrawalThreshold: w.OldWithdrawalThreshold, OldLists: w.OldLists,
 		Slot:      newQuadPath(w.Index, w.Path),
-		LowMember: w.LowMember, LowNext: w.LowNext, LowEscrow: w.LowEscrow, LowLists: w.LowLists,
+		LowMember: w.LowMember, LowNext: w.LowNext, LowEscrow: w.LowEscrow, LowMintPolicy: w.LowMintPolicy, LowWithdrawalThreshold: w.LowWithdrawalThreshold, LowLists: w.LowLists,
 		Low: newQuadPath(w.LowIndex, w.LowPath),
 	}
 }

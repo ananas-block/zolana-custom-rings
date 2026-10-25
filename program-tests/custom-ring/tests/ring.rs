@@ -56,8 +56,8 @@ use custom_ring_interface::{
     RING_PROGRAM_CONFIG,
 };
 use custom_ring_sdk::{
-    compute_unit_limit, AnonymousTransfer, CoSignScope, CoSignThreshold, CustomRing,
-    CustomRingMerge, CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
+    compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
+    CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
     DelegateTransferInput, DepositRecipient, InstructionTag, MergeProofInput, PendingFirstContact,
     ProvenRingTransfer, RegisterKey, RingClient, RingDeposit, RingDepositReceipt, RingError,
     RingMergeOperation, RingOperation, RingRegistration,
@@ -66,7 +66,7 @@ use custom_ring_test_validator::{
     cli::{merged, RingProject, RingToml},
     policy::{
         owner_member, policy_registry, RegistryWrite, RingNotes, EMPTY, LIMIT_CAP,
-        LIMIT_COSIGN_ABOVE, OUTFLOW_LIMIT,
+        LIMIT_COSIGN_ABOVE,
     },
     ring_rpc::RingRpcSpec,
     ring_wallet::RingWallet,

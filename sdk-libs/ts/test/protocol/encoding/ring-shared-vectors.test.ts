@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -48,10 +49,8 @@ import {
   buildRuleTable,
   decodeRule,
   decodeRuleTable,
-  memberOfIdentity,
   policyTableFields,
   policyTableHash,
-  type OutflowLimit,
   type RecordLists,
   type RuleRefusal,
 } from "../../../src/protocol/membership/policy.js";
@@ -144,6 +143,7 @@ describe("ring-records.json", () => {
     siblings: vector.siblings.map((level) => level.map(field)),
   });
   const record = (vector: VectorRecord): MemberRecord => ({
+    mintPolicy: EMPTY_MINT_POLICY,
     member: field(vector.member),
     next: field(vector.next),
     lists: BigInt(vector.lists),
@@ -188,6 +188,7 @@ describe("ring-records.json", () => {
   it("replays every application to the root, next index and statement the apply proof binds", () => {
     for (const application of records.applications) {
       const writes: RecordWriteProofInput[] = application.writes.map((write) => ({
+        oldMintPolicy: EMPTY_MINT_POLICY,
         entry: {
           member: field(write.member),
           mask: BigInt(write.mask),
@@ -265,6 +266,7 @@ describe("ring-records.json", () => {
         chainStart: field(application.chain_start),
         writes: [
           {
+            oldMintPolicy: EMPTY_MINT_POLICY,
             entry: {
               member: field(write.member),
               mask: BigInt(write.mask),
@@ -295,9 +297,6 @@ describe("ring-policy-table.json", () => {
     readonly name: string;
     readonly sources: readonly Readonly<{ listId: number; registry: Bytes32 }>[];
     readonly rules: readonly Bytes32[];
-    readonly inlineAssets: readonly Bytes32[];
-    readonly inlineLimits: readonly bigint[];
-    readonly limits: readonly OutflowLimit[];
     readonly fields: readonly string[];
     readonly policyHash: string;
   }
@@ -338,31 +337,21 @@ describe("ring-policy-table.json", () => {
           registry: field(text32(object(source)["registry"])),
         })),
         rules: list(item["rules"]).map((row) => field(text32(row))),
-        inlineAssets: list(item["inline_assets"]).map((asset) => field(text32(asset))),
-        inlineLimits: list(item["inline_limits"]).map(integer),
-        limits: list(item["limits"]).map((limit) => ({
-          asset: memberOfIdentity(field(text32(object(limit)["asset"]))),
-          cap: integer(object(limit)["cap"]),
-          cosignAbove: integer(object(limit)["cosign_above"]),
-        })),
         fields: list(item["fields"]).map(text32),
         policyHash: text32(item["policy_hash"]),
       };
     });
   }
 
-  it("reproduces the 77 fields and the hash of every table", () => {
+  it("reproduces the 44 fields and the hash of every table", () => {
     const cases = policyCases();
     expect(cases.length).toBeGreaterThan(2);
     for (const vector of cases) {
       const table = buildRuleTable({
         rules: vector.rules.map(decodeRule),
-        inlineAssets: vector.inlineAssets,
-        inlineLimits: vector.inlineLimits,
-        limits: vector.limits,
       });
       const fields = policyTableFields(table, vector.sources);
-      expect(fields).toHaveLength(77);
+      expect(fields).toHaveLength(44);
       expect(hexes(fields), vector.name).toEqual(vector.fields);
       expect(hex(policyTableHash(table, vector.sources)), vector.name).toBe(vector.policyHash);
     }
@@ -846,9 +835,6 @@ describe("ring-policy-rules.json", () => {
     (_name, vector) => {
       const table = decodeRuleTable({
         rules: vector.rules.map((row) => field(row)),
-        inlineAssets: vector.inline_assets.map((asset) => field(asset)),
-        inlineLimits: vector.inline_limits.map(BigInt),
-        limits: [],
       });
       const lookup = (list: readonly { member: string; lists: number }[], member: string): bigint =>
         BigInt(list.find((record) => record.member === member)?.lists ?? 0);
@@ -870,6 +856,14 @@ describe("ring-policy-rules.json", () => {
             amount: BigInt(output.amount),
             ownerLists: lists(output.owner),
             assetLists: lists(output.asset),
+            mintPolicy: {
+              ...EMPTY_MINT_POLICY,
+              threshold: BigInt(
+                vector.inline_limits[
+                  (vector.inline_assets as readonly string[]).indexOf(output.asset)
+                ] ?? 0,
+              ),
+            },
           })),
         },
       );

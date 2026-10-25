@@ -1,3 +1,4 @@
+import type { MintPolicy } from "../protocol/membership/mint-policy.js";
 import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
 import {
   ApiError,
@@ -250,6 +251,7 @@ export class RingIndexer implements RingRecordReader {
             member: hash(write.member),
             mask: write.mask,
             value: write.value,
+            mintPolicy: write.mintPolicy ?? null,
           })),
         },
         context,
@@ -271,6 +273,7 @@ export class RingIndexer implements RingRecordReader {
                 oldNext: hashBytes(write.oldNext),
                 oldLists: write.oldLists,
                 oldEscrow: hashBytes(write.oldEscrow),
+                oldMintPolicy: write.oldMintPolicy,
                 slot: recordPath(write.slot),
                 low: memberRecord(write.low),
                 lowPath: recordPath(write.lowPath),
@@ -316,17 +319,25 @@ function memberRecord(record: WireRingMemberRecordView): MemberRecord {
     next: hashBytes(record.next),
     lists: record.lists,
     escrowKey: hashBytes(record.escrowKey),
+    mintPolicy: record.mintPolicy,
   });
 }
 
 function queueEntry(
-  entry: Readonly<{ member: Hash; mask: bigint; value: bigint; escrowKey: Hash }>,
+  entry: Readonly<{
+    member: Hash;
+    mask: bigint;
+    value: bigint;
+    escrowKey: Hash;
+    mintPolicy: MintPolicy | null;
+  }>,
 ): QueueEntry {
   return Object.freeze({
     member: hashBytes(entry.member),
     mask: entry.mask,
     value: entry.value,
     escrowKey: hashBytes(entry.escrowKey),
+    ...(entry.mintPolicy === null ? {} : { mintPolicy: entry.mintPolicy }),
   });
 }
 

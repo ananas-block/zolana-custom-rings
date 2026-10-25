@@ -22,14 +22,9 @@ impl TableBinding<'_> {
     #[inline(never)]
     pub fn bind(self) -> Result<Box<BoundTable>, ProgramError> {
         let table = self.table;
-        let rules = TableParts {
-            rows: &table.rules,
-            inline_assets: &table.inline_assets,
-            inline_limits: &table.inline_limits,
-            limits: &table.limits,
-        }
-        .encode()
-        .map_err(CustomRingError::from)?;
+        let rules = TableParts { rows: &table.rules }
+            .encode()
+            .map_err(CustomRingError::from)?;
         let sources = self.sources(rules.referenced())?;
         Ok(Box::new(BoundTable { rules, sources }))
     }

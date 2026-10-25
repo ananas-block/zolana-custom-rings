@@ -110,6 +110,7 @@ export interface RingTransactData {
   readonly auditProof: Uint8Array;
   /** Present exactly on a policy ring. */
   readonly policy?: PolicyProof;
+  readonly withdrawalExemption?: Readonly<{ proof: Uint8Array; rootIndex: number }>;
   readonly approvalRequired: boolean;
   /** The anonymous rail's statement epoch is the one before the landing slot's. */
   readonly previousEpoch: boolean;
@@ -256,7 +257,7 @@ export function taggedX25519(u: Bytes32): Bytes33 {
 export const RingTransactData = Object.freeze({
   /** Every length fixed by the flags, the shape and the counts, trailing bytes refused. */
   parse(data: Uint8Array, rail: RingRail): RingTransactData {
-    const bytes = new Reader(data);
+    const bytes = new TransactReader(data);
     try {
       return readCompact(bytes, rail);
     } catch (error) {
@@ -267,7 +268,7 @@ export const RingTransactData = Object.freeze({
   /** Historical decoding only; the upgraded program rejects legacy tags. */
   parseLegacy(data: Uint8Array, rail: RingRail): RingTransactData {
     try {
-      return readCompact(new Reader(data), rail, true);
+      return readCompact(new TransactReader(data), rail, true);
     } catch (error) {
       throw shortRead(error, "RingTransactLength");
     }
@@ -484,7 +485,7 @@ function exactly(published: number, outputs: number, layout: DisclosureLayout): 
   return Object.freeze(layout);
 }
 
-function readCompact(bytes: Reader, rail: RingRail, legacy = false): RingTransactData {
+function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): RingTransactData {
   const flags = bytes.u8("flags");
   checkFlags(flags, rail);
   const header = readHeader(bytes, rail);
@@ -545,8 +546,16 @@ function readCompact(bytes: Reader, rail: RingRail, legacy = false): RingTransac
         });
       })()
     : Object.freeze({ kind: "one" as const, context: readTreeContext(bytes) });
+  const withdrawalExemption =
+    !legacy && bytes.remaining === CUSTOM_RING_PROOF_LENGTH + 1
+      ? Object.freeze({
+          proof: bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "withdrawalExemption.proof"),
+          rootIndex: bytes.u8("withdrawalExemption.rootIndex"),
+        })
+      : undefined;
   bytes.done();
   return Object.freeze({
+    ...(withdrawalExemption === undefined ? {} : { withdrawalExemption }),
     rail,
     nIn,
     nOut,
@@ -754,6 +763,10 @@ function writeCompact(data: RingTransactData): Uint8Array {
     writeTreeContext(out, data.inputTrees.first);
     writeTreeContext(out, data.inputTrees.second);
   }
+  if (data.withdrawalExemption !== undefined)
+    out
+      .bytes(data.withdrawalExemption.proof, CUSTOM_RING_PROOF_LENGTH, "withdrawalExemption.proof")
+      .u8(data.withdrawalExemption.rootIndex, "withdrawalExemption.rootIndex");
   return out.finish();
 }
 
@@ -1033,4 +1046,18 @@ function shortRead(error: unknown, reason: string): unknown {
 /** `reason` names the `CustomRingError` the program raises. */
 function invalid(reason: string): RingError {
   return new RingError("RING_TRANSACT_DATA_INVALID", { details: { reason } });
+}
+
+/** Tracks the optional suffix without changing the core codec. */
+class TransactReader extends Reader {
+  remaining: number;
+  constructor(data: Uint8Array) {
+    super(data);
+    this.remaining = data.length;
+  }
+  override bytes(length: number, name: string): Uint8Array {
+    const result = super.bytes(length, name);
+    this.remaining -= length;
+    return result;
+  }
 }

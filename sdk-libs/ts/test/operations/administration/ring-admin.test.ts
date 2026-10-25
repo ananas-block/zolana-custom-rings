@@ -58,7 +58,6 @@ const CURATOR = address("CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8");
 const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const NEXT = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 const PAYER = address("29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2");
-const MINT = address("So11111111111111111111111111111111111111112");
 
 const READ = 0;
 const WRITE = 1;
@@ -202,7 +201,7 @@ describe("ring setup", () => {
 
 describe("config account", () => {
   const MODE_OFFSET = 68;
-  const CREATED_SLOT_OFFSET = 463;
+  const CREATED_SLOT_OFFSET = 142;
   const account = () =>
     ringProgramConfigData({
       authority: AUTHORITY,
@@ -215,7 +214,7 @@ describe("config account", () => {
     const data = account();
     const slot = 3n * EPOCH_SLOTS + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(471);
+    expect(data).toHaveLength(150);
     expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot, creationEpoch: 3n });
   });
 
@@ -274,11 +273,8 @@ describe("config writes", () => {
       authority: AUTHORITY,
       signer: NEXT,
       scope: 5,
-      thresholds: [{ mint: MINT, amount: 9n }],
     });
-    expect(cosigner.data).toEqual(
-      Uint8Array.of(27, ...addressBytes(NEXT), 5, 1, ...addressBytes(MINT), ...u64le(9n)),
-    );
+    expect(cosigner.data).toEqual(Uint8Array.of(27, ...addressBytes(NEXT), 5));
     const clear = await clearRingCoSignerInstruction({ ringProgramId: RING, authority: AUTHORITY });
     expect(clear.data).toEqual(Uint8Array.of(21));
     const fee = await setRingInsertFeeInstruction({
@@ -323,21 +319,6 @@ describe("config writes", () => {
       "a zero signer under an empty scope, the scope read first like Rust",
       { signer: address("11111111111111111111111111111111"), scope: 0 },
       "InvalidCoSignerScope",
-    ],
-    [
-      "a repeated mint",
-      {
-        thresholds: [
-          { mint: MINT, amount: 1n },
-          { mint: MINT, amount: 2n },
-        ],
-      },
-      "InvalidCoSignerThresholds",
-    ],
-    [
-      "thresholds outside the withdrawal scope",
-      { scope: 3, thresholds: [{ mint: MINT, amount: 1n }] },
-      "ThresholdsWithoutWithdrawals",
     ],
   ] as const)("refuses a co-signer with %s", async (_case, change, reason) => {
     await expect(
@@ -417,7 +398,7 @@ describe("policy writes", () => {
       sharedSources: [{ listId: ListId.block, curatorRingProgramId: CURATOR }],
     });
     expect(instruction.data).toEqual(
-      Uint8Array.of(7, 2, ListId.allow, 0, ListId.block, 1, 1, ...encodeRule(rule), 0, 0, 0),
+      Uint8Array.of(7, 2, ListId.allow, 0, ListId.block, 1, 1, ...encodeRule(rule)),
     );
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
@@ -506,7 +487,7 @@ describe("policy writes", () => {
         write({
           ringProgramId: RING,
           authority: AUTHORITY,
-          table: { rules: [...RULES, ...RULES], inlineAssets: [], inlineLimits: [], limits: [] },
+          table: { rules: [...RULES, ...RULES] },
         }),
       ).rejects.toMatchObject({
         code: "RING_RULE_TABLE_INVALID",

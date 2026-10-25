@@ -65,8 +65,11 @@ fn every_example_loads_and_compiles_on_both_clusters() {
                 forms.above |= matches!(rule.guard, Guard::AboveAmountByAsset);
                 forms.assets |= matches!(rule.subject, Subject::Asset);
             }
-            forms.assets |= !compiled.rules.inline_assets().is_empty();
-            forms.limits |= !compiled.rules.limits().is_empty();
+            forms.assets |= !compiled.mint_policies.is_empty();
+            forms.limits |= !compiled
+                .mint_policies
+                .values()
+                .all(|p| p.cap == 0 && p.cosign_above == 0);
         }
         forms.empty_table |= policy.rules.is_empty();
         forms.per_cluster_source |= Target::ALL

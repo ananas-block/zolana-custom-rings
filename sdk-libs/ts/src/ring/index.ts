@@ -24,7 +24,6 @@ export {
   MEMBER_QUEUE_LIMIT,
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_SCOPE_MASK,
-  RING_COSIGN_THRESHOLD_SLOTS,
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   checkedCustomRingProof,
@@ -41,7 +40,6 @@ export {
   registryOwnRoot,
 } from "../protocol/codec/ring-codecs.js";
 export type {
-  RingCoSignThreshold,
   RingCoSigner,
   RingMemberRegistry,
   RingMode,

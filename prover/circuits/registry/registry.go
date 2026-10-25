@@ -19,14 +19,16 @@ const (
 
 // The empty leaf is 0, and the sentinel (0, q-1, 0, 0) at index 0 brackets every member in [1, q-2].
 type Record struct {
-	Member    frontend.Variable
-	Next      frontend.Variable
-	Lists     frontend.Variable
-	EscrowKey frontend.Variable
+	Member              frontend.Variable
+	Next                frontend.Variable
+	Lists               frontend.Variable
+	EscrowKey           frontend.Variable
+	MintPolicy          frontend.Variable
+	WithdrawalThreshold frontend.Variable
 }
 
 func (r Record) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey})
+	return gadget.PoseidonHash(api, []frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey, r.MintPolicy, r.WithdrawalThreshold})
 }
 
 // EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.

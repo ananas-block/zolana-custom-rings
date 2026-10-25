@@ -1,3 +1,4 @@
+import type { MintPolicy } from "../membership/mint-policy.js";
 import type { Address } from "@heliuslabs/zolana";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
@@ -25,6 +26,7 @@ export interface RingMemberRecordView {
   readonly nullifierPk?: Hash | null;
   readonly ephPk: Base64String | null;
   readonly ciphertext: Base64String | null;
+  readonly mintPolicy: MintPolicy;
 }
 export interface RingMemberRecordsRequest {
   readonly ringProgramId: Address;
@@ -111,6 +113,7 @@ export interface RingQueueEntryView {
   /** Zero except on a RegisterKey write. */
   readonly escrowKey: Hash;
   readonly slot: bigint;
+  readonly mintPolicy: MintPolicy | null;
 }
 
 export interface RingRecordQueueResponse {
@@ -127,6 +130,7 @@ export interface RingListWriteView {
   readonly member: Hash;
   readonly mask: bigint;
   readonly value: bigint;
+  readonly mintPolicy: MintPolicy | null;
 }
 
 export interface RingApplyProofInputsRequest {
@@ -145,9 +149,11 @@ export interface RingRecordWriteView {
   readonly oldNext: Hash;
   readonly oldLists: bigint;
   readonly oldEscrow: Hash;
+  readonly oldMintPolicy: MintPolicy;
   readonly slot: RingRecordPathView;
   readonly low: RingMemberRecordView;
   readonly lowPath: RingRecordPathView;
+  readonly mintPolicy: MintPolicy | null;
 }
 
 export interface RingApplyProofInputsResponse {

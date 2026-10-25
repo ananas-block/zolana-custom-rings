@@ -607,6 +607,7 @@ pub struct RingTransactData<'a> {
     pub audit_proof: &'a CustomRingProof,
     /// Present exactly on a policy ring.
     pub policy: Option<PolicyProof<'a>>,
+    pub withdrawal_exemption: Option<&'a WithdrawalExemptionProof>,
     pub approval_required: bool,
     /// The anonymous rail's statement epoch is the one before the landing slot's.
     pub previous_epoch: bool,
@@ -753,13 +754,22 @@ impl<'a> RingTransactData<'a> {
                 }
             }
         };
-        bytes.finish()?;
+        let suffix = bytes.rest();
+        let withdrawal_exemption = match suffix.len() {
+            0 => None,
+            WithdrawalExemptionProof::SIZE if !legacy => Some(
+                bytemuck::try_from_bytes(suffix)
+                    .map_err(|_| CustomRingError::InvalidInstructionData)?,
+            ),
+            _ => return Err(CustomRingError::RingTransactLength),
+        };
         let data = Self {
             rail,
             n_in: header.n_in,
             n_out: header.n_out,
             audit_proof,
             policy,
+            withdrawal_exemption,
             approval_required: flags.has(transact_flag::APPROVAL_REQUIRED),
             previous_epoch: flags.has(transact_flag::PREVIOUS_EPOCH),
             anchor,
@@ -888,6 +898,9 @@ impl<'a> RingTransactData<'a> {
                 push_tree_context(&mut out, second)?;
             }
         }
+        if let Some(exemption) = self.withdrawal_exemption {
+            out.extend_from_slice(bytemuck::bytes_of(exemption));
+        }
         Ok(out)
     }
 
@@ -910,8 +923,7 @@ impl<'a> RingTransactData<'a> {
             }),
             _ => return Err(CustomRingError::FlagNotAllowed),
         };
-        let limited = self.rail != RingRail::Delegate && registry.rules.has_limits();
-        if self.approval_required && !limited {
+        if self.approval_required && self.rail == RingRail::Delegate {
             return Err(CustomRingError::UnexpectedApproval);
         }
         Ok(Some(PolicyBinding {
@@ -1267,4 +1279,15 @@ fn push_tree_context(out: &mut Vec<u8>, context: TreeContext) -> Result<(), Cust
             .map_err(|_| CustomRingError::InvalidInstructionData)?,
     );
     Ok(())
+}
+
+/// Optional compact suffix, proving every public withdrawal is below its record threshold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct WithdrawalExemptionProof {
+    pub proof: CustomRingProof,
+    pub root_index: u8,
+}
+impl WithdrawalExemptionProof {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
 }

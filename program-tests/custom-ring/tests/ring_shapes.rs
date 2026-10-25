@@ -82,6 +82,8 @@ impl Coverage {
                 RingCircuit::DelegatePolicy { own_only, .. } => *own_only,
                 RingCircuit::Deposit { capacity } => *capacity == 1,
                 RingCircuit::ApplyRecords { writes } => matches!(writes, 1 | 2),
+                // Threshold exemptions are covered by the withdrawal controls suite.
+                RingCircuit::WithdrawalExemption => false,
                 _ => true,
             })
             // Each required key belongs to one independently runnable sweep.
@@ -93,9 +95,9 @@ impl Coverage {
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
                     | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,
-                    RingCircuit::MemberPolicy { .. } | RingCircuit::RegisterKey => {
-                        Column::ConfidentialPolicy
-                    }
+                    RingCircuit::MemberPolicy { .. }
+                    | RingCircuit::RegisterKey
+                    | RingCircuit::WithdrawalExemption => Column::ConfidentialPolicy,
                     RingCircuit::ApplyRecords { writes: 1 } => Column::ConfidentialPolicy,
                     RingCircuit::ApplyRecords { .. } | RingCircuit::DelegatePolicy { .. } => {
                         Column::Delegate

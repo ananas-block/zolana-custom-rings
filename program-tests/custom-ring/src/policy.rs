@@ -3,7 +3,6 @@
 
 use anyhow::{anyhow, Result};
 use std::{
-    sync::LazyLock,
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -11,21 +10,17 @@ use std::{
 use custom_ring_cli::Landing;
 use custom_ring_cli::Zolana;
 use custom_ring_interface::MemberRegistry;
-use custom_ring_interface::SOL_ASSET_ADDRESS;
 use custom_ring_sdk::{
     AuthorityListWrite, CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
     DepositRecipient, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
 };
-use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use zolana_client::{prover::indexed::ProofDataSource, AsyncProverClient};
 use zolana_keypair::{ShieldedKeypair, X25519Keypair};
 use zolana_ring_client::AnonymousRingState;
-use zolana_ring_policy::{
-    ListChange, ListId, ListSet, Member, OutflowLimit, Rule, RuleTable, Subject,
-};
+use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
 use zolana_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use zolana_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
 
@@ -51,16 +46,6 @@ pub const BLOCK_ONLY: RuleTable = RuleTable::builder()
 
 pub const LIMIT_CAP: u64 = 650_000_000;
 pub const LIMIT_COSIGN_ABOVE: u64 = 300_000_000;
-
-/// SOL outflow capped per transfer, dual control above the threshold.
-pub static OUTFLOW_LIMIT: LazyLock<RuleTable> = LazyLock::new(|| {
-    let sol = Member::asset(&Address::new_from_array(SOL_ASSET_ADDRESS)).expect("the SOL asset");
-    RuleTable::builder()
-        .limits(&[OutflowLimit::of(&sol)
-            .with_cap(LIMIT_CAP)
-            .with_cosign_above(LIMIT_COSIGN_ABOVE)])
-        .build()
-});
 
 /// Approval or no Block admits an output owner.
 pub const APPROVAL_OR_UNBLOCKED: RuleTable = RuleTable::builder()

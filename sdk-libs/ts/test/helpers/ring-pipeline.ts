@@ -83,6 +83,7 @@ import {
   policySourceOwners,
   policyTableHash,
   referencedLists,
+  buildRuleTable,
   type ListId,
   type RuleTable,
 } from "../../src/protocol/membership/policy.js";
@@ -261,8 +262,9 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ),
     );
   }
-  if (options.table !== undefined) {
-    const referenced = referencedLists(options.table.rules);
+  if (options.table !== undefined || options.records !== undefined) {
+    const table = options.table ?? buildRuleTable({ rules: [] });
+    const referenced = referencedLists(table.rules);
     const shared = options.curator?.lists ?? [];
     const sources: RingSourceSlot[] = LIST_IDS.map((listId) =>
       referenced.includes(listId)
@@ -284,9 +286,9 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
           bump,
           history: [{ root: ownTree.root, applied: 0n, slot: 0n }],
           nextIndex: ownTree.nextIndex,
-          policyHash: policyTableHash(options.table, policySourceOwners(sources)),
+          policyHash: policyTableHash(table, policySourceOwners(sources)),
           sources,
-          table: options.table,
+          table,
           generation: 1,
         }),
       ),

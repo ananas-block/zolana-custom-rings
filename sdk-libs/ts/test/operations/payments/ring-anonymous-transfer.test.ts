@@ -1,3 +1,4 @@
+import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import { AccountState, getTokenEncoder } from "@solana-program/token";
 import {
@@ -955,7 +956,7 @@ describe("anonymous ring signer and epoch", () => {
       "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
     );
     const coSigned = await anonymousRing({
-      coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+      coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS },
     });
     await refused(
       coSigned,
@@ -1045,9 +1046,13 @@ describe("anonymous ring transfer builder", () => {
                   guard: { kind: "always" },
                 },
               ],
-              limits: [{ asset: memberOfAsset(SOL_MINT), cap: 0n, cosignAbove: 1n }],
             }),
             records: [
+              {
+                member: memberOfAsset(SOL_MINT),
+                lists: 0n,
+                mintPolicy: { ...EMPTY_MINT_POLICY, cosignAbove: 1n },
+              },
               {
                 member: memberOfIdentity(
                   sender.keypair.shieldedAddress().signingPublicKey.ownerProofInputHash(),
@@ -1055,7 +1060,7 @@ describe("anonymous ring transfer builder", () => {
                 lists: 1n,
               },
             ],
-            coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] },
+            coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS },
           }
         : {},
     );
@@ -1603,9 +1608,13 @@ describe("anonymous rail on a policy ring", () => {
             guard: { kind: "always" },
           },
         ],
-        limits: [{ asset: memberOfAsset(SOL_MINT), ...limit }],
       }),
       records: [
+        {
+          member: memberOfAsset(SOL_MINT),
+          lists: 0n,
+          mintPolicy: { ...EMPTY_MINT_POLICY, ...limit },
+        },
         {
           member: memberOfIdentity(
             sender.keypair.shieldedAddress().signingPublicKey.ownerProofInputHash(),
@@ -1615,7 +1624,7 @@ describe("anonymous rail on a policy ring", () => {
       ],
       ...(coSigner === undefined
         ? {}
-        : { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS, thresholds: [] } }),
+        : { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } }),
     });
   }
 
