@@ -52,18 +52,36 @@ pub fn cache_dir(tag: &str) -> PathBuf {
 }
 
 pub fn ensure_cached(tag: &str, asset: &Asset) -> Result<PathBuf> {
+    ensure_cached_from(tag, asset, None)
+}
+
+pub fn ensure_cached_from(
+    tag: &str,
+    asset: &Asset,
+    release_base_url: Option<&str>,
+) -> Result<PathBuf> {
     let path = cache_dir(tag).join(&asset.name);
-    ensure_at(tag, asset, &path)?;
+    ensure_at_from(tag, asset, &path, release_base_url)?;
     Ok(path)
 }
 
 /// A file at `path` is verified on every use, only a missing or wrong one is downloaded.
 pub fn ensure_at(tag: &str, asset: &Asset, path: &Path) -> Result<()> {
+    ensure_at_from(tag, asset, path, None)
+}
+
+pub fn ensure_at_from(
+    tag: &str,
+    asset: &Asset,
+    path: &Path,
+    release_base_url: Option<&str>,
+) -> Result<()> {
     pinned(asset)?;
     if fs::read(path).is_ok_and(|bytes| verify(&bytes, asset).is_ok()) {
         return Ok(());
     }
-    let base = env::var("ZOLANA_RELEASE_URL").unwrap_or_else(|_| DEFAULT_RELEASE_BASE_URL.into());
+    let base = env::var("ZOLANA_RELEASE_URL")
+        .unwrap_or_else(|_| release_base_url.unwrap_or(DEFAULT_RELEASE_BASE_URL).into());
     let url = format!("{base}/{tag}/{}", asset.name);
     println!("Downloading {url}");
     let bytes = download(&url, asset.size)?;

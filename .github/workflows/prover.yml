@@ -10,6 +10,8 @@ on:
       - "sdk-libs/sdk/**"
       - "sdk-libs/ts/src/**"
       - "tools/*ring_keys.py"
+      - "tools/check_ring_key_assets.py"
+      - "tools/images.json"
       - "zolana"
       - ".github/workflows/prover.yml"
   pull_request:
@@ -21,6 +23,8 @@ on:
       - "sdk-libs/sdk/**"
       - "sdk-libs/ts/src/**"
       - "tools/*ring_keys.py"
+      - "tools/check_ring_key_assets.py"
+      - "tools/images.json"
       - "zolana"
       - ".github/workflows/prover.yml"
   workflow_dispatch:
@@ -33,6 +37,26 @@ permissions:
   contents: read
 
 jobs:
+  combined-image:
+    name: prover / combined image
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+      - name: Build combined client prover image
+        run: docker build --file prover/Dockerfile --tag combined-prover:test .
+      - name: Check native and ring circuits in one image
+        run: |
+          docker run --rm combined-prover:test key-files > /tmp/prover-key-files
+          grep -qx 'transfer_ring_1_2.key' /tmp/prover-key-files
+          grep -qx 'custom_ring_apply_records_1.key' /tmp/prover-key-files
+          grep -qx 'custom_ring_withdrawal_exemption.key' /tmp/prover-key-files
+          docker run --rm combined-prover:test release-keys > /tmp/prover-release-keys
+          grep -q '^custom_ring_withdrawal_exemption.key ' /tmp/prover-release-keys
+
   go-tests:
     name: prover / go test
     runs-on: ubuntu-latest

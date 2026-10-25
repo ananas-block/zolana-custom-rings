@@ -54,15 +54,24 @@ impl ReleaseSet for CustomRings {
         validate_ring_key_pins(&ring_lock)?;
         let mut lock = json!({
             "release_tag": options.tag,
+            "release_base_url": "https://github.com/helius-labs/zolana-custom-rings/releases/download",
             "ring_program": stage_program(&RING_PROGRAM_SOURCE, &path, &options.tag, staging)?,
         });
         for source in RING_KEYS {
             let file_name = source.file_name();
             let key_source = zolana.join(PROVING_KEYS_DIR).join(&file_name);
             require_file(&key_source, "run `just fetch-custom-ring-keys` first")?;
-            let asset = source.asset(&options.tag);
+            let asset = file_name.clone();
             let staged = stage_file(&key_source, &staging.join(&asset))?;
             let pinned = pinned_sha256(&ring_lock, &file_name)?;
+            let pinned_size = ring_lock["keys"][&file_name]["size"]
+                .as_u64()
+                .with_context(|| format!("{RING_KEYS_LOCK} pins no size for {file_name}"))?;
+            ensure!(
+                staged.size == pinned_size,
+                "{file_name} is {} bytes, {RING_KEYS_LOCK} pins {pinned_size}",
+                staged.size
+            );
             if staged.sha256 != pinned {
                 bail!(
                     "{file_name} hashes to {}, {RING_KEYS_LOCK} pins {pinned}",

@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{ensure, Context as _, Result};
 use serde::Deserialize;
-use zolana_cli_common::release::{ensure_at, ensure_cached, Asset, BinaryAsset};
+use zolana_cli_common::release::{ensure_at_from, ensure_cached_from, Asset, BinaryAsset};
 
 pub use custom_ring_interface::key_catalog::{RingKey, RING_KEYS};
 
@@ -19,6 +19,8 @@ pub struct RingRelease {
     #[serde(rename = "release_tag")]
     pub tag: String,
     #[serde(default)]
+    release_base_url: Option<String>,
+    #[serde(default)]
     binaries: Vec<BinaryAsset>,
     #[serde(flatten)]
     assets: BTreeMap<String, Asset>,
@@ -27,6 +29,7 @@ pub struct RingRelease {
 pub struct RingProgram {
     pub tag: String,
     pub asset: Asset,
+    release_base_url: Option<String>,
 }
 
 impl RingRelease {
@@ -82,11 +85,11 @@ impl RingRelease {
     }
 
     pub fn ensure(&self, asset: &Asset) -> Result<PathBuf> {
-        ensure_cached(&self.tag, asset)
+        ensure_cached_from(&self.tag, asset, self.release_base_url.as_deref())
     }
 
     pub fn ensure_as(&self, asset: &Asset, path: &Path) -> Result<()> {
-        ensure_at(&self.tag, asset, path)
+        ensure_at_from(&self.tag, asset, path, self.release_base_url.as_deref())
     }
 }
 
@@ -97,11 +100,12 @@ impl RingProgram {
         Ok(Self {
             tag: release.tag,
             asset,
+            release_base_url: release.release_base_url,
         })
     }
 
     pub fn ensure(&self) -> Result<PathBuf> {
-        ensure_cached(&self.tag, &self.asset)
+        ensure_cached_from(&self.tag, &self.asset, self.release_base_url.as_deref())
     }
 }
 
@@ -174,11 +178,11 @@ mod tests {
         let mut lock: serde_json::Value = serde_json::from_str(FULL_LOCK).expect("json");
         for key in RING_KEYS {
             lock[key.section()] =
-                serde_json::json!({"asset": key.asset("v1"), "size": 1, "sha256": "x"});
+                serde_json::json!({"asset": key.file_name(), "size": 1, "sha256": "x"});
         }
         let release = RingRelease::parse(&lock.to_string()).expect("parses");
         for key in RING_KEYS {
-            assert_eq!(release.key(key).expect("served").name, key.asset("v1"));
+            assert_eq!(release.key(key).expect("served").name, key.file_name());
         }
         let partial = RingRelease::parse(FULL_LOCK).expect("parses");
         assert_eq!(
@@ -216,10 +220,11 @@ mod tests {
 
     #[test]
     fn a_release_asset_is_cached_whole_or_not_at_all() {
-        std::env::set_var("ZOLANA_RELEASE_URL", serve(b"ring"));
+        let mut lock: serde_json::Value = serde_json::from_str(BINARIES_ONLY_LOCK).expect("json");
+        lock["release_base_url"] = serde_json::json!(serve(b"ring"));
         let dir = std::env::temp_dir().join(format!("ring-release-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let release = RingRelease::parse(BINARIES_ONLY_LOCK).expect("parses");
+        let release = RingRelease::parse(&lock.to_string()).expect("parses");
         let asset = |sha256: String| Asset {
             name: "ring.so".to_owned(),
             size: 4,
@@ -238,5 +243,14 @@ mod tests {
             .collect();
         assert_eq!(names, ["ring.so"], "no part file and no refused download");
         std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn existing_release_keeps_its_legacy_download_source() {
+        let release = RingRelease::parse(BINARIES_ONLY_LOCK).expect("parses");
+        assert!(release.release_base_url.is_none());
+        let lock: serde_json::Value =
+            serde_json::from_str(include_str!("../../../release-artifacts.lock")).expect("json");
+        assert!(lock.get("release_base_url").is_none());
     }
 }
