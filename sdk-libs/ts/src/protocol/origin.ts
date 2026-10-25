@@ -1,4 +1,4 @@
-import { RingInstructionTag } from "./admin.js";
+import { RingInstructionTag } from "./instruction-tag.js";
 import { getBase58Encoder } from "@solana/kit";
 
 import {
@@ -468,6 +468,7 @@ export function confirmedRingWithdrawals(
       const withdrawals = ringWithdrawalsOf([instruction]);
       if (withdrawals.length === 0) return withdrawals;
       const tag = parent.data[0];
+      if (tag === undefined) return withdrawals;
       if (tag !== RingInstructionTag.transact && tag !== RingInstructionTag.delegateTransact)
         return withdrawals;
       const source = settlementDataOf(instruction);

@@ -969,11 +969,6 @@ fn page() -> Page {
     Page::new(None, None).expect("page")
 }
 
-
-
-
-
-
 /// A member paid on an anonymous ring, then two transfers that spend the member's UTXO.
 struct SpentUtxo {
     paid: ShieldedTransaction,
@@ -1107,8 +1102,6 @@ fn utxos_request(hashes: Vec<Hash>) -> GetAuditedUtxosRequest {
         .expect("signed UTXO read")
 }
 
-
-
 /// The audited deposit of `member` into the ring at `blinding`, its capsule sealed to `auditor`.
 fn audited_deposit(
     auditor: &X25519Pubkey,
@@ -1174,9 +1167,6 @@ fn audited_deposit(
     let bindings = ring_event_origin_in(&[group], 0, RING).unwrap().deposits;
     (deposit, bindings)
 }
-
-
-
 
 /// Each owner's record escrowing its nullifier key under one registry root.
 #[derive(Clone)]
@@ -1339,19 +1329,12 @@ fn escrowed_source(
     source
 }
 
-
-
-
-
 fn escrow_errors(page: &GetDecryptedTransactionsResponse) -> Vec<OutputPayloadErrorKind> {
     let [item] = page.value.items.as_slice() else {
         panic!("one escrowed transfer, {:?}", page.value.skipped);
     };
     item.payload_errors.iter().map(|error| error.kind).collect()
 }
-
-
-
 
 /// The commitment of `owner`'s output on the ring's audited page.
 async fn fixture_output_hash(service: &AuditService<StaticSource>, owner: &UtxoFields) -> Hash {
@@ -1370,16 +1353,6 @@ async fn fixture_output_hash(service: &AuditService<StaticSource>, owner: &UtxoF
         .hash
         .clone()
 }
-
-
-
-
-
-
-
-
-
-
 
 #[test]
 fn request_builder_rejects_noncanonical_pages() {
@@ -1404,7 +1377,6 @@ fn as_object<T: serde::Serialize>(value: T) -> serde_json::Map<String, serde_jso
     };
     map
 }
-
 
 fn signed_by(authority: &Keypair) -> CreateAuditorKeyRequest {
     CreateAuditorKeyRequest::for_ring(RING, GENESIS)
@@ -1441,11 +1413,6 @@ fn released(created: &CreateAuditorKeyResponse, request: &CreateAuditorKeyReques
 fn refused(result: Result<(), RingRpcError>, expected: Unauthorized) -> bool {
     matches!(result, Err(RingRpcError::Unauthorized(reason)) if reason == expected)
 }
-
-
-
-
-
 
 fn deposit(byte: u8, slot: u64, amount: u64) -> DepositRecord {
     DepositRecord {

@@ -1,4 +1,4 @@
-import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
+import { policyWithdrawalHash } from "../../src/proof/withdrawals.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";

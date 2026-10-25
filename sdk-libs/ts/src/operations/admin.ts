@@ -13,7 +13,7 @@ import {
   equalBytes,
 } from "@heliuslabs/zolana/internal";
 import type { KitRpcAccess } from "@heliuslabs/zolana/client";
-import { InstructionTag, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -32,6 +32,7 @@ import {
   type RingProgramConfig,
 } from "../protocol/ring-codecs.js";
 import { ringProgramDataAddress } from "../protocol/config.js";
+import { RingInstructionTag } from "../protocol/instruction-tag.js";
 import { RingError } from "../protocol/error.js";
 import {
   buildRuleTable,
@@ -43,36 +44,7 @@ import {
 } from "../protocol/policy.js";
 import { checkTransactionFits } from "./compile.js";
 
-/** Rust `tag`, the first byte of the ring program's instruction data. */
-export const RingInstructionTag = Object.freeze({
-  createConfig: 1,
-  initSppRingConfig: 2,
-  transact: 43,
-  legacyTransact: 3,
-  legacyDelegateTransact: 25,
-  grantReadAccess: 4,
-  revokeReadAccess: 5,
-  setAuthority: 6,
-  createPolicy: 7,
-  setPolicySource: 10,
-  setPaused: 11,
-  setPolicyRules: 12,
-  /** SPP's `RING_DEPOSIT`, always refused, `auditedDeposit` replaces it. */
-  deposit: InstructionTag.ringDeposit,
-  clearCoSigner: 21,
-  merge: InstructionTag.ringMergeTransact,
-  setDelegate: 24,
-  delegateTransact: 44,
-  setCoSigner: 27,
-  createMemberRegistry: 28,
-  registerKey: 29,
-  auditedDeposit: 31,
-  writeRecords: 39,
-  authorityWriteRecords: 40,
-  applyRecords: 41,
-  setInsertFee: 42,
-} as const);
-export type RingInstructionTag = (typeof RingInstructionTag)[keyof typeof RingInstructionTag];
+export { RingInstructionTag } from "../protocol/instruction-tag.js";
 
 const ACCOUNT_UNITS = 50_000;
 /** One policy hash plus a curator registry load. */

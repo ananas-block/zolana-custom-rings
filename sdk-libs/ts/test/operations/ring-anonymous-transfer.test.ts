@@ -1,4 +1,4 @@
-import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
+import { policyWithdrawalHash } from "../../src/proof/withdrawals.js";
 import { AccountState, getTokenEncoder } from "@solana-program/token";
 import {
   AccountRole,

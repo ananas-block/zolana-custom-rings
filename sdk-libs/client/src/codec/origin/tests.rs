@@ -1129,7 +1129,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../test-vectors/ring-transact-expansion.json"
+        "../../../../../test-vectors/ring-transact-expansion.json"
     ))
     .unwrap();
     let bytes = hex::decode(vectors["cases"][0]["compact"].as_str().unwrap()).unwrap();

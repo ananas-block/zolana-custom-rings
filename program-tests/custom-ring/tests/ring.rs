@@ -192,12 +192,6 @@ const USDC_WITHDRAW_AMOUNT: u64 = 2_500_000;
 const USDC_FINAL_SEND: u64 = 1_000_000;
 const USDC_FINAL_CHANGE: u64 = USDC_EXIT_CHANGE - USDC_WITHDRAW_AMOUNT - USDC_FINAL_SEND;
 
-
-
-
-
-
-
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let count = amounts.len().to_string();
     let merged_count = amounts.len().min(
@@ -306,18 +300,10 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     Ok(())
 }
 
-
-
-
-
 /// A Frozen hidden sender is refused.
 const FROZEN_SENDERS: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
     .build();
-
-
-
-
 
 /// Registers every member in the pinned registry before the delegate turns key escrow on.
 struct EscrowedDelegate<'a> {
@@ -362,8 +348,6 @@ impl DelegateAppointment<'_> {
         Ok(())
     }
 }
-
-
 
 fn lamports<R: Rpc>(rpc: &R, address: Address) -> Result<u64> {
     Ok(rpc

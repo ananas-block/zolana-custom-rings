@@ -1,4 +1,4 @@
-import { policyWithdrawalHash } from "../src/ring/withdrawals.js";
+import { policyWithdrawalHash } from "../../src/proof/withdrawals.js";
 import { AccountRole, type Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 

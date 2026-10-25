@@ -34,7 +34,7 @@ import { checkSignersHideOwner } from "./anonymous.js";
 import type { RingProgramConfig } from "../protocol/ring-codecs.js";
 import { fetchRingProgramConfig } from "../protocol/config.js";
 import { DEPOSIT_DEMAND, checkRingCoSigner } from "../proof/cosign.js";
-import { RING_DEPOSIT_AUDIT_SLOTS, type RingDepositCapsule } from "../protocol/deposit-capsule.js";
+import { type RingDepositCapsule } from "../protocol/deposit-capsule.js";
 import {
   ringDepositContextHash,
   ringDepositPublicInputHash,

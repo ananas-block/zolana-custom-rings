@@ -3,8 +3,8 @@ import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import { assetField, type SettlementTransfer } from "@heliuslabs/zolana/transaction";
-import { splDestination } from "./anonymous.js";
-import { RingError } from "./error.js";
+import { splDestination } from "../operations/anonymous.js";
+import { RingError } from "../protocol/error.js";
 
 export interface PolicyWithdrawal {
   readonly owner: Bytes32;
