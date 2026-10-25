@@ -7,16 +7,16 @@ import { p256 } from "@noble/curves/nist.js";
 import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 import { SPL_TOKEN_2022_PROGRAM_ID, buildDepositTransaction } from "@heliuslabs/zolana";
-import { createCustomRingClient } from "../../src/client/client.js";
+import { createCustomRingClient } from "../../src/rpc/client.js";
 import { addressBytes, sha256 } from "@heliuslabs/zolana/internal";
 import {
   signSendAndConfirm,
   signerFromWalletFile,
   tokenBalance,
 } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
-import { P256ReaderKey } from "../../src/ring/reader.js";
+import { P256ReaderKey } from "../../src/operations/reader-access.js";
+import type { DecryptedRingTransaction } from "../../src/rpc/ring-rpc.js";
 import { ListId } from "../../src/ring/advanced.js";
-import type { DecryptedRingTransaction } from "../../src/ring/rpc.js";
 import {
   RingError,
   RingRpc,

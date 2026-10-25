@@ -7,8 +7,8 @@ use zolana_account_checks::AccountIterator;
 
 use crate::{
     instructions::{
+        instruction_runtime::{check_system_program, no_data, Pda},
         loader::load_authorized_config,
-        shared::{check_system_program, no_data, Pda},
     },
     state::Init,
 };

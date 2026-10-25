@@ -6,8 +6,8 @@ use zolana_account_checks::AccountIterator;
 
 use crate::{
     instructions::{
+        instruction_runtime::{check_system_program, close_into, parse, Pda},
         loader::{load, load_authorized_config},
-        shared::{check_system_program, close_into, parse, Pda},
     },
     state::{check_reader_key, Init},
 };

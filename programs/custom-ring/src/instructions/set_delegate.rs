@@ -3,8 +3,8 @@ use pinocchio::{AccountView, Address, ProgramResult};
 use zolana_account_checks::AccountIterator;
 
 use crate::instructions::{
+    instruction_runtime::no_data,
     loader::{load_mut, load_registry, UpgradeAuthorityCheck},
-    shared::no_data,
 };
 
 /// Only the upgrade authority appoints the delegate.

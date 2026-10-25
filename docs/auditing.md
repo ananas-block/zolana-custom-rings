@@ -4,8 +4,8 @@ Every ring has one auditor, an X25519 key that the ring config fixes at
 creation. The auditor reads every transfer, deposit and merge of the ring.
 The audit proof binds what the auditor reads to the notes SPP settles, and the
 ring program forwards no transfer without it. The disclosure layouts and the
-audit statements are in [Audit disclosure](../zolana/docs/spec.md#audit-disclosure)
-and [Audit proof](../zolana/docs/spec.md#audit-proof).
+audit statements are in [Audit disclosure](../program-libs/interface/src/disclosure.rs)
+and [Audit proof](proof-costs.md#audit-statements).
 
 ## The envelope
 
@@ -30,7 +30,7 @@ hash of every ring output and exit from what it reads. The proof shows that
 the rebuilt hash is the settled one.
 
 A **packed** disclosure serves the
-[packed form](../zolana/docs/spec.md#ring-outputs) of the confidential and
+[packed form](../program-libs/interface/src/output.rs) of the confidential and
 delegate rails. Per published output it carries the owner key, the nullifier
 key, the asset, the amount and the two data hashes. The auditor derives every
 ring output blinding from `tx_viewing_sk`, so no blinding is published.

@@ -1,16 +1,16 @@
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/interface/custom-ring-proof.js";
-import { disclosureFieldCount } from "../../src/interface/ring-disclosure-layout.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/custom-ring-proof.js";
+import { disclosureFieldCount } from "../../src/protocol/ring-disclosure-layout.js";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { RingInstructionTag } from "../../src/ring/admin.js";
+import { RingInstructionTag } from "../../src/operations/admin.js";
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
   ringDisclosureLayout,
   type RingOutput,
   type RingRail,
-} from "../../src/ring/transact.js";
-import { RING_AUTHORITY_SHAPES } from "../../src/interface/spp.js";
+} from "../../src/protocol/transact.js";
+import { RING_AUTHORITY_SHAPES } from "../../src/protocol/spp.js";
 
 function field(byte: number): Bytes32 {
   const value = new Uint8Array(32);

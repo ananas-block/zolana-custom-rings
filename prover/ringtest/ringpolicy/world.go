@@ -57,7 +57,7 @@ type Table struct {
 	Limits  []OutflowLimit
 }
 
-// Rule mirrors one Row of program-libs/policy/src/rule_table.rs.
+// Rule mirrors one Row of program-libs/policy/src/rule_table/mod.rs.
 type Rule struct {
 	Subject, Mode, Mask, Guard, Threshold, Alternative uint64
 }

@@ -1,0 +1,459 @@
+/** The hidden owner's rail of an anonymous ring, mirrors Rust `pipeline::anonymous`. */
+import {
+  AccountState,
+  getMultisigSize,
+  getTokenDecoder,
+  getTokenSize,
+  type Token,
+} from "@solana-program/token";
+import { isOffCurveAddress, type MessagePartialSigner } from "@solana/kit";
+
+import { initializePoseidon } from "@heliuslabs/zolana";
+import {
+  ClientError,
+  DEFAULT_INDEXER_RPC_CONFIG,
+  attempts,
+  isClientError,
+  isRetryable,
+  pollUntil,
+  ZERO_32,
+  SYSTEM_PROGRAM,
+  addressBytes,
+  checkedAddress,
+  encodeBase58,
+  associatedTokenAddress,
+  treeAddress,
+  bigIntBytes,
+  rightAlign,
+  equalBytes,
+  isCanonicalField,
+  poseidon,
+} from "@heliuslabs/zolana/internal";
+import type { ChainReader, ProofReader, RpcAccount } from "@heliuslabs/zolana/client";
+import {
+  SPL_TOKEN_2022_PROGRAM_ID,
+  SPL_TOKEN_PROGRAM_ID,
+  STATE_HEIGHT,
+  treeIdField,
+} from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
+import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, SigningKey } from "@heliuslabs/zolana/keypair";
+import {
+  assetField,
+  type SettlementTransfer,
+  type SppProofInputs,
+} from "@heliuslabs/zolana/transaction";
+import type { RingAddress } from "../crypto/ring-address.js";
+export { ANCHOR_DECOYS } from "../state/anonymous-state.js";
+
+import { RingError, wrapRingError, type RingErrorCode } from "../protocol/error.js";
+import {
+  spendsDefaultRing,
+  type AnchorWitness,
+  type PendingAnchor,
+  type PendingFirstContact,
+} from "./pipeline.js";
+import type { RingOutputRail } from "./output-rail.js";
+import { signMessage } from "../rpc/ring-rpc.js";
+import { anchorState } from "../protocol/trees.js";
+import { type PairAnchor } from "../state/anonymous-state.js";
+
+/** The hidden owner's Ed25519 key, the signature lives inside the proof so the key may live in a wallet. Rust `AnonymousSpendSigner`. */
+export interface AnonymousSpendSigner {
+  publicKey(): ShieldedPublicKey;
+  /** RFC 8032 Ed25519 over the transfer's 32-byte `messageHash`. */
+  sign(message: Uint8Array, context?: RequestContext): Promise<Bytes64>;
+}
+
+/** An output paying a ring address, its stream picked when the transfer is proven, Rust `AnonymousPayment`. */
+export interface AnonymousPayment {
+  readonly to: RingAddress;
+  readonly asset: Address;
+  readonly amount: bigint;
+}
+
+/** Signs with an in-process key, the caller keeps and destroys it. */
+export function signingKeySpendSigner(key: SigningKey): AnonymousSpendSigner {
+  return Object.freeze({
+    publicKey: () => key.publicKey(),
+    sign: (message: Uint8Array) => Promise.resolve(key.sign(message)),
+  });
+}
+
+/** Signs through a kit message signer, a wallet adapter's `signMessage`. */
+export function messageSignerSpendSigner(signer: MessagePartialSigner): AnonymousSpendSigner {
+  // A base58 address decodes to exactly 32 bytes.
+  const publicKey = ShieldedPublicKey.fromEd25519(addressBytes(signer.address) as Bytes32);
+  return Object.freeze({
+    publicKey: () => publicKey,
+    sign: (message: Uint8Array) => signMessage(signer, message),
+  });
+}
+
+/**
+ * The hidden owner signs no public slot, a public signature would undo the hiding. Returns the
+ * owner's Ed25519 key.
+ */
+export function checkAnonymousSigner(
+  input: Readonly<{
+    signer: AnonymousSpendSigner;
+    sender: ShieldedAddress;
+    payer: Address;
+    coSigner: Address | undefined;
+  }>,
+): Bytes32 {
+  const signing = input.signer.publicKey();
+  if (!(signing instanceof ShieldedPublicKey) || !signing.equals(input.sender.signingPublicKey))
+    throw new RingError("RING_ANONYMOUS_SIGNER_MISMATCH");
+  const owner = signing.ed25519();
+  checkSignersHideOwner(owner, [input.payer, input.coSigner]);
+  return owner;
+}
+
+/** Rust `AnonymousPublicSignerLinksOwner`. */
+export function checkSignersHideOwner(
+  owner: Bytes32,
+  signers: readonly (Address | undefined)[],
+): void {
+  if (signers.some((signer) => signer !== undefined && equalBytes(addressBytes(signer), owner)))
+    throw new RingError("RING_ANONYMOUS_SIGNER_LINKS_OWNER");
+}
+
+/** Rust `AnonymousExits::token_owner`, the owner SPP binds for the SPL withdrawal, `undefined` without one. */
+export async function anonymousExitTokenOwner(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    transfers: readonly SettlementTransfer[];
+    hiddenOwner: Bytes32;
+    /** A missing exit token account must be the owner's associated token account. */
+    tokenOwner?: Address;
+  }>,
+  context?: RequestContext,
+): Promise<Address | undefined> {
+  const hidden = encodeBase58(input.hiddenOwner);
+  const named =
+    input.tokenOwner === undefined ? undefined : checkedAddress(input.tokenOwner, "exitTokenOwner");
+  const withdrawals = input.transfers.filter((transfer) => !transfer.isDeposit);
+  if (named !== undefined && !withdrawals.some((transfer) => transfer.kind === "spl"))
+    throw new RingError("RING_ANONYMOUS_EXIT_TOKEN_OWNER_MISMATCH");
+  let tokenOwner: Address | undefined;
+  for (const transfer of withdrawals) {
+    if (transfer.kind === "sol") {
+      await checkSolExit(
+        { client: input.client, recipient: transfer.userSolAccount, hidden },
+        context,
+      );
+      continue;
+    }
+    const owner = await splExitOwner({ client: input.client, transfer, hidden, named }, context);
+    if (named !== undefined && named !== owner)
+      throw new RingError("RING_ANONYMOUS_EXIT_NAMED_OWNER_MISMATCH", {
+        details: { destination: transfer.tokenAccount, named, owner },
+      });
+    if (tokenOwner !== undefined && tokenOwner !== owner)
+      throw new RingError("RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER");
+    tokenOwner = owner;
+  }
+  return tokenOwner;
+}
+
+/** Rust `check_anonymous_slots`, only uncached noncompact notes in and Ed25519 owners out. */
+export function checkAnonymousSlots(proofInputs: SppProofInputs): void {
+  const inputOpen = proofInputs.inputUtxos.some(
+    (input) => input.cacheSlot !== undefined || input.isCompact() || input.isAddress(),
+  );
+  const outputOpen = proofInputs.outputs.some(
+    (output) =>
+      output.cacheSlot !== undefined ||
+      output.isCompact() ||
+      (!output.isDummy() && output.ownerAddress?.signingPublicKey.signatureType() !== "ed25519"),
+  );
+  if (inputOpen || outputOpen) throw new RingError("RING_ANONYMOUS_SLOT_INVALID");
+}
+
+/** The entry key rebuilds every spent UTXO from its opening, Rust `check_entry_inputs`. */
+export function checkEntryInputs(proofInputs: SppProofInputs): void {
+  if (!spendsDefaultRing(proofInputs)) return;
+  proofInputs.inputUtxos.forEach((input, index) => {
+    if (input.isDummy()) return;
+    if (input.utxo.ringProgramId !== undefined)
+      throw new RingError("RING_ENTRY_RING_INPUT", { details: { index } });
+    if (!carriesNoData([input.dataHash, input.ringDataHash]))
+      throw new RingError("RING_ENTRY_INPUT_DATA", { details: { index } });
+  });
+}
+
+/** Rust `carries_no_data`, a zero hash commits like an absent one. */
+export function carriesNoData(hashes: readonly (Bytes32 | undefined)[]): boolean {
+  return hashes.every((hash) => hash === undefined || equalBytes(hash, ZERO_32));
+}
+
+type AnchorClient = Pick<ProofReader, "getMerkleProofs"> & Pick<ChainReader, "getAccount">;
+
+export function pendingAnchor(
+  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint }>,
+): PendingAnchor {
+  const tree = treeAddress(input.anchor.contact.treeId);
+  const pending: PendingAnchor = {
+    tree,
+    read: (context) => anchorWitness({ ...input, tree }, context),
+  };
+  return Object.freeze(pending);
+}
+
+/** The first contact's path at a root its tree holds, fetched beside its pinned decoys, Rust `AnonymousSpend::anchor`. */
+async function anchorWitness(
+  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint; tree: Address }>,
+  context: RequestContext | undefined,
+): Promise<AnchorWitness> {
+  const { anchor: pair, stagedSlot, tree } = input;
+  const { contact, leaves } = pair;
+  await initializePoseidon();
+  const refused = (cause?: unknown): RingError =>
+    wrapRingError("RING_ANCHOR_INVALID", cause, {
+      reason: "leaves",
+      tree,
+      recipient: [...contact.recipient.toBytes()]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    });
+  let latest = 0n;
+  // An indexer at or past the staging slot holds every pinned leaf, a missing one is refused.
+  const response = await pollUntil(
+    () => input.client.getMerkleProofs(tree, leaves, DEFAULT_INDEXER_RPC_CONFIG, context),
+    (answer) => {
+      latest = answer.context.slot;
+      return latest >= stagedSlot;
+    },
+    {
+      retryErrors: false,
+      ...(context === undefined ? {} : { context }),
+      onTimeout: (poll) =>
+        new ClientError("CLIENT_INDEXER_NOT_CAUGHT_UP", {
+          details: {
+            target: stagedSlot.toString(),
+            latest: latest.toString(),
+            attempts: attempts(poll),
+          },
+        }),
+    },
+  ).catch((cause: unknown) => {
+    if (
+      isClientError(cause) &&
+      (cause.code === "CLIENT_INVALID_RPC_RESPONSE" ||
+        (cause.code === "CLIENT_INDEXER" && !isRetryable(cause)))
+    )
+      throw refused(cause);
+    throw cause;
+  });
+  // A fault on any pinned leaf refuses the read alike.
+  const proofs = leaves.map((leaf) =>
+    response.proofs.find((candidate) => equalBytes(candidate.leaf, leaf)),
+  );
+  const proof = proofs.find(
+    (candidate) =>
+      candidate !== undefined &&
+      equalBytes(candidate.leaf, contact.utxoHash) &&
+      candidate.leafIndex === contact.leafIndex,
+  );
+  if (
+    proof === undefined ||
+    proofs.some(
+      (candidate) =>
+        candidate === undefined ||
+        candidate.merkleContext.tree !== tree ||
+        candidate.path.length !== STATE_HEIGHT ||
+        !stateProofReachesRoot(candidate) ||
+        !equalBytes(candidate.root, proof.root) ||
+        candidate.rootIndex !== proof.rootIndex,
+    )
+  )
+    throw refused();
+  const anchor = { tree, rootIndex: proof.rootIndex, root: proof.root };
+  switch (await anchorState(input.client, anchor, context)) {
+    case "paused":
+      throw new RingError("RING_ANCHOR_INVALID", { details: { reason: "paused", tree } });
+    case "moved":
+      throw new RingError("RING_ANCHOR_INVALID", {
+        details: { reason: "root", rootIndex: proof.rootIndex },
+      });
+    case "holds":
+      break;
+  }
+  return Object.freeze({
+    ...anchor,
+    request: Object.freeze({
+      treeId: treeIdField(contact.treeId),
+      asset: assetField(contact.asset),
+      amount: rightAlign(bigIntBytes(contact.amount, 8)),
+      slotSecret: contact.slotSecret,
+      blinding: contact.blinding,
+      epoch: contact.epoch,
+      index: contact.index,
+      pathIndex: contact.leafIndex,
+      path: proof.path,
+    }),
+  });
+}
+
+/** Every inbox payment of the transfer as the first contact it becomes, Rust `Anonymous::first_contacts`. */
+export function pendingFirstContacts(
+  input: Readonly<{
+    rail: RingOutputRail;
+    proofInputs: SppProofInputs;
+    payments: ReadonlyMap<number, AnonymousPayment>;
+    epoch: bigint;
+  }>,
+): readonly PendingFirstContact[] {
+  const { rail, proofInputs } = input;
+  if (rail.delivery.kind !== "anonymous") return Object.freeze([]);
+  const slots = rail.delivery.slots;
+  const contacts: PendingFirstContact[] = [];
+  for (const [slotIndex, payment] of input.payments) {
+    const planned = slots.payment(slotIndex);
+    if (planned === undefined || planned.position.kind !== "inbox") continue;
+    const output = proofInputs.outputs[slotIndex];
+    if (output === undefined) throw new RingError("RING_PAYMENT_SLOT", { details: { slotIndex } });
+    contacts.push(
+      Object.freeze({
+        recipient: planned.recipient,
+        treeId: proofInputs.outputTreeId,
+        utxoHash: output.hash(proofInputs.outputTreeId),
+        slotSecret: rail.slotSecret(planned.recipient, slotIndex),
+        blinding: output.blinding,
+        epoch: input.epoch,
+        index: planned.position.index,
+        asset: payment.asset,
+        amount: payment.amount,
+      }),
+    );
+  }
+  return Object.freeze(contacts);
+}
+
+async function checkSolExit(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    recipient: Address;
+    hidden: Address;
+  }>,
+  context: RequestContext | undefined,
+): Promise<void> {
+  const { recipient } = input;
+  if (recipient === input.hidden) throw exitRefused("RING_ANONYMOUS_EXIT_LINKS_OWNER", recipient);
+  const account = await input.client.getAccount(recipient, context);
+  // Data or a program owner could name a second key, SPP refuses both.
+  if (account !== undefined && (account.owner !== SYSTEM_PROGRAM || account.data.length > 0))
+    throw exitRefused("RING_ANONYMOUS_EXIT_ACCOUNT_HAS_DATA", recipient);
+}
+
+async function splExitOwner(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    transfer: Extract<SettlementTransfer, { kind: "spl" }>;
+    hidden: Address;
+    named: Address | undefined;
+  }>,
+  context: RequestContext | undefined,
+): Promise<Address> {
+  const { transfer, hidden } = input;
+  const destination = transfer.tokenAccount;
+  const refused = (code: Parameters<typeof exitRefused>[0]) => exitRefused(code, destination);
+  const read = await splDestination(input, context);
+  if (read === undefined) throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_INVALID");
+  const { control, tokenProgram } = read;
+  // An associated token account stays derivable from its first owner.
+  const associated = await associatedTokenAddress(hidden, transfer.mint, tokenProgram);
+  if ([destination, control.owner].includes(hidden) || associated === destination)
+    throw refused("RING_ANONYMOUS_EXIT_LINKS_OWNER");
+  // An off-curve address has no keypair, so it is never the hidden owner's key.
+  if (!isOffCurveAddress(destination)) throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_ON_CURVE");
+  if (control.kind === "shared") throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED");
+  return control.owner;
+}
+
+export async function splDestination(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    transfer: Extract<SettlementTransfer, { kind: "spl" }>;
+    named: Address | undefined;
+  }>,
+  context: RequestContext | undefined,
+): Promise<Readonly<{ control: TokenAccountControl; tokenProgram: Address }> | undefined> {
+  const { mint, tokenAccount } = input.transfer;
+  const account = await input.client.getAccount(tokenAccount, context);
+  if (account !== undefined) {
+    const control = tokenAccountControl(account, mint);
+    return control === undefined ? undefined : { control, tokenProgram: account.owner };
+  }
+  if (input.named === undefined) return undefined;
+  // The associated token program creates it with the named owner and no other authority.
+  const tokenProgram = (await input.client.getAccount(mint, context))?.owner;
+  if (tokenProgram === undefined || !isTokenProgram(tokenProgram)) return undefined;
+  if ((await associatedTokenAddress(input.named, mint, tokenProgram)) !== tokenAccount)
+    return undefined;
+  return { control: { kind: "soleOwner", owner: input.named }, tokenProgram };
+}
+
+/** Every refusal names the destination it refused, Rust `exit_refused`. */
+function exitRefused(
+  code: Extract<RingErrorCode, `RING_ANONYMOUS_EXIT_${string}`>,
+  destination: Address,
+): RingError {
+  return new RingError(code, { details: { destination } });
+}
+
+/** Rust `TokenAccountControl`. */
+type TokenAccountControl = Readonly<{ kind: "soleOwner" | "shared"; owner: Address }>;
+
+/** spl `AccountType::Account`, the byte after the base state of an account with extensions. */
+const ACCOUNT_TYPE_ACCOUNT = 2;
+const DELEGATE_TAG_OFFSET = 72;
+const CLOSE_AUTHORITY_TAG_OFFSET = 129;
+
+function isTokenProgram(program: Address): boolean {
+  return program === SPL_TOKEN_PROGRAM_ID || program === SPL_TOKEN_2022_PROGRAM_ID;
+}
+
+/** Rust `TokenAccountState::unpack` over an initialized `mint` account of either token program. */
+function tokenAccountControl(account: RpcAccount, mint: Address): TokenAccountControl | undefined {
+  const { data } = account;
+  const base = getTokenSize();
+  if (
+    !isTokenProgram(account.owner) ||
+    data.length < base ||
+    data.length === getMultisigSize() ||
+    (data.length > base && data[base] !== ACCOUNT_TYPE_ACCOUNT)
+  )
+    return undefined;
+  let token: Token;
+  try {
+    token = getTokenDecoder().decode(data.subarray(0, base));
+  } catch {
+    return undefined;
+  }
+  if (token.state !== AccountState.Initialized || token.mint !== mint) return undefined;
+  // SPP counts any nonzero option tag as set, the kit decoder reads a tag above one as none.
+  const sole = [DELEGATE_TAG_OFFSET, CLOSE_AUTHORITY_TAG_OFFSET].every((offset) =>
+    data.subarray(offset, offset + 4).every((byte) => byte === 0),
+  );
+  return Object.freeze({ kind: sole ? "soleOwner" : "shared", owner: token.owner });
+}
+
+/** Rust `MerkleProof::path_root`, bit `i` of the leaf index puts the node right of sibling `i`. */
+function stateProofReachesRoot(
+  proof: Readonly<{ leaf: Bytes32; path: readonly Bytes32[]; root: Bytes32; leafIndex: bigint }>,
+): boolean {
+  // A bit past the path would give one path a second leaf index.
+  if (proof.leafIndex >> BigInt(STATE_HEIGHT) !== 0n) return false;
+  // Poseidon takes no value outside the field, such a path reaches no root.
+  if (![proof.leaf, ...proof.path].every((node) => isCanonicalField(node))) return false;
+  let node: Uint8Array = proof.leaf;
+  let position = proof.leafIndex;
+  for (const sibling of proof.path) {
+    node = (position & 1n) === 0n ? poseidon([node, sibling]) : poseidon([sibling, node]);
+    position >>= 1n;
+  }
+  return equalBytes(node, proof.root);
+}

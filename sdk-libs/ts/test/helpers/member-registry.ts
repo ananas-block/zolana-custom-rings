@@ -1,4 +1,4 @@
-import { type RingMemberOpening, type RingSealedKey } from "../../src/client/ports.js";
+import { type RingMemberOpening, type RingSealedKey } from "../../src/rpc/ports.js";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/zolana/internal";
 import {
@@ -6,8 +6,8 @@ import {
   QUAD_HEIGHT,
   type MemberRecord,
   type QuadPath,
-} from "../../src/interface/member-registry.js";
-import { FIELD_MAX, memberRecordHash } from "../../src/ring/member-registry.js";
+} from "../../src/protocol/member-registry.js";
+import { FIELD_MAX, memberRecordHash } from "../../src/protocol/member-opening.js";
 
 /** One record the fixture holds, its key escrow served beside it when `sealed` is set. */
 export interface FixtureRecord {

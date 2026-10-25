@@ -13,7 +13,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import type { RingSubmissionTransport } from "../../src/client/ports.js";
+import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
 import {
   NullifierKeyEscrow,
   RegisterKey,

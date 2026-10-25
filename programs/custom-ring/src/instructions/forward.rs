@@ -9,11 +9,11 @@ use zolana_interface::instruction::instruction_data::deposit::RingDepositIxDataR
 
 use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
+    instruction_runtime::RingAuth,
     loader::{
         check_co_signer, check_funding_signer, load_config, load_registry, validate_spp_program,
     },
     merge_disclosure::MergeAudit,
-    shared::RingAuth,
 };
 
 #[inline(never)]

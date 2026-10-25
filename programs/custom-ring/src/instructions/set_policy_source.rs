@@ -7,9 +7,9 @@ use zolana_account_checks::AccountIterator;
 use zolana_ring_policy::ListId;
 
 use crate::instructions::{
+    instruction_runtime::parse,
     loader::{load_authorized_config, load_registry_mut},
-    policy_shared::curator_source,
-    shared::parse,
+    policy_binding::curator_source,
 };
 
 #[inline(never)]

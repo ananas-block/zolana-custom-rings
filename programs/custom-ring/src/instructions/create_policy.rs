@@ -6,9 +6,9 @@ use pinocchio::{
 use zolana_account_checks::AccountIterator;
 
 use crate::instructions::{
+    instruction_runtime::parse,
     loader::{load_authorized_config, load_registry_mut},
-    policy_shared::TableBinding,
-    shared::parse,
+    policy_binding::TableBinding,
 };
 
 #[inline(never)]

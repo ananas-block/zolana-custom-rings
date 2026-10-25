@@ -4,9 +4,13 @@ export {
   openTransactionViewingSecret,
   parseAuditorMessage,
   sealTransactionViewingSecret,
-} from "./audit.js";
-export type { AuditorEnvelope, AuditorMessage } from "./audit.js";
-export { RING_KEY_ERROR_RUST_VARIANT, RingKeyError, type RingKeyErrorCode } from "./error.js";
+} from "../crypto/audit.js";
+export type { AuditorEnvelope, AuditorMessage } from "../crypto/audit.js";
+export {
+  RING_KEY_ERROR_RUST_VARIANT,
+  RingKeyError,
+  type RingKeyErrorCode,
+} from "../crypto/error.js";
 export {
   MAX_PAIRING_ROWS,
   MAX_RING_ADDRESS_PAYLOAD_LENGTH,
@@ -18,4 +22,4 @@ export {
   RingPaymentRequest,
   type PairingRow,
   type RingPaymentRequestFields,
-} from "./ring-address.js";
+} from "../crypto/ring-address.js";

@@ -7,7 +7,7 @@ use pinocchio::{
 use pinocchio_system::instructions::Transfer;
 use zolana_account_checks::AccountIterator;
 
-use crate::instructions::shared::check_system_program;
+use crate::instructions::instruction_runtime::check_system_program;
 
 #[must_use]
 pub(crate) struct MemberWrite<'c> {

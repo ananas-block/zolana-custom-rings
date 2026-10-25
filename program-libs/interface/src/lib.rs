@@ -25,9 +25,11 @@ pub mod transact;
 pub mod withdrawals;
 pub use withdrawals::*;
 
-// At the crate root, the generated modules keep their public paths.
+// Keep the generated modules at their existing public paths.
 #[cfg(feature = "verifying-keys")]
-include!("verifying_keys.rs");
+mod verifying_keys;
+#[cfg(feature = "verifying-keys")]
+pub use verifying_keys::*;
 
 #[cfg(feature = "verifying-keys")]
 pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {

@@ -1,27 +1,48 @@
 //! The custom ring auditor client, free of test utilities so the end-to-end test runs its path.
 
+#[path = "operations/anonymous.rs"]
 pub mod anonymous;
+#[path = "operations/confidential.rs"]
 mod confidential;
+#[path = "operations/created_utxos.rs"]
 mod created;
+#[path = "crypto/decrypt/mod.rs"]
 mod decrypt;
+#[path = "operations/delivered_utxos.rs"]
 pub mod delivered;
+#[path = "crypto/deposit.rs"]
 mod deposit;
+#[path = "codec/deposit_payload.rs"]
 mod deposit_payload;
+#[path = "crypto/disclosure/mod.rs"]
 mod disclosure;
+#[path = "crypto/encryption/mod.rs"]
 mod encryption;
 mod error;
+#[path = "rpc/indexer.rs"]
 mod indexer;
+#[path = "state/known_utxo_index.rs"]
 mod known;
+#[path = "operations/merge_audit.rs"]
 mod merge_audit;
+#[path = "codec/origin/mod.rs"]
 mod origin;
+#[path = "rpc/paging.rs"]
 mod paging;
+#[path = "codec/program_data.rs"]
 mod program_data;
+#[path = "security/reader.rs"]
 mod reader;
+#[path = "operations/records.rs"]
 pub mod records;
+#[path = "operations/recover.rs"]
 mod recover;
 #[cfg(feature = "rpc")]
+#[path = "rpc/mod.rs"]
 pub mod rpc;
+#[path = "operations/scan.rs"]
 mod scan;
+#[path = "rpc/tags.rs"]
 pub mod tags;
 mod types;
 

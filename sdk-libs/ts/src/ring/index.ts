@@ -6,15 +6,15 @@ export {
 } from "@heliuslabs/zolana/internal";
 export type { RingDepositOutput, RingDepositPlaintext } from "@heliuslabs/zolana/internal";
 export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
-export { RING_ERROR_CODES, RingError, RingProgramError, wrapRingError } from "./error.js";
-export type { RingErrorCode, RingProgramErrorName } from "./error.js";
+export { RING_ERROR_CODES, RingError, RingProgramError, wrapRingError } from "../protocol/error.js";
+export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";
 
 export {
   ringAuthAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
-} from "../interface/pda/index.js";
+} from "../protocol/pda/index.js";
 export {
   APPLY_DELAY_SLOTS,
   AUTHORITY_RESERVED_LEAVES,
@@ -39,7 +39,7 @@ export {
   registryCuratorRoot,
   registryCurrentRoot,
   registryOwnRoot,
-} from "./codecs.js";
+} from "../protocol/ring-codecs.js";
 export type {
   RingCoSignThreshold,
   RingCoSigner,
@@ -50,7 +50,7 @@ export type {
   RingRecordQueue,
   RingRootEntry,
   RingSourceSlot,
-} from "./codecs.js";
+} from "../protocol/ring-codecs.js";
 export {
   BPF_LOADER_UPGRADEABLE_ID,
   fetchCuratorRegistry,
@@ -59,10 +59,10 @@ export {
   fetchRingRecordQueue,
   requireActiveRing,
   ringProgramDataAddress,
-} from "./config.js";
-export { ringRole, type RingRole } from "./role.js";
-export { listRegisteredRings, type RegisteredRing } from "./registry.js";
-export { ringTreeIdResolver } from "./trees.js";
+} from "../protocol/config.js";
+export { ringRole, type RingRole } from "../protocol/role.js";
+export { listRegisteredRings, type RegisteredRing } from "../rpc/ring-directory.js";
+export { ringTreeIdResolver } from "../protocol/trees.js";
 
 export {
   RingInstructionTag,
@@ -79,24 +79,24 @@ export {
   setRingPausedInstruction,
   setRingPolicyRulesInstruction,
   setRingPolicySourceInstruction,
-} from "./admin.js";
+} from "../operations/admin.js";
 export type {
   RingKind,
   RingPolicySourceOwner,
   RingPolicyTableInput,
   RingSharedSource,
-} from "./admin.js";
+} from "../operations/admin.js";
 export {
   buildRingCreatePolicyTransaction,
   buildRingSetPolicyRulesTransaction,
   buildRingSetPolicySourceTransaction,
-} from "./policy-admin.js";
+} from "../operations/policy-admin.js";
 export type {
   RingCreatePolicyTransactionParams,
   RingPolicyAdminClient,
   RingSetPolicyRulesTransactionParams,
   RingSetPolicySourceTransactionParams,
-} from "./policy-admin.js";
+} from "../operations/policy-admin.js";
 export {
   CLOCK_SYSVAR,
   RENT_SYSVAR,
@@ -112,13 +112,13 @@ export {
   upgradeInstruction,
   verifyRingProgram,
   writeBufferInstruction,
-} from "./program.js";
+} from "../protocol/program.js";
 export type {
   RingProgramData,
   RingProgramDeployClient,
   RingProgramDeployOutcome,
   RingProgramDeployParams,
-} from "./program.js";
+} from "../protocol/program.js";
 
 export {
   AUTHORITY_WRITABLE_LISTS,
@@ -128,18 +128,18 @@ export {
   feeAccounts,
   listWrite,
   memberListWriteInstruction,
-} from "./records.js";
+} from "../operations/record-writes.js";
 export type {
   ListWrite,
   ProvenRecordWrite,
   RecordQueueBinding,
   RingRecordApplicationClient,
   RingRecordWriteClient,
-} from "./records.js";
-export { MemberOpeningRead } from "./member-registry.js";
-export type { EscrowedRecord } from "./member-registry.js";
-export { checkEscrowedRecipients, readMemberRecords } from "./registered-record.js";
-export type { RingRecordReadClient } from "./registered-record.js";
+} from "../operations/record-writes.js";
+export { MemberOpeningRead } from "../protocol/member-opening.js";
+export type { EscrowedRecord } from "../protocol/member-opening.js";
+export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-record.js";
+export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export {
   NF_KEY_ENC_INFO,
   NullifierKeyEscrow,
@@ -148,7 +148,7 @@ export {
   openNullifierKey,
   openRingSealedKey,
   sealNullifierKey,
-} from "./register-key.js";
+} from "../operations/register-key.js";
 export type {
   KeyEscrowAuthority,
   KeyEscrowRequest,
@@ -159,34 +159,35 @@ export type {
   RingSealedKeyClient,
   RingSealedKeyEntry,
   SealedNullifierKey,
-} from "./register-key.js";
+} from "../operations/register-key.js";
 
 export {
   PreparedRingDeposit,
   RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
   buildRingDepositTransaction,
-} from "./deposit.js";
+} from "../operations/deposit.js";
 export type {
   ProvenRingDeposit,
   RingDepositClient,
   RingDepositParams,
   RingDepositRecipient,
-} from "./deposit.js";
-export { ringDepositInstruction } from "./deposit-instruction.js";
-export { customRingDepositPayload, decryptRingDepositUtxo } from "./deposit-payload.js";
+} from "../operations/deposit.js";
+export { ringDepositInstruction } from "../protocol/deposit-instruction.js";
+export { customRingDepositPayload, decryptRingDepositUtxo } from "../protocol/deposit-payload.js";
 export {
   openRingDepositOpening,
   ringDepositContextHash,
   ringDepositPublicInputHash,
   sealRingDepositOpenings,
-} from "./deposit-audit.js";
-export type { RingDepositOpening } from "./deposit-audit.js";
+} from "../proof/deposit-audit.js";
+export type { RingDepositOpening } from "../proof/deposit-audit.js";
 
-export { ANCHOR_DECOYS, messageSignerSpendSigner, signingKeySpendSigner } from "./anonymous.js";
 export {
-  ANONYMOUS_RING_STATE_VERSION,
-  AnonymousRingState,
-} from "../transaction/wallet/anonymous-state.js";
+  ANCHOR_DECOYS,
+  messageSignerSpendSigner,
+  signingKeySpendSigner,
+} from "../operations/anonymous.js";
+export { ANONYMOUS_RING_STATE_VERSION, AnonymousRingState } from "../state/anonymous-state.js";
 export type {
   DecoyLeaf,
   IndexedSpend,
@@ -195,25 +196,25 @@ export type {
   ReceivedAnchor,
   SentFirstContact,
   SerializedAnonymousRingState,
-} from "../transaction/wallet/anonymous-state.js";
-export { issueRingAddress, ringAddressOf } from "../wallet/anonymous.js";
-export { openRingNotes, syncRingWallet } from "../wallet/ring-sync.js";
-export type { RingNotes, RingSyncClient } from "../wallet/ring-sync.js";
-export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../transaction/wallet/ring-keys.js";
-export type {
-  RingDeliveryRequest,
-  RingKeys,
-  RingRecipientKey,
-} from "../transaction/wallet/ring-keys.js";
-export { approveRingUnattended, ringIntentHash } from "../transaction/intent.js";
+} from "../state/anonymous-state.js";
+export { issueRingAddress, ringAddressOf } from "../state/anonymous.js";
+export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
+export type { RingNotes, RingSyncClient } from "../state/ring-sync.js";
+export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
+export type { RingDeliveryRequest, RingKeys, RingRecipientKey } from "../state/ring-keys.js";
+export { approveRingUnattended, ringIntentHash } from "../protocol/intent.js";
 export type {
   RingAnonymousTransferIntent,
   RingApprovalHandler,
   RingApprovalRequest,
   RingTransactionIntent,
-} from "../transaction/intent.js";
-export type { AnonymousPayment, AnonymousSpendSigner } from "./anonymous.js";
-export { AnonymousTransfer, CustomRingTransfer, DelegateTransfer } from "./rails.js";
+} from "../protocol/intent.js";
+export type { AnonymousPayment, AnonymousSpendSigner } from "../operations/anonymous.js";
+export {
+  AnonymousTransfer,
+  CustomRingTransfer,
+  DelegateTransfer,
+} from "../operations/transfer-rails.js";
 export type {
   AnonymousTransferClient,
   CustomRingTransferClient,
@@ -221,16 +222,16 @@ export type {
   DelegateOutput,
   DelegateTransferClient,
   DelegateTransferInput,
-} from "./rails.js";
-export { ProvenRingTransfer, ringTransactInstruction } from "./pipeline.js";
+} from "../operations/transfer-rails.js";
+export { ProvenRingTransfer, ringTransactInstruction } from "../operations/pipeline.js";
 export type {
   PendingFirstContact,
   RingBoundState,
   RingProvingClient,
   RingTransactAccounts,
-} from "./pipeline.js";
-export type { BoundPolicy, BoundRoot } from "./policy-proof.js";
-export type { BoundAnchor } from "./trees.js";
+} from "../operations/pipeline.js";
+export type { BoundPolicy, BoundRoot } from "../proof/policy-proof.js";
+export type { BoundAnchor } from "../protocol/trees.js";
 export {
   buildRingEntryTransaction,
   buildRingExitTransaction,
@@ -239,7 +240,7 @@ export {
   createRingExitSubmission,
   createRingTransferSubmission,
   createRingWithdrawalSubmission,
-} from "./transfer.js";
+} from "../operations/transfer.js";
 export type {
   AnonymousRingSpend,
   RingEntryTransactionParams,
@@ -248,39 +249,39 @@ export type {
   RingTransferClient,
   RingTransferTransactionParams,
   RingWithdrawalTransactionParams,
-} from "./transfer.js";
+} from "../operations/transfer.js";
 export {
   buildRingDelegateRecoveredTransaction,
   buildRingDelegateTransferTransaction,
   createRingDelegateRecoveredSubmission,
   createRingDelegateSubmission,
-} from "./delegate.js";
+} from "../operations/delegate.js";
 export type {
   RingDelegateRecoveredClient,
   RingDelegateRecoveredParams,
   RingDelegateTransferClient,
   RingDelegateTransferParams,
-} from "./delegate.js";
+} from "../operations/delegate.js";
 export {
   MAX_RING_MERGE_INPUTS,
   RING_MERGE_COMPUTE_UNIT_LIMIT,
   buildRingMergeTransaction,
   createRingMergeSubmission,
   ringMergeInstruction,
-} from "./merge.js";
-export type { RingMergeTransactionParams } from "./merge.js";
-export type { RingMergeClient } from "../client/ports.js";
+} from "../operations/merge.js";
+export type { RingMergeTransactionParams } from "../operations/merge.js";
+export type { RingMergeClient } from "../rpc/ports.js";
 export {
   RingTransactionSubmission,
   createKitRingSubmissionTransport,
   reconcileRingSubmissions,
-} from "./submission.js";
+} from "../operations/submission.js";
 export type {
   ReservationHold,
   RingSubmissionAttempt,
   RingSubmissionBuild,
   RingSubmissionResult,
-} from "./submission.js";
+} from "../operations/submission.js";
 
 export {
   KnownUtxoIndex,
@@ -292,9 +293,9 @@ export {
   knownUtxoHash,
   openedUtxo,
   recoverTransactionViewingKey,
-} from "./audit.js";
-export { inputPrefix } from "../keypair/ring-disclosure.js";
-export type { InputPrefix } from "../keypair/ring-disclosure.js";
+} from "../operations/audit.js";
+export { inputPrefix } from "../crypto/ring-disclosure.js";
+export type { InputPrefix } from "../crypto/ring-disclosure.js";
 export type {
   AuditedInput,
   AuditedInputOpening,
@@ -314,25 +315,29 @@ export type {
   RingAuditPage,
   RingAuditReader,
   UtxoOwner,
-} from "./audit.js";
-export { auditRingMerges } from "./audit-merge.js";
-export { createdRingUtxos, scanCreatedRingUtxos } from "./created.js";
-export type { CreatedRingUtxosPage } from "./created.js";
+} from "../operations/audit.js";
+export { auditRingMerges } from "../operations/audit-merge.js";
+export { createdRingUtxos, scanCreatedRingUtxos } from "../operations/created-utxos.js";
+export type { CreatedRingUtxosPage } from "../operations/created-utxos.js";
 export type {
   AuditedRingMerge,
   MergeKeys,
   RingMergeAuditPage,
   RingMergeAuditReader,
   UnresolvedRingMerge,
-} from "./audit-merge.js";
+} from "../operations/audit-merge.js";
 export {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
   ringMergeAnonymousPublicInputHash,
-} from "./merge-disclosure.js";
-export type { RingMergeDisclosure, RingMergeOpening } from "./merge-disclosure.js";
-export { recoverRingMemberNotes } from "./recover.js";
-export type { RecoveredRingNotes, RingRecoveryClient, RingRecoveryParams } from "./recover.js";
+} from "../crypto/merge-disclosure.js";
+export type { RingMergeDisclosure, RingMergeOpening } from "../crypto/merge-disclosure.js";
+export { recoverRingMemberNotes } from "../operations/recover.js";
+export type {
+  RecoveredRingNotes,
+  RingRecoveryClient,
+  RingRecoveryParams,
+} from "../operations/recover.js";
 export {
   ConfirmedDeposit,
   ORIGIN_TRANSACTION_CONFIG,
@@ -343,7 +348,7 @@ export {
   ringInvokedIn,
   ringWithdrawalsOf,
   senderOf,
-} from "./origin.js";
+} from "../protocol/origin.js";
 export type {
   ConfirmedEventKind,
   ConfirmedRingTransaction,
@@ -351,7 +356,7 @@ export type {
   OriginInstructionGroup,
   RingWithdrawal,
   TransactionOrigin,
-} from "./origin.js";
+} from "../protocol/origin.js";
 export {
   RING_AUDITED_UTXOS_LIMIT,
   RING_PAYLOAD_ERROR_KINDS,
@@ -366,7 +371,7 @@ export {
   auditorKeyRequestAttestation,
   messageSignerReader,
   ringReadAttestation,
-} from "./rpc.js";
+} from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   DecryptedOutputContext,
@@ -395,7 +400,7 @@ export type {
   SkippedReason,
   SkippedRingTransaction,
   WebAuthnSignature,
-} from "./rpc.js";
+} from "../rpc/ring-rpc.js";
 export {
   P256ReaderKey,
   checkedReaderKey,
@@ -409,6 +414,6 @@ export {
   readerKeyFromBytes,
   readerKeyToString,
   revokeReadAccessInstruction,
-} from "./reader.js";
-export type { ReadAccessRecord, ReaderKey } from "./reader.js";
-export { createPasskey, passkeyReader, type Passkey } from "./passkey.js";
+} from "../operations/reader-access.js";
+export type { ReadAccessRecord, ReaderKey } from "../operations/reader-access.js";
+export { createPasskey, passkeyReader, type Passkey } from "../crypto/passkey.js";

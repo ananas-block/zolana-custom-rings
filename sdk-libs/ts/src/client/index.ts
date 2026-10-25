@@ -1,23 +1,23 @@
-export { CustomRingClient, createCustomRingClient } from "./client.js";
-export { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "./prover/assembly.js";
-export { customRingProof } from "./prover/proof.js";
-export { CUSTOM_RING_PROOF_LENGTH } from "../interface/custom-ring-proof.js";
+export { CustomRingClient, createCustomRingClient } from "../rpc/client.js";
+export { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
+export { customRingProof } from "../rpc/prover/proof.js";
+export { CUSTOM_RING_PROOF_LENGTH } from "../protocol/custom-ring-proof.js";
 export {
   RING_KEYS,
   RING_PROVING_KEY_SHA256S,
   ringCircuitType,
   ringProvingKey,
-} from "../interface/proving-keys.js";
-export type { RingKeyCircuit } from "../interface/proving-keys.js";
-export { ANONYMOUS_MERGE_WIDTHS } from "../interface/ring-disclosure-layout.js";
+} from "../protocol/proving-keys.js";
+export type { RingKeyCircuit } from "../protocol/proving-keys.js";
+export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/ring-disclosure-layout.js";
 export {
   RING_INLINE_ASSET_SLOTS,
   RING_OUTFLOW_LIMIT_SLOTS,
   RING_RULE_SLOTS,
   RING_SOURCE_SLOTS,
   RING_STATE_PATH_LENGTH,
-} from "./prover/types.js";
-export type { PresentRecordOpening } from "./prover/types.js";
+} from "../rpc/prover/types.js";
+export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
   AnonymousAuditProofRequest,
   AnonymousMergeProofRequest,
@@ -42,8 +42,8 @@ export type {
   RegisterKeyProofRequest,
   RingProofRequest,
   RingSlotOpening,
-} from "./prover/ring.js";
-export type { RingMergeDisclosureRequest } from "../ring/merge-disclosure.js";
+} from "../rpc/prover/ring.js";
+export type { RingMergeDisclosureRequest } from "../crypto/merge-disclosure.js";
 export type {
   AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,
@@ -70,4 +70,4 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
-} from "./ports.js";
+} from "../rpc/ports.js";

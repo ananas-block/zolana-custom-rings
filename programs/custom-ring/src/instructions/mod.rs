@@ -7,9 +7,14 @@ mod deposit_audit;
 mod forward;
 mod init_spp_ring_config;
 mod insert_fee;
+#[path = "runtime/instruction_runtime.rs"]
+mod instruction_runtime;
+#[path = "accounts/loader.rs"]
 mod loader;
 mod merge_disclosure;
-mod policy_shared;
+#[path = "verification/policy_binding.rs"]
+mod policy_binding;
+#[path = "verification/public_legs.rs"]
 mod public_legs;
 mod read_access;
 mod register_key;
@@ -20,8 +25,8 @@ mod set_insert_fee;
 mod set_paused;
 mod set_policy_rules;
 mod set_policy_source;
-mod shared;
 mod transact;
+#[path = "verification/verifier.rs"]
 mod verifier;
 mod write_records;
 

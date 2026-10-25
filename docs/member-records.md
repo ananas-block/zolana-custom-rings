@@ -10,14 +10,14 @@ the registry's root floor, so a revocation applies to every later transfer. A
 policy proof opens records under a root the registry holds and reveals no
 record it opened. The records themselves are public. The account layouts, the
 queue chain and the apply statement are in
-[Member registry](../zolana/docs/spec.md#member-registry), and the constants this
+[Member registry](../program-libs/interface/src/member_registry.rs), and the constants this
 guide names are in
 [Ring Program Interface](../zolana/docs/spec.md#ring-program-interface).
 
 ## Members and lists
 
 A **member** is an owner or an asset. See
-[Member registry](../zolana/docs/spec.md#member-registry) for its value. One list
+[Member registry](../program-libs/interface/src/member_registry.rs) for its value. One list
 holds both kinds, and an owner key and a mint with equal bytes stay distinct
 members.
 

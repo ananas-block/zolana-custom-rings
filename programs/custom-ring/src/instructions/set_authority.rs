@@ -1,7 +1,7 @@
 use pinocchio::{AccountView, Address, ProgramResult};
 use zolana_account_checks::AccountIterator;
 
-use crate::instructions::{loader::load_authorized_config_mut, shared::no_data};
+use crate::instructions::{instruction_runtime::no_data, loader::load_authorized_config_mut};
 
 /// The new authority signs too, a mistyped address cannot strand the config.
 #[inline(never)]

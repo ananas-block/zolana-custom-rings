@@ -4,8 +4,8 @@ use pinocchio::{AccountView, Address, ProgramResult};
 use zolana_account_checks::AccountIterator;
 
 use crate::instructions::{
+    instruction_runtime::{no_data, parse},
     loader::load_authorized_config_mut,
-    shared::{no_data, parse},
 };
 
 #[inline(never)]

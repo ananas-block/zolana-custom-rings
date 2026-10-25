@@ -26,7 +26,7 @@ def main():
     names = {k['Circuit'].replace('-','_')+'.key' for k in catalog}
     if names != prepared['keys'].keys():
         raise SystemExit('Prepared keys differ from circuit catalog')
-    interface = ROOT/'program-libs/interface/src'
+    interface = ROOT/'program-libs/interface/src/verifying_keys'
     with tempfile.TemporaryDirectory() as temporary:
         temp = pathlib.Path(temporary)
         def export(name):

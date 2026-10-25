@@ -4,8 +4,8 @@ use zolana_account_checks::AccountIterator;
 use zolana_interface::instruction::{encode_instruction, tag, UpdateRingConfigData};
 
 use crate::instructions::{
+    instruction_runtime::{parse, RingAuth},
     loader::{load_authorized_config, validate_spp_program},
-    shared::{parse, RingAuth},
 };
 
 #[inline(never)]

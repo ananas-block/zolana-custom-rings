@@ -10,7 +10,7 @@ import {
   recordBit,
   type RuleTable,
 } from "../../src/ring/advanced.js";
-import { customRingDepositPayload } from "../../src/ring/deposit-payload.js";
+import { customRingDepositPayload } from "../../src/protocol/deposit-payload.js";
 import {
   AuthorityListWrite,
   RingInstructionTag,
@@ -34,9 +34,9 @@ import {
   waitForAudited,
   type ReadableRing,
 } from "./ring-live-helpers.js";
-import { AnonymousRingState } from "../../src/transaction/wallet/anonymous-state.js";
-import { LocalRingKeys, ringWalletKeys } from "../../src/transaction/wallet/ring-keys.js";
-import { issueRingAddress } from "../../src/wallet/anonymous.js";
+import { AnonymousRingState } from "../../src/state/anonymous-state.js";
+import { LocalRingKeys, ringWalletKeys } from "../../src/state/ring-keys.js";
+import { issueRingAddress } from "../../src/state/anonymous.js";
 
 const DEPOSIT = 1_000_000_000n;
 const PAYMENT = 250_000_000n;

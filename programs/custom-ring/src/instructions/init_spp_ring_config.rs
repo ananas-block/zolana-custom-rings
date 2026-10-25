@@ -3,8 +3,8 @@ use zolana_account_checks::AccountIterator;
 use zolana_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 
 use crate::instructions::{
+    instruction_runtime::{no_data, RingAuth},
     loader::{load_authorized_config, load_registry, validate_spp_program},
-    shared::{no_data, RingAuth},
 };
 
 /// Creates SPP's `RingConfig` at `ring_auth`, the one point where SPP checks the ring's identity.

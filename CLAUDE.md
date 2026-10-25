@@ -10,9 +10,18 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   into it, so a zolana change and its ring change build together locally. Land
   the zolana side first, then move the pin with `just zolana-bump <commit>`.
 - The layout mirrors zolana: `programs/custom-ring`, `program-libs/{interface,
-  policy,member-registry}`, `sdk-libs/{client,indexer,sdk,transaction,ts}`,
+  policy,member-registry}`, `sdk-libs/{client,indexer,keys,sdk,secret-file,
+  transaction,ts}`,
   `program-tests/custom-ring`, `services/{ring-indexer,ring-rpc}`, `cli`, `xtask`.
-- The ring verifying keys are committed in `program-libs/interface/src`, and
+- Large package implementations group by technical layer: protocol or codec,
+  crypto or proof, RPC, state or storage, operations, and CLI UI. Keep a small
+  package flat when each source file already has one clear purpose. Rust crate
+  roots and TypeScript package entrypoints keep the public paths stable.
+- Name a module for the work it owns, such as `output-rail`, `transfer-rails`,
+  `ring-directory`, or `known_utxo_index`, rather than a broad noun that also
+  describes another module. Integration cases live in behavior-named test
+  modules; shared fixtures stay in one parent or helper module.
+- The ring verifying keys are committed in `program-libs/interface/src/verifying_keys`, and
   `just check-custom-ring-keys` diffs them against the ring prover's export of
   the keys `prover/ring/proving-keys.lock` pins.
 - The Go module `prover/` holds the ring circuits in `prover/circuits` and

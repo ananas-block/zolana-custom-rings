@@ -10,8 +10,8 @@ that each payment's tag derives from its recipient's inbox stream or from a
 first contact to that recipient.
 
 The byte layouts and derivations this guide names are in
-[Ring Address](../zolana/docs/spec.md#ring-address),
-[Ring outputs](../zolana/docs/spec.md#ring-outputs) and the
+[Ring Address](../sdk-libs/keys/src/ring_address.rs),
+[Ring outputs](../program-libs/interface/src/anonymous_output.rs) and the
 [Ring Program Interface](../zolana/docs/spec.md#ring-program-interface).
 
 ## Roles
@@ -60,7 +60,7 @@ the ring hides.
 
 A **ring address** names one recipient inside one ring. Its viewing key is the
 wallet's **address key** for that ring and index. See
-[Ring Address](../zolana/docs/spec.md#ring-address). Anyone who holds the address
+[Ring Address](../sdk-libs/keys/src/ring_address.rs). Anyone who holds the address
 derives its inbox tags, so a wallet gives each sender its own address and
 never publishes one. Two addresses of one wallet share the signing and nullifier
 keys, so anyone who compares them sees one recipient.
@@ -118,7 +118,7 @@ confirms, the sender records it as the address's newest first contact.
 A pair-tagged slot proves its first contact under a root the program reads from
 the root history of an SPP state tree. Both SDKs fetch the first contact's path
 in one request beside the paths of its decoys. The decoys are outputs of the
-same ring and tree in the [anonymous form](../zolana/docs/spec.md#ring-outputs)
+same ring and tree in the [anonymous form](../program-libs/interface/src/anonymous_output.rs)
 that the wallet's scans saw and pinned under those rules. Every read names the
 same leaves in the same order and does not mark the first contact.
 
@@ -175,7 +175,7 @@ form, a tag and a body. An exit is a default-ring output under its owner's tag.
 
 An anonymous ring settles a member transfer on SPP's `AnonymousRingEddsa`
 rail. The hidden owner signs the
-[ring spend message](../zolana/docs/spec.md#ring-spend-message). The circuit
+[ring spend message](../program-libs/interface/src/statement.rs). The circuit
 verifies the signature and checks that the ring program id the owner signs is
 the transfer's ring.
 
@@ -293,7 +293,7 @@ viewing secret never leaves the key holder.
 ## Limits
 
 Owners are Ed25519 keys. A ring output carries no data. An anonymous transfer
-carries no SPP [address slot](../zolana/docs/spec.md#input-slots), because its audit
+carries no SPP address slot, because its audit
 proof rebuilds `private_tx_hash` with an empty address chain. The Rust SDK
 refuses such a slot before signing. The anonymous rail serves fewer shapes than
 the confidential rail, and a transfer that spends a default-ring note fewer

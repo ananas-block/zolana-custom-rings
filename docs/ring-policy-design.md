@@ -22,7 +22,7 @@ curator bans Mr. Evil. Mr. Crazy transfers.
 ## The member record
 
 A **member** is the field element a UTXO opening carries for an owner or an
-asset, defined in [Member registry](../zolana/docs/spec.md#member-registry). One member space
+asset, defined in [Member registry](../program-libs/interface/src/member_registry.rs). One member space
 therefore serves every rule subject. One list holds owners and assets side by
 side, and an owner key and a mint with equal bytes stay distinct members.
 
@@ -32,7 +32,7 @@ records by member, and leaf 0 holds a sentinel whose link spans the field.
 Every member lies strictly inside that link, so an absent member always has a
 present low record whose link brackets it. A proof of absence opens that low
 record, and an absent member reads as on no list.
-[Member registry](../zolana/docs/spec.md#member-registry) fixes the layouts and the tree.
+[Member registry](../program-libs/interface/src/member_registry.rs) fixes the layouts and the tree.
 
 A record is never removed. A write that clears every bit leaves an empty
 bitmap in place, so removal is an ordinary write and absence keeps one
@@ -104,7 +104,7 @@ same registry, because the circuit opens one curator tree beside the ring's own
 tree.
 
 One hash binds the table and the map, over the fields
-[Policy proof](../zolana/docs/spec.md#policy-proof) lists. `POLICY_TABLE_VERSION` moves with
+[Policy proof](../program-libs/policy/src/rule_table/mod.rs) lists. `POLICY_TABLE_VERSION` moves with
 any change of the preimage. All eight source slots enter, empty slots as
 zeros. Hashing only the referenced slots would let a slot for an unused list
 change without moving the hash. The counts enter beside the rows, so a
@@ -282,7 +282,7 @@ opens the owner's escrowed key through SPP's merge proof.
 
 **Outflow limits** bound a sender's outflow per mint in one transfer. The
 policy proof bounds the outflow of each limited mint by the rule in
-[Policy proof](../zolana/docs/spec.md#policy-proof). A zero cap or threshold leaves that bound
+[Policy proof](../program-libs/policy/src/rule_table/mod.rs). A zero cap or threshold leaves that bound
 off. The ring keeps no counter, so a sender may move up to the cap in every
 transfer. The program demands the configured co-signer when the transfer sets
 the approval bit.

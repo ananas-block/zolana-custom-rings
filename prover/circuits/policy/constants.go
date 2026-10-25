@@ -1,6 +1,6 @@
 package policy
 
-// Table capacities, mirrored by program-libs/policy/src/rule_table.rs.
+// Table capacities, mirrored by program-libs/policy/src/rule_table/mod.rs.
 const (
 	NRules         = 16
 	NInlineAssets  = 8
@@ -8,7 +8,7 @@ const (
 	NOutflowLimits = 8
 )
 
-// Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table.rs.
+// Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
 const (
 	// PolicyTableVersion enters the table hash, every layout change bumps it.
 	PolicyTableVersion = 11
@@ -20,7 +20,7 @@ const (
 // Every table hash call absorbs a full rate of fields.
 const _ = uint(-(PolicyTableFields % PolicyTableRate))
 
-// Rule row values, mirrored by Subject, Mode and the guard tags of Rule::encoded in program-libs/policy/src/rule_table.rs.
+// Rule row values, mirrored by Subject, Mode and the guard tags of Rule::encoded in program-libs/policy/src/rule_table/mod.rs.
 const (
 	SubjectOutputOwner = 1
 	SubjectSender      = 2

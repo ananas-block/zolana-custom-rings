@@ -11,8 +11,8 @@ use zolana_account_checks::AccountIterator;
 
 use crate::{
     instructions::{
+        instruction_runtime::{check_system_program, parse, Pda},
         loader::UpgradeAuthorityCheck,
-        shared::{check_system_program, parse, Pda},
     },
     state::{is_x25519_key, Init},
 };
