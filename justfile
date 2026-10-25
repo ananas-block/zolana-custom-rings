@@ -168,26 +168,45 @@ fetch-custom-ring-keys:
     pinned() {
         python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["keys"][sys.argv[2]]["sha256"])' "$1" "$2"
     }
+    pinned_size() {
+        python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["keys"][sys.argv[2]]["size"])' "$1" "$2"
+    }
+    byte_count() {
+        python3 -c 'import os, sys; print(os.path.getsize(sys.argv[1]))' "$1"
+    }
     digest() {
         shasum -a 256 "$1" | awk '{ print $1 }'
     }
     fetch() {
-        lock="$1" name="$2" url="$3"
+        local lock="$1" name="$2" url="$3" source="${4:-object}"
         want="$(pinned "$lock" "$name")"
-        [[ -f "$keys_dir/$name" && "$(digest "$keys_dir/$name")" == "$want" ]] && return
+        want_size="$(pinned_size "$lock" "$name")"
+        [[ -f "$keys_dir/$name" && "$(byte_count "$keys_dir/$name")" == "$want_size" && "$(digest "$keys_dir/$name")" == "$want" ]] && return
         echo "Downloading $name" >&2
-        curl -fsSL --retry 3 --retry-max-time 60 --connect-timeout 10 --max-time 300 \
-            "$url" -o "$temp_dir/$name"
+        if [[ "$source" == release ]]; then
+            gh release download "$ring_tag" --repo "$ring_repo" --pattern "$name" --dir "$temp_dir"
+        else
+            curl -fsSL --retry 3 --retry-max-time 60 --connect-timeout 10 --max-time 300 \
+                "$url" -o "$temp_dir/$name"
+        fi
+        got_size="$(byte_count "$temp_dir/$name")"
         got="$(digest "$temp_dir/$name")"
-        if [[ "$got" != "$want" ]]; then
-            echo "$url hashes to $got, $lock pins $want" >&2
+        if [[ "$got_size" != "$want_size" || "$got" != "$want" ]]; then
+            echo "$url is $got_size bytes with SHA-256 $got; $lock pins $want_size bytes with SHA-256 $want" >&2
             exit 1
         fi
         install -m 0644 "$temp_dir/$name" "$keys_dir/$name"
     }
     release_url="${ZOLANA_RING_KEYS_URL:-$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release"])' "{{ring-keys-lock}}")}"
+    if [[ "$release_url" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)$ ]]; then
+        ring_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+        ring_tag="${BASH_REMATCH[3]}"
+        ring_source=release
+    else
+        ring_source=object
+    fi
     for name in {{custom-ring-keys}}; do
-        fetch "{{ring-keys-lock}}" "$name" "$release_url/$name"
+        fetch "{{ring-keys-lock}}" "$name" "$release_url/$name" "$ring_source"
     done
     spp_lock="zolana/prover/server/prover/provingkeys/proving-keys.lock"
     spp_url="${ZOLANA_PROVING_KEYS_URL:-https://d3gbdb0egjwcw9.cloudfront.net}/$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["prefix"])' "$spp_lock")"

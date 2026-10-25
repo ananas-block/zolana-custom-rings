@@ -20,6 +20,11 @@ Redis queue.
 3. Build and smoke-test the `ring-prover` image from this repository's
    `prover/Dockerfile`; record its immutable image digest and source commit.
    The image embeds both lockfiles and no proving-key bytes.
+4. Resolve runtime access before deployment. This repository is internal, so
+   an unauthenticated prover cannot read its release assets. Qualify either an
+   authenticated key-fetch path or an image containing verified ring keys, or
+   change repository visibility. The current no-key image is a build artifact,
+   not a deployable ring prover until that decision is implemented.
 
 ## Infra change to prepare
 

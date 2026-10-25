@@ -70,7 +70,8 @@ The build needs the Rust and Solana toolchains zolana pins, Go at the version
 `prover/go.mod` names, and `just`. `just fetch-custom-ring-keys` downloads the
 proving keys the lockfiles pin. Ring keys come from this repository's
 [key release](https://github.com/helius-labs/zolana-custom-rings/releases/tag/custom-ring-keys-policy-v2);
-Zolana's native keys retain their own source. The `test-custom-ring-*` suites start a local
+because this repository is internal, local ring-key downloads require `gh auth login`
+with read access. Zolana's native keys retain their own source. The `test-custom-ring-*` suites start a local
 validator, Photon, the ring indexer and the ring prover.
 
 ## Use

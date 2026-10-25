@@ -102,6 +102,8 @@ artifacts. Setup is randomized: regenerating keys produces different artifacts.
 The lockfile pins the public
 [policy-v2 key release](https://github.com/helius-labs/zolana-custom-rings/releases/tag/custom-ring-keys-policy-v2).
 Its files must match the prepared set in `target/circuit-policy-keys` byte for byte.
+The repository is internal; `just fetch-custom-ring-keys` uses an authenticated
+GitHub CLI session for these assets.
 Publication of every pinned artifact is required before merging or deployment.
 The installed-key CI job fails on missing keys and verifies every verifier export,
 compiled circuit, generated proof and mutated public statement.
