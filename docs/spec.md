@@ -421,30 +421,35 @@ Only `AuthorityWriteRecords` writes mint settings. One write replaces all four v
 
 ## Instructions
 
-| # | Instruction | Description | Access |
-| --- | --- | --- | --- |
-| 1 | `CreateConfig` | Creates the ring config with the auditor key and the ring kind. | Upgrade authority signs |
-| 28 | `CreateMemberRegistry` | Creates the member registry and the record queue. | Config authority signs |
-| 7 | `CreatePolicy` | Pins the first rule table and source map. | Config authority signs |
-| 12 | `SetPolicyRules` | Same as `CreatePolicy`, over an existing policy. | Config authority signs |
-| 10 | `SetPolicySource` | Points one list at the own registry or the curator. | Config authority signs |
-| 2 | `InitSppRingConfig` | Creates the SPP `RingConfig` at `ring_auth`. | Config authority signs |
-| 11 | `SetPaused` | Pauses or resumes the ring in SPP. | Config authority signs |
-| 6 | `SetAuthority` | Hands the config to a new authority. | Config authority and new authority sign |
-| 4 | `GrantReadAccess` | Creates a reader's read access record. | Config authority signs |
-| 5 | `RevokeReadAccess` | Closes a reader's read access record. | Config authority signs |
-| 27 | `SetCoSigner` | Sets the co-signer and its scope. | Config authority signs |
-| 21 | `ClearCoSigner` | Removes the co-signer. | Config authority signs |
-| 42 | `SetInsertFee` | Sets the insert fee. | Config authority signs |
-| 24 | `SetDelegate` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Upgrade authority and delegate sign |
-| 39 | `WriteRecords` | Queues a write of the signer's member lists. | Owner signs |
-| 29 | `RegisterKey` | Queues the signer's escrow key, proven sealed to the auditor. | Owner signs |
-| 41 | `ApplyRecords` | Applies the queue to the record tree. | Anyone |
-| 40 | `AuthorityWriteRecords` | Writes authority lists and mint settings and applies the queue at once. | Config authority signs |
-| 31 | `AuditedDeposit` | Forwards an SPP ring deposit with its deposit proof. | Funder signs |
-| 43 | `Transact` | Verifies a transfer's ring proofs and forwards it to SPP. | Owner signs, or payer on an anonymous ring |
-| 44 | `DelegateTransact` | Same as `Transact` on the authority rail. | Delegate signs |
-| 20 | `Merge` | Forwards an SPP ring merge with its disclosure proof. | Payer signs |
+| # | Instruction | Tag | Description | Access |
+| --- | --- | --- | --- | --- |
+| | **Setup** | | | |
+| 1 | `CreateConfig` | `1` | Creates the ring config with the auditor key and the ring kind. | Upgrade authority signs |
+| 2 | `CreateMemberRegistry` | `28` | Creates the member registry and the record queue. | Config authority signs |
+| 3 | `InitSppRingConfig` | `2` | Creates the SPP `RingConfig` at `ring_auth`. | Config authority signs |
+| | **Policy** | | | |
+| 4 | `CreatePolicy` | `7` | Pins the first rule table and source map. | Config authority signs |
+| 5 | `SetPolicyRules` | `12` | Same as `CreatePolicy`, over an existing policy. | Config authority signs |
+| 6 | `SetPolicySource` | `10` | Points one list at the own registry or the curator. | Config authority signs |
+| | **Controls** | | | |
+| 7 | `SetAuthority` | `6` | Hands the config to a new authority. | Config authority and new authority sign |
+| 8 | `SetPaused` | `11` | Pauses or resumes the ring in SPP. | Config authority signs |
+| 9 | `GrantReadAccess` | `4` | Creates a reader's read access record. | Config authority signs |
+| 10 | `RevokeReadAccess` | `5` | Closes a reader's read access record. | Config authority signs |
+| 11 | `SetCoSigner` | `27` | Sets the co-signer and its scope. | Config authority signs |
+| 12 | `ClearCoSigner` | `21` | Removes the co-signer. | Config authority signs |
+| 13 | `SetInsertFee` | `42` | Sets the insert fee. | Config authority signs |
+| 14 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Upgrade authority and delegate sign |
+| | **Records** | | | |
+| 15 | `WriteRecords` | `39` | Queues a write of the signer's member lists. | Owner signs |
+| 16 | `RegisterKey` | `29` | Queues the signer's escrow key, proven sealed to the auditor. | Owner signs |
+| 17 | `ApplyRecords` | `41` | Applies the queue to the record tree. | Anyone |
+| 18 | `AuthorityWriteRecords` | `40` | Writes authority lists and mint settings and applies the queue at once. | Config authority signs |
+| | **Money movement** | | | |
+| 19 | `AuditedDeposit` | `31` | Forwards an SPP ring deposit with its deposit proof. | Funder signs |
+| 20 | `Transact` | `43` | Verifies a transfer's ring proofs and forwards it to SPP. | Owner signs, or payer on an anonymous ring |
+| 21 | `DelegateTransact` | `44` | Same as `Transact` on the authority rail. | Delegate signs |
+| 22 | `Merge` | `20` | Forwards an SPP ring merge with its disclosure proof. | Payer signs |
 
 Tag `18` (SPP `RING_DEPOSIT`) fails with `DepositAuditRequired`. Tags `3` and `25` fail with `InvalidInstructionData`. Tags `8`, `9`, `22`, `23`, `26`, `30` and `32` to `38` are reserved and fail as unknown with `InvalidInstructionData` (`8100`). Clients set each instruction's compute unit limit to `ACCOUNT_UNITS`, the policy writes to `POLICY_UNITS` and every proof instruction to `PROOF_UNITS`.
 
@@ -452,9 +457,13 @@ Variable instruction data is wincode: little-endian integers, `u8` length prefix
 
 Two authority checks recur. The upgrade authority check requires the program account and its program data under Loader v3, and a nonzero upgrade authority equal to the signer, else `UnauthorizedInitializer`. An immutable program fails it. The config authority check loads the config (`ConfigNotInitialized`) and requires the signer to equal `config.authority`, else `UnauthorizedAuthority`. Account lists below name each account's role, and an account marked signer fails without its signature. The forwarding instructions pass every trailing account to SPP. `SetPolicySource` refuses extra accounts, and the other instructions ignore them.
 
-### 1. CreateConfig
+### Setup
 
-Creates the ring config with the auditor key and the ring kind. No SPP account changes.
+Create the ring and register it with SPP.
+
+#### 1. CreateConfig
+
+Tag `1`. Creates the ring config with the auditor key and the ring kind. No SPP account changes.
 
 **Accounts**
 
@@ -488,9 +497,9 @@ It writes the discriminator, `authority`, the auditor key, `bump`, `has_policy` 
 
 The program does not check that the auditor holds the key's secret. Ring RPC releases its key with a signed statement. The operator CLI checks that signature against the pinned service key, or accepts any service key under `--trust-ring-rpc` when none is pinned.
 
-### 28. CreateMemberRegistry
+#### 2. CreateMemberRegistry
 
-Creates the member registry and the record queue. It has no kind or mode check, so every ring can hold one.
+Tag `28`. Creates the member registry and the record queue. It has no kind or mode check, so every ring can hold one.
 
 **Accounts**
 
@@ -507,9 +516,36 @@ Empty.
 
 The program checks the system program, the config authority, then creates each PDA at its canonical address (`InvalidMemberRegistry`, `InvalidRecordQueue`) when it is empty (`MemberRegistryAlreadyExists`). It writes the registry as [MemberRegistry](#memberregistry) states and an empty queue.
 
-### 7. CreatePolicy
+#### 3. InitSppRingConfig
 
-Pins the first rule table and source map of a policy ring.
+Tag `2`. Creates the SPP `RingConfig` at `ring_auth`, with `ring_auth` as its authority.
+
+**Accounts**
+
+1. `payer`: signer, writable.
+2. `authority`: the config authority. Signer.
+3. `config`.
+4. `protocol_config`: the SPP protocol config.
+5. `ring_auth`: writable.
+6. `system_program`.
+7. `spp_program`.
+8. `registry`: on a policy ring only.
+
+**Instruction data**
+
+Empty.
+
+The program checks the config authority, that `spp_program` is SPP and executable (`InvalidShieldedPoolProgram`), on a policy ring that the registry loads and holds a policy (`PolicyNotSet`), and that `ring_auth` is canonical (`MissingRingAuth`). It invokes SPP `create_ring_config` signed as `ring_auth`. SPP sets `activated` from its protocol config and leaves the authority rail and `paused` off.
+
+The program does not activate the ring. Until SPP governance activates it, no note moves.
+
+### Policy
+
+Pin and change the rule table and its sources. On a policy ring `InitSppRingConfig` needs the policy first.
+
+#### 4. CreatePolicy
+
+Tag `7`. Pins the first rule table and source map of a policy ring.
 
 **Accounts**
 
@@ -545,13 +581,13 @@ It stores the table, the sources, `policy_hash`, `generation = 1` and `generatio
 
 The program does not check that the curator has a policy, serves the list, or runs the ring program. The ring trusts the curator's roots and floors fully. The operator CLI checks that a named curator is deployed, pins a policy and serves the list from its own registry.
 
-### 12. SetPolicyRules
+#### 5. SetPolicyRules
 
-Same as `CreatePolicy`, with check 2 replaced: a policy exists (`PolicyNotSet`). It replaces the table and the sources together, so every proof over the old table fails.
+Tag `12`. Same as `CreatePolicy`, with check 2 replaced: a policy exists (`PolicyNotSet`). It replaces the table and the sources together, so every proof over the old table fails.
 
-### 10. SetPolicySource
+#### 6. SetPolicySource
 
-Points one referenced list at the own registry or the curator, and stores the new hash over the stored rules.
+Tag `10`. Points one referenced list at the own registry or the curator, and stores the new hash over the stored rules.
 
 **Accounts**
 
@@ -565,32 +601,29 @@ struct SetPolicySourceIxData { list_id: u8, source: u8 }
 
 The program checks the config authority, the list id (`InvalidListId`), that `(source, curators)` is `(0, [])` or `(1, [curator])` with the curator checks of `CreatePolicy` check 5 (`InvalidSource`, `InvalidCuratorRegistry`), and that the list's slot is already set (`InvalidSource`). It refuses any other trailing account. It then stores the policy as `CreatePolicy` does, which refuses a second distinct curator.
 
-### 2. InitSppRingConfig
+### Controls
 
-Creates the SPP `RingConfig` at `ring_auth`, with `ring_auth` as its authority.
+Change who controls the ring and how.
+
+#### 7. SetAuthority
+
+Tag `6`. Hands the config to `new_authority`.
 
 **Accounts**
 
-1. `payer`: signer, writable.
-2. `authority`: the config authority. Signer.
-3. `config`.
-4. `protocol_config`: the SPP protocol config.
-5. `ring_auth`: writable.
-6. `system_program`.
-7. `spp_program`.
-8. `registry`: on a policy ring only.
+1. `authority`: the config authority. Signer.
+2. `new_authority`: signer.
+3. `config`: writable.
 
 **Instruction data**
 
 Empty.
 
-The program checks the config authority, that `spp_program` is SPP and executable (`InvalidShieldedPoolProgram`), on a policy ring that the registry loads and holds a policy (`PolicyNotSet`), and that `ring_auth` is canonical (`MissingRingAuth`). It invokes SPP `create_ring_config` signed as `ring_auth`. SPP sets `activated` from its protocol config and leaves the authority rail and `paused` off.
+The program checks the config authority and writes `authority = new_authority`. The new authority signs, so a mistyped address cannot strand the config.
 
-The program does not activate the ring. Until SPP governance activates it, no note moves.
+#### 8. SetPaused
 
-### 11. SetPaused
-
-Pauses or resumes the ring in SPP.
+Tag `11`. Pauses or resumes the ring in SPP.
 
 **Accounts**
 
@@ -609,25 +642,9 @@ The program checks the config authority, SPP (`InvalidShieldedPoolProgram`) and 
 
 A pause stops every SPP rail of the ring, so no owner can transfer, exit or withdraw until the authority resumes it. Record writes, applications, policy writes and controls still run.
 
-### 6. SetAuthority
+#### 9. GrantReadAccess
 
-Hands the config to `new_authority`.
-
-**Accounts**
-
-1. `authority`: the config authority. Signer.
-2. `new_authority`: signer.
-3. `config`: writable.
-
-**Instruction data**
-
-Empty.
-
-The program checks the config authority and writes `authority = new_authority`. The new authority signs, so a mistyped address cannot strand the config.
-
-### 4. GrantReadAccess
-
-Creates the read access record of one reader.
+Tag `4`. Creates the read access record of one reader.
 
 **Accounts**
 
@@ -647,9 +664,9 @@ The program checks the reader key (`InvalidReaderKey`), the system program, the 
 
 A grant has no scope and no expiry. Ring RPC serves the reader the ring's whole audited history.
 
-### 5. RevokeReadAccess
+#### 10. RevokeReadAccess
 
-Same as `GrantReadAccess`, with these parts replaced:
+Tag `5`. Same as `GrantReadAccess`, with these parts replaced:
 
 - Accounts: `authority` (config authority, signer), `config`, `read_access_record` (writable), `rent_recipient` (writable). No payer and no system program.
 - Checks: the config authority, the record loads, its stored reader equals the data, and `rent_recipient` is not the record (`InvalidReadAccessRecord`). The program does not check the reader key format or derive the address again.
@@ -657,9 +674,9 @@ Same as `GrantReadAccess`, with these parts replaced:
 
 Ring RPC sees the revocation at `confirmed` and does not recheck a read in progress. A revoked reader keeps every opening it read.
 
-### 27. SetCoSigner
+#### 11. SetCoSigner
 
-Sets the co-signer and its scope, and replaces any earlier ones. The withdrawal thresholds are mint settings, which `AuthorityWriteRecords` writes.
+Tag `27`. Sets the co-signer and its scope, and replaces any earlier ones. The withdrawal thresholds are mint settings, which `AuthorityWriteRecords` writes.
 
 **Accounts**
 
@@ -680,13 +697,13 @@ The program checks the scope (`InvalidCoSignerScope`), a nonzero signer (`Invali
 
 The co-signer may equal any key here. A transfer refuses a demanded co-signer that equals an owner or the delegate.
 
-### 21. ClearCoSigner
+#### 12. ClearCoSigner
 
-Same as `SetCoSigner` with empty data: it zeroes the co-signer and the scope. The mint settings keep their withdrawal thresholds. It succeeds on a ring without a co-signer.
+Tag `21`. Same as `SetCoSigner` with empty data: it zeroes the co-signer and the scope. The mint settings keep their withdrawal thresholds. It succeeds on a ring without a co-signer.
 
-### 42. SetInsertFee
+#### 13. SetInsertFee
 
-Sets `insert_fee`.
+Tag `42`. Sets `insert_fee`.
 
 **Accounts**
 
@@ -701,9 +718,9 @@ The program checks the config authority. A fee above zero and below the rent min
 
 The fee has no upper bound. A writer bounds what it pays with `max_fee`.
 
-### 24. SetDelegate
+#### 14. SetDelegate
 
-Sets the delegate and the `ConfidentialEscrow` mode on a confidential policy ring. Both are permanent for the deployed binary.
+Tag `24`. Sets the delegate and the `ConfidentialEscrow` mode on a confidential policy ring. Both are permanent for the deployed binary.
 
 **Accounts**
 
@@ -722,9 +739,13 @@ The program checks, in order, the upgrade authority, that no delegate exists (`D
 
 From this point every transfer sets the key escrow layout bit, and every deposited note and every transfer output, exits included, needs an owner whose record escrows the note's nullifier key. SPP governance must also enable the ring's authority rail before `DelegateTransact` runs.
 
-### 39. WriteRecords
+### Records
 
-Queues one write of the signer's own member lists.
+Write member records and apply them to the record tree.
+
+#### 15. WriteRecords
+
+Tag `39`. Queues one write of the signer's own member lists.
 
 **Accounts**
 
@@ -759,9 +780,9 @@ It pushes `{ member, mask, value, escrow_key: 0 }` with no mint setting at the c
 
 The program does not check the ring mode. On an anonymous ring a member write publishes the owner's Solana key as a ring participant.
 
-### 29. RegisterKey
+#### 16. RegisterKey
 
-Queues the signer's escrow key: its nullifier key and its nullifier secret sealed to the auditor.
+Tag `29`. Queues the signer's escrow key: its nullifier key and its nullifier secret sealed to the auditor.
 
 **Accounts**
 
@@ -792,9 +813,9 @@ The program refuses an anonymous ring (`AnonymousRingRefused`), applies `WriteRe
 
 The proof does not show that the member's notes use `nullifier_pk`. The first applied key is final. A wrong key makes every later escrow check of that member fail, so the member cannot receive on a `ConfidentialEscrow` ring and moves to a new signing key. The Rust SDK checks `nullifier_pk` against the member's address before it proves.
 
-### 41. ApplyRecords
+#### 17. ApplyRecords
 
-Applies every pending write to the record tree. Anyone submits it.
+Tag `41`. Applies every pending write to the record tree. Anyone submits it.
 
 **Accounts**
 
@@ -829,9 +850,9 @@ The program checks `apply_due`: `pending >= MEMBER_QUEUE_LIMIT`, or `pending > 0
 
 The proof does not check `value & !mask == 0`. The program checked it when the write was queued.
 
-### 40. AuthorityWriteRecords
+#### 18. AuthorityWriteRecords
 
-Writes up to 16 authority list changes or mint-setting replacements and applies the whole queue at once.
+Tag `40`. Writes up to 16 authority list changes or mint-setting replacements and applies the whole queue at once.
 
 **Accounts**
 
@@ -859,9 +880,13 @@ Same as `ApplyRecords`, with `apply_due` replaced. `count = 0` fails with `Inval
 
 An authority write lands in the instruction that makes it, so a block or a cleared allow binds the next transfer of the ring. Every proof built under an older own root fails with `RootBelowFloor`.
 
-### 31. AuditedDeposit
+### Money movement
 
-Forwards one SPP ring deposit of up to 8 new notes, with a proof that seals each opening to the auditor. Every deposit into a ring runs through it.
+Move notes into, inside and out of the ring.
+
+#### 19. AuditedDeposit
+
+Tag `31`. Forwards one SPP ring deposit of up to 8 new notes, with a proof that seals each opening to the auditor. Every deposit into a ring runs through it.
 
 **Accounts**
 
@@ -906,9 +931,9 @@ It verifies the proof under the key of the smallest capacity in `{1, 2, 4, 8}` a
 
 No list rule or outflow limit runs on a deposit, and the funder is never screened. The rules screen the note's owner when it sends. SPP leaves the view tag opaque, and the proof binds it only through the context hash. A recipient's wallet finds the note by its view tag.
 
-### 43. Transact
+#### 20. Transact
 
-Verifies a ring transfer's audit proof, on a policy ring its policy proof, and an optional withdrawal exemption proof, expands the compact frame into the SPP transfer, and invokes SPP signed as `ring_auth`. The ring program writes no ring account.
+Tag `43`. Verifies a ring transfer's audit proof, on a policy ring its policy proof, and an optional withdrawal exemption proof, expands the compact frame into the SPP transfer, and invokes SPP signed as `ring_auth`. The ring program writes no ring account.
 
 The mode selects the rail:
 
@@ -1050,9 +1075,9 @@ The program checks, in order:
 
 The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Packed bodies and exit payloads are not proven, so a sender can publish a `u` or a payload that does not open, and the recipient misses the note. The auditor still opens the slot from the disclosure. The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
 
-### 44. DelegateTransact
+#### 21. DelegateTransact
 
-Same as `Transact` on the SPP authority rail, signed by the delegate instead of an owner. It moves an escrowed member's notes to escrowed members of the same ring.
+Tag `44`. Same as `Transact` on the SPP authority rail, signed by the delegate instead of an owner. It moves an escrowed member's notes to escrowed members of the same ring.
 
 Rail row replaced: `Confidential` or `ConfidentialEscrow` with a delegate (`DelegateDisabled`) gives the delegate rail, `RING_AUTHORITY_TRANSACT` (21) with the `RingAuthority` circuit, shapes 2×2 and 4×4 only. An anonymous ring fails with `AnonymousRingRefused`.
 
@@ -1070,9 +1095,9 @@ Policy proof replaced: the `DelegatePolicy` key reopens the inputs. Input `0` is
 
 The SPP authority circuit keeps every input and output in the ring, and no owner signature binds the output owners. The delegate moves a member's notes to any escrowed member the rules admit.
 
-### 20. Merge
+#### 22. Merge
 
-Forwards an SPP ring merge, which joins up to 24 notes of one owner and one asset into one note, with a disclosure proof to the auditor. It succeeds on an anonymous ring only.
+Tag `20`. Forwards an SPP ring merge, which joins up to 24 notes of one owner and one asset into one note, with a disclosure proof to the auditor. It succeeds on an anonymous ring only.
 
 **Accounts**
 

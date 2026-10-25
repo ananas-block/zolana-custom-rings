@@ -14,7 +14,7 @@ Read `zolana/` paths at the submodule pin, not at the checkout.
 3. `programs/custom-ring/src/lib.rs`. Only `Transact`, `DelegateTransact`, `AuditedDeposit` and `Merge` sign a note move. The plain SPP deposit tag fails with `DepositAuditRequired`, so no deposit skips the audit.
 4. `programs/custom-ring/src/instructions/runtime/instruction_runtime.rs`. `RingAuth::check_slot` puts `ring_auth` at its one SPP index and refuses it at any other, so its signature cannot be lent to another account role.
 5. `program-libs/interface/src/instructions/transact.rs`. The frame is the compact `Transact` data. `transact_ix_data` writes the SPP data from it, with one auditor message. The SPP proof binds those bytes, and both ring statements, the audit and the policy public inputs, read the same parsed frame. All three proofs therefore bind one set of nullifiers, outputs, keys, salt and disclosure. `RingRail::of` takes the rail from the tag and the mode, never from the frame.
-6. `programs/custom-ring/src/instructions/transact/`. `processor.rs` runs the config, the rail, the parse, `accounts.rs`, `verify.rs` and then the CPI. The ring id comes from the executing program, the auditor key from the config, the epoch from `Clock`, the roots from the member registries, the anonymous first-contact root from the SPP tree, and the parties and withdrawals from the accounts. [Transact](spec.md#43-transact)
+6. `programs/custom-ring/src/instructions/transact/`. `processor.rs` runs the config, the rail, the parse, `accounts.rs`, `verify.rs` and then the CPI. The ring id comes from the executing program, the auditor key from the config, the epoch from `Clock`, the roots from the member registries, the anonymous first-contact root from the SPP tree, and the parties and withdrawals from the accounts. [Transact](spec.md#20-transact)
 7. `program-libs/interface/src/proof/statement.rs`. Each statement folds to one `HashChain4` field, the only public input. Each circuit's `statement` function in Go is its twin, so check that the element order matches. [Public inputs](spec/crypto/public-inputs.md)
 8. `programs/custom-ring/src/instructions/verification/verifier.rs`, `program-libs/interface/src/proof/key_catalog.rs`. The key follows the published shape and layout, and the layout is a statement element the circuit decodes in `prover/circuits/audit/layout.go`. `new_with_commitment` refuses a key without BSB22.
 
@@ -41,9 +41,9 @@ Read `zolana/` paths at the submodule pin, not at the checkout.
 **Key escrow, deposits and merges**
 
 20. `programs/custom-ring/src/instructions/records/register_key.rs`, `prover/circuits/registry/register_key.go`. A confidential member seals its nullifier secret to the auditor, and an anonymous ring refuses the write. In `ConfidentialEscrow` mode `escrows_keys` in `programs/custom-ring/src/instructions/transact/verify.rs` takes `key_escrow` from the mode, and the policy proof requires each output owner's record to escrow that output's nullifier key.
-21. `programs/custom-ring/src/instructions/configuration/access/set_delegate.rs`. The upgrade authority and the delegate together set `ConfidentialEscrow` mode, once, on a confidential policy ring. `DelegateTransact` refuses public legs and exits. SPP's authority rail keeps every note in the ring. [DelegateTransact](spec.md#44-delegatetransact)
-22. `programs/custom-ring/src/instructions/settlement/deposit_audit.rs`, `prover/circuits/deposit.go`. The deposit proof binds a context hash over the program id, the tree and the exact SPP data, and it seals each opening to the auditor. No rule runs on a deposit. [AuditedDeposit](spec.md#31-auditeddeposit)
-23. `programs/custom-ring/src/instructions/settlement/forward.rs`, `merge_disclosure.rs`, `prover/circuits/merge.go`. A merge verifies only on an anonymous ring and fails on every other ring. SPP keeps the owner, the asset and the value, so no rule runs. [Merge](spec.md#20-merge)
+21. `programs/custom-ring/src/instructions/configuration/access/set_delegate.rs`. The upgrade authority and the delegate together set `ConfidentialEscrow` mode, once, on a confidential policy ring. `DelegateTransact` refuses public legs and exits. SPP's authority rail keeps every note in the ring. [DelegateTransact](spec.md#21-delegatetransact)
+22. `programs/custom-ring/src/instructions/settlement/deposit_audit.rs`, `prover/circuits/deposit.go`. The deposit proof binds a context hash over the program id, the tree and the exact SPP data, and it seals each opening to the auditor. No rule runs on a deposit. [AuditedDeposit](spec.md#19-auditeddeposit)
+23. `programs/custom-ring/src/instructions/settlement/forward.rs`, `merge_disclosure.rs`, `prover/circuits/merge.go`. A merge verifies only on an anonymous ring and fails on every other ring. SPP keeps the owner, the asset and the value, so no rule runs. [Merge](spec.md#22-merge)
 
 **Trust outside the program**
 
@@ -55,7 +55,7 @@ Read `zolana/` paths at the submodule pin, not at the checkout.
 ## Key decisions
 
 - One signer. Every check a ring note has lives in the ring program binary. [Limitation](spec.md#the-upgrade-authority-can-move-every-note)
-- One frame. The program writes the SPP data, so the three proofs cannot disagree about the move. [Transact](spec.md#43-transact)
+- One frame. The program writes the SPP data, so the three proofs cannot disagree about the move. [Transact](spec.md#20-transact)
 - Chain supplies the statement. The prover chooses no bound value that the chain holds. [Properties](spec.md#properties)
 - Audit by construction. Blindings derive from the sealed secret, so the auditor opens what SPP commits. [Envelope](spec/crypto/envelope.md)
 - Validate at write, evaluate in the circuit. No transfer path reads a list bit. [Properties](spec.md#properties)

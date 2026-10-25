@@ -203,7 +203,7 @@ The circuit binds three things (`prover/circuits/policy/member.go:52`):
 2. **Rules to the ring**: the table and the source map hash to the `policy_hash` the program reads from the registry (`prover/circuits/policy/table.go:58`, `program-libs/interface/src/instructions/transact.rs:931`).
 3. **Openings to the registries**: every opening folds to `own_root` or `curator_root`, which the program reads by index (`program-libs/interface/src/instructions/transact.rs:932`, `programs/custom-ring/src/instructions/transact/accounts.rs:269`).
 
-It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:425`, `prover/circuits/policy/table.go:55`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transact/processor.rs:61`). [Transact](spec.md#43-transact)
+It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:425`, `prover/circuits/policy/table.go:55`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transact/processor.rs:61`). [Transact](spec.md#20-transact)
 
 <aside>
 
