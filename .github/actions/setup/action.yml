@@ -1,0 +1,64 @@
+name: Set up CI tools
+description: Install the pinned toolchains a job asks for, from cache when present.
+inputs:
+  rust:
+    description: Install the workspace Rust toolchain.
+    default: "false"
+  rust-cache:
+    description: Shared key of the Cargo target cache, empty for none.
+    default: ""
+  token:
+    description: Token with read access to the private cargo git dependencies.
+    default: ""
+  solana:
+    description: Install the Anza CLI at AGAVE_VERSION.
+    default: "false"
+  sbf:
+    description: Install the platform tools at SBF_TOOLS_VERSION.
+    default: "false"
+  go:
+    description: Install the Go version of the ring prover module.
+    default: "false"
+  node:
+    description: Install Node at NODE_VERSION with the npm cache.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/free-runner-disk
+    - if: inputs.token != ''
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+      run: git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+    - if: inputs.rust == 'true'
+      shell: bash
+      run: rustup show active-toolchain
+    - if: inputs.rust-cache != ''
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      with:
+        shared-key: ${{ inputs.rust-cache }}
+        save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+      with:
+        tool: just,nextest
+    - if: inputs.solana == 'true'
+      uses: ./zolana/.github/actions/install-anza
+      with:
+        version: ${{ env.AGAVE_VERSION }}
+    - if: inputs.sbf == 'true'
+      uses: ./zolana/.github/actions/install-sbf-tools
+      with:
+        version: ${{ env.SBF_TOOLS_VERSION }}
+    - if: inputs.go == 'true'
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      with:
+        go-version-file: prover/go.mod
+        cache-dependency-path: |
+          prover/go.sum
+          zolana/prover/server/go.sum
+    - if: inputs.node == 'true'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm

@@ -32,13 +32,25 @@ export PROVER_INDEXER_URL := localnet-ring-indexer-url
 # Any genesis address works, the shared ring binary serves it.
 export CUSTOM_RING_PROGRAM_ID := env_var_or_default("CUSTOM_RING_PROGRAM_ID", "9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh")
 export PROVER_BIN := justfile_directory() / "target/prover-server"
+sdk-lib-crates := "zolana-ring-client zolana-ring-indexer zolana-ring-transaction zolana-ring-rpc custom-ring-sdk custom-ring-cli custom-ring-interface zolana-ring-policy zolana-ring-member-registry"
 
 default:
     @just --list
 
 # === Build ===
 
-build-programs: zolana::build-programs build-ring-program
+build-programs: build-spp-programs build-ring-program
+
+# Only the zolana programs the ring stack deploys.
+build-spp-programs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
+    cd zolana
+    for program in user-registry shielded-pool; do
+        SBF_TOOLS_VERSION={{sbf-tools-version}} tools/build-programs.sh \
+            --manifest-path "programs/$program/Cargo.toml" -- --locked --features bpf-entrypoint
+    done
 
 build-ring-program:
     #!/usr/bin/env bash
@@ -51,12 +63,12 @@ _spp-programs:
     #!/usr/bin/env bash
     set -euo pipefail
     [[ -n "${ZOLANA_SPP_PROGRAM_SO:-}" && -n "${ZOLANA_USER_REGISTRY_SO:-}" ]] && exit 0
-    {{just_executable()}} zolana::build-programs
+    {{just_executable()}} build-spp-programs
 
 build-cli:
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
-    cargo build -p custom-ring-cli --target-dir target
+    cargo build --locked -p custom-ring-cli --target-dir target
 
 # zolana's Photon, skipped when ZOLANA_PHOTON_BIN names a build.
 build-photon:
@@ -71,10 +83,18 @@ build-ring-indexer:
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     cargo build --locked -p ring-indexer --features surfpool-fixture --target-dir target
 
-# The zolana and ring clis, the prover server, xtask, Photon and the ring indexer.
-build-localnet-tools: zolana::build-cli build-prover-server build-photon build-ring-indexer
+build-ring-rpc:
+    #!/usr/bin/env bash
+    [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
+    cargo build --locked -p zolana-ring-rpc --target-dir target
+
+build-zolana-tools: zolana::build-cli
     cargo build --manifest-path zolana/Cargo.toml -p xtask --target-dir zolana/target
-    cargo build --locked -p custom-ring-cli --target-dir target
+
+build-ring-tools: build-ring-indexer build-cli build-ring-rpc
+
+# The zolana and ring clis, the prover server, xtask, Photon, the ring indexer and the ring rpc.
+build-localnet-tools: build-zolana-tools build-prover-server build-photon build-ring-tools
 
 build-localnet-archives dir="target/nextest-archives":
     #!/usr/bin/env bash
@@ -91,28 +111,20 @@ test-program-fast: build-programs
     cargo nextest run -p custom-ring-program --tests
 
 test-sdk-libs:
-    cargo nextest run -p zolana-ring-client
-    cargo nextest run -p zolana-ring-indexer
-    cargo nextest run -p zolana-ring-transaction
-    cargo nextest run -p zolana-ring-rpc
-    cargo nextest run -p custom-ring-sdk
-    cargo nextest run -p custom-ring-cli
-    cargo nextest run -p custom-ring-interface
-    cargo nextest run -p zolana-ring-policy
-    cargo nextest run -p zolana-ring-member-registry
+    cargo nextest run {{prepend("-p ", sdk-lib-crates)}}
 
 test-ring-indexer:
     cargo nextest run -p ring-indexer
 
 # Custom-ring lifecycle on a local validator (program-tests/custom-ring/tests/ring.rs).
-test-custom-ring-validator filter="all()": fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
+test-custom-ring-validator filter="all()" *args: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
     #!/usr/bin/env bash
     set -euo pipefail
     program_ids=$(cd zolana && tools/ci/xtask.sh program-ids)
     eval "$program_ids"
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
-    bash tools/test-ring-controls.sh ring -E '{{filter}}'
+    bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")
@@ -345,7 +357,7 @@ test-ts:
     npm run check:ts
 
 # Ring TypeScript SDK flows against a fresh validator, Photon, ring indexer, ring prover and ring RPC.
-test-ts-e2e: (_test-ts-live "test:ts:e2e")
+test-ts-e2e *args: (_test-ts-live "test:ts:e2e" args)
 
 # The fresh ring controls suite on the same stack, its runner creates its own mints.
 test-ts-ring-controls: (_test-ts-live "test:ts:ring-controls")
@@ -353,7 +365,7 @@ test-ts-ring-controls: (_test-ts-live "test:ts:ring-controls")
 # One ring happy path through the ring indexer, on the ZOLANA_PHOTON_BIN, ZOLANA_SPP_PROGRAM_SO and ZOLANA_USER_REGISTRY_SO builds when set.
 test-ring-compat: (_test-ts-live "test:ts:ring-compat")
 
-_test-ts-live test-script: build-ring-program _spp-programs build-photon build-ring-indexer build-prover-server zolana::build-cli zolana::ensure-surfpool fetch-custom-ring-keys
+_test-ts-live test-script *args: build-ring-program _spp-programs build-photon build-ring-indexer build-cli build-ring-rpc build-prover-server zolana::build-cli zolana::ensure-surfpool fetch-custom-ring-keys
     #!/usr/bin/env bash
     set -euo pipefail
     # A command substitution that exits nonzero is no `set -e` trigger, so the
@@ -365,6 +377,8 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
     : "${DEFAULT_TREE_ADDRESS:?xtask did not emit DEFAULT_TREE_ADDRESS}"
     ring_program_id="{{CUSTOM_RING_PROGRAM_ID}}"
     bin="zolana/target/debug/zolana"
+    ring_cli="target/debug/zolana-ring"
+    ring_rpc="target/debug/ring-rpc"
     workdir="target/ts-sdk-e2e"
     cleanup() {
       local status=$?
@@ -482,9 +496,8 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
     forbid = "frozen"
     TOML
     # Derived mode, the suites deploy their own rings and take each auditor key from the service.
-    cargo run -q -p zolana-ring-rpc -- keygen --kind root --out "$ring_dir/root.secret"
-    cargo build -q -p zolana-ring-rpc --target-dir target
-    nohup target/debug/ring-rpc serve --port {{localnet-ring-rpc-port}} \
+    "$ring_rpc" keygen --kind root --out "$ring_dir/root.secret"
+    nohup "$ring_rpc" serve --port {{localnet-ring-rpc-port}} \
       --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
       --root-secret-file "$ring_dir/root.secret" \
       --allow-origin "$ring_origin" --webauthn-rp-id localhost \
@@ -502,14 +515,15 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
     fi
     echo " ready"
     # This recipe started the service, its key needs no pin.
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+    "$ring_cli" --config "$ring_dir/ring.toml" \
       init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc
     # Reads are grant only, the ring authority included.
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
+    "$ring_cli" --config "$ring_dir/ring.toml" \
       reader grant "$ring_authority"
     # The ring-status probe, otherwise exercised only against a hosted rpc.
-    cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" rpc-check
+    "$ring_cli" --config "$ring_dir/ring.toml" rpc-check
 
+    # The root and workspace npm runs each strip one `--`.
     ZOLANA_LOCALNET_URL="{{localnet-rpc-url}}" \
       ZOLANA_LOCALNET_RPC_PORT="{{localnet-rpc-port}}" \
       ZOLANA_INDEXER_URL="{{localnet-ring-indexer-url}}" \
@@ -526,7 +540,8 @@ _test-ts-live test-script: build-ring-program _spp-programs build-photon build-r
       RING_ORIGIN="$ring_origin" \
       RING_PROGRAM_SO="$PWD/target/deploy/custom_ring_program.so" \
       USER_REGISTRY_PROGRAM_SO="$registry_so" \
-      ZOLANA_TEST_AUTHORITY_WALLET="$PWD/$workdir/authority.json" npm run "{{test-script}}"
+      ZOLANA_TEST_AUTHORITY_WALLET="$PWD/$workdir/authority.json" \
+      npm run "{{test-script}}" {{ if args == "" { "" } else { "-- -- " + args } }}
 
 # === Formatting and linting ===
 
