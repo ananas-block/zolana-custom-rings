@@ -7,6 +7,7 @@ import { type RingApplyProofInputs, type RingRecordReader } from "../../../src/r
 import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { SYSTEM_PROGRAM } from "@heliuslabs/zolana/internal";
+import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { RingProofRequest } from "../../../src/rpc/prover/ring.js";
@@ -25,6 +26,7 @@ import { decodeRingProgramConfig } from "../../../src/protocol/codec/ring-codecs
 import {
   LIST_IDS,
   ListId,
+  memberOfAsset,
   memberOfIdentity,
   recordBit,
 } from "../../../src/protocol/membership/policy.js";
@@ -315,6 +317,22 @@ describe("member list writes", () => {
 });
 
 describe("authority list writes", () => {
+  it("sends mint settings to the indexer when requesting an application witness", async () => {
+    const vector = application(0);
+    const reader = client(await chain(vector), inputs(vector));
+    reader.getRingApplyProofInputs.mockRejectedValueOnce(new Error("stop after request"));
+    const mintPolicy = { ...EMPTY_MINT_POLICY, cap: 123n };
+    await expect(
+      new AuthorityListWrite({ ringProgramId: RING, authority: AUTHORITY })
+        .withMintPolicy(memberOfAsset(SOL_MINT), mintPolicy)
+        .prove(reader),
+    ).rejects.toMatchObject({ code: "RING_BUILD_LIST_WRITE" });
+    expect(reader.getRingApplyProofInputs.mock.calls[0]?.[0]).toEqual({
+      ringProgramId: RING,
+      authorityWrites: [{ member: memberOfAsset(SOL_MINT), mask: 0n, value: 0n, mintPolicy }],
+    });
+  });
+
   it("proves the vector's authority inserts into an empty queue", async () => {
     const vector = application(0);
     const served = inputs(vector);

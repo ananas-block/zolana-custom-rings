@@ -356,7 +356,12 @@ async function readApplication(
   const response = await input.client.getRingApplyProofInputs(
     {
       ringProgramId: input.ringProgramId,
-      authorityWrites: authority.map(({ member, mask, value }) => ({ member, mask, value })),
+      authorityWrites: authority.map(({ member, mask, value, mintPolicy }) => ({
+        member,
+        mask,
+        value,
+        ...(mintPolicy === undefined ? {} : { mintPolicy }),
+      })),
     },
     context,
   );
@@ -470,7 +475,14 @@ function sameEntry(entry: QueueEntry, expected: QueueEntry | undefined): boolean
     equalBytes(entry.member, expected.member) &&
     entry.mask === expected.mask &&
     entry.value === expected.value &&
-    equalBytes(entry.escrowKey, expected.escrowKey)
+    equalBytes(entry.escrowKey, expected.escrowKey) &&
+    (expected.mintPolicy === undefined
+      ? entry.mintPolicy === undefined
+      : entry.mintPolicy !== undefined &&
+        entry.mintPolicy.threshold === expected.mintPolicy.threshold &&
+        entry.mintPolicy.cap === expected.mintPolicy.cap &&
+        entry.mintPolicy.cosignAbove === expected.mintPolicy.cosignAbove &&
+        entry.mintPolicy.withdrawalThreshold === expected.mintPolicy.withdrawalThreshold)
   );
 }
 
