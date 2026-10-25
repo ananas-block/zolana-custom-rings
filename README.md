@@ -13,8 +13,9 @@ senders and recipients.
   proofs. Its ring instructions require the ring's `ring_auth` PDA to sign.
 - The ring program checks the ring proofs, signers and controls, then invokes
   SPP as `ring_auth`. It depends on zolana libraries, never on the SPP program.
-- The ring prover is the zolana prover built from the Go module `prover/`,
-  which holds the ring circuits.
+- The client prover uses `prover/cmd/prover`, which adds ring circuits to Zolana's
+  prover app. Zolana's native circuits and keys remain owned by Zolana. This
+  repository owns the ring circuits, their keys, and the combined client image.
 - zolana's Photon has no ring code. `services/ring-indexer` indexes the ring
   state and forwards every other JSON-RPC call to Photon.
 - `zolana/` pins zolana. A change to both lands in zolana first, then
@@ -67,8 +68,10 @@ just check-all && just test-hermetic
 
 The build needs the Rust and Solana toolchains zolana pins, Go at the version
 `prover/go.mod` names, and `just`. `just fetch-custom-ring-keys` downloads the
-proving keys the lockfiles pin. The `test-custom-ring-*` suites start a local
-validator, Photon, the ring indexer and the ring prover.
+proving keys the lockfiles pin. Ring keys come from the public
+[key release](https://github.com/helius-labs/zolana-custom-rings/releases/tag/custom-ring-keys-merge-v3).
+Zolana's native keys retain their own source. The `test-custom-ring-*` suites
+start a local validator, Photon, the ring indexer and the ring prover.
 
 ## Use
 

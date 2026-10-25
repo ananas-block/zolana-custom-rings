@@ -47,8 +47,8 @@ The zolana notes above apply here, with their paths read under `zolana/`.
 - Use `ed25519DerivationMessage(publicKey)` for browser-wallet signing. The
   signed off-chain message derives the existing identity; the bare payload does not.
 - The ring key lockfile owns artifact names, sizes and hashes. Publish its exact
-  prepared files before merging a rotation. The public Zolana key release hosts
-  these artifacts while this repository is private; downloads need no credentials.
+  prepared files before merging a rotation. This repository publishes its ring
+  key assets under bare `.key` filenames; Zolana publishes only its native keys.
 
 ## Common Commands
 

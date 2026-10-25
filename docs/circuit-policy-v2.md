@@ -100,7 +100,7 @@ the committed Rust verifiers. The lockfile and TypeScript pins identify the exac
 artifacts. Setup is randomized: regenerating keys produces different artifacts.
 
 The lockfile pins the public
-[policy-v2 key release](https://github.com/helius-labs/zolana/releases/tag/custom-ring-keys-policy-v2).
+[policy-v2 key release](https://github.com/helius-labs/zolana-custom-rings/releases/tag/custom-ring-keys-policy-v2).
 Its files must match the prepared set in `target/circuit-policy-keys` byte for byte.
 Publication of every pinned artifact is required before merging or deployment.
 The installed-key CI job fails on missing keys and verifies every verifier export,
@@ -112,7 +112,8 @@ Local rotation and verification commands, from the repository root:
 just build-prover-server
 python3 tools/prepare_ring_keys.py
 cargo build --manifest-path zolana/Cargo.toml -p xtask
-python3 tools/finalize_ring_keys.py --release https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-policy-v2
+python3 tools/finalize_ring_keys.py --release https://github.com/helius-labs/zolana-custom-rings/releases/download/custom-ring-keys-merge-v3
+python3 tools/check_ring_key_assets.py --allow-extra target/circuit-policy-keys
 cd prover
 REQUIRE_RING_KEYS=1 ZOLANA_PROVER_KEYS_DIR="$PWD/../target/circuit-policy-keys" WRITE_RING_PROOF_VECTORS=1 go test ./ring -run TestCatalogRequestsProveWithTheInstalledKeys -timeout 60m
 ```
@@ -120,7 +121,7 @@ REQUIRE_RING_KEYS=1 ZOLANA_PROVER_KEYS_DIR="$PWD/../target/circuit-policy-keys" 
 The merge keys moved on to `custom-ring-merge-v3-{8,24}` when the disclosure
 statement gained the owner's escrow record. They were prepared and finalized with
 the same commands and sit in the
-[merge-v3 key release](https://github.com/helius-labs/zolana/releases/tag/custom-ring-keys-merge-v3)
+[merge-v3 key release](https://github.com/helius-labs/zolana-custom-rings/releases/tag/custom-ring-keys-merge-v3)
 with the 93 unchanged keys.
 
 `test-vectors/proof/ring-proofs.json` contains public statements and real proofs for all

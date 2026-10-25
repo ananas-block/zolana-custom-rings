@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::config_dir;
 
-const DEFAULT_RELEASE_BASE_URL: &str = "https://github.com/helius-labs/zolana/releases/download";
+const DEFAULT_RELEASE_BASE_URL: &str =
+    "https://github.com/helius-labs/zolana-custom-rings/releases/download";
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
