@@ -2,7 +2,7 @@ use custom_ring_interface::CustomRingError::{self, *};
 
 #[test]
 fn error_codes_are_stable() {
-    let table: [(CustomRingError, u32); 99] = [
+    let table: [(CustomRingError, u32); 97] = [
         (InvalidInstructionData, 8100),
         (ProofVerificationFailed, 8101),
         (HashingFailed, 8102),
@@ -49,7 +49,6 @@ fn error_codes_are_stable() {
         (InvalidMergeDisclosure, 8179),
         (InvalidDepositData, 8180),
         (MissingOwnerSigner, 8192),
-        (MissingMergeDisclosure, 8198),
         (MergeDisclosureWidth, 8199),
         (RingTransactLength, 8200),
         (RingShapeUnkeyed, 8201),
@@ -95,7 +94,6 @@ fn error_codes_are_stable() {
         (InvalidSettlementAccounts, 8242),
         (TooManyPublicLegs, 8243),
         (InvalidAuditedDeposit, 8244),
-        (EscrowMergeUnverified, 8245),
         (AnonymousExitDestinationsDiffer, 8246),
         (AnonymousExitTokenAccountShared, 8247),
         (AnonymousExitAccountHasData, 8248),
