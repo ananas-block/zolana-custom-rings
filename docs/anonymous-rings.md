@@ -308,8 +308,8 @@ Scan cost grows with the epochs since the last scan, the issued addresses, the
 live pair streams and the wallet's own spends. Ring traffic does not add to it.
 A restore from seed reads every epoch since the ring's creation epoch.
 
-An anonymous merge spends fewer notes than a confidential one. See
-[the limits](../README.md#limits).
+A merge spends at most the notes its widest disclosure key holds, on every
+ring. See [the limits](../README.md#limits).
 
 A pairing row cannot name SOL alone, because SOL's mint is the zero address
 and a zero mint admits every asset.

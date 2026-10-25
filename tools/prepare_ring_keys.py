@@ -47,9 +47,11 @@ def main():
                     while chunk := source.read(1024 * 1024):
                         out.write(chunk)
             else:
+                # The setup command refuses any name but the key file's, it writes the final path itself.
+                temporary = path
                 with (args.keys_dir / (filename + ".log")).open("w") as log:
                     subprocess.run(
-                        [str(ROOT / "target/prover-server"), "setup-" + name, "--output", str(temporary)],
+                        [str(ROOT / "target/prover-server"), "setup-" + name, "--output", str(path)],
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         check=True,

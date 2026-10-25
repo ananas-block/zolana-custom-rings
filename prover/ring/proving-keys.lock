@@ -1,5 +1,5 @@
 {
-  "release": "https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-policy-v2",
+  "release": "https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-merge-v3",
   "keys": {
     "custom_ring_apply_records_1.key": {
       "sha256": "9fd04722000ed2315abbd04a1e4d8b9caa8ada722ed78e485a5d9db42ac2aa65",
@@ -161,14 +161,14 @@
       "size": 55825087,
       "source": "release"
     },
-    "custom_ring_merge_anonymous_v2_24.key": {
-      "sha256": "fc7707fd089d38038374385f6404d80de2b034f1f816e5d21779c58bcd90e697",
-      "size": 32215568,
+    "custom_ring_merge_v3_24.key": {
+      "sha256": "14a386a8f2b1335004ac8f663177927f32dfac8499cb119c229869c0d7c6bea5",
+      "size": 33418203,
       "source": "release"
     },
-    "custom_ring_merge_anonymous_v2_8.key": {
-      "sha256": "d235d3897ed3aef58e8d0ae06b8887b8691bed43bb962c167d9472fef4cfcc66",
-      "size": 22633255,
+    "custom_ring_merge_v3_8.key": {
+      "sha256": "f2e87a02e817fea3f9bb4dd434359da24eeff6d1f3b3a22a04195da228e411bf",
+      "size": 23894929,
       "source": "release"
     },
     "custom_ring_policy_delegate_v2_2x2_curator.key": {

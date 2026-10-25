@@ -63,9 +63,13 @@ def main():
             match = re.search(r'nbConstraints=(\d+)',log.read_text())
             if match: costs[name.removesuffix('.key')] = int(match[1])
     # Unchanged keys retain the measured counts from the preceding catalog.
-    costs.update({'custom_ring_audit_packed_2':52874,'custom_ring_audit_packed_4':63019,'custom_ring_audit_delivered_8':281902,'custom_ring_audit_delivered_16':518961,'custom_ring_apply_records_1':15492,'custom_ring_apply_records_16':232892,'custom_ring_register_key':36991})
+    pins = ROOT/'prover/ringtest/ringkey/constraints.json'
+    pinned = json.loads(pins.read_text()) if pins.exists() else {}
+    for name in sorted(names):
+        stem = name.removesuffix('.key')
+        if stem not in costs and stem in pinned: costs[stem] = pinned[stem]
     if len(costs)!=len(names): raise SystemExit('Missing constraint counts from setup logs')
-    (ROOT/'prover/ringtest/ringkey/constraints.json').write_text(json.dumps(dict(sorted(costs.items())),indent=2)+'\n')
+    pins.write_text(json.dumps(dict(sorted(costs.items())),indent=2)+'\n')
     print(f'Exported and pinned {len(names)} keys. Release publication is still required.')
 
 if __name__ == '__main__': main()

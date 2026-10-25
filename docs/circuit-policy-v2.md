@@ -117,6 +117,12 @@ cd prover
 REQUIRE_RING_KEYS=1 ZOLANA_PROVER_KEYS_DIR="$PWD/../target/circuit-policy-keys" WRITE_RING_PROOF_VECTORS=1 go test ./ring -run TestCatalogRequestsProveWithTheInstalledKeys -timeout 60m
 ```
 
+The merge keys moved on to `custom-ring-merge-v3-{8,24}` when the disclosure
+statement gained the owner's escrow record. They were prepared and finalized with
+the same commands and sit in the
+[merge-v3 key release](https://github.com/helius-labs/zolana/releases/tag/custom-ring-keys-merge-v3)
+with the 93 unchanged keys.
+
 `test-vectors/proof/ring-proofs.json` contains public statements and real proofs for all
 95 keys. The Rust SDK verifies them with the same Solana verifier and committed
 keys used by the program, including rejection under a changed statement.

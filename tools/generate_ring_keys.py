@@ -19,7 +19,7 @@ def variant(k):
             f'MemberPolicy {{ outputs: {o}, withdrawals: {w}, own_only: {own} }}',
             f'DelegatePolicy {{ inputs: {i}, outputs: {o}, own_only: {own} }}',
             f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
-            f'AnonymousMerge {{ width: {i} }}'][k['Family']]
+            f'Merge {{ width: {i} }}'][k['Family']]
 
 def main():
     parser = argparse.ArgumentParser()
