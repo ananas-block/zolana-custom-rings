@@ -76,7 +76,7 @@ export const RING_ERROR_CODES = [
   "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
   "RING_ANONYMOUS_SLOT_INVALID",
   "RING_SCAN_FRONTIER_MISSING",
-  "RING_ANONYMOUS_MERGE_TOO_WIDE",
+  "RING_MERGE_TOO_WIDE",
   "RING_ANONYMOUS_EXIT_LINKS_OWNER",
   "RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED",
   "RING_ANONYMOUS_EXIT_ACCOUNT_HAS_DATA",
@@ -126,7 +126,6 @@ export const RING_ERROR_CODES = [
   "RING_TOO_MANY_ISSUED_ADDRESSES",
   "RING_ANONYMOUS_EXIT_TOKEN_OWNER_MISMATCH",
   "RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER",
-  "RING_ESCROW_MERGE_UNVERIFIED",
   "RING_ANONYMOUS_PROVER_MISSING",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
@@ -182,7 +181,6 @@ export const RingProgramError = Object.freeze({
   invalidMergeDisclosure: 8179,
   invalidDepositData: 8180,
   missingOwnerSigner: 8192,
-  missingMergeDisclosure: 8198,
   mergeDisclosureWidth: 8199,
   ringTransactLength: 8200,
   ringShapeUnkeyed: 8201,
@@ -228,7 +226,6 @@ export const RingProgramError = Object.freeze({
   invalidSettlementAccounts: 8242,
   tooManyPublicLegs: 8243,
   invalidAuditedDeposit: 8244,
-  escrowMergeUnverified: 8245,
   anonymousExitDestinationsDiffer: 8246,
   anonymousExitTokenAccountShared: 8247,
   anonymousExitAccountHasData: 8248,

@@ -7,7 +7,7 @@ import {
   ANONYMOUS_AUDIT_CLASSES,
   ANONYMOUS_ENTRY_CLASS,
   ANONYMOUS_ENTRY_OUTPUTS,
-  ANONYMOUS_MERGE_WIDTHS,
+  MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
   PACKED_AUDIT_CAPACITIES,
 } from "../codec/ring-disclosure-layout.js";
@@ -27,7 +27,7 @@ export type RingKeyCircuit =
   | Readonly<{ family: "applyRecords"; writes: number }>
   | Readonly<{ family: "registerKey" }>
   | Readonly<{ family: "deposit"; capacity: number }>
-  | Readonly<{ family: "anonymousMerge"; width: number }>;
+  | Readonly<{ family: "merge"; width: number }>;
 
 /** Rust `RING_KEYS`, every ring key in its order, `name` the circuit type the prover serves. */
 export const RING_KEYS: readonly Readonly<{
@@ -91,9 +91,8 @@ export const RING_KEYS: readonly Readonly<{
       ...[1, 2, 4, 8].map(
         (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
       ),
-      ...ANONYMOUS_MERGE_WIDTHS.map(
-        (width) =>
-          [{ family: "anonymousMerge", width }, `custom-ring-merge-anonymous-v2-${width}`] as const,
+      ...MERGE_WIDTHS.map(
+        (width) => [{ family: "merge", width }, `custom-ring-merge-v3-${width}`] as const,
       ),
     ] as const
   ).map(([circuit, name]) =>
@@ -153,7 +152,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
       );
     case "applyRecords":
       return right.family === left.family && right.writes === left.writes;
-    case "anonymousMerge":
+    case "merge":
       return right.family === left.family && right.width === left.width;
     case "registerKey":
       return right.family === left.family;

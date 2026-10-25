@@ -256,10 +256,10 @@ export interface DepositProofRequest {
   readonly memberRegistryRoot: Bytes32;
 }
 
-/** Go `MergeAnonymousParams`. */
-export interface AnonymousMergeProofRequest {
+/** Go `MergeParams`, `member` the owner's escrow record under key escrow alone. */
+export interface MergeProofRequest {
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly kind: "anonymousMerge";
+  readonly kind: "merge";
   readonly publicInputHash: Bytes32;
   readonly privateTxHash: Bytes32;
   readonly outputUtxoHash: Bytes32;
@@ -276,6 +276,11 @@ export interface AnonymousMergeProofRequest {
   readonly inputs: readonly MergeInputOpening[];
   readonly outputTreeId: Bytes32;
   readonly outputRingDataHash: Bytes32;
+  readonly keyEscrow: boolean;
+  readonly memberRegistryRoot: Bytes32;
+  /** `hashBytes` of the RegisterKey ciphertext the record escrows beside the nullifier key. */
+  readonly ctHash: Bytes32;
+  readonly member?: PresentRecordOpening;
 }
 
 export type RingProofRequest =
@@ -287,7 +292,7 @@ export type RingProofRequest =
   | ApplyRecordsProofRequest
   | RegisterKeyProofRequest
   | DepositProofRequest
-  | AnonymousMergeProofRequest;
+  | MergeProofRequest;
 
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
@@ -322,8 +327,8 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
       return { family: "registerKey" };
     case "deposit":
       return { family: "deposit", capacity: depositCapacity(request.count) };
-    case "anonymousMerge":
-      return { family: "anonymousMerge", width: listLength(request.inputs) };
+    case "merge":
+      return { family: "merge", width: listLength(request.inputs) };
     default:
       throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   }
@@ -449,7 +454,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         keyEscrow: flag(request.keyEscrow),
         memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
       };
-    case "anonymousMerge":
+    case "merge":
       return {
         ...head,
         partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
@@ -467,6 +472,10 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         inputs: request.inputs.map((input, i) => mergeInputJson(input, `inputs[${i}]`)),
         outputTreeId: field(request.outputTreeId, "outputTreeId"),
         outputRingDataHash: field(request.outputRingDataHash, "outputRingDataHash"),
+        keyEscrow: flag(request.keyEscrow),
+        memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
+        ctHash: field(request.ctHash, "ctHash"),
+        member: request.member === undefined ? null : recordJson(request.member, "member"),
       };
   }
 }

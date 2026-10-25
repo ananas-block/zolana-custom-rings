@@ -66,15 +66,17 @@ import {
 import { checkSignersHideOwner } from "./anonymous.js";
 import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
 import { TRANSFER_DEMAND, checkRingCoSigner } from "../../proof/cosign.js";
-import { RingError, RingProgramError, wrapRingError } from "../../protocol/error.js";
+import { RingError, wrapRingError } from "../../protocol/error.js";
 import {
-  checkAnonymousMergeWidth,
+  checkMergeWidth,
   emptyRingMergeDisclosure,
   ringMergeDisclosureRequest,
   wipeRingMergeDisclosureRequest,
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
+  type RingMergeEscrow,
 } from "../../crypto/audit/merge-disclosure.js";
+import { readRegisteredRecord } from "../../rpc/registered-record.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -85,8 +87,8 @@ import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../work
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
 
-/** Rust `MAX_MERGE_INPUTS`. */
-export const MAX_RING_MERGE_INPUTS = 50;
+/** Rust `MAX_RING_MERGE_INPUTS`, the widest merge whose disclosure fits one v1 transaction. */
+export const MAX_RING_MERGE_INPUTS = 24;
 /** Rust `compute_unit_limit(Merge)`. */
 export const RING_MERGE_COMPUTE_UNIT_LIMIT = 1_400_000;
 /** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b` in the SPP merge body, Rust `MERGE_B_OFFSET`. */
@@ -96,7 +98,7 @@ export interface RingMergeTransactionParams {
   readonly client: RingMergeClient & ProofDataSourceContext;
   readonly ringProgramId: Address;
   readonly wallet: Wallet;
-  /** An anonymous ring's disclosure proof reaches the nullifier secret only through `proveRingWithSecret`. */
+  /** The disclosure proof reaches the nullifier secret only through `proveRingWithSecret`. */
   readonly keys: WalletKeys & Partial<RingSecretProver>;
   readonly feePayer: Address;
   readonly asset?: Address;
@@ -131,7 +133,7 @@ export function createRingMergeSubmission(
 }
 
 /**
- * `MERGE ‖ registry_root_index ‖ output_ring_data_hash ‖ disclosure? ‖ body` with the body's
+ * `MERGE ‖ registry_root_index ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
  * `proof.b` compressed, the accounts `[config, registry?, co_signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
@@ -142,18 +144,18 @@ export async function ringMergeInstruction(
     payer: SignerAccount;
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
+    disclosure: RingMergeDisclosure;
+    /** The own root a registry-mode ring binds, the registry account follows the config with it. */
+    registryRootIndex?: number;
     /** The co-signer the config demands for transfers. */
     cosigner?: SignerAccount;
-  }> &
-    (
-      | Readonly<{ registryRootIndex: number; disclosure?: undefined }>
-      /** An anonymous ring reads no registry, its disclosure proves the owner instead. */
-      | Readonly<{ disclosure: RingMergeDisclosure; registryRootIndex?: undefined }>
-    ),
+  }>,
 ): Promise<Instruction> {
   const [config, registry, auth, nullifiers] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
-    input.disclosure === undefined ? ringMemberRegistryAddress(input.ringProgramId) : undefined,
+    input.registryRootIndex === undefined
+      ? undefined
+      : ringMemberRegistryAddress(input.ringProgramId),
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
   ]);
@@ -199,7 +201,6 @@ async function buildRingMerge(
       fetchRingProgramConfig(params.client, params.ringProgramId, context),
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
-    if (config.mode !== "anonymous") return escrowMerge(params.ringProgramId);
     const cosigner = checkRingCoSigner({
       ringProgramId: params.ringProgramId,
       configured: config.coSigner,
@@ -208,10 +209,11 @@ async function buildRingMerge(
       approvalRequired: false,
     });
     const owner = params.keys.address();
-    checkSignersHideOwner(owner.signingPublicKey.ed25519(), [
-      params.feePayer,
-      cosigner === undefined ? undefined : signerAddress(cosigner),
-    ]);
+    if (config.mode === "anonymous")
+      checkSignersHideOwner(owner.signingPublicKey.ed25519(), [
+        params.feePayer,
+        cosigner === undefined ? undefined : signerAddress(cosigner),
+      ]);
     const asset = params.asset ?? SOL_MINT;
     const reserved = reservedUtxoKeys(params.wallet);
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
@@ -236,7 +238,7 @@ async function buildRingMerge(
           },
         },
       }).entries;
-    checkAnonymousMergeWidth(mergePaddedInputCount(entries.length) ?? entries.length);
+    checkMergeWidth(mergePaddedInputCount(entries.length) ?? entries.length);
     retry.entries = entries;
     retry.reservation ??= reserveEntries(params.wallet, entries, retry.lifetime);
     const inputs = entries.map((entry) => ringProofInput(entry, owner, params.client));
@@ -251,6 +253,19 @@ async function buildRingMerge(
       context,
     );
     const expectedHash = prepared.outputHash();
+    // A registry-mode merge proves the owner's escrow record under the registry's newest root.
+    const escrow =
+      config.mode === "registry"
+        ? await readRegisteredRecord(
+            {
+              client: params.client,
+              ringProgramId: params.ringProgramId,
+              member: owner.signingPublicKey.ownerProofInputHash(),
+              escrowed: prepared.nullifierPublicKey,
+            },
+            context,
+          )
+        : undefined;
     const compile = async (
       data: MergeTransactInstructionData,
       lifetime: LatestBlockhash,
@@ -266,9 +281,10 @@ async function buildRingMerge(
             outputTree: outputTree.tree,
             payer: params.feePayer,
             data,
-            // An anonymous ring merge output carries no ring data, Rust `AnonymousRingDataNotZero`.
+            // A merge output carries no ring data, an anonymous one must not, Rust `AnonymousRingDataNotZero`.
             outputRingDataHash: ZERO_32,
             disclosure,
+            ...(escrow === undefined ? {} : { registryRootIndex: escrow.index }),
             ...(cosigner === undefined ? {} : { cosigner }),
           }),
         ],
@@ -319,6 +335,7 @@ async function buildRingMerge(
         prepared,
         slots: proofInputs.inputs.payload,
         spp: data,
+        ...(escrow === undefined ? {} : { escrow }),
       },
       context,
     );
@@ -328,19 +345,15 @@ async function buildRingMerge(
       lastValidBlockHeight: lifetime.lastValidBlockHeight,
       intentHash: planned,
       ringInstructionIndex: 0,
-      roots: [],
+      roots:
+        escrow === undefined
+          ? []
+          : [{ ringProgramId: params.ringProgramId, rootIndex: escrow.index, root: escrow.root }],
     };
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError("RING_BUILD_MERGE", cause);
   }
-}
-
-/** The program refuses an escrow-mode merge without a ring merge proof, Rust `verify_escrow_merge`. */
-function escrowMerge(ringProgramId: Address): never {
-  throw new RingError("RING_ESCROW_MERGE_UNVERIFIED", {
-    details: { ringProgramId, programError: RingProgramError.escrowMergeUnverified },
-  });
 }
 
 /** Only the key holder adds the nullifier secret. */
@@ -353,6 +366,7 @@ async function proveMergeDisclosure(
     prepared: PreparedMerge;
     slots: PreparedMergeInputs;
     spp: MergeTransactInstructionData;
+    escrow?: RingMergeEscrow;
   }>,
   context: RequestContext | undefined,
 ): Promise<RingMergeDisclosure> {
