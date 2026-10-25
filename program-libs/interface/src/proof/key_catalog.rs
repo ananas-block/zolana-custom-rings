@@ -130,10 +130,6 @@ impl RingKey {
         let stem = self.name.strip_prefix(NAME_PREFIX).unwrap_or(self.name);
         key_suffixed(&stem.replace('-', "_"), "_")
     }
-
-    pub fn asset(self, tag: &str) -> String {
-        format!("{}-{tag}.key", key_suffixed(self.name, "-"))
-    }
 }
 
 const NAME_PREFIX: &str = "custom-ring-";
@@ -175,8 +171,8 @@ mod tests {
         };
         assert_eq!(packed.file_name(), "custom_ring_audit_packed_2.key");
         assert_eq!(packed.section(), "audit_packed_2_key");
-        assert_eq!(packed.asset("v5"), "custom-ring-audit-packed-2-key-v5.key");
+        assert_eq!(packed.file_name(), "custom_ring_audit_packed_2.key");
         assert_eq!(register.section(), "register_key");
-        assert_eq!(register.asset("v5"), "custom-ring-register-key-v5.key");
+        assert_eq!(register.file_name(), "custom_ring_register_key.key");
     }
 }

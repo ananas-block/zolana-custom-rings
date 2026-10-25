@@ -1,5 +1,5 @@
 {
-  "release": "https://github.com/helius-labs/zolana/releases/download/custom-ring-keys-policy-v2",
+  "release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/custom-ring-keys-policy-v2",
   "keys": {
     "custom_ring_apply_records_1.key": {
       "sha256": "9fd04722000ed2315abbd04a1e4d8b9caa8ada722ed78e485a5d9db42ac2aa65",

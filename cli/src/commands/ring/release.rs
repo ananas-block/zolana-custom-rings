@@ -174,11 +174,11 @@ mod tests {
         let mut lock: serde_json::Value = serde_json::from_str(FULL_LOCK).expect("json");
         for key in RING_KEYS {
             lock[key.section()] =
-                serde_json::json!({"asset": key.asset("v1"), "size": 1, "sha256": "x"});
+                serde_json::json!({"asset": key.file_name(), "size": 1, "sha256": "x"});
         }
         let release = RingRelease::parse(&lock.to_string()).expect("parses");
         for key in RING_KEYS {
-            assert_eq!(release.key(key).expect("served").name, key.asset("v1"));
+            assert_eq!(release.key(key).expect("served").name, key.file_name());
         }
         let partial = RingRelease::parse(FULL_LOCK).expect("parses");
         assert_eq!(
