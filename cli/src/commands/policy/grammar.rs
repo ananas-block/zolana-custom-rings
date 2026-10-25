@@ -650,12 +650,25 @@ mod tests {
 
     #[test]
     fn twenty_mints_compile_into_records() {
-        let mints: Vec<_> = (1..=20).map(|i| Address::new_from_array([i;32]).to_string()).collect();
-        let outflow = mints.iter().map(|mint| format!(r#"{{asset = "{mint}", cap = 1000, cosign_above = 500}}"#)).collect::<Vec<_>>().join(",");
-        let thresholds = mints.iter().map(|mint| format!(r#"{{asset = "{mint}", above = 100}}"#)).collect::<Vec<_>>().join(",");
+        let mints: Vec<_> = (1..=20)
+            .map(|i| Address::new_from_array([i; 32]).to_string())
+            .collect();
+        let outflow = mints
+            .iter()
+            .map(|mint| format!(r#"{{asset = "{mint}", cap = 1000, cosign_above = 500}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let thresholds = mints
+            .iter()
+            .map(|mint| format!(r#"{{asset = "{mint}", above = 100}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
         let policy = compiled(&format!("limits = [{outflow}]\n[[rules]]\nsubject = \"output-owner\"\nrequire = \"allow\"\nlimits = [{thresholds}]\n")).unwrap();
-        assert_eq!(policy.mint_policies.len(),20);
-        assert!(policy.mint_policies.values().all(|p| (p.threshold,p.cap,p.cosign_above)==(100,1000,500)));
+        assert_eq!(policy.mint_policies.len(), 20);
+        assert!(policy
+            .mint_policies
+            .values()
+            .all(|p| (p.threshold, p.cap, p.cosign_above) == (100, 1000, 500)));
     }
 
     #[test]
