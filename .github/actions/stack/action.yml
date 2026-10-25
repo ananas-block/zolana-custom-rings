@@ -49,8 +49,6 @@ runs:
         path: zolana/prover/server/proving-keys
         key: proving-keys-${{ hashFiles('prover/ring/proving-keys.lock', 'zolana/prover/server/prover/provingkeys/proving-keys.lock') }}
     - shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
       run: just fetch-custom-ring-keys
     # A pull request entry would evict the main entries.
     - if: steps.keys.outputs.cache-hit != 'true' && github.event_name != 'pull_request'

@@ -98,8 +98,6 @@ jobs:
           path: zolana/prover/server/proving-keys
           key: proving-keys-${{ hashFiles('prover/ring/proving-keys.lock', 'zolana/prover/server/prover/provingkeys/proving-keys.lock') }}
       - name: Verify every committed verifier against its pinned proving key
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: just check-custom-ring-keys
       - name: Compile, prove and verify every catalog shape with installed keys
         working-directory: prover
