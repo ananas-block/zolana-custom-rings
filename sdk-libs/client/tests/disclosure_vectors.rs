@@ -260,8 +260,8 @@ impl RailCase<'_> {
                 transaction,
                 frame,
                 mode: match self.key_escrow {
-                    true => RingMode::Registry,
-                    false => RingMode::Off,
+                    true => RingMode::ConfidentialEscrow,
+                    false => RingMode::Confidential,
                 },
                 layout,
                 outputs: audited_outputs(self.outputs, &slots),

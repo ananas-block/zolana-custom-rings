@@ -7,7 +7,7 @@ use crate::{EscrowedRecipients, MemberRecords, RegisterKey, RingError};
 fn escrowed() -> RingSettings {
     RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     }
 }
 
@@ -130,7 +130,7 @@ async fn a_recipient_without_an_escrowed_key_is_refused_before_any_proof() {
         .await,
         Err(RingError::UnregisteredOutputKey { owner }) if owner == owner_identity(&stranger)
     ));
-    let confidential = Chain::ring(RingSettings::new(RingMode::Off)).client();
+    let confidential = Chain::ring(RingSettings::new(RingMode::Confidential)).client();
     assert!(EscrowedRecipients {
         ring: ring(),
         recipients: &recipients,

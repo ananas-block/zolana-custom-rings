@@ -24,7 +24,7 @@ import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 import { RingError } from "../error.js";
 
 /** Mirrors Rust `RingMode`, set once at creation and never cleared. */
-export type RingMode = "off" | "registry" | "anonymous";
+export type RingMode = "confidential" | "confidentialEscrow" | "anonymous";
 
 /** Rust `CustomRingConfig`, the ring's governance as its config account holds it. */
 export interface RingProgramConfig {
@@ -34,7 +34,7 @@ export interface RingProgramConfig {
   /** A policy ring enforces its table, an audit-only ring proves only the audit statement. */
   readonly hasPolicy: boolean;
   readonly mode: RingMode;
-  /** `mode === "registry"`, every output nullifier key is escrowed in the registry. */
+  /** `mode === "confidentialEscrow"`, every output nullifier key is escrowed in the registry. */
   readonly keyEscrow: boolean;
   /** Lamports a record write by a signer other than the authority pays the authority. */
   readonly insertFee: bigint;
@@ -143,7 +143,7 @@ export const GRACE_SLOTS = 750n;
 /** Rust `DEFAULT_INSERT_FEE`, the lamports `CreateConfig` charges a member's record write. */
 export const DEFAULT_INSERT_FEE = 1_000_000n;
 
-const RING_MODES: readonly RingMode[] = ["off", "registry", "anonymous"];
+const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
 export const RING_PROGRAM_CONFIG_DISCRIMINATOR = 10;
 export const RING_PROGRAM_CONFIG_SIZE = 471;
 export const MEMBER_REGISTRY_DISCRIMINATOR = 11;
@@ -192,7 +192,7 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
     bump,
     hasPolicy: hasPolicy === 1,
     mode,
-    keyEscrow: mode === "registry",
+    keyEscrow: mode === "confidentialEscrow",
     insertFee,
     ...(signer === undefined
       ? {}

@@ -227,7 +227,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         auditorPublicKey: auditor.publicKey().toBytes(),
         bump: configBump,
         hasPolicy,
-        mode: options.mode ?? "off",
+        mode: options.mode ?? "confidential",
         ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner }),
         ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
       }),
@@ -453,8 +453,8 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ringProgramId,
     auditor,
     authority,
-    /** Registry mode escrows every output nullifier key. */
-    keyEscrow: options.mode === "registry",
+    /** `ConfidentialEscrow` mode escrows every output nullifier key. */
+    keyEscrow: options.mode === "confidentialEscrow",
     accounts,
     client,
     ringRequests,

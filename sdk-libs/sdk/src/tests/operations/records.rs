@@ -42,7 +42,7 @@ fn entry(byte: u8) -> QueueEntry {
 fn escrowed() -> Chain {
     Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(Registry::new(&[]), &super::pipeline_rules())
 }

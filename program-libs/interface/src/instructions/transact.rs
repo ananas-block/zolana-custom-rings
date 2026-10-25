@@ -54,7 +54,7 @@ const NO_PROOF_DATA: AnonymousRingEddsaProofData = AnonymousRingEddsaProofData {
 pub enum RingRail {
     Confidential,
     Anonymous,
-    /// `DelegateTransact`, the SPP authority rail of a policy ring in registry mode.
+    /// `DelegateTransact`, the SPP authority rail of a policy ring in `ConfidentialEscrow` mode.
     Delegate,
 }
 
@@ -72,7 +72,7 @@ impl RailSigner {
         match RingRail::of(tag, config.mode()?)? {
             RingRail::Anonymous => Ok(Self::Payer),
             RingRail::Confidential => Ok(Self::Owners),
-            // Only SetDelegate writes a delegate, together with Registry mode on a policy ring.
+            // Only SetDelegate writes a delegate, together with `ConfidentialEscrow` mode on a policy ring.
             RingRail::Delegate => config
                 .delegate()
                 .copied()
@@ -102,7 +102,7 @@ impl RingRail {
             }
             (
                 InstructionTag::Transact | InstructionTag::LegacyTransact,
-                RingMode::Off | RingMode::Registry,
+                RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Confidential),
             (
                 InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
@@ -110,7 +110,7 @@ impl RingRail {
             ) => Err(CustomRingError::AnonymousRingRefused),
             (
                 InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
-                RingMode::Off | RingMode::Registry,
+                RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Delegate),
             _ => Err(CustomRingError::InvalidInstructionData),
         }

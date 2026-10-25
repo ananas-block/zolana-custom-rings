@@ -36,7 +36,7 @@ impl EscrowedRecipients<'_> {
         self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<(), RingError> {
-        if self.ring.require_config(rpc).await?.mode != RingMode::Registry {
+        if self.ring.require_config(rpc).await?.mode != RingMode::ConfidentialEscrow {
             return Ok(());
         }
         let owners = self
