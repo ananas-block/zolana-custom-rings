@@ -113,7 +113,7 @@ async fn config(insert_fee: u64) -> CustomRingConfig {
         auditor_pubkey: *X25519Keypair::from_bytes(&[5; 32]).pubkey().as_bytes(),
         bump,
         has_policy: 1,
-        mode: RingMode::Registry as u8,
+        mode: RingMode::ConfidentialEscrow as u8,
         insert_fee: insert_fee.to_le_bytes(),
         ..bytemuck::Zeroable::zeroed()
     };

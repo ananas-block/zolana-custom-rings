@@ -314,7 +314,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .await?;
             validate_indexer_response(&response, &page, self.view_tag)?;
             // Read after the page, the root every transfer on it proves under is already on chain.
-            if config.mode == RingMode::Registry {
+            if config.mode == RingMode::ConfidentialEscrow {
                 if let Err(error) = self.refresh_escrow(&store).await {
                     log::warn!(
                         "escrow refresh of ring {} failed because {}",

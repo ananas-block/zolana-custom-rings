@@ -81,7 +81,7 @@ impl<'a> RingRecovery<'a> {
         Self {
             ring_program_id,
             auditor,
-            mode: RingMode::Off,
+            mode: RingMode::Confidential,
             page_size: RING_HISTORY_PAGE_SIZE,
             max_pages: RING_HISTORY_MAX_PAGES,
             indexer_config: None,
@@ -345,7 +345,7 @@ impl<'a> MemberRecovery<'a> {
         } = self.recovery;
         let kinds: &[ConfirmedEventKind] = match mode {
             RingMode::Anonymous => &[ConfirmedEventKind::Deposit, ConfirmedEventKind::Merge],
-            RingMode::Off | RingMode::Registry => &[ConfirmedEventKind::Deposit],
+            RingMode::Confidential | RingMode::ConfidentialEscrow => &[ConfirmedEventKind::Deposit],
         };
         let page = RingHistory {
             ring: ring_program_id,

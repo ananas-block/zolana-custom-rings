@@ -40,7 +40,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
         RingConfiguration {
             auditor_pubkey: X25519Keypair::new().pubkey(),
             authority: authority().pubkey(),
-            mode: RingMode::Off,
+            mode: RingMode::Confidential,
         },
     );
     let service = fixture.hub(source).service(None).expect("service");
@@ -226,7 +226,7 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
         RingConfiguration {
             auditor_pubkey: fixture.auditor.pubkey(),
             authority: authority().pubkey(),
-            mode: RingMode::Off,
+            mode: RingMode::Confidential,
         },
     )]);
     let hub = Hub::builder(source, GENESIS)

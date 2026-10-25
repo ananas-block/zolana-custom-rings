@@ -65,7 +65,7 @@ pub fn process_create_config_ix(
         mode: if kind.anonymous() {
             RingMode::Anonymous
         } else {
-            RingMode::Off
+            RingMode::Confidential
         } as u8,
         insert_fee: DEFAULT_INSERT_FEE.to_le_bytes(),
         created_slot: Clock::get()?.slot.to_le_bytes(),

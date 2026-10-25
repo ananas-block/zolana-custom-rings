@@ -635,17 +635,17 @@ describe("ring rails", () => {
   it("picks the rail of a ring instruction under the mode and the delegate like Rust `RingRail::new`", () => {
     const { transact, delegateTransact, merge } = RingInstructionTag;
     const delegate = encodeBase58(new Uint8Array(32).fill(7));
-    expect(ringRail(transact, { mode: "off" })).toBe("confidential");
+    expect(ringRail(transact, { mode: "confidential" })).toBe("confidential");
     expect(ringRail(transact, { mode: "anonymous" })).toBe("anonymous");
-    expect(ringRail(delegateTransact, { mode: "registry", delegate })).toBe("delegate");
+    expect(ringRail(delegateTransact, { mode: "confidentialEscrow", delegate })).toBe("delegate");
     expect(() => ringRail(delegateTransact, { mode: "anonymous", delegate })).toThrow(
       ringError("AnonymousRingRefused"),
     );
-    expect(() => ringRail(delegateTransact, { mode: "off" })).toThrow(
+    expect(() => ringRail(delegateTransact, { mode: "confidential" })).toThrow(
       ringError("DelegateDisabled"),
     );
-    expect(ringRailOf(delegateTransact, "off")).toBe("delegate");
-    expect(() => ringRailOf(merge, "off")).toThrow(ringError("InvalidInstructionData"));
+    expect(ringRailOf(delegateTransact, "confidential")).toBe("delegate");
+    expect(() => ringRailOf(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
   });
 
   it("reads the tag of an owner tag only behind sixteen zero bytes like Rust `RingTag::from_owner_tag`", () => {

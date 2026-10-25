@@ -110,7 +110,7 @@ async function ring(
           auditorPublicKey: AUDITOR.publicKey().toBytes(),
           bump: configBump,
           hasPolicy: true,
-          mode: options.mode ?? "registry",
+          mode: options.mode ?? "confidentialEscrow",
           insertFee: options.insertFee ?? 1_000_000n,
         }),
       ),

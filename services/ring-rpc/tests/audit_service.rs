@@ -895,7 +895,7 @@ impl Fixture {
                 RingConfiguration {
                     auditor_pubkey: self.auditor.pubkey(),
                     authority: authority().pubkey(),
-                    mode: RingMode::Off,
+                    mode: RingMode::Confidential,
                 },
             )]),
             chain: HashMap::new(),
@@ -1323,7 +1323,7 @@ fn escrowed_source(
     }
     .packed_with(true);
     let mut source = fixture.source().with_transactions(vec![audited.clone()]);
-    source.configs.get_mut(&RING).expect("config").mode = RingMode::Registry;
+    source.configs.get_mut(&RING).expect("config").mode = RingMode::ConfidentialEscrow;
     source.pages = HashMap::from([
         (None, paged(vec![audited], None, Some(1))),
         (Some(vec![1]), paged(Vec::new(), None, Some(1))),

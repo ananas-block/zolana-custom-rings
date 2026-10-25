@@ -571,7 +571,7 @@ describe("policy ring", () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       records: escrowed([sender, recipient]),
     });
@@ -584,7 +584,7 @@ describe("policy ring", () => {
     expect(data.policy?.curatorRootIndex).toBeUndefined();
 
     const unregistered = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       records: escrowed([sender]),
     });
@@ -598,7 +598,7 @@ describe("policy ring", () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: allowOwners(),
       records: [
         ...escrowed([sender]),
@@ -632,7 +632,7 @@ describe("delegate rail", () => {
   async function delegateRing(owners: readonly ShieldedKeypair[]) {
     const delegate = randomAddress();
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       delegate,
       records: escrowed(owners),
@@ -766,7 +766,7 @@ describe("delegate rail", () => {
     );
     await refused(
       {
-        fixture: await ringFixture({ mode: "registry", table: EMPTY_TABLE }),
+        fixture: await ringFixture({ mode: "confidentialEscrow", table: EMPTY_TABLE }),
         delegate,
         source,
         recipients: [recipient],
@@ -794,7 +794,7 @@ describe("delegate rail", () => {
     const recipient = ShieldedKeypair.generate();
     const delegate = randomAddress();
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       delegate,
       records: escrowed([source, recipient]),
@@ -820,7 +820,7 @@ describe("member records", () => {
     const [record] = escrowed([registered]);
     if (record === undefined) throw new Error("no record");
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       records: [{ ...record, lists: recordBit(ListId.allow) }],
     });
@@ -848,7 +848,7 @@ describe("member records", () => {
         recipients: recipients.map((keys) => keys.shieldedAddress()),
       });
     const escrowing = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       records: escrowed([registered]),
     });
@@ -872,7 +872,7 @@ describe("delegate move builder", () => {
     const delegate = randomAddress();
     const coSigner = randomAddress();
     const fixture = await ringFixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       table: EMPTY_TABLE,
       delegate,
       records: escrowed([source, ...recipients]),

@@ -784,13 +784,13 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
         let mut config = config();
         config.mode = mode as u8;
         config.has_policy = has_policy;
-        if mode == RingMode::Registry {
+        if mode == RingMode::ConfidentialEscrow {
             config.delegate = delegate;
         }
         config
     };
     assert_eq!(
-        RingRail::new(Transact, &ring(RingMode::Off, 0)),
+        RingRail::new(Transact, &ring(RingMode::Confidential, 0)),
         Ok(RingRail::Confidential)
     );
     assert_eq!(
@@ -798,7 +798,7 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
         Ok(RingRail::Anonymous)
     );
     assert_eq!(
-        RailSigner::new(DelegateTransact, &ring(RingMode::Registry, 1)),
+        RailSigner::new(DelegateTransact, &ring(RingMode::ConfidentialEscrow, 1)),
         Ok(RailSigner::Delegate(delegate))
     );
     assert_eq!(
@@ -806,14 +806,14 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
         Err(CustomRingError::AnonymousRingRefused)
     );
     assert_eq!(
-        RingRail::new(DelegateTransact, &ring(RingMode::Off, 1)),
+        RingRail::new(DelegateTransact, &ring(RingMode::Confidential, 1)),
         Err(CustomRingError::DelegateDisabled)
     );
     assert_eq!(
-        RingRail::new(InstructionTag::Merge, &ring(RingMode::Off, 1)),
+        RingRail::new(InstructionTag::Merge, &ring(RingMode::Confidential, 1)),
         Err(CustomRingError::InvalidInstructionData)
     );
-    let mut unknown = ring(RingMode::Off, 0);
+    let mut unknown = ring(RingMode::Confidential, 0);
     unknown.mode = RingMode::Anonymous as u8 + 1;
     assert_eq!(unknown.mode(), Err(CustomRingError::InvalidRingMode));
     assert_eq!(

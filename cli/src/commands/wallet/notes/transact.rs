@@ -200,7 +200,9 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
         RingMode::Anonymous => Recipient::Ring(Box::new(RingPaymentRequest::new(
             address::ring_address(&recipient, program, 0)?,
         ))),
-        RingMode::Off | RingMode::Registry => Recipient::Shielded(recipient.shielded_address()?),
+        RingMode::Confidential | RingMode::ConfidentialEscrow => {
+            Recipient::Shielded(recipient.shielded_address()?)
+        }
     };
     let payments = PaymentPlan::new(&[to])
         .with_amount(args.amount)
@@ -230,7 +232,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    let queued = (config.mode == RingMode::Registry)
+    let queued = (config.mode == RingMode::ConfidentialEscrow)
         .then(|| {
             KeyEnrolment {
                 funder: authority,
@@ -308,7 +310,7 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(ctx.ring.program_id())?;
-    if config.mode == RingMode::Registry {
+    if config.mode == RingMode::ConfidentialEscrow {
         payments.check_escrowed(ctx, &sender)?;
         KeyEnrolment {
             funder: ctx.funded_authority()?,
@@ -353,7 +355,7 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
         args.token_account,
         args.amount,
     )?;
-    if config.mode == RingMode::Registry {
+    if config.mode == RingMode::ConfidentialEscrow {
         KeyEnrolment {
             funder: ctx.funded_authority()?,
             members: &[&sender],
@@ -530,10 +532,10 @@ impl<'a> PaymentPlan<'a> {
                     entry: self.entry,
                 }
             }
-            RingMode::Off | RingMode::Registry if self.default_ring => {
+            RingMode::Confidential | RingMode::ConfidentialEscrow if self.default_ring => {
                 bail!("`--default-ring` pays out of an anonymous ring, ring {ring} is confidential")
             }
-            RingMode::Off | RingMode::Registry => {
+            RingMode::Confidential | RingMode::ConfidentialEscrow => {
                 match self.entry {
                     EntrySpend::Refuse => {}
                     EntrySpend::Allow => bail!(
@@ -894,7 +896,7 @@ impl Deposit<'_> {
     fn send(self, ctx: &Context) -> Result<RingDepositReceipt> {
         let state = match self.config.mode {
             RingMode::Anonymous => Some(ctx.anonymous_ring_store(self.sender, self.config).load()?),
-            RingMode::Off | RingMode::Registry => None,
+            RingMode::Confidential | RingMode::ConfidentialEscrow => None,
         };
         let recipient = match &state {
             Some(state) => DepositRecipient::Anonymous {
@@ -1512,7 +1514,7 @@ mod tests {
     fn each_recipient_must_fit_the_rings_mode() {
         let shielded = Recipient::Shielded(keypair(1).shielded_address().unwrap());
         let ring = request(2, RING);
-        for mode in [RingMode::Off, RingMode::Registry] {
+        for mode in [RingMode::Confidential, RingMode::ConfidentialEscrow] {
             assert!(PaymentPlan::new(std::slice::from_ref(&shielded))
                 .resolve(mode, RING)
                 .is_ok());
@@ -1552,11 +1554,11 @@ mod tests {
         ));
         let confidential = PaymentPlan::new(std::slice::from_ref(&shielded))
             .with_entry_spend(EntrySpend::Allow)
-            .resolve(RingMode::Off, RING);
+            .resolve(RingMode::Confidential, RING);
         assert!(refusal(confidential).contains("`--entry-spend` gates"));
         let confidential = PaymentPlan::new(&[shielded])
             .with_default_ring()
-            .resolve(RingMode::Off, RING);
+            .resolve(RingMode::Confidential, RING);
         assert!(refusal(confidential).contains("pays out of an anonymous ring"));
         let foreign = [request(2, Address::new_from_array([5; 32]))];
         let refused = PaymentPlan::new(&foreign).resolve(RingMode::Anonymous, RING);

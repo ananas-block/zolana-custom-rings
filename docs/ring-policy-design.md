@@ -275,7 +275,7 @@ on the rail, and SPP's authority circuit keeps every real UTXO inside the ring.
 A delegate therefore cannot withdraw or exit.
 
 **Key escrow** keeps every note the delegate may later move spendable by the
-delegate. `SetDelegate` moves the config to `Registry` mode, and no instruction
+delegate. `SetDelegate` moves the config to `ConfidentialEscrow` mode, and no instruction
 leaves it. The statement then binds `key_escrow = 1`. The record of every UTXO
 output's owner under `own_root` must hold an escrow key over that output's
 nullifier key. The escrow key also covers the ciphertext that seals the

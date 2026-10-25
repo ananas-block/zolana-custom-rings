@@ -515,7 +515,7 @@ export class DelegateTransfer {
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "missing" } });
     if (config.delegate !== input.delegate)
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "unauthorized" } });
-    if (config.mode !== "registry" || !config.hasPolicy)
+    if (config.mode !== "confidentialEscrow" || !config.hasPolicy)
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "escrow" } });
     // A delegate move spends one member's notes.
     const mixed = input.inputs.findIndex(

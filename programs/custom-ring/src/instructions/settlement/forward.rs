@@ -94,7 +94,7 @@ pub fn process_audited_deposit_ix(
     let mode = config.mode()?;
     // 2. Only a registry-mode ring binds its own root, its outputs escrow keys.
     let registry_root = match mode {
-        RingMode::Registry => Some(
+        RingMode::ConfidentialEscrow => Some(
             load_registry(program_id, iter.next_account("registry")?)?
                 .own_root(audited.registry_root_index)?,
         ),

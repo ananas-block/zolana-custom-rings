@@ -81,7 +81,7 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
         RingError::AnonymousPublicSignerLinksOwner
     ));
     let confidential = ring()
-        .require_config(&Chain::ring(RingSettings::new(RingMode::Off)))
+        .require_config(&Chain::ring(RingSettings::new(RingMode::Confidential)))
         .await
         .unwrap();
     assert!(prepared(&owner)
@@ -112,7 +112,7 @@ async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
     let config = ring()
         .require_config(&Chain::ring(RingSettings {
             co_signer: Some((Address::new_from_array([0x46; 32]), CoSignScope::TRANSFERS)),
-            ..RingSettings::new(RingMode::Registry)
+            ..RingSettings::new(RingMode::ConfidentialEscrow)
         }))
         .await
         .unwrap();

@@ -277,7 +277,7 @@ fn bind_withdrawal_owners(
     let mode = if spp.circuit.is_anonymous() {
         RingMode::Anonymous
     } else {
-        RingMode::Off
+        RingMode::Confidential
     };
     let rail = InstructionTag::try_from(tag)
         .and_then(|tag| RingRail::of(tag, mode))

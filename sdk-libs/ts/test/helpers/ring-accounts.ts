@@ -24,7 +24,7 @@ import {
 
 export const ZERO_ADDRESS = getAddressDecoder().decode(new Uint8Array(32));
 
-const MODES: readonly RingMode[] = ["off", "registry", "anonymous"];
+const MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
 
 export function ownedAccount(owner: Address, data: Uint8Array): RpcAccount {
   return { owner, lamports: 1n, data };
@@ -78,7 +78,7 @@ export function ringProgramConfigData(
     .bytes(input.auditorPublicKey, 33, "auditorPublicKey")
     .u8(input.bump, "bump")
     .u8(input.hasPolicy ? 1 : 0, "hasPolicy")
-    .u8(MODES.indexOf(input.mode ?? "off"), "mode")
+    .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
     .u64(input.insertFee ?? 0n, "insertFee")
     .bytes(addressBytes(input.coSigner?.signer ?? ZERO_ADDRESS))
     .u8(input.coSigner?.scope ?? 0, "coSignScope");

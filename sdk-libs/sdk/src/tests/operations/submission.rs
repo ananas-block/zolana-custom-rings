@@ -8,7 +8,7 @@ use crate::tests::support::{ring, Chain, Registry, RingSettings, SLOT, TREE_ID};
 async fn a_policy_write_an_overwritten_root_or_a_passed_epoch_moves_the_proof() {
     let chain = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(Registry::new(&[]), &crate::tests::pipeline_rules());
     let pinned = ring().require_registry(&chain).await.unwrap().policy_hash;
@@ -45,7 +45,7 @@ async fn a_policy_write_an_overwritten_root_or_a_passed_epoch_moves_the_proof() 
 
 #[tokio::test]
 async fn a_fresh_proof_fixes_a_stale_root_and_an_expired_blockhash_alone() {
-    let chain = Chain::ring(RingSettings::new(RingMode::Off));
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
     let ring_failure = |error: CustomRingError| {
         TransactionError::InstructionError(0, InstructionError::Custom(error as u32))
     };

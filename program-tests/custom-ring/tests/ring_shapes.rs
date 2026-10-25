@@ -189,7 +189,7 @@ impl<'a> ColumnSetup<'a> {
         }
         let config = env.run(ring.require_config(env.client.as_async()))?;
         let escrowed = match config.mode {
-            RingMode::Registry => members
+            RingMode::ConfidentialEscrow => members
                 .into_iter()
                 .map(|member| {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
@@ -213,7 +213,7 @@ impl<'a> ColumnSetup<'a> {
                     ))
                 })
                 .collect::<Result<_>>()?,
-            RingMode::Off | RingMode::Anonymous => HashMap::new(),
+            RingMode::Confidential | RingMode::Anonymous => HashMap::new(),
         };
         Ok(ShapeRing {
             env,

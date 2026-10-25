@@ -1366,7 +1366,7 @@ async fn only_the_configured_delegate_moves_utxos_on_an_escrowed_policy_ring() {
     let escrowed = RingSettings {
         has_policy: true,
         delegate: Some(delegate),
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     };
     let stage = |settings: RingSettings, signer: Address, key: &ShieldedKeypair, inputs| {
         stage_delegate(DelegateCase {
@@ -1412,7 +1412,7 @@ async fn only_the_configured_delegate_moves_utxos_on_an_escrowed_policy_ring() {
             ..escrowed
         },
         RingSettings {
-            mode: RingMode::Off,
+            mode: RingMode::Confidential,
             ..escrowed
         },
     ] {
@@ -1482,7 +1482,7 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
     let chain = Chain::ring(RingSettings {
         has_policy: true,
         delegate: Some(delegate),
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     });
     let config = ring().require_config(&chain).await.unwrap();
     let automatic = transfer();
@@ -1547,7 +1547,7 @@ fn move_chain(members: [&ShieldedKeypair; 2], delegate: Address) -> Chain {
     Chain::ring(RingSettings {
         has_policy: true,
         delegate: Some(delegate),
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_tree(1)
     .with_registry(
@@ -1845,7 +1845,7 @@ async fn an_approval_its_owner_would_co_sign_is_refused_before_proving() {
     let settings = RingSettings {
         has_policy: true,
         co_signer: Some((owner, custom_ring_interface::CoSignScope::DEPOSITS)),
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     };
     let client = Chain::ring(settings)
         .with_registry(
@@ -1883,7 +1883,7 @@ async fn a_scope_co_signer_among_the_owner_signers_is_refused_before_proving() {
     let owner = Address::new_from_array(sender.signing_pubkey().confidential_view_tag().unwrap());
     let client = Chain::ring(RingSettings {
         co_signer: Some((owner, custom_ring_interface::CoSignScope::TRANSFERS)),
-        ..RingSettings::new(RingMode::Off)
+        ..RingSettings::new(RingMode::Confidential)
     })
     .client();
     let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
@@ -1930,7 +1930,7 @@ async fn a_policy_transfer_of_two_owners_utxos_is_refused_before_proving() {
     let other = keypair(2);
     let client = Chain::ring(RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(
         Registry::new(&[(&sender, 1), (&other, 1)]),
@@ -1956,7 +1956,7 @@ async fn a_recipient_the_rules_refuse_fails_before_proving() {
     let recipient = keypair(2);
     let settings = RingSettings {
         has_policy: true,
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     };
     let client = Chain::ring(settings)
         .with_registry(
@@ -2074,8 +2074,8 @@ impl Measure {
         let delegate = Address::new_from_array([0x44; 32]);
         let mode = match rail {
             Measured::Anonymous | Measured::AnonymousPolicy => RingMode::Anonymous,
-            Measured::ConfidentialPolicy | Measured::Delegate => RingMode::Registry,
-            Measured::Confidential => RingMode::Off,
+            Measured::ConfidentialPolicy | Measured::Delegate => RingMode::ConfidentialEscrow,
+            Measured::Confidential => RingMode::Confidential,
         };
         let settings = RingSettings {
             has_policy: policy,
@@ -2546,7 +2546,7 @@ async fn a_delegate_its_own_co_signer_is_refused_before_proving() {
         has_policy: true,
         delegate: Some(delegate),
         co_signer: Some((delegate, custom_ring_interface::CoSignScope::TRANSFERS)),
-        ..RingSettings::new(RingMode::Registry)
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(
         Registry::new(&[(&member, 1), (&recipient, 1)]),
@@ -2630,7 +2630,7 @@ async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
     }
     let chain = Chain::ring(RingSettings {
         co_signer: Some((Address::new_from_array([77; 32]), CoSignScope::WITHDRAWALS)),
-        ..RingSettings::new(RingMode::Off)
+        ..RingSettings::new(RingMode::Confidential)
     })
     .with_registry(registry, &RuleTable::empty());
     let config = ring().require_config(&chain).await.unwrap();

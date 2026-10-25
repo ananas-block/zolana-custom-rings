@@ -190,7 +190,7 @@ impl RingScan {
         Self {
             ring_program_id,
             auditor_key,
-            mode: RingMode::Off,
+            mode: RingMode::Confidential,
             cursor: None,
             page_size: DEFAULT_PAGE_SIZE,
             max_pages: DEFAULT_MAX_PAGES,

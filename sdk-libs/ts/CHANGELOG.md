@@ -13,7 +13,7 @@ slot under the layout the ring program verified.
 Breaking
 
 - Mint thresholds, outflow limits and withdrawal co-sign thresholds move from eight-entry arrays into authenticated asset records → write `MintPolicy` through `AuthorityListWrite.withMintPolicy(memberOfAsset(mint), policy)`. `RuleTable` carries rules only and `setRingCoSignerInstruction` takes signer and scope only. Upgrade the program, SDK, indexer and keys together for fresh rings; existing rings need an explicit state migration.
-
+- `RingMode` names the confidential modes `"confidential"` and `"confidentialEscrow"` in place of `"off"` and `"registry"`, matching Rust `RingMode::Confidential` and `RingMode::ConfidentialEscrow`. The config byte is unchanged → compare `config.mode` with the new names.
 - Transfers use instruction tags 43 and 44 and policy statement version 2. Public withdrawals now follow output-owner and asset list rules, including gross amount guards; direct deposits and same-owner merges keep their existing policy behavior. SPL owner snapshots are checked at execution and exposed as `screenedOwner` in historical audit results. Legacy transfer frames remain readable, but cannot execute on the upgraded program.
 - Anonymous transfer, entry and merge proofs bind the actual fee payer, configured co-signer and public withdrawal owner. Proof requests and proving-key pins change; deploy the program, prover and SDKs together after publishing the pinned key artifacts.
 - Policy keys specialize by registry sources and withdrawal capacity. Deposits use capacities 1, 2, 4 and 8; registry updates use 1, 2, 4, 8 and 16. Clients select the smallest matching key.

@@ -96,7 +96,7 @@ impl RingStatements<'_> {
     }
 }
 
-/// Registry mode alone, its policy proof escrows every output nullifier key.
+/// `ConfidentialEscrow` mode alone, its policy proof escrows every output nullifier key.
 pub(super) fn escrows_keys(config: &RingProgramConfig) -> Result<bool, CustomRingError> {
-    Ok(config.mode()? == RingMode::Registry)
+    Ok(config.mode()? == RingMode::ConfidentialEscrow)
 }

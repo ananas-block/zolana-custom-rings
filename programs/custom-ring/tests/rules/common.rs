@@ -551,7 +551,7 @@ pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
     )
 }
 
-/// A policy ring whose delegate put it in registry mode.
+/// A policy ring whose delegate put it in `ConfidentialEscrow` mode.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.insecure_clone();

@@ -311,7 +311,7 @@ impl<'a> Pipeline<'a> {
             .count();
         let ring_id = self.ring.ring_id()?;
         let auditor = config.auditor_pubkey;
-        let key_escrow = config.mode == RingMode::Registry;
+        let key_escrow = config.mode == RingMode::ConfidentialEscrow;
         let preview = |proof_inputs: &SppProofInputs| -> Result<TransactParts, RingError> {
             Ok(preview_parts(PreviewParts {
                 rail: ring_rail,

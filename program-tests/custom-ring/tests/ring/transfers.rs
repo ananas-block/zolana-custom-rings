@@ -65,7 +65,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
             auditor_pubkey,
             bump: config_bump,
             has_policy: 1,
-            mode: RingMode::Off as u8,
+            mode: RingMode::Confidential as u8,
             ..config
         },
         "custom-ring config account"

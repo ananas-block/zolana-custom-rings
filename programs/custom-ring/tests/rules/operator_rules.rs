@@ -176,7 +176,7 @@ fn the_delegate_is_permanent_and_needs_a_confidential_policy_ring() {
     within_budget(InstructionTag::SetDelegate, appoint(&mut ring, &delegate));
     let config: RingProgramConfig = ring.read(&config_pda());
     assert_eq!(config.delegate(), Some(&delegate.pubkey()));
-    assert_eq!(config.mode(), Ok(RingMode::Registry));
+    assert_eq!(config.mode(), Ok(RingMode::ConfidentialEscrow));
     refused(
         appoint(&mut ring, &Keypair::new()),
         CustomRingError::DelegateAlreadySet,
@@ -678,8 +678,8 @@ fn create_config_takes_its_canonical_address_once_beside_the_system_program() {
 #[test]
 fn each_ring_kind_fixes_its_policy_flag_and_mode() {
     for (setup, has_policy, mode) in [
-        (Setup::AuditOnly, false, RingMode::Off),
-        (Setup::Policy, true, RingMode::Off),
+        (Setup::AuditOnly, false, RingMode::Confidential),
+        (Setup::Policy, true, RingMode::Confidential),
         (Setup::Anonymous, false, RingMode::Anonymous),
         (Setup::AnonymousPolicy, true, RingMode::Anonymous),
     ] {

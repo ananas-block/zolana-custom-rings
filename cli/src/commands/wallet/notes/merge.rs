@@ -47,7 +47,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     }
     let count = match config.mode {
         RingMode::Anonymous => (args.count as usize).min(widest_anonymous_merge()),
-        RingMode::Off | RingMode::Registry => args.count as usize,
+        RingMode::Confidential | RingMode::ConfidentialEscrow => args.count as usize,
     };
     let selected = select(&spendable, ctx.ring.program_id(), mint, count)?;
     let (input_count, tree_id) = (selected.len(), selected[0].tree_id);

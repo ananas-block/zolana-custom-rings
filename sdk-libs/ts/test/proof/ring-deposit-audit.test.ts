@@ -506,7 +506,7 @@ describe("ring deposit builder", () => {
   it("binds a registry ring deposit to the recipient's escrowed key under the newest root", async () => {
     const recipient = ShieldedKeypair.generate();
     const { client, requests } = await fixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       members: [escrowedMember(recipient)],
     });
     const prepared = await PreparedRingDeposit.prepare(
@@ -555,7 +555,7 @@ describe("ring deposit builder", () => {
   it("refuses a recipient whose record escrows another key before any proof", async () => {
     const recipient = ShieldedKeypair.generate();
     const { client, proveRing } = await fixture({
-      mode: "registry",
+      mode: "confidentialEscrow",
       members: [escrowedMember(recipient, field(77n))],
     });
     const prepared = await PreparedRingDeposit.prepare(
@@ -671,7 +671,7 @@ describe("ring deposit builder", () => {
           params(anonymous.client, { kind: "confidential", address: owner.shieldedAddress() }),
         ),
       ).rejects.toMatchObject({ causeCode: "RING_ANONYMOUS_REFUSED" });
-      const registry = await fixture({ mode: "registry" });
+      const registry = await fixture({ mode: "confidentialEscrow" });
       await expect(
         PreparedRingDeposit.prepare(
           params(registry.client, {
@@ -692,7 +692,7 @@ describe("ring deposit builder", () => {
     const cosigner = getAddressDecoder().decode(new Uint8Array(32).fill(0x55));
     try {
       const covered = await fixture({
-        mode: "off",
+        mode: "confidential",
         coSigner: { signer: cosigner, scope: RING_COSIGN_DEPOSITS },
       });
       const deposit = { kind: "confidential", address: recipient.shieldedAddress() } as const;
@@ -703,7 +703,7 @@ describe("ring deposit builder", () => {
         params(covered.client, deposit, { cosigner }),
       );
       const outside = await fixture({
-        mode: "off",
+        mode: "confidential",
         coSigner: { signer: cosigner, scope: RING_COSIGN_TRANSFERS },
       });
       const unsigned = await PreparedRingDeposit.prepare(

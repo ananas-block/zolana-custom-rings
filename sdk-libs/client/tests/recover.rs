@@ -51,7 +51,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        Self::in_mode(RingMode::Off)
+        Self::in_mode(RingMode::Confidential)
     }
 
     fn anonymous() -> Self {
@@ -573,7 +573,7 @@ async fn a_key_escrow_ring_recovers_the_member_beside_other_owners() {
         ..Default::default()
     };
     let recovery = RingRecovery::new(RING, &fixture.auditor)
-        .with_mode(RingMode::Registry)
+        .with_mode(RingMode::ConfidentialEscrow)
         .for_member(SourceMember {
             address: &fixture.address,
             nullifier_key: &fixture.member.nullifier_key,

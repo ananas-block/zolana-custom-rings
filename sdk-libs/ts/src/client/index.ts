@@ -36,6 +36,7 @@ export type {
   RegisterKeyProofRequest,
   RingProofRequest,
   RingSlotOpening,
+  WithdrawalExemptionProofRequest,
 } from "../rpc/prover/ring.js";
 export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
