@@ -4,7 +4,9 @@ use zolana_interface::pda;
 use zolana_keypair::ShieldedKeypair;
 use zolana_transaction::Mint;
 
-use super::support::{keypair, ring, ring_utxo, Chain, RingSettings, TREE_ID};
+use super::support::{
+    keypair, owner_identity, ring, ring_utxo, Chain, Registry, RingSettings, TREE_ID,
+};
 use crate::{
     CustomRingMerge, MergeProofInput, PreparedCustomRingMerge, RingError, RingMergeOperation,
     RingSubmission,
@@ -46,6 +48,36 @@ impl Merge<'_> {
             .await
             .unwrap_err()
     }
+}
+
+/// A registry-mode merge opens the owner's escrow record before any proof.
+#[tokio::test]
+async fn an_escrowed_ring_refuses_a_merge_of_an_owner_without_an_escrowed_key() {
+    let registered = keypair(1);
+    let stranger = keypair(2);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Registry)
+    })
+    .with_registry(
+        Registry::new(&[(&registered, 1)]),
+        &crate::tests::pipeline_rules(),
+    );
+    let client = chain.client();
+    let merge = RingMergeOperation::new(
+        prepared(&stranger),
+        MergeProofInput {
+            nullifier_key: stranger.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID),
+        },
+    );
+    let owner = owner_identity(&stranger);
+    assert!(matches!(
+        RingSubmission::new(merge).send(&client, &payer, &[]).await,
+        Err(RingError::UnregisteredOutputKey { owner: refused }) if refused == owner
+    ));
 }
 
 /// The hidden owner never pays, signs or co-signs its anonymous merge.

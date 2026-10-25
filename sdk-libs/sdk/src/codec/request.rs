@@ -609,9 +609,10 @@ impl core::fmt::Debug for MergeSlot {
     }
 }
 
+/// The merge disclosure's witness, `member` the owner's escrow record on a registry-mode ring.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MergeAnonymous {
+pub(crate) struct MergeRequest {
     #[serde(serialize_with = "fe::seq")]
     pub party_identities: [[u8; 32]; 3],
     #[serde(with = "fe")]
@@ -644,6 +645,12 @@ pub(crate) struct MergeAnonymous {
     pub output_tree_id: [u8; 32],
     #[serde(with = "fe")]
     pub output_ring_data_hash: [u8; 32],
+    pub key_escrow: bool,
+    #[serde(with = "fe")]
+    pub member_registry_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub ct_hash: [u8; 32],
+    pub member: Option<RecordOpeningRequest>,
 }
 
 /// A present record as the deposit circuit opens it.

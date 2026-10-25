@@ -4,7 +4,7 @@
 use super::*;
 use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
-    ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
+    ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, MERGE_WIDTHS,
 };
 use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
 use zolana_client::{Shape, SPP_SUPPORTED_SHAPES};
@@ -92,7 +92,7 @@ impl Coverage {
                     | RingCircuit::Deposit { .. } => Column::Confidential,
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
-                    | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,
+                    | RingCircuit::Merge { .. } => Column::Anonymous,
                     RingCircuit::MemberPolicy { .. } | RingCircuit::RegisterKey => {
                         Column::ConfidentialPolicy
                     }
@@ -305,7 +305,7 @@ impl ShapeRing<'_> {
         let env = self.env;
         let tree_id = env.tree_id(env.tree)?;
         let mut count = 2;
-        for width in ANONYMOUS_MERGE_WIDTHS {
+        for width in MERGE_WIDTHS {
             restart_prover()?;
             let prepared = CustomRingMerge::new(self.ring, self.utxos(count, coverage)?, None)?
                 .with_output_tree_id(tree_id)
@@ -325,7 +325,7 @@ impl ShapeRing<'_> {
                 },
             );
             land(env, merge, &env.payer, &[])?;
-            coverage.cover(RingCircuit::AnonymousMerge { width: proved });
+            coverage.cover(RingCircuit::Merge { width: proved });
             count = width + 1;
         }
         Ok(())
@@ -579,6 +579,12 @@ fn sweep(column: Column) -> Result<()> {
     ring.sweep(&mut coverage)?;
     if column == Column::Anonymous {
         ring.entries(&mut coverage)?;
+    }
+    // A merge proves its disclosure on every ring, the escrow record on a registry-mode one.
+    if matches!(
+        column,
+        Column::Anonymous | Column::Confidential | Column::Delegate
+    ) {
         ring.merges(&mut coverage)?;
     }
     coverage.assert_transfer_keys(column);
