@@ -5,7 +5,7 @@ in its member registry account, and the program hashes the table at every
 policy write. Each policy proof binds that hash. The rules read the
 [member records](member-records.md) of the transfer's
 subjects, and the proof opens those records privately. The table hash and the
-policy statement are in [Policy proof](../zolana/docs/spec.md#policy-proof).
+policy statement are in [Policy proof](ring-policy-design.md#the-policy-circuit).
 
 ## Rules
 

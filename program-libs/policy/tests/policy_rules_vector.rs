@@ -1,4 +1,4 @@
-//! Pins `test-vectors/ring-policy-rules.json` for the policy circuit and the TS SDK.
+//! Pins `test-vectors/policy/ring-policy-rules.json` for the policy circuit and the TS SDK.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ use zolana_ring_policy::{
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/ring-policy-rules.json"
+    "/../../test-vectors/policy/ring-policy-rules.json"
 );
 
 const ALLOW: u64 = ListId::Allow.record_bit();
@@ -643,7 +643,7 @@ fn ring_policy_rules_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/ring-policy-rules.json"]
+#[ignore = "rewrites test-vectors/policy/ring-policy-rules.json"]
 fn write_ring_policy_rules_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");

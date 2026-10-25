@@ -145,7 +145,7 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// statement is the anonymous merge preimage, mirrored by MergeAnonymousPublicInput::elements in program-libs/interface/src/merge.rs.
+// statement is the anonymous merge preimage, mirrored by MergeAnonymousPublicInput::elements in program-libs/interface/src/instructions/merge.rs.
 //
 //	CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_id, aud0, aud1, eph0, eph1, ct_hash, salt, HashChain4(fields)
 func (c *AnonymousMergeCircuit) statement(api frontend.API, sealed shared.Sealed, fields []frontend.Variable) []frontend.Variable {

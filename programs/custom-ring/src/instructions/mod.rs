@@ -1,28 +1,53 @@
+#[path = "records/apply_records.rs"]
 mod apply_records;
+#[path = "records/authority_write_records.rs"]
 mod authority_write_records;
+#[path = "configuration/setup/create_config.rs"]
 mod create_config;
+#[path = "configuration/setup/create_member_registry.rs"]
 mod create_member_registry;
+#[path = "configuration/setup/create_policy.rs"]
 mod create_policy;
+#[path = "settlement/deposit_audit.rs"]
 mod deposit_audit;
+#[path = "settlement/forward.rs"]
 mod forward;
+#[path = "configuration/setup/init_spp_ring_config.rs"]
 mod init_spp_ring_config;
+#[path = "settlement/insert_fee.rs"]
 mod insert_fee;
+#[path = "runtime/instruction_runtime.rs"]
+mod instruction_runtime;
+#[path = "accounts/loader.rs"]
 mod loader;
+#[path = "settlement/merge_disclosure.rs"]
 mod merge_disclosure;
-mod policy_shared;
+#[path = "verification/policy_binding.rs"]
+mod policy_binding;
+#[path = "verification/public_legs.rs"]
 mod public_legs;
+#[path = "configuration/access/read_access.rs"]
 mod read_access;
+#[path = "records/register_key.rs"]
 mod register_key;
+#[path = "configuration/access/set_authority.rs"]
 mod set_authority;
+#[path = "configuration/access/set_cosigner.rs"]
 mod set_cosigner;
+#[path = "configuration/access/set_delegate.rs"]
 mod set_delegate;
+#[path = "configuration/policy/set_insert_fee.rs"]
 mod set_insert_fee;
+#[path = "configuration/access/set_paused.rs"]
 mod set_paused;
+#[path = "configuration/policy/set_policy_rules.rs"]
 mod set_policy_rules;
+#[path = "configuration/policy/set_policy_source.rs"]
 mod set_policy_source;
-mod shared;
 mod transact;
+#[path = "verification/verifier.rs"]
 mod verifier;
+#[path = "records/write_records.rs"]
 mod write_records;
 
 pub(crate) use apply_records::process_apply_records_ix;

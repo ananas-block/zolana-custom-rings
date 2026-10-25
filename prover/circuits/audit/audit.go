@@ -35,7 +35,7 @@ func (s AnonymousAuditShape) senderKeyLen() int {
 	return 0
 }
 
-// Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/disclosure.rs.
+// Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/proof/disclosure.rs.
 var (
 	// PackedAuditCapacities leave confidential and delegate bodies unproven.
 	PackedAuditCapacities = [...]int{2, 4}
@@ -123,7 +123,7 @@ func (w AuditWires) assertBlinding(api frontend.API, e auditEnvelope, o shared.U
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.live, A: o.Blinding, B: blinding})
 }
 
-// statementHead opens every audit statement, mirrored by AuditHead in program-libs/interface/src/statement.rs.
+// statementHead opens every audit statement, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs.
 //
 //	CRAU, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout
 func (e auditEnvelope) statementHead(w AuditWires) []frontend.Variable {

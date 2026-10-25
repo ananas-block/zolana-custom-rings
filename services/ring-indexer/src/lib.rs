@@ -1,14 +1,22 @@
 //! Indexes custom ring member registries and forwards every other JSON-RPC
 //! call to Photon.
 
+#[path = "rpc/api.rs"]
 mod api;
+#[path = "ingest/block.rs"]
 mod block;
 mod error;
+#[path = "ingest/indexer.rs"]
 mod indexer;
+#[path = "ingest/member_registry.rs"]
 mod member_registry;
+#[path = "storage/migration/mod.rs"]
 mod migration;
+#[path = "rpc/solana.rs"]
 mod rpc;
+#[path = "rpc/server/mod.rs"]
 mod server;
+#[path = "storage/database.rs"]
 mod storage;
 
 use std::{net::SocketAddr, sync::Arc};

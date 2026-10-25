@@ -1,4 +1,4 @@
-//! `test-vectors/ring-policy-table.json`, the table hash the policy circuits and the SDKs recompute.
+//! `test-vectors/policy/ring-policy-table.json`, the table hash the policy circuits and the SDKs recompute.
 
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -10,7 +10,7 @@ use zolana_ring_policy::{
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/ring-policy-table.json"
+    "/../../test-vectors/policy/ring-policy-table.json"
 );
 const GENERATED_CASES: usize = 12;
 const SUBJECTS: [Subject; 3] = [Subject::OutputOwner, Subject::Sender, Subject::Asset];
@@ -494,7 +494,7 @@ fn ring_policy_table_parts_encode_and_decode() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/ring-policy-table.json"]
+#[ignore = "rewrites test-vectors/policy/ring-policy-table.json"]
 fn write_ring_policy_table_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");

@@ -207,7 +207,10 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         target/prover-server export-vk --keys-file "{{spp-keys-dir}}/$key" --output "$export_dir/$key.vkbin" >/dev/null
         cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$export_dir/$key.vkbin" "$PWD/{{spp-keys-dir}}/$key" "$export_dir" "$module" >/dev/null
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
-        diff -u "program-libs/interface/src/$module" "$export_dir/$module"
+        relative="$(python3 -c 'import sys; from tools.ring_key_layout import verifier_relative_path; print(verifier_relative_path(sys.argv[1]))' "$module")"
+        cp "program-libs/interface/src/verifying_keys/$relative" "$export_dir/committed-$module"
+        rustfmt --config-path rustfmt.toml "$export_dir/committed-$module"
+        diff -u "$export_dir/committed-$module" "$export_dir/$module"
     done
 
 # === Rings ===

@@ -1,24 +1,40 @@
 //! Instruction builders, proofs and submission for the custom ring program, a blocking caller
 //! wraps an operation in `zolana.block_on(op.prove(zolana.as_async()))`.
 
+#[path = "state/account.rs"]
 mod account;
+#[path = "operations/admin.rs"]
 mod admin;
+#[path = "rpc/client.rs"]
 mod client;
+#[path = "operations/deposit.rs"]
 mod deposit;
 mod error;
+#[path = "state/heap.rs"]
 mod heap;
+#[path = "validation/limits.rs"]
 mod limits;
+#[path = "operations/merge.rs"]
 mod merge;
+#[path = "operations/pipeline/mod.rs"]
 mod pipeline;
+#[path = "rpc/projection.rs"]
 mod projection;
+#[path = "rpc/prover.rs"]
 mod prover;
+#[path = "operations/records.rs"]
 mod records;
+#[path = "operations/register_key.rs"]
 mod register_key;
+#[path = "codec/request.rs"]
 mod request;
+#[path = "operations/utxo_selection.rs"]
 mod select;
+#[path = "operations/submission.rs"]
 mod submission;
 #[cfg(test)]
 mod tests;
+#[path = "state/trees.rs"]
 mod trees;
 
 pub(crate) const REDACTED: &str = "<redacted>";

@@ -19,7 +19,7 @@ import (
 )
 
 func TestKeysMatchTheRustCatalog(t *testing.T) {
-	rust, err := os.ReadFile("../../program-libs/interface/src/ring_keys.rs")
+	rust, err := os.ReadFile("../../program-libs/interface/src/proof/ring_keys.rs")
 	if err != nil {
 		t.Fatal(err)
 	}

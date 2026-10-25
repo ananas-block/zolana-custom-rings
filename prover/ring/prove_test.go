@@ -89,7 +89,7 @@ func TestCatalogRequestsProveWithTheInstalledKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile("../../test-vectors/ring-proofs.json", append(encoded, '\n'), 0644); err != nil {
+		if err := os.WriteFile("../../test-vectors/proof/ring-proofs.json", append(encoded, '\n'), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

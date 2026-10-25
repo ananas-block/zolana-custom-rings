@@ -1,73 +1,52 @@
 # Proof costs
 
-SPP and the ring program each verify their own proofs. A prover plans its
-memory and proving time by the constraint count of each circuit family. Each
-count is the R1CS constraint count of the circuit its key compiles.
-`TestRingKeyCatalog` holds every ring key to the count
-`prover/server/prover-test/ringkey/ringkey.go` pins.
-`TestCircuitFingerprintsMatchRotatedKeys` and `TestMergeRingConstraintCounts`
-hold the SPP counts. A circuit change that moves a count fails these tests. A
-shape such as 2x4 names 2 inputs and 4 outputs.
+Each proving key fixes a circuit family and its input and output width. A shape
+such as 2x4 has two inputs and four outputs. The available ring keys are defined
+by the [Go key catalog](../prover/ring/keys.go), mirrored by the
+[Rust key catalog](../program-libs/interface/src/proof/key_catalog.rs), and pinned by
+[proving-keys.lock](../prover/ring/proving-keys.lock). Use those files when
+choosing a shape; a copied constraint count can become stale after a key
+rotation.
 
 ## What each transaction proves
 
 - A confidential transfer proves SPP's ring statement and one audit statement.
-  A policy ring adds one policy statement.
+  A policy ring adds a member policy statement.
 - An anonymous transfer proves SPP's anonymous statement and one anonymous
-  audit statement. A policy ring adds one policy statement.
-- A delegate move proves SPP's ring authority statement, one audit statement
-  and one delegate policy statement.
-- An audited deposit proves one deposit statement, and SPP's `ring_deposit`
-  takes no proof.
-- A merge proves SPP's ring merge statement. A merge on an anonymous ring adds
-  one merge disclosure statement.
-- A key registration proves one register key statement. An application of the
-  record queue proves one apply statement.
+  audit statement. A policy ring adds a member policy statement.
+- A delegate move proves SPP's ring authority statement, an audit statement
+  and a delegate policy statement.
+- An audited deposit proves a deposit statement; SPP's `ring_deposit` takes no
+  separate proof.
+- A merge proves SPP's ring merge statement. An anonymous ring adds a merge
+  disclosure statement.
+- Key registration and record application each prove their own statement.
 
 ## SPP statements
 
-The SPP statement grows mostly with the inputs, because each input proves its
-leaf under a tree root. At the 2x4 shape the confidential ring statement has
-57,708 constraints, 150 more than the default ring's 57,558. The anonymous
-statement also verifies the owner's EdDSA signature and has 129,120 at 2x4. The
-ring authority statement of a delegate move has 51,925 at 2x2.
-
-A ring merge has 184,534 constraints at width 8, 531,750 at width 24 and
-1,140,682 at width 52. At width 24 it costs 4,062 more than the default-ring
-merge.
+Input tree openings account for much of a transfer's work, so wider input
+shapes cost more. The upstream [SPP fingerprint test](../zolana/prover/server/prover/fingerprint/fingerprint_test.go)
+pins compiled constraints for representative shapes and rejects unplanned
+changes.
 
 ## Audit statements
 
-A confidential transfer or a delegate move of 2 or 4 outputs uses the packed
-audit layout, at 53,502 and 64,827 constraints. At 8 and 16 outputs the audit
-proof also proves each output's delivery to its recipient. The delivered layout
-costs 284,405 at 8 outputs and 524,519 at 16.
-
-The anonymous audit statement also names the hidden sender to the auditor. Its
-keys come in input classes per output count, and the outputs dominate the cost.
-The 4-input class has 123,533 constraints at 2 outputs, 185,366 at 4 and
-310,762 at 8. The 32-input class has 171,252 at 2 outputs, and the 1-input
-class has 554,690 at 16. A transfer that spends a default-ring note uses the
-entry key, which opens every spent note. The entry key has 138,067 constraints
-at 2 outputs, 199,900 at 4 and 325,296 at 8.
+Packed audit keys cover smaller confidential and delegate outputs. Delivered
+keys also prove that each output body opens for its recipient. Anonymous audit
+keys additionally bind the hidden sender and its input class; an entry key
+fully opens default-ring inputs. The [audit key tests](../prover/circuits/audit/keys_test.go)
+pin the current compiled counts.
 
 ## Policy statements
 
-The policy circuit holds a record opening for the sender and for every output's
-owner and asset, so its cost grows with the outputs. The member key of a
-confidential or anonymous transfer has 48,455 constraints at 2 outputs, 82,348
-at 4, 150,253 at 8 and 286,047 at 16. The delegate key also reopens the spent
-notes and adds 1,353 constraints per input. It has 48,736 at 1x2 and 101,503 at
-40x2.
-
-`TestPolicyKeys` holds every member key of 2 or 4 outputs below 100,000
-constraints and every delegate key of 2 or 4 outputs below 150,000. The wider
-keys have no such bound. Transaction size limits the shapes each rail serves.
-See [the shapes](../README.md#shapes).
+A member policy proof opens the sender's record and records for each output's
+owner and asset. A delegate policy proof also reopens spent notes. The
+[policy key tests](../prover/circuits/policy/policy_test.go) enforce budgets for
+the small output shapes; transaction size limits the wider shapes.
 
 ## Registry, deposits and merge disclosures
 
-An application of one queued write proves 15,492 constraints. Any larger queue
-uses the 16-write key, at 232,892. A key registration proves 36,991. An audited
-deposit of up to eight entries proves 148,936. The merge disclosure of an
-anonymous ring has 56,192 constraints at width 8 and 81,698 at width 24.
+Record application, key registration, audited deposits and anonymous merge
+disclosures have separate keys. The [registry tests](../prover/circuits/registry/registry_test.go)
+pin opening constraints. Verify the current cost of any other key by compiling
+it with the [ring key tests](../prover/ring/keys_test.go).

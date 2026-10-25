@@ -8,7 +8,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
-// Vector is test-vectors/ring-records.json, written by program-libs/member-registry/tests/ring_records_vector.rs.
+// Vector is test-vectors/registry/ring-records.json, written by program-libs/member-registry/tests/ring_records_vector.rs.
 type Vector struct {
 	EmptyRoot    ringtest.Hex  `json:"empty_root"`
 	Applications []Application `json:"applications"`

@@ -19,10 +19,10 @@ import (
 // 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
 // 4. The statement binds both roots, both next indexes, both chain ends and the count.
 
-// ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/member_registry.rs.
+// ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
 
-// ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/key_catalog.rs.
+// ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
 // QueueEntry's EscrowKey is zero except on a RegisterKey write.
@@ -33,7 +33,7 @@ type QueueEntry struct {
 	EscrowKey frontend.Variable
 }
 
-// Hash is the entry the program chains at write time in program-libs/interface/src/member_registry.rs.
+// Hash is the entry the program chains at write time in program-libs/interface/src/accounts/member_registry.rs.
 func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey})
 }
@@ -150,7 +150,7 @@ func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable 
 	return kept
 }
 
-// statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/statement.rs.
+// statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
 	return []frontend.Variable{
 		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,

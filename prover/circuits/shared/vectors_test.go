@@ -81,7 +81,7 @@ func (c *ringTagsCircuit) Define(api frontend.API) error {
 
 func TestRingTagsMatchRustVectors(t *testing.T) {
 	var vectors ringTagVectors
-	ringtest.ReadVector(t, "ring-tags.json", &vectors)
+	ringtest.ReadVector(t, "wallet/ring-tags.json", &vectors)
 	constants := vectors.Constants
 	if constants.EpochSlots != shared.EpochSlots || constants.JInbox != shared.JInbox || constants.JPair != shared.JPair ||
 		constants.KPairEpochs != shared.KPairEpochs || constants.TagLen != shared.TagLen || constants.BodyLen != shared.BodyLen {
@@ -207,7 +207,7 @@ func (c *ringSecretsCircuit) Define(api frontend.API) error {
 // The circuit gadgets rebuild every CRBS, TXOB and CRAT value of the Rust vector from tx_viewing_sk.
 func TestRingSecretsMatchRustVectors(t *testing.T) {
 	var vectors ringSecretVectors
-	ringtest.ReadVector(t, "ring-secrets.json", &vectors)
+	ringtest.ReadVector(t, "wallet/ring-secrets.json", &vectors)
 	witness := &ringSecretsCircuit{
 		FirstNullifier:        ringtest.VectorField(t, vectors.FirstNullifier),
 		BlindingSeed:          ringtest.VectorField(t, vectors.BlindingSeed),

@@ -1,4 +1,4 @@
-//! `test-vectors/ring_address.json` pins the `zolana:` payment request form for every
+//! `test-vectors/wallet/ring_address.json` pins the `zolana:` payment request form for every
 //! implementation, the ignored `print_ring_address_vectors` regenerates it.
 
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use zolana_ring_keys::{
     Pairing, PairingRow, RingAddress, RingKeyError, RingPaymentRequest, RingViewingKey,
 };
 
-const VECTORS_JSON: &str = include_str!("../../../test-vectors/ring_address.json");
+const VECTORS_JSON: &str = include_str!("../../../test-vectors/wallet/ring_address.json");
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct RingAddressVectors {
@@ -267,7 +267,7 @@ fn a_ring_address_prints_no_recipient_key() {
 }
 
 #[test]
-#[ignore = "regenerates test-vectors/ring_address.json; run with --nocapture and commit the output"]
+#[ignore = "regenerates test-vectors/wallet/ring_address.json; run with --nocapture and commit the output"]
 fn print_ring_address_vectors() {
     println!("{}", serde_json::to_string_pretty(&compute()).unwrap());
 }

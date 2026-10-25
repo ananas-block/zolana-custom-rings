@@ -95,7 +95,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// statement mirrors DepositPublicInput::elements in program-libs/interface/src/deposit.rs.
+// statement mirrors DepositPublicInput::elements in program-libs/interface/src/instructions/deposit.rs.
 func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
 	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count, c.Anonymous}
 	for i, commitment := range commitments {

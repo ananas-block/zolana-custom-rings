@@ -33,7 +33,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/statement.rs.
+// statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk frontend.Variable, sealed shared.Sealed) []frontend.Variable {
 	return []frontend.Variable{
 		shared.RegisterKeyDomain, c.Member, nullifierPk, sealed.Auditor[0], sealed.Auditor[1], sealed.Eph[0], sealed.Eph[1],

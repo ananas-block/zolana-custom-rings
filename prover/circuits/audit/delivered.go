@@ -75,7 +75,7 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// disclosure is the delivered disclosure the layout flags select, mirrored by DisclosureLayout::Delivered in program-libs/interface/src/disclosure.rs.
+// disclosure is the delivered disclosure the layout flags select, mirrored by DisclosureLayout::Delivered in program-libs/interface/src/proof/disclosure.rs.
 //
 //	SeedOut under LayoutExits, nullifier_pk per slot unless LayoutEscrow,
 //	pack_disclosure(slot bytes per slot), 40 bytes under LayoutExits and the first 32 otherwise
@@ -98,7 +98,7 @@ func (c *DeliveredAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 	})
 }
 
-// statement is the delivered audit preimage, mirrored by AuditStatement::elements under AuditKind::Delivered in program-libs/interface/src/statement.rs.
+// statement is the delivered audit preimage, mirrored by AuditStatement::elements under AuditKind::Delivered in program-libs/interface/src/proof/statement.rs.
 //
 //	head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain
 func (c *DeliveredAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, recipientKeyChain frontend.Variable) frontend.Variable {

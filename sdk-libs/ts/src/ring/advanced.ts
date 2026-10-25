@@ -10,8 +10,8 @@ export {
   parseAuditorMessage,
   unmaskDisclosure,
   unpackDisclosure,
-} from "../keypair/audit.js";
-export type { AuditorMessage, DisclosurePad } from "../keypair/audit.js";
+} from "../crypto/audit/audit.js";
+export type { AuditorMessage, DisclosurePad } from "../crypto/audit/audit.js";
 export {
   ANONYMOUS_AUDIT_CLASSES,
   ANONYMOUS_ENTRY_CLASS,
@@ -36,7 +36,7 @@ export {
   disclosureFieldCount,
   packedChunks,
   packedFields,
-} from "../interface/ring-disclosure-layout.js";
+} from "../protocol/codec/ring-disclosure-layout.js";
 export type {
   AnonymousAuditKey,
   AnonymousFields,
@@ -50,7 +50,7 @@ export type {
   FieldRange,
   PackedFields,
   PackedLayout,
-} from "../interface/ring-disclosure-layout.js";
+} from "../protocol/codec/ring-disclosure-layout.js";
 export {
   anonymousCommitments,
   decodeDisclosure,
@@ -60,7 +60,7 @@ export {
   openRingDisclosure,
   sealRingDisclosure,
   splitInputPrefixPair,
-} from "../keypair/ring-disclosure.js";
+} from "../crypto/audit/ring-disclosure.js";
 export type {
   AnonymousInputOpening,
   AnonymousInputs,
@@ -71,7 +71,7 @@ export type {
   PackedOutputOpening,
   PublishedOutputs,
   RingDisclosure,
-} from "../keypair/ring-disclosure.js";
+} from "../crypto/audit/ring-disclosure.js";
 export {
   EPOCH_SLOTS,
   J_INBOX,
@@ -90,14 +90,14 @@ export {
   senderCommitment,
   tagEpoch,
   tagIndex,
-} from "../keypair/ring-stream.js";
-export type { DeliveredSlot, TagIndex } from "../keypair/ring-stream.js";
+} from "../crypto/derivation/ring-stream.js";
+export type { DeliveredSlot, TagIndex } from "../crypto/derivation/ring-stream.js";
 export {
   RING_DELIVERED_BODY_LEN,
   openDeliveredBody,
   sealDeliveredBody,
   type DeliveredBodyOpening,
-} from "../interface/output.js";
+} from "../protocol/transaction/output.js";
 export {
   anonymousRingData,
   openRingDelivery,
@@ -107,7 +107,7 @@ export {
   type RingDeliveryOpening,
   type RingDeliverySlot,
   type RingNoteOwner,
-} from "./blinding.js";
+} from "../crypto/derivation/blinding.js";
 
 export {
   PLAIN_GROTH16_PROOF_LENGTH,
@@ -122,13 +122,13 @@ export {
   ringSppInputs,
   ringTransactOutput,
   taggedX25519,
-} from "./transact.js";
+} from "../protocol/transaction/transact.js";
 export {
   encodeRingTransactInstructionData,
   type AnonymousRingEddsaCircuit,
   type RingCircuitId,
   type RingTransactInstructionData,
-} from "../interface/circuit.js";
+} from "../protocol/proof/circuit.js";
 export type {
   AnchorRoot,
   AnonymousProofData,
@@ -137,7 +137,7 @@ export type {
   RingOutput,
   RingRail,
   RingTransactConfig,
-} from "./transact.js";
+} from "../protocol/transaction/transact.js";
 export {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
@@ -148,7 +148,7 @@ export {
   registerKeyStatementElements,
   registerKeyStatementHash,
   ringAuditStatement,
-} from "./statement.js";
+} from "../protocol/proof/statement.js";
 export type {
   ApplyRecordsStatement,
   AuditBinding,
@@ -158,10 +158,10 @@ export type {
   PolicyKey,
   PolicyStatement,
   RegisterKeyStatement,
-} from "./statement.js";
-export { depositStatementElements } from "./deposit-audit.js";
-export type { DepositStatement } from "./deposit-audit.js";
-export type { EncodedRuleTable } from "./codecs.js";
+} from "../protocol/proof/statement.js";
+export { depositStatementElements } from "../proof/deposit-audit.js";
+export type { DepositStatement } from "../proof/deposit-audit.js";
+export type { EncodedRuleTable } from "../protocol/codec/ring-codecs.js";
 
 export {
   FIELD_MAX,
@@ -177,12 +177,12 @@ export {
   quadPathRoot,
   replayRecordWrites,
   verifyRecordOpening,
-} from "./member-registry.js";
-export type { EscrowKey } from "./member-registry.js";
-export { readRegisteredRecord, type RegisteredRecord } from "./registered-record.js";
-export { nextScanCursor } from "./audit.js";
-export { openDisclosedMerge } from "./audit-merge.js";
-export { recoverMergeOpening, type MergeAuditorOpening } from "./audit-merge.js";
+} from "../protocol/membership/member-opening.js";
+export type { EscrowKey } from "../protocol/membership/member-opening.js";
+export { readRegisteredRecord, type RegisteredRecord } from "../rpc/registered-record.js";
+export { nextScanCursor } from "../operations/audit/audit.js";
+export { openDisclosedMerge } from "../operations/audit/audit-merge.js";
+export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 
 export {
   AUDITED_RING_DEPOSIT_TAG,
@@ -192,8 +192,11 @@ export {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
   type RingDepositCapsule,
-} from "./deposit-capsule.js";
-export { ringDepositSpp, type RingDepositSpp } from "./deposit-instruction.js";
+} from "../protocol/codec/deposit-capsule.js";
+export {
+  ringDepositSpp,
+  type RingDepositSpp,
+} from "../protocol/transaction/deposit-instruction.js";
 
 export {
   LIST_IDS,
@@ -220,7 +223,7 @@ export {
   recordBit,
   referencedLists,
   ruleAlternatives,
-} from "./policy.js";
+} from "../protocol/membership/policy.js";
 export type {
   ListWriter,
   Member,
@@ -240,4 +243,4 @@ export type {
   RuleTableInput,
   TransferSubject,
   TransferSubjects,
-} from "./policy.js";
+} from "../protocol/membership/policy.js";

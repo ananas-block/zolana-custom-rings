@@ -1,4 +1,4 @@
-//! Pins `test-vectors/ring-tags.json` and `test-vectors/ring-secrets.json` for the Go circuits and the TS SDK.
+//! Pins `test-vectors/wallet/ring-tags.json` and `test-vectors/wallet/ring-secrets.json` for the Go circuits and the TS SDK.
 
 use std::collections::BTreeSet;
 
@@ -20,8 +20,8 @@ use zolana_instruction::derivation::{
 };
 use zolana_keypair::X25519Keypair;
 
-const RING_TAGS_JSON: &str = include_str!("../../../test-vectors/ring-tags.json");
-const RING_SECRETS_JSON: &str = include_str!("../../../test-vectors/ring-secrets.json");
+const RING_TAGS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-tags.json");
+const RING_SECRETS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-secrets.json");
 
 /// The epoch the anonymous outputs of the secrets vector are tagged in.
 const TAG_EPOCH: u64 = 6_734;
@@ -72,14 +72,14 @@ fn domains_are_their_ascii_tags() {
 }
 
 #[test]
-#[ignore = "regenerates test-vectors/ring-tags.json, run with --nocapture and commit the output"]
+#[ignore = "regenerates test-vectors/wallet/ring-tags.json, run with --nocapture and commit the output"]
 fn print_ring_tag_vectors() {
     let vectors = Scenario::new().tag_vectors();
     println!("{}", serde_json::to_string_pretty(&vectors).expect("json"));
 }
 
 #[test]
-#[ignore = "regenerates test-vectors/ring-secrets.json, run with --nocapture and commit the output"]
+#[ignore = "regenerates test-vectors/wallet/ring-secrets.json, run with --nocapture and commit the output"]
 fn print_ring_secret_vectors() {
     let vectors = Scenario::new().secret_vectors();
     println!("{}", serde_json::to_string_pretty(&vectors).expect("json"));

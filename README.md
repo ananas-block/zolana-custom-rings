@@ -20,6 +20,44 @@ senders and recipients.
 - `zolana/` pins zolana. A change to both lands in zolana first, then
   `just zolana-bump <commit>` moves the pin.
 
+## Rings and rails
+
+A ring may enforce a policy over member records or only require an audit proof.
+The owner rail uses the note owner's signature, the anonymous rail proves the
+owner's signature without publishing the owner, and the delegate rail lets an
+authorized delegate move a member's notes. See [ring policy](docs/ring-policy.md),
+[anonymous rings](docs/anonymous-rings.md) and [auditing](docs/auditing.md).
+
+## Roles
+
+The config authority sets ring controls, the auditor opens ring activity, and
+members own notes and may write their own registry records. A curator supplies
+lists to another ring's policy. A delegate can move notes only through the
+ring's delegate checks; an authorized reader can query the ring RPC without
+holding the auditor key. See [member records](docs/member-records.md) and the
+[ring RPC](services/ring-rpc/README.md).
+
+## How a transfer settles
+
+The wallet prepares the SPP settlement and the ring's required audit and policy
+proofs. The ring program checks its authorization and proofs, then signs its
+SPP call as `ring_auth`. SPP verifies its own proof and updates notes, trees and
+nullifiers. [Proof costs](docs/proof-costs.md) lists the statements by operation.
+
+## Shapes
+
+Each proving key fixes an input and output width; a shape such as 2x4 has two
+inputs and four outputs. The available widths depend on the rail and proof
+family. See [proof costs](docs/proof-costs.md) and the pinned
+[key catalog](program-libs/interface/src/proof/key_catalog.rs).
+
+## Threat
+
+An auditor can open ring activity but cannot spend merely by holding the audit
+key. A delegate's separate authority is checked by the ring program. The
+upgrade authority can replace those checks; see [Limits](#limits) and
+[auditing limits](docs/auditing.md#limits).
+
 ## Setup
 
 ```bash

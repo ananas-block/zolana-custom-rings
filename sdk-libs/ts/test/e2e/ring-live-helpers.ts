@@ -1,4 +1,4 @@
-import { customRingDepositPayload } from "../../src/ring/deposit-payload.js";
+import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 // Shared by the ring live suites, the harness ring pins the released rows.
 import { readFile } from "node:fs/promises";
 
@@ -14,7 +14,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 
-import type { CustomRingClient } from "../../src/client/client.js";
+import type { CustomRingClient } from "../../src/rpc/client.js";
 import {
   compileUnsignedTransaction,
   setRingActivationInstruction,
@@ -22,7 +22,7 @@ import {
 import { ClientError } from "@heliuslabs/zolana/client";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@heliuslabs/zolana";
-import type { MemberRecord } from "../../src/interface/member-registry.js";
+import type { MemberRecord } from "../../src/protocol/membership/member-registry.js";
 import {
   ListId,
   memberOfTag,
@@ -57,7 +57,7 @@ import {
   syncRingWallet,
   type RingReadTarget,
 } from "../../src/ring/index.js";
-import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/ring/projection.js";
+import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/rpc/projection.js";
 import {
   currentSlot,
   liveHarness,
