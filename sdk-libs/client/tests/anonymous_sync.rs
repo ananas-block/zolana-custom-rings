@@ -2071,7 +2071,7 @@ fn a_stored_state_repeating_an_entry_or_overfilling_a_decoy_pool_is_refused() {
 #[tokio::test]
 async fn the_pin_and_its_read_order_match_the_shared_vector() {
     let vector: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../test-vectors/anonymous-ring-state.json"
+        "../../../test-vectors/wallet/anonymous-ring-state.json"
     ))
     .unwrap();
     let bytes = |value: &serde_json::Value| -> [u8; 32] {

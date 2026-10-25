@@ -68,7 +68,7 @@ func (p *Policy) validate() error {
 	return nil
 }
 
-// statement is the policy preimage, mirrored by PolicyStatement::elements in program-libs/interface/src/statement.rs.
+// statement is the policy preimage, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 //
 //	CRPO, private_tx_hash, policy_hash, ring_id, anonymous on the member key only, approval_required,
 //	key_escrow, own_root, curator_root, sender, asset_k and amount_k per public slot, version 2, withdrawal_hash

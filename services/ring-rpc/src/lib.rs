@@ -1,16 +1,29 @@
+#[path = "operations/audit.rs"]
 mod audit;
+#[path = "security/authorize.rs"]
 mod authorize;
+#[path = "config/config.rs"]
 mod config;
 mod error;
+#[path = "operations/hub.rs"]
 mod hub;
+#[path = "security/keys.rs"]
 mod keys;
+#[path = "config/limits.rs"]
 mod limits;
+#[path = "config/metering.rs"]
 mod metering;
+#[path = "security/origins.rs"]
 mod origins;
+#[path = "security/replay.rs"]
 mod replay;
+#[path = "rpc/server.rs"]
 mod server;
+#[path = "rpc/upstream.rs"]
 mod upstream;
+#[path = "operations/utxos.rs"]
 mod utxos;
+#[path = "security/webauthn.rs"]
 mod webauthn;
 
 pub use audit::{AuditRead, AuditService, Page};

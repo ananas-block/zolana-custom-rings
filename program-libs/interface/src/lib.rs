@@ -1,33 +1,56 @@
 //! Account layouts, instruction data, errors and statements of the custom ring
 //! program, shared by the program, the SDKs and the services.
 
+#[path = "instructions/anonymous_exit.rs"]
 pub mod anonymous_exit;
+#[path = "codec/anonymous_output.rs"]
 pub mod anonymous_output;
+#[path = "proof/blinding.rs"]
 pub mod blinding;
+#[path = "codec/bytes.rs"]
 mod bytes;
+#[path = "instructions/cosign.rs"]
 pub mod cosign;
+#[path = "instructions/deposit.rs"]
 pub mod deposit;
+#[path = "instructions/deposit_audit.rs"]
 pub mod deposit_audit;
+#[path = "proof/disclosure.rs"]
 pub mod disclosure;
+#[path = "proof/domain.rs"]
 pub mod domain;
 pub mod error;
+#[path = "instructions/instruction.rs"]
 pub mod instruction;
+#[path = "proof/key_catalog.rs"]
 pub mod key_catalog;
+#[path = "accounts/member_registry.rs"]
 pub mod member_registry;
+#[path = "instructions/merge.rs"]
 pub mod merge;
+#[path = "codec/output.rs"]
 pub mod output;
+#[path = "proof/ring_keys.rs"]
 pub mod ring_keys;
+#[path = "codec/spp.rs"]
 pub mod spp;
+#[path = "accounts/state.rs"]
 pub mod state;
+#[path = "proof/statement.rs"]
 pub mod statement;
+#[path = "codec/stream.rs"]
 pub mod stream;
+#[path = "instructions/transact.rs"]
 pub mod transact;
+#[path = "instructions/withdrawals.rs"]
 pub mod withdrawals;
 pub use withdrawals::*;
 
-// At the crate root, the generated modules keep their public paths.
+// Keep the generated modules at their existing public paths.
 #[cfg(feature = "verifying-keys")]
-include!("verifying_keys.rs");
+mod verifying_keys;
+#[cfg(feature = "verifying-keys")]
+pub use verifying_keys::*;
 
 #[cfg(feature = "verifying-keys")]
 pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {

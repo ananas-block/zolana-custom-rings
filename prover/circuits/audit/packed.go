@@ -100,7 +100,7 @@ func newPackedRecord(api frontend.API, o shared.UtxoWires, ownerKey [32]frontend
 	}
 }
 
-// disclosure is the packed disclosure the layout flags select, mirrored by DisclosureLayout::Packed in program-libs/interface/src/disclosure.rs.
+// disclosure is the packed disclosure the layout flags select, mirrored by DisclosureLayout::Packed in program-libs/interface/src/proof/disclosure.rs.
 //
 //	SeedOut under LayoutExits, then per published slot nullifier_pk unless LayoutEscrow, asset,
 //	data_hash and ring_data_hash unless LayoutDataFree, pack_disclosure(owner_key ‖ u64be(amount))
@@ -126,7 +126,7 @@ func (r packedRecord) fields(c layoutChoice) []frontend.Variable {
 	return append(fields, r.keyAndAmount...)
 }
 
-// statement is the packed audit preimage, mirrored by AuditStatement::elements under AuditKind::Packed in program-libs/interface/src/statement.rs.
+// statement is the packed audit preimage, mirrored by AuditStatement::elements under AuditKind::Packed in program-libs/interface/src/proof/statement.rs.
 //
 //	head ‖ output_chain, disclosure_chain
 func (c *PackedAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, disclosureChain frontend.Variable) frontend.Variable {

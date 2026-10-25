@@ -15,7 +15,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 )
 
-const fieldCountVector = "ring-disclosure-counts.json"
+const fieldCountVector = "audit/ring-disclosure-counts.json"
 
 const fieldCountDescription = "Published field counts of the audit disclosures, each record a host disclosure the audit circuit solves. " +
 	"packed takes the published outputs and the exits, key_escrow and data_free flags, delivered the capacity and the exits and key_escrow flags, " +

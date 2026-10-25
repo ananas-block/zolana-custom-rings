@@ -695,7 +695,7 @@ async fn post_init_account_faults_are_local_and_ahead_registries_are_not_quarant
     }
 }
 
-const RING_RECORDS: &str = include_str!("../../../test-vectors/ring-records.json");
+const RING_RECORDS: &str = include_str!("../../../test-vectors/registry/ring-records.json");
 
 fn bytes32(value: &Value) -> [u8; 32] {
     hex::decode(value.as_str().unwrap())

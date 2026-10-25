@@ -2,8 +2,8 @@ import type { Commitment } from "@solana/kit";
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
 import { treeAddress } from "@heliuslabs/zolana/internal";
 import { BLOCKHASH, solanaRpcReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import type { RingAuditReader } from "../../src/ring/audit.js";
-import type { RingTransferClient } from "../../src/ring/transfer.js";
+import type { RingAuditReader } from "../../src/operations/audit/audit.js";
+import type { RingTransferClient } from "../../src/operations/payments/transfer.js";
 
 const TREE_ID = DEFAULT_TREE_ID;
 const TREE = treeAddress(TREE_ID);

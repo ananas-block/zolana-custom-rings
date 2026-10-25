@@ -8,7 +8,7 @@ import {
 } from "@solana/kit";
 import { expect } from "vitest";
 
-import { type RingMemberOpenings, type RingRecordReader } from "../../src/client/ports.js";
+import { type RingMemberOpenings, type RingRecordReader } from "../../src/rpc/ports.js";
 import type {
   ChainReader,
   ProofAuthority,
@@ -21,11 +21,11 @@ import type {
 import type {
   AnonymousRingTransactProofInput,
   HiddenOwnerAuthorization,
-} from "../../src/client/ports.js";
+} from "../../src/rpc/ports.js";
 import {
   encodeRingTransactInstructionData,
   type RingTransactInstructionData,
-} from "../../src/interface/circuit.js";
+} from "../../src/protocol/proof/circuit.js";
 import {
   prepareTransfer,
   SYSTEM_PROGRAM,
@@ -57,20 +57,27 @@ import {
   ProofInputUtxo,
   Utxo,
 } from "@heliuslabs/zolana/transaction";
-import type { RingProofRequest } from "../../src/client/prover/ring.js";
+import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
 import {
   ringAuthAddress,
   ringConfigAddress,
   ringConfigPda,
   ringMemberRegistryPda,
-} from "../../src/interface/pda/index.js";
-import { openTransactionViewingSecret } from "../../src/keypair/audit.js";
-import { openRingDisclosure, type RingDisclosure } from "../../src/keypair/ring-disclosure.js";
-import { ringIdField, ringTagField } from "../../src/keypair/ring-stream.js";
-import { RingInstructionTag, ringComputeUnitLimit } from "../../src/ring/admin.js";
-import type { RingCoSigner, RingMode, RingSourceSlot } from "../../src/ring/codecs.js";
-import type { ProvenRingTransfer, RingTransactionFrame } from "../../src/ring/pipeline.js";
-import type { RingTransferApproval } from "../../src/ring/rails.js";
+} from "../../src/protocol/pda/index.js";
+import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
+import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
+import { ringIdField, ringTagField } from "../../src/crypto/derivation/ring-stream.js";
+import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
+import type {
+  RingCoSigner,
+  RingMode,
+  RingSourceSlot,
+} from "../../src/protocol/codec/ring-codecs.js";
+import type {
+  ProvenRingTransfer,
+  RingTransactionFrame,
+} from "../../src/operations/workflow/pipeline.js";
+import type { RingTransferApproval } from "../../src/operations/payments/transfer-rails.js";
 import {
   LIST_IDS,
   policySourceOwners,
@@ -78,9 +85,9 @@ import {
   referencedLists,
   type ListId,
   type RuleTable,
-} from "../../src/ring/policy.js";
-import { auditStatementHash, ringAuditStatement } from "../../src/ring/statement.js";
-import { RingTransactData, type RingRail } from "../../src/ring/transact.js";
+} from "../../src/protocol/membership/policy.js";
+import { auditStatementHash, ringAuditStatement } from "../../src/protocol/proof/statement.js";
+import { RingTransactData, type RingRail } from "../../src/protocol/transaction/transact.js";
 
 import {
   matchesPage,
@@ -95,17 +102,17 @@ import {
   ringProgramConfigData,
   sppRingRegistration,
 } from "./ring-accounts.js";
-import { settlementAccounts } from "../../src/interface/spp.js";
-import { checkTransactionFits } from "../../src/flows/compile.js";
-import { decodeRingPacked, readRingOutput } from "../../src/interface/output.js";
-import { ringOutputBlinding, openRingDelivery } from "../../src/ring/blinding.js";
+import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
+import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
+import { decodeRingPacked, readRingOutput } from "../../src/protocol/transaction/output.js";
+import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
 import {
   LocalRingKeys,
   ringWalletKeys,
   type RingKeys,
   type RingRecipientKey,
-} from "../../src/transaction/wallet/ring-keys.js";
-import { x25519FromU } from "../../src/keypair/x25519.js";
+} from "../../src/state/ring-keys.js";
+import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
 export const TREE = treeAddress(TREE_ID);

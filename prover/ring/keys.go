@@ -13,7 +13,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
-// Family is mirrored by RingCircuit in program-libs/interface/src/key_catalog.rs.
+// Family is mirrored by RingCircuit in program-libs/interface/src/proof/key_catalog.rs.
 type Family int
 
 const (

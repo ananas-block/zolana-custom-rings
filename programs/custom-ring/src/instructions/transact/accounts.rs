@@ -9,12 +9,12 @@ use zolana_hasher::primitives::solana_owner_identity;
 use zolana_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
+    instruction_runtime::{PlacedRingAuth, RingAuth},
     loader::{
         check_co_signer, check_funding_signer, load_anonymous_exit, load_curator_registry,
         load_registry,
     },
     public_legs::PublicLegs,
-    shared::{PlacedRingAuth, RingAuth},
 };
 
 /// The registry follows the config on a policy ring.

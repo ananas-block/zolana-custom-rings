@@ -1,5 +1,5 @@
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { createCustomRingClient } from "../../src/client/client.js";
+import { createCustomRingClient } from "../../src/rpc/client.js";
 // Deploys a fresh ring program from the built binaries, upgrades it in place
 // and registers its config. Reads RING_PROGRAM_SO and USER_REGISTRY_PROGRAM_SO.
 import { readFile } from "node:fs/promises";

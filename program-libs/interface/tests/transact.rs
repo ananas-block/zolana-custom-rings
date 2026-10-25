@@ -1,4 +1,4 @@
-//! Pins `test-vectors/ring-transact-expansion.json` for the TS SDK and the ring program tests.
+//! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK and the ring program tests.
 
 mod common;
 
@@ -32,7 +32,7 @@ use zolana_ring_policy::{ListId, Member, OutflowLimit, RuleTable};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/ring-transact-expansion.json"
+    "/../../test-vectors/proof/ring-transact-expansion.json"
 );
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -443,7 +443,7 @@ fn ring_transact_expansion_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/ring-transact-expansion.json"]
+#[ignore = "rewrites test-vectors/proof/ring-transact-expansion.json"]
 fn write_ring_transact_expansion_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");

@@ -10,7 +10,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
-// Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/disclosure.rs.
+// Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/proof/disclosure.rs.
 const (
 	// LayoutExits is set exactly when a published UTXO exits, SeedOut then opens the disclosure.
 	LayoutExits = 1 << iota

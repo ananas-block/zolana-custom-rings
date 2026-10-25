@@ -1,4 +1,4 @@
-//! Pins the anonymous classes and shapes in `test-vectors/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
+//! Pins the anonymous classes and shapes in `test-vectors/proof/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
 
 use custom_ring_interface::{
     AnonymousSpend, ANONYMOUS_AUDIT_CLASSES, ANONYMOUS_ENTRY_CLASS, ANONYMOUS_ENTRY_OUTPUTS,
@@ -6,7 +6,10 @@ use custom_ring_interface::{
 use zolana_interface::shape::SPP_SUPPORTED_SHAPES;
 
 fn vector() -> serde_json::Value {
-    serde_json::from_str(include_str!("../../../test-vectors/ring_keyed_shapes.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../test-vectors/proof/ring_keyed_shapes.json"
+    ))
+    .unwrap()
 }
 
 #[test]

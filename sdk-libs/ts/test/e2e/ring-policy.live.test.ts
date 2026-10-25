@@ -1,6 +1,6 @@
 // Runs against the harness ring of `just test-ts-e2e`, its table pins the
 // released rows, allow required for every party, block and frozen forbidden.
-import { createCustomRingClient } from "../../src/client/client.js";
+import { createCustomRingClient } from "../../src/rpc/client.js";
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 import { ListId, memberOfTag, pinnedPolicy } from "../../src/ring/advanced.js";

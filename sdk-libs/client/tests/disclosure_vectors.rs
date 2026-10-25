@@ -27,9 +27,9 @@ use transfer::{
     Placement, Publish, Rail, Slot, Transfer, UtxoFields,
 };
 
-const PACKED: &str = include_str!("../../../test-vectors/audit-disclosure.json");
-const DELIVERED: &str = include_str!("../../../test-vectors/audit-disclosure-delivered.json");
-const ANONYMOUS: &str = include_str!("../../../test-vectors/audit-disclosure-anonymous.json");
+const PACKED: &str = include_str!("../../../test-vectors/audit/audit-disclosure.json");
+const DELIVERED: &str = include_str!("../../../test-vectors/audit/audit-disclosure-delivered.json");
+const ANONYMOUS: &str = include_str!("../../../test-vectors/audit/audit-disclosure-anonymous.json");
 
 const SOL: Address = Address::new_from_array([0; 32]);
 const MINT: Address = Address::new_from_array([0x0a; 32]);

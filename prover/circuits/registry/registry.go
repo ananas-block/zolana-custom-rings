@@ -7,7 +7,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// The tree shape mirrors program-libs/interface/src/member_registry.rs.
+// The tree shape mirrors program-libs/interface/src/accounts/member_registry.rs.
 const (
 	Height    = 10
 	Arity     = 4
@@ -29,7 +29,7 @@ func (r Record) Hash(api frontend.API) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey})
 }
 
-// EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/member_registry.rs.
+// EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.
 func EscrowKey(api frontend.API, nullifierPk, ciphertextHash frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{nullifierPk, ciphertextHash})
 }

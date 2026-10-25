@@ -12,7 +12,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// AuditHead is what the program holds for the head of an audit statement, mirrors AuditHead in program-libs/interface/src/statement.rs.
+// AuditHead is what the program holds for the head of an audit statement, mirrors AuditHead in program-libs/interface/src/proof/statement.rs.
 type AuditHead struct {
 	FirstNullifier *big.Int
 	RingProgramID  *big.Int

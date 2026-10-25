@@ -61,7 +61,7 @@ type ruleFields struct {
 	scalarGuard, assetGuard    frontend.Variable
 }
 
-// ruleParts mirrors Row in program-libs/policy/src/rule_table.rs, read from the low byte of the big-endian field.
+// ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
 var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 64}, {96, 8}}
 
 // decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
