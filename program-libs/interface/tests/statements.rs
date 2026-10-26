@@ -4,7 +4,7 @@ use custom_ring_interface::{
     stream::{RingTag, TAG_LEN},
     AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
     AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DepositContext, DepositPublicInput,
-    DisclosureLayout, PackedLayout, PolicyKey, PolicyStatement, RegisterKeyStatement, RingOutput,
+    DisclosureLayout, PolicyKey, PolicyStatement, RegisterKeyStatement, RingOutput,
     DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
@@ -33,7 +33,7 @@ struct StatementVectors {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct AuditCase {
-    /// `packed`, `delivered` or `anonymous`.
+    /// `delivered` or `anonymous`.
     kind: String,
     first_nullifier: String,
     ring_id: String,
@@ -42,7 +42,7 @@ struct AuditCase {
     eph_u: String,
     sealed: String,
     salt: String,
-    /// `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`.
+    /// `exits | key_escrow << 1 | full_openings << 3`.
     layout: u8,
     outputs: Vec<OutputCase>,
     disclosure: Vec<String>,
@@ -57,7 +57,7 @@ struct AuditCase {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct OutputCase {
-    /// `packed`, `delivered`, `anonymous` or `exit`.
+    /// `delivered`, `anonymous` or `exit`.
     kind: String,
     hash: String,
     u: Option<String>,
@@ -189,22 +189,11 @@ impl Values {
         }
     }
 
-    fn packed_outputs(&self) -> Vec<RingOutput<'_>> {
-        vec![
-            RingOutput::Packed {
-                hash: &self.fields[20],
-                u: &self.keys[3],
-                ciphertext: &[],
-            },
-            self.exit(1),
-        ]
-    }
-
-    fn delivered_outputs(&self) -> Vec<RingOutput<'_>> {
-        (0..8)
-            .map(|slot| match slot {
-                2 | 5 => self.exit(slot),
-                _ => RingOutput::Delivered {
+    fn delivered_outputs(&self, outputs: usize, exits: &[usize]) -> Vec<RingOutput<'_>> {
+        (0..outputs)
+            .map(|slot| match exits.contains(&slot) {
+                true => self.exit(slot),
+                false => RingOutput::Delivered {
                     hash: &self.fields[20 + slot],
                     u: &self.keys[4 + slot % 4],
                     body: &self.bodies[slot],
@@ -231,10 +220,9 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
     let head = statement.head;
     let anonymous = match statement.kind {
         AuditKind::Anonymous(anonymous) => Some(anonymous),
-        AuditKind::Packed | AuditKind::Delivered => None,
+        AuditKind::Delivered => None,
     };
     let kind = match statement.kind {
-        AuditKind::Packed => "packed",
         AuditKind::Delivered => "delivered",
         AuditKind::Anonymous(_) => "anonymous",
     };
@@ -262,7 +250,6 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
 
 fn output_case(output: &RingOutput<'_>) -> OutputCase {
     let (kind, u, tag, body) = match output {
-        RingOutput::Packed { u, .. } => ("packed", Some(*u), None, None),
         RingOutput::Delivered { u, body, .. } => ("delivered", Some(*u), None, Some(*body)),
         RingOutput::Anonymous { tag, body, .. } => ("anonymous", None, Some(*tag), Some(*body)),
         RingOutput::Exit { .. } => ("exit", None, None, None),
@@ -302,9 +289,9 @@ fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
 
 fn compute_vectors() -> StatementVectors {
     let values = Values::new();
-    let (packed, delivered, anonymous) = (
-        values.packed_outputs(),
-        values.delivered_outputs(),
+    let (escrowed, delivered, anonymous) = (
+        values.delivered_outputs(2, &[1]),
+        values.delivered_outputs(8, &[2, 5]),
         values.anonymous_outputs(),
     );
     let anonymous_tail = AuditKind::Anonymous(AnonymousAudit {
@@ -325,17 +312,15 @@ fn compute_vectors() -> StatementVectors {
             head: values.head(AuditLayout {
                 exits: true,
                 key_escrow: true,
-                data_free: true,
                 full_openings: false,
             }),
-            outputs: &packed,
-            disclosure: values.disclosure(DisclosureLayout::Packed(PackedLayout {
+            outputs: &escrowed,
+            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
                 outputs: 2,
                 exits: true,
                 key_escrow: true,
-                data_free: true,
             })),
-            kind: AuditKind::Packed,
+            kind: AuditKind::Delivered,
         },
         AuditStatement {
             head: values.head(AuditLayout {
@@ -362,7 +347,6 @@ fn compute_vectors() -> StatementVectors {
         AuditStatement {
             head: values.head(AuditLayout {
                 exits: true,
-                data_free: true,
                 full_openings: true,
                 ..AuditLayout::default()
             }),
@@ -451,12 +435,12 @@ fn compute_vectors() -> StatementVectors {
                       heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), \
                       pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), \
                       salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 \
-                      | data_free << 2 | full_openings << 3, the tails chain the published output \
+                      | full_openings << 3, the tails chain the published output \
                       hashes, the delivered and \
                       anonymous body hashes (zero for an exit), the disclosure fields, \
                       pack_be(u) per delivered slot and the 0^16 || tag field per anonymous \
-                      slot. Each disclosure holds the field count of its layout, packed with 2 \
-                      outputs, delivered with 8, anonymous of commitment class 4 and of the entry \
+                      slot. Each disclosure holds the field count of its layout, delivered with 2 \
+                      escrowed outputs and with 8, anonymous of commitment class 4 and of the entry \
                       key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
@@ -520,7 +504,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(lengths, [14, 16, 23, 23]);
+    assert_eq!(lengths, [16, 16, 23, 23]);
     let policy: Vec<usize> = committed
         .policy
         .iter()

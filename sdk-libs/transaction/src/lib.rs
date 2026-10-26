@@ -4,7 +4,6 @@ mod assets;
 mod error;
 mod published;
 mod ring_delivered;
-mod ring_packed;
 
 use std::{
     cell::RefCell,
@@ -25,7 +24,7 @@ use zolana_transaction::{
         ConfidentialTransaction, OutputEncoder, OutputEncryption, ResolvedOwnerTag, SppProofInputs,
     },
     serialization::confidential::{Confidential, ConfidentialEncode, ConfidentialOutputPlaintext},
-    Data, SppProofOutputUtxo, TransactionError, UtxoSerialization, SOL_ASSET_ID,
+    SppProofOutputUtxo, TransactionError, UtxoSerialization,
 };
 
 pub use assets::RingAssets;
@@ -35,12 +34,9 @@ pub use ring_delivered::{
     delivered_ring_data, is_contributory, RingDelivered, RingDeliveredBody, RingDeliveredNote,
     RingDeliveryOpening, RingUtxoOwner,
 };
-pub use ring_packed::{RingPacked, RingPackedPlaintext};
 
 #[derive(Clone, Debug)]
 pub enum RingDelivery {
-    /// Scheme 11 sealed to the owner's viewing key, at `PACKED_AUDIT_CAPACITIES`.
-    Packed,
     /// Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`.
     Delivered,
     /// Scheme 9 under a stream tag, each payment delivered to its ring address key.
@@ -213,7 +209,6 @@ enum Slot {
     Dummy {
         tag: Option<RingTag>,
     },
-    Compact,
 }
 
 impl RingOutputRail {
@@ -270,9 +265,6 @@ impl RingOutputRail {
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
         for (index, output) in inputs.output_utxos.iter_mut().enumerate() {
-            if output.is_compact() {
-                continue;
-            }
             if matches!(self.delivery, RingDelivery::Anonymous(_))
                 && output.ring_data_hash.is_some()
             {
@@ -352,19 +344,15 @@ impl RingOutputRail {
         slot_index: u32,
     ) -> Result<Slot, RingRailError> {
         let index = slot_index as usize;
-        let delivered = !matches!(self.delivery, RingDelivery::Packed);
         let anonymous = matches!(self.delivery, RingDelivery::Anonymous(_));
         if output.is_compact() {
-            return match delivered {
-                true => Err(RingRailError::DeliveredCompactPadding { slot_index: index }),
-                false => Ok(Slot::Compact),
-            };
+            return Err(RingRailError::DeliveredCompactPadding { slot_index: index });
         }
         // An anonymous output's ring data is the rail's own, checked where the rail sets it.
         let carries_data = !output.data.is_empty()
             || output.data_hash.is_some()
             || (output.ring_data_hash.is_some() && !anonymous);
-        if delivered && !output.is_dummy() && carries_data {
+        if !output.is_dummy() && carries_data {
             return Err(RingRailError::DeliveredOutputData { slot_index: index });
         }
         let owner = || {
@@ -388,7 +376,7 @@ impl RingOutputRail {
                 AnonymousSlot::Exit => Slot::Exit,
                 AnonymousSlot::Dummy { tag } => Slot::Dummy { tag: Some(tag) },
             },
-            RingDelivery::Packed | RingDelivery::Delivered => match output.is_dummy() {
+            RingDelivery::Delivered => match output.is_dummy() {
                 true => Slot::Dummy { tag: None },
                 false if is_ring_output(output) => Slot::Ring {
                     recipient: owner()?,
@@ -415,22 +403,6 @@ impl RingOutputRail {
             data: expanded.data.ok_or_else(framing)?,
         })
     }
-
-    fn dummy_ciphertext(&self, slot: &SlotEncode<'_>) -> Result<Vec<u8>, RingRailError> {
-        let plaintext = RingPackedPlaintext {
-            asset_id: SOL_ASSET_ID,
-            amount: 0,
-            blinding: [0; 32],
-            data: Data::default(),
-        }
-        .serialize()?;
-        Ok(self.tx_viewing_key.encrypt_slot(
-            &ViewingKey::new().pubkey(),
-            &plaintext,
-            self.salt,
-            slot.slot_index,
-        )?)
-    }
 }
 
 impl RingOutputRail {
@@ -451,7 +423,6 @@ impl RingOutputRail {
         {
             let slot_index = u32::try_from(index).map_err(|_| TransactionError::TooManyOutputs)?;
             let resolved = match self.slot(output, sender, slot_index)? {
-                Slot::Compact => continue,
                 Slot::Exit => owner_tag.resolved,
                 Slot::Ring { tag: Some(tag), .. } | Slot::Dummy { tag: Some(tag) } => tag.field(),
                 Slot::Ring {
@@ -502,22 +473,7 @@ impl RingOutputRail {
         let hash = [0; 32];
         let owner_tag = &slot.owner_tag;
         match self.slot(slot.output, slot.sender, slot.slot_index)? {
-            Slot::Compact => Err(RingRailError::DeliveredCompactPadding { slot_index }),
             Slot::Exit => self.exit_slot(slot).map(EncodedSlot::from),
-            Slot::Ring {
-                recipient,
-                tag: None,
-            } if matches!(self.delivery, RingDelivery::Packed) => RingPacked::encode_plaintext(
-                &RingPackedPlaintext::from(slot.output),
-                owner_tag.resolved,
-                &ConfidentialEncode {
-                    tx: self.tx_viewing_key.clone(),
-                    recipient_pubkey: recipient,
-                    salt: self.salt,
-                    slot_index: slot.slot_index,
-                },
-            )
-            .map(EncodedSlot::from),
             Slot::Ring { recipient, tag } => {
                 let secret =
                     self.slot_secret(&recipient, &slot.first_nullifier, slot.slot_index)?;
@@ -547,22 +503,13 @@ impl RingOutputRail {
             }
             Slot::Dummy { tag } => {
                 let body = random_body();
-                let ciphertext;
-                let output = match (tag, &self.delivery) {
-                    (Some(tag), _) => RingOutput::Anonymous {
+                let output = match tag {
+                    Some(tag) => RingOutput::Anonymous {
                         hash: &hash,
                         tag,
                         body: &body,
                     },
-                    (None, RingDelivery::Packed) => {
-                        ciphertext = self.dummy_ciphertext(slot)?;
-                        RingOutput::Packed {
-                            hash: &hash,
-                            u: &owner_tag.resolved,
-                            ciphertext: &ciphertext,
-                        }
-                    }
-                    (None, _) => RingOutput::Delivered {
+                    None => RingOutput::Delivered {
                         hash: &hash,
                         u: &owner_tag.resolved,
                         body: &body,

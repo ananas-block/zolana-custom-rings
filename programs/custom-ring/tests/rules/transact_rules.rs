@@ -44,7 +44,6 @@ pub struct Fixture {
     keys: [[u8; 32]; 16],
     bodies: [[u8; 40]; 16],
     tags: [[u8; TAG_LEN]; 16],
-    ciphertext: Vec<u8>,
     salt: [u8; 16],
 }
 
@@ -70,7 +69,6 @@ impl Fixture {
             keys: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
             tags: core::array::from_fn(|i| [0xa0 + i as u8; TAG_LEN]),
-            ciphertext: (0..82).collect(),
             salt: [0x5c; 16],
         }
     }
@@ -103,9 +101,6 @@ impl Fixture {
             tx_viewing_u: &self.keys[0],
             salt: &self.salt,
             interface_transfers: Vec::new(),
-            data_hash: None,
-            ring_data_hash: None,
-            data_free: false,
             key_escrow: rail == RingRail::Delegate,
             full_openings: false,
             outputs: Vec::new(),
@@ -126,26 +121,19 @@ impl Fixture {
             }),
         };
         let slots = 0..usize::from(n_out);
-        data.outputs = match (rail, n_out) {
-            (RingRail::Anonymous, _) => slots
+        data.outputs = match rail {
+            RingRail::Anonymous => slots
                 .map(|slot| RingOutput::Anonymous {
                     hash: &self.fields[10 + slot],
                     tag: RingTag::from_bytes(self.tags[slot]),
                     body: &self.bodies[slot],
                 })
                 .collect(),
-            (RingRail::Confidential | RingRail::Delegate, 8 | 16) => slots
+            RingRail::Confidential | RingRail::Delegate => slots
                 .map(|slot| RingOutput::Delivered {
                     hash: &self.fields[10 + slot],
                     u: &self.keys[5 + slot % 10],
                     body: &self.bodies[slot],
-                })
-                .collect(),
-            _ => slots
-                .map(|slot| RingOutput::Packed {
-                    hash: &self.fields[10 + slot],
-                    u: &self.keys[5 + slot],
-                    ciphertext: &self.ciphertext,
                 })
                 .collect(),
         };
@@ -241,42 +229,20 @@ fn a_confidential_transfer_passing_every_check_reaches_the_audit_key() {
 }
 
 #[test]
-fn trailing_bytes_or_a_packed_output_count_past_the_capacity_disagree_with_the_shape() {
+fn trailing_or_missing_bytes_disagree_with_the_shape() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AuditOnly);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
-    let mut bytes = data.encode().unwrap();
-    bytes.push(0);
-    refused(
-        send(
-            &mut ring,
-            tag::TRANSACT,
-            Vec::new(),
-            bytes,
-            spp.clone(),
-            &[],
-        ),
-        CustomRingError::RingTransactLength,
-    );
-
-    let mut bytes = data.encode().unwrap();
-    let (flags_shape_and_inputs, leg_count) = (input_flag::BYTE + 1, 1);
-    let output_count = flags_shape_and_inputs
-        + CustomRingProof::SIZE
-        + core::mem::size_of_val(&data.expiry_unix_ts)
-        + data.tx_viewing_u.len()
-        + data.salt.len()
-        + leg_count;
-    assert_eq!(bytes[output_count], 2);
-    for count in [3, 70] {
-        bytes[output_count] = count;
+    let encoded = data.encode().unwrap();
+    let trailing = [&encoded[..], &[0]].concat();
+    for bytes in [trailing, encoded[..encoded.len() - 1].to_vec()] {
         refused(
             send(
                 &mut ring,
                 tag::TRANSACT,
                 Vec::new(),
-                bytes.clone(),
+                bytes,
                 spp.clone(),
                 &[],
             ),

@@ -1488,9 +1488,11 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
     let automatic = transfer();
     let staged = automatic.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN2_OUT2);
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
     let shaped = transfer().with_shape(Shape::IN4_OUT4).unwrap();
     let staged = shaped.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN4_OUT4);
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
 }
 
 struct MoveFixture<'a> {
@@ -2194,12 +2196,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 1,
         n_out: 2,
-        bytes: [Some(1472), Some(1731), Some(1388), Some(1743), None],
+        bytes: [Some(1357), Some(1616), Some(1388), Some(1743), None],
     },
     SizePin {
         n_in: 1,
         n_out: 4,
-        bytes: [Some(1954), Some(2149), Some(1756), Some(2111), None],
+        bytes: [Some(1693), Some(1888), Some(1756), Some(2111), None],
     },
     SizePin {
         n_in: 1,
@@ -2209,12 +2211,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 2,
         n_out: 2,
-        bytes: [Some(1537), Some(1796), Some(1485), Some(1840), Some(1796)],
+        bytes: [Some(1422), Some(1681), Some(1485), Some(1840), Some(1681)],
     },
     SizePin {
         n_in: 2,
         n_out: 4,
-        bytes: [Some(2019), Some(2214), Some(1853), Some(2208), None],
+        bytes: [Some(1758), Some(1953), Some(1853), Some(2208), None],
     },
     SizePin {
         n_in: 1,
@@ -2229,12 +2231,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 3,
         n_out: 2,
-        bytes: [Some(1602), Some(1861), Some(1550), Some(1905), None],
+        bytes: [Some(1487), Some(1746), Some(1550), Some(1905), None],
     },
     SizePin {
         n_in: 3,
         n_out: 4,
-        bytes: [Some(2084), Some(2279), Some(1918), Some(2273), None],
+        bytes: [Some(1823), Some(2018), Some(1918), Some(2273), None],
     },
     SizePin {
         n_in: 2,
@@ -2249,12 +2251,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 4,
         n_out: 2,
-        bytes: [Some(1667), Some(1926), Some(1647), Some(2002), None],
+        bytes: [Some(1552), Some(1811), Some(1647), Some(2002), None],
     },
     SizePin {
         n_in: 4,
         n_out: 4,
-        bytes: [Some(2149), Some(2344), Some(2015), Some(2370), Some(2344)],
+        bytes: [Some(1888), Some(2083), Some(2015), Some(2370), Some(2083)],
     },
     SizePin {
         n_in: 4,
@@ -2264,12 +2266,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 5,
         n_out: 2,
-        bytes: [Some(1732), Some(1991), Some(1712), Some(2067), None],
+        bytes: [Some(1617), Some(1876), Some(1712), Some(2067), None],
     },
     SizePin {
         n_in: 5,
         n_out: 4,
-        bytes: [Some(2214), Some(2409), Some(2080), Some(2435), None],
+        bytes: [Some(1953), Some(2148), Some(2080), Some(2435), None],
     },
     SizePin {
         n_in: 4,
@@ -2284,12 +2286,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 6,
         n_out: 2,
-        bytes: [Some(1797), Some(2056), Some(1809), Some(2164), None],
+        bytes: [Some(1682), Some(1941), Some(1809), Some(2164), None],
     },
     SizePin {
         n_in: 6,
         n_out: 4,
-        bytes: [Some(2279), Some(2474), Some(2177), Some(2532), None],
+        bytes: [Some(2018), Some(2213), Some(2177), Some(2532), None],
     },
     SizePin {
         n_in: 5,
@@ -2304,12 +2306,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 8,
         n_out: 2,
-        bytes: [Some(1927), Some(2186), Some(1971), Some(2326), None],
+        bytes: [Some(1812), Some(2071), Some(1971), Some(2326), None],
     },
     SizePin {
         n_in: 8,
         n_out: 4,
-        bytes: [Some(2409), Some(2604), Some(2339), Some(2694), None],
+        bytes: [Some(2148), Some(2343), Some(2339), Some(2694), None],
     },
     SizePin {
         n_in: 8,
@@ -2324,12 +2326,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 12,
         n_out: 2,
-        bytes: [Some(2187), Some(2446), Some(2295), Some(2650), None],
+        bytes: [Some(2072), Some(2331), Some(2295), Some(2650), None],
     },
     SizePin {
         n_in: 12,
         n_out: 4,
-        bytes: [Some(2669), Some(2864), Some(2663), Some(3018), None],
+        bytes: [Some(2408), Some(2603), Some(2663), Some(3018), None],
     },
     SizePin {
         n_in: 12,
@@ -2339,12 +2341,12 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 16,
         n_out: 2,
-        bytes: [Some(2447), Some(2706), Some(2619), Some(2974), None],
+        bytes: [Some(2332), Some(2591), Some(2619), Some(2974), None],
     },
     SizePin {
         n_in: 16,
         n_out: 4,
-        bytes: [Some(2929), Some(3124), Some(2987), Some(3342), None],
+        bytes: [Some(2668), Some(2863), Some(2987), Some(3342), None],
     },
     SizePin {
         n_in: 16,
@@ -2354,27 +2356,27 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 24,
         n_out: 2,
-        bytes: [Some(2967), Some(3226), Some(3267), Some(3622), None],
+        bytes: [Some(2852), Some(3111), Some(3267), Some(3622), None],
     },
     SizePin {
         n_in: 24,
         n_out: 4,
-        bytes: [Some(3449), Some(3644), Some(3635), Some(3990), None],
+        bytes: [Some(3188), Some(3383), Some(3635), Some(3990), None],
     },
     SizePin {
         n_in: 32,
         n_out: 2,
-        bytes: [Some(3487), Some(3746), Some(3915), Some(4270), None],
+        bytes: [Some(3372), Some(3631), Some(3915), Some(4270), None],
     },
     SizePin {
         n_in: 40,
         n_out: 2,
-        bytes: [Some(4007), Some(4266), None, None, None],
+        bytes: [Some(3892), Some(4151), None, None, None],
     },
     SizePin {
         n_in: 48,
         n_out: 2,
-        bytes: [Some(4527), Some(4786), None, None, None],
+        bytes: [Some(4412), Some(4671), None, None, None],
     },
     SizePin {
         n_in: 49,
@@ -2431,19 +2433,13 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     let policy = Measure {
         rail: Measured::ConfidentialPolicy,
         shape: zolana_client::Shape::IN40_OUT2,
+        co_signer: Some(MEASURED_CO_SIGNER),
         ..audit_only
     };
     assert!(fits(policy).await);
     assert!(
         !fits(Measure {
             payer: Payer::Outsider,
-            ..policy
-        })
-        .await
-    );
-    assert!(
-        !fits(Measure {
-            co_signer: Some(MEASURED_CO_SIGNER),
             ..policy
         })
         .await

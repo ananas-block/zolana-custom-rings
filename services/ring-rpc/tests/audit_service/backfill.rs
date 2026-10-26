@@ -455,12 +455,12 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
     let fixture = Fixture::new();
     let mut source = fixture.source().with_transactions(vec![Indexed {
         transfer: &ring_transfer(8),
-        outputs: &[paid(utxo(0xb8, asset, 13), fixture.recipient_u)],
+        outputs: &[Output::Exit(utxo(0xb8, asset, 13))],
         auditor: &fixture.auditor.pubkey(),
         signature: 8,
         frames: &fixture.frames,
     }
-    .packed()]);
+    .delivered()]);
     source.assets = Some(RingAssets::new([Mint::new(asset, ASSET_ID)]).expect("ring assets"));
     let unknown_transactions = source.transactions.clone();
     let reads = source.asset_reads.clone();
@@ -504,7 +504,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             })
             .await
             .unwrap();
-        assert_eq!(response.value.items[0].outputs.len(), 1);
+        assert_eq!(response.value.items[0].outputs.len(), 2);
         assert_eq!(mint(&response), None);
         assert!(response.value.skipped.is_empty());
     }

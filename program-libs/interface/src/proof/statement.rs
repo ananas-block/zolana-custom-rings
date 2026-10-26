@@ -63,7 +63,6 @@ pub struct AnonymousAudit<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditKind<'a> {
-    Packed,
     Delivered,
     Anonymous(AnonymousAudit<'a>),
 }
@@ -86,7 +85,6 @@ impl AuditStatement<'_> {
         let output_chain = create_hash_chain_4_from_slice(&hashes)?;
         let disclosure_chain = create_hash_chain_4_from_slice(self.disclosure)?;
         match self.kind {
-            AuditKind::Packed => elements.extend([output_chain, disclosure_chain]),
             AuditKind::Delivered => {
                 let keys: Vec<[u8; 32]> = self
                     .outputs

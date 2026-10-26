@@ -112,7 +112,7 @@ ring_errors! {
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
     AuthorityLeafReserve = 8222 => "a member write would enter the leaves reserved for the authority",
     ApplyTooSoon = 8223 => "a permissionless application lands inside the delay of the previous one",
-    DataFreeBodyLength = 8224 => "a data-free transfer frames a packed or exit body of another length",
+    DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",
     ZeroPublicLegAmount = 8225 => "a public leg moves no amount",
     TooManyPublicAssets = 8226 => "the public legs name more assets than the public slots",
     PublicAmountOverflow = 8227 => "the net public amount of an asset exceeds a u64 magnitude",

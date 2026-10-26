@@ -17,11 +17,6 @@ use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OwnedOutput {
-    Packed {
-        hash: [u8; 32],
-        u: [u8; 32],
-        ciphertext: Vec<u8>,
-    },
     Delivered {
         hash: [u8; 32],
         u: [u8; 32],
@@ -42,15 +37,6 @@ pub(crate) enum OwnedOutput {
 impl OwnedOutput {
     pub fn of(output: RingOutput<'_>) -> Self {
         match output {
-            RingOutput::Packed {
-                hash,
-                u,
-                ciphertext,
-            } => Self::Packed {
-                hash: *hash,
-                u: *u,
-                ciphertext: ciphertext.to_vec(),
-            },
             RingOutput::Delivered { hash, u, body } => Self::Delivered {
                 hash: *hash,
                 u: *u,
@@ -75,15 +61,6 @@ impl OwnedOutput {
 
     pub fn view(&self) -> RingOutput<'_> {
         match self {
-            Self::Packed {
-                hash,
-                u,
-                ciphertext,
-            } => RingOutput::Packed {
-                hash,
-                u,
-                ciphertext,
-            },
             Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
             Self::Anonymous { hash, tag, body } => RingOutput::Anonymous {
                 hash,
@@ -135,9 +112,6 @@ pub(crate) struct TransactParts {
     pub tx_viewing_u: [u8; 32],
     pub salt: [u8; 16],
     pub interface_transfers: Vec<InterfaceTransfer>,
-    pub data_hash: Option<[u8; 32]>,
-    pub ring_data_hash: Option<[u8; 32]>,
-    pub data_free: bool,
     pub key_escrow: bool,
     pub full_openings: bool,
     pub outputs: Vec<OwnedOutput>,
@@ -173,9 +147,6 @@ impl TransactParts {
             tx_viewing_u: &self.tx_viewing_u,
             salt: &self.salt,
             interface_transfers: self.interface_transfers.clone(),
-            data_hash: self.data_hash.as_ref(),
-            ring_data_hash: self.ring_data_hash.as_ref(),
-            data_free: self.data_free,
             key_escrow: self.key_escrow,
             full_openings: self.full_openings,
             outputs: self.outputs.iter().map(OwnedOutput::view).collect(),

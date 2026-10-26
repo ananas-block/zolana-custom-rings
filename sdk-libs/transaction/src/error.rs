@@ -17,9 +17,9 @@ pub enum RingRailError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Hasher(#[from] HasherError),
-    #[error("delivered ring output {slot_index} carries data, its fixed body has no room")]
+    #[error("output {slot_index} carries data, a ring rail slot has a fixed body")]
     DeliveredOutputData { slot_index: usize },
-    #[error("output {slot_index} is compact padding, a delivered rail publishes every slot")]
+    #[error("output {slot_index} is compact padding, a ring rail publishes every slot")]
     DeliveredCompactPadding { slot_index: usize },
     #[error("output {slot_index} does not frame as its ring rail publishes it")]
     RingOutputFraming { slot_index: usize },

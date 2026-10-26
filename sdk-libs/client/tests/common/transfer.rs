@@ -1,16 +1,13 @@
 //! Ring transfers as the ring program publishes them, under the keys of the Go `ringaudit` fixture.
 
+use custom_ring_interface::ring_confidential_delivered_output_body;
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
     stream::{DeliveredSlot, RingTag, SlotSecret, TAG_LEN},
     tag as ring_tag, tagged_x25519, AnonymousAuditKey, AnonymousLayout, AnonymousProofData,
     AnonymousSpend, AuditorMessage, CustomRingProof, DeliveredLayout, DisclosureLayout, InputTrees,
-    PackedLayout, PlainGroth16Proof, RingOutput, RingPackedBody, RingRail, RingTransactData,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN, PACKED_AUDIT_CAPACITIES, RECIPIENT_KEY_LEN,
-    RING_DELIVERED_BODY_LEN, RING_PACKED_DATA_FREE_BODY_LEN,
-};
-use custom_ring_interface::{
-    ring_confidential_delivered_output_body, ring_confidential_packed_output_body,
+    PlainGroth16Proof, RingOutput, RingRail, RingTransactData, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -34,7 +31,7 @@ use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, AuditedUtxo, DeliveredOutputOpening, DisclosurePad, KnownUtxo,
-    OutputOpening, PackedOutputOpening, UtxoOwner,
+    OutputOpening, UtxoOwner,
 };
 use zolana_ring_transaction::{delivered_ring_data, RingDeliveredBody};
 use zolana_transaction::{
@@ -130,7 +127,6 @@ pub enum Output {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rail {
-    Packed,
     Delivered,
     Anonymous,
 }
@@ -161,7 +157,6 @@ pub struct Publish<'a> {
 pub struct Frame<'a> {
     pub tx: &'a ShieldedTransaction,
     pub layout: DisclosureLayout,
-    pub data_free: bool,
 }
 
 impl Transfer {
@@ -237,11 +232,6 @@ impl Transfer {
                 .seal(&secret)
                 .unwrap();
                 let published = match (rail, tag) {
-                    (Rail::Packed, _) => RingOutput::Packed {
-                        hash: &hash,
-                        u: &recipient_u,
-                        ciphertext: &[0xc0; RING_PACKED_DATA_FREE_BODY_LEN - RECIPIENT_KEY_LEN],
-                    },
                     (Rail::Delivered, _) => RingOutput::Delivered {
                         hash: &hash,
                         u: &recipient_u,
@@ -253,13 +243,12 @@ impl Transfer {
                         body: &body,
                     },
                 };
-                let delivered = rail != Rail::Packed;
                 Slot {
                     output: indexed(published, self.tree_id, leaf_index),
-                    slot_secret: delivered.then_some(*secret.as_bytes()),
+                    slot_secret: Some(*secret.as_bytes()),
                     ring_data_hash: utxo.ring_data_hash,
                     blinding,
-                    body: delivered.then_some(body),
+                    body: Some(body),
                 }
             }
             Output::Exit(utxo) => {
@@ -296,11 +285,6 @@ impl Transfer {
                 let u = [0xd1 + index as u8; 32];
                 let body = core::array::from_fn(|j| 0xd0 + j as u8);
                 let published = match rail {
-                    Rail::Packed => RingOutput::Packed {
-                        hash: &hash,
-                        u: &u,
-                        ciphertext: &[0xc1; RING_PACKED_DATA_FREE_BODY_LEN - RECIPIENT_KEY_LEN],
-                    },
                     Rail::Delivered => RingOutput::Delivered {
                         hash: &hash,
                         u: &u,
@@ -317,7 +301,7 @@ impl Transfer {
                     slot_secret: None,
                     ring_data_hash: [0; 32],
                     blinding,
-                    body: (rail != Rail::Packed).then_some(body),
+                    body: Some(body),
                 }
             }
         }
@@ -372,24 +356,6 @@ impl Transfer {
         let exits = seed_out.is_some();
         let escrowed = |nullifier_pk: Option<[u8; 32]>| nullifier_pk.filter(|_| !key_escrow);
         match rail {
-            Rail::Packed => AuditDisclosure::Packed {
-                layout: PackedLayout {
-                    outputs: outputs.len(),
-                    exits,
-                    key_escrow,
-                    data_free: data_free(outputs),
-                },
-                seed_out,
-                outputs: outputs
-                    .iter()
-                    .map(|output| {
-                        packed_opening(output).map(|opening| PackedOutputOpening {
-                            nullifier_pk: escrowed(opening.nullifier_pk),
-                            ..opening
-                        })
-                    })
-                    .collect(),
-            },
             Rail::Delivered => AuditDisclosure::Delivered {
                 layout: DeliveredLayout {
                     outputs: outputs.len(),
@@ -458,21 +424,8 @@ impl Transfer {
 impl Transfer {
     /// `tag || RingTransactData` the ring program received for `frame.tx`, every proof zero.
     pub fn frame(&self, frame: Frame<'_>) -> Vec<u8> {
-        let Frame {
-            tx,
-            layout,
-            data_free,
-        } = frame;
+        let Frame { tx, layout } = frame;
         let (rail, n_out, key_escrow, full_openings) = match layout {
-            DisclosureLayout::Packed(packed) => (
-                RingRail::Confidential,
-                PACKED_AUDIT_CAPACITIES
-                    .into_iter()
-                    .find(|capacity| *capacity >= packed.outputs)
-                    .unwrap(),
-                packed.key_escrow,
-                false,
-            ),
             DisclosureLayout::Delivered(delivered) => (
                 RingRail::Confidential,
                 delivered.outputs,
@@ -518,9 +471,6 @@ impl Transfer {
             tx_viewing_u: &tx_viewing_u,
             salt: &self.salt,
             interface_transfers: Vec::new(),
-            data_hash: None,
-            ring_data_hash: None,
-            data_free,
             key_escrow,
             full_openings,
             outputs: tx.output_slots.iter().map(wire).collect(),
@@ -544,15 +494,6 @@ impl Transfer {
     }
 }
 
-pub fn data_free(outputs: &[Output]) -> bool {
-    outputs.iter().all(|output| match output {
-        Output::Ring { utxo, .. } | Output::Exit(utxo) => {
-            utxo.data_hash == [0; 32] && utxo.ring_data_hash == [0; 32]
-        }
-        Output::Dummy => true,
-    })
-}
-
 /// The inverse of `RingOutput::transact_output`.
 fn wire(slot: &OutputSlot) -> RingOutput<'_> {
     let hash = &slot.output_context.hash;
@@ -562,13 +503,6 @@ fn wire(slot: &OutputSlot) -> RingOutput<'_> {
             hash,
             owner_tag: &slot.view_tag,
             payload,
-        };
-    }
-    if let Some(RingPackedBody { ciphertext, .. }) = ring_confidential_packed_output_body(payload) {
-        return RingOutput::Packed {
-            hash,
-            u: &slot.view_tag,
-            ciphertext,
         };
     }
     if let Some(body) = ring_confidential_delivered_output_body(payload) {
@@ -585,20 +519,6 @@ fn wire(slot: &OutputSlot) -> RingOutput<'_> {
             .and_then(|body| body.try_into().ok())
             .unwrap(),
     }
-}
-
-pub fn packed_opening(output: &Output) -> Option<PackedOutputOpening> {
-    let (Output::Ring { utxo, .. } | Output::Exit(utxo)) = output else {
-        return None;
-    };
-    Some(PackedOutputOpening {
-        owner_key: utxo.owner_key,
-        nullifier_pk: Some(utxo.nullifier_pk),
-        asset: utxo.asset(),
-        amount: utxo.amount,
-        data_hash: utxo.data_hash,
-        ring_data_hash: utxo.ring_data_hash,
-    })
 }
 
 pub fn delivered_opening(output: &Output) -> DeliveredOutputOpening {

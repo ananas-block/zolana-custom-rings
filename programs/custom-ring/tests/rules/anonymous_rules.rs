@@ -202,7 +202,7 @@ fn an_anonymous_policy_deposit_names_no_recipient() {
 }
 
 #[test]
-fn an_anonymous_policy_ring_reads_no_packed_layout() {
+fn an_anonymous_policy_ring_refuses_a_confidential_transfer() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
@@ -210,6 +210,6 @@ fn an_anonymous_policy_ring_reads_no_packed_layout() {
     let sent = transfer(&mut ring, Vec::new(), &data);
     assert!(
         sent.is_err(),
-        "a packed transfer reached an anonymous ring's keys"
+        "a confidential transfer reached an anonymous ring's keys"
     );
 }

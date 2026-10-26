@@ -50,12 +50,12 @@ pub mod audit_anonymous_v2_8_4_verifying_key;
 pub mod audit_anonymous_v2_8_8_verifying_key;
 #[path = "audit/audit_delivered_16_verifying_key.rs"]
 pub mod audit_delivered_16_verifying_key;
+#[path = "audit/audit_delivered_2_verifying_key.rs"]
+pub mod audit_delivered_2_verifying_key;
+#[path = "audit/audit_delivered_4_verifying_key.rs"]
+pub mod audit_delivered_4_verifying_key;
 #[path = "audit/audit_delivered_8_verifying_key.rs"]
 pub mod audit_delivered_8_verifying_key;
-#[path = "audit/audit_packed_2_verifying_key.rs"]
-pub mod audit_packed_2_verifying_key;
-#[path = "audit/audit_packed_4_verifying_key.rs"]
-pub mod audit_packed_4_verifying_key;
 #[path = "deposit/deposit_1_verifying_key.rs"]
 pub mod deposit_1_verifying_key;
 #[path = "deposit/deposit_2_verifying_key.rs"]
@@ -194,12 +194,12 @@ pub mod register_key_verifying_key;
 pub mod withdrawal_exemption_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
-        "custom_ring_audit_packed_2.key",
-        audit_packed_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_audit_delivered_2.key",
+        audit_delivered_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_packed_4.key",
-        audit_packed_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_audit_delivered_4.key",
+        audit_delivered_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_delivered_8.key",
@@ -582,11 +582,11 @@ pub fn verifying_key(
     circuit: key_catalog::RingCircuit,
 ) -> Option<&'static groth16_solana::groth16::Groth16Verifyingkey<'static>> {
     match circuit {
-        key_catalog::RingCircuit::PackedAudit { outputs: 2 } => {
-            Some(&audit_packed_2_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::DeliveredAudit { outputs: 2 } => {
+            Some(&audit_delivered_2_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::PackedAudit { outputs: 4 } => {
-            Some(&audit_packed_4_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::DeliveredAudit { outputs: 4 } => {
+            Some(&audit_delivered_4_verifying_key::VERIFYINGKEY)
         }
         key_catalog::RingCircuit::DeliveredAudit { outputs: 8 } => {
             Some(&audit_delivered_8_verifying_key::VERIFYINGKEY)

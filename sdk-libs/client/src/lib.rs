@@ -65,8 +65,8 @@ pub use crate::{
     deposit_payload::deposit_payload,
     disclosure::{
         AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-        PublishedOutputs, SealedAuditEnvelope,
+        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
+        SealedAuditEnvelope,
     },
     encryption::{
         auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,

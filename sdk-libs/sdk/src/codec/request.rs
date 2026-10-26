@@ -139,20 +139,6 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PackedAudit {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(flatten)]
-    pub audit: AuditParams,
-    pub n_out: u8,
-    /// The key's capacity, slots past `n_out` zero.
-    pub outputs: Vec<Opening>,
-    #[serde(serialize_with = "fe::seq")]
-    pub owner_keys: Vec<[u8; 32]>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeliveredOutput {

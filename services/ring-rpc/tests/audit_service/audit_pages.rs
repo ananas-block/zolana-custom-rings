@@ -578,7 +578,7 @@ async fn two_rings_read_only_their_own_transactions() {
         signature: 11,
         frames: &fixture.frames,
     }
-    .packed();
+    .delivered();
     let audited_b = Indexed {
         transfer: &Transfer {
             ring: ring_b,
@@ -589,7 +589,7 @@ async fn two_rings_read_only_their_own_transactions() {
         signature: 12,
         frames: &fixture.frames,
     }
-    .packed();
+    .delivered();
     let mut source = fixture.source();
     source.origins = HashMap::from([
         ((audited_a.tx_signature, 0), true),

@@ -2,12 +2,12 @@
 use crate::key_catalog::{RingCircuit, RingKey};
 pub const RING_KEYS: [RingKey; 96] = [
     RingKey {
-        circuit: RingCircuit::PackedAudit { outputs: 2 },
-        name: "custom-ring-audit-packed-2",
+        circuit: RingCircuit::DeliveredAudit { outputs: 2 },
+        name: "custom-ring-audit-delivered-2",
     },
     RingKey {
-        circuit: RingCircuit::PackedAudit { outputs: 4 },
-        name: "custom-ring-audit-packed-4",
+        circuit: RingCircuit::DeliveredAudit { outputs: 4 },
+        name: "custom-ring-audit-delivered-4",
     },
     RingKey {
         circuit: RingCircuit::DeliveredAudit { outputs: 8 },

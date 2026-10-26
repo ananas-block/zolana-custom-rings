@@ -20,7 +20,6 @@ use custom_ring_interface::{
     AnchorRoot, AuditBinding, CustomRingError, CustomRingProof, InputTrees, InstructionTag,
     ParsedTransact, PlainGroth16Proof, PublicLeg, PublicSlots, RingMode, RingProgramConfig,
     RingRail, Settlement, CONFIDENTIAL_RING_MAX_INPUTS, DELIVERED_AUDIT_CAPACITIES,
-    PACKED_AUDIT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -760,7 +759,7 @@ impl ProvenRingTransfer {
 
 /// Whether `rail` keys a transfer of `shape` publishing every input, none a default-ring UTXO.
 pub fn shape_keyed(rail: RingRail, shape: Shape) -> bool {
-    let capacity = audit_delivery(shape.n_outputs()).is_some();
+    let capacity = DELIVERED_AUDIT_CAPACITIES.contains(&shape.n_outputs());
     match rail {
         RingRail::Confidential => {
             capacity && shape.is_supported() && shape.n_inputs() <= CONFIDENTIAL_RING_MAX_INPUTS
@@ -814,13 +813,6 @@ fn preview_parts(preview: PreviewParts<'_>) -> TransactParts {
             .iter()
             .map(|transfer| transfer.interface_transfer())
             .collect(),
-        data_hash: external.data_hash,
-        ring_data_hash: external.ring_data_hash,
-        data_free: preview
-            .inputs
-            .output_utxos
-            .iter()
-            .all(|output| output.data.is_empty()),
         key_escrow: preview.key_escrow,
         full_openings: preview.rail == RingRail::Anonymous
             && spends_default_ring(&preview.inputs.input_utxos),
@@ -861,16 +853,11 @@ fn spends_default_ring(inputs: &[SppProofInputUtxo]) -> bool {
         .any(|input| !input.is_dummy() && input.utxo.ring_program_id.is_none())
 }
 
-fn audit_delivery(outputs: usize) -> Option<RingDelivery> {
-    match outputs {
-        n if PACKED_AUDIT_CAPACITIES.contains(&n) => Some(RingDelivery::Packed),
-        n if DELIVERED_AUDIT_CAPACITIES.contains(&n) => Some(RingDelivery::Delivered),
-        _ => None,
+fn delivered(outputs: usize, rail: RingRail) -> Result<RingDelivery, RingError> {
+    match DELIVERED_AUDIT_CAPACITIES.contains(&outputs) {
+        true => Ok(RingDelivery::Delivered),
+        false => Err(RingError::ShapeUnkeyed { rail }),
     }
-}
-
-fn packed_or_delivered(outputs: usize, rail: RingRail) -> Result<RingDelivery, RingError> {
-    audit_delivery(outputs).ok_or(RingError::ShapeUnkeyed { rail })
 }
 
 fn shape_byte(count: usize, rail: RingRail) -> Result<u8, RingError> {

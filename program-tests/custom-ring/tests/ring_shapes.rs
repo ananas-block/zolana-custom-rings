@@ -89,9 +89,9 @@ impl Coverage {
             // Each required key belongs to one independently runnable sweep.
             .filter(|circuit| {
                 let owner = match circuit {
-                    RingCircuit::PackedAudit { .. }
-                    | RingCircuit::DeliveredAudit { .. }
-                    | RingCircuit::Deposit { .. } => Column::Confidential,
+                    RingCircuit::DeliveredAudit { .. } | RingCircuit::Deposit { .. } => {
+                        Column::Confidential
+                    }
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
                     | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,

@@ -2,9 +2,8 @@
 
 use custom_ring_interface::{
     blinding::{anonymous_ring_data, ring_blinding_seed},
-    ring_confidential_packed_output_body,
     stream::{DeliveredSlot, RingTag, SlotSecret, TagIndex, TAG_LEN},
-    RingOutput, RingPackedBody,
+    RingOutput,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -13,11 +12,11 @@ use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use zolana_ring_keys::RingViewingKey;
 use zolana_ring_transaction::{
     AnonymousSlot, AnonymousSlots, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
-    RingPacked, RingRailError as E, RingUtxoOwner, StreamPayment, StreamPosition,
+    RingRailError as E, RingUtxoOwner, StreamPayment, StreamPosition,
 };
 use zolana_transaction::{
     instructions::transact::{ConfidentialTransaction, Shape, SppProofInputs, SppProofOutputUtxo},
-    Data, DecodeCx, Mint, Utxo, WalletUtxo,
+    Data, Mint, Utxo, WalletUtxo,
 };
 
 const RING: Address = Address::new_from_array([42; 32]);
@@ -128,24 +127,21 @@ fn open(wire: RingOutput<'_>, owner: &ShieldedAddress, secret: &SlotSecret) -> O
 }
 
 #[test]
-fn a_packed_ring_output_opens_for_its_owner_key_with_its_spp_blinding() {
+fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     let sender = keypair(1);
     let receiver = keypair(2);
     let recipient = address(&receiver);
     let (mut tx, tx_key) = ring_transfer(&sender, false);
     tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(tx_key.clone(), RingDelivery::Packed);
+    let rail = RingOutputRail::new(tx_key.clone(), RingDelivery::Delivered);
     let proof = rail.encrypt(tx, &address(&sender)).unwrap();
-    let first_nullifier = proof.input_utxos[0].nullifier();
-    let blinding = proof.output_utxos[0].blinding;
     assert_eq!(proof.external_data.salt, rail.salt());
     assert_eq!(
         proof.blinding_seed,
         ring_blinding_seed(&tx_key.secret_bytes(), &rail.salt()).unwrap()
     );
-    let resent = RingOutputRail::new(tx_key.clone(), RingDelivery::Packed);
     assert_ne!(
-        resent.salt(),
+        RingOutputRail::new(tx_key, RingDelivery::Delivered).salt(),
         rail.salt(),
         "a resent attempt draws a fresh salt"
     );
@@ -157,34 +153,7 @@ fn a_packed_ring_output_opens_for_its_owner_key_with_its_spp_blinding() {
     assert_eq!(published.len(), proof.output_utxos.len());
     assert!(published
         .iter()
-        .all(|slot| matches!(slot.wire, RingOutput::Packed { .. })));
-    let data = proof.external_data.outputs[0].data.as_deref().unwrap();
-    let RingPackedBody { key, ciphertext } = ring_confidential_packed_output_body(data).unwrap();
-    assert_eq!(key, recipient.viewing_pubkey.as_bytes());
-    let opened = RingPacked::decode(
-        &[&key[..], ciphertext].concat(),
-        &DecodeCx {
-            viewing_key: &receiver.viewing_key,
-            tx_viewing_pk: Some(tx_key.pubkey()),
-            salt: Some(rail.salt()),
-            slot_index: 0,
-            first_nullifier: Some(first_nullifier),
-        },
-    )
-    .unwrap();
-    assert_eq!((opened.amount, opened.blinding), (3, blinding));
-}
-
-#[test]
-fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
-    let sender = keypair(1);
-    let receiver = keypair(2);
-    let recipient = address(&receiver);
-    let (mut tx, tx_key) = ring_transfer(&sender, false);
-    tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
-    let proof = rail.encrypt(tx, &address(&sender)).unwrap();
-    let published = rail.published_slots(&proof, &address(&sender)).unwrap();
+        .all(|slot| matches!(slot.wire, RingOutput::Delivered { .. })));
     assert_eq!(published[0].recipient, Some(recipient.viewing_pubkey));
     let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 0);
     let opened = open(published[0].wire, &recipient, &secret).unwrap();
@@ -395,19 +364,22 @@ fn one_transfer_takes_one_pair_payment() {
 fn a_delivered_rail_refuses_output_data_and_compact_padding() {
     let sender = keypair(1);
     let recipient = address(&keypair(2));
-    let (mut tx, tx_key) = ring_transfer(&sender, false);
-    tx.add_output_utxo(
-        SppProofOutputUtxo::new(Mint::SOL, 3, recipient)
+    for ring in [Some(RING), None] {
+        let (mut tx, tx_key) = ring_transfer(&sender, false);
+        let output = SppProofOutputUtxo::new(Mint::SOL, 3, recipient)
             .unwrap()
-            .with_ring_program_id(RING)
-            .with_memo(vec![1]),
-    )
-    .unwrap();
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
-    assert!(matches!(
-        rail.encrypt(tx, &address(&sender)),
-        Err(E::DeliveredOutputData { slot_index: 0 })
-    ));
+            .with_memo(vec![1]);
+        tx.add_output_utxo(match ring {
+            Some(ring) => output.with_ring_program_id(ring),
+            None => output,
+        })
+        .unwrap();
+        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
+        assert!(matches!(
+            rail.encrypt(tx, &address(&sender)),
+            Err(E::DeliveredOutputData { slot_index: 0 })
+        ));
+    }
 
     let (tx, tx_key) = ring_transfer(&sender, true);
     let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);

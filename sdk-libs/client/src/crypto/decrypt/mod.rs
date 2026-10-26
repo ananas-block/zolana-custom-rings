@@ -28,8 +28,7 @@ use zolana_transaction::{
 use crate::{
     disclosure::{
         AnonymousDisclosure, AnonymousInputs, AnonymousOutputOpening, AuditDisclosure,
-        AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-        PublishedOutputs,
+        AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
     },
     encryption::auditor_view_tag,
     known::KnownUtxoIndex,
@@ -181,14 +180,6 @@ impl<'a> TransactionAudit<'a> {
             .zip(&tx.output_slots)
             .map(|(index, output)| Slot { index, output });
         match disclosure {
-            AuditDisclosure::Packed {
-                seed_out, outputs, ..
-            } => {
-                let transfer = transfer(seed_out)?;
-                for (slot, opening) in slots.zip(outputs) {
-                    audited.record(slot, transfer.packed(slot, opening)?);
-                }
-            }
             AuditDisclosure::Delivered {
                 seed_out, outputs, ..
             } => {
@@ -222,7 +213,6 @@ fn check_published(
     exits: &[bool],
 ) -> Result<(), AuditError> {
     let (outputs, inputs, flagged) = match layout {
-        DisclosureLayout::Packed(packed) => (packed.outputs, None, packed.exits),
         DisclosureLayout::Delivered(delivered) => (delivered.outputs, None, delivered.exits),
         DisclosureLayout::Anonymous(anonymous) => {
             (anonymous.outputs, Some(anonymous.inputs), anonymous.exits)
@@ -333,41 +323,6 @@ struct SpentInputs<'a> {
 }
 
 impl Transfer<'_> {
-    fn packed(
-        &self,
-        slot: Slot<'_>,
-        opening: Option<PackedOutputOpening>,
-    ) -> Result<SlotOpening, AuditError> {
-        let Some(opening) = opening else {
-            return self.verify(slot, OutputOpening::Dummy);
-        };
-        let Some(nullifier_pk) = self.nullifier_pk(&opening.owner_key, opening.nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
-        };
-        let exit = is_exit(slot.output);
-        let utxo = AuditedUtxo {
-            owner_key: opening.owner_key,
-            nullifier_pk,
-            asset: opening.asset,
-            mint: self.mint(&opening.asset),
-            amount: opening.amount,
-            blinding: self.blinding(slot)?,
-            data_hash: opening.data_hash,
-            ring_data_hash: opening.ring_data_hash,
-        };
-        self.verify(
-            slot,
-            match exit {
-                true => OutputOpening::Exit(utxo),
-                false => OutputOpening::Ring {
-                    utxo,
-                    recipient_u: slot.owner_tag(),
-                    tag: None,
-                },
-            },
-        )
-    }
-
     fn delivered(
         &self,
         slot: Slot<'_>,

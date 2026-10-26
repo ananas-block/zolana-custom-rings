@@ -1,8 +1,8 @@
 //! The slots a sealed ring transfer publishes, in the compact form the ring program expands.
 
 use custom_ring_interface::{
-    ring_anonymous_output_body, ring_confidential_delivered_output_body,
-    ring_confidential_packed_output_body, stream::RingTag, RingOutput,
+    ring_anonymous_output_body, ring_confidential_delivered_output_body, stream::RingTag,
+    RingOutput,
 };
 use zolana_event::confidential_encrypted_output_body;
 use zolana_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
@@ -33,22 +33,16 @@ impl RingOutputRail {
         let mut published = inputs.external_data.outputs.iter();
         let mut slots = Vec::with_capacity(inputs.external_data.outputs.len());
         for (index, output) in inputs.output_utxos.iter().enumerate() {
-            if output.is_compact() {
-                continue;
-            }
             let framing = RingRailError::RingOutputFraming { slot_index: index };
             let slot_index = u32::try_from(index).map_err(|_| TransactionError::TooManyOutputs)?;
             let slot = self.slot(output, sender, slot_index)?;
             let anonymous = match &self.delivery {
                 RingDelivery::Anonymous(plan) => Some(plan.slot(output, sender, slot_index)?),
-                RingDelivery::Packed | RingDelivery::Delivered => None,
+                RingDelivery::Delivered => None,
             };
-            let recipient = match (slot, &self.delivery) {
-                (
-                    Slot::Ring { recipient, .. },
-                    RingDelivery::Delivered | RingDelivery::Anonymous(_),
-                ) => Some(recipient),
-                _ => None,
+            let recipient = match slot {
+                Slot::Ring { recipient, .. } => Some(recipient),
+                Slot::Exit | Slot::Dummy { .. } => None,
             };
             slots.push(PublishedSlot {
                 output,
@@ -79,18 +73,10 @@ impl RingOutputRail {
         let data = published.data.as_deref().ok_or_else(framing)?;
         let hash = &published.utxo_hash;
         let wire = match (slot, &self.delivery) {
-            (Slot::Compact, _) => return Err(framing()),
             (Slot::Exit, _) => RingOutput::Exit {
                 hash,
                 owner_tag,
                 payload: confidential_encrypted_output_body(data).ok_or_else(framing)?,
-            },
-            (_, RingDelivery::Packed) => RingOutput::Packed {
-                hash,
-                u: owner_tag,
-                ciphertext: ring_confidential_packed_output_body(data)
-                    .ok_or_else(framing)?
-                    .ciphertext,
             },
             (_, RingDelivery::Delivered) => RingOutput::Delivered {
                 hash,
