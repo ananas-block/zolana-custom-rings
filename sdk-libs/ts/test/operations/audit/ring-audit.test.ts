@@ -136,12 +136,17 @@ function payload(layout: Layout, slot: VectorSlot): Uint8Array {
       RingScheme.confidential,
       new Uint8Array(CONFIDENTIAL_DATA_FREE_BODY_LEN),
     );
+  // The auditor never opens an anonymous body, any scheme 1 or 2 bytes publish.
+  if (layout === "anonymous")
+    return encodeRingOutput(
+      "stream" in slot && slot.stream === "change"
+        ? RingScheme.anonymousSender
+        : RingScheme.anonymousRecipient,
+      new Uint8Array(108).fill(0x5d),
+    );
   const body = "body" in slot ? slot.body : undefined;
   if (body === undefined) throw new Error("vector slot without a body");
-  return encodeRingOutput(
-    layout === "delivered" ? RingScheme.ringConfidentialDelivered : RingScheme.ringAnonymous,
-    hex(body, 40),
-  );
+  return encodeRingOutput(RingScheme.ringConfidentialDelivered, hex(body, 40));
 }
 
 /** The nullifier key each owner's escrow record holds, read from the vector's openings. */
@@ -265,12 +270,13 @@ function expectedOpening(layout: Layout, slot: VectorSlot, assets: AssetRegistry
     ringDataHash: field(need(slot.ring_data_hash, "ring_data_hash")),
   };
   if (slot.kind === "exit") return { kind: "exit", utxo };
-  const tag = "tag" in slot && typeof slot.tag === "string" ? slot.tag : undefined;
+  if (layout === "anonymous")
+    return { kind: "ring", utxo, ownerTag: { kind: "view", tag: field(slot.owner_tag) } };
+  const recipientU = "recipient_u" in slot ? slot.recipient_u : undefined;
   return {
     kind: "ring",
     utxo,
-    recipientU: field(need(slot.recipient_u, "recipient_u")),
-    ...(tag === undefined ? {} : { tag: hex<Bytes16>(tag, 16) }),
+    ownerTag: { kind: "recipient", u: field(need(recipientU, "recipient_u")) },
   };
 }
 
@@ -628,17 +634,34 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(audited.outputs.map((output) => output.slotIndex)).toEqual([0]);
   });
 
-  it("refuses a delivered body under the anonymous scheme as a frame error", () => {
+  it("refuses a delivered body under an anonymous scheme as a frame error", () => {
     const entry = vectorOf("delivered", "exits");
     const slot = entry.vector.slots[2]!;
     const body = "body" in slot ? slot.body : undefined;
     const audited = audit(entry, {
       transaction: withSlot(2, (published) => ({
         ...published,
-        payload: encodeRingOutput(RingScheme.ringAnonymous, hex(need(body, "body"), 40)),
+        payload: encodeRingOutput(RingScheme.anonymousRecipient, hex(need(body, "body"), 40)),
       })),
     });
     expect(audited.payloadErrors).toEqual([{ slotIndex: 2, kind: "frame" }]);
+  });
+
+  it("opens an anonymous output from its disclosure whatever body it publishes", () => {
+    const entry = vectorOf("anonymous", "commitment");
+    const assets = vectorAssets(entry.vector);
+    const audited = audit(entry, {
+      assets,
+      knownUtxos: spentUtxos(entry.vector, assets),
+      transaction: withSlot(0, (published) => ({
+        ...published,
+        payload: encodeRingOutput(RingScheme.anonymousRecipient, Uint8Array.of(1)),
+      })),
+    });
+    expect(audited.payloadErrors).toEqual([]);
+    expect(audited.outputs[0]?.opening).toEqual(
+      expectedOpening("anonymous", entry.vector.slots[0]!, assets),
+    );
   });
 
   it("refuses a recipient key without an X25519 agreement", () => {
@@ -648,19 +671,18 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(audited.payloadErrors).toEqual([{ slotIndex: 5, kind: "recipientKey" }]);
   });
 
-  it("refuses an anonymous ring output whose owner tag carries no tag", () => {
+  it("opens an anonymous ring output under any view tag and reports the tag it took", () => {
     const entry = vectorOf("anonymous", "commitment");
     const assets = vectorAssets(entry.vector);
+    const viewTag = new Uint8Array(32).fill(0xe1) as Bytes32;
     const audited = audit(entry, {
       assets,
       knownUtxos: spentUtxos(entry.vector, assets),
-      transaction: withSlot(0, (slot) => {
-        const viewTag = slot.viewTag.slice() as Bytes32;
-        viewTag[15] = 1;
-        return { ...slot, viewTag };
-      }),
+      transaction: withSlot(0, (slot) => ({ ...slot, viewTag })),
     });
-    expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "frame" }]);
+    expect(audited.payloadErrors).toEqual([]);
+    const opening = audited.outputs[0]?.opening;
+    expect(opening?.kind === "ring" && opening.ownerTag).toEqual({ kind: "view", tag: viewTag });
   });
 
   it("refuses a message sealed to another auditor, a duplicate and one not last", () => {
@@ -1058,10 +1080,10 @@ describe("recoverRingMemberNotes", () => {
           index === 0 && output.kind === "ring" ? { ...output, ownerKey, nullifierPk } : output,
         ),
       }).map(toHex),
-      slots: entry.vector.slots.map((vectorSlot, index) =>
+      slots: entry.vector.slots.map((vectorSlot: VectorSlot, index) =>
         index === 0 ? { ...vectorSlot, output_hash: toHex(commitment) } : vectorSlot,
       ),
-    };
+    } as Vector;
     return {
       transaction: vectorTransaction({ layout: "delivered", vector }, auditor),
       commitment,

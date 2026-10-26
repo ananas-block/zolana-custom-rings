@@ -15,7 +15,6 @@ import {
   RingTransactData,
   outputBodyHash,
   outputRecipientKeyFields,
-  outputTagField,
   taggedX25519,
   type RingOutput,
 } from "../transaction/transact.js";
@@ -40,9 +39,6 @@ export type AuditKind =
   | Readonly<{
       kind: "anonymous";
       privateTxHash: Bytes32;
-      epoch: bigint;
-      /** Zero without a pair-anchored slot. */
-      firstContactRoot: Bytes32;
       /** Zero outside a policy ring. */
       senderCommitment: Bytes32;
       partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
@@ -107,8 +103,8 @@ export interface RegisterKeyStatement {
 
 /**
  * `head ‖ [output_chain, body_chain, disclosure_chain, recipient_key_chain]` delivered,
- * `head ‖ [output_chain, body_chain, disclosure_chain, private_tx_hash, tag_chain,
- * epoch, first_contact_root, sender_commitment]` anonymous.
+ * `head ‖ [output_chain, disclosure_chain, private_tx_hash, sender_commitment, party0,
+ * party1, party2]` anonymous.
  */
 export function auditStatementElements(statement: AuditStatement): readonly Bytes32[] {
   const { outputs, kind } = statement;
@@ -128,12 +124,8 @@ export function auditStatementElements(statement: AuditStatement): readonly Byte
       return [
         ...head,
         outputChain,
-        chain(outputs.map(outputBodyHash)),
         disclosureChain,
         checkedBytes<Bytes32>(kind.privateTxHash, 32, "private tx hash"),
-        chain(outputs.map(outputTagField)),
-        u64Field(kind.epoch, "epoch"),
-        checkedBytes<Bytes32>(kind.firstContactRoot, 32, "first contact root"),
         checkedBytes<Bytes32>(kind.senderCommitment, 32, "sender commitment"),
         ...kind.partyIdentities,
       ];
@@ -150,10 +142,6 @@ export interface AuditBinding {
   /** `hash_bytes` of the ring program id. */
   readonly ringId: Bytes32;
   readonly auditorPubkey: Bytes33;
-  /** The anonymous rail's statement epoch. */
-  readonly epoch: bigint;
-  /** The anonymous rail's first-contact root, zero without an anchor. */
-  readonly firstContactRoot: Bytes32;
   /** The ring mode escrows every output nullifier key, the frame flag has to agree. */
   readonly keyEscrow: boolean;
 }
@@ -169,8 +157,6 @@ export function ringAuditStatement(data: RingTransactData, binding: AuditBinding
           kind: "anonymous",
           privateTxHash: data.privateTxHash,
           partyIdentities: binding.partyIdentities,
-          epoch: binding.epoch,
-          firstContactRoot: binding.firstContactRoot,
           senderCommitment: data.policy?.senderCommitment ?? (new Uint8Array(32) as Bytes32),
         }
       : { kind: layout.kind };

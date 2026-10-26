@@ -10,10 +10,8 @@ import {
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
   decompileTransactionMessage,
-  type KeyPairSigner,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
 import {
   AuthorityListWrite,
   NullifierKeyEscrow,
@@ -39,7 +37,6 @@ import {
   buildRingTransferTransaction,
   buildRingDelegateTransferTransaction,
   buildRingDepositTransaction,
-  type RingTransactionSubmission,
 } from "../../src/ring/index.js";
 import {
   EMPTY_MINT_POLICY,
@@ -59,31 +56,9 @@ import {
   sendInstruction,
   sync,
   writeList,
+  settle,
+  settleWithTransport,
 } from "./ring-live-helpers.js";
-
-async function settle(
-  submission: RingTransactionSubmission,
-  client: Awaited<ReturnType<typeof liveHarness>>["client"],
-  signers: readonly KeyPairSigner[],
-) {
-  return settleWithTransport(submission, createKitRingSubmissionTransport(client, signers));
-}
-
-async function settleWithTransport(
-  submission: RingTransactionSubmission,
-  transport: RingSubmissionTransport,
-) {
-  const deadline = Date.now() + 180_000;
-  for (;;) {
-    const result = await submission.send(transport);
-    if (result.kind === "confirmed") return result;
-    if (result.kind === "failed")
-      throw new Error(`controls transaction failed (${result.signature})`);
-    if (Date.now() > deadline)
-      throw new Error(`controls transaction unresolved (${result.signature})`);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-}
 
 describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) => {
   it("escrows keys, enforces policy and recovers notes", async () => {

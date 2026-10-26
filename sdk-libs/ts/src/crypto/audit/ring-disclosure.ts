@@ -42,9 +42,15 @@ export type DeliveredOutputOpening =
   | Readonly<{ kind: "exit"; nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>
   | DummySlot;
 
-/** The published tag hides `recipientU`, only the disclosure names it. */
+/** The disclosure opens every live slot's asset and amount, the published body is unproven. */
 export type AnonymousOutputOpening =
-  | Readonly<{ kind: "ring"; ownerKey: Bytes32; nullifierPk: Bytes32; recipientU: Bytes32 }>
+  | Readonly<{
+      kind: "ring";
+      ownerKey: Bytes32;
+      nullifierPk: Bytes32;
+      asset: Bytes32;
+      amount: bigint;
+    }>
   | Readonly<{ kind: "exit"; nullifierPk: Bytes32; asset: Bytes32; amount: bigint }>
   | DummySlot;
 
@@ -279,7 +285,6 @@ export function decodeDisclosure(
 
 const KEY_BYTES = 32;
 const AMOUNT_BYTES = 8;
-const KEY_AND_AMOUNT_BYTES = KEY_BYTES + AMOUNT_BYTES;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const DUMMY: DummySlot = Object.freeze({ kind: "dummy" });
 const PREFIX_SHIFT = BigInt(INPUT_PREFIX_BITS);
@@ -384,21 +389,19 @@ function anonymousNullifierPk(output: AnonymousOutputOpening): Bytes32 {
   return output.kind === "dummy" ? zero() : field(output.nullifierPk, "nullifierPk");
 }
 
-/** A ring slot `owner_key ‖ u`, an exit `asset ‖ u64be(amount) ‖ 0^24`. */
+/** `mask(ring, owner_key) ‖ fe32(asset) ‖ u64be(amount)`, a dummy all zero. */
 function pushAnonymousSlot(parts: Uint8Array[], output: AnonymousOutputOpening): void {
-  switch (output.kind) {
-    case "ring":
-      parts.push(checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey"));
-      parts.push(checkedBytes<Bytes32>(output.recipientU, 32, "recipientU"));
-      return;
-    case "exit":
-      parts.push(field(output.asset, "asset"));
-      parts.push(amountBytes(output.amount));
-      parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES - KEY_AND_AMOUNT_BYTES));
-      return;
-    case "dummy":
-      parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES));
+  if (output.kind === "dummy") {
+    parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES));
+    return;
   }
+  parts.push(
+    output.kind === "ring"
+      ? checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey")
+      : new Uint8Array(KEY_BYTES),
+  );
+  parts.push(field(output.asset, "asset"));
+  parts.push(amountBytes(output.amount));
 }
 
 function readAnonymousOutput(
@@ -406,16 +409,12 @@ function readAnonymousOutput(
   slot: Uint8Array,
   exit: boolean,
 ): AnonymousOutputOpening {
-  const head = key(slot, 0, "ownerKey");
-  const tail = slot.subarray(KEY_BYTES);
+  const ownerKey = key(slot, 0, "ownerKey");
+  const asset = key(slot, KEY_BYTES, "asset");
+  const amount = bytesToBigInt(slot.subarray(2 * KEY_BYTES, 2 * KEY_BYTES + AMOUNT_BYTES));
   if (exit) {
-    zeroBytes(tail.subarray(AMOUNT_BYTES));
-    return Object.freeze({
-      kind: "exit",
-      nullifierPk,
-      asset: field(head, "asset"),
-      amount: bytesToBigInt(tail.subarray(0, AMOUNT_BYTES)),
-    });
+    zeroBytes(ownerKey);
+    return Object.freeze({ kind: "exit", nullifierPk, asset: field(asset, "asset"), amount });
   }
   if (isZero(nullifierPk)) {
     zeroBytes(slot);
@@ -423,9 +422,10 @@ function readAnonymousOutput(
   }
   return Object.freeze({
     kind: "ring",
-    ownerKey: head,
+    ownerKey,
     nullifierPk,
-    recipientU: key(tail, 0, "recipientU"),
+    asset: field(asset, "asset"),
+    amount,
   });
 }
 

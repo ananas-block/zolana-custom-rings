@@ -11,7 +11,6 @@ import {
   type AnonymousSlotProofInputs,
   type AuditEnvelopeProofInputs,
   type DeliveredSlotProofInputs,
-  type FirstContactAnchor,
   type PolicyProofInputs,
   type PolicySubjectEntry,
   type RingProofRequest,
@@ -50,15 +49,7 @@ import {
   type DeliveredOutputOpening,
 } from "../../src/crypto/audit/ring-disclosure.js";
 import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
-import {
-  deliveredSlotSecret,
-  inboxKey,
-  inboxTag,
-  pairKey,
-  pairTag,
-  senderCommitment,
-  tagIndex,
-} from "../../src/crypto/derivation/ring-stream.js";
+import { deliveredSlotSecret, senderCommitment } from "../../src/crypto/derivation/ring-stream.js";
 import {
   applyRecordsStatement,
   replayRecordWrites,
@@ -78,11 +69,7 @@ import {
   type AuditHead,
 } from "../../src/protocol/proof/statement.js";
 import type { RingOutput } from "../../src/protocol/transaction/transact.js";
-import {
-  anonymousRingData,
-  ringBlindingSeed,
-  ringOutputBlinding,
-} from "../../src/crypto/derivation/blinding.js";
+import { ringBlindingSeed, ringOutputBlinding } from "../../src/crypto/derivation/blinding.js";
 
 const GOLDENS = new URL("../../../../prover/ring/testdata/", import.meta.url);
 const HAS_GOLDENS = existsSync(GOLDENS);
@@ -253,32 +240,7 @@ function delivered(value: unknown): DeliveredSlotProofInputs {
 
 function anonymousSlot(value: unknown): AnonymousSlotProofInputs {
   const item = record(value);
-  const stream = record(item["stream"]);
-  return {
-    ...delivered(item),
-    stream: {
-      tag: field(stream["tag"]),
-      inbox: flag(stream["inbox"]),
-      pair: flag(stream["pair"]),
-      self: flag(stream["self"]),
-      index: count(stream["index"]),
-    },
-  };
-}
-
-function anchor(value: unknown): FirstContactAnchor {
-  const item = record(value);
-  return {
-    treeId: field(item["treeId"]),
-    asset: field(item["asset"]),
-    amount: field(item["amount"]),
-    slotSecret: field(item["slotSecret"]),
-    blinding: field(item["blinding"]),
-    epoch: BigInt(count(item["epoch"])),
-    index: count(item["index"]),
-    pathIndex: BigInt(count(item["pathIndex"])),
-    path: fields(item["path"]),
-  };
+  return { output: opening(item["output"]), ownerKey: bytes<Bytes32>(item["ownerKey"], 32) };
 }
 
 function policy(item: Json): PolicyProofInputs {
@@ -385,9 +347,6 @@ function request(item: Json): RingProofRequest {
       inputCount: count(item["inputCount"]),
       inputs: list(item["inputs"]).map(opening),
       senderCommitment: field(item["senderCommitment"]),
-      epoch: BigInt(count(item["epoch"])),
-      firstContactRoot: field(item["firstContactRoot"]),
-      ...(item["anchor"] === undefined ? {} : { anchor: anchor(item["anchor"]) }),
     };
   if (circuitType.startsWith("custom-ring-policy-member-"))
     return {
@@ -575,24 +534,8 @@ function seedOutOf(envelope: AuditEnvelopeProofInputs): Bytes32 {
   );
 }
 
-function tagOf(tag: Bytes32): Bytes16 {
-  expect(tag.subarray(0, 16)).toEqual(new Uint8Array(16));
-  return tag.slice(16) as Bytes16;
-}
-
 function exitOutput(hash: Bytes32): RingOutput {
   return { kind: "exit", hash, ownerTag: ZERO, payload: new Uint8Array(0) };
-}
-
-/** Go `MerkleRootGadget`, bit `i` of the index puts the node right of its sibling. */
-function stateRoot(leaf: Bytes32, index: bigint, path: readonly Bytes32[]): Bytes32 {
-  return path.reduce<Bytes32>(
-    (node, sibling, level) =>
-      (((index >> BigInt(level)) & 1n) === 0n
-        ? poseidon([node, sibling])
-        : poseidon([sibling, node])) as Bytes32,
-    leaf,
-  );
 }
 
 // The Go ring prover goldens live outside the repository.
@@ -809,7 +752,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
   );
 
   it.each(CIRCUIT_TYPES.filter((name) => name.startsWith("custom-ring-audit-anonymous-")))(
-    "rebuilds %s with its tags, its anchor and its spent inputs",
+    "rebuilds %s with its owner keys and its spent inputs",
     (circuitType) => {
       const typed = request(golden(circuitType));
       if (typed.kind !== "anonymousAudit") throw new Error("anonymous golden");
@@ -834,58 +777,17 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
             amount: amountOf(opened.amount),
           };
         }
-        const secret = slotSecret(typed, slot, i);
-        const tag = tagOf(slot.stream.tag);
-        expect(
-          hex(
-            sealDeliveredBody(secret, {
-              blinding: opened.blinding,
-              amount: amountOf(opened.amount),
-            }),
-          ),
-        ).toBe(hex(slot.body));
-        expect(hex(anonymousRingData(secret, tag))).toBe(hex(opened.ringDataHash));
-        const index = tagIndex(slot.stream.index);
-        if (slot.stream.inbox) {
-          const inbox = inboxKey(
-            typed.ringId,
-            X25519PublicKey.fromBytes(tagged(slot.recipientKey)),
-          );
-          expect(hex(inboxTag(inbox, typed.epoch, index))).toBe(hex(tag));
-        }
-        if (slot.stream.pair) {
-          if (typed.anchor === undefined) throw new Error("pair slot without an anchor");
-          expect(hex(pairTag(pairKey(typed.anchor.slotSecret), typed.epoch, index))).toBe(hex(tag));
-        }
-        if (slot.stream.self) expect(hex(opened.ownerPkHash)).toBe(hex(senderPkHash));
+        // A ring output commits to no ring data, its owner the identity of its disclosed key.
+        expect(hex(opened.ringDataHash)).toBe(hex(ZERO));
+        expect(hex(solanaOwnerIdentity(slot.ownerKey))).toBe(hex(opened.ownerPkHash));
         return {
           kind: "ring",
           nullifierPk: opened.nullifierPk,
           ownerKey: slot.ownerKey,
-          recipientU: slot.recipientKey,
+          asset: opened.asset,
+          amount: amountOf(opened.amount),
         };
       });
-      const pair = typed.outputs.find((slot) => slot.stream.pair);
-      if (pair !== undefined && typed.anchor !== undefined) {
-        const firstAnchor = typed.anchor;
-        const inbox = inboxKey(typed.ringId, X25519PublicKey.fromBytes(tagged(pair.recipientKey)));
-        const firstTag = inboxTag(inbox, firstAnchor.epoch, tagIndex(firstAnchor.index));
-        const firstContact = openingHash({
-          domain: pair.output.domain,
-          treeId: firstAnchor.treeId,
-          ownerPkHash: pair.output.ownerPkHash,
-          nullifierPk: pair.output.nullifierPk,
-          asset: firstAnchor.asset,
-          amount: firstAnchor.amount,
-          blinding: firstAnchor.blinding,
-          dataHash: ZERO,
-          ringDataHash: anonymousRingData(firstAnchor.slotSecret, firstTag),
-          ringProgramId: typed.ringId,
-        });
-        expect(hex(stateRoot(firstContact, firstAnchor.pathIndex, firstAnchor.path))).toBe(
-          hex(typed.firstContactRoot),
-        );
-      }
       expect(
         hex(senderCommitment({ senderPkHash, privateTxBlinding: typed.privateTxBlinding })),
       ).toBe(hex(typed.senderCommitment));
@@ -935,10 +837,11 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
           isUtxo(slot.output) && !isRingOutput(slot.output)
             ? exitOutput(openingHash(slot.output))
             : {
+                // The statement binds no tag and no body.
                 kind: "anonymous",
                 hash: openingHash(slot.output),
-                tag: tagOf(slot.stream.tag),
-                body: slot.body,
+                tag: ZERO,
+                body: Uint8Array.of(1),
               },
         ),
         disclosure,
@@ -946,8 +849,6 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
           kind: "anonymous",
           partyIdentities: typed.partyIdentities,
           privateTxHash: typed.privateTxHash,
-          epoch: typed.epoch,
-          firstContactRoot: typed.firstContactRoot,
           senderCommitment: typed.senderCommitment,
         },
       });

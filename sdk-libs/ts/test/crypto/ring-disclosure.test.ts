@@ -114,10 +114,22 @@ function anonymous(): Extract<RingDisclosure, { kind: "anonymous" }> {
     layout: { key: { kind: "entry" }, inputs: 2, outputs: 4, exits: true },
     seedOut: field(1),
     outputs: [
-      { kind: "ring", ownerKey: bytes(0xb5), nullifierPk: field(0x25), recipientU: bytes(0x15) },
+      {
+        kind: "ring",
+        ownerKey: bytes(0xb5),
+        nullifierPk: field(0x25),
+        asset: field(0x15),
+        amount: 70n,
+      },
       { kind: "exit", nullifierPk: field(0x26), asset: field(0x27), amount: 0n },
       { kind: "dummy" },
-      { kind: "ring", ownerKey: bytes(0xa1), nullifierPk: field(0x5a), recipientU: bytes(0x17) },
+      {
+        kind: "ring",
+        ownerKey: bytes(0xa1),
+        nullifierPk: field(0x5a),
+        asset: field(0x17),
+        amount: (1n << 64n) - 1n,
+      },
     ],
     inputs: {
       kind: "openings",

@@ -6,11 +6,6 @@ export const RingDomain = Object.freeze({
   auditStatement: 0x4352_4155, // "CRAU"
   deliveredSlotSecret: 0x4352_4453, // "CRDS"
   blindingSeed: 0x4352_4253, // "CRBS"
-  anonymousRingData: 0x4352_4154, // "CRAT"
-  inboxKey: 0x4352_494b, // "CRIK"
-  inboxTag: 0x4352_4954, // "CRIT"
-  pairKey: 0x4352_504b, // "CRPK"
-  pairTag: 0x4352_5054, // "CRPT"
   senderCommitment: 0x4352_5343, // "CRSC"
   disclosurePad: 0x4352_4f44, // "CROD"
   policyStatement: 0x4352_504f, // "CRPO"
@@ -35,7 +30,7 @@ export function domainHash(domain: RingDomain, fields: readonly Uint8Array[]): B
   }
 }
 
-/** `Poseidon(CRDB, blinding_secret)`, a deposit blinding no anchor opens as a first contact. */
+/** `Poseidon(CRDB, blinding_secret)`. */
 export function depositBlinding(blindingSecret: Bytes32): Bytes32 {
   return domainHash(RingDomain.depositBlinding, [
     checkedBytes<Bytes32>(blindingSecret, 32, "deposit blinding secret"),

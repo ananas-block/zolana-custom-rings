@@ -68,33 +68,32 @@ export type {
   RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 export {
-  EPOCH_SLOTS,
-  J_INBOX,
-  J_PAIR,
-  K_PAIR_EPOCHS,
-  TAG_LEN,
   deliveredSlotSecret,
-  inboxKey,
-  inboxTag,
-  pairKey,
-  pairTag,
   ringIdField,
-  ringTag,
-  ringTagField,
-  ringTagFromOwnerTag,
   senderCommitment,
-  tagEpoch,
-  tagIndex,
 } from "../crypto/derivation/ring-stream.js";
-export type { DeliveredSlot, TagIndex } from "../crypto/derivation/ring-stream.js";
+export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
   RING_DELIVERED_BODY_LEN,
+  anonymousRecipientOutputBody,
+  anonymousSenderOutputBody,
   openDeliveredBody,
+  RingScheme,
   sealDeliveredBody,
   type DeliveredBodyOpening,
 } from "../protocol/transaction/output.js";
 export {
-  anonymousRingData,
+  DUMMY_RECIPIENT_VIEWING_PK,
+  RECIPIENT_BODY_LEN,
+  isDummyRecipient,
+  listedRecipients,
+  openRecipient,
+  rebuilds,
+  senderChange,
+  type AnonymousOutput,
+} from "../protocol/codec/anonymous-body.js";
+export {
+  OutputBlindings,
   openRingDelivery,
   ringBlindingSeed,
   ringOutputBlinding,
@@ -109,7 +108,6 @@ export {
   RingTransactData,
   outputBodyHash,
   outputRecipientKeyFields,
-  outputTagField,
   ringDisclosureLayout,
   ringRail,
   ringRailOf,
@@ -124,13 +122,13 @@ export {
   type RingTransactInstructionData,
 } from "../protocol/proof/circuit.js";
 export type {
-  AnchorRoot,
   AnonymousProofData,
   InputTrees,
   PolicyProof,
   RingOutput,
   RingRail,
   RingTransactConfig,
+  SenderBundle,
 } from "../protocol/transaction/transact.js";
 export {
   applyRecordsStatementElements,

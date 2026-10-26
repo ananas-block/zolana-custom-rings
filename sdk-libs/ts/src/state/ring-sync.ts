@@ -60,7 +60,7 @@ export async function openRingNotes(
   if (nullifiers.length !== notes.length) throw new WalletError("WALLET_KEYS_BATCH_MISMATCH");
   return Object.freeze({
     utxos: Object.freeze(
-      notes.map(({ utxo, utxoHash, slot, ringDataHash }, index) =>
+      notes.map(({ utxo, utxoHash, slot }, index) =>
         Object.freeze({
           utxo,
           outputContext: Object.freeze({
@@ -69,7 +69,6 @@ export async function openRingNotes(
             leafIndex: slot.outputContext.leafIndex,
           }),
           nullifier: nullifiers[index] as Bytes32,
-          ...(ringDataHash === undefined ? {} : { ringDataHash }),
           spent: false,
         }),
       ),
@@ -177,7 +176,7 @@ async function deliveredNote(
     const [secret] = await input.keys.ringDeliverySecrets(
       [
         {
-          recipient: { kind: "viewing", viewingPublicKey },
+          viewingPublicKey,
           txViewingPublicKey: site.txViewingPublicKey,
           salt: site.salt,
           outputIndex: site.slotIndex,

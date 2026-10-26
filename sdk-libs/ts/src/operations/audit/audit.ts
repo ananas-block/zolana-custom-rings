@@ -55,19 +55,11 @@ import {
   type InputPrefix,
   type RingDisclosure,
 } from "../../crypto/audit/ring-disclosure.js";
-import {
-  deliveredSlotSecret,
-  ringIdField,
-  ringTagFromOwnerTag,
-} from "../../crypto/derivation/ring-stream.js";
+import { deliveredSlotSecret, ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../../protocol/error.js";
 import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
-import {
-  anonymousRingData,
-  ringBlindingSeed,
-  ringOutputBlinding,
-} from "../../crypto/derivation/blinding.js";
+import { ringBlindingSeed, ringOutputBlinding } from "../../crypto/derivation/blinding.js";
 import { dummyUtxoHash, fieldUtxoHash } from "../../protocol/membership/utxo-hash.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
 import { x25519FromU } from "../../crypto/keys/x25519.js";
@@ -87,15 +79,16 @@ export interface AuditedUtxo {
   readonly ringDataHash: Bytes32;
 }
 
+/** The owner tag a ring output was published under, Rust `RingOwnerTag`. */
+export type RingOwnerTag =
+  /** The recipient key's u on the delivered rails. */
+  | Readonly<{ kind: "recipient"; u: Bytes32 }>
+  /** A view tag the anonymous proof leaves free. */
+  | Readonly<{ kind: "view"; tag: Bytes32 }>;
+
 /** Rust `OutputOpening`. */
 export type OutputOpening =
-  | Readonly<{
-      kind: "ring";
-      utxo: AuditedUtxo;
-      recipientU: Bytes32;
-      /** The published tag of an anonymous ring output. */
-      tag?: Bytes16;
-    }>
+  | Readonly<{ kind: "ring"; utxo: AuditedUtxo; ownerTag: RingOwnerTag }>
   /** A default-ring UTXO, its owner the published owner tag. */
   | Readonly<{ kind: "exit"; utxo: AuditedUtxo }>
   | Readonly<{ kind: "dummy" }>;
@@ -585,8 +578,6 @@ interface Delivery {
   readonly ownerKey: Bytes32;
   /** `undefined` under key escrow. */
   readonly nullifierPk: Bytes32 | undefined;
-  readonly recipientU: Bytes32;
-  readonly tag?: Bytes16;
 }
 
 /** An exit of a delivered rail, its owner key published as its owner tag. */
@@ -698,7 +689,6 @@ class Transfer {
           slot,
           ownerKey: opening.ownerKey,
           nullifierPk: opening.nullifierPk,
-          recipientU: slot.output.viewTag,
         });
       case "exit":
         return this.exit(slot, opening);
@@ -710,15 +700,21 @@ class Transfer {
   private anonymous(slot: Slot, opening: AnonymousOutputOpening): SlotOpening | undefined {
     switch (opening.kind) {
       case "ring": {
-        const tag = ringTagFromOwnerTag(slot.output.viewTag);
-        if (tag === undefined) return FRAME;
-        return this.deliver({
-          slot,
+        const utxo = this.opened({
           ownerKey: opening.ownerKey,
           nullifierPk: opening.nullifierPk,
-          recipientU: opening.recipientU,
-          tag,
+          asset: opening.asset,
+          amount: opening.amount,
+          blinding: this.blinding(slot),
         });
+        return this.verify(
+          slot,
+          Object.freeze({
+            kind: "ring",
+            utxo,
+            ownerTag: Object.freeze({ kind: "view", tag: slot.output.viewTag }),
+          }),
+        );
       }
       case "exit":
         return this.exit(slot, opening);
@@ -728,20 +724,17 @@ class Transfer {
   }
 
   private deliver(delivery: Delivery): SlotOpening | undefined {
-    const { slot, tag } = delivery;
+    const { slot } = delivery;
+    const recipientU = slot.output.viewTag;
     const nullifierPk = this.nullifierPk(delivery.ownerKey, delivery.nullifierPk);
     if (nullifierPk === undefined) return ESCROW_UNKNOWN;
-    const body = encryptedBody(
-      slot.output.payload,
-      tag === undefined ? RingScheme.ringConfidentialDelivered : RingScheme.ringAnonymous,
-    );
+    const body = encryptedBody(slot.output.payload, RingScheme.ringConfidentialDelivered);
     if (body?.length !== RING_DELIVERED_BODY_LEN) return FRAME;
-    const secret = this.deliveredSecret(slot, delivery.recipientU);
+    const secret = this.deliveredSecret(slot, recipientU);
     if (secret === undefined) return Object.freeze({ ok: false, kind: "recipientKey" });
     try {
       const { amount } = openDeliveredBody(secret, body);
       const blinding = this.blinding(slot);
-      const ringDataHash = tag === undefined ? ZERO_32 : anonymousRingData(secret, tag);
       // The body names no mint, the first registered asset that rebuilds the commitment is it.
       for (const [, mint] of this.keys.assets.entries()) {
         const utxo: AuditedUtxo = Object.freeze({
@@ -752,15 +745,14 @@ class Transfer {
           amount,
           blinding,
           dataHash: ZERO_32,
-          ringDataHash,
+          ringDataHash: ZERO_32,
         });
         const opened = this.verify(
           slot,
           Object.freeze({
             kind: "ring",
             utxo,
-            recipientU: delivery.recipientU,
-            ...(tag === undefined ? {} : { tag }),
+            ownerTag: Object.freeze({ kind: "recipient", u: recipientU }),
           }),
         );
         if (opened.ok) return opened;

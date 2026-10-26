@@ -184,25 +184,52 @@ export {
 export type { RingDepositOpening } from "../proof/deposit-audit.js";
 
 export {
-  ANCHOR_DECOYS,
   messageSignerSpendSigner,
   signingKeySpendSigner,
 } from "../operations/payments/anonymous.js";
-export { ANONYMOUS_RING_STATE_VERSION, AnonymousRingState } from "../state/anonymous-state.js";
+export {
+  MAX_COUNTERPARTIES,
+  PENDING_RETENTION,
+  StreamCounter,
+  TransferTagging,
+  VIEWING_HISTORY_VERSION,
+  ViewingHistory,
+  ViewingKeyEntry,
+} from "../state/viewing-history.js";
 export type {
-  DecoyLeaf,
-  IndexedSpend,
-  IssuedAddress,
-  PairAnchor,
-  ReceivedAnchor,
-  SentFirstContact,
-  SerializedAnonymousRingState,
-} from "../state/anonymous-state.js";
-export { issueRingAddress, ringAddressOf } from "../state/anonymous.js";
+  AdvancedTag,
+  Counterparty,
+  EntryStream,
+  FirstContact,
+  FirstContactPairing,
+  Learned,
+  PaymentRecipient,
+  PaymentTag,
+  TagSelection,
+  TransferTags,
+} from "../state/viewing-history.js";
+export { AnonymousSync, TAG_WINDOW, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export type {
+  AnonymousRingUtxo,
+  AnonymousScan,
+  AnonymousStream,
+  AnonymousSyncClient,
+  SentCheck,
+  SentPayment,
+  SkippedCounterparty,
+} from "../state/anonymous-sync.js";
+export type { TaggedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
 export type { RingNotes, RingSyncClient } from "../state/ring-sync.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
-export type { RingDeliveryRequest, RingKeys, RingRecipientKey } from "../state/ring-keys.js";
+export type {
+  RingDeliveryRequest,
+  RingKeys,
+  SharedTagPair,
+  SharedTagsRequest,
+  ViewTagRequest,
+  ViewTagStream,
+} from "../state/ring-keys.js";
 export { approveRingUnattended, ringIntentHash } from "../protocol/transaction/intent.js";
 export type {
   RingAnonymousTransferIntent,
@@ -226,18 +253,18 @@ export type {
 } from "../operations/payments/transfer-rails.js";
 export { ProvenRingTransfer, ringTransactInstruction } from "../operations/workflow/pipeline.js";
 export type {
-  PendingFirstContact,
+  AnonymousSpendValues,
   RingBoundState,
   RingProvingClient,
   RingTransactAccounts,
 } from "../operations/workflow/pipeline.js";
 export type { BoundPolicy, BoundRoot } from "../proof/policy-proof.js";
-export type { BoundAnchor } from "../protocol/membership/trees.js";
 export {
   buildRingEntryTransaction,
   buildRingExitTransaction,
   buildRingTransferTransaction,
   buildRingWithdrawalTransaction,
+  createRingEntrySubmission,
   createRingExitSubmission,
   createRingTransferSubmission,
   createRingWithdrawalSubmission,
@@ -311,6 +338,7 @@ export type {
   KnownUtxo,
   KnownUtxos,
   OutputOpening,
+  RingOwnerTag,
   OutputPayloadError,
   OutputPayloadErrorKind,
   RingAuditPage,

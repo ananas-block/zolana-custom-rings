@@ -7,10 +7,8 @@ import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type {
   AnonymousAuditProofRequest,
   AnonymousSlotProofInputs,
-  AnonymousStreamPosition,
   DeliveredAuditProofRequest,
   DeliveredSlotProofInputs,
-  FirstContactAnchor,
 } from "../rpc/prover/ring.js";
 import {
   anonymousKeyClass,
@@ -27,7 +25,6 @@ import {
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
-import { ringTagField } from "../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../protocol/error.js";
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
@@ -53,10 +50,6 @@ export interface AnonymousAuditValues {
   readonly privateTxBlinding: Bytes32;
   /** Zero outside a policy ring. */
   readonly senderCommitment: Bytes32;
-  readonly epoch: bigint;
-  /** Zero without a pair-anchored slot. */
-  readonly firstContactRoot: Bytes32;
-  readonly anchor?: FirstContactAnchor;
 }
 
 /** The values a disclosure opens beside the published slots, Rust `AuditSeal::seal`. */
@@ -166,9 +159,6 @@ export function auditProofRequest(
         ],
         senderCommitment: statement.senderCommitment,
         partyIdentities: statement.partyIdentities,
-        epoch: statement.epoch,
-        firstContactRoot: statement.firstContactRoot,
-        ...(statement.anchor === undefined ? {} : { anchor: statement.anchor }),
       };
       return Object.freeze({ kind: "anonymousAudit", ...slots, ...envelope() });
     }
@@ -250,13 +240,12 @@ function anonymousOpening(slot: PublishedSlot): AnonymousOutputOpening {
       asset: assetField(output.asset),
       amount: output.amount,
     };
-  if (slot.recipient === undefined)
-    throw new RingError("RING_OUTPUT_FRAMING", { details: { slotIndex: slot.slotIndex } });
   return {
     kind: "ring",
     nullifierPk: owner.nullifierPublicKey,
     ownerKey: owner.signingPublicKey.confidentialViewTag(),
-    recipientU: slot.recipient.u(),
+    asset: assetField(output.asset),
+    amount: output.amount,
   };
 }
 
@@ -267,9 +256,7 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   const [recipientKey, body] =
     wire.kind === "delivered"
       ? [wire.u, wire.body]
-      : wire.kind === "anonymous"
-        ? [slot.recipient?.u() ?? zero, wire.body]
-        : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
+      : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
   const ring = !output.isDummy() && wire.kind !== "exit";
   return Object.freeze({
     output: ringOutputOpening(output, tree),
@@ -279,33 +266,12 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   });
 }
 
+/** An exit's owner key is masked out of the disclosure, a dummy names none. */
 function anonymousSlot(slot: PublishedSlot, tree: number): AnonymousSlotProofInputs {
-  return Object.freeze({ ...deliveredSlot(slot, tree), stream: streamPosition(slot) });
-}
-
-/** Rust `Stream`, a ring output takes exactly one of the inbox, pair and change streams. */
-function streamPosition(slot: PublishedSlot): AnonymousStreamPosition {
-  const anonymous = slot.anonymous;
-  const none = { tag: zeroField(), inbox: false, pair: false, self: false, index: 0 };
-  switch (anonymous?.kind) {
-    case "payment": {
-      const inbox = anonymous.payment.position.kind === "inbox";
-      return {
-        ...none,
-        tag: ringTagField(anonymous.payment.tag),
-        inbox,
-        pair: !inbox,
-        index: anonymous.payment.position.index,
-      };
-    }
-    case "change":
-      return { ...none, tag: ringTagField(anonymous.tag), self: true };
-    case "dummy":
-      return { ...none, tag: ringTagField(anonymous.tag) };
-    case "exit":
-    case undefined:
-      return none;
-  }
+  return Object.freeze({
+    output: ringOutputOpening(slot.output, tree),
+    ownerKey: slotOwnerKey(slot.output),
+  });
 }
 
 /** The owner's Solana key a slot discloses, zero for padding, Rust `slot_owner_key`. */

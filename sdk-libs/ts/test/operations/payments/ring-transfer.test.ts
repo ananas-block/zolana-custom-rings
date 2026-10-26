@@ -186,7 +186,7 @@ describe("confidential rail", () => {
       openDelivered({
         fixture,
         keys: walletKeys(owner),
-        recipient: { kind: "viewing", viewingPublicKey: owner.viewingPublicKey() },
+        recipient: owner.viewingPublicKey(),
         call,
         data,
         slotIndex,
@@ -213,7 +213,7 @@ describe("confidential rail", () => {
       openDelivered({
         fixture,
         keys: walletKeys(recipient),
-        recipient: { kind: "viewing", viewingPublicKey: recipient.viewingPublicKey() },
+        recipient: recipient.viewingPublicKey(),
         call,
         data,
         slotIndex: 3,
@@ -708,7 +708,7 @@ describe("delegate rail", () => {
     const opened = await openDelivered({
       fixture,
       keys: walletKeys(recipient),
-      recipient: { kind: "viewing", viewingPublicKey: recipient.viewingPublicKey() },
+      recipient: recipient.viewingPublicKey(),
       call,
       data,
       slotIndex: 1,

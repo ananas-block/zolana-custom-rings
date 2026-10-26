@@ -7,10 +7,9 @@ export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
   outputs: number;
   classes: readonly number[];
 }>[] = Object.freeze([
-  Object.freeze({ outputs: 2, classes: Object.freeze([4, 8, 12, 16, 24, 32]) }),
-  Object.freeze({ outputs: 4, classes: Object.freeze([4, 8, 12, 16, 24]) }),
-  Object.freeze({ outputs: 8, classes: Object.freeze([4, 8, 12, 16]) }),
-  Object.freeze({ outputs: 16, classes: Object.freeze([1]) }),
+  Object.freeze({ outputs: 2, classes: Object.freeze([4, 16]) }),
+  Object.freeze({ outputs: 4, classes: Object.freeze([4, 16]) }),
+  Object.freeze({ outputs: 8, classes: Object.freeze([4, 8]) }),
 ]);
 /** Input slots of every anonymous entry key. */
 export const ANONYMOUS_ENTRY_CLASS = 8;
@@ -26,8 +25,8 @@ export const ANONYMOUS_MAX_INPUTS = Math.max(
 export const DELIVERED_SLOT_BYTES = 40;
 /** A delivered ring slot of an exit-free transfer, `owner_key`. */
 export const DENSE_DELIVERED_SLOT_BYTES = 32;
-/** A ring slot `owner_key ‖ u`, an exit `asset ‖ u64be(amount) ‖ 0^24`. */
-export const ANONYMOUS_SLOT_BYTES = 64;
+/** `owner_key ‖ fe32(asset) ‖ u64be(amount)`, the owner key zero on an exit. */
+export const ANONYMOUS_SLOT_BYTES = 72;
 /** The hidden sender's key ahead of the entry key's output slots. */
 export const DISCLOSURE_SENDER_KEY_BYTES = 32;
 /** The first bytes of a spent hash a commitment key discloses. */
