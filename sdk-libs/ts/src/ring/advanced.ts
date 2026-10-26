@@ -26,7 +26,6 @@ export {
   DISCLOSURE_SENDER_KEY_BYTES,
   INPUT_PREFIX_BITS,
   INPUT_PREFIX_BYTES,
-  PACKED_AUDIT_CAPACITIES,
   anonymousAuditClass,
   anonymousAuditKey,
   anonymousFields,
@@ -35,7 +34,6 @@ export {
   deliveredFields,
   disclosureFieldCount,
   packedChunks,
-  packedFields,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export type {
   AnonymousAuditKey,
@@ -48,8 +46,6 @@ export type {
   DeliveredLayout,
   DisclosureLayout,
   FieldRange,
-  PackedFields,
-  PackedLayout,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export {
   anonymousCommitments,
@@ -68,7 +64,6 @@ export type {
   DeliveredOutputOpening,
   DisclosureKey,
   DummySlot,
-  PackedOutputOpening,
   PublishedOutputs,
   RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
@@ -112,7 +107,6 @@ export {
 export {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  isDataFreeOutput,
   outputBodyHash,
   outputRecipientKeyFields,
   outputTagField,

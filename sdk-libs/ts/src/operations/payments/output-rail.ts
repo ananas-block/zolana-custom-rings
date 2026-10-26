@@ -10,9 +10,7 @@ import { randomSalt, ViewingKey } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   createExternalData,
-  Data,
   ProofInputUtxo,
-  SOL_ASSET_ID,
   SppProofInputs,
   TransactionError,
   type AssetRegistry,
@@ -21,10 +19,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import {
-  encodeRingPacked,
-  encryptRingPacked,
   readRingOutput,
-  RECIPIENT_KEY_LEN,
   RING_DELIVERED_BODY_LEN,
   RingScheme,
   sealDeliveredBody,
@@ -47,9 +42,7 @@ import { ringTransactOutput, type RingOutput } from "../../protocol/transaction/
 
 /** How the ring outputs of one transfer reach their recipients, Rust `RingDelivery`. */
 export type RingDelivery =
-  /** Confidential capacity 2 and 4 and the delegate rail at those capacities, scheme 11. */
-  | Readonly<{ kind: "packed" }>
-  /** Capacity 8 and 16, scheme 10 delivered to the owner's viewing key. */
+  /** Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`. */
   | Readonly<{ kind: "delivered" }>
   /** Scheme 9 under a stream tag, each payment delivered to its ring address key. */
   | Readonly<{ kind: "anonymous"; slots: AnonymousSlots }>;
@@ -184,13 +177,10 @@ export interface PublishedSlot {
 type Slot =
   | Readonly<{ kind: "ring"; recipient: X25519PublicKey; tag?: Bytes16 }>
   | Readonly<{ kind: "exit" }>
-  | Readonly<{ kind: "dummy"; tag?: Bytes16 }>
-  | Readonly<{ kind: "compact" }>;
+  | Readonly<{ kind: "dummy"; tag?: Bytes16 }>;
 
 /** The payload SPP binds for one final slot, as the program expands the slot's compact wire. */
-type FramedSlot =
-  | Readonly<{ kind: "compact" }>
-  | Readonly<{ kind: "framed"; viewTag: Bytes32; data: Uint8Array }>;
+type FramedSlot = Readonly<{ viewTag: Bytes32; data: Uint8Array }>;
 
 /** Rust `RingOutputRail`, keyed by a transaction viewing key the caller destroys and a salt drawn per rail. */
 export class RingOutputRail {
@@ -265,16 +255,13 @@ export class RingOutputRail {
       blindingSeed: this.blindingSeed(),
       ringData: planned.map((output, slotIndex) => this.#ringData(output, sender, slotIndex)),
     });
-    const published: TransactOutput[] = [];
-    outputs.forEach((output, slotIndex) => {
+    const published: TransactOutput[] = outputs.map((output, slotIndex) => {
       const slot = this.#frame(output, sender, slotIndex, input.assets);
-      if (output.isCompact() !== (slot.kind === "compact")) throw framingError(slotIndex);
-      if (slot.kind === "compact") return;
-      published.push({
+      return {
         utxoHash: output.hash(prepared.outputTreeId),
         ownerTag: { kind: "inline", value: slot.viewTag },
         data: slot.data,
-      });
+      };
     });
     return new SppProofInputs({
       payer: prepared.payer,
@@ -304,8 +291,7 @@ export class RingOutputRail {
     const published = proofInputs.externalData.outputs;
     const slots: PublishedSlot[] = [];
     proofInputs.outputs.forEach((output, slotIndex) => {
-      if (output.isCompact()) return;
-      const expected = published[slots.length];
+      const expected = published[slotIndex];
       if (expected === undefined) throw framingError(slotIndex);
       const slot = this.#slot(output, sender, slotIndex);
       const wire = this.#wire(slot, expected, slotIndex);
@@ -319,9 +305,7 @@ export class RingOutputRail {
           output,
           slotIndex,
           wire,
-          ...(slot.kind === "ring" && this.delivery.kind !== "packed"
-            ? { recipient: slot.recipient }
-            : {}),
+          ...(slot.kind === "ring" ? { recipient: slot.recipient } : {}),
           ...(this.delivery.kind === "anonymous"
             ? { anonymous: this.delivery.slots.slot(output, sender, slotIndex) }
             : {}),
@@ -344,19 +328,10 @@ export class RingOutputRail {
       return frame.body;
     };
     let wire: RingOutput;
-    if (slot.kind === "compact") throw framingError(slotIndex);
     if (slot.kind === "exit") {
       wire = { kind: "exit", hash, ownerTag, payload: body(RingScheme.confidential) };
     } else {
       switch (this.delivery.kind) {
-        case "packed":
-          wire = {
-            kind: "packed",
-            hash,
-            u: ownerTag,
-            ciphertext: body(RingScheme.ringConfidentialPacked).subarray(RECIPIENT_KEY_LEN),
-          };
-          break;
         case "delivered":
           wire = {
             kind: "delivered",
@@ -386,18 +361,14 @@ export class RingOutputRail {
 
   /** Rust `RingOutputRail::slot`. */
   #slot(output: ProofOutputUtxo, sender: ShieldedAddress, slotIndex: number): Slot {
-    const delivered = this.delivery.kind !== "packed";
-    if (output.isCompact()) {
-      if (delivered)
-        throw new RingError("RING_DELIVERED_COMPACT_PADDING", { details: { slotIndex } });
-      return Object.freeze({ kind: "compact" });
-    }
+    if (output.isCompact())
+      throw new RingError("RING_DELIVERED_COMPACT_PADDING", { details: { slotIndex } });
     // `encrypt` refuses ring data the anonymous rail did not derive.
     const carriesData =
       !output.data.isEmpty() ||
       output.dataHash !== undefined ||
       (output.ringDataHash !== undefined && this.delivery.kind !== "anonymous");
-    if (delivered && !output.isDummy() && carriesData)
+    if (!output.isDummy() && carriesData)
       throw new RingError("RING_DELIVERED_OUTPUT_DATA", { details: { slotIndex } });
     if (this.delivery.kind === "anonymous") {
       const slot = this.delivery.slots.slot(output, sender, slotIndex);
@@ -453,8 +424,6 @@ export class RingOutputRail {
     const slot = this.#slot(output, sender, slotIndex);
     const zero = new Uint8Array(32) as Bytes32;
     switch (slot.kind) {
-      case "compact":
-        return Object.freeze({ kind: "compact" });
       case "exit": {
         const owner = output.ownerAddress;
         if (owner === undefined)
@@ -475,22 +444,6 @@ export class RingOutputRail {
         return framed(viewTag, { kind: "exit", hash: zero, ownerTag: viewTag, payload });
       }
       case "ring": {
-        if (slot.tag === undefined && this.delivery.kind === "packed") {
-          const body = encryptRingPacked(
-            this.txViewingKey,
-            slot.recipient,
-            {
-              assetId: assets.assetId(output.asset),
-              amount: output.amount,
-              blinding: output.blinding,
-              data: output.data,
-            },
-            this.salt,
-            slotIndex,
-          );
-          const u = slot.recipient.u();
-          return framed(u, { kind: "packed", hash: zero, u, ciphertext: body.subarray(33) });
-        }
         const secret = this.slotSecret(slot.recipient, slotIndex);
         let body: Uint8Array;
         try {
@@ -521,20 +474,7 @@ export class RingOutputRail {
         const key = ViewingKey.generate();
         try {
           const u = key.publicKey().u();
-          if (this.delivery.kind !== "packed")
-            return framed(u, { kind: "delivered", hash: zero, u, body });
-          const ciphertext = this.txViewingKey.encryptSlot(
-            key.publicKey(),
-            encodeRingPacked({
-              assetId: SOL_ASSET_ID,
-              amount: 0n,
-              blinding: zero,
-              data: new Data(),
-            }),
-            this.salt,
-            slotIndex,
-          );
-          return framed(u, { kind: "packed", hash: zero, u, ciphertext });
+          return framed(u, { kind: "delivered", hash: zero, u, body });
         } finally {
           key.destroy();
         }
@@ -556,7 +496,7 @@ export function freeTag(): Bytes16 {
 function framed(viewTag: Bytes32, wire: RingOutput): FramedSlot {
   const { data } = ringTransactOutput(wire);
   if (data === undefined) throw new RingError("RING_OUTPUT_FRAMING");
-  return Object.freeze({ kind: "framed", viewTag, data });
+  return Object.freeze({ viewTag, data });
 }
 
 /** Random dummies join the last input tree and compact padding the first, as SPP reads them. */

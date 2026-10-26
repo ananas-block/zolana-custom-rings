@@ -50,12 +50,12 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
     "17ccb5beabcdd0e24acb953f3f89ea9930f38c30d1c15301514bc76f4b581d08",
   "custom_ring_audit_delivered_16.key":
     "d772c7121b3b513e751c49d4d2aaada7a1090ab00340241d3eafbfc5e070ad46",
+  "custom_ring_audit_delivered_2.key":
+    "951770333cb613485e33ab4260666e92de405ad25e7c8bc8006f7fb09da9995b",
+  "custom_ring_audit_delivered_4.key":
+    "54df827e8466094db91ff9cd5a5a02df8b3443a7a726be757df175c9d8e77e90",
   "custom_ring_audit_delivered_8.key":
     "09856badc833f291d494a2e90c90333a19b88de7b0de92cf1ea3ec377b8aac57",
-  "custom_ring_audit_packed_2.key":
-    "72f5be6c0c05f3e20db1cb1cd5fa9cb597e20829fa1453644956ca63ba62441f",
-  "custom_ring_audit_packed_4.key":
-    "524126d56f9e7ec9d9e8c57977a72a6b933186b184f716d4cff826de9da2d1c9",
   "custom_ring_deposit_1.key": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8",
   "custom_ring_deposit_2.key": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f",
   "custom_ring_deposit_4.key": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84",

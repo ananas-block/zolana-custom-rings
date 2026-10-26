@@ -105,7 +105,6 @@ import {
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
-import { decodeRingPacked, readRingOutput } from "../../src/protocol/transaction/output.js";
 import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
 import {
   LocalRingKeys,
@@ -688,30 +687,20 @@ export function checkDisclosure(
     exits.includes(true) ? call.proofInputs.outputBlindingSeed() : undefined,
   );
   const escrowed = disclosure.kind !== "anonymous" && disclosure.layout.keyEscrow;
-  const published = call.proofInputs.outputs.filter((output) => !output.isCompact());
+  const published = call.proofInputs.outputs;
   expect(disclosure.outputs).toHaveLength(published.length);
   disclosure.outputs.forEach((opened, index) => {
     const output = itemAt(published, index);
     const owner = output.ownerAddress;
     if (owner === undefined) {
-      expect(opened).toEqual(disclosure.kind === "packed" ? undefined : { kind: "dummy" });
+      expect(opened).toEqual({ kind: "dummy" });
       return;
     }
     const exit = exits[index] === true;
     const nullifierPk = escrowed ? undefined : owner.nullifierPublicKey;
     const ownerKey = owner.signingPublicKey.confidentialViewTag();
     const asset = assetField(output.asset);
-    if (disclosure.kind === "packed")
-      expect(opened).toEqual({
-        ownerKey,
-        nullifierPk,
-        asset,
-        amount: output.amount,
-        dataHash: output.dataHash ?? new Uint8Array(32),
-        ringDataHash: output.ringDataHash ?? new Uint8Array(32),
-      });
-    else if (exit)
-      expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
+    if (exit) expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
     else if (disclosure.kind === "delivered")
       expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey });
     else if (hex(owner.toBytes()) === hex(sender.toBytes()))
@@ -756,31 +745,6 @@ export function checkDisclosure(
     );
   }
   return disclosure;
-}
-
-/** A packed slot opens under the recipient's viewing key as scheme 11. */
-export function openPacked(
-  recipient: ShieldedKeypair,
-  call: SppCall,
-  data: RingTransactData,
-  slotIndex: number,
-) {
-  const slot = call.proofInputs.externalData.outputs[slotIndex];
-  const frame = readRingOutput(slot?.data ?? new Uint8Array());
-  expect(frame.scheme).toBe(11);
-  const viewing = recipient.viewingKey();
-  try {
-    return decodeRingPacked(
-      viewing.decryptUtxo(
-        frame.body.subarray(33),
-        X25519PublicKey.fromBytes(call.data.txViewingPk),
-        data.salt,
-        slotIndex,
-      ),
-    );
-  } finally {
-    viewing.destroy();
-  }
 }
 
 /**

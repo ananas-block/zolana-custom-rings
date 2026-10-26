@@ -18,7 +18,7 @@ function field(byte: number): Bytes32 {
   return value as Bytes32;
 }
 
-/** A data-free exit-free frame of `inputs` and `outputs` the rail's audit key serves, no proof valid. */
+/** An exit-free frame of `inputs` and `outputs` the rail's audit key serves, no proof valid. */
 export function ringFrame(
   input: Readonly<{ rail: RingRail; inputs: number; outputs: number; fullOpenings?: boolean }>,
 ): RingTransactData {
@@ -29,7 +29,6 @@ export function ringFrame(
   const flags = {
     exits: false,
     keyEscrow: rail === "delegate",
-    dataFree: true,
     fullOpenings: input.fullOpenings ?? false,
   };
   const layout = ringDisclosureLayout({
@@ -49,10 +48,10 @@ export function ringFrame(
           body: new Uint8Array(40),
         }
       : {
-          kind: "packed",
+          kind: "delivered",
           hash: field(10 + index),
           u: field(40 + index),
-          ciphertext: new Uint8Array(49),
+          body: new Uint8Array(40),
         };
   return {
     rail,
@@ -65,7 +64,6 @@ export function ringFrame(
     txViewingU: field(1),
     salt: new Uint8Array(16).fill(3) as Bytes16,
     interfaceTransfers: [],
-    dataFree: flags.dataFree,
     keyEscrow: flags.keyEscrow,
     fullOpenings: flags.fullOpenings,
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),

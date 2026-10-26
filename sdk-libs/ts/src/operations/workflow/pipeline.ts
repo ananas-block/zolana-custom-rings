@@ -56,7 +56,6 @@ import { auditStatementHash, ringAuditStatement } from "../../protocol/proof/sta
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  isDataFreeOutput,
   ringDisclosureLayout,
   ringSppInputs,
   type InputTrees,
@@ -275,7 +274,6 @@ async function assembleStagedTransfer<T>(
   const audit: AuditLayout = Object.freeze({
     exits: published.some((slot) => slot.wire.kind === "exit"),
     keyEscrow: config.keyEscrow,
-    dataFree: published.every((slot) => isDataFreeOutput(slot.wire)),
     // A default-ring input takes the entry key, every commitment key refuses ring id zero.
     fullOpenings: ringRail === "anonymous" && spendsDefaultRing(staged.proofInputs),
   });
@@ -629,8 +627,6 @@ function withAuditorMessage(
       instructionDiscriminator: external.instructionDiscriminator,
       expiryUnixTs: U32_MAX,
       interfaceTransfers: external.interfaceTransfers,
-      ...(external.dataHash === undefined ? {} : { dataHash: external.dataHash }),
-      ...(external.ringDataHash === undefined ? {} : { ringDataHash: external.ringDataHash }),
       txViewingPublicKey: external.txViewingPublicKey,
       salt: external.salt,
       outputs: external.outputs,
@@ -704,9 +700,6 @@ function previewData(
     txViewingU: input.txViewingU,
     salt: external.salt,
     interfaceTransfers: external.interfaceTransfers.map(interfaceTransferOf),
-    ...(external.dataHash === undefined ? {} : { dataHash: external.dataHash }),
-    ...(external.ringDataHash === undefined ? {} : { ringDataHash: external.ringDataHash }),
-    dataFree: input.audit.dataFree,
     keyEscrow: input.audit.keyEscrow,
     fullOpenings: input.audit.fullOpenings,
     outputs: Object.freeze(outputs),

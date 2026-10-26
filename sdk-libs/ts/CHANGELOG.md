@@ -44,6 +44,7 @@ Breaking
 - Ring deposit audit capsules carry a `RING_DEPOSIT_OPENING_LENGTH` (96) byte opening that also discloses the Ed25519 owner key of an anonymous ring deposit, `RingDepositOpening` takes it as `ownerKey` and `openRingDepositOpening` returns it → re-prove audited deposits with this version, a capsule sealed by an earlier version no longer decodes.
 
 - A merge on a ring with a member registry fails with cause `RING_ESCROW_MERGE_UNVERIFIED` (program error 8245) until the ring merge proof lands, `DelegateTransfer.withShape` is gone and a delegate move takes the 2x2 or 4x4 shape, and an anonymous ring output's body carries its blinding and amount, the asset found by rebuilding the output under every registered mint → merge on anonymous rings only for now, and keep the wallet's asset registry current.
+- Confidential and delegate transfers deliver every ring output at 2, 4, 8 and 16 outputs as a body the audit proof binds, the compact frame publishes every slot without an output count, data hashes or an exit length prefix and refuses frame byte 0 bits 6 and 7 and shape byte bit 7, `RingOutput`, `DisclosureLayout`, `RingDisclosure`, `AuditKind` and `RingKeyCircuit` lose their packed kind, `AuditLayout` and `RingTransactData` drop `dataFree`, `RingTransactData` drops `dataHash` and `ringDataHash`, `PACKED_AUDIT_CAPACITIES`, `packedFields`, `PackedLayout`, `PackedFields`, `PackedOutputOpening`, `PackedAuditProofRequest` and `isDataFreeOutput` are gone, a ring output carrying data fails with `RING_DELIVERED_OUTPUT_DATA` and a compact transfer's output padding with `RING_DELIVERED_COMPACT_PADDING` before any proof, and `RingNotes.pending` replaces `unknownAssetIds` → deploy this release's ring program and prover with the delivered 2 and 4 output audit keys, send ring outputs without data from a transfer that pads with dummies, and expect no note of the packed scheme to open.
 
 Added
 
@@ -51,9 +52,11 @@ Added
 - `CustomRingClient.checkRingProvingKeys()` compares the prover's ring keys
   with `RING_PROVING_KEY_SHA256S`, the keys the package pins, and refuses a
   differing digest with `CLIENT_PROVER_PROVING_KEYS_MISMATCH`.
-- `syncRingWallet` runs `syncWallet`, then adds to the wallet the packed and
-  delivered ring notes `syncWallet` skips, each marked spent once a spend of it
-  is indexed, and `openRingNotes` opens those notes from given transactions.
+- `syncRingWallet` runs `syncWallet`, then adds to the wallet the delivered
+  ring notes `syncWallet` skips, each marked spent once a spend of it is
+  indexed, reading the chain's mint registrations once when `RingNotes.pending`
+  counts a note no registered mint rebuilds, and `openRingNotes` opens those
+  notes from given transactions.
 
 Fixed
 

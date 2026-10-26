@@ -1,34 +1,28 @@
-/** Ring notes of schemes 10 and 11 opened into a wallet, the pinned zolana sync drops both, Rust `zolana_ring_client::confidential`. */
+/** Ring notes of scheme 10 opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
 import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
-import {
-  bytesKey,
-  equalBytes,
-  fetchSplAssetRegistrations,
-  splitEmbeddedKey,
-} from "@heliuslabs/zolana/internal";
+import { bytesKey, equalBytes, fetchSplAssetRegistrations } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
-  TransactionError,
-  Utxo,
   type AssetRegistry,
   type IndexedShieldedTransaction,
   type ShieldedKeys,
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { decodeRingPacked, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
+import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { nextScanCursor } from "../operations/audit/audit.js";
 import { openRingDelivery } from "../crypto/derivation/blinding.js";
 import { spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
+import type { RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
   readonly utxos: readonly WalletUtxo[];
-  /** Asset ids of packed notes the registry lacks, the caller registers them and opens again. */
-  readonly unknownAssetIds: readonly bigint[];
+  /** Slots sent to a held key that no registered mint rebuilds, the caller registers mints and opens again. */
+  readonly pending: number;
 }
 
 /** Every note is unspent, scheme 10 opens only under keys that are also `RingKeys`. */
@@ -41,16 +35,15 @@ export async function openRingNotes(
   context?: RequestContext,
 ): Promise<RingNotes> {
   const notes: Note[] = [];
-  const unknownAssetIds = new Set<bigint>();
+  let pending = 0;
   for (const tx of input.transactions) {
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
     if (ring === undefined || txViewingPublicKey === undefined || salt === undefined) continue;
     for (const [slotIndex, slot] of tx.outputSlots.entries()) {
       const site: Site = { tx, ring, txViewingPublicKey, salt, slotIndex, slot };
       const opened = await openSlot(input, site, context);
-      if (opened === undefined) continue;
-      if (typeof opened === "bigint") unknownAssetIds.add(opened);
-      else notes.push(opened);
+      if (opened === PENDING) pending += 1;
+      else if (opened !== undefined) notes.push(opened);
     }
   }
   const nullifiers =
@@ -81,7 +74,7 @@ export async function openRingNotes(
         }),
       ),
     ),
-    unknownAssetIds: Object.freeze([...unknownAssetIds]),
+    pending,
   });
 }
 
@@ -100,7 +93,7 @@ export async function syncRingWallet(
   const open = () => openRingNotes({ keys, assets: wallet.registry, transactions }, context);
   let notes = await open();
   const { solanaRpc, commitment } = client;
-  if (notes.unknownAssetIds.length > 0 && solanaRpc !== undefined && commitment !== undefined) {
+  if (notes.pending > 0 && solanaRpc !== undefined && commitment !== undefined) {
     for (const { assetId, mint } of await fetchSplAssetRegistrations(
       { solanaRpc, commitment },
       context,
@@ -146,19 +139,16 @@ interface Site {
   readonly slot: IndexedShieldedTransaction["outputSlots"][number];
 }
 
-interface Note {
-  readonly utxo: Utxo;
-  readonly utxoHash: Bytes32;
-  readonly slot: Site["slot"];
-  readonly ringDataHash?: Bytes32;
-}
+type Note = RingDeliveredNote & Readonly<{ slot: Site["slot"] }>;
 
-/** A note, the asset id of a packed note the registry lacks, or `undefined` for a slot of another key. */
+const PENDING = Symbol("pending");
+
+/** `undefined` for a slot sent to no held key. */
 async function openSlot(
   input: Readonly<{ keys: ShieldedKeys; assets: AssetRegistry }>,
   site: Site,
   context: RequestContext | undefined,
-): Promise<Note | bigint | undefined> {
+): Promise<Note | typeof PENDING | undefined> {
   let frame: ReturnType<typeof readRingOutput>;
   try {
     frame = readRingOutput(site.slot.payload);
@@ -166,65 +156,9 @@ async function openSlot(
     return undefined;
   }
   if (frame.encoding !== "encrypted") return undefined;
-  if (frame.scheme === RingScheme.ringConfidentialPacked)
-    return packedNote(input, site, frame.body, context);
   if (frame.scheme === RingScheme.ringConfidentialDelivered && isRingKeys(input.keys))
     return deliveredNote({ keys: input.keys, assets: input.assets }, site, frame.body, context);
   return undefined;
-}
-
-/** Scheme 3's key schedule under the embedded recipient key, the rebuilt commitment authenticates it. */
-async function packedNote(
-  input: Readonly<{ keys: ShieldedKeys; assets: AssetRegistry }>,
-  site: Site,
-  body: Uint8Array,
-  context: RequestContext | undefined,
-): Promise<Note | bigint | undefined> {
-  let split: ReturnType<typeof splitEmbeddedKey>;
-  try {
-    split = splitEmbeddedKey(body);
-  } catch {
-    return undefined;
-  }
-  const viewingPublicKey = input.keys.viewingPublicKeys().find((key) => key.equals(split.key));
-  if (viewingPublicKey === undefined) return undefined;
-  const plaintext = await opened(context, async () => {
-    const [bytes] = await input.keys.decrypt(
-      [
-        {
-          ciphertext: split.rest,
-          viewingPublicKey,
-          txViewingPublicKey: site.txViewingPublicKey,
-          salt: site.salt,
-          slotIndex: site.slotIndex,
-          label: "transfer",
-        },
-      ],
-      context,
-    );
-    return bytes === undefined ? undefined : decodeRingPacked(bytes);
-  });
-  if (plaintext === undefined) return undefined;
-  let asset: ReturnType<AssetRegistry["resolve"]>;
-  try {
-    asset = input.assets.resolve(plaintext.assetId);
-  } catch (error) {
-    if (error instanceof TransactionError && error.code === "TRANSACTION_UNKNOWN_ASSET")
-      return plaintext.assetId;
-    throw error;
-  }
-  const owner = input.keys.address();
-  const utxo = new Utxo({
-    owner: owner.signingPublicKey,
-    asset,
-    amount: plaintext.amount,
-    blinding: plaintext.blinding,
-    data: plaintext.data,
-    ringProgramId: site.ring,
-  });
-  const utxoHash = utxo.hash(owner.nullifierPublicKey, outputTreeId(site.slot.outputContext));
-  if (!equalBytes(utxoHash, site.slot.outputContext.hash)) return undefined;
-  return Object.freeze({ utxo, utxoHash, slot: site.slot });
 }
 
 /** The slot secret keys the body, the asset is the registered mint that rebuilds the commitment. */
@@ -233,7 +167,7 @@ async function deliveredNote(
   site: Site,
   body: Uint8Array,
   context: RequestContext | undefined,
-): Promise<Note | undefined> {
+): Promise<Note | typeof PENDING | undefined> {
   const viewingPublicKey = input.keys
     .viewingPublicKeys()
     .find((key) => equalBytes(key.u(), site.slot.viewTag));
@@ -270,7 +204,7 @@ async function deliveredNote(
     },
     input.assets,
   );
-  return note === undefined ? undefined : Object.freeze({ ...note, slot: site.slot });
+  return note === undefined ? PENDING : Object.freeze({ ...note, slot: site.slot });
 }
 
 /** A body that fails to open is another key's or malformed, an abort still stops the sync. */

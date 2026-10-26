@@ -11,7 +11,6 @@ import type {
   DeliveredAuditProofRequest,
   DeliveredSlotProofInputs,
   FirstContactAnchor,
-  PackedAuditProofRequest,
 } from "../rpc/prover/ring.js";
 import {
   anonymousKeyClass,
@@ -25,7 +24,6 @@ import {
   type AnonymousInputs,
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
-  type PackedOutputOpening,
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
@@ -106,10 +104,7 @@ export function sealedAuditMessage(sealed: SealedAudit, auditor: X25519PublicKey
   );
 }
 
-export type AuditProofRequest =
-  | PackedAuditProofRequest
-  | DeliveredAuditProofRequest
-  | AnonymousAuditProofRequest;
+export type AuditProofRequest = DeliveredAuditProofRequest | AnonymousAuditProofRequest;
 
 /** The audit proof's request, one layout per rail, Rust `AuditProving::prove`. */
 export function auditProofRequest(
@@ -128,7 +123,6 @@ export function auditProofRequest(
 ): AuditProofRequest {
   const { sealed, proofInputs, published } = input;
   const tree = proofInputs.outputTreeId;
-  const capacity = proofInputs.outputs.length;
   const shared = {
     firstNullifier: proofInputs.firstNullifier(),
     ringId: input.ringId,
@@ -144,23 +138,6 @@ export function auditProofRequest(
     txViewingSk: input.rail.txViewingKey.secretBytes(),
   });
   switch (sealed.layout.kind) {
-    case "packed": {
-      const outputs = Array.from({ length: capacity }, (_, index) => {
-        const slot = published[index];
-        return slot === undefined ? EMPTY_RING_OPENING : ringOutputOpening(slot.output, tree);
-      });
-      const ownerKeys = Array.from({ length: capacity }, (_, index) => {
-        const output = published[index]?.output;
-        return output === undefined ? zeroField() : slotOwnerKey(output);
-      });
-      return Object.freeze({
-        kind: "packedAudit",
-        nOut: sealed.layout.outputs,
-        outputs,
-        ownerKeys,
-        ...envelope(),
-      });
-    }
     case "delivered": {
       const outputs = published.map((slot) => deliveredSlot(slot, tree));
       return Object.freeze({ kind: "deliveredAudit", outputs, ...envelope() });
@@ -211,13 +188,6 @@ function auditDisclosure(
   const { layout, published } = input;
   const disclosedSeed = layout.exits ? seedOut : undefined;
   switch (layout.kind) {
-    case "packed":
-      return {
-        kind: "packed",
-        layout,
-        seedOut: disclosedSeed,
-        outputs: published.map((slot) => packedOpening(slot, layout.keyEscrow)),
-      };
     case "delivered":
       return {
         kind: "delivered",
@@ -256,21 +226,6 @@ function anonymousInputs(
         blinding: input.utxo.blinding,
       };
     }),
-  };
-}
-
-/** `undefined` for a dummy, the nullifier key left to the owner's escrow record under key escrow. */
-function packedOpening(slot: PublishedSlot, keyEscrow: boolean): PackedOutputOpening | undefined {
-  const { output } = slot;
-  const owner = output.ownerAddress;
-  if (owner === undefined) return undefined;
-  return {
-    ownerKey: owner.signingPublicKey.confidentialViewTag(),
-    nullifierPk: keyEscrow ? undefined : owner.nullifierPublicKey,
-    asset: assetField(output.asset),
-    amount: output.amount,
-    dataHash: output.dataHash ?? zeroField(),
-    ringDataHash: output.ringDataHash ?? zeroField(),
   };
 }
 

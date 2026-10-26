@@ -21,7 +21,6 @@ import {
   anonymousAuditKey,
   anonymousKeyClass,
   disclosureFieldCount,
-  packedFields,
   deliveredFields,
   anonymousFields,
   type AnonymousAuditKey,
@@ -77,6 +76,7 @@ import {
   type RingOutput,
   type RingRail,
 } from "../../../src/protocol/transaction/transact.js";
+import { CONFIDENTIAL_DATA_FREE_BODY_LEN } from "../../../src/protocol/transaction/output.js";
 import {
   TAG_LEN,
   ringTagField,
@@ -364,8 +364,6 @@ describe("ring-statements.json", () => {
   const output = (vector: AuditCase["outputs"][number]): RingOutput => {
     const hash = field(vector.hash);
     switch (vector.kind) {
-      case "packed":
-        return { kind: "packed", hash, u: field(vector.u ?? ""), ciphertext: new Uint8Array() };
       case "delivered":
         return {
           kind: "delivered",
@@ -389,11 +387,10 @@ describe("ring-statements.json", () => {
         };
     }
   };
-  /** `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`. */
+  /** `exits | key_escrow << 1 | full_openings << 3`. */
   const layout = (value: number): AuditLayout => ({
     exits: (value & 1) !== 0,
     keyEscrow: (value & 2) !== 0,
-    dataFree: (value & 4) !== 0,
     fullOpenings: (value & 8) !== 0,
   });
   const kind = (vector: AuditCase): AuditKind =>
@@ -410,7 +407,7 @@ describe("ring-statements.json", () => {
           firstContactRoot: field(vector.first_contact_root ?? ""),
           senderCommitment: field(vector.sender_commitment ?? ""),
         }
-      : { kind: vector.kind === "packed" ? "packed" : "delivered" };
+      : { kind: "delivered" };
 
   it("rebuilds every audit statement and its public input", () => {
     for (const vector of statements.audit) {
@@ -563,31 +560,33 @@ describe("ring-transact-expansion.json", () => {
     expect(refused("confidential_delivered_audit_only", 1, () => 63)).toThrow(
       ringError("RingShapeUnkeyed"),
     );
-    expect(refused("confidential_delivered_audit_only", 0, (byte) => byte | (1 << 4))).toThrow(
-      ringError("FlagNotAllowed"),
-    );
+    for (const [at, bit] of [
+      [0, 4],
+      [0, 6],
+      [0, 7],
+      [1, 7],
+    ] as const)
+      expect(refused("confidential_delivered_audit_only", at, (byte) => byte | (1 << bit))).toThrow(
+        ringError("FlagNotAllowed"),
+      );
     const wide = SPP_SUPPORTED_SHAPES.findIndex(
       (shape) => shape.inputs > RING_AUTHORITY_MAX_INPUTS,
     );
     expect(refused("delegate_move", 1, () => wide)).toThrow(ringError("RingShapeUnkeyed"));
   });
 
-  it("frames a data-free packed slot at its fixed length and refuses another", () => {
-    const vector = expansion.cases.find((entry) => entry.name === "delegate_move");
-    if (vector === undefined) throw new Error("vector has no delegate move");
+  it("frames an exit payload at its data-free length and refuses another", () => {
+    const vector = expansion.cases.find((entry) => entry.name === "confidential_delivered_policy");
+    if (vector === undefined) throw new Error("vector has no confidential policy transfer");
     const data = RingTransactData.parse(bytes(vector.compact), railOf(vector.rail));
-    expect(data.dataFree).toBe(true);
-    const [first, ...rest] = data.outputs;
-    if (first?.kind !== "packed") throw new Error("delegate move without a packed slot");
-    expect(first.ciphertext).toHaveLength(49);
-    const longer = { ...first, ciphertext: Uint8Array.of(...first.ciphertext, 0) };
-    expect(() => RingTransactData.encode({ ...data, outputs: [longer, ...rest] })).toThrow(
-      ringError("DataFreeBodyLength"),
-    );
-    // The data-free flag moves the packed slot fields, the sealed disclosure no longer fits.
-    expect(() => RingTransactData.encode({ ...data, dataFree: false })).toThrow(
-      ringError("RingTransactLength"),
-    );
+    const at = data.outputs.findIndex((output) => output.kind === "exit");
+    const exit = data.outputs[at];
+    if (exit?.kind !== "exit") throw new Error("policy transfer without an exit");
+    expect(exit.payload).toHaveLength(CONFIDENTIAL_DATA_FREE_BODY_LEN);
+    const longer = { ...exit, payload: Uint8Array.of(...exit.payload, 0) };
+    expect(() =>
+      RingTransactData.encode({ ...data, outputs: data.outputs.with(at, longer) }),
+    ).toThrow(ringError("DataFreeBodyLength"));
   });
 
   it("refuses an SPP point off the curve at expansion", () => {
@@ -676,16 +675,6 @@ describe("disclosure packing", () => {
 
   it("counts the fields of every layout as the solved Go host disclosure the vector records", () => {
     const layouts = [
-      ...counts.packed.map((record) => ({
-        record,
-        layout: {
-          kind: "packed",
-          outputs: record.outputs,
-          exits: record.exits,
-          keyEscrow: record.key_escrow,
-          dataFree: record.data_free,
-        } as const,
-      })),
       ...counts.delivered.map((record) => ({
         record,
         layout: {
@@ -716,25 +705,21 @@ describe("disclosure packing", () => {
   });
 
   it("places every field the flags keep and skips every field they leave out", () => {
-    expect(packedFields({ outputs: 2, exits: true, keyEscrow: false, dataFree: false })).toEqual({
+    const pair = deliveredFields({ outputs: 2, exits: true, keyEscrow: false });
+    expect(pair).toEqual({
       seedOut: 0,
-      firstSlot: 1,
-      slotWidth: 6,
-      nullifierPk: 0,
-      asset: 1,
-      dataHashes: 2,
-      ownerAndAmount: 4,
-      fieldCount: 13,
-    });
-    expect(packedFields({ outputs: 2, exits: false, keyEscrow: true, dataFree: true })).toEqual({
-      seedOut: undefined,
-      firstSlot: 0,
-      slotWidth: 3,
-      nullifierPk: undefined,
-      asset: 0,
-      dataHashes: undefined,
-      ownerAndAmount: 1,
+      nullifierPks: { start: 1, end: 3 },
+      slots: { start: 3, end: 6 },
+      slotBytes: 40,
       fieldCount: 6,
+    });
+    const escrowed = deliveredFields({ outputs: 4, exits: false, keyEscrow: true });
+    expect(escrowed).toEqual({
+      seedOut: undefined,
+      nullifierPks: undefined,
+      slots: { start: 0, end: 5 },
+      slotBytes: 32,
+      fieldCount: 5,
     });
     const dense = deliveredFields({ outputs: 8, exits: false, keyEscrow: false });
     expect([dense.seedOut, dense.nullifierPks, dense.slots, dense.slotBytes]).toEqual([
@@ -798,9 +783,9 @@ describe("disclosure packing", () => {
     expect(
       decode({ kind: "anonymous", key: { kind: "entry" }, inputs: 2, outputs: 16, exits: false }),
     ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(
-      decode({ kind: "packed", outputs: 5, exits: false, keyEscrow: false, dataFree: false }),
-    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(decode({ kind: "delivered", outputs: 3, exits: false, keyEscrow: false })).toThrow(
+      "KEYPAIR_DISCLOSURE_SHAPE",
+    );
   });
 });
 

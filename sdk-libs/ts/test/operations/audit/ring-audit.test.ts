@@ -1,7 +1,6 @@
 import { getAddressEncoder, type Address, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import packed from "../../../../../test-vectors/audit/audit-disclosure.json" with { type: "json" };
 import anonymous from "../../../../../test-vectors/audit/audit-disclosure-anonymous.json" with { type: "json" };
 import delivered from "../../../../../test-vectors/audit/audit-disclosure-delivered.json" with { type: "json" };
 import {
@@ -71,10 +70,7 @@ import {
   confirmedDepositTransaction,
   ringDepositPayload,
 } from "../../helpers/confirmed-deposits.js";
-import {
-  CONFIDENTIAL_DATA_FREE_BODY_LEN,
-  RING_PACKED_DATA_FREE_BODY_LEN,
-} from "../../../src/protocol/transaction/output.js";
+import { CONFIDENTIAL_DATA_FREE_BODY_LEN } from "../../../src/protocol/transaction/output.js";
 import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 
 await initializePoseidon();
@@ -90,22 +86,17 @@ function field(value: string): Bytes32 {
   return hex<Bytes32>(value, 32);
 }
 
-type Layout = "packed" | "delivered" | "anonymous";
-type Vector =
-  | (typeof packed.cases)[number]
-  | (typeof delivered.cases)[number]
-  | (typeof anonymous.cases)[number];
+type Layout = "delivered" | "anonymous";
+type Vector = (typeof delivered.cases)[number] | (typeof anonymous.cases)[number];
 type VectorSlot = Vector["slots"][number];
 type VectorEntry = Readonly<{ layout: Layout; bound: DisclosureLayout; vector: Vector }>;
 
-/** `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`, the frame's layout element. */
+/** `exits | key_escrow << 1 | full_openings << 3`, the frame's layout element. */
 function bound(layout: Layout, vector: Vector): DisclosureLayout {
   const value = vector.layout;
   const exits = (value & 1) !== 0;
   const keyEscrow = (value & 2) !== 0;
   const outputs = vector.slots.length;
-  if (layout === "packed")
-    return { kind: layout, outputs, exits, keyEscrow, dataFree: (value & 4) !== 0 };
   if (layout === "delivered") return { kind: layout, outputs, exits, keyEscrow };
   if (!("inputs" in vector)) throw new Error("anonymous vector without inputs");
   return {
@@ -118,13 +109,12 @@ function bound(layout: Layout, vector: Vector): DisclosureLayout {
 }
 
 const VECTORS: readonly VectorEntry[] = [
-  ...packed.cases.map((vector) => ({ layout: "packed" as const, vector })),
   ...delivered.cases.map((vector) => ({ layout: "delivered" as const, vector })),
   ...anonymous.cases.map((vector) => ({ layout: "anonymous" as const, vector })),
 ].map((entry) => ({ ...entry, bound: bound(entry.layout, entry.vector) }));
 
 const SIGNATURE = "1".repeat(64) as Signature;
-/** A mint no default registry names, the exit of the packed vector settles it. */
+/** A mint no default registry names, the exit of the pair vector settles it. */
 const FOREIGN_MINT = encodeBase58(new Uint8Array(32).fill(0x0a));
 const OTHER_RING = encodeBase58(new Uint8Array(32).fill(0x0b));
 
@@ -134,10 +124,10 @@ function vectorOf(layout: Layout, name: string): VectorEntry {
   return found;
 }
 
-/** The packed case with an exit and no escrow, every key and data hash published. */
-const PACKED = vectorOf("packed", "exits");
-const PACKED_LAYOUT = PACKED.bound;
-const PACKED_VECTOR = PACKED.vector;
+/** The capacity 2 delivered case with an exit and no escrow, every key published. */
+const PAIR = vectorOf("delivered", "pair_exits");
+const PAIR_LAYOUT = PAIR.bound;
+const PAIR_VECTOR = PAIR.vector;
 
 /** The slot's payload under the scheme its rail expands to, exits under scheme 3. */
 function payload(layout: Layout, slot: VectorSlot): Uint8Array {
@@ -145,11 +135,6 @@ function payload(layout: Layout, slot: VectorSlot): Uint8Array {
     return encodeRingOutput(
       RingScheme.confidential,
       new Uint8Array(CONFIDENTIAL_DATA_FREE_BODY_LEN),
-    );
-  if (layout === "packed")
-    return encodeRingOutput(
-      RingScheme.ringConfidentialPacked,
-      new Uint8Array(RING_PACKED_DATA_FREE_BODY_LEN),
     );
   const body = "body" in slot ? slot.body : undefined;
   if (body === undefined) throw new Error("vector slot without a body");
@@ -391,7 +376,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
 
   it("names a registered mint and leaves an unregistered one to a refresh", () => {
     const exit = (assets: AssetRegistry) =>
-      audit(PACKED, { assets }).outputs.find((output) => output.opening.kind === "exit");
+      audit(PAIR, { assets }).outputs.find((output) => output.opening.kind === "exit");
     const unknown = exit(new AssetRegistry())?.opening;
     expect(unknown?.kind === "exit" && unknown.utxo.mint).toBeUndefined();
     const known = exit(new AssetRegistry([[2n, FOREIGN_MINT]]))?.opening;
@@ -629,18 +614,18 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
   });
 
   it("records a disclosed field moved off its opening as that slot's commitment error", () => {
-    const audited = audit(PACKED, {
+    const audited = audit(PAIR, {
       transaction: (transaction) => {
         const message = transaction.messages[0]!;
         const data = message.data.slice();
-        // Field 1 is the first slot's masked nullifier key, one more stays a canonical field.
-        const at = 65 + 32;
+        // Field 2 is the exit's masked nullifier key, one more stays a canonical field.
+        const at = 65 + 2 * 32;
         data.set(bigIntBytes(fieldAdd(bytesToBigInt(data.slice(at, at + 32)), 1n)), at);
         return { ...transaction, messages: [{ viewTag: message.viewTag, data }] };
       },
     });
-    expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
-    expect(audited.outputs.map((output) => output.slotIndex)).toEqual([1, 2, 3]);
+    expect(audited.payloadErrors).toEqual([{ slotIndex: 1, kind: "commitment" }]);
+    expect(audited.outputs.map((output) => output.slotIndex)).toEqual([0]);
   });
 
   it("refuses a delivered body under the anonymous scheme as a frame error", () => {
@@ -709,7 +694,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
 
   it("refuses a published key the envelope does not seal", () => {
     expect(() =>
-      audit(PACKED, {
+      audit(PAIR, {
         transaction: (transaction) => ({
           ...transaction,
           txViewingPublicKey: X25519Keypair.generate().publicKey(),
@@ -720,15 +705,15 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
 
   it("refuses an unclamped alias of the sealed transaction secret", () => {
     const auditor = X25519Keypair.generate();
-    const transaction = vectorTransaction(PACKED, auditor.publicKey());
-    const alias = field(PACKED_VECTOR.tx_viewing_sk);
+    const transaction = vectorTransaction(PAIR, auditor.publicKey());
+    const alias = field(PAIR_VECTOR.tx_viewing_sk);
     alias[0] = (alias[0] ?? 0) | 1;
     const envelope = sealTransactionViewingSecret(alias, auditor.publicKey());
     const message = auditorMessageData(
       {
         ephemeralPublicKey: envelope.ephemeralPublicKey,
         sealed: envelope.sealed,
-        disclosure: PACKED_VECTOR.published.map(field),
+        disclosure: PAIR_VECTOR.published.map(field),
       },
       auditor.publicKey(),
     );
@@ -737,7 +722,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
         auditor,
         transaction: { ...transaction, messages: [message] },
         assets: new AssetRegistry(),
-        layout: PACKED_LAYOUT,
+        layout: PAIR_LAYOUT,
       }),
     ).toThrow(ringError("RING_AUDIT_NONCANONICAL_KEY"));
   });
@@ -745,30 +730,29 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
   it("audits under the layout the frame bound and refuses one off the published counts", () => {
     // The escrow layout leaves out every key, the field count no longer matches the message.
     expect(() =>
-      audit(PACKED, {
-        layout: { ...PACKED_LAYOUT, kind: "packed", keyEscrow: true, dataFree: false },
+      audit(PAIR, {
+        layout: { ...PAIR_LAYOUT, kind: "delivered", keyEscrow: true },
       }),
     ).toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "malformed" }));
     expect(() =>
-      audit(PACKED, {
+      audit(PAIR, {
         layout: {
-          kind: "packed",
-          outputs: PACKED_VECTOR.slots.length - 1,
+          kind: "delivered",
+          outputs: 4,
           exits: true,
           keyEscrow: false,
-          dataFree: false,
         },
       }),
     ).toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "layout" }));
     // The program sets the exits bit exactly when a published slot exits.
-    expect(() => audit(PACKED, { layout: { ...PACKED_LAYOUT, exits: false } })).toThrow(
+    expect(() => audit(PAIR, { layout: { ...PAIR_LAYOUT, exits: false } })).toThrow(
       ringError("RING_AUDIT_MESSAGE", { reason: "layout" }),
     );
   });
 
   it("refuses a transfer without its salt and input trees of another count", () => {
     const auditor = X25519Keypair.generate();
-    const transaction = vectorTransaction(PACKED, auditor.publicKey());
+    const transaction = vectorTransaction(PAIR, auditor.publicKey());
     const unsalted: IndexedShieldedTransaction = {
       slot: transaction.slot,
       txSignature: transaction.txSignature,
@@ -788,10 +772,10 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
         auditor,
         transaction: unsalted,
         assets: new AssetRegistry(),
-        layout: PACKED_LAYOUT,
+        layout: PAIR_LAYOUT,
       }),
     ).toThrow(ringError("RING_AUDIT_UNSEALED", { reason: "salt" }));
-    expect(() => audit(PACKED, { inputTreeIds: [9, 9] })).toThrow(
+    expect(() => audit(PAIR, { inputTreeIds: [9, 9] })).toThrow(
       ringError("RING_INVALID_LENGTH", { name: "inputTreeIds" }),
     );
   });
@@ -808,14 +792,14 @@ function openedMint(assets: AssetRegistry, asset: string): Readonly<{ mint?: Add
   return mint === undefined ? {} : { mint };
 }
 
-const RING = encodeBase58(field(PACKED_VECTOR.ring_program_id));
+const RING = encodeBase58(field(PAIR_VECTOR.ring_program_id));
 
 const TRANSFERS: TransactionOrigin = {
   confirmedTransaction: async (transaction) => ({
     kind: "transfer",
     transaction,
     inputTreeIds: transaction.nullifiers.map(() => undefined),
-    layout: PACKED_LAYOUT,
+    layout: PAIR_LAYOUT,
   }),
 };
 
@@ -878,7 +862,7 @@ describe("auditRing", () => {
 
   it("audits the ring's confirmed transfers and skips every other event", async () => {
     const auditor = X25519Keypair.generate();
-    const transfer = vectorTransaction(PACKED, auditor.publicKey());
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
     const deposit = { ...transfer, txSignature: "2".repeat(64) as Signature };
     const foreign = { ...transfer, txSignature: "3".repeat(64) as Signature };
     const origin: TransactionOrigin = {
@@ -897,7 +881,7 @@ describe("auditRing", () => {
 
   it("never reads the origin of a row another ring or the default ring indexed", async () => {
     const auditor = X25519Keypair.generate();
-    const transfer = vectorTransaction(PACKED, auditor.publicKey());
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
     const { ringProgramId: _ring, ...defaultRing } = {
       ...transfer,
       txSignature: "7".repeat(64) as Signature,
@@ -926,7 +910,7 @@ describe("auditRing", () => {
 
   it("refuses a confirmed transfer without its auditor message", async () => {
     const auditor = X25519Keypair.generate();
-    const transfer = vectorTransaction(PACKED, auditor.publicKey());
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
     await expect(scan([{ ...transfer, messages: [] }], transfers, { auditor })).rejects.toThrow(
       ringError("RING_AUDIT_MESSAGE", { reason: "missing" }),
     );
@@ -934,7 +918,7 @@ describe("auditRing", () => {
 
   it("refreshes the asset registry once for a mint the chain registers", async () => {
     const auditor = X25519Keypair.generate();
-    const transfer = vectorTransaction(PACKED, auditor.publicKey());
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
     const registry = new Uint8Array(48);
     registry[0] = StateDiscriminator.splAssetRegistry;
     registry.set(new Uint8Array(getAddressEncoder().encode(FOREIGN_MINT as Address)), 8);
@@ -964,7 +948,7 @@ describe("auditRing", () => {
 
   it("follows the cursor to the page that states its frontier and stops at the page cap", async () => {
     const auditor = X25519Keypair.generate();
-    const first = vectorTransaction(PACKED, auditor.publicKey());
+    const first = vectorTransaction(PAIR, auditor.publicKey());
     const second = { ...first, txSignature: "4".repeat(64) as Signature };
     const pages = [
       transactionsPage({ transactions: [first], nextCursor: Uint8Array.of(1) }),
@@ -1042,13 +1026,13 @@ describe("auditRing", () => {
 
 describe("recoverRingMemberNotes", () => {
   const key = {
-    txViewingSecret: field(PACKED_VECTOR.tx_viewing_sk),
-    salt: hex<Bytes16>(PACKED_VECTOR.salt, 16),
+    txViewingSecret: field(PAIR_VECTOR.tx_viewing_sk),
+    salt: hex<Bytes16>(PAIR_VECTOR.salt, 16),
   };
   const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 
-  /** The packed `entry` with its first ring output paid to `owner`, the disclosure sealed again. */
-  function ownedTransfer(owner: ShieldedKeypair, auditor: X25519PublicKey, entry = PACKED) {
+  /** The delivered `entry` with its first ring output paid to `owner`, the disclosure sealed again. */
+  function ownedTransfer(owner: ShieldedKeypair, auditor: X25519PublicKey, entry = PAIR) {
     const address = owner.shieldedAddress();
     const ownerKey = address.signingPublicKey.ed25519();
     const opened = openRingDisclosure(key, {
@@ -1056,7 +1040,7 @@ describe("recoverRingMemberNotes", () => {
       fields: entry.vector.published.map(field),
       exits: entry.vector.slots.map((slot) => slot.kind === "exit"),
     });
-    if (opened.kind !== "packed") throw new Error("packed vector");
+    if (opened.kind !== "delivered") throw new Error("delivered vector");
     const slot = entry.vector.slots[0]!;
     const commitment = new Utxo({
       owner: address.signingPublicKey,
@@ -1071,7 +1055,7 @@ describe("recoverRingMemberNotes", () => {
       published: sealRingDisclosure(key, {
         ...opened,
         outputs: opened.outputs.map((output, index) =>
-          index === 0 && output !== undefined ? { ...output, ownerKey, nullifierPk } : output,
+          index === 0 && output.kind === "ring" ? { ...output, ownerKey, nullifierPk } : output,
         ),
       }).map(toHex),
       slots: entry.vector.slots.map((vectorSlot, index) =>
@@ -1079,8 +1063,9 @@ describe("recoverRingMemberNotes", () => {
       ),
     };
     return {
-      transaction: vectorTransaction({ layout: "packed", vector }, auditor),
+      transaction: vectorTransaction({ layout: "delivered", vector }, auditor),
       commitment,
+      amount: BigInt(need(slot.amount, "amount")),
     };
   }
 
@@ -1142,7 +1127,7 @@ describe("recoverRingMemberNotes", () => {
       asset: SOL_MINT,
       amount,
       blinding,
-      treeId: PACKED_VECTOR.output_tree_id,
+      treeId: PAIR_VECTOR.output_tree_id,
       ringDataHash,
       ringProgramId: RING,
     });
@@ -1165,8 +1150,8 @@ describe("recoverRingMemberNotes", () => {
           payload: encodeMergeOutputData({ salt, ciphertext, ringDataHash }),
           outputContext: {
             hash: commitment,
-            tree: treeAddress(PACKED_VECTOR.output_tree_id),
-            treeId: PACKED_VECTOR.output_tree_id,
+            tree: treeAddress(PAIR_VECTOR.output_tree_id),
+            treeId: PAIR_VECTOR.output_tree_id,
             leafIndex: 9n,
           },
         },
@@ -1178,10 +1163,10 @@ describe("recoverRingMemberNotes", () => {
   it("recovers the source's unspent ring note and drops it once a confirmed spend names its nullifier", async () => {
     const auditor = X25519Keypair.generate();
     const owner = ShieldedKeypair.generate();
-    const { transaction, commitment } = ownedTransfer(owner, auditor.publicKey());
+    const { transaction, commitment, amount } = ownedTransfer(owner, auditor.publicKey());
     const recovered = await recover({ owner, auditor, transaction });
     expect(recovered.notes.map((note) => [note.outputContext.hash, note.utxo.amount])).toEqual([
-      [commitment, 1000n],
+      [commitment, amount],
     ]);
     expect(recovered.unopened).toEqual([]);
     const nullifier = recovered.notes[0]!.nullifier;
@@ -1223,7 +1208,7 @@ describe("recoverRingMemberNotes", () => {
   it("opens the source's escrowed note and passes over another owner's", async () => {
     const auditor = X25519Keypair.generate();
     const owner = ShieldedKeypair.generate();
-    const escrow = vectorOf("packed", "escrow");
+    const escrow = vectorOf("delivered", "quad_escrow");
     const { transaction, commitment } = ownedTransfer(owner, auditor.publicKey(), escrow);
     const recovered = await recover({
       owner,
@@ -1408,12 +1393,12 @@ describe("recoverRingMemberNotes", () => {
     await expect(
       recover({ owner, auditor, transaction, nullifierKey: ShieldedKeypair.generate() }),
     ).rejects.toThrow(ringError("RING_NULLIFIER_KEY_MISMATCH"));
-    const moved = withSlot(3, (slot) => ({
+    const moved = withSlot(1, (slot) => ({
       ...slot,
-      outputContext: { ...slot.outputContext, hash: field(PACKED_VECTOR.slots[0]!.output_hash) },
+      outputContext: { ...slot.outputContext, hash: field(PAIR_VECTOR.slots[0]!.output_hash) },
     }))(transaction);
     await expect(recover({ owner, auditor, transaction: moved })).rejects.toThrow(
-      ringError("RING_AUDIT_OUTPUT_MISMATCH", { reason: "unopened", slotIndex: 3 }),
+      ringError("RING_AUDIT_OUTPUT_MISMATCH", { reason: "unopened", slotIndex: 1 }),
     );
     let page = 0;
     const endless = () => transactionsPage({ nextCursor: Uint8Array.of(++page) });

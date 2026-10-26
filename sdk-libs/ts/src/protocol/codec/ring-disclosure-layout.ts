@@ -1,9 +1,7 @@
 /** Field layouts of the auditor disclosure, Rust `custom_ring_interface::disclosure`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
-/** Packed audit output capacities, no delivery proof. */
-export const PACKED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4]);
-export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([8, 16]);
+export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
 /** Input classes of the anonymous commitment keys per output capacity, ascending. */
 export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
   outputs: number;
@@ -47,18 +45,20 @@ export interface AuditLayout {
   readonly exits: boolean;
   /** The policy proof escrows every output nullifier key the disclosure leaves out. */
   readonly keyEscrow: boolean;
-  /** No published output carries a data hash. */
-  readonly dataFree: boolean;
   /** The anonymous entry key, every spent UTXO opens in full. */
   readonly fullOpenings: boolean;
 }
 
-/** `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`. */
+/** `exits | key_escrow << 1 | full_openings << 3`, bit 2 stays clear. */
 export function auditLayoutValue(layout: AuditLayout): number {
-  const flags = [layout.exits, layout.keyEscrow, layout.dataFree, layout.fullOpenings];
-  if (flags.some((flag) => typeof flag !== "boolean"))
+  const flags = [
+    [layout.exits, 0],
+    [layout.keyEscrow, 1],
+    [layout.fullOpenings, 3],
+  ] as const;
+  if (flags.some(([flag]) => typeof flag !== "boolean"))
     throw new InterfaceError("INTERFACE_INVALID_SHAPE", { name: "layout" });
-  return flags.reduce((value, flag, bit) => (flag ? value | (1 << bit) : value), 0);
+  return flags.reduce((value, [flag, bit]) => (flag ? value | (1 << bit) : value), 0);
 }
 
 /** The key of an anonymous transfer's audit proof, Rust `AnonymousAuditKey`. */
@@ -102,14 +102,6 @@ export function anonymousAuditClass(inputs: number, outputs: number): number | u
   );
 }
 
-export interface PackedLayout {
-  /** The published slots, a prefix of the capacity. */
-  readonly outputs: number;
-  readonly exits: boolean;
-  readonly keyEscrow: boolean;
-  readonly dataFree: boolean;
-}
-
 export interface DeliveredLayout {
   /** Every slot of the capacity. */
   readonly outputs: number;
@@ -127,9 +119,7 @@ export interface AnonymousLayout {
 
 /** The published fields of one transfer's disclosure, Rust `DisclosureLayout`. */
 export type DisclosureLayout =
-  /** Capacity 2 and 4 of the confidential and delegate rails. */
-  | (Readonly<{ kind: "packed" }> & PackedLayout)
-  /** Capacity 8 and 16 of the confidential and delegate rails. */
+  /** The confidential and delegate rails. */
   | (Readonly<{ kind: "delivered" }> & DeliveredLayout)
   | (Readonly<{ kind: "anonymous" }> & AnonymousLayout);
 
@@ -137,21 +127,6 @@ export type DisclosureLayout =
 export interface FieldRange {
   readonly start: number;
   readonly end: number;
-}
-
-/** Positions in a packed disclosure, slot `k` opens at `firstSlot + k * slotWidth`. */
-export interface PackedFields {
-  readonly seedOut: number | undefined;
-  readonly firstSlot: number;
-  readonly slotWidth: number;
-  /** Offsets inside a slot from here on. */
-  readonly nullifierPk: number | undefined;
-  readonly asset: number;
-  /** `data_hash` then `ring_data_hash`. */
-  readonly dataHashes: number | undefined;
-  /** The two fields of `pack_disclosure(owner_key ‖ u64be(amount))`. */
-  readonly ownerAndAmount: number;
-  readonly fieldCount: number;
 }
 
 /** Positions in a delivered disclosure. */
@@ -203,29 +178,6 @@ export function packedChunks(length: number): number {
   return Math.ceil(length / DISCLOSURE_CHUNK_BYTES);
 }
 
-const PACKED_OWNER_AND_AMOUNT_FIELDS = packedChunks(32 + 8);
-
-export function packedFields(layout: PackedLayout): PackedFields {
-  const next = new Cursor();
-  const seedOut = layout.exits ? next.one() : undefined;
-  const slot = new Cursor();
-  const nullifierPk = layout.keyEscrow ? undefined : slot.one();
-  const asset = slot.one();
-  const dataHashes = layout.dataFree ? undefined : slot.run(2).start;
-  const ownerAndAmount = slot.run(PACKED_OWNER_AND_AMOUNT_FIELDS).start;
-  const firstSlot = next.run(layout.outputs * slot.position).start;
-  return Object.freeze({
-    seedOut,
-    firstSlot,
-    slotWidth: slot.position,
-    nullifierPk,
-    asset,
-    dataHashes,
-    ownerAndAmount,
-    fieldCount: next.position,
-  });
-}
-
 export function deliveredFields(layout: DeliveredLayout): DeliveredFields {
   const next = new Cursor();
   const seedOut = layout.exits ? next.one() : undefined;
@@ -270,8 +222,6 @@ export function anonymousFields(layout: AnonymousLayout): AnonymousFields {
 
 export function disclosureFieldCount(layout: DisclosureLayout): number {
   switch (layout.kind) {
-    case "packed":
-      return packedFields(layout).fieldCount;
     case "delivered":
       return deliveredFields(layout).fieldCount;
     case "anonymous":

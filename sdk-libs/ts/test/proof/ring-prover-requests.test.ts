@@ -48,7 +48,6 @@ import {
   sealRingDisclosure,
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
-  type PackedOutputOpening,
 } from "../../src/crypto/audit/ring-disclosure.js";
 import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
 import {
@@ -220,13 +219,12 @@ function entry(value: unknown, member: Bytes32): PolicySubjectEntry {
   };
 }
 
-/** `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`. */
+/** `exits | key_escrow << 1 | full_openings << 3`. */
 function layout(value: unknown): AuditLayout {
   const flags = count(value);
   return {
     exits: (flags & 1) !== 0,
     keyEscrow: (flags & 2) !== 0,
-    dataFree: (flags & 4) !== 0,
     fullOpenings: (flags & 8) !== 0,
   };
 }
@@ -365,15 +363,6 @@ function write(value: unknown): RecordWriteProofInput {
 function request(item: Json): RingProofRequest {
   const circuitType = text(item["circuitType"]);
   const publicInputHash = field(item["publicInputHash"]);
-  if (circuitType.startsWith("custom-ring-audit-packed-"))
-    return {
-      kind: "packedAudit",
-      publicInputHash,
-      ...envelope(item),
-      nOut: count(item["nOut"]),
-      outputs: list(item["outputs"]).map(opening),
-      ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
-    };
   if (circuitType.startsWith("custom-ring-audit-delivered-"))
     return {
       kind: "deliveredAudit",
@@ -652,28 +641,18 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
       name: "custom_ring_deposit_8.key",
       sha256: RING_PROVING_KEY_SHA256S["custom_ring_deposit_8.key"],
     });
-    expect(() => ringProvingKey({ family: "packedAudit", outputs: 3 })).toThrow(
+    expect(() => ringProvingKey({ family: "deliveredAudit", outputs: 3 })).toThrow(
       expect.objectContaining({ code: "INTERFACE_INVALID_SHAPE" }),
     );
   });
 
   it("refuses a request no key serves or the strict decoder would refuse", () => {
-    const base = request(golden("custom-ring-audit-packed-2"));
-    if (base.kind !== "packedAudit") throw new Error("packed golden");
-    const [first] = base.outputs;
-    if (first === undefined) throw new Error("packed golden output");
-    expect(() =>
-      ringProofRequestBody({
-        ...base,
-        outputs: [...base.outputs, first],
-        ownerKeys: [...base.ownerKeys, ZERO],
-      }),
-    ).toThrow(expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }));
-    expect(() => ringProofRequestBody({ ...base, nOut: 0 })).toThrow(
-      expect.objectContaining({
-        code: "CLIENT_INVALID_INTEGER",
-        details: { field: "nOut", length: 1 },
-      }),
+    const base = request(golden("custom-ring-audit-delivered-8"));
+    if (base.kind !== "deliveredAudit") throw new Error("delivered golden");
+    const [first, ...rest] = base.outputs;
+    if (first === undefined) throw new Error("delivered golden output");
+    expect(() => ringProofRequestBody({ ...base, outputs: [...base.outputs, first] })).toThrow(
+      expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }),
     );
     const modulus = Uint8Array.from(
       Buffer.from("30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001", "hex"),
@@ -684,11 +663,19 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
         details: { field: "firstNullifier" },
       }),
     );
-    expect(() => ringProofRequestBody({ ...base, ownerKeys: [ZERO] })).toThrow(
-      expect.objectContaining({ code: "CLIENT_INVALID_LENGTH" }),
+    expect(() =>
+      ringProofRequestBody({
+        ...base,
+        outputs: [{ ...first, body: first.body.slice(1) }, ...rest],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "CLIENT_INVALID_LENGTH",
+        details: { field: "outputs[0].body", expected: 40, actual: 39 },
+      }),
     );
     const unknown = { ...base };
-    Reflect.set(unknown, "kind", "packedAuditV2");
+    Reflect.set(unknown, "kind", "deliveredAuditV2");
     const loose = { ...base };
     Reflect.set(loose, "outputs", { length: base.outputs.length });
     for (const malformed of [unknown, loose]) {
@@ -764,48 +751,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
     },
   );
 
-  it.each(["custom-ring-audit-packed-2", "custom-ring-audit-packed-4"])(
-    "rebuilds %s from tx_sk",
-    (circuitType) => {
-      const typed = request(golden(circuitType));
-      if (typed.kind !== "packedAudit") throw new Error("packed golden");
-      const key = { txViewingSecret: typed.txViewingSk, salt: typed.salt };
-      const { exits, keyEscrow, dataFree } = typed.layout;
-      const published = typed.outputs.slice(0, typed.nOut);
-      const outputs = published.map((slot, i): PackedOutputOpening | undefined => {
-        if (!isUtxo(slot)) return undefined;
-        expect(hex(blindingOf(typed, i))).toBe(hex(slot.blinding));
-        return {
-          ownerKey: typed.ownerKeys[i] ?? ZERO,
-          nullifierPk: keyEscrow ? undefined : slot.nullifierPk,
-          asset: slot.asset,
-          amount: amountOf(slot.amount),
-          dataHash: slot.dataHash,
-          ringDataHash: slot.ringDataHash,
-        };
-      });
-      const disclosure = sealRingDisclosure(key, {
-        kind: "packed",
-        layout: { outputs: typed.nOut, exits, keyEscrow, dataFree },
-        seedOut: exits ? seedOutOf(typed) : undefined,
-        outputs,
-      });
-      const hash = auditStatementHash({
-        head: auditHead(typed),
-        outputs: published.map((slot) => ({
-          kind: "packed",
-          hash: openingHash(slot),
-          u: ZERO,
-          ciphertext: new Uint8Array(0),
-        })),
-        disclosure,
-        kind: { kind: "packed" },
-      });
-      expect(hex(hash)).toBe(hex(typed.publicInputHash));
-    },
-  );
-
-  it.each(["custom-ring-audit-delivered-8", "custom-ring-audit-delivered-16"])(
+  it.each(CIRCUIT_TYPES.filter((name) => name.startsWith("custom-ring-audit-delivered-")))(
     "rebuilds %s from tx_sk and every recipient key",
     (circuitType) => {
       const typed = request(golden(circuitType));

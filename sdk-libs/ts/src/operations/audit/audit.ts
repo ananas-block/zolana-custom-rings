@@ -53,7 +53,6 @@ import {
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
   type InputPrefix,
-  type PackedOutputOpening,
   type RingDisclosure,
 } from "../../crypto/audit/ring-disclosure.js";
 import {
@@ -619,9 +618,6 @@ class Transfer {
 
   open(slot: Slot, disclosure: RingDisclosure): SlotOpening | undefined {
     switch (disclosure.kind) {
-      case "packed":
-        // The decode fixed one entry per published slot, `undefined` is a dummy.
-        return this.packed(slot, disclosure.outputs[slot.index]);
       case "delivered":
         return this.delivered(slot, disclosureSlot(disclosure.outputs, slot));
       case "anonymous":
@@ -693,28 +689,6 @@ class Transfer {
       }),
       inputs: spentInputs(nullifiers, openings),
     });
-  }
-
-  private packed(slot: Slot, opening: PackedOutputOpening | undefined): SlotOpening {
-    if (opening === undefined) return this.verify(slot, DUMMY);
-    const nullifierPk = this.nullifierPk(opening.ownerKey, opening.nullifierPk);
-    if (nullifierPk === undefined) return ESCROW_UNKNOWN;
-    const exit = isExit(slot.output);
-    const utxo = this.opened({
-      ownerKey: opening.ownerKey,
-      nullifierPk,
-      asset: opening.asset,
-      amount: opening.amount,
-      blinding: this.blinding(slot),
-      dataHash: opening.dataHash,
-      ringDataHash: opening.ringDataHash,
-    });
-    return this.verify(
-      slot,
-      exit
-        ? Object.freeze({ kind: "exit", utxo })
-        : Object.freeze({ kind: "ring", utxo, recipientU: slot.output.viewTag }),
-    );
   }
 
   private delivered(slot: Slot, opening: DeliveredOutputOpening): SlotOpening | undefined {
@@ -868,8 +842,6 @@ class Transfer {
       asset: Bytes32;
       amount: bigint;
       blinding: Bytes32;
-      dataHash?: Bytes32;
-      ringDataHash?: Bytes32;
     }>,
   ): AuditedUtxo {
     const mint = this.keys.assets.addressForField(fields.asset);
@@ -880,8 +852,8 @@ class Transfer {
       ...(mint === undefined ? {} : { mint }),
       amount: fields.amount,
       blinding: fields.blinding,
-      dataHash: fields.dataHash ?? ZERO_32,
-      ringDataHash: fields.ringDataHash ?? ZERO_32,
+      dataHash: ZERO_32,
+      ringDataHash: ZERO_32,
     });
   }
 

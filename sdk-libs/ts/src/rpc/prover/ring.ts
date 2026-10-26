@@ -159,16 +159,6 @@ export interface MergeInputOpening {
   readonly ringDataHash: Bytes32;
 }
 
-/** Go `PackedAuditParams`, `outputs` and `ownerKeys` at the key's capacity. */
-export interface PackedAuditProofRequest extends AuditEnvelopeProofInputs {
-  readonly kind: "packedAudit";
-  readonly publicInputHash: Bytes32;
-  /** The published output count. */
-  readonly nOut: number;
-  readonly outputs: readonly RingSlotOpening[];
-  readonly ownerKeys: readonly Bytes32[];
-}
-
 /** Go `DeliveredAuditParams`, every slot published. */
 export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly kind: "deliveredAudit";
@@ -285,7 +275,6 @@ export interface WithdrawalExemptionProofRequest {
 
 export type RingProofRequest =
   | WithdrawalExemptionProofRequest
-  | PackedAuditProofRequest
   | DeliveredAuditProofRequest
   | AnonymousAuditProofRequest
   | MemberPolicyProofRequest
@@ -298,8 +287,6 @@ export type RingProofRequest =
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
-    case "packedAudit":
-      return { family: "packedAudit", outputs: listLength(request.outputs) };
     case "deliveredAudit":
       return { family: "deliveredAudit", outputs: listLength(request.outputs) };
     case "anonymousAudit":
@@ -348,18 +335,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     publicInputHash: field(request.publicInputHash, "publicInputHash"),
   };
   switch (request.kind) {
-    case "packedAudit": {
-      const capacity = request.outputs.length;
-      return {
-        ...head,
-        ...envelopeJson(request),
-        nOut: integer(request.nOut, "nOut", 1, capacity),
-        outputs: request.outputs.map((output, i) => openingJson(output, `outputs[${i}]`)),
-        ownerKeys: sized(request.ownerKeys, capacity, "ownerKeys").map((key, i) =>
-          hexBytes(key, 32, `ownerKeys[${i}]`),
-        ),
-      };
-    }
     case "deliveredAudit":
       return {
         ...head,

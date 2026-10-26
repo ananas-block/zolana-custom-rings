@@ -27,7 +27,6 @@ export type {
   MemberPolicyProofRequest,
   MergeInputOpening,
   OutflowLimitProofInput,
-  PackedAuditProofRequest,
   PolicyOutputOpening,
   PolicyProofInputs,
   PolicySourceProofInput,

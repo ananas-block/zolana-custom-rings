@@ -19,10 +19,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { ViewingKey } from "@heliuslabs/zolana/keypair";
 import type { AssetRegistry, ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 import { type ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/zolana/transaction";
-import {
-  DELIVERED_AUDIT_CAPACITIES,
-  PACKED_AUDIT_CAPACITIES,
-} from "../../protocol/codec/ring-disclosure-layout.js";
+import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure-layout.js";
 import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import {
@@ -604,9 +601,7 @@ async function activeConfig(
   return config;
 }
 
-/** Up to four outputs pack their ciphertexts, eight and sixteen deliver proven bodies. */
 function confidentialDelivery(shape: Shape, rail: "confidential" | "delegate"): RingDelivery {
-  if (PACKED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "packed" };
   if (DELIVERED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "delivered" };
   throw new RingError("RING_TRANSACT_DATA_INVALID", {
     details: { reason: "RingShapeUnkeyed", rail },

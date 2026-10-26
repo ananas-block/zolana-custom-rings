@@ -36,7 +36,6 @@ export interface AuditHead {
 }
 
 export type AuditKind =
-  | Readonly<{ kind: "packed" }>
   | Readonly<{ kind: "delivered" }>
   | Readonly<{
       kind: "anonymous";
@@ -107,7 +106,6 @@ export interface RegisterKeyStatement {
 }
 
 /**
- * `head ‖ [output_chain, disclosure_chain]` packed,
  * `head ‖ [output_chain, body_chain, disclosure_chain, recipient_key_chain]` delivered,
  * `head ‖ [output_chain, body_chain, disclosure_chain, private_tx_hash, tag_chain,
  * epoch, first_contact_root, sender_commitment]` anonymous.
@@ -118,8 +116,6 @@ export function auditStatementElements(statement: AuditStatement): readonly Byte
   const disclosureChain = chain(statement.disclosure);
   const head = auditHeadElements(statement.head);
   switch (kind.kind) {
-    case "packed":
-      return [...head, outputChain, disclosureChain];
     case "delivered":
       return [
         ...head,
