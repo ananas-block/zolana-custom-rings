@@ -42,8 +42,7 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields.
 	envelope := c.sealEnvelope(api, rc)
-	// No delivered UTXO carries data, the data-free flag holds whatever the frame sets.
-	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutEscrow|LayoutDataFree, 0)
+	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutEscrow|LayoutReserved, 0)
 	var hashes, bodyHashes, recipientKeys, nullifierPks []frontend.Variable
 	slots := make([]outputSlot, len(c.Outputs))
 	slotBytes := make([][]frontend.Variable, len(c.Outputs))

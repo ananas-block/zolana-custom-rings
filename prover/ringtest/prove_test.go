@@ -18,12 +18,12 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 )
 
-func TestPackedAuditAndMemberPolicyProve(t *testing.T) {
-	packed, err := audit.NewPackedAuditCircuit(2)
+func TestDeliveredAuditAndMemberPolicyProve(t *testing.T) {
+	delivered, err := audit.NewDeliveredAuditCircuit(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, packed, ringaudit.PackedAuditOf(t, 2, 2).Circuit(t))
+	requireProves(t, delivered, ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
 	member, err := policy.NewMemberPolicyCircuit(2)
 	if err != nil {
 		t.Fatal(err)
@@ -41,24 +41,11 @@ func TestAnonymousAuditTransferProves(t *testing.T) {
 }
 
 func TestAuditsPinBlindingAndRingData(t *testing.T) {
-	packed, err := audit.NewPackedAuditCircuit(2)
-	if err != nil {
-		t.Fatal(err)
-	}
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
 	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Run("packed blinding off the CRBS seed", func(t *testing.T) {
-		p := ringaudit.PackedAuditOf(t, 2, 2)
-		honest := p.Circuit(t)
-		p.SeedOut = big.NewInt(0x5eed)
-		for i := range p.Outputs {
-			p.Outputs[i].Blinding = p.Blinding(t, i)
-		}
-		requireRefused(t, packed, honest, p.Circuit(t))
-	})
 	t.Run("delivered ring data", func(t *testing.T) {
 		delivered, err := audit.NewDeliveredAuditCircuit(8)
 		if err != nil {

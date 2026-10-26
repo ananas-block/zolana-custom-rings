@@ -81,8 +81,6 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 			}
 			var elements []*big.Int
 			switch v.Kind {
-			case "packed":
-				elements = ringaudit.PackedStatement(t, head, outputs, disclosure)
 			case "delivered":
 				elements = ringaudit.DeliveredStatement(t, head, outputs, disclosure)
 			case "anonymous":
@@ -100,8 +98,8 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 			requireElements(t, elements, v.Elements, v.PublicInputHash)
 		})
 	}
-	if len(kinds) != 3 {
-		t.Fatalf("the vector covers %v, want packed, delivered and anonymous", kinds)
+	if len(kinds) != 2 {
+		t.Fatalf("the vector covers %v, want delivered and anonymous", kinds)
 	}
 }
 

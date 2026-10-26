@@ -37,10 +37,8 @@ func (s AnonymousAuditShape) senderKeyLen() int {
 
 // Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/proof/disclosure.rs.
 var (
-	// PackedAuditCapacities leave confidential and delegate bodies unproven.
-	PackedAuditCapacities = [...]int{2, 4}
-	// DeliveredAuditCapacities prove every confidential body.
-	DeliveredAuditCapacities = [...]int{8, 16}
+	// DeliveredAuditCapacities prove every confidential and delegate body.
+	DeliveredAuditCapacities = [...]int{2, 4, 8, 16}
 	// AnonymousAuditShapes name spent notes by hash and prefix, a transfer takes the smallest class holding its published inputs.
 	AnonymousAuditShapes = [...]AnonymousAuditShape{
 		{InputClass: 4, Outputs: 2}, {InputClass: 8, Outputs: 2}, {InputClass: 12, Outputs: 2},

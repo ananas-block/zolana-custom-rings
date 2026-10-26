@@ -21,21 +21,21 @@ import (
 )
 
 const (
-	packedKey    common.CircuitType = "custom-ring-audit-packed-2"
-	deliveredKey common.CircuitType = "custom-ring-audit-delivered-8"
-	anonymousKey common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
-	entryKey     common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
-	memberKey    common.CircuitType = "custom-ring-policy-member-v2-2-w0-curator"
-	delegateKey  common.CircuitType = "custom-ring-policy-delegate-v2-2x2-curator"
-	applyKey     common.CircuitType = "custom-ring-apply-records-1"
-	batchKey     common.CircuitType = "custom-ring-apply-records-16"
-	registerKey  common.CircuitType = "custom-ring-register-key"
-	depositKey   common.CircuitType = "custom-ring-deposit-8"
-	mergeKey     common.CircuitType = "custom-ring-merge-anonymous-v2-8"
+	smallDeliveredKey common.CircuitType = "custom-ring-audit-delivered-2"
+	deliveredKey      common.CircuitType = "custom-ring-audit-delivered-8"
+	anonymousKey      common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
+	entryKey          common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
+	memberKey         common.CircuitType = "custom-ring-policy-member-v2-2-w0-curator"
+	delegateKey       common.CircuitType = "custom-ring-policy-delegate-v2-2x2-curator"
+	applyKey          common.CircuitType = "custom-ring-apply-records-1"
+	batchKey          common.CircuitType = "custom-ring-apply-records-16"
+	registerKey       common.CircuitType = "custom-ring-register-key"
+	depositKey        common.CircuitType = "custom-ring-deposit-8"
+	mergeKey          common.CircuitType = "custom-ring-merge-anonymous-v2-8"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{packedKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{smallDeliveredKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -57,8 +57,6 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 func hostRequest(t testing.TB, k Key) any {
 	t.Helper()
 	switch k.Family {
-	case PackedAudit:
-		return requestOf[PackedAuditParams](t, k.Circuit, ringaudit.NewPackedAudit(t, k.Outputs).Circuit(t))
 	case DeliveredAudit:
 		return requestOf[DeliveredAuditParams](t, k.Circuit, ringaudit.NewDeliveredAudit(t, k.Outputs).Circuit(t))
 	case AnonymousAudit, AnonymousEntryAudit:

@@ -8,9 +8,6 @@ import (
 )
 
 func TestAuditKeysCompileAtPinnedCounts(t *testing.T) {
-	for _, capacity := range audit.PackedAuditCapacities {
-		ringkey.RequirePinned(t, packedKeyName(capacity), compilePacked(t, capacity).cs)
-	}
 	for _, capacity := range audit.DeliveredAuditCapacities {
 		ringkey.RequirePinned(t, deliveredKeyName(capacity), compileDelivered(t, capacity).cs)
 	}

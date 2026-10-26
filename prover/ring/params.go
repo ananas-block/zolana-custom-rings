@@ -49,14 +49,6 @@ type AuditParams struct {
 	Layout         uint8 `json:"layout"`
 }
 
-type PackedAuditParams struct {
-	RequestHead
-	AuditParams
-	NOut      uint8     `json:"nOut"`
-	Outputs   []Opening `json:"outputs"`
-	OwnerKeys []Bytes   `json:"ownerKeys"`
-}
-
 type DeliveredOutput struct {
 	Output       Opening `json:"output"`
 	RecipientKey Bytes   `json:"recipientKey"`

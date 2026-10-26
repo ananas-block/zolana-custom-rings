@@ -17,8 +17,7 @@ import (
 type Family int
 
 const (
-	PackedAudit Family = iota
-	DeliveredAudit
+	DeliveredAudit Family = iota
 	AnonymousAudit
 	AnonymousEntryAudit
 	MemberPolicy
@@ -53,9 +52,6 @@ func keys() []Key {
 		key := Key{Family: family, Inputs: inputs, Outputs: outputs}
 		key.Circuit = key.circuitType()
 		keys = append(keys, key)
-	}
-	for _, outputs := range audit.PackedAuditCapacities {
-		add(PackedAudit, 0, outputs)
 	}
 	for _, outputs := range audit.DeliveredAuditCapacities {
 		add(DeliveredAudit, 0, outputs)
@@ -115,8 +111,6 @@ func (k Key) circuitType() common.CircuitType {
 		return common.CircuitType("custom-ring-" + fmt.Sprintf(format, args...))
 	}
 	switch k.Family {
-	case PackedAudit:
-		return named("audit-packed-%d", k.Outputs)
 	case DeliveredAudit:
 		return named("audit-delivered-%d", k.Outputs)
 	case AnonymousAudit:

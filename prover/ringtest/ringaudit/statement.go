@@ -40,13 +40,13 @@ func (h AuditHead) Elements(t testing.TB) []*big.Int {
 type Layout struct {
 	Exits        bool
 	Escrow       bool
-	DataFree     bool
+	Reserved     bool
 	FullOpenings bool
 }
 
 func (l Layout) Value() int64 {
 	return ringtest.Bit(l.Exits)*audit.LayoutExits | ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
-		ringtest.Bit(l.DataFree)*audit.LayoutDataFree | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
+		ringtest.Bit(l.Reserved)*audit.LayoutReserved | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
 }
 
 func hasExit(utxos []Utxo) bool {
@@ -71,12 +71,6 @@ type AnonymousTail struct {
 	FirstContactRoot *big.Int
 	SenderCommitment *big.Int
 	PartyIdentities  [3]*big.Int
-}
-
-// PackedStatement mirrors AuditKind::Packed.
-func PackedStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
-	t.Helper()
-	return append(head.Elements(t), outputChain(t, outputs), spptest.MustHashChain4(t, disclosure))
 }
 
 // DeliveredStatement mirrors AuditKind::Delivered.

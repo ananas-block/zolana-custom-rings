@@ -123,8 +123,7 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields.
 	envelope := c.sealEnvelope(api, rc)
-	// No anonymous output carries data, the data-free flag holds whatever the frame sets.
-	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutDataFree, c.Shape.layout())
+	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutReserved, c.Shape.layout())
 	// 2. Every ring output body opens for its recipient and every slot takes its stream.
 	senderPkHash := c.senderPkHash(api)
 	shared.AssertAnonymousParties(api, senderPkHash, c.PartyIdentities)
