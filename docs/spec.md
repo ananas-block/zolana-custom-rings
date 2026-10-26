@@ -97,7 +97,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
    - the roots from the member registries and the SPP trees
    - the party identities from the accounts
    - the public legs, the withdrawal owners and the gross withdrawal per mint from the settlement accounts
-4. Every transfer verifies an audit proof. The proof seals `tx_viewing_sk` to the auditor. It forces the blinding of each live output in slot `i` to `TXOB(n0, TXOS(n0, CRBS(tx_viewing_sk, salt)), i)` ([Blinding derivations](spec/crypto/hashing.md#blinding-derivations)), so the auditor opens every output of every transfer.
+4. Every transfer verifies an audit proof. The proof seals `tx_viewing_sk` to the auditor. It forces the blinding of each live output in slot `i` to `TXOB(n0, TXOS(n0, CRBS(tx_viewing_sk, salt)), i)` ([Blinding derivations](spec/crypto/hashing.md#blinding-derivations)), so the auditor opens every output of every transfer. It proves that every ring output's body encrypts the output's blinding and amount to the key its slot publishes, and that no output carries data.
 5. Every deposit verifies a deposit proof that seals each new note's opening to the auditor. The plain SPP ring deposit tag is refused.
 6. On a policy ring every transfer verifies a policy proof under the stored `policy_hash`. Each active rule holds for each subject. The subjects are the sender, every live output owner and asset, and every withdrawal owner and asset. A rule holds when the subject is on one of its present lists or off one of its absent lists. A refused subject passes only when the rule's guard exempts its amount. Rules join with AND.
 7. Record openings fold to roots the program reads from the registries. An authority write raises the floor, so the next transfer proves under the new lists. A curator's authority write reaches its subscribers within `GRACE_SLOTS`.
@@ -125,14 +125,14 @@ On every transfer, chain observers see:
 - the shape, the published input and output counts, the nullifiers and their trees, and the output hashes
 - `tx_viewing_pk`, the salt, `eph_u`, the sealed key, the masked disclosure and the auditor view tag
 - the exits bitmap, each output's owner tag and body, and `private_tx_hash`
-- the layout flags, the expiry, the approval bit, the root indexes, the SPP proof and the data hash fields the frame carries
+- the layout flags, the expiry, the approval bit, the root indexes and the SPP proof
 - on the anonymous rail, the BSB22 commitment of the SPP proof and its proof of knowledge
 - the payer and each public leg, with its account, mint and amount
 
 On a `Confidential` or `ConfidentialEscrow` ring (confidential rail):
 
 14. Public: the owner signer, the co-signer when it signs, each ring output's owner tag `u` (the recipient's viewing key), each exit owner, and each SPL withdrawal owner.
-15. Private from chain observers: the amount, asset, blinding, nullifier key and data hashes of each output, the exit asset and amount, and which notes the nullifiers spend.
+15. Private from chain observers: the amount, asset, blinding and nullifier key of each output, the exit asset and amount, and which notes the nullifiers spend.
 16. Every payment to one recipient carries the same `u`. The zolana user registry maps a registered `u` to its owner's Solana key, and no proof shows the owner holds `u`. Payments to one recipient therefore link to each other and name it. Change carries the sender's own `u`.
 17. The disclosure opens outputs only, and a nullifier needs the owner's nullifier secret. The auditor therefore learns no spent note of an owner without a registered key. A registered owner's secret is sealed to the auditor on any confidential ring, so the auditor computes that owner's nullifiers and links its spends. A `ConfidentialEscrow` ring requires a registered key of every output owner.
 
@@ -957,8 +957,8 @@ The frame is a byte string the program parses in this order. The shape byte sele
 
 ```text
 flags            u8   POLICY 1, CURATOR 2, APPROVAL_REQUIRED 4, PREVIOUS_EPOCH 8,
-                      ANCHOR 16, SECOND_TREE 32, DATA_HASH 64, RING_DATA_HASH 128
-shape            u8   bits 0-5 index into SPP_SUPPORTED_SHAPES, bit 6 DEFAULT_OWNER_TAG, bit 7 DATA_FREE
+                      ANCHOR 16, SECOND_TREE 32, bits 6 and 7 clear
+shape            u8   bits 0-5 index into SPP_SUPPORTED_SHAPES, bit 6 DEFAULT_OWNER_TAG, bit 7 clear
 inputs           u8   bits 0-5 published input count, bit 6 KEY_ESCROW, bit 7 FULL_OPENINGS
 audit_proof      CustomRingProof
 [POLICY]         policy_proof CustomRingProof, own_root_index u8
@@ -970,13 +970,9 @@ tx_viewing_u     [32]
 salt             [16]
 interface_transfers  Vec<InterfaceTransfer>, u8 length
 [POLICY]         spl_withdrawal_owners [32] per SPL withdrawal
-[DATA_HASH]      [32]
-[RING_DATA_HASH] [32]
-[packed]         output_count u8
-exits            bitmap of ceil(count / 8) bytes
+exits            bitmap of ceil(n_out / 8) bytes
 outputs          per slot, by kind:
-                   exit      hash [32], owner_tag [32], payload
-                   packed    hash [32], u [32], ciphertext
+                   exit      hash [32], owner_tag [32], payload [83]
                    delivered hash [32], u [32], body [40]
                    anonymous hash [32], tag [16], body [40]
 eph_u            [32]
@@ -991,12 +987,12 @@ nullifiers       [32] per published input
 [exemption]      withdrawal_exemption_proof CustomRingProof, root_index u8
 ```
 
-A bitmap holds bit `i` at byte `i / 8`, bit `i % 8`. `count` is the published output count. A scheme is the zolana tag of an output's body format, which SPP stores without parsing. An exit payload is the zolana scheme 3 body, 83 bytes with `DATA_FREE` and `u16` little-endian prefixed otherwise. A packed ciphertext is the scheme 11 body after its `0x04 || u` prefix, 49 bytes with `DATA_FREE` and `u16` prefixed otherwise. `DATA_HASH` and `RING_DATA_HASH` carry the SPP data hash and ring data hash fields of the transfer. `InterfaceTransfer` and `TreeContext` are the zolana SPP types. `expiry_unix_ts` is the SPP expiry, which SPP checks against cluster time. The packed layout publishes `1 <= output_count <= n_out` slots. The delivered and anonymous layouts publish exactly `n_out`.
+A bitmap holds bit `i` at byte `i / 8`, bit `i % 8`. A scheme is the zolana tag of an output's body format, which SPP stores without parsing. An exit payload is the zolana scheme 3 body of an output without data, any other length fails with `DataFreeBodyLength`. A set reserved flag bit fails with `FlagNotAllowed`. `InterfaceTransfer` and `TreeContext` are the zolana SPP types. `expiry_unix_ts` is the SPP expiry, which SPP checks against cluster time. Every transfer publishes exactly `n_out` slots, a dummy slot included.
 
 The program expands the frame to SPP `TransactIxData`:
 
-- `tx_viewing_pk = 0x04 || tx_viewing_u`, the salt, the interface transfers and the data hashes
-- each output as `OwnerTag::Inline`, with scheme 11 (packed), 10 (delivered), 9 (anonymous) or 3 (exit)
+- `tx_viewing_pk = 0x04 || tx_viewing_u`, the salt and the interface transfers, with no transfer data hashes
+- each output as `OwnerTag::Inline` in the `Encrypted` encoding, with scheme 10 (delivered), 9 (anonymous) or 3 (exit)
 - exactly one message `{ view_tag: auditor u, data: 0x04 || eph_u || sealed || disclosure }`
 - `private_tx_hash`, the rail's circuit and the proof
 - the expiry widened to u64, each nullifier as an input with its tree index, and the tree contexts
@@ -1006,9 +1002,8 @@ The audit key follows the rail and the published shape:
 
 | Rail | `n_out` | Layout | Audit key |
 |---|---|---|---|
-| Confidential | 2, 4 | Packed | `PackedAudit { outputs }` |
-| Confidential | 8, 16 | Delivered | `DeliveredAudit { outputs }` |
-| Delegate | 2, 4 | Packed | `PackedAudit { outputs }` |
+| Confidential | 2, 4, 8, 16 | Delivered | `DeliveredAudit { outputs }` |
+| Delegate | 2, 4 | Delivered | `DeliveredAudit { outputs }` |
 | Anonymous | 2, 4, 8, 16 | Anonymous | `AnonymousAudit { class, outputs }`, the smallest input class at or above the published inputs |
 | Anonymous, `FULL_OPENINGS` | 2, 4, 8 | Anonymous entry | `AnonymousEntryAudit { 8, outputs }`, at most 8 inputs |
 
@@ -1023,12 +1018,11 @@ The audit proof checks, on every rail:
 1. `tx_viewing_sk` is clamped and `tx_viewing_pk` is its public key.
 2. `sealed` seals `tx_viewing_sk` to the config's auditor key from `eph_u`. [Envelope](spec/crypto/envelope.md)
 3. Every live output's blinding is `TXOB(n0, TXOS(n0, CRBS(tx_viewing_sk, salt)), i)`, so SPP's blinding seed is `CRBS(tx_viewing_sk, salt)` on every transfer with a live output.
-4. A live output with a nonzero ring id is a ring output and the rest are exits. The exits layout bit equals "some exit exists". Every live ring output's owner is `solana_owner_identity(owner_key)` for its disclosed owner key. The packed key binds every exit's owner the same way.
+4. A live output with a nonzero ring id is a ring output and the rest are exits. The exits layout bit equals "some exit exists". Every live ring output's owner is `solana_owner_identity(owner_key)` for its disclosed owner key.
 5. Each published disclosure field equals its plaintext plus `Poseidon(Poseidon(CROD, tx_viewing_sk, salt), j)`. [Disclosure](spec/crypto/disclosure.md)
-6. Packed (2, 4 outputs): the disclosure opens each published slot to owner key, amount, asset, and the nullifier key and data hashes unless the layout bit withholds them. Amounts fit 64 bits.
-7. Delivered (8, 16 outputs): each ring output's 40-byte body is `AES-256-CTR(blinding || amount)` under a slot secret from `ECDH(tx_viewing_sk, u)`, so the key `u` the frame publishes opens the body. Every output has `data_hash = 0` and `ring_data_hash = 0`.
-8. Anonymous, commitment key: every spent note belongs to one hidden owner and carries the ring id. Each ring output's tag derives from its recipient address's inbox stream, or from the pair stream of a first contact that opens under `first_contact_root`, or is the sender's own change. The ring data hash binds the slot secret and the tag. `private_tx_hash` reopens with the spent hashes and the outputs. Each nonzero party identity differs from the hidden owner. On a policy ring `sender_commitment = Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`.
-9. Anonymous, entry key: the same over a spend of default-ring notes, without the ring id condition on spent notes. Every spent note shares input `0`'s nullifier key and carries no data. The disclosure opens every spent note's asset, amount and blinding, the shared nullifier key and `sender_key`. The commitment key of check 8 discloses the first spent note's hash and 16-byte prefixes of the others instead.
+6. Delivered: each ring output's 40-byte body is `AES-256-CTR(blinding || amount)` under a slot secret from `ECDH(tx_viewing_sk, u)`, so the key `u` the frame publishes opens the body. Every output has `data_hash = 0` and `ring_data_hash = 0`. Amounts fit 64 bits.
+7. Anonymous, commitment key: every spent note belongs to one hidden owner and carries the ring id. Each ring output's tag derives from its recipient address's inbox stream, or from the pair stream of a first contact that opens under `first_contact_root`, or is the sender's own change. The ring data hash binds the slot secret and the tag. `private_tx_hash` reopens with the spent hashes and the outputs. Each nonzero party identity differs from the hidden owner. On a policy ring `sender_commitment = Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`.
+8. Anonymous, entry key: the same over a spend of default-ring notes, without the ring id condition on spent notes. Every spent note shares input `0`'s nullifier key and carries no data. The disclosure opens every spent note's asset, amount and blinding, the shared nullifier key and `sender_key`. The commitment key of check 7 discloses the first spent note's hash and 16-byte prefixes of the others instead.
 
 The policy proof checks, on a policy ring:
 
@@ -1073,7 +1067,7 @@ The program checks, in order:
 16. It builds the audit statement and the policy statement and resolves both keys (`UnsupportedCircuit`). It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
 17. It checks the SPP program (`InvalidShieldedPoolProgram`), the forwarded list size (`TooManyAccounts`), and invokes SPP.
 
-The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Packed bodies and exit payloads are not proven, so a sender can publish a `u` or a payload that does not open, and the recipient misses the note. The auditor still opens the slot from the disclosure. The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
+The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Exit payloads are not proven, as on any default-ring output, so a sender can publish a payload that does not open, and the recipient misses the exit. The auditor still opens the exit from the disclosure. No proof relates a published `u` to the output's owner, see [the limitation](#a-sender-can-make-a-note-unreadable-for-its-owner). The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
 
 #### 21. DelegateTransact
 
@@ -1083,7 +1077,7 @@ Rail row replaced: `Confidential` or `ConfidentialEscrow` with a delegate (`Dele
 
 Accounts: as `Transact`, with `delegate` (signer) after the co-signer slot and no owner signers. The SPP list is the `ring_authority_transact` list.
 
-Audit key replaced: the 2×2 and 4×4 shapes take `PackedAudit`.
+Audit key replaced: the 2×2 and 4×4 shapes take `DeliveredAudit { 2 | 4 }`.
 
 Program checks replaced:
 
@@ -1170,7 +1164,7 @@ Holds the auditor key and serves audited history to readers.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
-A reader receives each output's owner key, nullifier key, asset, amount, blinding and data hashes, the recipient `u`, and on the anonymous rail the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.
+A reader receives each output's owner key, nullifier key, asset, amount and blinding, the recipient `u`, and on the anonymous rail the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.
 
 ### Ring prover
 
@@ -1184,8 +1178,7 @@ The ring circuits have 96 Groth16 keys, each with one public input and one BSB22
 
 | Family | Keys |
 |---|---|
-| `PackedAudit` | outputs 2, 4 |
-| `DeliveredAudit` | outputs 8, 16 |
+| `DeliveredAudit` | outputs 2, 4, 8, 16 |
 | `AnonymousAudit` | 16 (class, outputs) pairs |
 | `AnonymousEntryAudit` | class 8, outputs 2, 4, 8 |
 | `MemberPolicy` | outputs {2, 4, 8, 16} × withdrawals {0, 1, 2, 4, 8, 16, 32} × {own, curator} |
@@ -1274,7 +1267,7 @@ The rule table and the member registry are public. An observer reads which lists
 
 ### A sender can make a note unreadable for its owner
 
-No proof relates a recipient key `u` to the owner of its output. A sender can seal a delivered or anonymous body to a key its owner does not hold, and a packed body to any key. The owner then misses the note, and the auditor still opens it.
+No proof relates a recipient key `u` to the owner of its output. The audit proof shows only that the body opens for the holder of the published `u` or address key. A sender can seal a body to a key its owner does not hold. The owner then misses the note, and the auditor still opens it.
 
 ### A curator controls its subscribers
 

@@ -154,8 +154,8 @@ For every ring output the audit proof shows that
 The body names no asset. The recipient finds it by rebuilding the note's hash
 under every registered asset. An anchor accepts only the ring data form of an
 anonymous ring output. The ring program keeps the ring data hash of a deposit
-and a merge output on an anonymous ring zero, and refuses the packed form and
-the delegate rail there. A deposit, a merge output, a confidential output, an
+and a merge output on an anonymous ring zero, and refuses the delegate rail
+there. A deposit, a merge output, a confidential output, an
 exit and a padding slot therefore never open as a first contact. The anchor also proves that the first contact
 took an inbox tag of the same address. A pair stream therefore starts from an
 output on its recipient's inbox stream.

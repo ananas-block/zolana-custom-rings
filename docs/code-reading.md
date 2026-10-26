@@ -20,8 +20,8 @@ Read `zolana/` paths at the submodule pin, not at the checkout.
 
 **Audit by construction**
 
-9. `prover/circuits/audit/`. `audit.go` seals `tx_viewing_sk` to the auditor key, and `assertBlinding` pins each live output blinding to SPP's `TXOB` under the ring blinding seed `CRBS(tx_viewing_sk, salt)`. Every SPP output commitment therefore opens under the sealed secret. [Hashing](spec/crypto/hashing.md#blinding-derivations) `packed.go`, `delivered.go` and `anonymous.go` add each layout's disclosure, mirrored in `program-libs/interface/src/proof/disclosure.rs`. [Disclosure](spec/crypto/disclosure.md)
-10. Packed bodies, the recipient ciphertexts of the 2 and 4 output layout, and exit payloads are not proven. A recipient can miss a note, but the auditor still opens it. [Limitation](spec.md#a-sender-can-make-a-note-unreadable-for-its-owner)
+9. `prover/circuits/audit/`. `audit.go` seals `tx_viewing_sk` to the auditor key, and `assertBlinding` pins each live output blinding to SPP's `TXOB` under the ring blinding seed `CRBS(tx_viewing_sk, salt)`. Every SPP output commitment therefore opens under the sealed secret. [Hashing](spec/crypto/hashing.md#blinding-derivations) `delivered.go` and `anonymous.go` add each layout's disclosure, mirrored in `program-libs/interface/src/proof/disclosure.rs`. [Disclosure](spec/crypto/disclosure.md)
+10. `delivery.go` proves every ring output body opens for the holder of its published `u`, and no output carries data. Exit payloads are not proven, and no proof ties `u` to the owner. A recipient can miss a note, but the auditor still opens it. [Limitation](spec.md#a-sender-can-make-a-note-unreadable-for-its-owner)
 
 **Policy is validated at write and evaluated only in the circuit**
 

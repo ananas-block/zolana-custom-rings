@@ -20,10 +20,10 @@ The auditor opens the envelope, derives the pad, subtracts it, and rebuilds each
 |---|---|---|
 | 1 | exits | some output goes to the default ring |
 | 2 | key escrow | the ring is in `ConfidentialEscrow` mode. Output nullifier keys are withheld, the escrow records give them. |
-| 4 | data free | no output carries data. The data hashes are withheld. |
+| 4 | reserved | always clear, every key accepts either value |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
-The packed key varies exits, key escrow and data free. The delivered key varies exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The delivered and anonymous keys accept either data-free value. The entry key pins full openings to `1`, the others to `0`.
+The delivered key varies exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key pins full openings to `1`, the others to `0`.
 
 ## Fields per layout
 
@@ -31,7 +31,6 @@ The packed key varies exits, key escrow and data free. The delivered key varies 
 
 | Layout | Fields in order |
 |---|---|
-| Packed, `n` published slots | `[seed_out if exits]`, then per slot `[nullifier_pk unless key escrow]`, `asset`, `[data_hash, ring_data_hash unless data free]`, `pack(owner_key \|\| u64be(amount))` (2 fields) |
 | Delivered, capacity `c` | `[seed_out if exits]`, `[nullifier_pk × c unless key escrow]`, `pack(slot × c)` with 40-byte slots under exits and 32-byte slots otherwise |
 | Anonymous, commitment key | `[seed_out if exits]`, `nullifier_pk × outputs`, `pack(slot × outputs)` with 64-byte slots, `hash_0`, then the `n - 1` other prefixes in `floor(n / 2)` pairs |
 | Anonymous, entry key | `[seed_out if exits]`, `sender_nullifier_pk`, `nullifier_pk × outputs`, `pack(sender_key \|\| slot × outputs)`, `pack(u64be(amount_i) × 8)` (3 fields), `(asset_i, blinding_i) × n` |

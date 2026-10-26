@@ -34,8 +34,8 @@ changes.
 
 ## Audit statements
 
-Packed audit keys cover smaller confidential and delegate outputs. Delivered
-keys also prove that each output body opens for its recipient. Anonymous audit
+Delivered audit keys cover confidential and delegate outputs and prove that
+each output body opens for its recipient. Anonymous audit
 keys additionally bind the hidden sender and its input class; an entry key
 fully opens default-ring inputs. The [audit key tests](../prover/circuits/audit/keys_test.go)
 pin the current compiled counts.
