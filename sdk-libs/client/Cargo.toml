@@ -23,7 +23,6 @@ rpc = [
 ]
 
 [dependencies]
-rand_core = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }

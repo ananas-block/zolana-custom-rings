@@ -1,5 +1,4 @@
 use custom_ring_interface::stream::StreamError;
-use solana_address::Address;
 use solana_signature::Signature;
 use thiserror::Error;
 use zolana_api::BlockingInsideRuntime;
@@ -162,20 +161,18 @@ pub enum AnonymousError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Hasher(#[from] HasherError),
-    #[error("the ring address names ring {address_ring}, the payment is in ring {ring}")]
-    ForeignRingAddress {
-        address_ring: Address,
-        ring: Address,
-    },
-    #[error(
-        "{count} issued ring addresses pass the maximum of {max}",
-        max = crate::anonymous::MAX_ISSUED_ADDRESSES
-    )]
-    TooManyIssuedAddresses { count: u64 },
-    #[error("anonymous ring state version {version} needs a rescan from the ring's creation")]
-    AnonymousRingStateVersion { version: u32 },
-    #[error("anonymous ring state does not parse because {0}")]
-    AnonymousRingState(String),
-    #[error("anonymous ring state names epoch {epoch} outside the ring's epochs")]
-    AnonymousRingEpoch { epoch: u64 },
+    #[error("viewing history version {version} needs a sync from index 0")]
+    ViewingHistoryVersion { version: u32 },
+    #[error("viewing history does not parse because {0}")]
+    ViewingHistory(String),
+    #[error("the viewing history's current key is not the wallet's viewing key")]
+    ViewingKeyNotCurrent,
+    #[error("a rotated viewing key must be new and created after the current one")]
+    RotatedKeyNotNewer,
+    #[error("a viewing key tracks more than {limit} counterparties in one direction")]
+    CounterpartyLimit { limit: usize },
+    #[error("a view tag counter passed u64")]
+    CounterOverflow,
+    #[error("the recipient's viewing key agrees on no shared secret")]
+    RecipientKeyNotContributory,
 }

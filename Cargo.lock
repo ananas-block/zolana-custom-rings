@@ -1351,7 +1351,6 @@ dependencies = [
  "zolana-cli-common",
  "zolana-client",
  "zolana-event",
- "zolana-event-parser",
  "zolana-indexer-api",
  "zolana-interface",
  "zolana-keypair",
@@ -1420,7 +1419,6 @@ dependencies = [
  "zolana-hasher",
  "zolana-interface",
  "zolana-ring-policy",
- "zolana-tree",
 ]
 
 [[package]]
@@ -1434,7 +1432,6 @@ dependencies = [
  "futures",
  "hex",
  "http",
- "rand_core 0.9.5",
  "serde",
  "serde_json",
  "solana-account 4.3.2",
@@ -8848,7 +8845,6 @@ dependencies = [
  "http",
  "p256 0.13.2",
  "rand 0.8.8",
- "rand_core 0.9.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -8903,7 +8899,6 @@ dependencies = [
  "ctr",
  "custom-ring-interface",
  "hex",
- "hkdf",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -9003,11 +8998,15 @@ name = "zolana-ring-transaction"
 version = "0.1.0"
 dependencies = [
  "custom-ring-interface",
+ "hex",
  "rand 0.8.8",
+ "serde",
+ "serde_json",
  "solana-address 2.6.1",
  "solana-signature",
  "thiserror 2.0.20",
  "wincode",
+ "zeroize",
  "zolana-event",
  "zolana-hasher",
  "zolana-instruction",

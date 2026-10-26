@@ -1,5 +1,5 @@
 {
-  "description": "Every ring statement and its public input HashChain4(elements). Audit heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 | full_openings << 3, the tails chain the published output hashes, the delivered and anonymous body hashes (zero for an exit), the disclosure fields, pack_be(u) per delivered slot and the 0^16 || tag field per anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 escrowed outputs and with 8, anonymous of commitment class 4 and of the entry key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the registry flag and root. Produced by program-libs/interface/tests/statements.rs.",
+  "description": "Every ring statement and its public input HashChain4(elements). Audit heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 | full_openings << 3, the tails chain the published output hashes, then on the delivered rail the body hashes (zero for an exit), the disclosure fields and pack_be(u) per delivered slot, on the anonymous rail the disclosure fields, private_tx_hash, the sender commitment and the three party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 escrowed outputs and with 8, anonymous of commitment class 4 and of the entry key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the registry flag and root. Produced by program-libs/interface/tests/statements.rs.",
   "audit": [
     {
       "kind": "delivered",
@@ -16,14 +16,12 @@
           "kind": "delivered",
           "hash": "1e14141414141414141414141414141414141414141414141414141414141414",
           "u": "6464646464646464646464646464646464646464646464646464646464646464",
-          "tag": null,
           "body": "90909090909090909090909090909090909090909090909090909090909090909090909090909090"
         },
         {
           "kind": "exit",
           "hash": "1e15151515151515151515151515151515151515151515151515151515151515",
           "u": null,
-          "tag": null,
           "body": null
         }
       ],
@@ -34,8 +32,6 @@
         "1e2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
       ],
       "private_tx_hash": null,
-      "epoch": null,
-      "first_contact_root": null,
       "sender_commitment": null,
       "party_identities": null,
       "elements": [
@@ -73,56 +69,48 @@
           "kind": "delivered",
           "hash": "1e14141414141414141414141414141414141414141414141414141414141414",
           "u": "6464646464646464646464646464646464646464646464646464646464646464",
-          "tag": null,
           "body": "90909090909090909090909090909090909090909090909090909090909090909090909090909090"
         },
         {
           "kind": "delivered",
           "hash": "1e15151515151515151515151515151515151515151515151515151515151515",
           "u": "6565656565656565656565656565656565656565656565656565656565656565",
-          "tag": null,
           "body": "91919191919191919191919191919191919191919191919191919191919191919191919191919191"
         },
         {
           "kind": "exit",
           "hash": "1e16161616161616161616161616161616161616161616161616161616161616",
           "u": null,
-          "tag": null,
           "body": null
         },
         {
           "kind": "delivered",
           "hash": "1e17171717171717171717171717171717171717171717171717171717171717",
           "u": "6767676767676767676767676767676767676767676767676767676767676767",
-          "tag": null,
           "body": "93939393939393939393939393939393939393939393939393939393939393939393939393939393"
         },
         {
           "kind": "delivered",
           "hash": "1e18181818181818181818181818181818181818181818181818181818181818",
           "u": "6464646464646464646464646464646464646464646464646464646464646464",
-          "tag": null,
           "body": "94949494949494949494949494949494949494949494949494949494949494949494949494949494"
         },
         {
           "kind": "exit",
           "hash": "1e19191919191919191919191919191919191919191919191919191919191919",
           "u": null,
-          "tag": null,
           "body": null
         },
         {
           "kind": "delivered",
           "hash": "1e1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
           "u": "6666666666666666666666666666666666666666666666666666666666666666",
-          "tag": null,
           "body": "96969696969696969696969696969696969696969696969696969696969696969696969696969696"
         },
         {
           "kind": "delivered",
           "hash": "1e1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
           "u": "6767676767676767676767676767676767676767676767676767676767676767",
-          "tag": null,
           "body": "97979797979797979797979797979797979797979797979797979797979797979797979797979797"
         }
       ],
@@ -149,8 +137,6 @@
         "1e3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b"
       ],
       "private_tx_hash": null,
-      "epoch": null,
-      "first_contact_root": null,
       "sender_commitment": null,
       "party_identities": null,
       "elements": [
@@ -188,28 +174,24 @@
           "kind": "anonymous",
           "hash": "1e14141414141414141414141414141414141414141414141414141414141414",
           "u": null,
-          "tag": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-          "body": "90909090909090909090909090909090909090909090909090909090909090909090909090909090"
+          "body": null
         },
         {
           "kind": "anonymous",
           "hash": "1e15151515151515151515151515151515151515151515151515151515151515",
           "u": null,
-          "tag": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
-          "body": "91919191919191919191919191919191919191919191919191919191919191919191919191919191"
+          "body": null
         },
         {
           "kind": "anonymous",
           "hash": "1e16161616161616161616161616161616161616161616161616161616161616",
           "u": null,
-          "tag": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-          "body": "92929292929292929292929292929292929292929292929292929292929292929292929292929292"
+          "body": null
         },
         {
           "kind": "exit",
           "hash": "1e17171717171717171717171717171717171717171717171717171717171717",
           "u": null,
-          "tag": null,
           "body": null
         }
       ],
@@ -229,11 +211,10 @@
         "1e34343434343434343434343434343434343434343434343434343434343434",
         "1e35353535353535353535353535353535353535353535353535353535353535",
         "1e36363636363636363636363636363636363636363636363636363636363636",
-        "1e37373737373737373737373737373737373737373737373737373737373737"
+        "1e37373737373737373737373737373737373737373737373737373737373737",
+        "1e38383838383838383838383838383838383838383838383838383838383838"
       ],
       "private_tx_hash": "1e03030303030303030303030303030303030303030303030303030303030303",
-      "epoch": 6734,
-      "first_contact_root": "1e04040404040404040404040404040404040404040404040404040404040404",
       "sender_commitment": "1e05050505050505050505050505050505050505050505050505050505050505",
       "party_identities": [
         "000000000000000000000000000000000000000000000000000000000000000b",
@@ -254,18 +235,14 @@
         "000000000000000000000000000000005c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
         "0000000000000000000000000000000000000000000000000000000000000001",
         "1938e1190c4ff0e2ab58a9846e1c9dc495c216e8596b3c7fc927f5df8c36dc46",
-        "105af9c30a2198c62f55b6d80affe956d7b8e97b53ef3c078bb6430a509e315a",
-        "20f2b28373904e7bff6bdce5f2ed29050a942c0e84462e6d1b49ba11532072f1",
+        "16cfa442b9dd860481b82cf564375b7078f980ef6fa7727e546a1038be7cfb20",
         "1e03030303030303030303030303030303030303030303030303030303030303",
-        "11928490802735f1613ff6f3155d677b4c83aa9d5fd84779706cc0986dc4c786",
-        "0000000000000000000000000000000000000000000000000000000000001a4e",
-        "1e04040404040404040404040404040404040404040404040404040404040404",
         "1e05050505050505050505050505050505050505050505050505050505050505",
         "000000000000000000000000000000000000000000000000000000000000000b",
         "000000000000000000000000000000000000000000000000000000000000000c",
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
-      "public_input_hash": "167d2c93f552e7f3c6cf6d56822f8fd3fbe7ee18bdfe85026973dd0d8c16b247"
+      "public_input_hash": "053a7a6075879722f8d7170c3518fdbe53a440420d07b9534937cbb80347fc7e"
     },
     {
       "kind": "anonymous",
@@ -282,28 +259,24 @@
           "kind": "anonymous",
           "hash": "1e14141414141414141414141414141414141414141414141414141414141414",
           "u": null,
-          "tag": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-          "body": "90909090909090909090909090909090909090909090909090909090909090909090909090909090"
+          "body": null
         },
         {
           "kind": "anonymous",
           "hash": "1e15151515151515151515151515151515151515151515151515151515151515",
           "u": null,
-          "tag": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
-          "body": "91919191919191919191919191919191919191919191919191919191919191919191919191919191"
+          "body": null
         },
         {
           "kind": "anonymous",
           "hash": "1e16161616161616161616161616161616161616161616161616161616161616",
           "u": null,
-          "tag": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-          "body": "92929292929292929292929292929292929292929292929292929292929292929292929292929292"
+          "body": null
         },
         {
           "kind": "exit",
           "hash": "1e17171717171717171717171717171717171717171717171717171717171717",
           "u": null,
-          "tag": null,
           "body": null
         }
       ],
@@ -332,11 +305,10 @@
         "1e3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d",
         "1e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e",
         "1e3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
-        "1e40404040404040404040404040404040404040404040404040404040404040"
+        "1e40404040404040404040404040404040404040404040404040404040404040",
+        "1e41414141414141414141414141414141414141414141414141414141414141"
       ],
       "private_tx_hash": "1e03030303030303030303030303030303030303030303030303030303030303",
-      "epoch": 6734,
-      "first_contact_root": "1e04040404040404040404040404040404040404040404040404040404040404",
       "sender_commitment": "1e05050505050505050505050505050505050505050505050505050505050505",
       "party_identities": [
         "000000000000000000000000000000000000000000000000000000000000000b",
@@ -357,18 +329,14 @@
         "000000000000000000000000000000005c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
         "0000000000000000000000000000000000000000000000000000000000000009",
         "1938e1190c4ff0e2ab58a9846e1c9dc495c216e8596b3c7fc927f5df8c36dc46",
-        "105af9c30a2198c62f55b6d80affe956d7b8e97b53ef3c078bb6430a509e315a",
-        "2c818d7043922366eaf8ce4c304e80d0a303c99d40312aba97b00b2f9f7bf0a4",
+        "24c00e9c5107d8eacbbc7dee6433e93804af78e634b7a4807122c77c9a2fbe2c",
         "1e03030303030303030303030303030303030303030303030303030303030303",
-        "11928490802735f1613ff6f3155d677b4c83aa9d5fd84779706cc0986dc4c786",
-        "0000000000000000000000000000000000000000000000000000000000001a4e",
-        "1e04040404040404040404040404040404040404040404040404040404040404",
         "1e05050505050505050505050505050505050505050505050505050505050505",
         "000000000000000000000000000000000000000000000000000000000000000b",
         "000000000000000000000000000000000000000000000000000000000000000c",
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
-      "public_input_hash": "10f8bbe7c9e217379e757e6ba734bc50c5df9066c7acf9d15593261ceaa3f999"
+      "public_input_hash": "144de8aa30be9e9b6ba7be3912f7be56fc7f0c0aae53a5438c9ee9d81659f556"
     }
   ],
   "policy": [

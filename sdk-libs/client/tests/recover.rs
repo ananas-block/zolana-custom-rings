@@ -5,10 +5,7 @@ mod origin_fixture;
 #[path = "common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{
-    stream::{RingTag, TAG_LEN},
-    RingDepositAuditCapsule, RingMode,
-};
+use custom_ring_interface::{RingDepositAuditCapsule, RingMode};
 use std::{cell::Cell, sync::Mutex};
 
 use solana_address::Address;
@@ -353,13 +350,12 @@ impl Fixture {
                     ..UtxoFields::default()
                 },
                 recipient_u: self.address.viewing_pubkey.u(),
-                tag: Some(RingTag::from_bytes([0x5c; TAG_LEN])),
+                tag: Some(field(0x5c)),
             },
             Output::Dummy,
         ];
         let slots = transfer.slots(Rail::Anonymous, &outputs);
         output.blinding = slots[0].blinding;
-        output.ring_data_hash = Some(slots[0].ring_data_hash);
         let mut held = self.held(&output, tree_id);
         held.tx_signature = signature;
         let mut published: Vec<OutputSlot> = slots.into_iter().map(|slot| slot.output).collect();

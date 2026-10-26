@@ -69,7 +69,8 @@ fn anonymous_outputs() -> Vec<AnonymousOutputOpening> {
         AnonymousOutputOpening::Ring {
             owner_key: [0xb5; 32],
             nullifier_pk: field(0x25),
-            recipient_u: [0x15; 32],
+            asset: field(0x15),
+            amount: 70,
         },
         AnonymousOutputOpening::Exit {
             nullifier_pk: field(0x26),
@@ -80,7 +81,8 @@ fn anonymous_outputs() -> Vec<AnonymousOutputOpening> {
         AnonymousOutputOpening::Ring {
             owner_key: [0xa1; 32],
             nullifier_pk: field(0x5a),
-            recipient_u: [0x17; 32],
+            asset: field(0x17),
+            amount: u64::MAX,
         },
     ]
 }
@@ -333,8 +335,8 @@ fn nonzero_padding_is_refused() {
 
     let (anonymous, exits) = anonymous();
     let fields = anonymous.fields().unwrap();
-    // The output block starts behind 6 fields, the amounts behind its 10.
-    let exit_padding = DISCLOSURE_SENDER_KEY_BYTES + ANONYMOUS_SLOT_BYTES + KEY_AND_AMOUNT_BYTES;
+    // The output block starts behind 6 fields, the amounts behind its 11, an exit masks its owner key.
+    let exit_padding = DISCLOSURE_SENDER_KEY_BYTES + ANONYMOUS_SLOT_BYTES + 5;
     let mut padded = fields.clone();
     *packed_byte(&mut padded, 6, exit_padding) = 1;
     // One malformed slot decodes unreadable, the others still open.
@@ -349,7 +351,7 @@ fn nonzero_padding_is_refused() {
     assert_eq!(decoded.outputs, expected);
     let unpublished_amount = 2 * DISCLOSURE_INPUT_AMOUNT_BYTES + 7;
     let mut padded = fields;
-    *packed_byte(&mut padded, 16, unpublished_amount) = 1;
+    *packed_byte(&mut padded, 17, unpublished_amount) = 1;
     assert!(matches!(
         refused(&anonymous, &exits, &padded),
         Err(AuditError::DisclosurePadding)

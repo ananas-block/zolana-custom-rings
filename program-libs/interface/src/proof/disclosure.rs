@@ -10,12 +10,8 @@ pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
 /// Input slots of the widest SPP shape a compact confidential ring spend uses.
 pub const CONFIDENTIAL_RING_MAX_INPUTS: usize = 48;
 /// Input classes of the anonymous commitment keys per output capacity, ascending.
-pub const ANONYMOUS_AUDIT_CLASSES: [(usize, &[usize]); 4] = [
-    (2, &[4, 8, 12, 16, 24, 32]),
-    (4, &[4, 8, 12, 16, 24]),
-    (8, &[4, 8, 12, 16]),
-    (16, &[1]),
-];
+pub const ANONYMOUS_AUDIT_CLASSES: [(usize, &[usize]); 3] =
+    [(2, &[4, 16]), (4, &[4, 16]), (8, &[4, 8])];
 /// Input slots of every anonymous entry key.
 pub const ANONYMOUS_ENTRY_CLASS: usize = 8;
 pub const ANONYMOUS_ENTRY_OUTPUTS: [usize; 3] = [2, 4, 8];
@@ -23,8 +19,8 @@ pub const ANONYMOUS_ENTRY_OUTPUTS: [usize; 3] = [2, 4, 8];
 pub const DELIVERED_SLOT_BYTES: usize = 40;
 /// A delivered ring slot of an exit-free transfer, `owner_key`.
 pub const DENSE_DELIVERED_SLOT_BYTES: usize = 32;
-/// A ring slot `owner_key || u`, an exit `asset || u64be(amount) || 0^24`.
-pub const ANONYMOUS_SLOT_BYTES: usize = 64;
+/// `owner_key || fe32(asset) || u64be(amount)`, the owner key zero on an exit.
+pub const ANONYMOUS_SLOT_BYTES: usize = 72;
 /// The hidden sender's key ahead of the entry key's output slots.
 pub const DISCLOSURE_SENDER_KEY_BYTES: usize = 32;
 /// The first bytes of a spent hash a commitment key discloses.
@@ -443,15 +439,14 @@ mod tests {
         };
         let commitment = |class| Some(AnonymousAuditKey::Commitment { class });
         assert_eq!(key(1, 2, false), commitment(4));
-        assert_eq!(key(17, 2, false), commitment(24));
-        assert_eq!(key(25, 2, false), commitment(32));
-        assert_eq!(key(32, 2, false), commitment(32));
-        assert_eq!(key(33, 2, false), None);
-        assert_eq!(key(25, 4, false), None);
-        assert_eq!(key(9, 8, false), commitment(12));
-        assert_eq!(key(17, 8, false), None);
-        assert_eq!(key(1, 16, false), commitment(1));
-        assert_eq!(key(2, 16, false), None);
+        assert_eq!(key(4, 2, false), commitment(4));
+        assert_eq!(key(5, 2, false), commitment(16));
+        assert_eq!(key(16, 4, false), commitment(16));
+        assert_eq!(key(17, 2, false), None);
+        assert_eq!(key(17, 4, false), None);
+        assert_eq!(key(5, 8, false), commitment(8));
+        assert_eq!(key(9, 8, false), None);
+        assert_eq!(key(1, 16, false), None);
         assert_eq!(key(1, 2, true), Some(AnonymousAuditKey::Entry));
         assert_eq!(key(8, 8, true), Some(AnonymousAuditKey::Entry));
         assert_eq!(key(9, 4, true), None);

@@ -94,8 +94,7 @@ ring_errors! {
     RootBelowFloor = 8203 => "the member registry root is older than the floor",
     CuratorRootStale = 8204 => "the curator root is outside its floor and grace window",
     RootIndexEmpty = 8205 => "the root history slot holds no root",
-    EpochUnderflow = 8206 => "the previous epoch flag is set at epoch zero",
-    FirstContactRootMissing = 8207 => "the first-contact tree holds no root at the index",
+    // 8206 and 8207 retired.
     OwnerSignerCount = 8208 => "a policy transfer takes exactly one owner signer",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
@@ -120,7 +119,7 @@ ring_errors! {
     MissingPolicyProof = 8229 => "a policy ring transfer carries no policy proof",
     UnexpectedPolicyProof = 8230 => "an audit-only ring transfer carries a policy proof",
     CoSignerIsOwner = 8231 => "dual control needs a co-signer other than the owner",
-    FirstContactTreePaused = 8232 => "the first-contact tree is paused",
+    // 8232 retired.
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
     InsertFeeAboveMax = 8235 => "the insert fee exceeds the writer's maximum",
@@ -146,6 +145,7 @@ ring_errors! {
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
+    AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
 }
 
 impl From<CustomRingError> for ProgramError {

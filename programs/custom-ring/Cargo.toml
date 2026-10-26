@@ -31,7 +31,6 @@ zolana-account-checks = { workspace = true }
 zolana-hasher = { workspace = true }
 zolana-interface = { workspace = true, features = ["borsh"] }
 zolana-ring-policy = { workspace = true }
-zolana-tree = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

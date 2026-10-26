@@ -1,14 +1,11 @@
 //! The transact refusals ahead of either ring pairing.
 
 use custom_ring_interface::{
-    funder_account_position, input_flag,
-    key_catalog::RingCircuit,
-    shape_flag,
-    stream::{RingTag, EPOCH_SLOTS, TAG_LEN},
-    tag, transact_flag, AnchorRoot, AnonymousProofData, AppliedAt, CustomRingError,
-    CustomRingProof, InputTrees, MemberRegistry, PlainGroth16Proof, PolicyProof, RingOutput,
-    RingProgramConfig, RingRail, RingTransactData, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED,
-    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
+    AnonymousProofData, AppliedAt, CustomRingError, CustomRingProof, InputTrees, MemberRegistry,
+    PlainGroth16Proof, PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData,
+    SenderBundle, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED, RING_TRANSACT_RING_CONFIG_INDEX,
+    TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -17,15 +14,13 @@ use solana_keypair::{Keypair, Signer};
 use zolana_interface::{
     instruction::{InterfaceTransfer, TreeContext},
     shape::SPP_SUPPORTED_SHAPES,
-    state::{default_tree_fees, discriminator::TREE_ACCOUNT_DISCRIMINATOR, nullifier_tree_params},
     MAX_INTERFACE_TRANSFERS, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 
 use crate::common::{
     allow_list_table, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2, policy_write,
     reaches_verification, refused, registry_pda, ring_auth, set_co_signer, transact, Ring, Sent,
-    Setup, PROGRAM, SYSTEM,
+    Setup, SYSTEM,
 };
 
 pub const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
@@ -43,7 +38,7 @@ pub struct Fixture {
     fields: Vec<[u8; 32]>,
     keys: [[u8; 32]; 16],
     bodies: [[u8; 40]; 16],
-    tags: [[u8; TAG_LEN]; 16],
+    tags: [[u8; 32]; 16],
     salt: [u8; 16],
 }
 
@@ -68,7 +63,7 @@ impl Fixture {
             fields: (1..=120u8).map(field).collect(),
             keys: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
-            tags: core::array::from_fn(|i| [0xa0 + i as u8; TAG_LEN]),
+            tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
             salt: [0x5c; 16],
         }
     }
@@ -95,8 +90,6 @@ impl Fixture {
                 sender_commitment: (rail == RingRail::Anonymous).then_some(&self.fields[3]),
             }),
             approval_required: false,
-            previous_epoch: false,
-            anchor: None,
             expiry_unix_ts: 1_800_000_000,
             tx_viewing_u: &self.keys[0],
             salt: &self.salt,
@@ -104,6 +97,10 @@ impl Fixture {
             key_escrow: rail == RingRail::Delegate,
             full_openings: false,
             outputs: Vec::new(),
+            sender: (rail == RingRail::Anonymous).then(|| SenderBundle {
+                tag: &self.tags[15],
+                body: &self.bodies[15],
+            }),
             eph_u: &self.keys[1],
             sealed: &self.keys[2],
             disclosure: &[],
@@ -125,8 +122,8 @@ impl Fixture {
             RingRail::Anonymous => slots
                 .map(|slot| RingOutput::Anonymous {
                     hash: &self.fields[10 + slot],
-                    tag: RingTag::from_bytes(self.tags[slot]),
-                    body: &self.bodies[slot],
+                    tag: &self.tags[slot],
+                    body: (slot != 0).then_some(&self.bodies[slot][..]),
                 })
                 .collect(),
             RingRail::Confidential | RingRail::Delegate => slots
@@ -257,7 +254,7 @@ fn flags_follow_the_rings_mode_and_policy() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let mut bytes = data.encode().unwrap();
-    bytes[transact_flag::BYTE] |= transact_flag::ANCHOR;
+    bytes[transact_flag::BYTE] |= 1 << 4;
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     refused(
         send(&mut ring, tag::TRANSACT, Vec::new(), bytes, spp, &[]),
@@ -276,36 +273,6 @@ fn flags_follow_the_rings_mode_and_policy() {
         confidential(&mut policy_ring, vec![registry_meta()], &data),
         CustomRingError::MissingPolicyProof,
     );
-}
-
-#[test]
-fn the_previous_epoch_at_epoch_zero_underflows() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Anonymous);
-    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
-    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
-    ring.warp(EPOCH_SLOTS - 1);
-    data.previous_epoch = true;
-    refused(
-        send(
-            &mut ring,
-            tag::TRANSACT,
-            Vec::new(),
-            data.encode().unwrap(),
-            spp.clone(),
-            &[],
-        ),
-        CustomRingError::EpochUnderflow,
-    );
-    ring.warp(EPOCH_SLOTS);
-    reaches_verification(send(
-        &mut ring,
-        tag::TRANSACT,
-        Vec::new(),
-        data.encode().unwrap(),
-        spp,
-        &[],
-    ));
 }
 
 #[test]
@@ -1257,67 +1224,6 @@ fn a_delegate_shape_without_a_ring_authority_key_is_refused() {
     refused(
         delegate_move(&mut ring, &delegate, &data, bytes),
         CustomRingError::RingShapeUnkeyed,
-    );
-}
-
-pub fn spp_tree(address: &Address, paused: bool) -> Vec<u8> {
-    let mut bytes = vec![0u8; TreeAccount::account_size()];
-    let params = nullifier_tree_params();
-    let fees = default_tree_fees(params.input_queue_zkp_batch_size).unwrap();
-    TreeAccount::init(
-        &mut bytes,
-        TREE_ACCOUNT_DISCRIMINATOR,
-        UTXO_TREE_HEIGHT as u8,
-        address.to_bytes(),
-        1,
-        params,
-        fees,
-    )
-    .unwrap()
-    .set_paused(paused);
-    bytes
-}
-
-#[test]
-fn a_first_contact_root_comes_from_a_live_spp_state_tree() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Anonymous);
-    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
-    let tree = Address::new_unique();
-    let mut anchored = |ring: &mut Ring, root_index: u16| {
-        data.anchor = Some(AnchorRoot {
-            tree: 1,
-            root_index,
-        });
-        let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
-        send(
-            ring,
-            tag::TRANSACT,
-            vec![AccountMeta::new_readonly(tree, false)],
-            data.encode().unwrap(),
-            spp,
-            &[],
-        )
-    };
-    refused(
-        anchored(&mut ring, 0),
-        CustomRingError::FirstContactRootMissing,
-    );
-    ring.store(tree, PROGRAM, spp_tree(&tree, false));
-    refused(
-        anchored(&mut ring, 0),
-        CustomRingError::FirstContactRootMissing,
-    );
-    ring.store(tree, SPP, spp_tree(&tree, false));
-    reaches_verification(anchored(&mut ring, 0));
-    refused(
-        anchored(&mut ring, 1),
-        CustomRingError::FirstContactRootMissing,
-    );
-    ring.store(tree, SPP, spp_tree(&tree, true));
-    refused(
-        anchored(&mut ring, 0),
-        CustomRingError::FirstContactTreePaused,
     );
 }
 

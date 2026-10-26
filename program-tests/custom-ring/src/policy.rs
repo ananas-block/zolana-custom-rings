@@ -19,7 +19,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use zolana_client::{prover::indexed::ProofDataSource, AsyncProverClient};
 use zolana_keypair::{ShieldedKeypair, X25519Keypair};
-use zolana_ring_client::AnonymousRingState;
+use zolana_ring_client::ViewingHistory;
 use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
 use zolana_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use zolana_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
@@ -114,17 +114,24 @@ impl RingNotes<'_> {
         self.deposit_to(recipient, payer)
     }
 
-    /// Notes of the owner's hidden identity on an anonymous ring.
+    /// Notes of the owner's hidden identity on an anonymous ring, each under the next sender tag.
     pub fn deposit_hidden_from(self, payer: &(dyn Signer + Sync)) -> Result<Vec<Utxo>> {
         let owner = self.owner;
-        let state = AnonymousRingState::new(self.ring.program_id(), 0);
-        self.deposit_to(
-            DepositRecipient::Anonymous {
+        let mut history = ViewingHistory::new(owner.viewing_pubkey(), 0);
+        let mut utxos = Vec::with_capacity(self.count);
+        for _ in 0..self.count {
+            let recipient = DepositRecipient::Anonymous {
                 keys: owner,
-                state: &state,
-            },
-            payer,
-        )
+                history: &history,
+            };
+            let deposit = self.deposit_with(recipient, payer);
+            let next = deposit
+                .viewing_history()?
+                .ok_or_else(|| anyhow!("an anonymous deposit advances its history"))?;
+            utxos.push(self.land(&deposit)?);
+            history = next;
+        }
+        Ok(utxos)
     }
 
     fn deposit_to(
@@ -132,32 +139,39 @@ impl RingNotes<'_> {
         recipient: DepositRecipient<'_>,
         payer: &(dyn Signer + Sync),
     ) -> Result<Vec<Utxo>> {
-        let env = self.env;
-        let indexer = env.client.indexer();
         (0..self.count)
-            .map(|_| {
-                let deposit = RingDeposit {
-                    ring: self.ring,
-                    payer,
-                    recipient,
-                    tree: env.tree,
-                    asset: DepositAsset::Sol,
-                    amount: self.amount,
-                    cosigner: None,
-                };
-                let RingDepositReceipt { utxo, .. } =
-                    env.run(deposit.send(env.client.ring_client()))?;
-                let tree_id = env.tree_id(env.tree)?;
-                let leaf = utxo.hash(
-                    &self.owner.nullifier_key.pubkey()?,
-                    &[0; 32],
-                    &[0; 32],
-                    tree_id,
-                )?;
-                wait_for_merkle_proof(indexer, self.env.tree, leaf);
-                Ok(utxo)
-            })
+            .map(|_| self.land(&self.deposit_with(recipient, payer)))
             .collect()
+    }
+
+    fn deposit_with<'d>(
+        &self,
+        recipient: DepositRecipient<'d>,
+        payer: &'d (dyn Signer + Sync),
+    ) -> RingDeposit<'d> {
+        RingDeposit {
+            ring: self.ring,
+            payer,
+            recipient,
+            tree: self.env.tree,
+            asset: DepositAsset::Sol,
+            amount: self.amount,
+            cosigner: None,
+        }
+    }
+
+    fn land(&self, deposit: &RingDeposit<'_>) -> Result<Utxo> {
+        let env = self.env;
+        let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
+        let tree_id = env.tree_id(env.tree)?;
+        let leaf = utxo.hash(
+            &self.owner.nullifier_key.pubkey()?,
+            &[0; 32],
+            &[0; 32],
+            tree_id,
+        )?;
+        wait_for_merkle_proof(env.client.indexer(), env.tree, leaf);
+        Ok(utxo)
     }
 }
 

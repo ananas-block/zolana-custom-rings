@@ -14,7 +14,7 @@ use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad,
 };
-use zolana_ring_transaction::{AnonymousSlot, PublishedSlot, RingOutputRail, StreamPosition};
+use zolana_ring_transaction::{PublishedSlot, RingOutputRail};
 use zolana_transaction::{
     derive_output_blinding_seed, instructions::transact::SppProofInputs, SppProofOutputUtxo,
     TransactionError,
@@ -24,8 +24,8 @@ use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
     request::{
-        owner_key, Anchor, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit,
-        DeliveredOutput, Opening, Stream,
+        owner_key, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit, DeliveredOutput,
+        Opening,
     },
     RingError,
 };
@@ -90,8 +90,7 @@ impl AuditSeal<'_> {
                     outputs: self
                         .published
                         .iter()
-                        .enumerate()
-                        .map(|(index, slot)| anonymous_opening(slot, index))
+                        .map(anonymous_opening)
                         .collect::<Result<_, _>>()?,
                     inputs: self.spent(layout.key)?,
                 })
@@ -170,9 +169,6 @@ pub(crate) struct AnonymousStatement {
     pub private_tx_hash: [u8; 32],
     pub private_tx_blinding: [u8; 32],
     pub sender_commitment: [u8; 32],
-    pub epoch: u64,
-    pub first_contact_root: [u8; 32],
-    pub anchor: Option<Anchor>,
 }
 
 impl AuditProving<'_> {
@@ -248,9 +244,6 @@ impl AuditProving<'_> {
                     })?,
                     inputs: openings,
                     sender_commitment: statement.sender_commitment,
-                    epoch: statement.epoch,
-                    first_contact_root: statement.first_contact_root,
-                    anchor: statement.anchor.clone(),
                 }))
             }
             (DisclosureLayout::Anonymous(_), None) => {
@@ -294,26 +287,24 @@ fn delivered_opening(
     })
 }
 
-fn anonymous_opening(
-    slot: &PublishedSlot<'_>,
-    index: usize,
-) -> Result<AnonymousOutputOpening, RingError> {
+fn anonymous_opening(slot: &PublishedSlot<'_>) -> Result<AnonymousOutputOpening, RingError> {
     let output = slot.output;
     let Some(owner) = output.owner_address else {
         return Ok(AnonymousOutputOpening::Dummy);
     };
-    Ok(match (slot.wire.is_exit(), slot.recipient) {
-        (true, _) => AnonymousOutputOpening::Exit {
+    let asset = hash_bytes(output.asset.asset.as_array())?;
+    Ok(match slot.wire.is_exit() {
+        true => AnonymousOutputOpening::Exit {
             nullifier_pk: owner.nullifier_pubkey,
-            asset: hash_bytes(output.asset.asset.as_array())?,
+            asset,
             amount: output.amount,
         },
-        (false, Some(recipient)) => AnonymousOutputOpening::Ring {
+        false => AnonymousOutputOpening::Ring {
             owner_key: owner_key(&owner.signing_pubkey)?,
             nullifier_pk: owner.nullifier_pubkey,
-            recipient_u: recipient.u(),
+            asset,
+            amount: output.amount,
         },
-        (false, None) => return Err(RingError::UndeliveredRingOutput { slot: index }),
     })
 }
 
@@ -322,10 +313,9 @@ fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutp
     let output = slot.output;
     let (recipient_key, body) = match slot.wire {
         RingOutput::Delivered { u, body, .. } => (*u, *body),
-        RingOutput::Anonymous { body, .. } => {
-            (slot.recipient.map(|key| key.u()).unwrap_or_default(), *body)
+        RingOutput::Anonymous { .. } | RingOutput::Exit { .. } => {
+            ([0; 32], [0; RING_DELIVERED_BODY_LEN])
         }
-        RingOutput::Exit { .. } => ([0; 32], [0; RING_DELIVERED_BODY_LEN]),
     };
     let ring = !output.is_dummy() && !slot.wire.is_exit();
     Ok(DeliveredOutput {
@@ -339,34 +329,11 @@ fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutp
     })
 }
 
+/// An exit's owner key is masked out of the disclosure, a dummy names none.
 fn anonymous_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<AnonymousOutput, RingError> {
-    let stream = match slot.anonymous {
-        Some(AnonymousSlot::Payment(payment)) => {
-            let (inbox, index) = match payment.position {
-                StreamPosition::Inbox(index) => (true, index),
-                StreamPosition::Pair(index) => (false, index),
-            };
-            Stream {
-                tag: payment.tag.field(),
-                inbox,
-                pair: !inbox,
-                change: false,
-                index: index.get(),
-            }
-        }
-        Some(AnonymousSlot::Change { tag }) => Stream {
-            tag: tag.field(),
-            change: true,
-            ..Stream::default()
-        },
-        Some(AnonymousSlot::Dummy { tag }) => Stream {
-            tag: tag.field(),
-            ..Stream::default()
-        },
-        Some(AnonymousSlot::Exit) | None => Stream::default(),
-    };
+    let output = slot.output;
     Ok(AnonymousOutput {
-        delivered: delivered_output(slot, tree)?,
-        stream,
+        output: Opening::output(output, tree)?,
+        owner_key: slot_owner_key(output)?,
     })
 }

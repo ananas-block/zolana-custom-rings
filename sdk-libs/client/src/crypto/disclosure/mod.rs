@@ -25,7 +25,7 @@ const KEY_AND_AMOUNT_BYTES: usize = KEY_BYTES + AMOUNT_BYTES;
 const ZERO: [u8; 32] = [0; 32];
 
 const _: () = assert!(DELIVERED_SLOT_BYTES == KEY_AND_AMOUNT_BYTES);
-const _: () = assert!(ANONYMOUS_SLOT_BYTES == 2 * KEY_BYTES);
+const _: () = assert!(ANONYMOUS_SLOT_BYTES == 2 * KEY_BYTES + AMOUNT_BYTES);
 const _: () = assert!(DISCLOSURE_INPUT_AMOUNT_BYTES == AMOUNT_BYTES);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,13 +141,14 @@ pub enum DeliveredOutputOpening {
     Dummy,
 }
 
-/// The published tag hides `recipient_u`, only the disclosure names it.
+/// The disclosure opens every live slot's asset and amount, the published body is unproven.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnonymousOutputOpening {
     Ring {
         owner_key: [u8; 32],
         nullifier_pk: [u8; 32],
-        recipient_u: [u8; 32],
+        asset: [u8; 32],
+        amount: u64,
     },
     Exit {
         nullifier_pk: [u8; 32],
@@ -437,45 +438,48 @@ impl AnonymousOutputOpening {
         }
     }
 
+    /// `mask(ring, owner_key) ‖ asset ‖ u64be(amount)`, a dummy all zero.
     fn slot_bytes(&self) -> Result<[u8; ANONYMOUS_SLOT_BYTES], AuditError> {
         let mut slot = [0; ANONYMOUS_SLOT_BYTES];
-        let (head, tail) = slot.split_at_mut(KEY_BYTES);
-        match self {
+        let (owner, rest) = slot.split_at_mut(KEY_BYTES);
+        let (asset_bytes, amount_bytes) = rest.split_at_mut(KEY_BYTES);
+        let (asset, amount) = match self {
             Self::Ring {
                 owner_key,
-                recipient_u,
+                asset,
+                amount,
                 ..
             } => {
-                head.copy_from_slice(owner_key);
-                tail.copy_from_slice(recipient_u);
+                owner.copy_from_slice(owner_key);
+                (asset, amount)
             }
-            Self::Exit { asset, amount, .. } => {
-                head.copy_from_slice(&canonical(*asset)?);
-                tail[..AMOUNT_BYTES].copy_from_slice(&amount.to_be_bytes());
-            }
-            Self::Dummy => {}
+            Self::Exit { asset, amount, .. } => (asset, amount),
+            Self::Dummy => return Ok(slot),
             Self::Unreadable => return Err(AuditError::DisclosureLayout),
-        }
+        };
+        asset_bytes.copy_from_slice(&canonical(*asset)?);
+        amount_bytes.copy_from_slice(&amount.to_be_bytes());
         Ok(slot)
     }
 
     fn read(nullifier_pk: [u8; 32], slot: &[u8; ANONYMOUS_SLOT_BYTES], exit: bool) -> Self {
-        let head: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[i]);
-        let tail: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[KEY_BYTES + i]);
-        let (amount, padding) = split_exit_tail(&tail);
+        let owner_key: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[i]);
+        let asset: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[KEY_BYTES + i]);
+        let amount = u64::from_be_bytes(core::array::from_fn(|i| slot[2 * KEY_BYTES + i]));
         let opening = match exit {
-            true => zero(&padding).and_then(|()| {
+            true => zero(&owner_key).and_then(|()| {
                 Ok(Self::Exit {
                     nullifier_pk,
-                    asset: canonical(head)?,
+                    asset: canonical(asset)?,
                     amount,
                 })
             }),
             false if nullifier_pk == ZERO => zero(slot).map(|()| Self::Dummy),
-            false => Ok(Self::Ring {
-                owner_key: head,
+            false => canonical(asset).map(|asset| Self::Ring {
+                owner_key,
                 nullifier_pk,
-                recipient_u: tail,
+                asset,
+                amount,
             }),
         };
         opening.unwrap_or(Self::Unreadable)
@@ -679,12 +683,6 @@ fn key_and_amount(key: &[u8; 32], amount: u64) -> [u8; KEY_AND_AMOUNT_BYTES] {
     head.copy_from_slice(key);
     tail.copy_from_slice(&amount.to_be_bytes());
     bytes
-}
-
-fn split_exit_tail(tail: &[u8; KEY_BYTES]) -> (u64, [u8; KEY_BYTES - AMOUNT_BYTES]) {
-    let amount = core::array::from_fn(|i| tail[i]);
-    let padding = core::array::from_fn(|i| tail[AMOUNT_BYTES + i]);
-    (u64::from_be_bytes(amount), padding)
 }
 
 fn zero(bytes: &[u8]) -> Result<(), AuditError> {

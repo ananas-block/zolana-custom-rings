@@ -14,8 +14,6 @@ pub(super) struct RingStatements<'a> {
     pub config: &'a RingProgramConfig,
     pub transfer: &'a ParsedTransact<'a>,
     pub accounts: &'a TransactAccounts<'a>,
-    pub epoch: u64,
-    pub first_contact_root: &'a [u8; 32],
     pub key_escrow: bool,
 }
 
@@ -33,8 +31,6 @@ impl RingStatements<'_> {
                     .unwrap_or(&[[0; 32]; 3]),
                 ring_id: &ring_id,
                 auditor_pubkey: &self.config.auditor_pubkey,
-                epoch: self.epoch,
-                first_contact_root: self.first_contact_root,
                 key_escrow: self.key_escrow,
             })?
             .hash()

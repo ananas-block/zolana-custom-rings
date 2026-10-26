@@ -90,8 +90,8 @@ use anyhow::{bail, ensure, Context as _, Result};
 use clap::{Args, FromArgMatches, Parser, Subcommand};
 use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag};
 use custom_ring_sdk::{
-    CustomRing, CustomRingConfig, PendingFirstContact, RingError, RingMode, RingOperation,
-    RingSubmission, SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
+    CustomRing, CustomRingConfig, RingError, RingMode, RingOperation, RingSubmission,
+    SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, Instruction};
@@ -109,7 +109,6 @@ use zolana_keypair::ShieldedAddress;
 use zolana_ring_client::ReaderKey;
 
 pub use crate::{
-    address::PairingRowArg,
     chain::{transaction_error, Chain, Zolana, ZolanaServices},
     config::{CoSignClass, Mint, ModeName, RingConfig, Service, Target, ThresholdSpec, RING_TOML},
     list::{MemberArgs, MemberList},

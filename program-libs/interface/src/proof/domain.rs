@@ -9,16 +9,6 @@ pub const AUDIT_STATEMENT: u32 = 0x4352_4155;
 pub const DELIVERED_SLOT_SECRET: u32 = 0x4352_4453;
 /// `"CRBS"`
 pub const BLINDING_SEED: u32 = 0x4352_4253;
-/// `"CRAT"`
-pub const ANONYMOUS_RING_DATA: u32 = 0x4352_4154;
-/// `"CRIK"`
-pub const INBOX_KEY: u32 = 0x4352_494b;
-/// `"CRIT"`
-pub const INBOX_TAG: u32 = 0x4352_4954;
-/// `"CRPK"`
-pub const PAIR_KEY: u32 = 0x4352_504b;
-/// `"CRPT"`
-pub const PAIR_TAG: u32 = 0x4352_5054;
 /// `"CRSC"`
 pub const SENDER_COMMITMENT: u32 = 0x4352_5343;
 /// `"CROD"`
@@ -43,7 +33,7 @@ pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
 }
 
-/// `Poseidon(CRDB, blinding_secret)`, a deposit blinding no anchor opens as a first contact.
+/// `Poseidon(CRDB, blinding_secret)`.
 pub fn deposit_blinding(blinding_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(DEPOSIT_BLINDING), blinding_secret])
 }

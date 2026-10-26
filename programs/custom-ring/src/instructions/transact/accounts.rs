@@ -226,14 +226,6 @@ impl<'a> TransactCheck<'a> {
             RailSigner::Payer => SignerSlot::Payer,
             RailSigner::Delegate(expected) => SignerSlot::Delegate(next.slot(expected)),
         };
-        // The first-contact tree sits in the prefix only when the data names its slot.
-        if self
-            .data
-            .anchor
-            .is_some_and(|anchor| usize::from(anchor.tree) == next.0)
-        {
-            next.0 += 1;
-        }
         Prefix {
             curator,
             co_signer,

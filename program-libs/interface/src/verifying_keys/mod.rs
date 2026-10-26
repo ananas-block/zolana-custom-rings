@@ -16,36 +16,16 @@ pub mod audit_anonymous_entry_v2_8_2_verifying_key;
 pub mod audit_anonymous_entry_v2_8_4_verifying_key;
 #[path = "audit/entry/audit_anonymous_entry_v2_8_8_verifying_key.rs"]
 pub mod audit_anonymous_entry_v2_8_8_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_12_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_12_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_4_verifying_key;
-#[path = "audit/anonymous/outputs_8/audit_anonymous_v2_12_8_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_8_verifying_key;
 #[path = "audit/anonymous/outputs_2/audit_anonymous_v2_16_2_verifying_key.rs"]
 pub mod audit_anonymous_v2_16_2_verifying_key;
 #[path = "audit/anonymous/outputs_4/audit_anonymous_v2_16_4_verifying_key.rs"]
 pub mod audit_anonymous_v2_16_4_verifying_key;
-#[path = "audit/anonymous/outputs_8/audit_anonymous_v2_16_8_verifying_key.rs"]
-pub mod audit_anonymous_v2_16_8_verifying_key;
-#[path = "audit/anonymous/outputs_16/audit_anonymous_v2_1_16_verifying_key.rs"]
-pub mod audit_anonymous_v2_1_16_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_24_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_24_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_24_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_24_4_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_32_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_32_2_verifying_key;
 #[path = "audit/anonymous/outputs_2/audit_anonymous_v2_4_2_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_2_verifying_key;
 #[path = "audit/anonymous/outputs_4/audit_anonymous_v2_4_4_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_4_verifying_key;
 #[path = "audit/anonymous/outputs_8/audit_anonymous_v2_4_8_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_8_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_8_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_8_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_8_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_8_4_verifying_key;
 #[path = "audit/anonymous/outputs_8/audit_anonymous_v2_8_8_verifying_key.rs"]
 pub mod audit_anonymous_v2_8_8_verifying_key;
 #[path = "audit/audit_delivered_16_verifying_key.rs"]
@@ -214,44 +194,16 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         audit_anonymous_v2_4_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_anonymous_v2_8_2.key",
-        audit_anonymous_v2_8_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_2.key",
-        audit_anonymous_v2_12_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
         "custom_ring_audit_anonymous_v2_16_2.key",
         audit_anonymous_v2_16_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_24_2.key",
-        audit_anonymous_v2_24_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_32_2.key",
-        audit_anonymous_v2_32_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_v2_4_4.key",
         audit_anonymous_v2_4_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_anonymous_v2_8_4.key",
-        audit_anonymous_v2_8_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_4.key",
-        audit_anonymous_v2_12_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
         "custom_ring_audit_anonymous_v2_16_4.key",
         audit_anonymous_v2_16_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_24_4.key",
-        audit_anonymous_v2_24_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_v2_4_8.key",
@@ -260,18 +212,6 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_audit_anonymous_v2_8_8.key",
         audit_anonymous_v2_8_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_8.key",
-        audit_anonymous_v2_12_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_16_8.key",
-        audit_anonymous_v2_16_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_1_16.key",
-        audit_anonymous_v2_1_16_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_entry_v2_8_2.key",
@@ -599,45 +539,17 @@ pub fn verifying_key(
             outputs: 2,
         } => Some(&audit_anonymous_v2_4_2_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
-            class: 8,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_8_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_12_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
             class: 16,
             outputs: 2,
         } => Some(&audit_anonymous_v2_16_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 24,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_24_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 32,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_32_2_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
             class: 4,
             outputs: 4,
         } => Some(&audit_anonymous_v2_4_4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
-            class: 8,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_8_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_12_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
             class: 16,
             outputs: 4,
         } => Some(&audit_anonymous_v2_16_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 24,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_24_4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
             class: 4,
             outputs: 8,
@@ -646,18 +558,6 @@ pub fn verifying_key(
             class: 8,
             outputs: 8,
         } => Some(&audit_anonymous_v2_8_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 8,
-        } => Some(&audit_anonymous_v2_12_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 16,
-            outputs: 8,
-        } => Some(&audit_anonymous_v2_16_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 1,
-            outputs: 16,
-        } => Some(&audit_anonymous_v2_1_16_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousEntryAudit {
             class: 8,
             outputs: 2,

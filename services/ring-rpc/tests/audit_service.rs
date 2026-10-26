@@ -15,9 +15,7 @@ mod deposits;
 pub mod transfer;
 
 use custom_ring_interface::{
-    encode_ring_confidential_delivered_output,
-    stream::{RingTag, TAG_LEN},
-    EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
+    encode_ring_confidential_delivered_output, EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -993,7 +991,7 @@ impl SpentUtxo {
             Output::Ring {
                 utxo: member,
                 recipient_u: x25519_u(0x54),
-                tag: Some(RingTag::from_bytes([0x55; TAG_LEN])),
+                tag: Some(field(0x55)),
             },
             Output::Dummy,
         ];

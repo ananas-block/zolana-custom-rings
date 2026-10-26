@@ -17,7 +17,6 @@ use std::{
 };
 
 use custom_ring_interface::{
-    stream::{RingTag, TAG_LEN},
     DeliveredLayout, DisclosureLayout, InputPrefix, RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
@@ -35,8 +34,8 @@ use zolana_ring_client::{
     AuditEnvelope, AuditError, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
     CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening, InputOpening, InputRing, KnownUtxo,
     KnownUtxoIndex, KnownUtxos, MergeDisclosureEncryption, MergeOpening, OutputOpening,
-    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingScan, TransactionAudit,
-    TransactionOrigin, UtxoOwner,
+    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    TransactionAudit, TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 use zolana_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
@@ -285,7 +284,7 @@ fn prefixed_spend() -> PrefixedSpend {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Dummy,
     ];
@@ -576,7 +575,7 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Dummy,
     ];
@@ -664,7 +663,7 @@ fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Exit(utxo(0xe5, SOL, 20)),
     ];
@@ -880,12 +879,12 @@ fn anonymous_spend() -> (Transfer, Built, [Spend; 2]) {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Ring {
             utxo: sender(MINT, 30),
             recipient_u: x25519_u(0x52),
-            tag: Some(RingTag::from_bytes([0x53; TAG_LEN])),
+            tag: Some(field(0x53)),
         },
     ];
     let built = build_anonymous(&transfer, outputs, &spent, Spending::Entry);
@@ -971,15 +970,21 @@ fn an_anonymous_input_resolves_to_its_ring_or_the_default_ring() {
     ));
 }
 
+/// The proof leaves the tag free, the auditor opens the output from the disclosure alone.
 #[test]
-fn an_anonymous_ring_slot_publishes_its_tag_in_the_owner_tag() {
+fn an_anonymous_ring_slot_opens_under_any_published_tag() {
     let (_, mut built, _) = anonymous_spend();
-    built.transaction.output_slots[0].view_tag[0] = 1;
+    let tag = [0xfe; 32];
+    built.transaction.output_slots[0].view_tag = tag;
     let audited = audit(&built.transaction, built.layout).unwrap();
-    assert_eq!(
-        audited.payload_errors,
-        [slot_error(0, OutputPayloadErrorKind::Frame)]
-    );
+    assert!(audited.payload_errors.is_empty());
+    assert!(matches!(
+        audited.outputs[0].opening,
+        OutputOpening::Ring {
+            owner_tag: RingOwnerTag::View(opened),
+            ..
+        } if opened == tag
+    ));
 }
 
 #[test]
@@ -1281,7 +1286,7 @@ fn paid_and_spent() -> (Built, Built) {
         },
         blinding: field(0x65),
     };
-    let tag = |byte| Some(RingTag::from_bytes([byte; TAG_LEN]));
+    let tag = |byte| Some(field(byte));
     let paid = build_anonymous(
         &paying,
         vec![

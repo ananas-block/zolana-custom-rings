@@ -42,7 +42,6 @@ impl MergeAudit<'_> {
         if disclosure.eph_pk[0] != VIEWING_PUBKEY_TAG {
             return Err(CustomRingError::InvalidMergeDisclosure.into());
         }
-        // Only a ring output's CRAT ring data opens as an anchor.
         if self.output_ring_data_hash != &[0; 32] {
             return Err(CustomRingError::AnonymousRingDataNotZero.into());
         }

@@ -1,7 +1,8 @@
 //! Ring output bodies in SPP's encrypted output framing, schemes SPP stores without parsing.
 
 use zolana_event::{
-    OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
+    OutputDataEncoding, ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
+    ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
 };
 
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
@@ -30,22 +31,28 @@ pub fn ring_confidential_delivered_output_body(
         .ok()
 }
 
-pub fn ring_anonymous_output_body(data: &[u8]) -> Option<&[u8; RING_DELIVERED_BODY_LEN]> {
-    encrypted_output_body(data, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG)?
-        .try_into()
-        .ok()
-}
-
 pub fn encode_confidential_output(body: &[u8]) -> Vec<u8> {
     encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, &[body])
 }
 
-pub fn encode_ring_anonymous_output(body: &[u8; RING_DELIVERED_BODY_LEN]) -> Vec<u8> {
-    encode_encrypted_output(RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG, &[body])
-}
-
 pub fn encode_ring_confidential_delivered_output(body: &[u8; RING_DELIVERED_BODY_LEN]) -> Vec<u8> {
     encode_encrypted_output(RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, &[body])
+}
+
+pub fn encode_anonymous_recipient_output(body: &[u8]) -> Vec<u8> {
+    encode_encrypted_output(ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, &[body])
+}
+
+pub fn encode_anonymous_sender_output(body: &[u8]) -> Vec<u8> {
+    encode_encrypted_output(ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG, &[body])
+}
+
+pub fn anonymous_recipient_output_body(data: &[u8]) -> Option<&[u8]> {
+    encrypted_output_body(data, ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG)
+}
+
+pub fn anonymous_sender_output_body(data: &[u8]) -> Option<&[u8]> {
+    encrypted_output_body(data, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG)
 }
 
 /// `Encrypted(len || scheme || payload)`, the length counting the scheme byte.
@@ -64,6 +71,13 @@ fn encode_encrypted_output(scheme: u8, payload: &[&[u8]]) -> Vec<u8> {
 }
 
 fn encrypted_output_body(data: &[u8], scheme: u8) -> Option<&[u8]> {
+    encrypted_output(data)
+        .filter(|(scheme_byte, _)| *scheme_byte == scheme)
+        .map(|(_, payload)| payload)
+}
+
+/// The scheme byte and payload of `Encrypted(len || scheme || payload)`.
+fn encrypted_output(data: &[u8]) -> Option<(u8, &[u8])> {
     let (&encoding_tag, rest) = data.split_first()?;
     if encoding_tag != OutputDataEncoding::ENCRYPTED_TAG {
         return None;
@@ -71,5 +85,5 @@ fn encrypted_output_body(data: &[u8], scheme: u8) -> Option<&[u8]> {
     let (len_bytes, body) = rest.split_first_chunk::<4>()?;
     let body_len = usize::try_from(u32::from_le_bytes(*len_bytes)).ok()?;
     let (&scheme_byte, payload) = body.split_first()?;
-    (body_len == body.len() && scheme_byte == scheme).then_some(payload)
+    (body_len == body.len()).then_some((scheme_byte, payload))
 }

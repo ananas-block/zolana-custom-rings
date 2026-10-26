@@ -54,9 +54,6 @@ impl AuditHead<'_> {
 pub struct AnonymousAudit<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
-    pub epoch: u64,
-    /// Zero without a pair-anchored slot.
-    pub first_contact_root: &'a [u8; 32],
     /// Zero outside a policy ring.
     pub sender_commitment: &'a [u8; 32],
 }
@@ -99,15 +96,10 @@ impl AuditStatement<'_> {
                 ]);
             }
             AuditKind::Anonymous(anonymous) => {
-                let tags: Vec<[u8; 32]> = self.outputs.iter().map(RingOutput::tag_field).collect();
                 elements.extend([
                     output_chain,
-                    self.body_chain()?,
                     disclosure_chain,
                     *anonymous.private_tx_hash,
-                    create_hash_chain_4_from_slice(&tags)?,
-                    right_align(&anonymous.epoch.to_be_bytes()),
-                    *anonymous.first_contact_root,
                     *anonymous.sender_commitment,
                     anonymous.party_identities[0],
                     anonymous.party_identities[1],
