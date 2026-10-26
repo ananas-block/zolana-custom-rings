@@ -62,29 +62,9 @@ type DeliveredAuditParams struct {
 	Outputs []DeliveredOutput `json:"outputs"`
 }
 
-type Stream struct {
-	Tag   Field `json:"tag"`
-	Inbox bool  `json:"inbox"`
-	Pair  bool  `json:"pair"`
-	Self  bool  `json:"self"`
-	Index uint8 `json:"index"`
-}
-
 type AnonymousOutput struct {
-	DeliveredOutput
-	Stream Stream `json:"stream"`
-}
-
-type Anchor struct {
-	TreeID     Field   `json:"treeId"`
-	Asset      Field   `json:"asset"`
-	Amount     Field   `json:"amount"`
-	SlotSecret Field   `json:"slotSecret"`
-	Blinding   Field   `json:"blinding"`
-	Epoch      uint64  `json:"epoch"`
-	Index      uint8   `json:"index"`
-	PathIndex  uint64  `json:"pathIndex"`
-	Path       []Field `json:"path"`
+	Output   Opening `json:"output"`
+	OwnerKey Bytes   `json:"ownerKey"`
 }
 
 type AnonymousAuditParams struct {
@@ -100,10 +80,6 @@ type AnonymousAuditParams struct {
 	// Inputs fill the input class, the slots past InputCount carry no UTXO.
 	Inputs           []Opening `json:"inputs"`
 	SenderCommitment Field     `json:"senderCommitment"`
-	Epoch            uint64    `json:"epoch"`
-	FirstContactRoot Field     `json:"firstContactRoot"`
-	// An absent anchor assigns zeros.
-	Anchor *Anchor `json:"anchor,omitempty"`
 }
 
 type Source struct {

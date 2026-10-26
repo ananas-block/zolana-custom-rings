@@ -30,8 +30,6 @@ type auditStatementVector struct {
 	Outputs          []statementOutputVector `json:"outputs"`
 	Disclosure       []string                `json:"disclosure"`
 	PrivateTxHash    string                  `json:"private_tx_hash"`
-	Epoch            uint64                  `json:"epoch"`
-	FirstContactRoot string                  `json:"first_contact_root"`
 	SenderCommitment string                  `json:"sender_commitment"`
 	Elements         []string                `json:"elements"`
 	PublicInputHash  string                  `json:"public_input_hash"`
@@ -41,7 +39,6 @@ type statementOutputVector struct {
 	Kind string `json:"kind"`
 	Hash string `json:"hash"`
 	U    string `json:"u"`
-	Tag  string `json:"tag"`
 	Body string `json:"body"`
 }
 
@@ -68,9 +65,6 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 				if o.U != "" {
 					outputs[i].U = [32]byte(ringtest.VectorBytes(t, o.U, 32))
 				}
-				if o.Tag != "" {
-					outputs[i].Tag = new(big.Int).SetBytes(ringtest.VectorBytes(t, o.Tag, shared.TagLen))
-				}
 				if o.Body != "" {
 					outputs[i].Body = ringtest.VectorBytes(t, o.Body, shared.BodyLen)
 				}
@@ -86,8 +80,6 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 			case "anonymous":
 				elements = ringaudit.AnonymousStatement(t, head, outputs, disclosure, ringaudit.AnonymousTail{
 					PrivateTxHash:    ringtest.VectorField(t, v.PrivateTxHash),
-					Epoch:            v.Epoch,
-					FirstContactRoot: ringtest.VectorField(t, v.FirstContactRoot),
 					SenderCommitment: ringtest.VectorField(t, v.SenderCommitment),
 					PartyIdentities:  [3]*big.Int{ringtest.VectorField(t, v.PartyIdentities[0]), ringtest.VectorField(t, v.PartyIdentities[1]), ringtest.VectorField(t, v.PartyIdentities[2])},
 				})

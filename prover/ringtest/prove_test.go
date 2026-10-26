@@ -15,7 +15,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 )
 
 func TestDeliveredAuditAndMemberPolicyProve(t *testing.T) {
@@ -56,22 +55,16 @@ func TestAuditsPinBlindingAndRingData(t *testing.T) {
 		d.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
 		requireRefused(t, delivered, honest, d.Circuit(t))
 	})
-	t.Run("body naming another blinding", func(t *testing.T) {
-		a := ringaudit.NewAnonymousAudit(t, shape)
-		honest := a.Circuit(t)
-		a.Outputs[0].Body[0] ^= 1
-		requireRefused(t, anonymous, honest, a.Circuit(t))
-	})
-	t.Run("ring data off CRAT", func(t *testing.T) {
+	t.Run("anonymous ring data", func(t *testing.T) {
 		a := ringaudit.NewAnonymousAudit(t, shape)
 		honest := a.Circuit(t)
 		a.Outputs[0].Utxo.RingDataHash = big.NewInt(7)
 		requireRefused(t, anonymous, honest, a.Circuit(t))
 	})
-	t.Run("anchor off the first contact's tag", func(t *testing.T) {
+	t.Run("anonymous blinding off the CRBS seed", func(t *testing.T) {
 		a := ringaudit.NewAnonymousAudit(t, shape)
 		honest := a.Circuit(t)
-		a.Anchor.RingDataHash = ringprotocol.AnonymousRingData(t, a.Anchor.SlotSecret, big.NewInt(7))
+		a.Outputs[0].Utxo.Blinding = big.NewInt(7)
 		requireRefused(t, anonymous, honest, a.Circuit(t))
 	})
 }

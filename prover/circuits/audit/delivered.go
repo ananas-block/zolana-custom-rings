@@ -48,7 +48,7 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	slotBytes := make([][]frontend.Variable, len(c.Outputs))
 	for i, output := range c.Outputs {
 		// 2. Every ring output body opens for the holder of its published recipient key.
-		slots[i] = openDelivered(api, output)
+		slots[i] = openOutput(api, output.Output)
 		d := c.deliver(api, rc, envelope, output, slots[i], recipientKey(api, slots[i], output.RecipientKey), i)
 		// 3. The auditor rebuilds every blinding from tx_viewing_sk, no UTXO carries ring data.
 		c.assertBlinding(api, envelope, output.Output, slots[i], i)

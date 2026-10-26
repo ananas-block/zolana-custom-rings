@@ -66,8 +66,7 @@ func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}, []int{1, 2, 3, 4}},
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}, []int{2}},
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 8}, []int{2}},
-		{audit.AnonymousAuditShape{InputClass: 32, Outputs: 2}, []int{31, 32}},
-		{audit.AnonymousAuditShape{InputClass: 1, Outputs: 16}, []int{1}},
+		{audit.AnonymousAuditShape{InputClass: 16, Outputs: 2}, []int{15, 16}},
 	}
 	for _, shape := range audit.AnonymousEntryShapes {
 		anonymous = append(anonymous, anonymousCounts{shape, []int{2}})

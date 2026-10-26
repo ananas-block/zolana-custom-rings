@@ -41,12 +41,9 @@ var (
 	DeliveredAuditCapacities = [...]int{2, 4, 8, 16}
 	// AnonymousAuditShapes name spent notes by hash and prefix, a transfer takes the smallest class holding its published inputs.
 	AnonymousAuditShapes = [...]AnonymousAuditShape{
-		{InputClass: 4, Outputs: 2}, {InputClass: 8, Outputs: 2}, {InputClass: 12, Outputs: 2},
-		{InputClass: 16, Outputs: 2}, {InputClass: 24, Outputs: 2}, {InputClass: 32, Outputs: 2},
-		{InputClass: 4, Outputs: 4}, {InputClass: 8, Outputs: 4}, {InputClass: 12, Outputs: 4},
-		{InputClass: 16, Outputs: 4}, {InputClass: 24, Outputs: 4},
-		{InputClass: 4, Outputs: 8}, {InputClass: 8, Outputs: 8}, {InputClass: 12, Outputs: 8}, {InputClass: 16, Outputs: 8},
-		{InputClass: 1, Outputs: 16},
+		{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2},
+		{InputClass: 4, Outputs: 4}, {InputClass: 16, Outputs: 4},
+		{InputClass: 4, Outputs: 8}, {InputClass: 8, Outputs: 8},
 	}
 	// AnonymousEntryShapes open every spent UTXO, the keys of a transfer that spends a default-ring note.
 	AnonymousEntryShapes = [...]AnonymousAuditShape{

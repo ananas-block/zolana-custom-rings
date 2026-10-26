@@ -137,7 +137,7 @@
       "inputs": 2,
       "outputs": 4,
       "exits": true,
-      "fields": 16
+      "fields": 17
     },
     {
       "key": "commitment",
@@ -145,31 +145,23 @@
       "inputs": 2,
       "outputs": 8,
       "exits": true,
-      "fields": 28
+      "fields": 30
     },
     {
       "key": "commitment",
-      "class": 32,
-      "inputs": 31,
+      "class": 16,
+      "inputs": 15,
       "outputs": 2,
       "exits": false,
-      "fields": 23
+      "fields": 15
     },
     {
       "key": "commitment",
-      "class": 32,
-      "inputs": 32,
+      "class": 16,
+      "inputs": 16,
       "outputs": 2,
       "exits": false,
-      "fields": 24
-    },
-    {
-      "key": "commitment",
-      "class": 1,
-      "inputs": 1,
-      "outputs": 16,
-      "exits": true,
-      "fields": 52
+      "fields": 16
     },
     {
       "key": "entry",
@@ -185,7 +177,7 @@
       "inputs": 2,
       "outputs": 4,
       "exits": true,
-      "fields": 23
+      "fields": 24
     },
     {
       "key": "entry",
@@ -193,7 +185,7 @@
       "inputs": 2,
       "outputs": 8,
       "exits": true,
-      "fields": 35
+      "fields": 37
     }
   ]
 }

@@ -32,7 +32,7 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 		{"recipient key given as its high-bit alias", func(d *ringaudit.DeliveredAudit) {
 			alias := slot
 			alias.RecipientKey[31] |= 0x80
-			d.Outputs[0] = d.NewRingOutput(t, alias, func(*big.Int) *big.Int { return big.NewInt(0) })
+			d.Outputs[0] = d.NewRingOutput(t, alias)
 		}},
 		{"dense slots with an exit published", func(d *ringaudit.DeliveredAudit) { d.Layout.Exits = false }},
 		{"SeedOut published without an exit", func(d *ringaudit.DeliveredAudit) {
