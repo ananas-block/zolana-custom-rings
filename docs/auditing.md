@@ -37,10 +37,10 @@ auditor opens the body with the X25519 agreement of `tx_viewing_sk` and that
 key, as the recipient does with its own secret, and finds the asset by
 rebuilding the output's hash under every registered asset.
 
-An **anonymous** disclosure serves the anonymous rail. Per ring output it adds
-the key the body is sealed to. That key is an address key or the sender's ring
-change key. The auditor again reads a ring output's blinding and amount from its
-body. The first spent note is disclosed as its UTXO hash and each later spent
+An **anonymous** disclosure serves the anonymous rail. Per output it carries
+the nullifier key, the owner key of a ring output, and the asset and amount of
+every live output. The auditor derives the blinding from `tx_viewing_sk` and
+opens no body. The first spent note is disclosed as its UTXO hash and each later spent
 note as the first 16 bytes of its hash. Every ring note is an output of an
 operation the ring audited, so the auditor already holds the opening of each
 spent note. The proof shows that the hidden owner owns every spent note. The
@@ -121,9 +121,10 @@ earlier pages, to `RingScan::with_known_utxos` or to the `knownUtxos` of
 
 ## Limits
 
-No layout proves an exit's payload, and no proof ties a ring output's recipient
-key to its owner. A sender can send an output its owner cannot decrypt, while
-the auditor still reads it.
+No layout proves an exit's payload. On the delivered rails no proof ties a ring
+output's recipient key to its owner, and on the anonymous rail no proof checks
+a tag or a body. A sender can send an output its owner cannot find or decrypt,
+while the auditor still reads it.
 
 The auditor holds no spending key. A delegate, a separate key, moves notes.
 See [the delegate rail](../README.md#rings-and-rails).

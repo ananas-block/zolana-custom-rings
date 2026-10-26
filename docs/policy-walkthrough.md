@@ -46,7 +46,7 @@ A **live output** is a real output note, not a dummy slot. An **exit** is a live
 | `OutputOwner` | Every live output owner, including change and exits, and every withdrawal owner |
 | `Asset` | Every live output asset and every withdrawn asset |
 
-The **sender commitment** is `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, a hash that hides the anonymous sender's identity. [Hashing](spec/crypto/hashing.md#anonymous-streams)
+The **sender commitment** is `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, a hash that hides the anonymous sender's identity. [Hashing](spec/crypto/hashing.md#slot-secret-and-sender-commitment)
 
 The policy proof does not open the spent notes, so input assets are never screened. A sender rule takes no amount guard (`SenderGuard`, `program-libs/policy/src/rule_table/mod.rs:388`).
 

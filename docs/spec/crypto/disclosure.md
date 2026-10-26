@@ -32,7 +32,7 @@ The delivered key varies exits and key escrow. The anonymous key varies exits an
 | Layout | Fields in order |
 |---|---|
 | Delivered, capacity `c` | `[seed_out if exits]`, `[nullifier_pk × c unless key escrow]`, `pack(slot × c)` with 40-byte slots under exits and 32-byte slots otherwise |
-| Anonymous, commitment key | `[seed_out if exits]`, `nullifier_pk × outputs`, `pack(slot × outputs)` with 64-byte slots, `hash_0`, then the `n - 1` other prefixes in `floor(n / 2)` pairs |
+| Anonymous, commitment key | `[seed_out if exits]`, `nullifier_pk × outputs`, `pack(slot × outputs)` with 72-byte slots, `hash_0`, then the `n - 1` other prefixes in `floor(n / 2)` pairs |
 | Anonymous, entry key | `[seed_out if exits]`, `sender_nullifier_pk`, `nullifier_pk × outputs`, `pack(sender_key \|\| slot × outputs)`, `pack(u64be(amount_i) × 8)` (3 fields), `(asset_i, blinding_i) × n` |
 
 Slot bytes:
@@ -40,9 +40,9 @@ Slot bytes:
 | Layout | Ring output | Exit | Dummy |
 |---|---|---|---|
 | Delivered | `owner_key \|\| 0^8` | `fe32(asset) \|\| u64be(amount)` | zeros |
-| Anonymous | `owner_key \|\| u` | `fe32(asset) \|\| u64be(amount) \|\| 0^24` | zeros |
+| Anonymous | `owner_key \|\| fe32(asset) \|\| u64be(amount)` | `0^32 \|\| fe32(asset) \|\| u64be(amount)` | zeros |
 
-A delivered or anonymous ring output's amount and blinding are in its body, not in the disclosure. The auditor rebuilds the slot secret from `tx_viewing_sk` and the published `u`, and opens the body.
+A delivered ring output's amount and blinding are in its body, not in the disclosure. The auditor rebuilds the slot secret from `tx_viewing_sk` and the published `u`, and opens the body. An anonymous slot opens the asset and the amount of every live output, the auditor derives the blinding, and no anonymous body enters the disclosure.
 
 ## Spent notes on the anonymous rail
 
