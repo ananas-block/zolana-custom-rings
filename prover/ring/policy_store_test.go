@@ -45,7 +45,6 @@ func TestPolicyStoreFixtures(t *testing.T) {
 	members := ringregistry.New(t)
 	for revision := range 3 {
 		entries := []ringregistry.Entry{}
-		writes := []QueueEntry{}
 		ids := []int64{ringpolicy.Bob}
 		value := int64(1)
 		if revision == 0 {
@@ -55,7 +54,6 @@ func TestPolicyStoreFixtures(t *testing.T) {
 		}
 		for _, member := range ids {
 			entries = append(entries, ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(3), Value: big.NewInt(value), EscrowKey: big.NewInt(0)})
-			writes = append(writes, QueueEntry{Member: fi(member), Mask: 3, Value: uint64(value), EscrowKey: fi(0), MintPolicy: fi(0), WithdrawalThreshold: fi(0)})
 		}
 		capacity, circuit := 1, applyKey
 		if revision == 0 {
@@ -65,32 +63,34 @@ func TestPolicyStoreFixtures(t *testing.T) {
 			circuit: circuit, capacity: capacity, members: members, entries: entries,
 			chainStart: spptest.MustHashChain4(t, []*big.Int{big.NewInt(shared.ApplyRecordsDomain), instance, big.NewInt(int64(revision))}),
 		}).request(t)
+		writes := make([]QueueEntry, len(entries))
+		for i, write := range request.Writes[:len(entries)] {
+			writes[i] = write.Entry
+		}
 		vectors["update"+big.NewInt(int64(revision)).String()] = map[string]any{
 			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes,
 		}
 	}
 	const policyKey common.CircuitType = "custom-ring-policy-member-v2-2-w0-own"
-	for reader := range 2 {
-		world := ringpolicy.Confidential()
-		world.OwnOnly, world.KeyEscrow = true, false
-		world.Table.Lists, world.Table.Limits = []uint64{ringregistry.AllowBit, ringregistry.FrozenBit}, nil
-		for member := range world.Own {
-			world.Own[member] = ringpolicy.Record{Lists: ringregistry.AllowBit}
-		}
-		world.Slots[0].Amount += uint64(reader)
-		witness := world.Build(t)
-		witness.Member.RingProgramID = instance
-		for i := range witness.Member.Outputs {
-			witness.Member.Outputs[i].RingProgramID = instance
-		}
-		witness.Rehash(t)
-		if ringtest.AsBigInt(witness.Member.OwnRoot).Cmp(members.Root()) != 0 {
-			t.Fatal("policy and update roots differ")
-		}
-		vectors["reader"+big.NewInt(int64(reader)).String()] = map[string]any{
-			"proof":  prove(policyKey, requestOf[MemberPolicyParams](t, policyKey, witness.Member)),
-			"action": fb(ringtest.AsBigInt(witness.Member.PrivateTxHash)),
-		}
+	world := ringpolicy.Confidential()
+	world.OwnOnly, world.KeyEscrow = true, false
+	world.Table.Lists, world.Table.Limits = []uint64{ringregistry.AllowBit, ringregistry.FrozenBit}, nil
+	for member := range world.Own {
+		world.Own[member] = ringpolicy.Record{Lists: ringregistry.AllowBit}
+	}
+	witness := world.Build(t)
+	witness.Member.RingProgramID = instance
+	for i := range witness.Member.Outputs {
+		witness.Member.Outputs[i].RingProgramID = instance
+	}
+	witness.Rehash(t)
+	if ringtest.AsBigInt(witness.Member.OwnRoot).Cmp(members.Root()) != 0 {
+		t.Fatal("policy and update roots differ")
+	}
+	vectors["reader"] = map[string]any{
+		"proof":  prove(policyKey, requestOf[MemberPolicyParams](t, policyKey, witness.Member)),
+		"action": fb(ringtest.AsBigInt(witness.Member.PrivateTxHash)),
+		"rules":  fieldsOf(ringtest.ToBigInts(witness.Member.Table.Rules[:ringtest.AsBigInt(witness.Member.Table.PolicyLen).Int64()])),
 	}
 	encoded, err := json.MarshalIndent(vectors, "", "  ")
 	if err != nil {
