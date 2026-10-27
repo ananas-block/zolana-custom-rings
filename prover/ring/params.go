@@ -166,7 +166,7 @@ type Withdrawal struct {
 	Amount Field `json:"amount"`
 }
 
-type PolicyParams struct {
+type PolicyInputsParams struct {
 	WithdrawalCount uint8        `json:"withdrawalCount"`
 	WithdrawalHash  Field        `json:"withdrawalHash"`
 	Withdrawals     []Withdrawal `json:"withdrawals"`
@@ -182,6 +182,10 @@ type PolicyParams struct {
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
 	Outputs           []OutputOpening `json:"outputs"`
 	SenderPkHash      Field           `json:"senderPkHash"`
+}
+
+type PolicyParams struct {
+	PolicyInputsParams
 	SenderEntry       Entry           `json:"senderEntry"`
 	// OwnerEntries[o] and AssetEntries[o] open output o's owner and asset.
 	OwnerEntries       []Entry          `json:"ownerEntries"`
@@ -189,19 +193,27 @@ type PolicyParams struct {
 	PublicAssetEntries []*MemberOpening `json:"publicAssetEntries"`
 }
 
-type MemberPolicyParams struct {
+type MemberPolicyInputsParams struct {
 	RequestHead
 	Anonymous        bool  `json:"anonymous"`
 	ApprovalRequired bool  `json:"approvalRequired"`
 	KeyEscrow        bool  `json:"keyEscrow"`
 	Sender           Field `json:"sender"`
 	InputChain       Field `json:"inputChain"`
+}
+
+type MemberPolicyParams struct {
+	MemberPolicyInputsParams
 	PolicyParams
 }
 
-type DelegatePolicyParams struct {
+type DelegatePolicyInputsParams struct {
 	RequestHead
 	Inputs []Opening `json:"inputs"`
+}
+
+type DelegatePolicyParams struct {
+	DelegatePolicyInputsParams
 	PolicyParams
 }
 

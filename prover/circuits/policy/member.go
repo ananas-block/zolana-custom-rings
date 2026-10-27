@@ -14,7 +14,7 @@ import (
 
 var MemberOutputs = [...]int{2, 4, 8, 16}
 
-type MemberPolicyCircuit struct {
+type MemberPolicyValues struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	// Anonymous selects how Sender reads, the owner signer identity or the sender commitment.
 	Anonymous        frontend.Variable
@@ -23,6 +23,10 @@ type MemberPolicyCircuit struct {
 	Sender           frontend.Variable
 	// InputChain stays opaque, the program's sole owner signer or the anonymous audit proof binds every input to the sender.
 	InputChain frontend.Variable
+}
+
+type MemberPolicyCircuit struct {
+	MemberPolicyValues
 	Policy
 }
 
@@ -53,6 +57,10 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	if err := c.validate(); err != nil {
 		return err
 	}
+	return c.define(api, &c.Policy, 2)
+}
+
+func (c *MemberPolicyCircuit) define(api frontend.API, resolver subjectResolver, version int) error {
 	rc := rangecheck.New(api)
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
@@ -63,16 +71,19 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	// 3. One sender, the owner signer, or on an anonymous ring the sender its commitment hides.
 	sender := c.sender(api)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
-	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
-	s := c.resolveSubjects(api, t, sender, payments)
+	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc, version)...)
+	s, err := resolver.resolveSubjects(api, t, sender, payments)
+	if err != nil {
+		return err
+	}
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, payments)
+	c.assertRules(api, cmp, t, s, payments, version)
 	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
-	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, s.mintPolicies[:len(outputs)]))
+	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, s.mintPolicies[:len(outputs)], resolver))
 	// 7. Under key escrow every output owner escrows the output's nullifier key.
 	c.assertEscrow(api, c.KeyEscrow, s.owners, outputs)
 	// 8. The one public input is the statement the program rebuilds.
-	bindStatement(api, c.PublicInputHash, c.Statement())
+	bindStatement(api, c.PublicInputHash, c.statementVersion(c.rail(), version))
 	return nil
 }
 

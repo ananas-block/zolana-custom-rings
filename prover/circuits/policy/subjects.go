@@ -28,7 +28,7 @@ type subjects struct {
 }
 
 // resolveSubjects opens the sender, every UTXO output's owner and, under an asset rule, every UTXO output's asset.
-func (p *Policy) resolveSubjects(api frontend.API, t tableView, sender frontend.Variable, outputs []utxoView) subjects {
+func (p *Policy) resolveSubjects(api frontend.API, t tableView, sender frontend.Variable, outputs []utxoView) (subjects, error) {
 	s := subjects{
 		sender:       p.resolve(api, t.sources, p.SenderEntry, 1, sender),
 		owners:       make([]subjectView, len(outputs)),
@@ -40,7 +40,7 @@ func (p *Policy) resolveSubjects(api frontend.API, t tableView, sender frontend.
 		s.assets[o] = p.resolve(api, t.sources, p.AssetEntries[o], out.utxo, out.asset)
 		s.mintPolicies[o] = decodeMintPolicy(api, s.assets[o].mintPolicy)
 	}
-	return s
+	return s, nil
 }
 
 // resolve opens member in the own registry, and in the curator registry when a list is foreign, while cond holds.
@@ -61,7 +61,7 @@ func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, me
 	return view
 }
 
-func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
+func (p *PolicyInputs) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
 	for o, out := range outputs {
 		escrowed := api.Mul(out.utxo, keyEscrow)
 		key := registry.EscrowKey(api, out.nullifierPk, p.Outputs[o].CtHash)
@@ -78,7 +78,7 @@ func newEntry(ownOnly bool) Entry {
 	return e
 }
 
-func (p *Policy) assertOwnOnly(api frontend.API) {
+func (p *PolicyInputs) assertOwnOnly(api frontend.API) {
 	if !p.OwnOnly {
 		return
 	}
@@ -86,4 +86,14 @@ func (p *Policy) assertOwnOnly(api frontend.API) {
 	for _, source := range p.Sources {
 		api.AssertIsEqual(source.Registry, 0)
 	}
+}
+
+type subjectResolver interface {
+	resolveSubjects(frontend.API, tableView, frontend.Variable, []utxoView) (subjects, error)
+	resolvePublicAsset(frontend.API, frontend.Variable, frontend.Variable, int) mintPolicyWires
+}
+
+func (p *Policy) resolvePublicAsset(api frontend.API, active, asset frontend.Variable, index int) mintPolicyWires {
+	_, _, packed, _ := p.PublicAssetEntries[index].Resolve(api, active, p.OwnRoot, asset)
+	return decodeMintPolicy(api, packed)
 }

@@ -3,6 +3,7 @@ package policy
 import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
 const WithdrawalDomain = 0x43525057 // CRPW
@@ -11,7 +12,7 @@ const WithdrawalDomain = 0x43525057 // CRPW
 // These payments do not enter private_tx_hash, escrow or net outflow a second time.
 type WithdrawalWires struct{ Owner, Asset, Amount frontend.Variable }
 
-func (p *Policy) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []utxoView {
+func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker, version int) []utxoView {
 	count := ringgadget.SelectCount(api, p.WithdrawalCount, 0, len(p.Withdrawals)+1)
 	fields := []frontend.Variable{WithdrawalDomain, p.WithdrawalCount}
 	ends := make([]frontend.Variable, 2+3*len(p.Withdrawals))
@@ -32,6 +33,25 @@ func (p *Policy) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []u
 		ends[4+3*i] = count.OneHot[i+1]
 		payments[i] = utxoView{ownerPkHash: w.Owner, asset: w.Asset, amount: w.Amount, utxo: active}
 	}
-	api.AssertIsEqual(p.WithdrawalHash, ringgadget.HashPrefix4(api, fields, ends))
+	var hash frontend.Variable
+	if version == 2 {
+		hash = ringgadget.HashPrefix4(api, fields, ends)
+	} else {
+		hash = paddedWithdrawalHash(api, fields, count.OneHot)
+	}
+	api.AssertIsEqual(p.WithdrawalHash, hash)
 	return payments
+}
+
+func paddedWithdrawalHash(api frontend.API, fields, counts []frontend.Variable) frontend.Variable {
+	head, selected := frontend.Variable(fields[0]), frontend.Variable(0)
+	for i, active := range counts {
+		group := []frontend.Variable{head, 0, 0, 0}
+		start := 1 + 3*i
+		copy(group[1:], fields[start:min(start+3, len(fields))])
+		// Inactive withdrawal fields supply the selected block's zero padding.
+		head = gadget.PoseidonHash(api, group)
+		selected = api.Add(selected, api.Mul(active, head))
+	}
+	return selected
 }
