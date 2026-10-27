@@ -445,7 +445,8 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
         response.value.skipped[0].reason,
         SkippedReason::InvalidAuditData
     );
-    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    // One timed read at the page start.
+    assert_eq!(reads.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
