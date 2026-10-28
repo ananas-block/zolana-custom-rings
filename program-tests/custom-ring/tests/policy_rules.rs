@@ -20,9 +20,9 @@ use custom_ring_test_validator::{
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
+use spr_transaction::Utxo;
 use zolana_ring_client::{AuditedTransaction, OutputOpening, RingConfidentialScan, RingScan};
 use zolana_ring_policy::{ListId, Member};
-use spr_transaction::Utxo;
 
 /// `RELEASED` as `ring.toml` spells it.
 const RELEASED_TOML: &str = r#"[policy]

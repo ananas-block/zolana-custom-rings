@@ -4,9 +4,9 @@ use anyhow::Result;
 use solana_address::Address;
 use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
 use spr_keypair::ShieldedKeypair;
+use spr_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 use zolana_ring_client::{AnonymousSync, RingConfidentialScan, ViewingHistory};
 use zolana_ring_transaction::RingAssets;
-use spr_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
 use crate::shared::TestEnv;
 

@@ -101,16 +101,6 @@ use spr_program::instruction::{
     TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts, UpdateRingConfig,
 };
 use spr_program_test::Rejection;
-use zolana_ring_client::{
-    auditor_view_tag,
-    rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
-};
-use zolana_ring_keys::{RingAddress, RingPaymentRequest};
-use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
-use zolana_ring_rpc::{
-    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
-};
 use spr_test_utils::wallet::Wallet;
 use spr_test_utils::{
     localnet::isolated_temp_path,
@@ -128,6 +118,16 @@ use spr_transaction::{
 };
 use spr_tree::TreeAccount;
 use spr_user_registry_interface::user_registry_program_id;
+use zolana_ring_client::{
+    auditor_view_tag,
+    rpc::{write_auditor_key, CreateAuditorKeyRequest},
+    AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
+};
+use zolana_ring_keys::{RingAddress, RingPaymentRequest};
+use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
+use zolana_ring_rpc::{
+    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
+};
 
 /// Lamports moved by the two transaction-shape probes. Small enough that the
 /// payer's airdrop covers both plus fees.
@@ -447,14 +447,7 @@ impl Note<'_> {
             data: Data::default(),
         };
         if self.ring_program_id == Some(FOREIGN_RING) {
-            return spr_test_utils::utxo::wallet(
-                utxo,
-                &self.owner.nullifier_key,
-                0,
-                0,
-                None,
-                None,
-            );
+            return spr_test_utils::utxo::wallet(utxo, &self.owner.nullifier_key, 0, 0, None, None);
         }
         indexed_note(utxo, self.owner, env, env.tree)
     }

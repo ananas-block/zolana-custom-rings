@@ -118,7 +118,7 @@ export async function syncRingWallet(
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const spends: IndexedShieldedTransaction[] = [];
-    for (let frontier = fresh; frontier.length > 0; ) {
+    for (let frontier = fresh; frontier.length > 0;) {
       const read = await spendingTransactions(
         client,
         frontier.map((entry) => entry.nullifier),

@@ -43,9 +43,6 @@ use spr_program_test::{
     create_tree_instructions,
     localnet::{LocalnetPorts, LocalnetValidator, UpgradeableProgram},
 };
-use zolana_ring_client::{MemberOpeningRead, RingConfidentialScan};
-use zolana_ring_policy::{ListId, Member, RuleTable};
-use zolana_ring_transaction::RingAssets;
 use spr_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
 use spr_test_utils::{
     localnet::{isolated_temp_path, localnet_indexer_url, localnet_rpc_url, WorkspaceArtifacts},
@@ -55,6 +52,9 @@ use spr_test_utils::{
 };
 use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction};
 use spr_user_registry_interface::user_registry_program_id;
+use zolana_ring_client::{MemberOpeningRead, RingConfidentialScan};
+use zolana_ring_policy::{ListId, Member, RuleTable};
+use zolana_ring_transaction::RingAssets;
 
 use crate::ring_indexer::RingIndexerLaunch;
 
@@ -241,8 +241,7 @@ impl WalletSync<'_> {
         let authority = KeypairWalletAuthority::new(Address::default(), self.keys);
         self.wallet
             .sync(&authority, self.transactions, 0, DEFAULT_TAG_WINDOW)?;
-        let notes = RingConfidentialScan::new(self.keys, self.assets)
-            .open(self.transactions)?;
+        let notes = RingConfidentialScan::new(self.keys, self.assets).open(self.transactions)?;
         for utxo in notes.owned.utxos {
             if !self
                 .wallet
@@ -512,9 +511,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         programs: vec![
             (
                 user_registry_program_id(),
-                artifacts
-                    .path("target/deploy/spr_user_registry.so")
-                    .into(),
+                artifacts.path("target/deploy/spr_user_registry.so").into(),
             ),
             (
                 smart_account,

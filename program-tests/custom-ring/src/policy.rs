@@ -19,10 +19,10 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
-use zolana_ring_client::ViewingHistory;
-use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
+use zolana_ring_client::ViewingHistory;
+use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
 
 use crate::shared::{
     custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, TestEnv, Tier,

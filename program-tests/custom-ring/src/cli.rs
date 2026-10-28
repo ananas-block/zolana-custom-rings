@@ -11,8 +11,8 @@ use custom_ring_sdk::CustomRing;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use spr_keypair::ShieldedKeypair;
-use zolana_ring_policy::ListId;
 use spr_test_utils::localnet::isolated_temp_path;
+use zolana_ring_policy::ListId;
 
 use crate::{
     policy::{owner_member, wait_for_list},

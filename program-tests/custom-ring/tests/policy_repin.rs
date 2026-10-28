@@ -17,8 +17,8 @@ use custom_ring_test_validator::{
 use solana_signer::Signer;
 use spr_keypair::ShieldedKeypair;
 use spr_program_test::Rejection;
-use zolana_ring_policy::ListId;
 use spr_transaction::Utxo;
+use zolana_ring_policy::ListId;
 
 /// A local ring rpc, `init` reads the auditor key file and contacts nothing.
 const RING_RPC: &str = "http://127.0.0.1:1";
