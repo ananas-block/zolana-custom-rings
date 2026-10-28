@@ -36,22 +36,26 @@ func NewSharedQuadProof(openings int) (SharedQuadProof, error) {
 	return proof, nil
 }
 
-func (p SharedQuadProof) AssertLeaves(api frontend.API, root frontend.Variable, leaves []frontend.Variable) error {
-	return p.AssertLeavesWhen(api, 1, root, leaves)
+const muxCanopyLimit = 16
+
+func (p SharedQuadProof) AssertLeaves(api frontend.API, root frontend.Variable, leaves []frontend.Variable) {
+	p.AssertLeavesWhen(api, 1, root, leaves)
 }
 
-func (p SharedQuadProof) AssertLeavesWhen(api frontend.API, active, root frontend.Variable, leaves []frontend.Variable) error {
-	if err := p.validate(len(leaves)); err != nil {
-		return err
+// AssertLeavesWhen panics on a shape Validate refuses.
+func (p SharedQuadProof) AssertLeavesWhen(api frontend.API, active, root frontend.Variable, leaves []frontend.Variable) {
+	if err := p.Validate(len(leaves)); err != nil {
+		panic(err)
 	}
 	api.AssertIsBoolean(active)
 	api.AssertIsEqual(api.Mul(active, api.Sub(canopyRoot(api, p.Canopy), root)), 0)
-	if len(p.Canopy) <= 16 {
+	if len(p.Canopy) <= muxCanopyLimit {
 		for i, path := range p.Paths {
 			node := path.root(api, leaves[i])
+			// Ungated, an inactive pool's canopy is prover-chosen and always admits its paths.
 			api.AssertIsEqual(selector.BinaryMux(api, node.bits, p.Canopy), node.value)
 		}
-		return nil
+		return
 	}
 	table := logderivlookup.New(api)
 	for _, node := range p.Canopy {
@@ -61,7 +65,6 @@ func (p SharedQuadProof) AssertLeavesWhen(api frontend.API, active, root fronten
 		node := path.root(api, leaves[i])
 		api.AssertIsEqual(table.Lookup(api.FromBinary(node.bits...))[0], node.value)
 	}
-	return nil
 }
 
 type canopyNode struct {
@@ -74,7 +77,7 @@ func (p SharedQuadPath) root(api frontend.API, leaf frontend.Variable) canopyNod
 	return canopyNode{bits: bits[2*len(p.Siblings):], value: foldQuadPath(api, p.Siblings, bits, leaf)}
 }
 
-func (p SharedQuadProof) validate(count int) error {
+func (p SharedQuadProof) Validate(count int) error {
 	if len(p.Paths) == 0 || len(p.Paths) != count {
 		return fmt.Errorf("registry shared opening count mismatch")
 	}

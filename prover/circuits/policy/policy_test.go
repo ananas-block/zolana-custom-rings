@@ -151,8 +151,8 @@ var refusals = []struct {
 	wide    bool
 }{
 	{name: "owner record claiming a list it lacks", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) {
-		b.Policy().OwnerEntries[0].Own.Lists = ringregistry.AllowBit | ringregistry.BlockBit
-	}, in: "registry.QuadOpening.Resolve", wide: true},
+		b.OwnRecord(b.Policy().OwnerEntries[0]).Lists = ringregistry.AllowBit | ringregistry.BlockBit
+	}, in: "registry.SharedQuadProof.AssertLeavesWhen", wide: true},
 	{name: "public deposit above the outflow to others", honest: deposited, world: func(w *ringpolicy.World) { w.Public[0].Amount = 400 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
 	{name: "dummy amount covering a public deposit", honest: dummyDeposit, world: func(w *ringpolicy.World) { w.Public[0].Amount = 150 }, in: "policy.(*PolicyInputs).constrainOutflow"},
 	{name: "withdrawal past the cap", honest: withdrawn, world: func(w *ringpolicy.World) { w.Public[0].Amount = -800 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
@@ -198,7 +198,7 @@ var refusals = []struct {
 	{name: "opening under another root", honest: ringpolicy.Confidential, witness: func(t testing.TB, b ringpolicy.Witness) {
 		b.Policy().OwnRoot = 5
 		b.Rebind(t)
-	}, in: "registry.QuadOpening.Resolve"},
+	}, in: "registry.SharedQuadProof.AssertLeavesWhen"},
 	{name: "curator root outside the statement", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) { b.Policy().CuratorRoot = 5 }, in: "policy.bindStatement"},
 }
 
@@ -349,7 +349,7 @@ func policyKeys() []policyKey {
 	for _, width := range delegateWidths {
 		shape := transaction.Shape{NInputs: width, NOutputs: width}
 		keys = append(keys, policyKey{
-			name:    fmt.Sprintf("custom_ring_policy_delegate_v2_%dx%d_curator", width, width),
+			name:    fmt.Sprintf("custom_ring_policy_delegate_v3_%dx%d_curator", width, width),
 			budget:  budget(delegateBudget, width),
 			circuit: delegate(shape),
 			honest:  func() ringpolicy.World { return ringpolicy.Delegate(shape) },
@@ -359,15 +359,19 @@ func policyKeys() []policyKey {
 }
 
 func memberKeyName(outputs int) string {
-	return fmt.Sprintf("custom_ring_policy_member_v2_%d_w0_curator", outputs)
+	return fmt.Sprintf("custom_ring_policy_member_v3_%d_w0_curator", outputs)
 }
 
 func member(outputs int) func() (frontend.Circuit, error) {
-	return func() (frontend.Circuit, error) { return policy.NewMemberPolicyCircuit(outputs) }
+	return func() (frontend.Circuit, error) {
+		return policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: outputs})
+	}
 }
 
 func delegate(shape transaction.Shape) func() (frontend.Circuit, error) {
-	return func() (frontend.Circuit, error) { return policy.NewDelegatePolicyCircuit(shape) }
+	return func() (frontend.Circuit, error) {
+		return policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: shape})
+	}
 }
 
 func requireCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b ringpolicy.Witness) {
@@ -473,7 +477,7 @@ func TestMintThresholdsAndOutflowHaveNoEightRecordLimit(t *testing.T) {
 	})
 	t.Run("settings cannot be forged", func(t *testing.T) {
 		b := world().Build(t)
-		b.Member.AssetEntries[0].Own.MintPolicy = 0
+		b.OwnRecord(b.Member.AssetEntries[0]).MintPolicy = 0
 		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
 			t.Fatal("forged settings admitted")
 		}

@@ -29,10 +29,7 @@ type poolQueryWires struct {
 }
 
 func (c *recordPoolCircuit) Define(api frontend.API) error {
-	pool, err := openRecordPool(api, c.Active, c.Root, c.Records, c.Proof)
-	if err != nil {
-		return err
-	}
+	pool := openRecordPool(api, c.Active, c.Root, c.Records, c.Proof)
 	for _, q := range c.Queries {
 		v := pool.resolve(api, recordQuery{active: q.Active, member: q.Member, index: q.Index})
 		api.AssertIsEqual(api.FromBinary(v.onList[:]...), q.Lists)

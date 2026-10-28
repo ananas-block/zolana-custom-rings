@@ -6,16 +6,15 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/frontend"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 )
 
 func TestPooledPolicyGroth16(t *testing.T) {
 	for _, world := range []ringpolicy.World{curated(), ringpolicy.Anonymous(), delegate2()} {
-		pooled := world.Build(t).Pooled(t, policy.RecordPoolShape{})
+		pooled := world.Build(t)
 		assignment := pooled.Assignment()
-		schema := world.Build(t).Pooled(t, policy.RecordPoolShape{})
+		schema := world.Build(t)
 		cs := ringkey.Compile(t, schema.Assignment())
 		pk, vk, err := groth16.Setup(cs)
 		if err != nil {

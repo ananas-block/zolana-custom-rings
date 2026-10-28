@@ -22,7 +22,8 @@ type sharedPathCircuit struct {
 }
 
 func (c *sharedPathCircuit) Define(api frontend.API) error {
-	return c.Proof.AssertLeaves(api, c.Root, c.Leaves)
+	c.Proof.AssertLeaves(api, c.Root, c.Leaves)
+	return nil
 }
 
 func sharedCircuit(t *testing.T, count int) *sharedPathCircuit {
@@ -242,7 +243,8 @@ type conditionalSharedCircuit struct {
 }
 
 func (c *conditionalSharedCircuit) Define(api frontend.API) error {
-	return c.Path.Proof.AssertLeavesWhen(api, c.Active, c.Path.Root, c.Path.Leaves)
+	c.Path.Proof.AssertLeavesWhen(api, c.Active, c.Path.Root, c.Path.Leaves)
+	return nil
 }
 
 func TestSharedQuadProofConditionalRoot(t *testing.T) {

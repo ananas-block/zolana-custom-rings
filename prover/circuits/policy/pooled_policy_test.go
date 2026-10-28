@@ -23,32 +23,12 @@ func TestPooledPolicyModes(t *testing.T) {
 			}
 			world.OwnOnly = own
 			t.Run(fmt.Sprintf("%d-own%v", i, own), func(t *testing.T) {
-				b := world.Build(t).Pooled(t, policy.RecordPoolShape{})
+				b := world.Build(t)
 				if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
 					t.Fatal(err)
 				}
 			})
 		}
-	}
-}
-
-func TestPooledPolicyRetainsRefusals(t *testing.T) {
-	for _, refusal := range refusals {
-		if refusal.world == nil {
-			continue
-		}
-		t.Run(refusal.name, func(t *testing.T) {
-			w := refusal.honest()
-			honest := w.Build(t).Pooled(t, policy.RecordPoolShape{})
-			if err := test.IsSolved(honest.Assignment(), honest.Assignment(), ecc.BN254.ScalarField()); err != nil {
-				t.Fatal(err)
-			}
-			refusal.world(&w)
-			bad := w.Build(t).Pooled(t, policy.RecordPoolShape{})
-			if test.IsSolved(bad.Assignment(), bad.Assignment(), ecc.BN254.ScalarField()) == nil {
-				t.Fatal("refused policy solved")
-			}
-		})
 	}
 }
 
@@ -64,15 +44,15 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 						capacity.Curator = 3
 					}
 				}
-				c, err := policy.NewMemberPolicyCircuitV3(policy.MemberShapeV3{MemberShape: shape, Records: capacity})
+				shape.Records = capacity
+				c, err := policy.NewMemberPolicyCircuit(shape)
 				if err != nil {
 					t.Fatal(err)
 				}
 				cs := ringkey.Compile(t, c)
-				repeated := poolWorld(shape, false, false).Build(t).Pooled(t, capacity)
-				requirePooledCompiledSolved(t, cs, repeated)
+				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, false).Build(t))
 				if !compact {
-					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, false).Build(t).Pooled(t, capacity))
+					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, false).Build(t))
 				}
 				t.Logf("member-%d-w%d-own%v capacity=%d/%d constraints=%d", shape.Outputs, shape.Withdrawals, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
 			}
@@ -86,15 +66,15 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 						capacity.Curator = 3
 					}
 				}
-				c, err := policy.NewDelegatePolicyCircuitV3(policy.DelegateShapeV3{DelegateShape: policy.DelegateShape{Shape: transaction.Shape{NInputs: width, NOutputs: width}, OwnOnly: own}, Records: capacity})
+				c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: transaction.Shape{NInputs: width, NOutputs: width}, OwnOnly: own, Records: capacity})
 				if err != nil {
 					t.Fatal(err)
 				}
 				cs := ringkey.Compile(t, c)
-				shape := policy.MemberShape{Outputs: width, OwnOnly: own}
-				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, true).Build(t).Pooled(t, capacity))
+				shape := policy.MemberShape{Outputs: width, OwnOnly: own, Records: capacity}
+				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, true).Build(t))
 				if !compact {
-					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, true).Build(t).Pooled(t, capacity))
+					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, true).Build(t))
 				}
 				t.Logf("delegate-%dx%d-own%v capacity=%d/%d constraints=%d", width, width, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
 			}
@@ -102,7 +82,7 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 	}
 }
 
-func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b ringpolicy.PooledWitness) {
+func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b ringpolicy.Witness) {
 	t.Helper()
 	commitments, ok := cs.GetCommitments().(constraint.Groth16Commitments)
 	if !ok || len(commitments) != 1 || commitments[0].NbPublicCommitted != 0 {
@@ -119,7 +99,7 @@ func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b
 
 func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.World {
 	w := ringpolicy.Confidential()
-	w.Outputs, w.WithdrawalCapacity, w.OwnOnly = shape.Outputs, shape.Withdrawals, shape.OwnOnly
+	w.Outputs, w.WithdrawalCapacity, w.OwnOnly, w.Records = shape.Outputs, shape.Withdrawals, shape.OwnOnly, shape.Records
 	w.Table.Limits = nil
 	w.Table.Rules = append(w.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
 	w.Slots, w.Withdrawals = nil, nil
@@ -170,24 +150,25 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(*policy.PolicyV3)
+		mutate func(*policy.Policy)
 	}{
-		{"sender subject", func(p *policy.PolicyV3) { p.SenderEntry.Own = 1 }},
-		{"owner subject", func(p *policy.PolicyV3) { p.OwnerEntries[1].Own = 0 }},
-		{"asset subject", func(p *policy.PolicyV3) { p.AssetEntries[1].Own = 0 }},
-		{"public subject", func(p *policy.PolicyV3) { p.PublicAssetEntries[0] = 0 }},
-		{"withdrawal subject", func(p *policy.PolicyV3) { p.OwnerEntries[2].Own = 0 }},
-		{"curator subject", func(p *policy.PolicyV3) { p.OwnerEntries[1].Curator[0] = 0 }},
-		{"subject member", func(p *policy.PolicyV3) { p.OwnSubjects[1].Member = ringpolicy.Sender }},
-		{"subject raw record", func(p *policy.PolicyV3) { p.OwnSubjects[1].RecordIndex = 0 }},
-		{"subject index outside pool", func(p *policy.PolicyV3) { p.OwnerEntries[1].Own = 3 }},
-		{"raw record index outside pool", func(p *policy.PolicyV3) { p.OwnSubjects[1].RecordIndex = 3 }},
+		{"sender subject", func(p *policy.Policy) { p.SenderEntry.Own = 1 }},
+		{"owner subject", func(p *policy.Policy) { p.OwnerEntries[1].Own = 0 }},
+		{"asset subject", func(p *policy.Policy) { p.AssetEntries[1].Own = 0 }},
+		{"public subject", func(p *policy.Policy) { p.PublicAssetEntries[0] = 0 }},
+		{"withdrawal subject", func(p *policy.Policy) { p.OwnerEntries[2].Own = 0 }},
+		{"curator subject", func(p *policy.Policy) { p.OwnerEntries[1].Curator[0] = 0 }},
+		{"subject member", func(p *policy.Policy) { p.OwnSubjects[1].Member = ringpolicy.Sender }},
+		{"subject raw record", func(p *policy.Policy) { p.OwnSubjects[1].RecordIndex = 0 }},
+		{"subject index outside pool", func(p *policy.Policy) { p.OwnerEntries[1].Own = 3 }},
+		{"raw record index outside pool", func(p *policy.Policy) { p.OwnSubjects[1].RecordIndex = 3 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 1}, false, false)
 			w.KeyEscrow = false
-			b := w.Build(t).Pooled(t, policy.RecordPoolShape{Own: 3, Curator: 3})
+			w.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
+			b := w.Build(t)
 			if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +182,7 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 
 func TestPooledPolicyRejectsCapacityOverflow(t *testing.T) {
 	for _, capacity := range []policy.RecordPoolShape{{Own: -1}, {Own: int(^uint(0) >> 1)}, {Curator: -1}, {Curator: int(^uint(0) >> 1)}, {OwnSubjects: -1}, {OwnSubjects: int(^uint(0) >> 1)}, {CuratorSubjects: -1}, {CuratorSubjects: int(^uint(0) >> 1)}} {
-		if _, err := policy.NewMemberPolicyCircuitV3(policy.MemberShapeV3{MemberShape: policy.MemberShape{Outputs: 2}, Records: capacity}); err == nil {
+		if _, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: capacity}); err == nil {
 			t.Fatal("invalid capacity accepted")
 		}
 	}
@@ -212,8 +193,9 @@ func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
 	w.KeyEscrow = false
 	w.Own, w.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
 	w.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
-	b := w.Build(t).Pooled(t, policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5})
-	c, err := policy.NewMemberPolicyCircuitV3(policy.MemberShapeV3{MemberShape: policy.MemberShape{Outputs: 2}, Records: policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}})
+	w.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}
+	b := w.Build(t)
+	c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: w.Records})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,18 +203,9 @@ func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
 	requirePooledCompiledSolved(t, cs, b)
 }
 
-func TestPooledPolicyBindsVersion(t *testing.T) {
-	old := ringpolicy.Confidential().Build(t)
-	b := old.Pooled(t, policy.RecordPoolShape{})
-	b.Member.PublicInputHash = old.Member.PublicInputHash
-	if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
-		t.Fatal("v2 statement accepted by v3 circuit")
-	}
-}
-
 func TestPooledPolicyDistinctWithdrawalCapacity(t *testing.T) {
 	w := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 2}, true, false)
-	b := w.Build(t).Pooled(t, policy.RecordPoolShape{})
+	b := w.Build(t)
 	if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
 		t.Fatal(err)
 	}

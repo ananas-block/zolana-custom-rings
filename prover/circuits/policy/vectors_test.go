@@ -253,14 +253,14 @@ func (v statementVector) circuits(t *testing.T) (frontend.Circuit, frontend.Circ
 	b.Rebind(t)
 	if delegated {
 		v.requireHostStatement(t, b.Delegate.PublicInputHash)
-		skeleton, err := policy.NewDelegatePolicyCircuit(w.Shape)
+		skeleton, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: w.Shape})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return &delegateStatementCircuit{*skeleton}, &delegateStatementCircuit{*b.Delegate}
 	}
 	v.requireHostStatement(t, b.Member.PublicInputHash)
-	skeleton, err := policy.NewMemberPolicyCircuit(w.Outputs)
+	skeleton, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: w.Outputs})
 	if err != nil {
 		t.Fatal(err)
 	}

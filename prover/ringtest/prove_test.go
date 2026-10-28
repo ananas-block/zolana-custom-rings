@@ -23,7 +23,7 @@ func TestDeliveredAuditAndMemberPolicyProve(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireProves(t, delivered, ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
-	member, err := policy.NewMemberPolicyCircuit(2)
+	member, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

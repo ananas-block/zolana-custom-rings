@@ -36,24 +36,23 @@ type recordPool struct {
 	table  *lookup.Table
 }
 
-func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof) (recordPool, error) {
+func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof) recordPool {
 	api.AssertIsBoolean(active)
 	pool := recordPool{active: active, table: lookup.New(api, 6+NSources)}
 	leaves := make([]frontend.Variable, len(records))
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
+		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
 		bits := api.ToBinary(record.Lists, registry.ListBits)
-		policy := decodePooledMintPolicy(api, record.MintPolicy)
+		policy := decodeMintPolicy(api, record.MintPolicy)
 		row := []frontend.Variable{record.Member, record.Next, record.EscrowKey, policy.threshold, policy.cap, policy.cosignAbove}
 		pool.table.Insert(append(row, bits[:NSources]...))
 	}
-	if err := proof.AssertLeavesWhen(api, active, root, leaves); err != nil {
-		return recordPool{}, err
-	}
-	return pool, nil
+	proof.AssertLeavesWhen(api, active, root, leaves)
+	return pool
 }
 
-func decodePooledMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {
+func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {
 	limbs, err := api.Compiler().NewHint(rangecheck.DecomposeHint, 3, 192, 64, packed)
 	if err != nil {
 		panic(err)

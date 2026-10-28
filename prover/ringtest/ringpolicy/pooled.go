@@ -9,15 +9,10 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-type PooledWitness struct {
-	Member   *policy.MemberPolicyCircuitV3
-	Delegate *policy.DelegatePolicyCircuitV3
-}
-
 type recordCollector struct {
+	tree           *ringregistry.Registry
 	records        []circuitregistry.Record
 	leafIndices    []uint64
 	indices        map[string]int
@@ -25,89 +20,57 @@ type recordCollector struct {
 	subjectIndices map[string]int
 }
 
-func (b Witness) Pooled(t testing.TB, capacity policy.RecordPoolShape) PooledWitness {
+// OwnRecord is the own pool record entry resolves to.
+func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
+	p := b.Policy()
+	subject := p.OwnSubjects[ringtest.AsBigInt(entry.Own).Int64()]
+	return &p.OwnRecords[ringtest.AsBigInt(subject.RecordIndex).Int64()]
+}
+
+// pool opens every live subject once, each record once, and fills the pools cyclically to capacity.
+func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry) {
 	t.Helper()
-	old := b.Policy()
-	var pooled PooledWitness
-	if b.Member != nil {
-		c, err := policy.NewMemberPolicyCircuitV3(policy.MemberShapeV3{MemberShape: policy.MemberShape{Outputs: len(old.Outputs), Withdrawals: len(old.Withdrawals), OwnOnly: old.OwnOnly}, Records: capacity})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.MemberPolicyValues = b.Member.MemberPolicyValues
-		pooled.Member = c
-	} else {
-		c, err := policy.NewDelegatePolicyCircuitV3(policy.DelegateShapeV3{DelegateShape: policy.DelegateShape{Shape: transaction.Shape{NInputs: len(b.Delegate.Inputs), NOutputs: len(old.Outputs)}, OwnOnly: old.OwnOnly}, Records: capacity})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.DelegatePolicyValues = b.Delegate.DelegatePolicyValues
-		pooled.Delegate = c
-	}
-	p := pooled.Policy()
-	p.PolicyInputs = old.PolicyInputs
-	own, curator := recordCollector{indices: map[string]int{}, subjectIndices: map[string]int{}}, recordCollector{indices: map[string]int{}, subjectIndices: map[string]int{}}
+	p := b.Policy()
+	own, curator := newCollector(ownTree), newCollector(curatorTree)
 	foreign := false
 	for _, source := range p.Sources {
 		foreign = foreign || ringtest.AsBigInt(source.Registry).Sign() != 0
 	}
-	entry := func(member frontend.Variable, active bool, opening policy.Entry) policy.PoolEntry {
-		e := policy.PoolEntry{Own: own.add(member, active, opening.Own)}
+	entry := func(member frontend.Variable, active bool) policy.PoolEntry {
+		e := policy.PoolEntry{Own: own.add(member, active)}
 		if !p.OwnOnly {
-			e.Curator = []frontend.Variable{curator.add(member, active && foreign, opening.Curator[0])}
+			e.Curator = []frontend.Variable{curator.add(member, active && foreign)}
 		}
 		return e
 	}
-	p.SenderEntry = entry(old.SenderPkHash, true, old.SenderEntry)
+	p.SenderEntry = entry(p.SenderPkHash, true)
 	for i, out := range p.Outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
-		p.OwnerEntries[i] = entry(out.OwnerPkHash, active, old.OwnerEntries[i])
-		p.AssetEntries[i] = entry(out.Asset, active, old.AssetEntries[i])
+		p.OwnerEntries[i], p.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
 	}
 	for i, out := range p.Withdrawals {
 		active := int64(i) < ringtest.AsBigInt(p.WithdrawalCount).Int64()
 		index := len(p.Outputs) + i
-		p.OwnerEntries[index] = entry(out.Owner, active, old.OwnerEntries[index])
-		p.AssetEntries[index] = entry(out.Asset, active, old.AssetEntries[index])
+		p.OwnerEntries[index], p.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
 	}
-	for i, asset := range p.PublicAssets {
-		p.PublicAssetEntries[i] = own.add(asset, b.Member != nil && ringtest.AsBigInt(asset).Sign() != 0, old.PublicAssetEntries[i])
+	for i := range p.PublicAssetEntries {
+		asset := p.PublicAssets[i]
+		p.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
 	if len(curator.records) == 0 && !p.OwnOnly {
-		curator.add(old.SenderPkHash, true, old.SenderEntry.Curator[0])
+		curator.add(p.SenderPkHash, true)
 	}
-	p.OwnProof = own.fill(t, p.OwnRecords, p.OwnSubjects, b.ownRegistry)
+	p.OwnProof = own.fill(t, p.OwnRecords, p.OwnSubjects)
 	if !p.OwnOnly {
-		p.CuratorProof = curator.fill(t, p.CuratorRecords, p.CuratorSubjects, b.curatorRegistry)
-	}
-	pooled.Rebind(t)
-	return pooled
-}
-
-func (b PooledWitness) Policy() *policy.PolicyV3 {
-	if b.Member != nil {
-		return &b.Member.PolicyV3
-	}
-	return &b.Delegate.PolicyV3
-}
-
-func (b PooledWitness) Assignment() frontend.Circuit {
-	if b.Member != nil {
-		return b.Member
-	}
-	return b.Delegate
-}
-
-func (b PooledWitness) Rebind(t testing.TB) {
-	t.Helper()
-	if b.Member != nil {
-		b.Member.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Member.Statement()))
-	} else {
-		b.Delegate.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Delegate.Statement()))
+		p.CuratorProof = curator.fill(t, p.CuratorRecords, p.CuratorSubjects)
 	}
 }
 
-func (c *recordCollector) add(member frontend.Variable, active bool, opening circuitregistry.QuadOpening) int {
+func newCollector(tree *ringregistry.Registry) *recordCollector {
+	return &recordCollector{tree: tree, indices: map[string]int{}, subjectIndices: map[string]int{}}
+}
+
+func (c *recordCollector) add(member frontend.Variable, active bool) int {
 	if !active {
 		return 0
 	}
@@ -115,6 +78,7 @@ func (c *recordCollector) add(member frontend.Variable, active bool, opening cir
 	if index, ok := c.subjectIndices[subjectKey]; ok {
 		return index
 	}
+	opening := c.tree.Opening(ringtest.AsBigInt(member)).Wires()
 	key := ringtest.AsBigInt(opening.Path.Index).String()
 	recordIndex, ok := c.indices[key]
 	if !ok {
@@ -133,7 +97,7 @@ func (c *recordCollector) add(member frontend.Variable, active bool, opening cir
 	return index
 }
 
-func (c recordCollector) fill(t testing.TB, target []circuitregistry.Record, subjects []policy.PoolSubject, tree *ringregistry.Registry) circuitregistry.SharedQuadProof {
+func (c *recordCollector) fill(t testing.TB, target []circuitregistry.Record, subjects []policy.PoolSubject) circuitregistry.SharedQuadProof {
 	t.Helper()
 	if len(c.records) > len(target) {
 		t.Fatalf("pool needs %d records with capacity %d", len(c.records), len(target))
@@ -149,7 +113,7 @@ func (c recordCollector) fill(t testing.TB, target []circuitregistry.Record, sub
 		target[i] = c.records[i%len(c.records)]
 		indices[i] = c.leafIndices[i%len(c.leafIndices)]
 	}
-	proof, err := tree.SharedProof(indices)
+	proof, err := c.tree.SharedProof(indices)
 	if err != nil {
 		t.Fatal(err)
 	}

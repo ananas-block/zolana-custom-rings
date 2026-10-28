@@ -71,7 +71,7 @@ func TestPolicyStoreFixtures(t *testing.T) {
 			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes,
 		}
 	}
-	const policyKey common.CircuitType = "custom-ring-policy-member-v2-2-w0-own"
+	const policyKey common.CircuitType = "custom-ring-policy-member-v3-2-w0-own"
 	world := ringpolicy.Confidential()
 	world.OwnOnly, world.KeyEscrow = true, false
 	world.Table.Lists, world.Table.Limits = []uint64{ringregistry.AllowBit, ringregistry.FrozenBit}, nil

@@ -123,11 +123,6 @@ type MemberOpening struct {
 	LowWithdrawalThreshold Field  `json:"lowWithdrawalThreshold"`
 }
 
-type Entry struct {
-	Own     *MemberOpening `json:"own"`
-	Curator *MemberOpening `json:"curator"`
-}
-
 type Withdrawal struct {
 	Owner  Field `json:"owner"`
 	Asset  Field `json:"asset"`
@@ -152,13 +147,49 @@ type PolicyInputsParams struct {
 	SenderPkHash      Field           `json:"senderPkHash"`
 }
 
+type PooledRecord struct {
+	Member              Field  `json:"member"`
+	Next                Field  `json:"next"`
+	Lists               uint64 `json:"lists"`
+	EscrowKey           Field  `json:"escrowKey"`
+	MintPolicy          Field  `json:"mintPolicy"`
+	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+}
+
+type PooledSubject struct {
+	Member      Field  `json:"member"`
+	RecordIndex uint32 `json:"recordIndex"`
+}
+
+type PooledEntry struct {
+	Own     uint32   `json:"own"`
+	Curator []uint32 `json:"curator"`
+}
+
+type SharedRegistryPath struct {
+	Index    uint32    `json:"index"`
+	Siblings [][]Field `json:"siblings"`
+}
+
+type SharedRegistryProof struct {
+	Canopy []Field              `json:"canopy"`
+	Paths  []SharedRegistryPath `json:"paths"`
+}
+
 type PolicyParams struct {
 	PolicyInputsParams
-	SenderEntry       Entry           `json:"senderEntry"`
-	// OwnerEntries[o] and AssetEntries[o] open output o's owner and asset.
-	OwnerEntries       []Entry          `json:"ownerEntries"`
-	AssetEntries       []Entry          `json:"assetEntries"`
-	PublicAssetEntries []*MemberOpening `json:"publicAssetEntries"`
+	OwnRecords      []PooledRecord      `json:"ownRecords"`
+	CuratorRecords  []PooledRecord      `json:"curatorRecords"`
+	OwnProof        SharedRegistryProof `json:"ownProof"`
+	CuratorProof    SharedRegistryProof `json:"curatorProof"`
+	OwnSubjects     []PooledSubject     `json:"ownSubjects"`
+	CuratorSubjects []PooledSubject     `json:"curatorSubjects"`
+	SenderEntry     PooledEntry         `json:"senderEntry"`
+	// OwnerEntries[o] and AssetEntries[o] index payment o's owner and asset subjects.
+	OwnerEntries []PooledEntry `json:"ownerEntries"`
+	AssetEntries []PooledEntry `json:"assetEntries"`
+	// PublicAssetEntries is empty on a delegate key.
+	PublicAssetEntries []uint32 `json:"publicAssetEntries"`
 }
 
 type MemberPolicyInputsParams struct {

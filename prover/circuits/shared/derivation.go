@@ -7,7 +7,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/ring-domain.ts.
+// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/derivation/ring-domain.ts.
 const (
 	// AuditStatementDomain = "CRAU"
 	AuditStatementDomain = 0x43524155
@@ -35,9 +35,16 @@ const (
 	MergeStatementDomain = 0x43524d47
 	// DepositBlindingDomain = "CRDB"
 	DepositBlindingDomain = 0x43524442
+	// WithdrawalsDomain = "CRPW"
+	WithdrawalsDomain = 0x43525057
+	// WithdrawalExemptionDomain = "CRWX"
+	WithdrawalExemptionDomain = 0x43525758
 )
 
-// Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit.ts.
+// PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
+const PolicyStatementVersion = 3
+
+// Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
 	// DomSepCRShared = "CR_S"
 	DomSepCRShared = 0x43525f53
