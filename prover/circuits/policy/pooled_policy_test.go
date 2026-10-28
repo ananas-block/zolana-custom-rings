@@ -114,6 +114,10 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 		if distinct {
 			owner = int64(10000 + 2*i)
 			asset = owner + 1
+			if i >= shape.Outputs {
+				// Withdrawals settle through the public slots, their assets repeat the public assets.
+				asset = int64(30000 + (i-shape.Outputs)%transaction.NPublicSlots)
+			}
 		}
 		slot := add(owner, asset)
 		if i < shape.Outputs {
