@@ -196,6 +196,42 @@ Enrollment depends on the ring's policy. Key escrow is required on key-escrow ri
    4. When queued updates are eligible, generates an apply proof and submits the registry update.
    5. Indexes the applied member records and serves their updated proofs.
 
+## 3. Member record updates
+
+The **Wallet** updates its own viewing and recovery settings. The **Config Authority** updates the ring's policy list entries.
+
+1. **Wallet or Config Authority:** Signs the changes it is authorized to make and sends them to **Ring RPC**.
+2. **Ring RPC:**
+   1. Reads the current member records and pending updates.
+   2. Queues wallet updates until they are eligible to apply; prepares authority updates for immediate application.
+   3. Generates the required proof and submits the registry update to the **Ring Program**, paying fees.
+   4. Indexes the updated member records and serves their proofs.
+
+## 4. Deposit
+
+A deposit moves SOL or tokens from a wallet's public balance into ring notes. The token and amount are public.
+
+Compared with a transfer, a deposit adds a round trip for the **Wallet** to sign the transaction that moves its SOL or SPL tokens.
+
+1. **Wallet:**
+
+   1. Chooses the token, amount and recipient.
+   2. Prepares the deposit notes and encrypts their details to the recipient and the **Auditor**.
+   3. Sends the deposit request to **Ring RPC**.
+
+2. **Ring RPC:**
+
+   1. Checks that the ring is active, the asset is allowed and any required recipient key escrow is registered.
+   2. Generates the required deposit proof.
+   3. Builds the deposit transaction and returns it to the **Wallet** for signing.
+
+3. **Wallet:** Signs the prepared transaction to authorize the SOL or SPL token transfer and returns it to **Ring RPC**.
+4. **Ring RPC:**
+
+   1. Co-signs.
+   2. Pays fees and submits the deposit to the **Ring Program**.
+   3. Indexes the confirmed deposit so the recipient's **Wallet** can find its new notes.
+
 ## 5. Transfer flow
 
 A unified flow for confidential and anonymous transfers.  
