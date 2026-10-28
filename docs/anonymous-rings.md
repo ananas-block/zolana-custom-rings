@@ -234,17 +234,19 @@ Each stream counter also keeps a watermark, the index the next sync resumes
 from. `AnonymousSync` runs the anonymous-ring steps of that section for every
 entry whose viewing key the wallet holds.
 
-1. Phase 1 reads the sender and request streams in windows of `TAG_WINDOW`
-   tags from each watermark until a window holds no tag. It also reads the
-   bootstrap tag.
+1. Each round reads the sender stream, the request stream and the shared
+   stream of every known counterparty, all their tags batched into indexer
+   requests of `TAGS_PER_REQUEST`. The first round also reads the bootstrap
+   tag. A stream's first round reads from its watermark to `TAG_GAP` indices
+   past its next index, each later round reads on with the gap doubled up to
+   `TAGS_PER_REQUEST`, and the stream stops after a round that finds nothing.
 2. Each matched recipient body opens at its output position and gives a note
    and the viewing key of its sender. A matched sender bundle opens at the
    output count and gives the wallet's change, and its recipients when the
    wallet's own transaction key derives the published one. A matched deposit
    gives its note. Each new key joins the known senders or the known
    recipients.
-3. Phase 2 reads the shared stream of every known counterparty the same way,
-   and repeats while it adds a counterparty.
+3. A counterparty learned in a round joins the next one.
 4. The spends of every found or held ring note mark it spent and find the ring
    merges among them.
 
@@ -339,9 +341,9 @@ A first payment under the bootstrap tag publishes the recipient's viewing key.
 See [the limitation](spec.md#a-bootstrap-payment-names-its-recipients-viewing-key).
 
 Scan cost grows with the counterparties of each viewing key and the wallet's
-own spends. Each known counterparty adds one tag stream to every sync, at most
-`MAX_COUNTERPARTIES` per viewing key and direction, and a sync reports a pair
-past the limit in `skipped_counterparties`. Ring traffic does not add to it.
+own spends. Each known counterparty that sends nothing adds `TAG_GAP` tags to
+every sync, and no limit applies to the counterparties a viewing key learns.
+Ring traffic does not add to it.
 
 An anonymous merge spends fewer notes than a confidential one. See
 [the limits](../README.md#limits).

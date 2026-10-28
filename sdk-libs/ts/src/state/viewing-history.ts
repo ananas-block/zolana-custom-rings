@@ -4,7 +4,7 @@
  */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { RequestContext } from "@heliuslabs/zolana";
-import { U64_MAX } from "@heliuslabs/zolana/internal";
+import { PAGE_LIMIT, U64_MAX } from "@heliuslabs/zolana/internal";
 import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
 
 import { isSmallOrder } from "../crypto/keys/x25519.js";
@@ -15,11 +15,11 @@ import type { RingKeys, SharedTagPair } from "./ring-keys.js";
 
 export const VIEWING_HISTORY_VERSION = 7;
 
-/** Counterparties one viewing key tracks per direction, each costs a tag window every sync. */
-export const MAX_COUNTERPARTIES = 1 << 12;
-
 /** How far below its watermark a sync still reads an unobserved index. */
 export const PENDING_RETENTION = 256n;
+
+/** Indices a stream's first round reads past its next index, doubled up to `PAGE_LIMIT` after every round that finds one. */
+export const TAG_GAP = 20n;
 
 /** One tag stream's next index to use and the index its sync resumes from, never above `next`. */
 export class StreamCounter {
@@ -72,6 +72,47 @@ export class StreamCounter {
     if (!ascendingOrder || pending.some((index) => index < floor || index >= scanned))
       throw invalid("a pending index repeats or lies outside its retention window");
     return new StreamCounter(next, scanned, pending);
+  }
+}
+
+export class GapScan {
+  readonly #from: bigint;
+  #start: bigint;
+  #end: bigint;
+  #gap = TAG_GAP;
+  #late: readonly bigint[];
+  readonly #observed = new Set<bigint>();
+
+  constructor(from: bigint, counter: StreamCounter) {
+    this.#from = from;
+    this.#start = from;
+    this.#end = saturatingAdd(max(counter.next, from), TAG_GAP);
+    this.#late = counter.pending;
+  }
+
+  round(): readonly bigint[] {
+    const late = this.#late;
+    this.#late = [];
+    const length = Number(this.#end - this.#start);
+    return [...late, ...Array.from({ length }, (_, offset) => this.#start + BigInt(offset))];
+  }
+
+  /** `false` once a round finds nothing in its range. */
+  advance(seen: Iterable<bigint>): boolean {
+    let found = false;
+    for (const at of seen) {
+      this.#observed.add(at);
+      found ||= at >= this.#start && at < this.#end;
+    }
+    if (!found) return false;
+    this.#gap = min(this.#gap * 2n, PAGE_LIMIT);
+    this.#start = this.#end;
+    this.#end = saturatingAdd(this.#start, this.#gap);
+    return true;
+  }
+
+  finish(counter: StreamCounter): StreamCounter {
+    return counter.observe(this.#from, this.#observed);
   }
 }
 
@@ -138,7 +179,7 @@ export class ViewingKeyEntry {
     return this.#withKnown(stream.kind, new Map([...known, [key, counterparty]]));
   }
 
-  /** Refuses a counterparty map past `MAX_COUNTERPARTIES`, naming a key twice or a small-order key. */
+  /** Refuses a counterparty map naming a key twice or a small-order key. */
   static restore(
     fields: Readonly<{
       viewingPublicKey: X25519PublicKey;
@@ -150,8 +191,6 @@ export class ViewingKeyEntry {
     }>,
   ): ViewingKeyEntry {
     const counterparties = (rows: readonly Counterparty[], name: string) => {
-      if (rows.length > MAX_COUNTERPARTIES)
-        throw new RingError("RING_COUNTERPARTY_LIMIT", { details: { limit: MAX_COUNTERPARTIES } });
       if (rows.some((row) => isSmallOrder(row.key)))
         throw invalid(`${name} holds a small-order key`);
       const known = new Map(rows.map((row) => [keyOf(row.key), Object.freeze({ ...row })]));
@@ -168,17 +207,13 @@ export class ViewingKeyEntry {
     });
   }
 
-  /** `full` leaves the entry unchanged. */
-  learn(pair: SharedTagPair): Readonly<{ learned: Learned; entry: ViewingKeyEntry }> {
+  /** A known counterparty keeps the entry as it is. */
+  learn(pair: SharedTagPair): ViewingKeyEntry {
     const known = this.#known(pair.kind);
     const key = keyOf(pair.counterparty);
-    if (known.has(key)) return { learned: "known", entry: this };
-    if (known.size >= MAX_COUNTERPARTIES) return { learned: "full", entry: this };
+    if (known.has(key)) return this;
     const counterparty: Counterparty = { key: pair.counterparty, counter: StreamCounter.EMPTY };
-    return {
-      learned: "new",
-      entry: this.#withKnown(pair.kind, new Map([...known, [key, counterparty]])),
-    };
+    return this.#withKnown(pair.kind, new Map([...known, [key, counterparty]]));
   }
 
   /** Shared once known, else the caller's first contact tag. */
@@ -208,10 +243,7 @@ export class ViewingKeyEntry {
     }
     if (isSmallOrder(recipient.viewingPublicKey))
       throw new RingError("RING_RECIPIENT_KEY_NOT_CONTRIBUTORY");
-    const { learned, entry } =
-      pairing === "pairs" ? this.learn(pair) : { learned: "known" as const, entry: this };
-    if (learned === "full")
-      throw new RingError("RING_COUNTERPARTY_LIMIT", { details: { limit: MAX_COUNTERPARTIES } });
+    const entry = pairing === "pairs" ? this.learn(pair) : this;
     const first = recipient.firstContact;
     const tag =
       first.kind === "request"
@@ -250,9 +282,6 @@ export class ViewingKeyEntry {
 export type Counterparty = Readonly<{ key: X25519PublicKey; counter: StreamCounter }>;
 
 export type EntryStream = "tx" | "request" | SharedTagPair;
-
-/** Whether a counterparty entered a full map. */
-export type Learned = "new" | "known" | "full";
 
 /** A first contact pairs only when its body names the sender. */
 export type FirstContactPairing = "pairs" | "unpaired";
@@ -610,10 +639,18 @@ function max(left: bigint, right: bigint): bigint {
   return left > right ? left : right;
 }
 
+function min(left: bigint, right: bigint): bigint {
+  return left < right ? left : right;
+}
+
 function ascending(left: bigint, right: bigint): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function saturatingIncrement(value: bigint): bigint {
-  return value >= U64_MAX ? U64_MAX : value + 1n;
+  return saturatingAdd(value, 1n);
+}
+
+function saturatingAdd(value: bigint, added: bigint): bigint {
+  return value > U64_MAX - added ? U64_MAX : value + added;
 }

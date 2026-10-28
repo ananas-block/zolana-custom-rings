@@ -169,8 +169,6 @@ pub enum AnonymousError {
     ViewingKeyNotCurrent,
     #[error("a rotated viewing key must be new and created after the current one")]
     RotatedKeyNotNewer,
-    #[error("a viewing key tracks more than {limit} counterparties in one direction")]
-    CounterpartyLimit { limit: usize },
     #[error("a view tag counter passed u64")]
     CounterOverflow,
     #[error("the recipient's viewing key agrees on no shared secret")]

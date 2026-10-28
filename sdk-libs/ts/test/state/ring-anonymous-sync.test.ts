@@ -47,11 +47,13 @@ import {
   type AnonymousScan,
   type AnonymousStream,
   type AnonymousSyncClient,
+  TAGS_PER_REQUEST,
 } from "../../src/state/anonymous-sync.js";
 import {
-  MAX_COUNTERPARTIES,
+  GapScan,
   PENDING_RETENTION,
   StreamCounter,
+  TAG_GAP,
   TransferTagging,
   VIEWING_HISTORY_VERSION,
   ViewingHistory,
@@ -108,6 +110,8 @@ class Indexer {
   readonly deposits: Readonly<{ slot: bigint; txSignature: Signature; outputSlot: OutputSlot }>[] =
     [];
   #nextLeaf = 0n;
+  #tagReads = 0;
+  #tagsRead = 0;
 
   publish(transaction: IndexedShieldedTransaction): void {
     this.transactions.push(transaction);
@@ -119,6 +123,14 @@ class Indexer {
     return first;
   }
 
+  /** The tag reads and the tags they named since the last call. */
+  takeTagReads(): readonly [number, number] {
+    const taken = [this.#tagReads, this.#tagsRead] as const;
+    this.#tagReads = 0;
+    this.#tagsRead = 0;
+    return taken;
+  }
+
   client(): AnonymousSyncClient {
     const tagged = (request: GetByTagsRequest) => {
       const tags = new Set(request.tags.map(hex));
@@ -126,12 +138,16 @@ class Indexer {
     };
     const terminal = { context: CONTEXT, scannedThrough: Uint8Array.of(0) };
     return {
-      getShieldedTransactionsByTags: async (request: GetByTagsRequest) => ({
-        ...terminal,
-        transactions: this.transactions.filter(
-          (tx) => tx.outputSlots.some(tagged(request)) || tx.messages.some(tagged(request)),
-        ),
-      }),
+      getShieldedTransactionsByTags: async (request: GetByTagsRequest) => {
+        this.#tagReads += 1;
+        this.#tagsRead += request.tags.length;
+        return {
+          ...terminal,
+          transactions: this.transactions.filter(
+            (tx) => tx.outputSlots.some(tagged(request)) || tx.messages.some(tagged(request)),
+          ),
+        };
+      },
       getEncryptedUtxosByTags: async (request: GetByTagsRequest) => ({
         ...terminal,
         matches: this.deposits.filter((deposit) => tagged(request)(deposit.outputSlot)),
@@ -425,6 +441,40 @@ describe("anonymous sync", () => {
       [first, second, third].map((tx) => hex(output(tx, 1))).sort(),
     );
   });
+
+  it("costs every forged sender one gap of tags, batched across streams, and still pairs a real one", async () => {
+    const forged = 4096;
+    const indexer = new Indexer();
+    const alice = new Wallet(1);
+    const bob = new Wallet(2);
+    const entry = ViewingKeyEntry.restore({
+      viewingPublicKey: bob.viewingKey,
+      createdAt: 0n,
+      tx: StreamCounter.EMPTY,
+      request: StreamCounter.EMPTY,
+      knownSenders: Array.from({ length: forged }, () => ({
+        key: X25519Keypair.generate().publicKey(),
+        counter: StreamCounter.EMPTY,
+      })),
+      knownRecipients: [],
+    });
+    const firstRound = (forged + 3) * Number(TAG_GAP) + 1;
+    const withinBound = ([reads, tags]: readonly [number, number]) => {
+      expect(tags).toBeLessThanOrEqual(firstRound + 2 * Number(TAG_GAP));
+      expect(reads).toBeLessThanOrEqual(Math.ceil(firstRound / TAGS_PER_REQUEST) + 1);
+    };
+
+    await alice.pay(indexer, [{ to: bob.address, amount: 30n }]);
+    const paired = await bob.sync(indexer, fresh(bob).withEntry(0, entry));
+    withinBound(indexer.takeTagReads());
+    expect(paired.history.current().knownSenders()).toHaveLength(forged + 1);
+    expect(receivedFrom(paired.history, alice)?.next).toBe(0n);
+
+    const shared = await alice.pay(indexer, [{ to: bob.address, amount: 40n }]);
+    const found = await bob.sync(indexer, paired.history);
+    withinBound(indexer.takeTagReads());
+    expect(stream(found, output(shared, 1))).toMatchObject({ kind: "shared", index: 0n });
+  }, 60_000);
 
   it("finds a transfer landing behind the watermark on the next sync", async () => {
     const indexer = new Indexer();
@@ -732,28 +782,13 @@ function depositRow(owner: ShieldedAddress, tag: ViewTag, capsule: boolean, blin
 describe("viewing history", () => {
   const key = () => X25519Keypair.generate().publicKey();
 
-  it("refuses a new counterparty into a full map and keeps a known one", () => {
-    let entry = ViewingKeyEntry.create(key(), 0n);
-    const known = key();
-    const learned = entry.learn({ kind: "fromSender", counterparty: known });
-    expect(learned.learned).toBe("new");
-    entry = ViewingKeyEntry.restore({
-      viewingPublicKey: entry.viewingPublicKey,
-      createdAt: 0n,
-      tx: StreamCounter.EMPTY,
-      request: StreamCounter.EMPTY,
-      knownSenders: [
-        { key: known, counter: StreamCounter.EMPTY },
-        ...Array.from({ length: MAX_COUNTERPARTIES - 1 }, () => ({
-          key: key(),
-          counter: StreamCounter.EMPTY,
-        })),
-      ],
-      knownRecipients: [],
-    });
-    expect(entry.learn({ kind: "fromSender", counterparty: key() }).learned).toBe("full");
-    expect(entry.learn({ kind: "fromSender", counterparty: known }).learned).toBe("known");
-    expect(entry.knownSenders()).toHaveLength(MAX_COUNTERPARTIES);
+  it("reads at most one request after a round that finds its last index", () => {
+    const scan = new GapScan(0n, StreamCounter.EMPTY);
+    for (let round = 0; round < 64; round++) {
+      const indices = scan.round();
+      expect(indices.length).toBeLessThanOrEqual(TAGS_PER_REQUEST);
+      expect(scan.advance(indices.slice(-1))).toBe(true);
+    }
   });
 
   it("keeps an unseen index pending until it trails past the retention", () => {

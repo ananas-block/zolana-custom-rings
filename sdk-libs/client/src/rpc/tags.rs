@@ -18,15 +18,12 @@ use spr_client::{
 
 use crate::paging::{PageCursor, PAGE_LIMIT};
 
-/// Indices one stream window derives, split into requests of [`TAGS_PER_REQUEST`].
-pub const TAG_WINDOW: u64 = 10_000;
-
 /// The indexer's cap on the tags or nullifiers one request names.
 pub const TAGS_PER_REQUEST: usize = spr_indexer_api::PAGE_LIMIT as usize;
 
 #[derive(Clone, Debug)]
-pub struct TagWindow {
-    by_tag: HashMap<ViewTag, u64>,
+pub struct TagWindow<K = u64> {
+    by_tag: HashMap<ViewTag, K>,
 }
 
 impl TagWindow {
@@ -34,8 +31,10 @@ impl TagWindow {
     pub fn new(start: u64, tags: impl IntoIterator<Item = ViewTag>) -> Self {
         Self::indexed((start..).zip(tags))
     }
+}
 
-    pub fn indexed(tags: impl IntoIterator<Item = (u64, ViewTag)>) -> Self {
+impl<K: Copy> TagWindow<K> {
+    pub fn indexed(tags: impl IntoIterator<Item = (K, ViewTag)>) -> Self {
         Self {
             by_tag: tags.into_iter().map(|(index, tag)| (tag, index)).collect(),
         }
@@ -45,7 +44,7 @@ impl TagWindow {
         self.by_tag.keys().copied().collect()
     }
 
-    pub fn index_of(&self, tag: &ViewTag) -> Option<u64> {
+    pub fn index_of(&self, tag: &ViewTag) -> Option<K> {
         self.by_tag.get(tag).copied()
     }
 }

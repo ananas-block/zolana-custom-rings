@@ -12,15 +12,15 @@ use spr_transaction::ShieldedKeys;
 use zolana_ring_keys::{RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream};
 use zolana_ring_transaction::{is_contributory, TaggedPayment};
 
-use crate::{exactly_one, AnonymousError, REDACTED};
+use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
 
 pub const VIEWING_HISTORY_VERSION: u32 = 7;
 
-/// Counterparties one viewing key tracks per direction, each costs a tag window every sync.
-pub const MAX_COUNTERPARTIES: usize = 1 << 12;
-
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
+
+/// Indices a stream's first round reads past its next index, doubled up to [`TAGS_PER_REQUEST`] after every round that finds one.
+pub const TAG_GAP: u64 = 20;
 
 /// `scanned` never passes `next`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -108,12 +108,14 @@ pub struct TransferTagging<'a, K: ?Sized> {
     pub recipients: &'a [PaymentRecipient],
 }
 
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Learned {
-    New,
-    Known,
-    Full,
+#[derive(Clone, Debug)]
+pub(crate) struct GapScan {
+    from: u64,
+    start: u64,
+    end: u64,
+    gap: u64,
+    late: Vec<u64>,
+    observed: BTreeSet<u64>,
 }
 
 impl StreamCounter {
@@ -148,6 +150,42 @@ impl StreamCounter {
         let next = self.next;
         self.next = next.checked_add(1).ok_or(AnonymousError::CounterOverflow)?;
         Ok(next)
+    }
+}
+
+impl GapScan {
+    pub(crate) fn new(from: u64, counter: &StreamCounter) -> Self {
+        Self {
+            from,
+            start: from,
+            end: counter.next.max(from).saturating_add(TAG_GAP),
+            gap: TAG_GAP,
+            late: counter.pending().collect(),
+            observed: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn round(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.late)
+            .into_iter()
+            .chain(self.start..self.end)
+            .collect()
+    }
+
+    /// `false` once a round finds nothing in its range.
+    pub(crate) fn advance(&mut self, seen: impl IntoIterator<Item = u64>) -> bool {
+        self.observed.extend(seen);
+        if self.observed.range(self.start..self.end).next().is_none() {
+            return false;
+        }
+        self.gap = self.gap.saturating_mul(2).min(TAGS_PER_REQUEST as u64);
+        self.start = self.end;
+        self.end = self.start.saturating_add(self.gap);
+        true
+    }
+
+    pub(crate) fn finish(&self, counter: &mut StreamCounter) {
+        counter.observe(self.from, &self.observed);
     }
 }
 
@@ -210,11 +248,12 @@ impl ViewingKeyEntry {
         }
     }
 
-    pub(crate) fn learn(&mut self, pair: SharedTagPair) -> Learned {
-        match pair {
-            SharedTagPair::FromSender(sender) => learn(&mut self.known_senders, sender),
-            SharedTagPair::ToRecipient(recipient) => learn(&mut self.known_recipients, recipient),
-        }
+    pub(crate) fn learn(&mut self, pair: SharedTagPair) {
+        let (known, key) = match pair {
+            SharedTagPair::FromSender(sender) => (&mut self.known_senders, sender),
+            SharedTagPair::ToRecipient(recipient) => (&mut self.known_recipients, recipient),
+        };
+        known.entry(key).or_default();
     }
 
     /// Shared once known, else the caller's first contact tag.
@@ -238,13 +277,8 @@ impl ViewingKeyEntry {
                 if !is_contributory(&recipient.viewing_pubkey) {
                     return Err(AnonymousError::RecipientKeyNotContributory);
                 }
-                if pairing == FirstContactPairing::Pairs
-                    && self.learn(SharedTagPair::ToRecipient(recipient.viewing_pubkey))
-                        == Learned::Full
-                {
-                    return Err(AnonymousError::CounterpartyLimit {
-                        limit: MAX_COUNTERPARTIES,
-                    });
+                if pairing == FirstContactPairing::Pairs {
+                    self.learn(SharedTagPair::ToRecipient(recipient.viewing_pubkey));
                 }
                 match recipient.first_contact {
                     FirstContact::Request(tag) => (tag, TagSelection::Request),
@@ -556,11 +590,6 @@ fn counterparties(
     name: &str,
     rows: Vec<CounterpartyJson>,
 ) -> Result<HashMap<X25519Pubkey, StreamCounter>, AnonymousError> {
-    if rows.len() > MAX_COUNTERPARTIES {
-        return Err(AnonymousError::CounterpartyLimit {
-            limit: MAX_COUNTERPARTIES,
-        });
-    }
     let mut known = HashMap::with_capacity(rows.len());
     for row in rows {
         let key = pubkey(name, &row.pubkey)?;
@@ -612,39 +641,11 @@ fn unparsed(error: serde_json::Error) -> AnonymousError {
     ))
 }
 
-fn learn(known: &mut HashMap<X25519Pubkey, StreamCounter>, key: X25519Pubkey) -> Learned {
-    if known.contains_key(&key) {
-        return Learned::Known;
-    }
-    if known.len() >= MAX_COUNTERPARTIES {
-        return Learned::Full;
-    }
-    known.insert(key, StreamCounter::default());
-    Learned::New
-}
-
 #[cfg(test)]
 mod tests {
     use spr_keypair::ViewingKey;
 
     use super::*;
-
-    #[test]
-    fn a_full_map_refuses_a_new_counterparty_and_keeps_a_known_one() {
-        let mut entry = ViewingKeyEntry::new(ViewingKey::new().pubkey(), 0);
-        let known = ViewingKey::new().pubkey();
-        assert_eq!(entry.learn(SharedTagPair::FromSender(known)), Learned::New);
-        while entry.known_senders.len() < MAX_COUNTERPARTIES {
-            let _ = entry.learn(SharedTagPair::FromSender(ViewingKey::new().pubkey()));
-        }
-        let extra = SharedTagPair::FromSender(ViewingKey::new().pubkey());
-        assert_eq!(entry.learn(extra), Learned::Full);
-        assert_eq!(
-            entry.learn(SharedTagPair::FromSender(known)),
-            Learned::Known
-        );
-        assert_eq!(entry.known_senders.len(), MAX_COUNTERPARTIES);
-    }
 
     #[test]
     fn an_unseen_index_stays_pending_until_it_trails_past_the_retention() {
@@ -660,6 +661,16 @@ mod tests {
             counter.pending().collect::<Vec<_>>(),
             (4..PENDING_RETENTION).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_round_finding_its_last_index_reads_at_most_one_request_next() {
+        let mut scan = GapScan::new(0, &StreamCounter::default());
+        for _ in 0..64 {
+            let round = scan.round();
+            assert!(round.len() <= TAGS_PER_REQUEST);
+            assert!(scan.advance(round.last().copied()));
+        }
     }
 
     #[test]

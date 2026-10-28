@@ -25,9 +25,9 @@ use crate::{
     confidential::RingMerges,
     delivered::RingDeliveryContext,
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
-    deposit_payload, exactly_one, exactly_one_each,
-    tags::{IndexerReads, TagWindow, TAG_WINDOW},
-    viewing_history::{Learned, StreamCounter, ViewingHistory, ViewingKeyEntry},
+    deposit_payload, exactly_one_each,
+    tags::{IndexerReads, TagWindow},
+    viewing_history::{GapScan, StreamCounter, ViewingHistory, ViewingKeyEntry},
     AnonymousError,
 };
 
@@ -58,13 +58,6 @@ pub struct AnonymousRingUtxo {
     pub stream: AnonymousStream,
 }
 
-/// A counterparty a full map left out, its stream unread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SkippedCounterparty {
-    pub viewing_pubkey: X25519Pubkey,
-    pub pair: SharedTagPair,
-}
-
 /// One payment the wallet's sender bundle lists, its body opened with the transaction key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SentPayment {
@@ -92,7 +85,6 @@ pub struct AnonymousScan {
     /// The notes found past each watermark, their spends read from every fetched nullifier.
     pub decrypted: DecryptionResult,
     pub utxos: Vec<AnonymousRingUtxo>,
-    pub skipped_counterparties: Vec<SkippedCounterparty>,
     /// Bodies that decoded as the wallet's but rebuilt under no mint of `assets`.
     pub unmatched: Vec<[u8; 32]>,
     /// The wallet's payments in the transfers whose change it found, a body that fails to open left out.
@@ -176,7 +168,6 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
             decrypted: DecryptionResult::default(),
             opened: HashSet::new(),
             spends: HashSet::new(),
-            skipped: Vec::new(),
             unmatched: Vec::new(),
             sent: Vec::new(),
         };
@@ -192,7 +183,6 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
             found,
             utxos,
             mut decrypted,
-            skipped,
             unmatched,
             sent,
             ..
@@ -202,14 +192,13 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
             history,
             decrypted,
             utxos,
-            skipped_counterparties: skipped,
             unmatched,
             sent,
         })
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Stream {
     Sender,
     Request,
@@ -217,10 +206,22 @@ enum Stream {
     Pair(SharedTagPair),
 }
 
-/// Derives a stream's tags window by window, a pair's ECDH once per sync.
+/// Derives a stream's tags round by round, a pair's ECDH once per sync.
 enum TagSource {
     Own(fn(u64) -> ViewTagStream),
     Shared(SharedViewTags),
+}
+
+struct ActiveStream {
+    stream: Stream,
+    source: TagSource,
+    scan: GapScan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RoundTag {
+    Bootstrap,
+    Stream { slot: usize, index: u64 },
 }
 
 impl Stream {
@@ -248,7 +249,6 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     /// Sites already read, a body under two tags opens once.
     opened: HashSet<(Signature, Option<u16>, Site)>,
     spends: HashSet<(Signature, Option<u16>)>,
-    skipped: Vec<SkippedCounterparty>,
     unmatched: Vec<[u8; 32]>,
     sent: Vec<SentPayment>,
 }
@@ -287,87 +287,118 @@ impl Body<'_> {
 }
 
 impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_, I, K> {
-    /// Phase 1 reads the sender, request and bootstrap tags, Phase 2 repeats while it adds a counterparty.
+    /// All streams share each round's reads, a counterparty learned in a round joins the next.
     async fn entry(&mut self, index: usize) -> Result<(), AnonymousError> {
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        self.stream(index, Stream::Sender).await?;
-        self.stream(index, Stream::Request).await?;
-        let bootstrap = TagWindow::new(0, [viewing_pubkey.u()]);
-        let _ = self
-            .window(index, &bootstrap, |_| Some(AnonymousStream::Bootstrap))
-            .await?;
-        let mut scanned: HashSet<SharedTagPair> = HashSet::new();
+        let mut started: HashSet<Stream> = HashSet::new();
+        let mut active: Vec<ActiveStream> = Vec::new();
+        let mut bootstrap = Some(viewing_pubkey.u());
         loop {
-            let entry = &self.history.entries()[index];
-            let pending: Vec<SharedTagPair> = entry
-                .known_senders()
-                .keys()
-                .map(|sender| SharedTagPair::FromSender(*sender))
-                .chain(
-                    entry
-                        .known_recipients()
-                        .keys()
-                        .map(|recipient| SharedTagPair::ToRecipient(*recipient)),
-                )
-                .filter(|pair| scanned.insert(*pair))
-                .collect();
-            if pending.is_empty() {
+            active.extend(self.start_streams(index, &mut started)?);
+            if active.is_empty() {
                 return Ok(());
             }
-            for pair in pending {
-                self.stream(index, Stream::Pair(pair)).await?;
+            let mut tagged: Vec<(RoundTag, ViewTag)> = bootstrap
+                .take()
+                .map(|tag| (RoundTag::Bootstrap, tag))
+                .into_iter()
+                .collect();
+            for (slot, stream) in active.iter_mut().enumerate() {
+                let indices = stream.scan.round();
+                let tags = self.tags(viewing_pubkey, &stream.source, &indices)?;
+                tagged.extend(
+                    indices
+                        .into_iter()
+                        .map(|index| RoundTag::Stream { slot, index })
+                        .zip(tags),
+                );
             }
+            let window = TagWindow::indexed(tagged);
+            let seen = self
+                .window(index, &window, |tag| match tag {
+                    RoundTag::Bootstrap => Some(AnonymousStream::Bootstrap),
+                    RoundTag::Stream { slot, index } => active
+                        .get(slot)
+                        .and_then(|active| active.stream.found(index)),
+                })
+                .await?;
+            let mut continuing = Vec::with_capacity(active.len());
+            for (slot, mut stream) in active.into_iter().enumerate() {
+                let found = seen.iter().filter_map(|tag| match *tag {
+                    RoundTag::Stream { slot: at, index } if at == slot => Some(index),
+                    _ => None,
+                });
+                if stream.scan.advance(found) {
+                    continuing.push(stream);
+                } else if let Some(counter) = self.counter_mut(index, stream.stream) {
+                    stream.scan.finish(counter);
+                }
+            }
+            active = continuing;
         }
     }
 
-    /// Windows of [`TAG_WINDOW`] from the watermark until one holds no tag, the pending indices read with the first.
-    async fn stream(&mut self, index: usize, stream: Stream) -> Result<(), AnonymousError> {
-        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let Some(counter) = self.counter_mut(index, stream) else {
-            return Ok(());
+    /// Every new pair's ECDH in one request.
+    fn start_streams(
+        &mut self,
+        index: usize,
+        started: &mut HashSet<Stream>,
+    ) -> Result<Vec<ActiveStream>, AnonymousError> {
+        let entry = &self.history.entries()[index];
+        let viewing_pubkey = entry.viewing_pubkey();
+        let pairs: Vec<SharedTagPair> = entry
+            .known_senders()
+            .keys()
+            .map(|sender| SharedTagPair::FromSender(*sender))
+            .chain(
+                entry
+                    .known_recipients()
+                    .keys()
+                    .map(|recipient| SharedTagPair::ToRecipient(*recipient)),
+            )
+            .filter(|pair| started.insert(Stream::Pair(*pair)))
+            .collect();
+        let requests: Vec<SharedTagsRequest> = pairs
+            .iter()
+            .map(|pair| SharedTagsRequest {
+                viewing_pubkey,
+                pair: *pair,
+            })
+            .collect();
+        let shared = match requests.is_empty() {
+            true => Vec::new(),
+            false => exactly_one_each(self.sync.keys.shared_view_tags(&requests)?, requests.len())?,
         };
-        let (scanned, mut late) = (counter.scanned(), counter.pending().collect::<Vec<_>>());
-        let from = match self.sync.from {
-            ScanFrom::Watermark => scanned,
-            ScanFrom::Start => 0,
-        };
-        let source = match stream {
-            Stream::Sender => TagSource::Own(|tx_count| ViewTagStream::Sender { tx_count }),
-            Stream::Request => {
-                TagSource::Own(|request_count| ViewTagStream::Request { request_count })
-            }
-            Stream::Pair(pair) => {
-                TagSource::Shared(exactly_one(self.sync.keys.shared_view_tags(&[
-                    SharedTagsRequest {
-                        viewing_pubkey,
-                        pair,
-                    },
-                ])?)?)
-            }
-        };
-        let mut observed = BTreeSet::new();
-        let mut start = from;
-        loop {
-            let counters: Vec<u64> = std::mem::take(&mut late)
-                .into_iter()
-                .chain((0..TAG_WINDOW).map_while(|offset| start.checked_add(offset)))
-                .collect();
-            let tags = self.tags(viewing_pubkey, &source, &counters)?;
-            let window = TagWindow::indexed(counters.into_iter().zip(tags));
-            let seen = self
-                .window(index, &window, |counter| stream.found(counter))
-                .await?;
-            let advanced = seen.range(start..).next().is_some();
-            observed.extend(seen);
-            match start.checked_add(TAG_WINDOW) {
-                Some(later) if advanced => start = later,
-                _ => break,
-            }
-        }
-        if let Some(counter) = self.counter_mut(index, stream) {
-            counter.observe(from, &observed);
-        }
-        Ok(())
+        let own = [
+            (
+                Stream::Sender,
+                TagSource::Own(|tx_count| ViewTagStream::Sender { tx_count }),
+            ),
+            (
+                Stream::Request,
+                TagSource::Own(|request_count| ViewTagStream::Request { request_count }),
+            ),
+        ]
+        .into_iter()
+        .filter(|(stream, _)| started.insert(*stream));
+        let rescan = self.sync.from == ScanFrom::Start;
+        Ok(own
+            .chain(
+                pairs
+                    .into_iter()
+                    .map(Stream::Pair)
+                    .zip(shared.into_iter().map(TagSource::Shared)),
+            )
+            .filter_map(|(stream, source)| {
+                let counter = self.counter_mut(index, stream)?;
+                let from = if rescan { 0 } else { counter.scanned() };
+                Some(ActiveStream {
+                    stream,
+                    source,
+                    scan: GapScan::new(from, counter),
+                })
+            })
+            .collect())
     }
 
     fn tags(
@@ -397,13 +428,13 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         }
     }
 
-    /// Opens every output under a tag of `window`, the indices any output holds.
-    async fn window(
+    /// Opens every output under a tag of `window`, the tags any output holds.
+    async fn window<T: Copy + Ord>(
         &mut self,
         index: usize,
-        window: &TagWindow,
-        found: impl Fn(u64) -> Option<AnonymousStream>,
-    ) -> Result<BTreeSet<u64>, AnonymousError> {
+        window: &TagWindow<T>,
+        found: impl Fn(T) -> Option<AnonymousStream>,
+    ) -> Result<BTreeSet<T>, AnonymousError> {
         let tags = window.tags();
         let transactions = self.reads.transactions(&tags).await?;
         let deposits = self.reads.deposits(&tags).await?;
@@ -703,22 +734,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         }
     }
 
-    /// A key no ECDH accepts never enters the map, a full map reports the pair.
+    /// A key no ECDH accepts never enters the map.
     fn learn(&mut self, index: usize, pair: SharedTagPair) {
         let (SharedTagPair::FromSender(key) | SharedTagPair::ToRecipient(key)) = pair;
-        if !is_contributory(&key) {
-            return;
-        }
-        let entry = self.entry_mut(index);
-        let viewing_pubkey = entry.viewing_pubkey();
-        if entry.learn(pair) == Learned::Full {
-            let skipped = SkippedCounterparty {
-                viewing_pubkey,
-                pair,
-            };
-            if !self.skipped.contains(&skipped) {
-                self.skipped.push(skipped);
-            }
+        if is_contributory(&key) {
+            self.entry_mut(index).learn(pair);
         }
     }
 

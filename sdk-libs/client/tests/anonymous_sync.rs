@@ -1,7 +1,13 @@
 //! `AnonymousSync` and the spec view tag selection against an in-memory indexer, every transfer
 //! sealed by the anonymous rail.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
@@ -31,8 +37,8 @@ use spr_transaction::{
 };
 use zolana_ring_client::{
     AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync, FirstContact, PaymentRecipient,
-    SentCheck, StreamCounter, TagSelection, TransferTagging, ViewingHistory,
-    VIEWING_HISTORY_VERSION,
+    SentCheck, StreamCounter, TagSelection, TransferTagging, ViewingHistory, TAGS_PER_REQUEST,
+    TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_transaction::{
     AnonymousPlan, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
@@ -53,6 +59,8 @@ struct Indexer {
     transactions: Mutex<Vec<ShieldedTransaction>>,
     deposits: Mutex<Vec<EncryptedUtxoMatch>>,
     next_leaf: Mutex<u64>,
+    tag_reads: AtomicUsize,
+    tags_read: AtomicUsize,
 }
 
 impl Indexer {
@@ -66,6 +74,14 @@ impl Indexer {
         let first = *next;
         *next += count as u64;
         first
+    }
+
+    /// The tag reads and the tags they named since the last call.
+    fn take_tag_reads(&self) -> (usize, usize) {
+        (
+            self.tag_reads.swap(0, Ordering::Relaxed),
+            self.tags_read.swap(0, Ordering::Relaxed),
+        )
     }
 
     fn context() -> Context {
@@ -85,6 +101,8 @@ impl AsyncRpc for Indexer {
         _limit: Option<u32>,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.tag_reads.fetch_add(1, Ordering::Relaxed);
+        self.tags_read.fetch_add(tags.len(), Ordering::Relaxed);
         let transactions = self.transactions.lock().unwrap();
         Ok(GetShieldedTransactionsByTagsResponse {
             context: Self::context(),
@@ -651,6 +669,55 @@ async fn a_sync_resumes_from_each_watermark_and_a_rescan_reads_from_index_0() {
     let mut every = vec![output(&first, 1), output(&second, 1), output(&third, 1)];
     every.sort();
     assert_eq!(found, every);
+}
+
+/// A forged sender costs one gap of tags and never crowds out a real pair.
+#[tokio::test]
+async fn forged_senders_never_crowd_out_a_real_pair() {
+    const FORGED: usize = 4096;
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let mut stored: serde_json::Value = serde_json::from_str(&fresh(&bob).to_json()).unwrap();
+    stored["viewingHistory"][0]["knownSenders"] = (0..FORGED)
+        .map(|_| {
+            serde_json::json!({
+                "pubkey": hex::encode(ViewingKey::new().pubkey().as_bytes()),
+                "next": 0,
+                "scanned": 0,
+                "pending": [],
+            })
+        })
+        .collect();
+    let forged = ViewingHistory::from_json(&stored.to_string()).unwrap();
+    let pay = [Pay {
+        to: &bob.address(),
+        request: None,
+        amount: 30,
+    }];
+    let first_round = (FORGED + 3) * TAG_GAP as usize + 1;
+    let within_bound = |(reads, tags): (usize, usize)| {
+        assert!(tags <= first_round + 2 * TAG_GAP as usize, "{tags} tags");
+        assert!(
+            reads <= first_round.div_ceil(TAGS_PER_REQUEST) + 1,
+            "{reads} reads"
+        );
+    };
+
+    alice.pay(&indexer, &pay);
+    let paired = bob.sync(&indexer, &forged).await;
+    within_bound(indexer.take_tag_reads());
+    let sender = alice.keys.viewing_pubkey();
+    let known = paired.history.current().known_senders();
+    assert_eq!((known.len(), known.next_of(&sender)), (FORGED + 1, Some(0)));
+
+    let shared = alice.pay(&indexer, &pay);
+    let found = bob.sync(&indexer, &paired.history).await;
+    within_bound(indexer.take_tag_reads());
+    assert_eq!(
+        stream(&found, output(&shared, 1)),
+        AnonymousStream::Shared { sender, index: 0 }
+    );
 }
 
 /// Transfer `n` lands after `n + 1` and after a sync passed it, the next sync reads it again.

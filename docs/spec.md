@@ -1237,7 +1237,7 @@ The bootstrap tag is the recipient's `u`. Every observer reads the recipient's v
 
 ### The sender key in a body is unauthenticated
 
-A recipient body names `sender_pubkey`, and no proof checks it, so a body can attribute a payment to any viewing key. A recipient that opens a body adds the named key to its known senders and reads its shared tags on every later sync. A payer that names fresh keys grows that work up to `MAX_COUNTERPARTIES` per viewing key and direction, and a sync reports every pair past the limit as skipped.
+A recipient body names `sender_pubkey`, and no proof checks it, so a body can attribute a payment to any viewing key. A recipient that opens a body adds the named key to its known senders and reads its shared tags on every later sync. A payer that names fresh keys adds `TAG_GAP` tags per key to every later sync, and the known senders have no limit, so a real sender is still learned.
 
 ### Member writes name members
 

@@ -5,13 +5,7 @@
 import { getBase58Encoder, type ReadonlyUint8Array } from "@solana/kit";
 
 import { ClientError, type IndexerReader, type IndexerRpcConfig } from "@heliuslabs/zolana/client";
-import {
-  bytesKey,
-  equalBytes,
-  isCanonicalField,
-  PAGE_LIMIT,
-  U64_MAX,
-} from "@heliuslabs/zolana/internal";
+import { bytesKey, equalBytes, isCanonicalField, PAGE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import {
   X25519PublicKey,
@@ -50,16 +44,18 @@ import {
   anonymousRecipientOutputBody,
   anonymousSenderOutputBody,
 } from "../protocol/transaction/output.js";
-import { answered, exactlyOne } from "./batch.js";
+import { answered } from "./batch.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
 import { openRingMerges } from "./ring-sync.js";
 import type { RingKeys, SharedTagPair } from "./ring-keys.js";
 import { RingError } from "../protocol/error.js";
-import { type EntryStream, type ViewingHistory, type ViewingKeyEntry } from "./viewing-history.js";
-
-/** Indices one stream window derives, split into requests of `TAGS_PER_REQUEST`. */
-export const TAG_WINDOW = 10_000n;
+import {
+  GapScan,
+  type EntryStream,
+  type ViewingHistory,
+  type ViewingKeyEntry,
+} from "./viewing-history.js";
 
 /** The indexer's cap on the tags or nullifiers one request names. */
 export const TAGS_PER_REQUEST = Number(PAGE_LIMIT);
@@ -78,12 +74,6 @@ export interface AnonymousRingUtxo {
   readonly utxoHash: Bytes32;
   readonly viewingPublicKey: X25519PublicKey;
   readonly stream: AnonymousStream;
-}
-
-/** A counterparty a full map left out, its stream unread. */
-export interface SkippedCounterparty {
-  readonly viewingPublicKey: X25519PublicKey;
-  readonly pair: SharedTagPair;
 }
 
 export type SentCheck =
@@ -110,7 +100,6 @@ export interface AnonymousScan {
   readonly utxos: readonly WalletUtxo[];
   readonly spentNullifiers: readonly Bytes32[];
   readonly found: readonly AnonymousRingUtxo[];
-  readonly skippedCounterparties: readonly SkippedCounterparty[];
   /** The output hash of each body that decoded as the wallet's but did not rebuild. */
   readonly unmatched: readonly Bytes32[];
   /** The wallet's payments in the transfers whose change it found, a body that fails to open left out. */
@@ -201,19 +190,27 @@ export class AnonymousSync {
 /** A `toRecipient` stream holds the wallet's own payments, observed and never opened. */
 type Stream = "tx" | "request" | SharedTagPair;
 
-class TagWindow {
-  readonly #byTag = new Map<string, bigint>();
+class TagWindow<T> {
+  readonly #byTag = new Map<string, T>();
   readonly tags: readonly ViewTag[];
 
-  constructor(tags: readonly (readonly [bigint, ViewTag])[]) {
+  constructor(tags: readonly (readonly [T, ViewTag])[]) {
     for (const [index, tag] of tags) this.#byTag.set(bytesKey(tag), index);
     this.tags = tags.map(([, tag]) => tag);
   }
 
-  indexOf(tag: Bytes32): bigint | undefined {
+  indexOf(tag: Bytes32): T | undefined {
     return this.#byTag.get(bytesKey(tag));
   }
 }
+
+interface ActiveStream {
+  readonly stream: Stream;
+  readonly shared: SharedViewTags | undefined;
+  readonly scan: GapScan;
+}
+
+type RoundTag = Readonly<{ kind: "bootstrap" }> | Readonly<{ slot: number; index: bigint }>;
 
 /** Rust `RingDeliveryContext`. */
 interface SlotContext {
@@ -280,7 +277,6 @@ class Scan {
   readonly #opened = new Set<string>();
   readonly #spends = new Set<string>();
   readonly #spent = new Map<string, Bytes32>();
-  readonly #skipped: SkippedCounterparty[] = [];
   readonly #unmatched: Bytes32[] = [];
   readonly #sent: SentPayment[] = [];
   readonly #unknownMints = new Set<Address>();
@@ -298,26 +294,47 @@ class Scan {
     this.#history = history;
   }
 
-  /** Phase 1 reads the sender, request and bootstrap tags, Phase 2 repeats while it adds a counterparty. */
+  /** All streams share each round's reads, a counterparty learned in a round joins the next. */
   async entry(index: number): Promise<void> {
     const viewingPublicKey = this.#entry(index).viewingPublicKey;
-    await this.#stream(index, "tx");
-    await this.#stream(index, "request");
-    await this.#window(index, new TagWindow([[0n, viewingPublicKey.u()]]), () => BOOTSTRAP);
-    const scanned = new Set<string>();
-    for (;;) {
-      const entry = this.#entry(index);
-      const pending: SharedTagPair[] = [
-        ...entry.knownSenders().map((known) => pairOf("fromSender", known.key)),
-        ...entry.knownRecipients().map((known) => pairOf("toRecipient", known.key)),
-      ].filter((pair) => {
-        const key = `${pair.kind}:${bytesKey(pair.counterparty.toBytes())}`;
-        if (scanned.has(key)) return false;
-        scanned.add(key);
-        return true;
-      });
-      if (pending.length === 0) return;
-      for (const pair of pending) await this.#stream(index, pair);
+    const started = new Set<string>();
+    const opened: SharedViewTags[] = [];
+    let active: ActiveStream[] = [];
+    let bootstrap: ViewTag | undefined = viewingPublicKey.u();
+    try {
+      for (;;) {
+        const fresh = await this.#startStreams(index, started);
+        for (const { shared } of fresh) if (shared !== undefined) opened.push(shared);
+        active = [...active, ...fresh];
+        if (active.length === 0) return;
+        const tagged: (readonly [RoundTag, ViewTag])[] =
+          bootstrap === undefined ? [] : [[BOOTSTRAP_TAG, bootstrap]];
+        bootstrap = undefined;
+        for (const [slot, { stream, shared, scan }] of active.entries()) {
+          const indices = scan.round();
+          const tags = await this.#tags(viewingPublicKey, stream, shared, indices);
+          for (const [at, tag] of answered(indices, tags)) tagged.push([{ slot, index: at }, tag]);
+        }
+        const round = active;
+        const seen = await this.#window(index, new TagWindow(tagged), (tag) => {
+          if (!("slot" in tag)) return BOOTSTRAP;
+          const stream = round[tag.slot]?.stream;
+          return stream === undefined ? undefined : foundIn(stream, tag.index);
+        });
+        active = round.filter(({ stream, scan }, slot) => {
+          const found = [...seen].flatMap((tag) =>
+            "slot" in tag && tag.slot === slot ? [tag.index] : [],
+          );
+          if (scan.advance(found)) return true;
+          const current = this.#entry(index);
+          const counter = current.counter(stream);
+          if (counter !== undefined)
+            this.#withEntry(index, current.withCounter(stream, scan.finish(counter)));
+          return false;
+        });
+      }
+    } finally {
+      for (const shared of opened) shared.destroy();
     }
   }
 
@@ -390,48 +407,49 @@ class Scan {
       ),
       spentNullifiers: Object.freeze([...this.#spent.values()]),
       found: Object.freeze([...this.#streams]),
-      skippedCounterparties: Object.freeze([...this.#skipped]),
       unmatched: Object.freeze([...this.#unmatched]),
       sent: Object.freeze([...this.#sent]),
       unknownMints: Object.freeze([...this.#unknownMints]),
     });
   }
 
-  /** Windows of `TAG_WINDOW` from the watermark until one holds no tag, the pending indices read with the first. */
-  async #stream(index: number, stream: Stream): Promise<void> {
+  /** Every new pair's ECDH in one request. */
+  async #startStreams(index: number, started: Set<string>): Promise<readonly ActiveStream[]> {
     const entry = this.#entry(index);
-    const viewingPublicKey = entry.viewingPublicKey;
-    const counter = entry.counter(stream);
-    if (counter === undefined) return;
-    const from = this.#sync.fullRescan ? 0n : counter.scanned;
-    let late: readonly bigint[] = counter.pending;
-    const shared =
-      stream === "tx" || stream === "request"
-        ? undefined
-        : exactlyOne(
-            await this.#sync.keys.sharedViewTags(
-              [{ viewingPublicKey, pair: stream }],
-              this.#context,
-            ),
+    const fresh = (stream: Stream): boolean => {
+      const key = streamKey(stream);
+      if (started.has(key)) return false;
+      started.add(key);
+      return true;
+    };
+    const pairs = [
+      ...entry.knownSenders().map((known) => pairOf("fromSender", known.key)),
+      ...entry.knownRecipients().map((known) => pairOf("toRecipient", known.key)),
+    ].filter(fresh);
+    const derived =
+      pairs.length === 0
+        ? []
+        : await this.#sync.keys.sharedViewTags(
+            pairs.map((pair) => ({ viewingPublicKey: entry.viewingPublicKey, pair })),
+            this.#context,
           );
+    let shared: readonly (readonly [(typeof pairs)[number], SharedViewTags])[];
     try {
-      const observed = new Set<bigint>();
-      for (let start = from; ; start += TAG_WINDOW) {
-        const counters = [...late, ...windowFrom(start)];
-        late = [];
-        const tags = await this.#tags(viewingPublicKey, stream, shared, counters);
-        const seen = await this.#window(index, new TagWindow(answered(counters, tags)), (at) =>
-          foundIn(stream, at),
-        );
-        for (const at of seen) observed.add(at);
-        if (![...seen].some((at) => at >= start) || start > U64_MAX - TAG_WINDOW) break;
-      }
-      const current = this.#entry(index);
-      const scanned = current.counter(stream)?.observe(from, observed);
-      if (scanned !== undefined) this.#withEntry(index, current.withCounter(stream, scanned));
-    } finally {
-      shared?.destroy();
+      shared = answered(pairs, derived);
+    } catch (error) {
+      for (const tags of derived) tags.destroy();
+      throw error;
     }
+    const streams: readonly (readonly [Stream, SharedViewTags | undefined])[] = [
+      ...(["tx", "request"] as const).filter(fresh).map((stream) => [stream, undefined] as const),
+      ...shared,
+    ];
+    return streams.flatMap(([stream, tags]) => {
+      const counter = entry.counter(stream);
+      if (counter === undefined) return [];
+      const from = this.#sync.fullRescan ? 0n : counter.scanned;
+      return [{ stream, shared: tags, scan: new GapScan(from, counter) }];
+    });
   }
 
   async #tags(
@@ -453,15 +471,15 @@ class Scan {
     );
   }
 
-  /** Opens every output under a tag of `window`, the indices any output holds. */
-  async #window(
+  /** Opens every output under a tag of `window`, the tags any output holds. */
+  async #window<T>(
     index: number,
-    window: TagWindow,
-    found: (at: bigint) => AnonymousStream | undefined,
-  ): Promise<ReadonlySet<bigint>> {
+    window: TagWindow<T>,
+    found: (at: T) => AnonymousStream | undefined,
+  ): Promise<ReadonlySet<T>> {
     const transactions = await this.#transactions(window.tags);
     const deposits = await this.#deposits(window.tags);
-    const observed = new Set<bigint>();
+    const observed = new Set<T>();
     const hits: Hit[] = [];
     for (const tx of transactions) {
       const sites: (readonly [Site, Bytes32])[] = [
@@ -691,23 +709,10 @@ class Scan {
     };
   }
 
-  /** A key no ECDH accepts never enters the map, a full map reports the pair. */
+  /** A key no ECDH accepts never enters the map. */
   #learn(index: number, pair: SharedTagPair): void {
     if (isSmallOrder(pair.counterparty)) return;
-    const entry = this.#entry(index);
-    const { learned, entry: learnedEntry } = entry.learn(pair);
-    if (learned === "full") {
-      const skipped = this.#skipped.some(
-        (held) =>
-          held.pair.kind === pair.kind &&
-          held.pair.counterparty.equals(pair.counterparty) &&
-          held.viewingPublicKey.equals(entry.viewingPublicKey),
-      );
-      if (!skipped)
-        this.#skipped.push(Object.freeze({ viewingPublicKey: entry.viewingPublicKey, pair }));
-      return;
-    }
-    this.#withEntry(index, learnedEntry);
+    this.#withEntry(index, this.#entry(index).learn(pair));
   }
 
   /** Keeps a rebuilt note once, under the stream that found it. */
@@ -885,6 +890,7 @@ class Scan {
 }
 
 const BOOTSTRAP: AnonymousStream = Object.freeze({ kind: "bootstrap" });
+const BOOTSTRAP_TAG: RoundTag = BOOTSTRAP;
 const base58 = getBase58Encoder();
 
 function pairOf(kind: SharedTagPair["kind"], counterparty: X25519PublicKey): SharedTagPair {
@@ -899,9 +905,10 @@ function foundIn(stream: EntryStream, index: bigint): AnonymousStream | undefine
     : undefined;
 }
 
-function windowFrom(start: bigint): readonly bigint[] {
-  const end = U64_MAX - start < TAG_WINDOW ? U64_MAX + 1n : start + TAG_WINDOW;
-  return Array.from({ length: Number(end - start) }, (_, offset) => start + BigInt(offset));
+function streamKey(stream: Stream): string {
+  return typeof stream === "string"
+    ? stream
+    : `${stream.kind}:${bytesKey(stream.counterparty.toBytes())}`;
 }
 
 /** `undefined` without a ring, a contributory key, a salt or a canonical first nullifier. */

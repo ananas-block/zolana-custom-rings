@@ -52,15 +52,14 @@ pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
     AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SentCheck, SentPayment,
-    SkippedCounterparty,
 };
 #[cfg(feature = "solana-rpc")]
 pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
-pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST, TAG_WINDOW};
+pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST};
 pub use crate::viewing_history::{
     AdvancedTag, FirstContact, PaymentRecipient, PaymentTag, StreamCounter, TagSelection,
-    TransferTagging, TransferTags, ViewingHistory, ViewingKeyEntry, MAX_COUNTERPARTIES,
-    PENDING_RETENTION, VIEWING_HISTORY_VERSION,
+    TransferTagging, TransferTags, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
+    VIEWING_HISTORY_VERSION,
 };
 pub use crate::{
     confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},

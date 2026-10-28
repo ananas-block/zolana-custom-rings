@@ -191,9 +191,9 @@ export {
   signingKeySpendSigner,
 } from "../operations/payments/anonymous.js";
 export {
-  MAX_COUNTERPARTIES,
   PENDING_RETENTION,
   StreamCounter,
+  TAG_GAP,
   TransferTagging,
   VIEWING_HISTORY_VERSION,
   ViewingHistory,
@@ -205,13 +205,12 @@ export type {
   EntryStream,
   FirstContact,
   FirstContactPairing,
-  Learned,
   PaymentRecipient,
   PaymentTag,
   TagSelection,
   TransferTags,
 } from "../state/viewing-history.js";
-export { AnonymousSync, TAG_WINDOW, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
 export type {
   AnonymousRingUtxo,
   AnonymousScan,
@@ -219,7 +218,6 @@ export type {
   AnonymousSyncClient,
   SentCheck,
   SentPayment,
-  SkippedCounterparty,
 } from "../state/anonymous-sync.js";
 export type { TaggedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
