@@ -2,11 +2,11 @@
 
 Policy Store verifies registry updates and policy decisions for one writer and multiple readers. Start with [the instruction entry point](src/lib.rs).
 
-The writer creates a registry at the PDA derived from `REGISTRY_PDA_SEED` and its address. Initialization fixes the writer and grace period. The initial root contains only the tree sentinel.
+The writer creates a registry at the PDA derived from `Registry::SEED` and its address. The account layout and errors live in `custom_ring_interface::policy_store`. Initialization fixes the writer and grace period. The initial root contains only the tree sentinel.
 
 Updates carry public record changes and an apply proof. The program checks the writer signature, validates the changes, and binds their ordered hash to the registry address and expected revision. The proof binds the old root and leaf index to their replacements. List contents and rule tables stay outside the account. Readers need access to the tree data to construct proofs.
 
-A normal update gives the outgoing root a fixed expiry slot. Earlier expiry slots stay fixed. A normal update fails if it would replace an unexpired root. An immediate update clears all earlier roots. Both update modes advance the revision without wraparound.
+A normal update gives the outgoing root a fixed expiry slot, saturating at `u64::MAX`, where the root never expires. Earlier expiry slots stay fixed. A normal update fails if it would replace an unexpired root. An immediate update clears all earlier roots. Both update modes advance the revision without wraparound.
 
 Readers supply a revision, rule table, action hash, sender and policy proof. Verification reads the registry without changing it. All referenced lists come from the same registry. The proof uses the member policy circuit with confidential outputs, no withdrawals, no public asset flow and no key escrow. A proof can verify at another revision when the root bytes are equal.
 

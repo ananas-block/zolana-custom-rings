@@ -30,6 +30,8 @@ pub mod member_registry;
 pub mod merge;
 #[path = "codec/output.rs"]
 pub mod output;
+#[path = "accounts/policy_store.rs"]
+pub mod policy_store;
 #[path = "proof/ring_keys.rs"]
 pub mod ring_keys;
 #[path = "codec/spp.rs"]

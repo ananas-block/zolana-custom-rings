@@ -1,12 +1,11 @@
 use bytemuck::bytes_of;
 use custom_ring_interface::{
+    policy_store::{PolicyStoreError, Registry},
     ApplyRecordsIxData, AuthorityWriteRecordsIxData, CustomRingError, CustomRingProof,
     PlainGroth16Proof, RecordWriteData, WriteRecordsIxData,
 };
 use litesvm::LiteSVM;
-use policy_store_program::{
-    tag, InitializeIxData, StoreError, VerifyPolicyIxData, REGISTRY_PDA_SEED,
-};
+use policy_store_program::{tag, InitializeIxData, VerifyPolicyIxData};
 use serde_json::Value;
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -42,17 +41,35 @@ impl Store {
         svm.add_program(PROGRAM, &std::fs::read(program).unwrap())
             .unwrap();
         let writer = Keypair::new_from_array([9; 32]);
-        svm.airdrop(&writer.pubkey(), 1_000_000_000).unwrap();
+        let reader = Keypair::new();
+        for signer in [&writer, &reader] {
+            svm.airdrop(&signer.pubkey(), 1_000_000_000).unwrap();
+        }
         let registry =
-            Address::find_program_address(&[REGISTRY_PDA_SEED, writer.pubkey().as_ref()], &PROGRAM)
-                .0;
+            Address::find_program_address(&[Registry::SEED, writer.pubkey().as_ref()], &PROGRAM).0;
         Self {
             svm,
             writer,
-            reader: Keypair::new(),
+            reader,
             registry,
             proofs: serde_json::from_str(include_str!("proofs.json")).unwrap(),
         }
+    }
+
+    fn initialize(&mut self, grace_slots: u64) {
+        self.send(self.instruction(
+            tag::INITIALIZE,
+            bytes_of(&InitializeIxData {
+                grace_slots: grace_slots.to_le_bytes(),
+            }),
+        ))
+        .unwrap();
+    }
+
+    fn update_with(&self, revision: u64, mode: u8) -> Instruction {
+        let mut update = self.update(revision);
+        update.data[0] = mode;
+        update
     }
 
     fn update(&self, revision: u64) -> Instruction {
@@ -197,23 +214,12 @@ fn proof(vector: &Value) -> CustomRingProof {
 #[test]
 fn writer_updates_and_readers_verify_retained_roots() {
     let mut store = Store::new();
-    store
-        .svm
-        .airdrop(&store.reader.pubkey(), 1_000_000_000)
-        .unwrap();
-    store
-        .send(store.instruction(
-            tag::INITIALIZE,
-            bytes_of(&InitializeIxData {
-                grace_slots: GRACE.to_le_bytes(),
-            }),
-        ))
-        .unwrap();
+    store.initialize(GRACE);
     let mut wrong_writer = store.update(0);
     wrong_writer.accounts[0].pubkey = store.reader.pubkey();
     assert_eq!(
         store.send(wrong_writer),
-        refusal(StoreError::Unauthorized as u32)
+        refusal(PolicyStoreError::Unauthorized as u32)
     );
     let mut forged = store.update(0);
     *forged.data.last_mut().unwrap() ^= 1;
@@ -224,7 +230,7 @@ fn writer_updates_and_readers_verify_retained_roots() {
     store.send(store.update(0)).unwrap();
     assert_eq!(
         store.send(store.update(0)),
-        refusal(StoreError::RevisionChanged as u32)
+        refusal(PolicyStoreError::RevisionChanged as u32)
     );
     for _ in 0..2 {
         store.reader = Keypair::new();
@@ -244,9 +250,7 @@ fn writer_updates_and_readers_verify_retained_roots() {
     let seeded = store.svm.clone();
     for mode in [tag::UPDATE, tag::UPDATE_IMMEDIATE] {
         store.svm = seeded.clone();
-        let mut update = store.update(1);
-        update.data[0] = mode;
-        store.send(update).unwrap();
+        store.send(store.update_with(1, mode)).unwrap();
         if mode == tag::UPDATE {
             store.svm.warp_to_slot(GRACE - 1);
             store.send(store.verify()).unwrap();
@@ -254,15 +258,26 @@ fn writer_updates_and_readers_verify_retained_roots() {
         }
         assert_eq!(
             store.send(store.verify()),
-            refusal(StoreError::RootExpired as u32)
+            refusal(PolicyStoreError::RootExpired as u32)
         );
         store.send(store.update(2)).unwrap();
         assert_eq!(
             store.send(store.verify()),
-            refusal(StoreError::RootExpired as u32)
+            refusal(PolicyStoreError::RootExpired as u32)
         );
         let mut current = store.verify();
         bytemuck::from_bytes_mut::<VerifyPolicyIxData>(&mut current.data[1..]).revision = 3.into();
         store.send(current).unwrap();
     }
+}
+
+#[test]
+fn unbounded_grace_keeps_both_update_modes() {
+    let mut store = Store::new();
+    store.initialize(u64::MAX);
+    store.svm.warp_to_slot(1);
+    store.send(store.update_with(0, tag::UPDATE)).unwrap();
+    store
+        .send(store.update_with(1, tag::UPDATE_IMMEDIATE))
+        .unwrap();
 }
