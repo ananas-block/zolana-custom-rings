@@ -45,18 +45,23 @@ mod scan;
 #[path = "rpc/tags.rs"]
 pub mod tags;
 mod types;
+#[path = "state/viewing_history.rs"]
+pub mod viewing_history;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingScan, AnonymousRingState, AnonymousRingSync, AnonymousRingUtxo, AnonymousStream,
-    DecoyLeaf, IssuedAddress, PairAnchor, PaymentStream, PaymentTag, ReceivedAnchor,
-    SentFirstContact, TagAllocation, ADDRESS_GAP, ANCHOR_DECOYS, ANONYMOUS_RING_STATE_VERSION,
-    DECOYS_PER_TREE, DEPOSIT_GAP, MAX_FETCH_EPOCHS, MAX_ISSUED_ADDRESSES, PAIR_IDLE_EPOCHS,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SentCheck, SentPayment,
+    SkippedCounterparty,
 };
 #[cfg(feature = "solana-rpc")]
 pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
-pub use crate::tags::{IndexerReads, TagWindow, DEFAULT_TAG_WINDOW, TAGS_PER_REQUEST};
+pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST, TAG_WINDOW};
+pub use crate::viewing_history::{
+    AdvancedTag, FirstContact, PaymentRecipient, PaymentTag, StreamCounter, TagSelection,
+    TransferTagging, TransferTags, ViewingHistory, ViewingKeyEntry, MAX_COUNTERPARTIES,
+    PENDING_RETENTION, VIEWING_HISTORY_VERSION,
+};
 pub use crate::{
     confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
     created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
@@ -65,8 +70,8 @@ pub use crate::{
     deposit_payload::deposit_payload,
     disclosure::{
         AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-        PublishedOutputs, SealedAuditEnvelope,
+        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
+        SealedAuditEnvelope,
     },
     encryption::{
         auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
@@ -92,7 +97,7 @@ pub use crate::{
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
         AuditedUtxo, CreatedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening,
-        OutputPayloadError, OutputPayloadErrorKind, UtxoOwner,
+        OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

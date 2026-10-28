@@ -155,6 +155,14 @@ impl<S: TransactionSource> Shared<S> {
         self.assets.lock().await.registry.clone()
     }
 
+    /// Delivered bodies name no mint, so a new mint arrives only through the interval refresh.
+    pub(crate) async fn due_assets(&self) -> RingAssets {
+        match self.refresh_assets().await {
+            Ok(assets) => assets,
+            Err(_) => self.cached_assets().await,
+        }
+    }
+
     /// At most one registry read per interval, a failed one blocks retries until it ends.
     pub(crate) async fn refresh_assets(&self) -> Result<RingAssets, RingRpcError> {
         let mut cache = self.assets.lock().await;

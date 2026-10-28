@@ -43,7 +43,6 @@ zolana-cli-common = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 spr-api = { workspace = true }
 spr-client = { workspace = true, features = ["solana-rpc"] }
-spr-event-parser = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-interface = { workspace = true }
 spr-keypair = { workspace = true }

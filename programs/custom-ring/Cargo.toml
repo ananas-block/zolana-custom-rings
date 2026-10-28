@@ -31,7 +31,6 @@ spr-account-checks = { workspace = true }
 spr-hasher = { workspace = true }
 spr-interface = { workspace = true, features = ["borsh"] }
 zolana-ring-policy = { workspace = true }
-spr-tree = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

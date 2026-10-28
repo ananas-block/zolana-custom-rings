@@ -86,7 +86,7 @@ func goldenPath(name string) string {
 	case strings.HasPrefix(name, "custom-ring-audit-anonymous-v2-"):
 		parts := strings.Split(name, "-")
 		outputs := parts[len(parts)-1]
-		if outputs != "2" && outputs != "4" && outputs != "8" && outputs != "16" {
+		if outputs != "2" && outputs != "4" && outputs != "8" {
 			panic("unknown anonymous audit shape: " + name)
 		}
 		family = "audit/anonymous/outputs_" + outputs

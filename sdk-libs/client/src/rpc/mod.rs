@@ -27,7 +27,7 @@ use zolana_secret_file::{
 use crate::{
     AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
     InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening, OutputPayloadErrorKind,
-    ReaderKey, ReaderKeyError, RingWithdrawal, UtxoOwner,
+    ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -505,7 +505,7 @@ pub struct DecryptedOutput {
     /// The recipient's X25519 u of a ring output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipient_u: Option<Hash>,
-    /// `0^16 || tag`, the published owner tag of an anonymous ring output.
+    /// The view tag of an anonymous ring output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<Hash>,
 }
@@ -794,13 +794,21 @@ impl From<AuditedOutput> for DecryptedOutput {
         let (kind, utxo, recipient_u, tag) = match output.opening {
             OutputOpening::Ring {
                 utxo,
-                recipient_u,
-                tag,
+                owner_tag: RingOwnerTag::Recipient(recipient_u),
             } => (
                 DecryptedOutputKind::Ring,
                 Some(utxo),
                 Some(recipient_u.into()),
-                tag.map(|tag| tag.field().into()),
+                None,
+            ),
+            OutputOpening::Ring {
+                utxo,
+                owner_tag: RingOwnerTag::View(tag),
+            } => (
+                DecryptedOutputKind::Ring,
+                Some(utxo),
+                None,
+                Some(tag.into()),
             ),
             OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None, None),
             OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None, None),

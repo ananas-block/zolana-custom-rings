@@ -12,12 +12,12 @@ use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
-use zolana_client::{
+use spr_client::{
     compile_message,
     prover::{Proof, ProofCompressed},
     sign_transaction, ComputeBudgetConfig,
 };
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_policy::TableParts;
 
 const PROGRAM: Address = Address::new_from_array([0x53; 32]);

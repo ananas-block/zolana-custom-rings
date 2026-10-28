@@ -139,20 +139,6 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PackedAudit {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(flatten)]
-    pub audit: AuditParams,
-    pub n_out: u8,
-    /// The key's capacity, slots past `n_out` zero.
-    pub outputs: Vec<Opening>,
-    #[serde(serialize_with = "fe::seq")]
-    pub owner_keys: Vec<[u8; 32]>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeliveredOutput {
@@ -175,69 +161,13 @@ pub(crate) struct DeliveredAudit {
     pub outputs: Vec<DeliveredOutput>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct Stream {
-    #[serde(with = "fe")]
-    pub tag: [u8; 32],
-    pub inbox: bool,
-    pub pair: bool,
-    #[serde(rename = "self")]
-    pub change: bool,
-    pub index: u8,
-}
-
+/// The owner key is bytes, never a field.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
-pub(crate) struct AnonymousOutput {
-    #[serde(flatten)]
-    pub delivered: DeliveredOutput,
-    pub stream: Stream,
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Anchor {
+pub(crate) struct AnonymousOutput {
+    pub output: Opening,
     #[serde(with = "fe")]
-    pub tree_id: [u8; 32],
-    #[serde(with = "fe")]
-    pub asset: [u8; 32],
-    #[serde(with = "fe")]
-    pub amount: [u8; 32],
-    #[serde(with = "fe")]
-    pub slot_secret: [u8; 32],
-    #[serde(with = "fe")]
-    pub blinding: [u8; 32],
-    pub epoch: u64,
-    pub index: u8,
-    pub path_index: u64,
-    #[serde(serialize_with = "fe::seq")]
-    pub path: Vec<[u8; 32]>,
-}
-
-impl core::fmt::Debug for Anchor {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let Self {
-            tree_id,
-            asset,
-            amount,
-            slot_secret: _,
-            blinding: _,
-            epoch,
-            index,
-            path_index: _,
-            path: _,
-        } = self;
-        f.debug_struct("Anchor")
-            .field("tree_id", tree_id)
-            .field("asset", asset)
-            .field("amount", amount)
-            .field("slot_secret", &REDACTED)
-            .field("blinding", &REDACTED)
-            .field("epoch", epoch)
-            .field("index", index)
-            .field("path_index", &REDACTED)
-            .field("path", &REDACTED)
-            .finish()
-    }
+    pub owner_key: [u8; 32],
 }
 
 #[derive(Serialize)]
@@ -262,11 +192,6 @@ pub(crate) struct AnonymousAudit {
     pub inputs: Vec<Opening>,
     #[serde(with = "fe")]
     pub sender_commitment: [u8; 32],
-    pub epoch: u64,
-    #[serde(with = "fe")]
-    pub first_contact_root: [u8; 32],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchor: Option<Anchor>,
 }
 
 /// A member's record, or the low record proving it absent, as one subject entry opens it.

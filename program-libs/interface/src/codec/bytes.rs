@@ -47,12 +47,6 @@ impl<'a> Bytes<'a> {
         Ok(self.take(count * 32)?.as_chunks::<32>().0)
     }
 
-    /// `len u16 || bytes`.
-    pub(crate) fn sized(&mut self) -> Result<&'a [u8], CustomRingError> {
-        let len = self.u16()?;
-        self.take(usize::from(len))
-    }
-
     /// `ceil(len / 8)` bytes, bit `i` at byte `i / 8` bit `i % 8`, no bit set past `len`.
     pub(crate) fn bitmap(&mut self, len: usize) -> Result<u64, CustomRingError> {
         if len > u64::BITS as usize {

@@ -18,9 +18,9 @@ custom-ring-interface = { workspace = true }
 pinocchio = { workspace = true, features = ["cpi"] }
 pinocchio-system = { workspace = true }
 thiserror = { workspace = true }
-zolana-account-checks = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-interface = { workspace = true }
+spr-account-checks = { workspace = true }
+spr-hasher = { workspace = true }
+spr-interface = { workspace = true }
 zolana-ring-policy = { workspace = true }
 
 [dev-dependencies]
@@ -31,7 +31,7 @@ solana-address = { workspace = true }
 solana-instruction = { workspace = true }
 solana-keypair = { workspace = true }
 solana-transaction-error = { workspace = true }
-zolana-client = { workspace = true }
+spr-client = { workspace = true }
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

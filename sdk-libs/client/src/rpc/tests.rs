@@ -1,4 +1,3 @@
-use custom_ring_interface::stream::{RingTag, TAG_LEN};
 use solana_keypair::Keypair;
 use spr_keypair::ViewingKey;
 use spr_transaction::OutputContext;
@@ -283,8 +282,7 @@ fn a_decrypted_page_keeps_its_wire_json() {
                 0,
                 OutputOpening::Ring {
                     utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
-                    recipient_u: [6; 32],
-                    tag: None,
+                    owner_tag: RingOwnerTag::Recipient([6; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),
@@ -329,8 +327,7 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
                         ring_data_hash: [0; 32],
                         ..utxo(0x10, Some(Address::new_from_array([4; 32])))
                     },
-                    recipient_u: [6; 32],
-                    tag: Some(RingTag::from_bytes([0x31; TAG_LEN])),
+                    owner_tag: RingOwnerTag::View([0x31; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),

@@ -10,7 +10,7 @@ use spr_transaction::{
 };
 
 use super::{
-    canonical_shape, packed_or_delivered, pad_under_rail, sealed,
+    canonical_shape, delivered, pad_under_rail, sealed,
     selection::{payment_total, widest, Funding},
     shape_keyed, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
 };
@@ -238,7 +238,7 @@ impl Delegated<'_> {
                     })?
             }
         };
-        let delivery = packed_or_delivered(shape.n_outputs(), RingRail::Delegate)?;
+        let delivery = delivered(shape.n_outputs(), RingRail::Delegate)?;
         // The delegate holds no viewing key of the member, a fresh transaction key seals the move.
         let rail = RingOutputRail::new(ViewingKey::new(), delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &self.source)?;

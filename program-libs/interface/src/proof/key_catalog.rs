@@ -9,9 +9,6 @@ pub use crate::ring_keys::RING_KEYS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingCircuit {
-    PackedAudit {
-        outputs: u8,
-    },
     DeliveredAudit {
         outputs: u8,
     },
@@ -51,7 +48,6 @@ pub enum RingCircuit {
 impl RingCircuit {
     pub const fn audit(layout: DisclosureLayout, n_out: u8) -> Self {
         match layout {
-            DisclosureLayout::Packed(_) => Self::PackedAudit { outputs: n_out },
             DisclosureLayout::Delivered(_) => Self::DeliveredAudit { outputs: n_out },
             DisclosureLayout::Anonymous(layout) => {
                 let class = layout.key.class() as u8;
@@ -126,7 +122,7 @@ impl RingKey {
         format!("{}.key", self.name.replace('-', "_"))
     }
 
-    /// The release lock section, `custom-ring-audit-packed-2` reads `audit_packed_2_key`.
+    /// The release lock section, `custom-ring-audit-delivered-2` reads `audit_delivered_2_key`.
     pub fn section(self) -> String {
         let stem = self.name.strip_prefix(NAME_PREFIX).unwrap_or(self.name);
         key_suffixed(&stem.replace('-', "_"), "_")
@@ -166,17 +162,20 @@ mod tests {
 
     #[test]
     fn key_names_carry_one_key_suffix() {
-        let packed = RingKey {
-            circuit: RingCircuit::PackedAudit { outputs: 2 },
-            name: "custom-ring-audit-packed-2",
+        let delivered = RingKey {
+            circuit: RingCircuit::DeliveredAudit { outputs: 2 },
+            name: "custom-ring-audit-delivered-2",
         };
         let register = RingKey {
             circuit: RingCircuit::RegisterKey,
             name: "custom-ring-register-key",
         };
-        assert_eq!(packed.file_name(), "custom_ring_audit_packed_2.key");
-        assert_eq!(packed.section(), "audit_packed_2_key");
-        assert_eq!(packed.asset("v5"), "custom-ring-audit-packed-2-key-v5.key");
+        assert_eq!(delivered.file_name(), "custom_ring_audit_delivered_2.key");
+        assert_eq!(delivered.section(), "audit_delivered_2_key");
+        assert_eq!(
+            delivered.asset("v5"),
+            "custom-ring-audit-delivered-2-key-v5.key"
+        );
         assert_eq!(register.section(), "register_key");
         assert_eq!(register.asset("v5"), "custom-ring-register-key-v5.key");
     }

@@ -11,51 +11,31 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
   "custom_ring_apply_records_8.key":
     "ddac9ce96b1040b3893b4f22967f2e04f541fb901869491a4960588edbda92c5",
   "custom_ring_audit_anonymous_entry_v2_8_2.key":
-    "b3e9076cd34a399e61a820cbafe1dac03fc6376f32e8b4257672b0a83bd824f3",
+    "ae68de8a0210c63c959874380608149580ce5de150ae71a1c79ce769ce9f995e",
   "custom_ring_audit_anonymous_entry_v2_8_4.key":
-    "974f589d2ac4ab21df2d2287c34a4af836a7a3563297de44cfc9ba605aeb8fc6",
+    "fb9971dc393fd8a938e19afde2f0d10696db6854df666b7c91b2703d7a9df818",
   "custom_ring_audit_anonymous_entry_v2_8_8.key":
-    "882c762ba7efa6c98e07a32c193368759924b776d304dfaa7bf2a33688394018",
-  "custom_ring_audit_anonymous_v2_12_2.key":
-    "02b9bdad8ae28d02473e7d98809ca2a302d80f3a2d8b249617dc3857328e53f1",
-  "custom_ring_audit_anonymous_v2_12_4.key":
-    "031c906c069425ddcd0972608bb3b3a08b3215be53967330fb561d3356603193",
-  "custom_ring_audit_anonymous_v2_12_8.key":
-    "64af01fb22343349821b101691f013d7f9130a306d4f7a8cc2ea7b3a600926f5",
+    "42315d298d206bf1882b848786dd9ef40bccabe9f8f98347022218784d57e206",
   "custom_ring_audit_anonymous_v2_16_2.key":
-    "fbfea39b3429b9d4df0782a16d2bc28e4feb0960389404140b7fea5592acb534",
+    "6c93b1cb2f0bf7785beec1bb32c08abb764bd992c1c5781c9d8dffe1ac82731a",
   "custom_ring_audit_anonymous_v2_16_4.key":
-    "8322a5954af188c8ca8b492760d3b1869286c3a8eff837c568a9cb2a40b9fa6f",
-  "custom_ring_audit_anonymous_v2_16_8.key":
-    "dfd5eebaf5af0c54ab18b46efbac149916a95b79fc0f39e2c5591990e0d1dfa9",
-  "custom_ring_audit_anonymous_v2_1_16.key":
-    "81d2326e322f2e7c69f81f88ad455a74fdd57b6cda1666add17cc27f170eb91c",
-  "custom_ring_audit_anonymous_v2_24_2.key":
-    "a87ef205ae82c215d1e24b2f6dfeb704727407fb6c908eec76e5cff468c31e0c",
-  "custom_ring_audit_anonymous_v2_24_4.key":
-    "dede173d45f5f5042ca1e13bd680d0fa9e138ce449fe2ef08586b12419fbf3d7",
-  "custom_ring_audit_anonymous_v2_32_2.key":
-    "feae73379c03ac598e4f45901ca3636a36e8f7b9e65a6f4f6f64c73bbd5a36a3",
+    "8c09da13d6e7c4fe321aadd0d8dc6bb3b08b82c64ef8893b383a18f83ecf8bff",
   "custom_ring_audit_anonymous_v2_4_2.key":
-    "38fecfe14adca752197810d4553018d9f964239fc7ae8c17e1a27cccaf2dc66f",
+    "27d5e8a439f9605671733644883be3996c844465d86e0eb8d63f590ff42dd06a",
   "custom_ring_audit_anonymous_v2_4_4.key":
-    "0329d85abbe5e6c978693b1f0bedc5cba9861c943477111d68087491ca04f621",
+    "5199a6f4f8b068c65e348e0fd278e66c495c52b273d400120694d2c05aa2e2db",
   "custom_ring_audit_anonymous_v2_4_8.key":
-    "d74a2ced546e77c5a79f1b9811d5fd6b552e1e2b74e1f1b95ac252726220a8e6",
-  "custom_ring_audit_anonymous_v2_8_2.key":
-    "34d47063da54748a9b999667e6e922173e26a4d1a3b3144d25a040bf76c7378b",
-  "custom_ring_audit_anonymous_v2_8_4.key":
-    "fd3767c9dd9a9ee22ed00eb93ec6ddfe1a39f9e90c425dfb9ed5d5b0146bd983",
+    "49301fc05332b596faeb52ca6aef75309a3df29ca5a07013e7437ae277b53345",
   "custom_ring_audit_anonymous_v2_8_8.key":
-    "17ccb5beabcdd0e24acb953f3f89ea9930f38c30d1c15301514bc76f4b581d08",
+    "75eec96eb53636b1b5db299b8f5b36aec91fcfbcddd50eb65de35f2342299279",
   "custom_ring_audit_delivered_16.key":
     "d772c7121b3b513e751c49d4d2aaada7a1090ab00340241d3eafbfc5e070ad46",
+  "custom_ring_audit_delivered_2.key":
+    "951770333cb613485e33ab4260666e92de405ad25e7c8bc8006f7fb09da9995b",
+  "custom_ring_audit_delivered_4.key":
+    "54df827e8466094db91ff9cd5a5a02df8b3443a7a726be757df175c9d8e77e90",
   "custom_ring_audit_delivered_8.key":
     "09856badc833f291d494a2e90c90333a19b88de7b0de92cf1ea3ec377b8aac57",
-  "custom_ring_audit_packed_2.key":
-    "72f5be6c0c05f3e20db1cb1cd5fa9cb597e20829fa1453644956ca63ba62441f",
-  "custom_ring_audit_packed_4.key":
-    "524126d56f9e7ec9d9e8c57977a72a6b933186b184f716d4cff826de9da2d1c9",
   "custom_ring_deposit_1.key": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8",
   "custom_ring_deposit_2.key": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f",
   "custom_ring_deposit_4.key": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84",

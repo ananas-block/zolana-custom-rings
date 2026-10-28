@@ -15,9 +15,7 @@ mod deposits;
 pub mod transfer;
 
 use custom_ring_interface::{
-    encode_ring_confidential_delivered_output,
-    stream::{RingTag, TAG_LEN},
-    EscrowKey, RingMode,
+    encode_ring_confidential_delivered_output, EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -45,15 +43,15 @@ use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in,
     rpc::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedInputRing, DecryptedPayloadError, DecryptedSender, DecryptedTransaction,
-        DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse, GetAuditedUtxosRequest,
-        GetAuditedUtxosResponse, GetDecryptedTransactionsRequest, GetDecryptedTransactionsResponse,
-        HealthResponse, KeyMode, PagedRead, ReadAttestation, ReadAuth, ReadBuildError,
-        ReadSignature, ReadSigner, ReadTarget, RegistryRoot, RegistryStatus, RingActivation,
-        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
-        RingStatusResponse, SkippedReason, WebAuthnAssertion, AUDITED_UTXOS_LIMIT,
-        CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS,
-        HEALTH, RING_DEPOSITS, RING_STATUS,
+        DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError, DecryptedSender,
+        DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
+        GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
+        GetDecryptedTransactionsResponse, HealthResponse, KeyMode, PagedRead, ReadAttestation,
+        ReadAuth, ReadBuildError, ReadSignature, ReadSigner, ReadTarget, RegistryRoot,
+        RegistryStatus, RingActivation, RingChainStatus, RingDepositsRequest, RingDepositsResponse,
+        RingState, RingStatusRequest, RingStatusResponse, SkippedReason, WebAuthnAssertion,
+        AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
+        GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
     },
     seal_deposits, AnonymousInputs, AuditDisclosure, AuditError, ConfirmedDeposit, DepositOpening,
     MergeAuditPage, MergeAuditResult, OutputPayloadErrorKind, ReaderKey, RingOrigin,
@@ -76,8 +74,7 @@ use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 
 use transfer::{
-    data_free, field, input_opening, x25519_u, Frame, Output, Placement, Publish, Rail, Transfer,
-    UtxoFields,
+    field, input_opening, x25519_u, Frame, Output, Placement, Publish, Rail, Transfer, UtxoFields,
 };
 
 /// Raw id of the tree these fixtures publish into. A slot names the id, not the
@@ -758,23 +755,22 @@ struct Indexed<'a> {
 }
 
 impl Indexed<'_> {
-    fn packed(self) -> ShieldedTransaction {
-        self.packed_with(false)
-    }
-
-    /// Under key escrow every output nullifier key leaves the disclosure.
-    fn packed_with(self, key_escrow: bool) -> ShieldedTransaction {
-        let disclosure = self
-            .transfer
-            .disclosure(Rail::Packed, self.outputs, key_escrow);
-        self.publish(Rail::Packed, &disclosure)
-    }
-
     fn delivered(self) -> ShieldedTransaction {
+        self.delivered_with(false)
+    }
+
+    /// Dummies fill the outputs to the narrowest delivered capacity.
+    fn delivered_with(self, key_escrow: bool) -> ShieldedTransaction {
+        let capacity = DELIVERED_AUDIT_CAPACITIES
+            .into_iter()
+            .find(|capacity| *capacity >= self.outputs.len())
+            .expect("a delivered capacity holds the outputs");
+        let mut outputs = self.outputs.to_vec();
+        outputs.resize(capacity, Output::Dummy);
         let disclosure = self
             .transfer
-            .disclosure(Rail::Delivered, self.outputs, false);
-        self.publish(Rail::Delivered, &disclosure)
+            .disclosure(Rail::Delivered, &outputs, key_escrow);
+        self.publish(Rail::Delivered, &outputs, &disclosure)
     }
 
     /// The entry key's disclosure, the first spent UTXO's owner the sender.
@@ -798,14 +794,19 @@ impl Indexed<'_> {
 
     fn anonymous_with(self, inputs: AnonymousInputs) -> ShieldedTransaction {
         let disclosure = self.transfer.anonymous_disclosure(self.outputs, inputs);
-        self.publish(Rail::Anonymous, &disclosure)
+        self.publish(Rail::Anonymous, self.outputs, &disclosure)
     }
 
-    fn publish(self, rail: Rail, disclosure: &AuditDisclosure) -> ShieldedTransaction {
+    fn publish(
+        &self,
+        rail: Rail,
+        outputs: &[Output],
+        disclosure: &AuditDisclosure,
+    ) -> ShieldedTransaction {
         let mut transaction = self.transfer.publish(Publish {
             slots: self
                 .transfer
-                .slots(rail, self.outputs)
+                .slots(rail, outputs)
                 .into_iter()
                 .map(|slot| slot.output)
                 .collect(),
@@ -817,7 +818,6 @@ impl Indexed<'_> {
         let frame = self.transfer.frame(Frame {
             tx: &transaction,
             layout: disclosure.layout(),
-            data_free: data_free(self.outputs),
         });
         self.frames
             .lock()
@@ -852,7 +852,7 @@ impl Fixture {
             signature: 1,
             frames: &frames,
         }
-        .packed();
+        .delivered();
         let mut foreign_key = Indexed {
             transfer: &ring_transfer(2),
             outputs: &[paid(sol(0xb2, 9), recipient_u)],
@@ -860,7 +860,7 @@ impl Fixture {
             signature: 2,
             frames: &frames,
         }
-        .packed();
+        .delivered();
         foreign_key.messages[0].view_tag = auditor_view_tag(&auditor_pk);
         let mut missing_message = Indexed {
             transfer: &ring_transfer(3),
@@ -869,7 +869,7 @@ impl Fixture {
             signature: 3,
             frames: &frames,
         }
-        .packed();
+        .delivered();
         missing_message.messages.clear();
         Self {
             auditor,
@@ -961,6 +961,7 @@ impl Fixture {
 fn amounts(item: &DecryptedTransaction) -> Vec<u64> {
     item.outputs
         .iter()
+        .filter(|output| output.kind != DecryptedOutputKind::Dummy)
         .map(|output| output.utxo.as_ref().expect("utxo").amount)
         .collect()
 }
@@ -990,7 +991,7 @@ impl SpentUtxo {
             Output::Ring {
                 utxo: member,
                 recipient_u: x25519_u(0x54),
-                tag: Some(RingTag::from_bytes([0x55; TAG_LEN])),
+                tag: Some(field(0x55)),
             },
             Output::Dummy,
         ];
@@ -1305,7 +1306,7 @@ impl EscrowRegistry {
     }
 }
 
-/// A packed transfer of a Registry-mode ring, its owners' nullifier keys left to the registry.
+/// A delivered transfer of a Registry-mode ring, its owners' nullifier keys left to the registry.
 fn escrowed_source(
     fixture: &Fixture,
     owners: &[UtxoFields],
@@ -1321,7 +1322,7 @@ fn escrowed_source(
         signature: 90,
         frames: &fixture.frames,
     }
-    .packed_with(true);
+    .delivered_with(true);
     let mut source = fixture.source().with_transactions(vec![audited.clone()]);
     source.configs.get_mut(&RING).expect("config").mode = RingMode::ConfidentialEscrow;
     source.pages = HashMap::from([

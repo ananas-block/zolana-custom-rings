@@ -509,8 +509,7 @@ impl<S: TransactionSource> AuditService<S> {
         store: &AuditStore,
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
-        let mut assets = self.shared.cached_assets().await;
-        let mut refreshed = false;
+        let assets = self.shared.due_assets().await;
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut origins: HashMap<(Signature, u16), RingOrigin> = HashMap::new();
@@ -566,16 +565,8 @@ impl<S: TransactionSource> AuditService<S> {
                 store,
                 mode,
             };
-            let mut result = bound.and_then(|()| self.audit(audit, &assets));
-            let missing_asset = matches!(&result, Ok(opened) if opened.has_unknown_assets());
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            if missing_asset && !refreshed {
-                refreshed = true;
-                if let Ok(updated) = self.shared.refresh_assets().await {
-                    assets = updated;
-                    result = self.audit(audit, &assets);
-                }
-            }
+            let result = bound.and_then(|()| self.audit(audit, &assets));
             match result {
                 Ok(opened) => {
                     store.record(

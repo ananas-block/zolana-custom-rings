@@ -1,6 +1,5 @@
 use core::fmt;
 
-use custom_ring_interface::stream::RingTag;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -46,13 +45,19 @@ pub struct AuditedOutput {
 pub enum OutputOpening {
     Ring {
         utxo: AuditedUtxo,
-        recipient_u: [u8; 32],
-        /// `None` outside the anonymous rail.
-        tag: Option<RingTag>,
+        owner_tag: RingOwnerTag,
     },
     /// A default-ring note, its owner the published owner tag.
     Exit(AuditedUtxo),
     Dummy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RingOwnerTag {
+    /// The recipient key's u on the delivered rails.
+    Recipient([u8; 32]),
+    /// A view tag the anonymous proof leaves free.
+    View([u8; 32]),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -28,8 +28,7 @@ import {
 import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
 import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
-import { J_INBOX } from "../../crypto/derivation/ring-stream.js";
-import { RING_RULE_SLOTS, RING_SOURCE_SLOTS, RING_STATE_PATH_LENGTH } from "./types.js";
+import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
 
 /** Go `Opening`, one transaction slot as the ring circuits open it. */
@@ -68,33 +67,10 @@ export interface DeliveredSlotProofInputs {
   readonly body: Uint8Array;
 }
 
-/** Go `Stream`, a ring output takes exactly one of `inbox`, `pair` and `self`. */
-export interface AnonymousStreamPosition {
-  readonly tag: Bytes32;
-  readonly inbox: boolean;
-  readonly pair: boolean;
-  readonly self: boolean;
-  readonly index: number;
-}
-
-/** Go `AnonymousOutput`. */
-export interface AnonymousSlotProofInputs extends DeliveredSlotProofInputs {
-  readonly stream: AnonymousStreamPosition;
-}
-
-/** Go `Anchor`, the first contact whose slot secret keys the transfer's one pair stream. */
-export interface FirstContactAnchor {
-  readonly treeId: Bytes32;
-  readonly asset: Bytes32;
-  readonly amount: Bytes32;
-  readonly slotSecret: Bytes32;
-  readonly blinding: Bytes32;
-  /** The epoch and index of the first contact's inbox tag. */
-  readonly epoch: bigint;
-  readonly index: number;
-  readonly pathIndex: bigint;
-  /** State tree siblings, leaf level first. */
-  readonly path: readonly Bytes32[];
+/** Go `AnonymousOutputWires`, the owner key zero on a dummy. */
+export interface AnonymousSlotProofInputs {
+  readonly output: RingSlotOpening;
+  readonly ownerKey: Bytes32;
 }
 
 /** Go `Source`, a zero `registry` names the ring's own registry. */
@@ -159,16 +135,6 @@ export interface MergeInputOpening {
   readonly ringDataHash: Bytes32;
 }
 
-/** Go `PackedAuditParams`, `outputs` and `ownerKeys` at the key's capacity. */
-export interface PackedAuditProofRequest extends AuditEnvelopeProofInputs {
-  readonly kind: "packedAudit";
-  readonly publicInputHash: Bytes32;
-  /** The published output count. */
-  readonly nOut: number;
-  readonly outputs: readonly RingSlotOpening[];
-  readonly ownerKeys: readonly Bytes32[];
-}
-
 /** Go `DeliveredAuditParams`, every slot published. */
 export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly kind: "deliveredAudit";
@@ -190,10 +156,6 @@ export interface AnonymousAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly inputCount: number;
   readonly inputs: readonly RingSlotOpening[];
   readonly senderCommitment: Bytes32;
-  readonly epoch: bigint;
-  readonly firstContactRoot: Bytes32;
-  /** Absent without a pair-tagged slot. */
-  readonly anchor?: FirstContactAnchor;
 }
 
 /** Go `MemberPolicyParams`. */
@@ -285,7 +247,6 @@ export interface WithdrawalExemptionProofRequest {
 
 export type RingProofRequest =
   | WithdrawalExemptionProofRequest
-  | PackedAuditProofRequest
   | DeliveredAuditProofRequest
   | AnonymousAuditProofRequest
   | MemberPolicyProofRequest
@@ -298,8 +259,6 @@ export type RingProofRequest =
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
-    case "packedAudit":
-      return { family: "packedAudit", outputs: listLength(request.outputs) };
     case "deliveredAudit":
       return { family: "deliveredAudit", outputs: listLength(request.outputs) };
     case "anonymousAudit":
@@ -348,18 +307,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     publicInputHash: field(request.publicInputHash, "publicInputHash"),
   };
   switch (request.kind) {
-    case "packedAudit": {
-      const capacity = request.outputs.length;
-      return {
-        ...head,
-        ...envelopeJson(request),
-        nOut: integer(request.nOut, "nOut", 1, capacity),
-        outputs: request.outputs.map((output, i) => openingJson(output, `outputs[${i}]`)),
-        ownerKeys: sized(request.ownerKeys, capacity, "ownerKeys").map((key, i) =>
-          hexBytes(key, 32, `ownerKeys[${i}]`),
-        ),
-      };
-    }
     case "deliveredAudit":
       return {
         ...head,
@@ -378,9 +325,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
         inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
         senderCommitment: field(request.senderCommitment, "senderCommitment"),
-        epoch: u64(request.epoch, "epoch"),
-        firstContactRoot: field(request.firstContactRoot, "firstContactRoot"),
-        ...(request.anchor === undefined ? {} : { anchor: anchorJson(request.anchor) }),
       };
     case "memberPolicy":
       return {
@@ -556,30 +500,9 @@ function deliveredJson(slot: DeliveredSlotProofInputs, name: string): Json {
 }
 
 function anonymousSlotJson(slot: AnonymousSlotProofInputs, name: string): Json {
-  const stream = slot.stream;
   return {
-    ...deliveredJson(slot, name),
-    stream: {
-      tag: field(stream.tag, `${name}.stream.tag`),
-      inbox: flag(stream.inbox),
-      pair: flag(stream.pair),
-      self: flag(stream.self),
-      index: integer(stream.index, `${name}.stream.index`, 0, J_INBOX - 1),
-    },
-  };
-}
-
-function anchorJson(anchor: FirstContactAnchor): Json {
-  return {
-    treeId: field(anchor.treeId, "anchor.treeId"),
-    asset: field(anchor.asset, "anchor.asset"),
-    amount: field(anchor.amount, "anchor.amount"),
-    slotSecret: field(anchor.slotSecret, "anchor.slotSecret"),
-    blinding: field(anchor.blinding, "anchor.blinding"),
-    epoch: u64(anchor.epoch, "anchor.epoch"),
-    index: integer(anchor.index, "anchor.index", 0, J_INBOX - 1),
-    pathIndex: u64(anchor.pathIndex, "anchor.pathIndex"),
-    path: fields(anchor.path, RING_STATE_PATH_LENGTH, "anchor.path"),
+    output: openingJson(slot.output, `${name}.output`),
+    ownerKey: hexBytes(slot.ownerKey, 32, `${name}.ownerKey`),
   };
 }
 

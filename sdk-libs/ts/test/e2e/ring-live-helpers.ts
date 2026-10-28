@@ -55,8 +55,11 @@ import {
   ringComputeUnitLimit,
   ringWalletKeys,
   syncRingWallet,
+  createKitRingSubmissionTransport,
   type RingReadTarget,
+  type RingTransactionSubmission,
 } from "../../src/ring/index.js";
+import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/rpc/projection.js";
 import {
   currentSlot,
@@ -467,4 +470,26 @@ export async function enrolInAllow(
     ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
   );
   for (const member of members) await awaitLists(client, ringProgramId, member, bit, true);
+}
+
+export async function settle(
+  submission: RingTransactionSubmission,
+  client: CustomRingClient,
+  signers: readonly KeyPairSigner[],
+) {
+  return settleWithTransport(submission, createKitRingSubmissionTransport(client, signers));
+}
+
+export async function settleWithTransport(
+  submission: RingTransactionSubmission,
+  transport: RingSubmissionTransport,
+) {
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    const result = await submission.send(transport);
+    if (result.kind === "confirmed") return result;
+    if (result.kind === "failed") throw new Error(`ring transaction failed (${result.signature})`);
+    if (Date.now() > deadline) throw new Error(`ring transaction unresolved (${result.signature})`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }

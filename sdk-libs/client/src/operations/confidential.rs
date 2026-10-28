@@ -1,21 +1,16 @@
-//! Confidential ring notes of schemes 10 and 11 opened into a wallet, the pinned zolana scan skips both.
+//! Confidential ring notes of scheme 10 opened into a wallet, the pinned zolana scan skips them.
 
 use std::collections::HashSet;
 
-use custom_ring_interface::{ring_confidential_packed_output_body, RingPackedBody};
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_keypair::{KeypairError, ShieldedAddress};
 use zolana_ring_keys::RingKeys;
-use zolana_ring_transaction::{RingAssets, RingPackedPlaintext};
+use zolana_ring_transaction::RingAssets;
 use spr_transaction::{
-    serialization::confidential::Confidential, verify_owned, DecryptLabel, DecryptRequest,
-    DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction, TransactionError, Utxo,
-    WalletUtxo,
+    verify_owned, DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction,
 };
 
 use crate::{
     delivered::{confidential_delivered, open_delivered, PendingUtxo},
-    exactly_one_each,
     tags::IndexerReads,
     AnonymousError,
 };
@@ -93,7 +88,7 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
         assets,
         &confidential_delivered(keys, transactions)?,
     )?;
-    let mut decrypted = DecryptionResult {
+    let decrypted = DecryptionResult {
         utxos: delivered.found,
         spent_nullifiers: transactions
             .iter()
@@ -101,98 +96,8 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
             .collect(),
         ..DecryptionResult::default()
     };
-    for tx in transactions {
-        packed_notes(keys, &address, assets, tx, &mut decrypted)?;
-    }
     Ok(RingConfidentialNotes {
         owned: verify_owned(keys, &decrypted)?,
         pending: delivered.pending,
     })
-}
-
-/// Scheme 3's key schedule under the embedded recipient key, `verify_owned` checks the commitment.
-fn packed_notes<K: ShieldedKeys + ?Sized>(
-    keys: &K,
-    address: &ShieldedAddress,
-    assets: &RingAssets,
-    tx: &ShieldedTransaction,
-    decrypted: &mut DecryptionResult,
-) -> Result<(), AnonymousError> {
-    let (Some(ring), Some(tx_viewing_pubkey), Some(salt)) =
-        (tx.ring_program_id, tx.tx_viewing_pk, tx.salt)
-    else {
-        return Ok(());
-    };
-    let held = keys.viewing_public_keys();
-    let mut sites = Vec::new();
-    let mut requests = Vec::new();
-    for (position, slot) in tx.output_slots.iter().enumerate() {
-        let Some(RingPackedBody { key, ciphertext }) =
-            ring_confidential_packed_output_body(&slot.payload)
-        else {
-            continue;
-        };
-        let Ok(viewing_pubkey) = Confidential::embedded_viewing_pk(key) else {
-            continue;
-        };
-        if !held.contains(&viewing_pubkey) {
-            continue;
-        }
-        let slot_index = u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?;
-        sites.push((slot, slot_index));
-        requests.push(DecryptRequest {
-            ciphertext,
-            viewing_pubkey,
-            tx_viewing_pubkey,
-            salt,
-            slot_index,
-            label: DecryptLabel::Utxo,
-        });
-    }
-    if requests.is_empty() {
-        return Ok(());
-    }
-    let plaintexts = match keys.decrypt(&requests) {
-        Ok(plaintexts) => exactly_one_each(plaintexts, requests.len())?,
-        // The sender picks `tx_viewing_pk`, a low-order one opens under no key.
-        Err(TransactionError::Keypair(KeypairError::NonContributoryKey)) => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    for ((slot, slot_index), bytes) in sites.into_iter().zip(plaintexts) {
-        let Ok(plaintext) = RingPackedPlaintext::deserialize(&bytes) else {
-            continue;
-        };
-        let asset = match assets.registry().resolve(plaintext.asset_id) {
-            Ok(asset) => asset,
-            Err(TransactionError::UnknownAsset(asset_id)) => {
-                decrypted.unknown_asset_ids.insert(asset_id);
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let context = &slot.output_context;
-        decrypted.utxos.push(WalletUtxo {
-            utxo: Utxo {
-                owner: address.signing_pubkey,
-                asset,
-                amount: plaintext.amount,
-                blinding: plaintext.blinding,
-                ring_program_id: Some(ring),
-                data: plaintext.data,
-            },
-            nullifier_pubkey: address.nullifier_pubkey,
-            utxo_hash: context.hash,
-            nullifier: [0; 32],
-            tx_viewing_key: None,
-            data_hash: None,
-            ring_data_hash: None,
-            tree_id: context.tree_id,
-            leaf_index: context.leaf_index,
-            latest_tree_id: None,
-            slot: tx.slot,
-            tx_signature: tx.tx_signature,
-            slot_index,
-        });
-    }
-    Ok(())
 }

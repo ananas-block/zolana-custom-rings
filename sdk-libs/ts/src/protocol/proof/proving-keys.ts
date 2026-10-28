@@ -9,7 +9,6 @@ import {
   ANONYMOUS_ENTRY_OUTPUTS,
   ANONYMOUS_MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
-  PACKED_AUDIT_CAPACITIES,
 } from "../codec/ring-disclosure-layout.js";
 import { RING_AUTHORITY_SHAPES } from "../transaction/spp.js";
 
@@ -17,7 +16,6 @@ export { RING_PROVING_KEY_SHA256S };
 
 /** A ring circuit by the shape its key serves, Rust `RingCircuit`. */
 export type RingKeyCircuit =
-  | Readonly<{ family: "packedAudit"; outputs: number }>
   | Readonly<{ family: "deliveredAudit"; outputs: number }>
   | Readonly<{ family: "anonymousAudit"; inputClass: number; outputs: number }>
   /** Opens every spent UTXO, the key of a transfer spending a default-ring note. */
@@ -37,10 +35,6 @@ export const RING_KEYS: readonly Readonly<{
 }>[] = Object.freeze(
   (
     [
-      ...PACKED_AUDIT_CAPACITIES.map(
-        (outputs) =>
-          [{ family: "packedAudit", outputs }, `custom-ring-audit-packed-${outputs}`] as const,
-      ),
       ...DELIVERED_AUDIT_CAPACITIES.map(
         (outputs) =>
           [
@@ -129,7 +123,6 @@ function pinnedProvingKey(name: string, circuit: string): ExpectedProvingKey {
 
 function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
   switch (left.family) {
-    case "packedAudit":
     case "deliveredAudit":
       return right.family === left.family && right.outputs === left.outputs;
     case "memberPolicy":

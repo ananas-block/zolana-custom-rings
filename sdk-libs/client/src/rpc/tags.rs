@@ -18,8 +18,8 @@ use spr_client::{
 
 use crate::paging::{PageCursor, PAGE_LIMIT};
 
-/// Indices probed per indexer query.
-pub const DEFAULT_TAG_WINDOW: u64 = 64;
+/// Indices one stream window derives, split into requests of [`TAGS_PER_REQUEST`].
+pub const TAG_WINDOW: u64 = 10_000;
 
 /// The indexer's cap on the tags or nullifiers one request names.
 pub const TAGS_PER_REQUEST: usize = spr_indexer_api::PAGE_LIMIT as usize;
@@ -30,10 +30,14 @@ pub struct TagWindow {
 }
 
 impl TagWindow {
-    /// `tags` in index order from `start`, a short list ends the window early.
+    /// `tags` in index order from `start`.
     pub fn new(start: u64, tags: impl IntoIterator<Item = ViewTag>) -> Self {
+        Self::indexed((start..).zip(tags))
+    }
+
+    pub fn indexed(tags: impl IntoIterator<Item = (u64, ViewTag)>) -> Self {
         Self {
-            by_tag: tags.into_iter().zip(indices(start)).collect(),
+            by_tag: tags.into_iter().map(|(index, tag)| (tag, index)).collect(),
         }
     }
 
@@ -74,7 +78,7 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         }
     }
 
-    /// No epoch past the returned slot's is complete, `None` before the first answer.
+    /// The lowest slot any answer reports persisted, `None` before the first answer.
     pub fn persisted_slot(&self) -> Option<u64> {
         self.persisted
     }
@@ -197,8 +201,4 @@ pages! {
     GetShieldedTransactionsByTagsResponse => ShieldedTransaction, transactions;
     GetShieldedTransactionsByNullifiersResponse => ShieldedTransaction, transactions;
     GetEncryptedUtxosByTagsResponse => EncryptedUtxoMatch, matches;
-}
-
-pub(crate) fn indices(start: u64) -> impl Iterator<Item = u64> {
-    start..=start.saturating_add(DEFAULT_TAG_WINDOW - 1)
 }

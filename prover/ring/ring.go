@@ -28,8 +28,6 @@ func init() {
 
 func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
-	case PackedAudit:
-		return bind[PackedAuditParams](k, audit.NewPackedAuditCircuit, k.Outputs)
 	case DeliveredAudit:
 		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
 	case AnonymousAudit, AnonymousEntryAudit:

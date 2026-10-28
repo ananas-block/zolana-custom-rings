@@ -15,9 +15,9 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use thiserror::Error;
-use zolana_account_checks::AccountIterator;
-use zolana_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
-use zolana_interface::N_PUBLIC_SLOTS;
+use spr_account_checks::AccountIterator;
+use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
+use spr_interface::N_PUBLIC_SLOTS;
 use zolana_ring_policy::{registry_field, EncodedRuleTable, SourceMap};
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
