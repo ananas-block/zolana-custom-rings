@@ -153,16 +153,16 @@ and/or a withdrawal cap.
 | --- | ------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **Member record**        | Registry entry | A public entry in the member registry for an owner or asset, containing list memberships, key escrow information and asset limits used to prove that a transfer meets the ring's rules. |
 | 2   | **Ring RPC**             | Service        | Our hosted service that indexes member records, generates proofs, pays fees, submits transactions and serves decrypted activity to authorized readers.                                  |
-| 3   | **Ring Program**         | Solana program | Enforces ring controls and verifies proofs before authorizing note movements.                                                                                                           |
+| 3   | **Ring Program**         | Solana program | Enforces ring controls and verifies proofs before authorizing UTXO movements.                                                                                                           |
 | 4   | **Policy Store Program** | Solana program | Stores versioned registry roots and verifies policy proofs for applications.                                                                                                            |
 | 5   | **Curator**              | Solana program | Supplies member lists from another registry for a ring's policy checks.                                                                                                                 |
-| 6   | **Wallet**               | User           | Holds spending keys and authorizes transfers of its ring notes.                                                                                                                         |
+| 6   | **Wallet**               | User           | Holds spending keys and authorizes transfers of its ring UTXOs.                                                                                                                         |
 | 7   | **Reader**               | User           | Uses granted read access to query decrypted ring activity through Ring RPC.                                                                                                             |
 | 8   | **Config Authority**     | Authority      | Sets ring policies, member lists, readers, co-signer requirements, fees and pause controls.                                                                                             |
 | 9   | **Upgrade Authority**    | Authority      | Upgrades the ring program and creates its initial configuration.                                                                                                                        |
 | 10  | **Auditor**              | Authority      | Holds the auditor key and decrypts ring transfers, deposits, merges and escrowed keys.                                                                                                  |
 | 11  | **Co-signer**            | Authority      | Signs operations when the ring's configured scope or approval rules require it.                                                                                                         |
-| 12  | **Delegate**             | Authority      | Uses delegated authority to move members' notes within a ring with key escrow.                                                                                                          |
+| 12  | **Delegate**             | Authority      | Uses delegated authority to move members' UTXOs within a ring with key escrow.                                                                                                          |
 
 
 ## Flows
@@ -172,15 +172,16 @@ and/or a withdrawal cap.
 3. Member record updates
 4. Deposit
 5. Transfer (confidential and anonymous)
-6. Note merge
-7. Delegate transfer
-8. Wallet synchronization and recovery
-9. Transaction auditing
-10. Reader access grants and revocation
-11. Policy and mint limit updates
-12. Curator list integration
-13. Ring administration and authority changes
-14. Policy Store initialization, updates and verification
+6. User Merge
+7. Managed Merge
+8. Delegate transfer
+9. Wallet synchronization and recovery
+10. Transaction auditing
+11. Reader access grants and revocation
+12. Policy and mint limit updates
+13. Curator list integration
+14. Ring administration and authority changes
+15. Policy Store initialization, updates and verification
 
 ## 2. Member enrollment and key escrow
 
@@ -207,13 +208,13 @@ The **Wallet** updates its own viewing and recovery settings. The **Config Autho
 
 ## 4. Deposit
 
-A deposit moves SOL or tokens from a wallet's public balance into ring notes. The token and amount are public.
+A deposit moves SOL or tokens from a wallet's public balance into ring UTXOs. The token and amount are public.
 
 Compared with a transfer, a deposit adds a round trip for the **Wallet** to sign the transaction that moves its SOL or SPL tokens.
 
 1. **Wallet:**
    1. Chooses the token, amount and recipient.
-   2. Prepares the deposit notes and encrypts their details to the recipient and the **Auditor**.
+   2. Prepares the deposit UTXOs and encrypts their details to the recipient and the **Auditor**.
    3. Sends the deposit request to **Ring RPC**.
 2. **Ring RPC:**
    1. Checks that the ring is active, the asset is allowed and any required recipient key escrow is registered.
@@ -223,7 +224,7 @@ Compared with a transfer, a deposit adds a round trip for the **Wallet** to sign
 4. **Ring RPC:**
    1. Co-signs.
    2. Pays fees and submits the deposit to the **Ring Program**.
-   3. Indexes the confirmed deposit so the recipient's **Wallet** can find its new notes.
+   3. Indexes the confirmed deposit so the recipient's **Wallet** can find its new UTXOs.
 
 ## 5. Transfer flow
 
@@ -233,15 +234,40 @@ A unified flow for anonymous,  confidential transfers, and withdrawals.
 
 1. anonymous: default
 2. confidential:  policy circuit checks sender and recipients as public inputs same as default ring.
-3. transfer to default ring: some outputs of a transfer can be owned by the default ring program. 
+3. transfer to default ring: some outputs of a transfer can be owned by the default ring program.
 4. public withdrawal: spl tranfer to 1 or multiple spl accounts, optionally alongside other transfers
-
-1. **Wallet:** Signs the transfer authorization and sends it with the proof inputs to **Ring RPC**.
-2. **Ring RPC:**
+5. **Wallet:** Signs the transfer authorization and sends it with the proof inputs to **Ring RPC**.
+6. **Ring RPC:**
    1. Reads the required member records.
    2. Generates the required proofs.
    3. Obtains the **Co-signer** signature when required.
    4. Pays fees and submits the transaction to Solana.
+
+## 6. User Merge
+
+A merge combines UTXOs of the same wallet, token and ring into one UTXO with their total value. 
+
+1. **Wallet:** Selects the UTXOs, prepares the merged UTXO and sends the merge request with its proof inputs to **Ring RPC**.
+2. **Ring RPC:**
+
+    1. Checks that the UTXOs are unspent and belong to the same wallet, token and ring.
+    2. Generates proofs that preserve the wallet, token and total value and let the **Auditor** read the merged UTXO.
+    3. Obtains the **Co-signer** signature when required.
+    4. Pays fees and submits the merge to the **Ring Program**.
+    5. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
+
+## 7. Managed Merge
+
+Managed merge is initiated by **Ring RPC** on a ring with a permanent delegate and registered escrow keys. It combines one wallet's UTXOs of the same token and ring while preserving their total value. The user should be able to configure, how many utxos with what average amount. 
+
+1. **Ring RPC:**
+
+    1. Selects unspent UTXOs belonging to the same wallet, token and ring.
+    2. Uses the wallet's escrowed nullifier key to prepare the merged UTXO and encrypt its details to the **Auditor**.
+    3. Generates proofs that preserve the wallet, token, ring and total value.
+    4. Obtains the **Delegate** signature and any required **Co-signer** signature.
+    5. Pays fees and submits the merge to the **Ring Program**.
+    6. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
 
 
 
@@ -252,6 +278,9 @@ A unified flow for anonymous,  confidential transfers, and withdrawals.
 1. The program's upgrade authority is responsible only for upgrading the program and creating its initial configuration. The ring authority manages policy rules, list entries and ongoing ring settings.
 2. We should implement support for multiple co signers using smart accounts in a hot path is too expensive. We can just create a pda per co signer and check it in the program.
 3. We need to test that we can make the ring rpc relayer flow work with third party zk programs.
+4. The wallet should never fetch merkle proofs.
+
+
 
 ## Questions:
 
