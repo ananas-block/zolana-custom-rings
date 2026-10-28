@@ -895,32 +895,31 @@ describe("anonymous ring transfer builder", () => {
     await build;
     const proofs = [fixture.ringRequests.length, fixture.sppCalls.length];
     const approvals = requests.length;
+    const recipient = await addressOf(fixture, ShieldedKeypair.generate());
     const refusals = [
       [
-        buildRingTransferTransaction({
-          ...params,
-          recipient: await addressOf(fixture, ShieldedKeypair.generate()),
-        }),
+        () => buildRingTransferTransaction({ ...params, recipient }),
         "RING_BUILD_TRANSFER",
         "createRingTransferSubmission",
       ],
       [
-        buildRingExitTransaction({
-          ...params,
-          recipient: ShieldedKeypair.generate().shieldedAddress(),
-        }),
+        () =>
+          buildRingExitTransaction({
+            ...params,
+            recipient: ShieldedKeypair.generate().shieldedAddress(),
+          }),
         "RING_BUILD_TRANSFER",
         "createRingExitSubmission",
       ],
-      [buildRingEntryTransaction(params), "RING_BUILD_ENTRY", "createRingEntrySubmission"],
+      [() => buildRingEntryTransaction(params), "RING_BUILD_ENTRY", "createRingEntrySubmission"],
       [
-        buildRingWithdrawalTransaction({ ...params, recipient: randomAddress() }),
+        () => buildRingWithdrawalTransaction({ ...params, recipient: randomAddress() }),
         "RING_BUILD_WITHDRAWAL",
         "createRingWithdrawalSubmission",
       ],
     ] as const;
     for (const [build, code, use] of refusals)
-      await expect(build).rejects.toMatchObject({
+      await expect(build()).rejects.toMatchObject({
         code,
         causeCode: "RING_ANONYMOUS_SUBMISSION_REQUIRED",
         cause: { details: { ringProgramId: fixture.ringProgramId, use } },
