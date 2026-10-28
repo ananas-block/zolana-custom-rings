@@ -137,7 +137,7 @@ On an `Anonymous` ring (anonymous rail):
 18. Public: the configured co-signer identity, the withdrawal destination, each exit owner, each 32-byte view tag, the length of each body and, on a policy ring, the blinded sender commitment.
 19. Private from chain observers: the sender, every recipient, the amounts, assets and blindings, and the spent notes. The audit proof shows the hidden owner differs from the payer, the co-signer and the withdrawal destination.
 20. A transfer that spends a default-ring note publishes the hidden owner's identity `solana_owner_identity(key)` as `default_owner_tag`, so it names its sender. An exit or a withdrawal publishes its recipient. When ring notes are spent, SPP refuses an exit to the hidden owner's key, and the audit proof refuses a withdrawal to it. No layer checks a recipient key that is only linked to the sender.
-21. A first payment takes the recipient's request tag or bootstrap tag. The bootstrap tag is the recipient's `u`, so it names the recipient's viewing key and links every bootstrap payment to that key. Two payments under one request tag link to each other. Later payments of a pair take shared tags only the holders of the two viewing keys derive. An empty body tells change from payments and dummies.
+21. A first payment takes the recipient's request tag or bootstrap tag. The bootstrap tag is the recipient's `u`, so it names the recipient's viewing key and links every bootstrap payment to that key. Two payments under one request tag link to each other. Later payments of a pair take shared tags only the holders of the two viewing keys derive. Only the first change output takes the sender tag. A second change output takes a random tag laid out as a derived tag and opens from the sender bundle. An empty body tells change from payments and dummies.
 22. The auditor learns the hidden sender and names each spent note. It names the first by its hash and the others by 16-byte prefixes it matches against the sender's notes. An entry spend opens every spent note.
 
 On deposits, merges and delegate moves:
@@ -174,6 +174,7 @@ In every mode:
 | `MAX_RULES`, `MAX_SOURCES` | `16`, `8` | Rule table widths. |
 | `N_FOREIGN` | `1` | Curators per policy. |
 | `POLICY_TABLE_VERSION` | `12` | Second field of the `policy_hash` preimage. |
+| `POLICY_STATEMENT_VERSION` | `3` | Policy statement element after the public slots. |
 | `POLICY_TABLE_FIELDS` | `44` | Fields of the `policy_hash` preimage, 35 values and 9 zeros, absorbed 11 per Poseidon call. |
 | `N_PUBLIC_SLOTS` | `3` | Distinct assets of public legs per transfer, from SPP. |
 | `ACCOUNT_UNITS`, `POLICY_UNITS`, `PROOF_UNITS` | `50_000`, `150_000`, `1_400_000` | Compute unit limits clients set per instruction tag. The program does not check them. |
@@ -921,7 +922,7 @@ The program checks, in order:
 
 It verifies the proof under the key of the smallest capacity in `{1, 2, 4, 8}` at or above `count`, and invokes SPP with the deposit data unchanged.
 
-No list rule or outflow limit runs on a deposit, and the funder is never screened. The rules screen the note's owner when it sends. SPP leaves the view tag opaque, and the proof binds it only through the context hash. A recipient's wallet finds the note by its view tag.
+No list rule or outflow limit runs on a deposit, and the funder is never screened. The rules screen the note's owner when it sends. SPP leaves the view tag opaque, and the proof binds it only through the context hash. A recipient's wallet finds the note by its view tag. The ring SDKs open the scheme 8 body in their ring scan, Rust `DepositOpener` and TypeScript `openRingDeposit`. They keep the note only when it rebuilds the published hash.
 
 #### 20. Transact
 
@@ -978,7 +979,7 @@ nullifiers       [32] per published input
 [exemption]      withdrawal_exemption_proof CustomRingProof, root_index u8
 ```
 
-A bitmap holds bit `i` at byte `i / 8`, bit `i % 8`. A scheme is the zolana tag of an output's body format, stored by SPP without parsing. An exit payload is the zolana scheme 3 body of an output without data, any other length fails with `DataFreeBodyLength`. An anonymous output body is scheme 1, and an empty one marks a change output. An empty sender bundle or a body past `u16::MAX` fails with `AnonymousBodyLength`. A set reserved flag bit fails with `FlagNotAllowed`. `InterfaceTransfer` and `TreeContext` are the zolana SPP types. `expiry_unix_ts` is the SPP expiry, checked by SPP against cluster time. Every transfer publishes exactly `n_out` slots, a dummy slot included.
+A bitmap holds bit `i` at byte `i / 8`, bit `i % 8`. A scheme is the zolana tag of an output's body format, stored by SPP without parsing. An exit payload is the zolana scheme 3 body of an output without data, any other length fails with `DataFreeBodyLength`. An anonymous output body is scheme 1, and an empty one marks a change output. The ring SDKs encode the scheme 1 recipient, scheme 2 sender bundle and scheme 8 deposit plaintexts with their own codecs, in Rust `anonymous_plaintext.rs` and `ring_deposit.rs` of `zolana-ring-transaction`. They take the scheme numbers, the view tag derivations and the body encryption from zolana. An empty sender bundle or a body past `u16::MAX` fails with `AnonymousBodyLength`. A set reserved flag bit fails with `FlagNotAllowed`. `InterfaceTransfer` and `TreeContext` are the zolana SPP types. `expiry_unix_ts` is the SPP expiry, checked by SPP against cluster time. Every transfer publishes exactly `n_out` slots, a dummy slot included.
 
 The program expands the frame to SPP `TransactIxData`:
 
@@ -1001,7 +1002,7 @@ The audit key follows the rail and the published shape:
 
 The anonymous input classes are `{4, 16}` at 2 and 4 outputs and `{4, 8}` at 8. A shape with no key fails with `RingShapeUnkeyed`.
 
-The sender chooses each output's owner, asset and amount. The audit proof fixes every blinding from `tx_viewing_sk`, the salt and the first nullifier. A recipient finds its notes by its owner tag. That is its viewing key `u` on the confidential rail, or a view tag on the anonymous rail. It opens the body and keeps the note only when a held mint rebuilds the published commitment. On the anonymous rail every payment and dummy carries one body sealed at its output position, the sender's change leads with no body, and the sender bundle message lists one recipient viewing key per later output. [Anonymous rings](anonymous-rings.md#output-layout) The auditor finds every transfer by the auditor view tag.
+The sender chooses each output's owner, asset and amount. The audit proof fixes every blinding from `tx_viewing_sk`, the salt and the first nullifier. A recipient finds its notes by its owner tag. That is its viewing key `u` on the confidential rail, or a view tag on the anonymous rail. It opens the body and keeps the note only when a held mint rebuilds the published commitment. On the anonymous rail every payment and dummy carries one body sealed at its output position, and the sender's change leads with no body. Output 0 takes the sender tag, and a second change output takes a dummy tag. The sender bundle message lists one recipient viewing key per output after the change. An exit or a dummy takes the dummy key `0x04 || 0^32`, a custom-ring extension of the zolana sender bundle. [Anonymous rings](anonymous-rings.md#output-layout) The auditor finds every transfer by the auditor view tag.
 
 **Proof**
 
@@ -1022,13 +1023,21 @@ The policy proof checks, on a policy ring:
 2. The outputs reopen `private_tx_hash`. The member key takes the spent note chain and the address nullifier chain as opaque values. The delegate key takes only the address nullifier chain as opaque and reopens the spent notes.
 3. The sender is the statement's `sender` on the confidential rail. On the anonymous rail `sender` is the commitment and opens to `sender_pk_hash` with the blinding the `private_tx_hash` preimage fixes.
 4. The withdrawal legs hash to `withdrawal_hash`. Each active leg has a nonzero asset and a nonzero 64-bit amount.
-5. Every subject's record opens under `own_root`, and under `curator_root` for foreign lists. A list bit reads from the curator record when the list's source is foreign. The asset record of every live payment and of every nonzero public asset opens under `own_root`, whatever the rules, and gives that asset's mint settings.
+5. The own record pool folds to `own_root` through one shared canopy, and the curator pool to `curator_root` when some list is foreign. Each subject resolves to its own leaf in the pool, or to the low record that brackets it. A bracketed subject reads every list and mint setting as `0`. A list bit reads from the curator record when the list's source is foreign. The asset record of every live payment and of every nonzero public asset resolves in the own pool, whatever the rules. It gives that asset's mint settings.
 6. Each active rule holds as [Properties](#properties) 6 states. A scalar `AboveAmount(t)` guard exempts an asset subject when the live payments of that asset sum to at most `t`. It exempts an owner subject when that owner's live payments sum to at most `t`, and then every payment is in one asset. `AboveAmountByAsset` exempts when the owner's payments in that asset sum to at most the asset's `threshold`. A live payment in an asset with a zero `threshold` fails the proof under such a rule, admitted or not. Comparisons are inclusive.
 7. Outflow and `approval_required` follow [Properties](#properties) 8.
 8. In `ConfidentialEscrow` mode every UTXO output's owner record holds the output's escrow key.
 9. The own-only key requires `curator_root = 0` and no foreign source.
 
-The policy key is `MemberPolicy { outputs: n_out, withdrawals, own_only }`, with `withdrawals` the smallest of `{0, 1, 2, 4, 8, 16, 32}` at or above the withdrawal count and `own_only` when the policy has no curator.
+The policy key is `MemberPolicy { outputs: n_out, withdrawals, own_only }`, with `withdrawals` the smallest of `{0, 1, 2, 4, 8, 16, 32}` at or above the withdrawal count and `own_only` when the policy has no curator. Its record pools hold, with `o = n_out`, `w = withdrawals` and `p = N_PUBLIC_SLOTS`:
+
+```text
+distinct = 1 + 2·o + w
+own      = distinct + max(min(w, 3), p)
+curator  = distinct + min(w, 3), none on the own-only key
+```
+
+The delegate key takes `w = 0` and `p = 0`. [Policy circuit](circuit-policy.md#record-pool)
 
 The withdrawal exemption proof checks, under the `WithdrawalExemption` key:
 
@@ -1125,7 +1134,7 @@ A ring runs with three services next to Photon. None holds an authority key. Eac
 
 ### Ring indexer
 
-Projects the member registry, record queue and records of every ring from confirmed Solana blocks. It serves six JSON-RPC methods and forwards every other call, and every batch, to Photon unchanged.
+Projects the member registry, record queue and records of every ring from confirmed Solana blocks. It serves seven JSON-RPC methods and forwards every other call, and every batch, to Photon unchanged.
 
 - It decodes `CreateMemberRegistry`, `WriteRecords`, `RegisterKey`, `AuthorityWriteRecords` and `ApplyRecords` of successful transactions. A ring counts once SPP holds an activated `RingConfig` for it.
 - It applies the program's own admission rules and replays every application. A projected root or next index that differs from the instruction's quarantines the ring, and a quarantined ring answers every read with `-32070` until the block rolls back.
@@ -1136,6 +1145,7 @@ Projects the member registry, record queue and records of every ring from confir
 |---|---|
 | `getRingMemberRecord` | One member's opening under a named root. |
 | `getRingMemberOpenings` | Up to 100 openings under one root, absent members as their low record. |
+| `getRingRecordPool` | The distinct records of up to 100 members under one root, with paths below a canopy sized for the requested openings, and each member's record index. |
 | `getRingMemberRecords` | A page of up to 100 records with paths. |
 | `getRingMemberRegistryRoot` | The 32-root history, floors and the append path. |
 | `getRingRecordQueue` | The pending writes from `head` to `tail`. |

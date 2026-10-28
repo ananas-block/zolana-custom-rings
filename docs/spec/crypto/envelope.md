@@ -67,7 +67,7 @@ magic       "CRDEP001"
 slot_index  u8, below 8, equal to the entry's position
 eph_pk      [33], tag 0x04, equal across the batch
 ciphertext  [96], bytes 96 i .. 96 i + 96 of the batch stream
-recipient   the rest, the recipient's own ciphertext, not proven
+recipient   the rest, the recipient's RingDepositPlaintext ciphertext, not proven
 ```
 
 The capsule header is 138 bytes. The auditor opens the batch from one ECDH and checks each owner hash and blinding against the published `owner_utxo_hash`.

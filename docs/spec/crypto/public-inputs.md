@@ -47,7 +47,7 @@ The delivered statement carries no `private_tx_hash`. They bind the transfer thr
   approval_required, key_escrow,
   own_root, curator_root, sender,
   asset_0, amount_0, asset_1, amount_1, asset_2, amount_2,
-  2,                          // statement version
+  3,                          // POLICY_STATEMENT_VERSION
   withdrawal_hash ]
 ```
 

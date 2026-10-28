@@ -33,7 +33,7 @@ A **ring address** is the recipient's shielded address and the ring program id. 
 ### View tag
 
 A **view tag** is the 32-byte owner tag SPP publishes for each output. On a confidential ring it is the recipient's `u`. On an anonymous ring it is one of zolana's [view tags](../zolana/docs/spec.md#view-tags), and a recipient finds its notes by asking the indexer for the tags it derives.
-- The **sender tag** `get_sender_view_tag(tx_count)` derives from the sender's own viewing secret. Every change output of one transfer takes the same sender tag.
+- The **sender tag** `get_sender_view_tag(tx_count)` derives from the sender's own viewing secret. Output 0, the first change output, takes it. A second change output takes a dummy tag and opens from the sender bundle.
 - The **request tag** `get_recipient_request_view_tag(request_count)` derives from the recipient's viewing secret. The recipient puts it in a payment request.
 - The **bootstrap tag** is the recipient's `u`. Anyone who holds the address derives it.
 - A **shared tag** derives from the X25519 agreement of the sender's and the recipient's viewing keys and an index. Only the two holders derive it.
@@ -128,8 +128,8 @@ See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-it
     - On the delivered rails the body opens for `u`. Line 76 binds the owner to the disclosed owner key, and nothing binds `u` to it.
 7. **Parties**: `prover/circuits/shared/parties.go:7`
     - Each nonzero party identity differs from the hidden owner.
-8. **Output layout**: `sdk-libs/transaction/src/anonymous_rail.rs:75`
-    - `slots` gives the leading change the sender tag and refuses a transfer without one, and `lead_change` at line 148 moves the change to the front. `AnonymousSeal::body` at line 190 seals each body at its output position, and `change` at line 220 lists the recipients at output 0.
+8. **Output layout**: `sdk-libs/transaction/src/anonymous_rail.rs:76`
+    - `slots` gives output 0 the sender tag and a later change output a dummy tag, and refuses a transfer without change. `lead_change` at line 152 moves the change to the front. `AnonymousSeal::body` at line 194 seals each body at its output position. `sender_bundle` at line 230 lists one recipient key per output after the change and seals the bundle at the output count. An exit or a dummy takes the dummy key `0x04 || 0^32`.
 9. **Wallet sync**: `sdk-libs/client/src/operations/anonymous.rs:284`
     - `entry` runs both phases, `stream` at line 317 resumes from the watermark, and `record_sent` at line 604 opens the wallet's sent payments.
 10. **Ring address**: `sdk-libs/keys/src/ring_address.rs:38`

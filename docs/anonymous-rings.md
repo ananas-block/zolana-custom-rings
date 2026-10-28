@@ -11,9 +11,11 @@ The tags, the body encryption and the sync follow zolana's
 [View Tags](../zolana/docs/spec.md#view-tags),
 [AES Key derivation](../zolana/docs/spec.md#aes-key-derivation) and
 [First Time Sync Wallet](../zolana/docs/spec.md#first-time-sync-wallet). The
-byte layouts are in
+ring SDKs take the view tag derivations and the scheme numbers from zolana and
+encode the plaintexts with their own codecs. The byte layouts are in
 [Ring Address](../sdk-libs/keys/src/ring_address.rs),
-[anonymous bodies](../sdk-libs/transaction/src/anonymous_body.rs) and
+[anonymous plaintexts](../sdk-libs/transaction/src/anonymous_plaintext.rs),
+[ring deposits](../sdk-libs/transaction/src/ring_deposit.rs) and
 [Transact](spec.md#20-transact).
 
 ## Roles
@@ -78,9 +80,10 @@ Every anonymous ring output publishes a 32-byte view tag as its owner tag. The
 wallet takes it by [View Tag Selection](../zolana/docs/spec.md#view-tag-selection)
 over the counters of its viewing history.
 
-1. Every change output of a transfer shares the transfer's sender tag, the next
-   `get_sender_view_tag(tx_count)`. A deposit to the wallet's own note takes
-   the next sender tag too.
+1. Output 0, the first change output, takes the transfer's sender tag, the
+   next `get_sender_view_tag(tx_count)`. A second change output takes a dummy
+   tag and opens from the sender bundle. A deposit to the wallet's own note
+   takes the next sender tag too.
 2. A payment to a known recipient takes the pair's next shared tag.
 3. A first payment takes the recipient's request tag or its bootstrap tag, the
    recipient's `u`. The caller picks one per recipient with
@@ -131,8 +134,9 @@ refuses the delegate rail there.
 ## Output layout
 
 Every output slot of an anonymous transfer is published, so the slot count
-shows only the shape. The bodies are the zolana anonymous plaintexts. An exit
-is a default-ring output under its owner's tag.
+shows only the shape. The bodies are the scheme 1 recipient and scheme 2
+sender bundle plaintexts. An exit is a default-ring output under its owner's
+tag.
 
 1. Output 0 is the sender's change, a zero-amount note when nothing returns.
    SPL change leads SOL change. A change output carries its tag and no body.
@@ -140,7 +144,9 @@ is a default-ring output under its owner's tag.
    tag and sealed to the sender's own viewing key at the output count. It holds
    the change amounts and mint, the seed every change blinding derives from,
    and one recipient viewing key per output after the change, in output order.
-   An exit or a dummy takes the all-zero key `0x04 || 0^32`.
+   An exit or a dummy takes the dummy key `0x04 || 0^32`. The zolana sender
+   bundle lists recipients only, so the dummy key is a custom-ring extension,
+   and a sync never adds it to the known recipients.
 3. A payment carries a scheme 1 body sealed to its recipient at its output
    position, with the owner key, the mint, the amount, the sender's viewing
    key, the blinding and the data.
@@ -152,6 +158,8 @@ only alone, because a zero amount reads back as no output.
 
 The program checks only that the sender bundle is not empty. An empty body
 marks a change output, so an observer tells change from payments and dummies.
+A second change output takes a dummy tag, and its empty body still marks it as
+change.
 
 ## The anonymous SPP rail
 
@@ -201,7 +209,9 @@ selection above. In Rust `DepositRecipient::Anonymous` and
 is sent. In TypeScript `PreparedRingDeposit.viewingHistory` returns it, and
 `buildRingDepositTransaction` refuses an anonymous recipient. A deposit body
 names no sender, so a deposit pairs neither side, and the next payment to that
-recipient takes a first-payment tag again.
+recipient takes a first-payment tag again. The ring sync opens the scheme 8
+deposit body with Rust `DepositOpener` or TypeScript `openRingDeposit`. It
+keeps the note only when the note rebuilds the published hash.
 
 A merge consolidates notes of one owner without the owner's signature. See
 [Merges](auditing.md#merges).
@@ -230,8 +240,9 @@ entry whose viewing key the wallet holds.
 2. Each matched recipient body opens at its output position and gives a note
    and the viewing key of its sender. A matched sender bundle opens at the
    output count and gives the wallet's change, and its recipients when the
-   wallet's own transaction key derives the published one. Each new key joins
-   the known senders or the known recipients.
+   wallet's own transaction key derives the published one. A matched deposit
+   gives its note. Each new key joins the known senders or the known
+   recipients.
 3. Phase 2 reads the shared stream of every known counterparty the same way,
    and repeats while it adds a counterparty.
 4. The spends of every found or held ring note mark it spent and find the ring
