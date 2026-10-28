@@ -138,7 +138,7 @@ export class ViewingKeyEntry {
     return this.#withKnown(stream.kind, new Map([...known, [key, counterparty]]));
   }
 
-  /** Refuses a counterparty map past `MAX_COUNTERPARTIES` or naming a key twice. */
+  /** Refuses a counterparty map past `MAX_COUNTERPARTIES`, naming a key twice or a small-order key. */
   static restore(
     fields: Readonly<{
       viewingPublicKey: X25519PublicKey;
@@ -152,6 +152,8 @@ export class ViewingKeyEntry {
     const counterparties = (rows: readonly Counterparty[], name: string) => {
       if (rows.length > MAX_COUNTERPARTIES)
         throw new RingError("RING_COUNTERPARTY_LIMIT", { details: { limit: MAX_COUNTERPARTIES } });
+      if (rows.some((row) => isSmallOrder(row.key)))
+        throw invalid(`${name} holds a small-order key`);
       const known = new Map(rows.map((row) => [keyOf(row.key), Object.freeze({ ...row })]));
       if (known.size !== rows.length) throw invalid(`${name} repeats a key`);
       return known;

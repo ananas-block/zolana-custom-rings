@@ -9,7 +9,11 @@ import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
-import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
+import {
+  POLICY_STATEMENT_VERSION,
+  RingDomain,
+  domainField,
+} from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import {
   RingTransactData,
@@ -203,7 +207,7 @@ export function policyStatementElements(statement: PolicyStatement): readonly By
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
     ]),
-    bigIntBytes(2n) as Bytes32,
+    bigIntBytes(POLICY_STATEMENT_VERSION) as Bytes32,
     checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash"),
   ];
 }

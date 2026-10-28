@@ -14,8 +14,9 @@ Breaking
 
 - Mint thresholds, outflow limits and withdrawal co-sign thresholds move from eight-entry arrays into authenticated asset records → write `MintPolicy` through `AuthorityListWrite.withMintPolicy(memberOfAsset(mint), policy)`. `RuleTable` carries rules only and `setRingCoSignerInstruction` takes signer and scope only. Upgrade the program, SDK, indexer and keys together for fresh rings; existing rings need an explicit state migration.
 - `RingMode` names the confidential modes `"confidential"` and `"confidentialEscrow"` in place of `"off"` and `"registry"`, matching Rust `RingMode::Confidential` and `RingMode::ConfidentialEscrow`. The config byte is unchanged → compare `config.mode` with the new names.
-- Transfers use instruction tags 43 and 44 and policy statement version 2. Public withdrawals now follow output-owner and asset list rules, including gross amount guards; direct deposits and same-owner merges keep their existing policy behavior. SPL owner snapshots are checked at execution and exposed as `screenedOwner` in historical audit results. Legacy transfer frames remain readable, but cannot execute on the upgraded program.
+- Transfers use instruction tags 43 and 44 and policy statement version 3. Public withdrawals now follow output-owner and asset list rules, including gross amount guards; direct deposits and same-owner merges keep their existing policy behavior. SPL owner snapshots are checked at execution and exposed as `screenedOwner` in historical audit results. Legacy transfer frames remain readable, but cannot execute on the upgraded program.
 - Anonymous transfer, entry and merge proofs bind the actual fee payer, configured co-signer and public withdrawal owner. Proof requests and proving-key pins change; deploy the program, prover and SDKs together after publishing the pinned key artifacts.
+- Policy proofs read every subject from one record pool per registry, `PolicyProofInputs` carries `ownPool` and `curatorPool` as `RecordPool` values, `PolicySubjectEntry` and `publicAssetEntries` hold subject indices into them, and `RingRecordReader` requires `getRingRecordPool` → serve `getRingRecordPool` from a custom indexer adapter and deploy the `custom-ring-policy-*-v3-*` keys with this SDK.
 - Policy keys specialize by registry sources and withdrawal capacity. Deposits use capacities 1, 2, 4 and 8; registry updates use 1, 2, 4, 8 and 16. Clients select the smallest matching key.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from
@@ -31,9 +32,11 @@ Breaking
 - `RingReadRequest.decryptedTransactions` and `RingReadRequest.auditedMerges` replace `RingReadRequest.read` and, like `RingAuditedUtxosRequest.read` and the `RingRpc` reads, take a `RingReadTarget` naming the cluster's genesis hash, the ring rpc's pinned service key and the ring in place of `ringProgramId`, `ringReadAttestation` and `auditedUtxosAttestation` sign all three, `ringReadAttestation` and `SignedRingRead` name the `method` a reader's signature authorizes, which `RingRpc` checks before it sends a signed read, `auditorKeyStatement` replaces `auditorKeyAttestation` and binds the cluster and the nonce of the request the service answers, and every `sign` of a read, UTXO read or auditor key request draws a fresh nonce → pin the ring rpc's service key, pass it with the genesis hash in a `RingReadTarget`, build each read from the constructor of its method and pair the SDK with a ring rpc of this release.
 - `CompressedProof.toCustomRingProof()` is gone → call `customRingProof(proof)`
   with the prover's proof.
-- `syncWallet` opens an audited ring deposit only through the ring capsule
-  decoder → pass `depositPayloadDecoder: customRingDepositPayload` in its
-  config.
+- `syncRingWallet` and `openRingNotes` open ring deposits, an audited one
+  through the ring capsule, and `syncWallet` no longer does → sync ring
+  wallets with `syncRingWallet` and drop `depositPayloadDecoder` from the
+  `syncWallet` config.
+- `syncRingWallet` follows the spends of the notes it opens and opens the ring merges among them.
 - `RingRpc` now posts each JSON-RPC method beneath its base URL and accepts
   `RingRpcOptions.apiKey` or the URL's `api-key`, while `RingRpc.url` omits the key;
   service clients reject malformed or conflicting credentials during construction
@@ -60,6 +63,8 @@ Added
   indexed, reading the chain's mint registrations once when `RingNotes.pending`
   counts a note no registered mint rebuilds, and `openRingNotes` opens those
   notes from given transactions.
+- `CustomRingClient.getRingRecordPool` reads members' records under one root as a `RingRecordPool` of distinct leaves, each path cut at a shared canopy.
+- `encodeAnonymousRecipient`, `decodeAnonymousRecipient`, `encodeAnonymousSender` and `decodeAnonymousSender` in `@heliuslabs/zolana-custom-rings/advanced` write and read the recipient and sender bundle plaintexts that `openRecipient` and `senderChange` take.
 
 Fixed
 

@@ -3,8 +3,11 @@ export {
   decodeRingDepositOutput,
   decodeRingDepositPlaintext,
   encodeRingDepositPlaintext,
-} from "@heliuslabs/zolana/internal";
-export type { RingDepositOutput, RingDepositPlaintext } from "@heliuslabs/zolana/internal";
+} from "../protocol/codec/ring-deposit-plaintext.js";
+export type {
+  RingDepositOutput,
+  RingDepositPlaintext,
+} from "../protocol/codec/ring-deposit-plaintext.js";
 export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
 export { RING_ERROR_CODES, RingError, RingProgramError, wrapRingError } from "../protocol/error.js";
 export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";

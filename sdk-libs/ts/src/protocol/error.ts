@@ -243,6 +243,7 @@ export const RingProgramError = Object.freeze({
   anonymousExitTokenAccountInvalid: 8250,
   anonymousRingDataNotZero: 8251,
   anonymousBodyLength: 8252,
+  outputBodyLength: 8253,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

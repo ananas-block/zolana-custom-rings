@@ -10,7 +10,6 @@ import {
   recordBit,
   type RuleTable,
 } from "../../src/ring/advanced.js";
-import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 import {
   AuthorityListWrite,
   PreparedRingDeposit,
@@ -71,7 +70,7 @@ async function syncRing(ring: AnonymousRing, actor: Actor): Promise<void> {
     client: ring.client,
     wallet: actor.wallet,
     keys: actor.keys,
-    config: { depositPayloadDecoder: customRingDepositPayload, requireSlot: slot },
+    config: { requireSlot: slot },
   });
 }
 

@@ -10,12 +10,7 @@ import {
   ViewingKey,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
-import {
-  AssetRegistry,
-  Data,
-  decodeAnonymousRecipient,
-  decodeAnonymousSender,
-} from "@heliuslabs/zolana/transaction";
+import { AssetRegistry, Data } from "@heliuslabs/zolana/transaction";
 
 import {
   DUMMY_RECIPIENT_VIEWING_PK,
@@ -26,6 +21,10 @@ import {
   senderChange,
   type AnonymousOutput,
 } from "../../../src/protocol/codec/anonymous-body.js";
+import {
+  decodeAnonymousRecipient,
+  decodeAnonymousSender,
+} from "../../../src/protocol/codec/anonymous-plaintext.js";
 import { OutputBlindings, ringBlindingSeed } from "../../../src/crypto/derivation/blinding.js";
 
 await initializePoseidon();

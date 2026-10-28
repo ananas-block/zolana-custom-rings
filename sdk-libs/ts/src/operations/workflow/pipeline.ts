@@ -72,7 +72,7 @@ import type { ViewingHistory } from "../../state/viewing-history.js";
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
 export type RingProvingClient = TreeContext &
   Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings"> &
+  Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> &
   RingProver;
 
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */

@@ -32,6 +32,7 @@ import type {
   MemberRecord,
   QuadPath,
   RecordOpening,
+  RecordPool,
   RecordWriteProofInput,
 } from "../../src/protocol/membership/member-registry.js";
 import {
@@ -53,7 +54,8 @@ import { deliveredSlotSecret, senderCommitment } from "../../src/crypto/derivati
 import {
   applyRecordsStatement,
   replayRecordWrites,
-  verifyRecordOpening,
+  verifyRecordPool,
+  type MemberOpeningRead,
 } from "../../src/protocol/membership/member-opening.js";
 import {
   buildRuleTable,
@@ -80,6 +82,10 @@ const GOLDEN_FILES = HAS_GOLDENS
   : [];
 const GOLDEN_BY_CIRCUIT = new Map(
   GOLDEN_FILES.map((file) => [basename(file, ".json"), file] as const),
+);
+const RUST_FIXTURES = new URL("../../../sdk/tests/fixtures/", import.meta.url);
+const RUST_POLICY_FIXTURES = readdirSync(RUST_FIXTURES).filter(
+  (name) => name.startsWith("custom-ring-policy-") && name.endsWith(".json"),
 );
 const ZERO = new Uint8Array(32) as Bytes32;
 
@@ -198,11 +204,40 @@ function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefin
   };
 }
 
-function entry(value: unknown, member: Bytes32): PolicySubjectEntry {
+function entry(value: unknown): PolicySubjectEntry {
+  const item = record(value);
+  const [curator, ...rest] = list(item["curator"]);
+  if (rest.length !== 0) throw new Error("golden curator entry");
+  return { own: count(item["own"]), ...(curator === undefined ? {} : { curator: count(curator) }) };
+}
+
+function memberRecord(value: unknown): MemberRecord {
   const item = record(value);
   return {
-    own: memberOpening(item["own"], member),
-    curator: memberOpening(item["curator"], member),
+    mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
+    member: field(item["member"]),
+    next: field(item["next"]),
+    lists: BigInt(count(item["lists"])),
+    escrowKey: field(item["escrowKey"]),
+  };
+}
+
+/** Go `PooledRecord`, `SharedRegistryProof` and `PooledSubject` rows, absent when empty. */
+function recordPool(records: unknown, proof: unknown, subjects: unknown): RecordPool | undefined {
+  const rows = list(records);
+  const shared = record(proof);
+  if (rows.length === 0) return undefined;
+  return {
+    records: rows.map(memberRecord),
+    canopy: fields(shared["canopy"]),
+    paths: list(shared["paths"]).map((value) => {
+      const path = record(value);
+      return { index: count(path["index"]), siblings: list(path["siblings"]).map(fields) };
+    }),
+    subjects: list(subjects).map((value) => {
+      const subject = record(value);
+      return { member: field(subject["member"]), recordIndex: count(subject["recordIndex"]) };
+    }),
   };
 }
 
@@ -259,7 +294,13 @@ function policy(item: Json): PolicyProofInputs {
       amount: BigInt(String(leg["amount"])),
     };
   });
-  const senderPkHash = field(item["senderPkHash"]);
+  const ownPool = recordPool(item["ownRecords"], item["ownProof"], item["ownSubjects"]);
+  if (ownPool === undefined) throw new Error("golden own pool");
+  const curatorPool = recordPool(
+    item["curatorRecords"],
+    item["curatorProof"],
+    item["curatorSubjects"],
+  );
   return {
     withdrawalCount: count(item["withdrawalCount"]),
     withdrawalHash: field(item["withdrawalHash"]),
@@ -277,20 +318,16 @@ function policy(item: Json): PolicyProofInputs {
     }),
     policyLen: count(item["policyLen"]),
     rules: fields(item["rules"]),
-    publicAssetEntries: list(item["publicAssetEntries"]).map((value, i) =>
-      memberOpening(value, fields(item["publicAssets"])[i] ?? ZERO),
-    ),
+    publicAssetEntries: list(item["publicAssetEntries"]).map(count),
     addressChain: field(item["addressChain"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
     outputs,
-    senderPkHash,
-    senderEntry: entry(item["senderEntry"], senderPkHash),
-    ownerEntries: list(item["ownerEntries"]).map((value, i) =>
-      entry(value, outputs[i]?.ownerPkHash ?? withdrawals[i - outputs.length]?.owner ?? ZERO),
-    ),
-    assetEntries: list(item["assetEntries"]).map((value, i) =>
-      entry(value, outputs[i]?.asset ?? withdrawals[i - outputs.length]?.asset ?? ZERO),
-    ),
+    senderPkHash: field(item["senderPkHash"]),
+    ownPool,
+    ...(curatorPool === undefined ? {} : { curatorPool }),
+    senderEntry: entry(item["senderEntry"]),
+    ownerEntries: list(item["ownerEntries"]).map(entry),
+    assetEntries: list(item["assetEntries"]).map(entry),
   };
 }
 
@@ -554,16 +591,11 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
   });
 
   it.each(CIRCUIT_TYPES)("encodes %s byte for byte", (circuitType) => {
-    const item = golden(circuitType);
-    const typed = request(item);
-    const body = ringProofRequestBody(typed);
-    expect(body).toEqual(item);
-    expect(JSON.stringify(body)).toBe(JSON.stringify(item));
-    expect(ringCircuitType(ringProofCircuit(typed))).toBe(circuitType);
+    expectReencoded(golden(circuitType));
   });
 
   it("encodes the full u64 withdrawal range exactly and rejects overflow", () => {
-    const base = request(golden("custom-ring-policy-member-v2-2-w2-own"));
+    const base = request(golden("custom-ring-policy-member-v3-2-w2-own"));
     if (base.kind !== "memberPolicy") throw new Error("member policy fixture");
     const leg = base.withdrawals[0]!;
     const body = ringProofRequestBody({
@@ -644,6 +676,16 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
       expect(() => ringProofRequestBody(refused)).toThrow(
         expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }),
       );
+  });
+});
+
+describe("ring prover request encoding against the Rust fixtures", () => {
+  it("finds a Rust policy fixture", () => {
+    expect(RUST_POLICY_FIXTURES.length).toBeGreaterThan(0);
+  });
+
+  it.each(RUST_POLICY_FIXTURES)("encodes %s byte for byte", (name) => {
+    expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
   });
 });
 
@@ -866,18 +908,18 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         rules: typed.rules.slice(0, typed.policyLen).map(decodeRule),
       });
       expect(hex(policyTableHash(table, typed.sources))).toBe(hex(typed.policyHash));
-      const own = (
-        opening: RecordOpening | undefined,
-        member: Bytes32,
-      ): MemberRecord | undefined => {
-        if (opening === undefined) throw new Error("own opening missing");
-        return verifyRecordOpening(opening, typed.ownRoot, member);
+      const ownReads = poolReads(typed.ownPool, typed.ownRoot);
+      if (typed.curatorPool !== undefined) poolReads(typed.curatorPool, typed.curatorRoot);
+      const own = (entry: PolicySubjectEntry | undefined, member: Bytes32) => {
+        const index = entry?.own ?? -1;
+        expect(typed.ownPool.subjects[index]?.member).toEqual(member);
+        return ownReads[index]?.record();
       };
-      own(typed.senderEntry.own, typed.senderPkHash);
+      own(typed.senderEntry, typed.senderPkHash);
       typed.outputs.forEach((output, i) => {
         if (!isUtxo(output)) return;
-        const owner = own(typed.ownerEntries[i]?.own, output.ownerPkHash);
-        own(typed.assetEntries[i]?.own, output.asset);
+        const owner = own(typed.ownerEntries[i], output.ownerPkHash);
+        own(typed.assetEntries[i], output.asset);
         if (output.ctHash !== undefined && owner !== undefined)
           expect(hex(owner.escrowKey)).toBe(hex(poseidon([output.nullifierPk, output.ctHash])));
       });
@@ -914,6 +956,28 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
     },
   );
 });
+
+function expectReencoded(item: Json): void {
+  const typed = request(item);
+  const body = ringProofRequestBody(typed);
+  expect(body).toEqual(item);
+  expect(JSON.stringify(body)).toBe(JSON.stringify(item));
+  expect(ringCircuitType(ringProofCircuit(typed))).toBe(text(item["circuitType"]));
+}
+
+/** Every subject's read, the padded pool verified as the indexer would serve it. */
+function poolReads(pool: RecordPool, root: Bytes32): readonly MemberOpeningRead[] {
+  return verifyRecordPool(
+    {
+      records: pool.records.map((record, i) => ({ record, path: pool.paths[i] as QuadPath })),
+      canopy: pool.canopy,
+      subjects: pool.subjects.map((subject) => subject.recordIndex),
+    },
+    root,
+    pool.subjects.map((subject) => subject.member),
+    pool.records.length,
+  );
+}
 
 /** CRDS under `X25519(tx_sk, u)`, the secret the recipient rebuilds from its own key. */
 function slotSecret(

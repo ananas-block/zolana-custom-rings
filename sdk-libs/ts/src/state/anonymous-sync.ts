@@ -7,14 +7,9 @@ import { getBase58Encoder, type ReadonlyUint8Array } from "@solana/kit";
 import { ClientError, type IndexerReader, type IndexerRpcConfig } from "@heliuslabs/zolana/client";
 import {
   bytesKey,
-  decodeAnonymousRecipient,
-  decodeAnonymousSender,
-  decodeRingDepositOutput,
   equalBytes,
   isCanonicalField,
   PAGE_LIMIT,
-  readOutputData,
-  ringDepositUtxo,
   U64_MAX,
 } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
@@ -27,10 +22,6 @@ import {
   type ViewTag,
 } from "@heliuslabs/zolana/keypair";
 import {
-  decryptTransactions,
-  EncryptedScheme,
-  Wallet,
-  type AnonymousRecipientPlaintext,
   type AssetRegistry,
   type DepositPayloadDecoder,
   type IndexedShieldedTransaction,
@@ -49,12 +40,19 @@ import {
   senderChange,
   type AnonymousOutput,
 } from "../protocol/codec/anonymous-body.js";
+import {
+  decodeAnonymousRecipient,
+  decodeAnonymousSender,
+  type AnonymousRecipientPlaintext,
+} from "../protocol/codec/anonymous-plaintext.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import {
   anonymousRecipientOutputBody,
   anonymousSenderOutputBody,
 } from "../protocol/transaction/output.js";
 import { answered, exactlyOne } from "./batch.js";
+import { decoded, openRingDeposit } from "./ring-deposit.js";
+import { openRingMerges } from "./ring-sync.js";
 import type { RingKeys, SharedTagPair } from "./ring-keys.js";
 import { RingError } from "../protocol/error.js";
 import { type EntryStream, type ViewingHistory, type ViewingKeyEntry } from "./viewing-history.js";
@@ -350,22 +348,10 @@ class Scan {
           .then((page) => ({ ...page, items: page.transactions })),
       );
       this.#noteSpends(spends);
-      const merges = spends.filter(
-        (tx) =>
-          tx.ringProgramId !== undefined &&
-          !tx.proofless &&
-          tx.txViewingPublicKey === undefined &&
-          tx.salt === undefined,
+      const { merges, utxos } = await openRingMerges(
+        { keys: this.#sync.keys, owner: this.#address, assets: this.#sync.assets, spends },
+        this.#context,
       );
-      if (merges.length === 0) continue;
-      const opened = new Wallet({ identity: this.#address, registry: this.#sync.assets });
-      await decryptTransactions({
-        wallet: opened,
-        keys: this.#sync.keys,
-        transactions: merges,
-        context: this.#context,
-      });
-      const utxos = opened._state().utxos;
       for (const merge of merges) {
         const firstNullifier = merge.nullifiers[0];
         if (firstNullifier === undefined) continue;
@@ -743,71 +729,33 @@ class Scan {
     if (slot !== undefined) this.#unmatched.push(slot.outputContext.hash);
   }
 
-  /** A deposit's owner hash, not its decryption, proves it the wallet's. */
   async #openDeposit(index: number, deposit: Deposit, found: AnonymousStream): Promise<void> {
     const slot = deposit.outputSlot;
-    const treeId = slot.outputContext.treeId;
-    const output = decoded(() => {
-      const frame = readOutputData(slot.payload);
-      return frame.encoding === "encrypted" && frame.scheme === EncryptedScheme.ringDeposit
-        ? decodeRingDepositOutput(frame.body)
-        : undefined;
-    });
-    if (output === undefined || treeId === undefined || this.#isFound(slot.outputContext.hash))
-      return;
-    const txViewingPublicKey = decoded(() =>
-      X25519PublicKey.fromBytes(output.encrypted.txViewingPublicKey),
-    );
-    if (txViewingPublicKey === undefined || isSmallOrder(txViewingPublicKey)) return;
+    if (this.#isFound(slot.outputContext.hash)) return;
     const entry = this.#entry(index);
-    const ciphertext = decoded(() => this.#sync.depositPayload(output.encrypted.ciphertext));
-    if (ciphertext === undefined) return;
-    const plaintext = exactlyOne(
-      await this.#sync.keys.decrypt(
-        [
-          {
-            ciphertext,
-            viewingPublicKey: entry.viewingPublicKey,
-            txViewingPublicKey,
-            salt: output.encrypted.salt,
-            slotIndex: 0,
-            label: "ringDeposit",
-          },
-        ],
-        this.#context,
-      ),
+    const utxo = await openRingDeposit(
+      {
+        keys: this.#sync.keys,
+        owner: this.#address,
+        viewingPublicKey: entry.viewingPublicKey,
+        outputSlot: slot,
+        depositPayload: this.#sync.depositPayload,
+      },
+      this.#context,
     );
-    try {
-      // A zero ring data hash is absent in the commitment.
-      const ringDataHash = output.ringDataHash.some((byte) => byte !== 0)
-        ? output.ringDataHash
-        : undefined;
-      const utxo = decoded(() => {
-        const opened = ringDepositUtxo(output, plaintext, this.#address.signingPublicKey);
-        const hash = opened.hash(
-          this.#address.nullifierPublicKey,
-          treeId,
-          output.dataHash,
-          ringDataHash,
-        );
-        return equalBytes(hash, slot.outputContext.hash) ? opened : undefined;
-      });
-      if (utxo === undefined) return;
-      this.#found.push({
-        utxo,
-        outputContext: walletContext(slot),
-        order: { slot: deposit.slot, signature: base58.encode(deposit.txSignature), position: 0 },
-      });
-      this.#streams.push(
-        Object.freeze({
-          utxoHash: slot.outputContext.hash,
-          viewingPublicKey: entry.viewingPublicKey,
-          stream: found,
-        }),
-      );
-    } finally {
-      plaintext.fill(0);
-    }
+    if (utxo === undefined) return;
+    this.#found.push({
+      utxo,
+      outputContext: walletContext(slot),
+      order: { slot: deposit.slot, signature: base58.encode(deposit.txSignature), position: 0 },
+    });
+    this.#streams.push(
+      Object.freeze({
+        utxoHash: slot.outputContext.hash,
+        viewingPublicKey: entry.viewingPublicKey,
+        stream: found,
+      }),
+    );
   }
 
   /** Derives the nullifiers of the found notes in publication order. */
@@ -1008,13 +956,4 @@ function compareOrder(left: Publication, right: Publication): number {
     if (difference !== 0) return difference;
   }
   return left.signature.length - right.signature.length || left.position - right.position;
-}
-
-/** A malformed body is another key's or a forgery, it is skipped. */
-function decoded<T>(decode: () => T | undefined): T | undefined {
-  try {
-    return decode();
-  } catch {
-    return undefined;
-  }
 }

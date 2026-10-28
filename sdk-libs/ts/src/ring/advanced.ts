@@ -93,6 +93,18 @@ export {
   type AnonymousOutput,
 } from "../protocol/codec/anonymous-body.js";
 export {
+  decodeAnonymousRecipient,
+  decodeAnonymousSender,
+  encodeAnonymousRecipient,
+  encodeAnonymousSender,
+  type AnonymousRecipientPlaintext,
+  type AnonymousSenderPlaintext,
+  type UnverifiedRecipientPlaintext,
+  type UnverifiedSenderPlaintext,
+  type VerifiedRecipientPlaintext,
+  type VerifiedSenderPlaintext,
+} from "../protocol/codec/anonymous-plaintext.js";
+export {
   OutputBlindings,
   openRingDelivery,
   ringBlindingSeed,

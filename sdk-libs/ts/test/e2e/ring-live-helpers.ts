@@ -1,4 +1,3 @@
-import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 // Shared by the ring live suites, the harness ring pins the released rows.
 import { readFile } from "node:fs/promises";
 
@@ -277,10 +276,7 @@ export async function sync(client: CustomRingClient, actor: Actor): Promise<void
     client,
     wallet: actor.wallet,
     keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
-    config: {
-      depositPayloadDecoder: customRingDepositPayload,
-      requireSlot: await currentSlot(client),
-    },
+    config: { requireSlot: await currentSlot(client) },
   });
 }
 

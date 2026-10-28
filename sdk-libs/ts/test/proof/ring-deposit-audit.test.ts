@@ -10,7 +10,6 @@ import {
   treeAddress,
   bigIntToBytes,
   checkedBytes,
-  encodeRingDepositPlaintext,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
@@ -58,6 +57,7 @@ import {
 } from "../../src/protocol/codec/deposit-capsule.js";
 import { ringDepositInstruction } from "../../src/protocol/transaction/deposit-instruction.js";
 import { decryptRingDepositUtxo } from "../../src/protocol/transaction/deposit-payload.js";
+import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
 import { ConfirmedDeposit } from "../../src/protocol/transaction/origin.js";
 import { ListId, recordBit } from "../../src/protocol/membership/policy.js";

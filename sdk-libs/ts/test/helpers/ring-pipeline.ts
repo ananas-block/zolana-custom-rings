@@ -2,7 +2,11 @@ import { bn254 } from "@noble/curves/bn254.js";
 import { AccountRole, getAddressDecoder, type Address, type Instruction } from "@solana/kit";
 import { expect } from "vitest";
 
-import { type RingMemberOpenings, type RingRecordReader } from "../../src/rpc/ports.js";
+import {
+  type RingMemberOpenings,
+  type RingRecordPool,
+  type RingRecordReader,
+} from "../../src/rpc/ports.js";
 import type {
   ChainReader,
   ProofAuthority,
@@ -268,20 +272,32 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const ringRequests: RingProofRequest[] = [];
   const sppCalls: SppCall[] = [];
   let proofs = 0;
-  const reader: Pick<ChainReader, "getAccount"> & Pick<RingRecordReader, "getRingMemberOpenings"> =
-    {
-      getAccount: async (address) => accounts.get(address),
-      getRingMemberOpenings: async (request): Promise<RingMemberOpenings> => {
-        const tree = trees.get(request.ringProgramId);
-        if (tree === undefined || hex(tree.root) !== hex(request.expectedRoot))
-          throw new Error("openings under an unknown root");
-        return {
-          context,
-          root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
-          openings: request.members.map((member) => tree.opening(member)),
-        };
-      },
-    };
+  const treeAt = (ringProgramId: Address, expectedRoot: Bytes32) => {
+    const tree = trees.get(ringProgramId);
+    if (tree === undefined || hex(tree.root) !== hex(expectedRoot))
+      throw new Error("openings under an unknown root");
+    return tree;
+  };
+  const reader: Pick<ChainReader, "getAccount"> &
+    Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> = {
+    getAccount: async (address) => accounts.get(address),
+    getRingMemberOpenings: async (request): Promise<RingMemberOpenings> => {
+      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+      return {
+        context,
+        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        openings: request.members.map((member) => tree.opening(member)),
+      };
+    },
+    getRingRecordPool: async (request): Promise<RingRecordPool> => {
+      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+      return {
+        context,
+        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        ...tree.pool(request.members, request.openings),
+      };
+    },
+  };
   const spp = (
     proofInputs: SppProofInputs,
     circuit: SppCircuit,

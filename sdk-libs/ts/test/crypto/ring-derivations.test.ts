@@ -46,6 +46,10 @@ describe("ring domains", () => {
       applyRecords: ascii("CRAP"),
       registerKey: ascii("CRRG"),
       depositBlinding: ascii("CRDB"),
+      depositStatement: ascii("CRDP"),
+      mergeStatement: ascii("CRMG"),
+      withdrawals: ascii("CRPW"),
+      withdrawalExemption: ascii("CRWX"),
     });
     const values = [
       ...Object.values(RingDomain),

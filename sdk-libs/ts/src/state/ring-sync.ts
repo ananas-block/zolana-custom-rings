@@ -1,10 +1,12 @@
-/** Ring notes of scheme 10 opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
+/** Ring notes of scheme 10 and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
 import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
 import { bytesKey, equalBytes, fetchSplAssetRegistrations } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
+  decryptTransactions,
+  Wallet,
   type AssetRegistry,
   type IndexedShieldedTransaction,
   type ShieldedKeys,
@@ -12,11 +14,13 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
+import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { nextScanCursor } from "../operations/audit/audit.js";
 import { openRingDelivery } from "../crypto/derivation/blinding.js";
 import { spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
+import { openRingDeposit } from "./ring-deposit.js";
 import type { RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
@@ -25,7 +29,7 @@ export interface RingNotes {
   readonly pending: number;
 }
 
-/** Every note is unspent, scheme 10 opens only under keys that are also `RingKeys`. */
+/** Every note is unspent, scheme 10 opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
 export async function openRingNotes(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -34,7 +38,7 @@ export async function openRingNotes(
   }>,
   context?: RequestContext,
 ): Promise<RingNotes> {
-  const notes: Note[] = [];
+  const notes = await ringDeposits(input, context);
   let pending = 0;
   for (const tx of input.transactions) {
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
@@ -77,18 +81,18 @@ export async function openRingNotes(
   });
 }
 
-/** `syncWallet`, then the ring notes it drops, each read spent once a spend of it is indexed. */
+/** `syncWallet`, then the ring notes it drops and the ring merges spending them, each read spent once a spend of it is indexed. */
 export async function syncRingWallet(
   input: SyncWalletInput & Readonly<{ client: RingSyncClient }>,
   context?: RequestContext,
 ): Promise<SyncReport> {
   const report = await syncWallet(input, context);
   const { wallet, keys, client } = input;
-  const transactions = await taggedTransactions(
-    client,
-    keys.viewingPublicKeys().map((key) => key.u()),
-    context,
-  );
+  const tags = keys.viewingPublicKeys().map((key) => key.u());
+  const transactions = [
+    ...(await taggedTransactions(client, tags, context)),
+    ...(await taggedDeposits(client, tags, context)),
+  ];
   const open = () => openRingNotes({ keys, assets: wallet.registry, transactions }, context);
   let notes = await open();
   const { solanaRpc, commitment } = client;
@@ -103,14 +107,32 @@ export async function syncRingWallet(
   await wallet._withSyncLock(async () => {
     const state = wallet._state();
     const held = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
-    const fresh = notes.utxos.filter((entry) => !held.has(bytesKey(entry.outputContext.hash)));
+    const unheld = (entry: WalletUtxo): boolean => {
+      const key = bytesKey(entry.outputContext.hash);
+      if (held.has(key)) return false;
+      held.add(key);
+      return true;
+    };
+    const fresh = notes.utxos.filter(unheld);
     if (fresh.length === 0) return;
-    const spends = await spendingTransactions(
-      client,
-      fresh.map((entry) => entry.nullifier),
-      { remaining: Number.MAX_SAFE_INTEGER },
-      context,
-    );
+    const owner = keys.address();
+    const budget = { remaining: Number.MAX_SAFE_INTEGER };
+    const spends: IndexedShieldedTransaction[] = [];
+    for (let frontier = fresh; frontier.length > 0; ) {
+      const read = await spendingTransactions(
+        client,
+        frontier.map((entry) => entry.nullifier),
+        budget,
+        context,
+      );
+      spends.push(...read);
+      const merged = await openRingMerges(
+        { keys, owner, assets: wallet.registry, spends: read },
+        context,
+      );
+      frontier = merged.utxos.filter(unheld);
+      fresh.push(...frontier);
+    }
     const nullifiers = new Set(state.nullifiers);
     for (const spend of [...transactions, ...spends])
       for (const nullifier of spend.nullifiers) nullifiers.add(bytesKey(nullifier));
@@ -141,6 +163,61 @@ interface Site {
 type Note = RingDeliveredNote & Readonly<{ slot: Site["slot"] }>;
 
 const PENDING = Symbol("pending");
+
+/** The ring merges among `spends` and the notes they open to `owner`, Rust `RingMerges`. */
+export async function openRingMerges(
+  input: Readonly<{
+    keys: ShieldedKeys;
+    owner: ShieldedAddress;
+    assets: AssetRegistry;
+    spends: readonly IndexedShieldedTransaction[];
+  }>,
+  context: RequestContext | undefined,
+): Promise<
+  Readonly<{ merges: readonly IndexedShieldedTransaction[]; utxos: readonly WalletUtxo[] }>
+> {
+  const merges = input.spends.filter(
+    (tx) =>
+      tx.ringProgramId !== undefined &&
+      !tx.proofless &&
+      tx.txViewingPublicKey === undefined &&
+      tx.salt === undefined,
+  );
+  if (merges.length === 0) return { merges, utxos: [] };
+  const opened = new Wallet({ identity: input.owner, registry: input.assets });
+  await decryptTransactions({ wallet: opened, keys: input.keys, transactions: merges, context });
+  return { merges, utxos: opened._state().utxos };
+}
+
+/** Deposits of any ring, Rust `DepositOpener::open_held`. */
+async function ringDeposits(
+  input: Readonly<{ keys: ShieldedKeys; transactions: readonly IndexedShieldedTransaction[] }>,
+  context: RequestContext | undefined,
+): Promise<Note[]> {
+  const owner = input.keys.address();
+  const held = input.keys.viewingPublicKeys();
+  const notes: Note[] = [];
+  const seen = new Set<string>();
+  for (const tx of input.transactions)
+    for (const slot of tx.outputSlots) {
+      const viewingPublicKey = held.find((key) => equalBytes(key.u(), slot.viewTag));
+      if (viewingPublicKey === undefined || seen.has(bytesKey(slot.outputContext.hash))) continue;
+      const utxo = await openRingDeposit(
+        {
+          keys: input.keys,
+          owner,
+          viewingPublicKey,
+          outputSlot: slot,
+          depositPayload: customRingDepositPayload,
+        },
+        context,
+      );
+      if (utxo === undefined) continue;
+      seen.add(bytesKey(slot.outputContext.hash));
+      notes.push({ utxo, utxoHash: slot.outputContext.hash, slot });
+    }
+  return notes;
+}
 
 /** `undefined` for a slot sent to no held key. */
 async function openSlot(
@@ -216,6 +293,34 @@ async function opened<T>(
   } catch (error) {
     if (context?.signal?.aborted === true) throw error;
     return undefined;
+  }
+}
+
+/** The deposits under one of `tags`, one proofless transaction per deposited output. */
+async function taggedDeposits(
+  client: Pick<IndexerReader, "getEncryptedUtxosByTags">,
+  tags: readonly Bytes32[],
+  context: RequestContext | undefined,
+): Promise<readonly IndexedShieldedTransaction[]> {
+  const deposits: IndexedShieldedTransaction[] = [];
+  let cursor: Uint8Array | undefined;
+  for (;;) {
+    const page = await client.getEncryptedUtxosByTags(
+      { tags: [...tags], ...(cursor === undefined ? {} : { cursor }) },
+      undefined,
+      context,
+    );
+    for (const match of page.matches)
+      deposits.push({
+        slot: match.slot,
+        txSignature: match.txSignature,
+        outputSlots: [match.outputSlot],
+        messages: [],
+        nullifiers: [],
+        proofless: true,
+      });
+    cursor = nextScanCursor(cursor, page);
+    if (cursor === undefined) return deposits;
   }
 }
 

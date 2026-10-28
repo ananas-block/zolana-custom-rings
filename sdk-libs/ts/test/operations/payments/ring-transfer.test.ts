@@ -918,9 +918,9 @@ describe("delegate move builder", () => {
           if (address === config) reads.config += 1;
           return fixture.client.getAccount(address);
         },
-        getRingMemberOpenings: async (request) => {
+        getRingRecordPool: async (request) => {
           reads.openings += 1;
-          return fixture.client.getRingMemberOpenings(request);
+          return fixture.client.getRingRecordPool(request);
         },
         getLatestBlockhash: async () => BLOCKHASH,
         ...kitReads({ solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) } }),

@@ -1,29 +1,22 @@
-/** The rebuild of a published anonymous output from its zolana plaintext, Rust `anonymous_body`. */
+/** The rebuild of a published anonymous output from its plaintext, Rust `anonymous_body`. */
 import type { Address, Bytes32 } from "@heliuslabs/zolana";
+import { equalBytes } from "@heliuslabs/zolana/internal";
+import { X25519PublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { Utxo, type AssetRegistry, type TreeId } from "@heliuslabs/zolana/transaction";
+
 import {
   anonymousRecipientUtxo,
   anonymousSenderUtxos,
-  equalBytes,
   type AnonymousRecipientPlaintext,
   type AnonymousSenderPlaintext,
-} from "@heliuslabs/zolana/internal";
-import { X25519PublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, Utxo, type AssetRegistry, type TreeId } from "@heliuslabs/zolana/transaction";
+} from "./anonymous-plaintext.js";
 
-const OWNER_LEN = 34;
-const MINT_LEN = 32;
-const AMOUNT_LEN = 8;
-const VIEWING_KEY_LEN = 33;
-const BLINDING_LEN = 32;
+export { RECIPIENT_BODY_LEN } from "./anonymous-plaintext.js";
 
 /** `0x04 ‖ 0^32`, the sender bundle's entry for an output no anonymous recipient reads. */
 export const DUMMY_RECIPIENT_VIEWING_PK = X25519PublicKey.fromBytes(
   Uint8Array.of(4, ...new Uint8Array(32)),
 );
-
-/** A recipient plaintext with empty data, the length of every dummy body. */
-export const RECIPIENT_BODY_LEN =
-  OWNER_LEN + MINT_LEN + AMOUNT_LEN + VIEWING_KEY_LEN + BLINDING_LEN + 1;
 
 export interface AnonymousOutput {
   readonly owner: ShieldedAddress;
@@ -49,7 +42,7 @@ export function senderChange(
   plaintext: AnonymousSenderPlaintext,
   firstNullifier: Bytes32,
 ): readonly Utxo[] {
-  return anonymousSenderUtxos(plaintext, output.assets, SOL_MINT, firstNullifier).map((utxo) =>
+  return anonymousSenderUtxos(plaintext, output.assets, firstNullifier).map((utxo) =>
     inRing(output.ring, utxo),
   );
 }

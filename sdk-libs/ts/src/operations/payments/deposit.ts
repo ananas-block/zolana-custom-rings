@@ -1,12 +1,12 @@
 import type { Instruction } from "@solana/kit";
 
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
+import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
 import {
   compileUnsignedTransaction,
   resolveDepositSettlement,
   signerAddress,
   ZERO_32,
-  encodeRingDepositPlaintext,
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";

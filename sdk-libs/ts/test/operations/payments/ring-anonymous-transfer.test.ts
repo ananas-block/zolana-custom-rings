@@ -36,8 +36,6 @@ import {
   ConfidentialTransfer,
   WithdrawalTarget,
   type SettlementTransfer,
-  decodeAnonymousRecipient,
-  decodeAnonymousSender,
   decodeConfidential,
   ProofInputUtxo,
   Utxo,
@@ -119,6 +117,10 @@ import {
   RECIPIENT_BODY_LEN,
   openRecipient,
 } from "../../../src/protocol/codec/anonymous-body.js";
+import {
+  decodeAnonymousRecipient,
+  decodeAnonymousSender,
+} from "../../../src/protocol/codec/anonymous-plaintext.js";
 
 await initializePoseidon();
 
@@ -1430,7 +1432,8 @@ describe("anonymous rail on a policy ring", () => {
     expect(data.approvalRequired).toBe(false);
     const policy = memberPolicy(fixture);
     expect(policy).toMatchObject({ anonymous: true, sender: commitment, senderPkHash });
-    expect(policy.senderEntry.own?.kind).toBe("present");
+    const senderRecord = policy.ownPool.subjects[policy.senderEntry.own]?.recordIndex;
+    expect(policy.ownPool.records[senderRecord ?? -1]?.member).toEqual(senderPkHash);
     const registryAccount = fixture.accounts.get(
       await ringMemberRegistryAddress(fixture.ringProgramId),
     );

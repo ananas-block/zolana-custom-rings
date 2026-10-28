@@ -6,11 +6,8 @@ import type { GetByNullifiersRequest, GetByTagsRequest } from "@heliuslabs/zolan
 import {
   addressBytes,
   concatBytes,
-  encodeAnonymousRecipient,
-  encodeAnonymousSender,
   encodeMergeOutputData,
   encodeOutputData,
-  encodeRingDepositPlaintext,
   encryptMergeOutput,
   mergeOutputBlinding,
   mergeOutputKey,
@@ -63,6 +60,11 @@ import {
 } from "../../src/state/viewing-history.js";
 import { AnonymousPlan, RingOutputRail } from "../../src/operations/payments/output-rail.js";
 import { RECIPIENT_BODY_LEN } from "../../src/protocol/codec/anonymous-body.js";
+import {
+  encodeAnonymousRecipient,
+  encodeAnonymousSender,
+} from "../../src/protocol/codec/anonymous-plaintext.js";
+import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import { encodeRingDepositCapsule } from "../../src/protocol/codec/ring-deposit-capsule.js";
 import { encodeRingOutput, RingScheme } from "../../src/protocol/transaction/output.js";
 import type { RingKeys } from "../../src/state/ring-keys.js";

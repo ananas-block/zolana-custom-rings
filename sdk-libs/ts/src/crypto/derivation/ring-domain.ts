@@ -14,8 +14,15 @@ export const RingDomain = Object.freeze({
   applyRecords: 0x4352_4150, // "CRAP"
   registerKey: 0x4352_5247, // "CRRG"
   depositBlinding: 0x4352_4442, // "CRDB"
+  depositStatement: 0x4352_4450, // "CRDP"
+  mergeStatement: 0x4352_4d47, // "CRMG"
+  withdrawals: 0x4352_5057, // "CRPW"
+  withdrawalExemption: 0x4352_5758, // "CRWX"
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
+
+/** Bound into every policy statement, a layout change raises it. */
+export const POLICY_STATEMENT_VERSION = 3n;
 
 export function domainField(domain: RingDomain): Bytes32 {
   return rightAlign(u32be(domain));

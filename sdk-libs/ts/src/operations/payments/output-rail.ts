@@ -1,11 +1,5 @@
 /** The ring output rails, mirrors Rust `zolana-ring-transaction` over the ring program's expansion. */
-import {
-  encodeAnonymousRecipient,
-  encodeAnonymousSender,
-  encryptConfidential,
-  equalBytes,
-  ZERO_32,
-} from "@heliuslabs/zolana/internal";
+import { encryptConfidential, equalBytes, ZERO_32 } from "@heliuslabs/zolana/internal";
 import type {
   Address,
   Bytes16,
@@ -42,6 +36,10 @@ import {
   DUMMY_RECIPIENT_VIEWING_PK,
   RECIPIENT_BODY_LEN,
 } from "../../protocol/codec/anonymous-body.js";
+import {
+  encodeAnonymousRecipient,
+  encodeAnonymousSender,
+} from "../../protocol/codec/anonymous-plaintext.js";
 import { deliveredSlotSecret } from "../../crypto/derivation/ring-stream.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
 import {
@@ -122,12 +120,12 @@ export class AnonymousPlan {
     const payments = this.payments[Symbol.iterator]();
     const slots = outputs.map((output, slotIndex): AnonymousSlot => {
       const owner = output.ownerAddress;
-      if (slotIndex < change) return Object.freeze({ kind: "change", tag: this.senderTag });
-      if (owner === undefined) {
-        const tag = this.#dummyTags[slotIndex];
-        if (tag === undefined) throw new TransactionError("TRANSACTION_TOO_MANY_OUTPUTS");
-        return Object.freeze({ kind: "dummy", tag });
-      }
+      const dummy = this.#dummyTags[slotIndex];
+      if (dummy === undefined) throw new TransactionError("TRANSACTION_TOO_MANY_OUTPUTS");
+      // Later change opens from the sender bundle, only output 0 takes the sender tag.
+      if (slotIndex < change)
+        return Object.freeze({ kind: "change", tag: slotIndex === 0 ? this.senderTag : dummy });
+      if (owner === undefined) return Object.freeze({ kind: "dummy", tag: dummy });
       if (isChange(output, sender))
         throw new RingError("RING_ANONYMOUS_CHANGE", { details: { slotIndex } });
       if (output.ringProgramId === undefined) {

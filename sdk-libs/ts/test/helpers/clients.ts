@@ -23,6 +23,7 @@ export function ringTransferClient(
     getLatestBlockhash: async () => BLOCKHASH,
     getAccount: async () => undefined,
     getRingMemberOpenings: notImplemented("getRingMemberOpenings"),
+    getRingRecordPool: notImplemented("getRingRecordPool"),
     proveRing: notImplemented("proveRing"),
     proveRingTransact: notImplemented("proveRingTransact"),
     proveAnonymousRingTransact: notImplemented("proveAnonymousRingTransact"),
