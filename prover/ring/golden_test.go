@@ -16,15 +16,21 @@ import (
 
 const goldenDigests = "testdata/witness.sha256"
 
-// rustGolden is written by the Rust SDK, in its own key order.
-const rustGolden = "../../sdk-libs/sdk/tests/fixtures/custom-ring-audit-anonymous-exit.json"
+// rustGoldens are written by the Rust SDK, in its own key order.
+const rustGoldens = "../../sdk-libs/sdk/tests/fixtures"
 
 // UPDATE_RING_GOLDENS=1 rewrites the digests, never the fixtures.
 func TestGoldenRequestsAssignTheRecordedWitness(t *testing.T) {
-	files := append(goldenFiles(t), rustGolden)
+	rust, err := filepath.Glob(filepath.Join(rustGoldens, "*.json"))
+	if err != nil || len(rust) == 0 {
+		t.Fatalf("no Rust fixtures: %v", err)
+	}
 	digests := map[string]string{}
-	for _, file := range files {
+	for _, file := range append(goldenFiles(t), rust...) {
 		name := filepath.Base(file)
+		if strings.HasPrefix(file, rustGoldens) {
+			name = "rust/" + name
+		}
 		payload, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

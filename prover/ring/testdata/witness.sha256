@@ -6,7 +6,6 @@ cd67d3233be7ad0782ebf1587c926bf20dcb70939085ea8c089924c2006a725e  custom-ring-ap
 5172b665dc9f233e6431fe0d1f5f56efb09f373f52541dcddd705c89cafd204e  custom-ring-audit-anonymous-entry-v2-8-2.json
 70921c39a88fe590250f1bb554b777a0dee29a86e6bac4ee6cf40f3ee9c09174  custom-ring-audit-anonymous-entry-v2-8-4.json
 92013c0323dc7b1ea2beca468d2690f83c2bebffc4fd188dc7516c68e53d6f18  custom-ring-audit-anonymous-entry-v2-8-8.json
-e450f59af81d2ebf4f82ec4c339de1eddc6396eba2a40e3fa48b33133057826b  custom-ring-audit-anonymous-exit.json
 97911823cca1c53b4b33a45144cfa4d4b050e7821419fb14da938783f086f37b  custom-ring-audit-anonymous-v2-16-2.json
 eb10dd28db66fdc1dbc7ac7b83d9fb7502c368306ae877007d1c375d4a4ec6fa  custom-ring-audit-anonymous-v2-16-4.json
 91143ffcc8d710b0e5866107211913f761d3b9f7edd4161abd8c6ab221a9c2ac  custom-ring-audit-anonymous-v2-4-2.json
@@ -28,10 +27,12 @@ ac3170e523abad52d847ec60d1e21b8a190ae5f0d392b2ceba81a2d6f785fb19  custom-ring-po
 53ff54b96c178e2a4824f0c9c1c92ff5bb729b5e0a58e7d9da52e251a78beaa9  custom-ring-policy-member-v3-16-w0-curator.json
 d03dcb44a086dd7df29057e9fd275e6f34aa50b1a4d8e351d885a56499f4694f  custom-ring-policy-member-v3-2-w0-curator.json
 5931a006cbf5aa3a018986650cc9627d75fed50034cb2e0d0ba8afe6bf99c18c  custom-ring-policy-member-v3-2-w0-own.json
-73ee3f8a975a34589415eabc398bbcb83512b347c4be79f7fc500a6c414ef7ae  custom-ring-policy-member-v3-2-w2-curator.json
-b09cd7bf2b5b921d678318d13c3a7661e7fbc3ce4c9e601c0421938f3ec94785  custom-ring-policy-member-v3-2-w2-own.json
-c65ebd12fbbe8e4c4a8b21bcef12b94c4cee9c76f571b4709421de04664582be  custom-ring-policy-member-v3-2-w32-own.json
+63716d646a0700a8b9355f472673dc46e19dd3ba82b4c2b447f9a78137c1ffa7  custom-ring-policy-member-v3-2-w2-curator.json
+75e888e856a4085ee443ff0a117980076e31301be566a896d2bca82e4b3096b7  custom-ring-policy-member-v3-2-w2-own.json
+afe23b5f1308c709ce739bebb99ba9ef45f4022787e0a12dd8785321be321838  custom-ring-policy-member-v3-2-w32-own.json
 5aae578cb9aec189fc1db877c2006050de77c43c51907505cc21294bb2f0fff1  custom-ring-policy-member-v3-4-w0-curator.json
 e74d25f207c4591e7c678bd2d67dbe12efd83fa0e0cfde0b441b5200d9782260  custom-ring-policy-member-v3-8-w0-curator.json
 ce07fdfbe6a41b9e552b4a7d3bb6d07d582d53a748524f29a0d2510f7e6d6e72  custom-ring-register-key.json
 2fbdc02e1fdb81e1301595b5ac832179340ad6055baa9e91f245892189de7e86  custom-ring-withdrawal-exemption.json
+e450f59af81d2ebf4f82ec4c339de1eddc6396eba2a40e3fa48b33133057826b  rust/custom-ring-audit-anonymous-exit.json
+b71b7c2a5925205fc6dec8bd501f33c53ce061306fc186f745fc4c3e1573bdf7  rust/custom-ring-policy-member-v3-2-w0-own.json
