@@ -1,7 +1,7 @@
 use solana_address::Address;
 use solana_keypair::Keypair;
-use zeroize::Zeroizing;
 use spr_keypair::{KeypairError, X25519Keypair};
+use zeroize::Zeroizing;
 use zolana_ring_client::rpc::auditor_keypair;
 
 use crate::{config::RootSecret, error::RingRpcError};

@@ -6,6 +6,7 @@ use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
     records::{MemberOpeningRead, RegistryTip},
@@ -25,7 +26,6 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
-use spr_transaction::instructions::transact::canonical_shape;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized},

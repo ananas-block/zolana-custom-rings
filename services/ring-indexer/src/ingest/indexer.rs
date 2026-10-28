@@ -16,8 +16,8 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use solana_account::Account;
 use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
-use thiserror::Error;
 use spr_interface::state::{discriminator::RING_CONFIG, RingConfig};
+use thiserror::Error;
 use zolana_ring_indexer::records::{self, RecordCall, RecordChange, RegistryAccounts};
 
 use crate::{

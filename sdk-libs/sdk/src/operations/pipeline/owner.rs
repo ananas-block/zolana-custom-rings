@@ -5,8 +5,8 @@ use spr_client::{AsyncRpc, SettlementAccountValidation};
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
-use zolana_ring_transaction::RingOutputRail;
 use spr_transaction::instructions::transact::ConfidentialTransaction;
+use zolana_ring_transaction::RingOutputRail;
 
 use super::{
     canonical_shape, delivered, pad_under_rail, sealed, shape_keyed, transaction_key, Rail,

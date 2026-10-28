@@ -5,20 +5,20 @@ use custom_ring_interface::{
     RingOutput, RING_DELIVERED_BODY_LEN,
 };
 use serde::Serialize;
-use zeroize::Zeroizing;
 use spr_client::AsyncRpc;
 use spr_event::MessageData;
 use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
+    derive_output_blinding_seed, instructions::transact::SppProofInputs, SppProofOutputUtxo,
+    TransactionError,
+};
+use zeroize::Zeroizing;
 use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad,
 };
 use zolana_ring_transaction::{PublishedSlot, RingOutputRail};
-use spr_transaction::{
-    derive_output_blinding_seed, instructions::transact::SppProofInputs, SppProofOutputUtxo,
-    TransactionError,
-};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{

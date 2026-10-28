@@ -7,7 +7,6 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zeroize::Zeroizing;
 use spr_client::{AsyncRpc, AsyncWitnessReader, ClientError, MergeProver, ProofCompressed};
 use spr_hasher::primitives::{pack_be, right_align};
 use spr_interface::{
@@ -19,13 +18,14 @@ use spr_interface::{
 };
 use spr_keypair::{NullifierKey, X25519Pubkey};
 use spr_program::instruction::MergeRing;
-use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
 use spr_transaction::{
     error::TransactionError,
     instructions::merge::{MergeProofInputs, MergeTransaction},
     utxo::{ProofInputUtxo, SppProofInputUtxo},
     ShieldedKeys, SppProofOutputUtxo, WalletUtxo,
 };
+use zeroize::Zeroizing;
+use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{

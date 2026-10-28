@@ -12,12 +12,12 @@ use custom_ring_interface::{DisclosureLayout, RingMode, RingRail, RingTransactDa
 use serde_json::{json, Map, Value};
 use solana_address::Address;
 use spr_hasher::hash_chain::create_hash_chain_4_from_slice;
+use spr_transaction::{Mint, ShieldedTransaction};
 use zolana_ring_client::{
     AnonymousInputs, AuditDisclosure, AuditedInput, AuditedInputOpening, AuditedOutput,
     DisclosurePad, InputOpening, InputRing, KnownUtxoIndex, RingOrigin, TransactionAudit,
 };
 use zolana_ring_transaction::RingAssets;
-use spr_transaction::{Mint, ShieldedTransaction};
 
 use transfer::{
     audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Frame, Output, Placement,

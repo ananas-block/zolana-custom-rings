@@ -1,15 +1,15 @@
 use async_trait::async_trait;
-use thiserror::Error;
 use spr_api::{ApiError, BlockingInsideRuntime, ZolanaApi};
 use spr_client::{
     indexer::{indexer_error, AsyncZolanaIndexer, ZolanaIndexer},
     AsyncZolanaClient, Blocking, ClientError, ZolanaClient,
 };
 use spr_indexer_api::RpcMethod;
+use thiserror::Error;
 use zolana_ring_indexer::rpc::{
     method::{
         GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-        GetRingMemberRegistryRoot, GetRingRecordQueue,
+        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
     },
     RingRpcError,
 };
@@ -108,6 +108,7 @@ ring_indexer! {
     get_ring_member_record => GetRingMemberRecord,
     get_ring_member_records => GetRingMemberRecords,
     get_ring_member_openings => GetRingMemberOpenings,
+    get_ring_record_pool => GetRingRecordPool,
     get_ring_member_registry_root => GetRingMemberRegistryRoot,
     get_ring_record_queue => GetRingRecordQueue,
     get_ring_apply_proof_inputs => GetRingApplyProofInputs,

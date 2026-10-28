@@ -7,16 +7,12 @@ use spr_keypair::{
     viewing_key::ViewTag, PublicKey, ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey,
     X25519Pubkey,
 };
-use spr_transaction::{
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-    },
-    Mint, SppProofOutputUtxo, Utxo,
-};
+use spr_transaction::{Mint, SppProofOutputUtxo, Utxo};
 
 use crate::{
-    anonymous_rail::AnonymousSeal, AnonymousOutput, AnonymousSlot, OutputBlindings, RingAssets,
-    TaggedPayment, DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN,
+    anonymous_rail::AnonymousSeal, AnonymousOutput, AnonymousSlot,
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, OutputBlindings,
+    RingAssets, TaggedPayment, DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN,
 };
 
 const VECTORS: &str = concat!(

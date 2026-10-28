@@ -91,7 +91,10 @@ pub use crate::{
     reader::{
         Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError, READ_ACCESS_RECORD_PDA_SEED,
     },
-    records::{apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RegistryTip},
+    records::{
+        apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RecordPoolCheck,
+        RecordPoolRead, RegistryTip,
+    },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage},
     types::{

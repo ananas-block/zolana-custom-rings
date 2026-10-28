@@ -1,11 +1,13 @@
 //! Ring output rails as the ring program expands them, mirrored by Go `prover/circuits/audit`.
 
 mod anonymous_body;
+mod anonymous_plaintext;
 mod anonymous_rail;
 mod assets;
 mod error;
 mod published;
 mod ring_delivered;
+mod ring_deposit;
 #[cfg(test)]
 mod tests;
 
@@ -33,6 +35,11 @@ pub use anonymous_body::{
     listed_recipients, AnonymousOutput, OutputBlindings, DUMMY_RECIPIENT_VIEWING_PK,
     RECIPIENT_BODY_LEN,
 };
+pub use anonymous_plaintext::{
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
+    UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
+    VerifiedSenderPlaintext,
+};
 use anonymous_rail::{lead_change, AnonymousSeal};
 pub use anonymous_rail::{AnonymousPlan, AnonymousSlot, TaggedPayment};
 pub use assets::RingAssets;
@@ -42,6 +49,7 @@ pub use ring_delivered::{
     is_contributory, RingDelivered, RingDeliveredBody, RingDeliveredNote, RingDeliveryOpening,
     RingUtxoOwner,
 };
+pub use ring_deposit::RingDepositPlaintext;
 
 #[derive(Clone, Debug)]
 pub enum RingDelivery {
@@ -230,7 +238,7 @@ impl RingOutputRail {
                         tag,
                         body: body.as_deref(),
                     };
-                    (wire.transact_output(), *tag)
+                    (wire.transact_output()?, *tag)
                 }
                 None => {
                     let owner_tag = output
@@ -258,7 +266,7 @@ impl RingOutputRail {
         inputs.external_data.resolved_owner_tags = resolved;
         inputs.external_data.messages = vec![MessageData {
             view_tag: *plan.sender_tag(),
-            data: encode_anonymous_sender_output(&sender_bundle),
+            data: encode_anonymous_sender_output(&sender_bundle)?,
         }];
         Ok(())
     }
@@ -281,7 +289,7 @@ impl RingOutputRail {
         slot_index: usize,
     ) -> Result<MessageData, RingRailError> {
         let framing = || RingRailError::RingOutputFraming { slot_index };
-        let expanded = output.transact_output();
+        let expanded = output.transact_output()?;
         if expanded.owner_tag != owner_tag.tag {
             return Err(framing());
         }

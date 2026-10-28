@@ -13,15 +13,14 @@ use spr_interface::{
 };
 use spr_keypair::ShieldedKeypair;
 use spr_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
+use spr_transaction::{
+    instructions::transact::ConfidentialTransaction, AssetRegistry, Mint, WalletUtxo,
+};
 use zolana_ring_client::{FirstContact, StreamCounter, ViewingHistory};
 use zolana_ring_keys::RingAddress;
-use zolana_ring_transaction::{listed_recipients, RingDelivery};
-use spr_transaction::{
-    instructions::transact::ConfidentialTransaction,
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-    },
-    AssetRegistry, Mint, WalletUtxo,
+use zolana_ring_transaction::{
+    listed_recipients, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
+    RingDelivery,
 };
 
 use super::*;
@@ -369,7 +368,8 @@ async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     );
     let slots = published(&staged);
     let sender_tag = sender.get_sender_view_tag(0).unwrap();
-    assert_eq!((slots[0].0, slots[1].0), (sender_tag, sender_tag));
+    assert_eq!(slots[0].0, sender_tag);
+    assert_ne!(slots[1].0, sender_tag);
     assert_eq!(slots[2].0, bootstrap.viewing_pubkey().u());
     assert_eq!(slots[3].0, request);
     assert!(slots[..2].iter().all(|(_, body)| body.is_none()));
@@ -1500,6 +1500,73 @@ async fn a_recipient_the_rules_refuse_fails_before_proving() {
             subject: TransferSubject::Owner(0),
         }))
     ));
+}
+
+/// `UPDATE_PROVER_JSON=1` rewrites the shared pooled request Go solves and TS rebuilds.
+#[tokio::test]
+async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
+    use crate::tests::support::{keypair, Registry};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
+    };
+    let client = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&sender, 1), (&recipient, 1)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    transaction
+        .transfer_with_ring(
+            &recipient.shielded_address().unwrap(),
+            Mint::SOL,
+            3,
+            Some(ring().program_id()),
+        )
+        .unwrap();
+    let assembled = owner_transfer(&sender, transaction)
+        .assemble(&client)
+        .await
+        .unwrap();
+    let request = assembled.policy_request().unwrap().unwrap();
+    let built = serde_json::to_value(
+        crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+    )
+    .unwrap();
+    let subjects = |pool: &str| -> Vec<String> {
+        built[pool]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|subject| subject["member"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let own = subjects("ownSubjects");
+    // The sender, the recipient and the asset, cycled to the pool width.
+    assert_eq!(
+        own[..3]
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    assert!(own
+        .iter()
+        .enumerate()
+        .all(|(index, member)| *member == own[index % 3]));
+    assert_eq!(built["ownRecords"].as_array().unwrap().len(), own.len());
+    let name = built["circuitType"].as_str().unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("tests/fixtures/{name}.json"));
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    let pinned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(request_layout(&built), request_layout(&pinned));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

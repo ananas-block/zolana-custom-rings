@@ -17,6 +17,7 @@ pub mod transfer;
 use custom_ring_interface::{
     encode_ring_confidential_delivered_output, EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
 };
+use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -26,7 +27,6 @@ use std::{
     },
     time::Duration,
 };
-use spr_keypair::{X25519Keypair, X25519Pubkey};
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordTree};
 use zolana_ring_policy::Member;
 
@@ -39,6 +39,7 @@ use solana_signer::Signer;
 use spr_client::{ClientError, Context, GetShieldedTransactionsByTagsResponse};
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::ViewingKey;
+use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in,
     rpc::{
@@ -71,7 +72,6 @@ use zolana_ring_rpc::{
     AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
-use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 
 use transfer::{
     field, input_opening, x25519_u, Frame, Output, Placement, Publish, Rail, Transfer, UtxoFields,

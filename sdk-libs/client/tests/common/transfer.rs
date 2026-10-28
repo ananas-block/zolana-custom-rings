@@ -29,17 +29,17 @@ use spr_interface::{
     tree_slot::tree_id_field,
 };
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{
+    derive_output_blinding_seed,
+    utxo::{derive_transact_output_blinding, DUMMY_DOMAIN, UTXO_DOMAIN},
+    OutputContext, OutputSlot, ShieldedTransaction,
+};
 use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, AuditedUtxo, DeliveredOutputOpening, DisclosurePad, KnownUtxo,
     OutputOpening, RingOwnerTag, UtxoOwner,
 };
 use zolana_ring_transaction::RingDeliveredBody;
-use spr_transaction::{
-    derive_output_blinding_seed,
-    utxo::{derive_transact_output_blinding, DUMMY_DOMAIN, UTXO_DOMAIN},
-    OutputContext, OutputSlot, ShieldedTransaction,
-};
 
 /// Byte `i` is `seed ^ i` under a `0x01` lead byte, the Go `ringaudit.Scalar`.
 pub fn scalar(seed: u8) -> [u8; 32] {
@@ -360,7 +360,7 @@ impl Transfer {
             messages: matches!(publish.disclosure, AuditDisclosure::Anonymous(_))
                 .then(|| MessageData {
                     view_tag: SENDER_TAG,
-                    data: encode_anonymous_sender_output(&SENDER_BUNDLE),
+                    data: encode_anonymous_sender_output(&SENDER_BUNDLE).unwrap(),
                 })
                 .into_iter()
                 .chain([MessageData {
@@ -644,7 +644,7 @@ pub fn input_opening(utxo: &UtxoFields, blinding: [u8; 32]) -> AnonymousInputOpe
 
 /// The slot the indexer returns for `output`, its owner tag rebuilt by the program.
 fn indexed(output: RingOutput<'_>, tree_id: u16, leaf_index: u64) -> OutputSlot {
-    let output = output.transact_output();
+    let output = output.transact_output().unwrap();
     let OwnerTag::Inline(view_tag) = output.owner_tag else {
         panic!("ring outputs publish inline owner tags");
     };

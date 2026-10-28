@@ -5,8 +5,8 @@ use custom_ring_interface::{stream::SlotSecret, AUDIT_STREAM_INFO, RING_DELIVERE
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
-use zolana_ring_keys::symmetric_apply_audit;
 use spr_transaction::{Blinding, Data, Mint, Utxo};
+use zolana_ring_keys::symmetric_apply_audit;
 
 use crate::{RingAssets, RingRailError};
 

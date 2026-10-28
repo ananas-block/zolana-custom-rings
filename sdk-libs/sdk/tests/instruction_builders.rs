@@ -18,7 +18,6 @@ use custom_ring_sdk::{
 use solana_account::Account;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use wincode::{config::DefaultConfig, SchemaRead};
 use spr_client::{AsyncRpc, ClientError};
 use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::{
@@ -29,6 +28,7 @@ use spr_interface::{
 };
 use spr_keypair::{SigningKey, X25519Keypair};
 use spr_program::instruction::MergeRing;
+use wincode::{config::DefaultConfig, SchemaRead};
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, PolicyTableError, Rule, RuleTable, RuleTableError, Subject,

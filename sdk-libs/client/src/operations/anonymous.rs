@@ -3,31 +3,28 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use custom_ring_interface::{anonymous_recipient_output_body, anonymous_sender_output_body};
-use solana_address::Address;
 use solana_signature::Signature;
-use zeroize::Zeroizing;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_event_parser::decode_encrypted_ring_deposit_output_data;
 use spr_keypair::{
     viewing_key::ViewTag, KeypairError, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey,
 };
+use spr_transaction::{
+    DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, DeriveRequest, Mint,
+    ShieldedKeys, ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
+};
+use zeroize::Zeroizing;
 use zolana_ring_keys::{
     RingKeys, SharedTagPair, SharedTagsRequest, SharedViewTags, ViewTagRequest, ViewTagStream,
 };
 use zolana_ring_transaction::{
-    is_contributory, listed_recipients, AnonymousOutput, RingAssets, DUMMY_RECIPIENT_VIEWING_PK,
-};
-use spr_transaction::{
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-    },
-    verify_owned, DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, DeriveRequest,
-    Mint, OutputSlot, ShieldedKeys, ShieldedTransaction, TransactionError, TransactionKeyRequest,
-    Utxo, WalletUtxo,
+    is_contributory, listed_recipients, AnonymousOutput, AnonymousTransferRecipientPlaintext,
+    AnonymousTransferSenderPlaintext, RingAssets, DUMMY_RECIPIENT_VIEWING_PK,
 };
 
 use crate::{
+    confidential::RingMerges,
     delivered::RingDeliveryContext,
+    deposit::{DepositOpener, DepositSlot, OpenedDeposit},
     deposit_payload, exactly_one, exactly_one_each,
     tags::{IndexerReads, TagWindow, TAG_WINDOW},
     viewing_history::{Learned, StreamCounter, ViewingHistory, ViewingKeyEntry},
@@ -88,7 +85,7 @@ pub enum SentCheck {
     Unverified,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AnonymousScan {
     /// Counters, watermarks and counterparties raised to what the indexer holds, never lowered.
     pub history: ViewingHistory,
@@ -432,14 +429,13 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         self.note_spends(&transactions);
         self.open(index, &hits)?;
         for deposit in &deposits {
-            let counters = deposit
-                .output_slots
-                .iter()
-                .filter_map(|slot| window.index_of(&slot.view_tag));
-            for counter in counters {
+            for (position, slot) in deposit.output_slots.iter().enumerate() {
+                let Some(counter) = window.index_of(&slot.view_tag) else {
+                    continue;
+                };
                 observed.insert(counter);
                 if let Some(found) = found(counter) {
-                    self.open_deposit(index, deposit, found)?;
+                    self.open_deposit(index, deposit, position, found)?;
                 }
             }
         }
@@ -762,58 +758,42 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         Ok(())
     }
 
-    /// A deposit's owner hash, not its decryption, proves it the wallet's.
     fn open_deposit(
         &mut self,
         index: usize,
         deposit: &ShieldedTransaction,
+        position: usize,
         found: AnonymousStream,
     ) -> Result<(), AnonymousError> {
-        let mut tx = deposit.clone();
-        let Some(ring) = tx.output_slots.first().and_then(deposit_ring) else {
+        let utxo_hash = deposit.output_slots[position].output_context.hash;
+        if self.found.iter().any(|held| held.utxo_hash == utxo_hash) {
             return Ok(());
-        };
-        let framing = tx
-            .output_slots
-            .iter_mut()
-            .try_for_each(|slot| slot.unwrap_ring_deposit(&ring, self.sync.deposit_payload));
-        match framing {
-            Ok(()) => {}
-            Err(TransactionError::Deserialize(_)) => return Ok(()),
-            Err(error) => return Err(error.into()),
         }
-        let mut opened = DecryptionResult::default();
-        match opened.extend(
-            self.sync.keys,
-            core::slice::from_ref(&tx),
-            self.sync.assets.registry(),
-        ) {
-            Ok(()) => {}
-            // The pinned decryption fails on a blinding outside the field, the deposit opens to nothing.
-            Err(TransactionError::Keypair(KeypairError::Poseidon(_))) => return Ok(()),
-            Err(error) => return Err(error.into()),
-        }
-        self.decrypted
-            .unknown_mints
-            .extend(opened.unknown_mints.iter().copied());
-        self.decrypted
-            .unknown_asset_ids
-            .extend(opened.unknown_asset_ids.iter().copied());
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        for utxo in verify_owned(self.sync.keys, &opened)?.utxos {
-            if self
-                .found
-                .iter()
-                .any(|held| held.utxo_hash == utxo.utxo_hash)
-            {
-                continue;
+        let opener = DepositOpener {
+            keys: self.sync.keys,
+            address: &self.address,
+            assets: self.sync.assets.registry(),
+            deposit_payload: self.sync.deposit_payload,
+        };
+        let opened = opener.open(DepositSlot {
+            deposit,
+            position,
+            viewing_pubkey,
+        })?;
+        match opened {
+            Some(OpenedDeposit::Note(utxo)) => {
+                self.found.push(*utxo);
+                self.utxos.push(AnonymousRingUtxo {
+                    utxo_hash,
+                    viewing_pubkey,
+                    stream: found,
+                });
             }
-            self.utxos.push(AnonymousRingUtxo {
-                utxo_hash: utxo.utxo_hash,
-                viewing_pubkey,
-                stream: found,
-            });
-            self.found.push(utxo);
+            Some(OpenedDeposit::UnknownMint(mint)) => {
+                self.decrypted.unknown_mints.insert(mint);
+            }
+            None => {}
         }
         Ok(())
     }
@@ -848,18 +828,14 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             }
             let spends = self.reads.spends(&frontier).await?;
             self.note_spends(&spends);
-            let merges: Vec<ShieldedTransaction> = spends
-                .into_iter()
-                .filter(|tx| tx.ring_program_id.is_some() && tx.may_be_merge())
-                .collect();
-            let mut opened = DecryptionResult::default();
-            opened.extend(self.sync.keys, &merges, self.sync.assets.registry())?;
+            let merges = RingMerges::among(spends);
+            let opened = merges.open(self.sync.keys, self.sync.assets)?;
             let viewing_pubkey = self.address.viewing_pubkey;
             let known = |hash: &[u8; 32], decrypted: &DecryptionResult| {
                 decrypted.utxos.iter().any(|held| held.utxo_hash == *hash)
                     || self.sync.held.iter().any(|held| held.utxo_hash == *hash)
             };
-            for merge in &merges {
+            for merge in &merges.0 {
                 let Some(&first_nullifier) = merge.nullifiers.first() else {
                     continue;
                 };
@@ -911,13 +887,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
 
 fn output_hash(body: &Body<'_>, position: usize) -> [u8; 32] {
     body.tx.output_slots[position].output_context.hash
-}
-
-/// The ring a deposit output names, `None` for any other output.
-fn deposit_ring(slot: &OutputSlot) -> Option<Address> {
-    decode_encrypted_ring_deposit_output_data(&slot.payload)
-        .ok()
-        .map(|output| Address::new_from_array(output.ring_program_id))
 }
 
 /// Derives the nullifiers of `found` and adds them to `decrypted` in publication order.

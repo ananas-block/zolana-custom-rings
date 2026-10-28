@@ -11,6 +11,7 @@ custom-ring-interface = { workspace = true }
 rand = { workspace = true }
 solana-address = { workspace = true }
 thiserror = { workspace = true }
+wincode = { workspace = true }
 zeroize = { workspace = true }
 spr-event = { workspace = true }
 spr-hasher = { workspace = true }

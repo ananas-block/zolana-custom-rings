@@ -13,7 +13,7 @@ pub fn deposit_payload(bytes: &[u8]) -> Result<Option<&[u8]>, TransactionError> 
 mod tests {
     use super::*;
     use spr_keypair::ViewingKey;
-    use spr_transaction::serialization::ring_deposit::RingDepositPlaintext;
+    use zolana_ring_transaction::RingDepositPlaintext;
 
     #[test]
     fn recipient_opens_plain_and_auditor_wrapped_ciphertexts() {

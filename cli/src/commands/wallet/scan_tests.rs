@@ -6,6 +6,7 @@ use crate::ZolanaServices;
 use custom_ring_interface::{
     blinding::ring_blinding_seed, encode_anonymous_recipient_output, encode_anonymous_sender_output,
 };
+use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncProverClient, ClientError,
@@ -15,18 +16,15 @@ use spr_client::{
 };
 use spr_event::MessageData;
 use spr_keypair::{viewing_key::ViewTag, ShieldedAddress};
-use zolana_ring_transaction::OutputBlindings;
 use spr_transaction::{
-    serialization::{
-        anonymous::{
-            AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-            UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
-            VerifiedSenderPlaintext,
-        },
-        proofless::{Proofless, ProoflessEncode},
-    },
+    serialization::proofless::{Proofless, ProoflessEncode},
     utxo::blinding::derive_transact_output_blinding,
     AssetRegistry, Data, Mint, OwnerCx, Utxo, UtxoSerialization,
+};
+use zolana_ring_transaction::{
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, OutputBlindings,
+    UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
+    VerifiedSenderPlaintext,
 };
 
 use super::{
@@ -148,7 +146,7 @@ impl Ledger {
         let ciphertext = tx
             .encrypt_slot(&owner.viewing_pubkey, &body, SALT, 0)
             .unwrap();
-        let payload = encode_anonymous_recipient_output(&ciphertext);
+        let payload = encode_anonymous_recipient_output(&ciphertext).unwrap();
         self.publish(&sealed, &owner, blinding, payload, Vec::new())
     }
 
@@ -189,7 +187,7 @@ impl Ledger {
             .unwrap();
         let bundle = MessageData {
             view_tag: sealed.tag,
-            data: encode_anonymous_sender_output(&ciphertext),
+            data: encode_anonymous_sender_output(&ciphertext).unwrap(),
         };
         self.publish(&sealed, &owner, blinding, Vec::new(), vec![bundle])
     }
@@ -336,7 +334,6 @@ impl Member {
             keys: &self.keys,
             assets: &assets,
             chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
-            ring: RING,
             slot: 9,
             store: Some(&self.store),
         }

@@ -9,18 +9,14 @@ use spr_keypair::{
     ShieldedAddress, ViewingKey, X25519Pubkey,
 };
 use spr_transaction::{
-    instructions::transact::SppProofInputs,
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-        UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
-        VerifiedSenderPlaintext,
-    },
-    Data, Mint, SppProofOutputUtxo, TransactionError,
+    instructions::transact::SppProofInputs, Data, Mint, SppProofOutputUtxo, TransactionError,
 };
 
 use crate::{
     anonymous_body::{OutputBlindings, DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN},
-    RingRailError,
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, RingRailError,
+    UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
+    VerifiedSenderPlaintext,
 };
 
 /// One recipient body, its tag picked by the spec view tag selection.
@@ -89,16 +85,19 @@ impl AnonymousPlan {
         let mut payments = self.payments.iter();
         let mut slots = Vec::with_capacity(outputs.len());
         for (slot_index, output) in outputs.iter().enumerate() {
+            let dummy_tag = *self
+                .dummy_tags
+                .get(slot_index)
+                .ok_or(TransactionError::TooManyOutputs)?;
             let slot = match output.owner_address {
+                // Later change opens from the sender bundle, only output 0 takes the sender tag.
                 _ if slot_index < change => AnonymousSlot::Change {
-                    tag: self.sender_tag,
+                    tag: match slot_index {
+                        0 => self.sender_tag,
+                        _ => dummy_tag,
+                    },
                 },
-                None => AnonymousSlot::Dummy {
-                    tag: *self
-                        .dummy_tags
-                        .get(slot_index)
-                        .ok_or(TransactionError::TooManyOutputs)?,
-                },
+                None => AnonymousSlot::Dummy { tag: dummy_tag },
                 Some(_) if is_change(output, sender) => {
                     return Err(RingRailError::AnonymousChange { slot_index })
                 }

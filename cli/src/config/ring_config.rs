@@ -12,9 +12,9 @@ use custom_ring_sdk::CoSignScope;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::{error::ParseAddressError, Address};
 use solana_keypair::Keypair;
-use toml_edit::{DocumentMut, Item};
 use spr_client::{prover::tee::TeePolicy, AsyncProverClient};
 use spr_transaction::SOL_MINT;
+use toml_edit::{DocumentMut, Item};
 
 use crate::{
     file,

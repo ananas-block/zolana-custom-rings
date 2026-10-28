@@ -30,15 +30,18 @@ use spr_interface::{
     RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
-use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
-use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
-};
-use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
-use zolana_ring_policy::{Member, RuleTable};
 use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
+use zolana_ring_indexer::rpc::{
+    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
+    GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
+    RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
+};
+use zolana_ring_member_registry::{
+    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
+};
+use zolana_ring_policy::{Member, RuleTable};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -416,16 +419,54 @@ impl AsyncRingIndexer for Chain {
                 block_time: 0,
                 slot: SLOT,
             },
-            root: RingRegistryRootView {
-                root: Hash(registry.root()),
-                root_index: 1,
-                applied: 0,
-                next_index: registry.tree.records().len() as u64,
-            },
+            root: registry.root_view(),
             openings: request
                 .members
                 .iter()
                 .map(|member| registry.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn get_ring_record_pool(
+        &self,
+        request: GetRingRecordPoolRequest,
+    ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(ClientError::UnsupportedRpcMethod("get_ring_record_pool"))?;
+        let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
+        let pool = registry
+            .tree
+            .record_pool(
+                &members,
+                Canopy::covering(request.openings as usize).unwrap(),
+            )
+            .unwrap();
+        Ok(GetRingRecordPoolResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: registry.root_view(),
+            records: pool
+                .records
+                .iter()
+                .zip(&pool.proof.paths)
+                .map(|(record, path)| RingIndexedMemberRecordView {
+                    record: registry.view(record),
+                    path: RingRecordPathView {
+                        index: path.index,
+                        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+                    },
+                })
+                .collect(),
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
                 .collect(),
         })
     }
@@ -554,12 +595,32 @@ impl Registry {
         account(program(), &registry)
     }
 
+    fn root_view(&self) -> RingRegistryRootView {
+        RingRegistryRootView {
+            root: Hash(self.root()),
+            root_index: 1,
+            applied: 0,
+            next_index: self.tree.records().len() as u64,
+        }
+    }
+
     fn opening(&self, member: &[u8; 32]) -> RingMemberOpening {
         let opening = self.tree.opening(member).unwrap();
         let (present, record, path) = match opening {
             RecordOpening::Present { record, path } => (true, record, path),
             RecordOpening::Absent { low, path } => (false, low, path),
         };
+        RingMemberOpening {
+            present,
+            record: self.view(&record),
+            path: RingRecordPathView {
+                index: path.index,
+                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+            },
+        }
+    }
+
+    fn view(&self, record: &MemberRecord) -> RingMemberRecordView {
         let mut view = self
             .views
             .get(&record.member)
@@ -577,13 +638,6 @@ impl Registry {
             });
         view.next = Hash(record.next);
         view.mint_policy = record.mint_policy;
-        RingMemberOpening {
-            present,
-            record: view,
-            path: RingRecordPathView {
-                index: path.index,
-                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
-            },
-        }
+        view
     }
 }

@@ -2,8 +2,8 @@
 
 use solana_address::Address;
 use spr_interface::N_PUBLIC_SLOTS;
-use zolana_ring_policy::{Member, OutflowLimit};
 use spr_transaction::instructions::transact::SppProofOutputUtxo;
+use zolana_ring_policy::{Member, OutflowLimit};
 
 use crate::RingError;
 

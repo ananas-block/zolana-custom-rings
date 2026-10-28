@@ -4,9 +4,9 @@ use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_sdk::{DelegateMove, DelegatePayment, MemberRecords};
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
+use spr_transaction::SOL_MINT;
 use zolana_ring_client::{RingRecovery, SourceMember};
 use zolana_ring_policy::Member;
-use spr_transaction::SOL_MINT;
 
 use crate::{
     assets,

@@ -1,7 +1,7 @@
 use solana_address::Address;
 use spr_interface::N_PUBLIC_SLOTS;
-use zolana_ring_policy::{Member, OutflowLimit};
 use spr_transaction::{instructions::transact::SppProofOutputUtxo, Mint};
+use zolana_ring_policy::{Member, OutflowLimit};
 
 use super::support::{keypair, program};
 use crate::{limits::Outflows, RingError};

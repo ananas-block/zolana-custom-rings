@@ -3,13 +3,15 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use thiserror::Error;
 use spr_api::BlockingInsideRuntime;
 use spr_client::ClientError;
 use spr_hasher::HasherError;
 use spr_interface::error::ShieldedPoolError;
 use spr_keypair::KeypairError;
 use spr_program::instruction::DepositBuildError;
+use spr_transaction::TransactionError;
+use spr_tree::TreeError;
+use thiserror::Error;
 use zolana_ring_client::{AnonymousError, RingIndexerError, RingRpcError};
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_member_registry::RecordTreeError;
@@ -18,8 +20,6 @@ use zolana_ring_policy::{
     Writer,
 };
 use zolana_ring_transaction::RingRailError;
-use spr_transaction::TransactionError;
-use spr_tree::TreeError;
 
 #[derive(Debug, Error)]
 pub enum RingError {

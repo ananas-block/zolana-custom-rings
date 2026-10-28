@@ -5,11 +5,11 @@ use solana_signature::Signature;
 use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};
 use spr_interface::instruction::instruction_data::transact::OwnerTag;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
-use zolana_ring_client::open_ring_confidential;
-use zolana_ring_transaction::{RingAssets, RingDelivery, RingOutputRail};
 use spr_transaction::{
     instructions::transact::ConfidentialTransaction, Data, Mint, Utxo, WalletUtxo,
 };
+use zolana_ring_client::open_ring_confidential;
+use zolana_ring_transaction::{RingAssets, RingDelivery, RingOutputRail};
 
 const RING: Address = Address::new_from_array([42; 32]);
 const TREE: u16 = 7;

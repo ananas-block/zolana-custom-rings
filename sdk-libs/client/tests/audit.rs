@@ -29,6 +29,7 @@ use spr_event::{
     EncryptedRingDepositOutput, MergeOutputDataRef, MessageData,
 };
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in, seal_deposits, AnonymousInputs, AuditDisclosure,
     AuditEnvelope, AuditError, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
@@ -38,7 +39,6 @@ use zolana_ring_client::{
     TransactionAudit, TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
-use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 
 use transfer::{
     audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Frame, Output, Placement,
@@ -791,7 +791,7 @@ fn a_body_sealed_to_another_recipient_is_flagged_on_its_slot() {
     .seal(&transfer.delivered_secret(&x25519_u(0x7f), 2))
     .unwrap();
     built.transaction.output_slots[2].payload =
-        custom_ring_interface::encode_ring_confidential_delivered_output(&foreign);
+        custom_ring_interface::encode_ring_confidential_delivered_output(&foreign).unwrap();
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(
         audited.payload_errors,

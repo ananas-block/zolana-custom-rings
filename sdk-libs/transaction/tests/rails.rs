@@ -7,19 +7,16 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_interface::instruction::instruction_data::transact::OwnerTag;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
-use zolana_ring_transaction::{
-    listed_recipients, AnonymousOutput, AnonymousPlan, AnonymousSlot, OutputBlindings,
-    PublishedSlot, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
-    RingRailError as E, RingUtxoOwner, TaggedPayment, DUMMY_RECIPIENT_VIEWING_PK,
-    RECIPIENT_BODY_LEN,
-};
 use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, Shape, SppProofInputs, SppProofOutputUtxo},
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-        UnverifiedRecipientPlaintext, VerifiedRecipientPlaintext,
-    },
     Data, Mint, Utxo, WalletUtxo,
+};
+use zolana_ring_transaction::{
+    listed_recipients, AnonymousOutput, AnonymousPlan, AnonymousSlot,
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, OutputBlindings,
+    PublishedSlot, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
+    RingRailError as E, RingUtxoOwner, TaggedPayment, UnverifiedRecipientPlaintext,
+    VerifiedRecipientPlaintext, DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN,
 };
 
 const RING: Address = Address::new_from_array([42; 32]);
@@ -347,11 +344,15 @@ fn the_bundle_carries_the_spl_and_the_sol_change_and_their_outputs_no_data() {
         (proof.output_utxos[0].asset, proof.output_utxos[1].asset),
         (USDC, Mint::SOL)
     );
+    assert_eq!(
+        published[0].anonymous,
+        Some(AnonymousSlot::Change { tag: [0x0a; 32] })
+    );
+    assert!(matches!(
+        published[1].anonymous,
+        Some(AnonymousSlot::Change { tag }) if tag != [0x0a; 32] && tag[0] == 0
+    ));
     for change in &published[..2] {
-        assert_eq!(
-            change.anonymous,
-            Some(AnonymousSlot::Change { tag: [0x0a; 32] })
-        );
         assert!(matches!(
             change.wire,
             RingOutput::Anonymous { body: None, .. }

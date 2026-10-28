@@ -36,7 +36,6 @@ impl<'a> RingWallet<'a> {
     pub fn sync(&mut self, env: &TestEnv) -> Result<()> {
         let config = IndexerRpcConfig::at_slot(env.client.rpc().get_slot()?);
         let owned = UtxoScan::new(self.keys, self.assets.registry())
-            .with_ring_deposit_payload(self.ring, zolana_ring_client::deposit_payload)
             .with_indexer_config(config)
             .fetch(env.client.indexer())?;
         let synced = env.client.block_on(async {

@@ -368,9 +368,9 @@ mod tests {
         let mint = Address::new_from_array([7; 32]);
         let token = Address::new_from_array([8; 32]);
         let to = |seed: u8| {
-            spr_keypair::ShieldedKeypair::from_keypair(
-                spr_keypair::SigningKey::from_ed25519_bytes(&[seed; 32]),
-            )
+            spr_keypair::ShieldedKeypair::from_keypair(spr_keypair::SigningKey::from_ed25519_bytes(
+                &[seed; 32],
+            ))
             .unwrap()
             .shielded_address()
             .unwrap()

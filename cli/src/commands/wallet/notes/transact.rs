@@ -16,6 +16,12 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_interface::pda;
 use spr_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
+use spr_transaction::{
+    instructions::transact::{
+        canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
+    },
+    SpendableDecryptionResult, WalletUtxo, SOL_MINT,
+};
 use zolana_ring_client::{
     rpc::{DecryptedOutputKind, ReadTarget},
     ReaderKey,
@@ -23,12 +29,6 @@ use zolana_ring_client::{
 use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::RingAssets;
-use spr_transaction::{
-    instructions::transact::{
-        canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
-    },
-    SpendableDecryptionResult, WalletUtxo, SOL_MINT,
-};
 
 use crate::{
     assets,

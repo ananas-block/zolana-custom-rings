@@ -15,8 +15,8 @@ use spr_client::{fetch_spl_asset_registrations, Rpc, SolanaRpc};
 use spr_interface::{
     pda, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID,
 };
-use zolana_ring_transaction::RingAssets;
 use spr_transaction::{AssetRegistry, SOL_MINT};
+use zolana_ring_transaction::RingAssets;
 
 pub struct ResolvedAsset {
     pub mint: Address,

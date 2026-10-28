@@ -11,7 +11,6 @@ use solana_rpc_client::{
     rpc_client::GetConfirmedSignaturesForAddress2Config,
 };
 use solana_signature::Signature;
-use std::num::NonZeroUsize;
 use spr_api::ZolanaApi;
 use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
@@ -24,6 +23,8 @@ use spr_interface::{
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::X25519Pubkey;
+use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
+use std::num::NonZeroUsize;
 use zolana_ring_client::{
     program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
     MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin, TransactionOrigin,
@@ -33,7 +34,6 @@ use zolana_ring_indexer::rpc::{
     GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
 };
 use zolana_ring_transaction::RingAssets;
-use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
 

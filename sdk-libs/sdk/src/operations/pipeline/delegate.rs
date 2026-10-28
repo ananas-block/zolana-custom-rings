@@ -3,11 +3,11 @@ use solana_address::Address;
 use spr_client::AsyncRpc;
 use spr_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
-use zolana_ring_transaction::RingOutputRail;
 use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SppProofOutputUtxo},
     AssetRegistry, WalletUtxo,
 };
+use zolana_ring_transaction::RingOutputRail;
 
 use super::{
     canonical_shape, delivered, pad_under_rail, sealed,

@@ -22,10 +22,10 @@ use jsonrpsee::{
     RpcModule,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use spr_rpc_http::MethodPathLayer;
 use thiserror::Error;
 use tower::Service;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use spr_rpc_http::MethodPathLayer;
 
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,

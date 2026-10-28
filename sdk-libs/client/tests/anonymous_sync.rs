@@ -22,29 +22,23 @@ use spr_keypair::{
     random_salt, viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey,
     X25519Pubkey,
 };
+use spr_transaction::{
+    instructions::{
+        merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
+        transact::ConfidentialTransaction,
+    },
+    owner_utxo_hash, verify_spendable, Data, Mint, Utxo, WalletUtxo,
+};
 use zolana_ring_client::{
     AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync, FirstContact, PaymentRecipient,
     SentCheck, StreamCounter, TagSelection, TransferTagging, ViewingHistory,
     VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_transaction::{
-    AnonymousPlan, RingAssets, RingDelivery, RingOutputRail, RECIPIENT_BODY_LEN,
-};
-use spr_transaction::{
-    instructions::{
-        merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
-        transact::ConfidentialTransaction,
-    },
-    owner_utxo_hash,
-    serialization::{
-        anonymous::{
-            AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-            UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
-            VerifiedSenderPlaintext,
-        },
-        ring_deposit::RingDepositPlaintext,
-    },
-    verify_spendable, Data, Mint, Utxo, WalletUtxo,
+    AnonymousPlan, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
+    RingAssets, RingDelivery, RingDepositPlaintext, RingOutputRail, UnverifiedRecipientPlaintext,
+    UnverifiedSenderPlaintext, VerifiedRecipientPlaintext, VerifiedSenderPlaintext,
+    RECIPIENT_BODY_LEN,
 };
 
 const RING: Address = Address::new_from_array([4; 32]);
@@ -879,12 +873,12 @@ async fn sender_chosen_garbage_under_a_tag_never_fails_the_sync() {
                     tree_id: TREE,
                     leaf_index,
                 },
-                payload: encode_anonymous_recipient_output(&seal(body, position)),
+                payload: encode_anonymous_recipient_output(&seal(body, position)).unwrap(),
             })
             .collect(),
         messages: vec![MessageData {
             view_tag: bob.keys.viewing_pubkey().u(),
-            data: encode_anonymous_sender_output(&seal(&bundle, 2)),
+            data: encode_anonymous_sender_output(&seal(&bundle, 2)).unwrap(),
         }],
         nullifiers: vec![field(9, 9)],
         proofless: false,
@@ -901,7 +895,7 @@ async fn sender_chosen_garbage_under_a_tag_never_fails_the_sync() {
         output_slots: Vec::new(),
         messages: vec![MessageData {
             view_tag: bob.keys.viewing_pubkey().u(),
-            data: encode_anonymous_sender_output(&seal(&bundle, 0)),
+            data: encode_anonymous_sender_output(&seal(&bundle, 0)).unwrap(),
         }],
         nullifiers: vec![field(9, 8)],
         proofless: false,

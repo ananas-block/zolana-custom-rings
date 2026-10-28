@@ -1504,6 +1504,7 @@ dependencies = [
  "spr-instruction",
  "spr-interface",
  "spr-keypair",
+ "spr-transaction",
  "thiserror 2.0.20",
  "wincode",
  "zolana-ring-policy",
@@ -3927,7 +3928,6 @@ dependencies = [
  "spr-client",
  "spr-hasher",
  "spr-interface",
- "thiserror 2.0.20",
  "zolana-ring-policy",
 ]
 
@@ -9282,6 +9282,7 @@ dependencies = [
  "spr-keypair",
  "spr-transaction",
  "thiserror 2.0.20",
+ "wincode",
  "zeroize",
  "zolana-ring-keys",
 ]

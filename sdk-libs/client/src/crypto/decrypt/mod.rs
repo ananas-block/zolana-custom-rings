@@ -13,17 +13,17 @@ use custom_ring_interface::{
     AuditorMessage, DisclosureLayout, InputPrefix,
 };
 use solana_address::Address;
-use zeroize::Zeroizing;
 use spr_client::ProofInputUtxo;
 use spr_event::confidential_encrypted_output_body;
 use spr_hasher::primitives::right_align;
 use spr_interface::tree_slot::tree_id_field;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
     OutputSlot, ShieldedTransaction,
 };
+use zeroize::Zeroizing;
+use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
 use crate::{
     disclosure::{

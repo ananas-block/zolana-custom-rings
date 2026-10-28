@@ -20,13 +20,13 @@ use spr_hasher::{primitives::is_canonical_bn254_scalar_be, Hasher, Poseidon};
 use spr_indexer_api::{Context, Hash, SerializablePubkey};
 use spr_interface::instruction::instruction_data::merge_transact::merge_circuit_width;
 use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
-use zolana_ring_indexer::rpc::{GetRingMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
-use zolana_ring_member_registry::{OpeningCheck, RecordOpening};
-use zolana_ring_policy::Member;
 use spr_transaction::{
     instructions::merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
     utxo::program_id_proof_input_hash,
 };
+use zolana_ring_indexer::rpc::{GetRingMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
+use zolana_ring_member_registry::{OpeningCheck, RecordOpening};
+use zolana_ring_policy::Member;
 
 use crate::{
     encryption::{open_merge_disclosure, MergeOpening},
@@ -631,9 +631,9 @@ fn remember_merge(
 mod tests {
     use super::*;
     use custom_ring_interface::QueueEntry;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use spr_hasher::primitives::right_align;
     use spr_indexer_api::Base64String;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use zolana_ring_indexer::rpc::{
         GetRingMemberRecordsResponse, RingIndexedMemberRecordView, RingMemberRecordView,
         RingRecordPathView, RingRegistryRootView,
@@ -919,13 +919,11 @@ mod tests {
                         tree_id: 0,
                         leaf_index: 0,
                     },
-                    payload: spr_event::encode_merge_output_data(
-                        spr_event::MergeOutputDataRef {
-                            salt: &self.salt,
-                            ciphertext: &self.ciphertext,
-                            prefix: &[self.ring_data_hash],
-                        },
-                    ),
+                    payload: spr_event::encode_merge_output_data(spr_event::MergeOutputDataRef {
+                        salt: &self.salt,
+                        ciphertext: &self.ciphertext,
+                        prefix: &[self.ring_data_hash],
+                    }),
                 }],
                 messages: Vec::new(),
                 nullifiers: vec![self.first_nullifier; 8],

@@ -9,19 +9,18 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zeroize::Zeroizing;
 use spr_client::{AsyncRpc, ClientError};
 use spr_interface::{pda, state::SplAssetRegistry, PROGRAM_ID_PUBKEY};
 use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::{DepositAsset, RingAssetDeposit};
+use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
+use zeroize::Zeroizing;
 use zolana_ring_client::{
     seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening, FirstContact,
     PaymentRecipient, ViewingHistory,
 };
 use zolana_ring_keys::RingAddress;
-use spr_transaction::{
-    owner_utxo_hash, Data, Mint, RingDepositPlaintext, Utxo, SOL_ASSET_ID, SOL_MINT,
-};
+use zolana_ring_transaction::RingDepositPlaintext;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{

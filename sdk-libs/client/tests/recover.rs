@@ -20,16 +20,15 @@ use spr_event::{
 };
 use spr_hasher::primitives::right_align;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
+use spr_transaction::{
+    instructions::merge::MergeTransaction, Data, DataRecord, Mint, OutputContext, OutputSlot,
+    ShieldedTransaction, SppProofOutputUtxo, Utxo, WalletUtxo, SOL_MINT,
+};
 use zolana_ring_client::{
     seal_deposits, AnonymousInputs, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
     RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
-use zolana_ring_transaction::RingAssets;
-use spr_transaction::{
-    instructions::merge::MergeTransaction, serialization::ring_deposit::RingDepositPlaintext, Data,
-    DataRecord, Mint, OutputContext, OutputSlot, ShieldedTransaction, SppProofOutputUtxo, Utxo,
-    WalletUtxo, SOL_MINT,
-};
+use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
 
 use transfer::{field, x25519_u, Frame, Output, Publish, Rail, Transfer, UtxoFields};
 

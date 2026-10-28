@@ -1,9 +1,9 @@
-use custom_ring_interface::stream::StreamError;
-use thiserror::Error;
+use custom_ring_interface::{stream::StreamError, CustomRingError};
 use spr_hasher::HasherError;
 use spr_keypair::KeypairError;
-use zolana_ring_keys::RingKeyError;
 use spr_transaction::TransactionError;
+use thiserror::Error;
+use zolana_ring_keys::RingKeyError;
 
 #[derive(Debug, Error)]
 pub enum RingRailError {
@@ -17,6 +17,8 @@ pub enum RingRailError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Hasher(#[from] HasherError),
+    #[error(transparent)]
+    Interface(#[from] CustomRingError),
     #[error("output {slot_index} carries data, a ring rail slot has a fixed body")]
     DeliveredOutputData { slot_index: usize },
     #[error("output {slot_index} is compact padding, a ring rail publishes every slot")]

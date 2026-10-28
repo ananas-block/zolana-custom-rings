@@ -1,8 +1,8 @@
 //! Synthetic trusted chain data, production rebuilds it from confirmed SPP instructions.
 
 use spr_interface::event::{GeneralEvent, Input, OutputUtxo};
-use zolana_ring_client::{ConfirmedEvent, ConfirmedEventKind};
 use spr_transaction::ShieldedTransaction;
+use zolana_ring_client::{ConfirmedEvent, ConfirmedEventKind};
 
 pub fn event(transaction: &ShieldedTransaction) -> ConfirmedEvent {
     let kind = if transaction.proofless {

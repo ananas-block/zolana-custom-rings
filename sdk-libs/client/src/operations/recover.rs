@@ -15,13 +15,13 @@ use spr_event::{
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
 use spr_indexer_api::PAGE_LIMIT;
 use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
-use zolana_ring_transaction::RingAssets;
 use spr_transaction::{
     instructions::merge::{
         merge_circuit_width, merge_output_blinding, merge_output_key, MergeOutputPlaintext,
     },
     Data, OutputContext, OutputSlot, ShieldedTransaction, TransactionError, Utxo, WalletUtxo,
 };
+use zolana_ring_transaction::RingAssets;
 
 use crate::{
     created::{CreatedUtxos, DepositSlot},

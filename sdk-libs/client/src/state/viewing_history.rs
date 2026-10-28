@@ -8,9 +8,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use spr_keypair::{viewing_key::ViewTag, X25519Pubkey};
+use spr_transaction::ShieldedKeys;
 use zolana_ring_keys::{RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream};
 use zolana_ring_transaction::{is_contributory, TaggedPayment};
-use spr_transaction::ShieldedKeys;
 
 use crate::{exactly_one, AnonymousError, REDACTED};
 
@@ -563,9 +563,13 @@ fn counterparties(
     }
     let mut known = HashMap::with_capacity(rows.len());
     for row in rows {
+        let key = pubkey(name, &row.pubkey)?;
+        if !is_contributory(&key) {
+            return Err(invalid(&format!("{name} holds a small-order key")));
+        }
         if known
             .insert(
-                pubkey(name, &row.pubkey)?,
+                key,
                 CounterJson {
                     next: row.next,
                     scanned: row.scanned,

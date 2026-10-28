@@ -9,17 +9,17 @@ use solana_address::Address;
 use spr_client::{AsyncRpc, Shape};
 use spr_interface::{pda, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
 use spr_keypair::{Curve, NullifierKey, PublicKey, ShieldedAddress, SigningKey};
-use zolana_ring_client::{
-    FirstContact, PaymentRecipient, TransferTagging, TransferTags, ViewingHistory,
-};
-use zolana_ring_keys::{RingAddress, RingPaymentRequest};
-use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 use spr_transaction::{
     instructions::transact::{
         ConfidentialTransaction, SettlementTransfer, SppProofInputs, SppProofOutputUtxo,
     },
     Mint, WalletUtxo,
 };
+use zolana_ring_client::{
+    FirstContact, PaymentRecipient, TransferTagging, TransferTags, ViewingHistory,
+};
+use zolana_ring_keys::{RingAddress, RingPaymentRequest};
+use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 
 use super::{
     canonical_shape,

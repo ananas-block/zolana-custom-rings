@@ -29,9 +29,6 @@ use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::{instruction::TreeContext, N_PUBLIC_SLOTS};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
-use zolana_ring_client::ViewingHistory;
-use zolana_ring_keys::RingKeys;
-use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 use spr_transaction::{
     instructions::transact::{
         ConfidentialTransaction, SettlementTransfer, SppProofInputs, SppProofOutputUtxo,
@@ -39,6 +36,9 @@ use spr_transaction::{
     utxo::SppProofInputUtxo,
     ShieldedKeys, TransactionError,
 };
+use zolana_ring_client::ViewingHistory;
+use zolana_ring_keys::RingKeys;
+use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
     anonymous::{
@@ -356,6 +356,8 @@ impl<'a> Pipeline<'a> {
                     config,
                     rail: ring_rail,
                     inputs: &proof_inputs,
+                    n_in,
+                    n_out,
                     sender: sender_pk_hash,
                     public_assets: &public_assets,
                     public_amounts: &public_amounts,
@@ -620,25 +622,38 @@ impl Assembled {
         })
     }
 
-    async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
-        self,
-        client: &RingClient<P, I>,
-    ) -> Result<ProvenRingTransfer, RingError> {
-        let audit = self.audit()?;
+    fn policy_proving(&self) -> PolicyProving<'_> {
         let frame = &self.frame;
-        let policy_proving = PolicyProving {
+        PolicyProving {
             ring_id: frame.ring_id,
             rail: frame.parts.rail,
             inputs: &frame.proof_inputs,
-            n_in: frame.parts.n_in,
-            n_out: frame.parts.n_out,
             private_tx_hash: frame.parts.private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             sender: self.policy_sender,
             sender_pk_hash: frame.sender_pk_hash,
             public_assets: frame.public_assets,
             public_amount_fields: frame.public_amount_fields,
-        };
+        }
+    }
+
+    /// `None` on a ring without a policy.
+    #[cfg(test)]
+    pub(crate) fn policy_request(&self) -> Result<Option<policy::PolicyRequest<'_>>, RingError> {
+        self.frame
+            .policy
+            .as_ref()
+            .map(|policy| policy.request(&self.policy_proving()))
+            .transpose()
+    }
+
+    async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<P, I>,
+    ) -> Result<ProvenRingTransfer, RingError> {
+        let audit = self.audit()?;
+        let frame = &self.frame;
+        let policy_proving = self.policy_proving();
         let policy_proof = async {
             match &frame.policy {
                 Some(policy) => Ok(Some(policy.prove(client, &policy_proving).await?)),

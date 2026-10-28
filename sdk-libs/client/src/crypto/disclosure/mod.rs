@@ -6,13 +6,13 @@ use custom_ring_interface::{
     ANONYMOUS_SLOT_BYTES, AUDIT_CIPHERTEXT_LEN, DELIVERED_SLOT_BYTES,
     DISCLOSURE_INPUT_AMOUNT_BYTES, DISCLOSURE_SENDER_KEY_BYTES,
 };
-use zeroize::Zeroizing;
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
     Hasher, Poseidon,
 };
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::field::{field_add, field_sub};
+use zeroize::Zeroizing;
 
 use crate::{
     encryption::{open_stream, seal_stream, StreamSchedule},

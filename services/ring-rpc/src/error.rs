@@ -2,13 +2,13 @@ use std::{borrow::Cow, fmt::Display};
 
 use jsonrpsee::types::{error::ErrorCode, ErrorObjectOwned};
 use log::error;
-use thiserror::Error;
 use spr_client::ClientError;
+use spr_transaction::TransactionError;
+use thiserror::Error;
 use zolana_ring_client::{
     rpc::{KeyFileError, AUDITED_UTXOS_LIMIT},
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
-use spr_transaction::TransactionError;
 
 use crate::authorize::Unauthorized;
 

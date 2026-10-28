@@ -9,7 +9,6 @@ use std::{
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::RingMode;
 use custom_ring_sdk::CustomRingConfig;
-use solana_address::Address;
 use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
 use spr_keypair::{ShieldedKeypair, X25519Pubkey};
 use zolana_ring_client::{AnonymousSync, RingConfidentialScan, ViewingHistory};
@@ -47,7 +46,6 @@ struct ScanAt<'a> {
     assets: &'a RingAssets,
     /// Read only when a found note's mint is missing from `assets`.
     chain_assets: &'a dyn Fn() -> Result<RingAssets>,
-    ring: Address,
     /// The indexer answers only after it holds the slot.
     slot: u64,
     /// Present on an anonymous ring.
@@ -143,7 +141,6 @@ impl WalletScan<'_> {
             keys: self.keys,
             assets: self.assets,
             chain_assets: &|| crate::assets::ring_assets(ctx.rpc()),
-            ring: ctx.ring.program_id(),
             slot: ctx.rpc().get_slot()?,
             store: store.as_ref(),
         }
@@ -160,7 +157,6 @@ impl ScanAt<'_> {
         let (keys, assets) = (self.keys, self.assets);
         let config = IndexerRpcConfig::at_slot(self.slot);
         let owned = UtxoScan::new(keys, assets.registry())
-            .with_ring_deposit_payload(self.ring, zolana_ring_client::deposit_payload)
             .with_indexer_config(config)
             .fetch(zolana.indexer())?;
         let mut spendable = owned.spendable;
@@ -187,6 +183,7 @@ impl ScanAt<'_> {
             }
         }
         spendable.unknown_asset_ids.extend(notes.unknown_asset_ids);
+        spendable.unknown_mints.extend(notes.unknown_mints);
         let Some(store) = self.store else {
             return Ok(spendable);
         };
@@ -278,6 +275,7 @@ fn unix_now() -> Result<i64> {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
+    use solana_address::Address;
     use spr_keypair::SigningKey;
 
     use super::*;

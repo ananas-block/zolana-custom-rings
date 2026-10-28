@@ -12,14 +12,14 @@ use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
 use solana_signer::{Signer, SignerError};
-use thiserror::Error;
-use zeroize::Zeroizing;
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::{
     Base64String, Context, Hash, Limit, SerializablePubkey, SerializableSignature,
 };
 use spr_interface::{state::RingConfig, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
 use spr_keypair::{KeypairError, X25519Keypair, X25519Pubkey};
+use thiserror::Error;
+use zeroize::Zeroizing;
 use zolana_secret_file::{
     create_new, read_key32, Access, KeyPairFiles, SecretFileError, Visibility,
 };

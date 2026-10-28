@@ -2,15 +2,17 @@
 
 use custom_ring_interface::{QueueEntry, QUAD_ARITY, RING_DELIVERED_BODY_LEN};
 use serde::{Serialize, Serializer};
-use zeroize::Zeroizing;
 use spr_hasher::primitives::right_align;
 use spr_keypair::{PublicKey, X25519Pubkey};
-use zolana_ring_member_registry::{MemberRecord, QuadPath, RecordOpening, RecordWriteProofInput};
-use zolana_ring_policy::{EncodedRuleTable, SourceMap, MAX_SOURCES};
 use spr_transaction::{
     instructions::transact::SppProofOutputUtxo,
     utxo::{ProofInputUtxo, SppProofInputUtxo},
 };
+use zeroize::Zeroizing;
+use zolana_ring_member_registry::{
+    MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput,
+};
+use zolana_ring_policy::{EncodedRuleTable, SourceMap, MAX_SOURCES};
 
 use crate::{prover::fe, RingError, REDACTED};
 
@@ -267,11 +269,118 @@ impl From<&RecordOpening> for MemberOpening {
     }
 }
 
-/// One subject's openings, `None` where the circuit reads no record.
-#[derive(Clone, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct Entry {
-    pub own: Option<MemberOpening>,
-    pub curator: Option<MemberOpening>,
+/// One subject's index in each pool, `curator` empty without a curator registry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct PoolEntry {
+    pub own: u32,
+    pub curator: Vec<u32>,
+}
+
+/// The pools as Go `PolicyParams` names them, the curator pool empty without a curator registry.
+pub(crate) struct RecordPools {
+    pub own: RecordPool,
+    pub curator: Option<RecordPool>,
+}
+
+impl Serialize for RecordPools {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Record {
+            #[serde(with = "fe")]
+            member: [u8; 32],
+            #[serde(with = "fe")]
+            next: [u8; 32],
+            lists: u64,
+            #[serde(with = "fe")]
+            escrow_key: [u8; 32],
+            #[serde(with = "fe")]
+            mint_policy: [u8; 32],
+            #[serde(with = "fe")]
+            withdrawal_threshold: [u8; 32],
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Subject {
+            #[serde(with = "fe")]
+            member: [u8; 32],
+            record_index: u32,
+        }
+        #[derive(Serialize)]
+        struct Path<'a> {
+            index: u64,
+            #[serde(serialize_with = "levels")]
+            siblings: &'a [[[u8; 32]; QUAD_ARITY - 1]],
+        }
+        #[derive(Serialize)]
+        struct Proof<'a> {
+            #[serde(serialize_with = "fe::seq")]
+            canopy: &'a [[u8; 32]],
+            paths: Vec<Path<'a>>,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Pools<'a> {
+            own_records: Vec<Record>,
+            curator_records: Vec<Record>,
+            own_proof: Proof<'a>,
+            curator_proof: Proof<'a>,
+            own_subjects: Vec<Subject>,
+            curator_subjects: Vec<Subject>,
+        }
+        let records = |pool: Option<&RecordPool>| {
+            pool.map_or_else(Vec::new, |pool| {
+                pool.records
+                    .iter()
+                    .map(|record| Record {
+                        member: record.member,
+                        next: record.next,
+                        lists: record.lists,
+                        escrow_key: record.escrow_key,
+                        mint_policy: record.mint_policy.field(),
+                        withdrawal_threshold: right_align(
+                            &record.mint_policy.withdrawal_threshold.to_be_bytes(),
+                        ),
+                    })
+                    .collect()
+            })
+        };
+        fn proof(pool: Option<&RecordPool>) -> Proof<'_> {
+            Proof {
+                canopy: pool.map_or(&[], |pool| &pool.proof.canopy),
+                paths: pool
+                    .map_or(&[][..], |pool| &pool.proof.paths)
+                    .iter()
+                    .map(|path| Path {
+                        index: path.index,
+                        siblings: &path.siblings,
+                    })
+                    .collect(),
+            }
+        }
+        let subjects = |pool: Option<&RecordPool>| {
+            pool.map_or_else(Vec::new, |pool| {
+                pool.subjects
+                    .iter()
+                    .map(|subject| Subject {
+                        member: subject.member,
+                        record_index: subject.record_index,
+                    })
+                    .collect()
+            })
+        };
+        let own = Some(&self.own);
+        let curator = self.curator.as_ref();
+        Pools {
+            own_records: records(own),
+            curator_records: records(curator),
+            own_proof: proof(own),
+            curator_proof: proof(curator),
+            own_subjects: subjects(own),
+            curator_subjects: subjects(curator),
+        }
+        .serialize(serializer)
+    }
 }
 
 pub(crate) struct PolicyTable<'a> {
@@ -349,10 +458,13 @@ pub(crate) struct PolicyParams<'a> {
     pub outputs: Vec<OutputOpening>,
     #[serde(with = "fe")]
     pub sender_pk_hash: [u8; 32],
-    pub sender_entry: Entry,
-    pub owner_entries: Vec<Entry>,
-    pub asset_entries: Vec<Entry>,
-    pub public_asset_entries: Vec<Option<MemberOpening>>,
+    #[serde(flatten)]
+    pub pools: RecordPools,
+    pub sender_entry: PoolEntry,
+    pub owner_entries: Vec<PoolEntry>,
+    pub asset_entries: Vec<PoolEntry>,
+    /// Empty on the delegate key.
+    pub public_asset_entries: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -662,6 +774,19 @@ pub(crate) fn owner_key(owner: &PublicKey) -> Result<[u8; 32], RingError> {
 /// The circuits witness the untagged 32-byte coordinate.
 fn coordinate<S: Serializer>(key: &X25519Pubkey, serializer: S) -> Result<S::Ok, S::Error> {
     fe::bytes(&key.u(), serializer)
+}
+
+fn levels<S: Serializer>(
+    levels: &&[[[u8; 32]; QUAD_ARITY - 1]],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    struct Level<'a>(&'a [[u8; 32]; QUAD_ARITY - 1]);
+    impl Serialize for Level<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            fe::seq(self.0, serializer)
+        }
+    }
+    serializer.collect_seq(levels.iter().map(Level))
 }
 
 /// Every level's siblings from the leaf up, in child order.

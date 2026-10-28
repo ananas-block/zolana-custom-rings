@@ -9,8 +9,8 @@ use spr_event::{
     encode_encrypted_ring_deposit_output, EncryptedRingDepositData, EncryptedRingDepositOutput,
     OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME,
 };
-use zolana_ring_client::{ring_deposits_in, RingDeposit};
 use spr_transaction::SOL_MINT;
+use zolana_ring_client::{ring_deposits_in, RingDeposit};
 
 const RING: Address = Address::new_from_array([9u8; 32]);
 const OTHER_RING: Address = Address::new_from_array([8u8; 32]);

@@ -8,8 +8,8 @@ use solana_transaction_status_client_types::{
     option_serializer::OptionSerializer, EncodedTransactionWithStatusMeta, UiConfirmedBlock,
     UiInstruction, UiTransactionStatusMeta,
 };
-use thiserror::Error;
 use spr_indexer_api::Hash;
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Instruction {

@@ -1,20 +1,18 @@
 //! The anonymous rail's output blindings and the rebuild of a published output from its plaintext.
 
 use solana_address::Address;
-use zeroize::Zeroizing;
 use spr_keypair::{
     constants::PUBLIC_KEY_LEN, x25519::X25519_PUBKEY_LEN, ShieldedAddress, X25519Pubkey,
 };
 use spr_transaction::{
-    derive_output_blinding_seed,
-    serialization::anonymous::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-    },
-    utxo::derive_transact_output_blinding,
-    Blinding, Utxo,
+    derive_output_blinding_seed, utxo::derive_transact_output_blinding, Blinding, Utxo,
 };
+use zeroize::Zeroizing;
 
-use crate::{RingAssets, RingRailError};
+use crate::{
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, RingAssets,
+    RingRailError,
+};
 
 /// The sender bundle's entry for an output no anonymous recipient reads.
 pub const DUMMY_RECIPIENT_VIEWING_PK: [u8; X25519_PUBKEY_LEN] = {
@@ -51,7 +49,7 @@ impl AnonymousOutput<'_> {
         if plaintext.verified.owner_pubkey != self.owner.signing_pubkey {
             return Ok(None);
         }
-        let utxo = self.in_ring(plaintext.into_utxo(self.assets.registry(), None)?);
+        let utxo = self.in_ring(plaintext.into_utxo(self.assets.registry())?);
         Ok(self.rebuilds(&utxo).then_some(utxo))
     }
 
@@ -61,7 +59,7 @@ impl AnonymousOutput<'_> {
         plaintext: AnonymousTransferSenderPlaintext,
         first_nullifier: &[u8; 32],
     ) -> Result<Vec<Utxo>, RingRailError> {
-        let change = plaintext.into_utxos(first_nullifier, self.assets.registry(), None)?;
+        let change = plaintext.into_utxos(first_nullifier, self.assets.registry())?;
         Ok(change.into_iter().map(|utxo| self.in_ring(utxo)).collect())
     }
 

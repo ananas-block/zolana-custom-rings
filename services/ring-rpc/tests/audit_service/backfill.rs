@@ -410,7 +410,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
     }
     .seal(&secret)
     .expect("delivered body");
-    unmatched.output_slots[2].payload = encode_ring_confidential_delivered_output(&body);
+    unmatched.output_slots[2].payload = encode_ring_confidential_delivered_output(&body).unwrap();
     let mut invalid_disclosure = delivered(10);
     // The first disclosure field, past the tagged ephemeral key and the sealed key.
     invalid_disclosure.messages[0].data[65] = 0xff;

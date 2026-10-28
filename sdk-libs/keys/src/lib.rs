@@ -10,5 +10,5 @@ pub use keys::{
     RingDeliveryRequest, RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream,
 };
 pub use ring_address::{RingAddress, RingPaymentRequest};
-pub use stream_cipher::symmetric_apply_audit;
 pub use spr_keypair::SharedViewTags;
+pub use stream_cipher::symmetric_apply_audit;

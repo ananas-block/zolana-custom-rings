@@ -47,7 +47,7 @@ impl RingOutputRail {
                     Some(slot) => anonymous_wire(slot, published, index)?,
                     None => self.delivered_wire(output, published, index)?,
                 };
-                if wire.transact_output() != *published {
+                if wire.transact_output()? != *published {
                     return Err(RingRailError::RingOutputFraming { slot_index: index });
                 }
                 Ok(PublishedSlot {

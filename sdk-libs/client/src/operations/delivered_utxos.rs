@@ -9,14 +9,14 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{shielded::ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
+    DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
+    TransactionError, WalletUtxo,
+};
 use zolana_ring_keys::{RingDeliveryRequest, RingKeys};
 use zolana_ring_transaction::{
     is_contributory, RingAssets, RingDelivered, RingDeliveredNote, RingDeliveryOpening,
     RingUtxoOwner,
-};
-use spr_transaction::{
-    DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
-    TransactionError, WalletUtxo,
 };
 
 use crate::{exactly_one_each, AnonymousError};

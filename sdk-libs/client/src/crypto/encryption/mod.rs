@@ -5,12 +5,12 @@ use custom_ring_interface::{
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_INFO,
     RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET,
 };
-use zeroize::Zeroizing;
 use spr_hasher::{
     primitives::{pack_be, right_align},
     Hasher, Poseidon,
 };
 use spr_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
+use zeroize::Zeroizing;
 use zolana_ring_keys::symmetric_apply_audit;
 
 use crate::AuditError;
