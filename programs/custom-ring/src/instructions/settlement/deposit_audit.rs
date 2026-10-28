@@ -4,7 +4,7 @@ use custom_ring_interface::{
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use zolana_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
+use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 
 use crate::instructions::verifier::{ring_key, RingProof};
 

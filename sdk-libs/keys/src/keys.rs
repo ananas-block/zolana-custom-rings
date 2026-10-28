@@ -1,6 +1,6 @@
 use custom_ring_interface::stream::DeliveredSlot;
 use solana_address::Address;
-use zolana_keypair::{
+use spr_keypair::{
     shielded::ShieldedKeypair,
     viewing_key::{Salt, ViewTag},
     X25519Pubkey,

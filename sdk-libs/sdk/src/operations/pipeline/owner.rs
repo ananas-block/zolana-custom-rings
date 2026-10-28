@@ -1,12 +1,12 @@
 //! The confidential rail.
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
-use zolana_client::{AsyncRpc, SettlementAccountValidation};
-use zolana_interface::shape::Shape;
-use zolana_keypair::{NullifierKey, ShieldedAddress};
-use zolana_program::instruction::TransactInterfaceTransferAccounts;
+use spr_client::{AsyncRpc, SettlementAccountValidation};
+use spr_interface::shape::Shape;
+use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_program::instruction::TransactInterfaceTransferAccounts;
 use zolana_ring_transaction::RingOutputRail;
-use zolana_transaction::instructions::transact::ConfidentialTransaction;
+use spr_transaction::instructions::transact::ConfidentialTransaction;
 
 use super::{
     canonical_shape, packed_or_delivered, pad_under_rail, sealed, shape_keyed, transaction_key,

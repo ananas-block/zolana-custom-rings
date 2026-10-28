@@ -11,14 +11,14 @@ use custom_ring_interface::RingMode;
 use custom_ring_sdk::{CustomRingConfig, RingError};
 use serde::Deserialize;
 use solana_address::Address;
-use zolana_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::{x25519::X25519_PUBKEY_LEN, ShieldedKeypair, X25519Pubkey};
+use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::{x25519::X25519_PUBKEY_LEN, ShieldedKeypair, X25519Pubkey};
 use zolana_ring_client::{
     delivered::resolve_pending, AnonymousRingState, AnonymousRingSync, RingConfidentialScan,
 };
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
-use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
+use spr_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
 use crate::{file, Context, Zolana};
 
@@ -395,7 +395,7 @@ fn x25519_pubkey(text: &str) -> Result<X25519Pubkey> {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use zolana_keypair::SigningKey;
+    use spr_keypair::SigningKey;
 
     use super::*;
 

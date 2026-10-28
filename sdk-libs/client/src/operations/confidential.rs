@@ -3,11 +3,11 @@
 use std::collections::HashSet;
 
 use custom_ring_interface::{ring_confidential_packed_output_body, RingPackedBody};
-use zolana_client::{AsyncRpc, IndexerRpcConfig};
-use zolana_keypair::{KeypairError, ShieldedAddress};
+use spr_client::{AsyncRpc, IndexerRpcConfig};
+use spr_keypair::{KeypairError, ShieldedAddress};
 use zolana_ring_keys::RingKeys;
 use zolana_ring_transaction::{RingAssets, RingPackedPlaintext};
-use zolana_transaction::{
+use spr_transaction::{
     serialization::confidential::Confidential, verify_owned, DecryptLabel, DecryptRequest,
     DecryptionResult, OwnedUtxos, ShieldedKeys, ShieldedTransaction, TransactionError, Utxo,
     WalletUtxo,

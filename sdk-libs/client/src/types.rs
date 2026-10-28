@@ -5,14 +5,14 @@ use custom_ring_interface::stream::RingTag;
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::ProofInputUtxo;
-use zolana_hasher::{
+use spr_client::ProofInputUtxo;
+use spr_hasher::{
     primitives::{right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use zolana_interface::tree_slot::tree_id_field;
-use zolana_keypair::X25519Pubkey;
-use zolana_transaction::{
+use spr_interface::tree_slot::tree_id_field;
+use spr_keypair::X25519Pubkey;
+use spr_transaction::{
     utxo::{program_id_proof_input_hash, UTXO_DOMAIN},
     OutputContext,
 };

@@ -8,15 +8,15 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_event::{OutputDataEncoding, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG};
-use zolana_hasher::primitives::is_canonical_bn254_scalar_be;
-use zolana_keypair::{shielded::ShieldedAddress, X25519Pubkey};
+use spr_event::{OutputDataEncoding, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_keypair::{shielded::ShieldedAddress, X25519Pubkey};
 use zolana_ring_keys::{RingDeliveryRequest, RingKeys, RingRecipientKey};
 use zolana_ring_transaction::{
     is_contributory, RingAssets, RingDelivered, RingDeliveredNote, RingDeliveryOpening,
     RingUtxoOwner,
 };
-use zolana_transaction::{
+use spr_transaction::{
     DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
     TransactionError, WalletUtxo,
 };
@@ -348,7 +348,7 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     Ok(())
 }
 
-/// Mirrors zolana-transaction's private publication order.
+/// Mirrors spr-transaction's private publication order.
 fn sort_by_publication(utxos: &mut [WalletUtxo]) {
     utxos.sort_by_key(|utxo| {
         (

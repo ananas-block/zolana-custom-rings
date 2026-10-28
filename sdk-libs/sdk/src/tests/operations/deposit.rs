@@ -1,8 +1,8 @@
 use custom_ring_interface::{CoSignScope, CustomRingError, RingMode};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{OutputContext, OutputSlot, ShieldedTransaction};
-use zolana_interface::pda;
+use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};
+use spr_interface::pda;
 use zolana_ring_client::AnonymousRingState;
 use zolana_ring_keys::RingKeys;
 

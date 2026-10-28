@@ -18,16 +18,16 @@ use custom_ring_interface::{
 use rand_core::{OsRng, UnwrapErr};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncRpc, ClientError, Context,
     EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse, GetShieldedTransactionsByTagsResponse,
     IndexerRpcConfig, OutputContext, OutputSlot, ShieldedTransaction,
 };
-use zolana_event::{
+use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
     EncryptedRingDepositOutput, MergeOutputDataRef, OutputDataEncoding,
 };
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
 use zolana_ring_client::{
     AnonymousError, AnonymousRingState, AnonymousRingSync, AnonymousStream, DecoyLeaf, PairAnchor,
     PaymentStream, SentFirstContact, TagAllocation, ADDRESS_GAP, ANCHOR_DECOYS,
@@ -38,7 +38,7 @@ use zolana_ring_keys::{
 };
 use zolana_ring_policy::ring_id_field;
 use zolana_ring_transaction::{delivered_ring_data, RingAssets, RingDeliveredBody};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
     owner_utxo_hash,
     serialization::ring_deposit::RingDepositPlaintext,
@@ -622,7 +622,7 @@ async fn anonymous_sync_finds_inbox_pair_and_change() {
     );
     assert_eq!(scan.state.scanned_epoch(), Some(CREATION));
     let spendable =
-        zolana_transaction::verify_spendable(&fixture.recipient, &scan.decrypted).unwrap();
+        spr_transaction::verify_spendable(&fixture.recipient, &scan.decrypted).unwrap();
     let held: Vec<[u8; 32]> = spendable.utxos().map(|utxo| utxo.utxo_hash).collect();
     assert!(
         !held.contains(&first.utxo_hash),
@@ -742,7 +742,7 @@ async fn a_merge_of_the_wallets_utxos_is_found_by_the_next_sync() {
         }
     );
     let spendable =
-        zolana_transaction::verify_spendable(&fixture.recipient, &next.decrypted).unwrap();
+        spr_transaction::verify_spendable(&fixture.recipient, &next.decrypted).unwrap();
     let unspent: Vec<[u8; 32]> = spendable.utxos().map(|utxo| utxo.utxo_hash).collect();
     assert_eq!(unspent, [merged.utxo_hash]);
 }

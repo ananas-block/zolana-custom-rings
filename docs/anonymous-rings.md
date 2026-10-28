@@ -197,7 +197,7 @@ them with `inputs` of `"ring-or-default"` or `"default"`, and
 `buildRingEntryTransaction` spends them alone.
 
 `AnonymousSpendSigner` produces the signature, so the hidden owner's key can
-stay outside the process that proves. In Rust `zolana_keypair::SigningKey` and
+stay outside the process that proves. In Rust `spr_keypair::SigningKey` and
 `ed25519_dalek::SigningKey` implement it, and a hardware or remote signer
 implements it itself.
 
@@ -253,7 +253,7 @@ viewing secret never leaves the key holder.
 
 ### Rust wallet
 
-1. Start each ring's `AnonymousRingState` from `zolana-client` with
+1. Start each ring's `AnonymousRingState` from `spr-client` with
    `AnonymousRingState::new(ring, config.creation_epoch())`, and store it with
    `to_json` after every change.
 2. To receive, `issue` the next index with its pairing and store the state.

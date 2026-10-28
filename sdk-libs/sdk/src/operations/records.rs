@@ -10,8 +10,8 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zolana_client::AsyncRpc;
-use zolana_indexer_api::Hash;
+use spr_client::AsyncRpc;
+use spr_indexer_api::Hash;
 use zolana_ring_client::{
     records::{apply_proof_inputs, EscrowedRecord, MemberOpeningRead},
     AsyncRingIndexer,

@@ -15,7 +15,7 @@ use solana_address::Address;
 use solana_clock::DEFAULT_MS_PER_SLOT;
 use solana_transaction_status_client_types::TransactionDetails;
 use tokio::sync::Mutex as AsyncMutex;
-use zolana_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePubkey};
+use spr_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePubkey};
 use zolana_ring_indexer::{
     rpc::{
         GetRingApplyProofInputsRequest, GetRingApplyProofInputsResponse,

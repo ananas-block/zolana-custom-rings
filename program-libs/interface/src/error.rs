@@ -1,6 +1,6 @@
 use solana_program_error::ProgramError;
 use thiserror::Error;
-use zolana_hasher::HasherError;
+use spr_hasher::HasherError;
 use zolana_ring_policy::{PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {

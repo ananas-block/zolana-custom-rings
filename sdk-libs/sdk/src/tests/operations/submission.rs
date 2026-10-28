@@ -1,5 +1,5 @@
 use custom_ring_interface::RingMode;
-use zolana_interface::pda;
+use spr_interface::pda;
 
 use super::*;
 use crate::tests::support::{ring, Chain, Registry, RingSettings, SLOT, TREE_ID};
@@ -76,7 +76,7 @@ struct StatusRefused {
 
 #[async_trait::async_trait]
 impl AsyncRpc for StatusRefused {
-    async fn get_block_height(&self) -> Result<u64, zolana_client::ClientError> {
+    async fn get_block_height(&self) -> Result<u64, spr_client::ClientError> {
         Ok(self.block_height)
     }
 }

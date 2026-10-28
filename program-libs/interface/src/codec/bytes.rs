@@ -1,5 +1,5 @@
 use wincode::{config::DefaultConfig, containers, len::FixIntLen, SchemaRead};
-use zolana_interface::instruction::{InterfaceTransfer, TreeContext};
+use spr_interface::instruction::{InterfaceTransfer, TreeContext};
 
 use crate::error::CustomRingError;
 

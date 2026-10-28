@@ -3,11 +3,11 @@
 use custom_ring_interface::{QueueEntry, QUAD_ARITY, RING_DELIVERED_BODY_LEN};
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
-use zolana_hasher::primitives::right_align;
-use zolana_keypair::{PublicKey, X25519Pubkey};
+use spr_hasher::primitives::right_align;
+use spr_keypair::{PublicKey, X25519Pubkey};
 use zolana_ring_member_registry::{MemberRecord, QuadPath, RecordOpening, RecordWriteProofInput};
 use zolana_ring_policy::{EncodedRuleTable, SourceMap, MAX_SOURCES};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::SppProofOutputUtxo,
     utxo::{ProofInputUtxo, SppProofInputUtxo},
 };
@@ -800,8 +800,8 @@ pub(crate) struct WithdrawalExemption {
     #[serde(with = "fe")]
     pub root: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub assets: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    pub assets: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
     #[serde(serialize_with = "fe::seq")]
-    pub amounts: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    pub amounts: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
     pub entries: Vec<Option<MemberOpening>>,
 }

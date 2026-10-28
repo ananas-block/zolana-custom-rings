@@ -2,7 +2,7 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use solana_address::Address;
 use zeroize::Zeroizing;
-use zolana_keypair::{KeypairError, ViewingKey};
+use spr_keypair::{KeypairError, ViewingKey};
 
 use crate::RingKeyError;
 
@@ -12,7 +12,7 @@ pub const INFO_RING_ADDRESS_KEY_PREFIX: &[u8] = b"TSPP/ring_address_key/";
 /// Followed by the ring program address.
 pub const INFO_RING_CHANGE_KEY_PREFIX: &[u8] = b"TSPP/ring_change_key/";
 
-/// zolana-keypair's `DST_X25519_VIEW_ROOT`, the salt of the view root extract.
+/// spr-keypair's `DST_X25519_VIEW_ROOT`, the salt of the view root extract.
 const DST_X25519_VIEW_ROOT: &[u8] = b"TSPP/view_root/x25519/v1";
 
 pub trait RingViewingKey {
@@ -42,7 +42,7 @@ impl RingViewingKey for ViewingKey {
     }
 }
 
-/// zolana-keypair's private `derive_secret32`, HKDF-Expand of the view root.
+/// spr-keypair's private `derive_secret32`, HKDF-Expand of the view root.
 fn derive_secret32(key: &ViewingKey, info: &[&[u8]]) -> Result<Zeroizing<[u8; 32]>, KeypairError> {
     let (view_root, _) =
         Hkdf::<Sha256>::extract(Some(DST_X25519_VIEW_ROOT), key.secret_bytes().as_slice());

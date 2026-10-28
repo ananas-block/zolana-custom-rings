@@ -4,10 +4,10 @@ use custom_ring_interface::{
     ring_anonymous_output_body, ring_confidential_delivered_output_body,
     ring_confidential_packed_output_body, stream::RingTag, RingOutput,
 };
-use zolana_event::confidential_encrypted_output_body;
-use zolana_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
-use zolana_keypair::{ShieldedAddress, X25519Pubkey};
-use zolana_transaction::{
+use spr_event::confidential_encrypted_output_body;
+use spr_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
+use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
     instructions::transact::SppProofInputs, SppProofOutputUtxo, TransactionError,
 };
 

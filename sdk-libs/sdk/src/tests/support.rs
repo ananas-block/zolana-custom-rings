@@ -14,14 +14,14 @@ use custom_ring_interface::{
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::{
+use spr_client::{
     rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
     ClientError, Context, GetMerkleProofsResponse, GetShieldedTransactionsByTagsResponse,
     IndexerRpcConfig, InputWitnesses, MerkleContext, MerkleProof, ProofDataSource,
 };
-use zolana_hasher::{Hasher, Poseidon};
-use zolana_indexer_api::{Base64String, Hash, SerializablePubkey};
-use zolana_interface::{
+use spr_hasher::{Hasher, Poseidon};
+use spr_indexer_api::{Base64String, Hash, SerializablePubkey};
+use spr_interface::{
     state::{
         default_tree_fees,
         discriminator::{RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
@@ -29,7 +29,7 @@ use zolana_interface::{
     },
     RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
+use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, RingMemberOpening,
@@ -37,11 +37,11 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
 use zolana_ring_policy::{Member, RuleTable};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::ShieldedTransaction, utxo::SppProofInputUtxo, Data, Mint, Utxo,
     WalletUtxo,
 };
-use zolana_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -294,7 +294,7 @@ impl Chain {
 
     pub(crate) fn with_tree(self, id: u16) -> Self {
         let tree = PoolTree {
-            address: zolana_interface::pda::tree(id),
+            address: spr_interface::pda::tree(id),
             id,
         };
         self.with(tree.address, tree_account(tree))
@@ -368,7 +368,7 @@ impl Chain {
     }
 
     fn edit_tree(mut self, edit: impl FnOnce(&mut TreeAccount<'_>)) -> Self {
-        let address = zolana_interface::pda::tree(TREE_ID);
+        let address = spr_interface::pda::tree(TREE_ID);
         let account = self.accounts.get_mut(&address).unwrap();
         edit(&mut TreeAccount::from_bytes(&mut account.data, address.to_bytes()).unwrap());
         self
@@ -481,7 +481,7 @@ impl AsyncRingIndexer for Chain {
                 "get_ring_member_openings",
             ))?;
         Ok(GetRingMemberOpeningsResponse {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
             },

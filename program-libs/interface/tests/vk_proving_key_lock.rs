@@ -9,7 +9,7 @@ use custom_ring_interface::{
     ANONYMOUS_MERGE_WIDTHS, APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, PACKED_AUDIT_CAPACITIES,
     PROVING_KEY_SHA256S,
 };
-use zolana_interface::shape::SPP_SUPPORTED_SHAPES;
+use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
 const LOCK: &str = include_str!("../../../prover/ring/proving-keys.lock");
 

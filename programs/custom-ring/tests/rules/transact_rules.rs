@@ -14,13 +14,13 @@ use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
-use zolana_interface::{
+use spr_interface::{
     instruction::{InterfaceTransfer, TreeContext},
     shape::SPP_SUPPORTED_SHAPES,
     state::{default_tree_fees, discriminator::TREE_ACCOUNT_DISCRIMINATOR, nullifier_tree_params},
     MAX_INTERFACE_TRANSFERS, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 
 use crate::common::{
     allow_list_table, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2, policy_write,
@@ -1461,12 +1461,12 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
     let mint = Address::new_unique();
     let token = Address::new_unique();
     let owner = Address::new_unique();
-    let token_program = Address::new_from_array(zolana_interface::SPL_TOKEN_PROGRAM_ID);
-    let mut token_data = vec![0; zolana_interface::SPL_TOKEN_ACCOUNT_LEN];
+    let token_program = Address::new_from_array(spr_interface::SPL_TOKEN_PROGRAM_ID);
+    let mut token_data = vec![0; spr_interface::SPL_TOKEN_ACCOUNT_LEN];
     token_data[..32].copy_from_slice(mint.as_ref());
     token_data[32..64].copy_from_slice(owner.as_ref());
     // The base SPL token account's state byte follows its delegate COption.
-    token_data[108] = zolana_interface::SPL_TOKEN_ACCOUNT_INITIALIZED;
+    token_data[108] = spr_interface::SPL_TOKEN_ACCOUNT_INITIALIZED;
     ring.store(token, token_program, token_data.clone());
     let owners = [owner.to_bytes()];
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
@@ -1478,7 +1478,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     spp.extend([
         AccountMeta::new_readonly(
-            Address::new_from_array(zolana_interface::SHIELDED_POOL_CPI_AUTHORITY),
+            Address::new_from_array(spr_interface::SHIELDED_POOL_CPI_AUTHORITY),
             false,
         ),
         AccountMeta::new_readonly(mint, false),

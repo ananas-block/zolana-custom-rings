@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 use solana_address::Address;
-use zolana_keypair::ViewingKey;
+use spr_keypair::ViewingKey;
 use zolana_ring_keys::RingViewingKey;
 
 const VECTOR: &str = include_str!("fixtures/ring_derivation.json");

@@ -8,8 +8,8 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zolana_interface::instruction::{InterfaceTransfer, TransactProof};
-use zolana_program::instruction::{
+use spr_interface::instruction::{InterfaceTransfer, TransactProof};
+use spr_program::instruction::{
     RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
 };
 

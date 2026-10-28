@@ -4,8 +4,8 @@ use custom_ring_interface::{
     EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
-use zolana_hasher::{primitives::hash_bytes, HasherError};
-use zolana_keypair::X25519Pubkey;
+use spr_hasher::{primitives::hash_bytes, HasherError};
+use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, RingMemberOpening,
     RingMemberRecordView, RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,

@@ -1,6 +1,6 @@
 //! Ring output bodies in SPP's encrypted output framing, schemes SPP stores without parsing.
 
-use zolana_event::{
+use spr_event::{
     OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
 };
 

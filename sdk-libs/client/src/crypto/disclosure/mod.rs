@@ -7,12 +7,12 @@ use custom_ring_interface::{
     DISCLOSURE_INPUT_AMOUNT_BYTES, DISCLOSURE_SENDER_KEY_BYTES,
 };
 use zeroize::Zeroizing;
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, pack_be_chunks, right_align},
     Hasher, Poseidon,
 };
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use zolana_transaction::field::{field_add, field_sub};
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::field::{field_add, field_sub};
 
 use crate::{
     encryption::{open_stream, seal_stream, StreamSchedule},

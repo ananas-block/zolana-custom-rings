@@ -6,7 +6,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_AL
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 
-use zolana_keypair::shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN};
+use spr_keypair::shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN};
 
 use crate::RingKeyError;
 

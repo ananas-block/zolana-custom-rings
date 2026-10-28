@@ -1,7 +1,7 @@
 //! Domain tags of the ring hashes, distinct ASCII tags absorbed as the first
 //! Poseidon input and mirrored by Go `prover/circuits/shared/derivation.go`.
 
-use zolana_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 
 /// `"CRAU"`
 pub const AUDIT_STATEMENT: u32 = 0x4352_4155;

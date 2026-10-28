@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 use wincode::{SchemaRead, SchemaWrite};
-use zolana_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 
 use crate::{field_u8, ListId, ListSet, Member};
 

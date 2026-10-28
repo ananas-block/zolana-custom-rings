@@ -17,10 +17,10 @@ use custom_ring_interface::{
     RingOutput, RING_DELIVERED_BODY_LEN,
 };
 use rand::{rngs::OsRng, RngCore};
-use zolana_event::MessageData;
-use zolana_interface::{instruction::instruction_data::transact::OwnerTag, MAX_OUTPUTS};
-use zolana_keypair::{random_salt, viewing_key::Salt, ShieldedAddress, ViewingKey, X25519Pubkey};
-use zolana_transaction::{
+use spr_event::MessageData;
+use spr_interface::{instruction::instruction_data::transact::OwnerTag, MAX_OUTPUTS};
+use spr_keypair::{random_salt, viewing_key::Salt, ShieldedAddress, ViewingKey, X25519Pubkey};
+use spr_transaction::{
     instructions::transact::{
         ConfidentialTransaction, OutputEncoder, OutputEncryption, ResolvedOwnerTag, SppProofInputs,
     },

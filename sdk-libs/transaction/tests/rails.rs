@@ -8,14 +8,14 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_interface::instruction::instruction_data::transact::OwnerTag;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
+use spr_interface::instruction::instruction_data::transact::OwnerTag;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use zolana_ring_keys::RingViewingKey;
 use zolana_ring_transaction::{
     AnonymousSlot, AnonymousSlots, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
     RingPacked, RingRailError as E, RingUtxoOwner, StreamPayment, StreamPosition,
 };
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, Shape, SppProofInputs, SppProofOutputUtxo},
     Data, DecodeCx, Mint, Utxo, WalletUtxo,
 };

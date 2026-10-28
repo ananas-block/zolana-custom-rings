@@ -24,17 +24,17 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
-use zolana_client::{
+use spr_client::{
     AsyncRpc, ClientError, ComputeBudgetConfig, ProofAuthority, Shape, TransferInput,
 };
-use zolana_event::is_confidential_encrypted_output;
-use zolana_hasher::primitives::solana_owner_identity;
-use zolana_interface::{instruction::TreeContext, N_PUBLIC_SLOTS};
-use zolana_keypair::{NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
-use zolana_program::instruction::TransactInterfaceTransferAccounts;
+use spr_event::is_confidential_encrypted_output;
+use spr_hasher::primitives::solana_owner_identity;
+use spr_interface::{instruction::TreeContext, N_PUBLIC_SLOTS};
+use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
+use spr_program::instruction::TransactInterfaceTransferAccounts;
 use zolana_ring_keys::RingKeys;
 use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::{
         ConfidentialTransaction, SettlementTransfer, SppProofInputs, SppProofOutputUtxo,
     },
@@ -113,7 +113,7 @@ pub struct ProvenRingTransfer {
     pub co_signer: Option<Address>,
     /// The anonymous statement's epoch.
     pub epoch: Option<u64>,
-    /// Each goes to [`zolana_client::AnonymousRingState::record_first_contact`] once it lands.
+    /// Each goes to [`spr_client::AnonymousRingState::record_first_contact`] once it lands.
     pub first_contacts: Vec<PendingFirstContact>,
 }
 
@@ -920,7 +920,7 @@ pub(crate) fn transaction_key(
     sender: &dyn RingSender,
     first_nullifier: [u8; 32],
 ) -> Result<ViewingKey, RingError> {
-    let keys = sender.transaction_keys(&[zolana_transaction::TransactionKeyRequest {
+    let keys = sender.transaction_keys(&[spr_transaction::TransactionKeyRequest {
         viewing_pubkey: sender.address()?.viewing_pubkey,
         first_nullifier,
     }])?;

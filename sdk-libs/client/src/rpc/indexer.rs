@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use thiserror::Error;
-use zolana_api::{ApiError, BlockingInsideRuntime, ZolanaApi};
-use zolana_client::{
+use spr_api::{ApiError, BlockingInsideRuntime, ZolanaApi};
+use spr_client::{
     indexer::{indexer_error, AsyncZolanaIndexer, ZolanaIndexer},
     AsyncZolanaClient, Blocking, ClientError, ZolanaClient,
 };
-use zolana_indexer_api::RpcMethod;
+use spr_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::{
     method::{
         GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
@@ -142,10 +142,10 @@ mod tests {
 
     use http::{HeaderMap, StatusCode};
     use serde_json::{json, Value};
-    use zolana_api::{
+    use spr_api::{
         BlockingHttpClient, BlockingZolanaApi, HttpClient, HttpFuture, HttpRequest, HttpResponse,
     };
-    use zolana_indexer_api::{Hash, SerializablePubkey};
+    use spr_indexer_api::{Hash, SerializablePubkey};
     use zolana_ring_indexer::rpc::GetRingRecordQueueRequest;
 
     use super::*;

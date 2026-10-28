@@ -6,16 +6,16 @@ use custom_ring_interface::{
 };
 use serde::Serialize;
 use zeroize::Zeroizing;
-use zolana_client::AsyncRpc;
-use zolana_event::MessageData;
-use zolana_hasher::primitives::hash_bytes;
-use zolana_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_client::AsyncRpc;
+use spr_event::MessageData;
+use spr_hasher::primitives::hash_bytes;
+use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
 };
 use zolana_ring_transaction::{AnonymousSlot, PublishedSlot, RingOutputRail, StreamPosition};
-use zolana_transaction::{
+use spr_transaction::{
     derive_output_blinding_seed, instructions::transact::SppProofInputs, SppProofOutputUtxo,
     TransactionError,
 };

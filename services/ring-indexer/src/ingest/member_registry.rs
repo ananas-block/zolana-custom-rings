@@ -5,7 +5,7 @@ use custom_ring_interface::{
     RecordQueue, MEMBER_REGISTRY_CAPACITY,
 };
 use sea_orm::ConnectionTrait;
-use zolana_indexer_api::Hash;
+use spr_indexer_api::Hash;
 use zolana_ring_indexer::{
     records::{CanonicalAccounts, QueuedWrite, RecordAction, RecordChange, SealedKey},
     tree::{node_keys, LoadedTree, MemberRead, MemberRecord, ReadRows, WrittenRows},

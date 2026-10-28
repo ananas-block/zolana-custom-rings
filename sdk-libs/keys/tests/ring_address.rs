@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use zolana_ring_keys::{
     ring_address::{RING_ADDRESS_CHECKSUM_DOMAIN, RING_ADDRESS_VERSION},
     Pairing, PairingRow, RingAddress, RingKeyError, RingPaymentRequest, RingViewingKey,

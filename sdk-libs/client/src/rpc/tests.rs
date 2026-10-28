@@ -1,7 +1,7 @@
 use custom_ring_interface::stream::{RingTag, TAG_LEN};
 use solana_keypair::Keypair;
-use zolana_keypair::ViewingKey;
-use zolana_transaction::OutputContext;
+use spr_keypair::ViewingKey;
+use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
@@ -584,7 +584,7 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         owner: UtxoOwner::Keyed {
             nullifier_pk: small_field(5),
         },
-        asset: zolana_hasher::primitives::hash_bytes(mint.as_array()).unwrap(),
+        asset: spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap(),
         mint: Some(mint),
         amount: 40,
         blinding: small_field(6),

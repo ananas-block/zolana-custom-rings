@@ -14,12 +14,12 @@ use solana_signature::Signature;
 use solana_signer::{Signer, SignerError};
 use thiserror::Error;
 use zeroize::Zeroizing;
-use zolana_client::{AsyncRpc, ClientError};
-use zolana_indexer_api::{
+use spr_client::{AsyncRpc, ClientError};
+use spr_indexer_api::{
     Base64String, Context, Hash, Limit, SerializablePubkey, SerializableSignature,
 };
-use zolana_interface::{state::RingConfig, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
-use zolana_keypair::{KeypairError, X25519Keypair, X25519Pubkey};
+use spr_interface::{state::RingConfig, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
+use spr_keypair::{KeypairError, X25519Keypair, X25519Pubkey};
 use zolana_secret_file::{
     create_new, read_key32, Access, KeyPairFiles, SecretFileError, Visibility,
 };

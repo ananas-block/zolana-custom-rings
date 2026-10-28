@@ -26,12 +26,12 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
-use zolana_indexer_api::RpcMethod;
+use spr_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::method::{
     GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
     GetRingMemberRegistryRoot, GetRingRecordQueue,
 };
-use zolana_rpc_http::MethodPathLayer;
+use spr_rpc_http::MethodPathLayer;
 
 use crate::{
     api::{self, CachedChain},

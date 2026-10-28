@@ -7,7 +7,7 @@ mod record;
 mod tree;
 
 use thiserror::Error;
-use zolana_hasher::HasherError;
+use spr_hasher::HasherError;
 
 pub use memory::MemberRegistryTree;
 pub use path::{quad_node, NodePosition, QuadPath, ZERO_SUBTREES};

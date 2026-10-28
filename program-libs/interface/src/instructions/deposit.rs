@@ -1,4 +1,4 @@
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_from_slice,
     primitives::{hash_bytes, pack_be, right_align, PACK_BE_CHUNK_BYTES},
     HasherError,

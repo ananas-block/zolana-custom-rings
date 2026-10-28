@@ -10,8 +10,8 @@ use custom_ring_interface::{
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
-use zolana_hasher::primitives::{hash_bytes, solana_owner_identity};
-use zolana_interface::instruction::InterfaceTransfer;
+use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
+use spr_interface::instruction::InterfaceTransfer;
 use zolana_ring_policy::{Member, OutflowLimit};
 
 const VECTORS: &str = concat!(
@@ -506,7 +506,7 @@ fn compute_vectors() -> StatementVectors {
 }
 
 fn right_aligned(amount: u64) -> [u8; 32] {
-    zolana_hasher::primitives::right_align(&amount.to_be_bytes())
+    spr_hasher::primitives::right_align(&amount.to_be_bytes())
 }
 
 #[test]

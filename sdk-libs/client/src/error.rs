@@ -2,17 +2,17 @@ use custom_ring_interface::stream::StreamError;
 use solana_address::Address;
 use solana_signature::Signature;
 use thiserror::Error;
-use zolana_api::BlockingInsideRuntime;
-use zolana_client::ClientError;
+use spr_api::BlockingInsideRuntime;
+use spr_client::ClientError;
 use zolana_ring_indexer::rpc::RingRpcError;
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_transaction::RingRailError;
 
 use crate::RingIndexerError;
-use zolana_hasher::HasherError;
-use zolana_keypair::KeypairError;
+use spr_hasher::HasherError;
+use spr_keypair::KeypairError;
 use zolana_ring_policy::MemberError;
-use zolana_transaction::TransactionError;
+use spr_transaction::TransactionError;
 
 use crate::OutputPayloadErrorKind;
 

@@ -8,14 +8,14 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
-use zolana_client::ClientError;
-use zolana_interface::{pda, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID};
-use zolana_keypair::ShieldedKeypair;
-use zolana_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
+use spr_client::ClientError;
+use spr_interface::{pda, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID};
+use spr_keypair::ShieldedKeypair;
+use spr_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
 use zolana_ring_client::{AnonymousRingState, DecoyLeaf, SentFirstContact};
 use zolana_ring_keys::{Pairing, RingAddress};
 use zolana_ring_transaction::{RingDelivery, RingRailError, StreamPosition};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::ConfidentialTransaction, AssetRegistry, Mint, WalletUtxo,
 };
 
@@ -552,23 +552,23 @@ async fn every_anchor_read_of_a_contact_names_the_same_leaves() {
 struct FailingIndexer(fn() -> ClientError);
 
 #[async_trait::async_trait]
-impl zolana_client::AsyncRpc for FailingIndexer {
+impl spr_client::AsyncRpc for FailingIndexer {
     async fn get_merkle_proofs(
         &self,
         _tree_account: Address,
         _leaves: Vec<[u8; 32]>,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
+        _config: Option<spr_client::IndexerRpcConfig>,
+    ) -> Result<spr_client::GetMerkleProofsResponse, ClientError> {
         Err((self.0)())
     }
 
     async fn get_shielded_transactions_by_ring(
         &self,
-        _options: zolana_client::RingHistoryOptions,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetShieldedTransactionsByTagsResponse, ClientError> {
-        Ok(zolana_client::GetShieldedTransactionsByTagsResponse {
-            context: zolana_client::Context {
+        _options: spr_client::RingHistoryOptions,
+        _config: Option<spr_client::IndexerRpcConfig>,
+    ) -> Result<spr_client::GetShieldedTransactionsByTagsResponse, ClientError> {
+        Ok(spr_client::GetShieldedTransactionsByTagsResponse {
+            context: spr_client::Context {
                 block_time: 0,
                 slot: SLOT,
             },
@@ -615,8 +615,8 @@ struct AnsweringIndexer {
     slot: u64,
 }
 
-impl zolana_api::HttpClient for AnsweringIndexer {
-    fn send<'a>(&'a self, request: zolana_api::HttpRequest) -> zolana_api::HttpFuture<'a> {
+impl spr_api::HttpClient for AnsweringIndexer {
+    fn send<'a>(&'a self, request: spr_api::HttpRequest) -> spr_api::HttpFuture<'a> {
         let answer = match request.url.ends_with("getMerkleProofs") {
             true => self.proofs.clone(),
             false => serde_json::json!({
@@ -629,7 +629,7 @@ impl zolana_api::HttpClient for AnsweringIndexer {
         };
         let body = serde_json::to_vec(&answer).unwrap();
         Box::pin(async move {
-            Ok(zolana_api::HttpResponse {
+            Ok(spr_api::HttpResponse {
                 status: http::StatusCode::OK,
                 headers: http::HeaderMap::new(),
                 body,
@@ -652,7 +652,7 @@ async fn anchor_read(proofs: serde_json::Value, slot: u64) -> Result<(), RingErr
     let Spend::Anonymous(spend) = &staged.spend else {
         unreachable!("an anonymous ring stages its rail");
     };
-    let indexer = zolana_client::AsyncZolanaIndexer::with_api(zolana_api::ZolanaApi::with_client(
+    let indexer = spr_client::AsyncZolanaIndexer::with_api(spr_api::ZolanaApi::with_client(
         "http://indexer.invalid",
         AnsweringIndexer { proofs, slot },
     ));
@@ -711,15 +711,15 @@ struct FaultyProofs {
 }
 
 #[async_trait::async_trait]
-impl zolana_client::AsyncRpc for FaultyProofs {
+impl spr_client::AsyncRpc for FaultyProofs {
     async fn get_merkle_proofs(
         &self,
         tree_account: Address,
         leaves: Vec<[u8; 32]>,
-        config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
+        config: Option<spr_client::IndexerRpcConfig>,
+    ) -> Result<spr_client::GetMerkleProofsResponse, ClientError> {
         let mut response =
-            zolana_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config)
+            spr_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config)
                 .await?;
         let at = response
             .proofs
@@ -794,36 +794,36 @@ struct CatchingUpProofs {
 }
 
 #[async_trait::async_trait]
-impl zolana_client::AsyncRpc for CatchingUpProofs {
+impl spr_client::AsyncRpc for CatchingUpProofs {
     async fn get_account(
         &self,
         address: Address,
     ) -> Result<Option<solana_account::Account>, ClientError> {
-        zolana_client::AsyncRpc::get_account(&self.chain, address).await
+        spr_client::AsyncRpc::get_account(&self.chain, address).await
     }
 
     async fn get_merkle_proofs(
         &self,
         tree_account: Address,
         leaves: Vec<[u8; 32]>,
-        config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
+        config: Option<spr_client::IndexerRpcConfig>,
+    ) -> Result<spr_client::GetMerkleProofsResponse, ClientError> {
         if !self
             .refused
             .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             return Err(ClientError::Indexer("Record Not Found".to_owned()));
         }
-        zolana_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config).await
+        spr_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config).await
     }
 
     async fn get_shielded_transactions_by_ring(
         &self,
-        _options: zolana_client::RingHistoryOptions,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetShieldedTransactionsByTagsResponse, ClientError> {
-        Ok(zolana_client::GetShieldedTransactionsByTagsResponse {
-            context: zolana_client::Context {
+        _options: spr_client::RingHistoryOptions,
+        _config: Option<spr_client::IndexerRpcConfig>,
+    ) -> Result<spr_client::GetShieldedTransactionsByTagsResponse, ClientError> {
+        Ok(spr_client::GetShieldedTransactionsByTagsResponse {
+            context: spr_client::Context {
                 block_time: 0,
                 slot: SLOT,
             },
@@ -892,7 +892,7 @@ async fn a_leaf_keeps_an_earlier_pause_of_its_tree() {
         .unwrap()
         .unwrap();
     let mut view =
-        zolana_tree::TreeAccount::from_bytes(&mut account.data, tree.to_bytes()).unwrap();
+        spr_tree::TreeAccount::from_bytes(&mut account.data, tree.to_bytes()).unwrap();
     assert!(view.is_paused());
     assert_eq!(view.utxo_tree().next_index(), 1);
 }
@@ -904,13 +904,13 @@ async fn a_default_ring_spend_previews_the_hidden_owners_published_key() {
     let paid = ring_address(&crate::tests::support::keypair(2));
     let state = AnonymousRingState::new(ring().program_id(), 0);
     let entry = crate::tests::support::wallet(
-        zolana_transaction::Utxo {
+        spr_transaction::Utxo {
             owner: sender.signing_pubkey(),
             asset: Mint::SOL,
             amount: 10,
-            blinding: zolana_keypair::random_blinding(),
+            blinding: spr_keypair::random_blinding(),
             ring_program_id: None,
-            data: zolana_transaction::Data::default(),
+            data: spr_transaction::Data::default(),
         },
         &sender.nullifier_key,
         TREE_ID,
@@ -961,13 +961,13 @@ impl<'a> MoveSender<'a> {
 
 fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletUtxo {
     crate::tests::support::wallet(
-        zolana_transaction::Utxo {
+        spr_transaction::Utxo {
             owner: owner.signing_pubkey(),
             asset: Mint::SOL,
             amount,
-            blinding: zolana_keypair::random_blinding(),
+            blinding: spr_keypair::random_blinding(),
             ring_program_id: None,
-            data: zolana_transaction::Data::default(),
+            data: spr_transaction::Data::default(),
         },
         &owner.nullifier_key,
         TREE_ID,
@@ -1004,7 +1004,7 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     let assembled = widest.assemble(&client).await.unwrap();
     assert_eq!(
         assembled.frame.proof_inputs.check_shape().unwrap(),
-        zolana_client::Shape::IN32_OUT2
+        spr_client::Shape::IN32_OUT2
     );
     assert!(matches!(
         pay(33).select(&client).await,
@@ -1062,7 +1062,7 @@ async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving()
             .proof_inputs
             .check_shape()
             .unwrap(),
-        zolana_client::Shape::IN24_OUT2
+        spr_client::Shape::IN24_OUT2
     );
     assert!(matches!(
         pay(25).select(&client).await,
@@ -1452,7 +1452,7 @@ fn an_unkeyed_shape_names_its_rail_in_words() {
 
 #[tokio::test]
 async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
-    use zolana_client::Shape;
+    use spr_client::Shape;
     let member = &crate::tests::support::keypair(1);
     let delegate = Address::new_from_array([0x44; 32]);
     let source = member.shielded_address().unwrap();
@@ -1495,7 +1495,7 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
 
 struct MoveFixture<'a> {
     member: &'a ShieldedKeypair,
-    recipient: zolana_keypair::ShieldedAddress,
+    recipient: spr_keypair::ShieldedAddress,
     delegate: Address,
     assets: &'a AssetRegistry,
 }
@@ -1533,7 +1533,7 @@ impl<'a> MoveFixture<'a> {
 async fn selected(
     transfer: DelegateTransfer<'_>,
     client: &RingClient<Chain, Chain>,
-) -> (zolana_client::Shape, u16) {
+) -> (spr_client::Shape, u16) {
     let assembled = transfer.assemble(client).await.unwrap();
     (
         assembled.frame.proof_inputs.check_shape().unwrap(),
@@ -1581,7 +1581,7 @@ async fn a_delegate_move_takes_the_fewest_utxos() {
     });
     assert_eq!(
         selected(lean.select(&client).await.unwrap(), &client).await,
-        (zolana_client::Shape::IN4_OUT4, TREE_ID)
+        (spr_client::Shape::IN4_OUT4, TREE_ID)
     );
     let short = fixture.delegate_move(MoveCase {
         utxos: &utxos,
@@ -1606,7 +1606,7 @@ async fn a_delegate_move_takes_the_fewest_utxos() {
         });
         assert_eq!(
             selected(wide.select(&client).await.unwrap(), &client).await,
-            (zolana_client::Shape::IN2_OUT2, 1)
+            (spr_client::Shape::IN2_OUT2, 1)
         );
     }
 }
@@ -1697,7 +1697,7 @@ async fn a_delegate_move_takes_a_change_slot_only_for_change() {
     };
     assert_eq!(
         selected(four(&exact).select(&client).await.unwrap(), &client).await,
-        (zolana_client::Shape::IN4_OUT4, TREE_ID)
+        (spr_client::Shape::IN4_OUT4, TREE_ID)
     );
     assert!(matches!(
         four(&over).select(&client).await,
@@ -1711,7 +1711,7 @@ struct DelegateCase<'a> {
     settings: RingSettings,
     delegate: Address,
     member: &'a ShieldedKeypair,
-    key: zolana_keypair::NullifierKey,
+    key: spr_keypair::NullifierKey,
     inputs: Vec<WalletUtxo>,
 }
 
@@ -1805,7 +1805,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
         .with_tag_rng(zero_tag_rng)
         .with_payment(payment(&paid, 4))
         .unwrap()
-        .with_shape(zolana_client::Shape::IN1_OUT4)
+        .with_shape(spr_client::Shape::IN1_OUT4)
         .unwrap();
     let assembled = transfer
         .assemble(&Chain::ring(anonymous()).client())
@@ -2005,7 +2005,7 @@ impl Measured {
         !matches!(self, Self::Confidential | Self::Anonymous)
     }
 
-    fn keyed(self, shape: zolana_client::Shape) -> bool {
+    fn keyed(self, shape: spr_client::Shape) -> bool {
         let rail = match self {
             Self::Confidential | Self::ConfidentialPolicy => RingRail::Confidential,
             Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
@@ -2039,13 +2039,13 @@ const MEASURED_CO_SIGNER: (Address, custom_ring_interface::CoSignScope) = (
 #[derive(Clone, Copy)]
 struct Measure {
     rail: Measured,
-    shape: zolana_client::Shape,
+    shape: spr_client::Shape,
     payer: Payer,
     co_signer: Option<(Address, custom_ring_interface::CoSignScope)>,
 }
 
 impl Measure {
-    fn pinned(rail: Measured, shape: zolana_client::Shape) -> Self {
+    fn pinned(rail: Measured, shape: spr_client::Shape) -> Self {
         Self {
             rail,
             shape,
@@ -2154,7 +2154,7 @@ impl Measure {
 struct FrameSize<'c> {
     client: &'c RingClient<Chain, Chain>,
     rail: Measured,
-    shape: zolana_client::Shape,
+    shape: spr_client::Shape,
     payer: Address,
 }
 
@@ -2167,7 +2167,7 @@ impl FrameSize<'_> {
                     unwitnessed.frame.proof_inputs.check_shape().unwrap(),
                     self.shape
                 );
-                zolana_client::transaction_size(
+                spr_client::transaction_size(
                     &self.payer,
                     &[unwitnessed.instruction().unwrap()],
                     ComputeBudgetConfig::new(0),
@@ -2387,7 +2387,7 @@ const SIZE_PINS: [SizePin; 38] = [
 #[tokio::test]
 async fn every_transfer_shape_takes_its_pinned_transaction_size() {
     let mut measured = Vec::new();
-    for shape in zolana_client::SPP_SUPPORTED_SHAPES {
+    for shape in spr_client::SPP_SUPPORTED_SHAPES {
         let mut bytes = [None; Measured::COLUMNS.len()];
         for (rail, slot) in Measured::COLUMNS.into_iter().zip(&mut bytes) {
             if rail.keyed(shape) {
@@ -2416,7 +2416,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     };
     let audit_only = Measure {
         rail: Measured::Confidential,
-        shape: zolana_client::Shape::IN8_OUT16,
+        shape: spr_client::Shape::IN8_OUT16,
         payer: Payer::Owner,
         co_signer: None,
     };
@@ -2430,7 +2430,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     );
     let policy = Measure {
         rail: Measured::ConfidentialPolicy,
-        shape: zolana_client::Shape::IN40_OUT2,
+        shape: spr_client::Shape::IN40_OUT2,
         ..audit_only
     };
     assert!(fits(policy).await);
@@ -2454,7 +2454,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
 #[tokio::test]
 async fn a_payment_stages_when_outsider_rows_fill_the_inbox_tags() {
     use custom_ring_interface::stream::{InboxKey, J_INBOX};
-    use zolana_transaction::instructions::transact::{
+    use spr_transaction::instructions::transact::{
         OutputContext, OutputSlot, ShieldedTransaction,
     };
     let sender = &crate::tests::support::keypair(1);
@@ -2568,7 +2568,7 @@ async fn a_delegate_its_own_co_signer_is_refused_before_proving() {
         }],
     })
     .with_assets(&assets)
-    .with_shape(zolana_client::Shape::IN2_OUT2)
+    .with_shape(spr_client::Shape::IN2_OUT2)
     .unwrap();
     assert!(matches!(
         transfer.assemble(&client).await,
@@ -2616,7 +2616,7 @@ fn a_payment_total_past_a_u64_is_refused() {
 async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
     use crate::tests::support::Registry;
     use custom_ring_interface::{CoSignScope, PublicLeg};
-    use zolana_interface::instruction::InterfaceTransfer;
+    use spr_interface::instruction::InterfaceTransfer;
     use zolana_ring_policy::{MintPolicy, RuleTable};
     let mut registry = Registry::new(&[]);
     for i in 1..=12 {

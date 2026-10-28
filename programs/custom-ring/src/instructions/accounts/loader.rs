@@ -9,11 +9,11 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use zolana_interface::{
+use spr_interface::{
     instruction::InterfaceTransfer, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR,
     BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_tree::TreeAccount;
+use spr_tree::TreeAccount;
 
 /// Owner and discriminator suffice, accounts are created only at their canonical PDA.
 #[inline(always)]

@@ -20,11 +20,11 @@ use custom_ring_interface::{
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
-use zolana_event::{
+use spr_event::{
     confidential_encrypted_output_body, ring_anonymous_encrypted_output_body, OutputDataEncoding,
     CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{InterfaceTransfer, OwnerTag, TreeContext},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };

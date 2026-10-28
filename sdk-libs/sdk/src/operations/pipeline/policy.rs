@@ -7,14 +7,14 @@ use custom_ring_interface::{
     RingRail,
 };
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
-use zolana_interface::N_PUBLIC_SLOTS;
+use spr_client::AsyncRpc;
+use spr_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
+use spr_interface::N_PUBLIC_SLOTS;
 use zolana_ring_client::{records::MemberOpeningRead, AsyncRingIndexer};
 use zolana_ring_policy::{
     EncodedRuleTable, Member, OutputSubjects, RecordLists, SourceMap, TransferSubjects,
 };
-use zolana_transaction::instructions::transact::SppProofInputs;
+use spr_transaction::instructions::transact::SppProofInputs;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -376,7 +376,7 @@ impl PolicyInputs {
                 .map(|w| crate::request::PolicyWithdrawalRequest {
                     owner: w.owner,
                     asset: w.asset,
-                    amount: zolana_hasher::primitives::right_align(&w.amount.to_be_bytes()),
+                    amount: spr_hasher::primitives::right_align(&w.amount.to_be_bytes()),
                 })
                 .collect(),
             private_tx_hash: proving.private_tx_hash,
@@ -456,11 +456,11 @@ impl BoundCurator {
 /// Resolve token owners once; the program checks the snapshot again at execution.
 async fn read_withdrawals<R: AsyncRpc + ?Sized>(
     client: &R,
-    transfers: &[zolana_transaction::instructions::transact::SettlementTransfer],
+    transfers: &[spr_transaction::instructions::transact::SettlementTransfer],
     hint: Option<Address>,
 ) -> Result<(Vec<custom_ring_interface::PolicyWithdrawal>, Vec<[u8; 32]>), RingError> {
-    use zolana_interface::{SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
-    use zolana_transaction::instructions::transact::SettlementTransfer;
+    use spr_interface::{SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
+    use spr_transaction::instructions::transact::SettlementTransfer;
     let mut payments = Vec::new();
     let mut owners = Vec::new();
     for transfer in transfers.iter().filter(|t| !t.is_deposit()) {
@@ -504,7 +504,7 @@ async fn read_withdrawals<R: AsyncRpc + ?Sized>(
                             .ok_or_else(invalid)?;
                         if ![SPL_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID]
                             .contains(program.as_array())
-                            || zolana_interface::pda::associated_token_address_with_program(
+                            || spr_interface::pda::associated_token_address_with_program(
                                 &owner, &mint, &program,
                             ) != user_spl_token
                         {

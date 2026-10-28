@@ -3,7 +3,7 @@ use custom_ring_interface::{
     MergeAnonymousPublicInput, MergeDisclosureRef, RingProgramConfig, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use zolana_interface::instruction::instruction_data::merge_transact::{
+use spr_interface::instruction::instruction_data::merge_transact::{
     merge_circuit_width, MergeOutputEncryption, MergeTransactIxDataRef,
 };
 use zolana_ring_policy::ring_id_field;

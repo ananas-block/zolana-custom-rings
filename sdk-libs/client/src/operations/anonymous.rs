@@ -14,16 +14,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{AsyncRpc, IndexerRpcConfig};
-use zolana_event::RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG;
-use zolana_event_parser::decode_encrypted_ring_deposit_output_data;
-use zolana_keypair::{KeypairError, X25519Pubkey};
+use spr_client::{AsyncRpc, IndexerRpcConfig};
+use spr_event::RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG;
+use spr_event_parser::decode_encrypted_ring_deposit_output_data;
+use spr_keypair::{KeypairError, X25519Pubkey};
 use zolana_ring_keys::{
     Pairing, PairingRow, RingAddress, RingDeliveryRequest, RingKeys, RingRecipientKey,
 };
 use zolana_ring_policy::ring_id_field;
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
+use spr_transaction::{
     verify_owned, DecryptionResult, DepositPayload, OutputSlot, ShieldedKeys, ShieldedTransaction,
     TransactionError, TransactionKeyRequest, WalletUtxo,
 };
@@ -364,7 +364,7 @@ impl AnonymousRingState {
         };
         let address_key = exactly_one(keys.ring_address_keys(&self.ring, &[index])?)?;
         Ok(Some(RingAddress {
-            recipient: zolana_keypair::ShieldedAddress {
+            recipient: spr_keypair::ShieldedAddress {
                 viewing_pubkey: address_key,
                 ..keys.address()?
             },

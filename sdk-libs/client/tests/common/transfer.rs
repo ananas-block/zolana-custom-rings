@@ -14,13 +14,13 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::ProofInputUtxo;
-use zolana_event::MessageData;
-use zolana_hasher::{
+use spr_client::ProofInputUtxo;
+use spr_event::MessageData;
+use spr_hasher::{
     primitives::{hash_bytes, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{
         instruction_data::transact::{
             confidential_encrypted_output_body, ring_anonymous_encrypted_output_body, TreeContext,
@@ -30,14 +30,14 @@ use zolana_interface::{
     shape::SPP_SUPPORTED_SHAPES,
     tree_slot::tree_id_field,
 };
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use zolana_ring_client::{
     AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
     AuditDisclosure, AuditEnvelope, AuditedUtxo, DeliveredOutputOpening, DisclosurePad, KnownUtxo,
     OutputOpening, PackedOutputOpening, UtxoOwner,
 };
 use zolana_ring_transaction::{delivered_ring_data, RingDeliveredBody};
-use zolana_transaction::{
+use spr_transaction::{
     derive_output_blinding_seed,
     utxo::{derive_transact_output_blinding, DUMMY_DOMAIN, UTXO_DOMAIN},
     OutputContext, OutputSlot, ShieldedTransaction,

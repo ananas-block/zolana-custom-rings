@@ -7,7 +7,7 @@ use custom_ring_interface::{
     ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
 };
 use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
-use zolana_client::{Shape, SPP_SUPPORTED_SHAPES};
+use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
 
 const UTXO_AMOUNT: u64 = 1_000_000;
 
@@ -397,7 +397,7 @@ impl ShapeRing<'_> {
             .context("a tagged ring instruction")?;
         let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::try_from(*tag)?));
         let payer = self.payer();
-        let size = zolana_client::transaction_size(
+        let size = spr_client::transaction_size(
             &payer.pubkey(),
             std::slice::from_ref(&instruction),
             budget,

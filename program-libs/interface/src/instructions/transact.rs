@@ -3,11 +3,11 @@
 
 use solana_address::Address;
 use wincode::{containers, len::FixIntLen, Serialize};
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{hash_bytes, pack_be},
     HasherError,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{
         instruction_data::transact::{AnonymousRingEddsaProofData, Bsb22Commitment},
         tag::{RING_AUTHORITY_TRANSACT, RING_TRANSACT},
@@ -1208,7 +1208,7 @@ impl FrameHeader {
 
 const _: () = assert!(
     SPP_SUPPORTED_SHAPES.len() <= FrameHeader::LOW as usize + 1
-        && zolana_interface::MAX_TRANSACT_INPUTS <= FrameHeader::LOW as usize
+        && spr_interface::MAX_TRANSACT_INPUTS <= FrameHeader::LOW as usize
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,10 +1,10 @@
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
-use zolana_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
+use spr_client::AsyncRpc;
+use spr_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
+use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use zolana_ring_transaction::RingOutputRail;
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SppProofOutputUtxo},
     AssetRegistry, WalletUtxo,
 };

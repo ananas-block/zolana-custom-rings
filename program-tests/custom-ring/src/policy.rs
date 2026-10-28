@@ -17,12 +17,12 @@ use custom_ring_sdk::{
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_client::{prover::indexed::ProofDataSource, AsyncProverClient};
-use zolana_keypair::{ShieldedKeypair, X25519Keypair};
+use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
+use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use zolana_ring_client::AnonymousRingState;
 use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
-use zolana_test_utils::test_validator_asserts::wait_for_merkle_proof;
-use zolana_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
+use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
+use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
 
 use crate::shared::{
     custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, TestEnv, Tier,
@@ -183,7 +183,7 @@ impl PolicyTransfer<'_> {
             tree_id,
         )?;
         let state = wait_for_merkle_proof(self.env.client.indexer(), self.env.tree, hash);
-        let note = zolana_test_utils::utxo::wallet(
+        let note = spr_test_utils::utxo::wallet(
             self.note,
             &self.sender.nullifier_key,
             tree_id,
@@ -191,7 +191,7 @@ impl PolicyTransfer<'_> {
             None,
             None,
         )
-        .map_err(|error| zolana_client::ClientError::Rpc(error.to_string()))?;
+        .map_err(|error| spr_client::ClientError::Rpc(error.to_string()))?;
         let mut transfer = ConfidentialTransaction::new_with_ring(
             vec![note],
             self.sender.pubkey(),

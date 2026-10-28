@@ -1,4 +1,4 @@
-/** Mirrors Rust `zolana_keypair::ring_address`, pinned by `test-vectors/wallet/ring_address.json`. */
+/** Mirrors Rust `spr_keypair::ring_address`, pinned by `test-vectors/wallet/ring_address.json`. */
 import { equalBytes } from "@noble/ciphers/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {

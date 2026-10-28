@@ -6,11 +6,11 @@ use custom_ring_interface::{
     RING_TRANSACT_RING_CONFIG_INDEX, SOL_ASSET_ADDRESS, SYSTEM_PROGRAM_ID, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
-use zolana_event::EncryptedRingDepositData;
-use zolana_instruction::instruction::{
+use spr_event::EncryptedRingDepositData;
+use spr_instruction::instruction::{
     DepositAsset, MergeRing, RingAssetDeposit, RingDeposit, RingTransact,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{
         instruction_data::merge_transact::{MergeOutputEncryption, MergeProof},
         CircuitId, MergeTransactIxData, TransactIxData, TransactProof,

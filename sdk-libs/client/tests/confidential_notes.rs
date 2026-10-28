@@ -2,12 +2,12 @@
 
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{OutputContext, OutputSlot, ShieldedTransaction};
-use zolana_interface::instruction::instruction_data::transact::OwnerTag;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
+use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};
+use spr_interface::instruction::instruction_data::transact::OwnerTag;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
 use zolana_ring_client::open_ring_confidential;
 use zolana_ring_transaction::{RingAssets, RingDelivery, RingOutputRail};
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::ConfidentialTransaction, Data, Mint, Utxo, WalletUtxo,
 };
 

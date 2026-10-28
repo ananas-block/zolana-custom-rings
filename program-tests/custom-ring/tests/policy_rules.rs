@@ -18,11 +18,11 @@ use custom_ring_test_validator::{
     shared::{custom_ring_program_id, setup, RegisterRing, TestEnv, Tier, ACTOR_AIRDROP},
 };
 use solana_signer::Signer;
-use zolana_client::{IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::{ShieldedKeypair, X25519Keypair};
+use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use zolana_ring_client::{AuditedTransaction, OutputOpening, RingScan};
 use zolana_ring_policy::{ListId, Member};
-use zolana_transaction::Utxo;
+use spr_transaction::Utxo;
 
 /// `RELEASED` as `ring.toml` spells it.
 const RELEASED_TOML: &str = r#"[policy]

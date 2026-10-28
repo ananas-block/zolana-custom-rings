@@ -7,18 +7,18 @@ use custom_ring_interface::{
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::{
+use spr_client::{
     rpc::STATE_TREE_HEIGHT, AsyncRpc, ClientError, IndexerRpcConfig, MerkleProof,
     RingHistoryOptions, Shape,
 };
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{hash_bytes, right_align},
     Hasher, Poseidon,
 };
-use zolana_interface::{
+use spr_interface::{
     pda, tree_slot::tree_id_field, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
 };
-use zolana_keypair::{Curve, NullifierKey, PublicKey, SigningKey};
+use spr_keypair::{Curve, NullifierKey, PublicKey, SigningKey};
 pub use zolana_ring_client::ANCHOR_DECOYS;
 use zolana_ring_client::{
     AnonymousRingState, PairAnchor, PaymentStream, SentFirstContact, TagAllocation,
@@ -27,7 +27,7 @@ use zolana_ring_keys::RingAddress;
 use zolana_ring_transaction::{
     AnonymousSlots, RingDelivery, RingOutputRail, StreamPayment, StreamPosition,
 };
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SettlementTransfer, SppProofInputs},
     Mint, WalletUtxo,
 };
@@ -138,7 +138,7 @@ impl RingTransfer<Anonymous<'_>> {
         let transaction = &mut self.rail.owner.transaction;
         // Padding never reorders a slot, the tag follows the output it was built with.
         let slot = u32::try_from(transaction.outputs().len())
-            .map_err(|_| zolana_transaction::TransactionError::TooManyOutputs)?;
+            .map_err(|_| spr_transaction::TransactionError::TooManyOutputs)?;
         transaction.transfer_with_ring(
             &payment.to.recipient,
             payment.asset,
@@ -152,7 +152,7 @@ impl RingTransfer<Anonymous<'_>> {
     /// Unset, staging pads to the smallest supported shape.
     pub fn with_shape(mut self, shape: Shape) -> Result<Self, RingError> {
         if !shape.is_supported() {
-            return Err(zolana_transaction::TransactionError::UnsupportedShape {
+            return Err(spr_transaction::TransactionError::UnsupportedShape {
                 n_in: shape.n_inputs(),
                 n_out: shape.n_outputs(),
             }
@@ -359,7 +359,7 @@ pub(crate) struct AnonymousSpend<'a> {
 /// The leaf index is known only after confirmation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PendingFirstContact {
-    pub recipient: zolana_keypair::X25519Pubkey,
+    pub recipient: spr_keypair::X25519Pubkey,
     pub tree_id: u16,
     pub utxo_hash: [u8; 32],
     pub slot_secret: [u8; 32],
@@ -933,7 +933,7 @@ fn proof_opens(proof: &MerkleProof, leaf: &[u8; 32], tree: &Address) -> bool {
 }
 
 /// Bit `i` of `leaf_index` puts the node right of sibling `i`, each parent `Poseidon(left, right)`.
-pub(super) fn path_root(proof: &MerkleProof) -> Result<[u8; 32], zolana_hasher::HasherError> {
+pub(super) fn path_root(proof: &MerkleProof) -> Result<[u8; 32], spr_hasher::HasherError> {
     let mut node = proof.leaf;
     let mut position = proof.leaf_index;
     for sibling in &proof.path {

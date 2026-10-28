@@ -14,7 +14,7 @@ use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
 use solana_transaction_status_client_types::{TransactionConfirmationStatus, TransactionStatus};
-use zolana_client::{
+use spr_client::{
     compile_message, sign_transaction, AsyncRpc, ClientError, ComputeBudgetConfig,
     RpcSendTransactionConfig,
 };
@@ -35,7 +35,7 @@ pub(crate) fn check_transaction_size(
     instruction: &Instruction,
     budget: ComputeBudgetConfig,
 ) -> Result<(), RingError> {
-    let size = zolana_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
+    let size = spr_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
     if size.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
         return Err(RingError::TransactionTooLarge {
             bytes: size.bytes,

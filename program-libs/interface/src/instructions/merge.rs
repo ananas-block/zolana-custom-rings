@@ -1,10 +1,10 @@
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::{create_hash_chain_4_from_slice, create_hash_chain_from_slice},
     primitives::{hash_bytes, pack_be, pack_be_chunks, right_align},
     HasherError,
 };
-use zolana_interface::instruction::instruction_data::merge_transact::MergeTransactIxData;
+use spr_interface::instruction::instruction_data::merge_transact::MergeTransactIxData;
 
 use crate::{
     bytes::Bytes, error::CustomRingError, CustomRingProof, AUDIT_CIPHERTEXT_LEN,

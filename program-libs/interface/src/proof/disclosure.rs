@@ -2,7 +2,7 @@
 
 use core::ops::Range;
 
-use zolana_hasher::primitives::{
+use spr_hasher::primitives::{
     is_canonical_bn254_scalar_be, pack_be_chunks, BN254_SCALAR_MODULUS_BE, PACK_BE_CHUNK_BYTES,
 };
 

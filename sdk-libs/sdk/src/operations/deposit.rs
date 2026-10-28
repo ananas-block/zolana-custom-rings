@@ -10,15 +10,15 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use zeroize::Zeroizing;
-use zolana_client::{AsyncRpc, ClientError};
-use zolana_interface::{pda, state::SplAssetRegistry, PROGRAM_ID_PUBKEY};
-use zolana_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
-use zolana_program::instruction::{DepositAsset, RingAssetDeposit};
+use spr_client::{AsyncRpc, ClientError};
+use spr_interface::{pda, state::SplAssetRegistry, PROGRAM_ID_PUBKEY};
+use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
+use spr_program::instruction::{DepositAsset, RingAssetDeposit};
 use zolana_ring_client::{
     exactly_one, seal_deposits, AnonymousRingState, AsyncRingIndexer, DepositEncryption,
     DepositOpening,
 };
-use zolana_transaction::{
+use spr_transaction::{
     owner_utxo_hash, Data, Mint, RingDepositPlaintext, Utxo, SOL_ASSET_ID, SOL_MINT,
 };
 
@@ -181,7 +181,7 @@ impl RingDeposit<'_> {
         }
         .encode();
         // The proof binds the ring, the tree and the exact forwarded SPP bytes.
-        let spp = zolana_program::instruction::RingDeposit {
+        let spp = spr_program::instruction::RingDeposit {
             tree: self.tree,
             depositor: self.payer.pubkey(),
             ring_program_id: self.ring.program_id(),

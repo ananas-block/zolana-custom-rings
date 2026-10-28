@@ -2,11 +2,11 @@
 
 use anyhow::Result;
 use solana_address::Address;
-use zolana_client::{IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::ShieldedKeypair;
+use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::{AnonymousRingState, AnonymousRingSync, RingConfidentialScan};
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
+use spr_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
 use crate::shared::TestEnv;
 

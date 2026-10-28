@@ -6,9 +6,9 @@ use std::{
 };
 
 use solana_signature::Signature;
-use zolana_keypair::viewing_key::ViewTag;
+use spr_keypair::viewing_key::ViewTag;
 
-use zolana_client::{
+use spr_client::{
     rpc::{
         Context, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
         GetShieldedTransactionsByNullifiersResponse, GetShieldedTransactionsByTagsResponse,
@@ -22,7 +22,7 @@ use crate::paging::{PageCursor, PAGE_LIMIT};
 pub const DEFAULT_TAG_WINDOW: u64 = 64;
 
 /// The indexer's cap on the tags or nullifiers one request names.
-pub const TAGS_PER_REQUEST: usize = zolana_indexer_api::PAGE_LIMIT as usize;
+pub const TAGS_PER_REQUEST: usize = spr_indexer_api::PAGE_LIMIT as usize;
 
 #[derive(Clone, Debug)]
 pub struct TagWindow {

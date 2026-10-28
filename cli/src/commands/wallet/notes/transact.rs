@@ -14,9 +14,9 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_event_parser::indexed_events_from_instruction_groups;
-use zolana_interface::{pda, SHIELDED_POOL_PROGRAM_ID};
-use zolana_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
+use spr_event_parser::indexed_events_from_instruction_groups;
+use spr_interface::{pda, SHIELDED_POOL_PROGRAM_ID};
+use spr_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
 use zolana_ring_client::AnonymousRingState;
 use zolana_ring_client::{
     rpc::{DecryptedOutputKind, ReadTarget},
@@ -25,7 +25,7 @@ use zolana_ring_client::{
 use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
+use spr_transaction::{
     instructions::transact::{
         canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
     },
@@ -1345,7 +1345,7 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 #[cfg(test)]
 mod tests {
     use bytemuck::Zeroable;
-    use zolana_keypair::SigningKey;
+    use spr_keypair::SigningKey;
 
     use super::*;
     use crate::tests::transfer_args;
@@ -1637,7 +1637,7 @@ mod tests {
     fn a_payment_to_the_senders_own_key_charges_no_outflow() {
         let sender = keypair(1);
         let mut own = sender.shielded_address().unwrap();
-        own.viewing_pubkey = zolana_keypair::ViewingKey::new().pubkey();
+        own.viewing_pubkey = spr_keypair::ViewingKey::new().pubkey();
         let other = keypair(2).shielded_address().unwrap();
         let payments = Payments {
             mint: SOL_MINT,
@@ -1741,7 +1741,7 @@ mod tests {
         let ring = |amount| held_utxo(Some(RING), amount);
         let default = |amount| held_utxo(None, amount);
         let mut other_mint = ring(30);
-        other_mint.utxo.asset = zolana_transaction::Mint::new(Address::new_from_array([7; 32]), 7);
+        other_mint.utxo.asset = spr_transaction::Mint::new(Address::new_from_array([7; 32]), 7);
         let mut with_data = ring(30);
         with_data.data_hash = Some([1; 32]);
         let ring_short = scanned(vec![ring(3), default(7), other_mint, with_data]);

@@ -28,7 +28,7 @@ use std::{
     },
     time::Duration,
 };
-use zolana_keypair::{X25519Keypair, X25519Pubkey};
+use spr_keypair::{X25519Keypair, X25519Pubkey};
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordTree};
 use zolana_ring_policy::Member;
 
@@ -38,9 +38,9 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_client::{ClientError, Context, GetShieldedTransactionsByTagsResponse};
-use zolana_indexer_api::{Base64String, Hash, Limit};
-use zolana_keypair::ViewingKey;
+use spr_client::{ClientError, Context, GetShieldedTransactionsByTagsResponse};
+use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_keypair::ViewingKey;
 use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in,
     rpc::{
@@ -73,7 +73,7 @@ use zolana_ring_rpc::{
     AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
-use zolana_transaction::{Mint, ShieldedTransaction, SOL_MINT};
+use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 
 use transfer::{
     data_free, field, input_opening, x25519_u, Frame, Output, Placement, Publish, Rail, Transfer,
@@ -449,7 +449,7 @@ impl TransactionSource for StaticSource {
         _request: MergeAuditRequest<'_>,
     ) -> Result<MergeAuditPage, AuditError> {
         Ok(MergeAuditPage {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: 99,
             },
@@ -607,7 +607,7 @@ impl TransactionSource for StaticSource {
             .collect();
         let end = request.start_index + records.len() as u64;
         Ok(GetRingMemberRecordsResponse {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: 99,
             },
@@ -640,7 +640,7 @@ impl TransactionSource for StaticSource {
             })
             .collect();
         Ok(GetRingMemberOpeningsResponse {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: 99,
             },
@@ -655,7 +655,7 @@ impl TransactionSource for StaticSource {
     ) -> Result<GetRingRecordQueueResponse, RingIndexerError> {
         let registry = self.registry().expect("registry");
         Ok(GetRingRecordQueueResponse {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: 99,
             },
@@ -1114,7 +1114,7 @@ fn audited_deposit(
         owner_key: Some(member.owner_key),
     };
     let owner_utxo_hash =
-        zolana_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
+        spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
     let sealed = seal_deposits(&[opening], auditor).unwrap();
     let capsule = custom_ring_interface::RingDepositAuditCapsule {
         slot_index: 0,
@@ -1135,22 +1135,22 @@ fn audited_deposit(
         event_index: Some(0),
         tx_viewing_pk: None,
         salt: None,
-        output_slots: vec![zolana_transaction::OutputSlot {
+        output_slots: vec![spr_transaction::OutputSlot {
             view_tag: field(0x56),
-            output_context: zolana_transaction::OutputContext {
+            output_context: spr_transaction::OutputContext {
                 hash: commitment,
                 tree_id: TREE_ID,
                 leaf_index: 3,
             },
-            payload: zolana_event::encode_encrypted_ring_deposit_output(
-                zolana_event::EncryptedRingDepositOutput {
+            payload: spr_event::encode_encrypted_ring_deposit_output(
+                spr_event::EncryptedRingDepositOutput {
                     owner_utxo_hash,
                     asset: member.asset_address.to_bytes(),
                     amount: member.amount,
                     data_hash: None,
                     ring_program_id: RING.to_bytes(),
                     ring_data_hash: [0; 32],
-                    encrypted: zolana_event::EncryptedRingDepositData {
+                    encrypted: spr_event::EncryptedRingDepositData {
                         tx_viewing_pk: [0; 33],
                         salt: [0; 16],
                         ciphertext: capsule,

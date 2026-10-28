@@ -14,13 +14,13 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use zeroize::Zeroizing;
-use zolana_client::ProofInputUtxo;
-use zolana_event::{confidential_encrypted_output_body, ring_anonymous_encrypted_output_body};
-use zolana_hasher::primitives::right_align;
-use zolana_interface::tree_slot::tree_id_field;
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_client::ProofInputUtxo;
+use spr_event::{confidential_encrypted_output_body, ring_anonymous_encrypted_output_body};
+use spr_hasher::primitives::right_align;
+use spr_interface::tree_slot::tree_id_field;
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use zolana_ring_transaction::{delivered_ring_data, RingAssets, RingDeliveredBody};
-use zolana_transaction::{
+use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
     OutputSlot, ShieldedTransaction,
 };

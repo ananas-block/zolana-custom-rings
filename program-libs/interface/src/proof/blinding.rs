@@ -1,6 +1,6 @@
 //! The ring side of SPP's output blinding.
 
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{pack_be, right_align},
     Hasher, HasherError, Poseidon,
 };

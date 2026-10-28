@@ -7,10 +7,10 @@ use custom_ring_interface::{
     AUDIT_STREAM_INFO, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
-use zolana_hasher::primitives::is_canonical_bn254_scalar_be;
-use zolana_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
 use zolana_ring_keys::symmetric_apply_audit;
-use zolana_transaction::{Blinding, Data, Mint, Utxo};
+use spr_transaction::{Blinding, Data, Mint, Utxo};
 
 use crate::{RingAssets, RingRailError};
 

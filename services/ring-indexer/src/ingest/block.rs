@@ -9,7 +9,7 @@ use solana_transaction_status_client_types::{
     UiInstruction, UiTransactionStatusMeta,
 };
 use thiserror::Error;
-use zolana_indexer_api::Hash;
+use spr_indexer_api::Hash;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Instruction {

@@ -1,6 +1,6 @@
 use custom_ring_interface::stream::StreamError;
 use thiserror::Error;
-use zolana_keypair::KeypairError;
+use spr_keypair::KeypairError;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum RingKeyError {

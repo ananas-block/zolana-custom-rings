@@ -13,22 +13,22 @@ use std::{cell::Cell, sync::Mutex};
 
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncRpc, ClientError, Context,
     GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
 };
-use zolana_event::{
+use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositOutput,
     MergeOutputDataRef,
 };
-use zolana_hasher::primitives::right_align;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
+use spr_hasher::primitives::right_align;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
 use zolana_ring_client::{
     seal_deposits, AnonymousInputs, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
     RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
+use spr_transaction::{
     instructions::merge::MergeTransaction, serialization::ring_deposit::RingDepositPlaintext, Data,
     DataRecord, Mint, OutputContext, OutputSlot, ShieldedTransaction, SppProofOutputUtxo, Utxo,
     WalletUtxo, SOL_MINT,
@@ -272,7 +272,7 @@ impl Fixture {
             owner_key: (self.mode == RingMode::Anonymous).then(|| self.owner_key()),
         };
         let owner_utxo_hash =
-            zolana_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
+            spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
         let sealed = seal_deposits(&[opening], &self.auditor.pubkey()).unwrap();
         let mut encrypted = RingDepositPlaintext {
             blinding: held.utxo.blinding,
@@ -430,7 +430,7 @@ impl History {
 impl AsyncRpc for History {
     async fn get_shielded_transactions_by_ring(
         &self,
-        options: zolana_client::RingHistoryOptions,
+        options: spr_client::RingHistoryOptions,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.read(config)?;
@@ -865,7 +865,7 @@ async fn direct_deposits_are_reported_separately_without_claiming_they_are_unspe
     transaction.messages.clear();
     transaction.output_slots[0].view_tag = fixture.address.viewing_pubkey.u();
     let deposit = EncryptedRingDepositOutput {
-        owner_utxo_hash: zolana_transaction::owner_utxo_hash(
+        owner_utxo_hash: spr_transaction::owner_utxo_hash(
             &fixture.address.owner_hash().expect("owner"),
             &held.utxo.blinding,
         )
@@ -1061,7 +1061,7 @@ async fn invalid_deposit_openings_remain_unknown_and_a_forged_owned_leaf_fails()
     let mut wrong_ciphertext = transaction;
     let slot = &mut wrong_ciphertext.output_slots[0];
     let mut output =
-        zolana_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
+        spr_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
     output.encrypted.ciphertext[50] ^= 1;
     slot.payload = encode_encrypted_ring_deposit_output(output);
     let history = History {
@@ -1103,7 +1103,7 @@ async fn indexed_owner_key_tampering_is_rejected_against_confirmed_deposit() {
     let (_, mut indexed) = fixture.deposit(fixture.output(9), 7);
     let slot = &mut indexed.output_slots[0];
     let mut output =
-        zolana_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
+        spr_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
     output.encrypted.ciphertext[42 + 64] ^= 1;
     slot.payload = encode_encrypted_ring_deposit_output(output);
     let commitment = indexed.output_slots[0].output_context.hash;

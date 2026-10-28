@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use custom_ring_interface::{
     QueueEntry, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
     quad_node, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition, OpeningCheck,
     QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,

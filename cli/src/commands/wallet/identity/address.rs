@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::RingMode;
 use solana_address::Address;
-use zolana_keypair::ShieldedKeypair;
+use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::{AnonymousRingState, ADDRESS_GAP};
 use zolana_ring_keys::{Pairing, PairingRow, RingAddress, RingPaymentRequest};
 
@@ -129,7 +129,7 @@ impl FromStr for PairingRowArg {
 mod tests {
     use clap::Parser;
     use serde::Deserialize;
-    use zolana_keypair::ShieldedAddress;
+    use spr_keypair::ShieldedAddress;
     use zolana_ring_client::AnonymousError;
     use zolana_ring_keys::RingKeyError;
 

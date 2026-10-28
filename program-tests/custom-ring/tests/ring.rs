@@ -81,12 +81,12 @@ use solana_keypair::Keypair;
 use solana_message::v1::MAX_TRANSACTION_SIZE;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_client::{
+use spr_client::{
     compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient,
     AsyncZolanaIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
     ZolanaIndexer,
 };
-use zolana_interface::{
+use spr_interface::{
     error::ShieldedPoolError,
     pda,
     state::{
@@ -95,12 +95,12 @@ use zolana_interface::{
     },
     SHIELDED_POOL_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
-use zolana_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
-use zolana_program::instruction::{
+use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
+use spr_program::instruction::{
     AssetDeposit, Deposit as SppDeposit, DepositAsset, DepositSplAccounts,
     TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts, UpdateRingConfig,
 };
-use zolana_program_test::Rejection;
+use spr_program_test::Rejection;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
@@ -111,8 +111,8 @@ use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
 };
-use zolana_test_utils::wallet::Wallet;
-use zolana_test_utils::{
+use spr_test_utils::wallet::Wallet;
+use spr_test_utils::{
     localnet::isolated_temp_path,
     smart_account,
     spl::{create_token_account, mint_to},
@@ -121,13 +121,13 @@ use zolana_test_utils::{
         token_amount, wait_for_indexed_transaction, wait_for_merkle_proof,
     },
 };
-use zolana_transaction::{
+use spr_transaction::{
     decrypt_spendable,
     instructions::transact::{canonical_shape, ConfidentialTransaction, SppProofOutputUtxo},
     AssetRegistry, Data, Mint, Utxo, WalletUtxo, SOL_ASSET_ID, SOL_MINT,
 };
-use zolana_tree::TreeAccount;
-use zolana_user_registry_interface::user_registry_program_id;
+use spr_tree::TreeAccount;
+use spr_user_registry_interface::user_registry_program_id;
 
 /// Lamports moved by the two transaction-shape probes. Small enough that the
 /// payer's airdrop covers both plus fees.
@@ -444,7 +444,7 @@ impl Note<'_> {
             data: Data::default(),
         };
         if self.ring_program_id == Some(FOREIGN_RING) {
-            return zolana_test_utils::utxo::wallet(
+            return spr_test_utils::utxo::wallet(
                 utxo,
                 &self.owner.nullifier_key,
                 0,
@@ -899,7 +899,7 @@ fn indexed_note(
     let tree_id = env.tree_id(tree)?;
     let hash = utxo.hash(&owner.nullifier_key.pubkey()?, &[0; 32], &[0; 32], tree_id)?;
     let state = wait_for_merkle_proof(env.client.indexer(), tree, hash);
-    zolana_test_utils::utxo::wallet(
+    spr_test_utils::utxo::wallet(
         utxo,
         &owner.nullifier_key,
         tree_id,

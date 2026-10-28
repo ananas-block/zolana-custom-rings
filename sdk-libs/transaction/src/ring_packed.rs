@@ -2,9 +2,9 @@
 
 use custom_ring_interface::{encode_ring_confidential_packed_output, RECIPIENT_KEY_LEN};
 use wincode::{SchemaRead, SchemaWrite};
-use zolana_event::MessageData;
-use zolana_keypair::{constants::SALT_LEN, ViewingKey};
-use zolana_transaction::{
+use spr_event::MessageData;
+use spr_keypair::{constants::SALT_LEN, ViewingKey};
+use spr_transaction::{
     serialization::confidential::{Confidential, ConfidentialEncode},
     Data, DecodeCx, SppProofOutputUtxo, TransactionError, UtxoSerialization,
 };

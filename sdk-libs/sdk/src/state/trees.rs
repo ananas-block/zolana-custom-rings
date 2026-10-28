@@ -1,12 +1,12 @@
 use custom_ring_interface::CustomRingError;
 use futures::future::try_join_all;
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_interface::{
+use spr_client::AsyncRpc;
+use spr_interface::{
     pda, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_transaction::utxo::SppProofInputUtxo;
-use zolana_tree::TreeAccount;
+use spr_transaction::utxo::SppProofInputUtxo;
+use spr_tree::TreeAccount;
 
 use crate::RingError;
 

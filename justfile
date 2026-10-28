@@ -246,7 +246,7 @@ ring-localnet: check-custom-ring-keys build-programs zolana::build-cli build-pho
       --rpc-port {{localnet-rpc-port}} --photon-port {{localnet-photon-port}} \
       --account-dir "$accounts_dir" --limit-ledger-size 5000000 \
       --sbf-program "$SHIELDED_POOL_PROGRAM_ID" zolana/target/deploy/shielded_pool_program.so \
-      --sbf-program "$USER_REGISTRY_PROGRAM_ID" zolana/target/deploy/zolana_user_registry.so \
+      --sbf-program "$USER_REGISTRY_PROGRAM_ID" zolana/target/deploy/spr_user_registry.so \
       -- --deactivate-feature B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g
     tools/start-ring-indexer.sh "$workdir/ring-indexer" {{localnet-rpc-url}} {{localnet-photon-url}} \
       {{localnet-ring-indexer-port}}
@@ -406,7 +406,7 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     export ZOLANA_PHOTON_BIN="$photon_bin"
     spp_so="${ZOLANA_SPP_PROGRAM_SO:-zolana/target/deploy/shielded_pool_program.so}"
     [[ "$spp_so" = /* ]] || spp_so="$PWD/$spp_so"
-    registry_so="${ZOLANA_USER_REGISTRY_SO:-zolana/target/deploy/zolana_user_registry.so}"
+    registry_so="${ZOLANA_USER_REGISTRY_SO:-zolana/target/deploy/spr_user_registry.so}"
     [[ "$registry_so" = /* ]] || registry_so="$PWD/$registry_so"
     # Surfpool gives empty slots synthetic hashes, only the fixture keeps ring blocks linked across the jump.
     export ZOLANA_RING_SURFPOOL_FIXTURE=1

@@ -11,7 +11,7 @@ use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
-use zolana_account_checks::AccountError;
+use spr_account_checks::AccountError;
 use zolana_ring_policy::{ListChange, ListId, ListSet};
 
 use crate::common::{

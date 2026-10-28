@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zolana_indexer_api::{Base64String, Context, Hash, RpcMethod, SerializablePubkey};
+use spr_indexer_api::{Base64String, Context, Hash, RpcMethod, SerializablePubkey};
 
 /// Pages and opening batches include one authentication path per record.
 pub const MAX_RING_MEMBER_PAGE_LIMIT: u64 = 100;

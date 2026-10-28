@@ -1,9 +1,9 @@
 use custom_ring_interface::stream::StreamError;
 use thiserror::Error;
-use zolana_hasher::HasherError;
-use zolana_keypair::KeypairError;
+use spr_hasher::HasherError;
+use spr_keypair::KeypairError;
 use zolana_ring_keys::RingKeyError;
-use zolana_transaction::TransactionError;
+use spr_transaction::TransactionError;
 
 #[derive(Debug, Error)]
 pub enum RingRailError {

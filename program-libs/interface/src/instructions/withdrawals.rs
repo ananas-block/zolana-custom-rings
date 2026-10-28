@@ -1,11 +1,11 @@
 //! Gross public payments screened by policy version 2.
 use crate::{CustomRingError, SettlementAccount};
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
     primitives::{hash_bytes, right_align, solana_owner_identity},
     HasherError,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::InterfaceTransfer, SOL_ASSET_FIELD, SPL_TOKEN_2022_PROGRAM_ID,
     SPL_TOKEN_PROGRAM_ID,
 };

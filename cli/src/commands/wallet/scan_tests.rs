@@ -9,17 +9,17 @@ use custom_ring_interface::{
     stream::{DeliveredSlot, InboxKey, RingTag, TagIndex, EPOCH_SLOTS, J_INBOX, TAG_LEN},
 };
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncProverClient, ClientError,
     Context as Page, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
     GetShieldedTransactionsByTagsResponse, OutputContext, OutputSlot, ShieldedTransaction,
     WitnessReader,
 };
-use zolana_keypair::ShieldedAddress;
+use spr_keypair::ShieldedAddress;
 use zolana_ring_keys::{Pairing, RingViewingKey};
 use zolana_ring_policy::ring_id_field;
 use zolana_ring_transaction::{delivered_ring_data, RingDeliveredBody};
-use zolana_transaction::{
+use spr_transaction::{
     serialization::proofless::{Proofless, ProoflessEncode},
     utxo::blinding::{derive_output_blinding_seed, derive_transact_output_blinding},
     AssetRegistry, Data, Mint, OwnerCx, Utxo, UtxoSerialization,

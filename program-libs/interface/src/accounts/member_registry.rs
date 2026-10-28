@@ -1,7 +1,7 @@
 //! Record tree constants and the queued record writes the program chains, the tree
 //! lives in `zolana-ring-member-registry`.
 
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
     Hasher, HasherError, Poseidon,
 };

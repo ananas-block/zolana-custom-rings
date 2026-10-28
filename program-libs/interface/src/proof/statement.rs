@@ -1,11 +1,11 @@
 //! The `HashChain4` public input of the audit, policy, apply and register key proofs.
 
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
     primitives::{hash_bytes, pack_be, right_align},
     HasherError,
 };
-use zolana_interface::N_PUBLIC_SLOTS;
+use spr_interface::N_PUBLIC_SLOTS;
 
 use crate::{
     disclosure::AuditLayout, domain, tagged_x25519, transact::RingOutput, AUDIT_CIPHERTEXT_LEN,

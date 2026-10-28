@@ -43,7 +43,7 @@ pub use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CustomRingProof, InstructionTag, ListRegistry, RingKind,
     RingMode,
 };
-pub use zolana_program::instruction::{DepositAsset, DepositSplAccounts};
+pub use spr_program::instruction::{DepositAsset, DepositSplAccounts};
 
 pub use crate::prover::secret_json_body;
 pub use crate::{

@@ -2,7 +2,7 @@
 //! transfers, mirrored by the Go package `custom_rings/circuits/base`.
 
 use thiserror::Error;
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
     Hasher, HasherError, Poseidon,
 };
@@ -259,7 +259,7 @@ fn canonical(value: [u8; 32]) -> Result<[u8; 32], StreamError> {
 
 #[cfg(test)]
 mod tests {
-    use zolana_hasher::primitives::BN254_SCALAR_MODULUS_BE;
+    use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
     use super::*;
 

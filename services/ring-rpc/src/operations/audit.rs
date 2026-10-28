@@ -3,9 +3,9 @@ use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::GetShieldedTransactionsByTagsResponse;
-use zolana_indexer_api::{Base64String, Hash, Limit};
-use zolana_keypair::{X25519Keypair, X25519Pubkey};
+use spr_client::GetShieldedTransactionsByTagsResponse;
+use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_keypair::{X25519Keypair, X25519Pubkey};
 use zolana_ring_client::{
     auditor_view_tag,
     records::{MemberOpeningRead, RegistryTip},
@@ -25,7 +25,7 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::instructions::transact::canonical_shape;
+use spr_transaction::instructions::transact::canonical_shape;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized},
@@ -92,7 +92,7 @@ pub struct AuditRead<'a> {
 
 #[derive(Clone, Copy)]
 struct BoundTransaction<'a> {
-    transaction: &'a zolana_client::ShieldedTransaction,
+    transaction: &'a spr_client::ShieldedTransaction,
     origin: &'a RingOrigin,
     store: &'a AuditStore,
     mode: RingMode,
@@ -327,7 +327,7 @@ impl<S: TransactionSource> AuditService<S> {
                 response.next_cursor.clone(),
                 response.scanned_through.clone(),
             );
-            let context = zolana_indexer_api::Context {
+            let context = spr_indexer_api::Context {
                 block_time: response.context.block_time,
                 slot: response.context.slot,
             };
@@ -478,7 +478,7 @@ impl<S: TransactionSource> AuditService<S> {
             })
             .await?;
         validate_indexer_response(&response, page, self.view_tag)?;
-        let context = zolana_indexer_api::Context {
+        let context = spr_indexer_api::Context {
             block_time: response.context.block_time,
             slot: response.context.slot,
         };
@@ -755,7 +755,7 @@ fn validate_indexer_response(
 
 #[cfg(test)]
 mod tests {
-    use zolana_indexer_api::Context;
+    use spr_indexer_api::Context;
     use zolana_ring_client::{MergeAuditResult, UnresolvedMerge};
 
     use super::*;

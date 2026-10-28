@@ -6,7 +6,7 @@ use custom_ring_interface::{
 };
 use serde::Serialize;
 use zeroize::Zeroizing;
-use zolana_client::{
+use spr_client::{
     prover::{verify_proof_statement, ExpectedProvingKey, ProveRequest},
     AsyncRpc, ClientError, Proof, ProofCompressed,
 };

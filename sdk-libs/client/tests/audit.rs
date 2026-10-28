@@ -22,14 +22,14 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     AsyncRpc, Context, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, ShieldedTransaction,
 };
-use zolana_event::{
+use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
     EncryptedRingDepositOutput, MergeOutputDataRef, MessageData,
 };
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in, seal_deposits, AnonymousInputs, AuditDisclosure,
     AuditEnvelope, AuditError, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
@@ -39,7 +39,7 @@ use zolana_ring_client::{
     TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
-use zolana_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
+use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 
 use transfer::{
     audited_opening, auditor, data_free, field, input_opening, known_utxo, x25519_u, Frame, Output,
@@ -689,9 +689,9 @@ struct RingHistory(Vec<Vec<ShieldedTransaction>>);
 impl AsyncRpc for RingHistory {
     async fn get_shielded_transactions_by_ring(
         &self,
-        options: zolana_client::RingHistoryOptions,
+        options: spr_client::RingHistoryOptions,
         _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByTagsResponse, zolana_client::ClientError> {
+    ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
         let index = options.cursor.map_or(0, |cursor| usize::from(cursor[0]));
         let last = index + 1 == self.0.len();
         Ok(GetShieldedTransactionsByTagsResponse {
@@ -1132,7 +1132,7 @@ impl AsyncRpc for PagedIndexer {
         cursor: Option<Vec<u8>>,
         limit: Option<u32>,
         _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByTagsResponse, zolana_client::ClientError> {
+    ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
         assert_eq!(tags, vec![self.expected_tag]);
         self.requested.lock().unwrap().push(limit);
         let page_index = usize::from(*cursor.unwrap_or_default().first().unwrap_or(&0));

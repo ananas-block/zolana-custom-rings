@@ -99,20 +99,20 @@ pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
 pub use zolana_ring_indexer::rpc::RingRpcError;
 
 /// The answer to a one-item request, a holder that answers more or less is refused.
-pub fn exactly_one<T>(answers: Vec<T>) -> Result<T, zolana_transaction::TransactionError> {
+pub fn exactly_one<T>(answers: Vec<T>) -> Result<T, spr_transaction::TransactionError> {
     let got = answers.len();
     <[T; 1]>::try_from(answers)
         .map(|[answer]| answer)
-        .map_err(|_| zolana_transaction::TransactionError::IncompleteDerivation { got, want: 1 })
+        .map_err(|_| spr_transaction::TransactionError::IncompleteDerivation { got, want: 1 })
 }
 
 /// One answer per request, a holder that answers more or less is refused.
 pub(crate) fn exactly_one_each<T>(
     answers: Vec<T>,
     want: usize,
-) -> Result<Vec<T>, zolana_transaction::TransactionError> {
+) -> Result<Vec<T>, spr_transaction::TransactionError> {
     match answers.len() {
         got if got == want => Ok(answers),
-        got => Err(zolana_transaction::TransactionError::IncompleteDerivation { got, want }),
+        got => Err(spr_transaction::TransactionError::IncompleteDerivation { got, want }),
     }
 }

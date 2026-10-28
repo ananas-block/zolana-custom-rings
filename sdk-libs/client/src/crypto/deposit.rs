@@ -2,7 +2,7 @@
 
 use borsh::BorshDeserialize;
 use solana_address::Address;
-use zolana_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME};
+use spr_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME};
 
 /// One deposit slot of a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,10 +43,10 @@ fn deposit_of(view_tag: &[u8; 32], payload: &[u8], ring: Address) -> Option<Ring
 #[cfg(test)]
 mod tests {
     use custom_ring_interface::RingDepositAuditCapsule;
-    use zolana_keypair::ViewingKey;
+    use spr_keypair::ViewingKey;
 
     use crate::deposit_payload;
-    use zolana_transaction::serialization::ring_deposit::RingDepositPlaintext;
+    use spr_transaction::serialization::ring_deposit::RingDepositPlaintext;
 
     #[test]
     fn recipient_opens_plain_and_auditor_wrapped_ciphertexts() {

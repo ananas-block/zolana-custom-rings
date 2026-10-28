@@ -12,13 +12,13 @@ use custom_ring_interface::{
     RING_DELIVERED_BODY_LEN,
 };
 use serde_json::{json, Value};
-use zolana_hasher::primitives::{hash_bytes, solana_owner_identity, BN254_SCALAR_MODULUS_BE};
-use zolana_instruction::derivation::{
+use spr_hasher::primitives::{hash_bytes, solana_owner_identity, BN254_SCALAR_MODULUS_BE};
+use spr_instruction::derivation::{
     derive_output_blinding_seed, derive_private_tx_blinding, derive_transact_output_blinding,
     DOMAIN_PRIVATE_TX_BLINDING_V1, DOMAIN_TRANSACT_OUTPUT_BLINDING_SEED_V1,
     DOMAIN_TRANSACT_OUTPUT_BLINDING_V1,
 };
-use zolana_keypair::X25519Keypair;
+use spr_keypair::X25519Keypair;
 
 const RING_TAGS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-tags.json");
 const RING_SECRETS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-secrets.json");

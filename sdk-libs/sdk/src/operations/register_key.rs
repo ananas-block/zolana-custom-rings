@@ -7,9 +7,9 @@ use custom_ring_interface::{
 use solana_address::Address;
 use solana_instruction::Instruction;
 use zeroize::Zeroizing;
-use zolana_client::AsyncRpc;
-use zolana_hasher::primitives::{right_align, solana_owner_identity};
-use zolana_keypair::{NullifierKey, ShieldedAddress, ShieldedKeypair, X25519Pubkey};
+use spr_client::AsyncRpc;
+use spr_hasher::primitives::{right_align, solana_owner_identity};
+use spr_keypair::{NullifierKey, ShieldedAddress, ShieldedKeypair, X25519Pubkey};
 use zolana_ring_client::AsyncRingIndexer;
 use zolana_ring_client::NullifierKeyEnvelope;
 use zolana_ring_policy::Member;

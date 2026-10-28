@@ -1,4 +1,4 @@
-use zolana_hasher::primitives::BN254_SCALAR_MODULUS_BE;
+use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
 use super::*;
 use crate::encryption::{seal_stream, StreamSchedule};
