@@ -1,8 +1,10 @@
-A custom ring lets you enforce your own compliance rules on private transfers  
-in the Solana Privacy Program: you define a policy that every transfer and  
-withdrawal must prove it satisfies, and ring settings such as co-signer  
-approval that your ring program checks directly. This document describes each  
-control you can configure and who can change it.
+A custom ring lets you enforce your own compliance rules on private transfers, deposits, and withdrawals with the Solana Privacy Program. You configure three kinds of controls:
+
+- **ZK Policy:** Rules checked through zero-knowledge proofs, such as allowlists, blocklists, asset restrictions and auditor encryption. The ring program verifies the proofs.
+- **Global Program Config:** Settings checked directly by the ring program, such as whether the ring is paused and who can act as permanent delegate.
+- **Ring RPC:** Controls enforced by the service, such as who can read decrypted activity and which sender or token volume limits apply before co-signing.
+
+This document describes each control you can configure and who can change it.
 
 ## Compliance Rules
 
