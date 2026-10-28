@@ -399,7 +399,12 @@ fn ring_transact_expansion_vector() {
         let expected: Vec<_> = data
             .sender
             .iter()
-            .map(|bundle| (*bundle.tag, encode_anonymous_sender_output(bundle.body)))
+            .map(|bundle| {
+                (
+                    *bundle.tag,
+                    encode_anonymous_sender_output(bundle.body).unwrap(),
+                )
+            })
             .collect();
         assert_eq!(sender, expected, "{}", case.name);
         for (output, slot) in spp.outputs.iter().zip(&data.outputs) {
@@ -413,7 +418,7 @@ fn ring_transact_expansion_vector() {
                     assert_eq!(output.owner_tag, OwnerTag::Inline(**tag));
                     assert_eq!(
                         output.data,
-                        body.map(encode_anonymous_recipient_output),
+                        body.map(|body| encode_anonymous_recipient_output(body).unwrap()),
                         "{}",
                         case.name
                     );
@@ -449,12 +454,12 @@ fn anonymous_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
     };
     for (data, scheme, payload) in [
         (
-            fixture.tagged(1).transact_output().data.unwrap(),
+            fixture.tagged(1).transact_output().unwrap().data.unwrap(),
             ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
             &fixture.recipient_body[..],
         ),
         (
-            encode_anonymous_sender_output(&fixture.sender_body),
+            encode_anonymous_sender_output(&fixture.sender_body).unwrap(),
             ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
             &fixture.sender_body[..],
         ),
@@ -462,6 +467,7 @@ fn anonymous_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
             fixture
                 .exit(1, &fixture.payload)
                 .transact_output()
+                .unwrap()
                 .data
                 .unwrap(),
             CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
@@ -653,7 +659,7 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
         ),
     ];
     for (slot, (output, (owner_tag, data))) in parsed.outputs.iter().zip(expected).enumerate() {
-        let spp = output.transact_output();
+        let spp = output.transact_output().unwrap();
         assert_eq!(spp.utxo_hash, fixture.fields[10 + slot], "slot {slot}");
         assert_eq!(spp.owner_tag, OwnerTag::Inline(owner_tag), "slot {slot}");
         assert_eq!(spp.data, data, "slot {slot}");

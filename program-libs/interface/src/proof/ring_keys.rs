@@ -86,7 +86,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w0-curator",
+        name: "custom-ring-policy-member-v3-2-w0-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -94,7 +94,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w0-own",
+        name: "custom-ring-policy-member-v3-2-w0-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -102,7 +102,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w1-curator",
+        name: "custom-ring-policy-member-v3-2-w1-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -110,7 +110,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w1-own",
+        name: "custom-ring-policy-member-v3-2-w1-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -118,7 +118,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w2-curator",
+        name: "custom-ring-policy-member-v3-2-w2-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -126,7 +126,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w2-own",
+        name: "custom-ring-policy-member-v3-2-w2-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -134,7 +134,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w4-curator",
+        name: "custom-ring-policy-member-v3-2-w4-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -142,7 +142,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w4-own",
+        name: "custom-ring-policy-member-v3-2-w4-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -150,7 +150,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w8-curator",
+        name: "custom-ring-policy-member-v3-2-w8-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -158,7 +158,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w8-own",
+        name: "custom-ring-policy-member-v3-2-w8-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -166,7 +166,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w16-curator",
+        name: "custom-ring-policy-member-v3-2-w16-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -174,7 +174,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w16-own",
+        name: "custom-ring-policy-member-v3-2-w16-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -182,7 +182,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-2-w32-curator",
+        name: "custom-ring-policy-member-v3-2-w32-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -190,7 +190,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-2-w32-own",
+        name: "custom-ring-policy-member-v3-2-w32-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -198,7 +198,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w0-curator",
+        name: "custom-ring-policy-member-v3-4-w0-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -206,7 +206,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w0-own",
+        name: "custom-ring-policy-member-v3-4-w0-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -214,7 +214,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w1-curator",
+        name: "custom-ring-policy-member-v3-4-w1-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -222,7 +222,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w1-own",
+        name: "custom-ring-policy-member-v3-4-w1-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -230,7 +230,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w2-curator",
+        name: "custom-ring-policy-member-v3-4-w2-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -238,7 +238,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w2-own",
+        name: "custom-ring-policy-member-v3-4-w2-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -246,7 +246,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w4-curator",
+        name: "custom-ring-policy-member-v3-4-w4-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -254,7 +254,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w4-own",
+        name: "custom-ring-policy-member-v3-4-w4-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -262,7 +262,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w8-curator",
+        name: "custom-ring-policy-member-v3-4-w8-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -270,7 +270,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w8-own",
+        name: "custom-ring-policy-member-v3-4-w8-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -278,7 +278,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w16-curator",
+        name: "custom-ring-policy-member-v3-4-w16-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -286,7 +286,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w16-own",
+        name: "custom-ring-policy-member-v3-4-w16-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -294,7 +294,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-4-w32-curator",
+        name: "custom-ring-policy-member-v3-4-w32-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -302,7 +302,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-4-w32-own",
+        name: "custom-ring-policy-member-v3-4-w32-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -310,7 +310,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w0-curator",
+        name: "custom-ring-policy-member-v3-8-w0-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -318,7 +318,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w0-own",
+        name: "custom-ring-policy-member-v3-8-w0-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -326,7 +326,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w1-curator",
+        name: "custom-ring-policy-member-v3-8-w1-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -334,7 +334,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w1-own",
+        name: "custom-ring-policy-member-v3-8-w1-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -342,7 +342,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w2-curator",
+        name: "custom-ring-policy-member-v3-8-w2-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -350,7 +350,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w2-own",
+        name: "custom-ring-policy-member-v3-8-w2-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -358,7 +358,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w4-curator",
+        name: "custom-ring-policy-member-v3-8-w4-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -366,7 +366,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w4-own",
+        name: "custom-ring-policy-member-v3-8-w4-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -374,7 +374,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w8-curator",
+        name: "custom-ring-policy-member-v3-8-w8-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -382,7 +382,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w8-own",
+        name: "custom-ring-policy-member-v3-8-w8-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -390,7 +390,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w16-curator",
+        name: "custom-ring-policy-member-v3-8-w16-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -398,7 +398,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w16-own",
+        name: "custom-ring-policy-member-v3-8-w16-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -406,7 +406,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-8-w32-curator",
+        name: "custom-ring-policy-member-v3-8-w32-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -414,7 +414,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-8-w32-own",
+        name: "custom-ring-policy-member-v3-8-w32-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -422,7 +422,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w0-curator",
+        name: "custom-ring-policy-member-v3-16-w0-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -430,7 +430,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 0,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w0-own",
+        name: "custom-ring-policy-member-v3-16-w0-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -438,7 +438,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w1-curator",
+        name: "custom-ring-policy-member-v3-16-w1-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -446,7 +446,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 1,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w1-own",
+        name: "custom-ring-policy-member-v3-16-w1-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -454,7 +454,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w2-curator",
+        name: "custom-ring-policy-member-v3-16-w2-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -462,7 +462,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 2,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w2-own",
+        name: "custom-ring-policy-member-v3-16-w2-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -470,7 +470,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w4-curator",
+        name: "custom-ring-policy-member-v3-16-w4-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -478,7 +478,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 4,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w4-own",
+        name: "custom-ring-policy-member-v3-16-w4-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -486,7 +486,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w8-curator",
+        name: "custom-ring-policy-member-v3-16-w8-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -494,7 +494,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 8,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w8-own",
+        name: "custom-ring-policy-member-v3-16-w8-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -502,7 +502,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w16-curator",
+        name: "custom-ring-policy-member-v3-16-w16-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -510,7 +510,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 16,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w16-own",
+        name: "custom-ring-policy-member-v3-16-w16-own",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -518,7 +518,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: false,
         },
-        name: "custom-ring-policy-member-v2-16-w32-curator",
+        name: "custom-ring-policy-member-v3-16-w32-curator",
     },
     RingKey {
         circuit: RingCircuit::MemberPolicy {
@@ -526,7 +526,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             withdrawals: 32,
             own_only: true,
         },
-        name: "custom-ring-policy-member-v2-16-w32-own",
+        name: "custom-ring-policy-member-v3-16-w32-own",
     },
     RingKey {
         circuit: RingCircuit::DelegatePolicy {
@@ -534,7 +534,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             outputs: 2,
             own_only: false,
         },
-        name: "custom-ring-policy-delegate-v2-2x2-curator",
+        name: "custom-ring-policy-delegate-v3-2x2-curator",
     },
     RingKey {
         circuit: RingCircuit::DelegatePolicy {
@@ -542,7 +542,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             outputs: 2,
             own_only: true,
         },
-        name: "custom-ring-policy-delegate-v2-2x2-own",
+        name: "custom-ring-policy-delegate-v3-2x2-own",
     },
     RingKey {
         circuit: RingCircuit::DelegatePolicy {
@@ -550,7 +550,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             outputs: 4,
             own_only: false,
         },
-        name: "custom-ring-policy-delegate-v2-4x4-curator",
+        name: "custom-ring-policy-delegate-v3-4x4-curator",
     },
     RingKey {
         circuit: RingCircuit::DelegatePolicy {
@@ -558,7 +558,7 @@ pub const RING_KEYS: [RingKey; 86] = [
             outputs: 4,
             own_only: true,
         },
-        name: "custom-ring-policy-delegate-v2-4x4-own",
+        name: "custom-ring-policy-delegate-v3-4x4-own",
     },
     RingKey {
         circuit: RingCircuit::ApplyRecords { writes: 1 },

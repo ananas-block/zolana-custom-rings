@@ -89,7 +89,9 @@ impl DepositVerification<'_> {
         RingProof {
             proof: &self.audited.proof,
             statement: public_input,
-            key: ring_key(RingCircuit::deposit(count as u8))?,
+            key: ring_key(RingCircuit::deposit(
+                u8::try_from(count).map_err(|_| invalid)?,
+            ))?,
         }
         .verify()
     }

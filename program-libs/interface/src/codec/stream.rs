@@ -1,11 +1,11 @@
 //! Slot secrets and the sender commitment of ring transfers, mirrored by the
-//! Go package `custom_rings/circuits/base`.
+//! Go package `prover/circuits/shared`.
 
-use thiserror::Error;
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
     Hasher, HasherError, Poseidon,
 };
+use thiserror::Error;
 
 use crate::{domain, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG};
 

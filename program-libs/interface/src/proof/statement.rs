@@ -173,7 +173,10 @@ impl PolicyStatement<'_> {
         for (asset, amount) in self.public_assets.iter().zip(self.public_amounts) {
             elements.extend([*asset, *amount]);
         }
-        elements.extend([right_align(&[2]), *self.withdrawal_hash]);
+        elements.extend([
+            right_align(&[domain::POLICY_STATEMENT_VERSION]),
+            *self.withdrawal_hash,
+        ]);
         elements
     }
 

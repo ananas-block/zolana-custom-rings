@@ -2,7 +2,6 @@
 //! the SPP `TransactIxData` the SPP proof's external data hash covers.
 
 use solana_address::Address;
-use wincode::{containers, len::FixIntLen, Serialize};
 use spr_hasher::{
     primitives::{hash_bytes, pack_be},
     HasherError,
@@ -17,6 +16,7 @@ use spr_interface::{
     shape::{Shape, SPP_SUPPORTED_SHAPES},
     N_PUBLIC_SLOTS,
 };
+use wincode::{containers, len::FixIntLen, Serialize};
 
 use crate::{
     bytes::Bytes,
@@ -344,23 +344,24 @@ impl<'a> RingOutput<'a> {
     }
 
     /// The SPP output, the owner tag and the scheme framing rebuilt from the slot.
-    pub fn transact_output(&self) -> TransactOutput {
+    pub fn transact_output(&self) -> Result<TransactOutput, CustomRingError> {
         let (owner_tag, data) = match *self {
             Self::Delivered { u, body, .. } => {
-                (*u, Some(encode_ring_confidential_delivered_output(body)))
+                (*u, Some(encode_ring_confidential_delivered_output(body)?))
             }
-            Self::Anonymous { tag, body, .. } => {
-                (*tag, body.map(encode_anonymous_recipient_output))
-            }
+            Self::Anonymous { tag, body, .. } => (
+                *tag,
+                body.map(encode_anonymous_recipient_output).transpose()?,
+            ),
             Self::Exit {
                 owner_tag, payload, ..
-            } => (*owner_tag, Some(encode_confidential_output(payload))),
+            } => (*owner_tag, Some(encode_confidential_output(payload)?)),
         };
-        TransactOutput {
+        Ok(TransactOutput {
             utxo_hash: *self.hash(),
             owner_tag: OwnerTag::Inline(owner_tag),
             data,
-        }
+        })
     }
 
     /// Whether the slot uses the output encoding `layout` gives ring outputs.
@@ -936,14 +937,17 @@ impl<'a> RingTransactData<'a> {
                 .outputs
                 .iter()
                 .map(RingOutput::transact_output)
-                .collect(),
+                .collect::<Result<_, _>>()?,
             // The auditor message stays last.
             messages: self
                 .sender
-                .map(|sender| MessageData {
-                    view_tag: *sender.tag,
-                    data: encode_anonymous_sender_output(sender.body),
+                .map(|sender| {
+                    encode_anonymous_sender_output(sender.body).map(|data| MessageData {
+                        view_tag: *sender.tag,
+                        data,
+                    })
                 })
+                .transpose()?
                 .into_iter()
                 .chain([MessageData {
                     view_tag,

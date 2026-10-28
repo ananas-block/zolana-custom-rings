@@ -38,4 +38,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 spr-keypair = { workspace = true }
 spr-instruction = { workspace = true }
+spr-transaction = { workspace = true }
 hex = { workspace = true }

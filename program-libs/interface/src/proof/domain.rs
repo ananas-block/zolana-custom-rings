@@ -25,9 +25,17 @@ pub const APPLY_RECORDS: u32 = 0x4352_4150;
 pub const REGISTER_KEY: u32 = 0x4352_5247;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
-
+/// `"CRDP"`
+pub const DEPOSIT_STATEMENT: u32 = 0x4352_4450;
+/// `"CRMG"`
+pub const MERGE_STATEMENT: u32 = 0x4352_4d47;
+/// `"CRPW"`
+pub const WITHDRAWALS: u32 = 0x4352_5057;
 /// `"CRWX"`
 pub const WITHDRAWAL_EXEMPTION: u32 = 0x4352_5758;
+
+/// Bound into every policy statement, a layout change raises it.
+pub const POLICY_STATEMENT_VERSION: u8 = 3;
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())

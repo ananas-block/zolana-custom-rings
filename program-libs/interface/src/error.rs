@@ -1,6 +1,6 @@
 use solana_program_error::ProgramError;
-use thiserror::Error;
 use spr_hasher::HasherError;
+use thiserror::Error;
 use zolana_ring_policy::{PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
@@ -146,6 +146,7 @@ ring_errors! {
         "an anonymous SPL withdrawal's destination is no initialized token program account",
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
     AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
+    OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
 }
 
 impl From<CustomRingError> for ProgramError {

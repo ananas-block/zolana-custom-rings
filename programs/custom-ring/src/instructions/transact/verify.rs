@@ -85,7 +85,8 @@ impl RingStatements<'_> {
                 data.rail,
                 data.n_in,
                 data.n_out,
-                self.accounts.withdrawals.len() as u8,
+                u8::try_from(self.accounts.withdrawals.len())
+                    .map_err(|_| CustomRingError::TooManyPublicLegs)?,
                 roots.own_only,
             ))?,
         }))

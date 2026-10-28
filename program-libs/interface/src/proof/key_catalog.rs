@@ -1,4 +1,6 @@
 //! Every ring circuit and its proving key, no verifying keys.
+use spr_interface::N_PUBLIC_SLOTS;
+
 use crate::{
     disclosure::{AnonymousAuditKey, DisclosureLayout},
     member_registry::APPLY_BATCH,
@@ -107,6 +109,59 @@ impl RingCircuit {
                 _ => APPLY_BATCH as u8,
             },
         }
+    }
+}
+
+/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/pooled_policy.go`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordPools {
+    pub own: usize,
+    /// Zero without a curator registry.
+    pub curator: usize,
+}
+
+struct PolicyShape {
+    outputs: usize,
+    withdrawals: usize,
+    public_assets: usize,
+    own_only: bool,
+}
+
+impl RingCircuit {
+    /// Each pool takes as many subjects as records, `None` outside the policy keys.
+    pub fn record_pools(self) -> Option<RecordPools> {
+        let shape = match self {
+            Self::MemberPolicy {
+                outputs,
+                withdrawals,
+                own_only,
+            } => PolicyShape {
+                outputs: outputs.into(),
+                withdrawals: withdrawals.into(),
+                public_assets: N_PUBLIC_SLOTS,
+                own_only,
+            },
+            Self::DelegatePolicy {
+                outputs, own_only, ..
+            } => PolicyShape {
+                outputs: outputs.into(),
+                withdrawals: 0,
+                public_assets: 0,
+                own_only,
+            },
+            _ => return None,
+        };
+        // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
+        let withdrawal_assets = shape.withdrawals.min(N_PUBLIC_SLOTS);
+        let distinct = 1 + 2 * shape.outputs + shape.withdrawals;
+        Some(RecordPools {
+            own: distinct + withdrawal_assets.max(shape.public_assets),
+            curator: if shape.own_only {
+                0
+            } else {
+                distinct + withdrawal_assets
+            },
+        })
     }
 }
 

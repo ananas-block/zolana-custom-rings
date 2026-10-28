@@ -87,7 +87,7 @@ impl QueueEntry {
     }
 
     /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`, mirror
-    /// `prover/server/custom_rings/circuits/registry/apply.go`.
+    /// `prover/circuits/registry/apply_records.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[
             &domain::field(domain::QUEUE_WRITE),

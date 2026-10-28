@@ -1,4 +1,4 @@
-//! Field layouts of the auditor disclosure, mirror `prover/server/custom_rings/circuits/base`.
+//! Field layouts of the auditor disclosure, mirror `prover/circuits/audit`.
 
 use core::ops::Range;
 
@@ -30,7 +30,7 @@ pub const INPUT_PREFIX_BITS: u32 = 126;
 /// One `u64be(amount)` per input slot of the entry class.
 pub const DISCLOSURE_INPUT_AMOUNT_BYTES: usize = 8;
 
-/// The audit statement's layout element, mirror `prover/server/custom_rings/circuits/base/layout.go`.
+/// The audit statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuditLayout {
     /// A published output exits, `SeedOut` opens the disclosure.

@@ -363,11 +363,10 @@ impl RecordWriteData {
         } else {
             self.lists.entry(self.member, Writer::Authority)?
         };
-        entry.mint_policy = match self.mint_policy[0] {
+        let [tag, policy @ ..] = self.mint_policy;
+        entry.mint_policy = match tag {
             0 if self.mint_policy == [0; 33] && entry.mask != 0 => None,
-            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(
-                self.mint_policy[1..].try_into().unwrap(),
-            )),
+            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(policy)),
             _ => return Err(CustomRingError::InvalidInstructionData),
         };
         Ok(entry)

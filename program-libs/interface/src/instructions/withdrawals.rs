@@ -37,7 +37,7 @@ impl PolicyWithdrawal {
 /// Order and count matter, even when two legs pay the same owner and asset.
 pub fn policy_withdrawal_hash(legs: &[PolicyWithdrawal]) -> Result<[u8; 32], HasherError> {
     let mut fields = vec![
-        right_align(b"CRPW"),
+        crate::domain::field(crate::domain::WITHDRAWALS),
         right_align(&(legs.len() as u64).to_be_bytes()),
     ];
     for leg in legs {

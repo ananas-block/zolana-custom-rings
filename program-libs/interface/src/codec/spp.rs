@@ -2,7 +2,6 @@
 
 use arrayvec::ArrayVec;
 use solana_address::Address;
-use thiserror::Error;
 use spr_hasher::{
     primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
     HasherError,
@@ -10,6 +9,7 @@ use spr_hasher::{
 use spr_interface::{
     error::ShieldedPoolError, instruction::InterfaceTransfer, N_PUBLIC_SLOTS, SOL_ASSET_FIELD,
 };
+use thiserror::Error;
 
 /// The fee payer in every SPP transact account list.
 pub const TRANSACT_PAYER_INDEX: usize = 0;
