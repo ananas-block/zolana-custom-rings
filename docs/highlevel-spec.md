@@ -265,7 +265,8 @@ The **Config Authority** configures the limits applied by a **Co-signer**. **Rin
 
 1. align on account state structs member records state
 2. custom ring rpc api
-3. can we get this into 2 weeks audit scope?
+3. Instruction data + accounts for the important instructions
+4. can we get this into 2 weeks audit scope?
 
 ## Questions:
 
