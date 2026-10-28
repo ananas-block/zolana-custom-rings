@@ -59,27 +59,6 @@ transfers, withdrawals, merges and delegate moves. Funds stay where they are.
 A permanent delegate is a key that can move any user's funds to another user  
 within the custom ring.
 
-#### What the delegate can do
-
-- **Move funds within the ring:** the delegate signs each move. Moves pass the  
-policy's list checks and transfer-scoped co-signer approval. Sender limits  
-don't apply.
-
-#### Key registration
-
-- Setting a delegate requires every user of the ring to register their  
-spending key, encrypted to the ring's auditor, once, before they receive  
-funds.
-- The auditor's key recovers a user's UTXOs, and the delegate's signature  
-authorizes moving them.
-
-#### Configuration
-
-- The ring authority sets the delegate once. It can't be replaced or  
-removed, and registration stays required.
-- The Solana Privacy Program's governance must enable delegate moves for the  
-ring.
-
 ## 3. Ring RPC
 
 ### 3.1. Readers
@@ -95,56 +74,10 @@ operations. The co-signer on its own cannot move funds.
 
 #### Operations that can require approval
 
-- **Deposits:** every deposit into the ring.
-- **Transfers:** every transaction through the ring, including withdrawals,  
-transfers with a deposit leg and delegate moves. Plain deposits are  
-excluded.
-- **Withdrawals:** withdrawals whose public amount per token in one  
-transaction exceeds a threshold. A token without a threshold needs  
-approval for any amount.
-- **Transfer/withdrawal threshold:** transfers or withdrawals whose total per  
-token in one transaction exceeds a threshold, configured per token.  
-Deposits have no threshold.
-
-#### Configuration
-
-- The ring config holds one co-signer.
-- The co-signer can be a smart account to allow multiple approvers.
-- The ring authority sets, replaces or removes the co-signer. It also selects  
-the operations that need approval and the withdrawal thresholds per token.
-- The ring authority sets the transfer/withdrawal thresholds.
-
-#### 3.2.1. Sender limits
-
-A sender limit caps how much of a token one sender can transfer or withdraw,  
-without revealing the amount.
-
-##### What can be checked
-
-- **Outflow:** the total a sender moves out over a window of slots.
-
-##### Configuration
-
-- Limits are set per token.
-
-#### 3.2.2. Token volume limits
-
-A token volume limit caps how much of a token the whole ring deposits or  
-withdraws publicly within a window of slots. Transfers inside the ring don't  
-count.
-
-##### What can be checked
-
-- **Deposits:** the ring's total public deposits of a token in the current  
-window.
-- **Withdrawals:** the ring's total public withdrawals of a token in the  
-current window.
-
-##### Configuration
-
-- The ring authority sets, per token, the window length and a deposit cap  
-and/or a withdrawal cap.
-- A token without a limit is uncapped.
+- **Deposits**
+- **Transfers** 
+- **Withdrawals**
+- **Transfer/withdrawal threshold**
 
 ## Trust Assumptions
 
@@ -187,7 +120,7 @@ and/or a withdrawal cap.
 8. Reader access grants and revocation
 9. Co-signer Policy limits configuration
 
-## 2. Member enrollment and key escrow
+## 1. Member enrollment and key escrow
 
 Enrollment depends on the ring's policy. Key escrow is required on key-escrow rings, optional on other confidential rings, and unavailable on anonymous rings.
 
@@ -199,7 +132,7 @@ Enrollment depends on the ring's policy. Key escrow is required on key-escrow ri
    4. Submits the record batch and apply proof to the **Storage Program**, paying fees.
    5. Indexes the applied member records and serves their updated proofs.
 
-## 3. Member record updates
+## 2. Member record updates
 
 The **Wallet** updates its own viewing and recovery settings. The **Config Authority** updates the ring's policy list entries.
 
@@ -210,7 +143,7 @@ The **Wallet** updates its own viewing and recovery settings. The **Config Autho
    3. Generates an apply proof and submits the registry update to the **Storage Program**, paying fees.
    4. Indexes the updated member records and serves their proofs.
 
-## 4. Deposit
+## 3. Deposit
 
 A deposit moves SOL or tokens from a wallet's public balance into ring UTXOs. The token and amount are public.
 
@@ -230,7 +163,7 @@ Compared with a transfer, a deposit adds a round trip for the **Wallet** to sign
    2. Pays fees and submits the deposit to the **Ring Program**.
    3. Indexes the confirmed deposit so the recipient's **Wallet** can find its new UTXOs.
 
-## 5. Transfer flow
+## 4. Transfer flow
 
 A unified flow for anonymous,  confidential transfers, and withdrawals.
 
@@ -247,7 +180,7 @@ A unified flow for anonymous,  confidential transfers, and withdrawals.
    3. Obtains the **Co-signer** signature when required.
    4. Pays fees and submits the transaction to Solana.
 
-## 6. User Merge
+## 5. User Merge
 
 A merge combines UTXOs of the same wallet, token and ring into one UTXO with their total value. 
 
@@ -259,7 +192,7 @@ A merge combines UTXOs of the same wallet, token and ring into one UTXO with the
    4. Pays fees and submits the merge to the **Ring Program**.
    5. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
 
-## 7. Managed Merge
+## 6. Managed Merge
 
 Managed merge is initiated by **Ring RPC** on a ring with a permanent delegate and registered escrow keys. It combines one wallet's UTXOs of the same token and ring while preserving their total value. The user should be able to configure, how many utxos with what average amount. 
 
@@ -272,7 +205,7 @@ Managed merge is initiated by **Ring RPC** on a ring with a permanent delegate a
 
 
 
-## 8. Authority transfer
+## 7. Authority transfer
 
 An authority transfer moves a wallet's funds to recipients within the same ring, authorized by the permanent **Delegate**. **Ring RPC** uses the wallet's escrowed nullifier key to prepare the spend.
 
@@ -286,7 +219,7 @@ An authority transfer moves a wallet's funds to recipients within the same ring,
    1. Pays fees and submits the transfer to the **Ring Program**.
    2. Indexes the result, marking the input UTXOs spent and adding the new UTXOs.
 
-## 9. Reader access grants and revocation
+## 8. Reader access grants and revocation
 
 The **Config Authority** grants and revokes **Reader** access across the ring. A **Wallet** grants and revokes access to its own activity. Each manages its own grants.
 
@@ -299,9 +232,26 @@ The **Config Authority** grants and revokes **Reader** access across the ring. A
 3. **Reader:** Signs a read request with its wallet or passkey and sends it to **Ring RPC**.
 4. **Ring RPC:** Verifies the signature and checks the stored grants for an active grant covering the requested activity, then returns the permitted decrypted activity.
 
-Revocation removes the signer's grant. Another active grant may still authorize access. Data already returned remains with the **Reader**.
 
 
+## 9. Co-signer Policy limits configuration
+
+The **Config Authority** configures the limits applied by a **Co-signer**. **Ring RPC** stores the configuration in the **Storage tree** and enforces it before co-signing.
+
+1. **Config Authority:**
+
+    1. Selects the ring and configured **Co-signer**.
+    2. Sets, updates or removes per-token sender limits, public deposit and withdrawal caps, and their slot windows.
+    3. Signs the configuration update and sends it to **Ring RPC**.
+
+2. **Ring RPC:**
+
+    1. Verifies the **Config Authority** signature and the target ring and co-signer.
+    2. Validates the configured limits and slot windows.
+    3. Queues the record update, generates an apply proof when ready and submits the batch to the **Storage Program**, paying fees.
+    4. Indexes the applied configuration, activates the limits and confirms the changes to the **Config Authority**.
+
+**Ring RPC** tracks usage and enforces the active limits when deciding whether to co-sign. The **Ring Program** checks the required co-signer signature.
 
 ## Notes
 
