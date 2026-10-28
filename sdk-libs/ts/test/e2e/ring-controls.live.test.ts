@@ -429,27 +429,32 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           },
         ],
       };
-      await expect(buildRingDelegateTransferTransaction(move)).rejects.toMatchObject({
+      await expect(
+        indexedKeys(() => buildRingDelegateTransferTransaction(move)),
+      ).rejects.toMatchObject({
         code: "RING_BUILD_TRANSFER",
         causeCode: "RING_COSIGNER_REQUIRED",
       });
-      await settle(await createRingDelegateSubmission({ ...move, cosigner }), client, [
-        delegate,
-        cosigner,
-      ]);
+      await settle(
+        await indexedKeys(() => createRingDelegateSubmission({ ...move, cosigner })),
+        client,
+        [delegate, cosigner],
+      );
       await sync(client, sender);
-      const twoAssetMove = await createRingDelegateSubmission({
-        ...move,
-        cosigner,
-        outputs: [
-          { recipient: recipient.keypair.shieldedAddress(), asset: harness.mint, amount: 900n },
-          {
-            recipient: recipient.keypair.shieldedAddress(),
-            asset: harness.token2022Mint,
-            amount: 600n,
-          },
-        ],
-      });
+      const twoAssetMove = await indexedKeys(() =>
+        createRingDelegateSubmission({
+          ...move,
+          cosigner,
+          outputs: [
+            { recipient: recipient.keypair.shieldedAddress(), asset: harness.mint, amount: 900n },
+            {
+              recipient: recipient.keypair.shieldedAddress(),
+              asset: harness.token2022Mint,
+              amount: 600n,
+            },
+          ],
+        }),
+      );
       const moveTransport = createKitRingSubmissionTransport(client, [delegate, cosigner]);
       await settleWithTransport(twoAssetMove, {
         ...moveTransport,
@@ -508,23 +513,25 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           .reduce((total, note) => total + note.utxo.amount, 0n);
         expect(heldSol).toBe(800_000_000n);
         await settle(
-          await createRingDelegateRecoveredSubmission({
-            client,
-            ringProgramId,
-            source: sender.keypair.shieldedAddress(),
-            nullifierKey: recoveredKey,
-            notes: recovered.notes,
-            delegate,
-            cosigner,
-            feePayer: delegate.address,
-            outputs: [
-              {
-                recipient: recipient.keypair.shieldedAddress(),
-                asset: SOL_MINT,
-                amount: 100_000_000n,
-              },
-            ],
-          }),
+          await indexedKeys(() =>
+            createRingDelegateRecoveredSubmission({
+              client,
+              ringProgramId,
+              source: sender.keypair.shieldedAddress(),
+              nullifierKey: recoveredKey,
+              notes: recovered.notes,
+              delegate,
+              cosigner,
+              feePayer: delegate.address,
+              outputs: [
+                {
+                  recipient: recipient.keypair.shieldedAddress(),
+                  asset: SOL_MINT,
+                  amount: 100_000_000n,
+                },
+              ],
+            }),
+          ),
           client,
           [delegate, cosigner],
         );
@@ -590,11 +597,13 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
         state: "active",
       });
       await expect(
-        buildRingDelegateTransferTransaction({
-          ...move,
-          cosigner,
-          outputs: [{ ...move.outputs[0]!, amount: 1n }],
-        }),
+        indexedKeys(() =>
+          buildRingDelegateTransferTransaction({
+            ...move,
+            cosigner,
+            outputs: [{ ...move.outputs[0]!, amount: 1n }],
+          }),
+        ),
       ).rejects.toMatchObject({
         code: "RING_BUILD_TRANSFER",
         causeCode: "RING_POLICY_RULE_UNSATISFIED",
