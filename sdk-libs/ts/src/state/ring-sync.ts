@@ -17,10 +17,10 @@ import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { nextScanCursor } from "../operations/audit/audit.js";
 import { openRingDelivery } from "../crypto/derivation/blinding.js";
-import { spendingTransactions } from "../operations/workflow/recover.js";
+import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
-import { openRingDeposit } from "./ring-deposit.js";
+import { openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import type { RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
@@ -38,8 +38,9 @@ export async function openRingNotes(
   }>,
   context?: RequestContext,
 ): Promise<RingNotes> {
-  const notes = await ringDeposits(input, context);
-  let pending = 0;
+  const deposits = await ringDeposits(input, context);
+  const notes = deposits.notes;
+  let pending = deposits.pending;
   for (const tx of input.transactions) {
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
     if (ring === undefined || txViewingPublicKey === undefined || salt === undefined) continue;
@@ -64,9 +65,9 @@ export async function openRingNotes(
   if (nullifiers.length !== notes.length) throw new WalletError("WALLET_KEYS_BATCH_MISMATCH");
   return Object.freeze({
     utxos: Object.freeze(
-      notes.map(({ utxo, utxoHash, slot }, index) =>
+      notes.map(({ utxoHash, slot, ...note }, index) =>
         Object.freeze({
-          utxo,
+          ...note,
           outputContext: Object.freeze({
             hash: utxoHash,
             tree: slot.outputContext.tree,
@@ -160,7 +161,7 @@ interface Site {
   readonly slot: IndexedShieldedTransaction["outputSlots"][number];
 }
 
-type Note = RingDeliveredNote & Readonly<{ slot: Site["slot"] }>;
+type Note = RingDeliveredNote & Omit<RingDepositNote, "utxo"> & Readonly<{ slot: Site["slot"] }>;
 
 const PENDING = Symbol("pending");
 
@@ -189,20 +190,25 @@ export async function openRingMerges(
   return { merges, utxos: opened._state().utxos };
 }
 
-/** Deposits of any ring, Rust `DepositOpener::open_held`. */
+/** Deposits of any ring, Rust `DepositOpener::open_held`, one of an unregistered mint is pending. */
 async function ringDeposits(
-  input: Readonly<{ keys: ShieldedKeys; transactions: readonly IndexedShieldedTransaction[] }>,
+  input: Readonly<{
+    keys: ShieldedKeys;
+    assets: AssetRegistry;
+    transactions: readonly IndexedShieldedTransaction[];
+  }>,
   context: RequestContext | undefined,
-): Promise<Note[]> {
+): Promise<Readonly<{ notes: Note[]; pending: number }>> {
   const owner = input.keys.address();
   const held = input.keys.viewingPublicKeys();
   const notes: Note[] = [];
+  let pending = 0;
   const seen = new Set<string>();
   for (const tx of input.transactions)
     for (const slot of tx.outputSlots) {
       const viewingPublicKey = held.find((key) => equalBytes(key.u(), slot.viewTag));
       if (viewingPublicKey === undefined || seen.has(bytesKey(slot.outputContext.hash))) continue;
-      const utxo = await openRingDeposit(
+      const opened = await openRingDeposit(
         {
           keys: input.keys,
           owner,
@@ -212,11 +218,12 @@ async function ringDeposits(
         },
         context,
       );
-      if (utxo === undefined) continue;
+      if (opened === undefined) continue;
       seen.add(bytesKey(slot.outputContext.hash));
-      notes.push({ utxo, utxoHash: slot.outputContext.hash, slot });
+      if (registeredMint(input.assets, opened.utxo.asset) === undefined) pending += 1;
+      else notes.push({ ...opened, utxoHash: slot.outputContext.hash, slot });
     }
-  return notes;
+  return { notes, pending };
 }
 
 /** `undefined` for a slot sent to no held key. */

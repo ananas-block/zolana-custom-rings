@@ -51,7 +51,8 @@ import {
   anonymousSenderOutputBody,
 } from "../protocol/transaction/output.js";
 import { answered, exactlyOne } from "./batch.js";
-import { decoded, openRingDeposit } from "./ring-deposit.js";
+import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
+import { registeredMint } from "../operations/workflow/recover.js";
 import { openRingMerges } from "./ring-sync.js";
 import type { RingKeys, SharedTagPair } from "./ring-keys.js";
 import { RingError } from "../protocol/error.js";
@@ -114,6 +115,8 @@ export interface AnonymousScan {
   readonly unmatched: readonly Bytes32[];
   /** The wallet's payments in the transfers whose change it found, a body that fails to open left out. */
   readonly sent: readonly SentPayment[];
+  /** Deposit mints missing from the asset registry, their notes left out until registered. */
+  readonly unknownMints: readonly Address[];
 }
 
 export type AnonymousSyncClient = Pick<
@@ -241,8 +244,7 @@ interface Body {
 }
 
 /** A note whose rebuilt hash matched, before its nullifier. */
-interface Found {
-  readonly utxo: Utxo;
+interface Found extends RingDepositNote {
   readonly outputContext: WalletUtxo["outputContext"];
   readonly order: Publication;
 }
@@ -281,6 +283,7 @@ class Scan {
   readonly #skipped: SkippedCounterparty[] = [];
   readonly #unmatched: Bytes32[] = [];
   readonly #sent: SentPayment[] = [];
+  readonly #unknownMints = new Set<Address>();
 
   constructor(
     sync: SyncFields,
@@ -390,6 +393,7 @@ class Scan {
       skippedCounterparties: Object.freeze([...this.#skipped]),
       unmatched: Object.freeze([...this.#unmatched]),
       sent: Object.freeze([...this.#sent]),
+      unknownMints: Object.freeze([...this.#unknownMints]),
     });
   }
 
@@ -733,7 +737,7 @@ class Scan {
     const slot = deposit.outputSlot;
     if (this.#isFound(slot.outputContext.hash)) return;
     const entry = this.#entry(index);
-    const utxo = await openRingDeposit(
+    const opened = await openRingDeposit(
       {
         keys: this.#sync.keys,
         owner: this.#address,
@@ -743,9 +747,13 @@ class Scan {
       },
       this.#context,
     );
-    if (utxo === undefined) return;
+    if (opened === undefined) return;
+    if (registeredMint(this.#sync.assets, opened.utxo.asset) === undefined) {
+      this.#unknownMints.add(opened.utxo.asset);
+      return;
+    }
     this.#found.push({
-      utxo,
+      ...opened,
       outputContext: walletContext(slot),
       order: { slot: deposit.slot, signature: base58.encode(deposit.txSignature), position: 0 },
     });
@@ -774,11 +782,8 @@ class Scan {
         this.#context,
       ),
     );
-    for (const [{ utxo, outputContext, order }, nullifier] of nullifiers)
-      this.#decrypted.push({
-        utxo: Object.freeze({ utxo, outputContext, nullifier, spent: false }),
-        order,
-      });
+    for (const [{ order, ...note }, nullifier] of nullifiers)
+      this.#decrypted.push({ utxo: Object.freeze({ ...note, nullifier, spent: false }), order });
     this.#decrypted.sort((left, right) => compareOrder(left.order, right.order));
   }
 

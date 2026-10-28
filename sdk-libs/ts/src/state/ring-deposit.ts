@@ -1,6 +1,6 @@
 /** Ring deposits opened by the wallet they were sealed to, Rust `zolana_ring_client::deposit`. */
 import { equalBytes, isZero, readOutputData } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
+import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
   EncryptedScheme,
@@ -25,11 +25,17 @@ export interface RingDepositSlot {
   readonly depositPayload: DepositPayloadDecoder;
 }
 
+export interface RingDepositNote {
+  readonly utxo: Utxo;
+  readonly dataHash?: Bytes32;
+  readonly ringDataHash?: Bytes32;
+}
+
 /** A deposit's published hash, not its decryption, proves it the owner's, Rust `DepositOpener::open`. */
 export async function openRingDeposit(
   input: RingDepositSlot,
   context?: RequestContext,
-): Promise<Utxo | undefined> {
+): Promise<RingDepositNote | undefined> {
   const slot = input.outputSlot;
   const treeId = slot.outputContext.treeId;
   const output = decoded(() => {
@@ -79,7 +85,12 @@ export async function openRingDeposit(
         output.dataHash,
         ringDataHash,
       );
-      return equalBytes(hash, slot.outputContext.hash) ? opened : undefined;
+      if (!equalBytes(hash, slot.outputContext.hash)) return undefined;
+      return Object.freeze({
+        utxo: opened,
+        ...(output.dataHash === undefined ? {} : { dataHash: output.dataHash }),
+        ...(ringDataHash === undefined ? {} : { ringDataHash }),
+      });
     });
   } finally {
     plaintext.fill(0);

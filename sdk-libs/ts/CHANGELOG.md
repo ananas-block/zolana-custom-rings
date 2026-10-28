@@ -68,6 +68,7 @@ Added
 
 Fixed
 
+- `syncRingWallet` left SPL ring deposits under an unregistered mint unopened and dropped the data hashes of deposit notes, now it registers the mint and opens the deposit again, and anonymous sync reports such mints in `AnonymousScan.unknownMints`.
 - An anonymous transfer took an address slot, a note of another owner than the sender, or a default-ring note carrying data into proof assembly, now it refuses the address slot with `RING_ANONYMOUS_SLOT_INVALID` and the foreign note with `RING_MIXED_OWNERS` before any proof, and an entry funds from default-ring notes without data, a zero data hash counting as none.
 - `auditRing` opened a note twice when the sender's notes named it twice under one prefix, now each note opens once.
 - `RingKeyError.rustVariant` named Rust variants that do not exist for the disclosure codes, now it names each with its enum, as in `AuditError::DisclosureLayout`.
