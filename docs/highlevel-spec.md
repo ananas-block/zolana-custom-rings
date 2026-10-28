@@ -171,17 +171,12 @@ and/or a withdrawal cap.
 2. Member enrollment and key escrow
 3. Member record updates
 4. Deposit
-5. Transfer (confidential and anonymous)
+5. Transfer (anonymous, confidential, withdrawal, to/from default ring)
 6. User Merge
 7. Managed Merge
-8. Delegate transfer
-9. Wallet synchronization and recovery
-10. Transaction auditing
-11. Reader access grants and revocation
-12. Policy and mint limit updates
-13. Curator list integration
-14. Ring administration and authority changes
-15. Policy Store initialization, updates and verification
+8. Authority transfer
+9. Reader access grants and revocation
+10. Cosigner Policy limits
 
 ## 2. Member enrollment and key escrow
 
@@ -249,27 +244,41 @@ A merge combines UTXOs of the same wallet, token and ring into one UTXO with the
 
 1. **Wallet:** Selects the UTXOs, prepares the merged UTXO and sends the merge request with its proof inputs to **Ring RPC**.
 2. **Ring RPC:**
-
-    1. Checks that the UTXOs are unspent and belong to the same wallet, token and ring.
-    2. Generates proofs that preserve the wallet, token and total value and let the **Auditor** read the merged UTXO.
-    3. Obtains the **Co-signer** signature when required.
-    4. Pays fees and submits the merge to the **Ring Program**.
-    5. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
+   1. Checks that the UTXOs are unspent and belong to the same wallet, token and ring.
+   2. Generates proofs that preserve the wallet, token and total value and let the **Auditor** read the merged UTXO.
+   3. Obtains the **Co-signer** signature when required.
+   4. Pays fees and submits the merge to the **Ring Program**.
+   5. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
 
 ## 7. Managed Merge
 
 Managed merge is initiated by **Ring RPC** on a ring with a permanent delegate and registered escrow keys. It combines one wallet's UTXOs of the same token and ring while preserving their total value. The user should be able to configure, how many utxos with what average amount. 
 
 1. **Ring RPC:**
-
-    1. Selects unspent UTXOs belonging to the same wallet, token and ring.
-    2. Uses the wallet's escrowed nullifier key to prepare the merged UTXO and encrypt its details to the **Auditor**.
-    3. Generates proofs that preserve the wallet, token, ring and total value.
-    4. Obtains the **Delegate** signature and any required **Co-signer** signature.
-    5. Pays fees and submits the merge to the **Ring Program**.
-    6. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
+   1. Selects unspent UTXOs belonging to the same wallet, token and ring.
+   2. Uses the wallet's escrowed nullifier key to prepare the merged UTXO and encrypt its details to the **Auditor**.
+   3. Generates proofs that preserve the wallet, token, ring and total value.
+   4. Pays fees and submits the merge to the **Ring Program**.
+   5. Indexes the result, marking the input UTXOs spent and adding the merged UTXO.
 
 
+
+## 8. Authority transfer
+
+An authority transfer moves a wallet's funds to recipients within the same ring, authorized by the permanent **Delegate**. **Ring RPC** uses the wallet's escrowed nullifier key to prepare the spend.
+
+1. **Delegate:** Requests a transfer specifying the source wallet, recipients, token and amounts.
+2. **Ring RPC:**
+
+    1. Retrieves the source wallet's unspent UTXOs and escrowed nullifier key.
+    2. Prepares recipient and change UTXOs within the same ring and encrypts their details to the recipients and the **Auditor**.
+    3. Generates the required transfer, audit and policy proofs, including recipient key-escrow checks.
+
+3. **Delegate:** Signs the transaction; the **Co-signer** also signs when required.
+4. **Ring RPC:**
+
+    1. Pays fees and submits the transfer to the **Ring Program**.
+    2. Indexes the result, marking the input UTXOs spent and adding the new UTXOs.
 
 &nbsp;
 
