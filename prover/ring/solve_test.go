@@ -130,11 +130,24 @@ func applyRequest(t testing.TB, circuit common.CircuitType, capacity int) *Apply
 		empty := ringregistry.Entry{Member: big.NewInt(0x200), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(0), EscrowKey: big.NewInt(0)}
 		entries = append(entries, entry(0x100, ringregistry.EscrowBit, 0xe0), empty)
 	}
-	members := ringregistry.New(t)
 	// A nonzero chain checkpoint, as a queue past its first batch carries.
+	return (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
+}
+
+type registryBatch struct {
+	circuit    common.CircuitType
+	capacity   int
+	members    *ringregistry.Registry
+	entries    []ringregistry.Entry
+	chainStart *big.Int
+}
+
+func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
+	t.Helper()
+	members, entries := batch.members, batch.entries
 	p := &ApplyRecordsParams{
-		RequestHead: RequestHead{CircuitType: circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
-		ChainStart: fi(0x5eed), Count: uint8(len(entries)), Writes: make([]*RecordWrite, capacity),
+		RequestHead: RequestHead{CircuitType: batch.circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
+		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWrite, batch.capacity),
 	}
 	chain := p.ChainStart.Int
 	for i, e := range entries {

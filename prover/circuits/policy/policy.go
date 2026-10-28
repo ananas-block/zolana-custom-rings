@@ -20,7 +20,7 @@ import (
 // 5. On the member key every limit row's outflow is never negative and within its cap, and approval_required is set exactly when one passes its co-sign bound.
 // 6. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
 
-type Policy struct {
+type PolicyInputs struct {
 	OwnOnly         bool `gnark:"-"`
 	WithdrawalCount frontend.Variable
 	WithdrawalHash  frontend.Variable
@@ -40,7 +40,10 @@ type Policy struct {
 	Outputs           []OutputWires
 	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
 	SenderPkHash frontend.Variable
+}
 
+type Policy struct {
+	PolicyInputs
 	SenderEntry        Entry
 	OwnerEntries       []Entry
 	AssetEntries       []Entry
@@ -54,7 +57,7 @@ type railValues struct {
 }
 
 func newPolicy(outputs, withdrawals int, ownOnly bool) Policy {
-	p := Policy{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Withdrawals: make([]WithdrawalWires, withdrawals), OwnerEntries: make([]Entry, outputs+withdrawals), AssetEntries: make([]Entry, outputs+withdrawals)}
+	p := Policy{PolicyInputs: PolicyInputs{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}, OwnerEntries: make([]Entry, outputs+withdrawals), AssetEntries: make([]Entry, outputs+withdrawals)}
 	p.SenderEntry = newEntry(ownOnly)
 	for i := range p.OwnerEntries {
 		p.OwnerEntries[i], p.AssetEntries[i] = newEntry(ownOnly), newEntry(ownOnly)
@@ -74,14 +77,18 @@ func (p *Policy) validate() error {
 //
 //	CRPO, private_tx_hash, policy_hash, ring_id, anonymous on the member key only, approval_required,
 //	key_escrow, own_root, curator_root, sender, asset_k and amount_k per public slot, version 2, withdrawal_hash
-func (p *Policy) statement(rail railValues) []frontend.Variable {
+func (p *PolicyInputs) statement(rail railValues) []frontend.Variable {
+	return p.statementVersion(rail, 2)
+}
+
+func (p *PolicyInputs) statementVersion(rail railValues, version int) []frontend.Variable {
 	fields := []frontend.Variable{shared.PolicyStatementDomain, p.PrivateTxHash, p.PolicyHash, p.RingProgramID}
 	fields = append(fields, rail.anonymous...)
 	fields = append(fields, rail.approvalRequired, rail.keyEscrow, p.OwnRoot, p.CuratorRoot, rail.sender)
 	for k := range p.PublicAssets {
 		fields = append(fields, p.PublicAssets[k], p.PublicAmounts[k])
 	}
-	return append(fields, 2, p.WithdrawalHash)
+	return append(fields, version, p.WithdrawalHash)
 }
 
 func bindStatement(api frontend.API, publicInputHash frontend.Variable, statement []frontend.Variable) {

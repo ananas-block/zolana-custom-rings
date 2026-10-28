@@ -166,7 +166,7 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 					t.Fatalf("the rules before rule %d refuse, %v", v.Outcome.Rule, err)
 				}
 				for _, rules := range []int{v.Outcome.Rule + 1, len(v.Rules)} {
-					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*Policy).assertRules")
+					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*PolicyInputs).assertRules")
 				}
 			default:
 				t.Fatalf("outcome %q", v.Outcome.Kind)

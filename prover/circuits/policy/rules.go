@@ -13,7 +13,7 @@ type outputTotals struct {
 	byOwner, byAsset, byOwnerAndAsset frontend.Variable
 }
 
-func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s subjects, outputs []utxoView) {
+func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, t tableView, s subjects, outputs []utxoView, version int) {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
@@ -26,11 +26,7 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, s.mintPolicies[o].threshold)
 	}
 	// 3. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	for i, left := range outputs {
-		for _, right := range outputs[:i] {
-			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(t.scalarOwner, left.utxo, right.utxo), A: left.asset, B: right.asset})
-		}
-	}
+	assertScalarAssets(api, scalarAssets{outputs: outputs, enabled: t.scalarOwner, version: version})
 	// 4. Every active rule holds for its subjects, the sender once and each live output owner or asset.
 	for r, rule := range t.rules {
 		// The one sender meets every sender rule, with or without a spent input.
@@ -47,6 +43,29 @@ func (p *Policy) assertRules(api frontend.API, cmp comparator, t tableView, s su
 			// A subject the lists refuse needs its amounts within the rule's guard.
 			transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
 		}
+	}
+}
+
+type scalarAssets struct {
+	outputs []utxoView
+	enabled frontend.Variable
+	version int
+}
+
+func assertScalarAssets(api frontend.API, scope scalarAssets) {
+	if scope.version == 2 {
+		for i, left := range scope.outputs {
+			for _, right := range scope.outputs[:i] {
+				abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(scope.enabled, left.utxo, right.utxo), A: left.asset, B: right.asset})
+			}
+		}
+		return
+	}
+	var asset, seen frontend.Variable = 0, 0
+	for _, out := range scope.outputs {
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(scope.enabled, seen, out.utxo), A: asset, B: out.asset})
+		asset = api.Select(out.utxo, out.asset, asset)
+		seen = api.Or(seen, out.utxo)
 	}
 }
 

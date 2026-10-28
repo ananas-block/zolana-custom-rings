@@ -15,7 +15,7 @@ func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWire
 
 // Every output and public asset opens its own record, including absence. The
 // transaction, rather than a sender-supplied list of limits, determines coverage.
-func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, policies []mintPolicyWires) frontend.Variable {
+func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, policies []mintPolicyWires, resolver subjectResolver) frontend.Variable {
 	leaving := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
 		change := api.Mul(api.IsZero(api.Sub(out.ownerPkHash, sender)), api.IsZero(api.Sub(out.ringProgramID, p.RingProgramID)))
@@ -42,8 +42,7 @@ func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, sender front
 	}
 	for k, asset := range p.PublicAssets {
 		active := ringgadget.IsNonZero(api, asset)
-		_, _, packed, _ := p.PublicAssetEntries[k].Resolve(api, active, p.OwnRoot, asset)
-		check(asset, active, decodeMintPolicy(api, packed))
+		check(asset, active, resolver.resolvePublicAsset(api, active, asset, k))
 	}
 	return approval
 }

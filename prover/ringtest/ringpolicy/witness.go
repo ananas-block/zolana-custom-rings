@@ -19,8 +19,9 @@ import (
 )
 
 type Witness struct {
-	Member   *policy.MemberPolicyCircuit
-	Delegate *policy.DelegatePolicyCircuit
+	Member                       *policy.MemberPolicyCircuit
+	Delegate                     *policy.DelegatePolicyCircuit
+	ownRegistry, curatorRegistry *ringregistry.Registry
 }
 
 func (w World) Build(t testing.TB) Witness {
@@ -47,6 +48,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	p := b.Policy()
 	own, curator := registry(t, w.Own), registry(t, w.Curator)
+	b.ownRegistry, b.curatorRegistry = own, curator
 	mintPolicies := map[string]*big.Int{}
 	assets := map[string]*big.Int{}
 	for i, a := range rows.InlineAssets {
