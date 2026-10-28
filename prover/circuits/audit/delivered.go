@@ -10,6 +10,7 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -36,7 +37,7 @@ func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
 }
 
 func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
-	if err := validateLength("output", len(c.Outputs), c.Capacity); err != nil {
+	if err := transaction.ValidateLength("output", len(c.Outputs), c.Capacity); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)

@@ -88,9 +88,9 @@ func NewAnonymousAuditCircuit(shape AnonymousAuditShape) (*AnonymousAuditCircuit
 
 func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	if err := errors.Join(
-		validateLength("output", len(c.Outputs), c.Shape.Outputs),
-		validateLength("input", len(c.Inputs), c.Shape.InputClass),
-		validateLength("sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
+		transaction.ValidateLength("output", len(c.Outputs), c.Shape.Outputs),
+		transaction.ValidateLength("input", len(c.Inputs), c.Shape.InputClass),
+		transaction.ValidateLength("sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
 	); err != nil {
 		return err
 	}

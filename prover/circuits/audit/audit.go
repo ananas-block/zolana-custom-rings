@@ -2,8 +2,6 @@
 package audit
 
 import (
-	"fmt"
-
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -157,11 +155,4 @@ func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable)
 		out[i] = api.Mul(flag, b)
 	}
 	return out
-}
-
-func validateLength(name string, got, want int) error {
-	if got != want {
-		return fmt.Errorf("audit: %s count mismatch: got %d want %d", name, got, want)
-	}
-	return nil
 }
