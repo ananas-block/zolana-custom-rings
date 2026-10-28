@@ -172,17 +172,15 @@ and/or a withdrawal cap.
 3. Member record updates
 4. Deposit
 5. Transfer (confidential and anonymous)
-6. Exit to the default ring
-7. Public withdrawal
-8. Note merge
-9. Delegate transfer
-10. Wallet synchronization and recovery
-11. Transaction auditing
-12. Reader access grants and revocation
-13. Policy and mint limit updates
-14. Curator list integration
-15. Ring administration and authority changes
-16. Policy Store initialization, updates and verification
+6. Note merge
+7. Delegate transfer
+8. Wallet synchronization and recovery
+9. Transaction auditing
+10. Reader access grants and revocation
+11. Policy and mint limit updates
+12. Curator list integration
+13. Ring administration and authority changes
+14. Policy Store initialization, updates and verification
 
 ## 2. Member enrollment and key escrow
 
@@ -214,28 +212,29 @@ A deposit moves SOL or tokens from a wallet's public balance into ring notes. Th
 Compared with a transfer, a deposit adds a round trip for the **Wallet** to sign the transaction that moves its SOL or SPL tokens.
 
 1. **Wallet:**
-
    1. Chooses the token, amount and recipient.
    2. Prepares the deposit notes and encrypts their details to the recipient and the **Auditor**.
    3. Sends the deposit request to **Ring RPC**.
-
 2. **Ring RPC:**
-
    1. Checks that the ring is active, the asset is allowed and any required recipient key escrow is registered.
    2. Generates the required deposit proof.
    3. Builds the deposit transaction and returns it to the **Wallet** for signing.
-
 3. **Wallet:** Signs the prepared transaction to authorize the SOL or SPL token transfer and returns it to **Ring RPC**.
 4. **Ring RPC:**
-
    1. Co-signs.
    2. Pays fees and submits the deposit to the **Ring Program**.
    3. Indexes the confirmed deposit so the recipient's **Wallet** can find its new notes.
 
 ## 5. Transfer flow
 
-A unified flow for confidential and anonymous transfers.  
-The difference should only be in the policy circuit, the policy circuit should do the same the confidential default ring circuit does and check the tags as public inputs.
+A unified flow for anonymous,  confidential transfers, and withdrawals.
+
+**Variants:**
+
+1. anonymous: default
+2. confidential:  policy circuit checks sender and recipients as public inputs same as default ring.
+3. transfer to default ring: some outputs of a transfer can be owned by the default ring program. 
+4. public withdrawal: 
 
 1. **Wallet:** Signs the transfer authorization and sends it with the proof inputs to **Ring RPC**.
 2. **Ring RPC:**
@@ -252,6 +251,7 @@ The difference should only be in the policy circuit, the policy circuit should d
 
 1. The program's upgrade authority is responsible only for upgrading the program and creating its initial configuration. The ring authority manages policy rules, list entries and ongoing ring settings.
 2. We should implement support for multiple co signers using smart accounts in a hot path is too expensive. We can just create a pda per co signer and check it in the program.
+3. We need to test that we can make the ring rpc relayer flow work with third party zk programs.
 
 ## Questions:
 
