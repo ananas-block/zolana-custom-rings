@@ -2,7 +2,6 @@
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { syncWallet } from "@heliuslabs/zolana";
 import {
   ListId,
   buildRuleTable,
@@ -12,13 +11,14 @@ import {
 } from "../../src/ring/advanced.js";
 import {
   AuthorityListWrite,
-  PreparedRingDeposit,
-  RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
-  RingInstructionTag,
   createRingTransferSubmission,
   listWrite,
   messageSignerSpendSigner,
+  PreparedRingDeposit,
+  RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
   ringComputeUnitLimit,
+  RingInstructionTag,
+  syncRingWallet,
 } from "../../src/ring/index.js";
 import { currentSlot, type Actor } from "./live-helpers.js";
 import {
@@ -66,7 +66,7 @@ async function expectAudited(ring: AnonymousRing, sender: Actor, signature: stri
 /** Reads every stream of the ring through the current slot. */
 async function syncRing(ring: AnonymousRing, actor: Actor): Promise<void> {
   const slot = await currentSlot(ring.client);
-  await syncWallet({
+  await syncRingWallet({
     client: ring.client,
     wallet: actor.wallet,
     keys: actor.keys,
