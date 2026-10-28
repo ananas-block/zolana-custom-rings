@@ -234,7 +234,7 @@ A unified flow for anonymous,  confidential transfers, and withdrawals.
 1. anonymous: default
 2. confidential:  policy circuit checks sender and recipients as public inputs same as default ring.
 3. transfer to default ring: some outputs of a transfer can be owned by the default ring program. 
-4. public withdrawal: 
+4. public withdrawal: spl tranfer to 1 or multiple spl accounts, optionally alongside other transfers
 
 1. **Wallet:** Signs the transfer authorization and sends it with the proof inputs to **Ring RPC**.
 2. **Ring RPC:**
