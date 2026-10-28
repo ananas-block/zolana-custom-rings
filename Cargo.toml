@@ -58,6 +58,7 @@ spr-tree = { path = "zolana/program-libs/tree", version = "0.1.0" }
 spr-keypair = { path = "zolana/sdk-libs/keypair", version = "0.1.0" }
 spr-instruction = { path = "zolana/sdk-libs/instruction", version = "0.1.0" }
 spr-program = { path = "zolana/sdk-libs/program", version = "0.1.0" }
+spr-protocol-instructions = { path = "zolana/protocol-ops/instructions", version = "0.1.0" }
 # The zk crates live in helius-labs/zk-tools (zk-dsl/), pinned by rev.
 spr-zk-dsl = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
 spr-zk-gadgets = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
@@ -70,8 +71,8 @@ spr-client = { path = "zolana/sdk-libs/client", version = "0.1.0" }
 spr-gnark-ffi-prover = { path = "zolana/sdk-libs/gnark-ffi-prover", version = "0.1.0" }
 spr-gnark-ffi-prover-build = { path = "zolana/sdk-libs/gnark-ffi-prover/build-helper", version = "0.1.0" }
 spr-indexer-api = { path = "zolana/sdk-libs/indexer-api", version = "0.1.0" }
-spr-merkle-tree = { path = "zolana/sdk-libs/merkle-tree", version = "0.1.0" }
-spr-smart-account-client = { path = "zolana/sdk-libs/smart-account-client", version = "0.1.0" }
+spr-merkle-tree = { path = "zolana/protocol-ops/merkle-tree", version = "0.1.0" }
+spr-smart-account-client = { path = "zolana/protocol-ops/smart-account", version = "0.1.0" }
 spr-test-utils = { path = "zolana/program-tests/test-utils", version = "0.1.0" }
 spr-rpc-http = { path = "zolana/services/rpc-http", version = "0.1.0" }
 shielded-pool-program = { path = "zolana/programs/shielded-pool", version = "0.1.0" }
@@ -81,7 +82,6 @@ groth16-solana = { version = "0.3.1", features = ["bsb22"] }
 light-array-map = "0.2.0"
 spr-account-checks = { path = "zolana/program-libs/account-checks", version = "0.1.0", default-features = false }
 spr-hasher = { path = "zolana/program-libs/hasher", version = "0.1.1", default-features = false }
-spr-indexed-array = { path = "zolana/program-libs/indexed-array", version = "0.1.0" }
 light-poseidon = "0.5"
 # Pinned to the head of the mollusk-0.15 branch (Lightprotocol/light-program-profiler).
 # Switch back to a released version once that lands upstream.

@@ -37,12 +37,11 @@ use spr_interface::{
     SHIELDED_POOL_PROGRAM_ID,
 };
 use spr_keypair::{ShieldedKeypair, X25519Pubkey};
-use spr_program::instruction::CreateProtocolConfig;
-use spr_program::instruction::SetRingActivation;
 use spr_program_test::{
     create_tree_instructions,
     localnet::{LocalnetPorts, LocalnetValidator, UpgradeableProgram},
 };
+use spr_protocol_instructions::{CreateProtocolConfig, SetRingActivation};
 use spr_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
 use spr_test_utils::{
     localnet::{isolated_temp_path, localnet_indexer_url, localnet_rpc_url, WorkspaceArtifacts},

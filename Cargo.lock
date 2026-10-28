@@ -1615,6 +1615,7 @@ dependencies = [
  "spr-keypair",
  "spr-program",
  "spr-program-test",
+ "spr-protocol-instructions",
  "spr-test-utils",
  "spr-transaction",
  "spr-tree",
@@ -5827,7 +5828,6 @@ dependencies = [
  "solana-instruction",
  "solana-pubkey 4.2.1",
  "solana-sdk-ids",
- "solana-system-interface 3.2.0",
 ]
 
 [[package]]
@@ -7350,16 +7350,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spr-indexed-array"
-version = "0.1.0"
-dependencies = [
- "num-bigint 0.4.8",
- "num-traits",
- "spr-hasher",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "spr-indexer-api"
 version = "0.1.0"
 dependencies = [
@@ -7381,7 +7371,6 @@ dependencies = [
  "solana-pubkey 4.2.1",
  "spr-hasher",
  "spr-interface",
- "spr-tree",
  "thiserror 2.0.20",
  "wincode",
 ]
@@ -7435,7 +7424,6 @@ dependencies = [
  "num-bigint 0.4.8",
  "num-traits",
  "spr-hasher",
- "spr-indexed-array",
  "thiserror 2.0.20",
 ]
 
@@ -7479,9 +7467,21 @@ dependencies = [
  "spr-interface",
  "spr-keypair",
  "spr-merkle-tree",
+ "spr-protocol-instructions",
  "spr-transaction",
  "spr-tree",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "spr-protocol-instructions"
+version = "0.1.0"
+dependencies = [
+ "solana-address 2.6.1",
+ "solana-instruction",
+ "solana-pubkey 4.2.1",
+ "spr-interface",
+ "spr-tree",
 ]
 
 [[package]]
@@ -7561,6 +7561,7 @@ dependencies = [
  "spr-merkle-tree",
  "spr-program",
  "spr-program-test",
+ "spr-protocol-instructions",
  "spr-smart-account-client",
  "spr-transaction",
  "spr-tree",
@@ -8920,7 +8921,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bincode 1.3.3",
  "bs58",
  "flate2",
  "groth16-solana",
@@ -8929,12 +8929,9 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sha2 0.10.9",
- "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-instruction",
  "solana-keypair",
- "solana-loader-v3-interface 7.0.0",
- "solana-loader-v3-interface 8.0.1",
  "solana-message",
  "solana-pubkey 4.2.1",
  "solana-signer",
@@ -8946,7 +8943,6 @@ dependencies = [
  "spr-smart-account-client",
  "spr-test-utils",
  "spr-transaction",
- "spr-tree",
  "spr-user-registry-interface",
  "swap-program",
  "tar",
