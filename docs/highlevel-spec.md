@@ -29,9 +29,7 @@ The policy defines which checks a transfer must prove. The ring authority config
 
 ### 1.1. Whitelist
 
-A whitelist is a list of approved identities that the ring authority  
-maintains. Sender and or recipient must be on the whitelist.  
-Recipients above threshold must be on the whitelist.
+The ring authority manages a whitelist of approved identities. The policy specifies whether senders, recipients, or both must be whitelisted. Recipient whitelisting can be required only for transfers above a configured dollar amount threshold.
 
 ### 1.2. Blocklist
 
