@@ -142,9 +142,9 @@ The **Wallet** updates its own viewing and recovery settings. The **Config Autho
 1. **Wallet or Config Authority:** Signs the changes it is authorized to make and sends them to **Ring RPC**.
 2. **Ring RPC:**
    1. Reads the current records and pending updates.
-   2. Queues Wallet updates until they are eligible to apply; prepares authority updates for immediate application.
-   3. Generates an apply proof and submits the registry update to the **Storage Program**, paying fees.
-   4. Indexes the updated records and serves their proofs.
+   2. Queues Wallet updates until they are eligible to apply; prepares Config Authority updates for immediate application.
+   3. Generates a tree update proof and submits the registry update to the **Storage Program**, paying fees.
+   4. Indexes the updated records and makes their Merkle proofs available.
 
 ## 3. Deposit
 
