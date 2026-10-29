@@ -124,15 +124,15 @@ operations. The co-signer on its own cannot move funds.
 
 ## 1. Member enrollment and key escrow
 
-Enrollment depends on the ring's policy. Key escrow is required on key-escrow rings, optional on other confidential rings, and unavailable on anonymous rings.
+This flow registers a wallet’s keys and any list entries required by the ring’s policy in the member registry.
 
-1. **Wallet:** Authorizes its member-record updates and, when registering an escrow key, encrypts its nullifier secret to the **Auditor**.
-2. **Ring RPC:**
-   1. Coordinates required authority-list updates with the **Config Authority**.
-   2. Queues authorized member updates and key-registration requests.
-   3. Generates an apply proof for eligible batches of storage tree updates.
-   4. Submits the record batch and apply proof to the **Storage Program**, paying fees.
-   5. Indexes the applied member records and serves their updated proofs.
+**Key escrow** enables a configured permanent delegate to transfer or merge a wallet’s funds without the wallet signing each operation. The wallet provides an encrypted copy of its nullifier secret—a secret needed to prepare those spends—which the Auditor can decrypt. Key escrow is available on confidential rings and unavailable on anonymous rings.
+
+1. **Wallet:** Authorizes its registration and sends it to Ring RPC. When using key escrow, it also encrypts its nullifier secret for the Auditor.
+2. **Ring RPC:** Coordinates any required list updates with the Config Authority and batches the authorized record updates.
+3. **Ring RPC:** Generates a tree update proof and submits the records and proof to the Storage Program.
+4. **Storage Program:** Verifies the proof and updates the shared state Merkle tree.
+5. **Ring RPC:** Indexes the updated records and makes their Merkle proofs available.
 
 ## 2. Member record updates
 
