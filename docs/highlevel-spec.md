@@ -137,7 +137,7 @@ This flow registers a Walletâ€™s keys and any list entries required by the ringâ
 
 ## 2. Wallet record updates
 
-The **Wallet** updates its own viewing and recovery settings. The **Config Authority** updates the ring's policy list entries.
+This flow applies changes to existing Wallets in the registry used by the ring. The **Config Authority** updates the ring's policy list entries.
 
 1. **Wallet or Config Authority:** Signs the changes it is authorized to make and sends them to **Ring RPC**.
 2. **Ring RPC:**
