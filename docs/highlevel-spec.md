@@ -61,11 +61,13 @@ A permanent delegate is a key authorized to move any user's funds to another use
 
 ## 3. Ring RPC
 
+Ring RPC enforces reader permissions and configured limits before co-signing transactions.
+
 ### 3.1. Readers
 
-A reader accesses decrypted activity through **Ring RPC** without holding the auditor key. The **Config Authority** grants access across the ring; a **Wallet** grants access to its own activity.
+A reader can view decrypted activity through Ring RPC without holding the auditor key. The Config Authority grants access across the ring; a wallet grants access to its own activity.
 
-Read-access records are stored in the **Storage tree**. Optionally, **Ring RPC** stores these records encrypted in its database only.
+Read-access records are stored in the Storage tree. Optionally, they can be stored only in Ring RPC’s database, encrypted.
 
 ### 3.2. Co-signer
 
