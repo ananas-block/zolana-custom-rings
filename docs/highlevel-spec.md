@@ -9,10 +9,10 @@ This document describes each control you can configure and who can change it.
 ## Compliance Rules
 
 1. ZK Policy
-   1. Allowlist (kyc)
+   1. Whitelist (kyc)
    2. Blocklist (sanctions)
    3. Frozen list
-   4. Asset allowlist
+   4. Asset whitelist
    5. Auditor
 2. Global Program Config
    1. Pause
@@ -27,18 +27,18 @@ This document describes each control you can configure and who can change it.
 
 The policy defines which checks a transfer must prove. The ring authority configures these rules and maintains the list entries.
 
-### 1.1. Allowlist
+### 1.1. Whitelist
 
-An allowlist is a list of approved identities that the ring authority  
-maintains. Sender and or recipient must be on allow list.  
-Recipients above threshold must be on allow list.
+A whitelist is a list of approved identities that the ring authority  
+maintains. Sender and or recipient must be on the whitelist.  
+Recipients above threshold must be on the whitelist.
 
 ### 1.2. Blocklist
 
 A blocklist is a list of identities or tokens the ring refuses transfers to  
 or from. This freezes all tokens the blocked identity holds.
 
-### 1.3. Asset allowlist
+### 1.3. Asset whitelist
 
 Only allowed assets can be deposited.  
 Only allowed assets can be transferred.
