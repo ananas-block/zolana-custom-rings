@@ -86,7 +86,7 @@ operations. The co-signer on its own cannot move funds.
 1. **Storage tree write authority:** The state Merkle tree stores which identities and assets are on each list and which keys are registered for each wallet. It is shared by Solana Privacy Rings. The tree update proof verifies that record changes produce the correct new tree. The write authority is trusted to provide correct records and obtain wallet consent where required, unless separate checks enforce this.
 2. **Config Authority:** Usually the Ring Operator. Trusted to set policy rules, ring settings and access grants across the ring.
 3. **Ring RPC:** Can be hosted by Helius or self-hosted. Trusted to protect auditor keys and proof inputs, enforce reader permissions and apply co-signer limits.
-4. **Curators:** A ring trusts the authorities of the external storage trees used by its policy.
+4. **Curators:** Trusted to maintain correct entries in external whitelists, blocklists or other lists used by the ring’s policy.
 5. **Delegate:** Trusted to move users' funds within the ring under the configured controls.
 6. **Upgrade Authority:** Trusted to create the initial configuration and deploy upgrades that preserve the intended program guarantees.
 
