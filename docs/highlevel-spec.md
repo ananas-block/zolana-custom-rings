@@ -114,7 +114,7 @@ operations. The Co-signer on its own cannot move funds.
 ## Flows
 
 1. Wallet registration and key escrow
-2. Member record updates
+2. Wallet record updates
 3. Deposit
 4. Transfer (anonymous, confidential, withdrawal, to/from default ring)
 5. User Merge
@@ -135,16 +135,16 @@ This flow registers a Walletâ€™s keys and any list entries required by the ringâ
 4. **Storage Program:** Verifies the proof and updates the shared state Merkle tree.
 5. **Ring RPC:** Indexes the updated records and makes their Merkle proofs available.
 
-## 2. Member record updates
+## 2. Wallet record updates
 
 The **Wallet** updates its own viewing and recovery settings. The **Config Authority** updates the ring's policy list entries.
 
 1. **Wallet or Config Authority:** Signs the changes it is authorized to make and sends them to **Ring RPC**.
 2. **Ring RPC:**
-   1. Reads the current Member records and pending updates.
+   1. Reads the current records and pending updates.
    2. Queues Wallet updates until they are eligible to apply; prepares authority updates for immediate application.
    3. Generates an apply proof and submits the registry update to the **Storage Program**, paying fees.
-   4. Indexes the updated Member records and serves their proofs.
+   4. Indexes the updated records and serves their proofs.
 
 ## 3. Deposit
 
