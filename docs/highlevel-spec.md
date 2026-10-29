@@ -3,6 +3,7 @@ A custom ring lets you enforce your own compliance rules on private transfers, d
 - **ZK Policy:** Rules checked through zero-knowledge proofs, such as allowlists, blocklists, asset restrictions and Auditor encryption. The Ring Program verifies the proofs.
 - **Global Program Config:** Settings checked directly by the Ring Program, such as whether the ring is paused and who can act as permanent Delegate.
 - **Ring RPC:** Controls enforced by the service, such as who can read decrypted activity and which sender or token volume limits apply before co-signing.
+<!-- Question for PR review: Should serving decrypted activity and running the optional relayer be separate services from transaction indexing and submission? -->
 
 This document describes each control you can configure and who can change it.
 
