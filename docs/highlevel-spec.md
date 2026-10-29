@@ -49,15 +49,15 @@ can't move funds.
 
 ## 2. Global Program Config
 
+Global Program Config defines ring-wide settings checked directly by the ring program, including pause and permanent delegate.
+
 ### 2.1. Pause
 
-Pausing stops all activity in the ring until it's resumed: deposits,  
-transfers, withdrawals, merges and delegate moves. Funds stay where they are.
+Pausing stops all activity in the ring until it's resumed: deposits, transfers, withdrawals, merges and delegate transfers. Funds stay where they are.
 
 ### 2.2. Permanent delegate
 
-A permanent delegate is a key that can move any user's funds to another user  
-within the custom ring.
+A permanent delegate is a key authorized to move any user's funds to another user within the custom ring.
 
 ## 3. Ring RPC
 
