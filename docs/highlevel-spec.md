@@ -137,14 +137,16 @@ This flow registers a Wallet’s keys and any list entries required by the ring�
 
 ## 2. Wallet record updates
 
-This flow applies changes to existing Wallets in the registry used by the ring. The **Config Authority** updates the ring's policy list entries.
+This flow applies changes to existing Wallets in the registry used by the ring. A Wallet signs requests concerning its own record. The Config Authority signs changes to the ring’s whitelists, blocklists, frozen lists and asset whitelists.
 
-1. **Wallet or Config Authority:** Signs the changes it is authorized to make and sends them to **Ring RPC**.
-2. **Ring RPC:**
-   1. Reads the current records and pending updates.
-   2. Queues Wallet updates until they are eligible to apply; prepares Config Authority updates for immediate application.
-   3. Generates a tree update proof and submits the registry update to the **Storage Program**, paying fees.
-   4. Indexes the updated records and makes their Merkle proofs available.
+<!-- Question for PR review: Optionally define viewing and recovery settings? -->
+
+1. **Wallet or Config Authority:** Specifies the records to change and their new values, signs the request and sends it to Ring RPC.
+2. **Ring RPC:** Reads the affected records and any pending changes.
+3. **Ring RPC:** Groups Wallet updates into batches, applied when the batch is full or the required waiting period has passed. Config Authority updates are applied immediately.
+4. **Ring RPC:** Generates a tree update proof showing that the requested changes produce the new registry state, then submits the changes and proof to the Storage Program.
+5. **Storage Program:** Verifies the proof and records the new Merkle tree root on Solana.
+6. **Ring RPC:** Indexes the updated records and makes their Merkle proofs available for subsequent ring operations.
 
 ## 3. Deposit
 
