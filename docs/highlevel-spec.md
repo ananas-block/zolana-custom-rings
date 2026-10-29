@@ -112,7 +112,7 @@ operations. The co-signer on its own cannot move funds.
 
 ## Flows
 
-1. Member enrollment and key escrow
+1. Wallet registration and key escrow
 2. Member record updates
 3. Deposit
 4. Transfer (anonymous, confidential, withdrawal, to/from default ring)
@@ -122,9 +122,9 @@ operations. The co-signer on its own cannot move funds.
 8. Reader access grants and revocation
 9. Co-signer Policy limits configuration
 
-## 1. Member enrollment and key escrow
+## 1. Wallet registration and key escrow
 
-This flow registers a wallet’s keys and any list entries required by the ring’s policy in the member registry.
+This flow registers a wallet’s keys and any list entries required by the ring’s policy in the registry used by the ring.
 
 **Key escrow** enables a configured permanent delegate to transfer or merge a wallet’s funds without the wallet signing each operation. The wallet provides an encrypted copy of its nullifier secret—a secret needed to prepare those spends—which the Auditor can decrypt. Key escrow is available on confidential rings and unavailable on anonymous rings.
 
