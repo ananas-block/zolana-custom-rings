@@ -1688,6 +1688,9 @@ enum Measured {
     Anonymous,
     AnonymousPolicy,
     Delegate,
+    /// Spends default-ring notes, measured but not pinned.
+    AnonymousEntry,
+    AnonymousEntryPolicy,
 }
 
 impl Measured {
@@ -1705,8 +1708,22 @@ impl Measured {
     fn policy(self) -> bool {
         !matches!(
             self,
-            Self::Confidential | Self::InProofOwner | Self::Anonymous
+            Self::Confidential | Self::InProofOwner | Self::Anonymous | Self::AnonymousEntry
         )
+    }
+
+    fn anonymous(self) -> bool {
+        matches!(
+            self,
+            Self::Anonymous
+                | Self::AnonymousPolicy
+                | Self::AnonymousEntry
+                | Self::AnonymousEntryPolicy
+        )
+    }
+
+    fn entry(self) -> bool {
+        matches!(self, Self::AnonymousEntry | Self::AnonymousEntryPolicy)
     }
 
     fn keyed(self, shape: spr_client::Shape) -> bool {
@@ -1716,6 +1733,9 @@ impl Measured {
             | Self::InProofOwner
             | Self::InProofOwnerPolicy => RingRail::Confidential,
             Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
+            Self::AnonymousEntry | Self::AnonymousEntryPolicy => {
+                return shape.n_inputs() <= 8 && matches!(shape.n_outputs(), 2 | 4 | 8);
+            }
             Self::Delegate => RingRail::Delegate,
         };
         shape_keyed(rail, shape)
@@ -1749,6 +1769,15 @@ struct Measure {
     shape: spr_client::Shape,
     payer: Payer,
     co_signer: Option<(Address, custom_ring_interface::CoSignScope)>,
+    /// SOL withdrawal legs.
+    legs: usize,
+}
+
+/// Both v1 ceilings of one framed transfer, the address count unknown past the byte ceiling.
+#[derive(Clone, Copy, Debug)]
+struct Fit {
+    bytes: usize,
+    addresses: Option<usize>,
 }
 
 impl Measure {
@@ -1758,16 +1787,22 @@ impl Measure {
             shape,
             payer: Payer::Outsider,
             co_signer: rail.policy().then_some(MEASURED_CO_SIGNER),
+            legs: 0,
         }
     }
 
     async fn bytes(self) -> usize {
+        self.fit().await.bytes
+    }
+
+    async fn fit(self) -> Fit {
         use crate::tests::support::{keypair, Registry};
         let Self {
             rail,
             shape,
             payer,
             co_signer,
+            legs,
         } = self;
         let policy = rail.policy();
         let sender = keypair(1);
@@ -1776,11 +1811,51 @@ impl Measure {
             .map(|index| keypair(10 + index as u8))
             .collect();
         let utxos: Vec<WalletUtxo> = (0..shape.n_inputs() as u64)
-            .map(|leaf| ring_utxo(&sender, Mint::SOL, 100, leaf))
+            .map(|leaf| match rail.entry() {
+                true => crate::tests::support::wallet(
+                    spr_transaction::Utxo {
+                        owner: sender.signing_pubkey(),
+                        asset: Mint::SOL,
+                        amount: 100,
+                        blinding: spr_keypair::random_blinding(),
+                        ring_program_id: None,
+                        data: spr_transaction::Data::default(),
+                    },
+                    &sender.nullifier_key,
+                    TREE_ID,
+                    leaf,
+                ),
+                false => ring_utxo(&sender, Mint::SOL, 100, leaf),
+            })
             .collect();
+        // An anonymous exit pays one destination.
+        let leg_owners: Vec<ShieldedKeypair> = match rail.anonymous() {
+            true => (0..legs.min(1)).map(|_| keypair(40)).collect(),
+            false => (0..legs).map(|index| keypair(40 + index as u8)).collect(),
+        };
+        let destinations: Vec<Address> = (0..legs)
+            .map(|index| {
+                let owner = &leg_owners[index.min(leg_owners.len() - 1)];
+                owner.shielded_address().unwrap().solana_address().unwrap()
+            })
+            .collect();
+        let with_legs = |transaction: &mut ConfidentialTransaction| {
+            destinations
+                .iter()
+                .map(|recipient| {
+                    transaction.withdraw_sol(1, *recipient).unwrap();
+                    TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                        recipient: *recipient,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
         let delegate = Address::new_from_array([0x44; 32]);
         let mode = match rail {
-            Measured::Anonymous | Measured::AnonymousPolicy => RingMode::Anonymous,
+            Measured::Anonymous
+            | Measured::AnonymousPolicy
+            | Measured::AnonymousEntry
+            | Measured::AnonymousEntryPolicy => RingMode::Anonymous,
             Measured::ConfidentialPolicy | Measured::InProofOwnerPolicy | Measured::Delegate => {
                 RingMode::ConfidentialEscrow
             }
@@ -1794,6 +1869,8 @@ impl Measure {
         };
         let owners: Vec<(&ShieldedKeypair, u64)> = core::iter::once(&sender)
             .chain(&recipients)
+            // The allow rule needs each destination enrolled.
+            .chain(&leg_owners)
             .map(|owner| (owner, 1))
             .collect();
         let chain = match policy {
@@ -1823,7 +1900,8 @@ impl Measure {
                     )
                     .unwrap();
             }
-            owner_transfer(&sender, transaction)
+            let accounts = with_legs(&mut transaction);
+            owner_transfer(&sender, transaction).with_interface_transfer_accounts(accounts)
         };
         match rail {
             Measured::Confidential | Measured::ConfidentialPolicy => {
@@ -1833,8 +1911,14 @@ impl Measure {
                 size.of(confidential(utxos).with_in_proof_owner(&sender.signing_key))
                     .await
             }
-            Measured::Anonymous | Measured::AnonymousPolicy => {
-                let mut transfer = owner_transfer(&sender, paid_ring_transaction(utxos, payer))
+            Measured::Anonymous
+            | Measured::AnonymousPolicy
+            | Measured::AnonymousEntry
+            | Measured::AnonymousEntryPolicy => {
+                let mut transaction = paid_ring_transaction(utxos, payer);
+                let accounts = with_legs(&mut transaction);
+                let mut transfer = owner_transfer(&sender, transaction)
+                    .with_interface_transfer_accounts(accounts)
                     .with_anonymous_signer(&sender.signing_key, &state);
                 for recipient in &recipients {
                     transfer = transfer
@@ -1844,6 +1928,7 @@ impl Measure {
                 size.of(transfer).await
             }
             Measured::Delegate => {
+                assert_eq!(legs, 0, "the authority rail carries no public leg");
                 let transfer = DelegateTransfer::new(DelegateTransferInput {
                     ring: ring(),
                     delegate,
@@ -1878,7 +1963,7 @@ struct FrameSize<'c> {
 
 impl FrameSize<'_> {
     /// A refusal past the v1 ceiling carries the bytes of the framed transfer.
-    async fn of<R: Rail>(self, transfer: RingTransfer<R>) -> usize {
+    async fn of<R: Rail>(self, transfer: RingTransfer<R>) -> Fit {
         let transfer = match self.co_signer {
             Some(signer) => transfer.with_co_signer(signer),
             None => transfer,
@@ -1889,15 +1974,21 @@ impl FrameSize<'_> {
                     unwitnessed.frame.proof_inputs.check_shape().unwrap(),
                     self.shape
                 );
-                spr_client::transaction_size(
+                let size = spr_client::transaction_size(
                     &self.payer,
                     &[unwitnessed.instruction().unwrap()],
                     ComputeBudgetConfig::new(0),
                 )
-                .unwrap()
-                .bytes
+                .unwrap();
+                Fit {
+                    bytes: size.bytes,
+                    addresses: Some(size.addresses),
+                }
             }
-            Err(RingError::TransferTooWide { bytes, .. }) => bytes,
+            Err(RingError::TransferTooWide { bytes, .. }) => Fit {
+                bytes,
+                addresses: None,
+            },
             Err(error) => panic!("{:?} {:?}: {error}", self.rail, self.shape),
         }
     }
@@ -1954,6 +2045,57 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin { n_in: 49, n_out: 2, bytes: [None, None, None, None, None, None, None] },
 ];
 
+/// One JSON line per keyed rail, shape and SOL leg count when `RING_FIT_REPORT` names the file.
+#[tokio::test]
+async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
+    let Ok(path) = std::env::var("RING_FIT_REPORT") else {
+        return;
+    };
+    let only = std::env::var("RING_FIT_RAILS").ok();
+    let mut lines = Vec::new();
+    for shape in spr_client::SPP_SUPPORTED_SHAPES {
+        for rail in Measured::COLUMNS
+            .into_iter()
+            .chain([Measured::AnonymousEntry, Measured::AnonymousEntryPolicy])
+        {
+            let named = format!("{rail:?}");
+            if only
+                .as_ref()
+                .is_some_and(|only| !only.split(',').any(|name| name == named))
+            {
+                continue;
+            }
+            if !rail.keyed(shape) {
+                continue;
+            }
+            for legs in [0usize, 1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32] {
+                if legs > 0 && rail == Measured::Delegate {
+                    break;
+                }
+                let fit = Measure {
+                    legs,
+                    ..Measure::pinned(rail, shape)
+                }
+                .fit()
+                .await;
+                let addresses = fit
+                    .addresses
+                    .map_or_else(|| "null".to_owned(), |addresses| addresses.to_string());
+                lines.push(format!(
+                    r#"{{"rail":"{rail:?}","n_in":{},"n_out":{},"legs":{legs},"bytes":{},"addresses":{addresses}}}"#,
+                    shape.n_inputs(),
+                    shape.n_outputs(),
+                    fit.bytes
+                ));
+                if fit.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
+                    break;
+                }
+            }
+        }
+    }
+    std::fs::write(path, lines.join("\n") + "\n").unwrap();
+}
+
 /// The program cannot depend on the SDK's ciphertexts, the SDK pins the sizes.
 #[tokio::test]
 async fn every_transfer_shape_takes_its_pinned_transaction_size() {
@@ -1990,6 +2132,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
         shape: spr_client::Shape::IN8_OUT16,
         payer: Payer::Owner,
         co_signer: None,
+        legs: 0,
     };
     assert!(fits(audit_only).await);
     assert!(
