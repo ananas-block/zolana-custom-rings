@@ -1,4 +1,4 @@
-//! The `HashChain4` public input of the audit, policy, apply and register key proofs.
+//! The `HashChain4` public input of the transfer, audit, policy, apply and register key proofs.
 
 use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
@@ -30,11 +30,18 @@ pub struct AuditHead<'a> {
 
 impl AuditHead<'_> {
     fn elements(&self) -> Result<[[u8; 32]; AUDIT_HEAD_ELEMENTS], HasherError> {
+        self.elements_under(domain::AUDIT_STATEMENT)
+    }
+
+    fn elements_under(
+        &self,
+        statement: u32,
+    ) -> Result<[[u8; 32]; AUDIT_HEAD_ELEMENTS], HasherError> {
         let [tx0, tx1] = pack_be(&tagged_x25519(self.tx_viewing_u));
         let [aud0, aud1] = pack_be(self.auditor_pubkey);
         let [eph0, eph1] = pack_be(&tagged_x25519(self.eph_u));
         Ok([
-            domain::field(domain::AUDIT_STATEMENT),
+            domain::field(statement),
             *self.first_nullifier,
             *self.ring_id,
             tx0,
@@ -87,21 +94,15 @@ pub struct AuditStatement<'a> {
 impl AuditStatement<'_> {
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
         let mut elements = self.head.elements()?.to_vec();
-        let hashes: Vec<[u8; 32]> = self.outputs.iter().map(|output| *output.hash()).collect();
-        let output_chain = create_hash_chain_4_from_slice(&hashes)?;
+        let output_chain = output_chain(self.outputs)?;
         let disclosure_chain = create_hash_chain_4_from_slice(self.disclosure)?;
         match self.kind {
             AuditKind::Delivered(sender) => {
-                let keys: Vec<[u8; 32]> = self
-                    .outputs
-                    .iter()
-                    .flat_map(RingOutput::recipient_key_fields)
-                    .collect();
                 elements.extend([
                     output_chain,
-                    self.body_chain()?,
+                    body_chain(self.outputs)?,
                     disclosure_chain,
-                    create_hash_chain_4_from_slice(&keys)?,
+                    recipient_key_chain(self.outputs)?,
                 ]);
                 if let Some(sender) = sender {
                     elements.extend([*sender.private_tx_hash, sender.sender]);
@@ -125,14 +126,121 @@ impl AuditStatement<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         create_hash_chain_4_from_slice(&self.elements()?)
     }
+}
 
-    fn body_chain(&self) -> Result<[u8; 32], HasherError> {
-        let bodies = self
-            .outputs
-            .iter()
-            .map(RingOutput::body_hash)
-            .collect::<Result<Vec<_>, _>>()?;
-        create_hash_chain_4_from_slice(&bodies)
+fn output_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+    let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash()).collect();
+    create_hash_chain_4_from_slice(&hashes)
+}
+
+/// Zero for every slot but a delivered one.
+fn body_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+    let bodies = outputs
+        .iter()
+        .map(RingOutput::body_hash)
+        .collect::<Result<Vec<_>, _>>()?;
+    create_hash_chain_4_from_slice(&bodies)
+}
+
+fn recipient_key_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+    let keys: Vec<[u8; 32]> = outputs
+        .iter()
+        .flat_map(RingOutput::recipient_key_fields)
+        .collect();
+    create_hash_chain_4_from_slice(&keys)
+}
+
+/// The rail-bound elements of a transfer statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferFamily<'a> {
+    /// The signer, in-proof and authority rails.
+    Confidential {
+        in_proof: bool,
+        delegate: bool,
+        /// The in-proof owner's identity, the sole owner signer's under a policy, else zero.
+        sender: &'a [u8; 32],
+        /// One owner identity per output slot, zero on a dummy and off a policy.
+        recipients: &'a [[u8; 32]],
+    },
+    /// The anonymous rail, the head's layout picks the commitment or entry disclosure.
+    Anonymous {
+        /// `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, zero when absent.
+        party_identities: &'a [[u8; 32]; 3],
+    },
+}
+
+/// One ring transfer's proof, mirror `prover/circuits/transfer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferStatement<'a> {
+    pub head: AuditHead<'a>,
+    pub family: TransferFamily<'a>,
+    /// Every public slot's gross withdrawal stays at or below its record's threshold.
+    pub exempt: bool,
+    pub approval_required: bool,
+    pub outputs: &'a [RingOutput<'a>],
+    pub disclosure: &'a [[u8; 32]],
+    pub private_tx_hash: &'a [u8; 32],
+    /// Zero on an audit-only ring.
+    pub policy_hash: &'a [u8; 32],
+    /// Zero when no registry is read.
+    pub own_root: &'a [u8; 32],
+    /// Zero without a curator source.
+    pub curator_root: &'a [u8; 32],
+    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    /// SPP's signed nets, a withdrawal is `q - |amount|`.
+    pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    /// Gross withdrawals per slot as right-aligned u128.
+    pub public_gross: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    pub withdrawal_hash: &'a [u8; 32],
+}
+
+impl TransferStatement<'_> {
+    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
+        let mut elements = self
+            .head
+            .elements_under(domain::TRANSFER_STATEMENT)?
+            .to_vec();
+        if let TransferFamily::Confidential {
+            in_proof, delegate, ..
+        } = self.family
+        {
+            elements.extend([bit(in_proof), bit(delegate)]);
+        }
+        elements.extend([
+            bit(self.exempt),
+            bit(self.approval_required),
+            output_chain(self.outputs)?,
+        ]);
+        if matches!(self.family, TransferFamily::Confidential { .. }) {
+            elements.extend([
+                body_chain(self.outputs)?,
+                recipient_key_chain(self.outputs)?,
+            ]);
+        }
+        elements.extend([
+            create_hash_chain_4_from_slice(self.disclosure)?,
+            *self.private_tx_hash,
+        ]);
+        match self.family {
+            TransferFamily::Confidential { sender, .. } => elements.push(*sender),
+            TransferFamily::Anonymous { party_identities } => elements.extend(*party_identities),
+        }
+        elements.extend([*self.policy_hash, *self.own_root, *self.curator_root]);
+        if let TransferFamily::Confidential { recipients, .. } = self.family {
+            elements.extend_from_slice(recipients);
+        }
+        for (slot, asset) in self.public_assets.iter().enumerate() {
+            elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
+        }
+        elements.extend([
+            *self.withdrawal_hash,
+            right_align(&[domain::TRANSFER_STATEMENT_VERSION]),
+        ]);
+        Ok(elements)
+    }
+
+    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        create_hash_chain_4_from_slice(&self.elements()?)
     }
 }
 

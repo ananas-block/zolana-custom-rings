@@ -4,8 +4,8 @@ use custom_ring_interface::{
     AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
     AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DeliveredSender, DepositContext,
     DepositPublicInput, DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey,
-    PolicyStatement, RegisterKeyStatement, RingOutput, ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS,
-    DEPOSIT_PUBLIC_INPUT_ELEMENTS,
+    PolicyStatement, RegisterKeyStatement, RingOutput, TransferFamily, TransferStatement,
+    ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ struct StatementVectors {
     description: String,
     audit: Vec<AuditCase>,
     policy: Vec<PolicyCase>,
+    transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
@@ -83,6 +84,41 @@ struct PolicyCase {
     recipients: Vec<String>,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
+    elements: Vec<String>,
+    public_input_hash: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct TransferCase {
+    /// `confidential` or `anonymous`.
+    family: String,
+    /// `signer`, `in_proof`, `delegate`, `anonymous` or `entry`.
+    rail: String,
+    in_proof: Option<bool>,
+    delegate: Option<bool>,
+    exempt: bool,
+    approval_required: bool,
+    first_nullifier: String,
+    ring_id: String,
+    tx_viewing_u: String,
+    auditor_pubkey: String,
+    eph_u: String,
+    sealed: String,
+    salt: String,
+    layout: u8,
+    outputs: Vec<OutputCase>,
+    disclosure: Vec<String>,
+    private_tx_hash: String,
+    sender: Option<String>,
+    party_identities: Option<Vec<String>>,
+    policy_hash: String,
+    own_root: String,
+    curator_root: String,
+    recipients: Option<Vec<String>>,
+    public_assets: Vec<String>,
+    public_amounts: Vec<String>,
+    public_gross: Vec<String>,
+    withdrawal_hash: String,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -305,6 +341,65 @@ fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
     }
 }
 
+fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
+    let head = statement.head;
+    let confidential = match statement.family {
+        TransferFamily::Confidential {
+            in_proof,
+            delegate,
+            sender,
+            recipients,
+        } => Some((in_proof, delegate, sender, recipients)),
+        TransferFamily::Anonymous { .. } => None,
+    };
+    let parties = match statement.family {
+        TransferFamily::Anonymous { party_identities } => Some(hexes(party_identities)),
+        TransferFamily::Confidential { .. } => None,
+    };
+    let rail = match (confidential, head.layout.full_openings) {
+        (Some((true, _, _, _)), _) => "in_proof",
+        (Some((_, true, _, _)), _) => "delegate",
+        (Some(_), _) => "signer",
+        (None, true) => "entry",
+        (None, false) => "anonymous",
+    };
+    TransferCase {
+        family: match confidential {
+            Some(_) => "confidential",
+            None => "anonymous",
+        }
+        .to_string(),
+        rail: rail.to_string(),
+        in_proof: confidential.map(|(in_proof, ..)| in_proof),
+        delegate: confidential.map(|(_, delegate, ..)| delegate),
+        exempt: statement.exempt,
+        approval_required: statement.approval_required,
+        first_nullifier: hex::encode(head.first_nullifier),
+        ring_id: hex::encode(head.ring_id),
+        tx_viewing_u: hex::encode(head.tx_viewing_u),
+        auditor_pubkey: hex::encode(head.auditor_pubkey),
+        eph_u: hex::encode(head.eph_u),
+        sealed: hex::encode(head.sealed),
+        salt: hex::encode(head.salt),
+        layout: head.layout.value(),
+        outputs: statement.outputs.iter().map(output_case).collect(),
+        disclosure: hexes(statement.disclosure),
+        private_tx_hash: hex::encode(statement.private_tx_hash),
+        sender: confidential.map(|(_, _, sender, _)| hex::encode(sender)),
+        party_identities: parties,
+        policy_hash: hex::encode(statement.policy_hash),
+        own_root: hex::encode(statement.own_root),
+        curator_root: hex::encode(statement.curator_root),
+        recipients: confidential.map(|(_, _, _, recipients)| hexes(recipients)),
+        public_assets: hexes(statement.public_assets),
+        public_amounts: hexes(statement.public_amounts),
+        public_gross: hexes(statement.public_gross),
+        withdrawal_hash: hex::encode(statement.withdrawal_hash),
+        elements: hexes(&statement.elements().unwrap()),
+        public_input_hash: hex::encode(statement.hash().unwrap()),
+    }
+}
+
 fn compute_vectors() -> StatementVectors {
     let values = Values::new();
     let (escrowed, delivered, anonymous) = (
@@ -431,6 +526,126 @@ fn compute_vectors() -> StatementVectors {
         recipients: &[values.fields[62], values.fields[63]],
         ..confidential
     };
+    let gross = [zero, right_aligned(1200), zero];
+    let no_withdrawals = custom_ring_interface::policy_withdrawal_hash(&[]).unwrap();
+    let eight_recipients: [[u8; 32]; 8] = core::array::from_fn(|slot| values.fields[62 + slot]);
+    let exits_only = AuditLayout {
+        exits: true,
+        ..AuditLayout::default()
+    };
+    let signer_policy = TransferStatement {
+        head: values.head(exits_only),
+        family: TransferFamily::Confidential {
+            in_proof: false,
+            delegate: false,
+            sender: &owner_signer,
+            recipients: &eight_recipients,
+        },
+        exempt: false,
+        approval_required: true,
+        outputs: &delivered,
+        disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
+            outputs: 8,
+            exits: true,
+            key_escrow: false,
+            sender_class: None,
+        })),
+        private_tx_hash: &values.fields[3],
+        policy_hash: &values.fields[6],
+        own_root: &values.fields[7],
+        curator_root: &values.fields[8],
+        public_assets: &assets,
+        public_amounts: &amounts,
+        public_gross: &gross,
+        withdrawal_hash: &no_withdrawals,
+    };
+    let signer_exempt = TransferStatement {
+        family: TransferFamily::Confidential {
+            in_proof: false,
+            delegate: false,
+            sender: &zero,
+            recipients: &[zero; 8],
+        },
+        exempt: true,
+        approval_required: false,
+        policy_hash: &zero,
+        curator_root: &zero,
+        ..signer_policy
+    };
+    let in_proof_policy = TransferStatement {
+        family: TransferFamily::Confidential {
+            in_proof: true,
+            delegate: false,
+            sender: &owner_signer,
+            recipients: &eight_recipients,
+        },
+        ..signer_policy
+    };
+    let no_slots = [zero; 3];
+    let delegate_move = TransferStatement {
+        head: values.head(AuditLayout {
+            exits: true,
+            key_escrow: true,
+            full_openings: false,
+        }),
+        family: TransferFamily::Confidential {
+            in_proof: false,
+            delegate: true,
+            sender: &zero,
+            recipients: &[values.fields[62], values.fields[63]],
+        },
+        approval_required: false,
+        outputs: &escrowed,
+        disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
+            outputs: 2,
+            exits: true,
+            key_escrow: true,
+            sender_class: None,
+        })),
+        curator_root: &zero,
+        public_assets: &no_slots,
+        public_amounts: &no_slots,
+        public_gross: &no_slots,
+        ..signer_policy
+    };
+    let parties = [right_aligned(11), right_aligned(12), zero];
+    let anonymous_policy_transfer = TransferStatement {
+        family: TransferFamily::Anonymous {
+            party_identities: &parties,
+        },
+        approval_required: false,
+        outputs: &anonymous,
+        disclosure: values.disclosure(DisclosureLayout::Anonymous(commitment)),
+        ..signer_policy
+    };
+    let anonymous_exempt = TransferStatement {
+        exempt: true,
+        policy_hash: &zero,
+        curator_root: &zero,
+        ..anonymous_policy_transfer
+    };
+    let entry = TransferStatement {
+        head: values.head(AuditLayout {
+            full_openings: true,
+            ..exits_only
+        }),
+        disclosure: values.disclosure(DisclosureLayout::Anonymous(AnonymousLayout {
+            key: AnonymousAuditKey::Entry,
+            ..commitment
+        })),
+        policy_hash: &zero,
+        curator_root: &zero,
+        ..anonymous_policy_transfer
+    };
+    let transfers = [
+        signer_policy,
+        signer_exempt,
+        in_proof_policy,
+        delegate_move,
+        anonymous_policy_transfer,
+        anonymous_exempt,
+        entry,
+    ];
     let apply = ApplyRecordsStatement {
         old_root: values.fields[9],
         new_root: values.fields[10],
@@ -502,13 +717,21 @@ fn compute_vectors() -> StatementVectors {
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
                       registry root, the curator root, the policy hash and each asset hash with its amount zero \
-                      padded to 8 slots. Produced by program-libs/interface/tests/statements.rs."
+                      padded to 8 slots. The transfer statements are HashChain4 over the audit head under \
+                      CRTX, on the confidential family in_proof and delegate, then exempt, \
+                      approval_required, the output chain, on the confidential family the body and \
+                      recipient key chains, the disclosure chain, private_tx_hash, the sender on the \
+                      confidential family or the three party identities on the anonymous family, \
+                      policy_hash, own_root, curator_root, one recipient per output on the confidential \
+                      family, asset, net and gross per public slot, withdrawal_hash and the version. \
+                      Produced by program-libs/interface/tests/statements.rs."
             .to_string(),
         audit: audit.iter().map(audit_case).collect(),
         policy: [confidential, anonymous_policy, delegate]
             .iter()
             .map(policy_case)
             .collect(),
+        transfer: transfers.iter().map(transfer_case).collect(),
         apply_records: ApplyCase {
             old_root: hex::encode(apply.old_root),
             new_root: hex::encode(apply.new_root),
@@ -581,6 +804,12 @@ fn ring_statements_vector() {
         .map(|case| case.elements.len())
         .collect();
     assert_eq!(policy, [20, 20, 19]);
+    let transfer: Vec<usize> = committed
+        .transfer
+        .iter()
+        .map(|case| case.elements.len())
+        .collect();
+    assert_eq!(transfer, [44, 44, 44, 38, 34, 34, 34]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS

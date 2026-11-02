@@ -67,6 +67,8 @@ pub struct PublicSlots {
 struct PublicSlot {
     asset: [u8; 32],
     net: i128,
+    /// Sum of the asset's withdrawal legs, deposits excluded.
+    gross: u128,
 }
 
 impl PublicSlots {
@@ -109,6 +111,19 @@ impl PublicSlots {
         core::array::from_fn(|index| self.slots.get(index).map_or(0, |slot| slot.net))
     }
 
+    /// Gross withdrawals as right-aligned u128, zero past the used slots.
+    pub fn gross_fields(&self) -> [[u8; 32]; N_PUBLIC_SLOTS] {
+        core::array::from_fn(|index| {
+            right_align(
+                &self
+                    .slots
+                    .get(index)
+                    .map_or(0, |slot| slot.gross)
+                    .to_be_bytes(),
+            )
+        })
+    }
+
     /// Zero past the used slots.
     pub fn amount_fields(&self) -> Result<[[u8; 32]; N_PUBLIC_SLOTS], PublicSlotError> {
         let mut fields = [[0u8; 32]; N_PUBLIC_SLOTS];
@@ -124,7 +139,14 @@ impl PublicSlots {
             Some(slot) => *slot = slot.credit(amount)?,
             None => self
                 .slots
-                .try_push(PublicSlot { asset, net: 0 }.credit(amount)?)
+                .try_push(
+                    PublicSlot {
+                        asset,
+                        net: 0,
+                        gross: 0,
+                    }
+                    .credit(amount)?,
+                )
                 .map_err(|_| PublicSlotError::TooManyAssets { asset })?,
         }
         Ok(())
@@ -139,7 +161,12 @@ impl PublicSlot {
             .checked_add(amount)
             .filter(|net| u64::try_from(net.unsigned_abs()).is_ok())
             .ok_or(PublicSlotError::AmountOverflow { asset: self.asset })?;
-        Ok(Self { net, ..self })
+        // A u128 sum of u64 legs never overflows.
+        let gross = match amount.is_negative() {
+            true => self.gross + amount.unsigned_abs(),
+            false => self.gross,
+        };
+        Ok(Self { net, gross, ..self })
     }
 }
 

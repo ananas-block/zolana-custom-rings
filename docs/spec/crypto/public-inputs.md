@@ -4,6 +4,8 @@ Every ring proof has one public input. It is the fold of a statement the program
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
+| Transfer, confidential family | `HashChain4` | `36 + n_out` | `Transfer`, `AuthorityTransfer` |
+| Transfer, anonymous family | `HashChain4` | 34 | `Transfer` |
 | Audit, delivered | `HashChain4` | 16 | `Transfer`, `AuthorityTransfer` |
 | Audit, delivered sender | `HashChain4` | 18 | `Transfer` on the in-proof rail |
 | Audit, anonymous | `HashChain4` | 19 | `Transfer` |
@@ -14,6 +16,50 @@ Every ring proof has one public input. It is the fold of a statement the program
 | Withdrawal exemption | `HashChain4` | 8 | `Transfer` |
 | Deposit | `HashChain` | 44 | `Deposit` |
 | Merge | `HashChain` | 17 | `Merge` |
+
+## Transfer
+
+One proof covers the audit, the policy and the withdrawal exemption of a transfer. The
+confidential family serves the signer, in-proof and authority rails, the anonymous family the
+anonymous rail with the commitment or the entry disclosure by the head's `layout`.
+
+```text
+[ CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout,
+  in_proof, delegate,                 confidential family only
+  exempt, approval_required,
+  output_chain,
+  body_chain, recipient_key_chain,    confidential family only
+  disclosure_chain, private_tx_hash,
+  sender,                             confidential family only
+  party_0, party_1, party_2,          anonymous family only
+  policy_hash, own_root, curator_root,
+  recipient_0 .. recipient_{n_out-1}, confidential family only
+  (asset_k, net_k, gross_k) per public slot,
+  withdrawal_hash,
+  1 ]                                 TRANSFER_STATEMENT_VERSION
+```
+
+- The head is the audit head under `CRTX` in place of `CRAU`, the `layout` bits are `exits`,
+  `key_escrow` and `full_openings` as below. `key_escrow` equals `mode == ConfidentialEscrow`.
+- `in_proof` is the frame's `OWNER_IN_PROOF` flag, `delegate` is the `AuthorityTransfer` tag.
+  `exempt` is the frame's `EXEMPT` flag, `approval_required` its `APPROVAL_REQUIRED` flag,
+  refused on the authority rail.
+- `output_chain`, `body_chain`, `recipient_key_chain` and `disclosure_chain` are the delivered
+  and anonymous audit chains below.
+- `sender` is `solana_owner_identity` of the sole owner signer under a policy, of the framed
+  owner key on the in-proof rail, and zero on the signer rail off a policy and on the authority
+  rail. The party identities are those of the anonymous audit.
+- `policy_hash` is the ring account's written hash, zero on an audit-only ring. `own_root` and
+  `curator_root` are the registry roots at the frame's revisions. `own_root` is zero when no
+  registry is read, `curator_root` is zero without a curator.
+- `recipient_o` is output `o`'s owner identity from the frame under a policy, zero off one and
+  for a dummy slot.
+- A public slot holds SPP's asset field, `right_align(net)` for a positive net or `q - |net|` for
+  a negative one, and the gross withdrawal of the asset as `right_align` of a u128, deposits
+  excluded. Slots past the used ones are zeros. Under `exempt` the circuit bounds every gross
+  to u64 and to the asset's own-record `withdrawal_threshold`.
+- `withdrawal_hash` is the policy withdrawal hash below. The version is nonzero and last, so a
+  statement missing trailing elements hashes apart from a complete one.
 
 ## Audit
 

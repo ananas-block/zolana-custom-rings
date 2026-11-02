@@ -40,6 +40,10 @@ pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
 
 /// Bound into every policy statement, a layout change raises it.
 pub const POLICY_STATEMENT_VERSION: u8 = 4;
+/// `"CRTX"`
+pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
+/// Bound nonzero and last into every transfer statement, a layout change raises it.
+pub const TRANSFER_STATEMENT_VERSION: u8 = 1;
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
