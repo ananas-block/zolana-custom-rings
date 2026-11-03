@@ -2,7 +2,7 @@ import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from 
 import { type PresentRecordOpening } from "./prover/types.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
-import { waitForProjection, equalBytes } from "@heliuslabs/zolana/internal";
+import { waitForProjection, equalBytes, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
@@ -114,7 +114,9 @@ export async function checkEscrowedRecipients(
   );
   input.recipients.forEach((recipient, index) => {
     const owner = owners[index];
-    if (owner !== undefined) ownerEscrowed(owner, reads[index], recipient.nullifierPublicKey);
+    // The zero nullifier key escrows nothing.
+    if (owner !== undefined && !equalBytes(recipient.nullifierPublicKey, ZERO_NULLIFIER_PK))
+      ownerEscrowed(owner, reads[index], recipient.nullifierPublicKey);
   });
 }
 

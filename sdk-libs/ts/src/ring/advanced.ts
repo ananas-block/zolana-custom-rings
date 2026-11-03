@@ -30,16 +30,15 @@ export {
   ESCROWED_DELIVERED_BODY_LEN,
   ESCROWED_EXIT_RECORD_LEN,
   EXIT_RECORD_LEN,
-  INPUT_PREFIX_BYTES,
+  INPUT_HASH_LEN,
   MERGE_WIDTHS,
   STREAM_BLOCK_LEN,
   STREAM_FIRST_COUNTER,
-  anonymousAuditKey,
   auditLayoutValue,
   auditorMessageLen,
   checkedStreamLayout,
   ciphertextLen,
-  confidentialAuditKey,
+  transferAuditKey,
   deliveredBodyLen,
   envelopeRegion,
   evidenceBytes,
@@ -54,26 +53,23 @@ export {
   recordSlots,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export type {
-  AnonymousAuditKey,
-  AnonymousSpend,
+  AuditKeySpend,
   AuditKey,
   AuditLayout,
   AuditStreamLayout,
   AuditStreamRegion,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export {
-  anonymousCommitments,
   decodeDisclosure,
   disclosurePlaintext,
-  inputPrefixes,
   openRingDisclosure,
   sealRingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 export type {
   AnonymousInputOpening,
-  AnonymousInputs,
   AnonymousOutputOpening,
-  DeliveredInputs,
+  InputCommitments,
+  InputOpenings,
   DeliveredOutputOpening,
   DisclosurePlaintext,
   DummySlot,
@@ -82,35 +78,44 @@ export type {
 export { deliveredSlotSecret, ringIdField } from "../crypto/derivation/ring-stream.js";
 export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
-  anonymousRecipientOutputBody,
-  anonymousSenderOutputBody,
   openDeliveredBody,
+  recipientOutputBody,
+  senderBundleOutputBody,
   RingScheme,
   sealDeliveredBody,
   type DeliveredBodyOpening,
 } from "../protocol/transaction/output.js";
 export {
-  DUMMY_RECIPIENT_VIEWING_PK,
+  MIN_REPLY_LEN,
   RECIPIENT_BODY_LEN,
-  isDummyRecipient,
-  listedRecipients,
-  openRecipient,
-  rebuilds,
-  senderChange,
-  type AnonymousOutput,
-} from "../protocol/codec/anonymous-body.js";
+  openRecipientBody,
+  openReply,
+  openSenderBundle,
+  replyLength,
+  sealRecipientBody,
+  sealReply,
+  sealSenderBundle,
+  senderBundleLen,
+  type RecipientBody,
+  type ReplyMetadata,
+  type SenderBundle,
+} from "../protocol/codec/anonymous-delivery.js";
+export {
+  ownerDebits,
+  type DebitInput,
+  type DebitOutput,
+  type OwnerDebit,
+} from "../protocol/membership/owner-debits.js";
 export {
   decodeAnonymousRecipient,
   decodeAnonymousSender,
-  encodeAnonymousRecipient,
-  encodeAnonymousSender,
   type AnonymousRecipientPlaintext,
   type AnonymousSenderPlaintext,
-  type UnverifiedRecipientPlaintext,
-  type UnverifiedSenderPlaintext,
-  type VerifiedRecipientPlaintext,
-  type VerifiedSenderPlaintext,
-} from "../protocol/codec/anonymous-plaintext.js";
+  type CommittedRecipientPlaintext,
+  type CommittedSenderPlaintext,
+  type UncommittedRecipientPlaintext,
+  type UncommittedSenderPlaintext,
+} from "../protocol/historical/anonymous-plaintext.js";
 export {
   OutputBlindings,
   openRingDelivery,
@@ -151,7 +156,7 @@ export type {
   RingOutput,
   RingRail,
   RingTransactConfig,
-  SenderBundle,
+  PublishedSenderBundle,
 } from "../protocol/transaction/transact.js";
 export {
   applyRecordsStatementElements,
@@ -194,8 +199,7 @@ export {
 } from "../protocol/membership/member-opening.js";
 export type { EscrowKey } from "../protocol/membership/member-opening.js";
 export { readRegisteredRecord, type RegisteredRecord } from "../rpc/registered-record.js";
-export { nextScanCursor } from "../operations/audit/audit.js";
-export { openDisclosedMerge } from "../operations/audit/audit-merge.js";
+export { historyCursor, historyCursorToken, type HistoryStream } from "../rpc/history.js";
 export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 
 export {
@@ -219,6 +223,7 @@ export {
 export {
   LIST_IDS,
   ListId,
+  POLICY_LISTS,
   POLICY_TABLE_VERSION,
   admitTransfer,
   buildRuleTable,
@@ -278,3 +283,12 @@ export {
   type AssetLimits,
   type MintPolicy,
 } from "../protocol/membership/mint-policy.js";
+export {
+  historicalCoverageRow,
+  openHistoricalMerge,
+  openHistoricalRingTransfer,
+  type HistoricalCoverageRow,
+  type HistoricalInputOpening,
+  type HistoricalTransfer,
+  type HistoricalTransferInput,
+} from "../protocol/historical/index.js";

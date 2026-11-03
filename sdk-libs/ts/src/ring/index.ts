@@ -118,7 +118,11 @@ export {
   AuthorityRecordUpdate,
   WalletRecordUpdate,
 } from "../operations/management/record-updates.js";
-export type { EscrowEntry, RecordUpdateTarget } from "../operations/management/record-updates.js";
+export type {
+  AddressEntry,
+  EscrowEntry,
+  RecordUpdateTarget,
+} from "../operations/management/record-updates.js";
 export type {
   ReaderAccess,
   RecordUpdate,
@@ -184,40 +188,35 @@ export {
   PENDING_RETENTION,
   StreamCounter,
   TAG_GAP,
-  TransferTagging,
   VIEWING_HISTORY_VERSION,
   ViewingHistory,
   ViewingKeyEntry,
 } from "../state/viewing-history.js";
-export type {
-  AdvancedTag,
-  Counterparty,
-  EntryStream,
-  FirstContact,
-  FirstContactPairing,
-  PaymentRecipient,
-  PaymentTag,
-  TagSelection,
-  TransferTags,
-} from "../state/viewing-history.js";
-export { AnonymousSync, applyAnonymousScan, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export type { AdvancedTag, EntryStream, RingPosition } from "../state/viewing-history.js";
+export { plainTagFrame, scanWorkerMatcher } from "../state/anonymous-scan.js";
+export type { PlainTagFrame, ScanWorkerReply, ScanWorkerRequest } from "../state/anonymous-scan.js";
+export { AnonymousWallet, ANONYMOUS_WALLET_VERSION } from "../state/anonymous-wallet.js";
+export type { PendingClaim } from "../state/anonymous-wallet.js";
+export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
 export type {
   AnonymousRingUtxo,
   AnonymousScan,
   AnonymousStream,
   AnonymousSyncClient,
+  ReplyClaim,
   SentCheck,
   SentPayment,
 } from "../state/anonymous-sync.js";
-export type { TaggedPayment } from "../operations/payments/output-rail.js";
+export type { PlannedPayment } from "../operations/payments/output-rail.js";
 export { openRingNotes, syncRingWallet } from "../state/ring-sync.js";
 export type { RingNotes, RingSyncClient } from "../state/ring-sync.js";
 export { LocalRingKeys, isRingKeys, ringWalletKeys } from "../state/ring-keys.js";
 export type {
   RingDeliveryRequest,
   RingKeys,
-  SharedTagPair,
-  SharedTagsRequest,
+  RingTagFrame,
+  RingTagKind,
+  RingTagProbe,
   ViewTagRequest,
   ViewTagStream,
 } from "../state/ring-keys.js";
@@ -364,8 +363,6 @@ export {
   openedUtxo,
   recoverTransactionViewingKey,
 } from "../operations/audit/audit.js";
-export { inputPrefix } from "../crypto/audit/ring-disclosure.js";
-export type { InputPrefix } from "../crypto/audit/ring-disclosure.js";
 export type {
   AuditedInput,
   AuditedInputOpening,
@@ -393,12 +390,18 @@ export { auditRingMerges } from "../operations/audit/audit-merge.js";
 export { createdRingUtxos, scanCreatedRingUtxos } from "../operations/workflow/created-utxos.js";
 export type { CreatedRingUtxosPage } from "../operations/workflow/created-utxos.js";
 export type {
-  AuditedRingMerge,
-  MergeKeys,
+  HistoricalMergeRow,
   RingMergeAuditPage,
   RingMergeAuditReader,
-  UnresolvedRingMerge,
 } from "../operations/audit/audit-merge.js";
+export { MergeLedger } from "../state/merge-ledger.js";
+export type {
+  AuditedMergeOutput,
+  ConfirmedMerge,
+  KnownMergeInput,
+  MergeInput,
+  MergeTransition,
+} from "../state/merge-ledger.js";
 export {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
@@ -436,6 +439,9 @@ export {
   RING_READ_CURSOR_LIMIT,
   RING_READ_PAGE_LIMIT,
   RingAuditedUtxosRequest,
+  RingUnspentUtxosRequest,
+  GET_UNSPENT_UTXOS,
+  unspentUtxosAttestation,
   RingAuditorKeyRequest,
   RingAuthorityTransferRequest,
   RingReadRequest,
@@ -456,6 +462,17 @@ export {
 export type { RingEnrolmentAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
+  AuditedRingMerge,
+  UnresolvedRingMerge,
+  SignedUnspentUtxosRead,
+  RingUnspentUtxo,
+  RingUnspentUtxoKind,
+  RingCoverage,
+  RingUnresolvedReason,
+  RingUnresolvedHistory,
+  RingUnspentUtxosPage,
+  DecryptedRingInput,
+  DecryptedRingInputOpening,
   DecryptedOutputContext,
   DecryptedRingOutput,
   DecryptedRingTransaction,
@@ -497,3 +514,19 @@ export {
 } from "../operations/management/reader-access.js";
 export type { ReaderKey } from "../operations/management/reader-access.js";
 export { createPasskey, passkeyReader, type Passkey } from "../crypto/keys/passkey.js";
+export {
+  decodeAddressAuthorization,
+  enrollAddressInstruction,
+  type AddressAuthorization,
+  type EnrollAddress,
+} from "../operations/management/enroll-address.js";
+export { addressAuthorizationPda } from "../protocol/pda/index.js";
+export type { AuthorizedAddress } from "../protocol/membership/member-registry.js";
+export type { ReplyMetadata } from "../protocol/codec/anonymous-delivery.js";
+export {
+  checkCoOwnerKeys,
+  ringSpendAuthority,
+  ringSpendTransfer,
+  type CoOwner,
+} from "../operations/payments/ring-spend.js";
+export { noteNullifierPublicKey, ringProofInput } from "../operations/workflow/selection.js";

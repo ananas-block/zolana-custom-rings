@@ -28,6 +28,7 @@ import {
   type MemberRecord,
   type QuadPath,
   type RecordOpening,
+  type AuthorizedAddress,
 } from "../protocol/membership/member-registry.js";
 import type {
   RingMemberOpening,
@@ -212,7 +213,24 @@ function memberRecord(record: WireRingMemberRecordView): MemberRecord {
     lists: record.lists,
     escrowKey: hashBytes(record.escrowKey),
     mintPolicy: record.mintPolicy,
+    addressHash: hashBytes(record.addressHash),
   });
+}
+
+function servedAddress(
+  record: WireRingMemberRecordView,
+): Readonly<{ address?: AuthorizedAddress }> {
+  const { address } = record;
+  return address === undefined
+    ? {}
+    : {
+        address: Object.freeze({
+          ringId: hashBytes(address.ringId),
+          nullifierPk: hashBytes(address.nullifierPk),
+          viewingU: hashBytes(address.viewingU),
+          addressRevision: address.addressRevision,
+        }),
+      };
 }
 
 /** A sealed key is served whole or not at all. */
@@ -243,7 +261,11 @@ function memberOpening(
   const opened: RecordOpening = opening.present
     ? { kind: "present", record: memberRecord(record), path: recordPath(opening.path) }
     : { kind: "absent", low: memberRecord(record), path: recordPath(opening.path) };
-  return Object.freeze({ ...opened, ...(sealedKey === undefined ? {} : { sealedKey }) });
+  return Object.freeze({
+    ...opened,
+    ...(sealedKey === undefined ? {} : { sealedKey }),
+    ...(opening.present ? servedAddress(record) : {}),
+  });
 }
 
 function servedRecord(
@@ -260,6 +282,7 @@ function servedRecord(
     record: memberRecord(entry.record),
     path: opening.path,
     ...(opening.sealedKey === undefined ? {} : { sealedKey: opening.sealedKey }),
+    ...servedAddress(entry.record),
   });
 }
 

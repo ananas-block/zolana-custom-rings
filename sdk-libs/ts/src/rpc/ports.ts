@@ -13,6 +13,7 @@ import type {
 import type { Address, Signature } from "@solana/kit";
 
 import type {
+  AuthorizedAddress,
   MemberRecord,
   QuadPath,
   RecordOpening,
@@ -31,7 +32,8 @@ export interface RingSealedKey {
 }
 
 /** An opening the indexer served, unverified until checked against the bound root. */
-export type RingMemberOpening = RecordOpening & Readonly<{ sealedKey?: RingSealedKey }>;
+export type RingMemberOpening = RecordOpening &
+  Readonly<{ sealedKey?: RingSealedKey; address?: AuthorizedAddress }>;
 
 /** A root a `StorageRegistry` history holds, named by the revision the ring program reads. */
 export interface StorageRoot {
@@ -91,6 +93,7 @@ export type RingServedRecord = Readonly<{
   record: MemberRecord;
   path: QuadPath;
   sealedKey?: RingSealedKey;
+  address?: AuthorizedAddress;
 }>;
 
 export interface RingRecordReader {

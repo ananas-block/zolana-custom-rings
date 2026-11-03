@@ -32,11 +32,13 @@ import {
   type RingKeyCircuit,
 } from "../../protocol/proof/proving-keys.js";
 import {
+  screenedOwners,
   transferPoolCapacity,
   type PolicyPoolCapacity,
   type TransferKeyCircuit,
 } from "../../protocol/proof/transfer-shapes.js";
 import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
+import { RECIPIENT_BODY_LEN } from "../../protocol/codec/anonymous-delivery.js";
 import {
   auditLayoutValue,
   deliveredBodyLen,
@@ -80,10 +82,18 @@ export interface DeliveredSlotProofInputs {
   readonly body: Uint8Array;
 }
 
-/** Go `AnonymousOutputWires`, the owner key zero on a dummy. */
+/** The owner key zero on a dummy, the key and revision zero off a live ring slot, a change slot holds the sender's. */
 export interface AnonymousSlotProofInputs {
   readonly output: RingSlotOpening;
   readonly ownerKey: Bytes32;
+  readonly recipientKey: Bytes32;
+  readonly addressRevision: bigint;
+  readonly mintChunks: readonly Bytes32[];
+  readonly body: Uint8Array;
+  /** Zero on change, an exit and an omitted slot. */
+  readonly tag: Bytes32;
+  /** Read only on a published dummy, zero elsewhere. */
+  readonly tagPreimage: Bytes32;
 }
 
 /** Go `Source`, a zero `registry` names the ring's own registry. */
@@ -130,7 +140,8 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly recipients: readonly Bytes32[];
   readonly ownPool: RecordPool;
   readonly curatorPool: RecordPool;
-  readonly senderEntry: PolicySubjectEntry;
+  /** The pool rows of the key's `Q` screened owners, the proof derives the owners. */
+  readonly senderEntries: readonly PolicySubjectEntry[];
   readonly ownerEntries: readonly PolicySubjectEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
   readonly publicAssetEntries: readonly number[];
@@ -152,6 +163,11 @@ export interface TransferProofInputs extends AuditEnvelopeProofInputs, PolicyPro
   readonly approvalRequired: boolean;
   /** The published nullifier count, the input slots past it carry no UTXO. */
   readonly inputCount: number;
+  /** `m`, the slots past it leave the frame. */
+  readonly outputCount: number;
+  /** SPP's owner signer run by owner identity, zero filled to the key's `S`. */
+  readonly signers: readonly Bytes32[];
+  readonly signerCount: number;
   readonly privateTxHash: Bytes32;
   /** SPP's blinding of the hash, the proof reopens it with no address input. */
   readonly privateTxBlinding: Bytes32;
@@ -165,7 +181,6 @@ export interface ConfidentialTransferProofRequest extends TransferProofInputs {
   readonly outputs: readonly DeliveredSlotProofInputs[];
   /** Every slot a dummy on the signer rail and past the spent notes. */
   readonly inputs: readonly RingSlotOpening[];
-  readonly inputChain: Bytes32;
   /** The statement's sender, zero on the authority rail where `senderPkHash` names the member. */
   readonly sender: Bytes32;
   readonly senderPkHash: Bytes32;
@@ -179,6 +194,13 @@ export interface AnonymousTransferProofRequest extends TransferProofInputs {
   readonly senderKey?: Bytes32;
   readonly inputs: readonly RingSlotOpening[];
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+  /** `sender`'s address, its record binds it and change follows it. */
+  readonly senderNullifierPk: Bytes32;
+  readonly senderViewingKey: Bytes32;
+  readonly senderAddressRevision: bigint;
+  readonly senderBundleTag: Bytes32;
+  /** `ciphertext_digest(reply region)`, zero without replies. */
+  readonly replyDigest: Bytes32;
 }
 
 /** Go `ApplyRecordsParams`, one write takes the 1-write key, more the batch key. */
@@ -244,7 +266,10 @@ export interface MergeProofRequest {
   readonly disclosureKey: Bytes32;
   readonly ownerKey: Bytes32;
   readonly nullifierSecret: Bytes32;
-  readonly mintChunks: readonly Bytes32[];
+  /** `HashChain(mint[0..31], mint[31..32])`. */
+  readonly asset: Bytes32;
+  /** The published nullifiers, `1 <= inputCount <= width`, a hidden dummy counts. */
+  readonly inputCount: number;
   readonly inputs: readonly MergeInputOpening[];
   readonly outputTreeId: Bytes32;
   readonly outputRingDataHash: Bytes32;
@@ -325,9 +350,9 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
           deliveredJson(output, deliveredBodyLen(flag(request.layout.keyEscrow)), `outputs[${i}]`),
         ),
         inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
-        inputChain: field(request.inputChain, "inputChain"),
         sender: field(request.sender, "sender"),
         senderPkHash: field(request.senderPkHash, "senderPkHash"),
+        signers: fields(request.signers, request.signers.length, "signers"),
       };
     case "transferAnonymous":
       return {
@@ -337,6 +362,12 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...entrySenderKey(request),
         inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
         partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
+        signers: fields(request.signers, request.signers.length, "signers"),
+        senderNullifierPk: field(request.senderNullifierPk, "senderNullifierPk"),
+        senderViewingKey: hexBytes(request.senderViewingKey, 32, "senderViewingKey"),
+        senderAddressRevision: u64(request.senderAddressRevision, "senderAddressRevision"),
+        senderBundleTag: field(request.senderBundleTag, "senderBundleTag"),
+        replyDigest: field(request.replyDigest, "replyDigest"),
       };
     case "applyRecords": {
       const capacity = applyCapacity(request.writes.length);
@@ -422,7 +453,8 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         disclosureKey: hexBytes(request.disclosureKey, 32, "disclosureKey"),
         ownerKey: hexBytes(request.ownerKey, 32, "ownerKey"),
         nullifierSecret: field(request.nullifierSecret, "nullifierSecret"),
-        mintChunks: fields(request.mintChunks, MINT_CHUNKS, "mintChunks"),
+        asset: field(request.asset, "asset"),
+        inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
         inputs: request.inputs.map((input, i) => mergeInputJson(input, `inputs[${i}]`)),
         outputTreeId: field(request.outputTreeId, "outputTreeId"),
         outputRingDataHash: field(request.outputRingDataHash, "outputRingDataHash"),
@@ -438,7 +470,7 @@ type Json = Readonly<Record<string, unknown>>;
 
 const U8_MAX = 0xff;
 const U32_MAX = 0xffff_ffff;
-/** Go `[2]Field`, the two `hash_bytes_32` halves of the merged mint. */
+/** Go `[2]Field`, the two `hash_bytes_32` halves of a mint. */
 const MINT_CHUNKS = 2;
 const ZERO = new Uint8Array(32) as Bytes32;
 const MAX_LEAF_INDEX = Number(MEMBER_REGISTRY_CAPACITY) - 1;
@@ -470,7 +502,9 @@ function transferJson(
     ...envelopeJson(request),
     exempt: flag(request.exempt),
     approvalRequired: flag(request.approvalRequired),
+    outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
+    signerCount: integer(request.signerCount, "signerCount", 0, request.signers.length),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
     ...policyJson(request, transferCircuit(request)),
@@ -516,6 +550,12 @@ function anonymousSlotJson(slot: AnonymousSlotProofInputs, name: string): Json {
   return {
     output: openingJson(slot.output, `${name}.output`),
     ownerKey: hexBytes(slot.ownerKey, 32, `${name}.ownerKey`),
+    recipientKey: hexBytes(slot.recipientKey, 32, `${name}.recipientKey`),
+    addressRevision: u64(slot.addressRevision, `${name}.addressRevision`),
+    mintChunks: fields(slot.mintChunks, MINT_CHUNKS, `${name}.mintChunks`),
+    body: hexBytes(slot.body, RECIPIENT_BODY_LEN, `${name}.body`),
+    tag: field(slot.tag, `${name}.tag`),
+    tagPreimage: field(slot.tagPreimage, `${name}.tagPreimage`),
   };
 }
 
@@ -554,7 +594,9 @@ function policyJson(policy: PolicyProofInputs, circuit: TransferKeyCircuit): Jso
     curatorProof: curator.proof,
     ownSubjects: own.subjects,
     curatorSubjects: curator.subjects,
-    senderEntry: entryJson(policy.senderEntry, capacity, "senderEntry"),
+    senderEntries: sized(policy.senderEntries, screenedOwners(circuit), "senderEntries").map(
+      (entry, i) => entryJson(entry, capacity, `senderEntries[${i}]`),
+    ),
     ownerEntries: sized(policy.ownerEntries, slots, "ownerEntries").map((entry, i) =>
       entryJson(entry, capacity, `ownerEntries[${i}]`),
     ),
@@ -645,6 +687,7 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
       (record?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
       `${name}.assetLimits`,
     ),
+    addressHash: field(record?.addressHash ?? ZERO, `${name}.addressHash`),
     ...quadPathJson(opening.path, name, "index", "path"),
     lowMember: field(low?.member ?? ZERO, `${name}.lowMember`),
     lowNext: field(low?.next ?? ZERO, `${name}.lowNext`),
@@ -662,6 +705,7 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
       (low?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
       `${name}.lowAssetLimits`,
     ),
+    lowAddressHash: field(low?.addressHash ?? ZERO, `${name}.lowAddressHash`),
   };
 }
 
@@ -685,6 +729,7 @@ function recordFieldsJson(record: MemberRecord, name: string): Json {
       `${name}.withdrawalThreshold`,
     ),
     assetLimits: limitsJson(record.mintPolicy.limits, `${name}.assetLimits`),
+    addressHash: field(record.addressHash, `${name}.addressHash`),
   };
 }
 
@@ -701,6 +746,7 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       `${name}.oldWithdrawalThreshold`,
     ),
     oldAssetLimits: limitsJson(write.oldMintPolicy.limits, `${name}.oldAssetLimits`),
+    oldAddressHash: field(write.oldAddressHash, `${name}.oldAddressHash`),
     ...quadPathJson(write.slot, name, "index", "path"),
     lowMember: field(write.low.member, `${name}.lowMember`),
     lowNext: field(write.low.next, `${name}.lowNext`),
@@ -712,7 +758,14 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       `${name}.lowWithdrawalThreshold`,
     ),
     lowAssetLimits: limitsJson(write.low.mintPolicy.limits, `${name}.lowAssetLimits`),
+    lowAddressHash: field(write.low.addressHash, `${name}.lowAddressHash`),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
+    nullifierPk: field(write.pair?.nullifierPk ?? ZERO, `${name}.nullifierPk`),
+    addressRing: field(write.pair?.addressRing ?? ZERO, `${name}.addressRing`),
+    view0: field(write.pair?.view0 ?? ZERO, `${name}.view0`),
+    view1: field(write.pair?.view1 ?? ZERO, `${name}.view1`),
+    addressRevision: u64(write.pair?.addressRevision ?? 0n, `${name}.addressRevision`),
+    escrowCtHash: field(write.pair?.escrowCiphertextHash ?? ZERO, `${name}.escrowCtHash`),
   };
 }
 
@@ -728,6 +781,7 @@ function queueEntryJson(entry: QueueEntry, name: string): Json {
       `${name}.withdrawalThreshold`,
     ),
     assetLimits: limitsJson((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits, `${name}.assetLimits`),
+    addressHash: field(entry.addressHash ?? ZERO, `${name}.addressHash`),
   };
 }
 
