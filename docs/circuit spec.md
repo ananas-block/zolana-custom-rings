@@ -269,4 +269,19 @@ The record is packed into nine field elements and hashed with Poseidon. For a wa
  **Notes:**
 
 1. if we move `escrow_key` into `MintPolicy` or just nest it so that we can easily check that a curated list has a zero as mint policy hash since it shouldn´t set the escrow key. Is there a case where we would try a curated list with the escrowed nullifier key? (maybe it makes sense if we have multiple custom rings that users dont need to escrow again for every custom ring. This would be a case to make this part of the registry program.)
-2.
+2. One record pool with an authenticated tree selector can replace the separate own and curator pools. At the same total record capacity, this saves essentially no constraints. Savings come from reducing the fixed record budget; smaller separate pools already achieve similar counts. A unified pool allows that budget to be allocated flexibly between trees.
+
+   For 16 outputs with a curator, the current proofs cost 263,885 constraints with no withdrawal slots and 501,564 with 32 withdrawal slots:
+
+   | Withdrawal slots | Current record slots | Unified record slots | Prototype constraints | Saved constraints |
+   |---:|---:|---:|---:|---:|
+   | 0 | 69 | 69 | 263,997 | -112 |
+   | 0 | 69 | 36 | 174,650 | 89,235 |
+   | 0 | 69 | 16 | 115,741 | 148,144 |
+   | 0 | 69 | 6 | 84,696 | 179,189 |
+   | 32 | 136 | 136 | 502,307 | -743 |
+   | 32 | 136 | 68 | 321,315 | 180,249 |
+   | 32 | 136 | 36 | 234,690 | 266,874 |
+   | 32 | 136 | 6 | 144,736 | 356,828 |
+
+   Smaller budgets limit distinct authenticated (tree, record) pairs; they do not preserve the current worst-case record diversity. Repeated owners and assets can reuse records. The prototype keeps both registry roots, shared upper Merkle paths per tree, policy-source checks, and own-tree restrictions for escrow and mint settings. Subject-pool capacities remain unchanged. For comparison, separate pools with 18 records each cost 174,591 constraints versus 174,650 for a unified 36-record pool. These are compiled prototype counts, requiring new keys and witness changes. Honest witnesses, non-membership and tree-selection rejection checks passed. [Raw measurements](benchmarks/unified-record-pool-tradeoff.json) and [reproducible experiment](benchmarks/unified-record-pool-experiment.tar.gz).
