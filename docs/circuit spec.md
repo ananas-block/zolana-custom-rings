@@ -21,6 +21,10 @@ The ring circuits have 11 families and 90 instantiations, each with its own prov
 | **Total**                         | **90**                                                                                                                         | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 
+Notes:
+
+1. encryption circuits should be merged with the respective other circuits.
+
 ## Delivered audit
 
 1. **Audit envelope:** Gives the auditor one transaction viewing secret, which unlocks every output and the disclosure.
@@ -132,7 +136,8 @@ Each recipient body is **140 B**. The sender body is **117 + 33 × R B**, where 
 5. The SDK labels parts of the anonymous recipient and sender plaintexts as "verified fields", but their encryption is not currently checked by the proof. The anonymous audit proof verifies the separate auditor disclosure, not the recipient or sender ciphertexts.
 6. Recipient-encryption guarantees differ between modes: delivered audit proves that each ring output's ciphertext encrypts the correct amount and blinding to its published viewing key, while anonymous audit proves the auditor disclosure and leaves recipient ciphertexts unchecked. This explains much of the constraint-count difference. We should use one consistent encryption scheme across the audit circuits, with the same proof guarantees for verified fields in both modes.
 7. We should preserve SPP proof flexibility signer mix, compact and dummy padding etc
-8. The auditor needs to be able to know when a UTXO is spent so that the ring rpc can only serve spendable UTXOs, we
+8. The auditor needs to be able to know when a UTXO is spent so that the ring rpc can only serve spendable UTXOs
+9. We should skip the escrow nullifier key requirement if the nullifier key is zero to support shielded pdas and not require that those are registered.
 
 ## Merge
 
@@ -141,4 +146,126 @@ Each recipient body is **140 B**. The sender body is **117 + 33 × R B**, where 
 1. we can remove encrypted disclosure if we require nullifier key escrow. Then we can also simplify the circuit to really only verifiably encrypt the output cipher text, and potentially do policy checks. If we remove encrypted disclosure we can mirror the SPP proof input sizes.
 2. Should we have policy checks at all in merge? You cannot send funds to anyone so...
 
+## Policy
+
+The policy rules are a `RuleTable`; a `SourceMap` selects the registry supplying each list.
+
+```rust
+struct RuleTable {
+    rules: [Rule; 16],
+    len: u8, // Number of active rules.
+}
+
+struct Rule {
+    subject: Subject,
+    source: RuleSource,
+    guard: Guard,
+}
+
+enum Subject {
+    OutputOwner = 1,
+    Sender = 2,
+    ExitDestination = 3, // Rejected by current policy validation.
+    Asset = 4,
+}
+
+enum RuleSource {
+    // OR across the listed presence and absence alternatives.
+    Lists { present: ListSet, absent: ListSet },
+}
+
+struct ListSet(u8); // Bit i selects list i + 1.
+
+enum Guard {
+    Always,
+    AboveAmount(u64),
+    AboveAmountByAsset, // Threshold comes from the asset's MemberRecord.
+}
+
+struct SourceMap {
+    slots: [PolicySource; 8],
+}
+
+// List entry
+struct PolicySource {
+    list_id: u8,         // Zero for an empty slot; otherwise 1 through 8.
+    registry: [u8; 32],   // Registry field; zero selects the ring's own registry.
+}
+```
+
+`policy_hash` commits to the domain, encoding version (currently 12), eight source slots, rule count and sixteen encoded rule rows. These are zero-padded to 44 field elements and folded with Poseidon. Unused encoded rule rows are zero. Per-asset thresholds and limits remain in `MemberRecord`.
+
+### Lists
+
+1. **Allow:** Authority-controlled approval of owners or assets for policies requiring allowlisting.
+2. **Block:** Authority-controlled list of owners or assets that policy rules can exclude.
+3. **Frozen:** Separate authority-controlled list used to stop selected owners from sending.
+4. **Approval:** Additional authority-controlled approval list usable in policy rules and enrolment.
+5. **Escrow:** Reserved list ID for nullifier-secret escrow; registration is recorded through `escrow_key`.
+
+Allow, Block, Frozen and Approval affect transfers only when policy rules reference them.
+
+### Non Policy Lists
+
+1. **RingViewing:** Wallet-controlled flag with no current viewing behavior.
+2. **Recovery:** Wallet-controlled flag with no current recovery behavior.
+3. **Reader:** Grants access to decrypted activity through Ring RPC; current policy rules can also reference it.
+
+**Notes:**
+
+1. `Registry field; zero selects the ring's own registry.` consider to unify this to also check the hashed pubkey of the ring program. the ring program is just 1 of multiple whitelisted ones.
+2. **RingViewing,** For viewing additional data is necessary, who, for how long or how many requests? (eg 1 time read) Whats the diff to Reader?
+3. **Recovery,** What is recovery for?
+4. **Reader,** why can it be referenced in the policy proof? Owner and authtority should be able to let people read
+
 ## Member policy
+
+The membership-tree leaf is a `MemberRecord`:
+
+```rust
+struct MemberRecord {
+    member: [u8; 32],     // Owner, asset or reader identity.
+    next: [u8; 32],       // Next member in sorted order.
+    lists: u64,          // Bits: 0=Allow, 1=Block, 2=Frozen, 3=RingViewing, 4=Recovery, 5=Reader, 6=Approval, 7=Escrow (reserved).
+    escrow_key: [u8; 32], // EscrowKey hash, or zero before registration.
+    mint_policy: MintPolicy,
+}
+
+// Hashed as Poseidon(nullifier_pk, hash_bytes(ciphertext)).
+struct EscrowKey {
+    nullifier_pk: [u8; 32],
+    ciphertext: [u8; 32], // Encrypted NullifierKeyPlaintext.
+}
+
+// Encrypted to the auditor using X25519, a Poseidon KDF and AES-256-CTR.
+struct NullifierKeyPlaintext {
+    padding: u8,               // Always zero.
+    nullifier_secret: [u8; 31],
+}
+
+struct MintPolicy {
+    threshold: u64,
+    cap: u64,
+    cosign_above: u64,
+    withdrawal_threshold: u64,
+    limits: AssetLimits,
+}
+
+struct AssetLimits {
+    sender_cap: u64,
+    sender_window_slots: u64,
+    volume_cap: u64,
+    volume_window_slots: u64,
+    deposit_cap: u64,
+    deposit_window_slots: u64,
+    withdrawal_cap: u64,
+    withdrawal_window_slots: u64,
+}
+```
+
+The record is packed into nine field elements and hashed with Poseidon. For a wallet, `member` itself is the hash of its tagged owner public key.
+
+ **Notes:**
+
+1. if we move `escrow_key` into `MintPolicy` or just nest it so that we can easily check that a curated list has a zero as mint policy hash since it shouldn´t set the escrow key. Is there a case where we would try a curated list with the escrowed nullifier key? (maybe it makes sense if we have multiple custom rings that users dont need to escrow again for every custom ring. This would be a case to make this part of the registry program.)
+2.
