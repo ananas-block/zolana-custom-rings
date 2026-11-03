@@ -102,7 +102,7 @@ impl MemberArgs {
 
 impl MemberList {
     /// In `ListId::ALL` order.
-    pub const ALL: [Self; 2] = [Self(ListId::RingViewing), Self(ListId::Recovery)];
+    pub const ALL: [Self; 1] = [Self(ListId::RingViewing)];
 
     pub const fn id(self) -> ListId {
         self.0

@@ -108,6 +108,8 @@ pub enum PolicyError {
     UnknownList { name: String },
     #[error("the {name} list is written by its members, a rule cannot read it")]
     MemberWrittenList { name: String },
+    #[error("the {name} list grants reads, a rule cannot read it")]
+    ListNotPolicyReadable { name: String },
     #[error("a rule names no source, give one of require, forbid or any")]
     NoSourceForm,
     #[error("a rule names several sources, give one of require, forbid or any")]
@@ -194,6 +196,13 @@ impl ListName {
         Self(ListId::Reader),
         Self(ListId::Approval),
     ];
+    /// The lists a rule reads in `ListId::ALL` order, a lib test pins the set.
+    pub const POLICY: [Self; 4] = [
+        Self(ListId::Allow),
+        Self(ListId::Block),
+        Self(ListId::Frozen),
+        Self(ListId::Approval),
+    ];
 
     pub const fn id(self) -> ListId {
         self.0
@@ -204,11 +213,11 @@ impl ListName {
     }
 
     pub fn of(list_id: ListId) -> Result<Self, PolicyError> {
+        let name = list_id.name().to_owned();
         match list_id.writer() {
             Writer::Authority => Ok(Self(list_id)),
-            _ => Err(PolicyError::MemberWrittenList {
-                name: list_id.name().to_owned(),
-            }),
+            Writer::Member => Err(PolicyError::MemberWrittenList { name }),
+            Writer::Reserved => Err(PolicyError::UnknownList { name }),
         }
     }
 }
@@ -282,6 +291,15 @@ impl TryFrom<RawRule> for RuleSpec {
         ])?;
         if matches!(&source, SourceSpec::Any(alternatives) if alternatives.is_empty()) {
             return Err(PolicyError::EmptyAny);
+        }
+        if let Some(list) = source
+            .lists()
+            .into_iter()
+            .find(|list| !ListSet::POLICY_LISTS.contains(list.id()))
+        {
+            return Err(PolicyError::ListNotPolicyReadable {
+                name: list.to_string(),
+            });
         }
         Ok(Self {
             subject: raw.subject,
@@ -645,7 +663,28 @@ mod tests {
             "Allow".parse::<ListName>(),
             Err(PolicyError::UnknownList { name }) if name == "Allow"
         ));
+        assert!(matches!(
+            "recovery".parse::<ListName>(),
+            Err(PolicyError::UnknownList { name }) if name == "recovery"
+        ));
         assert!(ListName(ListId::Allow) < ListName(ListId::Approval));
+    }
+
+    #[test]
+    fn a_rule_refuses_the_reader_list_a_list_argument_takes() {
+        assert_eq!(
+            ListName::POLICY.map(ListName::id).to_vec(),
+            ListSet::POLICY_LISTS.iter().collect::<Vec<_>>()
+        );
+        for form in [
+            "require = \"reader\"",
+            "forbid = \"reader\"",
+            "any = [{ require = \"allow\" }, { forbid = \"reader\" }]",
+        ] {
+            let text = format!("[[rules]]\nsubject = \"sender\"\n{form}\n");
+            let refusal = spec(&text).expect_err("reader is no policy list");
+            assert!(refusal.to_string().contains("grants reads"), "{refusal}");
+        }
     }
 
     #[test]

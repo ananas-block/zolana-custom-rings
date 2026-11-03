@@ -9,10 +9,11 @@ use std::{
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::RingMode;
 use custom_ring_sdk::CustomRingConfig;
+use solana_address::Address;
 use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
 use spr_keypair::{ShieldedKeypair, X25519Pubkey};
 use spr_transaction::{verify_owned, SpendableDecryptionResult};
-use zolana_ring_client::{AnonymousSync, RingConfidentialScan, ViewingHistory};
+use zolana_ring_client::{AnonymousSync, AnonymousWallet, RingConfidentialScan, ViewingHistory};
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
 
@@ -21,7 +22,7 @@ use crate::{file, Context, Zolana};
 /// Under the `keys/` that `new` writes into `.gitignore`.
 pub const ANONYMOUS_RING_DIR: &str = "keys/anonymous-ring";
 
-/// One wallet's viewing history, shared by every anonymous ring it holds notes in.
+/// One wallet's notes, spends and scan progress in one document, shared by every anonymous ring it holds notes in.
 pub struct AnonymousWalletStore {
     path: PathBuf,
     viewing_pubkey: X25519Pubkey,
@@ -50,6 +51,7 @@ struct ScanAt<'a> {
     slot: u64,
     /// Present on an anonymous ring.
     store: Option<&'a AnonymousWalletStore>,
+    ring: Address,
 }
 
 /// Held while a store's file changes, any part file found under it is a crashed run's.
@@ -71,35 +73,38 @@ impl StoreLocation<'_> {
 }
 
 impl AnonymousWalletStore {
-    /// A wallet that never stored a history starts one at its current key.
-    pub fn load(&self) -> Result<ViewingHistory> {
+    /// A wallet that never stored one starts at its current key.
+    pub fn load(&self) -> Result<AnonymousWallet> {
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(ViewingHistory::new(self.viewing_pubkey, unix_now()?))
+                return Ok(AnonymousWallet::new(ViewingHistory::new(
+                    self.viewing_pubkey,
+                    unix_now()?,
+                )))
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("cannot read {}", self.path.display()))
             }
         };
-        let history = ViewingHistory::from_json(&text)
+        let wallet = AnonymousWallet::from_json(&text)
             .with_context(|| format!("cannot parse {}", self.path.display()))?;
         ensure!(
-            history.entry(&self.viewing_pubkey).is_some(),
+            wallet.history().entry(&self.viewing_pubkey).is_some(),
             "{} holds no entry of the wallet's viewing key",
             self.path.display()
         );
-        Ok(history)
+        Ok(wallet)
     }
 
-    /// Applies `change` to the stored history under the store's lock.
-    pub fn update<T>(&self, change: impl FnOnce(&mut ViewingHistory) -> Result<T>) -> Result<T> {
+    /// Applies `change` under the store's lock, its one replace stores everything it changed.
+    pub fn update<T>(&self, change: impl FnOnce(&mut AnonymousWallet) -> Result<T>) -> Result<T> {
         let lock = self.lock()?;
         let stored = self.load()?;
-        let mut history = stored.clone();
-        let outcome = change(&mut history)?;
-        if history != stored || !self.path.exists() {
-            lock.replace(&self.path, history.to_json())?;
+        let mut wallet = stored.clone();
+        let outcome = change(&mut wallet)?;
+        if wallet != stored || !self.path.exists() {
+            lock.replace(&self.path, wallet.to_json())?;
         }
         Ok(outcome)
     }
@@ -108,10 +113,10 @@ impl AnonymousWalletStore {
     pub fn commit(&self, from: &ViewingHistory, advanced: ViewingHistory) -> Result<()> {
         self.update(|stored| {
             ensure!(
-                stored == from,
+                stored.history() == from,
                 "the viewing history moved while the transfer was built, run it again"
             );
-            *stored = advanced;
+            stored.update_history(advanced)?;
             Ok(())
         })
     }
@@ -143,13 +148,14 @@ impl WalletScan<'_> {
             chain_assets: &|| crate::assets::ring_assets(ctx.rpc()),
             slot: ctx.rpc().get_slot()?,
             store: store.as_ref(),
+            ring: ctx.ring.program_id(),
         }
         .fetch(&ctx.zolana)
     }
 }
 
 impl ScanAt<'_> {
-    /// The CLI keeps no notes, its anonymous sync reads every stream from index 0 under the store's lock.
+    /// Its anonymous sync resumes from the stored position, one replace stores what the read covered.
     fn fetch<R: BlockingRpc, I: BlockingIndexer>(
         self,
         zolana: &Zolana<R, I>,
@@ -187,33 +193,41 @@ impl ScanAt<'_> {
         let Some(store) = self.store else {
             return Ok(spendable);
         };
-        let sync = |assets: &RingAssets, history: &ViewingHistory| {
+        let sync = |assets: &RingAssets, wallet: &AnonymousWallet| {
             zolana.block_on(async {
                 AnonymousSync::new(keys, assets)
-                    .with_full_rescan()
                     .with_indexer_config(config)
                     .with_deposit_payload(zolana_ring_client::deposit_payload)
-                    .fetch(zolana.as_async().indexer(), history)
+                    .with_held_notes(wallet.notes())
+                    .fetch(zolana.as_async().indexer(), wallet.history())
                     .await
                     .map_err(anyhow::Error::from)
             })
         };
-        let scan = store.update(|history| {
-            let mut scan = sync(assets, history)?;
-            // A note in a mint registered after the registry read opens under the chain's assets.
-            if !scan.unmatched.is_empty()
-                || !scan.decrypted.unknown_asset_ids.is_empty()
-                || !scan.decrypted.unknown_mints.is_empty()
-            {
-                scan = sync(&(self.chain_assets)()?, history)?;
+        let (held, unknown_mints) = store.update(|wallet| {
+            let watched = wallet.history().clone().with_ring(self.ring, None);
+            wallet.update_history(watched)?;
+            let scan = sync(assets, wallet)?;
+            let merged_unknown = !scan.decrypted().unknown_mints.is_empty();
+            let mut unknown_mints = scan.decrypted().unknown_mints.clone();
+            wallet.absorb(scan);
+            // A mint registered after the registry read names its notes under the chain's assets.
+            if merged_unknown || !wallet.pending_notes().is_empty() {
+                let chain = (self.chain_assets)()?;
+                wallet.resolve_pending(&chain);
+                if merged_unknown {
+                    let scan = sync(&chain, wallet)?;
+                    unknown_mints.clone_from(&scan.decrypted().unknown_mints);
+                    wallet.absorb(scan);
+                }
             }
-            *history = scan.history.clone();
-            Ok(scan)
+            unknown_mints.extend(wallet.pending_notes().iter().map(|note| note.mint()));
+            Ok((wallet.decrypted(), unknown_mints))
         })?;
-        let found = verify_owned(keys, &scan.decrypted)?
+        let found = verify_owned(keys, &held)?
             .spendable()
             .with_transaction_keys(keys)?;
-        let spent = &scan.decrypted.spent_nullifiers;
+        let spent = &held.spent_nullifiers;
         for balance in &mut spendable.balances.assets {
             balance
                 .utxos
@@ -234,8 +248,7 @@ impl ScanAt<'_> {
                 spendable.utxos_with_data.push(utxo.clone());
             }
         }
-        spendable.unknown_asset_ids.extend(found.unknown_asset_ids);
-        spendable.unknown_mints.extend(found.unknown_mints);
+        spendable.unknown_mints.extend(unknown_mints);
         Ok(spendable)
     }
 }
@@ -332,12 +345,13 @@ mod tests {
     fn a_new_store_starts_a_history_at_the_wallets_viewing_key() {
         let member = Member::new(1, "fresh");
         let fresh = member.store.load().unwrap();
-        assert_eq!(fresh.entries().len(), 1);
+        let history = fresh.history();
+        assert_eq!(history.entries().len(), 1);
         assert_eq!(
-            fresh.current().viewing_pubkey(),
+            history.current().viewing_pubkey(),
             member.keys.viewing_pubkey()
         );
-        assert_eq!(fresh.current().tx_count(), 0);
+        assert_eq!(history.current().tx_count(), 0);
         assert!(!member.state_file().exists(), "a load writes nothing");
     }
 
@@ -347,7 +361,7 @@ mod tests {
         let path = member.state_file();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let other = ViewingHistory::new(keypair(2).viewing_pubkey(), 1);
-        fs::write(&path, other.to_json()).unwrap();
+        fs::write(&path, AnonymousWallet::new(other).to_json()).unwrap();
         assert!(member.store.load().is_err(), "another viewing key");
         fs::write(&path, r#"{"version":4,"ring":"x"}"#).unwrap();
         let refused = member.store.load().unwrap_err();
@@ -362,13 +376,17 @@ mod tests {
         let member = Member::new(1, "commit");
         let keys = &member.keys;
         let loaded = member.store.load().unwrap();
+        let loaded = loaded.history();
         let first = loaded.sender_tag(keys).unwrap().history;
-        member.store.commit(&loaded, first.clone()).unwrap();
-        assert_eq!(member.store.load().unwrap(), first);
+        member.store.commit(loaded, first.clone()).unwrap();
+        assert_eq!(*member.store.load().unwrap().history(), first);
         let stale = loaded.sender_tag(keys).unwrap().history;
-        let refused = member.store.commit(&loaded, stale).unwrap_err();
+        let refused = member.store.commit(loaded, stale).unwrap_err();
         assert!(refused.to_string().contains("moved"), "{refused}");
-        assert_eq!(member.store.load().unwrap().current().tx_count(), 1);
+        assert_eq!(
+            member.store.load().unwrap().history().current().tx_count(),
+            1
+        );
     }
 
     #[test]
@@ -379,15 +397,19 @@ mod tests {
             for _ in 0..16 {
                 scope.spawn(move || {
                     store
-                        .update(|history| {
-                            *history = history.request_tag(keys)?.history;
+                        .update(|wallet| {
+                            let minted = wallet.history().request_tag(keys)?.history;
+                            wallet.update_history(minted)?;
                             Ok(())
                         })
                         .unwrap()
                 });
             }
         });
-        assert_eq!(store.load().unwrap().current().request_count(), 16);
+        assert_eq!(
+            store.load().unwrap().history().current().request_count(),
+            16
+        );
     }
 
     #[test]

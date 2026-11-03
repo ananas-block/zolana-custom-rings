@@ -96,6 +96,8 @@ pub enum Command {
     Audit(AuditArgs),
     /// Mint a `zolana:` payment request for the member on an anonymous ring.
     Address(AddressArgs),
+    /// List the replies on the member's notes, each an unauthenticated claim, or confirm one.
+    ReplyClaims(ReplyClaimsArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -234,6 +236,8 @@ pub enum EnrolmentCommand {
 pub enum KeyCommand {
     /// Seal the member's nullifier key to the ring auditor and register it, `transfer` does it on first use.
     Register,
+    /// Sign the sender's delivery address, its first nullifier key is permanent on the registry.
+    EnrollAddress,
 }
 
 #[derive(Debug, Subcommand)]
@@ -303,7 +307,7 @@ pub struct AuditArgs {
     /// The X25519 auditor read key the ring config pins.
     #[arg(long, default_value = AUDITOR_KEY_FILE)]
     pub auditor_key: PathBuf,
-    /// Continue from the hex cursor an earlier run printed.
+    /// Continue from the cursor an earlier run printed.
     #[arg(long)]
     pub cursor: Option<String>,
 }
@@ -330,6 +334,16 @@ pub struct AddressArgs {
     pub mint: Option<Mint>,
     #[arg(long)]
     pub label: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReplyClaimsArgs {
+    /// The member's Solana keypair, `keys/sender-keypair.json` by default.
+    #[arg(long)]
+    pub keypair: Option<PathBuf>,
+    /// Trust the sender a listed claim names, by its viewing key in hex.
+    #[arg(long)]
+    pub confirm: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -396,6 +410,9 @@ pub struct TransferArgs {
     /// The fewest output slots, dummies fill what the payments and the change leave.
     #[arg(long)]
     pub outputs: Option<usize>,
+    /// Attach the sender's address to each anonymous payment, an unauthenticated claim the recipient must confirm.
+    #[arg(long)]
+    pub reply: bool,
     /// An anonymous ring pays each shielded recipient a default-ring note, the value leaves the ring.
     #[arg(long)]
     pub default_ring: bool,

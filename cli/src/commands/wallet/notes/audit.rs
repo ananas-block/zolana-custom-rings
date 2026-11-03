@@ -29,7 +29,11 @@ pub fn run(ctx: &Context, args: AuditArgs) -> Result<()> {
     let assets = crate::assets::ring_assets(ctx.rpc())?;
     let mut scan = RingScan::new(ctx.ring.program_id(), auditor.pubkey()).with_mode(config.mode);
     if let Some(cursor) = &args.cursor {
-        scan = scan.with_cursor(hex::decode(cursor).context("the cursor is not hex")?);
+        scan = scan.with_cursor(
+            cursor
+                .parse()
+                .context("the cursor is not a history cursor")?,
+        );
     }
     let chain = ctx.chain();
     if config.mode == custom_ring_interface::RingMode::Anonymous {
@@ -53,7 +57,7 @@ pub fn run(ctx: &Context, args: AuditArgs) -> Result<()> {
     }
     line("transactions", page.transactions.len());
     if let Some(cursor) = page.next_cursor {
-        line("next cursor", hex::encode(cursor));
+        line("next cursor", cursor);
     }
     Ok(())
 }

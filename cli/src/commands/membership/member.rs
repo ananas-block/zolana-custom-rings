@@ -1,7 +1,10 @@
 //! `key`, the member's nullifier key escrowed in its record.
 
 use anyhow::{ensure, Result};
-use custom_ring_sdk::{CustomRing, KeyRegistration, MemberRecords, RingMode, WalletRecordUpdate};
+use custom_ring_sdk::{
+    address_enrollment, CustomRing, EnrollAddress, KeyRegistration, MemberRecords, RingError,
+    RingMode, WalletRecordUpdate,
+};
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
@@ -25,7 +28,60 @@ pub(crate) struct KeyEnrolment<'a> {
 }
 
 pub fn key(ctx: &Context, command: KeyCommand) -> Result<()> {
-    let KeyCommand::Register = command;
+    match command {
+        KeyCommand::Register => register_key(ctx),
+        KeyCommand::EnrollAddress => enroll_address(ctx),
+    }
+}
+
+/// The SDK refuses a key the record disagrees with before the owner signs, the apply enforces it.
+fn enroll_address(ctx: &Context) -> Result<()> {
+    let sender = ctx.sender()?;
+    let member = ShieldedKeypair::from_keypair(&sender)?;
+    let address = member.shielded_address()?;
+    let target = ctx.record_update_target()?;
+    let enrolled = ctx.block(async {
+        match address_enrollment(ctx.ring_client().zolana(), target.registry, sender.pubkey()).await
+        {
+            Ok(enrolled) => Ok(Some(enrolled.viewing_u.0)),
+            Err(RingError::AddressNotEnrolled) => Ok(None),
+            Err(error) => Err(error),
+        }
+    })?;
+    check_enrolled_viewing_key(enrolled, address.viewing_pubkey.u())?;
+    let enrollment = EnrollAddress {
+        payer: sender.pubkey(),
+        owner: sender.pubkey(),
+        registry: target.registry,
+        nullifier_pk: address.nullifier_pubkey,
+        viewing_u: address.viewing_pubkey.u(),
+    };
+    let instruction = ctx.block(enrollment.checked_instruction(ctx.ring_client().zolana()))?;
+    let signature = ctx.send(&[&sender], &[instruction])?;
+    line("enrollment", signature);
+    let enrolled = ctx.block(address_enrollment(
+        ctx.ring_client().zolana(),
+        target.registry,
+        sender.pubkey(),
+    ))?;
+    let update = WalletRecordUpdate::new(target, member.pubkey())?
+        .with_address(enrolled)
+        .sign(&member)?;
+    ctx.ring_rpc().apply_record_update(update)?;
+    line("address", "applied");
+    Ok(())
+}
+
+/// The CLI holds one viewing key, a move off the enrolled one strands every note sealed to it.
+fn check_enrolled_viewing_key(enrolled: Option<[u8; 32]>, held: [u8; 32]) -> Result<()> {
+    ensure!(
+        enrolled.is_none_or(|enrolled| enrolled == held),
+        "the record names another viewing key, this wallet holds one key and could not read notes sealed to the enrolled key"
+    );
+    Ok(())
+}
+
+fn register_key(ctx: &Context) -> Result<()> {
     let config = ctx.ring_config()?;
     ensure!(
         config.mode != RingMode::Anonymous,
@@ -105,6 +161,18 @@ fn registered<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enrolling_refuses_a_viewing_key_other_than_the_enrolled_one() {
+        let held = [1; 32];
+        assert!(super::check_enrolled_viewing_key(None, held).is_ok());
+        assert!(super::check_enrolled_viewing_key(Some(held), held).is_ok());
+        let refused = super::check_enrolled_viewing_key(Some([2; 32]), held).unwrap_err();
+        assert!(
+            refused.to_string().contains("another viewing key"),
+            "{refused}"
+        );
+    }
+
     use std::sync::atomic::{AtomicU8, Ordering};
 
     use custom_ring_interface::{EscrowKey, QueueEntry};
@@ -291,6 +359,7 @@ mod tests {
             mask: 1,
             value: 1,
             escrow_key: [0; 32],
+            address_hash: [0; 32],
         }]);
         let answer = IndexerAnswer {
             tree: &advanced,

@@ -23,23 +23,24 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
         recipient: member.shielded_address()?,
         ring_program_id: ctx.ring.program_id(),
     };
-    // Stored before it prints, a sync reads every request tag a payer may hold.
-    let request_view_tag = ctx.anonymous_wallet_store(&member).update(|history| {
-        let minted = history.request_tag(&member)?;
-        *history = minted.history;
+    // Stored before it prints, a sync reads every deposit tag a payer may hold.
+    let deposit_tag = ctx.anonymous_wallet_store(&member).update(|wallet| {
+        let minted = wallet.history().request_tag(&member)?;
+        wallet.update_history(minted.history)?;
         Ok(minted.tag)
     })?;
-    println!("{}", args.request(address, request_view_tag));
+    println!("{}", args.request(address, Some(deposit_tag)));
     Ok(())
 }
 
 impl AddressArgs {
-    fn request(self, address: RingAddress, request_view_tag: [u8; 32]) -> RingPaymentRequest {
+    fn request(self, address: RingAddress, deposit_tag: Option<[u8; 32]>) -> RingPaymentRequest {
         RingPaymentRequest {
+            deposit_tag,
             amount: self.amount,
             mint: self.mint.map(|mint| mint.0),
             label: self.label,
-            ..RingPaymentRequest::new(address, request_view_tag)
+            ..RingPaymentRequest::new(address)
         }
     }
 }
@@ -66,7 +67,7 @@ mod tests {
         uri: String,
         recipient: String,
         ring_program_id: String,
-        request_view_tag: String,
+        deposit_tag: Option<String>,
         amount: Option<String>,
         mint: Option<String>,
         label: Option<String>,
@@ -98,10 +99,10 @@ mod tests {
                 recipient: ShieldedAddress::from_bytes(&recipient).unwrap(),
                 ring_program_id: case.ring_program_id.parse().unwrap(),
             };
-            let tag = hex::decode(&case.request_view_tag)
-                .unwrap()
-                .try_into()
-                .unwrap();
+            let tag = case
+                .deposit_tag
+                .as_ref()
+                .map(|tag| hex::decode(tag).unwrap().try_into().unwrap());
             assert_eq!(
                 parse(&flags).request(address, tag).to_string(),
                 case.uri,

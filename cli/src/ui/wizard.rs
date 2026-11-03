@@ -421,7 +421,7 @@ impl Wizard<'_> {
     }
 
     fn list(&mut self) -> Result<ListName> {
-        Ok(ListName::ALL[self.ask.pick("list", &labels(ListName::ALL), 0)?])
+        Ok(ListName::POLICY[self.ask.pick("list", &labels(ListName::POLICY), 0)?])
     }
 
     /// Scalar owner thresholds require a single mint at transfer time.

@@ -61,6 +61,8 @@ pub mod policy;
 pub mod probe;
 #[path = "operations/records.rs"]
 mod records;
+#[path = "commands/wallet/identity/reply_claims.rs"]
+pub mod reply_claims;
 pub use records::patiently;
 #[path = "commands/ring/release.rs"]
 pub mod release;
@@ -269,6 +271,7 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),
         Command::Audit(args) => audit::run(ctx, args),
         Command::Address(args) => address::run(ctx, args),
+        Command::ReplyClaims(args) => reply_claims::run(ctx, args),
         Command::New(_)
         | Command::Target { .. }
         | Command::Url { .. }

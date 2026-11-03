@@ -164,7 +164,8 @@ pub(crate) mod fixtures {
     use std::sync::atomic::{AtomicU8, Ordering};
 
     use custom_ring_interface::{
-        storage::{Revision, StorageRegistry},
+        storage::{RegistryId, Revision, StorageRegistry},
+        storage_instruction::InitializeIxData,
         QueueEntry, RingPolicy, STORAGE_PROGRAM_ID,
     };
     use custom_ring_sdk::CustomRing;
@@ -229,6 +230,8 @@ pub(crate) mod fixtures {
                         nullifier_pk: None,
                         eph_pk: sealed.map(|key| Base64String(key.eph_pk.as_bytes().to_vec())),
                         ciphertext: sealed.map(|key| Base64String(key.ciphertext.to_vec())),
+                        address_hash: Hash(record.address_hash),
+                        address: None,
                     },
                     path: RingRecordPathView {
                         index: path.index,
@@ -294,7 +297,14 @@ pub(crate) mod fixtures {
                 Some(advanced) if reads > 0 => advanced,
                 _ => &self.tree,
             };
-            let mut records = StorageRegistry::new(Address::default(), 0);
+            let mut records = StorageRegistry::new(
+                Address::default(),
+                &InitializeIxData {
+                    registry_id: RegistryId([0; 32]),
+                    grace_slots: 0u64.to_le_bytes(),
+                    ring_id: [0; 32],
+                },
+            );
             records.roots[0].hash = tree.root().unwrap();
             records.roots[0].revision = Revision::from(u64::from(reads) + 1);
             Ok(Some(account(
