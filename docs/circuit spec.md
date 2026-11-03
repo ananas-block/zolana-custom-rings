@@ -1,6 +1,6 @@
 The ring circuits prove that deposits, transfers, merges and registry updates satisfy the ring’s applicable audit, policy and key escrow requirements.
 
-## Features
+## Circuits
 
 The ring circuits have 11 families and 90 instantiations, each with its own proving key.
 
@@ -120,7 +120,7 @@ Each recipient body is **140 B**. The sender body is **117 + 33 × R B**, where 
 1. The recipient learns the sender's viewing public key, but not its signing public key or full shielded address, so it cannot send a payment back using only the received payload. We could consider to add optional sender signing key and nullifier pubkeys to enc data, this way the boostrap flow will work and the sender remains private.
 2. If note-level linkability is not required, we could remove the Poseidon-encrypted disclosure and instead encrypt the sender identity and verified output fields to the auditor, with the proof checking that they match the transaction. Spent-input hashes, prefixes and full input openings would be omitted.
 3. The anonymous audit requires every real input to have the same owner, enforced by `spentBySender` in `prover/circuits/audit/anonymous.go`; the SDK also rejects mixed owners. This is too restrictive: anonymous transactions should support inputs from multiple owners, including PDA-owned UTXOs, as Zolana supports.
-4. A separate Poseidon-encrypted disclosure uses more instruction data but fewer constraints. The measured simplified variant removes input linkability and proves the verified fields in the sender and recipient AES ciphertexts using the delivered audit's Poseidon KDF and Zolana's optimized X25519.
+4. A separate Poseidon-encrypted disclosure uses more instruction data but fewer constraints. The measured simplified variant removes input linkability and proves the verified fields in the sender and recipient AES ciphertexts using the delivered audit's Poseidon KDF and Zolana's optimized X25519. If we make it mandatory to escrow nullifier keys we can trace everything even if we omit the encrypted disclosure.
 
    | Outputs | Current bytes | Simplified bytes | Saved bytes | Current constraints | Simplified constraints | Added constraints |
    | -------: | -------------: | ----------------: | -----------: | -------------------: | ----------------------: | -----------------: |
@@ -129,7 +129,16 @@ Each recipient body is **140 B**. The sender body is **117 + 33 × R B**, where 
    | 8       | 2,642         | 2,066            | 576         | 77,733              | 336,725                | 258,992           |
    | 16      | 5,162         | 3,978            | 1,184       | 104,749             | 626,978                | 522,229           |
 
-
-
 5. The SDK labels parts of the anonymous recipient and sender plaintexts as "verified fields", but their encryption is not currently checked by the proof. The anonymous audit proof verifies the separate auditor disclosure, not the recipient or sender ciphertexts.
 6. Recipient-encryption guarantees differ between modes: delivered audit proves that each ring output's ciphertext encrypts the correct amount and blinding to its published viewing key, while anonymous audit proves the auditor disclosure and leaves recipient ciphertexts unchecked. This explains much of the constraint-count difference. We should use one consistent encryption scheme across the audit circuits, with the same proof guarantees for verified fields in both modes.
+7. We should preserve SPP proof flexibility signer mix, compact and dummy padding etc
+8. The auditor needs to be able to know when a UTXO is spent so that the ring rpc can only serve spendable UTXOs, we
+
+## Merge
+
+**Notes:**
+
+1. we can remove encrypted disclosure if we require nullifier key escrow. Then we can also simplify the circuit to really only verifiably encrypt the output cipher text, and potentially do policy checks. If we remove encrypted disclosure we can mirror the SPP proof input sizes.
+2. Should we have policy checks at all in merge? You cannot send funds to anyone so...
+
+## Member policy
