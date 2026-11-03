@@ -4,7 +4,7 @@ use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    storage::StorageRegistry,
+    storage::{AddressAuthorization, StorageRegistry},
     storage_instruction::{tag, StorageUpdateIxData, StorageWriteData},
     ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT, RING_POLICY,
     ROOT_HISTORY, STORAGE_PROGRAM_ID,
@@ -15,11 +15,11 @@ use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::Proof;
 use zolana_ring_client::rpc::{
-    EscrowRegistration, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
-    GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
-    RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant,
-    GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT, RECORD_UPDATE_SLOTS,
-    SUBMIT_RECORD_UPDATE,
+    AddressEnrollment, EscrowRegistration, GetPendingEnrolmentsRequest,
+    GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess,
+    RecordUpdate, RecordUpdateEntry, RecordUpdateStatus, SubmitRecordUpdateRequest,
+    SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT,
+    RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -40,6 +40,14 @@ const REGISTRY: Address = Address::new_from_array([0x52; 32]);
 const NOW: u64 = 100;
 const NEW_ROOT: [u8; 32] = [0x77; 32];
 const BLOCKHASH_HEIGHTS: u64 = 150;
+
+fn initialize_records() -> custom_ring_interface::storage_instruction::InitializeIxData {
+    custom_ring_interface::storage_instruction::InitializeIxData {
+        registry_id: custom_ring_interface::storage::RegistryId([0; 32]),
+        grace_slots: [0; 8],
+        ring_id: [1; 32],
+    }
+}
 
 /// The fixture escrow proof binds the owner identity of the wallet.
 fn wallet() -> Keypair {
@@ -127,7 +135,7 @@ impl StorageChain for StubChain {
         &self,
         request: GetStorageApplyProofInputsRequest,
     ) -> Result<GetStorageApplyProofInputsResponse, RingRpcError> {
-        let registry = StorageRegistry::new(Address::default(), 0);
+        let registry = StorageRegistry::new(Address::default(), &initialize_records());
         let empty = || Hash([0; 32]);
         let path = || RingRecordPathView {
             index: 0,
@@ -158,6 +166,9 @@ impl StorageChain for StubChain {
                     old_lists: 0,
                     old_escrow: empty(),
                     old_mint_policy: MintPolicy::EMPTY,
+                    address_hash: write.address_hash,
+                    old_address_hash: empty(),
+                    pair: None,
                     slot: path(),
                     low: RingMemberRecordView {
                         member: empty(),
@@ -168,6 +179,8 @@ impl StorageChain for StubChain {
                         nullifier_pk: None,
                         eph_pk: None,
                         ciphertext: None,
+                        address_hash: empty(),
+                        address: None,
                         mint_policy: MintPolicy::EMPTY,
                     },
                     low_path: path(),
@@ -255,7 +268,7 @@ impl RecordsSetup<'_> {
             .local(RING, self.fixture.auditor.clone())
             .expect("hub");
         let writer = hub.record_writer().expect("writer").clone();
-        let registry = StorageRegistry::new(writer.authority(), 0);
+        let registry = StorageRegistry::new(writer.authority(), &initialize_records());
         let mut policy = RingPolicy::zeroed();
         policy.discriminator = RING_POLICY;
         policy.records = REGISTRY;
@@ -298,6 +311,7 @@ impl Records {
             value: 0,
             escrow_key: [0x0e; 32],
             mint_policy: None,
+            address_hash: [0; 32],
         });
     }
 
@@ -373,10 +387,11 @@ impl Records {
             mode: *mode,
             members: writes
                 .iter()
-                .map(|write| write.entry().expect("leaf write").member)
+                .map(|write| write.member().expect("leaf member"))
                 .collect(),
             writes,
             data,
+            accounts: message.static_account_keys().to_vec(),
         }
     }
 }
@@ -388,6 +403,7 @@ struct Flushed {
     members: Vec<[u8; 32]>,
     writes: Vec<StorageWriteData>,
     data: Vec<Vec<u8>>,
+    accounts: Vec<Address>,
 }
 
 fn owned(owner: Address, data: &[u8]) -> Account {
@@ -498,6 +514,136 @@ async fn a_wallet_escrow_registration_is_batched_only_after_its_proof_checks() {
     let flushed = records.flushed().await;
     assert_eq!(flushed.mode, tag::UPDATE);
     assert_eq!(flushed.members, [registration.member.0]);
+}
+
+/// One signed revision of the wallet, what `address_enrollment` reads.
+fn enrollment(nullifier_pk: [u8; 32]) -> AddressEnrollment {
+    AddressEnrollment {
+        owner: wallet().pubkey().into(),
+        ring_id: Hash([1; 32]),
+        nullifier_pk: Hash(nullifier_pk),
+        viewing_u: Hash([3; 32]),
+        address_revision: 1,
+    }
+}
+
+impl Records {
+    /// The account the storage program holds for the enrolled owner.
+    fn enrolled(&self, entry: &AddressEnrollment) -> Address {
+        let (address, bump) = AddressAuthorization::find_address(&REGISTRY, &entry.owner.0);
+        let authorization = AddressAuthorization {
+            discriminator: AddressAuthorization::DISCRIMINATOR,
+            bump,
+            registry: REGISTRY,
+            owner: entry.owner.0,
+            ring_id: entry.ring_id.0,
+            nullifier_pk: entry.nullifier_pk.0,
+            viewing_u: entry.viewing_u.0,
+            revision: entry.address_revision.to_le_bytes(),
+            applied_revision: [0; 8],
+        };
+        self.chain.accounts.lock().unwrap().insert(
+            address,
+            owned(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&authorization)),
+        );
+        address
+    }
+}
+
+#[tokio::test]
+async fn an_address_entry_batches_with_its_authorization_account() {
+    let records = Records::new().await;
+    let entry = enrollment([5; 32]);
+    assert_eq!(
+        refusal(
+            records
+                .submit(signed(
+                    &wallet(),
+                    vec![RecordUpdateEntry::Address(entry.clone())]
+                ))
+                .await
+        ),
+        RecordUpdateRefusal::AddressNotAuthorized.code(),
+        "no enrollment on chain"
+    );
+    let authorization = records.enrolled(&entry);
+    records
+        .submit(signed(
+            &wallet(),
+            vec![RecordUpdateEntry::Address(entry.clone())],
+        ))
+        .await
+        .expect("queued");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert!(flushed.accounts.contains(&authorization));
+}
+
+#[tokio::test]
+async fn an_address_entry_whose_account_moved_on_is_refused_with_its_status() {
+    let records = Records::new().await;
+    let entry = enrollment([5; 32]);
+    records.enrolled(&entry);
+    let queued = records
+        .submit(signed(
+            &wallet(),
+            vec![RecordUpdateEntry::Address(entry.clone())],
+        ))
+        .await
+        .expect("queued");
+    records.enrolled(&AddressEnrollment {
+        address_revision: 2,
+        ..entry
+    });
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    records.writer.flush().await.expect("pass");
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert!(matches!(
+        records.status(&queued).await,
+        RecordUpdateStatus::Refused { .. }
+    ));
+}
+
+#[tokio::test]
+async fn an_address_and_an_escrow_of_two_keys_refuse_for_an_early_error() {
+    let records = Records::new().await;
+    let registration = escrow_registration();
+    let other_key = enrollment([5; 32]);
+    assert_ne!(other_key.nullifier_pk, registration.nullifier_pk);
+    records.enrolled(&other_key);
+    assert_eq!(
+        refusal(
+            records
+                .submit(signed(
+                    &wallet(),
+                    vec![
+                        RecordUpdateEntry::Escrow(registration.clone()),
+                        RecordUpdateEntry::Address(other_key),
+                    ],
+                ))
+                .await
+        ),
+        RecordUpdateRefusal::AddressEscrowMismatch.code()
+    );
+    let same_key = enrollment(registration.nullifier_pk.0);
+    records.enrolled(&same_key);
+    records
+        .submit(signed(
+            &wallet(),
+            vec![
+                RecordUpdateEntry::Escrow(registration),
+                RecordUpdateEntry::Address(same_key),
+            ],
+        ))
+        .await
+        .expect("one key");
 }
 
 #[tokio::test]

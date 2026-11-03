@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     key_catalog::RingCircuit,
-    storage::{Revision, StorageRegistry},
+    storage::{AddressAuthorization, Revision, StorageRegistry},
     storage_instruction::{StorageWriteData, UpdateMode},
     verifying_key, CustomRingProof, ListRegistry, QueueEntry, RegisterKeyStatement, RingMode,
     RingPolicy, RingProof, APPLY_BATCH, REGISTER_KEY_CIPHERTEXT_LEN, ROOT_HISTORY,
@@ -11,8 +11,8 @@ use spr_keypair::X25519Pubkey;
 use thiserror::Error;
 use zolana_ring_client::{
     rpc::{
-        EscrowRegistration, RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest,
-        ENROLMENT_LISTS,
+        AddressEnrollment, EscrowRegistration, RecordUpdateEntry, RecordUpdateId,
+        SubmitRecordUpdateRequest, ENROLMENT_LISTS,
     },
     storage_apply_proof_inputs, MemberOpeningRead,
 };
@@ -29,8 +29,6 @@ pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 pub const MAX_ENROLMENT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24;
 /// Thirty days of 250 ms slots.
 pub const MAX_LIMIT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24 * 30;
-/// Written by wallets, read by grants under the newest registry root.
-const GRACED_LISTS: ListSet = ListSet::single(ListId::Reader);
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 #[repr(i32)]
@@ -86,6 +84,10 @@ pub enum RecordUpdateRefusal {
     InvalidLimits = -32276,
     #[error("mint limits name an asset without a record")]
     LimitsWithoutRecord = -32277,
+    #[error("address entry disagrees with the owner's authorization account or was applied")]
+    AddressNotAuthorized = -32278,
+    #[error("address and escrow of the member hold different nullifier keys")]
+    AddressEscrowMismatch = -32279,
 }
 
 pub(crate) struct UpdateContext<'a> {
@@ -108,6 +110,9 @@ pub(crate) struct RecordUpdateCheck<'a> {
 pub(crate) struct CheckedUpdate {
     pub id: RecordUpdateId,
     pub writes: Vec<StorageWriteData>,
+    /// The leaf write of each entry, an address entry names its signed preimage.
+    pub entries: Vec<QueueEntry>,
+    pub addresses: Vec<AddressEnrollment>,
     pub signer: UpdateSigner,
     /// `Some` holds the update until the policy authority sets these lists on the signer's record.
     pub awaited: Option<AwaitedLists>,
@@ -178,6 +183,24 @@ pub(crate) struct BatchPlan<'a> {
 #[must_use]
 pub(crate) struct PlannedBatch<'a> {
     pub updates: Vec<&'a QueuedUpdate>,
+}
+
+/// The first nullifier key is permanent, ApplyRecords enforces the pair and the check only errs early.
+#[must_use]
+pub(crate) struct KeyAgreement<'a> {
+    pub addresses: &'a [AddressEnrollment],
+    /// `(member, nullifier_pk)` of each escrow entry.
+    pub escrows: &'a [([u8; 32], [u8; 32])],
+    /// `reads[i]` opens `members[i]` under the newest registry root.
+    pub members: &'a [[u8; 32]],
+    pub reads: &'a [MemberOpeningRead],
+}
+
+/// The owner's signed account answers the entry, a later enrollment or an applied one refuses.
+#[must_use]
+pub(crate) struct AddressAuthorizationCheck<'a> {
+    pub enrollment: &'a AddressEnrollment,
+    pub authorization: Option<&'a AddressAuthorization>,
 }
 
 /// `records[i]` opens `registering[i]` under the newest registry root.
@@ -289,9 +312,9 @@ impl RecordUpdateCheck<'_> {
             .map(|entry| entry.write(&signer))
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid_entry)?;
-        let queued = writes
+        let queued = entries
             .iter()
-            .map(StorageWriteData::entry)
+            .map(RecordUpdateEntry::entry)
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid_entry)?;
         // 5. No entry writes and no enrolment awaits a tree reader list the service never reads.
@@ -306,6 +329,14 @@ impl RecordUpdateCheck<'_> {
         Ok(CheckedUpdate {
             id: RecordUpdateId(Hash(hash)),
             writes,
+            entries: queued,
+            addresses: entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    RecordUpdateEntry::Address(enrollment) => Some(enrollment.clone()),
+                    _ => None,
+                })
+                .collect(),
             signer: update_signer,
             awaited,
         })
@@ -317,7 +348,7 @@ impl CheckedUpdate {
     pub fn written_members(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
         let mut members = Vec::new();
         for write in &self.writes {
-            let member = write.entry().map_err(invalid_entry)?.member;
+            let member = write.member().map_err(invalid_entry)?;
             if !members.contains(&member) {
                 members.push(member);
             }
@@ -326,17 +357,16 @@ impl CheckedUpdate {
     }
 
     pub fn limited_assets(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
-        let mut assets = Vec::new();
-        for write in &self.writes {
-            let entry = write.entry().map_err(invalid_entry)?;
-            if entry
-                .mint_policy
-                .is_some_and(|policy| policy.limits != AssetLimits::EMPTY)
-            {
-                assets.push(entry.member);
-            }
-        }
-        Ok(assets)
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .mint_policy
+                    .is_some_and(|policy| policy.limits != AssetLimits::EMPTY)
+            })
+            .map(|entry| entry.member)
+            .collect())
     }
 }
 
@@ -449,13 +479,7 @@ impl EnrolmentApproval<'_> {
         if self.update.awaited.is_some() {
             return Ok(Vec::new());
         }
-        let entries = self
-            .update
-            .writes
-            .iter()
-            .map(StorageWriteData::entry)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(invalid_entry)?;
+        let entries = &self.update.entries;
         let approved: Vec<&AwaitingEnrolment> = self
             .awaiting
             .iter()
@@ -477,6 +501,64 @@ impl EnrolmentApproval<'_> {
             return Err(RecordUpdateRefusal::EnrolmentBatch);
         }
         Ok(approved.iter().map(|enrolment| enrolment.id).collect())
+    }
+}
+
+impl AddressAuthorizationCheck<'_> {
+    pub fn check(self) -> Result<(), RecordUpdateRefusal> {
+        let authorization = self
+            .authorization
+            .ok_or(RecordUpdateRefusal::AddressNotAuthorized)?;
+        if authorization.address() != self.enrollment.address()
+            || authorization.applied_revision() >= authorization.revision()
+        {
+            return Err(RecordUpdateRefusal::AddressNotAuthorized);
+        }
+        Ok(())
+    }
+}
+
+impl KeyAgreement<'_> {
+    pub fn check(self) -> Result<(), RecordUpdateRefusal> {
+        let read = |member: &[u8; 32]| {
+            self.members
+                .iter()
+                .position(|listed| listed == member)
+                .and_then(|position| self.reads.get(position))
+        };
+        for enrollment in self.addresses {
+            let member = Member::owner_tag(enrollment.owner.0.as_array()).map_err(invalid_entry)?;
+            let nullifier_pk = enrollment.nullifier_pk.0;
+            let same_update = self
+                .escrows
+                .iter()
+                .filter(|(escrowed, _)| escrowed == member.as_bytes())
+                .all(|(_, key)| *key == nullifier_pk);
+            let recorded = match read(member.as_bytes()) {
+                Some(read)
+                    if read
+                        .record()
+                        .is_some_and(|record| record.escrow_key != [0; 32]) =>
+                {
+                    read.escrowed(&nullifier_pk)
+                        .map_err(|_| RecordUpdateRefusal::InvalidEntry)?
+                        .is_some()
+                }
+                _ => true,
+            };
+            if !same_update || !recorded {
+                return Err(RecordUpdateRefusal::AddressEscrowMismatch);
+            }
+        }
+        for (member, nullifier_pk) in self.escrows {
+            if read(member)
+                .and_then(|read| read.address)
+                .is_some_and(|address| address.nullifier_pk != *nullifier_pk)
+            {
+                return Err(RecordUpdateRefusal::AddressEscrowMismatch);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -575,7 +657,7 @@ pub(crate) fn escrowed_members(
         .iter()
         .filter_map(|write| match write {
             StorageWriteData::Escrow(escrow) => Some(escrow.member().map_err(invalid_entry)),
-            StorageWriteData::Record(_) => None,
+            StorageWriteData::Record(_) | StorageWriteData::Address(_) => None,
         })
         .collect()
 }
@@ -617,9 +699,10 @@ fn awaited_lists(bits: u64, policy: &RingPolicy) -> Result<ListSet, RecordUpdate
     ListSet::from_record_bits(bits)
         .filter(|lists| {
             lists.is_subset(ENROLMENT_LISTS)
-                && lists
-                    .iter()
-                    .all(|list| policy.registry_for(list) == Some(ListRegistry::Own))
+                && lists.iter().all(|list| {
+                    // No rule reads Reader, a grant always reads the ring's own records.
+                    list == ListId::Reader || policy.registry_for(list) == Some(ListRegistry::Own)
+                })
         })
         .ok_or(RecordUpdateRefusal::EnrolmentLists)
 }
@@ -639,13 +722,19 @@ fn wallet_write(entry: &RecordUpdateEntry, wallet: &Member) -> bool {
         }
         RecordUpdateEntry::Escrow(registration) => own(&registration.member),
         RecordUpdateEntry::WalletGrant(grant) => own(&grant.wallet),
+        RecordUpdateEntry::Address(enrollment) => {
+            Member::owner_tag(enrollment.owner.0.as_array()).is_ok_and(|member| member == *wallet)
+        }
     }
 }
 
-/// The policy authority writes every authority list and mint setting.
+/// The policy authority writes every authority list and mint setting, and carries a PDA's address.
 fn authority_write(entry: &RecordUpdateEntry) -> bool {
-    matches!(entry, RecordUpdateEntry::Write(write)
-        if lists_within(write.mask, ListSet::AUTHORITY_WRITES))
+    match entry {
+        RecordUpdateEntry::Write(write) => lists_within(write.mask, ListSet::AUTHORITY_WRITES),
+        RecordUpdateEntry::Address(_) => true,
+        RecordUpdateEntry::Escrow(_) | RecordUpdateEntry::WalletGrant(_) => false,
+    }
 }
 
 fn revokes(table: &RuleTable, write: &RecordWriteProofInput) -> bool {
@@ -666,9 +755,8 @@ fn revokes_lists(table: &RuleTable, entry: &QueueEntry) -> bool {
                 let RuleSource::Lists { present, absent } = rule.source;
                 (on.union(present), off.union(absent))
             });
-    let graced = GRACED_LISTS.record_bits();
-    let cleared = entry.mask & !entry.value & !graced;
-    let set = entry.mask & entry.value & !graced;
+    let cleared = entry.mask & !entry.value;
+    let set = entry.mask & entry.value;
     cleared & accepted_on.record_bits() != 0 || set & accepted_off.record_bits() != 0
 }
 
@@ -712,7 +800,6 @@ mod tests {
         let table = RuleTable::builder()
             .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
             .rule(Rule::forbid(Subject::Sender, ListId::Approval))
-            .rule(Rule::require(Subject::Sender, ListId::Reader))
             .build();
 
         assert!(revokes_lists(&table, &set(ListId::Approval)));
@@ -722,7 +809,99 @@ mod tests {
         assert!(!revokes_lists(&table, &cleared(ListId::Approval)));
         // No rule reads Block.
         assert!(!revokes_lists(&table, &set(ListId::Block)));
-        // A wallet writes the reader bit of its grants.
-        assert!(!revokes_lists(&table, &cleared(ListId::Reader)));
+    }
+
+    #[test]
+    fn an_enrolment_awaiting_reader_needs_no_reader_rule() {
+        let policy = bytemuck::Zeroable::zeroed();
+        assert_eq!(
+            awaited_lists(ListId::Reader.record_bit(), &policy),
+            Ok(ListSet::single(ListId::Reader))
+        );
+        assert_eq!(
+            awaited_lists(ListId::Allow.record_bit(), &policy),
+            Err(RecordUpdateRefusal::EnrolmentLists),
+            "a list no rule reads from the ring's own records stays refused"
+        );
+    }
+
+    fn enrollment(nullifier_pk: [u8; 32]) -> AddressEnrollment {
+        AddressEnrollment {
+            owner: Address::new_from_array([2; 32]).into(),
+            ring_id: Hash([1; 32]),
+            nullifier_pk: Hash(nullifier_pk),
+            viewing_u: Hash([3; 32]),
+            address_revision: 1,
+        }
+    }
+
+    fn authorization(entry: &AddressEnrollment, applied: u64) -> AddressAuthorization {
+        AddressAuthorization {
+            discriminator: AddressAuthorization::DISCRIMINATOR,
+            bump: 255,
+            registry: Address::new_from_array([4; 32]),
+            owner: entry.owner.0,
+            ring_id: entry.ring_id.0,
+            nullifier_pk: entry.nullifier_pk.0,
+            viewing_u: entry.viewing_u.0,
+            revision: entry.address_revision.to_le_bytes(),
+            applied_revision: applied.to_le_bytes(),
+        }
+    }
+
+    #[test]
+    fn an_address_entry_answers_to_the_owners_account() {
+        let entry = enrollment([5; 32]);
+        let check = |authorization: Option<&AddressAuthorization>| {
+            AddressAuthorizationCheck {
+                enrollment: &entry,
+                authorization,
+            }
+            .check()
+        };
+        assert_eq!(check(None), Err(RecordUpdateRefusal::AddressNotAuthorized));
+        assert_eq!(check(Some(&authorization(&entry, 0))), Ok(()));
+        // The owner already applied the revision.
+        assert_eq!(
+            check(Some(&authorization(&entry, 1))),
+            Err(RecordUpdateRefusal::AddressNotAuthorized)
+        );
+        // Another key on the account, an authority never picks the address.
+        assert_eq!(
+            check(Some(&authorization(&enrollment([6; 32]), 0))),
+            Err(RecordUpdateRefusal::AddressNotAuthorized)
+        );
+    }
+
+    #[test]
+    fn an_address_entry_and_an_escrow_of_one_update_agree_on_the_key() {
+        let entry = enrollment([5; 32]);
+        let member = *Member::owner_tag(entry.owner.0.as_array())
+            .unwrap()
+            .as_bytes();
+        let check = |escrow_key: [u8; 32]| {
+            KeyAgreement {
+                addresses: core::slice::from_ref(&entry),
+                escrows: &[(member, escrow_key)],
+                members: &[],
+                reads: &[],
+            }
+            .check()
+        };
+        assert_eq!(check([5; 32]), Ok(()));
+        assert_eq!(
+            check([6; 32]),
+            Err(RecordUpdateRefusal::AddressEscrowMismatch)
+        );
+    }
+
+    #[test]
+    fn an_address_entry_is_the_owners_wallet_write_or_an_authority_carry() {
+        let entry = RecordUpdateEntry::Address(enrollment([5; 32]));
+        let owner = Member::owner_tag(&[2; 32]).unwrap();
+        let stranger = Member::owner_tag(&[8; 32]).unwrap();
+        assert!(wallet_write(&entry, &owner));
+        assert!(!wallet_write(&entry, &stranger));
+        assert!(authority_write(&entry));
     }
 }
