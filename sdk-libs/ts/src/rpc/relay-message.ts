@@ -202,10 +202,12 @@ export function checkDelegateMessage(
   };
   const { data, accounts } = open(envelope, message);
   if (data[0] !== RingInstructionTag.authorityTransfer) throw mismatch("Data");
+  // A delegate moves under a policy, the frame names every recipient.
   const recipients = withMismatch("Data", () => {
     const parsed = RingTransactData.parse(data.subarray(1), "delegate");
-    if (parsed.interfaceTransfers.length !== 0) throw mismatch("Data");
-    return RingTransactData.policyRecipients(parsed);
+    const framed = parsed.policy?.recipients;
+    if (parsed.interfaceTransfers.length !== 0 || framed?.kind !== "framed") throw mismatch("Data");
+    return framed.recipients;
   });
   if (recipients.length < expected.payees.length) throw mismatch("Recipients");
   const paysEachPayee = expected.payees.every((payee, slot) =>

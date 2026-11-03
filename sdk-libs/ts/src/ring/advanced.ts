@@ -13,13 +13,8 @@ export {
 } from "../crypto/audit/audit.js";
 export type { AuditorMessage, DisclosurePad } from "../crypto/audit/audit.js";
 export {
-  ANONYMOUS_AUDIT_CLASSES,
-  ANONYMOUS_ENTRY_CLASS,
-  ANONYMOUS_ENTRY_OUTPUTS,
-  ANONYMOUS_MAX_INPUTS,
   ANONYMOUS_SLOT_BYTES,
   DELIVERED_AUDIT_CAPACITIES,
-  DELIVERED_SENDER_CLASSES,
   DELIVERED_SLOT_BYTES,
   DENSE_DELIVERED_SLOT_BYTES,
   DISCLOSURE_CHUNK_BYTES,
@@ -27,16 +22,28 @@ export {
   DISCLOSURE_SENDER_KEY_BYTES,
   INPUT_PREFIX_BITS,
   INPUT_PREFIX_BYTES,
-  anonymousAuditClass,
   anonymousAuditKey,
   anonymousFields,
   anonymousKeyClass,
   auditLayoutValue,
   deliveredFields,
-  deliveredSenderClass,
   disclosureFieldCount,
   packedChunks,
 } from "../protocol/codec/ring-disclosure-layout.js";
+export {
+  ANONYMOUS_TRANSFER_SHAPES,
+  CONFIDENTIAL_TRANSFER_SHAPES,
+  ENTRY_TRANSFER_SHAPES,
+  ringTransferCircuit,
+  transferCircuitType,
+  transferInputClass,
+  transferPoolCapacity,
+} from "../protocol/proof/transfer-shapes.js";
+export type {
+  TransferKeyCircuit,
+  TransferShape,
+  TransferSpend,
+} from "../protocol/proof/transfer-shapes.js";
 export type {
   AnonymousAuditKey,
   AnonymousFields,
@@ -69,11 +76,7 @@ export type {
   PublishedOutputs,
   RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
-export {
-  deliveredSlotSecret,
-  ringIdField,
-  senderCommitment,
-} from "../crypto/derivation/ring-stream.js";
+export { deliveredSlotSecret, ringIdField } from "../crypto/derivation/ring-stream.js";
 export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
   RING_DELIVERED_BODY_LEN,
@@ -150,23 +153,20 @@ export type {
 export {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
-  auditStatementElements,
-  auditStatementHash,
-  policyStatementElements,
-  policyStatementHash,
   registerKeyStatementElements,
   registerKeyStatementHash,
-  ringAuditStatement,
+  ringTransferStatement,
+  transferStatementElements,
+  transferStatementHash,
 } from "../protocol/proof/statement.js";
 export type {
   ApplyRecordsStatement,
-  AuditBinding,
   AuditHead,
-  AuditKind,
-  AuditStatement,
-  PolicyKey,
-  PolicyStatement,
   RegisterKeyStatement,
+  TransferBinding,
+  TransferFamily,
+  TransferRoots,
+  TransferStatement,
 } from "../protocol/proof/statement.js";
 export { depositStatementElements } from "../proof/deposit-audit.js";
 export type { DepositedAsset, DepositRegistry, DepositStatement } from "../proof/deposit-audit.js";

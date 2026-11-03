@@ -19,12 +19,6 @@ export function policyWithdrawalHash(legs: readonly PolicyWithdrawal[]): Bytes32
     ...legs.flatMap((w) => [w.owner, w.asset, bigIntBytes(w.amount) as Bytes32]),
   ]) as Bytes32;
 }
-export function withdrawalCapacity(count: number): number {
-  const capacity = [0, 1, 2, 4, 8, 16, 32].find((c) => count <= c);
-  if (!Number.isSafeInteger(count) || count < 0 || capacity === undefined)
-    throw new RingError("RING_TRANSACT_DATA_INVALID");
-  return capacity;
-}
 export async function readPolicyWithdrawals(
   client: Pick<ChainReader, "getAccount">,
   transfers: readonly SettlementTransfer[],

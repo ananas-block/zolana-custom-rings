@@ -428,9 +428,8 @@ describe("confirmedRingWithdrawals", () => {
     const frame: RingTransactData = {
       ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
       interfaceTransfers: transfers,
+      ownRevision: 0n,
       policy: {
-        proof: new Uint8Array(192),
-        ownRevision: 0n,
         splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
         recipients: { kind: "framed", recipients: [zeros(32) as Bytes32, zeros(32) as Bytes32] },
       },

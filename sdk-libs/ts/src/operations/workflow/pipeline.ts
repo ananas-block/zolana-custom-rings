@@ -1,6 +1,6 @@
 /**
- * One transfer pipeline for every rail, Rust `pipeline`. The rail seals the outputs, the audit proof
- * opens them to the auditor, the policy proof checks the ring's table, the SPP proof spends.
+ * One transfer pipeline for every rail, Rust `pipeline`. The rail seals the outputs, the ring proof
+ * opens them to the auditor and screens the ring's table, the SPP proof spends.
  */
 import type { AccountMeta, Instruction } from "@solana/kit";
 
@@ -29,31 +29,26 @@ import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
 import type { AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
-import { ringIdField, senderCommitment } from "../../crypto/derivation/ring-stream.js";
+import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
-import {
-  auditProofRequest,
-  sealAudit,
-  sealedAuditMessage,
-  type SealedAudit,
-} from "../../proof/audit-proof.js";
+import { sealAudit, sealedAuditMessage, type SealedAudit } from "../../proof/audit-proof.js";
 import { ringRootRegistries, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
-import {
-  readWithdrawalExemption,
-  type WithdrawalExemption,
-} from "../../proof/withdrawal-exemption.js";
 import { demandedCoSigner, transactDemand } from "../../proof/cosign.js";
 import { RingError } from "../../protocol/error.js";
 import {
-  policyProofRequest,
+  exemptWithdrawals,
+  policyRoots,
   readPolicy,
+  screened,
   type BoundPolicy,
   type BoundRoot,
   type PolicyInputs,
 } from "../../proof/policy-proof.js";
+import { transferProofRequest } from "../../proof/transfer-proof.js";
+import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import type { PublishedSlot, RingOutputRail } from "../payments/output-rail.js";
-import { auditStatementHash, ringAuditStatement } from "../../protocol/proof/statement.js";
+import { ringTransferStatement, transferStatementHash } from "../../protocol/proof/statement.js";
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
@@ -61,11 +56,15 @@ import {
   ringDisclosureLayout,
   ringSppInputs,
   type InputTrees,
+  type PolicyProof,
   type PolicyRecipients,
   type RingRail,
   type SenderBundle,
 } from "../../protocol/transaction/transact.js";
 import {
+  MAX_SPP_CPI_ACCOUNTS,
+  publicAmountFields,
+  publicGrossFields,
   publicSlots,
   type PublicSlots,
   interfaceTransferOf,
@@ -183,14 +182,15 @@ interface AssembledTransfer {
   readonly proofInputs: SppProofInputs;
   readonly slots: PublicSlots;
   readonly senderPkHash: Bytes32;
-  readonly policy: PolicyInputs | undefined;
-  readonly withdrawalExemption: WithdrawalExemption | undefined;
-  readonly approvalRequired: boolean;
+  readonly policy: PolicyInputs;
   readonly coSigner: Address | undefined;
-  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32] | undefined;
+  /** Zeros off the anonymous rail. */
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+  /** The statement's sender identity, zero where the rail names none. */
+  readonly sender: Bytes32;
   readonly privateTxHash: Bytes32;
-  readonly privateTxBlinding: Bytes32;
-  readonly commitment: Bytes32 | undefined;
+  /** The one ring statement, hashed as the program rebuilds it. */
+  readonly publicInputHash: Bytes32;
   readonly accounts: RingTransactAccounts;
   readonly ringId: Bytes32;
   readonly preview: RingTransactData;
@@ -212,7 +212,7 @@ export type StagedTransferInput = Readonly<{
   approve?: (coSigner: Address | undefined) => Promise<void>;
 }>;
 
-/** Rust `Pipeline::assemble` and `Assembled::prove`, no proof is an input to another. */
+/** Rust `Pipeline::assemble` and `Assembled::prove`, neither proof is an input to the other. */
 export function proveStagedTransfer(
   input: StagedTransferInput,
   context?: RequestContext,
@@ -310,42 +310,42 @@ async function assembleStagedTransfer<T>(
   try {
     const slots = publicSlots(proofInputs.externalData.interfaceTransfers);
     const senderPkHash = sender.signingPublicKey.ownerProofInputHash();
-    const policy = config.hasPolicy
-      ? await readPolicy(
-          {
-            ...(spend.anonymous?.tokenOwner === undefined
-              ? {}
-              : { tokenOwnerHint: spend.anonymous.tokenOwner }),
-            client,
-            ringProgramId,
-            config,
-            rail: ringRail,
-            proofInputs,
-            sender: senderPkHash,
-            publicSlots: slots,
-          },
-          context,
-        )
-      : undefined;
-    const approvalRequired = policy?.approvalRequired ?? false;
-    const withdrawalExemption = await readWithdrawalExemption(
+    const read = await readPolicy(
+      {
+        ...(spend.anonymous?.tokenOwner === undefined
+          ? {}
+          : { tokenOwnerHint: spend.anonymous.tokenOwner }),
+        client,
+        ringProgramId,
+        config,
+        rail: ringRail,
+        proofInputs,
+        publishedInputs,
+        // The entry layout is the anonymous rail's, a confidential ring spends default-ring notes as any other.
+        spendsDefaultRing: ringRail === "anonymous" && spendsDefaultRing(proofInputs),
+        sender: senderPkHash,
+        publicSlots: slots,
+      },
+      context,
+    );
+    const policy = await exemptWithdrawals(
+      read,
       {
         client,
         ringProgramId,
         config,
         demand: transactDemand(proofInputs.externalData.interfaceTransfers),
-        approvalRequired,
-        own: policy?.own,
+        publicSlots: slots,
       },
       context,
     );
     const coSigner = await demandedCoSigner(
       {
         client,
-        withdrawalExempt: withdrawalExemption !== undefined,
+        withdrawalExempt: policy.exempt,
         ringProgramId,
         config,
-        approvalRequired,
+        approvalRequired: policy.approvalRequired,
         supplied: input.coSigner,
         transfers: proofInputs.externalData.interfaceTransfers,
         ownerSigners:
@@ -356,24 +356,24 @@ async function assembleStagedTransfer<T>(
       },
       context,
     );
-    const partyIdentities = spend.anonymous?.partyIdentities(coSigner);
+    const partyIdentities = spend.anonymous?.partyIdentities(coSigner) ?? [
+      zeroField(),
+      zeroField(),
+      zeroField(),
+    ];
     const privateTxHash = proofInputs.privateTxHash();
-    const privateTxBlinding = proofInputs.privateTxBlinding();
-    const anonymous = spend.anonymous;
-    const commitment =
-      anonymous !== undefined && policy !== undefined
-        ? senderCommitment({ senderPkHash, privateTxBlinding })
-        : undefined;
+    // The signer rail names its sole owner under a policy alone, the in-proof owner is public in the frame.
+    const statementSender =
+      ringRail === "confidential" && (spend.inProofOwner !== undefined || screened(policy))
+        ? senderPkHash
+        : zeroField();
     const accounts: RingTransactAccounts = Object.freeze({
       payer: proofInputs.payer,
       inputTrees: Object.freeze(proofInputs.inputTreeIds().map(treeAddress)),
       outputTree: treeAddress(proofInputs.outputTreeId),
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
-      registries: ringRootRegistries(
-        config,
-        withdrawalExemption === undefined ? "transfer" : "exemptTransfer",
-      ),
+      registries: ringRootRegistries(config, policy.exempt ? "exemptTransfer" : "transfer"),
       ...(coSigner === undefined ? {} : { coSigner }),
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
     });
@@ -390,11 +390,34 @@ async function assembleStagedTransfer<T>(
       sealed: sealed.sealed,
       disclosure: sealed.fields,
       privateTxHash,
-      approvalRequired,
-      ...(policy === undefined ? {} : { policy: { inputs: policy, senderCommitment: commitment } }),
-      ...(withdrawalExemption === undefined ? {} : { withdrawalExemption }),
+      approvalRequired: policy.approvalRequired,
+      exempt: policy.exempt,
+      ...(policy.own === undefined ? {} : { ownRevision: policy.own.revision }),
+      ...(screened(policy)
+        ? {
+            policy: {
+              splWithdrawalOwners: policy.splWithdrawalOwners,
+              ...(policy.curator === undefined ? {} : { curatorRevision: policy.curator.revision }),
+              recipients: policyRecipients(ringRail, policy),
+            },
+          }
+        : {}),
       ...(spend.inProofOwner === undefined ? {} : { inProofOwner: spend.inProofOwner }),
     });
+    const publicInputHash = transferStatementHash(
+      ringTransferStatement(preview, {
+        ringId,
+        auditorPubkey: auditor.toBytes(),
+        keyEscrow: config.keyEscrow,
+        sender: statementSender,
+        partyIdentities,
+        roots: policyRoots(policy),
+        publicAssets: slots.assets,
+        publicAmounts: publicAmountFields(slots),
+        publicGross: publicGrossFields(slots),
+        withdrawalHash: policyWithdrawalHash(policy.withdrawals),
+      }),
+    );
     // The program's expansion must reproduce the external data the SPP proof binds.
     if (
       !equalBytes(
@@ -422,13 +445,11 @@ async function assembleStagedTransfer<T>(
         slots,
         senderPkHash,
         policy,
-        withdrawalExemption,
-        approvalRequired,
         coSigner,
         partyIdentities,
+        sender: statementSender,
         privateTxHash,
-        privateTxBlinding,
-        commitment,
+        publicInputHash,
         accounts,
         ringId,
         preview,
@@ -446,81 +467,42 @@ async function proveAssembled(
 ): Promise<ProvenRingTransfer> {
   const { client, ringProgramId, config, staged } = input;
   const { rail, sender, spend } = staged;
-  const ringRail = spend.rail;
-  const anonymous = spend.anonymous;
-  const { proofInputs, policy, coSigner, privateTxHash, commitment, ringId } = assembled;
-  const auditor = config.auditorPublicKey;
-  const { preview } = assembled;
-  const policyRequest =
-    policy === undefined
-      ? undefined
-      : policyProofRequest(policy, {
-          ringId,
-          rail: ringRail,
-          proofInputs,
-          privateTxHash,
-          sender: ringRail === "delegate" ? zeroField() : (commitment ?? assembled.senderPkHash),
-          senderPkHash: assembled.senderPkHash,
-          publicSlots: assembled.slots,
-        });
-  const auditRequest = auditProofRequest({
+  const { proofInputs, policy, coSigner, privateTxHash, ringId, preview } = assembled;
+  const request = transferProofRequest({
     rail,
+    ringRail: spend.rail,
     sealed: assembled.sealed,
     published: assembled.published,
+    publishedInputs: assembled.publishedInputs,
     proofInputs,
     sender,
-    auditor,
-    ringId,
+    auditor: config.auditorPublicKey,
+    policy,
+    proving: { ringId, publicSlots: assembled.slots },
     privateTxHash,
-    privateTxBlinding: assembled.privateTxBlinding,
+    publicInputHash: assembled.publicInputHash,
+    statementSender: assembled.sender,
     senderPkHash: assembled.senderPkHash,
-    publicInputHash: auditStatementHash(
-      ringAuditStatement(preview, {
-        partyIdentities: assembled.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
-        ringId,
-        auditorPubkey: auditor.toBytes(),
-        keyEscrow: config.keyEscrow,
-      }),
-    ),
-    ...(assembled.partyIdentities === undefined
-      ? {}
-      : {
-          anonymous: Object.freeze({
-            partyIdentities: assembled.partyIdentities,
-            senderCommitment: commitment ?? zeroField(),
-          }),
-        }),
+    inProof: spend.inProofOwner !== undefined,
+    partyIdentities: assembled.partyIdentities,
   });
-  let proofs: readonly [
-    ProvenRingTransact | ProvenAnonymousRingTransact,
-    Uint8Array,
-    Uint8Array | undefined,
-    Uint8Array | undefined,
-  ];
+  let proofs: readonly [ProvenRingTransact | ProvenAnonymousRingTransact, Uint8Array];
   try {
-    // Each request runs in its own async call, a synchronous throw never strands another proof.
+    // Each request runs in its own async call, a synchronous throw never strands the other proof.
     proofs = await Promise.all([
       (async () => spend.prove(proofInputs, coSigner, context))(),
-      (async () => client.proveRing(auditRequest, context))(),
-      (async () =>
-        policyRequest === undefined ? undefined : client.proveRing(policyRequest, context))(),
-      (async () =>
-        assembled.withdrawalExemption === undefined
-          ? undefined
-          : client.proveRing(assembled.withdrawalExemption.request, context))(),
+      (async () => client.proveRing(request, context))(),
     ]);
   } finally {
-    wipeAuditRequest(auditRequest);
+    wipeAuditRequest(request);
   }
-  const [spp, auditProof, policyProof, withdrawalProof] = proofs;
+  const [spp, proof] = proofs;
   const data = provenData({
     preview,
     spp: spp.data,
     privateTxHash,
     publishedInputs: assembled.publishedInputs,
-    auditProof,
-    ...(policyProof === undefined ? {} : { policyProof }),
-    ...(withdrawalProof === undefined ? {} : { withdrawalProof }),
+    proof,
   });
   return new ProvenRingTransfer({
     ringProgramId,
@@ -528,15 +510,12 @@ async function proveAssembled(
     accounts: assembled.accounts,
     outputs: proofInputs.outputs,
     ...(coSigner === undefined ? {} : { coSigner }),
-    approvalRequired: assembled.approvalRequired,
-    roots: [
-      ...(policy === undefined ? [] : boundRoots(policy)),
-      ...(assembled.withdrawalExemption === undefined ? [] : [assembled.withdrawalExemption.root]),
-    ],
-    ...(policy === undefined
-      ? {}
-      : { policy: Object.freeze({ ringProgramId, policyHash: policy.pinned.policyHash }) }),
-    ...(anonymous === undefined ? {} : { viewingHistory: anonymous.viewingHistory }),
+    approvalRequired: policy.approvalRequired,
+    roots: boundRoots(policy),
+    ...(screened(policy)
+      ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
+      : {}),
+    ...(spend.anonymous === undefined ? {} : { viewingHistory: spend.anonymous.viewingHistory }),
   });
 }
 
@@ -563,6 +542,10 @@ export async function ringTransactInstruction(
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
   });
+  if (sppAccounts.length > MAX_SPP_CPI_ACCOUNTS)
+    throw new RingError("RING_TOO_MANY_SETTLEMENT_ACCOUNTS", {
+      details: { accounts: sppAccounts.length, limit: MAX_SPP_CPI_ACCOUNTS },
+    });
   const prefix: AccountMeta[] = [
     meta(ring, false, false),
     ...accounts.registries.map((registry) => meta(registry, false, false)),
@@ -621,8 +604,9 @@ function previewData(
     disclosure: readonly Bytes32[];
     privateTxHash: Bytes32;
     approvalRequired: boolean;
-    policy?: Readonly<{ inputs: PolicyInputs; senderCommitment: Bytes32 | undefined }>;
-    withdrawalExemption?: WithdrawalExemption;
+    exempt: boolean;
+    ownRevision?: bigint;
+    policy?: PolicyProof;
     inProofOwner?: Bytes32;
   }>,
 ): RingTransactData {
@@ -638,31 +622,10 @@ function previewData(
     rail: input.rail,
     nIn: input.shape.inputs,
     nOut: input.shape.outputs,
-    auditProof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-    ...(input.policy === undefined
-      ? {}
-      : {
-          policy: {
-            proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-            ownRevision: input.policy.inputs.own.revision,
-            splWithdrawalOwners: input.policy.inputs.splWithdrawalOwners,
-            ...(input.policy.inputs.curator === undefined
-              ? {}
-              : { curatorRevision: input.policy.inputs.curator.root.revision }),
-            ...(input.policy.senderCommitment === undefined
-              ? {}
-              : { senderCommitment: input.policy.senderCommitment }),
-            recipients: policyRecipients(input.rail, input.policy.inputs),
-          },
-        }),
-    ...(input.withdrawalExemption === undefined
-      ? {}
-      : {
-          withdrawalExemption: {
-            proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-            revision: input.withdrawalExemption.root.revision,
-          },
-        }),
+    proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+    ...(input.ownRevision === undefined ? {} : { ownRevision: input.ownRevision }),
+    ...(input.policy === undefined ? {} : { policy: input.policy }),
+    exempt: input.exempt,
     approvalRequired: input.approvalRequired,
     expiryUnixTs: Number(U32_MAX),
     txViewingU: input.txViewingU,
@@ -712,9 +675,7 @@ function provenData(
     spp: RingTransactInstructionData;
     privateTxHash: Bytes32;
     publishedInputs: number;
-    auditProof: Uint8Array;
-    policyProof?: Uint8Array;
-    withdrawalProof?: Uint8Array;
+    proof: Uint8Array;
   }>,
 ): RingTransactData {
   const { preview, spp } = input;
@@ -779,13 +740,7 @@ function provenData(
   sppProof.set(spp.proof.c, 96);
   return Object.freeze({
     ...preview,
-    auditProof: input.auditProof,
-    ...(preview.withdrawalExemption === undefined || input.withdrawalProof === undefined
-      ? {}
-      : { withdrawalExemption: { ...preview.withdrawalExemption, proof: input.withdrawalProof } }),
-    ...(preview.policy === undefined || input.policyProof === undefined
-      ? {}
-      : { policy: { ...preview.policy, proof: input.policyProof } }),
+    proof: input.proof,
     ...(anonymous === undefined ? {} : { anonymous }),
     ...(inProofOwner === undefined ? {} : { inProofOwner }),
     sppProof,
@@ -846,7 +801,7 @@ export function boundState(proven: ProvenRingTransfer): RingBoundState {
 
 function boundRoots(policy: PolicyInputs): readonly BoundRoot[] {
   return Object.freeze(
-    policy.curator === undefined ? [policy.own] : [policy.own, policy.curator.root],
+    [policy.own, policy.curator].filter((root): root is BoundRoot => root !== undefined),
   );
 }
 

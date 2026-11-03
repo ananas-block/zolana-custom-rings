@@ -3,12 +3,10 @@ import { type Bytes32, poseidon } from "@heliuslabs/zolana/keypair";
 
 /** Distinct ASCII tags, the first Poseidon input, mirroring Rust `custom_ring_interface::domain`. */
 export const RingDomain = Object.freeze({
-  auditStatement: 0x4352_4155, // "CRAU"
   deliveredSlotSecret: 0x4352_4453, // "CRDS"
   blindingSeed: 0x4352_4253, // "CRBS"
-  senderCommitment: 0x4352_5343, // "CRSC"
   disclosurePad: 0x4352_4f44, // "CROD"
-  policyStatement: 0x4352_504f, // "CRPO"
+  transferStatement: 0x4352_5458, // "CRTX"
   policyTable: 0x4352_5442, // "CRTB"
   queueWrite: 0x4352_5157, // "CRQW"
   applyRecords: 0x4352_4150, // "CRAP"
@@ -17,14 +15,13 @@ export const RingDomain = Object.freeze({
   depositStatement: 0x4352_4450, // "CRDP"
   mergeStatement: 0x4352_4d47, // "CRMG"
   withdrawals: 0x4352_5057, // "CRPW"
-  withdrawalExemption: 0x4352_5758, // "CRWX"
   recordUpdate: 0x4352_5255, // "CRRU"
   walletGrant: 0x4352_5747, // "CRWG"
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 
-/** Bound into every policy statement, a layout change raises it. */
-export const POLICY_STATEMENT_VERSION = 4n;
+/** The nonzero last element of every transfer statement, a layout change raises it. */
+export const TRANSFER_STATEMENT_VERSION = 1n;
 
 export function domainField(domain: RingDomain): Bytes32 {
   return rightAlign(u32be(domain));

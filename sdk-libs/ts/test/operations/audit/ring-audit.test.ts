@@ -102,7 +102,7 @@ function bound(layout: Layout, vector: Vector): DisclosureLayout {
   if (!("inputs" in vector)) throw new Error("anonymous vector without inputs");
   return {
     kind: layout,
-    key: vector.key === "entry" ? { kind: "entry" } : { kind: "commitment", class: vector.class },
+    key: { kind: vector.key === "entry" ? "entry" : "commitment", class: vector.class },
     inputs: vector.inputs.length,
     outputs,
     exits,

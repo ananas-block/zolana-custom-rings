@@ -1,36 +1,12 @@
 /** Field layouts of the auditor disclosure, Rust `custom_ring_interface::disclosure`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
+import { ringTransferCircuit } from "../proof/transfer-shapes.js";
+
+/** Rust `DELIVERED_AUDIT_CAPACITIES`, the output counts of the confidential keys. */
 export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
-/** Rust `DELIVERED_SENDER_CLASSES`. */
-export const DELIVERED_SENDER_CLASSES: readonly Readonly<{
-  outputs: number;
-  inputClass: number;
-}>[] = Object.freeze([
-  Object.freeze({ outputs: 2, inputClass: 48 }),
-  Object.freeze({ outputs: 4, inputClass: 24 }),
-  Object.freeze({ outputs: 8, inputClass: 16 }),
-  Object.freeze({ outputs: 16, inputClass: 8 }),
-]);
-/** Input classes of the anonymous commitment keys per output capacity, ascending. */
-export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
-  outputs: number;
-  classes: readonly number[];
-}>[] = Object.freeze([
-  Object.freeze({ outputs: 2, classes: Object.freeze([4, 16]) }),
-  Object.freeze({ outputs: 4, classes: Object.freeze([4, 16]) }),
-  Object.freeze({ outputs: 8, classes: Object.freeze([4, 8]) }),
-]);
-/** Input slots of every anonymous entry key. */
-export const ANONYMOUS_ENTRY_CLASS = 8;
-/** Output capacities of the anonymous entry keys. */
-export const ANONYMOUS_ENTRY_OUTPUTS: readonly number[] = Object.freeze([2, 4, 8]);
 /** Rust `MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
 export const MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
-/** The widest commitment class, no anonymous key serves more inputs. */
-export const ANONYMOUS_MAX_INPUTS = Math.max(
-  ...ANONYMOUS_AUDIT_CLASSES.flatMap((entry) => entry.classes),
-);
 /** A delivered slot of a transfer with an exit, ring `owner_key ‖ 0^8`, exit `asset ‖ u64be(amount)`. */
 export const DELIVERED_SLOT_BYTES = 40;
 /** A delivered ring slot of an exit-free transfer, `owner_key`. */
@@ -70,16 +46,16 @@ export function auditLayoutValue(layout: AuditLayout): number {
   return flags.reduce((value, [flag, bit]) => (flag ? value | (1 << bit) : value), 0);
 }
 
-/** The key of an anonymous transfer's audit proof, Rust `AnonymousAuditKey`. */
+/** The disclosure layout of an anonymous transfer's key, Rust `AnonymousAuditKey`. */
 export type AnonymousAuditKey =
   /** Publishes spent UTXO 0's hash and the prefix of every later one, every spent UTXO a note of the ring. */
   | Readonly<{ kind: "commitment"; class: number }>
   /** Opens every spent UTXO, the key of a transfer that spends a default-ring note. */
-  | Readonly<{ kind: "entry" }>;
+  | Readonly<{ kind: "entry"; class: number }>;
 
 /** The input slots of the key. */
 export function anonymousKeyClass(key: AnonymousAuditKey): number {
-  return key.kind === "commitment" ? key.class : ANONYMOUS_ENTRY_CLASS;
+  return key.class;
 }
 
 /** What picks an anonymous transfer's audit key, Rust `AnonymousSpend`. */
@@ -91,24 +67,20 @@ export interface AnonymousSpend {
   readonly spendsDefaultRing: boolean;
 }
 
-/** `undefined` when no key serves the spend, a larger entry spend splits. */
+/** `undefined` when no key serves the spend, a larger entry spend splits, Rust `AnonymousSpend::audit_key`. */
 export function anonymousAuditKey(spend: AnonymousSpend): AnonymousAuditKey | undefined {
-  if (!spend.spendsDefaultRing) {
-    const inputClass = anonymousAuditClass(spend.inputs, spend.outputs);
-    return inputClass === undefined
-      ? undefined
-      : Object.freeze({ kind: "commitment", class: inputClass });
-  }
-  return ANONYMOUS_ENTRY_OUTPUTS.includes(spend.outputs) && spend.inputs <= ANONYMOUS_ENTRY_CLASS
-    ? Object.freeze({ kind: "entry" })
-    : undefined;
-}
-
-/** The smallest commitment class holding `inputs` for `outputs`, `undefined` when no key serves it. */
-export function anonymousAuditClass(inputs: number, outputs: number): number | undefined {
-  return ANONYMOUS_AUDIT_CLASSES.find((entry) => entry.outputs === outputs)?.classes.find(
-    (inputClass) => inputClass >= inputs,
-  );
+  const circuit = ringTransferCircuit({
+    rail: "anonymous",
+    inputs: spend.inputs,
+    outputs: spend.outputs,
+    spendsDefaultRing: spend.spendsDefaultRing,
+    legs: 0,
+  });
+  if (circuit === undefined || circuit.family === "transferConfidential") return undefined;
+  return Object.freeze({
+    kind: circuit.family === "transferAnonymousEntry" ? "entry" : "commitment",
+    class: circuit.class,
+  });
 }
 
 export interface DeliveredLayout {
@@ -116,16 +88,6 @@ export interface DeliveredLayout {
   readonly outputs: number;
   readonly exits: boolean;
   readonly keyEscrow: boolean;
-  /** In-proof owner rail only, the disclosure fields ignore it. */
-  readonly senderClass?: number;
-}
-
-/** Rust `DeliveredLayout::sender_class`. */
-export function deliveredSenderClass(outputs: number, inputs: number): number | undefined {
-  const inputClass = DELIVERED_SENDER_CLASSES.find(
-    (entry) => entry.outputs === outputs,
-  )?.inputClass;
-  return inputClass !== undefined && inputs <= inputClass ? inputClass : undefined;
 }
 
 export interface AnonymousLayout {
@@ -225,7 +187,9 @@ export function anonymousFields(layout: AnonymousLayout): AnonymousFields {
       : Object.freeze({
           kind: "openings",
           senderNullifierPk,
-          amounts: next.run(packedChunks(DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS)),
+          amounts: next.run(
+            packedChunks(DISCLOSURE_INPUT_AMOUNT_BYTES * anonymousKeyClass(layout.key)),
+          ),
           openings: next.run(2 * layout.inputs),
         });
   return Object.freeze({

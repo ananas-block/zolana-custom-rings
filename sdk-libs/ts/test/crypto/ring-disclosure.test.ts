@@ -111,7 +111,7 @@ const DELIVERED_EXITS = [false, true, false, false, true, false, false, false];
 function anonymous(): Extract<RingDisclosure, { kind: "anonymous" }> {
   return {
     kind: "anonymous",
-    layout: { key: { kind: "entry" }, inputs: 2, outputs: 4, exits: true },
+    layout: { key: { kind: "entry", class: 8 }, inputs: 2, outputs: 4, exits: true },
     seedOut: field(1),
     outputs: [
       {
@@ -144,7 +144,7 @@ const ANONYMOUS_EXITS = [false, true, false, false];
 function commitments(): Extract<RingDisclosure, { kind: "anonymous" }> {
   return {
     ...anonymous(),
-    layout: { key: { kind: "commitment", class: 4 }, inputs: 4, outputs: 4, exits: true },
+    layout: { key: { kind: "commitment", class: 16 }, inputs: 4, outputs: 4, exits: true },
     inputs: anonymousCommitments([field(0x60), field(0x61), undefined, field(0x63)]),
   };
 }
@@ -354,7 +354,7 @@ describe("ring disclosure codec", () => {
     { kind: "delivered", outputs: 8, exits: false, keyEscrow: false },
     {
       kind: "anonymous",
-      key: { kind: "commitment", class: 4 },
+      key: { kind: "commitment", class: 16 },
       inputs: 2,
       outputs: 4,
       exits: false,

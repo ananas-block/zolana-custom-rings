@@ -15,9 +15,6 @@ import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/c
 import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
-  ANONYMOUS_AUDIT_CLASSES,
-  ANONYMOUS_ENTRY_CLASS,
-  ANONYMOUS_ENTRY_OUTPUTS,
   anonymousAuditKey,
   anonymousKeyClass,
   disclosureFieldCount,
@@ -26,6 +23,12 @@ import {
   type AnonymousAuditKey,
   type AuditLayout,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  ANONYMOUS_TRANSFER_SHAPES,
+  CONFIDENTIAL_TRANSFER_SHAPES,
+  ENTRY_TRANSFER_SHAPES,
+  ringTransferCircuit,
+} from "../../../src/protocol/proof/transfer-shapes.js";
 import { decodeDisclosure } from "../../../src/crypto/audit/ring-disclosure.js";
 import {
   APPLY_BATCH,
@@ -56,13 +59,11 @@ import {
 import {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
-  auditStatementElements,
-  auditStatementHash,
-  policyStatementElements,
-  policyStatementHash,
   registerKeyStatementElements,
   registerKeyStatementHash,
-  type AuditKind,
+  transferStatementElements,
+  transferStatementHash,
+  type TransferFamily,
 } from "../../../src/protocol/proof/statement.js";
 import {
   depositStatementElements,
@@ -76,6 +77,7 @@ import {
   ringTransactOutput,
   type RingOutput,
   type RingRail,
+  railShapes,
 } from "../../../src/protocol/transaction/transact.js";
 import {
   CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -359,9 +361,9 @@ describe("ring-policy-table.json", () => {
 });
 
 describe("ring-statements.json", () => {
-  type AuditCase = (typeof statements.audit)[number];
+  type TransferCase = (typeof statements.transfer)[number];
 
-  const output = (vector: AuditCase["outputs"][number]): RingOutput => {
+  const output = (vector: TransferCase["outputs"][number]): RingOutput => {
     const hash = field(vector.hash);
     switch (vector.kind) {
       case "delivered":
@@ -394,8 +396,9 @@ describe("ring-statements.json", () => {
     keyEscrow: (value & 2) !== 0,
     fullOpenings: (value & 8) !== 0,
   });
-  const kind = (vector: AuditCase): AuditKind =>
-    vector.kind === "anonymous"
+  // A family's own values are null on the other family's vectors.
+  const family = (vector: TransferCase): TransferFamily =>
+    vector.family === "anonymous"
       ? {
           kind: "anonymous",
           partyIdentities: (vector.party_identities ?? []).map(field) as [
@@ -403,21 +406,17 @@ describe("ring-statements.json", () => {
             Bytes32,
             Bytes32,
           ],
-          privateTxHash: field(vector.private_tx_hash ?? ""),
-          senderCommitment: field(vector.sender_commitment ?? ""),
         }
-      : vector.kind === "delivered_sender"
-        ? {
-            kind: "delivered",
-            sender: {
-              privateTxHash: field(vector.private_tx_hash ?? ""),
-              sender: field(vector.sender ?? ""),
-            },
-          }
-        : { kind: "delivered" };
+      : {
+          kind: "confidential",
+          inProof: vector.in_proof === true,
+          delegate: vector.delegate === true,
+          sender: field(vector.sender ?? "00".repeat(32)),
+          recipients: (vector.recipients ?? []).map(field),
+        };
 
-  it("rebuilds every audit statement and its public input", () => {
-    for (const vector of statements.audit) {
+  it("rebuilds every transfer statement, its element count and its public input", () => {
+    for (const vector of statements.transfer) {
       const statement = {
         head: {
           firstNullifier: field(vector.first_nullifier),
@@ -429,37 +428,26 @@ describe("ring-statements.json", () => {
           salt: bytes<Bytes16>(vector.salt, 16),
           layout: layout(vector.layout),
         },
+        family: family(vector),
+        exempt: vector.exempt,
+        approvalRequired: vector.approval_required,
         outputs: vector.outputs.map(output),
         disclosure: vector.disclosure.map(field),
-        kind: kind(vector),
-      };
-      expect(hexes(auditStatementElements(statement)), vector.kind).toEqual(vector.elements);
-      expect(hex(auditStatementHash(statement))).toBe(vector.public_input_hash);
-    }
-  });
-
-  it("rebuilds the member and delegate policy statements", () => {
-    for (const vector of statements.policy) {
-      const statement = {
-        key:
-          vector.key === "member"
-            ? { kind: "member" as const, anonymous: vector.anonymous === true }
-            : { kind: "delegate" as const },
         privateTxHash: field(vector.private_tx_hash),
-        withdrawalHash: field(vector.withdrawal_hash),
-        policyHash: field(vector.policy_hash),
-        ringId: field(vector.ring_id),
-        approvalRequired: vector.approval_required,
-        keyEscrow: vector.key_escrow,
-        ownRoot: field(vector.own_root),
-        curatorRoot: field(vector.curator_root),
-        sender: field(vector.sender),
-        recipients: vector.recipients.map(field),
+        roots: {
+          policyHash: field(vector.policy_hash),
+          ownRoot: field(vector.own_root),
+          curatorRoot: field(vector.curator_root),
+        },
         publicAssets: vector.public_assets.map(field),
         publicAmounts: vector.public_amounts.map(field),
+        publicGross: vector.public_gross.map(field),
+        withdrawalHash: field(vector.withdrawal_hash),
       };
-      expect(hexes(policyStatementElements(statement))).toEqual(vector.elements);
-      expect(hex(policyStatementHash(statement))).toBe(vector.public_input_hash);
+      const elements = transferStatementElements(statement);
+      expect(elements, vector.rail).toHaveLength(vector.elements.length);
+      expect(hexes(elements), vector.rail).toEqual(vector.elements);
+      expect(hex(transferStatementHash(statement))).toBe(vector.public_input_hash);
     }
   });
 
@@ -589,7 +577,6 @@ describe("ring-transact-expansion.json", () => {
       ringError("RingShapeUnkeyed"),
     );
     for (const [at, bit] of [
-      [0, 4],
       [0, 6],
       [0, 7],
       [1, 7],
@@ -603,15 +590,35 @@ describe("ring-transact-expansion.json", () => {
     expect(refused("delegate_move", 1, () => wide)).toThrow(ringError("RingShapeUnkeyed"));
   });
 
-  it("refuses bit 4 on every rail and the in-proof owner off the confidential rail", () => {
+  it("refuses the exempt bit on the delegate rail and the in-proof owner off the confidential rail", () => {
     for (const vector of expansion.cases)
-      for (const bit of vector.rail === "confidential" ? [4] : [3, 4]) {
+      for (const bit of vector.rail === "confidential"
+        ? []
+        : vector.rail === "anonymous"
+          ? [3]
+          : [3, 4]) {
         const compact = bytes(vector.compact);
         compact[0] = (compact[0] ?? 0) | (1 << bit);
         expect(() => RingTransactData.parse(compact, railOf(vector.rail))).toThrow(
           ringError("FlagNotAllowed"),
         );
       }
+  });
+
+  it("reads the exempt bit with its own revision and refuses it without a withdrawal leg", () => {
+    const exempt = expansion.cases.find((entry) => entry.name === "confidential_exempt_audit_only");
+    if (exempt === undefined) throw new Error("vector has no exempt transfer");
+    const data = RingTransactData.parse(bytes(exempt.compact), railOf(exempt.rail));
+    expect([data.exempt, data.ownRevision !== undefined, data.policy]).toEqual([
+      true,
+      true,
+      undefined,
+    ]);
+    expect(() => RingTransactData.encode({ ...data, interfaceTransfers: [] })).toThrow(
+      ringError("ExemptionWithoutWithdrawal"),
+    );
+    const { ownRevision: _dropped, ...withoutRevision } = data;
+    expect(() => RingTransactData.encode(withoutRevision)).toThrow(ringError("RingTransactLength"));
   });
 
   /** The anonymous policy frame, its first recipient slot and the offset of that slot's tag. */
@@ -743,11 +750,28 @@ describe("ring_keyed_shapes.json", () => {
     expect(ringAuthorityShape(3, 9)).toBeUndefined();
   });
 
-  it("keys the anonymous classes and exactly the anonymous shapes a commitment class serves", () => {
-    expect(ANONYMOUS_AUDIT_CLASSES).toEqual(keyedShapes.anonymous_audit_classes);
-    expect({ class: ANONYMOUS_ENTRY_CLASS, outputs: ANONYMOUS_ENTRY_OUTPUTS }).toEqual(
-      keyedShapes.anonymous_entry,
-    );
+  it("keys every transfer family at the pinned shapes and exactly the SPP shapes each rail serves", () => {
+    expect({
+      confidential: CONFIDENTIAL_TRANSFER_SHAPES,
+      anonymous: ANONYMOUS_TRANSFER_SHAPES,
+      entry: ENTRY_TRANSFER_SHAPES,
+    }).toEqual(keyedShapes.transfer_shapes);
+    const served = (rail: RingRail, spendsDefaultRing: boolean) =>
+      SPP_SUPPORTED_SHAPES.filter(
+        (shape) =>
+          railShapes(rail).includes(shape) &&
+          ringTransferCircuit({
+            rail,
+            inputs: shape.inputs,
+            outputs: shape.outputs,
+            spendsDefaultRing,
+            legs: 0,
+          }) !== undefined,
+      ).map((shape) => [shape.inputs, shape.outputs]);
+    expect(served("confidential", false)).toEqual(keyedShapes.confidential_ring);
+    expect(served("delegate", false)).toEqual(keyedShapes.ring_authority);
+    expect(served("anonymous", false)).toEqual(keyedShapes.anonymous_ring);
+    expect(served("anonymous", true)).toEqual(keyedShapes.anonymous_entry_ring);
     expect(
       SPP_SUPPORTED_SHAPES.filter(
         (shape) =>
@@ -805,8 +829,10 @@ describe("disclosure packing", () => {
         } as const,
       })),
       ...counts.anonymous.map((record) => {
-        const key: AnonymousAuditKey =
-          record.key === "entry" ? { kind: "entry" } : { kind: "commitment", class: record.class };
+        const key: AnonymousAuditKey = {
+          kind: record.key === "entry" ? "entry" : "commitment",
+          class: record.class,
+        };
         expect(anonymousKeyClass(key)).toBe(record.class);
         return {
           record,
@@ -848,7 +874,12 @@ describe("disclosure packing", () => {
       { start: 8, end: 17 },
       32,
     ]);
-    const entry = anonymousFields({ key: { kind: "entry" }, inputs: 3, outputs: 2, exits: true });
+    const entry = anonymousFields({
+      key: { kind: "entry", class: 8 },
+      inputs: 3,
+      outputs: 2,
+      exits: true,
+    });
     expect([entry.seedOut, entry.nullifierPks, entry.slots, entry.slotBytes]).toEqual([
       0,
       { start: 2, end: 4 },
@@ -897,12 +928,17 @@ describe("disclosure packing", () => {
     expect(commitment(28, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
     expect(commitment(4, 5, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
     expect(commitment(1, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(
-      decode({ kind: "anonymous", key: { kind: "entry" }, inputs: 9, outputs: 2, exits: false }),
-    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(
-      decode({ kind: "anonymous", key: { kind: "entry" }, inputs: 2, outputs: 16, exits: false }),
-    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    const entry = (inputClass: number, inputs: number, outputs: number) =>
+      decode({
+        kind: "anonymous",
+        key: { kind: "entry", class: inputClass },
+        inputs,
+        outputs,
+        exits: false,
+      });
+    expect(entry(8, 9, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(entry(8, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(entry(2, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
     expect(decode({ kind: "delivered", outputs: 3, exits: false, keyEscrow: false })).toThrow(
       "KEYPAIR_DISCLOSURE_SHAPE",
     );

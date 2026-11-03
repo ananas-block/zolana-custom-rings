@@ -830,11 +830,7 @@ function boundLayout(
   if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
   // Only an anonymous ring emits an anonymous transfer.
   const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "confidential");
-  const data = [RingInstructionTag.legacyTransact, RingInstructionTag.legacyDelegateTransact].some(
-    (legacy) => legacy === tag,
-  )
-    ? RingTransactData.parseLegacy(instruction.subarray(1), rail)
-    : RingTransactData.parse(instruction.subarray(1), rail);
+  const data = RingTransactData.parse(instruction.subarray(1), rail);
   if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
     throw invalid("transfer.instruction");
   return RingTransactData.disclosureLayout(data);

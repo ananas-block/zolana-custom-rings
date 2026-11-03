@@ -2,20 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import secrets from "../../../../test-vectors/wallet/ring-secrets.json" with { type: "json" };
 import {
-  solanaOwnerIdentity,
   DOMAIN_PRIVATE_TX_BLINDING_V1,
   DOMAIN_TRANSACT_OUTPUT_BLINDING_SEED_V1,
   DOMAIN_TRANSACT_OUTPUT_BLINDING_V1,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import {
-  outputBlindingSeed,
-  privateTxBlinding,
-  X25519Keypair,
-  X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+import { outputBlindingSeed, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { RingDomain, depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
-import { deliveredSlotSecret, senderCommitment } from "../../src/crypto/derivation/ring-stream.js";
+import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../src/crypto/derivation/blinding.js";
 
 function bytes<T extends Uint8Array>(value: string, length: number): T {
@@ -35,12 +29,10 @@ function ascii(tag: string): number {
 describe("ring domains", () => {
   it("spells every domain from its ASCII tag, no two alike", () => {
     expect(RingDomain).toEqual({
-      auditStatement: ascii("CRAU"),
       deliveredSlotSecret: ascii("CRDS"),
       blindingSeed: ascii("CRBS"),
-      senderCommitment: ascii("CRSC"),
       disclosurePad: ascii("CROD"),
-      policyStatement: ascii("CRPO"),
+      transferStatement: ascii("CRTX"),
       policyTable: ascii("CRTB"),
       queueWrite: ascii("CRQW"),
       applyRecords: ascii("CRAP"),
@@ -49,7 +41,6 @@ describe("ring domains", () => {
       depositStatement: ascii("CRDP"),
       mergeStatement: ascii("CRMG"),
       withdrawals: ascii("CRPW"),
-      withdrawalExemption: ascii("CRWX"),
       recordUpdate: ascii("CRRU"),
       walletGrant: ascii("CRWG"),
     });
@@ -109,16 +100,6 @@ describe("ring-secrets.json", () => {
     }
     expect(hex(depositBlinding(bytes<Bytes32>(secrets.deposit_blinding_secret, 32)))).toBe(
       secrets.deposit_blinding,
-    );
-  });
-
-  it("commits the hidden sender of the same transaction", () => {
-    const senderPkHash = solanaOwnerIdentity(bytes<Bytes32>(secrets.sender_key, 32)) as Bytes32;
-    expect(hex(senderPkHash)).toBe(secrets.sender_pk_hash);
-    const blinding = privateTxBlinding(firstNullifier, bytes<Bytes32>(secrets.blinding_seed, 32));
-    expect(hex(blinding)).toBe(secrets.private_tx_blinding);
-    expect(hex(senderCommitment({ senderPkHash, privateTxBlinding: blinding }))).toBe(
-      secrets.sender_commitment,
     );
   });
 });

@@ -76,7 +76,11 @@ import {
   type ListId,
   type RuleTable,
 } from "../../src/protocol/membership/policy.js";
-import { auditStatementHash, ringAuditStatement } from "../../src/protocol/proof/statement.js";
+import {
+  ringTransferStatement,
+  transferStatementHash,
+} from "../../src/protocol/proof/statement.js";
+import type { TransferProofRequest } from "../../src/proof/transfer-proof.js";
 import { RingTransactData, type RingRail } from "../../src/protocol/transaction/transact.js";
 
 import {
@@ -536,34 +540,41 @@ export function checkRingBlindings(call: SppCall, data: RingTransactData): void 
   });
 }
 
-/** The audit request proves the statement the program rebuilds from the parsed data. */
-export function checkAudit(
+/** The one ring request, its statement the program rebuilds from the parsed data and the values the request binds. */
+export function checkTransferProof(
   fixture: Fixture,
   data: RingTransactData,
-  binding: Readonly<{ kind: RingProofRequest["kind"] }>,
-): void {
-  const audit = fixture.ringRequests.find((request) => request.kind.endsWith("Audit"));
-  expect(audit?.kind).toBe(binding.kind);
-  expect(audit?.publicInputHash).toEqual(
-    auditStatementHash(
-      ringAuditStatement(data, {
+  expected: Readonly<{ kind: TransferProofRequest["kind"] }>,
+): TransferProofRequest {
+  const request = fixture.ringRequests.find((request) => request.kind.startsWith("transfer"));
+  if (request?.kind !== "transferConfidential" && request?.kind !== "transferAnonymous")
+    throw new Error("no transfer request");
+  expect(request.kind).toBe(expected.kind);
+  const zero = new Uint8Array(32) as Bytes32;
+  expect(request.publicInputHash).toEqual(
+    transferStatementHash(
+      ringTransferStatement(data, {
         ringId: ringIdField(fixture.ringProgramId),
         auditorPubkey: fixture.auditor.publicKey().toBytes(),
         keyEscrow: fixture.keyEscrow,
+        sender: request.kind === "transferConfidential" ? request.sender : zero,
         partyIdentities:
-          audit?.kind === "anonymousAudit"
-            ? audit.partyIdentities
-            : [
-                new Uint8Array(32) as Bytes32,
-                new Uint8Array(32) as Bytes32,
-                new Uint8Array(32) as Bytes32,
-              ],
+          request.kind === "transferAnonymous" ? request.partyIdentities : [zero, zero, zero],
+        roots: {
+          policyHash: request.policyHash,
+          ownRoot: request.ownRoot,
+          curatorRoot: request.curatorRoot,
+        },
+        publicAssets: request.publicAssets,
+        publicAmounts: request.publicAmounts,
+        publicGross: request.publicGross,
+        withdrawalHash: request.withdrawalHash,
       }),
     ),
   );
-  expect(audit === undefined ? undefined : "layout" in audit ? audit.layout : undefined).toEqual(
-    RingTransactData.auditLayout(data),
-  );
+  expect(request.layout).toEqual(RingTransactData.auditLayout(data));
+  expect([request.exempt, request.approvalRequired]).toEqual([data.exempt, data.approvalRequired]);
+  return request;
 }
 
 /**

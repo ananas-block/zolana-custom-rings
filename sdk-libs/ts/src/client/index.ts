@@ -13,20 +13,16 @@ export { MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
-  AnonymousAuditProofRequest,
   AnonymousSlotProofInputs,
+  AnonymousTransferProofRequest,
   ApplyRecordsProofRequest,
   AuditEnvelopeProofInputs,
-  DelegatePolicyProofRequest,
-  DeliveredAuditProofRequest,
-  DeliveredSenderAuditProofRequest,
+  ConfidentialTransferProofRequest,
   DeliveredSlotProofInputs,
   DepositProofRequest,
-  MemberPolicyProofRequest,
   MergeProofRequest,
   MergeInputOpening,
   OutflowLimitProofInput,
-  PolicyOutputOpening,
   PolicyProofInputs,
   PolicySourceProofInput,
   PolicySubjectEntry,
@@ -34,7 +30,7 @@ export type {
   RegisterKeyProofRequest,
   RingProofRequest,
   RingSlotOpening,
-  WithdrawalExemptionProofRequest,
+  TransferProofInputs,
 } from "../rpc/prover/ring.js";
 export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {

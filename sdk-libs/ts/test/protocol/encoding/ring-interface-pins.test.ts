@@ -20,6 +20,7 @@ import {
   RING_POLICY_SIZE,
   RING_ROLE_BYTES,
 } from "../../../src/protocol/codec/ring-codecs.js";
+import { MAX_SPP_CPI_ACCOUNTS } from "../../../src/protocol/transaction/spp.js";
 
 function rust(file: string): string {
   return readFileSync(
@@ -113,5 +114,12 @@ describe("ring interface pins", () => {
       ([, tag = "", variant = ""]) => [lowerFirst(variant), Number(tag)] as const,
     );
     expect(Object.fromEntries(rows)).toEqual(RING_ROLE_BYTES);
+  });
+
+  it("bounds the account window one call hands SPP like Rust `MAX_SPP_CPI_ACCOUNTS`", () => {
+    const pinned = /pub const MAX_SPP_CPI_ACCOUNTS: usize = (\d+);/u.exec(
+      rust("codec/spp.rs"),
+    )?.[1];
+    expect(MAX_SPP_CPI_ACCOUNTS).toBe(Number(pinned));
   });
 });

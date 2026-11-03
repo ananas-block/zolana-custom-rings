@@ -39,16 +39,6 @@ export function ringIdField(ring: Address): Bytes32 {
   return hashBytes(new Uint8Array(addressEncoder.encode(ring))) as Bytes32;
 }
 
-/** `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, binding the audit and policy proofs to one hidden sender. */
-export function senderCommitment(
-  sender: Readonly<{ senderPkHash: Bytes32; privateTxBlinding: Bytes32 }>,
-): Bytes32 {
-  return domainHash(RingDomain.senderCommitment, [
-    checkedBytes<Bytes32>(sender.senderPkHash, 32, "sender pk hash"),
-    checkedBytes<Bytes32>(sender.privateTxBlinding, 32, "private tx blinding"),
-  ]);
-}
-
 /** Packs a validated copy, the copy wiped once packed. */
 export function packedSecret(secret: Bytes32, name: string): Uint8Array[] {
   const copy = checkedBytes<Bytes32>(secret, 32, name);

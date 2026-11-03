@@ -10,12 +10,8 @@ import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
 
 import { RingKeyError } from "../error.js";
 import {
-  ANONYMOUS_AUDIT_CLASSES,
-  ANONYMOUS_ENTRY_CLASS,
-  ANONYMOUS_ENTRY_OUTPUTS,
   ANONYMOUS_SLOT_BYTES,
   DELIVERED_AUDIT_CAPACITIES,
-  DELIVERED_SENDER_CLASSES,
   DELIVERED_SLOT_BYTES,
   DISCLOSURE_INPUT_AMOUNT_BYTES,
   DISCLOSURE_SENDER_KEY_BYTES,
@@ -29,6 +25,8 @@ import {
   type DeliveredLayout,
   type DisclosureLayout,
   type FieldRange,
+  anonymousAuditKey,
+  anonymousKeyClass,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 
 import { maskDisclosure, packDisclosure, unmaskDisclosure, unpackDisclosure } from "./audit.js";
@@ -300,22 +298,20 @@ function checkedLayout<T extends DisclosureLayout>(layout: T): T {
     flags.every((flag) => typeof flag === "boolean") &&
     counted(layout.outputs) &&
     (layout.kind === "delivered"
-      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs) &&
-        (layout.senderClass === undefined ||
-          DELIVERED_SENDER_CLASSES.some(
-            (entry) => entry.outputs === layout.outputs && entry.inputClass === layout.senderClass,
-          ))
-      : counted(layout.inputs) &&
-        (layout.key.kind === "entry"
-          ? ANONYMOUS_ENTRY_OUTPUTS.includes(layout.outputs) &&
-            layout.inputs <= ANONYMOUS_ENTRY_CLASS
-          : (ANONYMOUS_AUDIT_CLASSES.find(
-              (entry) => entry.outputs === layout.outputs,
-            )?.classes.includes(layout.key.class) ??
-              false) &&
-            layout.inputs <= layout.key.class));
+      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
+      : counted(layout.inputs) && keyServes(layout));
   if (!valid) throw shapeError("layout");
   return layout;
+}
+
+/** The catalog's key for the layout's spend is the layout's key. */
+function keyServes(layout: AnonymousLayout): boolean {
+  const key = anonymousAuditKey({
+    inputs: layout.inputs,
+    outputs: layout.outputs,
+    spendsDefaultRing: layout.key.kind === "entry",
+  });
+  return key !== undefined && key.kind === layout.key.kind && key.class === layout.key.class;
 }
 
 function deliveredLayout(layout: DeliveredLayout): DeliveredLayout {
@@ -323,7 +319,6 @@ function deliveredLayout(layout: DeliveredLayout): DeliveredLayout {
     outputs: layout.outputs,
     exits: layout.exits,
     keyEscrow: layout.keyEscrow,
-    ...(layout.senderClass === undefined ? {} : { senderClass: layout.senderClass }),
   });
 }
 
@@ -472,7 +467,9 @@ function placeAnonymous(
       packParts((parts) => {
         for (const opening of openings) parts.push(amountBytes(opening.amount));
         parts.push(
-          new Uint8Array(DISCLOSURE_INPUT_AMOUNT_BYTES * (ANONYMOUS_ENTRY_CLASS - openings.length)),
+          new Uint8Array(
+            DISCLOSURE_INPUT_AMOUNT_BYTES * (anonymousKeyClass(layout.key) - openings.length),
+          ),
         );
       }),
     );
@@ -554,7 +551,7 @@ function readOpenings(
   const published = slice(fields, at.openings);
   const amounts = unpackDisclosure(
     slice(fields, at.amounts),
-    DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS,
+    DISCLOSURE_INPUT_AMOUNT_BYTES * anonymousKeyClass(layout.key),
   );
   try {
     zeroBytes(amounts.subarray(DISCLOSURE_INPUT_AMOUNT_BYTES * layout.inputs));

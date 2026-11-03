@@ -1,22 +1,16 @@
-/** The audit half of a ring transfer, the auditor envelope, the masked disclosure and the audit request, Rust `pipeline::audit`. */
+/** The audit section of a ring transfer, the auditor envelope, the masked disclosure and its opened slots, Rust `pipeline::audit`. */
 import { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 import type { Bytes32, MessageData } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { assetField, type SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type {
-  AnonymousAuditProofRequest,
   AnonymousSlotProofInputs,
-  DeliveredAuditProofRequest,
-  DeliveredSenderAuditProofRequest,
+  AuditEnvelopeProofInputs,
   DeliveredSlotProofInputs,
   RingSlotOpening,
 } from "../rpc/prover/ring.js";
-import {
-  anonymousKeyClass,
-  type AuditLayout,
-  type DisclosureLayout,
-} from "../protocol/codec/ring-disclosure-layout.js";
+import type { AuditLayout, DisclosureLayout } from "../protocol/codec/ring-disclosure-layout.js";
 import { auditorMessageData, sealTransactionViewingSecret } from "../crypto/audit/audit.js";
 import {
   anonymousCommitments,
@@ -28,7 +22,6 @@ import {
 } from "../crypto/audit/ring-disclosure.js";
 import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
 
-import { RingError } from "../protocol/error.js";
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
 
 /** The envelope and the masked disclosure every audit statement binds, Rust `SealedAudit`. */
@@ -43,13 +36,6 @@ export interface SealedAudit {
   /** The published fields. */
   readonly fields: readonly Bytes32[];
   readonly seedOut: Bytes32;
-}
-
-/** The anonymous audit statement's values beside the envelope, Rust `AnonymousStatement`. */
-export interface AnonymousAuditValues {
-  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  /** Zero outside a policy ring. */
-  readonly senderCommitment: Bytes32;
 }
 
 /** The values a disclosure opens beside the published slots, Rust `AuditSeal::seal`. */
@@ -97,84 +83,46 @@ export function sealedAuditMessage(sealed: SealedAudit, auditor: X25519PublicKey
   );
 }
 
-export type AuditProofRequest =
-  | DeliveredAuditProofRequest
-  | DeliveredSenderAuditProofRequest
-  | AnonymousAuditProofRequest;
-
-/** The audit proof's request, one layout per rail, Rust `AuditProving::prove`. */
-export function auditProofRequest(
+/** Go `AuditParams`, the secret copied last, a refusal before it leaves no copy to wipe. */
+export function auditEnvelope(
   input: Readonly<{
     rail: RingOutputRail;
     sealed: SealedAudit;
-    published: readonly PublishedSlot[];
     proofInputs: SppProofInputs;
-    sender: ShieldedAddress;
     auditor: X25519PublicKey;
-    ringId: Bytes32;
-    publicInputHash: Bytes32;
-    privateTxHash: Bytes32;
-    privateTxBlinding: Bytes32;
-    senderPkHash: Bytes32;
-    /** Present exactly on the anonymous rail. */
-    anonymous?: AnonymousAuditValues;
   }>,
-): AuditProofRequest {
-  const { sealed, proofInputs, published } = input;
-  const tree = proofInputs.outputTreeId;
-  const shared = {
-    firstNullifier: proofInputs.firstNullifier(),
-    ringId: input.ringId,
-    ephSk: sealed.ephemeralSecret,
+): AuditEnvelopeProofInputs {
+  return Object.freeze({
+    firstNullifier: input.proofInputs.firstNullifier(),
+    ephSk: input.sealed.ephemeralSecret,
     auditorPk: input.auditor.u(),
     salt: input.rail.salt,
-    layout: sealed.audit,
-    publicInputHash: input.publicInputHash,
-  };
-  // The secret is copied last, a refusal before it leaves no copy to wipe.
-  const envelope = () => ({
-    ...shared,
+    layout: input.sealed.audit,
     txViewingSk: input.rail.txViewingKey.secretBytes(),
   });
-  switch (sealed.layout.kind) {
-    case "delivered": {
-      const outputs = published.map((slot) => deliveredSlot(slot, tree));
-      const { senderClass } = sealed.layout;
-      if (senderClass === undefined)
-        return Object.freeze({ kind: "deliveredAudit", outputs, ...envelope() });
-      return Object.freeze({
-        kind: "deliveredSenderAudit",
-        outputs,
-        sender: input.senderPkHash,
-        privateTxHash: input.privateTxHash,
-        privateTxBlinding: input.privateTxBlinding,
-        inputs: inputOpenings(proofInputs, senderClass),
-        ...envelope(),
-      });
-    }
-    case "anonymous": {
-      const statement = input.anonymous;
-      if (statement === undefined)
-        throw new RingError("RING_ANONYMOUS_SIGNER_REQUIRED", { details: { reason: "audit" } });
-      const slots = {
-        outputs: published.map((slot) => anonymousSlot(slot, tree)),
-        privateTxHash: input.privateTxHash,
-        privateTxBlinding: input.privateTxBlinding,
-        ...(sealed.layout.key.kind === "entry"
-          ? { senderKey: input.sender.signingPublicKey.confidentialViewTag() }
-          : {}),
-        inputCount: sealed.layout.inputs,
-        inputs: inputOpenings(proofInputs, anonymousKeyClass(sealed.layout.key)),
-        senderCommitment: statement.senderCommitment,
-        partyIdentities: statement.partyIdentities,
-      };
-      return Object.freeze({ kind: "anonymousAudit", ...slots, ...envelope() });
-    }
-  }
 }
 
-/** Rust `AuditProving::input_openings`. */
-function inputOpenings(proofInputs: SppProofInputs, inputClass: number): RingSlotOpening[] {
+/** Rust `AuditSection::delivered_outputs`. */
+export function deliveredSlots(
+  published: readonly PublishedSlot[],
+  tree: number,
+): readonly DeliveredSlotProofInputs[] {
+  return published.map((slot) => deliveredSlot(slot, tree));
+}
+
+/** Rust `AuditSection::anonymous_outputs`. */
+export function anonymousSlots(
+  published: readonly PublishedSlot[],
+  tree: number,
+): readonly AnonymousSlotProofInputs[] {
+  return published.map((slot) => anonymousSlot(slot, tree));
+}
+
+/** The spent notes' openings in SPP order, zero past them to the key's input class, Rust `AuditSection::input_openings`. */
+export function inputOpenings(
+  proofInputs: SppProofInputs,
+  inputClass: number,
+): readonly RingSlotOpening[] {
   const openings = proofInputs.inputUtxos
     .filter((spent) => !spent.isCompact())
     .map(ringInputOpening);

@@ -35,6 +35,7 @@ import {
   type QuadPath,
   type QueueEntry,
   type RecordOpening,
+  type RecordPool,
   type RecordWriteProofInput,
 } from "./member-registry.js";
 
@@ -86,6 +87,36 @@ export function memberRecordHash(record: MemberRecord): Bytes32 {
     u64Field(record.mintPolicy.withdrawalThreshold, "withdrawal threshold"),
     ...assetLimitsFields(record.mintPolicy.limits),
   ]);
+}
+
+/** The pool of a key whose queries are all inactive, its canopy admits the zero record and binds no root, Rust `RecordPool::unopened`. */
+export function unopenedRecordPool(openings: number): RecordPool {
+  const levels = canopyLevels(openings);
+  const siblings = Array.from({ length: QUAD_HEIGHT - levels }, () =>
+    Object.freeze(Array.from({ length: QUAD_ARITY - 1 }, () => ZERO_32)),
+  );
+  const path: QuadPath = Object.freeze({ index: 0, siblings: Object.freeze(siblings) });
+  const record: MemberRecord = Object.freeze({
+    member: ZERO_32,
+    next: ZERO_32,
+    lists: 0n,
+    escrowKey: ZERO_32,
+    mintPolicy: EMPTY_MINT_POLICY,
+  });
+  // Index 0 is the first child at every level, the fold lands at canopy position 0.
+  let node = memberRecordHash(record);
+  for (const level of siblings) node = poseidon([node, ...level]);
+  const canopy = Array.from({ length: QUAD_ARITY ** levels }, (_, position) =>
+    position === 0 ? node : ZERO_32,
+  );
+  return Object.freeze({
+    records: Object.freeze(Array.from({ length: openings }, () => record)),
+    canopy: Object.freeze(canopy),
+    paths: Object.freeze(Array.from({ length: openings }, () => path)),
+    subjects: Object.freeze(
+      Array.from({ length: openings }, () => Object.freeze({ member: ZERO_32, recordIndex: 0 })),
+    ),
+  });
 }
 
 /** The root `leaf` folds to along `path`, Rust `QuadPath::root`. */
