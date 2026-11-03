@@ -15,7 +15,7 @@ import {
 
 import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
-import { nextScanCursor } from "../operations/audit/audit.js";
+import { nextHistoryToken } from "../rpc/history.js";
 import { openRingDelivery } from "../crypto/derivation/blinding.js";
 import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
@@ -46,7 +46,14 @@ export async function openRingNotes(
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
     if (ring === undefined || txViewingPublicKey === undefined || salt === undefined) continue;
     for (const [slotIndex, slot] of tx.outputSlots.entries()) {
-      const site: Site = { tx, ring, txViewingPublicKey, salt, slotIndex, slot };
+      const site: Site = {
+        tx,
+        ring,
+        txViewingPublicKey,
+        salt,
+        slotIndex,
+        slot,
+      };
       const opened = await openSlot(input, site, context);
       if (opened === PENDING) pending += 1;
       else if (opened !== undefined) notes.push(opened);
@@ -137,7 +144,10 @@ export async function syncRingWallet(
       ...state,
       utxos: [
         ...state.utxos,
-        ...fresh.map((entry) => ({ ...entry, spent: nullifiers.has(bytesKey(entry.nullifier)) })),
+        ...fresh.map((entry) => ({
+          ...entry,
+          spent: nullifiers.has(bytesKey(entry.nullifier)),
+        })),
       ],
       nullifiers,
     });
@@ -162,6 +172,16 @@ type Note = RingDeliveredNote & Omit<RingDepositNote, "utxo"> & Readonly<{ slot:
 const PENDING = Symbol("pending");
 
 /** The ring merges among `spends` and the notes they open to `owner`, Rust `RingMerges`. */
+/** A merge publishes no transaction key or salt, a deposit no proof. */
+export function isRingMergeRow(tx: IndexedShieldedTransaction): boolean {
+  return (
+    tx.ringProgramId !== undefined &&
+    !tx.proofless &&
+    tx.txViewingPublicKey === undefined &&
+    tx.salt === undefined
+  );
+}
+
 export async function openRingMerges(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -171,18 +191,20 @@ export async function openRingMerges(
   }>,
   context: RequestContext | undefined,
 ): Promise<
-  Readonly<{ merges: readonly IndexedShieldedTransaction[]; utxos: readonly WalletUtxo[] }>
+  Readonly<{
+    merges: readonly IndexedShieldedTransaction[];
+    utxos: readonly WalletUtxo[];
+  }>
 > {
-  const merges = input.spends.filter(
-    (tx) =>
-      tx.ringProgramId !== undefined &&
-      !tx.proofless &&
-      tx.txViewingPublicKey === undefined &&
-      tx.salt === undefined,
-  );
+  const merges = input.spends.filter(isRingMergeRow);
   if (merges.length === 0) return { merges, utxos: [] };
   const opened = new Wallet({ identity: input.owner, registry: input.assets });
-  await decryptTransactions({ wallet: opened, keys: input.keys, transactions: merges, context });
+  await decryptTransactions({
+    wallet: opened,
+    keys: input.keys,
+    transactions: merges,
+    context,
+  });
   return { merges, utxos: opened._state().utxos };
 }
 
@@ -307,14 +329,17 @@ async function taggedDeposits(
   context: RequestContext | undefined,
 ): Promise<readonly IndexedShieldedTransaction[]> {
   const deposits: IndexedShieldedTransaction[] = [];
-  let cursor: Uint8Array | undefined;
+  let token: string | undefined;
   for (;;) {
     const page = await client.getEncryptedUtxosByTags(
-      { tags: [...tags], ...(cursor === undefined ? {} : { cursor }) },
+      {
+        tags: [...tags],
+        ...(token === undefined ? {} : { paginationToken: token }),
+      },
       undefined,
       context,
     );
-    for (const match of page.matches)
+    for (const match of page.data.flatMap((item) => item.outputs))
       deposits.push({
         slot: match.slot,
         txSignature: match.txSignature,
@@ -323,8 +348,8 @@ async function taggedDeposits(
         nullifiers: [],
         proofless: true,
       });
-    cursor = nextScanCursor(cursor, page);
-    if (cursor === undefined) return deposits;
+    token = nextHistoryToken(token, page);
+    if (token === undefined) return deposits;
   }
 }
 
@@ -334,15 +359,18 @@ async function taggedTransactions(
   context: RequestContext | undefined,
 ): Promise<readonly IndexedShieldedTransaction[]> {
   const transactions: IndexedShieldedTransaction[] = [];
-  let cursor: Uint8Array | undefined;
+  let token: string | undefined;
   for (;;) {
     const page = await client.getShieldedTransactionsByTags(
-      { tags: [...tags], ...(cursor === undefined ? {} : { cursor }) },
+      {
+        tags: [...tags],
+        ...(token === undefined ? {} : { paginationToken: token }),
+      },
       undefined,
       context,
     );
-    transactions.push(...page.transactions);
-    cursor = nextScanCursor(cursor, page);
-    if (cursor === undefined) return transactions;
+    transactions.push(...page.data.flatMap((item) => item.events));
+    token = nextHistoryToken(token, page);
+    if (token === undefined) return transactions;
   }
 }
