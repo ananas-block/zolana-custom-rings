@@ -15,7 +15,7 @@ use spr_interface::{
 };
 use thiserror::Error;
 
-use crate::{CustomRingError, DepositedAsset};
+use crate::{CoSignScope, CustomRingError, DepositedAsset};
 
 /// The fee payer in every SPP transact account list.
 pub const TRANSACT_PAYER_INDEX: usize = 0;
@@ -61,9 +61,20 @@ pub struct PublicLeg {
 pub const MAX_SPP_CPI_ACCOUNTS: usize = 128;
 
 /// Assets in first-seen leg order, the fold SPP's `assign_public_amounts_and_assets` runs.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicSlots {
     slots: ArrayVec<PublicSlot, N_PUBLIC_SLOTS>,
+    classes: CoSignScope,
+}
+
+impl Default for PublicSlots {
+    /// A transact without legs is still a transfer.
+    fn default() -> Self {
+        Self {
+            slots: ArrayVec::new(),
+            classes: CoSignScope::TRANSFERS,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +92,11 @@ impl PublicSlots {
         let mut slots = Self::default();
         for leg in legs {
             let PublicLeg { transfer, mint } = leg?;
+            slots.classes = slots.classes
+                | match transfer.is_deposit() {
+                    true => CoSignScope::DEPOSITS,
+                    false => CoSignScope::WITHDRAWALS,
+                };
             slots.add(mint.unwrap_or(SOL_ASSET_ADDRESS), signed_amount(transfer))?;
         }
         if let Some(slot) = slots.slots.iter().find(|slot| slot.net == 0) {
@@ -95,6 +111,10 @@ impl PublicSlots {
 
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    pub fn classes(&self) -> CoSignScope {
+        self.classes
     }
 
     /// Zero past the used slots.

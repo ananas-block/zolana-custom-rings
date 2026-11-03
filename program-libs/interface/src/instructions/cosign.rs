@@ -1,6 +1,6 @@
 //! The co-signer a ring operation must carry, one rule for the program and the SDKs.
 
-use crate::{CoSignScope, CoSigner, CustomRingError, PublicLeg, RingPolicy, SOL_ASSET_ADDRESS};
+use crate::{CoSignScope, CoSigner, CustomRingError, PublicSlots, RingPolicy};
 use solana_address::Address;
 
 #[derive(Clone, Debug)]
@@ -8,41 +8,24 @@ pub struct CoSignDemand {
     /// Demands a co-signer of any scope when no class is shared.
     pub approval_required: bool,
     pub classes: CoSignScope,
-    /// Public withdrawal total per mint, each mint once.
-    pub withdrawals: Vec<(Address, u128)>,
 }
 
 impl CoSignDemand {
-    /// A transact is a transfer, each leg adds its class and a withdrawal its amount.
-    pub fn transact(approval_required: bool, legs: &[PublicLeg]) -> Self {
-        let mut classes = CoSignScope::TRANSFERS;
-        let mut withdrawals: Vec<(Address, u128)> = Vec::new();
-        for leg in legs {
-            if leg.transfer.is_deposit() {
-                classes = classes | CoSignScope::DEPOSITS;
-                continue;
-            }
-            classes = classes | CoSignScope::WITHDRAWALS;
-            let mint = Address::new_from_array(leg.mint.unwrap_or(SOL_ASSET_ADDRESS));
-            let amount = u128::from(leg.transfer.amount());
-            // A u128 sum of u64 legs never overflows.
-            match withdrawals.iter_mut().find(|(seen, _)| *seen == mint) {
-                Some((_, total)) => *total += amount,
-                None => withdrawals.push((mint, amount)),
-            }
-        }
+    pub fn transact(approval_required: bool, slots: &PublicSlots) -> Self {
         Self {
             approval_required,
-            classes,
-            withdrawals,
+            classes: slots.classes(),
         }
     }
 
     /// Only a transfer proof verified under the exempt bit may waive the withdrawal class.
     #[must_use]
-    pub fn exempt_withdrawals(mut self) -> Self {
-        self.withdrawals.clear();
-        self
+    pub fn exempt_withdrawals(self) -> Self {
+        let kept = self.classes.bits() & !CoSignScope::WITHDRAWALS.bits();
+        Self {
+            classes: CoSignScope::new(kept).unwrap_or(self.classes),
+            ..self
+        }
     }
 
     /// `None` when no record covers a class of the operation and no approval is demanded.
@@ -51,10 +34,7 @@ impl CoSignDemand {
         ring: &RingPolicy,
     ) -> Result<Option<CoSignRequirement>, CustomRingError> {
         let covered = ring.co_signers.covered();
-        let mut shared = covered.map_or(0, CoSignScope::bits) & self.classes.bits();
-        if self.withdrawals.is_empty() {
-            shared &= !CoSignScope::WITHDRAWALS.bits();
-        }
+        let shared = covered.map_or(0, CoSignScope::bits) & self.classes.bits();
         if let Some(classes) = CoSignScope::new(shared) {
             return Ok(Some(CoSignRequirement::Covering(classes)));
         }
@@ -91,11 +71,11 @@ impl CoSignRequirement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CoSignerCounts;
+    use crate::{CoSignerCounts, PublicLeg};
     use bytemuck::Zeroable;
     use spr_interface::instruction::InterfaceTransfer;
     #[test]
-    fn exemption_waives_only_withdrawals_and_gross_totals_ignore_deposits() {
+    fn exemption_waives_only_withdrawals() {
         let legs = [
             PublicLeg {
                 transfer: InterfaceTransfer::SolWithdrawal { amount: 60 },
@@ -110,8 +90,8 @@ mod tests {
                 mint: None,
             },
         ];
-        let demand = CoSignDemand::transact(false, &legs);
-        assert_eq!(demand.withdrawals, vec![(Address::default(), 120)]);
+        let slots = PublicSlots::fold(legs.map(Ok::<_, CustomRingError>)).unwrap();
+        let demand = CoSignDemand::transact(false, &slots);
         let config = |scope: CoSignScope| {
             let mut config = RingPolicy::zeroed();
             config.co_signers = CoSignerCounts::default().added(scope).unwrap();
@@ -123,12 +103,12 @@ mod tests {
             demand.requirement(&withdrawals),
             covering(CoSignScope::WITHDRAWALS)
         );
-        let exempt = CoSignDemand::transact(false, &legs).exempt_withdrawals();
+        let exempt = CoSignDemand::transact(false, &slots).exempt_withdrawals();
         assert_eq!(exempt.requirement(&withdrawals), Ok(None));
         for scope in [CoSignScope::TRANSFERS, CoSignScope::DEPOSITS] {
             assert_eq!(exempt.requirement(&config(scope)), covering(scope));
         }
-        let approval = CoSignDemand::transact(true, &legs).exempt_withdrawals();
+        let approval = CoSignDemand::transact(true, &slots).exempt_withdrawals();
         assert_eq!(
             approval.requirement(&withdrawals),
             Ok(Some(CoSignRequirement::Any))

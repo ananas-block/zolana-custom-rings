@@ -46,7 +46,6 @@ pub fn process_merge_ix(
     let demand = CoSignDemand {
         approval_required: false,
         classes: CoSignScope::TRANSFERS,
-        withdrawals: Vec::new(),
     };
     let co_signer = match demand.requirement(&ring)? {
         Some(requirement) => Some(
@@ -132,7 +131,6 @@ pub fn process_deposit_ix(
     let demand = CoSignDemand {
         approval_required: false,
         classes: CoSignScope::DEPOSITS,
-        withdrawals: Vec::new(),
     };
     if let Some(requirement) = demand.requirement(&ring)? {
         CoSignerSlot {

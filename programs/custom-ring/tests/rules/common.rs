@@ -449,7 +449,7 @@ pub fn reaches_verification(sent: Sent) -> u64 {
     }
 }
 
-pub fn reached_verification(sent: &Sent) -> Option<u64> {
+fn reached_verification(sent: &Sent) -> Option<u64> {
     let proof_check = [
         CustomRingError::InvalidRingProofPoint,
         CustomRingError::ProofVerificationFailed,

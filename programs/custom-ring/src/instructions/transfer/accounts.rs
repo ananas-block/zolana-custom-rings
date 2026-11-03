@@ -11,7 +11,7 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
     loader::{check_funding_signer, load_anonymous_exit, CoSignerSlot, RegistrySlots},
-    public_legs::PublicLegs,
+    public_legs::public_slots,
 };
 
 const RING_INDEX: usize = 0;
@@ -55,8 +55,8 @@ impl<'a> TransactCheck<'a> {
         let roots = registries.roots(self.slot);
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
-        let legs = PublicLegs::new(&data.interface_transfers, window)?;
-        let demand = CoSignDemand::transact(data.approval_required, legs.legs());
+        let public_slots = public_slots(&data.interface_transfers, window)?;
+        let demand = CoSignDemand::transact(data.approval_required, &public_slots);
         // The exempt bit is unverified here, the statement binds it and the gross per slot.
         let demand = match data.exempt {
             true => demand.exempt_withdrawals(),
@@ -142,7 +142,6 @@ impl<'a> TransactCheck<'a> {
                 check_funding_signer(group, funder)?;
             }
         }
-        let public_slots = legs.slots()?;
         let withdrawals = match data.policy {
             Some(policy) => custom_ring_interface::policy_withdrawals(
                 &data.interface_transfers,

@@ -1,4 +1,4 @@
-//! The widest frames of every transfer key reach the pairing within Pinocchio's heap.
+//! The widest frames of every transfer key reach the pairing within Pinocchio's heap, the validator sweep settles each key's widest policy legs.
 
 use custom_ring_interface::{
     key_catalog::{
@@ -6,10 +6,10 @@ use custom_ring_interface::{
         ENTRY_TRANSFER_SHAPES,
     },
     storage::Revision,
-    tag, RingPolicy, RingRail, RingTransactData, RootRead,
+    tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
-use solana_instruction::AccountMeta;
+use solana_instruction::{error::InstructionError, AccountMeta};
 use solana_keypair::Signer;
 use solana_transaction_error::TransactionError;
 use spl_token_2022_interface::pod::PodAccount;
@@ -19,7 +19,7 @@ use spr_interface::{
 };
 
 use crate::{
-    common::{policy_pda, reached_verification, transact, Ring, Sent, Setup, RECORDS},
+    common::{policy_pda, transact, Ring, Sent, Setup, RECORDS},
     transact_rules::{spp_list, Fixture},
 };
 
@@ -246,7 +246,7 @@ struct Sending {
 }
 
 fn prepare(ring: &mut Ring, case: Wide) -> Sending {
-    let fixture = Fixture::new();
+    let fixture = Fixture::new().with_identity_proof();
     let owners: Vec<[u8; 32]> = (0..MAX_INTERFACE_TRANSFERS)
         .map(|leg| [0x70 + leg as u8; 32])
         .collect();
@@ -303,13 +303,14 @@ fn send_widest(case: Wide) -> (Wide, Sent) {
     }
 }
 
-/// The pairing is the first step past the measured path.
+/// Settlement allocates CPI account metadata past the pairing.
 #[test]
 fn the_widest_frames_of_every_key_reach_the_pairing() {
+    let pairing = InstructionError::Custom(CustomRingError::ProofVerificationFailed as u32);
     for case in cases() {
         let (sent_case, sent) = send_widest(case);
         assert!(
-            reached_verification(&sent).is_some(),
+            matches!(&sent, Err((TransactionError::InstructionError(0, error), _)) if *error == pairing),
             "{}, got {sent:?}",
             sent_case.name()
         );

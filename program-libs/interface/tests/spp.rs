@@ -1,7 +1,7 @@
 //! The SPP account positions the ring program reads, against the pinned SPP builders.
 
 use custom_ring_interface::{
-    amount_field, signed_amount, PublicLeg, PublicSlotError, PublicSlots,
+    amount_field, signed_amount, CoSignScope, PublicLeg, PublicSlotError, PublicSlots,
     RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
     RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, SOL_ASSET_ADDRESS, SYSTEM_PROGRAM_ID, TRANSACT_PAYER_INDEX,
@@ -241,6 +241,25 @@ fn public_slots_fold_the_gross_withdrawal_per_asset_without_its_deposits() {
         fourth,
         Err(PublicSlotError::TooManyAssets { asset }) if asset == [4; 32]
     ));
+}
+
+#[test]
+fn public_slots_name_the_classes_of_their_legs() {
+    let classes = |legs: &[PublicLeg]| {
+        PublicSlots::fold(legs.iter().copied().map(Ok::<_, PublicSlotError>))
+            .unwrap()
+            .classes()
+    };
+    assert_eq!(classes(&[]), CoSignScope::TRANSFERS);
+    assert_eq!(
+        classes(&[sol(1, true)]),
+        CoSignScope::TRANSFERS | CoSignScope::DEPOSITS
+    );
+    assert_eq!(
+        classes(&[sol(1, false)]),
+        CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS
+    );
+    assert_eq!(classes(&[sol(2, false), sol(1, true)]), CoSignScope::ALL);
 }
 
 #[test]

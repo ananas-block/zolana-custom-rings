@@ -301,15 +301,14 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
     let parsed = RingTransactData::parse(compact, rail).unwrap();
     let parse = Arena::used();
     let data = parsed.data();
-    let mut legs = Vec::with_capacity(data.interface_transfers.len());
-    for transfer in &data.interface_transfers {
-        legs.push(PublicLeg {
+    let slots = PublicSlots::fold(data.interface_transfers.iter().map(|transfer| {
+        Ok::<_, CustomRingError>(PublicLeg {
             transfer: *transfer,
             mint: transfer.mint_account_position().map(|_| MINT),
-        });
-    }
-    let slots = PublicSlots::fold(legs.iter().copied().map(Ok::<_, CustomRingError>)).unwrap();
-    let demand = CoSignDemand::transact(data.approval_required, &legs);
+        })
+    }))
+    .unwrap();
+    let demand = CoSignDemand::transact(data.approval_required, &slots);
     let legs = Arena::used();
     let spp_data = data
         .spp_instruction_data_under(&config, TransactProof::zeroed())

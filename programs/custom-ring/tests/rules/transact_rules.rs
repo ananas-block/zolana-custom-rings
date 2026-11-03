@@ -1,5 +1,6 @@
 //! The transact refusals ahead of either ring pairing.
 
+use bytemuck::Zeroable;
 use custom_ring_interface::{
     funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
     AnonymousProofData, CoSignScope, CustomRingError, CustomRingProof, InputTrees,
@@ -69,6 +70,12 @@ impl Fixture {
             tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
             salt: [0x5c; 16],
         }
+    }
+
+    /// Identity points decompress and fail the pairing.
+    pub fn with_identity_proof(mut self) -> Self {
+        self.proofs = [CustomRingProof::zeroed(); 2];
+        self
     }
 
     /// One input per shape input slot, every output a ring output of the rail.
