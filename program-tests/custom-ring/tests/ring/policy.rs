@@ -348,15 +348,23 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     let unregistered_owner =
         Member::from_bytes(unregistered.signing_pubkey.owner_proof_input_hash()?)?;
     assert_eq!(refused(&unregistered)?, unregistered_owner);
-    let zero_key = ShieldedAddress {
+    let zero_key_recipients = [member_address, unregistered].map(|recipient| ShieldedAddress {
         nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
-        ..unregistered
-    };
-    assert_eq!(refused(&zero_key)?, unregistered_owner);
+        ..recipient
+    });
+    env.run(
+        custom_ring_sdk::EscrowedRecipients {
+            ring,
+            recipients: &zero_key_recipients,
+        }
+        .check(env.client.as_async()),
+    )?;
     let mismatched = ShieldedAddress {
-        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        nullifier_pubkey: unregistered.nullifier_pubkey,
         ..member_address
     };
+    assert_ne!(mismatched.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY);
+    assert_ne!(mismatched.nullifier_pubkey, member_address.nullifier_pubkey);
     assert_eq!(
         refused(&mismatched)?,
         Member::from_bytes(member_address.signing_pubkey.owner_proof_input_hash()?)?
