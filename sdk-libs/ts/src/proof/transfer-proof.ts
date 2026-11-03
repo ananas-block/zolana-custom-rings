@@ -1,17 +1,18 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections, Rust `pipeline::proof`. */
+import { ZERO_32 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { nonZeroHashChain, sppPrivateTxHashInput } from "@heliuslabs/zolana/internal";
 import type { SppProofInputs } from "@heliuslabs/zolana/transaction";
 
 import type {
   AnonymousTransferProofRequest,
   ConfidentialTransferProofRequest,
 } from "../rpc/prover/ring.js";
-import { EMPTY_RING_OPENING } from "../rpc/prover/assembly.js";
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
-import { transferInputClass } from "../protocol/proof/transfer-shapes.js";
-import type { RingRail } from "../protocol/transaction/transact.js";
+import { signerSlots, transferInputClass } from "../protocol/proof/transfer-shapes.js";
+import { ciphertextDigest } from "../protocol/proof/statement.js";
+import type { RingOutput, RingRail } from "../protocol/transaction/transact.js";
+import { RingError } from "../protocol/error.js";
 import {
   anonymousSlots,
   auditEnvelope,
@@ -20,6 +21,24 @@ import {
   type SealedAudit,
 } from "./audit-proof.js";
 import { policyParams, type PolicyInputs, type PolicyProving } from "./policy-proof.js";
+
+/** One slot per key capacity, an omitted suffix runs its gadgets over its own proof output. */
+function paddedSlots(
+  published: readonly PublishedSlot[],
+  proofInputs: SppProofInputs,
+): readonly PublishedSlot[] {
+  return proofInputs.outputs.map(
+    (output, slotIndex): PublishedSlot =>
+      published[slotIndex] ?? { output, slotIndex, wire: OMITTED_WIRE },
+  );
+}
+
+/** Never framed, its zero hash is what the statement fills past `m`. */
+const OMITTED_WIRE: RingOutput = Object.freeze({
+  kind: "change",
+  hash: ZERO_32,
+  tag: ZERO_32,
+});
 
 export type TransferProofRequest = ConfidentialTransferProofRequest | AnonymousTransferProofRequest;
 
@@ -43,12 +62,19 @@ export function transferProofRequest(
     senderPkHash: Bytes32;
     inProof: boolean;
     partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+    /** SPP's owner signer run by owner identity, in-proof, authority and entry bind none. */
+    signers: readonly Bytes32[];
+    /** Every reply in slot order, absent without the flag. */
+    replies?: Uint8Array;
+    /** Absent off the anonymous rail. */
+    senderBundleTag?: Bytes32;
   }>,
 ): TransferProofRequest {
   const { policy, proofInputs } = input;
   const { circuit } = policy;
   const tree = proofInputs.outputTreeId;
   const inputClass = transferInputClass(circuit);
+  const slots = signerSlots(circuit);
   const transfer = {
     publicInputHash: input.publicInputHash,
     ...auditEnvelope({
@@ -60,6 +86,12 @@ export function transferProofRequest(
     exempt: policy.exempt,
     approvalRequired: policy.approvalRequired,
     inputCount: input.publishedInputs,
+    outputCount: input.published.length,
+    signerCount: input.signers.length,
+    signers: [
+      ...input.signers,
+      ...Array.from({ length: Math.max(0, slots - input.signers.length) }, () => ZERO_32),
+    ],
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
     ...policyParams(policy, input.proving),
@@ -71,21 +103,29 @@ export function transferProofRequest(
       ...transfer,
       inProof: input.inProof,
       delegate,
-      outputs: deliveredSlots(input.published, tree, input.sealed.layout.keyEscrow),
-      // The signer rail opens no input, every slot a dummy.
-      inputs:
-        input.inProof || delegate
-          ? inputOpenings(proofInputs, inputClass)
-          : Array.from({ length: inputClass }, () => EMPTY_RING_OPENING),
-      inputChain: nonZeroHashChain(sppPrivateTxHashInput(proofInputs).inputHashes),
+      outputs: deliveredSlots(
+        paddedSlots(input.published, proofInputs),
+        tree,
+        input.sealed.layout.keyEscrow,
+      ),
+      // Every rail opens every slot, one list feeds the evidence and the transaction binding.
+      inputs: inputOpenings(proofInputs, inputClass),
       sender: input.statementSender,
       senderPkHash: input.senderPkHash,
     });
   }
+  const address = policy.senderAddress;
+  if (address === undefined)
+    throw new RingError("RING_ADDRESS_NOT_ENROLLED", { details: { reason: "sender" } });
   return Object.freeze({
     kind: "transferAnonymous",
     ...transfer,
-    outputs: anonymousSlots(input.published, tree),
+    outputs: anonymousSlots(paddedSlots(input.published, proofInputs), tree, policy.slotBindings),
+    senderNullifierPk: address.nullifierPk,
+    senderViewingKey: address.viewingU,
+    senderAddressRevision: address.addressRevision,
+    senderBundleTag: input.senderBundleTag ?? ZERO_32,
+    replyDigest: input.replies === undefined ? ZERO_32 : ciphertextDigest(input.replies),
     ...(circuit.family === "transferAnonymousEntry"
       ? { senderKey: input.sender.signingPublicKey.confidentialViewTag() }
       : {}),

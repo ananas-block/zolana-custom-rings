@@ -28,6 +28,7 @@ import {
   Writer,
   nullifierPdaAddress,
   ZERO_32,
+  ZERO_NULLIFIER_PK,
   checkIntentApproval,
   ownerSolanaAccount,
   equalBytes,
@@ -36,11 +37,7 @@ import {
 import { customRingProof } from "../../rpc/prover/proof.js";
 import { MERGE_WIDTHS } from "../../protocol/codec/ring-disclosure-layout.js";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import {
-  MERGE_INPUT_COUNT,
-  InstructionTag,
-  SHIELDED_POOL_PROGRAM_ID,
-} from "@heliuslabs/zolana/interface";
+import { MERGE_INPUT_COUNT, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,
@@ -65,11 +62,12 @@ import { PreparedRelay } from "../../rpc/relay.js";
 import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
 import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
 
-import { checkSignersHideOwner } from "./anonymous.js";
+import { checkHiddenParties } from "./anonymous.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { ringRootRegistries } from "../../protocol/codec/ring-codecs.js";
 import { TRANSFER_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
+import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import {
   checkMergeWidth,
   emptyRingMergeDisclosure,
@@ -79,14 +77,24 @@ import {
   type RingMergeDisclosure,
   type RingMergeEscrow,
 } from "../../crypto/audit/merge-disclosure.js";
-import { readRegisteredRecord } from "../../rpc/registered-record.js";
+import {
+  fetchBoundRoot,
+  readRegisteredRecord,
+  type BoundRoot,
+} from "../../rpc/registered-record.js";
+import type { PresentRecordOpening } from "../../rpc/prover/types.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
-import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
+import {
+  noteNullifierPublicKey,
+  ringIntentMismatch,
+  ringProofInput,
+  ringSelectionErrors,
+} from "../workflow/selection.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
 
@@ -134,12 +142,13 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
     const sender = params.wallet.identity;
     const { feePayer } = params.quote;
     // The merge circuit keeps the owner off the payer on every ring.
-    checkSignersHideOwner(sender.signingPublicKey.ed25519(), [feePayer]);
+    checkHiddenParties(sender.signingPublicKey.ed25519(), [feePayer]);
     const asset = params.asset ?? SOL_MINT;
     const notes = selectMergeNotes({
       wallet: params.wallet,
       ringProgramId: params.ringProgramId,
       tree: params.client.tree,
+      treeId: params.client.treeId,
       asset,
       maxInputs: mergeWidth(params.maxInputs),
     });
@@ -234,7 +243,7 @@ export async function ringMergeInstruction(
   return instruction(
     writeRingMergeDisclosure(
       new Writer()
-        .u8(InstructionTag.ringMergeTransact, "instructionTag")
+        .u8(RingInstructionTag.merge, "instructionTag")
         .u64(input.ownRevision ?? 0n, "ownRevision")
         .bytes(input.outputRingDataHash, 32, "outputRingDataHash"),
       input.disclosure,
@@ -286,7 +295,7 @@ async function buildRingMerge(
     const cosigner = demanded === undefined ? undefined : params.cosigner;
     const owner = params.keys.address();
     // The merge circuit keeps the owner off the payer and co-signer on every ring.
-    checkSignersHideOwner(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
+    checkHiddenParties(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
     const asset = params.asset ?? SOL_MINT;
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
     const entries =
@@ -295,6 +304,7 @@ async function buildRingMerge(
         wallet: params.wallet,
         ringProgramId: params.ringProgramId,
         tree: params.client.tree,
+        treeId: params.client.treeId,
         asset,
         maxInputs,
       });
@@ -313,17 +323,9 @@ async function buildRingMerge(
       context,
     );
     const expectedHash = prepared.outputHash();
-    const escrow =
+    const escrowRoot =
       config.mode === "confidentialEscrow"
-        ? await readRegisteredRecord(
-            {
-              client: params.client,
-              ringProgramId: params.ringProgramId,
-              member: owner.signingPublicKey.ownerProofInputHash(),
-              escrowed: prepared.nullifierPublicKey,
-            },
-            context,
-          )
+        ? await readMergeEscrow(params, prepared.nullifierPublicKey, owner, context)
         : undefined;
     const compile = async (
       data: MergeTransactInstructionData,
@@ -344,7 +346,7 @@ async function buildRingMerge(
             outputRingDataHash: ZERO_32,
             disclosure,
             registries: ringRootRegistries(config, "merge"),
-            ...(escrow === undefined ? {} : { ownRevision: escrow.root.revision }),
+            ...(escrowRoot === undefined ? {} : { ownRevision: escrowRoot.root.revision }),
             ...(cosigner === undefined ? {} : { cosigner }),
           }),
         ],
@@ -390,9 +392,15 @@ async function buildRingMerge(
         prepared,
         slots: proofInputs.inputs.payload,
         spp: data,
-        ...(escrow === undefined
+        ...(escrowRoot === undefined
           ? {}
-          : { escrow: { root: escrow.root.root, record: escrow.record, ctHash: escrow.ctHash } }),
+          : {
+              escrow: {
+                root: escrowRoot.root.root,
+                ctHash: escrowRoot.ctHash,
+                ...(escrowRoot.record === undefined ? {} : { record: escrowRoot.record }),
+              },
+            }),
       },
       context,
     );
@@ -402,7 +410,7 @@ async function buildRingMerge(
       lastValidBlockHeight: lifetime.lastValidBlockHeight,
       intentHash: planned,
       ringInstructionIndex: 0,
-      roots: escrow === undefined ? [] : [escrow.root],
+      roots: escrowRoot === undefined ? [] : [escrowRoot.root],
     };
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
@@ -412,11 +420,38 @@ async function buildRingMerge(
 
 type RingMergeIntent = Extract<TransactionIntent, { kind: "ringMerge" }>;
 
+/** The zero nullifier key escrows nothing, its merge binds the root alone. */
+async function readMergeEscrow(
+  params: RingMergeTransactionParams,
+  nullifierPublicKey: Bytes32,
+  owner: ShieldedAddress,
+  context: RequestContext | undefined,
+): Promise<Readonly<{ root: BoundRoot; ctHash: Bytes32; record?: PresentRecordOpening }>> {
+  if (!equalBytes(nullifierPublicKey, ZERO_NULLIFIER_PK)) {
+    return readRegisteredRecord(
+      {
+        client: params.client,
+        ringProgramId: params.ringProgramId,
+        member: owner.signingPublicKey.ownerProofInputHash(),
+        escrowed: nullifierPublicKey,
+      },
+      context,
+    );
+  }
+  const config = await fetchRingPolicy(params.client, params.ringProgramId, context);
+  const root = await fetchBoundRoot(
+    { client: params.client, ringProgramId: params.ringProgramId, registry: config.records },
+    context,
+  );
+  return Object.freeze({ root, ctHash: ZERO_32 });
+}
+
 function selectMergeNotes(
   input: Readonly<{
     wallet: Wallet;
     ringProgramId: Address;
     tree: Address;
+    treeId: number;
     asset: Address;
     maxInputs: number;
   }>,
@@ -427,9 +462,14 @@ function selectMergeNotes(
     asset: input.asset,
     target: { kind: "consolidate", minInputs: 2 },
     policy: {
+      // One merge spends one nullifier key, a zero key note stays out.
       eligible: (entry) =>
         unreserved(reserved)(entry) &&
         entry.utxo.ringProgramId === input.ringProgramId &&
+        equalBytes(
+          noteNullifierPublicKey(entry, input.wallet.identity, input.treeId),
+          input.wallet.identity.nullifierPublicKey,
+        ) &&
         entry.dataHash === undefined &&
         entry.utxo.data.records().every((record) => record.kind !== "utxoData"),
       ordering: "smallestFirst",

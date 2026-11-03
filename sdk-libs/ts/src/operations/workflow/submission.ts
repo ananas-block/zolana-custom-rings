@@ -19,6 +19,7 @@ import {
   assertVersion1Transaction,
 } from "@heliuslabs/zolana/internal";
 import type { ChainReader, KitRpcAccess } from "@heliuslabs/zolana/client";
+import type { ViewingHistory } from "../../state/viewing-history.js";
 import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/zolana/wallet";
 import type { Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
 import {
@@ -30,7 +31,6 @@ import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/po
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import type { RingBoundState } from "./pipeline.js";
-import type { ViewingHistory } from "../../state/viewing-history.js";
 
 /** Keeps the signed intent and validity bounds of one transaction attempt. */
 export interface RingSubmissionAttempt extends RingBoundState {
@@ -38,7 +38,7 @@ export interface RingSubmissionAttempt extends RingBoundState {
   readonly lastValidBlockHeight: bigint;
   readonly intentHash: Bytes32;
   readonly ringInstructionIndex: number;
-  /** The anonymous sender's viewing history past the attempt's tags, every attempt the same. */
+  /** The anonymous depositor's viewing history past the attempt's tag, every attempt the same. */
   readonly viewingHistory?: ViewingHistory;
 }
 
@@ -121,7 +121,7 @@ export class RingTransactionSubmission {
     this.#utxoHashes = (input.utxoHashes ?? []).map((hash) => new Uint8Array(hash) as Bytes32);
   }
 
-  /** An anonymous sender stores it before the first `send`. */
+  /** An anonymous depositor stores it before the first `send`. */
   get viewingHistory(): ViewingHistory | undefined {
     return this.#attempt.viewingHistory;
   }

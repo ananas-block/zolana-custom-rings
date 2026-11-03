@@ -10,10 +10,18 @@ import {
   type PolicyWithdrawal,
 } from "./withdrawals.js";
 import { thresholdsCover, waivesCoSigner } from "./withdrawal-exemption.js";
-import { ZERO_32, addressBytes, bytesKey, equalBytes, isZero } from "@heliuslabs/zolana/internal";
+import {
+  ZERO_32,
+  ZERO_NULLIFIER_PK,
+  addressBytes,
+  bytesKey,
+  equalBytes,
+  isZero,
+} from "@heliuslabs/zolana/internal";
 import { type RingRecordReader } from "../rpc/ports.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { assetField, type SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type {
   PolicyProofInputs,
@@ -25,10 +33,17 @@ import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import {
+  addressRecordHash,
   ownerEscrowed,
   unopenedRecordPool,
   type MemberOpeningRead,
 } from "../protocol/membership/member-opening.js";
+import {
+  ownerDebits,
+  type DebitInput,
+  type DebitOutput,
+} from "../protocol/membership/owner-debits.js";
+import type { AuthorizedAddress } from "../protocol/membership/member-registry.js";
 import {
   admitTransfer,
   memberOfAsset,
@@ -42,6 +57,7 @@ import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registere
 import type { TransferRoots } from "../protocol/proof/statement.js";
 import {
   ringTransferCircuit,
+  screenedOwners,
   transferPoolCapacity,
   type TransferKeyCircuit,
 } from "../protocol/proof/transfer-shapes.js";
@@ -53,6 +69,8 @@ import {
   type PublicSlots,
 } from "../protocol/transaction/spp.js";
 import type { CoSignDemand } from "./cosign.js";
+import type { AnonymousSlotBinding } from "./audit-proof.js";
+import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 export type { BoundRoot } from "../rpc/registered-record.js";
 
@@ -80,7 +98,13 @@ export interface PolicyInputs {
   /** Absent is the unopened pool of a key whose queries are all off. */
   readonly ownPool?: RecordPool;
   readonly curatorPool?: RecordPool;
-  readonly senderEntry: PolicySubjectEntry;
+  /** The screened owners at the key's `Q`, each by its identity, zero past them. */
+  readonly senders: readonly Bytes32[];
+  readonly senderEntries: readonly PolicySubjectEntry[];
+  /** The anonymous sender's bound address, every transfer on the rail opens it. */
+  readonly senderAddress?: AuthorizedAddress;
+  /** Set on every live ring slot, change opens the sender's row. */
+  readonly slotBindings: readonly (AnonymousSlotBinding | undefined)[];
   /** The live outputs then the withdrawals, the request pads them to the key. */
   readonly ownerEntries: readonly PolicySubjectEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
@@ -110,8 +134,12 @@ export type PolicyReadInput = Readonly<{
   /** The spent notes, every input but the compact ones. */
   publishedInputs: number;
   spendsDefaultRing: boolean;
-  /** The owner identity the rules read as the sender. */
-  sender: Bytes32;
+  /** The in-proof or authority owner, the hidden sender or the entry owner, absent on the signer rail. */
+  sender?: Bytes32;
+  /** SPP's owner signer run by owner identity, empty off the signer and commitment rails. */
+  signers: readonly Bytes32[];
+  /** The anonymous sender's address, `change` compares each slot against it. */
+  senderAddress?: ShieldedAddress;
   publicSlots: PublicSlots;
 }>;
 
@@ -124,6 +152,7 @@ export async function readPolicy(
 ): Promise<PolicyInputs> {
   const { client, config, proofInputs } = input;
   const outputs = proofInputs.outputs.length;
+  checkMixedDeposit(spentInputs(proofInputs), input.publicSlots);
   const { withdrawals, splWithdrawalOwners } = config.hasPolicy
     ? await readPolicyWithdrawals(
         client,
@@ -143,13 +172,16 @@ export async function readPolicy(
     throw new RingError("RING_TRANSACT_DATA_INVALID", {
       details: { reason: "RingShapeUnkeyed", rail: input.rail },
     });
+  const senders = screenedSenders(input, screenedOwners(circuit), config.hasPolicy);
   const unscreened: PolicyInputs = Object.freeze({
     circuit,
     withdrawals,
     splWithdrawalOwners,
     table: emptyTable(),
     policyHash: ZERO_32,
-    senderEntry: ABSENT_ENTRY,
+    senders,
+    senderEntries: Object.freeze(senders.map(() => ABSENT_ENTRY)),
+    slotBindings: Object.freeze([]),
     ownerEntries: Object.freeze([]),
     assetEntries: Object.freeze([]),
     publicAssetEntries: Object.freeze(Array.from({ length: N_PUBLIC_SLOTS }, () => 0)),
@@ -159,7 +191,106 @@ export async function readPolicy(
     keyEscrow: config.keyEscrow,
     exempt: false,
   });
-  return config.hasPolicy ? screen(input, unscreened, context) : unscreened;
+  if (config.hasPolicy) return screen(input, unscreened, context);
+  return input.rail === "anonymous" ? deliveryRecords(input, unscreened, context) : unscreened;
+}
+
+/** In pool order, never a free input. */
+function screenedSenders(
+  input: PolicyReadInput,
+  slots: number,
+  screening: boolean,
+): readonly Bytes32[] {
+  const { signers, sender } = input;
+  const named =
+    input.rail === "confidential" && sender === undefined ? signers : [sender ?? ZERO_32];
+  const listed = [...named, ...(input.rail === "anonymous" ? signers : [])];
+  if (screening && listed.length > slots)
+    throw new RingError("RING_TOO_MANY_OWNERS", {
+      details: { owners: listed.length, maximum: slots },
+    });
+  return Object.freeze([
+    ...listed.slice(0, slots),
+    ...Array.from({ length: Math.max(0, slots - listed.length) }, () => ZERO_32),
+  ]);
+}
+
+/** Independent of the policy gate, every anonymous transfer opens the sender and each live recipient. */
+async function deliveryRecords(
+  input: PolicyReadInput,
+  inputs: PolicyInputs,
+  context: RequestContext | undefined,
+): Promise<PolicyInputs> {
+  const { client, ringProgramId, config } = input;
+  const own = await fetchBoundRoot({ client, ringProgramId, registry: config.records }, context);
+  const owners = input.proofInputs.outputs.map((output) =>
+    output.ownerAddress?.signingPublicKey.ownerProofInputHash(),
+  );
+  const capacity = transferPoolCapacity(inputs.circuit);
+  const members = firstSeen([...inputs.senders.filter((sender) => !isZero(sender)), ...owners]);
+  const ownPool = await readRecordPool(
+    { client, root: own, members, openings: capacity.own },
+    context,
+  );
+  const reads = subjectReads(members, ownPool.reads);
+  const entry = (member: Bytes32 | undefined): PolicySubjectEntry => ({
+    own: member === undefined ? 0 : (reads.get(bytesKey(member))?.index ?? 0),
+    curator: 0,
+  });
+  return Object.freeze({
+    ...inputs,
+    own,
+    ownPool: ownPool.pool,
+    senderEntries: Object.freeze(inputs.senders.map((sender) => entry(sender))),
+    ownerEntries: Object.freeze(owners.map((owner) => entry(owner))),
+    ...boundAddresses(input, reads),
+  });
+}
+
+/** Every address read back from its record, an absent or mismatched row fails here and not in the proof. */
+function boundAddresses(
+  input: PolicyReadInput,
+  reads: SubjectReads,
+): Pick<PolicyInputs, "senderAddress" | "slotBindings"> {
+  const { senderAddress: sender } = input;
+  if (input.rail !== "anonymous" || sender === undefined) return { slotBindings: [] };
+  const ringId = ringIdField(input.ringProgramId);
+  const bound = (member: Bytes32): AuthorizedAddress => {
+    const opened = reads.get(bytesKey(member))?.read;
+    const record = opened?.record();
+    const address = opened?.opening.address;
+    if (record === undefined || address === undefined || isZero(record.addressHash))
+      throw new RingError("RING_ADDRESS_NOT_ENROLLED", { details: { member: bytesKey(member) } });
+    if (
+      !equalBytes(address.ringId, ringId) ||
+      !equalBytes(addressRecordHash({ ...address, member }), record.addressHash)
+    )
+      throw new RingError("RING_ADDRESS_MISMATCH", { details: { member: bytesKey(member) } });
+    return address;
+  };
+  const senderAddress = bound(sender.signingPublicKey.ownerProofInputHash());
+  if (
+    !equalBytes(senderAddress.nullifierPk, sender.nullifierPublicKey) ||
+    !equalBytes(senderAddress.viewingU, sender.viewingPublicKey.u())
+  )
+    throw new RingError("RING_ADDRESS_MISMATCH", { details: { reason: "sender" } });
+  const slotBindings = input.proofInputs.outputs
+    .filter((output) => !output.isCompact())
+    .map((output) => {
+      const owner = output.ownerAddress;
+      if (owner === undefined || output.ringProgramId === undefined) return undefined;
+      const address = bound(owner.signingPublicKey.ownerProofInputHash());
+      if (
+        !equalBytes(address.nullifierPk, owner.nullifierPublicKey) ||
+        !equalBytes(address.viewingU, owner.viewingPublicKey.u())
+      )
+        throw new RingError("RING_ADDRESS_MISMATCH", { details: { reason: "recipient" } });
+      return Object.freeze({
+        recipientKey: address.viewingU,
+        addressRevision: address.addressRevision,
+      });
+    });
+  return { senderAddress, slotBindings: Object.freeze(slotBindings) };
 }
 
 /** Opens every subject once under the bound roots and admits the transfer under the rules. */
@@ -187,7 +318,7 @@ async function screen(
   const capacity = transferPoolCapacity(inputs.circuit);
   // Rust builds the same subject order, public assets resolve in the own pool alone.
   const curatorMembers = firstSeen([
-    input.sender,
+    ...inputs.senders.filter((sender) => !isZero(sender)),
     ...outputs.flatMap((_, slotIndex) => [owners[slotIndex], assets[slotIndex]]),
     ...withdrawals.flatMap((w) => [w.owner, w.asset]),
   ]);
@@ -232,44 +363,53 @@ async function screen(
   const live = outputs.flatMap((output, slotIndex) =>
     output.isDummy() ? [] : [{ output, slotIndex }],
   );
-  const refusal = admitTransfer(pinned.table, pinned.sources, {
-    sender: lists(input.sender),
-    outputs: [
-      ...live.map(({ output, slotIndex }) => ({
-        owner: owners[slotIndex] ?? ZERO_32,
-        asset: memberOfAsset(output.asset),
-        amount: output.amount,
-        ownerLists: lists(owners[slotIndex]),
-        assetLists: lists(assets[slotIndex]),
-        mintPolicy: mintPolicy(assets[slotIndex]),
-      })),
-      ...withdrawals.map((w) => ({
-        ...w,
-        ownerLists: lists(w.owner),
-        assetLists: lists(w.asset),
-        mintPolicy: mintPolicy(w.asset),
-      })),
-    ],
-  });
-  if (refusal !== undefined)
-    throw ruleUnsatisfied(
-      refusal,
-      live.map(({ slotIndex }) => slotIndex),
-    );
+  // A co-owner who receives nothing is screened, every sender passes the sender rules.
+  for (const sender of inputs.senders.filter((member) => !isZero(member))) {
+    const refusal = admitTransfer(pinned.table, pinned.sources, {
+      sender: lists(sender),
+      outputs: [
+        ...live.map(({ output, slotIndex }) => ({
+          owner: owners[slotIndex] ?? ZERO_32,
+          asset: memberOfAsset(output.asset),
+          amount: output.amount,
+          ownerLists: lists(owners[slotIndex]),
+          assetLists: lists(assets[slotIndex]),
+          mintPolicy: mintPolicy(assets[slotIndex]),
+        })),
+        ...withdrawals.map((w) => ({
+          ...w,
+          ownerLists: lists(w.owner),
+          assetLists: lists(w.asset),
+          mintPolicy: mintPolicy(w.asset),
+        })),
+      ],
+    });
+    if (refusal !== undefined)
+      throw ruleUnsatisfied(
+        refusal,
+        live.map(({ slotIndex }) => slotIndex),
+      );
+  }
   const ctHashes = outputs.map((output, slotIndex) => {
     const owner = owners[slotIndex];
     const address = output.ownerAddress;
-    if (!inputs.keyEscrow || owner === undefined || address === undefined) return zeroField();
+    // The zero nullifier key escrows nothing and an address still binds it.
+    if (
+      !inputs.keyEscrow ||
+      owner === undefined ||
+      address === undefined ||
+      equalBytes(address.nullifierPublicKey, ZERO_NULLIFIER_PK)
+    )
+      return zeroField();
     return ownerEscrowed(owner, reads(owner).own, address.nullifierPublicKey).ctHash;
   });
   const approvalRequired =
     input.rail === "delegate"
       ? false
       : outflowApproval({
-          sender: input.sender,
+          senders: inputs.senders.filter((sender) => !isZero(sender)),
           ringProgramId,
           proofInputs,
-          publicSlots: input.publicSlots,
           limits: uniqueMembers([...assets, ...publicAssets]).flatMap((asset) => {
             const mint = mintPolicy(asset);
             return mint.cap === 0n && mint.cosignAbove === 0n
@@ -291,7 +431,10 @@ async function screen(
     ...(curatorRoot === undefined ? {} : { curator: curatorRoot }),
     ownPool: ownPool.pool,
     ...(curatorPool === undefined ? {} : { curatorPool: curatorPool.pool }),
-    senderEntry: entry(input.sender),
+    senderEntries: Object.freeze(
+      inputs.senders.map((sender) => (isZero(sender) ? ABSENT_ENTRY : entry(sender))),
+    ),
+    ...boundAddresses(input, ownReads),
     ownerEntries: Object.freeze([
       ...owners.map((owner) => entry(owner)),
       ...withdrawals.map((w) => entry(w.owner)),
@@ -417,65 +560,79 @@ export function policyParams(policy: PolicyInputs, proving: PolicyProving): Poli
     recipients: policy.recipients,
     ownPool: policy.ownPool ?? unopenedRecordPool(capacity.own),
     curatorPool: policy.curatorPool ?? unopenedRecordPool(capacity.curator),
-    senderEntry: policy.senderEntry,
+    senderEntries: policy.senderEntries,
     ownerEntries: pad(policy.ownerEntries, slots, ABSENT_ENTRY),
     assetEntries: pad(policy.assetEntries, slots, ABSENT_ENTRY),
     publicAssetEntries: policy.publicAssetEntries,
   });
 }
 
-/**
- * Rust `Outflows::approval_required`. Every UTXO output but the sender's change inside the ring
- * leaves it, less the asset's public net, a nonzero cap refuses more and a nonzero co-sign bound sets
- * the approval bit.
- */
+/** A nonzero cap refuses more and a nonzero co-sign bound sets the approval bit, credits never move between owners. */
 export function outflowApproval(
   input: Readonly<{
-    sender: Bytes32;
+    senders: readonly Bytes32[];
     ringProgramId: Address;
     proofInputs: SppProofInputs;
-    publicSlots: PublicSlots;
     limits: readonly OutflowLimit[];
   }>,
 ): boolean {
+  const debits = ownerDebits({
+    senders: input.senders,
+    assets: input.limits.map((limit) => limit.asset),
+    inputs: spentInputs(input.proofInputs),
+    outputs: slotOutputs(input.proofInputs, input.ringProgramId),
+  });
   let approval = false;
   for (const limit of input.limits) {
-    const outflow = assetOutflow(input, limit.asset);
-    const over = (bound: bigint): boolean => bound !== 0n && outflow > bound;
-    if (over(limit.cap))
-      throw new RingError("RING_OUTFLOW_CAP_EXCEEDED", {
-        details: { cap: limit.cap.toString(), outflow: outflow.toString() },
-      });
-    approval ||= over(limit.cosignAbove);
+    for (const { asset, debit } of debits) {
+      if (!equalBytes(asset, limit.asset)) continue;
+      const over = (bound: bigint): boolean => bound !== 0n && debit > bound;
+      if (over(limit.cap))
+        throw new RingError("RING_OUTFLOW_CAP_EXCEEDED", {
+          details: { cap: limit.cap.toString(), outflow: debit.toString() },
+        });
+      approval ||= over(limit.cosignAbove);
+    }
   }
   return approval;
 }
 
-function assetOutflow(
-  input: Readonly<{
-    sender: Bytes32;
-    ringProgramId: Address;
-    proofInputs: SppProofInputs;
-    publicSlots: PublicSlots;
-  }>,
-  asset: Bytes32,
-): bigint {
-  let others = 0n;
-  for (const output of input.proofInputs.outputs) {
+/** Mixed owners and a same-asset deposit are refused here and in the proof, input assets are hidden from the program. */
+function checkMixedDeposit(spent: readonly DebitInput[], slots: PublicSlots): void {
+  const [first] = spent;
+  if (first === undefined || spent.every((input) => equalBytes(input.owner, first.owner))) return;
+  slots.assets.forEach((asset, slot) => {
+    const deposit = (slots.nets[slot] ?? 0n) > 0n;
+    if (deposit && spent.some((input) => equalBytes(input.asset, asset)))
+      throw new RingError("RING_MIXED_OWNER_DEPOSIT", { details: { slot } });
+  });
+}
+
+function spentInputs(proofInputs: SppProofInputs): readonly DebitInput[] {
+  return proofInputs.inputUtxos
+    .filter((input) => !input.isCompact() && !input.isDummy())
+    .map((input) => ({
+      owner: input.utxo.owner.ownerProofInputHash(),
+      asset: assetField(input.utxo.asset),
+      amount: input.utxo.amount,
+    }));
+}
+
+/** An exit reads outside the ring, it counts as leaving. */
+function slotOutputs(proofInputs: SppProofInputs, ring: Address): readonly DebitOutput[] {
+  return proofInputs.outputs.flatMap((output) => {
     const owner = output.ownerAddress;
-    if (owner === undefined) continue;
-    const change =
-      equalBytes(owner.signingPublicKey.ownerProofInputHash(), input.sender) &&
-      output.ringProgramId === input.ringProgramId;
-    if (!change && equalBytes(assetField(output.asset), asset)) others += output.amount;
-  }
-  const net = input.publicSlots.assets.reduce(
-    (sum, publicAsset, index) =>
-      equalBytes(publicAsset, asset) ? sum + (input.publicSlots.nets[index] ?? 0n) : sum,
-    0n,
-  );
-  if (net > others) throw new RingError("RING_DEPOSIT_ABOVE_OUTFLOW");
-  return others - net;
+    return owner === undefined
+      ? []
+      : [
+          {
+            owner: owner.signingPublicKey.ownerProofInputHash(),
+            asset: assetField(output.asset),
+            amount: output.amount,
+            ring: output.ringProgramId === ring,
+          },
+        ];
+  });
 }
 
 /** The zero table, every gate reads it switched off. */

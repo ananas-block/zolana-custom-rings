@@ -42,7 +42,9 @@ import {
   type RingTransactionIntent,
 } from "../../protocol/transaction/intent.js";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
-import { anonymousAuditKey } from "../../protocol/codec/ring-disclosure-layout.js";
+import { ringSpendTransfer } from "./ring-spend.js";
+import { transferAuditKey } from "../../protocol/codec/ring-disclosure-layout.js";
+import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
@@ -68,7 +70,6 @@ import {
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
-import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
 
 export type RingTransferClient = CustomRingTransferClient & BlockhashProvider;
 
@@ -84,10 +85,8 @@ export interface RingRelaySpend {
 
 export interface AnonymousSpendOwner {
   readonly signer: AnonymousSpendSigner;
-  /** Store the viewing history the spend returns in its place before it is sent. */
-  readonly history: ViewingHistory;
-  /** The tag a payment to a `RingAddress` takes until the pair is known, chosen by the caller. */
-  readonly firstContact?: FirstContact;
+  /** `null` sends no reply, no path attaches one by default. */
+  readonly reply?: ReplyMetadata | null;
   /** A missing SPL exit token account must be the owner's associated token account. */
   readonly exitTokenOwner?: Address;
 }
@@ -419,7 +418,7 @@ function sendStrategy(
           ? ""
           : `, moves ${String(defaultFunding)} ${assetLabel(asset)} of default UTXOs into the ring`;
       if (!(resolved instanceof ShieldedAddress)) {
-        payment(resolved.to, resolved.firstContact, asset, params.amount);
+        payment(resolved.to, asset, params.amount, resolved.reply);
         return {
           intent: {
             kind: "ringAnonymousTransfer",
@@ -543,9 +542,9 @@ interface RingSpendStrategy<R> {
       /** Pays a ring address on the anonymous rail. */
       payment: (
         to: RingAddress,
-        firstContact: FirstContact,
         asset: Address,
         amount: bigint,
+        reply: ReplyMetadata | null,
       ) => void;
     }>,
   ): RingSpendPlan;
@@ -619,7 +618,6 @@ async function buildRingSpend<R>(
       intentHash: staged.planned,
       ringInstructionIndex: plan.setupInstructions?.length ?? 0,
       ...boundState(proven),
-      ...(proven.viewingHistory === undefined ? {} : { viewingHistory: proven.viewingHistory }),
     });
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
@@ -706,7 +704,7 @@ function proveDirect(
 }
 
 function anonymousTransfer(staged: StagedSpend, owner: AnonymousSpendOwner): AnonymousTransfer {
-  const signed = staged.rail.withAnonymousSigner(owner.signer, owner.history);
+  const signed = staged.rail.withAnonymousSigner(owner.signer);
   const paying =
     staged.anonymousPayment === undefined ? signed : signed.withPayment(staged.anonymousPayment);
   return owner.exitTokenOwner === undefined
@@ -768,11 +766,11 @@ async function stageRingSpend<R>(
         }));
   retry.reservation = retry.reservation ?? reserveEntries(params.wallet, selected, retry.lifetime);
   retry.entries = selected;
-  const transfer = new ConfidentialTransfer(
+  const transfer = ringSpendTransfer({
     owner,
-    selected.map((entry) => ringProofInput(entry, owner, params.client)),
-    input.feePayer,
-  ).withOutputTreeId(outputTree.treeId);
+    inputs: selected.map((entry) => ringProofInput(entry, owner, params.client)),
+    feePayer: input.feePayer,
+  }).withOutputTreeId(outputTree.treeId);
   let anonymousPayment: AnonymousPayment | undefined;
   const plan = strategy.configure({
     transfer,
@@ -780,12 +778,12 @@ async function stageRingSpend<R>(
     selected,
     asset,
     owner,
-    payment: (to, firstContact, paidAsset, amount) => {
+    payment: (to, paidAsset, amount, reply) => {
       if (!anonymousRing || anonymousPayment !== undefined)
         throw new RingError("RING_NOT_ANONYMOUS", {
           details: { ringProgramId: params.ringProgramId },
         });
-      anonymousPayment = { to, firstContact, asset: paidAsset, amount };
+      anonymousPayment = { to, asset: paidAsset, amount, reply };
     },
   });
   const planned = ringIntentHash(plan.intent);
@@ -867,13 +865,20 @@ function anonymousInputCap(selection: "ring" | "entry"): number {
     ...SPP_SUPPORTED_SHAPES.filter(
       (shape) =>
         shape.outputs === SPEND_OUTPUTS &&
-        anonymousAuditKey({ inputs: shape.inputs, outputs: shape.outputs, spendsDefaultRing }) !==
-          undefined,
+        transferAuditKey({
+          rail: "anonymous",
+          inputs: shape.inputs,
+          capacity: shape.outputs,
+          spendsDefaultRing,
+        }) !== undefined,
     ).map((shape) => shape.inputs),
   );
 }
 
-type AnonymousRecipient = Readonly<{ to: RingAddress; firstContact: FirstContact }>;
+type AnonymousRecipient = Readonly<{
+  to: RingAddress;
+  reply: ReplyMetadata | null;
+}>;
 
 /** A ring address or request pays on the anonymous rail, any other recipient resolves to its shielded address. */
 async function resolveSendRecipient(
@@ -888,7 +893,8 @@ async function resolveSendRecipient(
       throw new RingError("RING_FOREIGN_RING", {
         details: { address: to.ringProgramId, ring: params.ringProgramId },
       });
-    return Object.freeze({ to, firstContact: firstContactOf(params, recipient) });
+    checkRequestTerms(params, recipient);
+    return Object.freeze({ to, reply: replyChoice(params) });
   }
   return resolveShieldedRecipient(
     { rpc: params.client, recipient },
@@ -900,22 +906,21 @@ async function resolveSendRecipient(
   );
 }
 
-/** A request names its tag, amount and mint, a bare address takes the caller's explicit choice. */
-function firstContactOf(
-  params: SendParams,
-  recipient: RingAddress | RingPaymentRequest,
-): FirstContact {
-  const chosen = params.anonymous?.firstContact;
-  if (recipient instanceof RingAddress) {
-    if (chosen === undefined) throw new RingError("RING_FIRST_CONTACT_REQUIRED");
-    return chosen;
-  }
+/** The caller names the choice on every anonymous payment. */
+function replyChoice(params: SendParams): ReplyMetadata | null {
+  const reply = params.anonymous?.reply;
+  if (reply === undefined)
+    throw new RingError("RING_REPLY_INVALID", { details: { reason: "unnamed" } });
+  return reply;
+}
+
+/** A request names its amount and mint. */
+function checkRequestTerms(params: SendParams, recipient: RingAddress | RingPaymentRequest): void {
+  if (recipient instanceof RingAddress) return;
   const asset = params.asset ?? SOL_MINT;
-  if (chosen !== undefined) throw ringIntentMismatch("firstContact");
   if (recipient.amount !== undefined && recipient.amount !== params.amount)
     throw ringIntentMismatch("amount");
   if (recipient.mint !== undefined && recipient.mint !== asset) throw ringIntentMismatch("asset");
-  return Object.freeze({ kind: "request", tag: recipient.requestViewTag });
 }
 
 export function assetLabel(asset: Address): string {

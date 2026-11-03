@@ -1,5 +1,10 @@
 import type { TreeContext } from "@heliuslabs/zolana/client";
-import type { SpendSelectionErrors } from "@heliuslabs/zolana/internal";
+import {
+  equalBytes,
+  ZERO_NULLIFIER_PK,
+  type SpendSelectionErrors,
+} from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
@@ -19,12 +24,28 @@ export function ringProofInput(
   }
   return new ProofInputUtxo({
     utxo: entry.utxo,
-    nullifierPublicKey: owner.nullifierPublicKey,
+    nullifierPublicKey: noteNullifierPublicKey(entry, owner, client.treeId),
     nullifier: entry.nullifier,
     treeId: client.treeId,
     ...(entry.dataHash === undefined ? {} : { dataHash: entry.dataHash }),
     ...(entry.ringDataHash === undefined ? {} : { ringDataHash: entry.ringDataHash }),
   });
+}
+
+/** The zero key on a note a program owner's sender named, the note holds no key of its own. */
+export function noteNullifierPublicKey(
+  entry: WalletUtxo,
+  owner: ShieldedAddress,
+  treeId: number,
+): Bytes32 {
+  const rebuilds = (key: Bytes32): boolean =>
+    equalBytes(
+      entry.utxo.proofInput(key, treeId, entry.dataHash, entry.ringDataHash).hash(),
+      entry.outputContext.hash,
+    );
+  return !rebuilds(owner.nullifierPublicKey) && rebuilds(ZERO_NULLIFIER_PK)
+    ? ZERO_NULLIFIER_PK
+    : owner.nullifierPublicKey;
 }
 
 export function ringIntentMismatch(field: string): RingError {

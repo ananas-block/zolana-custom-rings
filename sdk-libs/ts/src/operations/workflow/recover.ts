@@ -19,7 +19,8 @@ import type {
 } from "@heliuslabs/zolana/transaction";
 import { Utxo } from "@heliuslabs/zolana/transaction";
 
-import { KnownUtxoIndex, auditRing, nextScanCursor, type RingAuditReader } from "../audit/audit.js";
+import { nextHistoryToken } from "../../rpc/history.js";
+import { KnownUtxoIndex, auditRing, type RingAuditReader } from "../audit/audit.js";
 import { recoverMergeOpening } from "../audit/audit-merge.js";
 import { createdDepositUtxo, createdRingUtxos } from "./created-utxos.js";
 import { openRingDepositOpening, ringDepositOutput } from "../../proof/deposit-audit.js";
@@ -106,7 +107,7 @@ export async function recoverRingMemberNotes(
   const unseenInputs: Bytes32[] = [];
   for (const transaction of page.transactions) {
     for (const { nullifier, opening } of transaction.inputs)
-      if (opening.kind === "unseen" || opening.kind === "unseenHash") unseenInputs.push(nullifier);
+      if (opening.kind === "unseenHash") unseenInputs.push(nullifier);
     for (const error of transaction.payloadErrors) {
       // Any other unopened slot could hide a source UTXO.
       if (error.kind !== "unknownAsset")
@@ -173,7 +174,11 @@ function refuseSkipped(skipped: readonly SkippedRingTransaction[]): void {
   const row = skipped[0];
   if (row !== undefined)
     throw new RingError("RING_RECOVERY_INCOMPLETE", {
-      details: { reason: "skipped row", transactionId: row.signature, eventIndex: row.eventIndex },
+      details: {
+        reason: "skipped row",
+        transactionId: row.signature,
+        eventIndex: row.eventIndex,
+      },
     });
 }
 
@@ -181,7 +186,10 @@ function refuseSkipped(skipped: readonly SkippedRingTransaction[]): void {
 class Found {
   readonly candidates: WalletUtxo[] = [];
   /** Commitments without a verified opening, with their nullifier when the key derives one. */
-  readonly unresolved: { readonly commitment: Bytes32; readonly nullifier?: Bytes32 }[] = [];
+  readonly unresolved: {
+    readonly commitment: Bytes32;
+    readonly nullifier?: Bytes32;
+  }[] = [];
   readonly unknownMints = new Set<Address>();
   /** Commitments of delivered slots no registered asset rebuilds. */
   readonly unknownAssets: Bytes32[] = [];
@@ -203,7 +211,10 @@ class Found {
 
   unresolve(commitment: Bytes32, nullifier?: Bytes32): void {
     this.unresolved.push(
-      Object.freeze({ commitment, ...(nullifier === undefined ? {} : { nullifier }) }),
+      Object.freeze({
+        commitment,
+        ...(nullifier === undefined ? {} : { nullifier }),
+      }),
     );
   }
 }
@@ -234,7 +245,10 @@ function sourceWalletUtxo(
     dataHash,
     ringDataHash,
   );
-  return Object.freeze({ utxo: walletUtxo, opens: equalBytes(commitment, outputContext.hash) });
+  return Object.freeze({
+    utxo: walletUtxo,
+    opens: equalBytes(commitment, outputContext.hash),
+  });
 }
 
 /** Mirrors Rust `ring_history`, `deposited_utxos` and `CreatedUtxos::open` in one read. */
@@ -308,7 +322,9 @@ async function recoverDeposits(
             },
           });
           if (!opened.opens)
-            throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "deposit opening" } });
+            throw new RingError("RING_AUDIT_MESSAGE", {
+              details: { reason: "deposit opening" },
+            });
           found.claim(commitment);
           if (registeredMint(input.assets, deposit.asset) !== undefined)
             found.candidates.push(opened.utxo);
@@ -324,7 +340,7 @@ async function recoverDeposits(
     },
     context,
   );
-  if (stopped !== undefined) throw new RingError("RING_RECOVERY_INCOMPLETE");
+  if (stopped.nextCursor !== undefined) throw new RingError("RING_RECOVERY_INCOMPLETE");
   return unsupported;
 }
 
@@ -423,19 +439,22 @@ export async function spendingTransactions(
   const transactions: IndexedShieldedTransaction[] = [];
   for (let start = 0; start < nullifiers.length; start += Number(PAGE_LIMIT)) {
     const batch = nullifiers.slice(start, start + Number(PAGE_LIMIT));
-    let cursor: Uint8Array | undefined;
+    let token: string | undefined;
     for (;;) {
       if (budget.remaining <= 0) throw new RingError("RING_RECOVERY_INCOMPLETE");
       budget.remaining--;
       const page = await client.getShieldedTransactionsByNullifiers(
-        { nullifiers: batch, ...(cursor === undefined ? {} : { cursor }) },
+        {
+          nullifiers: batch,
+          ...(token === undefined ? {} : { paginationToken: token }),
+        },
         undefined,
         context,
       );
-      transactions.push(...page.transactions);
-      const next = nextScanCursor(cursor, page);
+      transactions.push(...page.data.flatMap((item) => item.events));
+      const next = nextHistoryToken(token, page);
       if (next === undefined) break;
-      cursor = next;
+      token = next;
     }
   }
   return transactions;

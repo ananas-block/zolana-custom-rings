@@ -3,6 +3,7 @@ import { getBase64Decoder, type Instruction } from "@solana/kit";
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
 import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
 import {
+  ZERO_NULLIFIER_PK,
   bigIntBytes,
   compileUnsignedTransaction,
   equalBytes,
@@ -43,7 +44,7 @@ import type { DepositClient } from "@heliuslabs/zolana/wallet";
 import type { DepositProofRequest, PolicyTableProofInputs } from "../../rpc/prover/ring.js";
 import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
 
-import { checkSignersHideOwner } from "./anonymous.js";
+import { checkHiddenParties } from "./anonymous.js";
 import { ringRootRegistries, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { DEPOSIT_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
@@ -65,8 +66,9 @@ import { ownerEscrowed, type EscrowedRecord } from "../../protocol/membership/me
 import type { RecordOpening } from "../../protocol/membership/member-registry.js";
 import { pinnedPolicy, policyTableProofInputs } from "../../protocol/membership/policy.js";
 import { type RingKeys } from "../../state/ring-keys.js";
-import type { RingAddress } from "../../crypto/keys/ring-address.js";
-import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
+import { RingAddress, type RingPaymentRequest } from "../../crypto/keys/ring-address.js";
+import { isSmallOrder } from "../../crypto/keys/x25519.js";
+import type { ViewingHistory } from "../../state/viewing-history.js";
 import { encodeRelayDepositInputs } from "../../protocol/ring-rpc/relay-deposit-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
@@ -86,14 +88,8 @@ export type RingDepositRecipient =
   | Readonly<{ kind: "confidential"; address: Address | ShieldedAddress }>
   /** The depositor's own hidden identity on an anonymous ring, under its next sender tag. */
   | Readonly<{ kind: "anonymous"; keys: RingKeys; history: ViewingHistory }>
-  /** Another member of an anonymous ring, its tag by the selection over the depositor's history. */
-  | Readonly<{
-      kind: "anonymousPayment";
-      keys: RingKeys;
-      history: ViewingHistory;
-      to: RingAddress;
-      firstContact: FirstContact;
-    }>;
+  /** Another member of an anonymous ring, under a request's deposit tag, else its bootstrap tag. */
+  | Readonly<{ kind: "anonymousPayment"; to: RingAddress | RingPaymentRequest }>;
 
 type TaggedRecipient = Readonly<{
   address: ShieldedAddress;
@@ -389,7 +385,7 @@ export class PreparedRingDeposit {
         ),
         ephSk: this.#ephemeralSecret,
         auditorPk: this.#auditor.u(),
-        keyEscrow: escrowed !== undefined,
+        keyEscrow: this.#keyEscrow,
         memberRegistryRoot: records?.root.root ?? ZERO_32,
         curatorRoot: curator?.root.root ?? ZERO_32,
         policyHash: policy?.policyHash ?? ZERO_32,
@@ -454,13 +450,15 @@ export class PreparedRingDeposit {
           attempt,
         );
         const pinned = equalBytes(policy.policyHash, ZERO_32) ? undefined : pinnedPolicy(policy);
-        const owners = this.#keyEscrow ? [this.#ownerPkHash] : [];
+        // The zero nullifier key escrows nothing, no record backs it.
+        const escrows = this.#keyEscrow && !equalBytes(this.#nullifierPk, ZERO_NULLIFIER_PK);
+        const owners = escrows ? [this.#ownerPkHash] : [];
         const assets = pinned === undefined ? [] : [this.#asset.asset];
         const reads = await readMemberOpenings(
           { client, root, members: [...owners, ...assets] },
           attempt,
         );
-        const escrowed = this.#keyEscrow
+        const escrowed = escrows
           ? ownerEscrowed(this.#ownerPkHash, reads[0], this.#nullifierPk)
           : undefined;
         const asset = reads[owners.length];
@@ -708,7 +706,7 @@ function checkDepositSigners(
   signers: readonly (Address | SignerAccount | undefined)[],
 ): void {
   if (sealing.owner.kind !== "anonymous") return;
-  checkSignersHideOwner(
+  checkHiddenParties(
     sealing.owner.key,
     signers.map((party) => (party === undefined ? undefined : signerAddress(party))),
   );
@@ -751,17 +749,13 @@ async function anonymousRecipient(
     const { tag, history } = await recipient.history.senderTag(recipient.keys, context);
     return { address: recipient.keys.address(), viewTag: tag, history };
   }
-  if (recipient.to.ringProgramId !== ringProgramId)
+  const ringAddress = recipient.to instanceof RingAddress ? recipient.to : recipient.to.address;
+  if (ringAddress.ringProgramId !== ringProgramId)
     throw new RingError("RING_FOREIGN_RING", {
-      details: { address: recipient.to.ringProgramId, ring: ringProgramId },
+      details: { address: ringAddress.ringProgramId, ring: ringProgramId },
     });
-  const { tag, history } = await recipient.history.depositTag(
-    recipient.keys,
-    {
-      viewingPublicKey: recipient.to.recipient.viewingPublicKey,
-      firstContact: recipient.firstContact,
-    },
-    context,
-  );
-  return { address: recipient.to.recipient, viewTag: tag.payment.tag, history };
+  const { viewingPublicKey } = ringAddress.recipient;
+  if (isSmallOrder(viewingPublicKey)) throw new RingError("RING_RECIPIENT_KEY_NOT_CONTRIBUTORY");
+  const depositTag = recipient.to instanceof RingAddress ? undefined : recipient.to.depositTag;
+  return { address: ringAddress.recipient, viewTag: depositTag ?? viewingPublicKey.u() };
 }

@@ -5,9 +5,11 @@
 import type { AccountMeta, Instruction } from "@solana/kit";
 
 import {
+  addressBytes,
   compressG2,
   encodeBase58,
   meta,
+  solanaOwnerIdentity,
   treeAddress,
   bytesKey,
   equalBytes,
@@ -52,15 +54,17 @@ import { ringTransferStatement, transferStatementHash } from "../../protocol/pro
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
+  changeBitmap,
   exitsBitmap,
   publishesRecipients,
+  replyRegion,
   ringStreamLayout,
   ringSppInputs,
   type InputTrees,
   type PolicyProof,
   type PolicyRecipients,
+  type PublishedSenderBundle,
   type RingRail,
-  type SenderBundle,
 } from "../../protocol/transaction/transact.js";
 import {
   MAX_SPP_CPI_ACCOUNTS,
@@ -72,7 +76,6 @@ import {
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
 import { checkTransferFits } from "./compile.js";
-import type { ViewingHistory } from "../../state/viewing-history.js";
 
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
 export type RingProvingClient = TreeContext &
@@ -85,8 +88,6 @@ export interface AnonymousSpendValues {
   readonly tokenOwner?: Address;
   /** Binds the signing co-signer, zero when none signs. */
   partyIdentities(coSigner: Address | undefined): readonly [Bytes32, Bytes32, Bytes32];
-  /** Past the transfer's tags. */
-  readonly viewingHistory: ViewingHistory;
 }
 
 /** How the SPP proof authorizes the spends of one rail, Rust `Spend`. */
@@ -111,7 +112,7 @@ export interface StagedTransfer {
   readonly proofInputs: SppProofInputs;
   readonly rail: RingOutputRail;
   readonly sender: ShieldedAddress;
-  /** The confidential rail's owner signer run, empty on the other rails. */
+  /** The signer rail's owners and the anonymous rail's public co-owners, empty on the other rails. */
   readonly ownerSigners: readonly Address[];
   readonly withdrawal?: TransactWithdrawal;
   readonly spend: RailSpend;
@@ -153,8 +154,6 @@ export class ProvenRingTransfer {
   /** The live roots the proofs bind, a submission proves again once one leaves its registry. */
   readonly roots: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
-  /** The anonymous sender's viewing history past the transfer's tags, stored before it is sent. */
-  readonly viewingHistory?: ViewingHistory;
 
   /** @internal */
   constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
@@ -166,7 +165,6 @@ export class ProvenRingTransfer {
     this.approvalRequired = fields.approvalRequired;
     this.roots = fields.roots;
     if (fields.policy !== undefined) this.policy = fields.policy;
-    if (fields.viewingHistory !== undefined) this.viewingHistory = fields.viewingHistory;
     Object.freeze(this);
   }
 
@@ -230,7 +228,7 @@ export interface SealedTransfer {
   readonly audit: AuditLayout;
   readonly published: readonly PublishedSlot[];
   readonly publishedInputs: number;
-  readonly senderBundle: SenderBundle | undefined;
+  readonly senderBundle: PublishedSenderBundle | undefined;
   readonly shape: Shape;
   /** The owner signs its `messageHash`. */
   readonly proofInputs: SppProofInputs;
@@ -253,7 +251,8 @@ export function sealStagedTransfer(
   const shape = staged.proofInputs.checkShape();
   const publishedInputs = staged.proofInputs.inputUtxos.filter((spent) => !spent.isCompact());
   const published = rail.publishedSlots(staged.proofInputs, sender);
-  const senderBundle = rail.publishedSender(staged.proofInputs);
+  const wires = published.map((slot) => slot.wire);
+  const senderBundle = rail.publishedSender(staged.proofInputs, sender.viewingPublicKey);
   const audit: AuditLayout = Object.freeze({
     keyEscrow: config.keyEscrow,
     // A default-ring input takes the entry key, every commitment key refuses ring id zero.
@@ -267,7 +266,8 @@ export function sealStagedTransfer(
     outputs: published.length,
     keyEscrow: audit.keyEscrow,
     fullOpenings: audit.fullOpenings,
-    exits: exitsBitmap(published.map((slot) => slot.wire)),
+    exits: exitsBitmap(wires),
+    change: changeBitmap(wires),
     ownerInProof: spend.inProofOwner !== undefined,
   });
   const auditor = config.auditorPublicKey;
@@ -312,6 +312,10 @@ async function assembleStagedTransfer<T>(
   try {
     const slots = publicSlots(proofInputs.externalData.interfaceTransfers);
     const senderPkHash = sender.signingPublicKey.ownerProofInputHash();
+    const signerIdentities = staged.ownerSigners.map(
+      (signer) => solanaOwnerIdentity(addressBytes(signer)) as Bytes32,
+    );
+    const signerRail = ringRail === "confidential" && spend.inProofOwner === undefined;
     const read = await readPolicy(
       {
         ...(spend.anonymous?.tokenOwner === undefined
@@ -325,7 +329,9 @@ async function assembleStagedTransfer<T>(
         publishedInputs,
         // The entry layout is the anonymous rail's, a confidential ring spends default-ring notes as any other.
         spendsDefaultRing: ringRail === "anonymous" && spendsDefaultRing(proofInputs),
-        sender: senderPkHash,
+        ...(signerRail ? {} : { sender: senderPkHash }),
+        signers: signerIdentities,
+        ...(ringRail === "anonymous" ? { senderAddress: sender } : {}),
         publicSlots: slots,
       },
       context,
@@ -364,17 +370,15 @@ async function assembleStagedTransfer<T>(
       zeroField(),
     ];
     const privateTxHash = proofInputs.privateTxHash();
-    // The signer rail names its sole owner under a policy alone, the in-proof owner is public in the frame.
-    const statementSender =
-      ringRail === "confidential" && (spend.inProofOwner !== undefined || screened(policy))
-        ? senderPkHash
-        : zeroField();
+    // Only the in-proof owner is public in the frame, the signer rail binds its run instead.
+    const statementSender = spend.inProofOwner !== undefined ? senderPkHash : zeroField();
     const accounts: RingTransactAccounts = Object.freeze({
       payer: proofInputs.payer,
       inputTrees: Object.freeze(proofInputs.inputTreeIds().map(treeAddress)),
       outputTree: treeAddress(proofInputs.outputTreeId),
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
+      // An anonymous transfer reads its delivery addresses under the own root, as an exemption does.
       registries: ringRootRegistries(config, policy.exempt ? "exemptTransfer" : "transfer"),
       ...(coSigner === undefined ? {} : { coSigner }),
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
@@ -387,6 +391,7 @@ async function assembleStagedTransfer<T>(
       proofInputs,
       published,
       ...(senderBundle === undefined ? {} : { sender: senderBundle }),
+      replies: published.flatMap((slot) => (slot.reply === undefined ? [] : [slot.reply])),
       txViewingU: rail.txViewingKey.publicKey().u(),
       ephemeralU: sealed.ephemeralPublicKey.u(),
       envelope: sealed.envelope,
@@ -400,7 +405,7 @@ async function assembleStagedTransfer<T>(
             policy: {
               splWithdrawalOwners: policy.splWithdrawalOwners,
               ...(policy.curator === undefined ? {} : { curatorRevision: policy.curator.revision }),
-              recipients: policyRecipients(ringRail, policy),
+              recipients: policyRecipients(ringRail, policy, published.length),
             },
           }
         : {}),
@@ -413,6 +418,7 @@ async function assembleStagedTransfer<T>(
         keyEscrow: config.keyEscrow,
         sender: statementSender,
         partyIdentities,
+        signers: signerIdentities,
         roots: policyRoots(policy),
         publicAssets: slots.assets,
         publicAmounts: publicAmountFields(slots),
@@ -470,6 +476,8 @@ async function proveAssembled(
   const { client, ringProgramId, config, staged } = input;
   const { rail, sender, spend } = staged;
   const { proofInputs, policy, coSigner, privateTxHash, ringId, preview } = assembled;
+  const replies = replyRegion(preview);
+  const bindsRun = spend.inProofOwner === undefined && spend.delegate === undefined;
   const request = transferProofRequest({
     rail,
     ringRail: spend.rail,
@@ -487,6 +495,12 @@ async function proveAssembled(
     senderPkHash: assembled.senderPkHash,
     inProof: spend.inProofOwner !== undefined,
     partyIdentities: assembled.partyIdentities,
+    signers:
+      bindsRun && !preview.fullOpenings
+        ? staged.ownerSigners.map((signer) => solanaOwnerIdentity(addressBytes(signer)) as Bytes32)
+        : [],
+    ...(replies === undefined ? {} : { replies }),
+    ...(preview.sender === undefined ? {} : { senderBundleTag: preview.sender.tag }),
   });
   let proofs: readonly [ProvenRingTransact | ProvenAnonymousRingTransact, Uint8Array];
   try {
@@ -517,7 +531,6 @@ async function proveAssembled(
     ...(screened(policy)
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
-    ...(spend.anonymous === undefined ? {} : { viewingHistory: spend.anonymous.viewingHistory }),
   });
 }
 
@@ -539,7 +552,7 @@ export async function ringTransactInstruction(
     ringAuth,
     inputs: spp.inputs,
     treeContexts: spp.treeContexts,
-    ...(data.rail === "confidential" && accounts.ownerSigners.length > 0
+    ...(data.rail !== "delegate" && accounts.ownerSigners.length > 0
       ? { ownerSigners: accounts.ownerSigners }
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
@@ -599,7 +612,8 @@ function previewData(
     audit: AuditLayout;
     proofInputs: SppProofInputs;
     published: readonly Readonly<{ wire: RingTransactData["outputs"][number] }>[];
-    sender?: SenderBundle;
+    sender?: PublishedSenderBundle;
+    replies: readonly Uint8Array[];
     txViewingU: Bytes32;
     ephemeralU: Bytes32;
     envelope: Uint8Array;
@@ -636,6 +650,7 @@ function previewData(
     keyEscrow: input.audit.keyEscrow,
     fullOpenings: input.audit.fullOpenings,
     outputs: Object.freeze(outputs),
+    ...(input.replies.length === 0 ? {} : { replies: Object.freeze([...input.replies]) }),
     ...(input.sender === undefined ? {} : { sender: input.sender }),
     ephU: input.ephemeralU,
     envelope: input.envelope,
@@ -751,9 +766,13 @@ function provenData(
   });
 }
 
-function policyRecipients(rail: RingRail, policy: PolicyInputs): PolicyRecipients {
+function policyRecipients(
+  rail: RingRail,
+  policy: PolicyInputs,
+  published: number,
+): PolicyRecipients {
   return publishesRecipients(rail)
-    ? { kind: "framed", recipients: policy.recipients }
+    ? { kind: "framed", recipients: policy.recipients.slice(0, published) }
     : { kind: "hidden" };
 }
 

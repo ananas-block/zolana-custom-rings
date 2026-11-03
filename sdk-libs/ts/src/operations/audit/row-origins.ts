@@ -52,7 +52,8 @@ export function auditFailureKind(error: unknown): AuditFailureKind {
     case "RING_ORIGIN_STACK":
       return "invalidStackHeight";
     case "RING_RPC":
-    case "RING_SCAN_FRONTIER_MISSING":
+    case "RING_HISTORY_PAGE_INVALID":
+    case "RING_HISTORY_CURSOR_INVALID":
     case "RING_RECOVERY_INCOMPLETE":
     case "RING_MEMBER_REGISTRY_INVALID":
       return "indexerResponse";

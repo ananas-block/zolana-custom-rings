@@ -1,6 +1,7 @@
 /** The audit section of a ring transfer, the auditor stream and its opened slots, Rust `pipeline::audit`. */
-import { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
-import type { Bytes32, MessageData } from "@heliuslabs/zolana/interface";
+import { RING_INPUT_PADDING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
+import { bigIntBytes, mergeMintChunks } from "@heliuslabs/zolana/internal";
+import type { Address, Bytes32, MessageData } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { assetField, type SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
@@ -15,15 +16,14 @@ import {
   type AuditLayout,
   type AuditStreamLayout,
 } from "../protocol/codec/ring-disclosure-layout.js";
+import { RECIPIENT_BODY_LEN } from "../protocol/codec/anonymous-delivery.js";
 import { auditorMessageData } from "../crypto/audit/audit.js";
 import {
-  anonymousCommitments,
-  inputPrefixes,
   sealRingDisclosure,
-  type AnonymousInputs,
   type AnonymousOutputOpening,
-  type DeliveredInputs,
   type DeliveredOutputOpening,
+  type InputCommitments,
+  type InputOpenings,
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 
@@ -106,8 +106,9 @@ export function deliveredSlots(
 export function anonymousSlots(
   published: readonly PublishedSlot[],
   tree: number,
+  bindings: readonly (AnonymousSlotBinding | undefined)[],
 ): readonly AnonymousSlotProofInputs[] {
-  return published.map((slot) => anonymousSlot(slot, tree));
+  return published.map((slot, index) => anonymousSlot(slot, tree, bindings[index]));
 }
 
 /** The spent notes' openings in SPP order, zero past them to the key's input class, Rust `AuditSection::input_openings`. */
@@ -120,7 +121,7 @@ export function inputOpenings(
     .map(ringInputOpening);
   return [
     ...openings,
-    ...Array.from({ length: inputClass - openings.length }, () => EMPTY_RING_OPENING),
+    ...Array.from({ length: inputClass - openings.length }, () => RING_INPUT_PADDING),
   ];
 }
 
@@ -138,47 +139,50 @@ function auditDisclosure(
     return {
       kind: "delivered",
       layout,
-      inputs: deliveredInputs(layout.key.inputPrefixes, input.proofInputs),
+      inputs: inputCommitments(input.proofInputs),
       outputs: published.map((slot) => deliveredOpening(slot, layout.keyEscrow)),
     };
   return {
     kind: "anonymous",
     layout,
     outputs: published.map(anonymousOpening),
-    inputs: anonymousInputs(layout.key.kind, input.proofInputs, input.sender),
+    inputs:
+      layout.key.kind === "entry"
+        ? inputOpeningsEvidence(input.proofInputs, input.sender)
+        : inputCommitments(input.proofInputs),
   };
 }
 
-function deliveredInputs(named: boolean, proofInputs: SppProofInputs): DeliveredInputs {
-  if (!named) return { kind: "none" };
-  return { kind: "prefixes", prefixes: inputPrefixes(publishedInputHashes(proofInputs)) };
+/** One list feeds the evidence and `private_tx_hash`, a dummy reads zero. */
+function inputCommitments(proofInputs: SppProofInputs): InputCommitments {
+  return {
+    kind: "commitments",
+    hashes: proofInputs.inputUtxos
+      .filter((input) => !input.isCompact())
+      .map((input) => (input.isDummy() ? undefined : input.hash())),
+  };
 }
 
-function publishedInputHashes(proofInputs: SppProofInputs): readonly (Bytes32 | undefined)[] {
-  return proofInputs.inputUtxos
-    .filter((input) => !input.isCompact())
-    .map((input) => (input.isDummy() ? undefined : input.hash()));
-}
-
-function anonymousInputs(
-  key: "commitment" | "entry",
+function inputOpeningsEvidence(
   proofInputs: SppProofInputs,
   sender: ShieldedAddress,
-): AnonymousInputs {
-  if (key === "commitment") return anonymousCommitments(publishedInputHashes(proofInputs));
-  const spent = proofInputs.inputUtxos.filter((input) => !input.isCompact());
+): InputOpenings {
   return {
     kind: "openings",
     senderKey: sender.signingPublicKey.confidentialViewTag(),
     senderNullifierPk: sender.nullifierPublicKey,
-    inputs: spent.map((input) => {
-      if (input.isDummy()) return undefined;
-      return {
-        asset: assetField(input.utxo.asset),
-        amount: input.utxo.amount,
-        blinding: input.utxo.blinding,
-      };
-    }),
+    inputs: proofInputs.inputUtxos
+      .filter((input) => !input.isCompact())
+      .map((input) =>
+        input.isDummy()
+          ? undefined
+          : {
+              hash: input.hash(),
+              asset: assetField(input.utxo.asset),
+              amount: input.utxo.amount,
+              blinding: input.utxo.blinding,
+            },
+      ),
   };
 }
 
@@ -236,12 +240,34 @@ function deliveredSlot(
   });
 }
 
-/** An exit's owner key stays where zolana publishes it, a dummy names none. */
-function anonymousSlot(slot: PublishedSlot, tree: number): AnonymousSlotProofInputs {
+export interface AnonymousSlotBinding {
+  readonly recipientKey: Bytes32;
+  readonly addressRevision: bigint;
+}
+
+/** An exit's owner key stays where zolana publishes it, a dummy names none, an omitted slot runs on zeros. */
+function anonymousSlot(
+  slot: PublishedSlot,
+  tree: number,
+  binding: AnonymousSlotBinding | undefined,
+): AnonymousSlotProofInputs {
+  const { output, wire } = slot;
+  const body = wire.kind === "anonymous" ? wire.body : new Uint8Array(RECIPIENT_BODY_LEN);
   return Object.freeze({
-    output: ringOutputOpening(slot.output, tree),
-    ownerKey: slotOwnerKey(slot.output),
+    output: ringOutputOpening(output, tree),
+    ownerKey: slotOwnerKey(output),
+    recipientKey: binding?.recipientKey ?? zeroField(),
+    addressRevision: binding?.addressRevision ?? 0n,
+    mintChunks: output.isDummy() ? [zeroField(), zeroField()] : mintChunks(output.asset),
+    body,
+    // An exit's owner tag stays on the frame, the circuit holds the wire to zero.
+    tag: wire.kind === "anonymous" ? wire.tag : zeroField(),
+    tagPreimage: slot.anonymous?.kind === "dummy" ? slot.anonymous.preimage : zeroField(),
   });
+}
+
+function mintChunks(mint: Address): readonly Bytes32[] {
+  return mergeMintChunks(mint).map((chunk) => bigIntBytes(chunk) as Bytes32);
 }
 
 /** The owner's Solana key a slot discloses, zero for padding, Rust `slot_owner_key`. */

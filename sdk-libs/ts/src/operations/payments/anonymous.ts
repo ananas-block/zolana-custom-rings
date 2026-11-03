@@ -24,11 +24,11 @@ import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress, SigningKey } from "@heliuslabs/zolana/keypair";
 import type { SettlementTransfer, SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
-import type { FirstContact } from "../../state/viewing-history.js";
 
 import { RingError, type RingErrorCode } from "../../protocol/error.js";
 import { spendsDefaultRing } from "../workflow/pipeline.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
+import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 
 /** The hidden owner's Ed25519 key, the signature lives inside the proof so the key may live in a wallet. Rust `AnonymousSpendSigner`. */
 export interface AnonymousSpendSigner {
@@ -37,13 +37,13 @@ export interface AnonymousSpendSigner {
   sign(message: Uint8Array, context?: RequestContext): Promise<Bytes64>;
 }
 
-/** An output paying a ring address, its tag by the spec view tag selection, Rust `AnonymousPayment`. */
+/** Its tag derives from the slot secret. */
 export interface AnonymousPayment {
   readonly to: RingAddress;
-  /** Paid until the pair is known. */
-  readonly firstContact: FirstContact;
   readonly asset: Address;
   readonly amount: bigint;
+  /** `null` sends no reply, the caller always names the choice. */
+  readonly reply: ReplyMetadata | null;
 }
 
 /** Signs with an in-process key, the caller keeps and destroys it. */
@@ -64,10 +64,7 @@ export function messageSignerSpendSigner(signer: MessagePartialSigner): Anonymou
   });
 }
 
-/**
- * The hidden owner signs no public slot, a public signature would undo the hiding. Returns the
- * owner's Ed25519 key.
- */
+/** The hidden owner's key, the signature stays inside the proof. */
 export function checkAnonymousSigner(
   input: Readonly<{
     signer: AnonymousSpendSigner;
@@ -79,17 +76,30 @@ export function checkAnonymousSigner(
   if (!(signing instanceof ShieldedPublicKey) || !signing.equals(input.sender.signingPublicKey))
     throw new RingError("RING_ANONYMOUS_SIGNER_MISMATCH");
   const owner = signing.ed25519();
-  checkSignersHideOwner(owner, [input.payer]);
+  checkHiddenParties(owner, [input.payer]);
   return owner;
 }
 
-/** Rust `AnonymousPublicSignerLinksOwner`. */
-export function checkSignersHideOwner(
+/** The proof holds the hidden owner off every named party. */
+export function checkHiddenParties(
   owner: Bytes32,
-  signers: readonly (Address | undefined)[],
+  parties: readonly (Address | undefined)[],
 ): void {
-  if (signers.some((signer) => signer !== undefined && equalBytes(addressBytes(signer), owner)))
+  if (parties.some((party) => party !== undefined && equalBytes(addressBytes(party), owner)))
     throw new RingError("RING_ANONYMOUS_SIGNER_LINKS_OWNER");
+}
+
+/** The hidden owner's notes lead, public co-owners follow. */
+export function checkHiddenOwnerSpends(proofInputs: SppProofInputs, sender: ShieldedAddress): void {
+  const spent = proofInputs.inputUtxos.filter((input) => !input.isDummy() && !input.isCompact());
+  const held = (input: (typeof spent)[number]): boolean =>
+    input.utxo.owner.equals(sender.signingPublicKey);
+  const [first] = spent;
+  if (first === undefined || !held(first))
+    throw new RingError("RING_NO_HIDDEN_OWNER", { details: { index: 0 } });
+  const firstForeign = spent.findIndex((input) => !held(input));
+  if (firstForeign >= 0 && spent.slice(firstForeign).some(held))
+    throw new RingError("RING_NO_HIDDEN_OWNER", { details: { index: firstForeign } });
 }
 
 /** Rust `AnonymousExits::token_owner`, the owner SPP binds for the SPL withdrawal, `undefined` without one. */
@@ -130,23 +140,10 @@ export async function anonymousExitTokenOwner(
   return tokenOwner;
 }
 
-/** Rust `check_anonymous_slots`, only uncached noncompact notes in and Ed25519 owners out. */
-export function checkAnonymousSlots(proofInputs: SppProofInputs): void {
-  const inputOpen = proofInputs.inputUtxos.some(
-    (input) => input.cacheSlot !== undefined || input.isCompact() || input.isAddress(),
-  );
-  const outputOpen = proofInputs.outputs.some(
-    (output) =>
-      output.cacheSlot !== undefined ||
-      output.isCompact() ||
-      (!output.isDummy() && output.ownerAddress?.signingPublicKey.signatureType() !== "ed25519"),
-  );
-  if (inputOpen || outputOpen) throw new RingError("RING_ANONYMOUS_SLOT_INVALID");
-}
-
 /** The entry key rebuilds every spent UTXO from its opening, Rust `check_entry_inputs`. */
-export function checkEntryInputs(proofInputs: SppProofInputs): void {
+export function checkEntryInputs(proofInputs: SppProofInputs, coOwners: readonly Address[]): void {
   if (!spendsDefaultRing(proofInputs)) return;
+  if (coOwners.length > 0) throw new RingError("RING_ENTRY_CO_OWNER");
   proofInputs.inputUtxos.forEach((input, index) => {
     if (input.isDummy()) return;
     if (input.utxo.ringProgramId !== undefined)
