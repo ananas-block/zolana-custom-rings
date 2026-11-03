@@ -3,7 +3,7 @@
 
 use solana_address::Address;
 use spr_hasher::{
-    primitives::{pack_be, solana_owner_identity},
+    primitives::{hash_bytes, is_canonical_bn254_scalar_be, pack_be, solana_owner_identity},
     HasherError,
 };
 use spr_interface::{
@@ -22,17 +22,19 @@ use spr_interface::{
 use wincode::{containers, len::FixIntLen, Serialize};
 
 use crate::{
-    audit_stream::{AuditKey, AuditStreamLayout},
+    audit_stream::{
+        sender_bundle_len, AuditKey, AuditStreamLayout, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    },
     bytes::Bytes,
     disclosure::{AnonymousSpend, AuditLayout},
     error::CustomRingError,
     key_catalog::{RingCircuit, TransferShape, TransferSpend, CONFIDENTIAL_TRANSFER_SHAPES},
     output::{
-        encode_anonymous_recipient_output, encode_anonymous_sender_output,
         encode_confidential_output, encode_ring_confidential_delivered_output,
+        encode_ring_recipient_output, encode_ring_sender_bundle_output,
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
     },
-    statement::{AuditHead, ConfidentialSender, TransferFamily, TransferStatement},
+    statement::{AuditHead, ConfidentialSender, SignerSet, TransferFamily, TransferStatement},
     storage::Revision,
     tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
     RingMode, RingPolicy, TAGGED_X25519_KEY_LEN,
@@ -61,7 +63,7 @@ pub enum RingRail {
 pub enum RailSigner {
     /// The confidential rail's owner signer run.
     Owners,
-    /// The anonymous rail, the payer alone signs.
+    /// The anonymous rail, the payer, the owner run and the co-signer sign.
     Payer,
     Delegate(Address),
 }
@@ -96,19 +98,28 @@ impl RingRail {
 
     pub fn of(tag: InstructionTag, mode: RingMode) -> Result<Self, CustomRingError> {
         match (tag, mode) {
-            (InstructionTag::Transfer | InstructionTag::LegacyTransact, RingMode::Anonymous) => {
-                Ok(Self::Anonymous)
-            }
             (
-                InstructionTag::Transfer | InstructionTag::LegacyTransact,
+                InstructionTag::Transfer
+                | InstructionTag::HistoricalTransfer
+                | InstructionTag::LegacyTransact,
+                RingMode::Anonymous,
+            ) => Ok(Self::Anonymous),
+            (
+                InstructionTag::Transfer
+                | InstructionTag::HistoricalTransfer
+                | InstructionTag::LegacyTransact,
                 RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Confidential),
             (
-                InstructionTag::AuthorityTransfer | InstructionTag::LegacyDelegateTransact,
+                InstructionTag::AuthorityTransfer
+                | InstructionTag::HistoricalAuthorityTransfer
+                | InstructionTag::LegacyDelegateTransact,
                 RingMode::Anonymous,
             ) => Err(CustomRingError::AnonymousRingRefused),
             (
-                InstructionTag::AuthorityTransfer | InstructionTag::LegacyDelegateTransact,
+                InstructionTag::AuthorityTransfer
+                | InstructionTag::HistoricalAuthorityTransfer
+                | InstructionTag::LegacyDelegateTransact,
                 RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Delegate),
             _ => Err(CustomRingError::InvalidInstructionData),
@@ -159,7 +170,6 @@ impl RingRail {
                     .filter(|shape| inputs <= usize::from(shape.inputs))
                     .map(|shape| AuditKey::Confidential {
                         class: usize::from(shape.inputs),
-                        input_prefixes: header.owner_in_proof || self == Self::Delegate,
                     })
             }
             Self::Anonymous => AnonymousSpend {
@@ -203,7 +213,7 @@ pub struct PolicyProof<'a> {
 pub enum PolicyRecipients<'a> {
     /// The anonymous rail, every recipient zero.
     Hidden,
-    /// One owner identity per output slot.
+    /// One owner identity per published slot.
     Framed(&'a [[u8; 32]]),
 }
 
@@ -282,12 +292,12 @@ pub enum RingOutput<'a> {
         /// The layout's key escrow flag fixes the length.
         body: &'a [u8],
     },
-    /// Under a view tag, its scheme 1 body unproven.
+    /// Under a view tag, scheme 11 fields the proof holds to the opened note on a live slot.
     Anonymous {
         hash: &'a [u8; 32],
         tag: &'a [u8; 32],
         /// `None` on a change output, the sender bundle covers it.
-        body: Option<&'a [u8]>,
+        body: Option<&'a [u8; RECIPIENT_BODY_LEN]>,
         /// In the auditor message.
         record: &'a [u8],
     },
@@ -322,6 +332,15 @@ impl<'a> RingOutput<'a> {
         matches!(self, Self::Exit { .. })
     }
 
+    pub const fn is_change(&self) -> bool {
+        matches!(self, Self::Anonymous { body: None, .. })
+    }
+
+    /// A recipient or hidden dummy on the anonymous rail, the slots a reply serves.
+    const fn bears_recipient_body(&self) -> bool {
+        matches!(self, Self::Anonymous { body: Some(_), .. })
+    }
+
     /// The slot's ring disclosure ciphertext, the statement chains its hash.
     pub const fn ciphertext(&self) -> &'a [u8] {
         match self {
@@ -346,15 +365,49 @@ impl<'a> RingOutput<'a> {
         }
     }
 
-    /// The SPP output, the owner tag and the scheme framing rebuilt from the slot.
-    pub fn transact_output(&self) -> Result<TransactOutput, CustomRingError> {
+    /// The tag a body-bearing slot chains, zero on change and exit.
+    pub const fn recipient_tag_cell(&self) -> &'a [u8; 32] {
+        match self {
+            Self::Anonymous {
+                tag, body: Some(_), ..
+            } => tag,
+            _ => &ZERO_FIELD,
+        }
+    }
+
+    /// The chain refuses a value off the field, a change tag is a free slot the bundle makes needless.
+    fn check_tag(&self) -> Result<(), CustomRingError> {
+        match self {
+            Self::Anonymous {
+                tag, body: None, ..
+            } if **tag != ZERO_FIELD => Err(CustomRingError::ChangeTagNotZero),
+            Self::Anonymous {
+                tag, body: Some(_), ..
+            } => check_view_tag(tag),
+            _ => Ok(()),
+        }
+    }
+
+    /// `hash_bytes(body)` of a body-bearing slot, zero on change and exit.
+    pub fn recipient_body_hash(&self) -> Result<[u8; 32], HasherError> {
+        match self {
+            Self::Anonymous {
+                body: Some(body), ..
+            } => hash_bytes(body),
+            _ => Ok(ZERO_FIELD),
+        }
+    }
+
+    /// The SPP output, the owner tag and the scheme framing rebuilt from the slot, `reply` after a recipient body.
+    pub fn transact_output(&self, reply: &[u8]) -> Result<TransactOutput, CustomRingError> {
         let (owner_tag, data) = match *self {
             Self::Delivered { u, body, .. } => {
                 (*u, Some(encode_ring_confidential_delivered_output(body)?))
             }
             Self::Anonymous { tag, body, .. } => (
                 *tag,
-                body.map(encode_anonymous_recipient_output).transpose()?,
+                body.map(|body| encode_ring_recipient_output(body, reply))
+                    .transpose()?,
             ),
             Self::Exit {
                 owner_tag, payload, ..
@@ -380,7 +433,7 @@ impl<'a> RingOutput<'a> {
     fn slot_frame_len(&self) -> usize {
         32 + match self {
             Self::Delivered { body, .. } => 32 + body.len(),
-            Self::Anonymous { body, .. } => 32 + 2 + body.map_or(0, <[u8]>::len),
+            Self::Anonymous { body, .. } => 32 + body.map_or(0, |_| RECIPIENT_BODY_LEN),
             Self::Exit { payload, .. } => 32 + payload.len(),
         }
     }
@@ -395,11 +448,33 @@ impl<'a> RingOutput<'a> {
 
 /// Bit `i` set when slot `i` exits.
 pub fn exits_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
-    outputs
-        .iter()
-        .enumerate()
-        .filter(|(_, output)| output.is_exit())
+    slot_bits(outputs.iter().map(RingOutput::is_exit))
+}
+
+/// Bit `i` set when slot `i` is change.
+pub fn change_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
+    slot_bits(outputs.iter().map(RingOutput::is_change))
+}
+
+fn slot_bits(set: impl Iterator<Item = bool>) -> u64 {
+    set.enumerate()
+        .filter(|(_, set)| *set)
         .fold(0, |bits, (slot, _)| bits | 1 << slot)
+}
+
+fn check_view_tag(tag: &[u8; 32]) -> Result<(), CustomRingError> {
+    match is_canonical_bn254_scalar_be(tag) {
+        true => Ok(()),
+        false => Err(CustomRingError::ViewTagNotCanonical),
+    }
+}
+
+/// Change is a prefix of at most two slots, the bundle holds two change cells.
+const fn check_change_bits(exits: u64, changes: u64) -> Result<(), CustomRingError> {
+    match exits & changes == 0 && matches!(changes, 0 | 0b1 | 0b11) {
+        true => Ok(()),
+        false => Err(CustomRingError::InvalidChangeBits),
+    }
 }
 
 /// No output carries data, every exit payload is a data-free scheme 3 body.
@@ -418,6 +493,15 @@ impl SlotFrame {
         })
     }
 
+    fn read_change<'a>(self, bytes: &mut Bytes<'a>) -> Result<RingOutput<'a>, CustomRingError> {
+        Ok(RingOutput::Anonymous {
+            hash: bytes.array()?,
+            tag: bytes.array()?,
+            body: None,
+            record: &[],
+        })
+    }
+
     fn read_ring<'a>(self, bytes: &mut Bytes<'a>) -> Result<RingOutput<'a>, CustomRingError> {
         let hash = bytes.array()?;
         Ok(match self.stream.key {
@@ -426,16 +510,12 @@ impl SlotFrame {
                 u: bytes.array()?,
                 body: bytes.take(self.stream.delivered_body_len())?,
             },
-            AuditKey::Anonymous(_) => {
-                let tag = bytes.array()?;
-                let body = read_anonymous_body(bytes)?;
-                RingOutput::Anonymous {
-                    hash,
-                    tag,
-                    body: (!body.is_empty()).then_some(body),
-                    record: &[],
-                }
-            }
+            AuditKey::Anonymous(_) => RingOutput::Anonymous {
+                hash,
+                tag: bytes.array()?,
+                body: Some(bytes.array()?),
+                record: &[],
+            },
         })
     }
 
@@ -449,13 +529,10 @@ impl SlotFrame {
             }
             RingOutput::Anonymous { tag, body, .. } => {
                 out.extend_from_slice(*tag);
-                match body {
-                    Some(body) => write_anonymous_body(body, out),
-                    None => {
-                        out.extend_from_slice(&0u16.to_le_bytes());
-                        Ok(())
-                    }
+                if let Some(body) = body {
+                    out.extend_from_slice(*body);
                 }
+                Ok(())
             }
             RingOutput::Exit {
                 owner_tag, payload, ..
@@ -469,11 +546,30 @@ impl SlotFrame {
     }
 }
 
-/// Scheme 2, forwarded under its tag as the first SPP message.
+/// Scheme 12, forwarded under its tag as the first SPP message, `m` fixes the length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SenderBundle<'a> {
+pub struct FramedSenderBundle<'a> {
     pub tag: &'a [u8; 32],
     pub body: &'a [u8],
+}
+
+/// Every reply of a frame, one length so a hidden dummy matches a recipient.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Replies<'a> {
+    /// `reply_len`, at least [`MIN_REPLY_LEN`].
+    pub len: u16,
+    /// `len` bytes per body-bearing slot, in slot order, the statement digests the region.
+    pub region: &'a [u8],
+}
+
+impl<'a> Replies<'a> {
+    fn checked(self, bodies: usize) -> Result<Self, CustomRingError> {
+        let len = usize::from(self.len);
+        match len >= MIN_REPLY_LEN && self.region.len() == len * bodies {
+            true => Ok(self),
+            false => Err(CustomRingError::ReplyLength),
+        }
+    }
 }
 
 /// One public leg's committed accounts, the asset account then the user account.
@@ -525,12 +621,14 @@ impl<'a> ParsedTransact<'a> {
                     _ if data.in_proof_owner.is_some() => {
                         ConfidentialSender::InProof(binding.sender)
                     }
-                    _ => ConfidentialSender::Signer(binding.sender),
+                    _ => ConfidentialSender::Signer,
                 },
                 recipients: binding.recipients,
             },
             AuditKey::Anonymous(_) => TransferFamily::Anonymous {
                 party_identities: binding.party_identities,
+                sender: data.sender.ok_or(CustomRingError::RingTransactLength)?,
+                replies: data.replies.map(|replies| replies.region),
             },
         };
         Ok(TransferStatement {
@@ -548,8 +646,10 @@ impl<'a> ParsedTransact<'a> {
             exempt: data.exempt,
             approval_required: data.approval_required,
             outputs: &data.outputs,
+            output_capacity: self.stream.capacity,
             input_count: data.nullifiers.len(),
             private_tx_hash: data.private_tx_hash,
+            signers: binding.signers,
             policy_hash: &binding.roots.policy_hash,
             own_root: &binding.roots.own_root,
             curator_root: &binding.roots.curator_root,
@@ -569,11 +669,13 @@ pub struct TransferBinding<'a> {
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     /// The ring mode escrows every output nullifier key, the frame flag has to agree.
     pub key_escrow: bool,
-    /// The in-proof owner identity, or the sole owner signer identity under a policy, otherwise zero.
+    /// The in-proof owner identity, otherwise zero.
     pub sender: &'a [u8; 32],
+    /// Default on the in-proof, authority and entry rails.
+    pub signers: SignerSet,
     /// Zero outside the anonymous rail.
     pub party_identities: &'a [[u8; 32]; 3],
-    /// One per output slot, `RingTransactData::recipients`.
+    /// One per published slot, `RingTransactData::recipients`.
     pub recipients: &'a [[u8; 32]],
     pub roots: &'a TransferRoots,
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
@@ -588,10 +690,10 @@ pub struct RingTransactData<'a> {
     pub rail: RingRail,
     /// SPP shape inputs.
     pub n_in: u8,
-    /// SPP shape outputs.
+    /// SPP shape outputs, the key's `N`.
     pub n_out: u8,
     pub proof: &'a CustomRingProof,
-    /// Present exactly under a policy or an exemption.
+    /// Present exactly under a policy, an exemption or on the anonymous rail.
     pub own_revision: Option<Revision>,
     /// Present exactly on a policy ring.
     pub policy: Option<PolicyProof<'a>>,
@@ -606,10 +708,12 @@ pub struct RingTransactData<'a> {
     pub key_escrow: bool,
     /// The anonymous entry key, every spent UTXO opens in full.
     pub full_openings: bool,
-    /// Published order.
+    /// The `m` published slots, slot `i` keeps its index in every derivation.
     pub outputs: Vec<RingOutput<'a>>,
+    /// Set exactly under `REPLY_METADATA`.
+    pub replies: Option<Replies<'a>>,
     /// Present exactly on the anonymous rail.
-    pub sender: Option<SenderBundle<'a>>,
+    pub sender: Option<FramedSenderBundle<'a>>,
     pub eph_u: &'a [u8; 32],
     /// `envelope_ct`, the transmitted length is the stream layout's.
     pub envelope: &'a [u8],
@@ -630,13 +734,13 @@ impl<'a> RingTransactData<'a> {
         let mut bytes = Bytes::new(data, CustomRingError::RingTransactLength);
         let flags = TransactFlags(bytes.byte()?);
         flags.check(rail)?;
-        let header = FrameHeader::read(&mut bytes, rail, flags)?;
+        let header = FrameHeader::read(&mut bytes, rail)?;
         let input_count = header.input_count;
         let key = rail.audit_key(&header)?;
-        let output_count = usize::from(header.n_out);
+        let output_count = usize::from(header.output_count);
         let proof = bytes.pod()?;
         let own_revision = flags
-            .reads_own_root()
+            .reads_own_root(rail)
             .then(|| bytes.pod().copied())
             .transpose()?;
         let mut policy = match flags.has(transact_flag::POLICY) {
@@ -668,28 +772,56 @@ impl<'a> RingTransactData<'a> {
         if rail == RingRail::Delegate && exits != 0 {
             return Err(CustomRingError::FlagNotAllowed);
         }
+        let changes = match rail {
+            RingRail::Anonymous => bytes.bitmap(output_count)?,
+            RingRail::Confidential | RingRail::Delegate => 0,
+        };
+        check_change_bits(exits, changes)?;
         let stream = AuditStreamLayout {
             key,
             key_escrow: header.flags.key_escrow,
             inputs: usize::from(input_count),
             outputs: output_count,
+            capacity: usize::from(header.n_out),
             exits,
         };
         let frame = SlotFrame { stream };
         let mut outputs = Vec::with_capacity(output_count);
         for slot in 0..output_count {
-            outputs.push(match (exits >> slot) & 1 {
-                1 => frame.read_exit(&mut bytes)?,
+            let output = match ((exits >> slot) & 1, (changes >> slot) & 1) {
+                (1, _) => frame.read_exit(&mut bytes)?,
+                (_, 1) => frame.read_change(&mut bytes)?,
                 _ => frame.read_ring(&mut bytes)?,
-            });
+            };
+            output.check_tag()?;
+            outputs.push(output);
         }
+        let replies = match flags.has(transact_flag::REPLY_METADATA) {
+            false => None,
+            true => {
+                let len = bytes.u16()?;
+                let bodies = outputs
+                    .iter()
+                    .filter(|output| output.bears_recipient_body())
+                    .count();
+                Some(
+                    Replies {
+                        len,
+                        region: bytes.take(usize::from(len) * bodies)?,
+                    }
+                    .checked(bodies)?,
+                )
+            }
+        };
         let sender = match rail {
-            RingRail::Anonymous => Some(SenderBundle {
-                tag: bytes.array()?,
-                body: Some(read_anonymous_body(&mut bytes)?)
-                    .filter(|body| !body.is_empty())
-                    .ok_or(CustomRingError::AnonymousBodyLength)?,
-            }),
+            RingRail::Anonymous => {
+                let tag = bytes.array()?;
+                check_view_tag(tag)?;
+                Some(FramedSenderBundle {
+                    tag,
+                    body: bytes.take(sender_bundle_len(output_count))?,
+                })
+            }
             RingRail::Confidential | RingRail::Delegate => None,
         };
         let eph_u = bytes.array()?;
@@ -710,7 +842,7 @@ impl<'a> RingTransactData<'a> {
             }),
             RingRail::Confidential | RingRail::Delegate => None,
         };
-        let in_proof_owner = match header.owner_in_proof {
+        let in_proof_owner = match flags.has(transact_flag::OWNER_IN_PROOF) {
             false => None,
             true => Some(InProofOwner {
                 owner: bytes.array()?,
@@ -750,6 +882,7 @@ impl<'a> RingTransactData<'a> {
             key_escrow: header.flags.key_escrow,
             full_openings: header.flags.full_openings,
             outputs,
+            replies,
             sender,
             eph_u,
             envelope,
@@ -768,7 +901,7 @@ impl<'a> RingTransactData<'a> {
         let flags = self.flags();
         flags.check(self.rail)?;
         let header = FrameHeader::of(self)?;
-        let output_count = self.outputs.len();
+        let output_count = usize::from(header.output_count);
         let stream = self.audit_stream()?;
         let anonymous_rail = self.rail == RingRail::Anonymous;
         let frame = SlotFrame { stream };
@@ -782,9 +915,12 @@ impl<'a> RingTransactData<'a> {
             return Err(CustomRingError::ExemptionWithoutWithdrawal);
         }
         if !policy_fits
-            || self.own_revision.is_some() != flags.reads_own_root()
+            || self.own_revision.is_some() != flags.reads_own_root(self.rail)
             || self.anonymous.is_some() != anonymous_rail
             || self.sender.is_some() != anonymous_rail
+            || self
+                .sender
+                .is_some_and(|sender| sender.body.len() != sender_bundle_len(output_count))
             || self.envelope.len() != stream.envelope().len
             || !self.outputs.iter().enumerate().all(|(slot, output)| {
                 output.fits(stream.key) && output.ciphertext().len() == stream.ciphertext_len(slot)
@@ -794,6 +930,14 @@ impl<'a> RingTransactData<'a> {
         }
         if self.rail == RingRail::Delegate && self.outputs.iter().any(RingOutput::is_exit) {
             return Err(CustomRingError::FlagNotAllowed);
+        }
+        check_change_bits(exits_bitmap(&self.outputs), change_bitmap(&self.outputs))?;
+        self.outputs.iter().try_for_each(RingOutput::check_tag)?;
+        if let Some(sender) = self.sender {
+            check_view_tag(sender.tag)?;
+        }
+        if let Some(replies) = self.replies {
+            replies.checked(self.recipient_body_count())?;
         }
         let interface_transfers =
             <containers::Vec<InterfaceTransfer, FixIntLen<u8>> as Serialize>::serialize(
@@ -830,12 +974,19 @@ impl<'a> RingTransactData<'a> {
             }
         }
         push_bitmap(&mut out, self.outputs.iter().map(RingOutput::is_exit));
+        if anonymous_rail {
+            push_bitmap(&mut out, self.outputs.iter().map(RingOutput::is_change));
+        }
         for output in &self.outputs {
             frame.write(output, &mut out)?;
         }
+        if let Some(replies) = self.replies {
+            out.extend_from_slice(&replies.len.to_le_bytes());
+            out.extend_from_slice(replies.region);
+        }
         if let Some(sender) = self.sender {
             out.extend_from_slice(sender.tag);
-            write_anonymous_body(sender.body, &mut out)?;
+            out.extend_from_slice(sender.body);
         }
         out.extend_from_slice(self.eph_u);
         out.extend_from_slice(self.envelope);
@@ -893,9 +1044,8 @@ impl<'a> RingTransactData<'a> {
             policy.curator_revision.map_or(0, |_| revision)
                 + FIELD * (recipients + policy.spl_withdrawal_owners.len())
         });
-        let sender = self
-            .sender
-            .map_or(0, |sender| FIELD + 2 + sender.body.len());
+        let sender = self.sender.map_or(0, |sender| FIELD + sender.body.len());
+        let replies = self.replies.map_or(0, |replies| 2 + replies.region.len());
         let anonymous = self.anonymous.map_or(0, |anonymous| {
             FIELD * (2 + usize::from(anonymous.default_owner_tag.is_some()))
         });
@@ -907,7 +1057,11 @@ impl<'a> RingTransactData<'a> {
                 inputs.div_ceil(8) + tree_context_len(first)? + tree_context_len(second)?
             }
         };
-        Ok(1 + 2
+        let change_bits = match self.rail {
+            RingRail::Anonymous => self.outputs.len().div_ceil(8),
+            RingRail::Confidential | RingRail::Delegate => 0,
+        };
+        Ok(1 + 3
             + core::mem::size_of::<CustomRingProof>()
             + self.own_revision.map_or(0, |_| revision)
             + policy
@@ -916,11 +1070,13 @@ impl<'a> RingTransactData<'a> {
             + 16
             + interface_transfers
             + self.outputs.len().div_ceil(8)
+            + change_bits
             + self
                 .outputs
                 .iter()
                 .map(RingOutput::slot_frame_len)
                 .sum::<usize>()
+            + replies
             + sender
             + FIELD
             + stream.envelope().len
@@ -1025,7 +1181,7 @@ impl<'a> RingTransactData<'a> {
             .transpose()
     }
 
-    /// One per output slot, zero off a policy and on the anonymous rail.
+    /// One per published slot, zero off a policy and on the anonymous rail.
     pub fn recipients(&self) -> Vec<[u8; 32]> {
         match self.policy.map(|policy| policy.recipients) {
             Some(PolicyRecipients::Framed(recipients)) => recipients.to_vec(),
@@ -1040,17 +1196,34 @@ impl<'a> RingTransactData<'a> {
     /// Every ciphertext length of the transfer, refusing a frame no key serves.
     pub fn audit_stream(&self) -> Result<AuditStreamLayout, CustomRingError> {
         let key = self.rail.audit_key(&FrameHeader::of(self)?)?;
-        let outputs = usize::from(self.n_out);
-        if self.outputs.len() != outputs {
-            return Err(CustomRingError::RingTransactLength);
-        }
         Ok(AuditStreamLayout {
             key,
             key_escrow: self.key_escrow,
             inputs: self.nullifiers.len(),
-            outputs,
+            outputs: self.outputs.len(),
+            capacity: usize::from(self.n_out),
             exits: exits_bitmap(&self.outputs),
         })
+    }
+
+    fn recipient_body_count(&self) -> usize {
+        self.outputs
+            .iter()
+            .filter(|output| output.bears_recipient_body())
+            .count()
+    }
+
+    /// The reply of each slot in order, empty off a recipient body.
+    pub fn slot_replies(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
+        let mut replies = self
+            .replies
+            .map(|replies| replies.region.chunks_exact(usize::from(replies.len)));
+        self.outputs.iter().map(
+            move |output| match (output.bears_recipient_body(), &mut replies) {
+                (true, Some(replies)) => replies.next().unwrap_or_default(),
+                _ => &[],
+            },
+        )
     }
 
     /// `0x04 || eph_u || envelope_ct || record_ct...`.
@@ -1133,8 +1306,8 @@ impl<'a> RingTransactData<'a> {
             ring_data_hash: None,
             outputs: {
                 let mut outputs = Vec::with_capacity(self.outputs.len());
-                for output in &self.outputs {
-                    outputs.push(output.transact_output()?);
+                for (output, reply) in self.outputs.iter().zip(self.slot_replies()) {
+                    outputs.push(output.transact_output(reply)?);
                 }
                 outputs
             },
@@ -1142,7 +1315,7 @@ impl<'a> RingTransactData<'a> {
             messages: self
                 .sender
                 .map(|sender| {
-                    encode_anonymous_sender_output(sender.body).map(|data| MessageData {
+                    encode_ring_sender_bundle_output(sender.body).map(|data| MessageData {
                         view_tag: *sender.tag,
                         data,
                     })
@@ -1185,6 +1358,7 @@ impl<'a> RingTransactData<'a> {
                 matches!(self.input_trees, InputTrees::Two { .. }),
                 transact_flag::SECOND_TREE,
             ),
+            (self.replies.is_some(), transact_flag::REPLY_METADATA),
         ];
         TransactFlags(
             bits.into_iter()
@@ -1205,9 +1379,15 @@ pub mod transact_flag {
     /// Every public withdrawal stays within its record's threshold, the proof binds the claim.
     pub const EXEMPT: u8 = 1 << 4;
     pub const SECOND_TREE: u8 = 1 << 5;
-    /// Bits 6 and 7 are refused.
-    pub const KNOWN: u8 =
-        POLICY | CURATOR | APPROVAL_REQUIRED | OWNER_IN_PROOF | EXEMPT | SECOND_TREE;
+    /// Anonymous rail only, the frame carries one reply per body-bearing slot.
+    pub const REPLY_METADATA: u8 = 1 << 6;
+    pub const KNOWN: u8 = POLICY
+        | CURATOR
+        | APPROVAL_REQUIRED
+        | OWNER_IN_PROOF
+        | EXEMPT
+        | SECOND_TREE
+        | REPLY_METADATA;
 }
 
 /// Byte 1, the index into `SPP_SUPPORTED_SHAPES` below these flags.
@@ -1225,6 +1405,8 @@ pub mod input_flag {
     pub const FULL_OPENINGS: u8 = 1 << 7;
 }
 
+pub const OUTPUT_COUNT_BYTE: usize = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TransactFlags(u8);
 
@@ -1238,7 +1420,9 @@ impl TransactFlags {
         let foreign_owner =
             self.has(transact_flag::OWNER_IN_PROOF) && rail != RingRail::Confidential;
         let delegate_exempt = self.has(transact_flag::EXEMPT) && rail == RingRail::Delegate;
-        if self.0 & !transact_flag::KNOWN != 0 || foreign_owner || delegate_exempt {
+        let foreign_reply = self.has(transact_flag::REPLY_METADATA) && rail != RingRail::Anonymous;
+        if self.0 & !transact_flag::KNOWN != 0 || foreign_owner || delegate_exempt || foreign_reply
+        {
             return Err(CustomRingError::FlagNotAllowed);
         }
         let needs_policy =
@@ -1249,32 +1433,30 @@ impl TransactFlags {
         Ok(())
     }
 
-    const fn reads_own_root(self) -> bool {
-        self.has(transact_flag::POLICY) || self.has(transact_flag::EXEMPT)
+    /// Every anonymous transfer opens its delivery addresses under the own root.
+    fn reads_own_root(self, rail: RingRail) -> bool {
+        self.has(transact_flag::POLICY)
+            || self.has(transact_flag::EXEMPT)
+            || rail == RingRail::Anonymous
     }
 }
 
-/// Bytes 1 and 2 of the compact data, the SPP shape's index and the input count below their flags.
+/// Bytes 1 to 3 of the compact data, the SPP shape's index and the input count below their flags, then `m`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FrameHeader {
     n_in: u8,
     n_out: u8,
     input_count: u8,
+    output_count: u8,
     flags: FrameFlags,
-    /// Byte 0's `OWNER_IN_PROOF`, the audit takes the sender key.
-    owner_in_proof: bool,
 }
 
 impl FrameHeader {
     /// The shape index or the input count, bits 6 and 7 carry the flags.
     const LOW: u8 = 0b0011_1111;
 
-    fn read(
-        bytes: &mut Bytes<'_>,
-        rail: RingRail,
-        transact: TransactFlags,
-    ) -> Result<Self, CustomRingError> {
-        let [shape, inputs] = *bytes.array()?;
+    fn read(bytes: &mut Bytes<'_>, rail: RingRail) -> Result<Self, CustomRingError> {
+        let [shape, inputs, output_count] = *bytes.array()?;
         if shape & shape_flag::RESERVED != 0 {
             return Err(CustomRingError::FlagNotAllowed);
         }
@@ -1287,28 +1469,39 @@ impl FrameHeader {
             full_openings: inputs & input_flag::FULL_OPENINGS != 0,
         };
         flags.check(rail)?;
-        Ok(Self {
+        let header = Self {
             n_in: count_byte(spp_shape.n_inputs())?,
             n_out: count_byte(spp_shape.n_outputs())?,
             input_count: inputs & Self::LOW,
+            output_count,
             flags,
-            owner_in_proof: transact.has(transact_flag::OWNER_IN_PROOF),
-        })
+        };
+        header.check_output_count()?;
+        Ok(header)
     }
 
     fn of(data: &RingTransactData<'_>) -> Result<Self, CustomRingError> {
         let flags = FrameFlags::of(data);
         flags.check(data.rail)?;
-        Ok(Self {
+        let header = Self {
             n_in: data.n_in,
             n_out: data.n_out,
             input_count: count_byte(data.nullifiers.len())?,
+            output_count: count_byte(data.outputs.len())?,
             flags,
-            owner_in_proof: data.in_proof_owner.is_some(),
-        })
+        };
+        header.check_output_count()?;
+        Ok(header)
     }
 
-    fn bytes(self) -> Result<[u8; 2], CustomRingError> {
+    const fn check_output_count(self) -> Result<(), CustomRingError> {
+        match self.output_count >= 1 && self.output_count <= self.n_out {
+            true => Ok(()),
+            false => Err(CustomRingError::OutputCountOutOfRange),
+        }
+    }
+
+    fn bytes(self) -> Result<[u8; 3], CustomRingError> {
         let shape = Shape::new(usize::from(self.n_in), usize::from(self.n_out));
         let index = SPP_SUPPORTED_SHAPES
             .iter()
@@ -1324,6 +1517,7 @@ impl FrameHeader {
             self.input_count
                 | flag(flags.key_escrow, input_flag::KEY_ESCROW)
                 | flag(flags.full_openings, input_flag::FULL_OPENINGS),
+            self.output_count,
         ])
     }
 }
@@ -1377,21 +1571,6 @@ fn invalid<E>(_: E) -> CustomRingError {
 
 fn withdraws(transfers: &[InterfaceTransfer]) -> bool {
     transfers.iter().any(|transfer| !transfer.is_deposit())
-}
-
-fn read_anonymous_body<'a>(bytes: &mut Bytes<'a>) -> Result<&'a [u8], CustomRingError> {
-    let len = bytes.u16()?;
-    bytes.take(usize::from(len))
-}
-
-fn write_anonymous_body(body: &[u8], out: &mut Vec<u8>) -> Result<(), CustomRingError> {
-    let len = u16::try_from(body.len())
-        .ok()
-        .filter(|len| *len != 0)
-        .ok_or(CustomRingError::AnonymousBodyLength)?;
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(body);
-    Ok(())
 }
 
 fn count_byte(count: usize) -> Result<u8, CustomRingError> {

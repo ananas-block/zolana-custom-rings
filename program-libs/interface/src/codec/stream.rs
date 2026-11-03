@@ -64,6 +64,16 @@ impl SlotSecret {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// `Poseidon(CRRT, secret)`, the published output of the secret that also keys the body.
+    pub fn recipient_tag(&self) -> Result<[u8; 32], HasherError> {
+        Poseidon::hashv(&[&domain::field(domain::RECIPIENT_TAG), &self.0])
+    }
+
+    /// `Poseidon(CRST, secret)` under the secret at index `m`.
+    pub fn sender_tag(&self) -> Result<[u8; 32], HasherError> {
+        Poseidon::hashv(&[&domain::field(domain::SENDER_TAG), &self.0])
+    }
 }
 
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {
@@ -84,6 +94,22 @@ fn canonical(value: [u8; 32]) -> Result<[u8; 32], StreamError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tags_of_one_secret_differ_by_domain() {
+        let secret = SlotSecret::new(right_align(&[9])).unwrap();
+        let recipient = secret.recipient_tag().unwrap();
+        assert_eq!(
+            recipient,
+            Poseidon::hashv(&[&right_align(b"CRRT"), secret.as_bytes()]).unwrap()
+        );
+        assert_eq!(
+            secret.sender_tag().unwrap(),
+            Poseidon::hashv(&[&right_align(b"CRST"), secret.as_bytes()]).unwrap()
+        );
+        assert_ne!(recipient, secret.sender_tag().unwrap());
+        assert!(is_canonical_bn254_scalar_be(&recipient));
+    }
 
     #[test]
     fn untagged_viewing_keys_are_refused() {

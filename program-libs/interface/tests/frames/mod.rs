@@ -1,9 +1,10 @@
 //! Frames of every rail, shared by the codec and the heap budget tests.
 
 use custom_ring_interface::{
-    storage::Revision, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, SenderBundle, CONFIDENTIAL_DATA_FREE_BODY_LEN, EXIT_RECORD_LEN, RING_POLICY,
+    sender_bundle_len, storage::Revision, AnonymousProofData, CustomRingProof, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, PolicyRecipients, Replies,
+    RingOutput, RingPolicy, RingRail, RingTransactData, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    EXIT_RECORD_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -12,6 +13,8 @@ use spr_interface::instruction::{InterfaceTransfer, TreeContext};
 mod common;
 
 pub use common::spp_b;
+
+pub const ZERO_TAG: [u8; 32] = [0; 32];
 
 pub struct Fixture {
     pub proofs: [CustomRingProof; 2],
@@ -23,8 +26,11 @@ pub struct Fixture {
     /// Cut to the stream layout's envelope length.
     pub envelope: Vec<u8>,
     pub tags: [[u8; 32]; 8],
-    pub recipient_body: Vec<u8>,
+    pub recipient_body: [u8; RECIPIENT_BODY_LEN],
+    /// Cut to the frame's `m`.
     pub sender_body: Vec<u8>,
+    /// Cut to one length per body-bearing slot.
+    pub replies: Vec<u8>,
     pub payload: Vec<u8>,
     pub salt: [u8; 16],
 }
@@ -51,9 +57,12 @@ impl Fixture {
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             ciphertexts: core::array::from_fn(|i| [0x80 + i as u8; 104]),
             envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
-            tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
-            recipient_body: (0..120u8).map(|byte| byte ^ 0x5a).collect(),
-            sender_body: (0..90u8).map(|byte| byte ^ 0x2d).collect(),
+            tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
+            recipient_body: core::array::from_fn(|byte| byte as u8 ^ 0x5a),
+            sender_body: (0..sender_bundle_len(16) as u16)
+                .map(|byte| byte as u8 ^ 0x2d)
+                .collect(),
+            replies: (0..2048u32).map(|byte| byte as u8 ^ 0x17).collect(),
             payload: (0..CONFIDENTIAL_DATA_FREE_BODY_LEN as u8)
                 .map(|byte| byte ^ 0x66)
                 .collect(),
@@ -78,6 +87,7 @@ impl Fixture {
             key_escrow: false,
             full_openings: false,
             outputs: Vec::new(),
+            replies: None,
             sender: None,
             eph_u: &self.bytes[1],
             envelope: &[],
@@ -208,7 +218,7 @@ impl Fixture {
                 _ => self.tagged(slot),
             })
             .collect();
-        data.sender = self.sender();
+        data.sender = self.sender(4);
         data.anonymous = Some(AnonymousProofData {
             commitment: &self.bytes[20],
             commitment_pok: &self.bytes[21],
@@ -219,9 +229,10 @@ impl Fixture {
 
     pub fn anonymous_entry(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 2, 2);
+        data.own_revision = Some(Revision::from(0));
         data.full_openings = true;
         data.outputs = vec![self.tagged(0), self.exit(1, &self.payload)];
-        data.sender = self.sender();
+        data.sender = self.sender(2);
         data.anonymous = Some(AnonymousProofData {
             commitment: &self.bytes[20],
             commitment_pok: &self.bytes[21],
@@ -259,20 +270,54 @@ impl Fixture {
     pub fn tagged(&self, slot: usize) -> RingOutput<'_> {
         RingOutput::Anonymous {
             hash: &self.fields[10 + slot],
-            tag: &self.tags[slot],
-            body: (slot != 0).then_some(&self.recipient_body[..]),
+            tag: if slot == 0 {
+                &ZERO_TAG
+            } else {
+                &self.tags[slot]
+            },
+            body: (slot != 0).then_some(&self.recipient_body),
             record: &self.ciphertexts[slot],
         }
     }
 
-    pub fn sender(&self) -> Option<SenderBundle<'_>> {
-        Some(SenderBundle {
+    /// `outputs` is the frame's `m`.
+    pub fn sender(&self, outputs: usize) -> Option<FramedSenderBundle<'_>> {
+        Some(FramedSenderBundle {
             tag: &self.tags[0],
-            body: &self.sender_body,
+            body: &self.sender_body[..sender_bundle_len(outputs)],
         })
     }
 
-    pub fn cases(&self) -> [(&'static str, RingTransactData<'_>); 7] {
+    /// The anonymous frame's replies, one of `len` bytes per body-bearing slot.
+    pub fn anonymous_replies(&self, len: u16) -> RingTransactData<'_> {
+        let mut data = self.anonymous();
+        data.replies = Some(Replies {
+            len,
+            region: &self.replies[..2 * usize::from(len)],
+        });
+        data
+    }
+
+    pub fn anonymous_compact(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Anonymous, 3, 4);
+        data.own_revision = Some(Revision::from(33));
+        data.outputs = vec![self.tagged(0), self.tagged(1)];
+        data.sender = self.sender(2);
+        data.anonymous = Some(AnonymousProofData {
+            commitment: &self.bytes[20],
+            commitment_pok: &self.bytes[21],
+            default_owner_tag: None,
+        });
+        self.with_audit_stream(data)
+    }
+
+    pub fn confidential_compact(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Confidential, 1, 8);
+        data.outputs = (0..5).map(|slot| self.delivered(slot)).collect();
+        self.with_audit_stream(data)
+    }
+
+    pub fn cases(&self) -> [(&'static str, RingTransactData<'_>); 10] {
         [
             ("confidential_delivered_policy", self.confidential_policy()),
             (
@@ -287,6 +332,9 @@ impl Fixture {
             ("anonymous_policy", self.anonymous()),
             ("anonymous_entry_audit_only", self.anonymous_entry()),
             ("delegate_move", self.delegate()),
+            ("anonymous_reply_metadata", self.anonymous_replies(97)),
+            ("anonymous_compact", self.anonymous_compact()),
+            ("confidential_compact", self.confidential_compact()),
         ]
     }
 }

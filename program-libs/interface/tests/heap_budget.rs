@@ -16,7 +16,7 @@ use custom_ring_interface::{
     },
     storage::Revision,
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PolicyRecipients, PublicLeg,
-    PublicSlots, RingRail, RingTransactData,
+    PublicSlots, Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
 };
 use frames::{config, field, Fixture};
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
@@ -101,6 +101,7 @@ struct Widest {
     exempt: bool,
     entry: bool,
     in_proof: bool,
+    replies: bool,
 }
 
 impl Widest {
@@ -121,6 +122,8 @@ impl Widest {
                 " entry"
             } else if self.in_proof {
                 " in-proof"
+            } else if self.replies {
+                " replies"
             } else {
                 ""
             },
@@ -156,6 +159,7 @@ fn cases() -> Vec<Widest> {
             exempt: false,
             entry: false,
             in_proof: false,
+            replies: false,
         };
         cases.push(base);
         cases.push(Widest {
@@ -183,6 +187,7 @@ fn cases() -> Vec<Widest> {
             exempt: false,
             entry: false,
             in_proof: false,
+            replies: false,
         };
         cases.push(base);
         cases.push(Widest {
@@ -192,6 +197,10 @@ fn cases() -> Vec<Widest> {
         cases.push(Widest {
             policy: false,
             exempt: true,
+            ..base
+        });
+        cases.push(Widest {
+            replies: true,
             ..base
         });
     }
@@ -206,6 +215,7 @@ fn cases() -> Vec<Widest> {
             exempt: false,
             entry: true,
             in_proof: false,
+            replies: false,
         };
         cases.push(base);
         cases.push(Widest {
@@ -224,6 +234,7 @@ fn cases() -> Vec<Widest> {
         exempt: false,
         entry: false,
         in_proof: false,
+        replies: false,
     });
     cases
 }
@@ -235,7 +246,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
     data.full_openings = case.entry;
     data.exempt = case.exempt;
     data.approval_required = case.policy && case.rail != RingRail::Delegate;
-    data.own_revision = (case.policy || case.exempt).then(|| Revision::from(7));
+    data.own_revision = (case.policy || case.exempt || anonymous).then(|| Revision::from(7));
     data.interface_transfers = (0..case.legs)
         .map(|leg| {
             let amount = 1_000 + leg as u64;
@@ -270,11 +281,18 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
         })
         .collect();
     if anonymous {
-        data.sender = fixture.sender();
+        data.sender = fixture.sender(case.outputs);
         data.anonymous = Some(AnonymousProofData {
             commitment: &fixture.bytes[20],
             commitment_pok: &fixture.bytes[21],
             default_owner_tag: (!case.entry).then_some(&fixture.bytes[22]),
+        });
+    }
+    if case.replies {
+        let bodies = case.outputs - 2;
+        data.replies = Some(Replies {
+            len: MIN_REPLY_LEN as u16,
+            region: &fixture.replies[..MIN_REPLY_LEN * bodies],
         });
     }
     if case.in_proof {

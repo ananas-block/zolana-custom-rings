@@ -1,16 +1,16 @@
 //! Ring output bodies in SPP's encrypted output framing, schemes SPP stores without parsing.
 
-use spr_event::{
-    OutputDataEncoding, ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
-    ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
-};
+use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
 use crate::{
-    audit_stream::{DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN},
+    audit_stream::{DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN, RECIPIENT_BODY_LEN},
     CustomRingError,
 };
 
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
+/// `body || reply`, the reply absent without reply metadata.
+pub const RING_RECIPIENT_SCHEME_TAG: u8 = 11;
+pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 12;
 
 /// `0x04 || u`, the recipient key a scheme 3 body leads with.
 pub const RECIPIENT_KEY_LEN: usize = 33;
@@ -42,20 +42,24 @@ pub fn encode_ring_confidential_delivered_output(body: &[u8]) -> Result<Vec<u8>,
     encode_encrypted_output(RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, body)
 }
 
-pub fn encode_anonymous_recipient_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output(ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, body)
+pub fn encode_ring_recipient_output(
+    body: &[u8; RECIPIENT_BODY_LEN],
+    reply: &[u8],
+) -> Result<Vec<u8>, CustomRingError> {
+    encode_encrypted_output_parts(RING_RECIPIENT_SCHEME_TAG, &[body, reply])
 }
 
-pub fn encode_anonymous_sender_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output(ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG, body)
+pub fn encode_ring_sender_bundle_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
+    encode_encrypted_output(RING_SENDER_BUNDLE_SCHEME_TAG, body)
 }
 
-pub fn anonymous_recipient_output_body(data: &[u8]) -> Option<&[u8]> {
-    encrypted_output_body(data, ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG)
+/// `body || reply` of a scheme 11 output, `None` below the body's length.
+pub fn ring_recipient_output_body(data: &[u8]) -> Option<(&[u8; RECIPIENT_BODY_LEN], &[u8])> {
+    encrypted_output_body(data, RING_RECIPIENT_SCHEME_TAG)?.split_first_chunk()
 }
 
-pub fn anonymous_sender_output_body(data: &[u8]) -> Option<&[u8]> {
-    encrypted_output_body(data, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG)
+pub fn ring_sender_bundle_output_body(data: &[u8]) -> Option<&[u8]> {
+    encrypted_output_body(data, RING_SENDER_BUNDLE_SCHEME_TAG)
 }
 
 const fn is_delivered_body_len(len: usize) -> bool {
@@ -64,13 +68,17 @@ const fn is_delivered_body_len(len: usize) -> bool {
 
 /// `Encrypted(len || scheme || payload)`, the length counting the scheme byte.
 fn encode_encrypted_output(scheme: u8, payload: &[u8]) -> Result<Vec<u8>, CustomRingError> {
-    let body_len = payload.len() + 1;
+    encode_encrypted_output_parts(scheme, &[payload])
+}
+
+fn encode_encrypted_output_parts(scheme: u8, parts: &[&[u8]]) -> Result<Vec<u8>, CustomRingError> {
+    let body_len = parts.iter().map(|part| part.len()).sum::<usize>() + 1;
     let prefix = u32::try_from(body_len).map_err(|_| CustomRingError::OutputBodyLength)?;
     let mut out = Vec::with_capacity(BODY_OFFSET + body_len);
     out.push(OutputDataEncoding::ENCRYPTED_TAG);
     out.extend_from_slice(&prefix.to_le_bytes());
     out.push(scheme);
-    out.extend_from_slice(payload);
+    parts.iter().for_each(|part| out.extend_from_slice(part));
     Ok(out)
 }
 
@@ -81,7 +89,7 @@ fn encrypted_output_body(data: &[u8], scheme: u8) -> Option<&[u8]> {
 }
 
 /// The scheme byte and payload of `Encrypted(len || scheme || payload)`.
-fn encrypted_output(data: &[u8]) -> Option<(u8, &[u8])> {
+pub fn encrypted_output(data: &[u8]) -> Option<(u8, &[u8])> {
     let (&encoding_tag, rest) = data.split_first()?;
     if encoding_tag != OutputDataEncoding::ENCRYPTED_TAG {
         return None;

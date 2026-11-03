@@ -52,9 +52,13 @@ instruction_tags! {
     // Tags 1 and 2 are retired, never reuse them.
     /// Historical v1 frame, decoding only after the v2 upgrade.
     LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
-    Transfer = TRANSFER: 43 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalTransfer = HISTORICAL_TRANSFER: 43 => PROOF_UNITS,
+    Transfer = TRANSFER: 45 => PROOF_UNITS,
     // Tag 18 is retired, never reuse it.
-    Merge = MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalMerge = HISTORICAL_MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
+    Merge = MERGE: 47 => PROOF_UNITS,
     // Tags 4 and 5 are retired, never reuse them.
     UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     // Tags 7 to 10 and 12 are retired, never reuse them.
@@ -66,7 +70,9 @@ instruction_tags! {
     SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
     /// Tag 3 data over the SPP authority rail, signed by the delegate.
     LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
-    AuthorityTransfer = AUTHORITY_TRANSFER: 44 => PROOF_UNITS,
+    /// Decoding only, the program refuses it.
+    HistoricalAuthorityTransfer = HISTORICAL_AUTHORITY_TRANSFER: 44 => PROOF_UNITS,
+    AuthorityTransfer = AUTHORITY_TRANSFER: 46 => PROOF_UNITS,
     // Tags 28 to 30 are retired, never reuse them.
     Deposit = DEPOSIT: 31 => PROOF_UNITS,
     // Tags 32 to 42 are retired, never reuse them.
@@ -305,6 +311,7 @@ impl WriteRecordsIxData {
             value,
             escrow_key: [0; 32],
             mint_policy: None,
+            address_hash: [0; 32],
         })
     }
 }
@@ -401,26 +408,28 @@ mod tests {
     #[test]
     fn a_member_writes_only_its_own_lists_within_the_mask() {
         let member = right_align(&[7]);
-        let recovery = ListId::Recovery.record_bit();
+        let viewing = ListId::RingViewing.record_bit();
         let allow = ListId::Allow.record_bit();
         let write = |mask, value| lists(mask, value).entry(member, Writer::Member);
-        assert!(write(recovery, recovery).is_ok());
+        assert!(write(viewing, viewing).is_ok());
         assert_eq!(
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
-        assert_eq!(
-            write(ListId::Escrow.record_bit(), 0),
-            Err(CustomRingError::ListBitNotWritable)
-        );
+        for unwritable in [ListId::Escrow, ListId::Recovery] {
+            assert_eq!(
+                write(unwritable.record_bit(), 0),
+                Err(CustomRingError::ListBitNotWritable)
+            );
+        }
         assert_eq!(write(1 << 8, 0), Err(CustomRingError::ListBitNotWritable));
         assert_eq!(
-            write(recovery, recovery | allow),
+            write(viewing, viewing | allow),
             Err(CustomRingError::ValueOutsideMask)
         );
         assert_eq!(write(0, 0), Err(CustomRingError::ValueOutsideMask));
         assert_eq!(
-            lists(recovery, 0).entry([0; 32], Writer::Member),
+            lists(viewing, 0).entry([0; 32], Writer::Member),
             Err(CustomRingError::MemberOutOfRange)
         );
     }
