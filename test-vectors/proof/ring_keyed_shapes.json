@@ -295,10 +295,6 @@
     [
       24,
       4
-    ],
-    [
-      32,
-      2
     ]
   ],
   "description": "Per ring rail, the SPP shapes a transfer key serves when every shape input is spent, each list in the cost order of SPP_SUPPORTED_SHAPES. confidential_ring is the signer and in-proof rails, anonymous_ring the anonymous rail over ring notes, anonymous_entry_ring the anonymous rail spending a default-ring note, ring_authority the RingAuthority rail. transfer_shapes lists every transfer key family, its input class and the withdrawal leg capacities keyed at each output count, mirrored by prover/circuits/transfer. Produced by program-libs/interface/tests/keyed_shapes.rs.",
@@ -340,7 +336,7 @@
     ],
     "confidential": [
       {
-        "inputs": 32,
+        "inputs": 24,
         "outputs": 2,
         "withdrawals": [
           4,
