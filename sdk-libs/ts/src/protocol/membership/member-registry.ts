@@ -11,7 +11,6 @@ export const ROOT_HISTORY = 32;
 /** Rust `APPLY_BATCH`, the writes the larger apply key proves. */
 export const APPLY_BATCH = 16;
 
-/** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1)`, Rust `MemberRecord`. */
 export interface MemberRecord {
   readonly member: Bytes32;
   readonly next: Bytes32;
@@ -20,6 +19,17 @@ export interface MemberRecord {
   /** Zero until the member registers a key. */
   readonly escrowKey: Bytes32;
   readonly mintPolicy: MintPolicy;
+  /** Zero until the owner's enrollment is applied. */
+  readonly addressHash: Bytes32;
+}
+
+/** The preimage of a record's `address_hash`, the indexer serves it beside the record. */
+export interface AuthorizedAddress {
+  /** `hash_bytes` of the ring program id, a record of another ring does not open. */
+  readonly ringId: Bytes32;
+  readonly nullifierPk: Bytes32;
+  readonly viewingU: Bytes32;
+  readonly addressRevision: bigint;
 }
 
 /** A leaf index and three siblings per level in ascending child order, leaf level first. */
@@ -55,13 +65,25 @@ export type RecordOpening =
   | Readonly<{ kind: "present"; record: MemberRecord; path: QuadPath }>
   | Readonly<{ kind: "absent"; low: MemberRecord; path: QuadPath }>;
 
-/** One queued masked write, `lists' = (lists & !mask) | value`, the escrow key fills once. */
+/** `lists' = (lists & !mask) | value`, the escrow key fills once, an owner-signed write alone sets an address. */
 export interface QueueEntry {
   readonly member: Bytes32;
   readonly mask: bigint;
   readonly value: bigint;
   readonly escrowKey: Bytes32;
   readonly mintPolicy?: MintPolicy;
+  /** Absent preserves the record's address. */
+  readonly addressHash?: Bytes32;
+}
+
+/** Both preimages hold one nullifier key, the apply proof refuses any other pair. */
+export interface AddressEscrowPair {
+  readonly nullifierPk: Bytes32;
+  readonly addressRing: Bytes32;
+  readonly view0: Bytes32;
+  readonly view1: Bytes32;
+  readonly addressRevision: bigint;
+  readonly escrowCiphertextHash: Bytes32;
 }
 
 /** One queued write's apply proof input, Rust `RecordWriteProofInput`. */
@@ -73,6 +95,9 @@ export interface RecordWriteProofInput {
   readonly oldLists: bigint;
   readonly oldEscrow: Bytes32;
   readonly oldMintPolicy: MintPolicy;
+  readonly oldAddressHash: Bytes32;
+  /** The written record's address and escrow preimages, read while a write pairs them. */
+  readonly pair?: AddressEscrowPair;
   /** The record's leaf, for an absent member the leaf at `next_index`. */
   readonly slot: QuadPath;
   /** An absent member's low record and its path before the relink, empty for a present member. */

@@ -77,6 +77,8 @@ export interface StorageRegistry {
   readonly authority: Address;
   readonly graceSlots: bigint;
   readonly nextIndex: number;
+  /** Immutable, every address enrolled here binds it, zero serves as a curator only. */
+  readonly ringId: Bytes32;
   /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
@@ -119,7 +121,7 @@ const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_C
 export const RING_POLICY_DISCRIMINATOR = 15;
 export const RING_POLICY_SIZE = 1060;
 export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
-export const STORAGE_REGISTRY_SIZE = 1581;
+export const STORAGE_REGISTRY_SIZE = 1613;
 
 /** Mirrors Rust `CoSigner::valid`, a nonzero signer under a valid scope. */
 export function decodeRingCoSigner(data: Uint8Array): RingCoSigner & Readonly<{ bump: number }> {
@@ -201,6 +203,7 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   const authority = encodeBase58(reader.bytes(32, "authority"));
   const graceSlots = reader.u64("graceSlots");
   const nextIndex = reader.u32("nextIndex");
+  const ringId = reader.bytes(32, "ringId") as Bytes32;
   const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "root.hash") as Bytes32;
     const revision = reader.u64("root.revision");
@@ -210,7 +213,7 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
   reader.done();
   if (nextIndex < 1 || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { nextIndex } });
-  return Object.freeze({ authority, graceSlots, nextIndex, roots: Object.freeze(roots) });
+  return Object.freeze({ authority, graceSlots, nextIndex, ringId, roots: Object.freeze(roots) });
 }
 
 /** Rust `StorageRegistry::root`, the current root or a retired one before its expiry. */
@@ -294,7 +297,8 @@ function readPolicyFields(reader: Reader, code: AccountInvalidCode) {
 function rootRead(policy: RingPolicy, reader: RootReader): "none" | "own" | "policy" {
   switch (reader) {
     case "transfer":
-      return policy.hasPolicy ? "policy" : "none";
+      if (policy.hasPolicy) return "policy";
+      return policy.mode === "anonymous" ? "own" : "none";
     case "exemptTransfer":
       return policy.hasPolicy ? "policy" : "own";
     case "deposit":

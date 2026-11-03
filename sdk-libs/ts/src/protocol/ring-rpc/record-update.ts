@@ -21,8 +21,19 @@ import {
 } from "../../operations/management/record-writes.js";
 import { RingError } from "../error.js";
 import type { QueueEntry } from "../membership/member-registry.js";
-import { checkMember, escrowEntry, queueChain } from "../membership/member-opening.js";
-import { ListId, recordBit, walletGrantMember, type Member } from "../membership/policy.js";
+import {
+  addressRecordHash,
+  checkMember,
+  escrowEntry,
+  queueChain,
+} from "../membership/member-opening.js";
+import {
+  ListId,
+  memberOfTag,
+  recordBit,
+  walletGrantMember,
+  type Member,
+} from "../membership/policy.js";
 import type {
   RecordUpdate,
   RecordUpdateEntry,
@@ -77,6 +88,22 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
         nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
         ciphertext: ciphertext as Bytes32,
       });
+    }
+    case "address": {
+      const member = checkMember(memberOfTag(addressBytes(entry.owner, "owner")));
+      return {
+        member,
+        mask: 0n,
+        value: 0n,
+        escrowKey: ZERO_32,
+        addressHash: addressRecordHash({
+          member,
+          ringId: indexerScalars.hashBytes(entry.ringId),
+          nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
+          viewingU: indexerScalars.hashBytes(entry.viewingU),
+          addressRevision: entry.addressRevision,
+        }),
+      };
     }
     case "walletGrant": {
       const bit = recordBit(ListId.reader);

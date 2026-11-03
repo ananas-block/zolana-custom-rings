@@ -39,6 +39,9 @@ export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt1");
 export const DELIVERED_BODY_ENC_INFO = new TextEncoder().encode("CRING/bdy1");
 export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk1");
 export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep1");
+export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp1");
+export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl1");
+export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd1");
 
 /** `"CR_S"`, Rust `DOM_SEP_CR_SHARED`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;

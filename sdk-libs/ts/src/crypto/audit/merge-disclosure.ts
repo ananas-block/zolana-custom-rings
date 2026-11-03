@@ -7,15 +7,11 @@ import {
   randomBytes,
   Reader,
   Writer,
-  addressBytes,
-  encodeBase58,
+  isCanonicalField,
   rightAlign,
-  U64_MAX,
   ZERO_32,
   bigIntBytes,
-  bytesToBigInt,
   hashChain,
-  mergeMintChunks,
 } from "@heliuslabs/zolana/internal";
 import { symmetricApply, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { pack33, treeIdField } from "@heliuslabs/zolana/interface";
@@ -25,7 +21,7 @@ import type {
   Bytes33,
   MergeTransactInstructionData,
 } from "@heliuslabs/zolana/interface";
-import type { PreparedMerge } from "@heliuslabs/zolana/transaction";
+import { assetField, type PreparedMerge } from "@heliuslabs/zolana/transaction";
 import type { MergeProofRequest } from "../../rpc/prover/ring.js";
 import type { PresentRecordOpening } from "../../rpc/prover/types.js";
 import { ringIdField } from "../derivation/ring-stream.js";
@@ -45,12 +41,9 @@ import { RingError } from "../../protocol/error.js";
 
 /** Rust `MERGE_DISCLOSURE_INFO`, the envelope of the disclosure key. */
 const MERGE_DISCLOSURE_INFO = new TextEncoder().encode("CRING/mrg1");
-/** Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments. */
-const MERGE_DISCLOSURE_HEADER_LENGTH = 32 + 32 + 32 + 8 + 32;
 
-/** Rust `merge_disclosure_field_count`. */
 export function mergeDisclosureFieldCount(width: number): number {
-  return packedChunks(MERGE_DISCLOSURE_HEADER_LENGTH + 32 * width);
+  return packedChunks(32 * width);
 }
 
 /** The auditor's half of a ring merge, Rust `MergeDisclosure`. */
@@ -61,15 +54,14 @@ export interface RingMergeDisclosure {
   readonly fields: readonly Bytes32[];
 }
 
-/** What a merge discloses, enough to recompute its output commitment. */
-export interface RingMergeOpening {
-  readonly ownerKey: Address;
-  readonly nullifierPublicKey: Bytes32;
-  readonly mint: Address;
-  readonly amount: bigint;
-  readonly outputBlinding: Bytes32;
-  /** One per circuit slot, zero for padding. */
-  readonly inputCommitments: readonly Bytes32[];
+/** In slot order, a dummy reads zero. */
+export type RingMergeOpening = readonly Bytes32[];
+
+/** The zero nullifier key opens no record, the root and the flag stay bound. */
+export interface RingMergeEscrow {
+  readonly root: Bytes32;
+  readonly record?: PresentRecordOpening;
+  readonly ctHash: Bytes32;
 }
 
 /** Precedes the SPP merge body. */
@@ -95,7 +87,7 @@ export function readRingMergeDisclosure(reader: Reader): RingMergeDisclosure {
   return Object.freeze({ proof, ephemeralPublicKey, ciphertext, fields: Object.freeze(fields) });
 }
 
-/** Opens a disclosure the ring program verified, the caller checks it against the settled output. */
+/** Only for a disclosure the ring program verified, the key fixes `width` and the proof the order. */
 export function openRingMergeDisclosure(
   auditor: X25519Keypair,
   disclosure: RingMergeDisclosure,
@@ -113,22 +105,14 @@ export function openRingMergeDisclosure(
   try {
     const opened = openMergeDisclosureFields(key, salt, disclosure.fields);
     plaintext = opened;
-    const length = MERGE_DISCLOSURE_HEADER_LENGTH + 32 * width;
-    if (opened.subarray(length).some((byte) => byte !== 0)) throw invalid("disclosure padding");
-    const at = (offset: number, size = 32): Uint8Array => opened.slice(offset, offset + size);
-    return Object.freeze({
-      ownerKey: encodeBase58(at(0)),
-      nullifierPublicKey: at(32) as Bytes32,
-      mint: encodeBase58(at(64)),
-      amount: bytesToBigInt(at(96, 8)),
-      outputBlinding: at(104) as Bytes32,
-      inputCommitments: Object.freeze(
-        Array.from(
-          { length: width },
-          (_, index) => at(MERGE_DISCLOSURE_HEADER_LENGTH + 32 * index) as Bytes32,
-        ),
-      ),
-    });
+    if (opened.subarray(32 * width).some((byte) => byte !== 0)) throw invalid("disclosure padding");
+    return Object.freeze(
+      Array.from({ length: width }, (_, index) => {
+        const hash = opened.slice(32 * index, 32 * (index + 1)) as Bytes32;
+        if (!isCanonicalField(hash)) throw invalid("disclosure input");
+        return hash;
+      }),
+    );
   } finally {
     dh.fill(0);
     shared.fill(0);
@@ -137,7 +121,7 @@ export function openRingMergeDisclosure(
   }
 }
 
-/** Rust `MergePublicInput::hash`, the statement the ring program verifies. */
+/** Binds in Rust `MergePublicInput::hash` order. */
 export function ringMergePublicInputHash(
   input: Readonly<{
     partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
@@ -149,6 +133,8 @@ export function ringMergePublicInputHash(
     auditorPublicKey: X25519PublicKey;
     disclosure: Omit<RingMergeDisclosure, "proof">;
     salt: Bytes16;
+    /** Published nullifiers with a hidden dummy, never the real inputs. */
+    inputCount: number;
     /** Key escrow rings only, the owner's record under the root escrows the merged nullifier key. */
     memberRegistryRoot?: Bytes32;
   }>,
@@ -164,6 +150,7 @@ export function ringMergePublicInputHash(
     hashBytes(input.disclosure.ciphertext) as Bytes32,
     rightAlign(input.salt),
     hashChain4(input.disclosure.fields) as Bytes32,
+    bigIntBytes(BigInt(input.inputCount)) as Bytes32,
     ...input.partyIdentities,
     bigIntBytes(input.memberRegistryRoot === undefined ? 0n : 1n) as Bytes32,
     input.memberRegistryRoot ?? ZERO_32,
@@ -222,7 +209,7 @@ export function sealRingMergeDisclosureWith(
     disclosureKey: Bytes32;
   }>,
 ): SealedRingMergeDisclosure {
-  checkMergeWidth(input.opening.inputCommitments.length);
+  checkMergeWidth(input.opening.length);
   const plaintext = encodeMergeOpening(input.opening);
   let dh: Bytes32 | undefined;
   let shared: Bytes32 | undefined;
@@ -251,13 +238,6 @@ export function sealRingMergeDisclosureWith(
 /** The merge disclosure request without the nullifier secret only its holder adds. */
 export type RingMergeDisclosureRequest = Omit<MergeProofRequest, "nullifierSecret">;
 
-/** Rust `MergeEscrow`. */
-export interface RingMergeEscrow {
-  readonly root: Bytes32;
-  readonly record: PresentRecordOpening;
-  readonly ctHash: Bytes32;
-}
-
 /** Rust `MergeDisclosureProof::prove`, the statement binds the proved SPP merge `spp`. */
 export function ringMergeDisclosureRequest(
   input: Readonly<{
@@ -283,14 +263,7 @@ export function ringMergeDisclosureRequest(
   const ownerKey = prepared.signingPublicKey.ed25519();
   const salt = prepared.outputCiphertextSalt();
   const sealed = sealRingMergeDisclosure(
-    {
-      ownerKey: encodeBase58(ownerKey),
-      nullifierPublicKey: prepared.nullifierPublicKey,
-      mint: prepared.output.asset,
-      amount: prepared.output.amount,
-      outputBlinding: prepared.output.blinding,
-      inputCommitments: prepared.inputs.map((_, index) => commitments.get(index) ?? ZERO_32),
-    },
+    prepared.inputs.map((_, index) => commitments.get(index) ?? ZERO_32),
     salt,
     input.auditor,
   );
@@ -309,6 +282,7 @@ export function ringMergeDisclosureRequest(
         auditorPublicKey: input.auditor,
         disclosure: sealed.disclosure,
         salt,
+        inputCount: spp.nullifiers.length,
         ...(input.escrow === undefined ? {} : { memberRegistryRoot: input.escrow.root }),
       }),
       privateTxHash: spp.privateTxHash,
@@ -320,7 +294,8 @@ export function ringMergeDisclosureRequest(
       ephSk: sealed.ephemeralSecret,
       disclosureKey: sealed.disclosureKey,
       ownerKey,
-      mintChunks: Object.freeze(mergeMintChunks(prepared.output.asset).map(field)),
+      asset: assetField(prepared.output.asset),
+      inputCount: spp.nullifiers.length,
       inputs: Object.freeze(
         prepared.inputs.map((spend, index) => {
           const slot = input.slots.inputs[index];
@@ -339,7 +314,7 @@ export function ringMergeDisclosureRequest(
       keyEscrow: input.escrow !== undefined,
       memberRegistryRoot: input.escrow?.root ?? ZERO_32,
       ctHash: input.escrow?.ctHash ?? ZERO_32,
-      ...(input.escrow === undefined ? {} : { member: input.escrow.record }),
+      ...(input.escrow?.record === undefined ? {} : { member: input.escrow.record }),
     });
     return Object.freeze({ request, disclosure: sealed.disclosure });
   } catch (cause) {
@@ -355,20 +330,13 @@ export function wipeRingMergeDisclosureRequest(request: RingMergeDisclosureReque
   request.disclosureKey.fill(0);
 }
 
-/** Rust `MergeOpening::encode`, zero padded to whole 31-byte chunks. */
+/** `be32(hash_0) ‖ .. ‖ be32(hash_{width-1})`, zero padded to whole 31-byte chunks. */
 function encodeMergeOpening(opening: RingMergeOpening): Uint8Array {
-  const width = opening.inputCommitments.length;
-  if (opening.amount < 0n || opening.amount > U64_MAX) throw invalid("disclosure amount");
-  const plaintext = new Uint8Array(mergeDisclosureFieldCount(width) * DISCLOSURE_CHUNK_BYTES);
+  const plaintext = new Uint8Array(
+    mergeDisclosureFieldCount(opening.length) * DISCLOSURE_CHUNK_BYTES,
+  );
   try {
-    plaintext.set(addressBytes(opening.ownerKey), 0);
-    plaintext.set(opening.nullifierPublicKey, 32);
-    plaintext.set(addressBytes(opening.mint), 64);
-    plaintext.set(bigIntBytes(opening.amount, 8), 96);
-    plaintext.set(opening.outputBlinding, 104);
-    opening.inputCommitments.forEach((commitment, index) =>
-      plaintext.set(commitment, MERGE_DISCLOSURE_HEADER_LENGTH + 32 * index),
-    );
+    opening.forEach((commitment, index) => plaintext.set(commitment, 32 * index));
     return plaintext;
   } catch (cause) {
     plaintext.fill(0);

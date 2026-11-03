@@ -1,7 +1,8 @@
 /** Regions of the ring auditor stream and the lengths of its ciphertexts, Rust `custom_ring_interface::audit_stream`. */
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
-import { CONFIDENTIAL_TRANSFER_SHAPES, ringTransferCircuit } from "../proof/transfer-shapes.js";
+import { ringTransferCircuit, transferInputClass } from "../proof/transfer-shapes.js";
+import type { RingRail } from "../transaction/transact.js";
 
 /** Rust `DELIVERED_AUDIT_CAPACITIES`, the output counts of the confidential keys. */
 export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
@@ -9,8 +10,6 @@ export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4
 export const MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
 /** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
-/** The first bytes of a spent hash the evidence discloses. */
-export const INPUT_PREFIX_BYTES = 16;
 export const STREAM_BLOCK_LEN = 16;
 export const STREAM_FIRST_COUNTER = 2;
 /** The sealed `tx_viewing_sk`, the envelope's first bytes. */
@@ -25,14 +24,15 @@ export const ANONYMOUS_RECORD_LEN = 104;
 export const ESCROWED_EXIT_RECORD_LEN = 40;
 /** `be32(asset) ‖ u64be(amount) ‖ be32(nullifier_pk)`. */
 export const EXIT_RECORD_LEN = 72;
-/** `u64be(amount) ‖ be32(asset) ‖ be32(blinding)`. */
-export const ENTRY_INPUT_LEN = 72;
+/** `be32(hash) ‖ u64be(amount) ‖ be32(asset) ‖ be32(blinding)`. */
+export const ENTRY_INPUT_LEN = 104;
 /** `sender_key ‖ be32(sender_nullifier_pk)`. */
 export const ENTRY_EVIDENCE_HEAD_LEN = 64;
+/** One input hash of the non-entry evidence. */
+export const INPUT_HASH_LEN = 32;
 /** `0x04 ‖ eph_u` ahead of the auditor ciphertexts. */
 export const TAGGED_KEY_LEN = 33;
 
-const FIELD_LEN = 32;
 const ENVELOPE_KEY_BLOCKS = ENVELOPE_KEY_LEN / STREAM_BLOCK_LEN;
 
 /** Rust `pack_be_chunks`, the fields `length` bytes pack into. */
@@ -58,57 +58,38 @@ export function auditLayoutValue(layout: AuditLayout): number {
   return flags.reduce((value, [flag, bit]) => (flag ? value | (1 << bit) : value), 0);
 }
 
-/** The audit key of an anonymous transfer, Rust `AnonymousAuditKey`. */
-export type AnonymousAuditKey =
-  /** Names spent UTXO 0 by its hash and every later one by its prefix, every spent UTXO a note of the ring. */
-  | Readonly<{ kind: "commitment"; class: number }>
-  /** Opens every spent UTXO, the key of a transfer that spends a default-ring note. */
-  | Readonly<{ kind: "entry"; class: number }>;
-
 /** The transfer key family at its input class, Rust `AuditKey`. */
-export type AuditKey =
-  | Readonly<{
-      kind: "confidential";
-      class: number;
-      /** The in-proof and authority rails, the signer rail discloses no input. */
-      inputPrefixes: boolean;
-    }>
-  | AnonymousAuditKey;
+export type AuditKey = Readonly<{
+  kind: "confidential" | "commitment" | "entry";
+  class: number;
+}>;
 
-/** What picks an anonymous transfer's audit key, Rust `AnonymousSpend`. */
-export interface AnonymousSpend {
+/** Rust `TransferSpend`. */
+export interface AuditKeySpend {
+  readonly rail: RingRail;
   /** Published inputs. */
   readonly inputs: number;
-  readonly outputs: number;
+  readonly capacity: number;
   /** A spent UTXO is a default-ring note, the commitment keys refuse ring id zero. */
   readonly spendsDefaultRing: boolean;
 }
 
-/** `undefined` when no key serves the spend, a larger entry spend splits, Rust `AnonymousSpend::audit_key`. */
-export function anonymousAuditKey(spend: AnonymousSpend): AnonymousAuditKey | undefined {
+/** `undefined` when the catalog keys no such spend, a larger spend splits. */
+export function transferAuditKey(spend: AuditKeySpend): AuditKey | undefined {
   const circuit = ringTransferCircuit({
-    rail: "anonymous",
+    rail: spend.rail,
     inputs: spend.inputs,
-    outputs: spend.outputs,
+    outputs: spend.capacity,
     spendsDefaultRing: spend.spendsDefaultRing,
     legs: 0,
   });
-  if (circuit === undefined || circuit.family === "transferConfidential") return undefined;
-  return Object.freeze({
-    kind: circuit.family === "transferAnonymousEntry" ? "entry" : "commitment",
-    class: circuit.class,
-  });
-}
-
-/** `undefined` off the capacities, the key of the delivered rails at `outputs`. */
-export function confidentialAuditKey(
-  outputs: number,
-  inputPrefixes: boolean,
-): AuditKey | undefined {
-  const shape = CONFIDENTIAL_TRANSFER_SHAPES.find((keyed) => keyed.outputs === outputs);
-  return shape === undefined
-    ? undefined
-    : Object.freeze({ kind: "confidential", class: shape.inputs, inputPrefixes });
+  if (circuit === undefined) return undefined;
+  const kinds = {
+    transferConfidential: "confidential",
+    transferAnonymous: "commitment",
+    transferAnonymousEntry: "entry",
+  } as const;
+  return Object.freeze({ kind: kinds[circuit.family], class: transferInputClass(circuit) });
 }
 
 /** `E_max`, the same at every rail of a key since one circuit serves them. */
@@ -133,9 +114,14 @@ export interface AuditStreamLayout {
   readonly keyEscrow: boolean;
   /** `n`, the frame's nullifier count, never the key capacity or a private live count. */
   readonly inputs: number;
+  /** `N`, the key's output capacity. */
+  readonly capacity: number;
+  /** `m`, the published slots. */
   readonly outputs: number;
   /** Bit `i` set when slot `i` exits. */
   readonly exits: bigint;
+  /** Bit `i` set when slot `i` is anonymous change. */
+  readonly change: bigint;
 }
 
 /** One stretch of the auditor keystream, no counter serves two regions, Rust `StreamRegion`. */
@@ -146,21 +132,24 @@ export interface AuditStreamRegion {
   readonly length: number;
 }
 
-/** Refuses an input count off the key and an exit past the outputs. */
+/** Refuses an input count off the key, a slot count off the capacity and a flag past the slots. */
 export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayout {
-  const { key, inputs, outputs, exits } = layout;
+  const { key, inputs, capacity, outputs, exits, change } = layout;
   const counted =
     Number.isInteger(inputs) &&
     inputs >= 1 &&
     inputs <= key.class &&
+    Number.isInteger(capacity) &&
     Number.isInteger(outputs) &&
-    outputs >= 1;
+    outputs >= 1 &&
+    outputs <= capacity;
   if (
     !counted ||
     typeof layout.keyEscrow !== "boolean" ||
-    typeof exits !== "bigint" ||
-    exits < 0n ||
-    exits >> BigInt(outputs) !== 0n
+    !slotBits(exits, outputs) ||
+    !slotBits(change, outputs) ||
+    (exits & change) !== 0n ||
+    !CHANGE_PREFIXES.includes(change)
   )
     throw shapeError("layout");
   return layout;
@@ -168,8 +157,7 @@ export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayou
 
 /** Slots at or past `n` stay absent from the evidence. */
 export function evidenceBytes(layout: AuditStreamLayout): number {
-  const { key, inputs } = layout;
-  return key.kind === "confidential" && !key.inputPrefixes ? 0 : evidenceLen(key, inputs);
+  return evidenceLen(layout.key, layout.inputs);
 }
 
 export function envelopeRegion(layout: AuditStreamLayout): AuditStreamRegion {
@@ -180,7 +168,7 @@ export function envelopeRegion(layout: AuditStreamLayout): AuditStreamRegion {
   });
 }
 
-/** The range of `slot`, transmitting nothing on a delivered slot. */
+/** Its counter fixed by the slot index alone, omission moves no region. */
 export function recordRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
   const blocks = recordBlocks(layout.key);
   return Object.freeze({
@@ -192,6 +180,10 @@ export function recordRegion(layout: AuditStreamLayout, slot: number): AuditStre
 
 export function isExitSlot(layout: Pick<AuditStreamLayout, "exits">, slot: number): boolean {
   return ((layout.exits >> BigInt(slot)) & 1n) === 1n;
+}
+
+export function isChangeSlot(layout: Pick<AuditStreamLayout, "change">, slot: number): boolean {
+  return ((layout.change >> BigInt(slot)) & 1n) === 1n;
 }
 
 export function deliveredBodyLen(keyEscrow: boolean): number {
@@ -230,15 +222,17 @@ export function auditorMessageLen(layout: AuditStreamLayout): number {
   );
 }
 
+/** The bundle holds two change cells, change is a prefix of at most two slots. */
+const CHANGE_PREFIXES: readonly bigint[] = Object.freeze([0n, 1n, 3n]);
+
+function slotBits(bits: bigint, slots: number): boolean {
+  return typeof bits === "bigint" && bits >= 0n && bits >> BigInt(slots) === 0n;
+}
+
 function evidenceLen(key: AuditKey, count: number): number {
-  switch (key.kind) {
-    case "confidential":
-      return INPUT_PREFIX_BYTES * count;
-    case "commitment":
-      return FIELD_LEN + INPUT_PREFIX_BYTES * (count - 1);
-    case "entry":
-      return ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * count;
-  }
+  return key.kind === "entry"
+    ? ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * count
+    : INPUT_HASH_LEN * count;
 }
 
 function shapeError(name: string): InterfaceError {

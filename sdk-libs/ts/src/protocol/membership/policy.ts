@@ -34,6 +34,7 @@ export const ListId = Object.freeze({
   block: 2,
   frozen: 3,
   ringViewing: 4,
+  /** Unused, holds slot 5 of the circuit's `NSources`. */
   recovery: 5,
   reader: 6,
   approval: 7,
@@ -43,6 +44,14 @@ export type ListId = (typeof ListId)[keyof typeof ListId];
 
 /** Source-slot order, the id of `LIST_IDS[i]` is `i + 1`. */
 export const LIST_IDS: readonly ListId[] = Object.freeze(Object.values(ListId));
+
+/** A reader grant moves no funds. */
+export const POLICY_LISTS: readonly ListId[] = Object.freeze([
+  ListId.allow,
+  ListId.block,
+  ListId.frozen,
+  ListId.approval,
+]);
 
 export function listIdFromByte(byte: number): ListId | undefined {
   return LIST_IDS.find((id) => id === byte);
@@ -283,11 +292,13 @@ export function referencedLists(rules: readonly Rule[]): readonly ListId[] {
   return listSet(bits);
 }
 
-/** Rust `EncodedRuleTable::validate`, a policy reads only lists the authority writes, in slot order. */
+/** The lists a policy reads, in slot order. */
 export function policySourceLists(rules: readonly Rule[]): readonly ListId[] {
   const lists = referencedLists(rules);
-  if (lists.some((listId) => listWriter(listId) !== "authority"))
+  if (lists.some((listId) => listWriter(listId) === "member"))
     throw ruleTableInvalid("MemberWrittenList");
+  if (lists.some((listId) => !POLICY_LISTS.includes(listId)))
+    throw ruleTableInvalid("ListNotPolicyReadable");
   return lists;
 }
 
@@ -561,13 +572,14 @@ function checkedMember(bytes: Bytes32): Member {
   return bytes as Member;
 }
 
-export type ListWriter = "authority" | "member";
+export type ListWriter = "authority" | "member" | "reserved";
 
 /** Mirrors Rust `ListId::writer`. */
 export function listWriter(listId: ListId): ListWriter {
   switch (checkedListId(listId)) {
-    case ListId.ringViewing:
     case ListId.recovery:
+      return "reserved";
+    case ListId.ringViewing:
     case ListId.escrow:
       return "member";
     case ListId.allow:

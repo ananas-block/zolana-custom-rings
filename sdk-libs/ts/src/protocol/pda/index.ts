@@ -75,3 +75,15 @@ export function ringRecordsAddress(
     }),
   );
 }
+
+/** The Storage program's enrollment account, canonical bump. */
+export function addressAuthorizationPda(
+  registry: Address,
+  owner: Address,
+): Promise<ProgramDerivedAddress> {
+  const addresses = getAddressEncoder();
+  return getProgramDerivedAddress({
+    programAddress: STORAGE_PROGRAM_ID,
+    seeds: [encoder.encode("address"), addresses.encode(registry), addresses.encode(owner)],
+  });
+}

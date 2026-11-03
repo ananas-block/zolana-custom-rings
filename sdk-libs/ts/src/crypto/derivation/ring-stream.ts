@@ -2,7 +2,7 @@ import { getAddressEncoder, type Address } from "@solana/kit";
 
 import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { ViewingKey, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { packBytesBe } from "./hasher.js";
 
 import { u32Field } from "../error.js";
@@ -31,6 +31,45 @@ export function deliveredSlotSecret(slot: DeliveredSlot): Bytes32 {
     ...packedSecret(slot.agreement, "agreement"),
     ...keys,
     ...tail,
+  ]);
+}
+
+/** The sealer's and the sent row reader's view of the secret, the agreement wiped once hashed. */
+export function txKeySlotSecret(
+  input: Readonly<{
+    txViewingKey: ViewingKey;
+    recipientViewingKey: X25519PublicKey;
+    salt: Bytes16;
+    outputIndex: number;
+    firstNullifier: Bytes32;
+  }>,
+): Bytes32 {
+  const agreement = input.txViewingKey.ecdh(input.recipientViewingKey);
+  try {
+    return deliveredSlotSecret({
+      agreement,
+      txViewingKey: input.txViewingKey.publicKey(),
+      recipientViewingKey: input.recipientViewingKey,
+      salt: input.salt,
+      outputIndex: input.outputIndex,
+      firstNullifier: input.firstNullifier,
+    });
+  } finally {
+    agreement.fill(0);
+  }
+}
+
+/** `Poseidon(CRRT, slot_secret)`, published for a live recipient and proven against its body's secret. */
+export function recipientTag(slotSecret: Bytes32): Bytes32 {
+  return domainHash(RingDomain.recipientTagDomain, [
+    checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
+  ]);
+}
+
+/** `Poseidon(CRST, slot_secret)` at index `m`, the domain keeps it apart from every recipient tag. */
+export function bundleTag(slotSecret: Bytes32): Bytes32 {
+  return domainHash(RingDomain.senderTagDomain, [
+    checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
   ]);
 }
 

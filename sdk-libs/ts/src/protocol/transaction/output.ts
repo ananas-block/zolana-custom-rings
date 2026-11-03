@@ -1,7 +1,7 @@
 /** Ring output bodies in SPP's output framing, Rust `custom_ring_interface::output`. */
 import type { Bytes32 } from "@heliuslabs/zolana";
 import { bytesToBigInt, checkedBytes, concatBytes, u64be } from "@heliuslabs/zolana/internal";
-import { EncryptedScheme, TransactionError } from "@heliuslabs/zolana/transaction";
+import { TransactionError } from "@heliuslabs/zolana/transaction";
 
 import { DELIVERED_BODY_ENC_INFO, symmetricAuditApply } from "../../crypto/audit/audit.js";
 import { checkedCounter } from "../../crypto/error.js";
@@ -13,10 +13,10 @@ import {
 
 /** The schemes a ring output publishes, SPP stores the ring-owned scheme 10 unparsed. */
 export const RingScheme = Object.freeze({
-  anonymousRecipient: EncryptedScheme.anonymousRecipient,
-  anonymousSender: EncryptedScheme.anonymousSender,
   confidential: 3,
   ringConfidentialDelivered: 10,
+  ringRecipientBody: 11,
+  ringSenderBundle: 12,
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
@@ -64,12 +64,13 @@ export function readRingOutput(bytes: Uint8Array): RingOutputFrame {
   return Object.freeze({ encoding, scheme: bytes[5] ?? 0, body: bytes.slice(6) });
 }
 
-export function anonymousRecipientOutputBody(data: Uint8Array): Uint8Array | undefined {
-  return encryptedOutputBody(data, RingScheme.anonymousRecipient);
+/** The scheme 11 payload, the body then its reply when the frame carries one. */
+export function recipientOutputBody(data: Uint8Array): Uint8Array | undefined {
+  return encryptedOutputBody(data, RingScheme.ringRecipientBody);
 }
 
-export function anonymousSenderOutputBody(data: Uint8Array): Uint8Array | undefined {
-  return encryptedOutputBody(data, RingScheme.anonymousSender);
+export function senderBundleOutputBody(data: Uint8Array): Uint8Array | undefined {
+  return encryptedOutputBody(data, RingScheme.ringSenderBundle);
 }
 
 function encryptedOutputBody(data: Uint8Array, scheme: RingScheme): Uint8Array | undefined {

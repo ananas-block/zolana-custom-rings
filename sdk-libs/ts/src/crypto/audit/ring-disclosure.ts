@@ -1,6 +1,5 @@
 /** The evidence and record codecs of the auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import {
-  BN254_SCALAR_ORDER,
   clampViewingSecret,
   isCanonicalField,
   bigIntToBytes,
@@ -19,19 +18,17 @@ import { RingError } from "../../protocol/error.js";
 import { RingKeyError } from "../error.js";
 import {
   ANONYMOUS_RECORD_LEN,
-  DELIVERED_AUDIT_CAPACITIES,
   ENTRY_INPUT_LEN,
   ENVELOPE_KEY_LEN,
-  INPUT_PREFIX_BYTES,
+  INPUT_HASH_LEN,
   STREAM_FIRST_COUNTER,
-  anonymousAuditKey,
   checkedStreamLayout,
-  confidentialAuditKey,
   evidenceBytes,
   isExitSlot,
   recordLen,
   recordRegion,
   recordSlots,
+  transferAuditKey,
   type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 
@@ -52,7 +49,7 @@ export type DeliveredOutputOpening =
   /** `nullifierPk` is `undefined` under key escrow. */
   | Readonly<{ kind: "exit"; nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>;
 
-/** The record opens every live slot's asset and amount, the published scheme 1 body is unproven. */
+/** The record opens every live slot's asset and amount. */
 export type AnonymousOutputOpening =
   | Readonly<{
       kind: "ring";
@@ -66,48 +63,38 @@ export type AnonymousOutputOpening =
 
 /** A spent UTXO of the hidden sender, its data hashes zero. */
 export interface AnonymousInputOpening {
+  /** The published commitment, the entry key binds it to the opened fields. */
+  readonly hash: Bytes32;
   readonly asset: Bytes32;
   readonly amount: bigint;
   readonly blinding: Bytes32;
 }
 
-/** The first `INPUT_PREFIX_BYTES` of a canonical spent hash read big endian, never zero, Rust `InputPrefix`. */
-export type InputPrefix = bigint & { readonly __inputPrefix: true };
+/** The evidence of the signer, in-proof, authority and commitment keys, `undefined` for a dummy. */
+export type InputCommitments = Readonly<{
+  kind: "commitments";
+  hashes: readonly (Bytes32 | undefined)[];
+}>;
 
-/** What the delivered rails disclose of their spent UTXOs, `undefined` for a dummy. */
-export type DeliveredInputs =
-  /** The signer rail. */
-  | Readonly<{ kind: "none" }>
-  /** The in-proof and authority rails. */
-  | Readonly<{ kind: "prefixes"; prefixes: readonly (InputPrefix | undefined)[] }>;
-
-/** The spent UTXOs as the anonymous audit key discloses them, `undefined` for a dummy. */
-export type AnonymousInputs =
-  /** Every spent UTXO a ring note, spent UTXO 0 named by its hash and every later one by its prefix. */
-  | Readonly<{
-      kind: "commitments";
-      first: Bytes32;
-      prefixes: readonly (InputPrefix | undefined)[];
-    }>
-  /** The entry key opens every spent UTXO, all under the sender's key and one nullifier key. */
-  | Readonly<{
-      kind: "openings";
-      senderKey: Bytes32;
-      senderNullifierPk: Bytes32;
-      inputs: readonly (AnonymousInputOpening | undefined)[];
-    }>;
+/** The entry key opens every spent UTXO, all under the sender's key and one nullifier key. */
+export type InputOpenings = Readonly<{
+  kind: "openings";
+  senderKey: Bytes32;
+  senderNullifierPk: Bytes32;
+  inputs: readonly (AnonymousInputOpening | undefined)[];
+}>;
 
 export type RingDisclosure =
   | Readonly<{
       kind: "delivered";
       layout: AuditStreamLayout;
-      inputs: DeliveredInputs;
+      inputs: InputCommitments;
       outputs: readonly DeliveredOutputOpening[];
     }>
   | Readonly<{
       kind: "anonymous";
       layout: AuditStreamLayout;
-      inputs: AnonymousInputs;
+      inputs: InputCommitments | InputOpenings;
       outputs: readonly AnonymousOutputOpening[];
     }>;
 
@@ -122,47 +109,6 @@ export interface DisclosurePlaintext {
   readonly evidence: Uint8Array;
   /** The records of the slots that have one, in slot order. */
   readonly records: readonly Uint8Array[];
-}
-
-/** Spent UTXO 0 must be real, Rust `AuditEvidence::Commitment`. */
-export function anonymousCommitments(hashes: readonly (Bytes32 | undefined)[]): AnonymousInputs {
-  const [first, ...rest] = hashes;
-  if (first === undefined) throw shapeError("inputs");
-  return Object.freeze({
-    kind: "commitments",
-    first: field(first, "inputHash"),
-    prefixes: inputPrefixes(rest),
-  });
-}
-
-/** A dummy names no input, any other hash below `2^128` is refused. */
-export function inputPrefixes(
-  hashes: readonly (Bytes32 | undefined)[],
-): readonly (InputPrefix | undefined)[] {
-  return Object.freeze(
-    hashes.map((hash) => {
-      if (hash === undefined) return undefined;
-      const prefix = inputPrefix(hash);
-      if (prefix === undefined)
-        throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputHash" });
-      return prefix;
-    }),
-  );
-}
-
-/** `undefined` for a hash at or above the modulus or below `2^128`, a zero prefix names no input. */
-export function inputPrefix(hash: Bytes32): InputPrefix | undefined {
-  const value = checkedBytes<Bytes32>(hash, 32, "inputHash");
-  if (!isCanonicalField(value)) return undefined;
-  const prefix = bytesToBigInt(value.subarray(0, INPUT_PREFIX_BYTES));
-  return prefix === 0n ? undefined : (prefix as InputPrefix);
-}
-
-/** `undefined` for bytes off the length, for zero and past the prefix of any canonical hash. */
-export function inputPrefixFromBytes(bytes: Uint8Array): InputPrefix | undefined {
-  if (bytes.length !== INPUT_PREFIX_BYTES) return undefined;
-  const prefix = bytesToBigInt(bytes);
-  return prefix === 0n || prefix > MAX_INPUT_PREFIX ? undefined : (prefix as InputPrefix);
 }
 
 /** Refuses a disclosure off its layout before any ephemeral key exists. */
@@ -264,10 +210,7 @@ export function canonicalViewingKey(recovered: Bytes32): ViewingKey {
 export function disclosurePlaintext(disclosure: RingDisclosure): DisclosurePlaintext {
   const layout = checkedLayout(disclosure.layout);
   checkCount(disclosure.outputs.length, layout.outputs);
-  const evidence =
-    disclosure.kind === "delivered"
-      ? deliveredEvidence(disclosure.inputs, layout)
-      : anonymousEvidence(disclosure.inputs, layout);
+  const evidence = encodeEvidence(disclosure.inputs, layout);
   if (evidence.length !== evidenceBytes(layout)) {
     evidence.fill(0);
     throw shapeError("inputs");
@@ -305,7 +248,7 @@ export function decodeDisclosure(
     return Object.freeze({
       kind: "delivered",
       layout: checked,
-      inputs: readDeliveredInputs(evidence, checked),
+      inputs: readCommitments(evidence, checked.inputs),
       outputs: Object.freeze(
         Array.from({ length: checked.outputs }, (_, slot) => {
           const bytes = record.get(slot);
@@ -316,7 +259,10 @@ export function decodeDisclosure(
   return Object.freeze({
     kind: "anonymous",
     layout: checked,
-    inputs: readAnonymousInputs(evidence, checked),
+    inputs:
+      checked.key.kind === "entry"
+        ? readOpenings(evidence, checked.inputs)
+        : readCommitments(evidence, checked.inputs),
     outputs: Object.freeze(
       Array.from({ length: checked.outputs }, (_, slot) => {
         const bytes = required(record.get(slot));
@@ -333,8 +279,6 @@ const AMOUNT_BYTES = 8;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const BODY: DeliveredOutputOpening = Object.freeze({ kind: "body" });
 const DUMMY: DummySlot = Object.freeze({ kind: "dummy" });
-/** No canonical hash has a larger prefix. */
-const MAX_INPUT_PREFIX = BN254_SCALAR_ORDER >> BigInt(8 * INPUT_PREFIX_BYTES);
 
 interface OpenedStream {
   readonly schedule: AuditSchedule;
@@ -392,39 +336,29 @@ function checkedLayout(layout: AuditStreamLayout): AuditStreamLayout {
 
 function keyServes(layout: AuditStreamLayout): boolean {
   const { key } = layout;
-  if (key.kind === "confidential") {
-    const keyed = DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
-      ? confidentialAuditKey(layout.outputs, key.inputPrefixes)
-      : undefined;
-    return keyed?.class === key.class;
-  }
-  const keyed = anonymousAuditKey({
+  const keyed = transferAuditKey({
+    rail: key.kind === "confidential" ? "confidential" : "anonymous",
     inputs: layout.inputs,
-    outputs: layout.outputs,
+    capacity: layout.capacity,
     spendsDefaultRing: key.kind === "entry",
   });
   return keyed !== undefined && keyed.kind === key.kind && keyed.class === key.class;
 }
 
-function deliveredEvidence(inputs: DeliveredInputs, layout: AuditStreamLayout): Uint8Array {
-  if (inputs.kind === "none") return new Uint8Array();
-  checkCount(inputs.prefixes.length, layout.inputs);
-  return joined(inputs.prefixes.map(prefixBytes));
-}
-
-function anonymousEvidence(inputs: AnonymousInputs, layout: AuditStreamLayout): Uint8Array {
+function encodeEvidence(
+  inputs: InputCommitments | InputOpenings,
+  layout: AuditStreamLayout,
+): Uint8Array {
   if (inputs.kind === "commitments") {
-    checkCount(inputs.prefixes.length + 1, layout.inputs);
-    return joined([
-      new Uint8Array(field(inputs.first, "inputHash")),
-      ...inputs.prefixes.map(prefixBytes),
-    ]);
+    checkCount(inputs.hashes.length, layout.inputs);
+    return joined(inputs.hashes.map((hash) => new Uint8Array(field(hash ?? zero(), "inputHash"))));
   }
   checkCount(inputs.inputs.length, layout.inputs);
   return joined([
     checkedBytes<Bytes32>(inputs.senderKey, KEY_BYTES, "senderKey"),
     new Uint8Array(field(inputs.senderNullifierPk, "senderNullifierPk")),
     ...inputs.inputs.flatMap((input) => [
+      new Uint8Array(field(input?.hash ?? zero(), "inputHash")),
       amountBytes(input?.amount ?? 0n),
       new Uint8Array(field(input?.asset ?? zero(), "inputAsset")),
       new Uint8Array(field(input?.blinding ?? zero(), "inputBlinding")),
@@ -493,23 +427,20 @@ function readAnonymousRecord(bytes: Uint8Array): AnonymousOutputOpening {
   });
 }
 
-function readDeliveredInputs(evidence: Uint8Array, layout: AuditStreamLayout): DeliveredInputs {
-  if (layout.key.kind !== "confidential" || !layout.key.inputPrefixes)
-    return Object.freeze({ kind: "none" });
-  return Object.freeze({ kind: "prefixes", prefixes: readPrefixes(evidence, layout.inputs) });
+/** A zero hash names a dummy, the proof holds each entry to an opened commitment. */
+function readCommitments(evidence: Uint8Array, count: number): InputCommitments {
+  return Object.freeze({
+    kind: "commitments",
+    hashes: Object.freeze(
+      Array.from({ length: count }, (_, index) => {
+        const hash = canonical(key(evidence, INPUT_HASH_LEN * index, "inputHash"), "inputHash");
+        return isZero(hash) ? undefined : hash;
+      }),
+    ),
+  });
 }
 
-function readAnonymousInputs(evidence: Uint8Array, layout: AuditStreamLayout): AnonymousInputs {
-  if (layout.key.kind === "commitment") {
-    const first = canonical(key(evidence, 0, "inputHash"), "inputHash");
-    // The circuit proves spent UTXO 0 real.
-    if (isZero(first)) throw shapeError("inputs");
-    return Object.freeze({
-      kind: "commitments",
-      first,
-      prefixes: readPrefixes(evidence.subarray(KEY_BYTES), layout.inputs - 1),
-    });
-  }
+function readOpenings(evidence: Uint8Array, count: number): InputOpenings {
   const head = 2 * KEY_BYTES;
   return Object.freeze({
     kind: "openings",
@@ -519,38 +450,20 @@ function readAnonymousInputs(evidence: Uint8Array, layout: AuditStreamLayout): A
       "senderNullifierPk",
     ),
     inputs: Object.freeze(
-      Array.from({ length: layout.inputs }, (_, index) => {
+      Array.from({ length: count }, (_, index) => {
         const start = head + index * ENTRY_INPUT_LEN;
         const input = evidence.subarray(start, start + ENTRY_INPUT_LEN);
         if (isZero(input)) return undefined;
+        const assetAt = KEY_BYTES + AMOUNT_BYTES;
         return Object.freeze({
-          amount: bytesToBigInt(input.subarray(0, AMOUNT_BYTES)),
-          asset: canonical(key(input, AMOUNT_BYTES, "inputAsset"), "inputAsset"),
-          blinding: canonical(
-            key(input, AMOUNT_BYTES + KEY_BYTES, "inputBlinding"),
-            "inputBlinding",
-          ),
+          hash: canonical(key(input, 0, "inputHash"), "inputHash"),
+          amount: bytesToBigInt(input.subarray(KEY_BYTES, assetAt)),
+          asset: canonical(key(input, assetAt, "inputAsset"), "inputAsset"),
+          blinding: canonical(key(input, assetAt + KEY_BYTES, "inputBlinding"), "inputBlinding"),
         });
       }),
     ),
   });
-}
-
-/** Refuses a prefix no canonical hash has, zero bytes name a published dummy. */
-function readPrefixes(bytes: Uint8Array, count: number): readonly (InputPrefix | undefined)[] {
-  return Object.freeze(
-    Array.from({ length: count }, (_, index) => {
-      const start = index * INPUT_PREFIX_BYTES;
-      const prefix = bytesToBigInt(bytes.subarray(start, start + INPUT_PREFIX_BYTES));
-      if (prefix > MAX_INPUT_PREFIX)
-        throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputPrefix" });
-      return prefix === 0n ? undefined : (prefix as InputPrefix);
-    }),
-  );
-}
-
-function prefixBytes(prefix: InputPrefix | undefined): Uint8Array {
-  return bigIntToBytes(prefix ?? 0n, INPUT_PREFIX_BYTES);
 }
 
 /** Concatenates the fresh `parts` and wipes them. */

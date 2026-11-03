@@ -20,8 +20,10 @@ import {
 import { RingError } from "../error.js";
 import {
   RingTransactData,
+  changeBitmap,
   exitsBitmap,
   outputRecipientKeyFields,
+  replyRegion,
   taggedX25519,
   type RingOutput,
 } from "../transaction/transact.js";
@@ -49,9 +51,9 @@ export type TransferFamily =
       kind: "confidential";
       inProof: boolean;
       delegate: boolean;
-      /** The in-proof owner's identity, the sole owner signer's under a policy, else zero. */
+      /** The in-proof owner's identity, zero on the signer and authority rails. */
       sender: Bytes32;
-      /** One owner identity per output slot, zero on a dummy and off a policy. */
+      /** One owner identity per published slot, zero on a dummy and off a policy. */
       recipients: readonly Bytes32[];
     }>
   /** The anonymous rail, the head's layout picks the commitment or entry disclosure. */
@@ -59,7 +61,17 @@ export type TransferFamily =
       kind: "anonymous";
       /** `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, zero when absent. */
       partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+      /** The transmitted scheme 12 ciphertext, its length follows `m`. */
+      senderBundle: Uint8Array;
+      senderBundleTag: Bytes32;
+      /** Every reply in slot order, absent without the flag. */
+      replies?: Uint8Array;
     }>;
+
+export interface SignerBinding {
+  readonly count: number;
+  readonly chain: Bytes32;
+}
 
 /** The roots the transfer statement binds, zero where the program reads none, Rust `TransferRoots`. */
 export interface TransferRoots {
@@ -74,10 +86,13 @@ export interface TransferStatement {
   readonly family: TransferFamily;
   readonly exempt: boolean;
   readonly approvalRequired: boolean;
-  /** Published output order. */
+  /** `N`, every per-slot chain is zero-filled to it. */
+  readonly capacity: number;
+  /** Published output order, `m` slots. */
   readonly outputs: readonly RingOutput[];
-  /** One ring disclosure ciphertext per output, in output order. */
+  /** One ring disclosure ciphertext per published slot, in output order. */
   readonly outputCiphertexts: readonly Uint8Array[];
+  readonly signers: SignerBinding;
   /** `n`, the frame's nullifier count. */
   readonly inputCount: number;
   readonly privateTxHash: Bytes32;
@@ -114,14 +129,8 @@ export interface RegisterKeyStatement {
   readonly ciphertext: Bytes32;
 }
 
-/**
- * `head ‖ [in_proof, delegate] ‖ exempt, approval_required, output_chain ‖ output_ciphertext_chain ‖
- * [recipient_key_chain] ‖ input_count, exits_bitmap, private_tx_hash ‖ sender | party0, party1, party2 ‖
- * policy_hash, own_root, curator_root ‖ [recipient per output] ‖ (asset, net, gross) x 3 ‖
- * withdrawal_hash, length, version`, the bracketed runs on the confidential family alone.
- */
 export function transferStatementElements(statement: TransferStatement): readonly Bytes32[] {
-  const { outputs, family, publicAssets, publicAmounts, publicGross } = statement;
+  const { outputs, family, publicAssets, publicAmounts, publicGross, capacity } = statement;
   if (
     publicAssets.length !== N_PUBLIC_SLOTS ||
     publicAmounts.length !== N_PUBLIC_SLOTS ||
@@ -130,34 +139,78 @@ export function transferStatementElements(statement: TransferStatement): readonl
     throw new RingError("RING_INVALID_LENGTH", {
       details: { name: "publicSlots", expected: N_PUBLIC_SLOTS },
     });
-  const confidential = family.kind === "confidential";
-  const elements: Bytes32[] = [
-    ...auditHeadElements(statement.head),
-    ...(confidential ? [bit(family.inProof), bit(family.delegate)] : []),
-    bit(statement.exempt),
-    bit(statement.approvalRequired),
-    chain(outputs.map((output) => output.hash)),
-    outputCiphertextChain(statement.outputCiphertexts),
-    ...(confidential ? [chain(outputs.flatMap(outputRecipientKeyFields))] : []),
+  if (outputs.length > capacity || statement.outputCiphertexts.length !== outputs.length)
+    throw new RingError("RING_INVALID_LENGTH", {
+      details: { name: "outputs", expected: capacity, actual: outputs.length },
+    });
+  const outputChain = filledChain(
+    outputs.map((output) => output.hash),
+    capacity,
+  );
+  const ciphertextChain = outputCiphertextChain(statement.outputCiphertexts, capacity);
+  const counts = [
     u32Field(statement.inputCount, "input count"),
     bigIntBytes(exitsBitmap(outputs)) as Bytes32,
     checkedBytes<Bytes32>(statement.privateTxHash, 32, "private tx hash"),
-    ...(family.kind === "confidential"
-      ? [checkedBytes<Bytes32>(family.sender, 32, "sender")]
-      : family.partyIdentities.map((party) => checkedBytes<Bytes32>(party, 32, "party"))),
+  ];
+  const signers = [
+    u32Field(statement.signers.count, "signer count"),
+    checkedBytes<Bytes32>(statement.signers.chain, 32, "signer chain"),
+  ];
+  const roots = [
     checkedBytes<Bytes32>(statement.roots.policyHash, 32, "policy hash"),
     checkedBytes<Bytes32>(statement.roots.ownRoot, 32, "own root"),
     checkedBytes<Bytes32>(statement.roots.curatorRoot, 32, "curator root"),
-    ...(family.kind === "confidential"
-      ? family.recipients.map((recipient) => checkedBytes<Bytes32>(recipient, 32, "recipient"))
-      : []),
-    ...publicAssets.flatMap((asset, slot) => [
-      checkedBytes<Bytes32>(asset, 32, "public asset"),
-      checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
-      checkedBytes<Bytes32>(publicGross[slot] as Bytes32, 32, "public gross"),
-    ]),
-    checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash"),
   ];
+  const publicLegs = publicAssets.flatMap((asset, slot) => [
+    checkedBytes<Bytes32>(asset, 32, "public asset"),
+    checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),
+    checkedBytes<Bytes32>(publicGross[slot] as Bytes32, 32, "public gross"),
+  ]);
+  const withdrawalHash = checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash");
+  const head = auditHeadElements(statement.head);
+  const outputCount = u32Field(outputs.length, "output count");
+  const elements: Bytes32[] =
+    family.kind === "confidential"
+      ? [
+          ...head,
+          bit(family.inProof),
+          bit(family.delegate),
+          bit(statement.exempt),
+          bit(statement.approvalRequired),
+          outputCount,
+          outputChain,
+          ciphertextChain,
+          filledChain(outputs.flatMap(outputRecipientKeyFields), 2 * capacity),
+          ...counts,
+          checkedBytes<Bytes32>(family.sender, 32, "sender"),
+          ...signers,
+          ...roots,
+          ...filled(family.recipients, capacity).map((recipient) =>
+            checkedBytes<Bytes32>(recipient, 32, "recipient"),
+          ),
+          ...publicLegs,
+          withdrawalHash,
+        ]
+      : [
+          ...head,
+          bit(statement.exempt),
+          bit(statement.approvalRequired),
+          outputCount,
+          outputChain,
+          ciphertextChain,
+          recipientBodyChain(outputs, capacity),
+          recipientTagChain(outputs, capacity, family.senderBundleTag),
+          bigIntBytes(changeBitmap(outputs)) as Bytes32,
+          ciphertextDigest(family.senderBundle),
+          ...counts,
+          ...family.partyIdentities.map((party) => checkedBytes<Bytes32>(party, 32, "party")),
+          ...signers,
+          ...roots,
+          ...publicLegs,
+          withdrawalHash,
+          family.replies === undefined ? ZERO_FIELD : ciphertextDigest(family.replies),
+        ];
   // The count then the version close the chain, another length or layout hashes apart.
   return [
     ...elements,
@@ -177,10 +230,12 @@ export interface TransferBinding {
   readonly auditorPubkey: Bytes33;
   /** The ring mode escrows every output nullifier key, the frame flag has to agree. */
   readonly keyEscrow: boolean;
-  /** The in-proof owner's identity, the sole owner signer's under a policy, zero otherwise. */
+  /** The in-proof owner's identity, zero otherwise. */
   readonly sender: Bytes32;
   /** Zeros off the anonymous rail. */
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+  /** The SPP owner signer run, first-occurrence dedup, each by its owner identity. */
+  readonly signers: readonly Bytes32[];
   readonly roots: TransferRoots;
   readonly publicAssets: readonly Bytes32[];
   readonly publicAmounts: readonly Bytes32[];
@@ -195,9 +250,16 @@ export function ringTransferStatement(
 ): TransferStatement {
   if (binding.keyEscrow !== data.keyEscrow)
     throw new RingError("RING_TRANSACT_DATA_INVALID", { details: { reason: "FlagNotAllowed" } });
+  const replies = replyRegion(data);
   const family: TransferFamily =
     data.rail === "anonymous"
-      ? { kind: "anonymous", partyIdentities: binding.partyIdentities }
+      ? {
+          kind: "anonymous",
+          partyIdentities: binding.partyIdentities,
+          senderBundle: data.sender?.body ?? new Uint8Array(),
+          senderBundleTag: data.sender?.tag ?? ZERO_FIELD,
+          ...(replies === undefined ? {} : { replies }),
+        }
       : {
           kind: "confidential",
           inProof: data.inProofOwner !== undefined,
@@ -205,6 +267,9 @@ export function ringTransferStatement(
           sender: binding.sender,
           recipients: RingTransactData.recipients(data),
         };
+  const layout = RingTransactData.streamLayout(data);
+  // In-proof, authority and entry bind no run, every other key one chain of its `S` slots.
+  const unbound = data.inProofOwner !== undefined || data.rail === "delegate" || data.fullOpenings;
   return Object.freeze({
     head: Object.freeze({
       firstNullifier: RingTransactData.firstNullifier(data),
@@ -219,8 +284,12 @@ export function ringTransferStatement(
     family,
     exempt: data.exempt,
     approvalRequired: data.approvalRequired,
+    capacity: data.nOut,
     outputs: data.outputs,
     outputCiphertexts: RingTransactData.outputCiphertexts(data),
+    signers: unbound
+      ? Object.freeze({ count: 0, chain: ZERO_FIELD })
+      : signerBinding(binding.signers, layout.key.class),
     inputCount: data.nullifiers.length,
     privateTxHash: data.privateTxHash,
     roots: binding.roots,
@@ -229,6 +298,17 @@ export function ringTransferStatement(
     publicGross: binding.publicGross,
     withdrawalHash: binding.withdrawalHash,
   });
+}
+
+/** `HashChain4(identity_0 .. identity_{count-1}, 0 .. 0 up to slots)`, reorder or an extra signer hashes apart. */
+export function signerBinding(identities: readonly Bytes32[], slots: number): SignerBinding {
+  if (identities.length > slots)
+    throw new RingError("RING_INVALID_LENGTH", {
+      details: { name: "signers", expected: slots, actual: identities.length },
+    });
+  // An empty run binds zero on every rail, the program and the circuit agree on it.
+  if (identities.length === 0) return Object.freeze({ count: 0, chain: ZERO_FIELD });
+  return Object.freeze({ count: identities.length, chain: filledChain(identities, slots) });
 }
 
 /** `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
@@ -267,6 +347,7 @@ export function registerKeyStatementHash(statement: RegisterKeyStatement): Bytes
   return chain(registerKeyStatementElements(statement));
 }
 
+const ZERO_FIELD = new Uint8Array(32) as Bytes32;
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -294,8 +375,48 @@ export function ciphertextDigest(ciphertext: Uint8Array): Bytes32 {
 }
 
 /** Every ciphertext has a fixed length under the layout, `hash_bytes` needs no tag. */
-export function outputCiphertextChain(ciphertexts: readonly Uint8Array[]): Bytes32 {
-  return chain(ciphertexts.map((ciphertext) => hashBytes(ciphertext) as Bytes32));
+export function outputCiphertextChain(
+  ciphertexts: readonly Uint8Array[],
+  capacity: number,
+): Bytes32 {
+  return filledChain(
+    ciphertexts.map((ciphertext) => hashBytes(ciphertext) as Bytes32),
+    capacity,
+  );
+}
+
+/** Zero on a change or exit slot and past `m`, a hidden dummy's body hashes as sent. */
+export function recipientBodyChain(outputs: readonly RingOutput[], capacity: number): Bytes32 {
+  return filledChain(
+    outputs.map((output) =>
+      output.kind === "anonymous" ? (hashBytes(output.body) as Bytes32) : ZERO_FIELD,
+    ),
+    capacity,
+  );
+}
+
+/** `tag_i` on a recipient or dummy slot, zero on change, exit and past `m`, the bundle tag last. */
+export function recipientTagChain(
+  outputs: readonly RingOutput[],
+  capacity: number,
+  senderBundleTag: Bytes32,
+): Bytes32 {
+  return chain([
+    ...filled(
+      outputs.map((output) => (output.kind === "anonymous" ? output.tag : ZERO_FIELD)),
+      capacity,
+    ),
+    checkedBytes<Bytes32>(senderBundleTag, 32, "sender bundle tag"),
+  ]);
+}
+
+/** Zero past the published values, `output_count` keeps the length apart. */
+function filled(values: readonly Bytes32[], width: number): readonly Bytes32[] {
+  return [...values, ...Array.from({ length: width - values.length }, () => ZERO_FIELD)];
+}
+
+function filledChain(values: readonly Bytes32[], width: number): Bytes32 {
+  return chain(filled(values, width));
 }
 
 function packedKey(key: Bytes33): readonly Bytes32[] {

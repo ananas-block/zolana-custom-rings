@@ -78,8 +78,25 @@ export type ConfirmedRingTransaction =
   | Readonly<{
       kind: "merge";
       transaction: IndexedShieldedTransaction;
-      /** The anonymous merge disclosure whose proof the direct ring caller verified. */
+      /** The merge disclosure whose proof the direct ring caller verified. */
       disclosure?: RingMergeDisclosure;
+    }>
+  /** Tag 3, 25, 43 or 44, the v3 readers skip it and the historical path decodes `instruction`. */
+  | Readonly<{
+      kind: "historicalTransfer";
+      transaction: IndexedShieldedTransaction;
+      inputTreeIds: readonly (number | undefined)[];
+      /** The ring instruction's data, its first byte the tag. */
+      instruction: Uint8Array;
+      /** SPP proved the transfer on the anonymous rail. */
+      sppAnonymous: boolean;
+    }>
+  /** The historical path decodes `instruction`. */
+  | Readonly<{
+      kind: "historicalMerge";
+      transaction: IndexedShieldedTransaction;
+      /** The ring instruction's data, its first byte the tag. */
+      instruction: Uint8Array;
     }>;
 
 /** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never absent. */
@@ -97,7 +114,7 @@ function confirmedMergeDisclosureOf(found: TrustedEvent): RingMergeDisclosure | 
   const wrapper = found.wrapper;
   if (
     found.source.data[0] !== InstructionTag.ringMergeTransact ||
-    wrapper?.data[0] !== InstructionTag.ringMergeTransact
+    wrapper?.data[0] !== RingInstructionTag.merge
   )
     return undefined;
   const request = new Reader(wrapper.data.subarray(MERGE_REQUEST_OFFSET));
@@ -793,6 +810,12 @@ function bindConfirmedTransaction(
         ),
       });
     if (data.kind === "merge") {
+      if (found.wrapper?.data[0] === RingInstructionTag.historicalMerge)
+        return Object.freeze({
+          kind: "historicalMerge",
+          transaction,
+          instruction: found.wrapper.data,
+        });
       const disclosure = confirmedMergeDisclosureOf(found);
       return Object.freeze({
         kind: data.kind,
@@ -802,12 +825,28 @@ function bindConfirmedTransaction(
     }
     // Rust `ConfirmedEvent::input_tree_ids`, the event names any other tree by its account alone.
     const outputTreeId = outputSlots[0]?.outputContext.treeId;
+    const inputTreeIds = Object.freeze(
+      data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
+    );
+    const wrapperTag = found.wrapper?.data[0];
+    if (
+      found.wrapper !== undefined &&
+      (wrapperTag === RingInstructionTag.historicalTransfer ||
+        wrapperTag === RingInstructionTag.historicalAuthorityTransfer ||
+        wrapperTag === RingInstructionTag.legacyTransact ||
+        wrapperTag === RingInstructionTag.legacyDelegateTransact)
+    )
+      return Object.freeze({
+        kind: "historicalTransfer",
+        transaction,
+        inputTreeIds,
+        instruction: found.wrapper.data,
+        sppAnonymous: data.anonymous === true,
+      });
     return Object.freeze({
       kind: data.kind,
       transaction,
-      inputTreeIds: Object.freeze(
-        data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
-      ),
+      inputTreeIds,
       layout: boundLayout(found, {
         anonymous: data.anonymous === true,
         outputs: outputSlots.length,

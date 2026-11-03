@@ -29,7 +29,6 @@ import {
   ShieldedAddress,
   ViewingKey,
   X25519PublicKey,
-  type ViewTag,
 } from "@heliuslabs/zolana/keypair";
 import {
   ProofInputUtxo,
@@ -197,13 +196,16 @@ export async function decodeRelayProofInputs(
 function writeRail(writer: Writer, rail: RelayRail): void {
   switch (rail.kind) {
     case "anonymous": {
-      writer.u8(0, "rail").bytes(rail.plan.senderTag, 32, "plan.senderTag");
+      writer.u8(0, "rail");
       writer.u8(rail.plan.payments.length, "plan.payments.length");
       for (const payment of rail.plan.payments)
-        writer
-          .bytes(payment.recipient.toBytes(), X25519_PUBLIC_KEY_LENGTH, "plan.payment.recipient")
-          .bytes(payment.tag, 32, "plan.payment.tag");
-      for (const tag of rail.plan.dummyTags()) writer.bytes(tag, 32, "plan.dummyTag");
+        writer.bytes(
+          payment.recipient.toBytes(),
+          X25519_PUBLIC_KEY_LENGTH,
+          "plan.payment.recipient",
+        );
+      for (const preimage of rail.plan.dummyPreimages())
+        writer.bytes(preimage, 32, "plan.dummyPreimage");
       writer.option(rail.exitTokenOwner, (output, owner) =>
         output.bytes(addressBytes(owner), 32, "exitTokenOwner"),
       );
@@ -262,6 +264,7 @@ function writeSpend(
     input.isCompact() ||
     input.isDummy() ||
     !input.utxo.owner.equals(sender.signingPublicKey) ||
+    !equalBytes(input.nullifierPublicKey, sender.nullifierPublicKey) ||
     leafIndex === undefined
   )
     throw refused("input", index);
@@ -397,22 +400,22 @@ function readRail(reader: WireReader): RelayRail {
   const tag = reader.u8("rail");
   switch (tag) {
     case 0: {
-      const senderTag = reader.hash("plan.senderTag");
       const payments = reader.list("plan.payments", () => ({
         recipient: X25519PublicKey.fromBytes(
           reader.bytes(X25519_PUBLIC_KEY_LENGTH, "plan.payment.recipient"),
         ),
-        tag: reader.hash("plan.payment.tag") as ViewTag,
+        // A reply already sits sealed in the external data, the wire carries no plaintext.
+        reply: null,
       }));
-      const dummyTags = AnonymousPlan.create(senderTag)
-        .dummyTags()
-        .map(() => reader.hash("plan.dummyTag") as ViewTag);
+      const dummyPreimages = AnonymousPlan.create()
+        .dummyPreimages()
+        .map(() => reader.hash("plan.dummyPreimage"));
       const exitTokenOwner = reader.option("exitTokenOwner", () =>
         reader.address("exitTokenOwner"),
       );
       return Object.freeze({
         kind: "anonymous",
-        plan: AnonymousPlan.fromTags(senderTag as ViewTag, payments, dummyTags),
+        plan: AnonymousPlan.fromDummyPreimages(payments, dummyPreimages),
         ...(exitTokenOwner === undefined ? {} : { exitTokenOwner }),
       });
     }

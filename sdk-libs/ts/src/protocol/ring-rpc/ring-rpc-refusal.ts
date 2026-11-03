@@ -30,6 +30,7 @@ export const RingRpcRefusal = Object.freeze({
   overLimit: -32161,
   repeatedAsset: -32162,
   limitsUnavailable: -32163,
+  messageScope: -32164,
   mergeSettingsUnavailable: -32170,
   staleMergeSettings: -32171,
   wrongCluster: -32190,
@@ -53,6 +54,8 @@ export const RingRpcRefusal = Object.freeze({
   walletScope: -32270,
   invalidLimits: -32276,
   limitsWithoutRecord: -32277,
+  addressNotAuthorized: -32278,
+  addressEscrowMismatch: -32279,
   unrecordedAsset: -32296,
 } as const);
 

@@ -13,9 +13,12 @@ import { memberOfIdentity, type Member } from "../membership/policy.js";
 /** Rust `write_kind`. */
 const RECORD_KIND = 0;
 const ESCROW_KIND = 1;
+const ADDRESS_KIND = 2;
 /** Rust `RecordWriteData::SIZE` and `EscrowWriteData::SIZE`. */
 const RECORD_LENGTH = 145;
 const ESCROW_LENGTH = 128;
+/** `owner ‖ address_revision u64 LE`. */
+const ADDRESS_LENGTH = 40;
 
 /** Rust `StorageWriteData`. */
 export type StorageWrite =
@@ -35,7 +38,9 @@ export type StorageWrite =
       /** The only field the leaf does not bind. */
       ephU: Bytes32;
       ciphertext: Bytes32;
-    }>;
+    }>
+  /** The owner's enrolled address, hashed from its authorization account, never from instruction data. */
+  | Readonly<{ kind: "address"; owner: Address; addressRevision: bigint }>;
 
 /** Mirrors Rust `StorageWriteData::encode_all`. */
 export function encodeStorageWrites(writes: readonly StorageWrite[]): Uint8Array {
@@ -48,6 +53,11 @@ export function encodeStorageWrites(writes: readonly StorageWrite[]): Uint8Array
         .u64(write.mask, "mask")
         .u64(write.value, "value")
         .bytes(mintPolicyWrite(write.mintPolicy));
+    else if (write.kind === "address")
+      writer
+        .u8(ADDRESS_KIND, "kind")
+        .bytes(addressBytes(write.owner, "owner"))
+        .u64(write.addressRevision, "addressRevision");
     else
       writer
         .u8(ESCROW_KIND, "kind")
@@ -65,12 +75,24 @@ export function decodeStorageWrites(data: Uint8Array): readonly StorageWrite[] {
   for (let offset = 0; offset < data.length;) {
     const kind = data[offset];
     const length =
-      kind === RECORD_KIND ? RECORD_LENGTH : kind === ESCROW_KIND ? ESCROW_LENGTH : undefined;
+      kind === RECORD_KIND
+        ? RECORD_LENGTH
+        : kind === ESCROW_KIND
+          ? ESCROW_LENGTH
+          : kind === ADDRESS_KIND
+            ? ADDRESS_LENGTH
+            : undefined;
     if (length === undefined) throw invalid(offset);
     const body = data.subarray(offset + 1, offset + 1 + length);
     try {
       const reader = new Reader(body);
-      writes.push(kind === RECORD_KIND ? recordWrite(reader) : escrowWrite(reader));
+      writes.push(
+        kind === RECORD_KIND
+          ? recordWrite(reader)
+          : kind === ESCROW_KIND
+            ? escrowWrite(reader)
+            : addressWrite(reader),
+      );
       reader.done();
     } catch (cause) {
       throw invalid(offset, cause);
@@ -106,6 +128,11 @@ function escrowWrite(reader: Reader): StorageWrite {
   const ephU = reader.bytes(32, "ephU") as Bytes32;
   const ciphertext = reader.bytes(32, "ciphertext") as Bytes32;
   return Object.freeze({ kind: "escrow", owner, nullifierPk, ephU, ciphertext });
+}
+
+function addressWrite(reader: Reader): StorageWrite {
+  const owner = encodeBase58(reader.bytes(32, "owner"));
+  return Object.freeze({ kind: "address", owner, addressRevision: reader.u64("addressRevision") });
 }
 
 function invalid(offset: number, cause?: unknown): RingError {

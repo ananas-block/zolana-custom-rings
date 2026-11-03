@@ -16,7 +16,7 @@ const shape = (outputs: number, inputs: number, withdrawals: readonly number[]):
 
 /** The signer, in-proof and authority rails. */
 export const CONFIDENTIAL_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 32, [4, 32]),
+  shape(2, 24, [4, 32]),
   shape(4, 24, [4, 32]),
   shape(8, 16, [4, 32]),
   shape(16, 5, [8]),
@@ -99,11 +99,21 @@ export interface PolicyPoolCapacity {
   readonly curator: number;
 }
 
+/** `Q`, the owners one transfer key screens, entry keys spend for one owner. */
+export function screenedOwners(circuit: TransferKeyCircuit): number {
+  return circuit.family === "transferAnonymousEntry" ? 1 : 4;
+}
+
+/** `S`, the SPP owner signers one transfer key binds, entry keys refuse a nonempty run. */
+export function signerSlots(circuit: TransferKeyCircuit): number {
+  return circuit.family === "transferAnonymousEntry" ? 0 : transferInputClass(circuit);
+}
+
 /** Go `PolicyInputs.recordCapacity`, Rust `RingCircuit::record_pools`. */
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  const distinct = 1 + 2 * circuit.outputs + circuit.withdrawals;
+  const distinct = screenedOwners(circuit) + 2 * circuit.outputs + circuit.withdrawals;
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,

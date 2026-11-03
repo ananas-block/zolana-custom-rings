@@ -37,7 +37,9 @@ import {
   type RecordOpening,
   type RecordPool,
   type RecordWriteProofInput,
+  type AuthorizedAddress,
 } from "./member-registry.js";
+import { packBytesBe } from "../../crypto/derivation/hasher.js";
 
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
@@ -48,10 +50,11 @@ import type { ApplyRecordsStatement } from "../proof/statement.js";
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
 /** Rust `MEMBER_REGISTRY_EMPTY_ROOT`, the tree holding only the sentinel, a registry's first root. */
 export const MEMBER_REGISTRY_EMPTY_ROOT = hexToBytes(
-  "00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130",
+  "23e7f55dac8acecf4f3c2ee3ccea5bd3b42ed78e2381e67e0d756d0f8ce3cb71",
 ) as Bytes32;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
+const CURVE25519_FIELD = 2n ** 255n - 19n;
 const CAPACITY = Number(MEMBER_REGISTRY_CAPACITY);
 
 /** Rust `EscrowKey`, the record field a registered key sets. */
@@ -67,6 +70,7 @@ export const SENTINEL_RECORD: MemberRecord = Object.freeze({
   lists: 0n,
   escrowKey: ZERO_32,
   mintPolicy: EMPTY_MINT_POLICY,
+  addressHash: ZERO_32,
 });
 
 /** The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly. */
@@ -86,7 +90,32 @@ export function memberRecordHash(record: MemberRecord): Bytes32 {
     mintPolicyField(record.mintPolicy),
     u64Field(record.mintPolicy.withdrawalThreshold, "withdrawal threshold"),
     ...assetLimitsFields(record.mintPolicy.limits),
+    checkedBytes<Bytes32>(record.addressHash, 32, "record address hash"),
   ]);
+}
+
+/** Mirrors `address_hash` in `program-libs/member-registry/src/record.rs`. */
+export function addressRecordHash(
+  input: Readonly<{ member: Bytes32 } & AuthorizedAddress>,
+): Bytes32 {
+  return poseidon([
+    domainField(RingDomain.addressRecord),
+    checkedBytes<Bytes32>(input.ringId, 32, "ring id"),
+    checkedBytes<Bytes32>(input.member, 32, "member"),
+    checkedBytes<Bytes32>(input.nullifierPk, 32, "nullifier pk"),
+    ...packBytesBe(checkedViewingU(input.viewingU)),
+    u64Field(input.addressRevision, "address revision"),
+  ]);
+}
+
+/** Little endian below `2^255 - 19` and nonzero, the Storage program refuses anything else at enrollment. */
+export function checkedViewingU(viewingU: Bytes32): Bytes32 {
+  const value = bytesToBigInt(
+    Uint8Array.from(checkedBytes<Bytes32>(viewingU, 32, "viewing key")).reverse(),
+  );
+  if (value === 0n || value >= CURVE25519_FIELD)
+    throw new RingError("RING_NONCANONICAL_VIEWING_KEY");
+  return viewingU;
 }
 
 /** The pool of a key whose queries are all inactive, its canopy admits the zero record and binds no root, Rust `RecordPool::unopened`. */
@@ -102,6 +131,7 @@ export function unopenedRecordPool(openings: number): RecordPool {
     lists: 0n,
     escrowKey: ZERO_32,
     mintPolicy: EMPTY_MINT_POLICY,
+    addressHash: ZERO_32,
   });
   // Index 0 is the first child at every level, the fold lands at canopy position 0.
   let node = memberRecordHash(record);
@@ -275,6 +305,7 @@ export function verifyRecordPool(
           record: served.record,
           path,
           ...(served.sealedKey === undefined ? {} : { sealedKey: served.sealedKey }),
+          ...(served.address === undefined ? {} : { address: served.address }),
         }
       : { kind: "absent", low: served.record, path };
     return MemberOpeningRead.verify(opening, root, member);
@@ -300,7 +331,6 @@ export function escrowEntry(member: Bytes32, key: EscrowKey): QueueEntry {
   });
 }
 
-/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`. */
 export function queueEntryHash(entry: QueueEntry): Bytes32 {
   return poseidon([
     domainField(RingDomain.queueWrite),
@@ -311,6 +341,7 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
     mintPolicyWriteField(entry.mintPolicy),
     u64Field(entry.mintPolicy?.withdrawalThreshold ?? 0n, "withdrawal threshold"),
     ...assetLimitsFields((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits),
+    checkedBytes<Bytes32>(entry.addressHash ?? ZERO_32, 32, "entry address hash"),
   ]);
 }
 
@@ -363,13 +394,17 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
   });
 }
 
-/** List bits outside the mask keep their value, a registered key is final. */
+/** List bits outside the mask keep their value, a registered key is final, a zero address hash preserves. */
 function writtenRecord(record: MemberRecord, entry: QueueEntry): MemberRecord {
   return Object.freeze({
     ...record,
     lists: (record.lists & ~entry.mask & U64_MAX) | entry.value,
     mintPolicy: entry.mintPolicy ?? record.mintPolicy,
     escrowKey: equalBytes(record.escrowKey, ZERO_32) ? entry.escrowKey : record.escrowKey,
+    addressHash:
+      entry.addressHash === undefined || equalBytes(entry.addressHash, ZERO_32)
+        ? record.addressHash
+        : entry.addressHash,
   });
 }
 
@@ -386,6 +421,7 @@ function replayWrite(
       lists: write.oldLists,
       escrowKey: write.oldEscrow,
       mintPolicy: write.oldMintPolicy,
+      addressHash: write.oldAddressHash,
     };
     if (!equalBytes(quadPathRoot(write.slot, memberRecordHash(record)), root))
       invalid("RootMismatch");
@@ -397,7 +433,8 @@ function replayWrite(
     !equalBytes(write.oldNext, low.next) ||
     write.oldLists !== 0n ||
     !equalBytes(write.oldEscrow, ZERO_32) ||
-    !isEmptyMintPolicy(write.oldMintPolicy)
+    !isEmptyMintPolicy(write.oldMintPolicy) ||
+    !equalBytes(write.oldAddressHash, ZERO_32)
   )
     invalid("NotBracketed");
   if (!equalBytes(quadPathRoot(write.lowPath, memberRecordHash(low)), root))
@@ -409,6 +446,7 @@ function replayWrite(
       lists: 0n,
       escrowKey: ZERO_32,
       mintPolicy: EMPTY_MINT_POLICY,
+      addressHash: ZERO_32,
     },
     entry,
   );
@@ -416,7 +454,8 @@ function replayWrite(
   if (
     inserted.lists === 0n &&
     equalBytes(inserted.escrowKey, ZERO_32) &&
-    isEmptyMintPolicy(inserted.mintPolicy)
+    isEmptyMintPolicy(inserted.mintPolicy) &&
+    equalBytes(inserted.addressHash, ZERO_32)
   ) {
     // The circuit range-checks a no-op's slot and nothing else.
     checkedIndex(write.slot.index);
