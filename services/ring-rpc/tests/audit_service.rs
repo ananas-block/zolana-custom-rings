@@ -11,6 +11,8 @@ mod authorization;
 mod backfill;
 #[path = "audit_service/cosign_relay.rs"]
 mod cosign_relay;
+#[path = "audit_service/coverage_failures.rs"]
+mod coverage_failures;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
 #[path = "audit_service/reader_grants.rs"]
@@ -434,6 +436,7 @@ struct StaticSource {
     /// A snapshot behind the floor, the shape of a rollback.
     forced_context: Arc<Mutex<Option<u64>>>,
     history_down: Arc<AtomicBool>,
+    config_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
 }
@@ -722,7 +725,13 @@ impl TransactionSource for StaticSource {
         ring: Address,
     ) -> impl Future<Output = Result<Option<RingConfiguration>, ClientError>> + Send {
         let config = self.configs.get(&ring).copied();
-        async move { Ok(config) }
+        let down = self.config_down.load(Ordering::Relaxed);
+        async move {
+            if down {
+                return Err(ClientError::Rpc("config unavailable".to_owned()));
+            }
+            Ok(config)
+        }
     }
 
     fn ring_chain_status(
@@ -1080,6 +1089,7 @@ impl Fixture {
             forged_token: None,
             forced_context: Arc::default(),
             history_down: Arc::default(),
+            config_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
         };

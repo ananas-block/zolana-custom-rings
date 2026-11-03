@@ -1,7 +1,7 @@
 //! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
 
 use jsonrpsee::RpcModule;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, Statement};
 use solana_instruction::AccountMeta;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::input_hash_evidence;
@@ -326,21 +326,26 @@ enum StoreFault {
     UpdateRefused,
     /// `RAISE(FAIL)` keeps the inserted row and still returns an error.
     InsertReplyLost,
+    ReservationReleaseRefused,
 }
 
 impl StoreFault {
     fn trigger(self) -> String {
         let (event, raise) = match self {
             Self::UpdateRefused => (
-                "BEFORE UPDATE",
+                "BEFORE UPDATE ON relay_relays",
                 "INSERT INTO relay_relays(status) VALUES(NULL)",
             ),
             Self::InsertReplyLost => (
-                "AFTER INSERT",
+                "AFTER INSERT ON relay_relays",
                 "SELECT RAISE(FAIL, 'the insert reply was lost')",
             ),
+            Self::ReservationReleaseRefused => (
+                "BEFORE DELETE ON cosign_usage",
+                "SELECT RAISE(ABORT, 'reservation release refused')",
+            ),
         };
-        format!("CREATE TRIGGER {FAULT_TRIGGER} {event} ON relay_relays BEGIN {raise}; END")
+        format!("CREATE TRIGGER {FAULT_TRIGGER} {event} BEGIN {raise}; END")
     }
 }
 
@@ -561,6 +566,46 @@ async fn a_refused_send_stores_failed_and_frees_its_reservation() {
         .expect("the relay records the refusal");
     let status = relay.status(relay_id).await;
     assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    relay.second_cap_fits().await;
+}
+
+#[tokio::test]
+async fn a_failed_reservation_release_is_retried_by_status() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    relay.chain.refuse_next.store(true, Ordering::Relaxed);
+    let refused = relay.spending_cap(1);
+    let relay_id = refused.relay_id().expect("relay id");
+    relay.fault(StoreFault::ReservationReleaseRefused).await;
+    let interrupted = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
+        .await;
+    assert!(interrupted.is_err());
+
+    let connection = relay.store.connection();
+    let stored = connection
+        .query_one(Statement::from_string(
+            connection.get_database_backend(),
+            "SELECT status FROM relay_relays",
+        ))
+        .await
+        .expect("relay query")
+        .expect("stored relay");
+    assert_eq!(
+        stored.try_get::<String>("", "status").expect("status"),
+        "failed"
+    );
+    assert!(relay.chain.sent().is_empty());
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+
+    relay.heal().await;
+    let status = relay.status(relay_id.clone()).await;
+    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    assert_eq!(relay.status(relay_id).await, status);
     relay.second_cap_fits().await;
 }
 

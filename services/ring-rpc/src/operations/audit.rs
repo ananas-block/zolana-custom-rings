@@ -474,15 +474,18 @@ impl<S: TransactionSource> AuditService<S> {
 
     /// Opens the ring's transfers, audited deposits and merges from the store's resume point.
     pub async fn backfill_utxos(&self) -> Result<(), RingRpcError> {
-        let source = &self.shared.source;
-        let Some(config) = source.ring_config(self.ring).await? else {
-            return Ok(());
-        };
-        if config.auditor_pubkey != self.auditor.pubkey() {
-            return Err(Unauthorized::AuditorKeyMismatch.into());
-        }
         let store = self.shared.store(self.ring);
-        let outcome = self.read_history(&store, config.mode).await;
+        let outcome = async {
+            let Some(config) = self.shared.source.ring_config(self.ring).await? else {
+                store.pass_unfinished();
+                return Ok(());
+            };
+            if config.auditor_pubkey != self.auditor.pubkey() {
+                return Err(Unauthorized::AuditorKeyMismatch.into());
+            }
+            self.read_history(&store, config.mode).await
+        }
+        .await;
         if outcome.is_err() {
             store.pass_unfinished();
         }
@@ -808,6 +811,7 @@ impl<S: TransactionSource> AuditService<S> {
                             if let Some(merge) = merge {
                                 apply_confirmed_merge(self.shared.database.as_ref(), store, merge)
                                     .await?;
+                                store.remember_merge(&tx)?;
                             }
                         }
                         Err(error) if error.disposition() == RowDisposition::Retry => {
@@ -863,6 +867,11 @@ impl<S: TransactionSource> AuditService<S> {
                         );
                         if error.disposition() == RowDisposition::Retry {
                             unfinished.get_or_insert(error);
+                        } else {
+                            store.hold_unnamed(
+                                created_in,
+                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
+                            );
                         }
                     }
                 }
@@ -1209,6 +1218,10 @@ fn spent_rows(event: SpentEvent) -> Vec<SpentCommitment> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "merge_successor_tests.rs"]
+mod merge_successor_tests;
 
 #[cfg(test)]
 mod tests {

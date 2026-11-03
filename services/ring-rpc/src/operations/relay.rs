@@ -684,9 +684,12 @@ impl Relay {
                     },
                 }
             }
-            RelayState::AwaitingSignature
-            | RelayState::Confirmed { .. }
-            | RelayState::Failed { .. } => return Ok(()),
+            RelayState::Failed { .. } => {
+                return self
+                    .settle(record.co_signature, CoSignSettlement::Failed)
+                    .await;
+            }
+            RelayState::AwaitingSignature | RelayState::Confirmed { .. } => return Ok(()),
         };
         self.close(relay_id, record).await
     }

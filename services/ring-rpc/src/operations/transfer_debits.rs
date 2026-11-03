@@ -198,7 +198,9 @@ fn public_flows(
             true => &mut flow.deposited,
             false => &mut flow.withdrawn,
         };
-        *side = side.saturating_add(transfer.amount());
+        *side = side
+            .checked_add(transfer.amount())
+            .ok_or_else(unavailable)?;
     }
     Ok(flows)
 }
@@ -405,6 +407,63 @@ mod tests {
             RingFrame::of(&message(instructions), RING).err(),
             Some(RingRpcError::CoSign(CoSignError::MessageScope))
         ));
+    }
+
+    #[test]
+    fn alternating_public_legs_refuse_gross_overflow() {
+        use custom_ring_interface::{CustomRingError, PublicLeg, PublicSlots};
+        use spr_interface::instruction::InterfaceTransfer;
+
+        let frame = hex::decode(
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../test-vectors/settlement/frame_v3.hex"
+            ))
+            .lines()
+            .next()
+            .expect("frame"),
+        )
+        .expect("hex");
+        let base = RingTransactData::parse(&frame, RingRail::Confidential)
+            .expect("frame")
+            .into_data();
+        let deposit = |amount| InterfaceTransfer::SolDeposit { amount };
+        let withdrawal = |amount| InterfaceTransfer::SolWithdrawal { amount };
+        for amount in [u64::MAX - 1, u64::MAX] {
+            for transfers in [
+                [withdrawal(amount), deposit(amount), withdrawal(1)],
+                [deposit(amount), withdrawal(amount), deposit(1)],
+            ] {
+                let slots =
+                    PublicSlots::fold::<CustomRingError>(transfers.iter().map(|transfer| {
+                        Ok(PublicLeg {
+                            transfer: *transfer,
+                            mint: None,
+                        })
+                    }))
+                    .expect("bounded public net");
+                assert_eq!(slots.amounts()[0].unsigned_abs(), 1);
+                let mut data = base.clone();
+                data.interface_transfers = transfers.to_vec();
+                let parsed = ParsedTransact::new(data).expect("frame");
+                let flows = public_flows(&parsed, &[PAYER; 6]);
+                if amount == u64::MAX {
+                    assert!(matches!(
+                        flows,
+                        Err(RingRpcError::CoSign(CoSignError::LimitsUnavailable))
+                    ));
+                } else {
+                    let flows = flows.expect("gross fits u64");
+                    assert_eq!(flows.len(), 1);
+                    let (deposited, withdrawn) = match transfers[0].is_deposit() {
+                        true => (u64::MAX, amount),
+                        false => (amount, u64::MAX),
+                    };
+                    assert_eq!(flows[0].deposited, deposited);
+                    assert_eq!(flows[0].withdrawn, withdrawn);
+                }
+            }
+        }
     }
 
     const VECTOR: &str = concat!(
