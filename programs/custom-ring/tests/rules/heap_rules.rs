@@ -307,12 +307,13 @@ fn send_widest(case: Wide) -> (Wide, Sent) {
 #[test]
 fn the_widest_frames_of_every_key_reach_the_pairing() {
     let pairing = InstructionError::Custom(CustomRingError::ProofVerificationFailed as u32);
-    for case in cases() {
-        let (sent_case, sent) = send_widest(case);
-        assert!(
-            matches!(&sent, Err((TransactionError::InstructionError(0, error), _)) if *error == pairing),
-            "{}, got {sent:?}",
-            sent_case.name()
-        );
-    }
+    let missed: Vec<String> = cases()
+        .into_iter()
+        .map(send_widest)
+        .filter(|(_, sent)| {
+            !matches!(sent, Err((TransactionError::InstructionError(0, error), _)) if *error == pairing)
+        })
+        .map(|(case, sent)| format!("{}, got {sent:?}", case.name()))
+        .collect();
+    assert!(missed.is_empty(), "{missed:#?}");
 }

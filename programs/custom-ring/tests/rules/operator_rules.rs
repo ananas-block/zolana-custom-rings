@@ -2,8 +2,8 @@
 
 use custom_ring_interface::{
     tag, CoSignScope, CoSigner, CustomRingError, InitializeIxData, InstructionTag,
-    PolicyBindingIxData, PolicySourceIxData, RingKind, RingMode, RingPolicy, RingRole,
-    SetPausedIxData, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
+    PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData, RingKind, RingMode, RingPolicy,
+    RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -15,9 +15,9 @@ use zolana_ring_policy::ListId;
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
-    refused, refused_with, ring_auth, rules_write, set_co_signer, set_delegate, within_budget,
-    ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup, UpdateAuthorityIx,
-    UpdatePolicyIx, PROGRAM, RECORDS,
+    refused, refused_with, ring_auth, root, rules_write, set_co_signer, set_delegate,
+    within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup,
+    UpdateAuthorityIx, UpdatePolicyIx, PROGRAM, RECORDS,
 };
 use crate::transact_rules::SPP;
 
@@ -164,6 +164,12 @@ fn the_ring_records_the_slot_it_was_created_in() {
     ring.warp(created);
     let data = InitializeIxData {
         kind: RingKind::Anonymous,
+        policy: Some(PolicyBindingIxData {
+            table: PolicyTableIxData {
+                sources: Vec::new(),
+                rules: Vec::new(),
+            },
+        }),
         ..audit_only_config(&ring)
     };
     upgrade_initialize(&mut ring, data).expect("the upgrade authority creates the ring");
@@ -408,6 +414,108 @@ fn update_policy_binds_records_late_on_an_audit_only_ring() {
     let account: RingPolicy = ring.read(&policy_pda());
     assert_eq!(account.records, RECORDS);
     assert_eq!(account.written_policy_hash(), None);
+}
+
+#[test]
+fn an_anonymous_ring_needs_a_records_registry() {
+    for (setup, refusal) in [
+        (Setup::Anonymous, CustomRingError::AnonymousRingNeedsRecords),
+        (Setup::AnonymousPolicy, CustomRingError::PolicyNotSet),
+    ] {
+        let mut ring = uninitialized(setup);
+        let data = InitializeIxData {
+            kind: setup.kind(),
+            policy: None,
+            ..policy_config(&ring)
+        };
+        refused(upgrade_initialize(&mut ring, data), refusal);
+    }
+}
+
+/// A shared own registry would fail the second ring for an enrolled owner.
+#[test]
+fn initialize_refuses_records_of_another_ring() {
+    let other_ring = [0x71; 32];
+    for setup in [Setup::AuditOnly, Setup::Policy, Setup::Anonymous] {
+        for ring_id in [other_ring, [0; 32]] {
+            let mut ring = uninitialized(setup);
+            let authority = ring.roles.policy.pubkey();
+            ring.store_registry_of(ring_id, RECORDS, &authority, &[root(0, [0x0e; 32])]);
+            let table = match setup.kind().has_policy() {
+                true => allow_list_table(Vec::new()),
+                false => PolicyTableIxData {
+                    sources: Vec::new(),
+                    rules: Vec::new(),
+                },
+            };
+            let data = InitializeIxData {
+                kind: setup.kind(),
+                policy: Some(PolicyBindingIxData { table }),
+                ..policy_config(&ring)
+            };
+            refused(
+                upgrade_initialize(&mut ring, data),
+                CustomRingError::RecordsRegistryOtherRing,
+            );
+        }
+    }
+}
+
+#[test]
+fn the_records_write_refuses_a_registry_of_another_ring() {
+    let foreign = Address::new_from_array([0x5e; 32]);
+    let mut ring = Ring::new(Setup::Anonymous);
+    let authority = ring.roles.policy.pubkey();
+    ring.store_registry_of([0x71; 32], foreign, &authority, &[root(0, [0x0e; 32])]);
+    let rebind = |records: &[Address]| {
+        UpdatePolicyIx {
+            authority,
+            update: UpdatePolicyIxData::Records,
+            trailing: records,
+        }
+        .instruction()
+    };
+    refused(
+        ring.role_send(RingRole::Policy, rebind(&[foreign])),
+        CustomRingError::RecordsRegistryOtherRing,
+    );
+    // The zero address owns no registry, the write cannot clear an anonymous ring's records.
+    refused(
+        ring.role_send(RingRole::Policy, rebind(&[Address::default()])),
+        CustomRingError::InvalidStorageRegistry,
+    );
+    refused(
+        ring.role_send(RingRole::Policy, rebind(&[])),
+        CustomRingError::InvalidStorageRegistry,
+    );
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.records, RECORDS);
+}
+
+/// A curator source reads list columns, any registry serves.
+#[test]
+fn a_curator_source_may_name_any_ring_s_registry() {
+    let curator = Address::new_from_array([0x5f; 32]);
+    let mut ring = Ring::new(Setup::Policy);
+    let policy = ring.roles.policy.pubkey();
+    ring.store_registry_of([0x71; 32], curator, &policy, &[root(4, [0x0c; 32])]);
+    let curated = PolicyTableIxData {
+        sources: vec![SourceSpec {
+            list_id: ListId::Allow as u8,
+            source: 1,
+        }],
+        ..allow_list_table(Vec::new())
+    };
+    ring.role_send(
+        RingRole::Policy,
+        UpdatePolicyIx {
+            authority: policy,
+            update: UpdatePolicyIxData::Rules(curated),
+            trailing: &[curator],
+        }
+        .instruction(),
+    )
+    .expect("a foreign ring's registry serves as a curator");
 }
 
 struct RoleWrite {

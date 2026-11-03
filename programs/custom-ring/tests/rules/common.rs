@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, RootUpdate, StorageRegistry},
-    storage_instruction::{StorageUpdateIxData, UpdateMode},
+    storage_instruction::{InitializeIxData as StorageInitialize, StorageUpdateIxData, UpdateMode},
     tag, ApplyRecordsIxData, CustomRingError, InitializeIxData, InstructionTag,
     PolicyBindingIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
     SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
@@ -23,7 +23,7 @@ use spr_interface::{
     state::{discriminator::PROTOCOL_CONFIG, ProtocolConfig},
     BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
+use zolana_ring_policy::{ring_id_field, ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
 /// Any address serves as the ring program.
 pub const PROGRAM: Address = Address::new_from_array([0x52; 32]);
@@ -197,9 +197,27 @@ impl Ring {
             .collect()
     }
 
-    /// A `StorageRegistry` of `authority` holding `roots` newest first.
+    /// A `StorageRegistry` of `PROGRAM` and `authority` holding `roots` newest first.
     pub fn store_registry(&mut self, address: Address, authority: &Address, roots: &[Root]) {
-        let mut registry = StorageRegistry::new(*authority, 0);
+        let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
+        self.store_registry_of(ring_id, address, authority, roots);
+    }
+
+    /// A `StorageRegistry` serving `ring_id`, zero serving as a curator only.
+    pub fn store_registry_of(
+        &mut self,
+        ring_id: [u8; 32],
+        address: Address,
+        authority: &Address,
+        roots: &[Root],
+    ) {
+        let mut registry = StorageRegistry::new(
+            *authority,
+            &StorageInitialize {
+                ring_id,
+                ..Zeroable::zeroed()
+            },
+        );
         registry.roots[..roots.len()].copy_from_slice(roots);
         self.store(
             address,
@@ -442,6 +460,7 @@ pub fn retired(revision: u64, hash: [u8; 32], expires_at: u64) -> Root {
 }
 
 /// Only a ring proof check raises either code, every earlier check passed.
+#[track_caller]
 pub fn reaches_verification(sent: Sent) -> u64 {
     match reached_verification(&sent) {
         Some(units) => units,

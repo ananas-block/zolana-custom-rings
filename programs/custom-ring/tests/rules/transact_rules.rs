@@ -2,11 +2,11 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
-    AnonymousProofData, CoSignScope, CustomRingError, CustomRingProof, InputTrees,
-    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX,
-    TRANSACT_PAYER_INDEX,
+    funder_account_position, input_flag, key_catalog::RingCircuit, sender_bundle_len, shape_flag,
+    tag, transact_flag, AnonymousProofData, CoSignScope, CustomRingError, CustomRingProof,
+    FramedSenderBundle, InputTrees, PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput,
+    RingPolicy, RingRail, RingTransactData, RootRead, RECIPIENT_BODY_LEN,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -32,6 +32,8 @@ fn field(seed: u8) -> [u8; 32] {
     value
 }
 
+const ZERO_TAG: [u8; 32] = [0; 32];
+
 pub struct Fixture {
     proofs: [CustomRingProof; 2],
     spp_proof: PlainGroth16Proof,
@@ -39,6 +41,9 @@ pub struct Fixture {
     keys: [[u8; 32]; 16],
     /// One slot's ciphertext, cut to the stream layout's length.
     ciphertexts: [[u8; 104]; 16],
+    bodies: [[u8; RECIPIENT_BODY_LEN]; 16],
+    /// Cut to the frame's `m`.
+    bundle: Vec<u8>,
     /// Cut to the stream layout's envelope length.
     envelope: Vec<u8>,
     tags: [[u8; 32]; 16],
@@ -66,8 +71,10 @@ impl Fixture {
             fields: (1..=120u8).map(field).collect(),
             keys: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             ciphertexts: core::array::from_fn(|i| [0x80 + i as u8; 104]),
+            bodies: core::array::from_fn(|i| [0x90 + i as u8; RECIPIENT_BODY_LEN]),
+            bundle: vec![0x3c; sender_bundle_len(16)],
             envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
-            tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
+            tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             salt: [0x5c; 16],
         }
     }
@@ -91,7 +98,7 @@ impl Fixture {
             n_in,
             n_out,
             proof: &self.proofs[0],
-            own_revision: policy.then(Default::default),
+            own_revision: (policy || rail == RingRail::Anonymous).then(Default::default),
             policy: policy.then(|| PolicyProof {
                 spl_withdrawal_owners: &[],
                 curator_revision: None,
@@ -109,9 +116,10 @@ impl Fixture {
             key_escrow: rail == RingRail::Delegate,
             full_openings: false,
             outputs: Vec::new(),
-            sender: (rail == RingRail::Anonymous).then(|| SenderBundle {
+            replies: None,
+            sender: (rail == RingRail::Anonymous).then(|| FramedSenderBundle {
                 tag: &self.tags[15],
-                body: &self.ciphertexts[15][..40],
+                body: &self.bundle[..sender_bundle_len(usize::from(n_out))],
             }),
             eph_u: &self.keys[1],
             envelope: &[],
@@ -134,8 +142,12 @@ impl Fixture {
             RingRail::Anonymous => slots
                 .map(|slot| RingOutput::Anonymous {
                     hash: &self.fields[10 + slot],
-                    tag: &self.tags[slot],
-                    body: (slot != 0).then_some(&self.ciphertexts[slot][..40]),
+                    tag: if slot == 0 {
+                        &ZERO_TAG
+                    } else {
+                        &self.tags[slot]
+                    },
+                    body: (slot != 0).then_some(&self.bodies[slot]),
                     record: &self.ciphertexts[slot],
                 })
                 .collect(),
@@ -331,27 +343,24 @@ fn flags_follow_the_rings_mode_and_policy() {
 }
 
 #[test]
-fn a_policy_transfer_takes_exactly_one_owner_signer() {
+fn a_policy_transfer_takes_at_least_one_owner_signer_up_to_the_key_slots() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    let data = fixture.transfer(RingRail::Confidential, 2, 8, true);
     let second = Keypair::new();
     let owners = [
         AccountMeta::new_readonly(ring.payer.pubkey(), true),
         AccountMeta::new_readonly(second.pubkey(), true),
     ];
     let spp = spp_list(&ring.payer.pubkey(), &data, &owners);
-    refused(
-        send(
-            &mut ring,
-            tag::TRANSFER,
-            Vec::new(),
-            data.encode().unwrap(),
-            spp,
-            &[&second],
-        ),
-        CustomRingError::OwnerSignerCount,
-    );
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[&second],
+    ));
     let repeated = [owners[0].clone(), owners[0].clone()];
     let spp = spp_list(&ring.payer.pubkey(), &data, &repeated);
     reaches_verification(send(
@@ -397,16 +406,60 @@ fn every_confidential_owner_slot_signs() {
 }
 
 #[test]
-fn an_anonymous_transfer_takes_no_signer_but_the_payer() {
+fn an_anonymous_transfer_signs_with_the_payer_and_the_owner_run_alone() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Anonymous);
     let data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
     let owner = Keypair::new();
-    let spp = spp_list(
-        &ring.payer.pubkey(),
-        &data,
-        &[AccountMeta::new_readonly(owner.pubkey(), true)],
+    let run = [AccountMeta::new_readonly(owner.pubkey(), true)];
+    let spp = spp_list(&ring.payer.pubkey(), &data, &run);
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[&owner],
+    ));
+    let mut stray = spp_list(&ring.payer.pubkey(), &data, &[]);
+    stray[RING_TRANSACT_RING_CONFIG_INDEX + 1].pubkey = owner.pubkey();
+    stray[RING_TRANSACT_RING_CONFIG_INDEX + 1].is_signer = true;
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            data.encode().unwrap(),
+            stray,
+            &[&owner],
+        ),
+        CustomRingError::InvalidAnonymousSigner,
     );
+    let unsigned = [AccountMeta::new_readonly(owner.pubkey(), false)];
+    let spp = spp_list(&ring.payer.pubkey(), &data, &unsigned);
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            data.encode().unwrap(),
+            spp,
+            &[],
+        ),
+        CustomRingError::MissingOwnerSigner,
+    );
+}
+
+#[test]
+fn the_entry_key_refuses_an_owner_run() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Anonymous);
+    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
+    data.full_openings = true;
+    fixture.fit_stream(&mut data);
+    let owner = Keypair::new();
+    let run = [AccountMeta::new_readonly(owner.pubkey(), true)];
+    let spp = spp_list(&ring.payer.pubkey(), &data, &run);
     refused(
         send(
             &mut ring,
@@ -417,6 +470,146 @@ fn an_anonymous_transfer_takes_no_signer_but_the_payer() {
             &[&owner],
         ),
         CustomRingError::InvalidAnonymousSigner,
+    );
+}
+
+/// A run wider than `S` cannot fit the chain the key binds.
+#[test]
+fn an_owner_run_past_the_key_slots_is_refused() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let data = fixture.transfer(RingRail::Confidential, 1, 16, false);
+    let owners: Vec<Keypair> = (0..6).map(|_| Keypair::new()).collect();
+    let run: Vec<AccountMeta> = owners
+        .iter()
+        .map(|owner| AccountMeta::new_readonly(owner.pubkey(), true))
+        .collect();
+    let signers: Vec<&Keypair> = owners.iter().collect();
+    let spp = spp_list(&ring.payer.pubkey(), &data, &run);
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            data.encode().unwrap(),
+            spp,
+            &signers,
+        ),
+        CustomRingError::OwnerSignerCount,
+    );
+}
+
+/// `m` shrinks the frame, the shape's key still serves and the ring's rules still read it.
+#[test]
+fn a_compact_transfer_reaches_the_key_of_its_capacity() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 4, false);
+    data.outputs.truncate(3);
+    fixture.fit_stream(&mut data);
+    let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[],
+    ));
+    let mut anonymous_ring = Ring::new(Setup::Anonymous);
+    let mut hidden = fixture.transfer(RingRail::Anonymous, 2, 4, false);
+    hidden.outputs.truncate(2);
+    hidden.sender = hidden.sender.map(|sender| FramedSenderBundle {
+        body: &sender.body[..sender_bundle_len(2)],
+        ..sender
+    });
+    fixture.fit_stream(&mut hidden);
+    let spp = spp_list(&anonymous_ring.payer.pubkey(), &hidden, &[]);
+    reaches_verification(send(
+        &mut anonymous_ring,
+        tag::TRANSFER,
+        Vec::new(),
+        hidden.encode().unwrap(),
+        spp,
+        &[],
+    ));
+}
+
+/// Scheme 11 and the reply are bound by the statement alone, SPP stores both.
+#[test]
+fn reply_metadata_reaches_the_key_on_the_anonymous_rail_and_no_other() {
+    let fixture = Fixture::new();
+    let replies = [0x71; 194];
+    let mut ring = Ring::new(Setup::Anonymous);
+    let mut data = fixture.transfer(RingRail::Anonymous, 2, 4, false);
+    data.replies = Some(custom_ring_interface::Replies {
+        len: 97,
+        region: &replies[..291 - 97],
+    });
+    data.outputs.truncate(3);
+    data.sender = data.sender.map(|sender| FramedSenderBundle {
+        body: &sender.body[..sender_bundle_len(3)],
+        ..sender
+    });
+    fixture.fit_stream(&mut data);
+    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[],
+    ));
+    let mut confidential_ring = Ring::new(Setup::AuditOnly);
+    let plain = fixture.transfer(RingRail::Confidential, 2, 4, false);
+    let spp = spp_list(
+        &confidential_ring.payer.pubkey(),
+        &plain,
+        &payer_owner(&confidential_ring),
+    );
+    let mut bytes = plain.encode().unwrap();
+    bytes[transact_flag::BYTE] |= transact_flag::REPLY_METADATA;
+    refused(
+        send(
+            &mut confidential_ring,
+            tag::TRANSFER,
+            Vec::new(),
+            bytes,
+            spp,
+            &[],
+        ),
+        CustomRingError::FlagNotAllowed,
+    );
+}
+
+/// The delivery gate reads the ring's records on every anonymous transfer.
+#[test]
+fn an_anonymous_transfer_binds_a_live_own_root() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Anonymous);
+    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
+    data.own_revision = Some(7u64.into());
+    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            data.encode().unwrap(),
+            spp.clone(),
+            &[],
+        ),
+        CustomRingError::RootNotServed,
+    );
+    data.own_revision = Some(Default::default());
+    let accounts = [vec![AccountMeta::new_readonly(policy_pda(), false)], spp].concat();
+    refused(
+        ring.send(
+            transact(tag::TRANSFER, accounts, data.encode().unwrap()),
+            &[],
+        ),
+        CustomRingError::UnboundRegistry,
     );
 }
 
@@ -1281,7 +1474,13 @@ fn legacy_transfer_tags_cannot_select_the_weaker_statements() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AuditOnly);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    for old in [tag::LEGACY_TRANSACT, tag::LEGACY_DELEGATE_TRANSACT] {
+    for old in [
+        tag::LEGACY_TRANSACT,
+        tag::LEGACY_DELEGATE_TRANSACT,
+        tag::HISTORICAL_TRANSFER,
+        tag::HISTORICAL_AUTHORITY_TRANSFER,
+        tag::HISTORICAL_MERGE,
+    ] {
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
         refused(
             send(&mut ring, old, Vec::new(), data.encode().unwrap(), spp, &[]),

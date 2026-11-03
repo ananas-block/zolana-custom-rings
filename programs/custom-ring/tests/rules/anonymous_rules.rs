@@ -1,7 +1,8 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
 use custom_ring_interface::{
-    tag, CustomRingError, RingOutput, RingRail, RingTransactData, SenderBundle,
+    tag, CustomRingError, FramedSenderBundle, RingOutput, RingRail, RingTransactData,
+    RECIPIENT_BODY_LEN,
 };
 use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
@@ -12,7 +13,7 @@ use crate::{
     transact_rules::{send, spp_list, Fixture},
 };
 
-/// An anonymous policy transfer, `prefix` after the ring account, the payer its only signer.
+/// An anonymous policy transfer, `prefix` after the ring account, the payer signing.
 fn transfer(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &[]);
     send(
@@ -37,7 +38,7 @@ fn an_anonymous_policy_transfer_passing_every_check_reaches_its_keys() {
 }
 
 #[test]
-fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
+fn an_anonymous_policy_transfer_takes_public_co_owners_in_the_run() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let data = fixture.transfer(RingRail::Anonymous, 2, 2, true);
@@ -47,32 +48,29 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
         &data,
         &[AccountMeta::new_readonly(owner.pubkey(), true)],
     );
-    refused(
-        send(
-            &mut ring,
-            tag::TRANSFER,
-            Vec::new(),
-            data.encode().unwrap(),
-            spp,
-            &[&owner],
-        ),
-        CustomRingError::InvalidAnonymousSigner,
-    );
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[&owner],
+    ));
 }
 
-/// The audit proof binds no tag and no body.
+/// Only the proof judges a canonical tag, the program holds the range and the change rule.
 #[test]
-fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
+fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     let fixture = Fixture::new();
-    let tags = [[0; 32], [0xff; 32]];
-    let body = [0x3c; 300];
+    let tags = [[0; 32], [0x2f; 32]];
+    let body = [0x3c; RECIPIENT_BODY_LEN];
     for (setup, policy) in [(Setup::AnonymousPolicy, true), (Setup::Anonymous, false)] {
         let mut ring = Ring::new(setup);
         let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, policy);
         for (output, (tag, body)) in data
             .outputs
             .iter_mut()
-            .zip([(&tags[0], None), (&tags[1], Some(&body[..1]))])
+            .zip([(&tags[0], None), (&tags[1], Some(&body))])
         {
             let RingOutput::Anonymous { hash, record, .. } = *output else {
                 panic!("an anonymous transfer publishes anonymous slots");
@@ -84,9 +82,9 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
                 record,
             };
         }
-        data.sender = Some(SenderBundle {
+        data.sender = data.sender.map(|sender| FramedSenderBundle {
             tag: &tags[1],
-            body: &body,
+            ..sender
         });
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
         reaches_verification(send(
@@ -100,26 +98,73 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
     }
 }
 
-/// A change output carries no body, the sender bundle always one.
+/// `m` fixes the bundle, a byte fewer shifts every later section.
 #[test]
-fn an_empty_sender_bundle_is_refused() {
+fn a_short_sender_bundle_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Anonymous);
     let data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
     let sender = data.sender.unwrap();
     let mut compact = data.encode().unwrap();
-    let len = compact
+    let body = compact
         .windows(32)
         .position(|window| window == sender.tag)
         .unwrap()
         + 32;
-    compact[len..len + 2].copy_from_slice(&0u16.to_le_bytes());
-    compact.drain(len + 2..len + 2 + sender.body.len());
+    compact.remove(body);
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     refused(
         send(&mut ring, tag::TRANSFER, Vec::new(), compact, spp, &[]),
-        CustomRingError::AnonymousBodyLength,
+        CustomRingError::RingTransactLength,
     );
+}
+
+fn tag_offset(compact: &[u8], hash: &[u8; 32]) -> usize {
+    compact
+        .windows(32)
+        .position(|window| window == hash)
+        .unwrap()
+        + 32
+}
+
+#[test]
+fn a_view_tag_off_the_field_or_on_change_is_refused() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Anonymous);
+    let data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
+    let compact = data.encode().unwrap();
+    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+    let bundle = compact
+        .windows(32)
+        .position(|window| window == data.sender.unwrap().tag)
+        .unwrap();
+    for (offset, tag, refusal) in [
+        (
+            tag_offset(&compact, data.outputs[1].hash()),
+            [0xff; 32],
+            CustomRingError::ViewTagNotCanonical,
+        ),
+        (bundle, [0xff; 32], CustomRingError::ViewTagNotCanonical),
+        (
+            tag_offset(&compact, data.outputs[0].hash()),
+            [0x2f; 32],
+            CustomRingError::ChangeTagNotZero,
+        ),
+    ] {
+        let mut bytes = compact.clone();
+        bytes[offset..offset + 32].copy_from_slice(&tag);
+        refused(
+            send(
+                &mut ring,
+                tag::TRANSFER,
+                Vec::new(),
+                bytes,
+                spp.clone(),
+                &[],
+            ),
+            refusal,
+        );
+    }
 }
 
 #[test]
