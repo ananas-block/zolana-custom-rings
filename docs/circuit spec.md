@@ -138,6 +138,7 @@ Each recipient body is **140 B**. The sender body is **117 + 33 × R B**, where 
 7. We should preserve SPP proof flexibility signer mix, compact and dummy padding etc
 8. The auditor needs to be able to know when a UTXO is spent so that the ring rpc can only serve spendable UTXOs
 9. We should skip the escrow nullifier key requirement if the nullifier key is zero to support shielded pdas and not require that those are registered.
+10. There should be no separate confidential circuit instantiation the program should just pass a right side zeroed hash chain so that the public input is essentially free. Checks inside the circuit will also be cheap.
 
 ## Merge
 
