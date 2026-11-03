@@ -150,7 +150,7 @@ pub(crate) struct Shared<S> {
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
     pub(crate) grants: Grants,
-    database: Option<Store>,
+    pub(crate) database: Option<Store>,
 }
 
 struct AssetCache {

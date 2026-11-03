@@ -34,3 +34,22 @@ impl Store {
         &self.db
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each connection of the pool can hold an older schema when a later migration runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fresh_file_migrates_through_a_pool_and_reopens() {
+        let directory = std::env::temp_dir().join(format!("store-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("directory");
+        for attempt in 0..32 {
+            let path = directory.join(format!("{attempt}.sqlite"));
+            let url = format!("sqlite://{}?mode=rwc", path.display());
+            Store::open(&url, STORE_CONNECTIONS).await.expect("fresh");
+            Store::open(&url, STORE_CONNECTIONS).await.expect("restart");
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+}

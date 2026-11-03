@@ -67,8 +67,12 @@ mod replay;
 mod replay_nonces;
 #[path = "rpc/server.rs"]
 mod server;
+#[path = "storage/spent_index.rs"]
+mod spent_index;
 #[path = "rpc/storage_chain.rs"]
 mod storage_chain;
+#[path = "operations/transfer_debits.rs"]
+mod transfer_debits;
 #[path = "storage/update_queue.rs"]
 mod update_queue;
 #[path = "rpc/upstream.rs"]
@@ -89,8 +93,8 @@ pub use config::{
     ServeKeyError, ServeKeys,
 };
 pub use cosign::{
-    AssetFlow, CoSignDecision, CoSignError, CoSignPolicy, CoSignRefusal, CoSignRequest,
-    CoSignSettlement, RefusingCoSigner,
+    AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
+    CoSignRequest, CoSignSettlement, OwnerFlow, RefusingCoSigner,
 };
 pub use cosign_limits::{
     AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,

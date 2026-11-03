@@ -1,9 +1,10 @@
-use std::{future::Future, time::Duration};
+use std::{future::Future, num::NonZeroU32, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
     storage::StorageRegistry, RingAccount, RingMode, RingPolicy, RingRoles,
 };
+use custom_ring_sdk::RingError;
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -26,11 +27,10 @@ use spr_interface::{
 };
 use spr_keypair::X25519Pubkey;
 use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
-use std::num::NonZeroUsize;
 use zolana_ring_client::{
-    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind,
-    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, StorageTip,
-    TransactionOrigin,
+    history::HistoryPosition, program_data, ring_deposits_in, AsyncRingIndexer, AuditError,
+    ConfirmedEventKind, MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError,
+    RingOrigin, StorageTip, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -42,19 +42,16 @@ use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsRespon
 
 use crate::{audit::Page, error::RingRpcError};
 
-const MAX_MERGE_MEMBER_PAGES: NonZeroUsize = NonZeroUsize::new(100).unwrap();
-const MAX_MERGE_CANDIDATE_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(100_000).unwrap();
-
 pub trait TransactionSource: Send + Sync {
     fn transactions_by_tag(
         &self,
-        request: TransactionPage<'_>,
+        request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send;
 
     /// Rows strictly after the requested position, in history order.
     fn ring_history(
         &self,
-        request: RingHistoryPage<'_>,
+        request: RingHistoryPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send;
 
     fn merge_audit_page<'a>(
@@ -113,6 +110,9 @@ pub trait TransactionSource: Send + Sync {
     fn genesis_hash(&self) -> impl Future<Output = Result<[u8; 32], ClientError>> + Send;
 
     fn ring_assets(&self) -> impl Future<Output = Result<RingAssets, ClientError>> + Send;
+
+    /// The id a tree's commitments hash under.
+    fn tree_id(&self, tree: Address) -> impl Future<Output = Result<u16, RingError>> + Send;
 }
 
 /// Unverified, callers read openings through `VerifiedOpenings`.
@@ -156,16 +156,20 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
     }
 }
 
+#[derive(Clone, Copy)]
 #[must_use]
-pub struct TransactionPage<'a> {
+pub struct TransactionPage {
     pub tag: [u8; 32],
-    pub page: &'a Page,
+    pub position: HistoryPosition,
+    pub limit: NonZeroU32,
 }
 
+#[derive(Clone, Copy)]
 #[must_use]
-pub struct RingHistoryPage<'a> {
+pub struct RingHistoryPage {
     pub ring: Address,
-    pub page: &'a Page,
+    pub position: HistoryPosition,
+    pub limit: NonZeroU32,
 }
 
 #[must_use]
@@ -235,18 +239,10 @@ pub struct ChainSource {
     rpc: AsyncSolanaRpc,
 }
 
-/// Ring history in strict cursor order, the merge audit reads its registry through it too.
+/// The merge audit reads ring history and its registry through one source.
 struct HistorySource<'a> {
     rpc: &'a AsyncSolanaRpc,
     indexer: &'a AsyncZolanaIndexer,
-}
-
-/// Photon orders tag and ring history by the fixed-width cursor it returns, the fields in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct HistoryPosition {
-    slot: u64,
-    signature: [u8; 64],
-    event_index: u16,
 }
 
 #[async_trait]
@@ -260,13 +256,9 @@ impl AsyncRpc for HistorySource<'_> {
         options: RingHistoryOptions,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let cursor = options.cursor.clone();
-        let response = self
-            .indexer
+        self.indexer
             .get_shielded_transactions_by_ring(options, config)
-            .await?;
-        validate_history_order(cursor.as_deref(), &response)?;
-        Ok(response)
+            .await
     }
 }
 
@@ -278,58 +270,6 @@ impl AsyncRingIndexer for HistorySource<'_> {
     ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
         self.indexer.get_storage_member_records(request).await
     }
-}
-
-impl HistoryPosition {
-    fn parse(cursor: &[u8]) -> Option<Self> {
-        let (&2, body) = cursor.split_first()? else {
-            return None;
-        };
-        let (&slot, body) = body.split_first_chunk::<8>()?;
-        let (&signature, body) = body.split_first_chunk::<64>()?;
-        let (&event_index, []) = body.split_first_chunk::<2>()? else {
-            return None;
-        };
-        Some(Self {
-            slot: u64::from_be_bytes(slot),
-            signature,
-            event_index: u16::from_be_bytes(event_index),
-        })
-    }
-}
-
-/// Rows past the cursor in strict order, the next cursor on the last row, the frontier never behind.
-fn validate_history_order(
-    cursor: Option<&[u8]>,
-    response: &GetShieldedTransactionsByTagsResponse,
-) -> Result<(), ClientError> {
-    let invalid = || ClientError::Indexer("invalid history cursor or row order".to_owned());
-    let parse = |cursor: &[u8]| HistoryPosition::parse(cursor).ok_or_else(invalid);
-    let mut previous = cursor.map(parse).transpose()?;
-    for tx in &response.transactions {
-        let position = HistoryPosition {
-            slot: tx.slot,
-            signature: *tx.tx_signature.as_array(),
-            event_index: tx.event_index.ok_or_else(invalid)?,
-        };
-        if previous.is_some_and(|previous| position <= previous) {
-            return Err(invalid());
-        }
-        previous = Some(position);
-    }
-    if let Some(next) = response.next_cursor.as_deref() {
-        if Some(parse(next)?) != previous {
-            return Err(invalid());
-        }
-    }
-    if let Some(frontier) = response.scanned_through.as_deref() {
-        if previous
-            .is_some_and(|previous| parse(frontier).is_ok_and(|frontier| frontier < previous))
-        {
-            return Err(invalid());
-        }
-    }
-    Ok(())
 }
 
 impl ChainSource {
@@ -380,46 +320,45 @@ impl ChainSource {
 }
 
 impl TransactionSource for ChainSource {
+    async fn tree_id(&self, tree: Address) -> Result<u16, RingError> {
+        custom_ring_sdk::tree_id(&self.rpc, tree).await
+    }
+
     async fn merge_audit_page<'a>(
         &'a self,
         request: MergeAuditRequest<'a>,
     ) -> Result<MergeAuditPage, AuditError> {
         MergeAudit::new(request.ring, request.auditor)
-            .with_cursor(request.page.cursor().map(ToOwned::to_owned))
+            .with_cursor(request.page.history_cursor())
             .with_page_size(request.page.limit())
-            // Either cap fails the read with MergeAuditWorkBudget, never a partial page.
-            .with_max_member_pages(MAX_MERGE_MEMBER_PAGES)
-            .with_max_candidate_attempts(MAX_MERGE_CANDIDATE_ATTEMPTS)
             .page(&self.history(), &self.rpc)
             .await
     }
 
     async fn transactions_by_tag(
         &self,
-        request: TransactionPage<'_>,
+        request: TransactionPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let cursor = request.page.cursor().map(ToOwned::to_owned);
-        let response = self
-            .indexer
+        self.indexer
             .get_shielded_transactions_by_tags(
                 vec![request.tag],
-                cursor.clone(),
-                Some(request.page.limit().get()),
+                request.position.token(),
+                Some(request.limit.get()),
+                request.position.filters(),
                 None,
             )
-            .await?;
-        validate_history_order(cursor.as_deref(), &response)?;
-        Ok(response)
+            .await
     }
 
     async fn ring_history(
         &self,
-        request: RingHistoryPage<'_>,
+        request: RingHistoryPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         let options = RingHistoryOptions {
             ring_program_id: request.ring,
-            cursor: request.page.cursor().map(ToOwned::to_owned),
-            limit: Some(request.page.limit().get()),
+            pagination_token: request.position.token(),
+            limit: Some(request.limit.get()),
+            filters: request.position.filters(),
         };
         self.history()
             .get_shielded_transactions_by_ring(options, None)
@@ -558,7 +497,13 @@ impl TransactionSource for ChainSource {
 
     async fn health(&self) -> Result<(), ClientError> {
         self.indexer
-            .get_shielded_transactions_by_tags(vec![[0; 32]], None, Some(1), None)
+            .get_shielded_transactions_by_tags(
+                vec![[0; 32]],
+                None,
+                Some(1),
+                HistoryPosition::default().filters(),
+                None,
+            )
             .await?;
         self.rpc.health().await
     }
@@ -703,54 +648,6 @@ mod tests {
         assert!(confirmed_signature("not a Solana signature").is_err());
         let valid = Signature::from([7; 64]);
         assert_eq!(confirmed_signature(&valid.to_string()).unwrap(), valid);
-    }
-
-    #[test]
-    fn history_pages_reject_repeated_or_reordered_indexer_rows() {
-        use spr_transaction::ShieldedTransaction;
-
-        let position = |slot: u64, signature: &Signature, event_index: u16| {
-            let mut cursor = vec![2];
-            cursor.extend_from_slice(&slot.to_be_bytes());
-            cursor.extend_from_slice(signature.as_array());
-            cursor.extend_from_slice(&event_index.to_be_bytes());
-            cursor
-        };
-        let tx = |slot: u64, event_index: u16| ShieldedTransaction {
-            slot,
-            tx_signature: Signature::from([7; 64]),
-            event_index: Some(event_index),
-            tx_viewing_pk: None,
-            salt: None,
-            output_slots: vec![],
-            messages: vec![],
-            nullifiers: vec![],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: None,
-        };
-        let first = tx(9, 1);
-        let second = tx(9, 2);
-        let mut response = GetShieldedTransactionsByTagsResponse {
-            context: spr_client::Context {
-                slot: 9,
-                block_time: 0,
-            },
-            transactions: vec![first.clone(), second.clone()],
-            next_cursor: Some(position(9, &second.tx_signature, 2)),
-            scanned_through: None,
-            output_tree_id: None,
-        };
-        assert!(validate_history_order(None, &response).is_ok());
-        let previous = position(9, &first.tx_signature, 1);
-        assert!(validate_history_order(Some(&previous), &response).is_err());
-        response.transactions = vec![first.clone(), first.clone()];
-        assert!(validate_history_order(None, &response).is_err());
-        response.transactions = vec![second.clone(), first];
-        assert!(validate_history_order(None, &response).is_err());
-        response.transactions = vec![second];
-        response.next_cursor = Some(previous);
-        assert!(validate_history_order(None, &response).is_err());
     }
 
     fn account<T: Pod>(owner: Address, value: &T) -> Account {

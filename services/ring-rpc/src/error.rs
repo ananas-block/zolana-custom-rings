@@ -26,6 +26,8 @@ pub enum RingRpcError {
     InvalidPage,
     #[error("a UTXO read names 1 to {AUDITED_UTXOS_LIMIT} UTXO hashes")]
     InvalidUtxoRequest,
+    #[error("the cursor is no position of the read")]
+    InvalidCursor,
     #[error("request is unauthorized because {0}")]
     Unauthorized(#[from] Unauthorized),
     #[error("key derivation failed because {0}")]
@@ -151,7 +153,8 @@ impl From<RingRpcError> for ErrorObjectOwned {
         use RingRpcError::*;
         let (code, message) = match &failure {
             Relay(relay) => return relay.into(),
-            RingRequired | RingNotServed | InvalidPage | InvalidUtxoRequest | Unauthorized(_) => {
+            RingRequired | RingNotServed | InvalidPage | InvalidUtxoRequest | InvalidCursor
+            | Unauthorized(_) => {
                 let message = failure.to_string();
                 return ErrorObjectOwned::owned(
                     ErrorCode::InvalidRequest.code(),
@@ -330,6 +333,8 @@ mod tests {
                 AuthorityLapsed => -32275,
                 InvalidLimits => -32276,
                 LimitsWithoutRecord => -32277,
+                AddressNotAuthorized => -32278,
+                AddressEscrowMismatch => -32279,
             };
             assert_eq!(refusal.code(), code);
         }

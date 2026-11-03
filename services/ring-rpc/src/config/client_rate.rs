@@ -28,6 +28,7 @@ use solana_address::Address;
 use thiserror::Error;
 use tower::{Layer, Service};
 
+use zolana_ring_client::rpc::GET_UNSPENT_UTXOS;
 use zolana_ring_client::rpc::{
     CreateRecordsRegistryRequest, PrepareAuthorityTransferRequest, RefuseEnrolmentRequest,
     SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
@@ -544,6 +545,7 @@ impl RatedCall {
             | GET_WALLET_ACTIVITY
             | GET_AUDITED_MERGES
             | GET_AUDITED_UTXOS
+            | GET_UNSPENT_UTXOS
             | GET_PENDING_ENROLMENTS => Self::SignedRead,
             SUBMIT_RECORD_UPDATE => write(
                 params

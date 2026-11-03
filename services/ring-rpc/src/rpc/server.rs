@@ -32,14 +32,15 @@ use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
     GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
     GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest,
-    GetRelayQuoteRequest, GetRelayStatusRequest, GetWalletActivityResponse, HealthResponse,
-    PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
-    RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
-    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
-    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS,
-    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, HEALTH,
-    PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS,
-    SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, GetUnspentUtxosRequest, GetWalletActivityResponse,
+    HealthResponse, PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest,
+    RefuseEnrolmentRequest, RingDepositsRequest, RingDepositsResponse, RingState,
+    RingStatusRequest, RingStatusResponse, SetMergeSettingsRequest, SetReaderGrantRequest,
+    SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
+    GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
+    GET_RELAY_STATUS, GET_UNSPENT_UTXOS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
+    REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -265,6 +266,15 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
             service.audited_utxos(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_UNSPENT_UTXOS,
+        |hub, request: GetUnspentUtxosRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+            service.unspent_utxos(&request).await
         },
     )?;
     method(
@@ -534,14 +544,14 @@ mod tests {
     impl TransactionSource for TestSource {
         async fn transactions_by_tag(
             &self,
-            _request: TransactionPage<'_>,
+            _request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
 
         async fn ring_history(
             &self,
-            _request: RingHistoryPage<'_>,
+            _request: RingHistoryPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
@@ -630,6 +640,10 @@ mod tests {
 
         async fn genesis_hash(&self) -> Result<[u8; 32], ClientError> {
             Ok(TEST_GENESIS)
+        }
+
+        async fn tree_id(&self, _tree: Address) -> Result<u16, custom_ring_sdk::RingError> {
+            Ok(1)
         }
 
         async fn ring_assets(&self) -> Result<RingAssets, ClientError> {

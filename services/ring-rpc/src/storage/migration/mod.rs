@@ -1,6 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 mod cosign3_000001_admission;
+mod cosign4_000001_owner_debits;
 mod cosign_m20261029_000001_usage;
 mod grants;
 mod merge2_000001_inputs;
@@ -11,6 +12,7 @@ mod records4_000001_signers;
 mod records_000001_queue;
 mod relay_000001_relays;
 mod replay_000001_nonces;
+mod spent_000001_commitments;
 
 pub struct Migrator;
 
@@ -29,6 +31,8 @@ impl MigratorTrait for Migrator {
             Box::new(merge2_000001_inputs::Migration),
             Box::new(records4_000001_signers::Migration),
             Box::new(replay_000001_nonces::Migration),
+            Box::new(spent_000001_commitments::Migration),
+            Box::new(cosign4_000001_owner_debits::Migration),
         ]
     }
 }

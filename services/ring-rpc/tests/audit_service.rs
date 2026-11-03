@@ -25,13 +25,14 @@ pub mod transfer;
 use custom_ring_interface::{
     encode_ring_confidential_delivered_output,
     storage_instruction::{EscrowWriteData, StorageWriteData},
-    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, InputPrefix, QueueEntry, RingMode,
+    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, QueueEntry, RingMode,
     DELIVERED_AUDIT_CAPACITIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    num::NonZeroU32,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -47,14 +48,19 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::{ClientError, Context, GetShieldedTransactionsByTagsResponse};
+use spr_client::{
+    rpc::{PaginationToken, TransactionEvents},
+    ClientError, Context, GetShieldedTransactionsByTagsResponse,
+};
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::ViewingKey;
 use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
-    auditor_view_tag, commitment_evidence, prefix_evidence, ring_event_origin_in,
+    auditor_view_tag,
+    history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream},
+    input_hash_evidence, ring_event_origin_in,
     rpc::{
-        unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
+        unix_now, AuditorKeyStatement, Coverage, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         DecryptedEscrowPending, DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError,
         DecryptedSender, DecryptedTransaction, DecryptedWithdrawal, DepositRecord,
         GetAuditedMergesResponse, GetAuditedUtxosRequest, GetAuditedUtxosResponse,
@@ -63,11 +69,12 @@ use zolana_ring_client::{
         ReadBuildError, ReadSignature, ReadSigner, ReadTarget, ReaderGrantAction,
         ReaderGrantAttestation, ReaderGrantRequest, RingActivation, RingChainStatus,
         RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
-        RingStatusResponse, SkippedReason, WalletActivity, WalletView, WebAuthnAssertion,
-        AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-        GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
+        RingStatusResponse, SkippedReason, UnspentUtxosRequest, WalletActivity, WalletView,
+        WebAuthnAssertion, AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
+        GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
+        SET_READER_GRANT,
     },
-    seal_deposits, AuditError, ConfirmedDeposit, DepositOpening, MergeAuditPage, MergeAuditResult,
+    seal_deposits, AuditError, ConfirmedDeposit, DepositOpening, MergeAuditPage,
     OutputPayloadErrorKind, ReaderKey, RingOrigin, RingWithdrawal,
 };
 use zolana_ring_client::{P256ReaderKey, RingIndexerError, StorageTip};
@@ -419,6 +426,14 @@ struct StaticSource {
     /// Rows whose confirmed call stack names a parent no instruction holds.
     stack_faults: HashSet<Signature>,
     history_cursors: Arc<Mutex<Vec<Option<Vec<u8>>>>>,
+    /// The page each served token continues to.
+    issued: Arc<Mutex<HashMap<PaginationToken, Vec<u8>>>>,
+    /// The page a pass past the last terminal page reads.
+    resume: Arc<Mutex<Option<Vec<u8>>>>,
+    forged_token: Option<PaginationToken>,
+    /// A snapshot behind the floor, the shape of a rollback.
+    forced_context: Arc<Mutex<Option<u64>>>,
+    history_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
 }
@@ -472,30 +487,88 @@ impl StaticSource {
         accounts
     }
 
-    /// The page `page` names, else every transaction the source holds under `tagged`.
+    /// The `pages` key a read at `position` names, a token at slot 0 is a test cursor.
+    fn marker(&self, position: HistoryPosition) -> Option<Vec<u8>> {
+        match position.token() {
+            Some(token) if token.slot() == 0 => Some(vec![token.signature().as_ref()[0]]),
+            Some(token) => self.issued.lock().unwrap().get(&token).cloned(),
+            None if position.filters().is_empty() => None,
+            None => self.resume.lock().unwrap().clone(),
+        }
+    }
+
+    /// The page `position` names, else every transaction under `tagged`, rows take increasing slots past the floor.
     fn page_at(
         &self,
-        page: &Page,
+        position: HistoryPosition,
+        limit: NonZeroU32,
         tagged: Option<&Vec<ShieldedTransaction>>,
     ) -> GetShieldedTransactionsByTagsResponse {
-        assert!(page.limit().get() <= 100);
-        let paged = self
-            .pages
-            .get(&page.cursor().map(ToOwned::to_owned))
-            .cloned()
-            .unwrap_or_else(|| Paged {
+        assert!(limit.get() <= 100);
+        let marker = self.marker(position);
+        let past_terminal = position.token().is_none() && !position.filters().is_empty();
+        let paged = self.pages.get(&marker).cloned().unwrap_or_else(|| {
+            if past_terminal {
+                return Paged {
+                    transactions: Vec::new(),
+                    next_cursor: None,
+                    scanned_through: marker.clone(),
+                };
+            }
+            Paged {
                 transactions: tagged.cloned().unwrap_or_else(|| self.transactions.clone()),
                 next_cursor: self.next_cursor.clone(),
                 scanned_through: self.scanned_through.clone(),
-            });
+            }
+        });
+        let floor = position
+            .filters()
+            .slot
+            .gt
+            .max(position.token().map(|token| token.slot()))
+            .unwrap_or_default();
+        let data: Vec<_> = (floor + 1..)
+            .zip(paged.transactions)
+            .map(|(slot, mut row)| {
+                row.slot = slot;
+                TransactionEvents {
+                    slot,
+                    signature: row.tx_signature,
+                    events: vec![row],
+                }
+            })
+            .collect();
+        let next = paged
+            .next_cursor
+            .filter(|_| paged.scanned_through.is_none());
+        let last = data
+            .last()
+            .map(|item| PaginationToken::new(item.slot, item.signature));
+        // A page that names itself as next never advances.
+        let pagination_token = self.forged_token.or_else(|| match &next {
+            Some(next) if marker.as_ref() == Some(next) => position.token(),
+            Some(_) => last,
+            None => None,
+        });
+        match (pagination_token, next) {
+            (Some(token), Some(next)) => {
+                self.issued.lock().unwrap().insert(token, next);
+            }
+            (None, _) => *self.resume.lock().unwrap() = paged.scanned_through,
+            (Some(_), None) => {}
+        }
+        let newest = data.last().map_or(floor, |item| item.slot);
         GetShieldedTransactionsByTagsResponse {
             context: Context {
                 block_time: 0,
-                slot: 99,
+                slot: self
+                    .forced_context
+                    .lock()
+                    .unwrap()
+                    .unwrap_or(newest.max(99)),
             },
-            transactions: paged.transactions,
-            next_cursor: paged.next_cursor,
-            scanned_through: paged.scanned_through,
+            data,
+            pagination_token,
             output_tree_id: Some(TREE_ID),
         }
     }
@@ -511,36 +584,39 @@ impl TransactionSource for StaticSource {
                 block_time: 0,
                 slot: 99,
             },
-            result: MergeAuditResult {
-                opened: Vec::new(),
-                unresolved: Vec::new(),
-            },
+            merges: Vec::new(),
+            historical: Vec::new(),
             next_cursor: None,
         })
     }
 
     fn transactions_by_tag(
         &self,
-        request: TransactionPage<'_>,
+        request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send
     {
-        let response = self.page_at(request.page, self.by_tag.get(&request.tag));
+        let response = self.page_at(
+            request.position,
+            request.limit,
+            self.by_tag.get(&request.tag),
+        );
         async move { Ok(response) }
     }
 
     fn ring_history(
         &self,
-        request: RingHistoryPage<'_>,
+        request: RingHistoryPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send
     {
         let capped = self.history_reads.fetch_add(1, Ordering::Relaxed) >= HISTORY_READ_CAP;
+        let down = self.history_down.load(Ordering::Relaxed);
         self.history_cursors
             .lock()
             .unwrap()
-            .push(request.page.cursor().map(ToOwned::to_owned));
-        let response = self.page_at(request.page, None);
+            .push(self.marker(request.position));
+        let response = self.page_at(request.position, request.limit, None);
         async move {
-            match capped {
+            match capped || down {
                 true => Err(ClientError::Rpc("history read cap".to_owned())),
                 false => Ok(response),
             }
@@ -740,6 +816,10 @@ impl TransactionSource for StaticSource {
         Ok(GENESIS)
     }
 
+    async fn tree_id(&self, _tree: Address) -> Result<u16, custom_ring_sdk::RingError> {
+        Ok(TREE_ID)
+    }
+
     async fn ring_assets(&self) -> Result<RingAssets, ClientError> {
         self.asset_reads.fetch_add(1, Ordering::Relaxed);
         if let Some(delay) = self.asset_delay {
@@ -837,7 +917,14 @@ impl Indexed<'_> {
                 .iter()
                 .map(|spend| {
                     spend.map_or_else(EntryInput::default, |spend| {
-                        input_opening(&spend.utxo, spend.blinding)
+                        input_opening(
+                            &spend.utxo,
+                            Placement {
+                                blinding: spend.blinding,
+                                ring: Some(RING),
+                                tree_id: TREE_ID,
+                            },
+                        )
                     })
                 })
                 .collect(),
@@ -847,12 +934,12 @@ impl Indexed<'_> {
 
     /// The commitment key's disclosure, spent UTXO 0 named by its hash and every later one by its prefix.
     fn anonymous_commitments(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
-        self.anonymous_with(commitment_evidence(spent).expect("spent UTXO 0"))
+        self.anonymous_with(input_hash_evidence(spent).expect("spent UTXO 0"))
     }
 
     /// The in-proof rail's disclosure, every published input named by its prefix.
     fn in_proof(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
-        let evidence = prefix_evidence(spent).expect("canonical hashes");
+        let evidence = input_hash_evidence(spent).expect("canonical hashes");
         let disclosure = self.transfer.in_proof_disclosure(self.outputs, evidence);
         self.publish(Rail::Delivered, self.outputs, &disclosure)
     }
@@ -882,7 +969,7 @@ impl Indexed<'_> {
         transaction.tx_signature = Signature::from([self.signature; 64]);
         let frame = self.transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout,
+            disclosure,
         });
         self.frames
             .lock()
@@ -988,6 +1075,11 @@ impl Fixture {
             undecodable: HashSet::new(),
             stack_faults: HashSet::new(),
             history_cursors: Arc::default(),
+            issued: Arc::default(),
+            resume: Arc::default(),
+            forged_token: None,
+            forced_context: Arc::default(),
+            history_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
         };
@@ -1156,6 +1248,18 @@ fn input_ring(response: &GetDecryptedTransactionsResponse) -> Option<DecryptedIn
         .clone()
 }
 
+/// The tag stream cursor of the `pages` entry `byte` keys.
+fn audit_cursor(byte: u8) -> Base64String {
+    HistoryCursor {
+        query: HistoryQuery {
+            ring: RING,
+            stream: HistoryStream::Tags,
+        },
+        token: PaginationToken::new(0, Signature::from([byte; 64])),
+    }
+    .into()
+}
+
 /// A read of the page `cursor` names, the attestation covers the cursor.
 async fn read_at(
     service: &AuditService<StaticSource>,
@@ -1168,10 +1272,10 @@ async fn read_at_result(
     service: &AuditService<StaticSource>,
     cursor: Option<u8>,
 ) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
-    let page = Page::new(cursor.map(|byte| vec![byte].into()), None).expect("page");
+    let page = Page::new(cursor.map(audit_cursor), None).expect("page");
     let request = match cursor {
         Some(byte) => GetDecryptedTransactionsRequest::read(target(RING))
-            .with_cursor(vec![byte].into())
+            .with_cursor(audit_cursor(byte))
             .expect("cursor"),
         None => GetDecryptedTransactionsRequest::read(target(RING)),
     }
@@ -1300,6 +1404,7 @@ impl Records {
             value: if listed { bit } else { 0 },
             escrow_key: [0; 32],
             mint_policy: None,
+            address_hash: [0; 32],
         });
     }
 
@@ -1395,6 +1500,8 @@ impl OwnRecords {
             nullifier_pk: sealed.map(|write| Hash(write.nullifier_pk)),
             eph_pk: sealed.map(|write| Base64String(tagged_x25519(&write.eph_u).to_vec())),
             ciphertext: sealed.map(|write| Base64String(write.ciphertext.to_vec())),
+            address_hash: Hash(record.address_hash),
+            address: None,
         }
     }
 }
