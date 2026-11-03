@@ -1,31 +1,51 @@
 {
   "valid": [
     {
-      "name": "bare",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "name": "no_tag",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
-      "request_view_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "deposit_tag": null,
+      "amount": null,
+      "mint": null,
+      "label": null
+    },
+    {
+      "name": "label_without_tag",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?label=rent",
+      "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
+      "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+      "deposit_tag": null,
+      "amount": null,
+      "mint": null,
+      "label": "rent"
+    },
+    {
+      "name": "bare",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
+      "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+      "deposit_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "amount": null,
       "mint": null,
       "label": null
     },
     {
       "name": "amount_mint_label",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1500000&mint=4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4&label=Coffee%20%26%20cake%20%E2%98%95%20100%25",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1500000&mint=4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4&label=Coffee%20%26%20cake%20%E2%98%95%20100%25",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
-      "request_view_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "deposit_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "amount": "1500000",
       "mint": "4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4",
       "label": "Coffee & cake ☕ 100%"
     },
     {
       "name": "label_only",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=rent",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=rent",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
-      "request_view_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "deposit_tag": "00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "amount": null,
       "mint": null,
       "label": "rent"
@@ -34,87 +54,87 @@
   "rejected": [
     {
       "name": "missing_scheme",
-      "uri": "EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressScheme"
     },
     {
       "name": "non_base58",
-      "uri": "zolana:0BKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:0BKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressBase58"
     },
     {
       "name": "short_payload",
-      "uri": "zolana:3zAeXpBMnxNZtEQsffuVsLutagwZjg2gwgNawFWNfjeyJf8HtUcy29o63ccxLxtqk5dLYCLTRfiw8uoukxtUG5F13FYMDzNhtnxcjBjixrXBst23d3piu3kYJELBtY14pb1VYW1u729KhTYk2C8uekoCcpmaCJMmoLXUPNbb3A6NdWnXzA1C4Dt6?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:3zAeXpBMnxNZtEQsffuVsLutagwZjg2gwgNawFWNfjeyJf8HtUcy29o63ccxLxtqk5dLYCLTRfiw8uoukxtUG5F13FYMDzNhtnxcjBjixrXBst23d3piu3kYJELBtY14pb1VYW1u729KhTYk2C8uekoCcpmaCJMmoLXUPNbb3A6NdWnXzA1C4Dt6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressLength"
     },
     {
       "name": "long_payload",
-      "uri": "zolana:21AZ1Yk3ZNtdNArmCUvK7oqU4HnqK28TD5YJpfbtH8BMqM8aRWjZowaGJ7ao2n8b94xAd9RhGVmjJqPKHdtovYnbUnr8krfuvDEqPERGdcHwiqXTr19WZz915kXXupHS9RrJF4k8W4gs4hwRayFtJEwg6A9C6erQWNgDLSzDMkg142tn5YQU6P1jefZ?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:21AZ1Yk3ZNtdNArmCUvK7oqU4HnqK28TD5YJpfbtH8BMqM8aRWjZowaGJ7ao2n8b94xAd9RhGVmjJqPKHdtovYnbUnr8krfuvDEqPERGdcHwiqXTr19WZz915kXXupHS9RrJF4k8W4gs4hwRayFtJEwg6A9C6erQWNgDLSzDMkg142tn5YQU6P1jefZ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressLength"
     },
     {
       "name": "unknown_version",
-      "uri": "zolana:9oBUjttGFMV4YR3NDywT9tymC3JVS7iMqa9QTUcKP4s9mPBPUgwomxxt1b1atrpt6e3vo42wuFTUfSrnpx7bFAFAbM7NrFLxK4sHG5V8FJEQnQECC19fHffdKfCXUgQrrPMk4TMZa3B28BY1u17MbJ76DHheoPZkBb11TQ923BKRTFoFiULPUbCSL?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:9oBUjttGFMV4YR3NDywT9tymC3JVS7iMqa9QTUcKP4s9mPBPUgwomxxt1b1atrpt6e3vo42wuFTUfSrnpx7bFAFAbM7NrFLxK4sHG5V8FJEQnQECC19fHffdKfCXUgQrrPMk4TMZa3B28BY1u17MbJ76DHheoPZkBb11TQ923BKRTFoFiULPUbCSL?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "UnknownRingAddressVersion"
     },
     {
       "name": "bad_checksum",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYB?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYB?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressChecksum"
     },
     {
       "name": "bad_viewing_key",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNqpnBv1tX5eD91eVRdnai8ZwcgrxUfWtKKvKTmbYQXv6AMjvUr3LzHunWC8X8jYVMT1fxoQE2yu6KPh4Wj53FJBaiMmxM3?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNqpnBv1tX5eD91eVRdnai8ZwcgrxUfWtKKvKTmbYQXv6AMjvUr3LzHunWC8X8jYVMT1fxoQE2yu6KPh4Wj53FJBaiMmxM3?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidPublicKey"
     },
     {
-      "name": "missing_tag",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC",
-      "error": "MissingRingPaymentTag"
+      "name": "delivery_tag_key",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "error": "UnknownRingPaymentKey"
     },
     {
       "name": "uppercase_tag",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408BDE019493F212C6D4A3DB392BAF9AA347DECADE1022DB5B322B7FB94",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408BDE019493F212C6D4A3DB392BAF9AA347DECADE1022DB5B322B7FB94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "short_tag",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "tag_without_zero_byte",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=01455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=01455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "unknown_query_key",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&memo=hi",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&memo=hi",
       "error": "UnknownRingPaymentKey"
     },
     {
       "name": "duplicate_query_key",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1&amount=2",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1&amount=2",
       "error": "DuplicateRingPaymentKey"
     },
     {
       "name": "fractional_amount",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1.5",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1.5",
       "error": "InvalidRingPaymentAmount"
     },
     {
       "name": "signed_amount",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=+1",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=+1",
       "error": "InvalidRingPaymentAmount"
     },
     {
       "name": "bad_mint",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&mint=notAnAddress",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&mint=notAnAddress",
       "error": "InvalidRingPaymentMint"
     },
     {
       "name": "bad_label_escape",
-      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=%zz",
+      "uri": "zolana:EBKaf1EimqQC98CNdgiiRCtSfhHqVMGTJLnGnT2edyGbWwHBYCukG5pRGYDhH7hp99RPEh2sdsv5wv63s3gBKXioAwBNGLEoVbrUhCPaDXaF1aBca7Tdvj9B93qh4TqHs37Az34xya3jXaB6tG9uPeJvH7qjWscgjXBVskKfEX8iUATymGjqoDrYC?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=%zz",
       "error": "InvalidRingPaymentLabel"
     }
   ]

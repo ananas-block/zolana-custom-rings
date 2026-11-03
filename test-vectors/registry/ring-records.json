@@ -1,6 +1,6 @@
 {
-  "description": "Record queue writes as the ring program receives them and the applications that fold them into the 4-ary member record tree. A member or register-key write's member is owner_identity(signer), an escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold) and chain(p) = Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an application are its pending writes then its authority writes, each with the apply circuit's proof inputs. Paths list three siblings per level, leaf level first, in ascending child order. Produced by program-libs/member-registry/tests/ring_records_vector.rs.",
-  "empty_root": "00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130",
+  "description": "Record queue writes as the ring program receives them and the applications that fold them into the 4-ary member record tree. A member or register-key write's member is owner_identity(signer), an escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2, address_hash) and chain(p) = Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an application are its pending writes then its authority writes, each with the apply circuit's proof inputs. Paths list three siblings per level, leaf level first, in ascending child order. Produced by program-libs/member-registry/tests/ring_records_vector.rs.",
+  "empty_root": "23e7f55dac8acecf4f3c2ee3ccea5bd3b42ed78e2381e67e0d756d0f8ce3cb71",
   "zero_subtrees": [
     "0000000000000000000000000000000000000000000000000000000000000000",
     "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
@@ -31,8 +31,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "1084dc13fbfee8b9f6079b0465bd0203742d1e484e211f3cc90216847eb450cf",
-          "chain": "04f6adfdac20ba123e70954269f9fe6dae56f89e590640594dd47d40ac271b81"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "21475852b89da4dda8cda057b9870776b368c09114a7cad1cb228ffc168b89a7",
+          "chain": "281131af8f6eeda2ff393d472376e8446b6fdc4d11e2ac49573abc6a8345b830"
         },
         {
           "position": 1,
@@ -45,8 +46,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "04bd3f39fc4bc7e7c2e043b7274907007331a7da4df603d6bb59bff909783ebe",
-          "chain": "0a9ac0b04358c3da6b714b869e6ca971dc3cbebc8c741df7c36ca85bee3dd68b"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "0fb6f7ce3b61a24d2fff7c04b293a4929df7b8bc685ce57d49eb0da150f78a45",
+          "chain": "05dc2b40461ee0b520155116dafd546a8aaee2d63af66333d4b8a9af33597379"
         },
         {
           "position": 2,
@@ -59,33 +61,36 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "196c1eca45ce396249424327b5e66bd54b9b62429d8ba6abde579fdbb1bfe0be",
-          "chain": "07b18f55d969b4dde927aa19f39f07bf4c228258172ff2e46506dd31d3ff6802"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "077618f03b891965a3f787c29652736e597ea9661fd4c0df3c9cc5d31144d188",
+          "chain": "066b927463ac3f001bc3d19915fd01a1f5f8bfd3694a29b99b4fe02d8eeb1c62"
         }
       ],
-      "old_root": "00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130",
-      "new_root": "1996a51c40051eaec3319cceb5dc169e512f68636fdee7bfb8ff8be23faceb8b",
+      "old_root": "23e7f55dac8acecf4f3c2ee3ccea5bd3b42ed78e2381e67e0d756d0f8ce3cb71",
+      "new_root": "2af0ad0afa0370b9078f1d6e9fd38e6c606e6a9836ff47d82f69bb2ca4ae6535",
       "old_next_index": 1,
       "new_next_index": 4,
       "chain_start": "0000000000000000000000000000000000000000000000000000000000000000",
-      "chain_end": "07b18f55d969b4dde927aa19f39f07bf4c228258172ff2e46506dd31d3ff6802",
+      "chain_end": "066b927463ac3f001bc3d19915fd01a1f5f8bfd3694a29b99b4fe02d8eeb1c62",
       "count": 3,
-      "statement_hash": "2cf3b043858749d97de8133ae15d3aa2c2fb5eb126beeacfa7fb8566a14c1731",
+      "statement_hash": "14d23f7f009abfb4bf265fdd59a0701f68e4a0d0124abdcafde034acf3749ffa",
       "writes": [
         {
           "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
           "mask": 1,
           "value": 1,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 1,
             "siblings": [
               [
-                "17a6f5ee4d6f3794a78e003994d97093ca734843a603909f6d0b38786f02f626",
+                "09ffad6c3d4cec5531be40f54822eb5333391e21b6a35712772d0cb4f7f05805",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
@@ -140,7 +145,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -203,16 +209,18 @@
           "mask": 33,
           "value": 33,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 2,
             "siblings": [
               [
-                "28589411a978d09cd84b8a5ef570c2714e3afbf4bc124c5c35e87a42cdbe380f",
-                "1f10e64bd8c360c774a1e7c875b31b94157b676a9b7f6afc6bee11826a71f349",
+                "088fbcd0b81d11d8670553c85b2d31893c0a2cb93a71ab5902821e5fb7b58672",
+                "2a04c6cddcf132f14e71b2b6c1e8682dca17837e9fd9fc59d7dfcd149c1738c4",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
@@ -266,13 +274,14 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
             "siblings": [
               [
-                "1f10e64bd8c360c774a1e7c875b31b94157b676a9b7f6afc6bee11826a71f349",
+                "2a04c6cddcf132f14e71b2b6c1e8682dca17837e9fd9fc59d7dfcd149c1738c4",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
@@ -329,17 +338,19 @@
           "mask": 2,
           "value": 2,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 3,
             "siblings": [
               [
-                "28589411a978d09cd84b8a5ef570c2714e3afbf4bc124c5c35e87a42cdbe380f",
-                "1002560e025b33082fcbc3d8dea936d5eb1df9880a5f92f0358e31492c3b2ff2",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4"
+                "088fbcd0b81d11d8670553c85b2d31893c0a2cb93a71ab5902821e5fb7b58672",
+                "14ba28ac7d2618f288d265134694d6281fe8f03696538f7edfd1d2633788661a",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f"
               ],
               [
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
@@ -392,14 +403,15 @@
             "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
             "next": "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000",
             "lists": 1,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 1,
             "siblings": [
               [
-                "28589411a978d09cd84b8a5ef570c2714e3afbf4bc124c5c35e87a42cdbe380f",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
+                "088fbcd0b81d11d8670553c85b2d31893c0a2cb93a71ab5902821e5fb7b58672",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
@@ -467,8 +479,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "1f230180ce63d0b8a6a6ea477facbb19acf3c818c7f8c674eb22f656edad812b",
-          "chain": "0ba0c25667a3b5bf2acdf8fee051c140d0ba5c72d3071bc54eeb8b1248dda358"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "1889e6b611b3a3c223608a2df17687b297d9d8355a2f8f4ba43acc0bf04201df",
+          "chain": "2f156ec2c48ebdc96cf980a20b770181cf6e6735aa81cf1d50c86528f204ee5d"
         },
         {
           "position": 4,
@@ -481,8 +494,9 @@
           "eph_u": "0707070707070707070707070707070707070707070707070707070707070707",
           "ciphertext": "1616161616161616161616161616161616161616161616161616161616161616",
           "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
-          "entry_hash": "17aee0d5874bd90f77554913f8d21e3494a0fc61d6d10ace996271ee9dd729e7",
-          "chain": "2e64f435d338bc9a90db03f32309d0d7dcacc4bf5474ed7cb22b33ca0bc0053b"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "21f16a5343b7003358eca36c7c227fe5f595244b2c32f719e116a4adea2f41fc",
+          "chain": "02e8ce9128d82eb4e931bb5a73ea192578b057cf548c68c0de8d638de62d5901"
         },
         {
           "position": 5,
@@ -495,64 +509,69 @@
           "eph_u": "0404040404040404040404040404040404040404040404040404040404040404",
           "ciphertext": "1515151515151515151515151515151515151515151515151515151515151515",
           "escrow_key": "00015143fb56cf7d47e75b74ff3f9deb383c7c611b611a63b519a76f719e439a",
-          "entry_hash": "1e012d77daec5ede2f9f9170d3a238ceb6a697a5e5945238806b06d948ca5ef5",
-          "chain": "10e04df1d8c0f5d563cbb92ff9494e8fb6a9254e1b12f9eaaac342ae56610266"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "2c3242020a443dea84706d2c2c51415fab9720f7e238f7a65dce37cea1cd1da9",
+          "chain": "2bcbefac1c47b905a0fc3643b46acf85726bdb1eb5f5ac23175da4cbde06a19a"
         },
         {
           "position": 6,
           "kind": "member_write",
           "signer": "2424242424242424242424242424242424242424242424242424242424242424",
           "member": "0a58fe7383803bf873fde61480302c86b2f65d090d355691562f9fd7642a144f",
-          "mask": 16,
+          "mask": 8,
           "value": 0,
           "nullifier_pk": null,
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "2136ee217526331bd500b3af45e8f3e5a79c22202e588fad3192dcabdb82bf31",
-          "chain": "27f31ced70766cd744c5b2aa58fd008f162ff514df9dbae090cf1b984e1fbe43"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "1e48231f173b49c96203db7a7660632dbd860ddc58ed8d87ef54cc7d8bf3edb6",
+          "chain": "1c700a3814d7822916afc2d29bf2591a07b8de636c49620b001f631b6af32f41"
         },
         {
           "position": 7,
           "kind": "member_write",
           "signer": "2121212121212121212121212121212121212121212121212121212121212121",
           "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
-          "mask": 24,
-          "value": 16,
+          "mask": 8,
+          "value": 0,
           "nullifier_pk": null,
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "080be6360baaa55709ef31bf8b4b87c1ac56179796b52314cef95a8e3d368a80",
-          "chain": "2804d54f754b37e6bbc5a16fdfc5714f6c86ed20f859c0802cb88feeb42ef421"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "28ffce1ccd2c2bfb919507b058202981ad9726c70524219ce703b769240a0ce8",
+          "chain": "2fb2095755df86bf71fd8b2353609413579b032c49da2407f3ad515a6659d445"
         }
       ],
       "authority_writes": [],
-      "old_root": "1996a51c40051eaec3319cceb5dc169e512f68636fdee7bfb8ff8be23faceb8b",
-      "new_root": "0b52cd0f6b291fa92a12ade0efd8a1b8d4c4e049ec1d305c9968d2acbf911b6c",
+      "old_root": "2af0ad0afa0370b9078f1d6e9fd38e6c606e6a9836ff47d82f69bb2ca4ae6535",
+      "new_root": "1116fda3e18e57a78724a6760cfad9028741dd36afad4e5b93e4dcd6b048c0fb",
       "old_next_index": 4,
       "new_next_index": 5,
-      "chain_start": "07b18f55d969b4dde927aa19f39f07bf4c228258172ff2e46506dd31d3ff6802",
-      "chain_end": "2804d54f754b37e6bbc5a16fdfc5714f6c86ed20f859c0802cb88feeb42ef421",
+      "chain_start": "066b927463ac3f001bc3d19915fd01a1f5f8bfd3694a29b99b4fe02d8eeb1c62",
+      "chain_end": "2fb2095755df86bf71fd8b2353609413579b032c49da2407f3ad515a6659d445",
       "count": 5,
-      "statement_hash": "0d2036a87eef8ffbe69683aacd27f9a79acca3e561eabf5747c9a48f553b59b5",
+      "statement_hash": "23b75c7f3890f768b5d62601e620092227ad779b20c1402190974f737940d594",
       "writes": [
         {
           "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
           "old_lists": 1,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 1,
             "siblings": [
               [
-                "28589411a978d09cd84b8a5ef570c2714e3afbf4bc124c5c35e87a42cdbe380f",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "088fbcd0b81d11d8670553c85b2d31893c0a2cb93a71ab5902821e5fb7b58672",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
@@ -605,7 +624,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -668,10 +688,12 @@
           "mask": 128,
           "value": 128,
           "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 4,
             "siblings": [
@@ -681,7 +703,7 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0839672382e37dd388a89a92945cbf05003aa2247c2163326a5dc354a50ebbfc",
+                "0978f0da45582a9433231caa2def5a1e77e4678bda89821eb8ad2f6e42611668",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -731,15 +753,16 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
             "siblings": [
               [
-                "2acd723e75d2f898a8809a8db00cf4fc734df1723f9ad20f0767604d6cf6abb7",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "1f3ccccbd86bcfd2c60ded2ce5e0ec60b903d0be0773d97e876bd58f4f2cf478",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
@@ -794,10 +817,12 @@
           "mask": 128,
           "value": 128,
           "escrow_key": "00015143fb56cf7d47e75b74ff3f9deb383c7c611b611a63b519a76f719e439a",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 128,
           "old_escrow": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 4,
             "siblings": [
@@ -807,7 +832,7 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0839672382e37dd388a89a92945cbf05003aa2247c2163326a5dc354a50ebbfc",
+                "0978f0da45582a9433231caa2def5a1e77e4678bda89821eb8ad2f6e42611668",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -857,7 +882,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -917,23 +943,25 @@
         },
         {
           "member": "0a58fe7383803bf873fde61480302c86b2f65d090d355691562f9fd7642a144f",
-          "mask": 16,
+          "mask": 8,
           "value": 0,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 5,
             "siblings": [
               [
-                "1ec35e0f77345cac710e79ca397effe8ef7b33684d5fc54601f9bdb83c38b438",
+                "193031ece166203b96b98ed8350bde0c8baac4da6b0f51dde1e72157b828667c",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0839672382e37dd388a89a92945cbf05003aa2247c2163326a5dc354a50ebbfc",
+                "0978f0da45582a9433231caa2def5a1e77e4678bda89821eb8ad2f6e42611668",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -983,7 +1011,8 @@
             "member": "023eb1146076ecd1d9828c0824875b92b874008824f31991df7d534b80f6f044",
             "next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
             "lists": 128,
-            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f"
+            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 4,
@@ -994,7 +1023,7 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0839672382e37dd388a89a92945cbf05003aa2247c2163326a5dc354a50ebbfc",
+                "0978f0da45582a9433231caa2def5a1e77e4678bda89821eb8ad2f6e42611668",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1043,23 +1072,25 @@
         },
         {
           "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
-          "mask": 24,
-          "value": 16,
+          "mask": 8,
+          "value": 0,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
           "old_lists": 9,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 1,
             "siblings": [
               [
-                "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
-                "234f0c9a6efd2f77807032723d94633ee8ef9c18ed77b3574abcdde6e2f2f5d1",
+                "1b52dcf2cadf3750f5fd8f815ff19c52c546d8afa5aeaac413a7552088c39085",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1109,7 +1140,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -1184,8 +1216,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "1540ec90b95643c9f3fc7156b0373f56418c15148317881dbc458049570e7d99",
-          "chain": "2f0726e076f972ac59beb5080d40e151e158cd849a7ae21ff51287d9f75b2ad1"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "27e2437bc784d46bd64f854e326c7535ca85d93e241ac16a477d17b8349e9bbf",
+          "chain": "0a6d11eebec1a1e7baf7bd2a08d3f67e52f3407efcec12373e7e805dbb32cded"
         },
         {
           "position": 9,
@@ -1198,8 +1231,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "0e20c3d39ebe53cca0750b4723a82b2144abde7b7786108cf574ca40197788ed",
-          "chain": "29bef213d55cdb8c031b3629367222a34acecd2f32475b3642b5b450965f71d9"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "16e28be0797dd38fedc0fb574d8792c4968bda09f2fe7404ee74758bed7ea457",
+          "chain": "257df10fb0b4e0c2130829693c7f570951e77d7b707612eff9acdae680ece10a"
         },
         {
           "position": 10,
@@ -1212,8 +1246,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "27502f60a3e6d08341661d76cdc93041ea550838e88da2a152e7344eae70a0d4",
-          "chain": "288b024dc2b28a58fe2c7fc924daaa32288cc439db7a336f535f6ac5da7e265d"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "0dd281fb10ac41b0c0654dbe8246605c84f81a7ba08c95efd8b65fe2e666affd",
+          "chain": "0043f03d8f7a58c20a7c4c81309163244a4804a95eee539829b427a1542e2cc5"
         },
         {
           "position": 11,
@@ -1226,8 +1261,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "1c10af2220b81a38290e4cbfa4f7eefaa6b9b831d6178c73a4ae08ddbabb1527",
-          "chain": "19b622858f0864828542bff540bbeaa7b407d3502735d527df1963fd348e1073"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "2b5c0f28df28f18675ee88e0ba0c2ae5509d4e9ab3f26ec2a2fc6905b6a28abc",
+          "chain": "09b464b1f00fe6a3c087d3a62fa9afb9e38630be5c9c80a08fb518ab7644b6d1"
         },
         {
           "position": 12,
@@ -1240,8 +1276,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "184a89c2cd10a3feded0571904d9dec3a3dc5642045b60e3be2ec2dd0d3c9e23",
-          "chain": "1b36de097b058a567e526e58d98f5818b0470d0f0d910b8bc0f8d403f8f27cc5"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "1055e86e5309d146bfbe229651a86fb7033b916b296514602647ec87205274f9",
+          "chain": "11d677a54c0ec6b1455e1700c3944505c1333c8c8a51125129fadc144fc2b4d6"
         },
         {
           "position": 13,
@@ -1254,8 +1291,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "0be52da1acb916177df7a6ffcdb70eac7221d4307c6792e1f7480a6cb7bbb1d9",
-          "chain": "0275098ed077e08ffa86ca2c314561d395b2c2695edf0cf150c66dacefc3bf5c"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "304d72b254f8acaf3eb5b98e5ff7b5a2e7da266c312fd409a7552ce81f5c45e8",
+          "chain": "1908dcaf311f674d45cbe168d885c3d94294a9acb614382dc3adc45b476cad83"
         },
         {
           "position": 14,
@@ -1268,8 +1306,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "25ee637c9f0412ad4bd6e7888610ad1ea25e7fa75b57c74d2786686eab04fd63",
-          "chain": "147de43be4b535e3105f569c61563f9af7f63f98905910c68d387a8fd4e5c8d6"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "299fe4bbea2231070530b253f5a2e6b4307df8de40ba1e67c80c9b5d89743aad",
+          "chain": "163eeb05dac0511c6358854f703c0f83ae7133c4169c5e1190970df168ff1a20"
         },
         {
           "position": 15,
@@ -1282,8 +1321,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "266e67ce4bbc53db0f03783fbdfc788e720dae52dab67090d524dbe07b155be7",
-          "chain": "1db80ed20d932b89dc76d2be9736beae518e13e86173b08bd0fb819619215919"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "0069a4affaa33eab02da5f0e7d817afa523cdbf5765ca3d8e928de167de5b90a",
+          "chain": "0d8222a6a70b226af0ae1973da171de81ad10ee5fd13d4311c8ab19f1ae8ff54"
         }
       ],
       "authority_writes": [
@@ -1298,8 +1338,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "00e0d0c87d7db120f477c85eebe9c5c5b6dc808cf633be952db1ba7b78617923",
-          "chain": "269031195030ea64300e488efacd3a98777cad50861c8a91a7b100448f200f08"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "0c812503383d1ad982954cec4e5e547fbc6e9bc4a23c93720c510c4b640346b4",
+          "chain": "1d27c6511c5165df5c15728e4d95c53787b11f4aa383fa622dbed2df268bb6a6"
         },
         {
           "position": 17,
@@ -1312,8 +1353,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "082fbfa545601512548cc733dec90b92a067b410d38eb424f91d3d06882186de",
-          "chain": "1de6ead771af9ebe852ef3e19986871d33b0a5c346767c425289c34022043d5e"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "04647a7dc4e1c9600de0d7ee9094c7029ef92281b46327077c60b7d37f14ac5b",
+          "chain": "0aa4601ba0c20bdf2cb508744cd079e1b3626de5567900501e2778622bdb2ad8"
         },
         {
           "position": 18,
@@ -1326,8 +1368,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "13ef5b40b99a3f6f0d86c00d30dad60587020a7d23f67651eac21e639c550d3e",
-          "chain": "0a8224c188de1c14e4acfe3051610d2f4d013ebdc874999a749604d878b78fa6"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "131814880dd7d8d93fbe241113dd0ac9a9d837c40a0f685f8186af1e158989c8",
+          "chain": "045e81da9a0b7138f0103e03bc1bfb25e1e227136ece167fc5c459b6b642907f"
         },
         {
           "position": 19,
@@ -1340,8 +1383,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "0efe73bf8d36c90fe3266d5e7e65669d65fe7521e72ca246113118799496e658",
-          "chain": "03ab4d8e4277d7777ed2907b5963953c5d86183c60c9251c42fbe359131aea21"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "0820d481c6251263032ef900e4f7830e0175beedd60ec90c06947b1186806c73",
+          "chain": "156b1f6e6aeba5b8e5cfb7b29072e5fa1c5276aad06a1580df351687c3a24596"
         },
         {
           "position": 20,
@@ -1354,8 +1398,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "16cfd86f535ba61072a16d15f1579d9629d129053de8c56225fa05ac47862b40",
-          "chain": "2b3c0db0e8e8c69a6435fdaa879932876f47d78a06ecc1834282862edbec0657"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "10fccadcbafdbe7e35582569fe67b7112b14dd704b48a60294b70bff5643b054",
+          "chain": "2f66655002f8bc59eabb095f559fe4c6fb84bfc256e3ddacd41e89155109348d"
         },
         {
           "position": 21,
@@ -1368,8 +1413,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "11dcc985dbe41e7ed5ae7451c950e18305f1e02fbc687404918c63aa3c602bbb",
-          "chain": "05ca4ddefa688f1dee036de7adf047aa5258b41be5431614f6abea551fc6f30d"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "2e8674df1342ad9e9b27e4a9edb1c5d2f40184d5a4583ec7a780dbaa476b912c",
+          "chain": "0a8fe760f294687c68f825af58f4df4142eaf58cac900ce1e3a97f229f07e6ba"
         },
         {
           "position": 22,
@@ -1382,8 +1428,9 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "152e03387432be87f5523f3dc6e8a45b77363245218e33d4912e8cbba99f7afb",
-          "chain": "0282b00b8b654a88f16991500841732bcb477fc620d25a809aae9039169e4ebb"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "2cf80a2fabaec0546e055b2dba79bcdd0a226c3b6e9b148a4815da6d8e8ab6a6",
+          "chain": "044f961ffab5037d8c5a702be4d205b71877798b65fdd3080862d65bf6821dd5"
         },
         {
           "position": 23,
@@ -1396,38 +1443,41 @@
           "eph_u": null,
           "ciphertext": null,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
-          "entry_hash": "1f20a74865936b61a7f68efbb27cd039efb9d059977b2b5c46b7d9f935c118a1",
-          "chain": "15f541373b2a9a5d058f4fdfcd61731384e394944e1b9236de324fdb449bcc1e"
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "entry_hash": "2fb31a9f58a8099197437d39f8f04a97533fd1cbf40ecb5023957406d6a452b8",
+          "chain": "1ad8f9d5384f9c80d825aa235663ef4980f9149064138fb0d1c842e1eccefa60"
         }
       ],
-      "old_root": "0b52cd0f6b291fa92a12ade0efd8a1b8d4c4e049ec1d305c9968d2acbf911b6c",
-      "new_root": "2ffc17ed0a96008e33141ced15a126c811e72dcdb645817d8c5f51487d142446",
+      "old_root": "1116fda3e18e57a78724a6760cfad9028741dd36afad4e5b93e4dcd6b048c0fb",
+      "new_root": "09f315996ec7c0a7560f1f56f62bfa5e27bc40684d8466439eb784c4eb883ea6",
       "old_next_index": 5,
       "new_next_index": 17,
-      "chain_start": "2804d54f754b37e6bbc5a16fdfc5714f6c86ed20f859c0802cb88feeb42ef421",
-      "chain_end": "15f541373b2a9a5d058f4fdfcd61731384e394944e1b9236de324fdb449bcc1e",
+      "chain_start": "2fb2095755df86bf71fd8b2353609413579b032c49da2407f3ad515a6659d445",
+      "chain_end": "1ad8f9d5384f9c80d825aa235663ef4980f9149064138fb0d1c842e1eccefa60",
       "count": 16,
-      "statement_hash": "1af758e1a6ad10e2f13645c8a14fb48cc03cf9bd8fa29828ea811917d96cff1a",
+      "statement_hash": "193a1a7eba2949b3e38c22f4a94309742a33cef506e622e224117313e4bc5fed",
       "writes": [
         {
           "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 5,
             "siblings": [
               [
-                "1d2a4bd73006b2a4239f6e320973f8436c8368e11f1c4bedbf67ac8023f18eb0",
+                "0ee52bca15146938a82f13a0ea02dc0614df332cd9b3e2cb2f940fa9cc3c23d6",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1477,7 +1527,8 @@
             "member": "023eb1146076ecd1d9828c0824875b92b874008824f31991df7d534b80f6f044",
             "next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
             "lists": 128,
-            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f"
+            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 4,
@@ -1488,7 +1539,7 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1540,20 +1591,22 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 6,
             "siblings": [
               [
-                "1d2a4bd73006b2a4239f6e320973f8436c8368e11f1c4bedbf67ac8023f18eb0",
-                "2e27c1c1239225e4044fb6e7ac711405230f87ac8c0f8c913ba090ab98a9a8b8",
+                "0ee52bca15146938a82f13a0ea02dc0614df332cd9b3e2cb2f940fa9cc3c23d6",
+                "2bb882861861c5b5cd2c6ac2fc9798c93a22c4c7944c9fbe9cafa24bfe253aae",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1603,18 +1656,19 @@
             "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
             "next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 5,
             "siblings": [
               [
-                "1d2a4bd73006b2a4239f6e320973f8436c8368e11f1c4bedbf67ac8023f18eb0",
+                "0ee52bca15146938a82f13a0ea02dc0614df332cd9b3e2cb2f940fa9cc3c23d6",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1666,20 +1720,22 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 7,
             "siblings": [
               [
-                "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-                "2e27c1c1239225e4044fb6e7ac711405230f87ac8c0f8c913ba090ab98a9a8b8",
-                "1c1159d45a4ab25f78a1c42aaff44db89e0073fa4db2e3538f1411c0157cd80d"
+                "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+                "2bb882861861c5b5cd2c6ac2fc9798c93a22c4c7944c9fbe9cafa24bfe253aae",
+                "1883fbc20db2f76b524a278b2004a754cae813fcdbece5d04228e1549e2f9250"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1729,18 +1785,19 @@
             "member": "023eb1146076ecd1d9828c0824875b92b874008824f31991df7d534b80f6f044",
             "next": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
             "lists": 128,
-            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f"
+            "escrow_key": "3050f86b79eb102b8c5d3dbb17043ec589a305c12baea46065152aec63a8fe8f",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 4,
             "siblings": [
               [
-                "2e27c1c1239225e4044fb6e7ac711405230f87ac8c0f8c913ba090ab98a9a8b8",
-                "1c1159d45a4ab25f78a1c42aaff44db89e0073fa4db2e3538f1411c0157cd80d",
+                "2bb882861861c5b5cd2c6ac2fc9798c93a22c4c7944c9fbe9cafa24bfe253aae",
+                "1883fbc20db2f76b524a278b2004a754cae813fcdbece5d04228e1549e2f9250",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1792,10 +1849,12 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 8,
             "siblings": [
@@ -1805,8 +1864,8 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
-                "1cff836d6fadf64bb1a2a745db2f010f39cbc4c4100fec6d4c0cbbc77a9994f3",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
+                "03b73c187a2d5ebc5c13020bc4443d05695a9e849680b7d555b5b1dab2334635",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -1855,18 +1914,19 @@
             "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
             "next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 5,
             "siblings": [
               [
-                "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-                "1c1159d45a4ab25f78a1c42aaff44db89e0073fa4db2e3538f1411c0157cd80d",
-                "12f25d5c11c77b54d39db08214ab5dee1620c2c2c0087cde746e9f4295dd8beb"
+                "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+                "1883fbc20db2f76b524a278b2004a754cae813fcdbece5d04228e1549e2f9250",
+                "0625b38af2961975dd4dfb56fec0b2e0cc219885d1664e64dc8efbef04e7063f"
               ],
               [
-                "09abfa277f9521ded004c75da942fd6b0d7a77184698cdd47a98eb3091b74b7b",
+                "0f6ca2d9279307e194500ee5a3d8143f28dd7ca3882f220ec95accdfb3967a7a",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
@@ -1918,21 +1978,23 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 9,
             "siblings": [
               [
-                "069534e7586b24381c4e628ec3483464d6a59eef52d3b06e91e167569a47a761",
+                "0aae2b55aebd6362cdaf4c4073486ff4045d80abf29a6398773e455e68f313a0",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0a566d784fa5fead6419651f0f547f394d85cf9b961d047d724c096863c51359",
-                "1cff836d6fadf64bb1a2a745db2f010f39cbc4c4100fec6d4c0cbbc77a9994f3",
+                "0d818702a9bdc02e30ce68dd13cfde3faababcc058d404c46e7f18d0ee8b3271",
+                "03b73c187a2d5ebc5c13020bc4443d05695a9e849680b7d555b5b1dab2334635",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -1980,20 +2042,21 @@
           "low": {
             "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
             "next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
-            "lists": 17,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "lists": 1,
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 1,
             "siblings": [
               [
-                "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
-                "1cff836d6fadf64bb1a2a745db2f010f39cbc4c4100fec6d4c0cbbc77a9994f3",
-                "277086ede1f8d26491d573b354bfad87ca92d5591d10aa8fa512cbc52613f8f8",
+                "03b73c187a2d5ebc5c13020bc4443d05695a9e849680b7d555b5b1dab2334635",
+                "09e0d4d907b46b75dc8e5fb30b73ac1e69e764779e0994b5f1eafab5e3415089",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2044,21 +2107,23 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0d74378efbe9d0e4d9f177097006adb560fbf0e4c3b3d7e3966dc7c00b7984c2",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 10,
             "siblings": [
               [
-                "069534e7586b24381c4e628ec3483464d6a59eef52d3b06e91e167569a47a761",
-                "18e9d53977d7e26da9c11713c59e7129264519102073f7b7e6a9885e8c25452e",
+                "0aae2b55aebd6362cdaf4c4073486ff4045d80abf29a6398773e455e68f313a0",
+                "1f9e67e37d947ccb08e6e31d2084e4773d289ebc33722525d59ec231e7f32a0d",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "0a566d784fa5fead6419651f0f547f394d85cf9b961d047d724c096863c51359",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
+                "0d818702a9bdc02e30ce68dd13cfde3faababcc058d404c46e7f18d0ee8b3271",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2107,19 +2172,20 @@
             "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
             "next": "0d74378efbe9d0e4d9f177097006adb560fbf0e4c3b3d7e3966dc7c00b7984c2",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 5,
             "siblings": [
               [
-                "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-                "1c1159d45a4ab25f78a1c42aaff44db89e0073fa4db2e3538f1411c0157cd80d",
-                "12f25d5c11c77b54d39db08214ab5dee1620c2c2c0087cde746e9f4295dd8beb"
+                "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+                "1883fbc20db2f76b524a278b2004a754cae813fcdbece5d04228e1549e2f9250",
+                "0625b38af2961975dd4dfb56fec0b2e0cc219885d1664e64dc8efbef04e7063f"
               ],
               [
-                "0a566d784fa5fead6419651f0f547f394d85cf9b961d047d724c096863c51359",
-                "0765a8f30b7b3ab01247be10528003ab055e769825f33d6ca7fd755f1a1d6ec2",
+                "0d818702a9bdc02e30ce68dd13cfde3faababcc058d404c46e7f18d0ee8b3271",
+                "0cbf519e0ae322cf3f31f92ecbed866e0ac4206bf1b92b3c1436b86f4e59f7b5",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2170,21 +2236,23 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "2242da4ad831eb5fd2fd02c71af8865dfa0d881e5560028b39749fde44ae4a5f",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 11,
             "siblings": [
               [
-                "069534e7586b24381c4e628ec3483464d6a59eef52d3b06e91e167569a47a761",
-                "18e9d53977d7e26da9c11713c59e7129264519102073f7b7e6a9885e8c25452e",
-                "15bea17643992362b0caf752ba0179e9e266c28fb08e352f39b2998ed74d0804"
+                "0aae2b55aebd6362cdaf4c4073486ff4045d80abf29a6398773e455e68f313a0",
+                "1f9e67e37d947ccb08e6e31d2084e4773d289ebc33722525d59ec231e7f32a0d",
+                "2a80317094be44b5f53931c58e2201f52fe216dfb0f3d333483843611cfc2bb0"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2232,20 +2300,21 @@
           "low": {
             "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
             "next": "2242da4ad831eb5fd2fd02c71af8865dfa0d881e5560028b39749fde44ae4a5f",
-            "lists": 17,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "lists": 1,
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 1,
             "siblings": [
               [
-                "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
-                "1a9f37fa77cab49726d8734ab03e9258e544a88161daba2e9fc191388406f424",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
+                "0b0f9d49656b4520c55f87bcfc78741eb3743bbca129c8399249fac522107daf",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2296,10 +2365,12 @@
           "mask": 8,
           "value": 8,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 12,
             "siblings": [
@@ -2309,9 +2380,9 @@
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
-                "038cc0eae37f7165c019accafafacb3fd866bcae9f44d56ba6e0fe678c83efff"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
+                "02d7a17472671407ccea8093bdd4802e63a740a31cb7d9906813fa4098af1a32"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2359,19 +2430,20 @@
             "member": "0d74378efbe9d0e4d9f177097006adb560fbf0e4c3b3d7e3966dc7c00b7984c2",
             "next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 8,
             "siblings": [
               [
-                "18e9d53977d7e26da9c11713c59e7129264519102073f7b7e6a9885e8c25452e",
-                "15bea17643992362b0caf752ba0179e9e266c28fb08e352f39b2998ed74d0804",
-                "1d44002b9ee7af9ff1fcd12f95ecb78586841b8f238534079758213307bee5ca"
+                "1f9e67e37d947ccb08e6e31d2084e4773d289ebc33722525d59ec231e7f32a0d",
+                "2a80317094be44b5f53931c58e2201f52fe216dfb0f3d333483843611cfc2bb0",
+                "18469ca83070a0626a479e8ff4ac498201352891f28fae0ca6444b45d888c5fc"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
@@ -2422,22 +2494,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 13,
             "siblings": [
               [
-                "1d73309b331c398685141e33c8adb1310f4fabcc39fa5667cead748b61ef3bc6",
+                "0ada2b915a63eb9986f9cca281160e4e320ae39fe31e0293e74ec8d7379b663d",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
-                "054cecb05718245fb3111407ce52b7c5aa95887b46b057b08db5f34aea8bd53b"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
+                "17e819cfa4105cbdf7c95e571b48987e5e60aa2e3c7669b5942fc4635efc1a10"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2485,20 +2559,21 @@
             "member": "2242da4ad831eb5fd2fd02c71af8865dfa0d881e5560028b39749fde44ae4a5f",
             "next": "2644152bb716e4d86af28f033ac9fb4f54478d6c63dedcfec525e361c7eb0972",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 9,
             "siblings": [
               [
-                "17a6133186c343d7b320345ccd4249e0188c0b0c752527dcf1c5b9406c8bd6db",
-                "15bea17643992362b0caf752ba0179e9e266c28fb08e352f39b2998ed74d0804",
-                "1d44002b9ee7af9ff1fcd12f95ecb78586841b8f238534079758213307bee5ca"
+                "10d4209f9523b49a353f1ae2cd2fefca3d9e22961dfe3f944cdd93010bb948cb",
+                "2a80317094be44b5f53931c58e2201f52fe216dfb0f3d333483843611cfc2bb0",
+                "18469ca83070a0626a479e8ff4ac498201352891f28fae0ca6444b45d888c5fc"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "23ae599590f46d1e7d8fc7dec82d4c3e75bd960678119d9f31ef107e6b752a49",
-                "0be4c3ddfac038a5008d6fdf44649221ffa879250b4a02cd276a23ac1f9eb68d"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "16ace79dd0eeeedac5e73d19fc5680a19e77d434abbba92efeb49ac6e03f01bc",
+                "3047d3490eba4655198454cf125f80fc88ece4c0d72e824c752fb493fcbf6997"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2548,22 +2623,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
           "old_lists": 8,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 6,
             "siblings": [
               [
-                "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-                "305047c78d087b8370ad2334284675e6dae6e2ac936c6d021c4ce2c454f80400",
-                "12f25d5c11c77b54d39db08214ab5dee1620c2c2c0087cde746e9f4295dd8beb"
+                "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+                "29ebfb21c86d10b9d5a009802c6fe5380a71779b88409e2b1b765174921e86e1",
+                "0625b38af2961975dd4dfb56fec0b2e0cc219885d1664e64dc8efbef04e7063f"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "054cecb05718245fb3111407ce52b7c5aa95887b46b057b08db5f34aea8bd53b",
-                "17981205ebb593f0d9c23621156d1d861690003691112633dc4c389a9da7fa14"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "17e819cfa4105cbdf7c95e571b48987e5e60aa2e3c7669b5942fc4635efc1a10",
+                "1e43eb8f836a548aa91e0fccf71e0429308d9d3eca7889407d2d29a05d47fd42"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2611,7 +2688,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -2674,22 +2752,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 14,
             "siblings": [
               [
-                "0006fddc3b4c423ce321ccba7cf1280b0bf27da4227ae5b900d9ba90785b7a54",
-                "18da20ad6a3a4c247ba6acc3fe85e35468ca555d568bbb32432208cc23ac287b",
+                "19c6f75df6d9d517b31413acd482d92acd7a5c167d4329f472f1a80393ee3783",
+                "2b61e226b4d8f76edb6e27f754c7f535c0a32262ce58e0dc486d7967b103aa56",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "08494f3aa818ba4b4ae40a56f590834f02c59894864da9f2cd4dee9f930605da",
-                "054cecb05718245fb3111407ce52b7c5aa95887b46b057b08db5f34aea8bd53b"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "2419b05419b5323687c761fb2db304b1940595bc1c158487e8097dd9ce9b322c",
+                "17e819cfa4105cbdf7c95e571b48987e5e60aa2e3c7669b5942fc4635efc1a10"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2737,20 +2817,21 @@
             "member": "0e4f74fbefec3aec1754b40c360d2f2c691580a25e98954d7eed19e51c395d0f",
             "next": "0eefe24e0ecce8ff35244f5e34edd65d035b31720355dc703b8193b6335c8764",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 12,
             "siblings": [
               [
-                "18da20ad6a3a4c247ba6acc3fe85e35468ca555d568bbb32432208cc23ac287b",
+                "2b61e226b4d8f76edb6e27f754c7f535c0a32262ce58e0dc486d7967b103aa56",
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 "0000000000000000000000000000000000000000000000000000000000000000"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "08494f3aa818ba4b4ae40a56f590834f02c59894864da9f2cd4dee9f930605da",
-                "054cecb05718245fb3111407ce52b7c5aa95887b46b057b08db5f34aea8bd53b"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "2419b05419b5323687c761fb2db304b1940595bc1c158487e8097dd9ce9b322c",
+                "17e819cfa4105cbdf7c95e571b48987e5e60aa2e3c7669b5942fc4635efc1a10"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2800,22 +2881,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "0e4f74fbefec3aec1754b40c360d2f2c691580a25e98954d7eed19e51c395d0f",
           "old_lists": 8,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 8,
             "siblings": [
               [
-                "0d541b353a6e5f05d1248b90eff392560509bfb34f3e3c0944dc670b3db0d546",
-                "15bea17643992362b0caf752ba0179e9e266c28fb08e352f39b2998ed74d0804",
-                "1d44002b9ee7af9ff1fcd12f95ecb78586841b8f238534079758213307bee5ca"
+                "0a371adbf60c53e12d359ca1f5872c9e58d3bdc93f5210fb0c73353b0ffca25d",
+                "2a80317094be44b5f53931c58e2201f52fe216dfb0f3d333483843611cfc2bb0",
+                "18469ca83070a0626a479e8ff4ac498201352891f28fae0ca6444b45d888c5fc"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "08494f3aa818ba4b4ae40a56f590834f02c59894864da9f2cd4dee9f930605da",
-                "0941e62215c9ade7cff9e51249d84b0ad23d5d97796fda47a08ca7d5f80d6afc"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "2419b05419b5323687c761fb2db304b1940595bc1c158487e8097dd9ce9b322c",
+                "1d787ee9deaaef6ffde676fcf8f59fdcc41730fee7f05f9d15058df847af38fa"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2863,7 +2946,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -2926,22 +3010,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "0bed0dfc9f7f1ca4a7047f103b4174ce536d4619a3cf7d65c1d04d7999a92627",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 15,
             "siblings": [
               [
-                "0006fddc3b4c423ce321ccba7cf1280b0bf27da4227ae5b900d9ba90785b7a54",
-                "18da20ad6a3a4c247ba6acc3fe85e35468ca555d568bbb32432208cc23ac287b",
-                "29c82cb6fb5a8c42151e520ed496bd876b90c8cd8cc86f27ec3197a250d46ba4"
+                "19c6f75df6d9d517b31413acd482d92acd7a5c167d4329f472f1a80393ee3783",
+                "2b61e226b4d8f76edb6e27f754c7f535c0a32262ce58e0dc486d7967b103aa56",
+                "19f244bd88473e07981fdde64675f7a02fd19683069dd747ddf7fe0265ff6bd2"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-                "21071a950f13290871e4ca9f50b9bea76aa58c441e430be47c85e7210f9e3f6c"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+                "26dfd867b5b2d66b846ea3f854689468f0ba8de6754d88f382f7d5ca7f5eef2c"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -2989,20 +3075,21 @@
             "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
             "next": "0bed0dfc9f7f1ca4a7047f103b4174ce536d4619a3cf7d65c1d04d7999a92627",
             "lists": 8,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 5,
             "siblings": [
               [
-                "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-                "200cafeea4f9fc760753c087c112762cb431793643bb1989246198c6294f0180",
-                "12f25d5c11c77b54d39db08214ab5dee1620c2c2c0087cde746e9f4295dd8beb"
+                "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+                "0aeccb09ff3fc4efb5a9328f540929145a172330a386db2560fff65e893386ed",
+                "0625b38af2961975dd4dfb56fec0b2e0cc219885d1664e64dc8efbef04e7063f"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "21071a950f13290871e4ca9f50b9bea76aa58c441e430be47c85e7210f9e3f6c",
-                "0941e62215c9ade7cff9e51249d84b0ad23d5d97796fda47a08ca7d5f80d6afc"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "26dfd867b5b2d66b846ea3f854689468f0ba8de6754d88f382f7d5ca7f5eef2c",
+                "1d787ee9deaaef6ffde676fcf8f59fdcc41730fee7f05f9d15058df847af38fa"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -3052,22 +3139,24 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "0d74378efbe9d0e4d9f177097006adb560fbf0e4c3b3d7e3966dc7c00b7984c2",
           "old_lists": 8,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 10,
             "siblings": [
               [
-                "082c88256c99d583d3576bd2296f1d8fa1930521d0a0e1575419d4bb8ffb321c",
-                "0d541b353a6e5f05d1248b90eff392560509bfb34f3e3c0944dc670b3db0d546",
-                "1d44002b9ee7af9ff1fcd12f95ecb78586841b8f238534079758213307bee5ca"
+                "29a11c184b19c7af0d0d6d551c55bc75b28af173f1aaa6c77f36a0ab652bd6f3",
+                "0a371adbf60c53e12d359ca1f5872c9e58d3bdc93f5210fb0c73353b0ffca25d",
+                "18469ca83070a0626a479e8ff4ac498201352891f28fae0ca6444b45d888c5fc"
               ],
               [
-                "18431494e3df536bc4c968fe2de0e2a0fb52a5d78ac2e2ecf201545f26a92875",
-                "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-                "048fdf534e5c89aa8d3acb3fe14c951a0a85cb815f8d91dba88d5e781488634d"
+                "2ccf266ed3024830675914e24aa2fbc38b902868f451edcbe0847c905a3bec8e",
+                "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+                "268eedb46f3a8ac25ffaa0e260c366e080c32bc56481209a36f3b9400672c701"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -3115,7 +3204,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -3178,10 +3268,12 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": false,
           "old_next": "1ba8478506b7e89e348913c66b98ed39d077c446735beb32b5f5cebfd83bab1e",
           "old_lists": 0,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 16,
             "siblings": [
@@ -3196,7 +3288,7 @@
                 "0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946"
               ],
               [
-                "2f5ba6292f8dd82793a71be13ac6168e0c18e0fa6d75dbc4d11f8dfe65ef24af",
+                "125c5cde6fd8060a465635366f1f583c31917e7bf9087bb85210134d6ef1efbb",
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c"
               ],
@@ -3240,21 +3332,22 @@
           "low": {
             "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
             "next": "1ba8478506b7e89e348913c66b98ed39d077c446735beb32b5f5cebfd83bab1e",
-            "lists": 17,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "lists": 1,
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 1,
             "siblings": [
               [
-                "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-                "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-                "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+                "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+                "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+                "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
               ],
               [
-                "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-                "044c4a5c40a69590da0df57206ff2682db0b6d32526364d8087ff5b9df31076e",
-                "048fdf534e5c89aa8d3acb3fe14c951a0a85cb815f8d91dba88d5e781488634d"
+                "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+                "2c1d78fa09681b6cecfd5600aaa58d72ad2187ead22b3c3390adaa8af972dfde",
+                "268eedb46f3a8ac25ffaa0e260c366e080c32bc56481209a36f3b9400672c701"
               ],
               [
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
@@ -3304,25 +3397,27 @@
           "mask": 69,
           "value": 68,
           "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+          "address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "exists": true,
           "old_next": "0e9988edf8907d7025a2f5dbfba0a8176ec9228966278bb4cba180953d259655",
           "old_lists": 8,
           "old_escrow": "0000000000000000000000000000000000000000000000000000000000000000",
+          "old_address_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "slot": {
             "index": 12,
             "siblings": [
               [
-                "18da20ad6a3a4c247ba6acc3fe85e35468ca555d568bbb32432208cc23ac287b",
-                "29c82cb6fb5a8c42151e520ed496bd876b90c8cd8cc86f27ec3197a250d46ba4",
-                "15b9f3ca1d9a157b51c52dee9bf381909bc89c6e7468cd49643e88c26cb4b427"
+                "2b61e226b4d8f76edb6e27f754c7f535c0a32262ce58e0dc486d7967b103aa56",
+                "19f244bd88473e07981fdde64675f7a02fd19683069dd747ddf7fe0265ff6bd2",
+                "0413feae28fbc5c5b470df65725455c948cc418ad10b0ed4425ea33990439045"
               ],
               [
-                "1c9107659adf838bd064d5fa0e3633ba3fc124635328765da71a1ecbc3df7ecf",
-                "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-                "044c4a5c40a69590da0df57206ff2682db0b6d32526364d8087ff5b9df31076e"
+                "2c5b2504cef58304109436f153c794ae821952c527cc9091e2071c4cec34bb7d",
+                "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+                "2c1d78fa09681b6cecfd5600aaa58d72ad2187ead22b3c3390adaa8af972dfde"
               ],
               [
-                "0517498cadb7613540f3d9f97edebab5a83b5805a2091e5afe7c006de98be772",
+                "1c1def6bad4e438432f8d94d3755246b11477bc7b23a04dc58ce533c46351a21",
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
                 "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c"
               ],
@@ -3367,7 +3462,8 @@
             "member": "0000000000000000000000000000000000000000000000000000000000000000",
             "next": "0000000000000000000000000000000000000000000000000000000000000000",
             "lists": 0,
-            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+            "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "low_path": {
             "index": 0,
@@ -3431,29 +3527,30 @@
   "openings": [
     {
       "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
-      "root": "2ffc17ed0a96008e33141ced15a126c811e72dcdb645817d8c5f51487d142446",
+      "root": "09f315996ec7c0a7560f1f56f62bfa5e27bc40684d8466439eb784c4eb883ea6",
       "present": true,
       "record": {
         "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
         "next": "1786ac2190f1d2617402266060bb139930e0dcca06b93d0cdaf004795fc3d264",
-        "lists": 17,
-        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+        "lists": 1,
+        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+        "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "path": {
         "index": 1,
         "siblings": [
           [
-            "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-            "2977a388f0fb48d726f649fb7ac94ed348d874fa53a28d115d623c65f67f2ba4",
-            "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+            "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+            "08092726e8ac1f3daab3151271fe2d08fa8a7e6c4836196f6173b1a2155d7e7f",
+            "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
           ],
           [
-            "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-            "044c4a5c40a69590da0df57206ff2682db0b6d32526364d8087ff5b9df31076e",
-            "0faa7e9158487b827711d6763720f09f12da953f9acfb0a1cc034372f530ad13"
+            "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+            "2c1d78fa09681b6cecfd5600aaa58d72ad2187ead22b3c3390adaa8af972dfde",
+            "1d3b47e943de736d2d566cfe01ae22cbc42493a8215ff1e5b3d54fe8cb5f6fb0"
           ],
           [
-            "0517498cadb7613540f3d9f97edebab5a83b5805a2091e5afe7c006de98be772",
+            "1c1def6bad4e438432f8d94d3755246b11477bc7b23a04dc58ce533c46351a21",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c"
           ],
@@ -3497,29 +3594,30 @@
     },
     {
       "member": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
-      "root": "2ffc17ed0a96008e33141ced15a126c811e72dcdb645817d8c5f51487d142446",
+      "root": "09f315996ec7c0a7560f1f56f62bfa5e27bc40684d8466439eb784c4eb883ea6",
       "present": true,
       "record": {
         "member": "14281222ab5e390514e7129b51e4380792713f7c7f159e35127d7fb9713b5b48",
         "next": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
         "lists": 33,
-        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+        "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "path": {
         "index": 2,
         "siblings": [
           [
-            "0ce32f69203f37eb77910cc1601041cbdf6a300d891359f53f15ea9b8fbfb49a",
-            "08deee23eed524d193c1245ce0b7f0b1a681dd859043cf123856d3b6b0d13a02",
-            "0e7904c5a9bb6502f40ac05bc3d586e4847026e125d0e68f0f68454e68ec9d00"
+            "28e3fdccd49f3273d85609d81be1b9d3971065ab977d9247b38d011123ce9c75",
+            "03ce22f722d19639f4b576585d32850ad3d3fbb80b44971fa396e121aba6a929",
+            "1f0da8ba4078a5297a6577154ed7d059416fcb00bd9a75a8cbd18ba88c982241"
           ],
           [
-            "17771a4bb2136ac895bb8277cfa31304f36245fa5710c1e7e83a143b142e76cd",
-            "044c4a5c40a69590da0df57206ff2682db0b6d32526364d8087ff5b9df31076e",
-            "0faa7e9158487b827711d6763720f09f12da953f9acfb0a1cc034372f530ad13"
+            "0a8d26c05cc0c055ef60f9c6d77abb23ea5cb7df6bfcc0fa0119a5cfcd034001",
+            "2c1d78fa09681b6cecfd5600aaa58d72ad2187ead22b3c3390adaa8af972dfde",
+            "1d3b47e943de736d2d566cfe01ae22cbc42493a8215ff1e5b3d54fe8cb5f6fb0"
           ],
           [
-            "0517498cadb7613540f3d9f97edebab5a83b5805a2091e5afe7c006de98be772",
+            "1c1def6bad4e438432f8d94d3755246b11477bc7b23a04dc58ce533c46351a21",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c"
           ],
@@ -3563,29 +3661,30 @@
     },
     {
       "member": "0a58fe7383803bf873fde61480302c86b2f65d090d355691562f9fd7642a144f",
-      "root": "2ffc17ed0a96008e33141ced15a126c811e72dcdb645817d8c5f51487d142446",
+      "root": "09f315996ec7c0a7560f1f56f62bfa5e27bc40684d8466439eb784c4eb883ea6",
       "present": false,
       "record": {
         "member": "0443a3de5231e61e56cd0d40e31a26abd294014f94d00b6d564fee3d4a4cc8fe",
         "next": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
         "lists": 8,
-        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000"
+        "escrow_key": "0000000000000000000000000000000000000000000000000000000000000000",
+        "address_hash": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "path": {
         "index": 7,
         "siblings": [
           [
-            "2a448c7025e2776b104cbdb590fa1d07b309374a8953e63409bbd8fcc6cae343",
-            "28a3a11d9c1cf67b77158ec9aae99691d90d77c4b24758c111ed9c2234910c12",
-            "200cafeea4f9fc760753c087c112762cb431793643bb1989246198c6294f0180"
+            "1df68a3784dbeea579788aab40b5aeb8b3f213826eec98f3bac630eb4c107287",
+            "1ce9d31d07993b378ee1e32240e1d79a14f4e293333214de1f59b68b4c43b387",
+            "0aeccb09ff3fc4efb5a9328f540929145a172330a386db2560fff65e893386ed"
           ],
           [
-            "1c9107659adf838bd064d5fa0e3633ba3fc124635328765da71a1ecbc3df7ecf",
-            "044c4a5c40a69590da0df57206ff2682db0b6d32526364d8087ff5b9df31076e",
-            "0faa7e9158487b827711d6763720f09f12da953f9acfb0a1cc034372f530ad13"
+            "2c5b2504cef58304109436f153c794ae821952c527cc9091e2071c4cec34bb7d",
+            "2c1d78fa09681b6cecfd5600aaa58d72ad2187ead22b3c3390adaa8af972dfde",
+            "1d3b47e943de736d2d566cfe01ae22cbc42493a8215ff1e5b3d54fe8cb5f6fb0"
           ],
           [
-            "0517498cadb7613540f3d9f97edebab5a83b5805a2091e5afe7c006de98be772",
+            "1c1def6bad4e438432f8d94d3755246b11477bc7b23a04dc58ce533c46351a21",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
             "1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c"
           ],

@@ -1,0 +1,80 @@
+{
+  "description": "The record pools each transfer key compiles. distinct = Q + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), Q 4 on confidential and commitment keys and 1 on entry keys. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+  "keys": [
+    {
+      "key": "custom_ring_transfer_confidential_2_in24_w4",
+      "own": 15,
+      "curator": 15
+    },
+    {
+      "key": "custom_ring_transfer_confidential_2_in24_w32",
+      "own": 43,
+      "curator": 43
+    },
+    {
+      "key": "custom_ring_transfer_confidential_4_in24_w4",
+      "own": 19,
+      "curator": 19
+    },
+    {
+      "key": "custom_ring_transfer_confidential_4_in24_w32",
+      "own": 47,
+      "curator": 47
+    },
+    {
+      "key": "custom_ring_transfer_confidential_8_in16_w4",
+      "own": 27,
+      "curator": 27
+    },
+    {
+      "key": "custom_ring_transfer_confidential_8_in16_w32",
+      "own": 55,
+      "curator": 55
+    },
+    {
+      "key": "custom_ring_transfer_confidential_16_in5_w8",
+      "own": 47,
+      "curator": 47
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_2_in24_w4",
+      "own": 15,
+      "curator": 15
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_2_in24_w32",
+      "own": 43,
+      "curator": 43
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_4_in16_w4",
+      "own": 19,
+      "curator": 19
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_4_in16_w32",
+      "own": 47,
+      "curator": 47
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_8_in5_w24",
+      "own": 47,
+      "curator": 47
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_entry_2_in8_w4",
+      "own": 12,
+      "curator": 12
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_entry_4_in8_w4",
+      "own": 16,
+      "curator": 16
+    },
+    {
+      "key": "custom_ring_transfer_anonymous_entry_8_in2_w4",
+      "own": 24,
+      "curator": 24
+    }
+  ]
+}
