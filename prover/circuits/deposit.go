@@ -26,7 +26,7 @@ import (
 // 1. The first Count of 1..8 owner commitments open to (owner hash, blinding, owner key) AES-CTR encrypted to AuditorPk, the padding slots carry nothing.
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. Each occupied slot discloses the key whose Solana owner identity is its owner_pk_hash.
-// 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
+// 4. Under key escrow every owner off ZeroNullifierPk has a record under MemberRegistryRoot that escrows the key the owner's nullifier key and ciphertext hash name.
 // 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset on the lists its records under MemberRegistryRoot and CuratorRoot carry.
 
 const (
@@ -99,8 +99,8 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.Assets[i], c.Amounts[i]} {
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: value})
 		}
-		// 3. Under escrow the owner's record exists and escrows Poseidon(nullifier_pk, ct_hash).
-		escrowed := api.Mul(active, c.KeyEscrow)
+		// 3. Under escrow the owner's record exists and escrows Poseidon(nullifier_pk, ct_hash), a zero secret key owes no record.
+		escrowed := shared.EscrowOwed(api, api.Mul(active, c.KeyEscrow), c.NullifierPks[i])
 		c.Members[i].AssertPresent(api, escrowed, c.MemberRegistryRoot, c.OwnerPkHashes[i])
 		key := registry.EscrowKey(api, c.NullifierPks[i], c.CtHashes[i])
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: c.Members[i].EscrowKey, B: key})

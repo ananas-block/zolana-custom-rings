@@ -128,6 +128,29 @@ func TestMergeRefusals(t *testing.T) {
 			s.Circuit.KeyEscrow = 1
 			s.Rebind(t)
 		}, define},
+		{"a live slot past the count", func(t *testing.T, s *ringmerge.Statement) {
+			s.Circuit.InputCount = 1
+			s.Rebind(t)
+		}, define},
+		{"a count of zero", func(t *testing.T, s *ringmerge.Statement) {
+			s.Circuit.InputCount = 0
+			s.Rebind(t)
+		}, define},
+		{"a count past the width", func(t *testing.T, s *ringmerge.Statement) {
+			s.Circuit.InputCount = 9
+			s.Rebind(t)
+		}, define},
+		// The auditor would read a note SPP never spent beside the slots it did.
+		{"a nonzero list entry at a dummy", func(t *testing.T, s *ringmerge.Statement) {
+			s.InputHashes[2] = big.NewInt(0x77)
+			s.Fields = s.Disclosed(t)
+			s.Rebind(t)
+		}, define},
+		{"a list with two entries swapped", func(t *testing.T, s *ringmerge.Statement) {
+			s.InputHashes[0], s.InputHashes[1] = s.InputHashes[1], s.InputHashes[0]
+			s.Fields = s.Disclosed(t)
+			s.Rebind(t)
+		}, define},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,6 +205,37 @@ func TestEscrowedMergeRefusals(t *testing.T) {
 			ringtest.RequireRefused(t, test.IsSolved(mergeCircuit(t, 8), s.Circuit, ecc.BN254.ScalarField()), tt.frames...)
 		})
 	}
+}
+
+// SPP pads with hidden dummies, input_count is the published count and never the number of real inputs.
+func TestMergePublishedCountHoldsHiddenDummies(t *testing.T) {
+	s := ringmerge.Build(t, 8)
+	s.Circuit.InputCount = 5
+	s.Rebind(t)
+	if err := test.IsSolved(mergeCircuit(t, 8), s.Circuit, ecc.BN254.ScalarField()); err != nil {
+		t.Fatal(err)
+	}
+	if s.InputHashes[3].Sign() != 0 || s.InputHashes[4].Sign() != 0 {
+		t.Fatal("a hidden dummy disclosed a nonzero entry")
+	}
+}
+
+// A zero secret owner holds no escrow record on an escrow ring, any other owner must.
+func TestMergeEscrowHoldsTheZeroKeyException(t *testing.T) {
+	t.Run("a zero secret owner with no record settles", func(t *testing.T) {
+		s := ringmerge.BuildZeroSecret(t, 8)
+		if err := test.IsSolved(mergeCircuit(t, 8), s.Circuit, ecc.BN254.ScalarField()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("an owner off the zero key with no record refuses", func(t *testing.T) {
+		s := ringmerge.Build(t, 8)
+		s.Circuit.KeyEscrow = 1
+		s.Rebind(t)
+		if test.IsSolved(mergeCircuit(t, 8), s.Circuit, ecc.BN254.ScalarField()) == nil {
+			t.Fatal("a merge output with no escrowed record settled")
+		}
+	})
 }
 
 // Every SPP merge width without a ring merge key is refused at construction and at compile time.

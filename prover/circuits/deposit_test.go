@@ -134,3 +134,25 @@ func TestDepositCapacitiesPreserveStatementsAndBoundCounts(t *testing.T) {
 		}
 	}
 }
+
+// A zero secret owner holds no escrow record on a registry ring, any other owner must.
+func TestDepositEscrowHoldsTheZeroKeyException(t *testing.T) {
+	d := ringdeposit.BuildZeroKey(t, 2)
+	if err := test.IsSolved(mustDepositCircuit(t), d.Circuit, ecc.BN254.ScalarField()); err != nil {
+		t.Fatal(err)
+	}
+	d = ringdeposit.BuildZeroKey(t, 2)
+	d.Circuit.NullifierPks[1] = big.NewInt(0x1234)
+	if test.IsSolved(mustDepositCircuit(t), d.Circuit, ecc.BN254.ScalarField()) == nil {
+		t.Fatal("an owner off the zero key settled with no record")
+	}
+}
+
+func mustDepositCircuit(t *testing.T) *circuits.DepositCircuit {
+	t.Helper()
+	c, err := circuits.NewDepositCircuit(circuits.MaxDeposits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
