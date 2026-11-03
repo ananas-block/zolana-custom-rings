@@ -1,18 +1,10 @@
-//! The transfer layout element, the anonymous key choice and the input prefix, mirror
-//! `prover/circuits/audit`.
+//! The transfer layout element and the anonymous key choice, mirror `prover/circuits/audit`.
 
-use spr_hasher::primitives::{
-    is_canonical_bn254_scalar_be, pack_be_chunks, BN254_SCALAR_MODULUS_BE, PACK_BE_CHUNK_BYTES,
-};
+use spr_hasher::primitives::{pack_be_chunks, PACK_BE_CHUNK_BYTES};
 
-use crate::{
-    error::CustomRingError,
-    key_catalog::{TransferShape, ANONYMOUS_TRANSFER_SHAPES, ENTRY_TRANSFER_SHAPES},
-};
+use crate::key_catalog::{TransferShape, ANONYMOUS_TRANSFER_SHAPES, ENTRY_TRANSFER_SHAPES};
 
 pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
-/// The first bytes of a spent hash the evidence discloses.
-pub const INPUT_PREFIX_BYTES: usize = 16;
 
 /// The transfer statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,7 +24,7 @@ impl AuditLayout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnonymousAuditKey {
-    /// Publishes spent UTXO 0's hash and the prefix of every later one, every spent UTXO a note of the ring.
+    /// Publishes every spent hash, every spent UTXO a note of the ring.
     Commitment { class: usize },
     /// Opens every spent UTXO, the key of a transfer that spends a default-ring note.
     Entry { class: usize },
@@ -73,46 +65,6 @@ impl AnonymousSpend {
     }
 }
 
-/// `prefix16(input_hash)`, the first bytes of the big-endian hash.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InputPrefix(u128);
-
-impl InputPrefix {
-    /// No canonical hash has a larger prefix.
-    const MAX: u128 = halves(&BN254_SCALAR_MODULUS_BE)[0];
-
-    /// `None` for a hash at or above the modulus or below 2^128, a zero prefix names no input.
-    pub fn of(hash: &[u8; 32]) -> Option<Self> {
-        let [prefix, _] = halves(hash);
-        (is_canonical_bn254_scalar_be(hash) && prefix != 0).then_some(Self(prefix))
-    }
-
-    pub const fn get(self) -> u128 {
-        self.0
-    }
-
-    pub const fn to_bytes(self) -> [u8; INPUT_PREFIX_BYTES] {
-        self.0.to_be_bytes()
-    }
-
-    /// `None` for the zero bytes of a published dummy, refuses a prefix no canonical hash has.
-    pub fn from_bytes(bytes: &[u8; INPUT_PREFIX_BYTES]) -> Result<Option<Self>, CustomRingError> {
-        match u128::from_be_bytes(*bytes) {
-            0 => Ok(None),
-            prefix if prefix <= Self::MAX => Ok(Some(Self(prefix))),
-            _ => Err(CustomRingError::InvalidInstructionData),
-        }
-    }
-}
-
-const fn halves(field: &[u8; 32]) -> [u128; 2] {
-    let (chunks, _) = field.as_chunks::<INPUT_PREFIX_BYTES>();
-    [
-        u128::from_be_bytes(chunks[0]),
-        u128::from_be_bytes(chunks[1]),
-    ]
-}
-
 /// Zero pads the plaintext at its end to whole 31-byte chunks, one chunk per field.
 pub fn pack_disclosure(plaintext: &[u8]) -> Vec<[u8; 32]> {
     plaintext
@@ -145,26 +97,6 @@ pub fn unpack_disclosure(fields: &[[u8; 32]], len: usize) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// No canonical hash has a prefix above the modulus prefix.
-    #[test]
-    fn input_prefixes_read_back_and_refuse_a_prefix_above_the_modulus() {
-        let mut below = BN254_SCALAR_MODULUS_BE;
-        below[31] -= 1;
-        let top = InputPrefix::of(&below).unwrap();
-        assert_eq!(top.get(), InputPrefix::MAX);
-        assert_eq!(InputPrefix::of(&BN254_SCALAR_MODULUS_BE), None);
-        let mut short = [0; 32];
-        short[16] = 1;
-        assert_eq!(InputPrefix::of(&short), None);
-        assert_eq!(InputPrefix::from_bytes(&top.to_bytes()), Ok(Some(top)));
-        assert_eq!(InputPrefix::from_bytes(&[0; 16]), Ok(None));
-        let over = (InputPrefix::MAX + 1).to_be_bytes();
-        assert_eq!(
-            InputPrefix::from_bytes(&over),
-            Err(CustomRingError::InvalidInstructionData)
-        );
-    }
 
     #[test]
     fn the_layout_value_keeps_bits_zero_and_two_clear() {

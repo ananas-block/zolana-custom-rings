@@ -30,13 +30,16 @@ fn ring_derivation_vectors() {
 
 #[test]
 fn domains_are_their_ascii_tags() {
-    let table: [(u32, &[u8; 4]); 14] = [
+    let table: [(u32, &[u8; 4]); 17] = [
         (domain::TRANSFER_STATEMENT, b"CRTX"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
         (domain::AUDIT_SHARED_SECRET, b"CR_S"),
         (domain::POLICY_TABLE, b"CRTB"),
         (domain::QUEUE_WRITE, b"CRQW"),
+        (domain::AUTHORIZED_ADDRESS, b"CRAD"),
+        (domain::RECIPIENT_TAG, b"CRRT"),
+        (domain::SENDER_TAG, b"CRST"),
         (domain::APPLY_RECORDS, b"CRAP"),
         (domain::REGISTER_KEY, b"CRRG"),
         (domain::DEPOSIT_BLINDING, b"CRDB"),

@@ -2,7 +2,7 @@
 
 use spr_hasher::{
     hash_chain::{create_hash_chain_4, create_hash_chain_4_from_slice},
-    primitives::{hash_bytes, pack_be, right_align},
+    primitives::{hash_bytes, pack_be, right_align, solana_owner_identity},
     Hasher, HasherError, Poseidon,
 };
 use spr_interface::N_PUBLIC_SLOTS;
@@ -10,10 +10,14 @@ use spr_interface::N_PUBLIC_SLOTS;
 use crate::{
     audit_stream::{ANONYMOUS_RECORD_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN},
     disclosure::{pack_disclosure, AuditLayout},
-    domain, tagged_x25519,
-    transact::{exits_bitmap, RingOutput},
+    domain,
+    error::CustomRingError,
+    tagged_x25519,
+    transact::{change_bitmap, exits_bitmap, FramedSenderBundle, RingOutput},
     REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
+
+const ZERO_FIELD: [u8; 32] = [0; 32];
 
 /// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, envelope_digest, salt, layout]`.
 pub const AUDIT_HEAD_ELEMENTS: usize = 12;
@@ -56,8 +60,16 @@ impl AuditHead<'_> {
     }
 }
 
-fn output_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
-    create_hash_chain_4(outputs.iter().map(RingOutput::hash))
+/// Zero past the last cell, the chain width stays the key's.
+fn zero_filled_chain<'a>(
+    cells: impl Iterator<Item = &'a [u8; 32]>,
+    width: usize,
+) -> Result<[u8; 32], HasherError> {
+    create_hash_chain_4(cells.chain(core::iter::repeat(&ZERO_FIELD)).take(width))
+}
+
+fn output_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
+    zero_filled_chain(outputs.iter().map(RingOutput::hash), capacity)
 }
 
 /// `Poseidon(u32 len(ct), HashChain4(pack_left31(ct)))`, without the tag trailing zeros collide.
@@ -70,12 +82,15 @@ pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
 }
 
 /// `HashChain4(hash_bytes(ct_i))`, untagged since the layout fixes every slot's length.
-pub fn output_ciphertext_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+pub fn output_ciphertext_chain(
+    outputs: &[RingOutput<'_>],
+    capacity: usize,
+) -> Result<[u8; 32], HasherError> {
     let mut hashes = Vec::with_capacity(outputs.len());
     for output in outputs {
         hashes.push(slot_ciphertext_hash(output.ciphertext())?);
     }
-    create_hash_chain_4_from_slice(&hashes)
+    zero_filled_chain(hashes.iter(), capacity)
 }
 
 /// `hash_bytes` at the three lengths a slot ciphertext has, any other is refused.
@@ -88,30 +103,100 @@ pub fn slot_ciphertext_hash(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> 
     match ciphertext.len() {
         ESCROWED_EXIT_RECORD_LEN => fixed::<ESCROWED_EXIT_RECORD_LEN>(ciphertext),
         EXIT_RECORD_LEN => fixed::<EXIT_RECORD_LEN>(ciphertext),
-        _ => fixed::<ANONYMOUS_RECORD_LEN>(ciphertext),
+        ANONYMOUS_RECORD_LEN => fixed::<ANONYMOUS_RECORD_LEN>(ciphertext),
+        len => Err(HasherError::InvalidInputLength(ANONYMOUS_RECORD_LEN, len)),
     }
 }
 
-fn recipient_key_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+fn recipient_key_chain(
+    outputs: &[RingOutput<'_>],
+    capacity: usize,
+) -> Result<[u8; 32], HasherError> {
     let mut keys = Vec::with_capacity(2 * outputs.len());
     for output in outputs {
         keys.extend(output.recipient_key_fields());
     }
-    create_hash_chain_4_from_slice(&keys)
+    zero_filled_chain(keys.iter(), 2 * capacity)
+}
+
+/// `HashChain4(hash_bytes(body_i))`, zero on a change or exit slot and past `m`.
+fn recipient_body_chain(
+    outputs: &[RingOutput<'_>],
+    capacity: usize,
+) -> Result<[u8; 32], HasherError> {
+    let mut hashes = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        hashes.push(output.recipient_body_hash()?);
+    }
+    zero_filled_chain(hashes.iter(), capacity)
+}
+
+/// `HashChain4` of each slot's proven tag cell at the key's width, then the bundle tag.
+fn recipient_tag_chain(
+    outputs: &[RingOutput<'_>],
+    capacity: usize,
+    bundle_tag: &[u8; 32],
+) -> Result<[u8; 32], HasherError> {
+    create_hash_chain_4(
+        outputs
+            .iter()
+            .map(RingOutput::recipient_tag_cell)
+            .chain(core::iter::repeat(&ZERO_FIELD))
+            .take(capacity)
+            .chain(core::iter::once(bundle_tag)),
+    )
+}
+
+/// SPP's owner signer run, deduplicated by first occurrence, the order `fill_owner_signer_hashes` reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SignerSet {
+    pub count: usize,
+    /// Zero on an empty set, the one encoding every rail binds.
+    pub chain: [u8; 32],
+}
+
+impl SignerSet {
+    /// `slots` is the key's `S`, a run wider than it refused.
+    pub fn new<'a>(
+        owners: impl Iterator<Item = &'a [u8; 32]>,
+        slots: usize,
+    ) -> Result<Self, CustomRingError> {
+        let mut unique: Vec<&[u8; 32]> = Vec::with_capacity(slots);
+        for owner in owners {
+            if !unique.contains(&owner) {
+                unique.push(owner);
+            }
+        }
+        if unique.len() > slots {
+            return Err(CustomRingError::OwnerSignerCount);
+        }
+        if unique.is_empty() {
+            return Ok(Self::default());
+        }
+        let mut identities = Vec::with_capacity(unique.len());
+        for owner in &unique {
+            identities.push(solana_owner_identity(owner)?);
+        }
+        Ok(Self {
+            count: unique.len(),
+            chain: zero_filled_chain(identities.iter(), slots)?,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfidentialSender<'a> {
-    Signer(&'a [u8; 32]),
+    Signer,
     InProof(&'a [u8; 32]),
     Authority,
 }
 
 impl ConfidentialSender<'_> {
+    /// Zero on the signer and authority rails.
     pub fn identity(&self) -> &[u8; 32] {
         match self {
-            Self::Signer(identity) | Self::InProof(identity) => identity,
-            Self::Authority => &[0; 32],
+            Self::InProof(identity) => identity,
+            Self::Signer | Self::Authority => &ZERO_FIELD,
         }
     }
 }
@@ -121,13 +206,17 @@ pub enum TransferFamily<'a> {
     /// The signer, in-proof and authority rails.
     Confidential {
         sender: ConfidentialSender<'a>,
-        /// One owner identity per output slot, zero on a dummy and off a policy.
+        /// One owner identity per published slot, zero on a dummy and off a policy.
         recipients: &'a [[u8; 32]],
     },
     /// The anonymous rail, the head's layout picks the commitment or entry disclosure.
     Anonymous {
         /// `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, zero when absent.
         party_identities: &'a [[u8; 32]; 3],
+        /// The ciphertext the sender reads back under its proven tag, the length follows `m`.
+        sender: FramedSenderBundle<'a>,
+        /// Every reply in slot order, `None` without reply metadata.
+        replies: Option<&'a [u8]>,
     },
 }
 
@@ -139,10 +228,15 @@ pub struct TransferStatement<'a> {
     /// Every public slot's gross withdrawal stays at or below its record's threshold.
     pub exempt: bool,
     pub approval_required: bool,
+    /// The `m` published slots.
     pub outputs: &'a [RingOutput<'a>],
+    /// `N`, the key's output capacity.
+    pub output_capacity: usize,
     /// `n`, the frame's nullifier count.
     pub input_count: usize,
     pub private_tx_hash: &'a [u8; 32],
+    /// Default on the in-proof, authority and entry rails and on an empty run.
+    pub signers: SignerSet,
     /// Zero on an audit-only ring.
     pub policy_hash: &'a [u8; 32],
     /// Zero when no registry is read.
@@ -158,16 +252,15 @@ pub struct TransferStatement<'a> {
 }
 
 impl TransferStatement<'_> {
-    /// `elements().len()`, 38 + n_out on the confidential family and 37 on the anonymous family.
     pub fn element_count(&self) -> usize {
-        let family = match self.family {
-            TransferFamily::Confidential { recipients, .. } => 4 + recipients.len(),
-            TransferFamily::Anonymous { .. } => 3,
-        };
-        AUDIT_HEAD_ELEMENTS + 3 + 1 + 3 + family + 3 + 3 * N_PUBLIC_SLOTS + 1 + 2
+        match self.family {
+            TransferFamily::Confidential { .. } => 41 + self.output_capacity,
+            TransferFamily::Anonymous { .. } => 45,
+        }
     }
 
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
+        let capacity = self.output_capacity;
         let mut elements = Vec::with_capacity(self.element_count());
         elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
         if let TransferFamily::Confidential { sender, .. } = self.family {
@@ -179,29 +272,55 @@ impl TransferStatement<'_> {
         elements.extend([
             bit(self.exempt),
             bit(self.approval_required),
-            output_chain(self.outputs)?,
-            output_ciphertext_chain(self.outputs)?,
+            count(self.outputs.len()),
+            output_chain(self.outputs, capacity)?,
+            output_ciphertext_chain(self.outputs, capacity)?,
         ]);
-        if matches!(self.family, TransferFamily::Confidential { .. }) {
-            elements.push(recipient_key_chain(self.outputs)?);
+        match self.family {
+            TransferFamily::Confidential { .. } => {
+                elements.push(recipient_key_chain(self.outputs, capacity)?);
+            }
+            TransferFamily::Anonymous { sender, .. } => elements.extend([
+                recipient_body_chain(self.outputs, capacity)?,
+                recipient_tag_chain(self.outputs, capacity, sender.tag)?,
+                bitmap(change_bitmap(self.outputs)),
+                ciphertext_digest(sender.body)?,
+            ]),
         }
         elements.extend([
-            right_align(&(self.input_count as u64).to_be_bytes()),
-            right_align(&exits_bitmap(self.outputs).to_be_bytes()),
+            count(self.input_count),
+            bitmap(exits_bitmap(self.outputs)),
             *self.private_tx_hash,
         ]);
         match self.family {
             TransferFamily::Confidential { sender, .. } => elements.push(*sender.identity()),
-            TransferFamily::Anonymous { party_identities } => elements.extend(*party_identities),
+            TransferFamily::Anonymous {
+                party_identities, ..
+            } => elements.extend(*party_identities),
         }
-        elements.extend([*self.policy_hash, *self.own_root, *self.curator_root]);
+        elements.extend([
+            count(self.signers.count),
+            self.signers.chain,
+            *self.policy_hash,
+            *self.own_root,
+            *self.curator_root,
+        ]);
         if let TransferFamily::Confidential { recipients, .. } = self.family {
-            elements.extend_from_slice(recipients);
+            elements.extend(
+                recipients
+                    .iter()
+                    .copied()
+                    .chain(core::iter::repeat(ZERO_FIELD))
+                    .take(capacity),
+            );
         }
         for (slot, asset) in self.public_assets.iter().enumerate() {
             elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
         }
         elements.push(*self.withdrawal_hash);
+        if let TransferFamily::Anonymous { replies, .. } = self.family {
+            elements.push(replies.map_or(Ok(ZERO_FIELD), ciphertext_digest)?);
+        }
         // The length counts itself and the version, both close the chain.
         let length = (elements.len() + 2) as u64;
         elements.extend([
@@ -286,4 +405,12 @@ impl RegisterKeyStatement<'_> {
 
 fn bit(value: bool) -> [u8; 32] {
     right_align(&[u8::from(value)])
+}
+
+fn count(value: usize) -> [u8; 32] {
+    right_align(&(value as u64).to_be_bytes())
+}
+
+fn bitmap(bits: u64) -> [u8; 32] {
+    right_align(&bits.to_be_bytes())
 }

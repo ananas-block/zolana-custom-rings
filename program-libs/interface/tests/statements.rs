@@ -1,12 +1,13 @@
 //! Pins `test-vectors/proof/ring-statements.json` for the Go circuits and the TS SDK.
 
 use custom_ring_interface::{
-    ciphertext_digest, exits_bitmap, output_ciphertext_chain, slot_ciphertext_hash,
-    AnonymousAuditKey, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout, AuditStreamLayout,
-    ConfidentialSender, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
-    RegisterKeyStatement, RingOutput, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN,
+    change_bitmap, ciphertext_digest, exits_bitmap, output_ciphertext_chain, sender_bundle_len,
+    slot_ciphertext_hash, AnonymousAuditKey, ApplyRecordsStatement, AuditHead, AuditKey,
+    AuditLayout, AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext,
+    DepositPublicInput, DepositRegistry, DepositedAsset, FramedSenderBundle, RegisterKeyStatement,
+    RingOutput, SignerSet, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN,
     AUDIT_HEAD_ELEMENTS, DELIVERED_BODY_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
-    ESCROWED_DELIVERED_BODY_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN,
+    ESCROWED_DELIVERED_BODY_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,9 @@ struct OutputCase {
     u: Option<String>,
     body: Option<String>,
     record: Option<String>,
+    recipient_body: Option<String>,
+    /// Null on change and exit.
+    tag: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -65,12 +69,19 @@ struct TransferCase {
     salt: String,
     layout: u8,
     outputs: Vec<OutputCase>,
+    output_capacity: usize,
     output_ciphertext_chain: String,
     input_count: usize,
     exits_bitmap: u64,
+    change_bitmap: Option<u64>,
+    sender_bundle: Option<String>,
+    sender_bundle_tag: Option<String>,
     private_tx_hash: String,
     sender: Option<String>,
     party_identities: Option<Vec<String>>,
+    signer_count: usize,
+    signer_chain: String,
+    replies: Option<String>,
     policy_hash: String,
     own_root: String,
     curator_root: String,
@@ -150,6 +161,9 @@ struct Values {
     ciphertexts: [[u8; 104]; 8],
     envelope: Vec<u8>,
     tags: [[u8; 32]; 8],
+    bodies: [[u8; RECIPIENT_BODY_LEN]; 8],
+    bundle: Vec<u8>,
+    replies: Vec<u8>,
     auditor_pubkey: [u8; 33],
     ring_id: [u8; 32],
     salt: [u8; 16],
@@ -162,7 +176,10 @@ impl Values {
             keys: (0..16).map(|seed| [0x60 + seed; 32]).collect(),
             ciphertexts: core::array::from_fn(|slot| [0x90 + slot as u8; 104]),
             envelope: (0..1024u32).map(|byte| byte as u8 ^ 0x93).collect(),
-            tags: core::array::from_fn(|slot| [0xb0 + slot as u8; 32]),
+            tags: core::array::from_fn(|slot| field(0xb0 + slot as u8)),
+            bodies: core::array::from_fn(|slot| [0xc0 + slot as u8; RECIPIENT_BODY_LEN]),
+            bundle: (0..1024u32).map(|byte| byte as u8 ^ 0x2d).collect(),
+            replies: (0..1024u32).map(|byte| byte as u8 ^ 0x17).collect(),
             auditor_pubkey: tagged(0xa1),
             ring_id: hash_bytes(&[0x77; 32]).unwrap(),
             salt: [0x5c; 16],
@@ -222,17 +239,33 @@ impl Values {
             .collect()
     }
 
-    fn anonymous<'a>(&'a self, slot: usize, body: Option<&'a [u8]>) -> RingOutput<'a> {
+    fn anonymous<'a>(
+        &'a self,
+        slot: usize,
+        body: Option<&'a [u8; RECIPIENT_BODY_LEN]>,
+    ) -> RingOutput<'a> {
         RingOutput::Anonymous {
             hash: &self.fields[20 + slot],
-            tag: &self.tags[slot],
+            tag: if body.is_some() {
+                &self.tags[slot]
+            } else {
+                &[0; 32]
+            },
             body,
             record: &self.ciphertexts[slot][..ANONYMOUS_RECORD_LEN],
         }
     }
 
-    fn anonymous_body(&self, slot: usize) -> Option<&[u8]> {
-        (slot != 1).then_some(&self.ciphertexts[slot][..40])
+    /// Slot 0 is change, every other ring slot a recipient body.
+    fn anonymous_body(&self, slot: usize) -> Option<&[u8; RECIPIENT_BODY_LEN]> {
+        (slot != 0).then_some(&self.bodies[slot])
+    }
+
+    fn sender_bundle(&self, outputs: usize) -> FramedSenderBundle<'_> {
+        FramedSenderBundle {
+            tag: &self.tags[7],
+            body: &self.bundle[..sender_bundle_len(outputs)],
+        }
     }
 }
 
@@ -243,6 +276,7 @@ fn stream(key: AuditKey, inputs: usize, outputs: &[RingOutput<'_>]) -> AuditStre
         key_escrow: false,
         inputs,
         outputs: outputs.len(),
+        capacity: outputs.len(),
         exits: exits_bitmap(outputs),
     }
 }
@@ -253,12 +287,22 @@ fn output_case(output: &RingOutput<'_>) -> OutputCase {
         RingOutput::Anonymous { record, .. } => ("anonymous", None, None, Some(*record)),
         RingOutput::Exit { record, .. } => ("exit", None, None, Some(*record)),
     };
+    let recipient_body = match output {
+        RingOutput::Anonymous {
+            body: Some(body), ..
+        } => Some(hex::encode(body)),
+        _ => None,
+    };
     OutputCase {
         kind: kind.to_string(),
         hash: hex::encode(output.hash()),
         u: u.map(hex::encode),
         body: body.map(hex::encode),
         record: record.map(hex::encode),
+        tag: recipient_body
+            .is_some()
+            .then(|| hex::encode(output.recipient_tag_cell())),
+        recipient_body,
     }
 }
 
@@ -274,8 +318,20 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         TransferFamily::Anonymous { .. } => None,
     };
     let parties = match statement.family {
-        TransferFamily::Anonymous { party_identities } => Some(hexes(party_identities)),
+        TransferFamily::Anonymous {
+            party_identities, ..
+        } => Some(hexes(party_identities)),
         TransferFamily::Confidential { .. } => None,
+    };
+    let (sender_bundle, sender_bundle_tag, replies) = match statement.family {
+        TransferFamily::Anonymous {
+            sender, replies, ..
+        } => (
+            Some(hex::encode(sender.body)),
+            Some(hex::encode(sender.tag)),
+            replies.map(hex::encode),
+        ),
+        TransferFamily::Confidential { .. } => (None, None, None),
     };
     let rail = match (confidential, head.layout.full_openings) {
         (Some((true, _, _, _)), _) => "in_proof",
@@ -305,12 +361,23 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         salt: hex::encode(head.salt),
         layout: head.layout.value(),
         outputs: statement.outputs.iter().map(output_case).collect(),
-        output_ciphertext_chain: hex::encode(output_ciphertext_chain(statement.outputs).unwrap()),
+        output_capacity: statement.output_capacity,
+        output_ciphertext_chain: hex::encode(
+            output_ciphertext_chain(statement.outputs, statement.output_capacity).unwrap(),
+        ),
         input_count: statement.input_count,
         exits_bitmap: exits_bitmap(statement.outputs),
+        change_bitmap: sender_bundle
+            .is_some()
+            .then(|| change_bitmap(statement.outputs)),
+        sender_bundle,
+        sender_bundle_tag,
         private_tx_hash: hex::encode(statement.private_tx_hash),
         sender: confidential.map(|(_, _, sender, _)| hex::encode(sender)),
         party_identities: parties,
+        signer_count: statement.signers.count,
+        signer_chain: hex::encode(statement.signers.chain),
+        replies,
         policy_hash: hex::encode(statement.policy_hash),
         own_root: hex::encode(statement.own_root),
         curator_root: hex::encode(statement.curator_root),
@@ -331,14 +398,7 @@ fn compute_vectors() -> StatementVectors {
         values.delivered_outputs(8, &[2, 5], false),
         values.anonymous_outputs(),
     );
-    let signer_key = AuditKey::Confidential {
-        class: 16,
-        input_prefixes: false,
-    };
-    let prefix_key = AuditKey::Confidential {
-        class: 16,
-        input_prefixes: true,
-    };
+    let confidential_key = AuditKey::Confidential { class: 16 };
     let commitment_key = AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 16 });
     let entry_key = AuditKey::Anonymous(AnonymousAuditKey::Entry { class: 8 });
     let assets = [values.fields[60], values.fields[61], [0; 32]];
@@ -352,16 +412,18 @@ fn compute_vectors() -> StatementVectors {
     let eight_recipients: [[u8; 32]; 8] = core::array::from_fn(|slot| values.fields[62 + slot]);
     let no_flags = AuditLayout::default();
     let signer_policy = TransferStatement {
-        head: values.head(no_flags, stream(signer_key, 2, &delivered)),
+        head: values.head(no_flags, stream(confidential_key, 2, &delivered)),
         family: TransferFamily::Confidential {
-            sender: ConfidentialSender::Signer(&owner_signer),
+            sender: ConfidentialSender::Signer,
             recipients: &eight_recipients,
         },
         exempt: false,
         approval_required: true,
         outputs: &delivered,
+        output_capacity: 8,
         input_count: 2,
         private_tx_hash: &values.fields[3],
+        signers: SignerSet::new([[0x42; 32], [0x43; 32], [0x42; 32]].iter(), 16).unwrap(),
         policy_hash: &values.fields[6],
         own_root: &values.fields[7],
         curator_root: &values.fields[8],
@@ -372,7 +434,7 @@ fn compute_vectors() -> StatementVectors {
     };
     let signer_exempt = TransferStatement {
         family: TransferFamily::Confidential {
-            sender: ConfidentialSender::Signer(&zero),
+            sender: ConfidentialSender::Signer,
             recipients: &[zero; 8],
         },
         exempt: true,
@@ -382,11 +444,11 @@ fn compute_vectors() -> StatementVectors {
         ..signer_policy
     };
     let in_proof_policy = TransferStatement {
-        head: values.head(no_flags, stream(prefix_key, 2, &delivered)),
         family: TransferFamily::Confidential {
             sender: ConfidentialSender::InProof(&owner_signer),
             recipients: &eight_recipients,
         },
+        signers: SignerSet::default(),
         ..signer_policy
     };
     let no_slots = [zero; 3];
@@ -396,7 +458,7 @@ fn compute_vectors() -> StatementVectors {
                 key_escrow: true,
                 full_openings: false,
             },
-            stream(prefix_key, 2, &escrowed),
+            stream(confidential_key, 2, &escrowed),
         ),
         family: TransferFamily::Confidential {
             sender: ConfidentialSender::Authority,
@@ -404,6 +466,8 @@ fn compute_vectors() -> StatementVectors {
         },
         approval_required: false,
         outputs: &escrowed,
+        output_capacity: 2,
+        signers: SignerSet::default(),
         curator_root: &zero,
         public_assets: &no_slots,
         public_amounts: &no_slots,
@@ -415,16 +479,30 @@ fn compute_vectors() -> StatementVectors {
         head: values.head(no_flags, stream(commitment_key, 3, &anonymous)),
         family: TransferFamily::Anonymous {
             party_identities: &parties,
+            sender: values.sender_bundle(4),
+            replies: None,
         },
         approval_required: false,
         outputs: &anonymous,
+        output_capacity: 4,
         input_count: 3,
+        signers: SignerSet::new([[0x44; 32]].iter(), 16).unwrap(),
         ..signer_policy
     };
     let anonymous_exempt = TransferStatement {
         exempt: true,
         policy_hash: &zero,
         curator_root: &zero,
+        signers: SignerSet::new([].iter(), 16).unwrap(),
+        ..anonymous_policy_transfer
+    };
+    let anonymous_compact = TransferStatement {
+        family: TransferFamily::Anonymous {
+            party_identities: &parties,
+            sender: values.sender_bundle(2),
+            replies: Some(&values.replies[..97]),
+        },
+        outputs: &anonymous[..2],
         ..anonymous_policy_transfer
     };
     let entry = TransferStatement {
@@ -437,7 +515,16 @@ fn compute_vectors() -> StatementVectors {
         ),
         policy_hash: &zero,
         curator_root: &zero,
+        signers: SignerSet::default(),
         ..anonymous_policy_transfer
+    };
+    let confidential_compact = TransferStatement {
+        family: TransferFamily::Confidential {
+            sender: ConfidentialSender::Signer,
+            recipients: &eight_recipients[..5],
+        },
+        outputs: &delivered[..5],
+        ..signer_policy
     };
     let transfers = [
         signer_policy,
@@ -447,6 +534,8 @@ fn compute_vectors() -> StatementVectors {
         anonymous_policy_transfer,
         anonymous_exempt,
         entry,
+        anonymous_compact,
+        confidential_compact,
     ];
     let apply = ApplyRecordsStatement {
         old_root: values.fields[9],
@@ -515,15 +604,25 @@ fn compute_vectors() -> StatementVectors {
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
                       registry root, the curator root, the policy hash and each asset hash with its amount zero \
-                      padded to 8 slots. The transfer statements are HashChain4 over the audit head under \
-                      CRTX, on the confidential family in_proof and delegate, then exempt, \
-                      approval_required, the output chain, the output ciphertext chain \
-                      HashChain4(hash_bytes(ct_i)), on the confidential family the recipient key \
-                      chain, input_count, exits_bitmap, private_tx_hash, the sender on the \
-                      confidential family or the three party identities on the anonymous family, \
-                      policy_hash, own_root, curator_root, one recipient per output on the confidential \
-                      family, asset, net and gross per public slot, withdrawal_hash, the element \
-                      count and the version. Produced by program-libs/interface/tests/statements.rs."
+                      padded to 8 slots. The transfer statements are version 3, HashChain4 over the \
+                      audit head under CRTX. The confidential family then holds in_proof, delegate, \
+                      exempt, approval_required, output_count, output_chain, \
+                      output_ciphertext_chain HashChain4(hash_bytes(ct_i)), recipient_key_chain, \
+                      input_count, exits_bitmap, private_tx_hash, sender, signer_count, \
+                      signer_chain, policy_hash, own_root, curator_root, one recipient per capacity \
+                      slot, asset, net and gross per public slot, withdrawal_hash, the element count \
+                      and the version. The anonymous family holds exempt, approval_required, \
+                      output_count, output_chain, output_ciphertext_chain, recipient_body_chain \
+                      HashChain4(hash_bytes(body_i)), recipient_tag_chain, HashChain4 of the tag of \
+                      each body-bearing slot, zero elsewhere, zero filled to the capacity, then \
+                      the bundle tag, change_bitmap, digest(sender bundle), \
+                      input_count, exits_bitmap, private_tx_hash, the three party identities, \
+                      signer_count, signer_chain, policy_hash, own_root, curator_root, the public \
+                      slots, withdrawal_hash, digest(replies) or zero, the element count and the \
+                      version. Every per-slot chain is zero filled to the capacity. signer_chain is \
+                      HashChain4 over the deduplicated owner identities zero filled to the key's S, \
+                      and zero when signer_count is zero on every rail. Produced by \
+                      program-libs/interface/tests/statements.rs."
             .to_string(),
         transfer: transfers.iter().map(transfer_case).collect(),
         apply_records: ApplyCase {
@@ -591,7 +690,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(transfer, [46, 46, 46, 40, 37, 37, 37]);
+    assert_eq!(transfer, [49, 49, 49, 43, 45, 45, 45, 45, 49]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -646,8 +745,16 @@ fn the_output_ciphertext_chain_hashes_each_slot_at_its_length() {
             .map(|output| slot_ciphertext_hash(output.ciphertext()).unwrap())
             .collect();
         assert_eq!(
-            output_ciphertext_chain(&outputs).unwrap(),
+            output_ciphertext_chain(&outputs, outputs.len()).unwrap(),
             create_hash_chain_4_from_slice(&hashes).unwrap()
+        );
+        // An omitted slot reads zero at the key's width.
+        let last = outputs.len() - 1;
+        let mut filled = hashes.clone();
+        filled[last] = [0; 32];
+        assert_eq!(
+            output_ciphertext_chain(&outputs[..last], outputs.len()).unwrap(),
+            create_hash_chain_4_from_slice(&filled).unwrap()
         );
     }
     assert_eq!(
@@ -655,86 +762,131 @@ fn the_output_ciphertext_chain_hashes_each_slot_at_its_length() {
         hash_bytes(&[7; EXIT_RECORD_LEN]).unwrap()
     );
     assert!(slot_ciphertext_hash(&[7; 41]).is_err());
+    assert!(slot_ciphertext_hash(&[7; 105]).is_err());
+    assert!(slot_ciphertext_hash(&[]).is_err());
 }
 
-/// One statement of each family at every keyed output count.
+/// Repeats collapse in run order, only the run's owners count, a reorder moves the chain.
 #[test]
-fn the_element_count_is_thirty_eight_plus_outputs_or_thirty_seven() {
+fn the_signer_set_dedups_by_first_occurrence_and_fills_to_the_slots() {
+    let (first, second) = ([0x41; 32], [0x42; 32]);
+    let identity = |key| solana_owner_identity(key).unwrap();
+    let set = SignerSet::new([first, second, first].iter(), 4).unwrap();
+    assert_eq!(set.count, 2);
+    assert_eq!(
+        set.chain,
+        create_hash_chain_4_from_slice(&[identity(&first), identity(&second), [0; 32], [0; 32]])
+            .unwrap()
+    );
+    assert_ne!(
+        set.chain,
+        SignerSet::new([second, first].iter(), 4).unwrap().chain
+    );
+    assert_eq!(
+        SignerSet::new([first, second].iter(), 1),
+        Err(CustomRingError::OwnerSignerCount)
+    );
+    assert_eq!(
+        SignerSet::new([first, first].iter(), 1).unwrap().count,
+        1,
+        "a repeat takes one slot"
+    );
+    for slots in [0, 2, 16] {
+        assert_eq!(
+            SignerSet::new(core::iter::empty(), slots),
+            Ok(SignerSet::default())
+        );
+    }
+    assert_eq!(SignerSet::default().chain, [0; 32]);
+}
+
+/// One statement of each family at every keyed output count, a compact frame keeps the key's width.
+#[test]
+fn the_element_count_is_forty_one_plus_capacity_or_forty_five() {
     let values = Values::new();
     let zero = [0u8; 32];
     let slots = [zero; 3];
     let parties = [zero; 3];
     let recipients = [zero; 8];
     let confidential = values.delivered_outputs(8, &[], false);
-    for n_out in [2usize, 4, 8] {
-        let statement = TransferStatement {
-            head: values.head(
-                AuditLayout::default(),
-                stream(
-                    AuditKey::Confidential {
-                        class: 16,
-                        input_prefixes: false,
-                    },
-                    1,
-                    &confidential[..n_out],
+    for capacity in [2usize, 4, 8] {
+        for published in [1, capacity] {
+            let statement = TransferStatement {
+                head: values.head(
+                    AuditLayout::default(),
+                    stream(
+                        AuditKey::Confidential { class: 16 },
+                        1,
+                        &confidential[..published],
+                    ),
                 ),
-            ),
-            family: TransferFamily::Confidential {
-                sender: ConfidentialSender::Signer(&zero),
-                recipients: &recipients[..n_out],
-            },
-            exempt: false,
-            approval_required: false,
-            outputs: &confidential[..n_out],
-            input_count: 1,
-            private_tx_hash: &zero,
-            policy_hash: &zero,
-            own_root: &zero,
-            curator_root: &zero,
-            public_assets: &slots,
-            public_amounts: &slots,
-            public_gross: &slots,
-            withdrawal_hash: &zero,
-        };
-        assert_eq!(statement.element_count(), 38 + n_out);
-        let elements = statement.elements().unwrap();
-        assert_eq!(elements.len(), 38 + n_out);
-        assert_eq!(
-            elements[elements.len() - 2],
-            right_aligned(38 + n_out as u64)
-        );
-        assert_eq!(elements[elements.len() - 1], right_aligned(2));
-        let anonymous = TransferStatement {
-            family: TransferFamily::Anonymous {
-                party_identities: &parties,
-            },
-            ..statement
-        };
-        assert_eq!(anonymous.element_count(), 37);
-        let elements = anonymous.elements().unwrap();
-        assert_eq!(elements.len(), 37);
-        assert_eq!(elements[elements.len() - 2], right_aligned(37));
+                family: TransferFamily::Confidential {
+                    sender: ConfidentialSender::Signer,
+                    recipients: &recipients[..published],
+                },
+                exempt: false,
+                approval_required: false,
+                outputs: &confidential[..published],
+                output_capacity: capacity,
+                input_count: 1,
+                private_tx_hash: &zero,
+                signers: SignerSet::default(),
+                policy_hash: &zero,
+                own_root: &zero,
+                curator_root: &zero,
+                public_assets: &slots,
+                public_amounts: &slots,
+                public_gross: &slots,
+                withdrawal_hash: &zero,
+            };
+            let expected = 41 + capacity;
+            assert_eq!(statement.element_count(), expected);
+            let elements = statement.elements().unwrap();
+            assert_eq!(elements.len(), expected);
+            assert_eq!(elements[16], right_aligned(published as u64));
+            assert_eq!(elements[elements.len() - 2], right_aligned(expected as u64));
+            assert_eq!(elements[elements.len() - 1], right_aligned(3));
+            let anonymous = TransferStatement {
+                family: TransferFamily::Anonymous {
+                    party_identities: &parties,
+                    sender: values.sender_bundle(published),
+                    replies: None,
+                },
+                ..statement
+            };
+            assert_eq!(anonymous.element_count(), 45);
+            let elements = anonymous.elements().unwrap();
+            assert_eq!(elements.len(), 45);
+            assert_eq!(elements[elements.len() - 2], right_aligned(45));
+        }
     }
 }
 
 #[test]
-fn the_anonymous_transfer_statement_chains_outputs_ciphertexts_private_tx_and_parties() {
+fn the_anonymous_transfer_statement_follows_the_contract_order() {
     let values = Values::new();
     let outputs = values.anonymous_outputs();
     let parties = [field(70), field(71), field(72)];
     let key = AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 16 });
     let zero = [0u8; 32];
     let slots = [zero; 3];
+    let signers = SignerSet::new([[0x44; 32]].iter(), 16).unwrap();
+    let reply = &values.replies[..97];
+    let bundle = values.sender_bundle(4);
     let statement = TransferStatement {
         head: values.head(AuditLayout::default(), stream(key, 3, &outputs)),
         family: TransferFamily::Anonymous {
             party_identities: &parties,
+            sender: bundle,
+            replies: Some(reply),
         },
         exempt: false,
         approval_required: true,
         outputs: &outputs,
+        output_capacity: 4,
         input_count: 3,
         private_tx_hash: &values.fields[3],
+        signers,
         policy_hash: &values.fields[6],
         own_root: &values.fields[7],
         curator_root: &zero,
@@ -749,51 +901,111 @@ fn the_anonymous_transfer_statement_chains_outputs_ciphertexts_private_tx_and_pa
         ciphertext_digest(statement.head.envelope).unwrap()
     );
     let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash()).collect();
+    let bodies: Vec<[u8; 32]> = outputs
+        .iter()
+        .map(|output| output.recipient_body_hash().unwrap())
+        .collect();
+    assert_eq!(bodies[0], zero, "change carries no body");
+    assert_eq!(bodies[3], zero, "an exit carries no body");
+    assert_eq!(bodies[1], hash_bytes(&values.bodies[1]).unwrap());
+    // Change and exit read zero, the bundle tag closes the chain.
+    let tag_chain = create_hash_chain_4_from_slice(&[
+        [0; 32],
+        values.tags[1],
+        values.tags[2],
+        [0; 32],
+        *bundle.tag,
+    ])
+    .unwrap();
     let mut tail = vec![
         right_aligned(0),
         right_aligned(1),
+        right_aligned(4),
         create_hash_chain_4_from_slice(&hashes).unwrap(),
-        output_ciphertext_chain(&outputs).unwrap(),
+        output_ciphertext_chain(&outputs, 4).unwrap(),
+        create_hash_chain_4_from_slice(&bodies).unwrap(),
+        tag_chain,
+        right_aligned(0b0001),
+        ciphertext_digest(bundle.body).unwrap(),
         right_aligned(3),
         right_aligned(0b1000),
         values.fields[3],
         parties[0],
         parties[1],
         parties[2],
+        right_aligned(1),
+        signers.chain,
         values.fields[6],
         values.fields[7],
         zero,
     ];
     tail.extend([zero; 9]);
-    tail.extend([values.fields[8], right_aligned(37), right_aligned(2)]);
+    tail.extend([
+        values.fields[8],
+        ciphertext_digest(reply).unwrap(),
+        right_aligned(45),
+        right_aligned(3),
+    ]);
     assert_eq!(elements.len(), AUDIT_HEAD_ELEMENTS + tail.len());
     assert_eq!(elements[AUDIT_HEAD_ELEMENTS..], tail);
-    // No tag or scheme 1 body enters the statement, a wallet picks both freely.
+    // A view tag enters the statement.
     let mut rewritten = outputs.clone();
-    rewritten[0] = RingOutput::Anonymous {
-        hash: outputs[0].hash(),
-        tag: &[0xff; 32],
-        body: Some(&values.ciphertexts[6]),
-        record: outputs[0].ciphertext(),
+    rewritten[1] = RingOutput::Anonymous {
+        hash: outputs[1].hash(),
+        tag: &values.tags[6],
+        body: values.anonymous_body(1),
+        record: outputs[1].ciphertext(),
     };
-    rewritten[2] = RingOutput::Anonymous {
-        hash: outputs[2].hash(),
-        tag: &values.tags[2],
-        body: None,
-        record: outputs[2].ciphertext(),
-    };
-    let reworded = TransferStatement {
-        outputs: &rewritten,
-        ..statement
-    };
-    assert_eq!(reworded.hash().unwrap(), statement.hash().unwrap());
-    // A record enters the statement.
-    rewritten[1] = values.exit(1, EXIT_RECORD_LEN);
     let reworded = TransferStatement {
         outputs: &rewritten,
         ..statement
     };
     assert_ne!(reworded.hash().unwrap(), statement.hash().unwrap());
+    // So does the bundle tag.
+    let retagged = TransferStatement {
+        family: TransferFamily::Anonymous {
+            party_identities: &parties,
+            sender: FramedSenderBundle {
+                tag: &values.tags[6],
+                ..bundle
+            },
+            replies: Some(reply),
+        },
+        ..statement
+    };
+    assert_ne!(retagged.hash().unwrap(), statement.hash().unwrap());
+    // An exit's owner tag does not, scheme 3 reads it.
+    let mut exit_tagged = outputs.clone();
+    exit_tagged[3] = RingOutput::Exit {
+        hash: outputs[3].hash(),
+        owner_tag: &[0xff; 32],
+        payload: &[],
+        record: outputs[3].ciphertext(),
+    };
+    let moved_exit = TransferStatement {
+        outputs: &exit_tagged,
+        ..statement
+    };
+    assert_eq!(moved_exit.hash().unwrap(), statement.hash().unwrap());
+    // A recipient body enters the statement.
+    rewritten[1] = values.anonymous(1, Some(&values.bodies[6]));
+    let reworded = TransferStatement {
+        outputs: &rewritten,
+        ..statement
+    };
+    assert_ne!(reworded.hash().unwrap(), statement.hash().unwrap());
+    // Presence, length and bytes of the replies enter the statement.
+    for replies in [None, Some(&values.replies[..98])] {
+        let moved = TransferStatement {
+            family: TransferFamily::Anonymous {
+                party_identities: &parties,
+                sender: bundle,
+                replies,
+            },
+            ..statement
+        };
+        assert_ne!(moved.hash().unwrap(), statement.hash().unwrap());
+    }
 }
 
 /// The policy circuit matches a limit row against the asset fields of the public slots.

@@ -2,10 +2,7 @@
 //! delivered bodies carry, mirror `prover/circuits/audit`.
 
 use crate::{
-    bytes::Bytes,
-    disclosure::{AnonymousAuditKey, InputPrefix, INPUT_PREFIX_BYTES},
-    error::CustomRingError,
-    TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, disclosure::AnonymousAuditKey, error::CustomRingError, TAGGED_X25519_KEY_LEN,
 };
 
 pub const STREAM_BLOCK_LEN: usize = 16;
@@ -22,10 +19,18 @@ pub const ANONYMOUS_RECORD_LEN: usize = 104;
 pub const ESCROWED_EXIT_RECORD_LEN: usize = 40;
 /// `be32(asset) || u64be(amount) || be32(nullifier_pk)`.
 pub const EXIT_RECORD_LEN: usize = 72;
-/// `u64be(amount) || be32(asset) || be32(blinding)`.
-pub const ENTRY_INPUT_LEN: usize = 72;
+/// `be32(hash) || u64be(amount) || be32(asset) || be32(blinding)`.
+pub const ENTRY_INPUT_LEN: usize = 104;
 /// `sender_key || be32(sender_nullifier_pk)`.
 pub const ENTRY_EVIDENCE_HEAD_LEN: usize = 64;
+/// `be32(hash_i)`, zero at a dummy.
+pub const INPUT_HASH_LEN: usize = 32;
+/// Scheme 11, `be32(blinding) || u64be(amount) || mint`.
+pub const RECIPIENT_BODY_LEN: usize = 72;
+/// `mint0 || u64be(amount0) || u64be(amount1) || output_seed`.
+pub const SENDER_BUNDLE_HEAD_LEN: usize = 80;
+/// `viewing_u || owner_key || nullifier_pk`, one byte for the wincode of no data.
+pub const MIN_REPLY_LEN: usize = 97;
 pub const ANONYMOUS_RECORD_BLOCKS: usize = ANONYMOUS_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
 pub const CONFIDENTIAL_RECORD_BLOCKS: usize = EXIT_RECORD_LEN.div_ceil(STREAM_BLOCK_LEN);
 const ENVELOPE_KEY_BLOCKS: usize = ENVELOPE_KEY_LEN / STREAM_BLOCK_LEN;
@@ -37,37 +42,42 @@ const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == DELIVERED_BODY_LEN);
 const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == ANONYMOUS_RECORD_LEN);
 const _: () = assert!(AMOUNT_LEN + FIELD_LEN == ESCROWED_EXIT_RECORD_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == EXIT_RECORD_LEN);
-const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == ENTRY_INPUT_LEN);
+const _: () = assert!(AMOUNT_LEN + 3 * FIELD_LEN == ENTRY_INPUT_LEN);
+const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
+const _: () = assert!(2 * AMOUNT_LEN + 2 * FIELD_LEN == SENDER_BUNDLE_HEAD_LEN);
+const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
 const _: () = assert!(2 * FIELD_LEN == ENTRY_EVIDENCE_HEAD_LEN);
 const _: () = assert!(DELIVERED_BODY_LEN == ANONYMOUS_RECORD_LEN);
 const _: () = assert!(ESCROWED_DELIVERED_BODY_LEN == EXIT_RECORD_LEN);
 
-/// The transfer key family at its input class, with the rail bits its evidence reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditKey {
-    Confidential {
-        class: usize,
-        /// The in-proof and authority rails, the signer rail discloses no input.
-        input_prefixes: bool,
-    },
+    Confidential { class: usize },
     Anonymous(AnonymousAuditKey),
 }
 
 impl AuditKey {
     pub const fn class(self) -> usize {
         match self {
-            Self::Confidential { class, .. } => class,
+            Self::Confidential { class } => class,
             Self::Anonymous(key) => key.class(),
+        }
+    }
+
+    /// `S`, the owner signers the key's statement chains.
+    pub const fn signer_slots(self) -> usize {
+        match self {
+            Self::Confidential { class } => class,
+            Self::Anonymous(AnonymousAuditKey::Commitment { class }) => class,
+            Self::Anonymous(AnonymousAuditKey::Entry { .. }) => 0,
         }
     }
 
     /// `E_max`, the same at every rail of a key since one circuit serves them.
     pub const fn max_evidence_blocks(self) -> usize {
         let max_evidence_len = match self {
-            Self::Confidential { class, .. } => INPUT_PREFIX_BYTES * class,
-            Self::Anonymous(AnonymousAuditKey::Commitment { class }) => {
-                FIELD_LEN + INPUT_PREFIX_BYTES * class.saturating_sub(1)
-            }
+            Self::Confidential { class }
+            | Self::Anonymous(AnonymousAuditKey::Commitment { class }) => INPUT_HASH_LEN * class,
             Self::Anonymous(AnonymousAuditKey::Entry { class }) => {
                 ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * class
             }
@@ -112,17 +122,22 @@ pub struct AuditStreamLayout {
     pub key_escrow: bool,
     /// `n`, the frame's nullifier count, never the key capacity or a private live count.
     pub inputs: usize,
+    /// `m`, the published slots.
     pub outputs: usize,
+    /// `N`, the key's output capacity, the keystream spans every slot of it.
+    pub capacity: usize,
     /// Bit `i` set when slot `i` exits.
     pub exits: u64,
 }
 
 impl AuditStreamLayout {
-    /// Refuses an input count off the key and an exit past the outputs.
+    /// Refuses an input count off the key, an output count off the capacity and an exit past the outputs.
     pub fn checked(self) -> Result<Self, CustomRingError> {
-        let exits_fit = self.outputs <= u64::BITS as usize
-            && self.exits.checked_shr(self.outputs as u32).unwrap_or(0) == 0;
-        match self.inputs >= 1 && self.inputs <= self.key.class() && exits_fit {
+        let outputs_fit = self.outputs >= 1
+            && self.outputs <= self.capacity
+            && self.outputs <= u64::BITS as usize;
+        let exits_fit = self.exits.checked_shr(self.outputs as u32).unwrap_or(0) == 0;
+        match self.inputs >= 1 && self.inputs <= self.key.class() && outputs_fit && exits_fit {
             true => Ok(self),
             false => Err(CustomRingError::RingTransactLength),
         }
@@ -143,16 +158,9 @@ impl AuditStreamLayout {
     /// Slots at or past `n` stay absent from the evidence.
     pub const fn evidence_len(self) -> usize {
         match self.key {
-            AuditKey::Confidential {
-                input_prefixes: false,
-                ..
-            } => 0,
-            AuditKey::Confidential {
-                input_prefixes: true,
-                ..
-            } => INPUT_PREFIX_BYTES * self.inputs,
-            AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
-                FIELD_LEN + INPUT_PREFIX_BYTES * self.inputs.saturating_sub(1)
+            AuditKey::Confidential { .. }
+            | AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
+                INPUT_HASH_LEN * self.inputs
             }
             AuditKey::Anonymous(AnonymousAuditKey::Entry { .. }) => {
                 ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * self.inputs
@@ -220,7 +228,7 @@ impl AuditStreamLayout {
 
     /// The blocks one `CTREncrypt` covers.
     pub const fn capacity_blocks(self) -> usize {
-        self.envelope().max_blocks + self.outputs * self.record_blocks()
+        self.envelope().max_blocks + self.capacity * self.record_blocks()
     }
 }
 
@@ -238,8 +246,15 @@ pub const fn exit_record_len(key_escrow: bool) -> usize {
     }
 }
 
+/// `m` fixes the bundle, never a slot count a reader inferred.
+pub const fn sender_bundle_len(outputs: usize) -> usize {
+    SENDER_BUNDLE_HEAD_LEN + FIELD_LEN * outputs
+}
+
+/// Zero fields off a UTXO.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EntryInput {
+    pub hash: [u8; 32],
     pub amount: u64,
     pub asset: [u8; 32],
     pub blinding: [u8; 32],
@@ -247,16 +262,8 @@ pub struct EntryInput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuditEvidence {
-    /// The signer rail.
-    None,
-    /// The in-proof and authority rails, `prefix16(input_hash_i)` for `i < n`.
-    InputPrefixes(Vec<Option<InputPrefix>>),
-    /// The anonymous commitment key.
-    Commitment {
-        first_input_hash: [u8; 32],
-        /// `prefix16(input_hash_i)` for `1 <= i < n`.
-        later_prefixes: Vec<Option<InputPrefix>>,
-    },
+    /// Signer, in-proof, authority and commitment, `be32(hash_i)` for `i < n`.
+    InputHashes(Vec<[u8; 32]>),
     /// The anonymous entry key, the circuit holds every input to `sender_nullifier_pk`.
     Entry {
         sender_key: [u8; 32],
@@ -275,11 +282,7 @@ pub struct AuditEnvelope {
 impl AuditEnvelope {
     pub fn encode(&self) -> Vec<u8> {
         let evidence_len = match &self.evidence {
-            AuditEvidence::None => 0,
-            AuditEvidence::InputPrefixes(prefixes) => INPUT_PREFIX_BYTES * prefixes.len(),
-            AuditEvidence::Commitment { later_prefixes, .. } => {
-                FIELD_LEN + INPUT_PREFIX_BYTES * later_prefixes.len()
-            }
+            AuditEvidence::InputHashes(hashes) => INPUT_HASH_LEN * hashes.len(),
             AuditEvidence::Entry { inputs, .. } => {
                 ENTRY_EVIDENCE_HEAD_LEN + ENTRY_INPUT_LEN * inputs.len()
             }
@@ -287,18 +290,8 @@ impl AuditEnvelope {
         let mut out = Vec::with_capacity(ENVELOPE_KEY_LEN + evidence_len);
         out.extend_from_slice(&self.tx_viewing_secret);
         match &self.evidence {
-            AuditEvidence::None => {}
-            AuditEvidence::InputPrefixes(prefixes) => {
-                prefixes.iter().for_each(|p| write_prefix(&mut out, p));
-            }
-            AuditEvidence::Commitment {
-                first_input_hash,
-                later_prefixes,
-            } => {
-                out.extend_from_slice(first_input_hash);
-                later_prefixes
-                    .iter()
-                    .for_each(|p| write_prefix(&mut out, p));
+            AuditEvidence::InputHashes(hashes) => {
+                hashes.iter().for_each(|hash| out.extend_from_slice(hash));
             }
             AuditEvidence::Entry {
                 sender_key,
@@ -308,6 +301,7 @@ impl AuditEnvelope {
                 out.extend_from_slice(sender_key);
                 out.extend_from_slice(sender_nullifier_pk);
                 for input in inputs {
+                    out.extend_from_slice(&input.hash);
                     out.extend_from_slice(&input.amount.to_be_bytes());
                     out.extend_from_slice(&input.asset);
                     out.extend_from_slice(&input.blinding);
@@ -323,19 +317,9 @@ impl AuditEnvelope {
             let tx_viewing_secret = *bytes.array()?;
             let inputs = layout.inputs;
             let evidence = match layout.key {
-                AuditKey::Confidential {
-                    input_prefixes: false,
-                    ..
-                } => AuditEvidence::None,
-                AuditKey::Confidential {
-                    input_prefixes: true,
-                    ..
-                } => AuditEvidence::InputPrefixes(read_prefixes(bytes, inputs)?),
-                AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
-                    AuditEvidence::Commitment {
-                        first_input_hash: *bytes.array()?,
-                        later_prefixes: read_prefixes(bytes, inputs.saturating_sub(1))?,
-                    }
+                AuditKey::Confidential { .. }
+                | AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
+                    AuditEvidence::InputHashes(bytes.fields(inputs)?.to_vec())
                 }
                 AuditKey::Anonymous(AnonymousAuditKey::Entry { .. }) => AuditEvidence::Entry {
                     sender_key: *bytes.array()?,
@@ -343,6 +327,7 @@ impl AuditEnvelope {
                     inputs: (0..inputs)
                         .map(|_| {
                             Ok(EntryInput {
+                                hash: *bytes.array()?,
                                 amount: read_amount(bytes)?,
                                 asset: *bytes.array()?,
                                 blinding: *bytes.array()?,
@@ -354,6 +339,75 @@ impl AuditEnvelope {
             Ok(Self {
                 tx_viewing_secret,
                 evidence,
+            })
+        })
+    }
+}
+
+/// Scheme 11, the recipient rebuilds the commitment with its own bound keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecipientBody {
+    pub blinding: [u8; 32],
+    pub amount: u64,
+    pub mint: [u8; 32],
+}
+
+impl RecipientBody {
+    pub fn encode(&self) -> [u8; RECIPIENT_BODY_LEN] {
+        let mut out = [0; RECIPIENT_BODY_LEN];
+        out[..32].copy_from_slice(&self.blinding);
+        out[32..40].copy_from_slice(&self.amount.to_be_bytes());
+        out[40..].copy_from_slice(&self.mint);
+        out
+    }
+
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            Ok(Self {
+                blinding: *bytes.array()?,
+                amount: read_amount(bytes)?,
+                mint: *bytes.array()?,
+            })
+        })
+    }
+}
+
+/// Scheme 12, the cells the sender rebuilds change and recipients from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SenderBundle {
+    /// Slot 0's mint when `change_bits` bit 0 is set, else zero.
+    pub mint: [u8; 32],
+    /// Slot 0's amount when `change_bits` bit 0 is set, else zero.
+    pub amount: u64,
+    /// Slot 1's amount in SOL when `change_bits` bit 1 is set, else zero.
+    pub sol_amount: u64,
+    pub output_seed: [u8; 32],
+    /// One per published slot, zero on change, exit and dummy.
+    pub recipient_keys: Vec<[u8; 32]>,
+}
+
+impl SenderBundle {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(sender_bundle_len(self.recipient_keys.len()));
+        out.extend_from_slice(&self.mint);
+        out.extend_from_slice(&self.amount.to_be_bytes());
+        out.extend_from_slice(&self.sol_amount.to_be_bytes());
+        out.extend_from_slice(&self.output_seed);
+        self.recipient_keys
+            .iter()
+            .for_each(|key| out.extend_from_slice(key));
+        out
+    }
+
+    /// `outputs` is the frame's `m`.
+    pub fn decode(plaintext: &[u8], outputs: usize) -> Result<Self, CustomRingError> {
+        read_all(plaintext, |bytes| {
+            Ok(Self {
+                mint: *bytes.array()?,
+                amount: read_amount(bytes)?,
+                sol_amount: read_amount(bytes)?,
+                output_seed: *bytes.array()?,
+                recipient_keys: bytes.fields(outputs)?.to_vec(),
             })
         })
     }
@@ -453,20 +507,6 @@ impl ExitRecord {
             })
         })
     }
-}
-
-/// A published dummy slot is `None`, zero bytes as `prefix16`.
-fn write_prefix(out: &mut Vec<u8>, prefix: &Option<InputPrefix>) {
-    out.extend_from_slice(&prefix.map_or([0; INPUT_PREFIX_BYTES], InputPrefix::to_bytes));
-}
-
-fn read_prefixes(
-    bytes: &mut Bytes<'_>,
-    count: usize,
-) -> Result<Vec<Option<InputPrefix>>, CustomRingError> {
-    (0..count)
-        .map(|_| InputPrefix::from_bytes(bytes.array()?))
-        .collect()
 }
 
 fn read_amount(bytes: &mut Bytes<'_>) -> Result<u64, CustomRingError> {

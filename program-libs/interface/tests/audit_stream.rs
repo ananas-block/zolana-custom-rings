@@ -6,9 +6,9 @@ use custom_ring_interface::{
         ENTRY_TRANSFER_SHAPES,
     },
     AnonymousAuditKey, AnonymousRecord, AuditEnvelope, AuditEvidence, AuditKey, AuditStreamLayout,
-    CustomRingError, DeliveredBody, EntryInput, ExitRecord, InputPrefix, ANONYMOUS_RECORD_LEN,
-    DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN,
-    STREAM_BLOCK_LEN,
+    CustomRingError, DeliveredBody, EntryInput, ExitRecord, RecipientBody, SenderBundle,
+    ANONYMOUS_RECORD_LEN, DELIVERED_BODY_LEN, ENTRY_INPUT_LEN, ESCROWED_DELIVERED_BODY_LEN,
+    ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN, RECIPIENT_BODY_LEN, STREAM_BLOCK_LEN,
 };
 use serde_json::{json, Value};
 
@@ -25,23 +25,19 @@ struct KeyCase {
     outputs: usize,
 }
 
-/// Every transfer key at both key escrow flags on the confidential family and the rail bits.
 fn key_cases() -> Vec<KeyCase> {
     let mut cases = Vec::new();
     for shape in CONFIDENTIAL_TRANSFER_SHAPES {
-        for (rail, input_prefixes) in [("signer", false), ("in_proof_or_authority", true)] {
-            for key_escrow in [false, true] {
-                cases.push(KeyCase {
-                    family: "confidential",
-                    rail,
-                    key: AuditKey::Confidential {
-                        class: usize::from(shape.inputs),
-                        input_prefixes,
-                    },
-                    key_escrow,
-                    outputs: usize::from(shape.outputs),
-                });
-            }
+        for key_escrow in [false, true] {
+            cases.push(KeyCase {
+                family: "confidential",
+                rail: "signer_in_proof_or_authority",
+                key: AuditKey::Confidential {
+                    class: usize::from(shape.inputs),
+                },
+                key_escrow,
+                outputs: usize::from(shape.outputs),
+            });
         }
     }
     let anonymous = |shapes: &[TransferShape], rail, key: fn(usize) -> AnonymousAuditKey| {
@@ -74,6 +70,7 @@ impl KeyCase {
             key_escrow: self.key_escrow,
             inputs,
             outputs: self.outputs,
+            capacity: self.outputs,
             exits,
         }
     }
@@ -117,7 +114,7 @@ impl KeyCase {
 
 fn compute_vector() -> Value {
     json!({
-        "description": "Auditor stream ranges per transfer key and layout. Regions are zero padded to 16-byte blocks: the envelope starts at counter 2 with max_evidence_blocks + 2 blocks, slot i at first_record_counter + i * record_blocks. ring_slot_ciphertext_len is the slot's ring disclosure ciphertext, a delivered body on the confidential family and a record on the anonymous family, ring_slot_record_len its bytes in the auditor message, exit_record_len an exit's record. Each by_input_count list starts at n = 1 and ends at the class, every length in bytes. message_len is 33 + envelope + records with no exit or every slot an exit. Produced by program-libs/interface/tests/audit_stream.rs.",
+        "description": "Auditor stream ranges per transfer key and layout at m = N. Regions are zero padded to 16-byte blocks: the envelope starts at counter 2 with max_evidence_blocks + 2 blocks, slot i at first_record_counter + i * record_blocks. ring_slot_ciphertext_len is the slot's ring disclosure ciphertext, a delivered body on the confidential family and a record on the anonymous family, ring_slot_record_len its bytes in the auditor message, exit_record_len an exit's record. Each by_input_count list starts at n = 1 and ends at the class, every length in bytes. message_len is 33 + envelope + records with no exit or every slot an exit. Produced by program-libs/interface/tests/audit_stream.rs.",
         "keys": key_cases().iter().map(KeyCase::vector).collect::<Vec<_>>(),
     })
 }
@@ -143,37 +140,27 @@ const fn block_bytes(blocks: usize) -> usize {
 
 #[test]
 fn the_contract_counts_each_family_at_its_class() {
-    let confidential = |class| AuditKey::Confidential {
-        class,
-        input_prefixes: false,
-    };
+    let confidential = |class| AuditKey::Confidential { class };
     let commitment = |class| AuditKey::Anonymous(AnonymousAuditKey::Commitment { class });
     let entry = |class| AuditKey::Anonymous(AnonymousAuditKey::Entry { class });
-    for (key, evidence_blocks, record_blocks) in [
-        (confidential(2), 2, 5),
-        (confidential(32), 32, 5),
-        (commitment(5), 6, 7),
-        (commitment(24), 25, 7),
-        // 64 + 72 * 2 and 64 + 72 * 8 bytes.
-        (entry(2), 13, 7),
-        (entry(8), 40, 7),
+    for (key, evidence_blocks, record_blocks, signer_slots) in [
+        (confidential(5), 10, 5, 5),
+        (confidential(24), 48, 5, 24),
+        (commitment(5), 10, 7, 5),
+        (commitment(24), 48, 7, 24),
+        // 64 + 104 * 2 and 64 + 104 * 8 bytes.
+        (entry(2), 17, 7, 0),
+        (entry(8), 56, 7, 0),
     ] {
         assert_eq!(key.max_evidence_blocks(), evidence_blocks, "{key:?}");
         assert_eq!(key.record_blocks(), record_blocks, "{key:?}");
+        assert_eq!(key.signer_slots(), signer_slots, "{key:?}");
         assert_eq!(
             key.first_record_counter() as usize,
             2 + 2 + evidence_blocks,
             "{key:?}"
         );
     }
-    let in_proof = AuditKey::Confidential {
-        class: 32,
-        input_prefixes: true,
-    };
-    assert_eq!(
-        in_proof.max_evidence_blocks(),
-        confidential(32).max_evidence_blocks()
-    );
 }
 
 /// Every region of every key at every `n`, in counter order with no shared counter.
@@ -214,18 +201,10 @@ fn the_input_past_the_class_would_cross_into_the_records_and_is_refused() {
     for case in key_cases() {
         let class = case.key.class();
         let widest = case.layout(class, 0).envelope();
-        assert!(widest.len > block_bytes(widest.max_blocks - 1) || widest.len == 32);
+        assert!(widest.len > block_bytes(widest.max_blocks - 1));
         let past = case.layout(class + 1, 0);
         assert_eq!(past.checked(), Err(CustomRingError::RingTransactLength));
-        if !matches!(
-            case.key,
-            AuditKey::Confidential {
-                input_prefixes: false,
-                ..
-            }
-        ) {
-            assert!(past.envelope().len > block_bytes(past.envelope().max_blocks));
-        }
+        assert!(past.envelope().len > block_bytes(past.envelope().max_blocks));
         assert_eq!(
             case.layout(0, 0).checked(),
             Err(CustomRingError::RingTransactLength)
@@ -260,12 +239,10 @@ fn slot_kinds_take_their_contract_lengths() {
         key_escrow,
         inputs: 1,
         outputs: 4,
+        capacity: 4,
         exits,
     };
-    let confidential = AuditKey::Confidential {
-        class: 8,
-        input_prefixes: false,
-    };
+    let confidential = AuditKey::Confidential { class: 8 };
     let anonymous = AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 8 });
     let open = layout(confidential, false, 0b0010);
     let escrowed = layout(confidential, true, 0b0010);
@@ -289,6 +266,56 @@ fn slot_kinds_take_their_contract_lengths() {
         layout(anonymous, false, 1 << 4).checked(),
         Err(CustomRingError::RingTransactLength)
     );
+}
+
+/// An omitted suffix leaves the frame, the stream still spans `N` so no slot's counter moves.
+#[test]
+fn a_compact_frame_keeps_every_counter_and_drops_the_suffix_records() {
+    let key = AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 16 });
+    let layout = |outputs| AuditStreamLayout {
+        key,
+        key_escrow: false,
+        inputs: 1,
+        outputs,
+        capacity: 4,
+        exits: 0,
+    };
+    let (compact, full) = (layout(2), layout(4));
+    assert_eq!(compact.capacity_blocks(), full.capacity_blocks());
+    assert_eq!(compact.record(1), full.record(1));
+    assert_eq!(compact.record_len(2), 0);
+    assert_eq!(compact.records_len(), 2 * ANONYMOUS_RECORD_LEN);
+    for refused in [layout(0), layout(5)] {
+        assert_eq!(refused.checked(), Err(CustomRingError::RingTransactLength));
+    }
+}
+
+#[test]
+fn the_anonymous_plaintexts_lay_out_their_contract_bytes() {
+    let body = RecipientBody {
+        blinding: [1; 32],
+        amount: 0x0102_0304_0506_0708,
+        mint: [2; 32],
+    };
+    let encoded = body.encode();
+    assert_eq!(encoded.len(), RECIPIENT_BODY_LEN);
+    assert_eq!(encoded[32..40], [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(RecipientBody::decode(&encoded), Ok(body));
+    assert!(RecipientBody::decode(&encoded[..71]).is_err());
+    let bundle = SenderBundle {
+        mint: [3; 32],
+        amount: 5,
+        sol_amount: 6,
+        output_seed: [4; 32],
+        recipient_keys: vec![[0; 32], [7; 32], [8; 32]],
+    };
+    let encoded = bundle.encode();
+    assert_eq!(encoded.len(), custom_ring_interface::sender_bundle_len(3));
+    assert_eq!(encoded.capacity(), encoded.len());
+    assert_eq!(encoded[32..40], 5u64.to_be_bytes());
+    assert_eq!(encoded[40..48], 6u64.to_be_bytes());
+    assert_eq!(SenderBundle::decode(&encoded, 3).as_ref(), Ok(&bundle));
+    assert!(SenderBundle::decode(&encoded, 2).is_err());
 }
 
 #[test]
@@ -345,35 +372,24 @@ fn plaintexts_read_back_at_their_lengths() {
     );
 }
 
-fn prefix(seed: u8) -> Option<InputPrefix> {
-    let mut hash = [seed; 32];
-    hash[0] = 0x0f;
-    InputPrefix::of(&hash)
-}
-
 #[test]
 fn envelopes_read_back_at_their_layout_length() {
     let tx_viewing_secret = [0x33; 32];
-    let confidential = |input_prefixes| AuditKey::Confidential {
-        class: 8,
-        input_prefixes,
+    let entry_input = EntryInput {
+        hash: [0x45; 32],
+        amount: 5,
+        asset: [0x43; 32],
+        blinding: [0x44; 32],
     };
+    assert_eq!(ENTRY_INPUT_LEN, 104);
+    let hashes = AuditEvidence::InputHashes(vec![[0x21; 32], [0; 32], [0x23; 32]]);
     let cases = [
-        (confidential(false), 3, AuditEvidence::None, 0),
-        (
-            confidential(true),
-            3,
-            AuditEvidence::InputPrefixes(vec![prefix(1), None, prefix(3)]),
-            48,
-        ),
+        (AuditKey::Confidential { class: 8 }, 3, hashes.clone(), 96),
         (
             AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 8 }),
             3,
-            AuditEvidence::Commitment {
-                first_input_hash: [0x21; 32],
-                later_prefixes: vec![prefix(2), None],
-            },
-            64,
+            hashes,
+            96,
         ),
         (
             AuditKey::Anonymous(AnonymousAuditKey::Entry { class: 8 }),
@@ -381,16 +397,9 @@ fn envelopes_read_back_at_their_layout_length() {
             AuditEvidence::Entry {
                 sender_key: [0x41; 32],
                 sender_nullifier_pk: [0x42; 32],
-                inputs: vec![
-                    EntryInput {
-                        amount: 5,
-                        asset: [0x43; 32],
-                        blinding: [0x44; 32],
-                    },
-                    EntryInput::default(),
-                ],
+                inputs: vec![entry_input, EntryInput::default()],
             },
-            64 + 144,
+            64 + 208,
         ),
     ];
     for (key, inputs, evidence, evidence_len) in cases {
@@ -399,6 +408,7 @@ fn envelopes_read_back_at_their_layout_length() {
             key_escrow: false,
             inputs,
             outputs: 2,
+            capacity: 2,
             exits: 0,
         };
         let envelope = AuditEnvelope {
@@ -421,15 +431,4 @@ fn envelopes_read_back_at_their_layout_length() {
             "{key:?}"
         );
     }
-    let in_proof = AuditStreamLayout {
-        key: confidential(true),
-        key_escrow: false,
-        inputs: 1,
-        outputs: 2,
-        exits: 0,
-    };
-    assert_eq!(
-        AuditEnvelope::decode(&[[0; 32].as_slice(), &[0xff; 16]].concat(), in_proof),
-        Err(CustomRingError::InvalidInstructionData)
-    );
 }
