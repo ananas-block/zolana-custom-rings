@@ -25,8 +25,7 @@ pub fn process_initialize_ix(
         program_id,
         payer: payer_account,
         creator: creator_account.address(),
-        registry_id: &ix.registry_id,
-        grace_slots: ix.grace_slots(),
+        ix,
     }
     .init(registry_account)
 }

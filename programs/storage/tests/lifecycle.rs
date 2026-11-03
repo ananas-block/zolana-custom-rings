@@ -1,7 +1,11 @@
+use bytemuck::Zeroable;
 use custom_ring_interface::{
-    storage::{RegistryId, Revision, RootUpdate, StorageError, StorageRegistry},
+    storage::{
+        AddressAuthorization, RegistryId, Revision, RootUpdate, StorageError, StorageRegistry,
+    },
     storage_instruction::{
-        tag, EscrowWriteData, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
+        tag, AddressWriteData, EnrollAddressIxData, EscrowWriteData, InitializeIxData,
+        StorageUpdateIxData, StorageWriteData, UpdateMode,
     },
     ApplyRecordsIxData, CustomRingProof, PlainGroth16Proof, RecordWriteData, WriteRecordsIxData,
 };
@@ -20,6 +24,13 @@ use spr_client::{
 const PROGRAM: Address = custom_ring_interface::STORAGE_PROGRAM_ID;
 const GRACE: u64 = 10;
 const REGISTRY_ID: RegistryId = RegistryId([1; 32]);
+const CURATOR_ID: RegistryId = RegistryId([2; 32]);
+const RING_ID: [u8; 32] = [7; 32];
+const SYSTEM: Address = Address::new_from_array([0; 32]);
+/// Any address serves the CPI owner.
+const CPI_OWNER_PROGRAM: Address = Address::new_from_array([0x63; 32]);
+const NULLIFIER_PK: [u8; 32] = [3; 32];
+const VIEWING_U: [u8; 32] = [4; 32];
 
 struct Store {
     svm: LiteSVM,
@@ -56,21 +67,96 @@ impl Store {
     }
 
     fn initialize(&mut self, grace_slots: u64) {
-        let data = InitializeIxData {
-            registry_id: REGISTRY_ID,
-            grace_slots: grace_slots.to_le_bytes(),
-        };
-        let instruction = Instruction {
+        let (registry, data) = (
+            self.registry,
+            InitializeIxData {
+                registry_id: REGISTRY_ID,
+                grace_slots: grace_slots.to_le_bytes(),
+                ring_id: RING_ID,
+            },
+        );
+        self.send_as_authority(self.initialize_instruction(registry, &data))
+            .unwrap();
+    }
+
+    fn initialize_instruction(&self, registry: Address, data: &InitializeIxData) -> Instruction {
+        Instruction {
             program_id: PROGRAM,
             accounts: vec![
                 AccountMeta::new(self.payer.pubkey(), true),
                 AccountMeta::new_readonly(self.authority.pubkey(), true),
-                AccountMeta::new(self.registry, false),
-                AccountMeta::new_readonly(Address::new_from_array([0; 32]), false),
+                AccountMeta::new(registry, false),
+                AccountMeta::new_readonly(SYSTEM, false),
             ],
-            data: [&[tag::INITIALIZE], bytemuck::bytes_of(&data)].concat(),
+            data: [&[tag::INITIALIZE], bytemuck::bytes_of(data)].concat(),
+        }
+    }
+
+    fn enroll(
+        &self,
+        registry: Address,
+        owner: &Address,
+        nullifier_pk: [u8; 32],
+        viewing_u: [u8; 32],
+    ) -> Instruction {
+        let data = EnrollAddressIxData {
+            nullifier_pk,
+            viewing_u,
         };
-        self.send_as_authority(instruction).unwrap();
+        Instruction {
+            program_id: PROGRAM,
+            accounts: vec![
+                AccountMeta::new(self.payer.pubkey(), true),
+                AccountMeta::new_readonly(*owner, true),
+                AccountMeta::new_readonly(registry, false),
+                AccountMeta::new(
+                    AddressAuthorization::find_address(&registry, owner).0,
+                    false,
+                ),
+                AccountMeta::new_readonly(SYSTEM, false),
+            ],
+            data: [&[tag::ENROLL_ADDRESS], bytemuck::bytes_of(&data)].concat(),
+        }
+    }
+
+    fn enrolled(&mut self, owner: &Keypair) -> AddressAuthorization {
+        self.send(
+            self.enroll(self.registry, &owner.pubkey(), NULLIFIER_PK, VIEWING_U),
+            &[owner],
+        )
+        .unwrap();
+        self.authorization(&owner.pubkey())
+    }
+
+    fn authorization(&self, owner: &Address) -> AddressAuthorization {
+        let address = AddressAuthorization::find_address(&self.registry, owner).0;
+        *bytemuck::from_bytes(&self.svm.get_account(&address).unwrap().data)
+    }
+
+    /// An update at revision 0 past every check ahead of the proof, the zero proof fails there.
+    fn address_update(
+        &self,
+        writes: Vec<StorageWriteData>,
+        authorizations: &[AccountMeta],
+    ) -> Instruction {
+        let apply = ApplyRecordsIxData::zeroed();
+        let data = StorageUpdateIxData {
+            revision: 0.into(),
+            writes,
+            apply: &apply,
+        };
+        Instruction {
+            program_id: PROGRAM,
+            accounts: [
+                vec![
+                    AccountMeta::new_readonly(self.authority.pubkey(), true),
+                    AccountMeta::new(self.registry, false),
+                ],
+                authorizations.to_vec(),
+            ]
+            .concat(),
+            data: [vec![UpdateMode::Graced.tag()], data.encode().unwrap()].concat(),
+        }
     }
 
     fn update(&self, revision: u64) -> Instruction {
@@ -159,6 +245,17 @@ impl Store {
             .map(|_| ())
             .map_err(|failed| failed.err)
     }
+}
+
+fn address_write(owner: &Address, revision: u64) -> StorageWriteData {
+    StorageWriteData::Address(AddressWriteData {
+        owner: *owner,
+        address_revision: revision.to_le_bytes(),
+    })
+}
+
+fn authorization_meta(registry: &Address, owner: &Address) -> AccountMeta {
+    AccountMeta::new(AddressAuthorization::find_address(registry, owner).0, false)
 }
 
 fn refusal(code: u32) -> Result<(), TransactionError> {
@@ -341,4 +438,251 @@ fn the_program_rotates_roots_as_the_indexer_projects_them() {
         store.send_as_authority(instruction).unwrap();
         assert_eq!(store.registry(), projected);
     }
+}
+
+#[test]
+fn the_first_enrollment_copies_the_registry_s_ring_at_revision_one() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    let account = store.enrolled(&owner);
+    assert_eq!(account.registry, store.registry);
+    assert_eq!(account.owner, owner.pubkey());
+    assert_eq!(account.ring_id, RING_ID);
+    assert_eq!(account.nullifier_pk, NULLIFIER_PK);
+    assert_eq!(account.viewing_u, VIEWING_U);
+    assert_eq!((account.revision(), account.applied_revision()), (1, 0));
+    assert_eq!(
+        account.bump,
+        AddressAuthorization::find_address(&store.registry, &owner.pubkey()).1
+    );
+}
+
+#[test]
+fn a_later_enrollment_rotates_the_viewing_key_alone() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    store.enrolled(&owner);
+    let rotated = [5; 32];
+    store
+        .send(
+            store.enroll(store.registry, &owner.pubkey(), NULLIFIER_PK, rotated),
+            &[&owner],
+        )
+        .unwrap();
+    let account = store.authorization(&owner.pubkey());
+    assert_eq!((account.viewing_u, account.revision()), (rotated, 2));
+    assert_eq!(
+        store.send(
+            store.enroll(store.registry, &owner.pubkey(), [6; 32], rotated),
+            &[&owner],
+        ),
+        refusal(StorageError::NullifierKeyChanged as u32)
+    );
+}
+
+#[test]
+fn enrollment_takes_the_owner_s_signature_and_a_canonical_key() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    let mut unsigned = store.enroll(store.registry, &owner.pubkey(), NULLIFIER_PK, VIEWING_U);
+    unsigned.accounts[1].is_signer = false;
+    assert_eq!(
+        store.send(unsigned, &[]),
+        refusal(StorageError::MissingSignature as u32)
+    );
+    let modulus: [u8; 32] = core::array::from_fn(|byte| match byte {
+        0 => 0xed,
+        31 => 0x7f,
+        _ => 0xff,
+    });
+    for viewing_u in [[0; 32], modulus] {
+        assert_eq!(
+            store.send(
+                store.enroll(store.registry, &owner.pubkey(), NULLIFIER_PK, viewing_u),
+                &[&owner],
+            ),
+            refusal(StorageError::NonCanonicalViewingKey as u32)
+        );
+    }
+    let mut foreign = store.enroll(store.registry, &owner.pubkey(), NULLIFIER_PK, VIEWING_U);
+    foreign.accounts[3].pubkey =
+        AddressAuthorization::find_address(&store.registry, &Keypair::new().pubkey()).0;
+    assert_eq!(
+        store.send(foreign, &[&owner]),
+        refusal(StorageError::InvalidAddressAuthorization as u32)
+    );
+}
+
+/// Only a registry naming a ring takes an address, the owner names no ring.
+#[test]
+fn a_curator_registry_refuses_enrollment() {
+    let mut store = Store::new();
+    let curator = StorageRegistry::find_address(&store.authority.pubkey(), &CURATOR_ID).0;
+    let data = InitializeIxData {
+        registry_id: CURATOR_ID,
+        grace_slots: GRACE.to_le_bytes(),
+        ring_id: [0; 32],
+    };
+    store
+        .send_as_authority(store.initialize_instruction(curator, &data))
+        .unwrap();
+    let owner = Keypair::new();
+    assert_eq!(
+        store.send(
+            store.enroll(curator, &owner.pubkey(), NULLIFIER_PK, VIEWING_U),
+            &[&owner],
+        ),
+        refusal(StorageError::RegistryServesNoRing as u32)
+    );
+    assert_eq!(
+        store.send(
+            store.enroll(PROGRAM, &owner.pubkey(), NULLIFIER_PK, VIEWING_U),
+            &[&owner],
+        ),
+        refusal(StorageError::InvalidRegistry as u32)
+    );
+}
+
+/// The runtime sets the signer flag a program's `invoke_signed` raises, one code path.
+#[test]
+fn a_program_owner_enrolls_through_cpi() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let dir = std::env::var_os("SBF_OUT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into());
+    store
+        .svm
+        .add_program(
+            CPI_OWNER_PROGRAM,
+            &std::fs::read(dir.join("storage_cpi_owner.so")).unwrap(),
+        )
+        .unwrap();
+    let owner = Address::find_program_address(&[b"owner"], &CPI_OWNER_PROGRAM).0;
+    let mut enroll = store.enroll(store.registry, &owner, NULLIFIER_PK, VIEWING_U);
+    enroll.program_id = CPI_OWNER_PROGRAM;
+    enroll.accounts[1].is_signer = false;
+    enroll
+        .accounts
+        .push(AccountMeta::new_readonly(PROGRAM, false));
+    store.send(enroll, &[]).unwrap();
+    let account = store.authorization(&owner);
+    assert_eq!((account.owner, account.revision()), (owner, 1));
+    assert_eq!(account.ring_id, RING_ID);
+}
+
+#[test]
+fn an_address_write_reads_the_owner_s_authorization_ahead_of_the_proof() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    store.enrolled(&owner);
+    let meta = authorization_meta(&store.registry, &owner.pubkey());
+    let at_revision = |revision| vec![address_write(&owner.pubkey(), revision)];
+    assert_eq!(
+        store.send_as_authority(store.address_update(at_revision(1), std::slice::from_ref(&meta))),
+        refusal(StorageError::ProofVerificationFailed as u32)
+    );
+    let refused = StorageError::InvalidAddressAuthorization as u32;
+    // A batch without the account or with another owner's cannot chain the entry.
+    assert_eq!(
+        store.send_as_authority(store.address_update(at_revision(1), &[])),
+        refusal(refused)
+    );
+    let stranger = Keypair::new();
+    store.enrolled(&stranger);
+    let foreign = authorization_meta(&store.registry, &stranger.pubkey());
+    assert_eq!(
+        store.send_as_authority(store.address_update(at_revision(1), &[foreign])),
+        refusal(refused)
+    );
+    // Only the newest revision applies, an authority cannot pick an older address.
+    assert_eq!(
+        store.send_as_authority(store.address_update(at_revision(2), std::slice::from_ref(&meta))),
+        refusal(refused)
+    );
+    let read_only = AccountMeta::new_readonly(meta.pubkey, false);
+    assert_eq!(
+        store.send_as_authority(store.address_update(at_revision(1), &[read_only])),
+        refusal(refused)
+    );
+    assert_eq!(
+        store
+            .send_as_authority(store.address_update(at_revision(1), &[meta.clone(), meta.clone()])),
+        refusal(refused)
+    );
+    let unenrolled = Keypair::new();
+    assert_eq!(
+        store.send_as_authority(store.address_update(
+            vec![address_write(&unenrolled.pubkey(), 1)],
+            &[authorization_meta(&store.registry, &unenrolled.pubkey())],
+        )),
+        refusal(refused)
+    );
+}
+
+#[test]
+fn an_applied_revision_applies_once_and_a_rotation_opens_the_next() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    let mut account = store.enrolled(&owner);
+    let meta = authorization_meta(&store.registry, &owner.pubkey());
+    account.applied_revision = account.revision;
+    let mut stored = store.svm.get_account(&meta.pubkey).unwrap();
+    stored.data.copy_from_slice(bytemuck::bytes_of(&account));
+    store.svm.set_account(meta.pubkey, stored).unwrap();
+    let write = vec![address_write(&owner.pubkey(), 1)];
+    assert_eq!(
+        store.send_as_authority(store.address_update(write, std::slice::from_ref(&meta))),
+        refusal(StorageError::AddressAlreadyApplied as u32)
+    );
+    store
+        .send(
+            store.enroll(store.registry, &owner.pubkey(), NULLIFIER_PK, [5; 32]),
+            &[&owner],
+        )
+        .unwrap();
+    let next = vec![address_write(&owner.pubkey(), 2)];
+    assert_eq!(
+        store.send_as_authority(store.address_update(next, &[meta])),
+        refusal(StorageError::ProofVerificationFailed as u32)
+    );
+}
+
+/// A record or escrow write holds no address, a trailing account cannot lend it one.
+#[test]
+fn an_authority_batch_cannot_change_an_address() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let owner = Keypair::new();
+    store.enrolled(&owner);
+    let meta = authorization_meta(&store.registry, &owner.pubkey());
+    let record = StorageWriteData::Record(RecordWriteData {
+        member: [1; 32],
+        lists: WriteRecordsIxData {
+            mask: 1u64.to_le_bytes(),
+            value: 1u64.to_le_bytes(),
+        },
+        mint_policy: custom_ring_interface::mint_policy_write(None),
+    });
+    assert_eq!(record.entry().unwrap().address_hash, [0; 32]);
+    assert_eq!(
+        store.send_as_authority(store.address_update(vec![record], std::slice::from_ref(&meta))),
+        refusal(StorageError::InvalidAddressAuthorization as u32)
+    );
+    let escrow = StorageWriteData::Escrow(EscrowWriteData {
+        owner: owner.pubkey(),
+        nullifier_pk: NULLIFIER_PK,
+        eph_u: [8; 32],
+        ciphertext: [9; 32],
+    });
+    assert_eq!(escrow.entry().unwrap().address_hash, [0; 32]);
+    assert_eq!(
+        store.send_as_authority(store.address_update(vec![escrow], &[meta])),
+        refusal(StorageError::InvalidAddressAuthorization as u32)
+    );
 }

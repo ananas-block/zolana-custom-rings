@@ -7,7 +7,10 @@ use custom_ring_interface::{
 };
 use pinocchio::{AccountView, Address, ProgramResult};
 
-use instructions::{process_initialize_ix, process_update_authority_ix, process_update_ix};
+use instructions::{
+    process_enroll_address_ix, process_initialize_ix, process_update_authority_ix,
+    process_update_ix,
+};
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
 mod entrypoint {
@@ -32,6 +35,7 @@ pub fn process_instruction(
             process_update_ix(program_id, accounts, data, UpdateMode::Immediate)
         }
         tag::UPDATE_AUTHORITY => process_update_authority_ix(program_id, accounts, data),
+        tag::ENROLL_ADDRESS => process_enroll_address_ix(program_id, accounts, data),
         _ => Err(StorageError::InvalidInstructionData.into()),
     }
 }
