@@ -4423,6 +4423,7 @@ dependencies = [
  "custom-ring-interface",
  "custom-ring-sdk",
  "futures",
+ "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -7479,6 +7480,7 @@ dependencies = [
  "ciborium-ll",
  "coset",
  "dcap-qvl",
+ "ed25519-dalek",
  "form_urlencoded",
  "hex",
  "hpke",
@@ -9179,6 +9181,7 @@ dependencies = [
  "solana-address 2.6.1",
  "spr-hasher",
  "spr-keypair",
+ "spr-transaction",
  "thiserror 2.0.20",
  "zeroize",
 ]
@@ -9187,10 +9190,12 @@ dependencies = [
 name = "zolana-ring-member-registry"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "custom-ring-interface",
  "hex",
  "serde",
  "serde_json",
+ "solana-address 2.6.1",
  "spr-hasher",
  "thiserror 2.0.20",
  "zolana-ring-policy",
