@@ -32,7 +32,7 @@ use crate::{
         encode_confidential_output, encode_ring_confidential_delivered_output,
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
     },
-    statement::{AuditHead, TransferFamily, TransferStatement},
+    statement::{AuditHead, ConfidentialSender, TransferFamily, TransferStatement},
     storage::Revision,
     tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
     RingMode, RingPolicy, TAGGED_X25519_KEY_LEN,
@@ -520,9 +520,13 @@ impl<'a> ParsedTransact<'a> {
         }
         let family = match self.stream.key {
             AuditKey::Confidential { .. } => TransferFamily::Confidential {
-                in_proof: data.in_proof_owner.is_some(),
-                delegate: data.rail == RingRail::Delegate,
-                sender: binding.sender,
+                sender: match data.rail {
+                    RingRail::Delegate => ConfidentialSender::Authority,
+                    _ if data.in_proof_owner.is_some() => {
+                        ConfidentialSender::InProof(binding.sender)
+                    }
+                    _ => ConfidentialSender::Signer(binding.sender),
+                },
                 recipients: binding.recipients,
             },
             AuditKey::Anonymous(_) => TransferFamily::Anonymous {
@@ -565,7 +569,7 @@ pub struct TransferBinding<'a> {
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     /// The ring mode escrows every output nullifier key, the frame flag has to agree.
     pub key_escrow: bool,
-    /// The sole owner signer's or the in-proof owner's identity under a policy, zero otherwise.
+    /// The in-proof owner identity, or the sole owner signer identity under a policy, otherwise zero.
     pub sender: &'a [u8; 32],
     /// Zero outside the anonymous rail.
     pub party_identities: &'a [[u8; 32]; 3],

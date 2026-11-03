@@ -101,13 +101,26 @@ fn recipient_key_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherErr
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfidentialSender<'a> {
+    Signer(&'a [u8; 32]),
+    InProof(&'a [u8; 32]),
+    Authority,
+}
+
+impl ConfidentialSender<'_> {
+    pub fn identity(&self) -> &[u8; 32] {
+        match self {
+            Self::Signer(identity) | Self::InProof(identity) => identity,
+            Self::Authority => &[0; 32],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferFamily<'a> {
     /// The signer, in-proof and authority rails.
     Confidential {
-        in_proof: bool,
-        delegate: bool,
-        /// The in-proof owner's identity, the sole owner signer's under a policy, else zero.
-        sender: &'a [u8; 32],
+        sender: ConfidentialSender<'a>,
         /// One owner identity per output slot, zero on a dummy and off a policy.
         recipients: &'a [[u8; 32]],
     },
@@ -157,11 +170,11 @@ impl TransferStatement<'_> {
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
         let mut elements = Vec::with_capacity(self.element_count());
         elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
-        if let TransferFamily::Confidential {
-            in_proof, delegate, ..
-        } = self.family
-        {
-            elements.extend([bit(in_proof), bit(delegate)]);
+        if let TransferFamily::Confidential { sender, .. } = self.family {
+            elements.extend([
+                bit(matches!(sender, ConfidentialSender::InProof(_))),
+                bit(matches!(sender, ConfidentialSender::Authority)),
+            ]);
         }
         elements.extend([
             bit(self.exempt),
@@ -178,7 +191,7 @@ impl TransferStatement<'_> {
             *self.private_tx_hash,
         ]);
         match self.family {
-            TransferFamily::Confidential { sender, .. } => elements.push(*sender),
+            TransferFamily::Confidential { sender, .. } => elements.push(*sender.identity()),
             TransferFamily::Anonymous { party_identities } => elements.extend(*party_identities),
         }
         elements.extend([*self.policy_hash, *self.own_root, *self.curator_root]);

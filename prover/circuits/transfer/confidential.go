@@ -1,8 +1,3 @@
-// Proves a transfer on the signer, in-proof or authority rail, the rails whose
-// recipients read their notes under a published viewing key.
-//
-// Read after transfer/transfer.go. Read before transfer/anonymous.go.
-
 package transfer
 
 import (

@@ -1,8 +1,3 @@
-// Proves a transfer on the anonymous rail, the policy screens the hidden owner
-// the audit names.
-//
-// Read after transfer/confidential.go. Read before prover/ring/ring.go.
-
 package transfer
 
 import (

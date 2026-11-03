@@ -3,10 +3,10 @@
 use custom_ring_interface::{
     ciphertext_digest, exits_bitmap, output_ciphertext_chain, slot_ciphertext_hash,
     AnonymousAuditKey, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout, AuditStreamLayout,
-    DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset, RegisterKeyStatement,
-    RingOutput, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN, AUDIT_HEAD_ELEMENTS,
-    DELIVERED_BODY_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS, ESCROWED_DELIVERED_BODY_LEN,
-    ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN,
+    ConfidentialSender, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
+    RegisterKeyStatement, RingOutput, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN,
+    AUDIT_HEAD_ELEMENTS, DELIVERED_BODY_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
+    ESCROWED_DELIVERED_BODY_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -265,12 +265,12 @@ fn output_case(output: &RingOutput<'_>) -> OutputCase {
 fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
     let head = statement.head;
     let confidential = match statement.family {
-        TransferFamily::Confidential {
-            in_proof,
-            delegate,
-            sender,
+        TransferFamily::Confidential { sender, recipients } => Some((
+            matches!(sender, ConfidentialSender::InProof(_)),
+            matches!(sender, ConfidentialSender::Authority),
+            *sender.identity(),
             recipients,
-        } => Some((in_proof, delegate, sender, recipients)),
+        )),
         TransferFamily::Anonymous { .. } => None,
     };
     let parties = match statement.family {
@@ -354,9 +354,7 @@ fn compute_vectors() -> StatementVectors {
     let signer_policy = TransferStatement {
         head: values.head(no_flags, stream(signer_key, 2, &delivered)),
         family: TransferFamily::Confidential {
-            in_proof: false,
-            delegate: false,
-            sender: &owner_signer,
+            sender: ConfidentialSender::Signer(&owner_signer),
             recipients: &eight_recipients,
         },
         exempt: false,
@@ -374,9 +372,7 @@ fn compute_vectors() -> StatementVectors {
     };
     let signer_exempt = TransferStatement {
         family: TransferFamily::Confidential {
-            in_proof: false,
-            delegate: false,
-            sender: &zero,
+            sender: ConfidentialSender::Signer(&zero),
             recipients: &[zero; 8],
         },
         exempt: true,
@@ -388,9 +384,7 @@ fn compute_vectors() -> StatementVectors {
     let in_proof_policy = TransferStatement {
         head: values.head(no_flags, stream(prefix_key, 2, &delivered)),
         family: TransferFamily::Confidential {
-            in_proof: true,
-            delegate: false,
-            sender: &owner_signer,
+            sender: ConfidentialSender::InProof(&owner_signer),
             recipients: &eight_recipients,
         },
         ..signer_policy
@@ -405,9 +399,7 @@ fn compute_vectors() -> StatementVectors {
             stream(prefix_key, 2, &escrowed),
         ),
         family: TransferFamily::Confidential {
-            in_proof: false,
-            delegate: true,
-            sender: &zero,
+            sender: ConfidentialSender::Authority,
             recipients: &[values.fields[62], values.fields[63]],
         },
         approval_required: false,
@@ -688,9 +680,7 @@ fn the_element_count_is_thirty_eight_plus_outputs_or_thirty_seven() {
                 ),
             ),
             family: TransferFamily::Confidential {
-                in_proof: false,
-                delegate: false,
-                sender: &zero,
+                sender: ConfidentialSender::Signer(&zero),
                 recipients: &recipients[..n_out],
             },
             exempt: false,

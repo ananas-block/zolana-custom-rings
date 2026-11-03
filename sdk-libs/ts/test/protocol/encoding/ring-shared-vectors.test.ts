@@ -758,6 +758,36 @@ describe("ring-transact-expansion.json", () => {
 });
 
 describe("ring_keyed_shapes.json", () => {
+  it.each([-1, 0, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses an invalid published input count %s",
+    (inputs) => {
+      expect(
+        ringTransferCircuit({
+          rail: "confidential",
+          inputs,
+          outputs: 2,
+          spendsDefaultRing: false,
+          legs: 0,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses an invalid withdrawal count %s",
+    (legs) => {
+      expect(
+        ringTransferCircuit({
+          rail: "confidential",
+          inputs: 1,
+          outputs: 2,
+          spendsDefaultRing: false,
+          legs,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
   it("keys the delegate rail at the pinned SPP's square authority shapes", () => {
     expect(RING_AUTHORITY_SHAPES.map((shape) => [shape.inputs, shape.outputs])).toEqual([
       [2, 2],

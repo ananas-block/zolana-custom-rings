@@ -1,9 +1,6 @@
 // Holds the statement values the policy section reads from the program. Every
 // value a rule reads ties back to the statement, so the proof checks the
 // transfer the program settles.
-//
-// Read after policy/table.go, policy/record_pool.go. Read before
-// policy/transaction.go, policy/screen.go.
 
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 package policy
@@ -17,28 +14,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
-
-// Local constraints, Screen asserts them:
-// 1. While screened the table hashes to policy_hash and every enabled rule holds for the sender and for every live payment's owner and asset on the lists their records carry, unless an amount guard exempts it.
-// 2. Each recipient is its slot's owner identity while screened and published, zero otherwise.
-// 3. withdrawal_hash reopens over the live legs, a live leg a nonzero amount of a nonzero asset, every amount below 2^64.
-// 4. While Outflow is on every limit row's outflow is never negative and within its cap, and the approval is set exactly when one passes its co-sign bound.
-// 5. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
-// 6. Under exempt every public slot's gross withdrawal lies at or under its asset record's threshold, zero off a record.
-// 7. Every record a gate queries opens under own_root, under curator_root when its list is foreign.
-//
-// Program-derived facts, the statement fixes them:
-// 8. policy_hash is the ring account's written table hash, zero on an audit-only ring.
-// 9. own_root and curator_root are the registry roots at the frame's revisions, zero where no pool is active.
-// 10. Each public slot's asset, net and gross come from the program's fold of the settled legs, a deposit never lowers a gross.
-// 11. The recipients are the frame's identities on a confidential rail under a policy, zero otherwise.
-// 12. The gates come from the rail, the instruction tag, the frame flags and policy_hash.
-// 13. The statement's sender is the sole owner signer under a policy on the signer rail, the framed owner key on the in-proof rail, zero on the authority rail, absent on the anonymous family.
-//
-// Guarantees the section leans on:
-// 14. SPP authorizes the owner signer over every spent input, the signer rail's sender owns the inputs with no ring constraint.
-// 15. The transfer circuit passes the statement's sender on the signer and in-proof rails and a private member it holds every opened input to on the authority and anonymous rails.
-// 16. SPP settles exactly the outputs under private_tx_hash, the transfer circuit reopens the hash over the slots the policy screens.
 
 type PolicyInputs struct {
 	OwnOnly         bool `gnark:"-"`

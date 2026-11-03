@@ -68,8 +68,9 @@ export function ringTransferCircuit(spend: TransferSpend): TransferKeyCircuit | 
   const keyed = family === undefined ? undefined : familyShapes(family);
   const found = keyed?.find((entry) => entry.outputs === spend.outputs);
   if (family === undefined || found === undefined) return undefined;
-  if (!Number.isInteger(spend.inputs) || spend.inputs === 0 || spend.inputs > found.inputs)
+  if (!Number.isInteger(spend.inputs) || spend.inputs < 1 || spend.inputs > found.inputs)
     return undefined;
+  if (!Number.isInteger(spend.legs) || spend.legs < 0) return undefined;
   const withdrawals = found.withdrawals.find((capacity) => capacity >= spend.legs);
   if (withdrawals === undefined) return undefined;
   return family === "transferConfidential"

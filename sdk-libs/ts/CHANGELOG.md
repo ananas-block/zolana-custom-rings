@@ -2,6 +2,8 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `ringTransferCircuit` rejects nonpositive input counts and negative or fractional withdrawal counts.
+
 The custom ring surface of `@heliuslabs/zolana` moves into
 `@heliuslabs/zolana-custom-rings`, built on `@heliuslabs/zolana` as a pinned
 peer. `CustomRingClient` adds the ring proofs and the ring indexer reads to a
