@@ -142,7 +142,7 @@ export interface AuditedInputOpening {
 export type InputOpening =
   | Readonly<{ kind: "dummy" }>
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
-  /** More of the sender's ring notes carry the disclosed prefix than inputs name it. */
+  /** More known ring notes carry the disclosed prefix than inputs name it. */
   | Readonly<{ kind: "ambiguous"; candidates: readonly Bytes32[] }>
   /** The in-proof and authority rails name a note no opened output holds, the outputs still open. */
   | Readonly<{ kind: "unseen"; prefix: InputPrefix }>;
@@ -985,7 +985,7 @@ function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
   });
 }
 
-/** Both audit keys keep dummies last as SPP does, opening k belongs to nullifier k. */
+/** Every key with evidence keeps dummies last as SPP does, opening k belongs to nullifier k. */
 function spentInputs(
   nullifiers: readonly Bytes32[],
   openings: readonly InputOpening[],

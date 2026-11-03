@@ -326,13 +326,24 @@ func (e Envelope) Head(w AuditWires, s Stream, domain frontend.Variable) []front
 	)
 }
 
-// SpentBySender opens every input slot once, holds it to the sender while live, slot 0 to a UTXO while required, and returns utxo * hash per slot.
+// SpentBySender opens every input slot once, holds it to the sender while live, slot 0 to a UTXO while required, spent UTXO k to nullifier k, and returns utxo * hash per slot.
 func SpentBySender(api frontend.API, inputs []shared.UtxoWires, live []frontend.Variable, required, sender frontend.Variable) []frontend.Variable {
 	hashes := make([]frontend.Variable, len(inputs))
+	previousUtxo := frontend.Variable(1)
 	for i, input := range inputs {
-		hashes[i] = spentBySender(api, input.Open(api), live[i], required, sender, i)
+		slot := input.Open(api)
+		hashes[i] = spentBySender(api, slot, live[i], required, sender, i)
+		assertFollowsUtxo(api, slot.Utxo, previousUtxo, i)
+		previousUtxo = slot.Utxo
 	}
 	return hashes
+}
+
+// assertFollowsUtxo holds a UTXO behind a UTXO as AssertDummiesLast holds SPP's slots, so spent UTXO k owns nullifier k.
+func assertFollowsUtxo(api frontend.API, utxo, previousUtxo frontend.Variable, i int) {
+	if i > 0 {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: utxo, V: api.Sub(1, previousUtxo)})
+	}
 }
 
 // InputPrefixEvidence is prefix16(input_hash_i) per slot under count, a count of zero transmits no entry.

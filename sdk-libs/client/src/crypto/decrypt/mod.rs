@@ -442,7 +442,7 @@ impl Transfer<'_> {
         self.assets.by_field(asset).map(|mint| mint.asset)
     }
 
-    /// Both anonymous keys keep dummies last as SPP does, opening k belongs to nullifier k.
+    /// Every key with evidence keeps dummies last as SPP does, opening k belongs to nullifier k.
     fn inputs(&self, spent: SpentInputs<'_>) -> Result<Spent, AuditError> {
         let SpentInputs {
             evidence,

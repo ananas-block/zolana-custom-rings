@@ -128,9 +128,10 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
   `transfer/confidential.go` and `anonymousSender` in `audit/anonymous.go`. Tests,
   `TestConfidentialRefusals/delegate with a statement sender`, `TestAnonymousRefusals/party identity
   equal to the hidden sender` and `TestConfidentialRailsSolve/in-proof on an audit-only ring`.
-- Spent input ownership. Private source, the opened input slots. Constraint, `SpentBySender` under
-  `in_proof OR delegate`, every slot a dummy on the signer rail, `Spend` in `audit/anonymous.go` on the
-  anonymous rail. Tests, `TestConfidentialRefusals/in-proof input of another owner`, `delegate move
+- Spent input ownership and order. Private source, the opened input slots. Constraint, `SpentBySender`
+  under `in_proof OR delegate`, every slot a dummy on the signer rail, `Spend` in `audit/anonymous.go` on
+  the anonymous rail, `assertFollowsUtxo` on both, so entry k names nullifier k. Tests,
+  `TestDummyBetweenSpentInputsIsRefused`, `TestConfidentialRefusals/in-proof input of another owner`, `delegate move
   with a second member's input`, `delegate move without a spent input`, `signer rail opening an input`
   and `TestAnonymousRefusals/commitment key spending a default-ring note`.
 - Settled outputs. Source, SPP's `private_tx_hash` from the frame, bound by SPP's own proof. Field,
@@ -177,7 +178,7 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
 - Exits and layout. Source, the exits bitmap of the frame and the key's family. Fields, `layout` and
   `exits_bitmap`. Constraint, `DecodeLayout` pins bit 0 clear and every flag outside the
   free set `decodeLayout` names on each circuit. `exitsBitmap` derives the bitmap from the opened slots,
-  the one record of exits. Tests, `TestLayoutRefusesBitZero`, `TestDeliveredAuditRefusals`,
+  the one record of exits. Tests, `TestLayoutRefusesTheClearBits`, `TestDeliveredAuditRefusals`,
   `TestAnonymousAuditRefusals` and `TestAnonymousRecordsStayOnTheirSlots/changed exit positions` in
   `prover/circuits/audit`.
 - Auditor stream. Source, the ring account's auditor key, the frame's `eph_u`, envelope ciphertext and

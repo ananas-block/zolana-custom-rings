@@ -1,4 +1,4 @@
-// Proves one ring transfer in one proof. The auditor opens every note, the
+// Proves one ring transfer in one proof. The auditor opens every output, the
 // policy screens the sender and every payment, and an exemption bounds every
 // withdrawal. The gates the program fixes in the statement switch only the
 // predicates the properties name under them, every section's hashing,

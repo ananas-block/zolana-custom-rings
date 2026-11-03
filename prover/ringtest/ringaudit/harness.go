@@ -39,7 +39,7 @@ func signerEvidence(api frontend.API, inputClass int) audit.Evidence {
 
 func (c *DeliveredCircuit) section(api frontend.API, rc frontend.Rangechecker, evidence audit.Evidence) ([]frontend.Variable, audit.Opened) {
 	envelope := c.OpenEnvelope(api, rc)
-	keyEscrow := audit.DecodeLayout(api, c.Layout, audit.LayoutEscrow|audit.LayoutReserved, 0).Flag(audit.LayoutEscrow)
+	keyEscrow := audit.DecodeLayout(api, c.Layout, audit.LayoutEscrow, 0).Flag(audit.LayoutEscrow)
 	opened := audit.OpenSlots(api, rc, c.AuditWires, envelope, c.Outputs)
 	stream := c.SealStream(api, audit.ConfidentialRanges(c.InputClass, len(c.Outputs)), evidence, opened.ExitRecords())
 	delivered := c.Deliver(api, envelope, keyEscrow, c.Outputs, opened, stream)
@@ -111,7 +111,7 @@ func (c *AnonymousCircuit) Define(api frontend.API) error {
 	if c.Shape.FullOpenings {
 		fixed = audit.LayoutFullOpenings
 	}
-	audit.DecodeLayout(api, c.Layout, audit.LayoutReserved, fixed)
+	audit.DecodeLayout(api, c.Layout, 0, fixed)
 	opened := audit.OpenSlots(api, rc, c.AuditWires, envelope, c.Outputs)
 	spent := audit.Spend(api, rc, c.Shape, c.Inputs, c.InputCount, c.RingProgramID, c.SenderKey)
 	shared.AssertAnonymousParties(api, spent.SenderPkHash, c.PartyIdentities)

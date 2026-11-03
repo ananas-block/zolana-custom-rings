@@ -90,12 +90,12 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 	})
 }
 
-// Every flag value solves at the smallest and a larger capacity, with an exit and without one, the reserved flag a delivered key ignores.
+// Every flag value solves at the smallest and a larger capacity, with an exit and without one.
 func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 	for _, capacity := range []int{2, 8} {
 		c := compileDelivered(t, capacity)
-		for value := range 4 {
-			layout := ringaudit.Layout{Escrow: value&1 != 0, Reserved: value&2 != 0}
+		for _, escrow := range []bool{false, true} {
+			layout := ringaudit.Layout{Escrow: escrow}
 			for name, build := range map[string]func(testing.TB, int) ringaudit.DeliveredAudit{
 				"exit-free": func(t testing.TB, capacity int) ringaudit.DeliveredAudit {
 					return ringaudit.DeliveredAuditOf(t, capacity)
@@ -113,11 +113,13 @@ func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 }
 
 // Bit 0 stays clear, exits_bitmap alone records exits.
-func TestLayoutRefusesBitZero(t *testing.T) {
+func TestLayoutRefusesTheClearBits(t *testing.T) {
 	c := compileDelivered(t, 8)
-	assignment := ringaudit.NewDeliveredAudit(t, 8).Circuit(t)
-	assignment.Layout = 1
-	c.Refuse(t, assignment)
+	for _, layout := range []int{1, 4} {
+		assignment := ringaudit.NewDeliveredAudit(t, 8).Circuit(t)
+		assignment.Layout = layout
+		c.Refuse(t, assignment)
+	}
 }
 
 // Each case changes one value of an honest in-proof owner transfer spending two sender UTXOs.

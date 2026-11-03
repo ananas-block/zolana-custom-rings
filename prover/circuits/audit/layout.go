@@ -14,12 +14,11 @@ import (
 
 // Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/proof/disclosure.rs.
 const (
-	// Bit 0 stays clear in every key, exits_bitmap alone records exits.
+	// Bits 0 and 2 stay clear in every key, exits_bitmap alone records exits.
 	_ = 1 << iota
 	// LayoutEscrow is the config's key escrow, the policy section escrows every output nullifier key the ciphertexts leave out.
 	LayoutEscrow
-	// LayoutReserved is free in every key, the program sends it clear.
-	LayoutReserved
+	_
 	// LayoutFullOpenings is the anonymous entry layout, every spent UTXO opens in the envelope.
 	LayoutFullOpenings
 )

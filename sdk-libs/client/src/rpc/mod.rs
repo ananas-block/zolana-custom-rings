@@ -583,7 +583,7 @@ pub struct DecryptedInput {
     /// Absent for a dummy input and an input under an ambiguous prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<DecryptedInputOpening>,
-    /// The sender's ring notes that carry the input's prefix, more of them than inputs name it.
+    /// The known ring notes that carry the input's prefix, more of them than inputs name it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Hash>,
 }

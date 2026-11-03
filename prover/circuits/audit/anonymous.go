@@ -61,10 +61,8 @@ func Spend(api frontend.API, rc frontend.Rangechecker, shape AnonymousAuditShape
 		// 4. Every spent UTXO lies below the count and is the hidden sender's.
 		hash := spentBySender(api, slot, count.Active[i], 1, senderPkHash, i)
 		spent.InputHashes = append(spent.InputHashes, hash)
-		if i > 0 {
-			// 5. A UTXO follows only a UTXO as SPP's AssertDummiesLast holds, so spent UTXO k owns nullifier k.
-			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: api.Sub(1, previousUtxo)})
-		}
+		// 5. A UTXO follows only a UTXO, spent UTXO k owns nullifier k.
+		assertFollowsUtxo(api, slot.Utxo, previousUtxo, i)
 		previousUtxo = slot.Utxo
 		if shape.FullOpenings {
 			spent.Evidence.Entries = append(spent.Evidence.Entries, entryInput(api, rc, slot, slots[0].NullifierPk))

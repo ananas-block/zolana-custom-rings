@@ -52,14 +52,13 @@ func TestAnonymousEntrySolvesBothLayouts(t *testing.T) {
 	c.RequireSolved(t, a.Circuit(t))
 }
 
-// Every published input count solves on a commitment key and on the entry key, the reserved flag either way.
+// Every published input count solves on a commitment key and on the entry key.
 func TestAnonymousAuditSolvesEveryInputCount(t *testing.T) {
 	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, entryShape} {
 		c := compileAnonymous(t, shape)
 		for count := 1; count <= shape.InputClass; count++ {
 			t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(shape), count), func(t *testing.T) {
 				a := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count)
-				a.Layout.Reserved = count%2 == 0
 				c.RequireSolved(t, a.Circuit(t))
 			})
 		}

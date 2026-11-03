@@ -46,13 +46,11 @@ func (h AuditHead) ElementsUnder(t testing.TB, domain int64) []*big.Int {
 // Layout is a transfer's layout flags, mirrors the Layout flags of package audit.
 type Layout struct {
 	Escrow       bool
-	Reserved     bool
 	FullOpenings bool
 }
 
 func (l Layout) Value() int64 {
-	return ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
-		ringtest.Bit(l.Reserved)*audit.LayoutReserved | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
+	return ringtest.Bit(l.Escrow)*audit.LayoutEscrow | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
 }
 
 // StatementOutput is one published output as an audit statement reads it.

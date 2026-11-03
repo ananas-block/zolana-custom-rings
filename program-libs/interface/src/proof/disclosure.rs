@@ -24,7 +24,7 @@ pub struct AuditLayout {
 }
 
 impl AuditLayout {
-    /// Every audit key refuses bit 0 and leaves bit 2 free, the program sends both clear.
+    /// Every audit key refuses bits 0 and 2.
     pub const fn value(self) -> u8 {
         (self.key_escrow as u8) << 1 | (self.full_openings as u8) << 3
     }

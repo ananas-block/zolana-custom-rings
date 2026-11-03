@@ -1,6 +1,6 @@
 # Disclosure
 
-A ring transfer opens to the auditor through one AES-256-CTR stream and its delivered bodies. The stream's envelope region seals the transaction viewing secret and names the spent notes. Its record regions open the outputs that carry no delivered body. [Spec](../../spec.md) [Envelope](envelope.md)
+A ring transfer opens to the auditor through one AES-256-CTR stream and its delivered bodies. The stream's envelope region seals the transaction viewing secret and, off the signer rail, names the spent notes. Its record regions open the outputs that carry no delivered body. [Spec](../../spec.md) [Envelope](envelope.md)
 
 ## Auditor message
 
@@ -44,13 +44,13 @@ The envelope plaintext is `tx_viewing_sk || evidence`. `prefix16` is the first 1
 | Anonymous, commitment key | `fe32(input_hash_0) \|\| prefix16(input_hash_i)` for `1 <= i < n` |
 | Anonymous, entry key | `sender_key \|\| fe32(sender_nullifier_pk) \|\| (u64be(amount) \|\| fe32(asset) \|\| fe32(blinding)) * n` |
 
-Slots at or past `n` stay absent. A published dummy slot contributes zeros.
+Slots at or past `n` stay absent. Spent notes come first in SPP's order and published dummies follow as zeros, so entry k names nullifier k.
 
 ## Spent notes
 
 - The commitment key discloses `hash_0`, the full hash of the first spent note, and the 16-byte prefix of every other.
-- The auditor finds `hash_0` among the notes it opened before and matches every prefix among the sender's ring notes. Several matches leave candidates, and no match leaves the input unseen.
-- The in-proof and authority rails disclose a prefix for each spent note. The auditor matches each among the ring notes it opened.
+- The auditor finds `hash_0` among the notes it opened before and matches every prefix among the sender's ring notes. Several matches leave candidates, and no match fails the audit of the transaction.
+- The in-proof and authority rails disclose a prefix for each spent note. The auditor matches each among the ring notes it opened, and no match leaves the input unseen.
 - The entry key spends default-ring notes, which the auditor never opened. It discloses every spent note's amount, asset and blinding, and the sender's key and nullifier key. The circuit holds every entry input to that one nullifier key.
 - The signer rail discloses no spent note.
 
@@ -99,7 +99,7 @@ Anonymous outputs and exits also keep zolana's recipient ciphertexts, and no rin
 |---|---|---|
 | 1 | none | always clear, every key refuses it |
 | 2 | key escrow | the ring is in `ConfidentialEscrow` mode. Bodies and exit records omit the nullifier key, and the escrow records give it. |
-| 4 | reserved | always clear, every key accepts either value |
+| 4 | reserved | always clear, every key refuses it |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
 The layout value is `key_escrow << 1 | full_openings << 3`. `exits_bitmap` is the one record of exits. The confidential family varies key escrow and pins full openings to `0`. The anonymous family's commitment layout pins both to `0`. Its entry layout pins full openings to `1` and key escrow to `0`.

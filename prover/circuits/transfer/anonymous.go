@@ -140,7 +140,7 @@ func (c *AnonymousTransferCircuit) decodeLayout(api frontend.API) {
 	if c.Shape.FullOpenings {
 		fixed = audit.LayoutFullOpenings
 	}
-	audit.DecodeLayout(api, c.Layout, audit.LayoutReserved, fixed)
+	audit.DecodeLayout(api, c.Layout, 0, fixed)
 }
 
 // statement is the anonymous transfer preimage, mirrored by TransferStatement::elements under TransferFamily::Anonymous in program-libs/interface/src/proof/statement.rs.

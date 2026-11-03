@@ -126,7 +126,7 @@ func (c *ConfidentialTransferCircuit) assertRail(api frontend.API) {
 
 // decodeLayout pins bit 0 and full openings clear and returns key escrow, set on the authority rail.
 func (c *ConfidentialTransferCircuit) decodeLayout(api frontend.API) frontend.Variable {
-	keyEscrow := audit.DecodeLayout(api, c.Layout, audit.LayoutEscrow|audit.LayoutReserved, 0).Flag(audit.LayoutEscrow)
+	keyEscrow := audit.DecodeLayout(api, c.Layout, audit.LayoutEscrow, 0).Flag(audit.LayoutEscrow)
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: api.Sub(1, keyEscrow)})
 	return keyEscrow
 }
