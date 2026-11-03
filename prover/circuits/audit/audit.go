@@ -68,9 +68,9 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 
 // StreamRanges mirrors AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
 type StreamRanges struct {
-	EvidenceHead, FirstEntry, Entry int
-	InputClass, Outputs             int
-	RecordBlocks                    int
+	EvidenceHead, Entry int
+	InputClass, Outputs int
+	RecordBlocks        int
 }
 
 const (
@@ -78,14 +78,14 @@ const (
 	// StreamFirstCounter is aes.Cipher.CTREncrypt's first counter, mirrored by STREAM_FIRST_COUNTER.
 	StreamFirstCounter = 2
 	EnvelopeKeyLen     = 32
-	// InputPrefixLen mirrors INPUT_PREFIX_BYTES.
-	InputPrefixLen = 16
-	fieldLen       = 32
-	amountLen      = 8
+	// InputHashLen mirrors INPUT_HASH_LEN.
+	InputHashLen = fieldLen
+	fieldLen     = 32
+	amountLen    = 8
 	// EntryEvidenceHeadLen mirrors ENTRY_EVIDENCE_HEAD_LEN.
 	EntryEvidenceHeadLen = 2 * fieldLen
 	// EntryInputLen mirrors ENTRY_INPUT_LEN.
-	EntryInputLen = amountLen + 2*fieldLen
+	EntryInputLen = InputHashLen + amountLen + 2*fieldLen
 	// AnonymousRecordLen mirrors ANONYMOUS_RECORD_LEN.
 	AnonymousRecordLen = fieldLen + amountLen + 2*fieldLen
 	// ExitRecordLen mirrors EXIT_RECORD_LEN.
@@ -96,24 +96,20 @@ const (
 	ConfidentialRecordBlocks = (ExitRecordLen + streamBlockLen - 1) / streamBlockLen
 )
 
-// ConfidentialRanges transmits no entry on the signer rail.
 func ConfidentialRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{FirstEntry: InputPrefixLen, Entry: InputPrefixLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: ConfidentialRecordBlocks}
+	return StreamRanges{Entry: InputHashLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: ConfidentialRecordBlocks}
 }
 
 func CommitmentRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{FirstEntry: fieldLen, Entry: InputPrefixLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
+	return StreamRanges{Entry: InputHashLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
 }
 
 func EntryRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{EvidenceHead: EntryEvidenceHeadLen, FirstEntry: EntryInputLen, Entry: EntryInputLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
+	return StreamRanges{EvidenceHead: EntryEvidenceHeadLen, Entry: EntryInputLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
 }
 
 func (r StreamRanges) EvidenceLen(count int) int {
-	if count == 0 {
-		return 0
-	}
-	return r.EvidenceHead + r.FirstEntry + (count-1)*r.Entry
+	return r.EvidenceHead + count*r.Entry
 }
 
 // EnvelopeLen is what the frame carries, with no padding.
@@ -175,25 +171,28 @@ func (w AuditWires) SealStream(api frontend.API, ranges StreamRanges, evidence E
 	return Stream{ranges: ranges, sealed: sealed, digest: envelopeDigest(api, ranges, evidence, sealed.Ciphertext)}
 }
 
-// envelopeDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs.
+// envelopeDigest covers the class's envelope bytes alone, a record region and the padding past it reach no digest.
 func envelopeDigest(api frontend.API, ranges StreamRanges, evidence Evidence, ciphertext []frontend.Variable) frontend.Variable {
-	// Only the class's envelope bytes enter, a record region and the padding past it reach no digest.
-	transmitted := slices.Clone(ciphertext[:ranges.EnvelopeLen(ranges.InputClass)])
+	return countedDigest(api, ciphertext, EnvelopeKeyLen+len(evidence.Head), ranges.Entry, evidence.Count)
+}
+
+// countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.
+func countedDigest(api frontend.API, ciphertext []frontend.Variable, head, entry int, count ringgadget.Count) frontend.Variable {
+	transmitted := slices.Clone(ciphertext[:head+len(count.Active)*entry])
 	// An entry at or past the count packs as zero, the chunk the cut falls in then equals pack_left31 of the transmitted bytes.
-	offset := EnvelopeKeyLen + len(evidence.Head)
-	for i, entry := range evidence.Entries {
-		copy(transmitted[offset:], masked(api, evidence.Count.Active[i], transmitted[offset:offset+len(entry)]))
-		offset += len(entry)
+	for i, active := range count.Active {
+		offset := head + i*entry
+		copy(transmitted[offset:], masked(api, active, transmitted[offset:offset+entry]))
 	}
 	fields := shared.PackDisclosure(api, transmitted)
-	// SelectCount sets exactly one candidate, its flag falls on the last chunk of that count's envelope and HashPrefix4 ends the chain there.
+	// SelectCount sets exactly one candidate, its flag falls on the last chunk of that count's bytes and HashPrefix4 ends the chain there.
 	ends := shared.Zeros(len(fields))
 	length := frontend.Variable(0)
-	for k, selected := range evidence.Count.OneHot {
-		envelopeLen := ranges.EnvelopeLen(evidence.Count.Candidate(k))
-		last := (envelopeLen+gadget.HashBytesChunkSize-1)/gadget.HashBytesChunkSize - 1
+	for k, selected := range count.OneHot {
+		byteLen := head + count.Candidate(k)*entry
+		last := (byteLen+gadget.HashBytesChunkSize-1)/gadget.HashBytesChunkSize - 1
 		ends[last] = api.Add(ends[last], selected)
-		length = api.Add(length, api.Mul(selected, envelopeLen))
+		length = api.Add(length, api.Mul(selected, byteLen))
 	}
 	// The tag is the selected count's transmitted length, two counts whose chains agree over trailing zero bytes hash apart.
 	return gadget.PoseidonHash(api, []frontend.Variable{length, ringgadget.HashPrefix4(api, fields, ends)})
@@ -207,8 +206,7 @@ func (s Stream) record(i int) []frontend.Variable {
 type slotBytes struct {
 	asset, nullifierPk [fieldLen]frontend.Variable
 	amount             []frontend.Variable
-	// blinding stays unset on an anonymous slot, the auditor derives it.
-	blinding [fieldLen]frontend.Variable
+	blinding           [fieldLen]frontend.Variable
 }
 
 // exitRecord mirrors ExitRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
@@ -219,7 +217,10 @@ func (b slotBytes) exitRecord() []frontend.Variable {
 // Opened holds every output slot once, every section reads these wires.
 type Opened struct {
 	Slots []shared.Output
-	// OutputChain covers every slot hash, a dummy's included.
+	// OutputCount is the published m.
+	OutputCount frontend.Variable
+	Count       ringgadget.Count
+	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
 	OutputChain frontend.Variable
 	ExitsBitmap frontend.Variable
 	bytes       []slotBytes
@@ -227,39 +228,44 @@ type Opened struct {
 
 type outputWires interface {
 	utxoWires() shared.UtxoWires
-	carriesBlinding() bool
 }
 
-func OpenSlots[O outputWires](api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, outputs []O) Opened {
-	opened := Opened{Slots: make([]shared.Output, len(outputs)), bytes: make([]slotBytes, len(outputs))}
+func OpenSlots[O outputWires](api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, outputs []O, outputCount frontend.Variable) Opened {
+	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
+	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, bytes: make([]slotBytes, len(outputs))}
 	hashes := make([]frontend.Variable, len(outputs))
 	for i, output := range outputs {
 		slot := OpenOutput(api, output.utxoWires())
+		active := count.Active[i]
+		// An omitted slot holds no note, SPP's padded chain would miss it.
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
 		// The auditor rebuilds every commitment from the sealed key's blinding with no ring data, another value leaves the slot unopened.
-		w.AssertBlinding(api, e, slot, i)
+		w.AssertBlinding(api, e, slot, active, i)
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: slot.RingDataHash})
 		// FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
 		opened.bytes[i] = slotBytes{
 			asset:       ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Asset)),
 			nullifierPk: ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.NullifierPk)),
 			amount:      ringgadget.UintBytesBE(api, api.Mul(slot.Utxo, slot.Amount), amountLen),
+			blinding:    ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Blinding)),
 		}
-		if output.carriesBlinding() {
-			opened.bytes[i].blinding = ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Blinding))
-		}
-		opened.Slots[i], hashes[i] = slot, slot.Hash
+		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
 	opened.OutputChain = gadget.HashChain4(api, hashes)
 	// The program cuts every ciphertext length from the same positions.
-	opened.ExitsBitmap = exitsBitmap(api, opened.Slots)
+	exits := make([]frontend.Variable, len(opened.Slots))
+	for i, slot := range opened.Slots {
+		exits[i] = slot.Exit
+	}
+	opened.ExitsBitmap = weightedBits(api, exits)
 	return opened
 }
 
-// exitsBitmap mirrors exits_bitmap in program-libs/interface/src/instructions/transact.rs.
-func exitsBitmap(api frontend.API, slots []shared.Output) frontend.Variable {
+// weightedBits mirrors exits_bitmap in program-libs/interface/src/instructions/transact.rs.
+func weightedBits(api frontend.API, bits []frontend.Variable) frontend.Variable {
 	bitmap := frontend.Variable(0)
-	for i, slot := range slots {
-		bitmap = api.Add(bitmap, api.Mul(slot.Exit, uint64(1)<<i))
+	for i, bit := range bits {
+		bitmap = api.Add(bitmap, api.Mul(bit, uint64(1)<<i))
 	}
 	return bitmap
 }
@@ -275,9 +281,9 @@ func assertOwnerKey(api frontend.API, slot shared.Output, key [32]frontend.Varia
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Ring, A: slot.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, key)})
 }
 
-// AssertBlinding holds a dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
-func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, i int) {
-	api.AssertIsEqual(slot.Blinding, transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i))
+// AssertBlinding holds a published dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
+func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, active frontend.Variable, i int) {
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: slot.Blinding, B: transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)})
 }
 
 // Head opens every audit statement under domain, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs.
@@ -289,39 +295,15 @@ func (e Envelope) Head(w AuditWires, s Stream, domain frontend.Variable) []front
 	)
 }
 
-// SpentBySender returns utxo * hash per slot, the input list of private_tx_hash.
-func SpentBySender(api frontend.API, inputs []shared.UtxoWires, live []frontend.Variable, required, sender frontend.Variable) []frontend.Variable {
-	hashes := make([]frontend.Variable, len(inputs))
-	var previousUtxo frontend.Variable
-	for i, input := range inputs {
-		slot := input.Open(api)
-		hashes[i] = spentBySender(api, slot, live[i], required, sender, i)
-		assertFollowsUtxo(api, slot.Utxo, previousUtxo, i)
-		previousUtxo = slot.Utxo
-	}
-	return hashes
-}
-
-// assertFollowsUtxo twins SPP's AssertDummiesLast, pairing spent UTXO k with nullifier k needs both.
-func assertFollowsUtxo(api frontend.API, utxo, previousUtxo frontend.Variable, i int) {
-	if i > 0 {
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: utxo, V: api.Sub(1, previousUtxo)})
-	}
-}
-
-// InputPrefixEvidence transmits no entry at a count of zero.
-func InputPrefixEvidence(api frontend.API, rc frontend.Rangechecker, hashes []frontend.Variable, count ringgadget.Count) Evidence {
+// InputEvidence transmits be32(hash_i) per slot, the list private_tx_hash chains.
+func InputEvidence(api frontend.API, rc frontend.Rangechecker, hashes []frontend.Variable, count ringgadget.Count) Evidence {
 	entries := make([][]frontend.Variable, len(hashes))
 	for i, hash := range hashes {
-		entries[i] = inputPrefix(api, rc, hash)
+		// The be32 below q is one encoding, hash + q would name no note.
+		bytes := ringgadget.FieldToBytesBEWith(api, rc, hash)
+		entries[i] = bytes[:]
 	}
 	return Evidence{Entries: entries, Count: count}
-}
-
-// inputPrefix reads the be32 below q, the prefix of hash + q would name another note.
-func inputPrefix(api frontend.API, rc frontend.Rangechecker, hash frontend.Variable) []frontend.Variable {
-	bytes := ringgadget.FieldToBytesBEWith(api, rc, hash)
-	return bytes[:InputPrefixLen]
 }
 
 // AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.

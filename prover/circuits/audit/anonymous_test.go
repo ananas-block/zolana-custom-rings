@@ -104,6 +104,7 @@ func TestAnonymousAmountsStayBelowTwoTo64(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, shape)
 			a.Outputs[slot].Utxo.Amount = math.MaxUint64
+			a.Reseal(t, slot)
 			c.RequireSolved(t, a.Circuit(t))
 			assignment := a.Circuit(t)
 			assignment.Outputs[slot].Output.Amount = new(big.Int).Lsh(big.NewInt(1), 64)
@@ -130,8 +131,8 @@ func TestAnonymousInputsKeepDummiesLast(t *testing.T) {
 	}
 }
 
-// A spent hash below 2^254 - q has a second 32-byte encoding, hash + q, the canonical bound refuses its prefix.
-func TestAnonymousSpentPrefixRefusesTheAliasEncoding(t *testing.T) {
+// A spent hash below 2^254 - q has a second 32-byte encoding, hash + q, the canonical bound refuses it.
+func TestAnonymousEvidenceRefusesTheAliasEncoding(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
 	c := compileAnonymous(t, shape)
 	q := ecc.BN254.ScalarField()
@@ -240,10 +241,7 @@ func TestAnonymousEntryRefusals(t *testing.T) {
 			a.Inputs[1].NullifierPk = spptest.MustNullifierPk(t, big.NewInt(8))
 		}},
 		{"input hashes on an entry key", func(a *ringaudit.AnonymousAudit) { a.Layout.FullOpenings = false }},
-		{"sender key of another owner", func(a *ringaudit.AnonymousAudit) {
-			a.SenderKey = ringtest.Repeat(0xc3)
-			a.Outputs[1] = a.NewPayment(t, a.Change(t, 1))
-		}},
+		{"sender key of another owner", func(a *ringaudit.AnonymousAudit) { a.SenderKey = ringtest.Repeat(0xc3) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, entryShape)
@@ -253,8 +251,8 @@ func TestAnonymousEntryRefusals(t *testing.T) {
 	}
 }
 
-// A commitment key's evidence holds input 0's hash and the prefix of every other spent hash, evidence naming another note fails the statement.
-func TestAnonymousEvidenceHoldsInputHashAndPrefixes(t *testing.T) {
+// A commitment key's evidence holds every spent hash, evidence naming another note fails the statement.
+func TestAnonymousEvidenceHoldsEveryInputHash(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}
 	c := compileAnonymous(t, shape)
 	honest := ringaudit.NewAnonymousAudit(t, shape)

@@ -19,7 +19,7 @@ import (
 )
 
 // Properties:
-// 2. The output chain covers every slot.
+// 2. The output chain covers every published slot.
 // 3. Every UTXO is a ring output or an exit and carries no output data.
 
 type DeliveryWires struct {
@@ -32,8 +32,6 @@ type DeliveryWires struct {
 }
 
 func (d DeliveryWires) utxoWires() shared.UtxoWires { return d.Output }
-
-func (DeliveryWires) carriesBlinding() bool { return true }
 
 type Delivered struct {
 	OutputCiphertextChain, RecipientKeyChain frontend.Variable
@@ -55,9 +53,10 @@ func (w AuditWires) Deliver(api frontend.API, e Envelope, keyEscrow frontend.Var
 		// 1. Every ring output body opens for the holder of its published recipient key.
 		w.deliver(api, e, keyEscrow, output, slot, opened.bytes[i], i)
 		// Each slot chains the one ciphertext the program hashes from the frame.
-		ciphertexts = append(ciphertexts, slotCiphertextHash(api, keyEscrow, output, slot, stream.record(i)))
-		// The program rebuilds the owner tag from the published key, zero on an exit.
-		recipientKeys = append(recipientKeys, recipientKeyFields(api, output, slot)...)
+		active := opened.Count.Active[i]
+		ciphertexts = append(ciphertexts, api.Mul(active, slotCiphertextHash(api, keyEscrow, output, slot, stream.record(i))))
+		// The program rebuilds the owner tag from the published key, zero on an exit and past the published count.
+		recipientKeys = append(recipientKeys, recipientKeyFields(api, output, slot, active)...)
 	}
 	return Delivered{
 		OutputCiphertextChain: gadget.HashChain4(api, ciphertexts),
@@ -73,36 +72,39 @@ func slotCiphertextHash(api frontend.API, keyEscrow frontend.Variable, d Deliver
 }
 
 // recipientKeyFields masks an exit's key, the agreement's ECDH bounds a ring output's bytes.
-func recipientKeyFields(api frontend.API, d DeliveryWires, slot shared.Output) []frontend.Variable {
-	key, notExit := shared.PackBounded(api, d.RecipientKey[:]), api.Sub(1, slot.Exit)
-	return []frontend.Variable{api.Mul(notExit, key[0]), api.Mul(notExit, key[1])}
+func recipientKeyFields(api frontend.API, d DeliveryWires, slot shared.Output, active frontend.Variable) []frontend.Variable {
+	key, published := shared.PackBounded(api, d.RecipientKey[:]), api.Sub(active, slot.Exit)
+	return []frontend.Variable{api.Mul(published, key[0]), api.Mul(published, key[1])}
 }
 
-func recipientKey(api frontend.API, slot shared.Output, key [32]frontend.Variable) [32]frontend.Variable {
+func recipientKey(api frontend.API, live frontend.Variable, key [32]frontend.Variable) [32]frontend.Variable {
 	var u [32]frontend.Variable
 	for j := range u {
 		// A slot without a recipient agrees with the base point, the ladder stays satisfiable on every slot.
-		u[j] = api.Select(slot.Ring, key[j], basepointByte(j))
+		u[j] = api.Select(live, key[j], basepointByte(j))
 	}
 	return u
 }
 
-// deliver mirrors DeliveredBody::encode in program-libs/interface/src/proof/audit_stream.rs, key escrow cuts the last field.
-func (w AuditWires) deliver(api frontend.API, e Envelope, keyEscrow frontend.Variable, d DeliveryWires, slot shared.Output, bytes slotBytes, i int) {
-	u := recipientKey(api, slot, d.RecipientKey)
-	// 1. One encoding per recipient key, an alias would key the slot secret and the owner tag to bytes the recipient never derives.
+// slotSecret is the CRDS secret of index under u, an alias of u would key it to bytes the holder never derives.
+func (w AuditWires) slotSecret(api frontend.API, e Envelope, u [32]frontend.Variable, index frontend.Variable) frontend.Variable {
 	agreement := shared.AgreeCanonical(api, e.txViewingSk, u)
 	// The agreement's ECDH bounds every byte of u and returns canonical agreement bytes.
 	recipient := [2]frontend.Variable(shared.PackBounded(api, shared.Tagged(u)))
-	// The slot and n0 in the secret keep two slots off one keystream.
-	secret := shared.DeliveredSlot{
+	// The index and n0 in the secret keep two slots off one keystream.
+	return shared.DeliveredSlot{
 		Agreement:      [2]frontend.Variable(shared.PackBounded(api, agreement[:])),
 		TxPk:           e.txPk,
 		Recipient:      recipient,
 		Salt:           e.salt,
-		OutputIndex:    i,
+		OutputIndex:    index,
 		FirstNullifier: w.FirstNullifier,
 	}.Secret(api)
+}
+
+// deliver mirrors DeliveredBody::encode in program-libs/interface/src/proof/audit_stream.rs, key escrow cuts the last field.
+func (w AuditWires) deliver(api frontend.API, e Envelope, keyEscrow frontend.Variable, d DeliveryWires, slot shared.Output, bytes slotBytes, i int) {
+	secret := w.slotSecret(api, e, recipientKey(api, slot.Ring, d.RecipientKey), i)
 	// The CRING/bdy1 label separates a body's key from every other line over one secret.
 	key, nonce := shared.AuditStreamKeySchedule(api, secret, shared.BodyEncInfo)
 	// 5. A ring output's body is the encryption of its opening, the recipient and the auditor decrypt the same bytes.

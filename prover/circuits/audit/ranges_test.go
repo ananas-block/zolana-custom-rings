@@ -27,20 +27,18 @@ type rangesVector struct {
 	EnvelopeLens        []int  `json:"envelope_len_by_input_count"`
 }
 
-func (v rangesVector) keyRanges(t *testing.T) (audit.StreamRanges, bool) {
+func (v rangesVector) keyRanges(t *testing.T) audit.StreamRanges {
 	t.Helper()
 	switch v.Rail {
-	case "signer":
-		return audit.ConfidentialRanges(v.Class, v.Outputs), false
-	case "in_proof_or_authority":
-		return audit.ConfidentialRanges(v.Class, v.Outputs), true
+	case "signer_in_proof_or_authority":
+		return audit.ConfidentialRanges(v.Class, v.Outputs)
 	case "commitment":
-		return audit.CommitmentRanges(v.Class, v.Outputs), true
+		return audit.CommitmentRanges(v.Class, v.Outputs)
 	case "entry":
-		return audit.EntryRanges(v.Class, v.Outputs), true
+		return audit.EntryRanges(v.Class, v.Outputs)
 	}
 	t.Fatalf("unknown rail %q", v.Rail)
-	return audit.StreamRanges{}, false
+	return audit.StreamRanges{}
 }
 
 func TestStreamRangesAreTheSharedVector(t *testing.T) {
@@ -51,7 +49,7 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 	covered := map[string]bool{}
 	for _, v := range vectors.Keys {
 		t.Run(v.Rail, func(t *testing.T) {
-			r, evidence := v.keyRanges(t)
+			r := v.keyRanges(t)
 			if r.MaxEvidenceBlocks() != v.MaxEvidenceBlocks || r.RecordBlocks != v.RecordBlocks || r.RecordCounter(0) != v.FirstRecordCounter || r.CapacityBlocks() != v.CapacityBlocks {
 				t.Errorf("E_max %d R %d R0 %d capacity %d, the vector holds %d %d %d %d", r.MaxEvidenceBlocks(), r.RecordBlocks, r.RecordCounter(0), r.CapacityBlocks(), v.MaxEvidenceBlocks, v.RecordBlocks, v.FirstRecordCounter, v.CapacityBlocks)
 			}
@@ -64,11 +62,7 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 			}
 			lengths := make([]int, v.Class)
 			for n := range lengths {
-				count := 0
-				if evidence {
-					count = n + 1
-				}
-				lengths[n] = r.EnvelopeLen(count)
+				lengths[n] = r.EnvelopeLen(n + 1)
 			}
 			if !slices.Equal(lengths, v.EnvelopeLens) {
 				t.Errorf("envelope lengths %v, the vector holds %v", lengths, v.EnvelopeLens)
@@ -111,7 +105,7 @@ func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	if audit.AnonymousRecordBlocks*blockLen < audit.AnonymousRecordLen || audit.ConfidentialRecordBlocks*blockLen < audit.ExitRecordLen {
 		t.Fatal("a record overruns its region")
 	}
-	for _, r := range []audit.StreamRanges{audit.ConfidentialRanges(32, 2), audit.CommitmentRanges(24, 2), audit.EntryRanges(8, 2)} {
+	for _, r := range []audit.StreamRanges{audit.ConfidentialRanges(24, 2), audit.CommitmentRanges(24, 2), audit.EntryRanges(8, 2)} {
 		if r.EnvelopeLen(r.InputClass) > r.EnvelopeBlocks()*blockLen {
 			t.Fatalf("%+v: the envelope overruns its region", r)
 		}

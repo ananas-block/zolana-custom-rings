@@ -203,3 +203,29 @@ func TestDeliveredSenderEvidenceFollowsTheInputCount(t *testing.T) {
 		c.RefuseStatement(t, d.Circuit(t), ringaudit.DeliveredSenderStatement(t, head, d.StatementOutputs(t), 2, d.PrivateTxHash(t), d.Sender(t)))
 	})
 }
+
+// An omitted slot publishes no cell on the delivered family, each chain reads zero past the count.
+func TestDeliveredCompactCells(t *testing.T) {
+	c := compileDelivered(t, 8)
+	omitted := func(t *testing.T) ringaudit.DeliveredAudit {
+		t.Helper()
+		return ringaudit.NewDeliveredAudit(t, 8).Omit(t, 1)
+	}
+	c.RequireSolved(t, omitted(t).Circuit(t))
+	t.Run("a statement over every slot", func(t *testing.T) {
+		d := omitted(t)
+		outputs := d.StatementOutputs(t)
+		outputs[7].Omitted, outputs[7].Hash, outputs[7].Ciphertext = false, big.NewInt(1), []byte{1}
+		c.RefuseStatement(t, d.Circuit(t), ringaudit.DeliveredStatement(t, d.Head(t), outputs))
+	})
+	t.Run("a live note past the count", func(t *testing.T) {
+		d := ringaudit.NewDeliveredAudit(t, 8)
+		d.Omitted = 2
+		c.Refuse(t, d.Circuit(t))
+	})
+	t.Run("an omitted slot's blinding stays free", func(t *testing.T) {
+		d := omitted(t)
+		d.Outputs[7].Utxo.Blinding = big.NewInt(0x5ec)
+		c.RequireSolved(t, d.Circuit(t))
+	})
+}
