@@ -56,7 +56,7 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
     let rpc = env.client.rpc();
     let prover = AsyncProverClient::new(prover_url());
 
-    for count in [2_u8, 4, 8] {
+    for count in [1_u8, 2, 4, 8] {
         let capacity = usize::from(count);
         let secrets: Vec<_> = (0..capacity)
             .map(|_| Zeroizing::new(random_blinding()))
