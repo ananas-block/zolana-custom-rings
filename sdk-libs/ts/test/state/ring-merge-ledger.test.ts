@@ -9,6 +9,8 @@ import {
   encryptMergeOutput,
   mergeOutputKey,
   treeAddress,
+  BN254_SCALAR_ORDER,
+  bigIntToBytes,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Bytes16, Bytes31, Bytes32, Signature } from "@heliuslabs/zolana/interface";
@@ -22,7 +24,7 @@ import {
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { sealRingMergeDisclosure } from "../../src/crypto/audit/merge-disclosure.js";
 import { auditRingMerges } from "../../src/operations/audit/audit-merge.js";
-import type { KnownUtxo } from "../../src/operations/audit/audit.js";
+import { knownUtxoOwnerHash, type KnownUtxo } from "../../src/operations/audit/audit.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import type { TransactionOrigin } from "../../src/protocol/transaction/origin.js";
 import {
@@ -198,6 +200,36 @@ describe("MergeLedger", () => {
     expect(ledger.output(filled(40))?.amount).toBe(9n);
   });
 
+  it.each([
+    [10, 11],
+    [11, 10],
+  ])("resolves equal deposited and keyed owners through descendants in order %j", (...inputs) => {
+    const keyed = note(5n);
+    const deposited: MergeInput = {
+      ...keyed,
+      owner: { kind: "deposited", ownerHash: knownUtxoOwnerHash(keyed) },
+    };
+    const ledger = new MergeLedger();
+    ledger.apply(merge(2, [20, 12], 30), NOTHING);
+    ledger.apply(merge(1, inputs, 20), NOTHING);
+    const known: KnownMergeInput = (commitment) => {
+      switch (commitment[0]) {
+        case 10:
+          return deposited;
+        case 11:
+          return keyed;
+        case 12:
+          return note(7n);
+        default:
+          return undefined;
+      }
+    };
+    expect(ledger.resolve(known)).toHaveLength(2);
+    expect(ledger.output(filled(20))).toMatchObject({ owner: keyed.owner, amount: 10n });
+    expect(ledger.output(filled(30))).toMatchObject({ owner: keyed.owner, amount: 17n });
+    expect(ledger.unresolved()).toEqual([]);
+  });
+
   it("reads a zero list entry as a dummy, never an input and never spent", () => {
     const inputs = realMergeInputs([filled(10), ZERO, filled(11), ZERO], 8);
     expect(inputs).toEqual([filled(10), filled(11)]);
@@ -206,6 +238,40 @@ describe("MergeLedger", () => {
     expect(transition.spent).toEqual(inputs);
     expect(transition.resolved[0]?.amount).toBe(8n);
   });
+
+  it.each(["apply", "resolve"] as const)(
+    "keeps the ledger unchanged when %s fails in a descendant owner check",
+    (operation) => {
+      const ledger = new MergeLedger();
+      const parent = merge(1, [10], 20);
+      const descendant = merge(2, [20, 11], 30);
+      ledger.apply(parent, NOTHING);
+      if (operation === "resolve") ledger.apply(descendant, NOTHING);
+      const before = ledger.unresolved();
+      const invalid: MergeInput = {
+        ...note(5n),
+        owner: {
+          kind: "keyed",
+          nullifierPk: bigIntToBytes(BN254_SCALAR_ORDER) as Bytes32,
+        },
+      };
+      const known: KnownMergeInput = (commitment) => {
+        if (commitment[0] === 10) return note(5n);
+        if (commitment[0] === 11) return invalid;
+        return undefined;
+      };
+      const resolve = (openings: KnownMergeInput) =>
+        operation === "apply"
+          ? ledger.apply(descendant, openings).resolved
+          : ledger.resolve(openings);
+      expect(() => resolve(known)).toThrow();
+      expect(ledger.outputs()).toEqual([]);
+      expect(ledger.unresolved()).toEqual(before);
+      expect(resolve(knownOnly({ 10: 5n, 11: 7n }))).toHaveLength(2);
+      expect(ledger.output(filled(30))?.amount).toBe(12n);
+      expect(ledger.unresolved()).toEqual([]);
+    },
+  );
 
   it.each<readonly [string, MergeInput]>([
     ["two owner keys", { ...note(1n), ownerKey: filled(9) }],

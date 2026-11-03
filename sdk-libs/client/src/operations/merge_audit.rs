@@ -251,13 +251,12 @@ impl MergeOutput {
             return Err(invalid_merge());
         };
         let commitment = slot.output_context.hash;
-        let (salt, fields) = encrypted
+        let (salt, _) = encrypted
             .split_first_chunk::<MERGE_OUTPUT_SALT_LEN>()
             .filter(|_| encrypted.len() == MERGE_OUTPUT_BODY_LEN)
             .ok_or_else(invalid_merge)?;
         if ![first_nullifier, commitment, *ring_data_hash]
             .iter()
-            .chain(fields.as_chunks::<32>().0)
             .all(is_canonical_bn254_scalar_be)
         {
             return Err(invalid_merge());
@@ -312,9 +311,69 @@ fn remember_merge(
 #[cfg(test)]
 mod tests {
     use spr_client::rpc::PaginationToken;
+    use spr_event::{encode_merge_output_data, MergeOutputDataRef};
+    use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
+    use spr_transaction::{OutputContext, OutputSlot};
 
     use super::*;
     use crate::origin::RingOrigin;
+    use crate::{MergeDisclosureEncryption, MergeOpening};
+
+    #[test]
+    fn native_ciphertext_fields_do_not_restrict_the_proved_merge_list() {
+        let auditor = X25519Keypair::new();
+        let salt = [5; 16];
+        let mut list = vec![[0; 32]; 8];
+        list[..2].copy_from_slice(&[[1; 32], [2; 32]]);
+        let sealed = MergeDisclosureEncryption::new(
+            &MergeOpening {
+                input_commitments: list.clone(),
+            },
+            salt,
+            &auditor.pubkey(),
+        )
+        .unwrap();
+        let mut disclosure = ConfirmedMergeDisclosure {
+            eph_pk: *sealed.eph_pk.as_bytes(),
+            ciphertext: sealed.ciphertext,
+            fields: sealed.fields,
+        };
+        let mut transaction = ShieldedTransaction {
+            slot: 1,
+            tx_signature: Signature::default(),
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![OutputSlot {
+                view_tag: [4; 32],
+                output_context: OutputContext {
+                    hash: [3; 32],
+                    tree_id: 1,
+                    leaf_index: 0,
+                },
+                payload: Vec::new(),
+            }],
+            messages: Vec::new(),
+            nullifiers: vec![[4; 32], [6; 32]],
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(Address::new_from_array([9; 32])),
+        };
+        for field in [[0; 32], BN254_SCALAR_MODULUS_BE] {
+            transaction.output_slots[0].payload = encode_merge_output_data(MergeOutputDataRef {
+                salt: &salt,
+                ciphertext: &[field, [0; 32], [0; 32]],
+                prefix: &[[0; 32]],
+            });
+            let output = MergeOutput::of(&transaction).unwrap();
+            assert_eq!(output.disclose(&auditor, &disclosure).unwrap(), list);
+        }
+        disclosure.fields[0] = BN254_SCALAR_MODULUS_BE;
+        assert!(MergeOutput::of(&transaction)
+            .unwrap()
+            .disclose(&auditor, &disclosure)
+            .is_err());
+    }
 
     struct History {
         pagination_token: Option<PaginationToken>,

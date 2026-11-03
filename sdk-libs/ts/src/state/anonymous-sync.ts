@@ -210,7 +210,7 @@ export class AnonymousSync {
     return new AnonymousSync({ ...this.#fields, fullRescan: true });
   }
 
-  /** Notes found by earlier syncs, only their spends and the new notes' reach the result. */
+  /** Include pending openings to retain their later spends. */
   withHeldNotes(held: readonly WalletUtxo[]): AnonymousSync {
     return new AnonymousSync({
       ...this.#fields,
@@ -805,9 +805,12 @@ async function openMerges(
         const hash = slot.outputContext.hash;
         const utxo = utxos.find((entry) => equalBytes(entry.outputContext.hash, hash));
         if (utxo === undefined || isHeld(hash)) continue;
+        const pending = registeredMint(input.assets, utxo.utxo.asset) === undefined;
+        if (pending) ledger.unknownMint(utxo.utxo.asset);
         ledger.keep(
           {
             utxo: utxo.utxo,
+            pending,
             outputContext: utxo.outputContext,
             nullifierPublicKey: owner.nullifierPublicKey,
             order: publication(merge, position),
@@ -881,7 +884,6 @@ class NoteLedger {
   readonly #replyClaims: ReplyClaim[] = [];
   readonly #sent: SentPayment[] = [];
   readonly #unknownMints = new Set<Address>();
-  readonly #unmatched: Bytes32[] = [];
 
   constructor(keys: ShieldedKeys, held: readonly WalletUtxo[]) {
     this.#keys = keys;
@@ -908,7 +910,6 @@ class NoteLedger {
         this.#replyClaims.push(Object.freeze({ utxoHash: slot.outputContext.hash, reply }));
     }
     this.#sent.push(...read.sent);
-    this.#unmatched.push(...read.unmatched);
     for (const mint of read.unknownMints) this.unknownMint(mint);
   }
 
@@ -995,7 +996,7 @@ class NoteLedger {
       replyClaims: Object.freeze([...this.#replyClaims]),
       sent: Object.freeze([...this.#sent]),
       unknownMints: Object.freeze([...this.#unknownMints]),
-      unmatched: Object.freeze([...this.#unmatched]),
+      unmatched: Object.freeze(this.#pending.map(({ utxo }) => utxo.outputContext.hash)),
     });
   }
 
@@ -1011,7 +1012,6 @@ class NoteLedger {
 /** One viewing key's reading of a batch of bodies. */
 class BodyRead {
   readonly notes: RebuiltNote[] = [];
-  readonly unmatched: Bytes32[] = [];
   readonly unknownMints: Address[] = [];
   readonly sent: SentPayment[] = [];
   readonly #reads: BodyReads;
@@ -1082,10 +1082,7 @@ class BodyRead {
     if (slot === undefined) return;
     const mint = rebuilt.utxo.asset;
     const pending = registeredMint(this.#reads.assets, mint) === undefined;
-    if (pending) {
-      this.unknownMints.push(mint);
-      this.unmatched.push(slot.outputContext.hash);
-    }
+    if (pending) this.unknownMints.push(mint);
     this.notes.push({ ...rebuilt, body, position, reply, pending });
   }
 

@@ -9,6 +9,8 @@ import {
   poseidon,
   encodeMergeOutputData,
   encryptMergeOutput,
+  BN254_SCALAR_ORDER,
+  bigIntToBytes,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Bytes16, Bytes31, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
@@ -206,6 +208,44 @@ describe("auditRingMerges rows", () => {
     ciphertext: new Uint8Array(32) as Bytes32,
     fields: [],
   };
+
+  it("opens the proved input list with a noncanonical native ciphertext field", async () => {
+    const owner = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
+    const merge = escrowedMerge({ member: OWNER_MEMBER, key: owner });
+    const transaction = {
+      ...merge.transaction,
+      outputSlots: merge.transaction.outputSlots.map((slot) => ({
+        ...slot,
+        payload: encodeMergeOutputData({
+          salt: merge.salt,
+          ciphertext: [bigIntToBytes(BN254_SCALAR_ORDER) as Bytes32, memberOf(0), memberOf(0)],
+          ringDataHash: merge.ringDataHash,
+        }),
+      })),
+    };
+    const list = Array.from({ length: 8 }, (_, slot) =>
+      slot < 2 ? memberOf(slot + 1) : memberOf(0),
+    );
+    const { disclosure } = sealRingMergeDisclosure(list, merge.salt, auditor.publicKey());
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async (confirmed) => ({
+        kind: "merge",
+        transaction: confirmed,
+        disclosure: { ...disclosure, proof: new Uint8Array(192) },
+      }),
+    };
+    const { client } = scanClient({ transactions: [[transaction]] });
+    const result = await auditRingMerges({
+      client,
+      ringProgramId: ring,
+      auditor,
+      origin,
+    });
+    expect(result.spent).toEqual(list.slice(0, 2));
+    expect(result.skipped).toEqual([]);
+    expect(result.unresolved).toHaveLength(1);
+    owner.destroy();
+  });
 
   it.each<readonly [string, TransactionOrigin]>([
     [

@@ -359,7 +359,7 @@ impl UtxoOwner {
         }
     }
 
-    fn hash(self, owner_key: &[u8; 32]) -> Result<[u8; 32], AuditError> {
+    pub(crate) fn hash(self, owner_key: &[u8; 32]) -> Result<[u8; 32], AuditError> {
         match self {
             Self::Keyed { nullifier_pk } => Ok(Poseidon::hashv(&[
                 &solana_owner_identity(owner_key)?,

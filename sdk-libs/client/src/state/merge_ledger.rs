@@ -170,11 +170,17 @@ impl ConfirmedMerge {
     ) -> Option<AuditedMergeOutput> {
         let inputs = self.inputs.iter().map(&input).collect::<Option<Vec<_>>>()?;
         let first = inputs.first()?;
+        let owner_hash = first.owner.hash(&first.owner_key).ok()?;
         let same_note_kind = inputs.iter().all(|input| {
             input.owner_key == first.owner_key
-                && input.owner == first.owner
+                && input.owner.hash(&input.owner_key).ok() == Some(owner_hash)
                 && input.asset == first.asset
         });
+        let owner = inputs
+            .iter()
+            .find(|input| matches!(input.owner, UtxoOwner::Keyed { .. }))
+            .unwrap_or(first)
+            .owner;
         let amount = inputs
             .iter()
             .try_fold(0u64, |sum, input| sum.checked_add(input.amount))?;
@@ -186,7 +192,7 @@ impl ConfirmedMerge {
             tree_id: self.tree_id,
             leaf_index: self.leaf_index,
             owner_key: first.owner_key,
-            owner: first.owner,
+            owner,
             asset: first.asset,
             mint: inputs.iter().find_map(|input| input.mint),
             amount,
@@ -246,6 +252,79 @@ mod tests {
         let first = merge(1, &[[10; 32]], [20; 32]);
         assert_eq!(ledger.apply(first.clone(), known).spent, [[10; 32]]);
         assert_eq!(ledger.apply(first, known), MergeTransition::default());
+    }
+
+    #[test]
+    fn equal_deposited_and_keyed_owners_resolve_in_both_orders_and_through_descendants() {
+        let keyed = note(5);
+        let deposited = MergeInput {
+            owner: UtxoOwner::Deposited {
+                owner_hash: keyed.owner.hash(&keyed.owner_key).unwrap(),
+            },
+            ..keyed
+        };
+        for inputs in [[[10; 32], [11; 32]], [[11; 32], [10; 32]]] {
+            let mut ledger = MergeLedger::default();
+            ledger.apply(merge(2, &[[20; 32], [12; 32]], [30; 32]), |_| None);
+            ledger.apply(merge(1, &inputs, [20; 32]), |_| None);
+            let resolved = ledger.resolve(|commitment| match commitment[0] {
+                10 => Some(deposited),
+                11 => Some(keyed),
+                12 => Some(note(7)),
+                _ => None,
+            });
+            assert_eq!(resolved.len(), 2);
+            let parent = ledger.output(&[20; 32]).unwrap();
+            assert_eq!(parent.owner, keyed.owner);
+            assert_eq!(parent.amount, 10);
+            let descendant = ledger.output(&[30; 32]).unwrap();
+            assert_eq!(descendant.owner, keyed.owner);
+            assert_eq!(descendant.amount, 17);
+            assert_eq!(ledger.unresolved().count(), 0);
+        }
+    }
+
+    #[test]
+    fn deposited_and_keyed_owners_with_different_hashes_never_resolve() {
+        let keyed = note(5);
+        let deposited = MergeInput {
+            owner: UtxoOwner::Deposited {
+                owner_hash: UtxoOwner::Keyed {
+                    nullifier_pk: [3; 32],
+                }
+                .hash(&keyed.owner_key)
+                .unwrap(),
+            },
+            ..keyed
+        };
+        let mut ledger = MergeLedger::default();
+        let transition = ledger.apply(merge(1, &[[10; 32], [11; 32]], [20; 32]), |commitment| {
+            Some(if commitment[0] == 10 {
+                deposited
+            } else {
+                keyed
+            })
+        });
+        assert!(transition.resolved.is_empty());
+        assert_eq!(ledger.unresolved().count(), 1);
+    }
+
+    #[test]
+    fn a_noncanonical_nullifier_key_stays_unresolved_until_a_valid_opening() {
+        let invalid = MergeInput {
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: spr_hasher::primitives::BN254_SCALAR_MODULUS_BE,
+            },
+            ..note(5)
+        };
+        let mut ledger = MergeLedger::default();
+        let transition = ledger.apply(merge(1, &[[10; 32]], [20; 32]), |_| Some(invalid));
+        assert!(transition.resolved.is_empty());
+        assert!(ledger.outputs().next().is_none());
+        assert_eq!(ledger.unresolved().count(), 1);
+        let resolved = ledger.resolve(|_| Some(note(5)));
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(ledger.unresolved().count(), 0);
     }
 
     #[test]

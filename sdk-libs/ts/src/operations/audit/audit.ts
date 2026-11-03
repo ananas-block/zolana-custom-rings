@@ -526,10 +526,7 @@ export function openedUtxo(utxo: AuditedUtxo, treeId: number): KnownUtxo {
 /** Rust `KnownUtxo::commitment`, `ringId` zero for a default-ring UTXO. */
 export function knownUtxoHash(utxo: KnownUtxo, ringId: Bytes32): Bytes32 {
   return fieldUtxoHash({
-    owner:
-      utxo.owner.kind === "keyed"
-        ? (ownerHash(solanaOwnerIdentity(utxo.ownerKey), utxo.owner.nullifierPk) as Bytes32)
-        : utxo.owner.ownerHash,
+    owner: knownUtxoOwnerHash(utxo),
     assetField: utxo.asset,
     amount: utxo.amount,
     blinding: utxo.blinding,
@@ -538,6 +535,12 @@ export function knownUtxoHash(utxo: KnownUtxo, ringId: Bytes32): Bytes32 {
     ringDataHash: utxo.ringDataHash,
     ringId,
   });
+}
+
+export function knownUtxoOwnerHash(utxo: Pick<KnownUtxo, "ownerKey" | "owner">): Bytes32 {
+  return utxo.owner.kind === "keyed"
+    ? (ownerHash(solanaOwnerIdentity(utxo.ownerKey), utxo.owner.nullifierPk) as Bytes32)
+    : utxo.owner.ownerHash;
 }
 
 /** Rust `AuditedTransaction::has_unknown_assets`, a registry refresh may name the mint, a delivered slot opens only after it. */

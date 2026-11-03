@@ -4,7 +4,7 @@ import { getBase58Encoder, type Address } from "@solana/kit";
 import { U64_MAX, bytesKey, equalBytes, isZero } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Signature } from "@heliuslabs/zolana/interface";
 
-import type { KnownUtxo, UtxoOwner } from "../operations/audit/audit.js";
+import { knownUtxoOwnerHash, type KnownUtxo, type UtxoOwner } from "../operations/audit/audit.js";
 
 const base58Encoder = getBase58Encoder();
 
@@ -81,7 +81,7 @@ const EMPTY_TRANSITION: MergeTransition = Object.freeze({
   resolved: Object.freeze([]),
 });
 
-/** One per ring, a later opening moves it only forward. */
+/** Requires `await initializePoseidon()` before owner verification. */
 export class MergeLedger {
   readonly #applied = new Set<string>();
   readonly #outputs = new Map<string, AuditedMergeOutput>();
@@ -91,25 +91,20 @@ export class MergeLedger {
   apply(merge: ConfirmedMerge, known: KnownMergeInput): MergeTransition {
     const id = mergeId(merge);
     if (this.#applied.has(id)) return EMPTY_TRANSITION;
-    this.#applied.add(id);
     const inputs = Object.freeze([...merge.inputs]);
-    this.#unresolved.set(id, Object.freeze({ ...merge, inputs }));
-    return Object.freeze({ spent: inputs, resolved: this.resolve(known) });
+    const pending = Object.freeze({ ...merge, inputs });
+    const resolved = this.#resolve([...this.unresolved(), pending], known);
+    this.#applied.add(id);
+    this.#unresolved.set(id, pending);
+    this.#commit(resolved);
+    return Object.freeze({ spent: inputs, resolved });
   }
 
   /** Runs after every new opening, a resolved output can complete its descendant. */
   resolve(known: KnownMergeInput): readonly AuditedMergeOutput[] {
-    const input: KnownMergeInput = (commitment) => known(commitment) ?? this.output(commitment);
-    const resolved: AuditedMergeOutput[] = [];
-    for (;;) {
-      const opened = this.unresolved().flatMap((merge) => resolvedOutput(merge, input) ?? []);
-      if (opened.length === 0) return Object.freeze(resolved);
-      for (const output of opened) {
-        this.#unresolved.delete(mergeId(output));
-        this.#outputs.set(bytesKey(output.commitment), output);
-        resolved.push(output);
-      }
-    }
+    const resolved = this.#resolve(this.unresolved(), known);
+    this.#commit(resolved);
+    return resolved;
   }
 
   output(commitment: Bytes32): AuditedMergeOutput | undefined {
@@ -123,6 +118,31 @@ export class MergeLedger {
   /** Oldest first, a descendant follows the merge it spends. */
   unresolved(): readonly ConfirmedMerge[] {
     return Object.freeze([...this.#unresolved.values()].sort(oldestFirst));
+  }
+
+  #resolve(
+    merges: readonly ConfirmedMerge[],
+    known: KnownMergeInput,
+  ): readonly AuditedMergeOutput[] {
+    const pending = new Map([...merges].sort(oldestFirst).map((merge) => [mergeId(merge), merge]));
+    const staged = new Map<string, AuditedMergeOutput>();
+    const input: KnownMergeInput = (commitment) =>
+      known(commitment) ?? staged.get(bytesKey(commitment)) ?? this.output(commitment);
+    for (;;) {
+      const opened = [...pending.values()].flatMap((merge) => resolvedOutput(merge, input) ?? []);
+      if (opened.length === 0) return Object.freeze([...staged.values()]);
+      for (const output of opened) {
+        pending.delete(mergeId(output));
+        staged.set(bytesKey(output.commitment), output);
+      }
+    }
+  }
+
+  #commit(outputs: readonly AuditedMergeOutput[]): void {
+    for (const output of outputs) {
+      this.#unresolved.delete(mergeId(output));
+      this.#outputs.set(bytesKey(output.commitment), output);
+    }
   }
 }
 
@@ -145,13 +165,15 @@ function resolvedOutput(
   }
   const first = inputs[0];
   if (first === undefined || amount > U64_MAX) return undefined;
+  const ownerHash = knownUtxoOwnerHash(first);
   const sameNoteKind = inputs.every(
     (input) =>
       equalBytes(input.ownerKey, first.ownerKey) &&
-      sameOwner(input.owner, first.owner) &&
+      equalBytes(knownUtxoOwnerHash(input), ownerHash) &&
       equalBytes(input.asset, first.asset),
   );
   if (!sameNoteKind) return undefined;
+  const owner = inputs.find((input) => input.owner.kind === "keyed")?.owner ?? first.owner;
   const mint = inputs.find((input) => input.mint !== undefined)?.mint;
   return Object.freeze({
     commitment: merge.outputCommitment,
@@ -161,18 +183,12 @@ function resolvedOutput(
     treeId: merge.treeId,
     leafIndex: merge.leafIndex,
     ownerKey: first.ownerKey,
-    owner: first.owner,
+    owner,
     asset: first.asset,
     ...(mint === undefined ? {} : { mint }),
     amount,
     inputs: merge.inputs,
   });
-}
-
-function sameOwner(left: UtxoOwner, right: UtxoOwner): boolean {
-  if (left.kind === "keyed")
-    return right.kind === "keyed" && equalBytes(left.nullifierPk, right.nullifierPk);
-  return right.kind === "deposited" && equalBytes(left.ownerHash, right.ownerHash);
 }
 
 /** Rust `(slot, signature, event_index)` order. */

@@ -107,7 +107,9 @@ adds a Ring with `withRing` when a key enrolls. `AnonymousSync.fullScan` reads a
 Ring from its start and uses no tag. `AnonymousWallet` holds the notes, spends,
 reply claims and scan positions in one document. Absorb a scan, then replace
 the stored `toJson` in one atomic write, so a position is never saved without
-what it covers. `@heliuslabs/zolana-custom-rings/scan-worker` is a `Worker`
+what it covers. Pass `[...wallet.notes(), ...wallet.pendingOpenings()]` to
+`withHeldNotes` before each scan to retain spends of pending notes.
+`@heliuslabs/zolana-custom-rings/scan-worker` is a `Worker`
 entry for the tag test. Pass it with `scanWorkerMatcher`.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:

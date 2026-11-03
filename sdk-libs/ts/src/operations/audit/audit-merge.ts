@@ -176,8 +176,7 @@ export function confirmedMerge(
     body.encrypted.length !== MERGE_OUTPUT_BODY_LENGTH ||
     !isCanonicalField(firstNullifier) ||
     !isCanonicalField(slot.outputContext.hash) ||
-    !isCanonicalField(ringDataHash) ||
-    !ciphertextChunks(body.encrypted).every(isCanonicalField)
+    !isCanonicalField(ringDataHash)
   )
     throw new RingError("RING_ORIGIN_DECODE", {
       details: { reason: "ring merge output" },
@@ -198,13 +197,6 @@ export function confirmedMerge(
     firstNullifier,
     inputs: realMergeInputs(list, transaction.nullifiers.length),
   });
-}
-
-/** The 32-byte ciphertext elements behind the 16-byte salt. */
-function ciphertextChunks(encrypted: Uint8Array): readonly Uint8Array[] {
-  return Array.from({ length: (encrypted.length - 16) / 32 }, (_, index) =>
-    encrypted.subarray(16 + 32 * index, 48 + 32 * index),
-  );
 }
 
 /** A verified merge opening when only the registered member hash is known. */
