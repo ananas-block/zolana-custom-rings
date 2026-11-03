@@ -31,6 +31,15 @@ use crate::{
 #[path = "../tests/operations/submission.rs"]
 mod tests;
 
+/// The header the transaction sends, the size check and the send read one budget.
+pub(crate) fn send_budget(tag: InstructionTag, priority_fee: Option<u64>) -> ComputeBudgetConfig {
+    let budget = ComputeBudgetConfig::new(compute_unit_limit(tag));
+    match priority_fee {
+        Some(lamports) => budget.with_priority_fee(lamports),
+        None => budget,
+    }
+}
+
 pub(crate) fn check_transaction_size(
     payer: &Address,
     instruction: &Instruction,
@@ -139,7 +148,7 @@ impl BoundRoot {
         Self::own(&*ring.require_policy(rpc).await?, rpc).await
     }
 
-    async fn newest_of(
+    pub(crate) async fn newest_of(
         registry: Address,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
@@ -245,6 +254,7 @@ enum Outcome {
 #[must_use]
 pub struct RingSubmission<'a> {
     operation: RingOperation<'a>,
+    priority_fee: Option<u64>,
     pending: Option<Attempt>,
     attempts: u8,
     terminal: Option<SubmissionStatus>,
@@ -254,10 +264,18 @@ impl<'a> RingSubmission<'a> {
     pub fn new(operation: impl Into<RingOperation<'a>>) -> Self {
         Self {
             operation: operation.into(),
+            priority_fee: None,
             pending: None,
             attempts: 0,
             terminal: None,
         }
+    }
+
+    /// Lamports the v1 header carries, refused before proving past the size ceiling.
+    pub fn with_priority_fee(mut self, lamports: u64) -> Self {
+        self.priority_fee = Some(lamports);
+        self.operation = self.operation.with_priority_fee(lamports);
+        self
     }
 
     pub fn pending_transaction(&self) -> Option<&VersionedTransaction> {
@@ -288,7 +306,11 @@ impl<'a> RingSubmission<'a> {
                     self.operation
                         .check_public_signers(client.zolana(), &public)
                         .await?;
-                    let proved = boxed(|| self.operation.prove(client, payer.pubkey())).await?;
+                    let proved = boxed(|| {
+                        self.operation
+                            .prove(client, payer.pubkey(), self.priority_fee)
+                    })
+                    .await?;
                     check_transaction_size(&payer.pubkey(), &proved.instruction, proved.budget)?;
                     let (blockhash, last_valid_block_height) =
                         client.get_latest_blockhash().await?;
@@ -404,14 +426,35 @@ impl RingOperation<'_> {
         }
     }
 
+    fn with_priority_fee(self, lamports: u64) -> Self {
+        match self {
+            Self::Transfer(transfer) => {
+                Self::Transfer(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Anonymous(transfer) => {
+                Self::Anonymous(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Delegate(transfer) => {
+                Self::Delegate(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Merge(operation) => Self::Merge(Box::new(RingMergeOperation {
+                prepared: operation.prepared.with_priority_fee(lamports),
+                input: operation.input,
+            })),
+            Self::Deposit(deposit) => Self::Deposit(Box::new(deposit.with_priority_fee(lamports))),
+            Self::Instruction(instruction) => Self::Instruction(instruction),
+        }
+    }
+
     async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
         payer: Address,
+        priority_fee: Option<u64>,
     ) -> Result<Proved, RingError> {
         let proved = |instruction, tag, bound| Proved {
             instruction,
-            budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
+            budget: send_budget(tag, priority_fee),
             bound,
         };
         Ok(match self {
@@ -440,17 +483,6 @@ impl RingOperation<'_> {
                 )
             }
             Self::Merge(operation) => {
-                let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge));
-                let config = operation
-                    .prepared
-                    .ring()
-                    .require_config(client.zolana())
-                    .await?;
-                check_transaction_size(
-                    &payer,
-                    &operation.preview_instruction(payer, &config)?,
-                    budget,
-                )?;
                 let proven = boxed(|| {
                     operation
                         .prepared

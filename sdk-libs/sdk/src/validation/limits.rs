@@ -1,73 +1,94 @@
-//! The outflow of one transfer per limit row, as the member policy key sums it.
+//! Each sender's debit per limit row, a shared vector pins `owner_debits` to the circuit.
 
-use solana_address::Address;
 use spr_interface::N_PUBLIC_SLOTS;
-use spr_transaction::instructions::transact::SppProofOutputUtxo;
-use zolana_ring_policy::{Member, OutflowLimit};
+use spr_transaction::{instructions::transact::SppProofOutputUtxo, utxo::SppProofInputUtxo};
+use zolana_ring_policy::{
+    owner_debits, DebitInput, DebitOutput, DebitTransfer, Member, OutflowLimit,
+};
 
 use crate::RingError;
 
-/// Mirrors the policy circuit outflow, the co-signer counts the same outputs.
-#[derive(Clone, Copy, Debug)]
-pub struct SenderOutflow {
-    pub sender: Member,
-    pub ring: Address,
-}
-
 pub(crate) struct Outflows<'a> {
-    pub rule: SenderOutflow,
+    /// The transfer's screened owners, one identity per sender subject.
+    pub senders: &'a [[u8; 32]],
+    pub inputs: &'a [SppProofInputUtxo],
     pub outputs: &'a [SppProofOutputUtxo],
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     /// Signed nets, a withdrawal negative.
     pub public_amounts: &'a [i128; N_PUBLIC_SLOTS],
 }
 
-impl SenderOutflow {
-    /// A dummy output never counts.
-    pub fn counts(&self, output: &SppProofOutputUtxo) -> Result<bool, RingError> {
-        let Some(owner) = output.owner_address.as_ref() else {
-            return Ok(false);
-        };
-        let change = output.ring_program_id == Some(self.ring)
-            && owner.signing_pubkey.owner_proof_input_hash()? == *self.sender.as_bytes();
-        Ok(!change)
-    }
-}
-
 impl Outflows<'_> {
-    /// Every UTXO output but the sender's change inside the ring, less the asset's public net.
-    fn outflow(&self, asset: &[u8; 32]) -> Result<i128, RingError> {
-        let mut others: i128 = 0;
-        for output in self.outputs {
-            if self.rule.counts(output)? && Member::asset(&output.asset.asset)?.as_bytes() == asset
-            {
-                others += i128::from(output.amount);
-            }
-        }
-        let net: i128 = self
+    fn debit_inputs(&self) -> Result<Vec<DebitInput>, RingError> {
+        self.inputs
+            .iter()
+            .filter(|input| !input.is_dummy())
+            .map(|input| {
+                Ok(DebitInput {
+                    owner: input.utxo.owner.owner_proof_input_hash()?,
+                    asset: *Member::asset(&input.utxo.asset.asset)?.as_bytes(),
+                    amount: input.utxo.amount,
+                })
+            })
+            .collect()
+    }
+
+    /// An exit reads no ring output, so it counts as leaving.
+    fn debit_outputs(&self) -> Result<Vec<DebitOutput>, RingError> {
+        self.outputs
+            .iter()
+            .filter_map(|output| output.owner_address.map(|owner| (output, owner)))
+            .map(|(output, owner)| {
+                Ok(DebitOutput {
+                    ring: output.ring_program_id.is_some(),
+                    owner: owner.signing_pubkey.owner_proof_input_hash()?,
+                    asset: *Member::asset(&output.asset.asset)?.as_bytes(),
+                    amount: output.amount,
+                })
+            })
+            .collect()
+    }
+
+    /// A deposit offsets one owner's net, a mixed spend of its asset cannot split the credit.
+    pub fn check_deposits(&self) -> Result<(), RingError> {
+        let inputs = self.debit_inputs()?;
+        let mixed = inputs
+            .first()
+            .is_some_and(|first| inputs.iter().any(|input| input.owner != first.owner));
+        let deposits_spent = self
             .public_assets
             .iter()
             .zip(self.public_amounts)
-            .filter(|(public, _)| *public == asset)
-            .map(|(_, amount)| *amount)
-            .sum();
-        if net > others {
-            return Err(RingError::DepositAboveOutflow { asset: *asset });
+            .filter(|(asset, net)| **net > 0 && **asset != [0; 32])
+            .any(|(asset, _)| inputs.iter().any(|input| input.asset == *asset));
+        match mixed && deposits_spent {
+            true => Err(RingError::MixedOwnerDeposit),
+            false => Ok(()),
         }
-        Ok(others - net)
     }
 
-    /// Refuses an outflow above a nonzero cap, `true` past a nonzero co-sign bound.
+    /// Refuses a debit above a nonzero cap, `true` past a nonzero co-sign bound.
     pub fn approval_required(&self, limits: &[OutflowLimit]) -> Result<bool, RingError> {
+        let inputs = self.debit_inputs()?;
+        let outputs = self.debit_outputs()?;
+        let assets: Vec<[u8; 32]> = limits.iter().map(|limit| *limit.asset()).collect();
+        let debits = owner_debits(&DebitTransfer {
+            senders: self.senders,
+            assets: &assets,
+            inputs: &inputs,
+            outputs: &outputs,
+        });
         let mut approval = false;
-        for limit in limits {
-            let outflow = self.outflow(limit.asset())?;
-            let over = |bound: u64| bound != 0 && outflow > i128::from(bound);
+        for debit in debits {
+            let Some(limit) = limits.iter().find(|limit| *limit.asset() == debit.asset) else {
+                continue;
+            };
+            let over = |bound: u64| bound != 0 && debit.debit > u128::from(bound);
             if over(limit.cap) {
                 return Err(RingError::OutflowCapExceeded {
-                    asset: *limit.asset(),
+                    asset: debit.asset,
                     cap: limit.cap,
-                    outflow: u64::try_from(outflow).map_err(|_| RingError::OutflowOverflow)?,
+                    outflow: u64::try_from(debit.debit).map_err(|_| RingError::OutflowOverflow)?,
                 });
             }
             approval |= over(limit.cosign_above);
