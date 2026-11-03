@@ -136,7 +136,6 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 	}
 }
 
-// Stream keeps the whole ciphertext, Envelope and Record cut what the frame transmits.
 type Stream struct {
 	Ranges     audit.StreamRanges
 	Ciphertext []byte

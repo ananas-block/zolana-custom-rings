@@ -1,9 +1,3 @@
-// Waives the withdrawal co-signer when every withdrawn token stays within the
-// threshold its record sets. The program sums the legs, the proof reads the
-// threshold the record authenticates.
-//
-// Read after policy/subjects.go, policy/rules.go. Read before policy/screen.go.
-
 package policy
 
 import (

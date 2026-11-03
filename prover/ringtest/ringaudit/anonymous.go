@@ -77,11 +77,24 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 		case kindExit:
 			a.Outputs = append(a.Outputs, a.NewAnonymousExit(t, i))
 		case kindDummy:
-			a.Outputs = append(a.Outputs, AnonymousOutput{Utxo: a.newDummy(t, i).Utxo, OwnerKey: ringtest.Repeat(0xd1 + byte(i))})
+			a.Outputs = append(a.Outputs, a.newAnonymousDummy(t, i))
 		}
 	}
 	a.Layout = Layout{FullOpenings: shape.FullOpenings}
 	return a
+}
+
+func (a AnonymousAudit) AllDummies(t testing.TB) AnonymousAudit {
+	t.Helper()
+	for i := range a.Outputs {
+		a.Outputs[i] = a.newAnonymousDummy(t, i)
+	}
+	return a
+}
+
+func (a AnonymousAudit) newAnonymousDummy(t testing.TB, i int) AnonymousOutput {
+	t.Helper()
+	return AnonymousOutput{Utxo: a.newDummy(t, i).Utxo, OwnerKey: ringtest.Repeat(0xd1 + byte(i))}
 }
 
 func (a AnonymousAudit) AtInputCount(count int) AnonymousAudit {

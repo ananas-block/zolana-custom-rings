@@ -60,8 +60,7 @@ type AnonymousTransferCircuit struct {
 	auditStatementWires
 	Outputs []audit.AnonymousOutputWires
 	// SenderKey is the hidden owner's Ed25519 key on an entry key, a commitment key carries none.
-	SenderKey []frontend.Variable
-	// InputCount is the published nullifier count, the evidence opens the slots below it.
+	SenderKey  []frontend.Variable
 	InputCount frontend.Variable
 	Inputs     []shared.UtxoWires
 	transactionBinding
@@ -104,32 +103,20 @@ func (c *AnonymousTransferCircuit) Define(api frontend.API) error {
 	}
 	rc := rangecheck.New(api)
 	w := c.auditWires(c.RingProgramID)
-	// 1. The transaction key opens and its seed fixes every output blinding.
 	envelope := w.OpenEnvelope(api, rc)
-	// 2. The layout names the one key, an anonymous ring escrows no key.
 	c.decodeLayout(api)
-	// 3. Every slot opens once, the sections below read the same wires.
 	opened := audit.OpenSlots(api, rc, w, envelope, c.Outputs)
-	// 4. Every spent UTXO is the sender's, below the published count.
 	spent := audit.Spend(api, rc, c.Shape.audit(), c.Inputs, c.InputCount, c.RingProgramID, c.SenderKey)
-	// 5. Every party differs from the sender.
 	shared.AssertAnonymousParties(api, spent.SenderPkHash, c.PartyIdentities)
-	// 6. SPP's private transaction hash reopens over the opened slots with no address input.
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, spent.InputHashes), opened.Slots)
-	// 7. A record opens every ring output and exit, a dummy's encrypts zeros.
 	records := opened.AnonymousRecords(api, c.Outputs)
-	// 8. The auditor stream seals tx_viewing_sk, the input evidence and every slot's record.
 	stream := w.SealStream(api, c.Shape.audit().Ranges(), spent.Evidence, records)
-	// 9. Each slot chains its record at the length its kind fixes.
 	ciphertextChain := opened.RecordChain(api, stream)
-	// 10. The policy screens the same slots under the sender the inputs prove, no recipient is published and no key escrowed.
 	c.screen(api, rc, policy.Rail{KeyEscrow: 0, Delegate: 0, Published: 0}, spent.SenderPkHash, opened.Slots)
-	// 11. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, stream, opened, ciphertextChain)))
 	return nil
 }
 
-// decodeLayout pins bit 0 and key escrow clear and full openings to the key.
 func (c *AnonymousTransferCircuit) decodeLayout(api frontend.API) {
 	fixed := 0
 	if c.Shape.FullOpenings {
@@ -139,9 +126,6 @@ func (c *AnonymousTransferCircuit) decodeLayout(api frontend.API) {
 }
 
 // statement is the anonymous transfer preimage, mirrored by TransferStatement::elements under TransferFamily::Anonymous in program-libs/interface/src/proof/statement.rs.
-//
-//	head ‖ exempt, approval_required, output_chain, output_ciphertext_chain, input_count, exits_bitmap, private_tx_hash,
-//	party0, party1, party2, policy_hash, own_root, curator_root, asset, net and gross per public slot, withdrawal_hash, length, version
 func (c *AnonymousTransferCircuit) statement(e audit.Envelope, w audit.AuditWires, stream audit.Stream, opened audit.Opened, outputCiphertextChain frontend.Variable) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, stream, shared.TransferStatementDomain), []frontend.Variable{
 		c.Exempt, c.ApprovalRequired, opened.OutputChain, outputCiphertextChain,

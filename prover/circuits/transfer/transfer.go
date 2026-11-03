@@ -36,12 +36,11 @@ type screenedPolicy struct {
 	policy.Policy
 }
 
-// screen runs the policy over the opened slots under the rail and holds approval_required to the outflow's verdict.
 func (p *screenedPolicy) screen(api frontend.API, rc frontend.Rangechecker, rail policy.Rail, sender frontend.Variable, slots []shared.Output) {
-	// 1. Exempt is a bit, it switches assertExemption and the own pool lookups the thresholds read.
+	// Exempt switches assertExemption and the own pool lookups the thresholds read.
 	api.AssertIsBoolean(p.Exempt)
 	rail.Exempt = p.Exempt
-	// 2. Screen returns zero while Outflow is off, so approval_required is set exactly when a limit row passes its co-sign bound.
+	// Screen returns zero while Outflow is off, approval_required then reads the outflow's verdict alone.
 	api.AssertIsEqual(p.ApprovalRequired, p.Screen(api, rc, rail, sender, slots))
 }
 

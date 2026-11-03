@@ -32,7 +32,8 @@ type Confidential struct {
 	Public           []PublicSlot
 	Withdrawals      []Withdrawal
 	// Exits are the audit's exit slots, by default the second to last slot of a key past two outputs.
-	Exits []int
+	Exits      []int
+	AllDummies bool
 }
 
 // Built is a confidential witness with the fixtures it was derived from.
@@ -62,6 +63,9 @@ func (w Confidential) Build(t testing.TB) Built {
 		exits = []int{w.Shape.Outputs - 2}
 	}
 	d := ringaudit.DeliveredAuditOf(t, w.Shape.Outputs, exits...)
+	if w.AllDummies {
+		d = d.AllDummies(t)
+	}
 	escrow := w.Escrow || w.Rail == Delegate
 	d.Layout.Escrow = escrow
 	d.InputClass, d.InputCount = w.Shape.Inputs, publishedInputs

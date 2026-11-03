@@ -44,6 +44,14 @@ func DeliveredAuditOf(t testing.TB, capacity int, exits ...int) DeliveredAudit {
 	return d
 }
 
+func (d DeliveredAudit) AllDummies(t testing.TB) DeliveredAudit {
+	t.Helper()
+	for i := range d.Outputs {
+		d.Outputs[i] = d.newDummy(t, i)
+	}
+	return d
+}
+
 // NewConfidentialOutput delivers slot i to fixture recipient i mod 3.
 func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutput {
 	t.Helper()

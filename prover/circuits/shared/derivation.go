@@ -59,21 +59,21 @@ const (
 
 // Key schedule labels, distinct per ciphertext kind.
 const (
-	// AuditEncInfo labels the auditor stream, mirrored by AUDIT_STREAM_LABEL in program-libs/interface/src/proof/domain.rs.
+	// AuditEncInfo mirrors AUDIT_STREAM_LABEL in program-libs/interface/src/proof/domain.rs.
 	AuditEncInfo = "CRING/adt1"
-	// BodyEncInfo labels a delivered body, mirrored by DELIVERED_BODY_LABEL.
+	// BodyEncInfo mirrors DELIVERED_BODY_LABEL.
 	BodyEncInfo = "CRING/bdy1"
-	// NfKeyEncInfo labels the register key ciphertext, mirrored by REGISTER_KEY_LABEL.
+	// NfKeyEncInfo mirrors REGISTER_KEY_LABEL.
 	NfKeyEncInfo = "CRING/nfk1"
-	// DepositEncInfo labels the deposit stream, mirrored by DEPOSIT_AUDIT_LABEL.
+	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
 	DepositEncInfo = "CRING/dep1"
 	MergeEncInfo   = "CRING/mrg1"
 )
 
 const (
-	// BodyLen is a delivered body, mirrored by DELIVERED_BODY_LEN.
+	// BodyLen mirrors DELIVERED_BODY_LEN.
 	BodyLen = 104
-	// EscrowBodyLen is a delivered body under key escrow, mirrored by ESCROWED_DELIVERED_BODY_LEN.
+	// EscrowBodyLen mirrors ESCROWED_DELIVERED_BODY_LEN.
 	EscrowBodyLen = 72
 )
 

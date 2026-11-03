@@ -171,6 +171,12 @@ var confidentialRefusals = []confidentialRefusal{
 		b.Circuit.Layout = b.Audit.Layout.Value()
 		b.Rebind(t)
 	}, in: "transfer.(*ConfidentialTransferCircuit).Define"},
+	{name: "every output a dummy under an unrelated envelope key", honest: fullWithdrawal, witness: func(t testing.TB, b ringtransfer.Built) {
+		b.Audit.Transfer = b.Audit.WithUnrelatedKey(t)
+		sk := b.Audit.Keys.TxViewingSk()
+		ringtest.SetBytes(b.Circuit.TxViewingSk[:], sk[:])
+		b.Rebind(t)
+	}, in: "audit.AuditWires.AssertBlinding"},
 	{name: "escrow of another key ciphertext", honest: func(testing.TB) ringtransfer.Confidential { return escrowed() }, witness: func(_ testing.TB, b ringtransfer.Built) { b.Circuit.CtHashes[0] = 7 }, in: "policy.(*PolicyInputs).assertEscrow"},
 }
 
@@ -244,6 +250,12 @@ var anonymousRefusals = []anonymousRefusal{
 		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
 		b.Rebind(t)
 	}, in: "audit.spentBySender"},
+	{name: "every output a dummy under an unrelated envelope key", honest: hiddenFullWithdrawal, witness: func(t testing.TB, b ringtransfer.BuiltAnonymous) {
+		b.Audit.Transfer = b.Audit.WithUnrelatedKey(t)
+		sk := b.Audit.Keys.TxViewingSk()
+		ringtest.SetBytes(b.Circuit.TxViewingSk[:], sk[:])
+		b.Rebind(t)
+	}, in: "audit.AuditWires.AssertBlinding"},
 	{name: "exempt gross above the threshold", honest: func(t testing.TB) ringtransfer.Anonymous { return hiddenExempt(t, 100) }, world: func(w *ringtransfer.Anonymous) {
 		w.Withdrawals[0].Amount, w.Public[0].Net, w.Public[0].Gross = 101, -101, 101
 	}, in: "policy.(*PolicyInputs).assertExemption"},
@@ -302,6 +314,15 @@ func exempt(t testing.TB, gross uint64) ringtransfer.Confidential {
 	return w
 }
 
+func fullWithdrawal(t testing.TB) ringtransfer.Confidential {
+	t.Helper()
+	w := ringtransfer.Signed(confidential2)
+	w.AllDummies = true
+	w.Withdrawals = []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: ringtransfer.Asset(t), Amount: 160}}
+	w.Public = []ringtransfer.PublicSlot{{Asset: ringtransfer.Asset(t), Net: -160, Gross: 160}}
+	return w
+}
+
 func unscreenedExempt(t testing.TB) ringtransfer.Confidential {
 	t.Helper()
 	w := exempt(t, 100)
@@ -332,6 +353,15 @@ func hiddenExempt(t testing.TB, gross uint64) ringtransfer.Anonymous {
 	w.Exempt = true
 	w.Withdrawals = []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: ringtransfer.Asset(t), Amount: gross}}
 	w.Public = []ringtransfer.PublicSlot{{Asset: ringtransfer.Asset(t), Net: -int64(gross), Gross: gross}}
+	return w
+}
+
+func hiddenFullWithdrawal(t testing.TB) ringtransfer.Anonymous {
+	t.Helper()
+	w := ringtransfer.Hidden(anonymous2)
+	w.AllDummies = true
+	w.Withdrawals = []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: ringtransfer.Asset(t), Amount: 160}}
+	w.Public = []ringtransfer.PublicSlot{{Asset: ringtransfer.Asset(t), Net: -160, Gross: 160}}
 	return w
 }
 

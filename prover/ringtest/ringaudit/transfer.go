@@ -46,6 +46,12 @@ func (tr Transfer) WithKeys(t testing.TB, keys Keys) Transfer {
 	return tr
 }
 
+// WithUnrelatedKey seals under a key whose seed differs from the one the slots were built over.
+func (tr Transfer) WithUnrelatedKey(t testing.TB) Transfer {
+	t.Helper()
+	return tr.WithKeys(t, tr.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44))))
+}
+
 // Blinding is the TXOB blinding SPP derives for slot i of the transfer.
 func (tr Transfer) Blinding(t testing.TB, i int) *big.Int {
 	t.Helper()

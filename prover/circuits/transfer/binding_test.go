@@ -58,7 +58,7 @@ func TestDummySlotEntersTheOutputChainOnly(t *testing.T) {
 	if dummy.Utxo.IsUtxo() {
 		t.Fatal("slot 1 is no dummy")
 	}
-	dummy.Utxo.Blinding = big.NewInt(0x0d0d)
+	dummy.Utxo.TreeID++
 	b.Circuit.Outputs[1] = dummy.Wires()
 	b.Rehash(t)
 	if ringtest.AsBigInt(b.Circuit.PrivateTxHash).Cmp(before) != 0 {

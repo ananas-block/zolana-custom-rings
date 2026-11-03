@@ -47,7 +47,7 @@ func (e Envelope) Seal(api frontend.API) Sealed {
 	})
 }
 
-// SealStream encrypts under AuditStreamKeySchedule at the label Info, its first block at counter 2.
+// SealStream starts at counter 2, the readers start there.
 func (e Envelope) SealStream(api frontend.API) Sealed {
 	return e.seal(api, func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable) {
 		return AuditStreamKeySchedule(api, secret, e.Info)
@@ -70,7 +70,7 @@ func (e Envelope) seal(api frontend.API, schedule keySchedule) Sealed {
 	return sealed
 }
 
-// AuditStreamKeySchedule draws the AES-256 key and CTR nonce from the low canonical bytes of Poseidon(label ‖ 0, secret) and Poseidon(label ‖ 1, secret), the label separates every ring line over one secret, mirrored by RingStream::new in sdk-libs/keys/src/stream_cipher.rs.
+// AuditStreamKeySchedule mirrors RingStream::new in sdk-libs/keys/src/stream_cipher.rs, the label separates every ring line over one secret.
 func AuditStreamKeySchedule(api frontend.API, secret frontend.Variable, label string) (key [32]frontend.Variable, nonce [12]frontend.Variable) {
 	rc := rangecheck.New(api)
 	tag := func(counter byte) *big.Int {

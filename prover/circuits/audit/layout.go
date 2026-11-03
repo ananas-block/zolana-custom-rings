@@ -1,5 +1,4 @@
-// Decodes the transfer statement's layout flags. The program cuts every ciphertext
-// from them and the exits bitmap, a flag off the key shifts every frame length.
+// The program cuts every ciphertext from the layout flags and the exits bitmap, a flag off the key shifts every frame length.
 //
 // Read after audit/audit.go, ringgadget/count.go. Read before
 // audit/delivered.go, audit/anonymous.go.

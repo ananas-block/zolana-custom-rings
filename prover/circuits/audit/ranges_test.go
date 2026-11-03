@@ -1,5 +1,3 @@
-// Pins every transfer key's auditor stream regions to the shared Rust vector.
-
 package audit_test
 
 import (
@@ -29,7 +27,6 @@ type rangesVector struct {
 	EnvelopeLens        []int  `json:"envelope_len_by_input_count"`
 }
 
-// keyRanges is the stream of the vector's key, and whether its rail reads evidence at the published count.
 func (v rangesVector) keyRanges(t *testing.T) (audit.StreamRanges, bool) {
 	t.Helper()
 	switch v.Rail {

@@ -79,7 +79,7 @@ func AuditStreamKeys(t testing.TB, secret *big.Int, label string) (key [32]byte,
 	return key, nonce
 }
 
-// EnvelopeDigest is Poseidon(len, HashChain4(pack_left31(ciphertext))), head element 9 of a transfer statement.
+// EnvelopeDigest mirrors ciphertext_digest, head element 9 of a transfer statement.
 func EnvelopeDigest(t testing.TB, ciphertext []byte) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, big.NewInt(int64(len(ciphertext))), spptest.MustHashChain4(t, PackDisclosure(ciphertext)))

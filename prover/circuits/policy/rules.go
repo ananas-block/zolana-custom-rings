@@ -1,8 +1,3 @@
-// Applies the ring's rules to the sender, each recipient and each token. A
-// sender no list admits is refused. A recipient or token no list admits passes
-// only within an amount limit, and a payment split across outputs counts as one
-// total.
-
 package policy
 
 import (

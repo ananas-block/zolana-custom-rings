@@ -1,5 +1,3 @@
-// Pins the anonymous section's refusals over slots, evidence, records and the published count.
-
 package audit_test
 
 import (
@@ -52,7 +50,6 @@ func TestAnonymousEntrySolvesBothLayouts(t *testing.T) {
 	c.RequireSolved(t, a.Circuit(t))
 }
 
-// Every published input count solves on a commitment key and on the entry key.
 func TestAnonymousAuditSolvesEveryInputCount(t *testing.T) {
 	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, entryShape} {
 		c := compileAnonymous(t, shape)
@@ -86,6 +83,10 @@ func TestAnonymousAuditRefusals(t *testing.T) {
 		{"escrow flag on an anonymous key", func(a *ringaudit.AnonymousAudit) { a.Layout.Escrow = true }},
 		{"ring output blinding of another slot", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Utxo.Blinding = a.Blinding(t, 0) }},
 		{"exit blinding off the CRBS seed", func(a *ringaudit.AnonymousAudit) { a.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) }},
+		{"dummy blinding off the CRBS seed", func(a *ringaudit.AnonymousAudit) {
+			*a = a.AllDummies(t)
+			a.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, shape)

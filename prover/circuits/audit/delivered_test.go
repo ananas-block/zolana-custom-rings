@@ -1,5 +1,3 @@
-// Pins the delivered section's refusals over bodies, exit records and the in-proof evidence.
-
 package audit_test
 
 import (
@@ -32,6 +30,11 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 		{"body encrypting another amount", func(d *ringaudit.DeliveredAudit) {
 			d.Outputs[0].Body = body(d, slot.Amount+1)
 		}},
+		{"ring output of no amount in an asset no mint names", func(d *ringaudit.DeliveredAudit) {
+			d.Outputs[0].Utxo.Amount = 0
+			d.Outputs[0].Utxo.Asset = big.NewInt(0xdead)
+			d.Outputs[0].Body = body(d, 0)
+		}},
 		{"ring output blinding of another slot", func(d *ringaudit.DeliveredAudit) {
 			d.Outputs[0].Utxo.Blinding = d.Blinding(t, 1)
 			d.Outputs[0].Body = body(d, slot.Amount)
@@ -52,6 +55,7 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 			d.Outputs[0].RecipientKey = ringaudit.Recipient(t, 1, 0, 100).RecipientKey
 		}},
 		{"exit blinding off the CRBS seed", func(d *ringaudit.DeliveredAudit) { d.Outputs[6].Utxo.Blinding = big.NewInt(0x5ec) }},
+		{"dummy blinding off the CRBS seed", func(d *ringaudit.DeliveredAudit) { d.Outputs[7].Utxo.Blinding = big.NewInt(0x5ec) }},
 		{"owner key not the slot owner", func(d *ringaudit.DeliveredAudit) { d.Outputs[0].OwnerKey[0] ^= 1 }},
 		{"recipient key given as its high-bit alias", func(d *ringaudit.DeliveredAudit) {
 			alias := slot
@@ -90,7 +94,6 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 	})
 }
 
-// Every flag value solves at the smallest and a larger capacity, with an exit and without one.
 func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 	for _, capacity := range []int{2, 8} {
 		c := compileDelivered(t, capacity)

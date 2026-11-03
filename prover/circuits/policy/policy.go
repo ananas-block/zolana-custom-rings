@@ -1,7 +1,3 @@
-// Holds the statement values the policy section reads from the program. Every
-// value a rule reads ties back to the statement, so the proof checks the
-// transfer the program settles.
-
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 package policy
 

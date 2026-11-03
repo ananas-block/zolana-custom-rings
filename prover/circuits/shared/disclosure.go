@@ -1,7 +1,3 @@
-// Packs ciphertext bytes for a statement digest and masks the merge fields. A
-// salt used twice under one key repeats the merge mask, so every merge needs a
-// fresh salt.
-//
 // Read after ringgadget/bytes.go, shared/derivation.go. Read before
 // shared/envelope.go, audit/audit.go, merge.go.
 

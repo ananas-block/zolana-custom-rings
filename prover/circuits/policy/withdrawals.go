@@ -1,6 +1,3 @@
-// Brings public withdrawals under the ring's rules. The proof checks the same
-// list of withdrawals the program pays, so no withdrawal escapes the rules.
-
 package policy
 
 import (

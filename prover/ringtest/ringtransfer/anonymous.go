@@ -21,6 +21,7 @@ type Anonymous struct {
 	ApprovalRequired bool
 	Public           []PublicSlot
 	Withdrawals      []Withdrawal
+	AllDummies       bool
 }
 
 // BuiltAnonymous is an anonymous witness with the fixtures it was derived from.
@@ -43,6 +44,9 @@ func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
 		t.Fatal(err)
 	}
 	a := ringaudit.NewAnonymousAudit(t, audit.AnonymousAuditShape{InputClass: w.Shape.InputClass, Outputs: w.Shape.Outputs, FullOpenings: w.Shape.FullOpenings})
+	if w.AllDummies {
+		a = a.AllDummies(t)
+	}
 	wires := a.Wires(a.Layout)
 	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
 	for i, output := range a.Outputs {
