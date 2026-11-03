@@ -59,6 +59,7 @@ export function transferProofRequest(
     }),
     exempt: policy.exempt,
     approvalRequired: policy.approvalRequired,
+    inputCount: input.publishedInputs,
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
     ...policyParams(policy, input.proving),
@@ -70,7 +71,7 @@ export function transferProofRequest(
       ...transfer,
       inProof: input.inProof,
       delegate,
-      outputs: deliveredSlots(input.published, tree),
+      outputs: deliveredSlots(input.published, tree, input.sealed.layout.keyEscrow),
       // The signer rail opens no input, every slot a dummy.
       inputs:
         input.inProof || delegate
@@ -88,7 +89,6 @@ export function transferProofRequest(
     ...(circuit.family === "transferAnonymousEntry"
       ? { senderKey: input.sender.signingPublicKey.confidentialViewTag() }
       : {}),
-    inputCount: input.publishedInputs,
     inputs: inputOpenings(proofInputs, inputClass),
     partyIdentities: input.partyIdentities,
   });

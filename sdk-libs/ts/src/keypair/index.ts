@@ -3,7 +3,6 @@ export {
   auditorViewTag,
   openTransactionViewingSecret,
   parseAuditorMessage,
-  sealTransactionViewingSecret,
 } from "../crypto/audit/audit.js";
 export type { AuditorEnvelope, AuditorMessage } from "../crypto/audit/audit.js";
 export {

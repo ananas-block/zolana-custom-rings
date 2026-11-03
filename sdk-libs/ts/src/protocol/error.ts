@@ -207,7 +207,6 @@ export const RingProgramError = Object.freeze({
   policyNotSet: 8217,
   invalidSppProofPoint: 8218,
   // 8219 retired.
-  zeroDisclosureField: 8220,
   policyAlreadySet: 8221,
   // 8222 and 8223 retired.
   dataFreeBodyLength: 8224,

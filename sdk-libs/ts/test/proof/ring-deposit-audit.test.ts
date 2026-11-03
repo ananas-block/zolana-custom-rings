@@ -137,8 +137,8 @@ describe("deposit disclosure", () => {
         "2cc6b9a5a2cb550702b5387ade744abee5e6eeb7c266415e59502e6f8acce56b",
       );
       expect(sealed.capsules.map((capsule) => hex(capsule.ciphertext))).toEqual([
-        "006d5d4d188464de0e852c806b11ef3850cd683b977fea9bd1b9278b6461669f631350fa47a91f10cceb37738a4fefe7f88ded2f36b08fa08cb0ebba0268414424ab3ee9887da5fa32d2074fbd7155bc72723a28dacb3fd92f045649bba3cdf6",
-        "588ca73e11d9094a68cc5e7c26aadac08f1bc0f41c3580bf9ddc70518b26a826aaeab0368c456598c7641706ce6de7dcdbafa8c64f3eba9526b5012da75c1a4c4fb93b88049bc84e8589460c06610c931447f57d2d4a9955f6ec638727886729",
+        "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c",
+        "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b",
       ]);
       const hash = ringDepositPublicInputHash({
         contextHash,
@@ -154,7 +154,7 @@ describe("deposit disclosure", () => {
         ],
         auditorPublicKey: auditor.publicKey(),
       });
-      expect(hex(hash)).toBe("29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078");
+      expect(hex(hash)).toBe("0da1732e6a3d2bb9db9e4fdb3a4d4979aa74be80e96a5f1916016e9b58167d04");
     } finally {
       generate.mockRestore();
       sealed.ephemeralSecret.fill(0);

@@ -1,4 +1,4 @@
-/** The audit section of a ring transfer, the auditor envelope, the masked disclosure and its opened slots, Rust `pipeline::audit`. */
+/** The audit section of a ring transfer, the auditor stream and its opened slots, Rust `pipeline::audit`. */
 import { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 import type { Bytes32, MessageData } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
@@ -10,62 +10,60 @@ import type {
   DeliveredSlotProofInputs,
   RingSlotOpening,
 } from "../rpc/prover/ring.js";
-import type { AuditLayout, DisclosureLayout } from "../protocol/codec/ring-disclosure-layout.js";
-import { auditorMessageData, sealTransactionViewingSecret } from "../crypto/audit/audit.js";
+import {
+  deliveredBodyLen,
+  type AuditLayout,
+  type AuditStreamLayout,
+} from "../protocol/codec/ring-disclosure-layout.js";
+import { auditorMessageData } from "../crypto/audit/audit.js";
 import {
   anonymousCommitments,
+  inputPrefixes,
   sealRingDisclosure,
   type AnonymousInputs,
   type AnonymousOutputOpening,
+  type DeliveredInputs,
   type DeliveredOutputOpening,
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
-import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
 
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
 
-/** The envelope and the masked disclosure every audit statement binds, Rust `SealedAudit`. */
+/** The auditor stream every transfer statement binds, Rust `SealedAudit`. */
 export interface SealedAudit {
   /** The statement's layout element. */
   readonly audit: AuditLayout;
-  readonly layout: DisclosureLayout;
+  readonly layout: AuditStreamLayout;
   readonly ephemeralPublicKey: X25519PublicKey;
-  readonly sealed: Bytes32;
-  /** The audit proof's witness, the caller wipes it once the proof returns. */
+  /** `tx_viewing_sk ‖ evidence` under the auditor stream. */
+  readonly envelope: Uint8Array;
+  /** The records of the slots that have one, in slot order. */
+  readonly records: readonly Uint8Array[];
+  /** The proof's input, the caller wipes it once the proof returns. */
   readonly ephemeralSecret: Bytes32;
-  /** The published fields. */
-  readonly fields: readonly Bytes32[];
-  readonly seedOut: Bytes32;
 }
 
-/** The values a disclosure opens beside the published slots, Rust `AuditSeal::seal`. */
+/** Rust `AuditSeal::seal`, a fresh ephemeral key per build since one key and nonce serves one plaintext. */
 export function sealAudit(
   input: Readonly<{
     rail: RingOutputRail;
     audit: AuditLayout;
-    layout: DisclosureLayout;
+    layout: AuditStreamLayout;
     published: readonly PublishedSlot[];
     proofInputs: SppProofInputs;
     sender: ShieldedAddress;
     auditor: X25519PublicKey;
   }>,
 ): SealedAudit {
-  const seedOut = input.proofInputs.outputBlindingSeed();
-  const disclosure = auditDisclosure(input, seedOut);
+  const disclosure = auditDisclosure(input);
   const txViewingSecret = input.rail.txViewingKey.secretBytes();
   try {
-    const fields = sealRingDisclosure({ txViewingSecret, salt: input.rail.salt }, disclosure);
-    // The ephemeral secret comes last, a refusal before it leaves no copy to wipe.
-    const envelope = sealTransactionViewingSecret(txViewingSecret, input.auditor);
-    return Object.freeze({
-      audit: input.audit,
-      layout: input.layout,
-      ephemeralPublicKey: envelope.ephemeralPublicKey,
-      sealed: envelope.sealed,
-      ephemeralSecret: envelope.ephemeralSecret,
-      fields,
-      seedOut,
+    const sealed = sealRingDisclosure({
+      txViewingSecret,
+      auditorPublicKey: input.auditor,
+      disclosure,
     });
+    return Object.freeze({ audit: input.audit, layout: input.layout, ...sealed });
   } finally {
     txViewingSecret.fill(0);
   }
@@ -73,14 +71,7 @@ export function sealAudit(
 
 /** The message the program expands under the auditor's view tag, Rust `SealedAudit::message`. */
 export function sealedAuditMessage(sealed: SealedAudit, auditor: X25519PublicKey): MessageData {
-  return auditorMessageData(
-    {
-      ephemeralPublicKey: sealed.ephemeralPublicKey,
-      sealed: sealed.sealed,
-      disclosure: sealed.fields,
-    },
-    auditor,
-  );
+  return auditorMessageData(sealed, auditor);
 }
 
 /** Go `AuditParams`, the secret copied last, a refusal before it leaves no copy to wipe. */
@@ -106,8 +97,9 @@ export function auditEnvelope(
 export function deliveredSlots(
   published: readonly PublishedSlot[],
   tree: number,
+  keyEscrow: boolean,
 ): readonly DeliveredSlotProofInputs[] {
-  return published.map((slot) => deliveredSlot(slot, tree));
+  return published.map((slot) => deliveredSlot(slot, tree, keyEscrow));
 }
 
 /** Rust `AuditSection::anonymous_outputs`. */
@@ -132,35 +124,40 @@ export function inputOpenings(
   ];
 }
 
-/** Rust `AuditSeal::disclosure`, the plaintext the CROD pad masks, `SeedOut` only beside an exit. */
+/** Rust `AuditSeal::evidence` and `output_record` per slot. */
 function auditDisclosure(
   input: Readonly<{
-    layout: DisclosureLayout;
+    layout: AuditStreamLayout;
     published: readonly PublishedSlot[];
     proofInputs: SppProofInputs;
     sender: ShieldedAddress;
   }>,
-  seedOut: Bytes32,
 ): RingDisclosure {
   const { layout, published } = input;
-  const disclosedSeed = layout.exits ? seedOut : undefined;
-  switch (layout.kind) {
-    case "delivered":
-      return {
-        kind: "delivered",
-        layout,
-        seedOut: disclosedSeed,
-        outputs: published.map((slot) => deliveredOpening(slot, layout.keyEscrow)),
-      };
-    case "anonymous":
-      return {
-        kind: "anonymous",
-        layout,
-        seedOut: disclosedSeed,
-        outputs: published.map(anonymousOpening),
-        inputs: anonymousInputs(layout.key.kind, input.proofInputs, input.sender),
-      };
-  }
+  if (layout.key.kind === "confidential")
+    return {
+      kind: "delivered",
+      layout,
+      inputs: deliveredInputs(layout.key.inputPrefixes, input.proofInputs),
+      outputs: published.map((slot) => deliveredOpening(slot, layout.keyEscrow)),
+    };
+  return {
+    kind: "anonymous",
+    layout,
+    outputs: published.map(anonymousOpening),
+    inputs: anonymousInputs(layout.key.kind, input.proofInputs, input.sender),
+  };
+}
+
+function deliveredInputs(named: boolean, proofInputs: SppProofInputs): DeliveredInputs {
+  if (!named) return { kind: "none" };
+  return { kind: "prefixes", prefixes: inputPrefixes(publishedInputHashes(proofInputs)) };
+}
+
+function publishedInputHashes(proofInputs: SppProofInputs): readonly (Bytes32 | undefined)[] {
+  return proofInputs.inputUtxos
+    .filter((input) => !input.isCompact())
+    .map((input) => (input.isDummy() ? undefined : input.hash()));
 }
 
 function anonymousInputs(
@@ -168,9 +165,8 @@ function anonymousInputs(
   proofInputs: SppProofInputs,
   sender: ShieldedAddress,
 ): AnonymousInputs {
+  if (key === "commitment") return anonymousCommitments(publishedInputHashes(proofInputs));
   const spent = proofInputs.inputUtxos.filter((input) => !input.isCompact());
-  if (key === "commitment")
-    return anonymousCommitments(spent.map((input) => (input.isDummy() ? undefined : input.hash())));
   return {
     kind: "openings",
     senderKey: sender.signingPublicKey.confidentialViewTag(),
@@ -186,14 +182,17 @@ function anonymousInputs(
   };
 }
 
+/** A dummy and a ring output publish a delivered body, only an exit has a record. */
 function deliveredOpening(slot: PublishedSlot, keyEscrow: boolean): DeliveredOutputOpening {
-  const { output } = slot;
+  const { output, wire } = slot;
   const owner = output.ownerAddress;
-  if (owner === undefined) return { kind: "dummy" };
-  const nullifierPk = keyEscrow ? undefined : owner.nullifierPublicKey;
-  return slot.wire.kind === "exit"
-    ? { kind: "exit", nullifierPk, asset: assetField(output.asset), amount: output.amount }
-    : { kind: "ring", nullifierPk, ownerKey: owner.signingPublicKey.confidentialViewTag() };
+  if (wire.kind !== "exit" || owner === undefined) return { kind: "body" };
+  return {
+    kind: "exit",
+    nullifierPk: keyEscrow ? undefined : owner.nullifierPublicKey,
+    asset: assetField(output.asset),
+    amount: output.amount,
+  };
 }
 
 function anonymousOpening(slot: PublishedSlot): AnonymousOutputOpening {
@@ -217,13 +216,17 @@ function anonymousOpening(slot: PublishedSlot): AnonymousOutputOpening {
 }
 
 /** A ring output opens its body for its recipient, padding binds its published key and body. */
-function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInputs {
+function deliveredSlot(
+  slot: PublishedSlot,
+  tree: number,
+  keyEscrow: boolean,
+): DeliveredSlotProofInputs {
   const { output, wire } = slot;
   const zero = zeroField();
   const [recipientKey, body] =
     wire.kind === "delivered"
       ? [wire.u, wire.body]
-      : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
+      : [zero, new Uint8Array(deliveredBodyLen(keyEscrow))];
   const ring = !output.isDummy() && wire.kind !== "exit";
   return Object.freeze({
     output: ringOutputOpening(output, tree),
@@ -233,7 +236,7 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   });
 }
 
-/** An exit's owner key is masked out of the disclosure, a dummy names none. */
+/** An exit's owner key stays where zolana publishes it, a dummy names none. */
 function anonymousSlot(slot: PublishedSlot, tree: number): AnonymousSlotProofInputs {
   return Object.freeze({
     output: ringOutputOpening(slot.output, tree),

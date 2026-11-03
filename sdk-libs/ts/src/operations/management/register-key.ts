@@ -8,15 +8,15 @@ import {
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import { addressBytes, equalBytes, rightAlign, indexerScalars } from "@heliuslabs/zolana/internal";
 import type { Bytes31, Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
-import {
-  symmetricApply,
-  NullifierKey,
-  X25519Keypair,
-  type X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+import { NullifierKey, X25519Keypair, type X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import type { MemberRecord, QuadPath } from "../../protocol/membership/member-registry.js";
-import { auditSharedSecret } from "../../crypto/audit/audit.js";
+import {
+  auditSharedSecret,
+  NF_KEY_ENC_INFO,
+  symmetricAuditApply,
+} from "../../crypto/audit/audit.js";
+import { STREAM_FIRST_COUNTER } from "../../protocol/codec/ring-disclosure-layout.js";
 
 import { checkedCustomRingProof, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
@@ -26,8 +26,7 @@ import { readOwnRecords, type RingRecordReadClient } from "../../rpc/registered-
 import type { EscrowEntry } from "./record-updates.js";
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
 
-/** Rust `NF_KEY_ENC_INFO`, separates the key stream from the audit stream. */
-export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk1");
+const KEY_STREAM = Object.freeze({ label: NF_KEY_ENC_INFO, counter: STREAM_FIRST_COUNTER });
 
 export type { SealedNullifierKey };
 
@@ -235,7 +234,7 @@ export function sealNullifierKeyWith(
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditorPublicKey);
     shared = auditSharedSecret(dh, ephemeralPublicKey, auditorPublicKey);
-    const ciphertext = symmetricApply(shared, NF_KEY_ENC_INFO, plaintext) as Bytes32;
+    const ciphertext = symmetricAuditApply(shared, KEY_STREAM, plaintext) as Bytes32;
     return Object.freeze({
       ephemeralSecret: ephemeral.secretBytes(),
       sealed: Object.freeze({ ephemeralPublicKey, ciphertext }),
@@ -257,7 +256,7 @@ export function openNullifierKey(sealed: SealedNullifierKey, auditor: X25519Keyp
   try {
     dh = auditor.ecdh(sealed.ephemeralPublicKey);
     shared = auditSharedSecret(dh, sealed.ephemeralPublicKey, auditor.publicKey());
-    plaintext = symmetricApply(shared, NF_KEY_ENC_INFO, sealed.ciphertext);
+    plaintext = symmetricAuditApply(shared, KEY_STREAM, sealed.ciphertext);
     if (plaintext[0] !== 0) throw new RingError("RING_KEY_ENVELOPE_INVALID");
     return NullifierKey.fromSecret(plaintext.subarray(1) as Bytes31);
   } finally {

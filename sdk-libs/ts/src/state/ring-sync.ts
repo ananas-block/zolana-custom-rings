@@ -22,7 +22,7 @@ import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
 import { openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { unseen } from "./batch.js";
-import type { RingDeliveredNote } from "../crypto/derivation/blinding.js";
+import { RING_DELIVERY_UNRESOLVED, type RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
   readonly utxos: readonly WalletUtxo[];
@@ -283,7 +283,8 @@ async function deliveredNote(
     },
     input.assets,
   );
-  return note === undefined ? PENDING : Object.freeze({ ...note, slot: site.slot });
+  if (note === undefined) return undefined;
+  return note === RING_DELIVERY_UNRESOLVED ? PENDING : Object.freeze({ ...note, slot: site.slot });
 }
 
 /** A body that fails to open is another key's or malformed, an abort still stops the sync. */

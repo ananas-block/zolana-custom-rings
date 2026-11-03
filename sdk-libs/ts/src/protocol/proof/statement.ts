@@ -6,6 +6,9 @@ import {
   rightAlign,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { poseidon } from "@heliuslabs/zolana/keypair";
+import { packDisclosure } from "../../crypto/audit/audit.js";
+import { u32Field } from "../../crypto/error.js";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
@@ -17,7 +20,7 @@ import {
 import { RingError } from "../error.js";
 import {
   RingTransactData,
-  outputBodyHash,
+  exitsBitmap,
   outputRecipientKeyFields,
   taggedX25519,
   type RingOutput,
@@ -33,7 +36,8 @@ export interface AuditHead {
   /** `0x04 ‖ u` as the ring config stores it. */
   readonly auditorPubkey: Bytes33;
   readonly ephU: Bytes32;
-  readonly sealed: Bytes32;
+  /** `tx_viewing_sk ‖ evidence` under the auditor stream. */
+  readonly envelope: Uint8Array;
   readonly salt: Bytes16;
   readonly layout: AuditLayout;
 }
@@ -72,8 +76,10 @@ export interface TransferStatement {
   readonly approvalRequired: boolean;
   /** Published output order. */
   readonly outputs: readonly RingOutput[];
-  /** Exactly the published disclosure fields. */
-  readonly disclosure: readonly Bytes32[];
+  /** One ring disclosure ciphertext per output, in output order. */
+  readonly outputCiphertexts: readonly Uint8Array[];
+  /** `n`, the frame's nullifier count. */
+  readonly inputCount: number;
   readonly privateTxHash: Bytes32;
   readonly roots: TransferRoots;
   /** SPP's public asset fields, zero past the used slots. */
@@ -109,8 +115,8 @@ export interface RegisterKeyStatement {
 }
 
 /**
- * `head ‖ [in_proof, delegate] ‖ exempt, approval_required, output_chain ‖ [body_chain,
- * recipient_key_chain] ‖ disclosure_chain, private_tx_hash ‖ sender | party0, party1, party2 ‖
+ * `head ‖ [in_proof, delegate] ‖ exempt, approval_required, output_chain ‖ output_ciphertext_chain ‖
+ * [recipient_key_chain] ‖ input_count, exits_bitmap, private_tx_hash ‖ sender | party0, party1, party2 ‖
  * policy_hash, own_root, curator_root ‖ [recipient per output] ‖ (asset, net, gross) x 3 ‖
  * withdrawal_hash, length, version`, the bracketed runs on the confidential family alone.
  */
@@ -131,10 +137,10 @@ export function transferStatementElements(statement: TransferStatement): readonl
     bit(statement.exempt),
     bit(statement.approvalRequired),
     chain(outputs.map((output) => output.hash)),
-    ...(confidential
-      ? [chain(outputs.map(outputBodyHash)), chain(outputs.flatMap(outputRecipientKeyFields))]
-      : []),
-    chain(statement.disclosure),
+    outputCiphertextChain(statement.outputCiphertexts),
+    ...(confidential ? [chain(outputs.flatMap(outputRecipientKeyFields))] : []),
+    u32Field(statement.inputCount, "input count"),
+    bigIntBytes(exitsBitmap(outputs)) as Bytes32,
     checkedBytes<Bytes32>(statement.privateTxHash, 32, "private tx hash"),
     ...(family.kind === "confidential"
       ? [checkedBytes<Bytes32>(family.sender, 32, "sender")]
@@ -189,9 +195,8 @@ export function ringTransferStatement(
 ): TransferStatement {
   if (binding.keyEscrow !== data.keyEscrow)
     throw new RingError("RING_TRANSACT_DATA_INVALID", { details: { reason: "FlagNotAllowed" } });
-  const layout = RingTransactData.disclosureLayout(data);
   const family: TransferFamily =
-    layout.kind === "anonymous"
+    data.rail === "anonymous"
       ? { kind: "anonymous", partyIdentities: binding.partyIdentities }
       : {
           kind: "confidential",
@@ -207,7 +212,7 @@ export function ringTransferStatement(
       txViewingU: data.txViewingU,
       auditorPubkey: binding.auditorPubkey,
       ephU: data.ephU,
-      sealed: data.sealed,
+      envelope: data.envelope,
       salt: data.salt,
       layout: RingTransactData.auditLayout(data),
     }),
@@ -215,7 +220,8 @@ export function ringTransferStatement(
     exempt: data.exempt,
     approvalRequired: data.approvalRequired,
     outputs: data.outputs,
-    disclosure: data.disclosure,
+    outputCiphertexts: RingTransactData.outputCiphertexts(data),
+    inputCount: data.nullifiers.length,
     privateTxHash: data.privateTxHash,
     roots: binding.roots,
     publicAssets: binding.publicAssets,
@@ -264,7 +270,7 @@ export function registerKeyStatementHash(statement: RegisterKeyStatement): Bytes
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
-/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout]`. */
+/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, digest(envelope_ct), salt, layout]`. */
 function auditHeadElements(head: AuditHead): readonly Bytes32[] {
   return [
     domainField(RingDomain.transferStatement),
@@ -273,10 +279,23 @@ function auditHeadElements(head: AuditHead): readonly Bytes32[] {
     ...packedKey(taggedX25519(head.txViewingU)),
     ...packedKey(checkedBytes<Bytes33>(head.auditorPubkey, 33, "auditor pubkey")),
     ...packedKey(taggedX25519(head.ephU)),
-    hashBytes(checkedBytes<Bytes32>(head.sealed, 32, "sealed")) as Bytes32,
+    ciphertextDigest(head.envelope),
     rightAlign(checkedBytes<Bytes16>(head.salt, 16, "salt")),
     rightAlign(Uint8Array.of(auditLayoutValue(head.layout))),
   ];
+}
+
+/** The length tag closes the trailing zero ambiguity of `HashChain4`. */
+export function ciphertextDigest(ciphertext: Uint8Array): Bytes32 {
+  return poseidon([
+    u32Field(ciphertext.length, "ciphertext length"),
+    chain(packDisclosure(ciphertext)),
+  ]) as Bytes32;
+}
+
+/** Every ciphertext has a fixed length under the layout, `hash_bytes` needs no tag. */
+export function outputCiphertextChain(ciphertexts: readonly Uint8Array[]): Bytes32 {
+  return chain(ciphertexts.map((ciphertext) => hashBytes(ciphertext) as Bytes32));
 }
 
 function packedKey(key: Bytes33): readonly Bytes32[] {

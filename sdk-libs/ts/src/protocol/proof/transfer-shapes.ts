@@ -16,10 +16,10 @@ const shape = (outputs: number, inputs: number, withdrawals: readonly number[]):
 
 /** The signer, in-proof and authority rails. */
 export const CONFIDENTIAL_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 40, [4, 32]),
+  shape(2, 32, [4, 32]),
   shape(4, 24, [4, 32]),
   shape(8, 16, [4, 32]),
-  shape(16, 8, [8]),
+  shape(16, 5, [8]),
 ]);
 /** The anonymous rail over ring notes. */
 export const ANONYMOUS_TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([

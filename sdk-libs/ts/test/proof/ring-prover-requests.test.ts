@@ -22,13 +22,7 @@ import { type PresentRecordOpening } from "../../src/rpc/prover/types.js";
 import { isZero, solanaOwnerIdentity } from "@heliuslabs/zolana/internal";
 import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import {
-  NullifierKey,
-  outputBlindingSeed,
-  poseidon,
-  X25519Keypair,
-  X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+import { NullifierKey, poseidon, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { privateTxHash } from "@heliuslabs/zolana/transaction";
 import type {
   MemberRecord,
@@ -43,13 +37,26 @@ import {
   ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
-import { auditSharedSecret, symmetricAuditApply } from "../../src/crypto/audit/audit.js";
-import type { AuditLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  AUDIT_ENC_INFO,
+  auditSharedSecret,
+  symmetricAuditApply,
+} from "../../src/crypto/audit/audit.js";
+import {
+  deliveredBodyLen,
+  recordRegion,
+  recordSlots,
+  STREAM_FIRST_COUNTER,
+  type AuditLayout,
+  type AuditStreamLayout,
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   anonymousCommitments,
-  sealRingDisclosure,
+  disclosurePlaintext,
+  inputPrefixes,
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
+  type RingDisclosure,
 } from "../../src/crypto/audit/ring-disclosure.js";
 import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
@@ -260,11 +267,10 @@ function recordPool(records: unknown, proof: unknown, subjects: unknown): Record
   };
 }
 
-/** `exits | key_escrow << 1 | full_openings << 3`. */
+/** `key_escrow << 1 | full_openings << 3`. */
 function layout(value: unknown): AuditLayout {
   const flags = count(value);
   return {
-    exits: (flags & 1) !== 0,
     keyEscrow: (flags & 2) !== 0,
     fullOpenings: (flags & 8) !== 0,
   };
@@ -281,13 +287,13 @@ function envelope(item: Json): AuditEnvelopeProofInputs {
   };
 }
 
-function delivered(value: unknown): DeliveredSlotProofInputs {
+function delivered(value: unknown, keyEscrow: boolean): DeliveredSlotProofInputs {
   const item = record(value);
   return {
     output: opening(item["output"]),
     recipientKey: bytes<Bytes32>(item["recipientKey"], 32),
     ownerKey: bytes<Bytes32>(item["ownerKey"], 32),
-    body: bytes(item["body"], 40),
+    body: bytes(item["body"], deliveredBodyLen(keyEscrow)),
   };
 }
 
@@ -372,6 +378,7 @@ function request(item: Json): RingProofRequest {
     ...envelope(item),
     exempt: flag(item["exempt"]),
     approvalRequired: flag(item["approvalRequired"]),
+    inputCount: Number(item["inputCount"]),
     privateTxHash: field(item["privateTxHash"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
     ...policy(item),
@@ -382,7 +389,9 @@ function request(item: Json): RingProofRequest {
       ...transfer(),
       inProof: flag(item["inProof"]),
       delegate: flag(item["delegate"]),
-      outputs: list(item["outputs"]).map(delivered),
+      outputs: list(item["outputs"]).map((output) =>
+        delivered(output, layout(item["layout"]).keyEscrow),
+      ),
       inputs: list(item["inputs"]).map(opening),
       inputChain: field(item["inputChain"]),
       sender: field(item["sender"]),
@@ -516,21 +525,64 @@ function agreement(secret: Uint8Array, peer: X25519PublicKey): Bytes32 {
   }
 }
 
-/** The envelope the circuit seals, rebuilt from the request's secrets. */
-function auditHead(envelope: AuditEnvelopeProofInputs & Readonly<{ ringId: Bytes32 }>): AuditHead {
+/** The auditor stream the circuit seals, rebuilt from the request's secrets. */
+function requestStream(
+  envelope: AuditEnvelopeProofInputs,
+  disclosure: RingDisclosure,
+): Readonly<{ envelope: Uint8Array; records: readonly Uint8Array[] }> {
   const auditor = X25519PublicKey.fromBytes(tagged(envelope.auditorPk));
   const eph = publicKeyOf(envelope.ephSk);
   const shared = auditSharedSecret(agreement(envelope.ephSk, auditor), eph, auditor);
+  const plaintext = disclosurePlaintext(disclosure);
+  const seal = (counter: number, data: Uint8Array) =>
+    symmetricAuditApply(shared, { label: AUDIT_ENC_INFO, counter }, data);
+  return {
+    envelope: seal(
+      STREAM_FIRST_COUNTER,
+      Uint8Array.of(...envelope.txViewingSk, ...plaintext.evidence),
+    ),
+    records: recordSlots(disclosure.layout).map((slot, index) =>
+      seal(recordRegion(disclosure.layout, slot).startCounter, plaintext.records[index]!),
+    ),
+  };
+}
+
+function auditHead(
+  envelope: AuditEnvelopeProofInputs & Readonly<{ ringId: Bytes32 }>,
+  stream: Readonly<{ envelope: Uint8Array }>,
+): AuditHead {
   return {
     firstNullifier: envelope.firstNullifier,
     ringId: envelope.ringId,
     txViewingU: publicKeyOf(envelope.txViewingSk).u(),
     auditorPubkey: tagged(envelope.auditorPk),
-    ephU: eph.u(),
-    sealed: symmetricAuditApply(shared, envelope.txViewingSk) as Bytes32,
+    ephU: publicKeyOf(envelope.ephSk).u(),
+    envelope: stream.envelope,
     salt: envelope.salt,
     layout: envelope.layout,
   };
+}
+
+/** Bit `i` set when slot `i` opens a UTXO outside the ring. */
+function exitsOf(outputs: readonly Readonly<{ output: RingSlotOpening }>[]): bigint {
+  return outputs.reduce(
+    (bits, { output }, slot) =>
+      isUtxo(output) && !isRingOutput(output) ? bits | (1n << BigInt(slot)) : bits,
+    0n,
+  );
+}
+
+/** One ring disclosure ciphertext per slot, `record` the stream's record of `slot`. */
+function slotCiphertexts(
+  layout: AuditStreamLayout,
+  records: readonly Uint8Array[],
+  bodyOf: (slot: number) => Uint8Array | undefined,
+): readonly Uint8Array[] {
+  const slots = recordSlots(layout);
+  return Array.from({ length: layout.outputs }, (_, slot) => {
+    const index = slots.indexOf(slot);
+    return index < 0 ? bodyOf(slot)! : records[index]!;
+  });
 }
 
 /** Go `UtxoHashCircuit`, a dummy's owner is zero. */
@@ -565,13 +617,6 @@ function blindingOf(envelope: AuditEnvelopeProofInputs, outputIndex: number): By
   });
 }
 
-function seedOutOf(envelope: AuditEnvelopeProofInputs): Bytes32 {
-  return outputBlindingSeed(
-    envelope.firstNullifier,
-    ringBlindingSeed(envelope.txViewingSk, envelope.salt),
-  );
-}
-
 function exitOutput(hash: Bytes32): RingOutput {
   return { kind: "exit", hash, ownerTag: ZERO, payload: new Uint8Array(0) };
 }
@@ -596,7 +641,7 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
   });
 
   it("encodes the full u64 withdrawal range exactly and rejects overflow", () => {
-    const base = request(golden("custom-ring-transfer-confidential-2-in40-w4"));
+    const base = request(golden("custom-ring-transfer-confidential-2-in32-w4"));
     if (base.kind !== "transferConfidential") throw new Error("confidential transfer fixture");
     const [leg, ...rest] = base.withdrawals;
     if (leg === undefined) throw new Error("fixture without a withdrawal slot");
@@ -648,7 +693,11 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
     ).toThrow(
       expect.objectContaining({
         code: "CLIENT_INVALID_LENGTH",
-        details: { field: "outputs[0].body", expected: 40, actual: 39 },
+        details: {
+          field: "outputs[0].body",
+          expected: first.body.length,
+          actual: first.body.length - 1,
+        },
       }),
     );
     const unknown = { ...base };
@@ -744,11 +793,19 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
     (circuitType) => {
       const typed = request(golden(circuitType));
       if (typed.kind !== "transferConfidential") throw new Error("confidential golden");
-      const key = { txViewingSecret: typed.txViewingSk, salt: typed.salt };
-      const { exits, keyEscrow } = typed.layout;
+      const { keyEscrow } = typed.layout;
+      const spentInputs = typed.inputs.slice(0, typed.inputCount);
+      const inputEvidence = typed.inProof || typed.delegate;
+      const layout: AuditStreamLayout = {
+        key: { kind: "confidential", class: typed.inputs.length, inputPrefixes: inputEvidence },
+        keyEscrow,
+        inputs: typed.inputCount,
+        outputs: typed.outputs.length,
+        exits: exitsOf(typed.outputs),
+      };
       const outputs = typed.outputs.map((slot, i): DeliveredOutputOpening => {
         const opened = slot.output;
-        if (!isUtxo(opened)) return { kind: "dummy" };
+        if (!isUtxo(opened)) return { kind: "body" };
         const nullifierPk = keyEscrow ? undefined : opened.nullifierPk;
         expect(hex(blindingOf(typed, i))).toBe(hex(opened.blinding));
         if (!isRingOutput(opened)) {
@@ -765,22 +822,31 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
             sealDeliveredBody(secret, {
               blinding: opened.blinding,
               amount: amountOf(opened.amount),
+              ownerKey: slot.ownerKey,
+              nullifierPk,
             }),
           ),
         ).toBe(hex(slot.body));
         expect(hex(opened.ringDataHash)).toBe(hex(ZERO));
-        return { kind: "ring", nullifierPk, ownerKey: slot.ownerKey };
+        return { kind: "body" };
       });
       checkPolicySection(typed, typed.senderPkHash);
-      const disclosure = sealRingDisclosure(key, {
+      const stream = requestStream(typed, {
         kind: "delivered",
-        layout: { outputs: typed.outputs.length, exits, keyEscrow },
-        seedOut: exits ? seedOutOf(typed) : undefined,
+        layout,
+        inputs: inputEvidence
+          ? {
+              kind: "prefixes",
+              prefixes: inputPrefixes(
+                spentInputs.map((slot) => (isUtxo(slot) ? openingHash(slot) : undefined)),
+              ),
+            }
+          : { kind: "none" },
         outputs,
       });
       const hash = transferStatementHash({
         ...statementTail(typed),
-        head: auditHead(typed),
+        head: auditHead(typed, stream),
         family: {
           kind: "confidential",
           inProof: typed.inProof,
@@ -798,7 +864,11 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
                 body: slot.body,
               },
         ),
-        disclosure,
+        outputCiphertexts: slotCiphertexts(
+          layout,
+          stream.records,
+          (slot) => typed.outputs[slot]?.body,
+        ),
       });
       expect(hex(hash)).toBe(hex(typed.publicInputHash));
     },
@@ -809,7 +879,6 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
     (circuitType) => {
       const typed = request(golden(circuitType));
       if (typed.kind !== "transferAnonymous") throw new Error("anonymous golden");
-      const key = { txViewingSecret: typed.txViewingSk, salt: typed.salt };
       const spent = typed.inputs.slice(0, typed.inputCount);
       const [first] = spent;
       if (first === undefined) throw new Error("anonymous golden without an input");
@@ -853,16 +922,17 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         ),
       ).toBe(hex(typed.privateTxHash));
       checkPolicySection(typed, senderPkHash);
-      const { exits, fullOpenings } = typed.layout;
-      const disclosure = sealRingDisclosure(key, {
+      const { fullOpenings } = typed.layout;
+      const layout: AuditStreamLayout = {
+        key: { kind: fullOpenings ? "entry" : "commitment", class: typed.inputs.length },
+        keyEscrow: false,
+        inputs: typed.inputCount,
+        outputs: typed.outputs.length,
+        exits: exitsOf(typed.outputs),
+      };
+      const stream = requestStream(typed, {
         kind: "anonymous",
-        layout: {
-          key: { kind: fullOpenings ? "entry" : "commitment", class: typed.inputs.length },
-          inputs: typed.inputCount,
-          outputs: typed.outputs.length,
-          exits,
-        },
-        seedOut: exits ? seedOutOf(typed) : undefined,
+        layout,
         outputs,
         inputs:
           typed.senderKey === undefined
@@ -882,7 +952,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
       });
       const hash = transferStatementHash({
         ...statementTail(typed),
-        head: auditHead(typed),
+        head: auditHead(typed, stream),
         family: { kind: "anonymous", partyIdentities: typed.partyIdentities },
         outputs: typed.outputs.map((slot) =>
           isUtxo(slot.output) && !isRingOutput(slot.output)
@@ -895,7 +965,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
                 body: Uint8Array.of(1),
               },
         ),
-        disclosure,
+        outputCiphertexts: stream.records,
       });
       expect(hex(hash)).toBe(hex(typed.publicInputHash));
     },
@@ -905,10 +975,14 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
 /** The statement values the request binds beside the head, the family and the slots. */
 function statementTail(
   typed: TransferProofInputs,
-): Omit<Parameters<typeof transferStatementHash>[0], "head" | "family" | "outputs" | "disclosure"> {
+): Omit<
+  Parameters<typeof transferStatementHash>[0],
+  "head" | "family" | "outputs" | "outputCiphertexts"
+> {
   return {
     exempt: typed.exempt,
     approvalRequired: typed.approvalRequired,
+    inputCount: typed.inputCount,
     privateTxHash: typed.privateTxHash,
     roots: {
       policyHash: typed.policyHash,

@@ -1,12 +1,17 @@
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
-import { disclosureFieldCount } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  deliveredBodyLen,
+  envelopeRegion,
+  recordLen,
+  recordSlots,
+} from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { RingInstructionTag } from "../../src/operations/management/admin.js";
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  ringDisclosureLayout,
+  ringStreamLayout,
   type RingOutput,
   type RingRail,
 } from "../../src/protocol/transaction/transact.js";
@@ -28,17 +33,18 @@ export function ringFrame(
   const shape = keyed.find((entry) => entry.inputs >= inputs && entry.outputs === outputs);
   if (shape === undefined) throw new Error("no shape serves the counts");
   const flags = {
-    exits: false,
     keyEscrow: rail === "delegate",
     fullOpenings: input.fullOpenings ?? false,
   };
-  const layout = ringDisclosureLayout({
+  const layout = ringStreamLayout({
     rail,
     nIn: shape.inputs,
     nOut: shape.outputs,
     inputs,
     outputs,
-    layout: flags,
+    keyEscrow: flags.keyEscrow,
+    fullOpenings: flags.fullOpenings,
+    exits: 0n,
   });
   const slot = (index: number): RingOutput =>
     rail === "anonymous"
@@ -52,7 +58,7 @@ export function ringFrame(
           kind: "delivered",
           hash: field(10 + index),
           u: field(40 + index),
-          body: new Uint8Array(40),
+          body: new Uint8Array(deliveredBodyLen(flags.keyEscrow)),
         };
   return {
     rail,
@@ -70,9 +76,9 @@ export function ringFrame(
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),
     ...(rail === "anonymous" ? { sender: { tag: field(1), body: new Uint8Array(150) } } : {}),
     ephU: field(2),
-    sealed: field(3),
-    disclosure: Array.from({ length: disclosureFieldCount(layout) }, (_, index) =>
-      field(index + 1),
+    envelope: new Uint8Array(envelopeRegion(layout).length).fill(3),
+    records: recordSlots(layout).map((slot) =>
+      new Uint8Array(recordLen(layout, slot)).fill(slot + 1),
     ),
     privateTxHash: field(4),
     ...(rail === "anonymous"

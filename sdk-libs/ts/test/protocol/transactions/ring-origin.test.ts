@@ -889,7 +889,7 @@ describe("RpcTransactionOrigin", () => {
     ).resolves.toMatchObject({
       kind: "transfer",
       transaction: indexed,
-      layout: RingTransactData.disclosureLayout(frame),
+      layout: RingTransactData.streamLayout(frame),
     });
   });
 
@@ -905,7 +905,7 @@ describe("RpcTransactionOrigin", () => {
       new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
     ).resolves.toMatchObject({
       kind: "transfer",
-      layout: RingTransactData.disclosureLayout(frame),
+      layout: RingTransactData.streamLayout(frame),
     });
   });
 

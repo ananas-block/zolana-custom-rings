@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import keyedShapes from "../../../../../test-vectors/proof/ring_keyed_shapes.json" with { type: "json" };
 import policyRules from "../../../../../test-vectors/policy/ring-policy-rules.json" with { type: "json" };
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
-import counts from "../../../../../test-vectors/audit/ring-disclosure-counts.json" with { type: "json" };
+import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
 import { solanaOwnerIdentity, encodeBase58, hashChain } from "@heliuslabs/zolana/internal";
@@ -16,12 +16,18 @@ import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zo
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   anonymousAuditKey,
-  anonymousKeyClass,
-  disclosureFieldCount,
-  deliveredFields,
-  anonymousFields,
-  type AnonymousAuditKey,
+  auditorMessageLen,
+  ciphertextLen,
+  envelopeRegion,
+  exitRecordLen,
+  firstRecordCounter,
+  maxEvidenceBlocks,
+  recordBlocks,
+  recordLen,
+  recordRegion,
+  type AuditKey,
   type AuditLayout,
+  type AuditStreamLayout,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   ANONYMOUS_TRANSFER_SHAPES,
@@ -61,6 +67,8 @@ import {
   applyRecordsStatementHash,
   registerKeyStatementElements,
   registerKeyStatementHash,
+  ciphertextDigest,
+  outputCiphertextChain,
   transferStatementElements,
   transferStatementHash,
   type TransferFamily,
@@ -371,7 +379,7 @@ describe("ring-statements.json", () => {
           kind: "delivered",
           hash,
           u: field(vector.u ?? ""),
-          body: bytes(vector.body ?? "", 40),
+          body: bytes(vector.body ?? ""),
         };
       // The anonymous statement binds no tag and no body.
       case "anonymous":
@@ -390,9 +398,8 @@ describe("ring-statements.json", () => {
         };
     }
   };
-  /** `exits | key_escrow << 1 | full_openings << 3`. */
+  /** `key_escrow << 1 | full_openings << 3`. */
   const layout = (value: number): AuditLayout => ({
-    exits: (value & 1) !== 0,
     keyEscrow: (value & 2) !== 0,
     fullOpenings: (value & 8) !== 0,
   });
@@ -417,6 +424,15 @@ describe("ring-statements.json", () => {
 
   it("rebuilds every transfer statement, its element count and its public input", () => {
     for (const vector of statements.transfer) {
+      const outputCiphertexts = vector.outputs.map((slot) =>
+        bytes(slot.kind === "delivered" ? (slot.body ?? "") : (slot.record ?? "")),
+      );
+      expect(hex(ciphertextDigest(bytes(vector.envelope))), vector.rail).toBe(
+        vector.envelope_digest,
+      );
+      expect(hex(outputCiphertextChain(outputCiphertexts)), vector.rail).toBe(
+        vector.output_ciphertext_chain,
+      );
       const statement = {
         head: {
           firstNullifier: field(vector.first_nullifier),
@@ -424,7 +440,7 @@ describe("ring-statements.json", () => {
           txViewingU: field(vector.tx_viewing_u),
           auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
           ephU: field(vector.eph_u),
-          sealed: field(vector.sealed),
+          envelope: bytes(vector.envelope),
           salt: bytes<Bytes16>(vector.salt, 16),
           layout: layout(vector.layout),
         },
@@ -432,7 +448,8 @@ describe("ring-statements.json", () => {
         exempt: vector.exempt,
         approvalRequired: vector.approval_required,
         outputs: vector.outputs.map(output),
-        disclosure: vector.disclosure.map(field),
+        outputCiphertexts,
+        inputCount: vector.input_count,
         privateTxHash: field(vector.private_tx_hash),
         roots: {
           policyHash: field(vector.policy_hash),
@@ -817,132 +834,92 @@ describe("disclosure packing", () => {
     expect(() => unpackDisclosure(padded, 40)).toThrow("KEYPAIR_DISCLOSURE_PADDING");
   });
 
-  it("counts the fields of every layout as the solved Go host disclosure the vector records", () => {
-    const layouts = [
-      ...counts.delivered.map((record) => ({
-        record,
-        layout: {
-          kind: "delivered",
-          outputs: record.outputs,
-          exits: record.exits,
-          keyEscrow: record.key_escrow,
-        } as const,
-      })),
-      ...counts.anonymous.map((record) => {
-        const key: AnonymousAuditKey = {
-          kind: record.key === "entry" ? "entry" : "commitment",
-          class: record.class,
-        };
-        expect(anonymousKeyClass(key)).toBe(record.class);
-        return {
-          record,
-          layout: {
-            kind: "anonymous",
-            key,
-            inputs: record.inputs,
-            outputs: record.outputs,
-            exits: record.exits,
-          } as const,
-        };
-      }),
-    ];
-    for (const { record, layout } of layouts)
-      expect(disclosureFieldCount(layout), JSON.stringify(record)).toBe(record.fields);
-  });
-
-  it("places every field the flags keep and skips every field they leave out", () => {
-    const pair = deliveredFields({ outputs: 2, exits: true, keyEscrow: false });
-    expect(pair).toEqual({
-      seedOut: 0,
-      nullifierPks: { start: 1, end: 3 },
-      slots: { start: 3, end: 6 },
-      slotBytes: 40,
-      fieldCount: 6,
-    });
-    const escrowed = deliveredFields({ outputs: 4, exits: false, keyEscrow: true });
-    expect(escrowed).toEqual({
-      seedOut: undefined,
-      nullifierPks: undefined,
-      slots: { start: 0, end: 5 },
-      slotBytes: 32,
-      fieldCount: 5,
-    });
-    const dense = deliveredFields({ outputs: 8, exits: false, keyEscrow: false });
-    expect([dense.seedOut, dense.nullifierPks, dense.slots, dense.slotBytes]).toEqual([
-      undefined,
-      { start: 0, end: 8 },
-      { start: 8, end: 17 },
-      32,
-    ]);
-    const entry = anonymousFields({
-      key: { kind: "entry", class: 8 },
-      inputs: 3,
-      outputs: 2,
-      exits: true,
-    });
-    expect([entry.seedOut, entry.nullifierPks, entry.slots, entry.slotBytes]).toEqual([
-      0,
-      { start: 2, end: 4 },
-      { start: 4, end: 10 },
-      176,
-    ]);
-    expect(entry.inputs).toEqual({
-      kind: "openings",
-      senderNullifierPk: 1,
-      amounts: { start: 10, end: 13 },
-      openings: { start: 13, end: 19 },
-    });
-    const commitment = anonymousFields({
-      key: { kind: "commitment", class: 4 },
-      inputs: 3,
-      outputs: 2,
-      exits: true,
-    });
-    expect([commitment.nullifierPks, commitment.slots, commitment.slotBytes]).toEqual([
-      { start: 1, end: 3 },
-      { start: 3, end: 8 },
-      144,
-    ]);
-    expect(commitment.inputs).toEqual({
-      kind: "commitments",
-      first: 8,
-      prefixPairs: { start: 9, end: 10 },
-    });
-  });
-
   it("refuses a layout no audit key serves", () => {
-    const decode = (layout: Parameters<typeof decodeDisclosure>[0]["layout"]) => () =>
-      decodeDisclosure(
-        { layout, exits: Array.from({ length: layout.outputs }, () => false) },
-        Array.from({ length: disclosureFieldCount(layout) }, () => new Uint8Array(32) as Bytes32),
-      );
-    const commitment = (inputClass: number, inputs: number, outputs: number) =>
-      decode({
-        kind: "anonymous",
-        key: { kind: "commitment", class: inputClass },
-        inputs,
-        outputs,
-        exits: false,
+    const decode = (layout: AuditStreamLayout) => () =>
+      decodeDisclosure(layout, {
+        evidence: new Uint8Array(0),
+        records: [],
       });
-    expect(commitment(24, 2, 8)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(commitment(28, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(commitment(4, 5, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(commitment(1, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    const entry = (inputClass: number, inputs: number, outputs: number) =>
+    const anonymousLayout = (
+      kind: "commitment" | "entry",
+      inputClass: number,
+      inputs: number,
+      outputs: number,
+    ) => decode({ key: { kind, class: inputClass }, keyEscrow: false, inputs, outputs, exits: 0n });
+    expect(anonymousLayout("commitment", 24, 2, 8)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("commitment", 28, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("commitment", 4, 5, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("commitment", 1, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("entry", 8, 9, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("entry", 8, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(anonymousLayout("entry", 2, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(
       decode({
-        kind: "anonymous",
-        key: { kind: "entry", class: inputClass },
-        inputs,
-        outputs,
-        exits: false,
-      });
-    expect(entry(8, 9, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(entry(8, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(entry(2, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(decode({ kind: "delivered", outputs: 3, exits: false, keyEscrow: false })).toThrow(
-      "KEYPAIR_DISCLOSURE_SHAPE",
-    );
+        key: { kind: "confidential", class: 32, inputPrefixes: false },
+        keyEscrow: false,
+        inputs: 1,
+        outputs: 3,
+        exits: 0n,
+      }),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
   });
+});
+
+describe("ring-disclosure-ranges.json", () => {
+  type KeyRanges = (typeof ranges.keys)[number];
+
+  const keyOf = (vector: KeyRanges): AuditKey => {
+    switch (vector.rail) {
+      case "entry":
+        return { kind: "entry", class: vector.class };
+      case "commitment":
+        return { kind: "commitment", class: vector.class };
+      default:
+        return {
+          kind: "confidential",
+          class: vector.class,
+          inputPrefixes: vector.rail === "in_proof_or_authority",
+        };
+    }
+  };
+
+  it.each(ranges.keys)(
+    "fixes every range of the $rail key of $outputs outputs and class $class, key escrow $key_escrow",
+    (vector) => {
+      const key = keyOf(vector);
+      expect(maxEvidenceBlocks(key)).toBe(vector.max_evidence_blocks);
+      expect(recordBlocks(key)).toBe(vector.record_blocks);
+      expect(firstRecordCounter(key)).toBe(vector.first_record_counter);
+      expect(exitRecordLen(vector.key_escrow)).toBe(vector.exit_record_len);
+      const layoutAt = (inputs: number, exits: bigint): AuditStreamLayout => ({
+        key,
+        keyEscrow: vector.key_escrow,
+        inputs,
+        outputs: vector.outputs,
+        exits,
+      });
+      const everyExit = (1n << BigInt(vector.outputs)) - 1n;
+      const free = layoutAt(1, 0n);
+      expect(ciphertextLen(free, 0)).toBe(vector.ring_slot_ciphertext_len);
+      expect(recordLen(free, 0)).toBe(vector.ring_slot_record_len);
+      expect(
+        Array.from({ length: vector.outputs }, (_, slot) => recordRegion(free, slot).startCounter),
+      ).toEqual(vector.record_start_counters);
+      expect(envelopeRegion(free).maxBlocks + vector.outputs * recordBlocks(key)).toBe(
+        vector.capacity_blocks,
+      );
+      vector.envelope_len_by_input_count.forEach((length, index) => {
+        const inputs = index + 1;
+        expect(envelopeRegion(layoutAt(inputs, 0n)).length).toBe(length);
+        expect(auditorMessageLen(layoutAt(inputs, 0n))).toBe(
+          vector.message_len_no_exit_by_input_count[index],
+        );
+        expect(auditorMessageLen(layoutAt(inputs, everyExit))).toBe(
+          vector.message_len_every_exit_by_input_count[index],
+        );
+      });
+    },
+  );
 });
 
 describe("ring-policy-rules.json", () => {

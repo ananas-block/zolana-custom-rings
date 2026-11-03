@@ -1,4 +1,4 @@
-import { X25519PublicKey, X25519Keypair, symmetricApply } from "@heliuslabs/zolana/keypair";
+import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
   hashBytes,
   addressBytes,
@@ -26,13 +26,15 @@ import {
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
   type RingDepositCapsule,
 } from "../protocol/codec/deposit-capsule.js";
-import { auditSharedSecret } from "../crypto/audit/audit.js";
+import { auditSharedSecret, DEPOSIT_ENC_INFO, symmetricAuditApply } from "../crypto/audit/audit.js";
+import { STREAM_FIRST_COUNTER } from "../protocol/codec/ring-disclosure-layout.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 
-const INFO = new TextEncoder().encode("CRING/dep1");
 const OPENING_LENGTH = RING_DEPOSIT_OPENING_LENGTH;
+/** One opening's blocks of the batch's contiguous stream. */
+const OPENING_BLOCKS = 6;
 const OWNER_KEY_OFFSET = RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET;
 const PAYLOAD_LENGTH = OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
 const ZERO = new Uint8Array(32) as Bytes32;
@@ -75,7 +77,11 @@ export function sealRingDepositOpenings(
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditor);
     shared = auditSharedSecret(dh, ephemeralPublicKey, auditor);
-    ciphertext = symmetricApply(shared, INFO, plaintext);
+    ciphertext = symmetricAuditApply(
+      shared,
+      { label: DEPOSIT_ENC_INFO, counter: STREAM_FIRST_COUNTER },
+      plaintext,
+    );
     const encrypted = ciphertext;
     const capsules = openings.map((opening, index): RingDepositCapsule =>
       Object.freeze({
@@ -129,8 +135,6 @@ export function openRingDepositOpening(
   if (snapshot === undefined) throw new RingError("RING_AUDIT_MESSAGE");
   capsule = snapshot;
   confirmed.authenticate(capsule, ownerCommitment);
-  const ciphertext = new Uint8Array(PAYLOAD_LENGTH);
-  ciphertext.set(capsule.ciphertext, capsule.slotIndex * OPENING_LENGTH);
   let dh: Bytes32 | undefined;
   let shared: Bytes32 | undefined;
   let plaintext: Uint8Array | undefined;
@@ -138,11 +142,17 @@ export function openRingDepositOpening(
     const ephemeral = X25519PublicKey.fromBytes(capsule.ephemeralPublicKey);
     dh = auditor.ecdh(ephemeral);
     shared = auditSharedSecret(dh, ephemeral, auditor.publicKey());
-    plaintext = symmetricApply(shared, INFO, ciphertext);
-    const start = capsule.slotIndex * OPENING_LENGTH;
-    const ownerHash = plaintext.slice(start, start + 32) as Bytes32;
-    const blinding = plaintext.slice(start + 32, start + OWNER_KEY_OFFSET) as Bytes32;
-    const ownerKey = plaintext.slice(start + OWNER_KEY_OFFSET, start + OPENING_LENGTH) as Bytes32;
+    plaintext = symmetricAuditApply(
+      shared,
+      {
+        label: DEPOSIT_ENC_INFO,
+        counter: STREAM_FIRST_COUNTER + capsule.slotIndex * OPENING_BLOCKS,
+      },
+      capsule.ciphertext,
+    );
+    const ownerHash = plaintext.slice(0, 32) as Bytes32;
+    const blinding = plaintext.slice(32, OWNER_KEY_OFFSET) as Bytes32;
+    const ownerKey = plaintext.slice(OWNER_KEY_OFFSET, OPENING_LENGTH) as Bytes32;
     try {
       if (
         !isCanonicalField(ownerHash) ||
@@ -158,7 +168,6 @@ export function openRingDepositOpening(
     }
     return Object.freeze({ ownerHash, blinding, ownerKey });
   } finally {
-    ciphertext.fill(0);
     dh?.fill(0);
     shared?.fill(0);
     plaintext?.fill(0);

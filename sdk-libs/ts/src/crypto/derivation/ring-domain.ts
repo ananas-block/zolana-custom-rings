@@ -5,7 +5,6 @@ import { type Bytes32, poseidon } from "@heliuslabs/zolana/keypair";
 export const RingDomain = Object.freeze({
   deliveredSlotSecret: 0x4352_4453, // "CRDS"
   blindingSeed: 0x4352_4253, // "CRBS"
-  disclosurePad: 0x4352_4f44, // "CROD"
   transferStatement: 0x4352_5458, // "CRTX"
   policyTable: 0x4352_5442, // "CRTB"
   queueWrite: 0x4352_5157, // "CRQW"
@@ -21,7 +20,7 @@ export const RingDomain = Object.freeze({
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 
 /** The nonzero last element of every transfer statement, a layout change raises it. */
-export const TRANSFER_STATEMENT_VERSION = 1n;
+export const TRANSFER_STATEMENT_VERSION = 2n;
 
 export function domainField(domain: RingDomain): Bytes32 {
   return rightAlign(u32be(domain));

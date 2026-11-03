@@ -130,8 +130,8 @@ export { MemberOpeningRead } from "../protocol/membership/member-opening.js";
 export type { EscrowedRecord } from "../protocol/membership/member-opening.js";
 export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-record.js";
 export type { RingRecordReadClient } from "../rpc/registered-record.js";
+export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
-  NF_KEY_ENC_INFO,
   KeyRegistration,
   NullifierKeyEscrow,
   fetchRingSealedKey,

@@ -7,6 +7,7 @@ import {
   ZERO_32,
   equalBytes,
   bytesKey,
+  isCanonicalField,
   fetchSplAssetRegistrations,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -33,13 +34,12 @@ import type {
 import {
   openDeliveredBody,
   readRingOutput,
-  RING_DELIVERED_BODY_LEN,
   RingScheme,
 } from "../../protocol/transaction/output.js";
 import {
   INPUT_PREFIX_BYTES,
-  disclosureFieldCount,
-  type DisclosureLayout,
+  deliveredBodyLen,
+  type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import {
   auditorViewTag,
@@ -143,7 +143,9 @@ export type InputOpening =
   | Readonly<{ kind: "dummy" }>
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
   /** More of the sender's ring notes carry the disclosed prefix than inputs name it. */
-  | Readonly<{ kind: "ambiguous"; candidates: readonly Bytes32[] }>;
+  | Readonly<{ kind: "ambiguous"; candidates: readonly Bytes32[] }>
+  /** The in-proof and authority rails name a note no opened output holds, the outputs still open. */
+  | Readonly<{ kind: "unseen"; prefix: InputPrefix }>;
 
 export interface AuditedInput {
   readonly nullifier: Bytes32;
@@ -161,7 +163,7 @@ export interface AuditedRingTransaction {
   readonly payloadErrors: readonly OutputPayloadError[];
   /** The hidden sender of an anonymous transfer. */
   readonly sender?: AuditedSender;
-  /** One per published nullifier of an anonymous transfer. */
+  /** One per published nullifier, empty on the signer rail whose evidence names no input. */
   readonly inputs: readonly AuditedInput[];
 }
 
@@ -189,12 +191,15 @@ export interface KnownUtxos {
   utxo(commitment: Bytes32): KnownUtxo | undefined;
   /** Every opened note of `ownerKey` whose hash carries `prefix`. */
   withPrefix(ownerKey: Bytes32, prefix: InputPrefix): readonly Bytes32[];
+  /** Every opened note whose hash carries `prefix`, the authority rail names no owner. */
+  withPrefixOfAnyone(prefix: InputPrefix): readonly Bytes32[];
 }
 
 /** Rust `KnownUtxoIndex`, the notes an auditor opened by commitment and by owner key and prefix. */
 export class KnownUtxoIndex implements KnownUtxos {
   readonly #utxos = new Map<string, KnownUtxo>();
   readonly #owned = new Map<string, Bytes32[]>();
+  readonly #prefixes = new Map<InputPrefix, Bytes32[]>();
 
   constructor(utxos: Iterable<Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>> = []) {
     for (const { commitment, utxo } of utxos) this.insert(commitment, utxo);
@@ -212,6 +217,7 @@ export class KnownUtxoIndex implements KnownUtxos {
     if (prefix !== undefined) {
       const owner = ownedKey(utxo.ownerKey, prefix);
       this.#owned.set(owner, [...(this.#owned.get(owner) ?? []), commitment]);
+      this.#prefixes.set(prefix, [...(this.#prefixes.get(prefix) ?? []), commitment]);
     }
     this.#utxos.set(key, utxo);
   }
@@ -222,6 +228,10 @@ export class KnownUtxoIndex implements KnownUtxos {
 
   withPrefix(ownerKey: Bytes32, prefix: InputPrefix): readonly Bytes32[] {
     return Object.freeze([...(this.#owned.get(ownedKey(ownerKey, prefix)) ?? [])]);
+  }
+
+  withPrefixOfAnyone(prefix: InputPrefix): readonly Bytes32[] {
+    return Object.freeze([...(this.#prefixes.get(prefix) ?? [])]);
   }
 }
 
@@ -300,7 +310,7 @@ export function auditRingTransaction(
     transaction: IndexedShieldedTransaction;
     assets: AssetRegistry;
     /** The layout the ring program verified the audit proof under, `ConfirmedRingTransaction` reads it. */
-    layout: DisclosureLayout;
+    layout: AuditStreamLayout;
     /** One per published nullifier, the tree the input was spent from. */
     inputTreeIds?: readonly (number | undefined)[];
     /** Opens a commitment-layout input, and among two candidates resolves an entry input's ring. */
@@ -334,12 +344,15 @@ export function auditRingTransaction(
       },
     });
   const { layout } = input;
-  const exits = transaction.outputSlots.map(isExit);
-  // The program bound the layout to these counts and exits, the message length checks its field count.
+  const exits = transaction.outputSlots.reduce(
+    (bits, slot, index) => (isExit(slot) ? bits | (1n << BigInt(index)) : bits),
+    0n,
+  );
+  // The program bound the layout to these counts and exits, the message length checks the rest.
   if (
     layout.outputs !== transaction.outputSlots.length ||
-    layout.exits !== exits.includes(true) ||
-    (layout.kind === "anonymous" && layout.inputs !== transaction.nullifiers.length)
+    layout.exits !== exits ||
+    layout.inputs !== transaction.nullifiers.length
   )
     throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "layout" } });
   const message = parsedMessage(auditorMessage(transaction, input.auditor.publicKey()), layout);
@@ -351,11 +364,7 @@ export function auditRingTransaction(
       throw new RingError("RING_AUDIT_KEY_MISMATCH", {
         details: { signature: transaction.txSignature },
       });
-    const disclosure = openDisclosure(txViewingSecret, salt, {
-      layout,
-      fields: message.disclosure,
-      exits,
-    });
+    const disclosure = openDisclosure(input.auditor, { layout, message });
     const transfer = new Transfer({
       ring,
       txKey,
@@ -372,23 +381,20 @@ export function auditRingTransaction(
       const slot = { index, output };
       audited.record(slot, transfer.open(slot, disclosure));
     });
-    const spent =
-      disclosure.kind === "anonymous"
-        ? transfer.inputs({
-            disclosure,
-            nullifiers: transaction.nullifiers,
-            ...(input.inputTreeIds === undefined ? {} : { trees: input.inputTreeIds }),
-            ...(input.knownUtxos === undefined ? {} : { known: input.knownUtxos }),
-          })
-        : undefined;
+    const spent = transfer.inputs({
+      evidence: disclosure.inputs,
+      nullifiers: transaction.nullifiers,
+      ...(input.inputTreeIds === undefined ? {} : { trees: input.inputTreeIds }),
+      ...(input.knownUtxos === undefined ? {} : { known: input.knownUtxos }),
+    });
     return Object.freeze({
       signature: transaction.txSignature,
       slot: transaction.slot,
       txViewingPublicKey,
       outputs: Object.freeze(audited.outputs),
       payloadErrors: Object.freeze(audited.payloadErrors),
-      ...(spent === undefined ? {} : { sender: spent.sender }),
-      inputs: Object.freeze(spent?.inputs ?? []),
+      ...(spent.sender === undefined ? {} : { sender: spent.sender }),
+      inputs: spent.inputs,
     });
   } finally {
     txViewingSecret.fill(0);
@@ -539,9 +545,9 @@ function encryptedBody(payload: Uint8Array, scheme: RingScheme): Uint8Array | un
   }
 }
 
-function parsedMessage(data: Uint8Array, layout: DisclosureLayout): AuditorMessage {
+function parsedMessage(data: Uint8Array, layout: AuditStreamLayout): AuditorMessage {
   try {
-    return parseAuditorMessage(data, disclosureFieldCount(layout));
+    return parseAuditorMessage(data, layout);
   } catch (cause) {
     throw new RingError("RING_AUDIT_MESSAGE", {
       details: { reason: "malformed", length: data.length },
@@ -551,12 +557,11 @@ function parsedMessage(data: Uint8Array, layout: DisclosureLayout): AuditorMessa
 }
 
 function openDisclosure(
-  txViewingSecret: Bytes32,
-  salt: Bytes16,
+  auditor: X25519Keypair,
   published: Parameters<typeof openRingDisclosure>[1],
 ): RingDisclosure {
   try {
-    return openRingDisclosure({ txViewingSecret, salt }, published);
+    return openRingDisclosure(auditor, published);
   } catch (cause) {
     if (!(cause instanceof KeypairError)) throw cause;
     throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "disclosure" }, cause });
@@ -572,14 +577,6 @@ type SlotOpening =
   | Readonly<{ ok: true; opening: OutputOpening }>
   | Readonly<{ ok: false; kind: OutputPayloadErrorKind }>;
 
-/** A ring output whose body opens under its recipient's CRDS slot secret. */
-interface Delivery {
-  readonly slot: Slot;
-  readonly ownerKey: Bytes32;
-  /** `undefined` under key escrow. */
-  readonly nullifierPk: Bytes32 | undefined;
-}
-
 /** An exit of a delivered rail, its owner key published as its owner tag. */
 interface DeliveredExit {
   readonly nullifierPk: Bytes32 | undefined;
@@ -588,7 +585,8 @@ interface DeliveredExit {
 }
 
 interface Spent {
-  readonly sender: AuditedSender;
+  /** Absent outside the anonymous rail. */
+  readonly sender?: AuditedSender;
   readonly inputs: readonly AuditedInput[];
 }
 
@@ -610,26 +608,41 @@ class Transfer {
   open(slot: Slot, disclosure: RingDisclosure): SlotOpening | undefined {
     switch (disclosure.kind) {
       case "delivered":
-        return this.delivered(slot, disclosureSlot(disclosure.outputs, slot));
+        return this.delivered(slot, disclosureSlot(disclosure.outputs, slot), disclosure.layout);
       case "anonymous":
         return this.anonymous(slot, disclosureSlot(disclosure.outputs, slot));
     }
   }
 
   /**
-   * Every input is the sender's with zero data, the commitment key's inputs are notes of the ring
-   * the auditor opened before, the entry key's open in full.
+   * The signer rail names no input, the in-proof and authority rails name each by its prefix, the
+   * commitment key's inputs are ring notes the auditor opened before, the entry key's open in full.
    */
   inputs(
     spent: Readonly<{
-      disclosure: Extract<RingDisclosure, { kind: "anonymous" }>;
+      evidence: RingDisclosure["inputs"];
       nullifiers: readonly Bytes32[];
       trees?: readonly (number | undefined)[];
       known?: KnownUtxos;
     }>,
   ): Spent {
-    const { disclosure, nullifiers } = spent;
-    const published = disclosure.inputs;
+    const { nullifiers } = spent;
+    const published = spent.evidence;
+    if (published.kind === "none") return Object.freeze({ inputs: Object.freeze([]) });
+    if (published.kind === "prefixes") {
+      const { known } = spent;
+      const ringId = ringIdField(this.keys.ring);
+      return Object.freeze({
+        inputs: spentInputs(
+          nullifiers,
+          assignPrefixedInputs(
+            published.prefixes,
+            (prefix) => (known === undefined ? [] : anyOwnerNotes({ known, ringId }, prefix)),
+            "anyOwner",
+          ),
+        ),
+      });
+    }
     if (published.kind === "commitments") {
       const { first } = published;
       // The circuit proves spent UTXO 0 real and every spent UTXO under one owner key.
@@ -682,19 +695,14 @@ class Transfer {
     });
   }
 
-  private delivered(slot: Slot, opening: DeliveredOutputOpening): SlotOpening | undefined {
-    switch (opening.kind) {
-      case "ring":
-        return this.deliver({
-          slot,
-          ownerKey: opening.ownerKey,
-          nullifierPk: opening.nullifierPk,
-        });
-      case "exit":
-        return this.exit(slot, opening);
-      case "dummy":
-        return this.verify(slot, DUMMY);
-    }
+  private delivered(
+    slot: Slot,
+    opening: DeliveredOutputOpening,
+    layout: AuditStreamLayout,
+  ): SlotOpening | undefined {
+    return opening.kind === "exit"
+      ? this.exit(slot, opening)
+      : this.deliver(slot, deliveredBodyLen(layout.keyEscrow));
   }
 
   private anonymous(slot: Slot, opening: AnonymousOutputOpening): SlotOpening | undefined {
@@ -723,22 +731,27 @@ class Transfer {
     }
   }
 
-  private deliver(delivery: Delivery): SlotOpening | undefined {
-    const { slot } = delivery;
+  /** A hidden dummy publishes random bytes under a random key, only its commitment names it. */
+  private deliver(slot: Slot, bodyLength: number): SlotOpening | undefined {
+    const dummy = this.verify(slot, DUMMY);
+    if (dummy.ok) return dummy;
     const recipientU = slot.output.viewTag;
-    const nullifierPk = this.nullifierPk(delivery.ownerKey, delivery.nullifierPk);
-    if (nullifierPk === undefined) return ESCROW_UNKNOWN;
     const body = encryptedBody(slot.output.payload, RingScheme.ringConfidentialDelivered);
-    if (body?.length !== RING_DELIVERED_BODY_LEN) return FRAME;
+    if (body?.length !== bodyLength) return FRAME;
     const secret = this.deliveredSecret(slot, recipientU);
     if (secret === undefined) return Object.freeze({ ok: false, kind: "recipientKey" });
     try {
-      const { amount } = openDeliveredBody(secret, body);
+      const opened = openDeliveredBody(secret, body);
+      const { ownerKey, amount } = opened;
       const blinding = this.blinding(slot);
+      if (!equalBytes(opened.blinding, blinding)) return COMMITMENT;
+      const nullifierPk = this.nullifierPk(ownerKey, opened.nullifierPk);
+      if (nullifierPk === undefined) return ESCROW_UNKNOWN;
+      if (!isCanonicalField(nullifierPk)) return COMMITMENT;
       // The body names no mint, the first registered asset that rebuilds the commitment is it.
       for (const [, mint] of this.keys.assets.entries()) {
         const utxo: AuditedUtxo = Object.freeze({
-          ownerKey: delivery.ownerKey,
+          ownerKey,
           nullifierPk,
           asset: hashBytes(addressBytes(mint, "mint")) as Bytes32,
           mint,
@@ -747,7 +760,7 @@ class Transfer {
           dataHash: ZERO_32,
           ringDataHash: ZERO_32,
         });
-        const opened = this.verify(
+        const verified = this.verify(
           slot,
           Object.freeze({
             kind: "ring",
@@ -755,7 +768,7 @@ class Transfer {
             ownerTag: Object.freeze({ kind: "recipient", u: recipientU }),
           }),
         );
-        if (opened.ok) return opened;
+        if (verified.ok) return verified;
       }
       return amount === 0n ? undefined : UNKNOWN_ASSET;
     } finally {
@@ -788,7 +801,7 @@ class Transfer {
           );
     return equalBytes(commitment, slot.output.outputContext.hash)
       ? Object.freeze({ ok: true, opening })
-      : Object.freeze({ ok: false, kind: "commitment" });
+      : COMMITMENT;
   }
 
   /** `undefined` when `recipientU` admits no agreement with the transaction key. */
@@ -873,10 +886,14 @@ function disclosureSlot<T>(outputs: readonly T[], slot: Slot): T {
 
 type PrefixNote = Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>;
 
+/** A commitment key's inputs are the sender's ring notes the auditor opened, an in-proof or authority input it never opened leaves the outputs readable. */
+export type PrefixScope = "sender" | "anyOwner";
+
 /** @internal Exact only for one note in one position, notes sharing a prefix fit any of its positions. */
 export function assignPrefixedInputs(
   prefixes: readonly (InputPrefix | undefined)[],
   notesOf: (prefix: InputPrefix) => readonly PrefixNote[],
+  scope: PrefixScope = "sender",
 ): InputOpening[] {
   const positions = new Map<InputPrefix, number[]>();
   prefixes.forEach((prefix, position) => {
@@ -885,10 +902,15 @@ export function assignPrefixedInputs(
   const openings = prefixes.map(() => DUMMY_INPUT);
   for (const [prefix, inputs] of positions) {
     const notes = notesOf(prefix);
-    if (notes.length < inputs.length)
-      throw new RingError("RING_AUDIT_UNSEEN_INPUT_PREFIX", {
-        details: { prefix: prefix.toString(16).padStart(2 * INPUT_PREFIX_BYTES, "0") },
-      });
+    if (notes.length < inputs.length) {
+      if (scope === "sender")
+        throw new RingError("RING_AUDIT_UNSEEN_INPUT_PREFIX", {
+          details: { prefix: prefix.toString(16).padStart(2 * INPUT_PREFIX_BYTES, "0") },
+        });
+      const unseen: InputOpening = Object.freeze({ kind: "unseen", prefix });
+      for (const position of inputs) openings[position] = unseen;
+      continue;
+    }
     const ambiguous: InputOpening | undefined =
       notes.length > 1
         ? Object.freeze({
@@ -910,15 +932,39 @@ function ringNotes(
   prefix: InputPrefix,
 ): readonly PrefixNote[] {
   const { known, sender, first, ringId } = source;
+  // The circuit binds every spent UTXO to the prefix and to the owner key of spent UTXO 0.
+  return notesWithPrefix(
+    known.withPrefix(sender, prefix),
+    { known, ringId, prefix },
+    (commitment, utxo) => !equalBytes(commitment, first) && equalBytes(utxo.ownerKey, sender),
+  );
+}
+
+function anyOwnerNotes(
+  source: Readonly<{ known: KnownUtxos; ringId: Bytes32 }>,
+  prefix: InputPrefix,
+): readonly PrefixNote[] {
+  return notesWithPrefix(
+    source.known.withPrefixOfAnyone(prefix),
+    { ...source, prefix },
+    () => true,
+  );
+}
+
+/** A named note whose hash carries the prefix and rebuilds under the ring, each counted once. */
+function notesWithPrefix(
+  candidates: readonly Bytes32[],
+  source: Readonly<{ known: KnownUtxos; ringId: Bytes32; prefix: InputPrefix }>,
+  inScope: (commitment: Bytes32, utxo: KnownUtxo) => boolean,
+): readonly PrefixNote[] {
+  const { known, ringId, prefix } = source;
   const seen = new Set<string>();
-  return known.withPrefix(sender, prefix).flatMap((commitment) => {
+  return candidates.flatMap((commitment) => {
     const utxo = known.utxo(commitment);
-    // The circuit binds every spent UTXO to the prefix and to the owner key of spent UTXO 0.
     if (
       utxo === undefined ||
-      equalBytes(commitment, first) ||
+      !inScope(commitment, utxo) ||
       inputPrefix(commitment) !== prefix ||
-      !equalBytes(utxo.ownerKey, sender) ||
       !equalBytes(knownUtxoHash(utxo, ringId), commitment) ||
       seen.has(bytesKey(commitment))
     )
@@ -961,6 +1007,7 @@ function ownedKey(ownerKey: Bytes32, prefix: InputPrefix): string {
 export const DUMMY_INPUT: InputOpening = Object.freeze({ kind: "dummy" });
 const DUMMY: OutputOpening = Object.freeze({ kind: "dummy" });
 const FRAME: SlotOpening = Object.freeze({ ok: false, kind: "frame" });
+const COMMITMENT: SlotOpening = Object.freeze({ ok: false, kind: "commitment" });
 const ESCROW_UNKNOWN: SlotOpening = Object.freeze({ ok: false, kind: "escrowUnknown" });
 const UNKNOWN_ASSET: SlotOpening = Object.freeze({ ok: false, kind: "unknownAsset" });
 
@@ -1002,13 +1049,24 @@ class ScanUtxos implements KnownUtxos {
   }
 
   withPrefix(ownerKey: Bytes32, prefix: InputPrefix): readonly Bytes32[] {
-    const earlier = this.#known?.withPrefix(ownerKey, prefix) ?? [];
-    const seen = new Set(earlier.map(bytesKey));
-    return Object.freeze([
-      ...earlier,
-      ...this.#opened
-        .withPrefix(ownerKey, prefix)
-        .filter((commitment) => !seen.has(bytesKey(commitment))),
-    ]);
+    return merged(
+      this.#known?.withPrefix(ownerKey, prefix) ?? [],
+      this.#opened.withPrefix(ownerKey, prefix),
+    );
   }
+
+  withPrefixOfAnyone(prefix: InputPrefix): readonly Bytes32[] {
+    return merged(
+      this.#known?.withPrefixOfAnyone(prefix) ?? [],
+      this.#opened.withPrefixOfAnyone(prefix),
+    );
+  }
+}
+
+function merged(earlier: readonly Bytes32[], opened: readonly Bytes32[]): readonly Bytes32[] {
+  const seen = new Set(earlier.map(bytesKey));
+  return Object.freeze([
+    ...earlier,
+    ...opened.filter((commitment) => !seen.has(bytesKey(commitment))),
+  ]);
 }

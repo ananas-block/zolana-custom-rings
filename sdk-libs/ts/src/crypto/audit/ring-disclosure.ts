@@ -1,3 +1,4 @@
+/** The evidence and record codecs of the auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import {
   BN254_SCALAR_ORDER,
   isCanonicalField,
@@ -6,42 +7,43 @@ import {
   checkedBytes,
   concatBytes,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
+import type { Bytes32, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import { RingKeyError } from "../error.js";
 import {
-  ANONYMOUS_SLOT_BYTES,
+  ANONYMOUS_RECORD_LEN,
   DELIVERED_AUDIT_CAPACITIES,
-  DELIVERED_SLOT_BYTES,
-  DISCLOSURE_INPUT_AMOUNT_BYTES,
-  DISCLOSURE_SENDER_KEY_BYTES,
-  INPUT_PREFIX_BITS,
+  ENTRY_INPUT_LEN,
+  ENVELOPE_KEY_LEN,
   INPUT_PREFIX_BYTES,
-  anonymousFields,
-  deliveredFields,
-  disclosureFieldCount,
-  type AnonymousInputFields,
-  type AnonymousLayout,
-  type DeliveredLayout,
-  type DisclosureLayout,
-  type FieldRange,
+  STREAM_FIRST_COUNTER,
   anonymousAuditKey,
-  anonymousKeyClass,
+  checkedStreamLayout,
+  confidentialAuditKey,
+  evidenceBytes,
+  isExitSlot,
+  recordLen,
+  recordRegion,
+  recordSlots,
+  type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 
-import { maskDisclosure, packDisclosure, unmaskDisclosure, unpackDisclosure } from "./audit.js";
-import { RingDomain } from "../derivation/ring-domain.js";
+import {
+  openAuditorRegions,
+  sealAuditorStream,
+  type AuditorEnvelope,
+  type AuditorMessage,
+} from "./audit.js";
 
 export type DummySlot = Readonly<{ kind: "dummy" }>;
 
-/** The recipient rebuilds the rest of a ring output from its body, an exit's owner is its owner tag. */
+/** The delivered body opens a ring output and a hidden dummy, an exit's owner is its owner tag. */
 export type DeliveredOutputOpening =
+  | Readonly<{ kind: "body" }>
   /** `nullifierPk` is `undefined` under key escrow. */
-  | Readonly<{ kind: "ring"; ownerKey: Bytes32; nullifierPk: Bytes32 | undefined }>
-  | Readonly<{ kind: "exit"; nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>
-  | DummySlot;
+  | Readonly<{ kind: "exit"; nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>;
 
-/** The disclosure opens every live slot's asset and amount, the published body is unproven. */
+/** The record opens every live slot's asset and amount, the published scheme 1 body is unproven. */
 export type AnonymousOutputOpening =
   | Readonly<{
       kind: "ring";
@@ -63,6 +65,13 @@ export interface AnonymousInputOpening {
 /** The first `INPUT_PREFIX_BYTES` of a canonical spent hash read big endian, never zero, Rust `InputPrefix`. */
 export type InputPrefix = bigint & { readonly __inputPrefix: true };
 
+/** What the delivered rails disclose of their spent UTXOs, `undefined` for a dummy. */
+export type DeliveredInputs =
+  /** The signer rail. */
+  | Readonly<{ kind: "none" }>
+  /** The in-proof and authority rails. */
+  | Readonly<{ kind: "prefixes"; prefixes: readonly (InputPrefix | undefined)[] }>;
+
 /** The spent UTXOs as the anonymous audit key discloses them, `undefined` for a dummy. */
 export type AnonymousInputs =
   /** Every spent UTXO a ring note, spent UTXO 0 named by its hash and every later one by its prefix. */
@@ -79,55 +88,54 @@ export type AnonymousInputs =
       inputs: readonly (AnonymousInputOpening | undefined)[];
     }>;
 
-/** The plaintext an audit proof publishes under the CROD pad, `seedOut` present exactly when an output exits. */
 export type RingDisclosure =
   | Readonly<{
       kind: "delivered";
-      layout: DeliveredLayout;
-      seedOut: Bytes32 | undefined;
+      layout: AuditStreamLayout;
+      inputs: DeliveredInputs;
       outputs: readonly DeliveredOutputOpening[];
     }>
   | Readonly<{
       kind: "anonymous";
-      layout: AnonymousLayout;
-      seedOut: Bytes32 | undefined;
-      outputs: readonly AnonymousOutputOpening[];
+      layout: AuditStreamLayout;
       inputs: AnonymousInputs;
+      outputs: readonly AnonymousOutputOpening[];
     }>;
 
-/** A ring slot and an exit share a byte width, the exit bitmap tells them apart. */
-export interface PublishedOutputs {
-  readonly layout: DisclosureLayout;
-  /** One per published slot. */
-  readonly exits: readonly boolean[];
+/** The plaintexts of one auditor stream behind `tx_viewing_sk`. */
+export interface DisclosurePlaintext {
+  readonly evidence: Uint8Array;
+  /** The records of the slots that have one, in slot order. */
+  readonly records: readonly Uint8Array[];
 }
 
-/** Both sides of the disclosure know `tx_sk` and the transfer's salt. */
-export interface DisclosureKey {
-  readonly txViewingSecret: Bytes32;
-  readonly salt: Bytes16;
-}
-
-/** Spent UTXO 0 must be real, Rust `AnonymousInputs::commitments`. */
+/** Spent UTXO 0 must be real, Rust `AuditEvidence::Commitment`. */
 export function anonymousCommitments(hashes: readonly (Bytes32 | undefined)[]): AnonymousInputs {
   const [first, ...rest] = hashes;
   if (first === undefined) throw shapeError("inputs");
   return Object.freeze({
     kind: "commitments",
     first: field(first, "inputHash"),
-    prefixes: Object.freeze(
-      rest.map((hash) => {
-        if (hash === undefined) return undefined;
-        const prefix = inputPrefix(hash);
-        if (prefix === undefined)
-          throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputHash" });
-        return prefix;
-      }),
-    ),
+    prefixes: inputPrefixes(rest),
   });
 }
 
-/** `undefined` for a hash at or above the modulus or below `2^128`, a zero half names no input. */
+/** A dummy names no input, any other hash below `2^128` is refused. */
+export function inputPrefixes(
+  hashes: readonly (Bytes32 | undefined)[],
+): readonly (InputPrefix | undefined)[] {
+  return Object.freeze(
+    hashes.map((hash) => {
+      if (hash === undefined) return undefined;
+      const prefix = inputPrefix(hash);
+      if (prefix === undefined)
+        throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputHash" });
+      return prefix;
+    }),
+  );
+}
+
+/** `undefined` for a hash at or above the modulus or below `2^128`, a zero prefix names no input. */
 export function inputPrefix(hash: Bytes32): InputPrefix | undefined {
   const value = checkedBytes<Bytes32>(hash, 32, "inputHash");
   if (!isCanonicalField(value)) return undefined;
@@ -135,490 +143,326 @@ export function inputPrefix(hash: Bytes32): InputPrefix | undefined {
   return prefix === 0n ? undefined : (prefix as InputPrefix);
 }
 
-/** `first * 2^INPUT_PREFIX_BITS + second`, an `undefined` half is zero. */
-export function inputPrefixPair(
-  first: InputPrefix | undefined,
-  second: InputPrefix | undefined,
-): Bytes32 {
-  return bigIntToBytes(((first ?? 0n) << PREFIX_SHIFT) | (second ?? 0n), 32) as Bytes32;
-}
-
-/** Inverts `inputPrefixPair`, `undefined` when a half exceeds the prefix of the modulus. */
-export function splitInputPrefixPair(
-  pair: Bytes32,
-): readonly [InputPrefix | undefined, InputPrefix | undefined] | undefined {
-  const value = bytesToBigInt(checkedBytes<Bytes32>(pair, 32, "inputPrefixPair"));
-  const halves = [value >> PREFIX_SHIFT, value & ((1n << PREFIX_SHIFT) - 1n)] as const;
-  if (halves.some((half) => half > MAX_INPUT_PREFIX)) return undefined;
-  const [first, second] = halves.map((half) => (half === 0n ? undefined : (half as InputPrefix)));
-  return Object.freeze([first, second] as const);
-}
-
-export function disclosureLayout(disclosure: RingDisclosure): DisclosureLayout {
-  switch (disclosure.kind) {
-    case "delivered":
-      return checkedLayout({ kind: "delivered", ...disclosure.layout });
-    case "anonymous":
-      return checkedLayout({ kind: "anonymous", ...disclosure.layout });
-  }
-}
-
-/** The published fields, `C[j] = P[j] + pad_j`. */
+/** Refuses a disclosure off its layout before any ephemeral key exists. */
 export function sealRingDisclosure(
-  key: DisclosureKey,
-  disclosure: RingDisclosure,
-): readonly Bytes32[] {
-  const plaintext = disclosureFields(disclosure);
-  try {
-    const sealed = maskDisclosure({
-      key: key.txViewingSecret,
-      salt: key.salt,
-      domain: RingDomain.disclosurePad,
-      fields: plaintext,
-    });
-    // The program refuses a zero published field, another salt seals the transfer.
-    if (sealed.some((field) => field.every((byte) => byte === 0)))
-      throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "published" });
-    return sealed;
-  } finally {
-    for (const field of plaintext) field.fill(0);
-  }
-}
-
-/** Refuses a field at or above the modulus and any nonzero padding. */
-export function openRingDisclosure(
-  key: DisclosureKey,
-  published: PublishedOutputs & Readonly<{ fields: readonly Bytes32[] }>,
-): RingDisclosure {
-  const layout = checkedLayout(published.layout);
-  if (published.fields.length !== disclosureFieldCount(layout)) throw shapeError("fields");
-  const plaintext = unmaskDisclosure({
-    key: key.txViewingSecret,
-    salt: key.salt,
-    domain: RingDomain.disclosurePad,
-    fields: published.fields,
-  });
-  try {
-    return decodeDisclosure({ layout, exits: published.exits }, plaintext);
-  } finally {
-    for (const field of plaintext) field.fill(0);
-  }
-}
-
-/** The plaintext `P`, every field where the layout's fields place it. */
-export function disclosureFields(disclosure: RingDisclosure): Bytes32[] {
-  const layout = disclosureLayout(disclosure);
-  const fields = Array.from(
-    { length: disclosureFieldCount(layout) },
-    () => new Uint8Array(32) as Bytes32,
+  input: Readonly<{
+    txViewingSecret: Bytes32;
+    auditorPublicKey: X25519PublicKey;
+    disclosure: RingDisclosure;
+  }>,
+): AuditorEnvelope {
+  const { disclosure } = input;
+  const plaintext = disclosurePlaintext(disclosure);
+  const envelope = concatBytes(
+    checkedBytes<Bytes32>(input.txViewingSecret, ENVELOPE_KEY_LEN, "tx viewing secret"),
+    plaintext.evidence,
   );
   try {
-    switch (disclosure.kind) {
-      case "delivered": {
-        const at = deliveredFields(disclosure.layout);
-        checkCount(disclosure.outputs.length, disclosure.layout.outputs);
-        placeSeedOut(fields, at.seedOut, disclosure.seedOut);
-        if (at.nullifierPks === undefined) {
-          if (disclosure.outputs.some((output) => deliveredNullifierPk(output) !== undefined))
-            throw shapeError("nullifierPk");
-        } else
-          place(fields, at.nullifierPks, disclosure.outputs.map(publishedDeliveredNullifierPk));
-        place(
-          fields,
-          at.slots,
-          packParts((parts) => {
-            for (const output of disclosure.outputs) pushDeliveredSlot(parts, output, at.slotBytes);
-          }),
-        );
-        break;
-      }
-      case "anonymous":
-        placeAnonymous(fields, disclosure);
-        break;
-    }
-    return fields.map((field, index) => canonical(field, `field${String(index)}`));
+    return sealAuditorStream({
+      auditorPublicKey: input.auditorPublicKey,
+      envelope,
+      records: recordSlots(disclosure.layout).map((slot, index) => ({
+        counter: recordRegion(disclosure.layout, slot).startCounter,
+        bytes: required(plaintext.records[index]),
+      })),
+    });
+  } finally {
+    envelope.fill(0);
+    plaintext.evidence.fill(0);
+    for (const record of plaintext.records) record.fill(0);
+  }
+}
+
+/** Opens the evidence and every record under the layout the program verified. */
+export function openRingDisclosure(
+  auditor: X25519Keypair,
+  published: Readonly<{ layout: AuditStreamLayout; message: AuditorMessage }>,
+): RingDisclosure {
+  const { layout, message } = published;
+  const slots = recordSlots(checkedLayout(layout));
+  if (message.records.length !== slots.length) throw shapeError("records");
+  const [envelope, ...records] = openAuditorRegions(auditor, message.ephemeralPublicKey, [
+    { counter: STREAM_FIRST_COUNTER, bytes: message.envelope },
+    ...slots.map((slot, index) => ({
+      counter: recordRegion(layout, slot).startCounter,
+      bytes: required(message.records[index]),
+    })),
+  ]);
+  try {
+    return decodeDisclosure(layout, {
+      evidence: required(envelope).subarray(ENVELOPE_KEY_LEN),
+      records,
+    });
+  } finally {
+    envelope?.fill(0);
+    for (const record of records) record.fill(0);
+  }
+}
+
+/** The evidence and records the layout fixes, the caller wipes them. */
+export function disclosurePlaintext(disclosure: RingDisclosure): DisclosurePlaintext {
+  const layout = checkedLayout(disclosure.layout);
+  checkCount(disclosure.outputs.length, layout.outputs);
+  const evidence =
+    disclosure.kind === "delivered"
+      ? deliveredEvidence(disclosure.inputs, layout)
+      : anonymousEvidence(disclosure.inputs, layout);
+  if (evidence.length !== evidenceBytes(layout)) {
+    evidence.fill(0);
+    throw shapeError("inputs");
+  }
+  const records: Uint8Array[] = [];
+  try {
+    for (const slot of recordSlots(layout)) records.push(encodeRecord(disclosure, slot));
+    // A delivered slot publishes no record, its opening must still name no exit.
+    disclosure.outputs.forEach((output, slot) => {
+      if ((output.kind === "exit") !== isExitSlot(layout, slot)) throw shapeError("exits");
+    });
+    return Object.freeze({ evidence, records: Object.freeze(records) });
   } catch (error) {
-    for (const field of fields) field.fill(0);
+    evidence.fill(0);
+    for (const record of records) record.fill(0);
     throw error;
   }
 }
 
 /** Refuses a field at or above the modulus and any nonzero padding, the result shares no bytes with `plaintext`. */
 export function decodeDisclosure(
-  published: PublishedOutputs,
-  plaintext: readonly Bytes32[],
+  layout: AuditStreamLayout,
+  plaintext: DisclosurePlaintext,
 ): RingDisclosure {
-  const layout = checkedLayout(published.layout);
-  const { exits } = published;
-  if (plaintext.length !== disclosureFieldCount(layout)) throw shapeError("fields");
-  const fields = plaintext.map((value, index) => field(value, `field${String(index)}`));
-  checkCount(exits.length, layout.outputs);
-  if (!layout.exits && exits.includes(true)) throw shapeError("exits");
-  switch (layout.kind) {
-    case "delivered": {
-      const at = deliveredFields(layout);
-      const slots = unpackDisclosure(slice(fields, at.slots), at.slotBytes * layout.outputs);
-      try {
-        return Object.freeze({
-          kind: "delivered",
-          layout: deliveredLayout(layout),
-          seedOut: fieldAt(fields, at.seedOut),
-          outputs: Object.freeze(
-            exits.map((exit, index) =>
-              readDelivered(
-                at.nullifierPks === undefined ? undefined : fields[at.nullifierPks.start + index],
-                slots.subarray(index * at.slotBytes, (index + 1) * at.slotBytes),
-                exit,
-              ),
-            ),
-          ),
-        });
-      } finally {
-        slots.fill(0);
-      }
-    }
-    case "anonymous":
-      return readAnonymous(anonymousLayout(layout), exits, fields);
-  }
+  const checked = checkedLayout(layout);
+  const slots = recordSlots(checked);
+  const { evidence, records } = plaintext;
+  if (evidence.length !== evidenceBytes(checked) || records.length !== slots.length)
+    throw shapeError("plaintext");
+  slots.forEach((slot, index) => {
+    if (required(records[index]).length !== recordLen(checked, slot)) throw shapeError("records");
+  });
+  const record = new Map(slots.map((slot, index) => [slot, required(records[index])]));
+  if (checked.key.kind === "confidential")
+    return Object.freeze({
+      kind: "delivered",
+      layout: checked,
+      inputs: readDeliveredInputs(evidence, checked),
+      outputs: Object.freeze(
+        Array.from({ length: checked.outputs }, (_, slot) => {
+          const bytes = record.get(slot);
+          return bytes === undefined ? BODY : readExit(bytes, checked.keyEscrow);
+        }),
+      ),
+    });
+  return Object.freeze({
+    kind: "anonymous",
+    layout: checked,
+    inputs: readAnonymousInputs(evidence, checked),
+    outputs: Object.freeze(
+      Array.from({ length: checked.outputs }, (_, slot) => {
+        const bytes = required(record.get(slot));
+        return isExitSlot(checked, slot)
+          ? (readExit(bytes, false) as AnonymousOutputOpening)
+          : readAnonymousRecord(bytes);
+      }),
+    ),
+  });
 }
 
 const KEY_BYTES = 32;
 const AMOUNT_BYTES = 8;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
+const BODY: DeliveredOutputOpening = Object.freeze({ kind: "body" });
 const DUMMY: DummySlot = Object.freeze({ kind: "dummy" });
-const PREFIX_SHIFT = BigInt(INPUT_PREFIX_BITS);
 /** No canonical hash has a larger prefix. */
 const MAX_INPUT_PREFIX = BN254_SCALAR_ORDER >> BigInt(8 * INPUT_PREFIX_BYTES);
 
-/** A structural layout names one key, its counts within the capacities that key serves. */
-function checkedLayout<T extends DisclosureLayout>(layout: T): T {
-  const flags = [layout.exits, ...(layout.kind === "anonymous" ? [] : [layout.keyEscrow])];
-  const counted = (value: number) => Number.isInteger(value) && value >= 1;
-  const valid =
-    flags.every((flag) => typeof flag === "boolean") &&
-    counted(layout.outputs) &&
-    (layout.kind === "delivered"
-      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
-      : counted(layout.inputs) && keyServes(layout));
-  if (!valid) throw shapeError("layout");
+/** A structural layout names one key of the catalog, its counts within what that key serves. */
+function checkedLayout(layout: AuditStreamLayout): AuditStreamLayout {
+  try {
+    checkedStreamLayout(layout);
+  } catch {
+    throw shapeError("layout");
+  }
+  if (!keyServes(layout)) throw shapeError("layout");
   return layout;
 }
 
-/** The catalog's key for the layout's spend is the layout's key. */
-function keyServes(layout: AnonymousLayout): boolean {
-  const key = anonymousAuditKey({
+function keyServes(layout: AuditStreamLayout): boolean {
+  const { key } = layout;
+  if (key.kind === "confidential") {
+    const keyed = DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
+      ? confidentialAuditKey(layout.outputs, key.inputPrefixes)
+      : undefined;
+    return keyed?.class === key.class;
+  }
+  const keyed = anonymousAuditKey({
     inputs: layout.inputs,
     outputs: layout.outputs,
-    spendsDefaultRing: layout.key.kind === "entry",
+    spendsDefaultRing: key.kind === "entry",
   });
-  return key !== undefined && key.kind === layout.key.kind && key.class === layout.key.class;
+  return keyed !== undefined && keyed.kind === key.kind && keyed.class === key.class;
 }
 
-function deliveredLayout(layout: DeliveredLayout): DeliveredLayout {
+function deliveredEvidence(inputs: DeliveredInputs, layout: AuditStreamLayout): Uint8Array {
+  if (inputs.kind === "none") return new Uint8Array();
+  checkCount(inputs.prefixes.length, layout.inputs);
+  return joined(inputs.prefixes.map(prefixBytes));
+}
+
+function anonymousEvidence(inputs: AnonymousInputs, layout: AuditStreamLayout): Uint8Array {
+  if (inputs.kind === "commitments") {
+    checkCount(inputs.prefixes.length + 1, layout.inputs);
+    return joined([
+      new Uint8Array(field(inputs.first, "inputHash")),
+      ...inputs.prefixes.map(prefixBytes),
+    ]);
+  }
+  checkCount(inputs.inputs.length, layout.inputs);
+  return joined([
+    checkedBytes<Bytes32>(inputs.senderKey, KEY_BYTES, "senderKey"),
+    new Uint8Array(field(inputs.senderNullifierPk, "senderNullifierPk")),
+    ...inputs.inputs.flatMap((input) => [
+      amountBytes(input?.amount ?? 0n),
+      new Uint8Array(field(input?.asset ?? zero(), "inputAsset")),
+      new Uint8Array(field(input?.blinding ?? zero(), "inputBlinding")),
+    ]),
+  ]);
+}
+
+/** The record of `slot`, an opening that fits no record of the slot's kind is refused. */
+function encodeRecord(disclosure: RingDisclosure, slot: number): Uint8Array {
+  const { layout } = disclosure;
+  const output = disclosure.outputs[slot];
+  if (output === undefined) throw shapeError("outputs");
+  if (isExitSlot(layout, slot)) {
+    if (output.kind !== "exit") throw shapeError("exits");
+    return exitRecord(output, layout.keyEscrow);
+  }
+  if (output.kind === "dummy") return new Uint8Array(ANONYMOUS_RECORD_LEN);
+  if (output.kind !== "ring") throw shapeError("exits");
+  return joined([
+    checkedBytes<Bytes32>(output.ownerKey, KEY_BYTES, "ownerKey"),
+    new Uint8Array(field(output.asset, "asset")),
+    amountBytes(output.amount),
+    new Uint8Array(field(output.nullifierPk, "nullifierPk")),
+  ]);
+}
+
+function exitRecord(
+  output: Readonly<{ nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>,
+  keyEscrow: boolean,
+): Uint8Array {
+  if (keyEscrow !== (output.nullifierPk === undefined)) throw shapeError("nullifierPk");
+  return joined([
+    new Uint8Array(field(output.asset, "asset")),
+    amountBytes(output.amount),
+    ...(output.nullifierPk === undefined
+      ? []
+      : [new Uint8Array(field(output.nullifierPk, "nullifierPk"))]),
+  ]);
+}
+
+function readExit(
+  bytes: Uint8Array,
+  keyEscrow: boolean,
+): Extract<DeliveredOutputOpening, { kind: "exit" }> {
+  const asset = key(bytes, 0, "asset");
+  const amount = bytesToBigInt(bytes.subarray(KEY_BYTES, KEY_BYTES + AMOUNT_BYTES));
   return Object.freeze({
-    outputs: layout.outputs,
-    exits: layout.exits,
-    keyEscrow: layout.keyEscrow,
-  });
-}
-
-function anonymousLayout(layout: AnonymousLayout): AnonymousLayout {
-  return Object.freeze({
-    key: layout.key,
-    inputs: layout.inputs,
-    outputs: layout.outputs,
-    exits: layout.exits,
-  });
-}
-
-function deliveredNullifierPk(output: DeliveredOutputOpening): Bytes32 | undefined {
-  return output.kind === "dummy" ? undefined : output.nullifierPk;
-}
-
-/** The disclosed key of a slot, zero for a dummy. */
-function publishedDeliveredNullifierPk(output: DeliveredOutputOpening): Bytes32 {
-  if (output.kind === "dummy") return zero();
-  if (output.nullifierPk === undefined) throw shapeError("nullifierPk");
-  return field(output.nullifierPk, "nullifierPk");
-}
-
-/** With an exit a slot is `owner_key ‖ 0^8` or `asset ‖ u64be(amount)`, without one `owner_key`. */
-function pushDeliveredSlot(
-  parts: Uint8Array[],
-  output: DeliveredOutputOpening,
-  width: number,
-): void {
-  switch (output.kind) {
-    case "ring":
-      parts.push(checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey"));
-      parts.push(new Uint8Array(width - KEY_BYTES));
-      return;
-    case "exit":
-      if (width !== DELIVERED_SLOT_BYTES) throw shapeError("exits");
-      parts.push(field(output.asset, "asset"));
-      parts.push(amountBytes(output.amount));
-      return;
-    case "dummy":
-      parts.push(new Uint8Array(width));
-  }
-}
-
-function readDelivered(
-  nullifierPk: Bytes32 | undefined,
-  slot: Uint8Array,
-  exit: boolean,
-): DeliveredOutputOpening {
-  const head = key(slot, 0, "ownerKey");
-  const tail = slot.subarray(KEY_BYTES);
-  if (exit)
-    return Object.freeze({
-      kind: "exit",
-      nullifierPk,
-      asset: field(head, "asset"),
-      amount: bytesToBigInt(tail),
-    });
-  // A disclosed zero key marks a dummy, under key escrow its zero slot does.
-  if (isZero(nullifierPk ?? head)) {
-    zeroBytes(slot);
-    return DUMMY;
-  }
-  zeroBytes(tail);
-  return Object.freeze({ kind: "ring", ownerKey: head, nullifierPk });
-}
-
-function anonymousNullifierPk(output: AnonymousOutputOpening): Bytes32 {
-  return output.kind === "dummy" ? zero() : field(output.nullifierPk, "nullifierPk");
-}
-
-/** `mask(ring, owner_key) ‖ fe32(asset) ‖ u64be(amount)`, a dummy all zero. */
-function pushAnonymousSlot(parts: Uint8Array[], output: AnonymousOutputOpening): void {
-  if (output.kind === "dummy") {
-    parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES));
-    return;
-  }
-  parts.push(
-    output.kind === "ring"
-      ? checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey")
-      : new Uint8Array(KEY_BYTES),
-  );
-  parts.push(field(output.asset, "asset"));
-  parts.push(amountBytes(output.amount));
-}
-
-function readAnonymousOutput(
-  nullifierPk: Bytes32,
-  slot: Uint8Array,
-  exit: boolean,
-): AnonymousOutputOpening {
-  const ownerKey = key(slot, 0, "ownerKey");
-  const asset = key(slot, KEY_BYTES, "asset");
-  const amount = bytesToBigInt(slot.subarray(2 * KEY_BYTES, 2 * KEY_BYTES + AMOUNT_BYTES));
-  if (exit) {
-    zeroBytes(ownerKey);
-    return Object.freeze({ kind: "exit", nullifierPk, asset: field(asset, "asset"), amount });
-  }
-  if (isZero(nullifierPk)) {
-    zeroBytes(slot);
-    return DUMMY;
-  }
-  return Object.freeze({
-    kind: "ring",
-    ownerKey,
-    nullifierPk,
-    asset: field(asset, "asset"),
+    kind: "exit",
+    nullifierPk: keyEscrow
+      ? undefined
+      : canonical(key(bytes, KEY_BYTES + AMOUNT_BYTES, "nullifierPk"), "nullifierPk"),
+    asset: canonical(asset, "asset"),
     amount,
   });
 }
 
-function placeAnonymous(
-  fields: Bytes32[],
-  disclosure: Extract<RingDisclosure, { kind: "anonymous" }>,
-): void {
-  const { layout, inputs } = disclosure;
-  const at = anonymousFields(layout);
-  checkCount(disclosure.outputs.length, layout.outputs);
-  placeSeedOut(fields, at.seedOut, disclosure.seedOut);
-  place(fields, at.nullifierPks, disclosure.outputs.map(anonymousNullifierPk));
-  if (inputs.kind === "commitments") {
-    if (at.inputs.kind !== "commitments") throw shapeError("inputs");
-    checkCount(inputs.prefixes.length + 1, layout.inputs);
-    fields[at.inputs.first] = field(inputs.first, "inputHash");
-    place(
-      fields,
-      at.inputs.prefixPairs,
-      Array.from({ length: at.inputs.prefixPairs.end - at.inputs.prefixPairs.start }, (_, pair) =>
-        inputPrefixPair(inputs.prefixes[2 * pair], inputs.prefixes[2 * pair + 1]),
-      ),
-    );
-  } else {
-    if (at.inputs.kind !== "openings") throw shapeError("inputs");
-    checkCount(inputs.inputs.length, layout.inputs);
-    const openings = inputs.inputs.map(
-      (opening) => opening ?? { asset: zero(), amount: 0n, blinding: zero() },
-    );
-    const start = at.inputs.openings.start;
-    openings.forEach((opening, index) => {
-      fields[start + 2 * index] = field(opening.asset, "inputAsset");
-      fields[start + 2 * index + 1] = field(opening.blinding, "inputBlinding");
-    });
-    place(
-      fields,
-      at.inputs.amounts,
-      packParts((parts) => {
-        for (const opening of openings) parts.push(amountBytes(opening.amount));
-        parts.push(
-          new Uint8Array(
-            DISCLOSURE_INPUT_AMOUNT_BYTES * (anonymousKeyClass(layout.key) - openings.length),
-          ),
-        );
-      }),
-    );
-    fields[at.inputs.senderNullifierPk] = field(inputs.senderNullifierPk, "senderNullifierPk");
+/** A hidden dummy is the zero record, a zero key with any other byte set is refused. */
+function readAnonymousRecord(bytes: Uint8Array): AnonymousOutputOpening {
+  const nullifierPk = key(bytes, 2 * KEY_BYTES + AMOUNT_BYTES, "nullifierPk");
+  if (isZero(nullifierPk)) {
+    if (!isZero(bytes)) throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { name: "record" });
+    return DUMMY;
   }
-  place(
-    fields,
-    at.slots,
-    packParts((parts) => {
-      if (inputs.kind === "openings")
-        parts.push(
-          checkedBytes<Bytes32>(inputs.senderKey, DISCLOSURE_SENDER_KEY_BYTES, "senderKey"),
-        );
-      for (const output of disclosure.outputs) pushAnonymousSlot(parts, output);
+  return Object.freeze({
+    kind: "ring",
+    ownerKey: key(bytes, 0, "ownerKey"),
+    nullifierPk: canonical(nullifierPk, "nullifierPk"),
+    asset: canonical(key(bytes, KEY_BYTES, "asset"), "asset"),
+    amount: bytesToBigInt(bytes.subarray(2 * KEY_BYTES, 2 * KEY_BYTES + AMOUNT_BYTES)),
+  });
+}
+
+function readDeliveredInputs(evidence: Uint8Array, layout: AuditStreamLayout): DeliveredInputs {
+  if (layout.key.kind !== "confidential" || !layout.key.inputPrefixes)
+    return Object.freeze({ kind: "none" });
+  return Object.freeze({ kind: "prefixes", prefixes: readPrefixes(evidence, layout.inputs) });
+}
+
+function readAnonymousInputs(evidence: Uint8Array, layout: AuditStreamLayout): AnonymousInputs {
+  if (layout.key.kind === "commitment") {
+    const first = canonical(key(evidence, 0, "inputHash"), "inputHash");
+    // The circuit proves spent UTXO 0 real.
+    if (isZero(first)) throw shapeError("inputs");
+    return Object.freeze({
+      kind: "commitments",
+      first,
+      prefixes: readPrefixes(evidence.subarray(KEY_BYTES), layout.inputs - 1),
+    });
+  }
+  const head = 2 * KEY_BYTES;
+  return Object.freeze({
+    kind: "openings",
+    senderKey: key(evidence, 0, "senderKey"),
+    senderNullifierPk: canonical(
+      key(evidence, KEY_BYTES, "senderNullifierPk"),
+      "senderNullifierPk",
+    ),
+    inputs: Object.freeze(
+      Array.from({ length: layout.inputs }, (_, index) => {
+        const start = head + index * ENTRY_INPUT_LEN;
+        const input = evidence.subarray(start, start + ENTRY_INPUT_LEN);
+        if (isZero(input)) return undefined;
+        return Object.freeze({
+          amount: bytesToBigInt(input.subarray(0, AMOUNT_BYTES)),
+          asset: canonical(key(input, AMOUNT_BYTES, "inputAsset"), "inputAsset"),
+          blinding: canonical(
+            key(input, AMOUNT_BYTES + KEY_BYTES, "inputBlinding"),
+            "inputBlinding",
+          ),
+        });
+      }),
+    ),
+  });
+}
+
+/** Refuses a prefix no canonical hash has, zero bytes name a published dummy. */
+function readPrefixes(bytes: Uint8Array, count: number): readonly (InputPrefix | undefined)[] {
+  return Object.freeze(
+    Array.from({ length: count }, (_, index) => {
+      const start = index * INPUT_PREFIX_BYTES;
+      const prefix = bytesToBigInt(bytes.subarray(start, start + INPUT_PREFIX_BYTES));
+      if (prefix > MAX_INPUT_PREFIX)
+        throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputPrefix" });
+      return prefix === 0n ? undefined : (prefix as InputPrefix);
     }),
   );
 }
 
-function readAnonymous(
-  layout: AnonymousLayout,
-  exits: readonly boolean[],
-  fields: readonly Bytes32[],
-): RingDisclosure {
-  const at = anonymousFields(layout);
-  const block = unpackDisclosure(slice(fields, at.slots), at.slotBytes);
+function prefixBytes(prefix: InputPrefix | undefined): Uint8Array {
+  return bigIntToBytes(prefix ?? 0n, INPUT_PREFIX_BYTES);
+}
+
+/** Concatenates the fresh `parts` and wipes them. */
+function joined(parts: readonly Uint8Array[]): Uint8Array {
   try {
-    const outputs = slice(fields, at.nullifierPks).map((nullifierPk, index) => {
-      const start = at.slotStart + index * ANONYMOUS_SLOT_BYTES;
-      return readAnonymousOutput(
-        nullifierPk,
-        block.subarray(start, start + ANONYMOUS_SLOT_BYTES),
-        exits[index] === true,
-      );
-    });
-    return Object.freeze({
-      kind: "anonymous",
-      layout,
-      seedOut: fieldAt(fields, at.seedOut),
-      outputs: Object.freeze(outputs),
-      inputs:
-        at.inputs.kind === "commitments"
-          ? readCommitments(
-              layout,
-              required(fields[at.inputs.first]),
-              slice(fields, at.inputs.prefixPairs),
-            )
-          : readOpenings(layout, at.inputs, fields, key(block, 0, "senderKey")),
-    });
-  } finally {
-    block.fill(0);
-  }
-}
-
-/** Spent UTXO 0 is real, an even published count closes the last pair with a zero half. */
-function readCommitments(
-  layout: AnonymousLayout,
-  first: Bytes32,
-  pairs: readonly Bytes32[],
-): AnonymousInputs {
-  if (isZero(first)) throw shapeError("inputs");
-  const prefixes = pairs.flatMap((pair) => {
-    const split = splitInputPrefixPair(pair);
-    if (split === undefined)
-      throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "inputPrefixPair" });
-    return split;
-  });
-  const padding = prefixes.length === layout.inputs ? prefixes.pop() : undefined;
-  if (padding !== undefined)
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { name: "inputPrefixPair" });
-  return Object.freeze({ kind: "commitments", first, prefixes: Object.freeze(prefixes) });
-}
-
-function readOpenings(
-  layout: AnonymousLayout,
-  at: Extract<AnonymousInputFields, { kind: "openings" }>,
-  fields: readonly Bytes32[],
-  senderKey: Bytes32,
-): AnonymousInputs {
-  const published = slice(fields, at.openings);
-  const amounts = unpackDisclosure(
-    slice(fields, at.amounts),
-    DISCLOSURE_INPUT_AMOUNT_BYTES * anonymousKeyClass(layout.key),
-  );
-  try {
-    zeroBytes(amounts.subarray(DISCLOSURE_INPUT_AMOUNT_BYTES * layout.inputs));
-    return Object.freeze({
-      kind: "openings",
-      senderKey,
-      senderNullifierPk: required(fields[at.senderNullifierPk]),
-      inputs: Object.freeze(
-        Array.from({ length: layout.inputs }, (_, index) => {
-          const asset = required(published[2 * index]);
-          const blinding = required(published[2 * index + 1]);
-          const amount = bytesToBigInt(
-            amounts.subarray(
-              index * DISCLOSURE_INPUT_AMOUNT_BYTES,
-              (index + 1) * DISCLOSURE_INPUT_AMOUNT_BYTES,
-            ),
-          );
-          return amount === 0n && isZero(asset) && isZero(blinding)
-            ? undefined
-            : Object.freeze({ asset, amount, blinding });
-        }),
-      ),
-    });
-  } finally {
-    amounts.fill(0);
-  }
-}
-
-/** `SeedOut` is published exactly when the layout names its position. */
-function placeSeedOut(
-  fields: Bytes32[],
-  at: number | undefined,
-  seedOut: Bytes32 | undefined,
-): void {
-  if ((at === undefined) !== (seedOut === undefined)) throw shapeError("seedOut");
-  if (at !== undefined && seedOut !== undefined) fields[at] = field(seedOut, "seedOut");
-}
-
-function place(fields: Bytes32[], range: FieldRange, values: readonly Bytes32[]): void {
-  if (values.length !== range.end - range.start) throw shapeError("fields");
-  values.forEach((value, offset) => {
-    fields[range.start + offset] = value;
-  });
-}
-
-function packParts(write: (parts: Uint8Array[]) => void): readonly Bytes32[] {
-  const parts: Uint8Array[] = [];
-  let block: Uint8Array | undefined;
-  try {
-    write(parts);
-    block = concatBytes(...parts);
-    return packDisclosure(block);
+    return concatBytes(...parts);
   } finally {
     for (const part of parts) part.fill(0);
-    block?.fill(0);
   }
 }
 
-function slice(fields: readonly Bytes32[], range: FieldRange): readonly Bytes32[] {
-  return fields.slice(range.start, range.end);
-}
-
-function fieldAt(fields: readonly Bytes32[], at: number | undefined): Bytes32 | undefined {
-  return at === undefined ? undefined : required(fields[at]);
-}
-
-function required(value: Bytes32 | undefined): Bytes32 {
+function required<T>(value: T | undefined): T {
   if (value === undefined) throw shapeError("fields");
   return value;
 }
@@ -633,7 +477,7 @@ function amountBytes(amount: bigint): Uint8Array {
   return bigIntToBytes(amount, AMOUNT_BYTES);
 }
 
-/** The circuit discloses only canonical field encodings. */
+/** The circuit bounds every field value to its canonical encoding. */
 function field(value: Uint8Array, name: string): Bytes32 {
   return canonical(checkedBytes<Bytes32>(value, 32, name), name);
 }
@@ -645,10 +489,6 @@ function canonical(value: Bytes32, name: string): Bytes32 {
 
 function key(bytes: Uint8Array, at: number, name: string): Bytes32 {
   return checkedBytes<Bytes32>(bytes.subarray(at, at + KEY_BYTES), 32, name);
-}
-
-function zeroBytes(bytes: Uint8Array): void {
-  if (!isZero(bytes)) throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { name: "slot" });
 }
 
 function isZero(bytes: Uint8Array): boolean {

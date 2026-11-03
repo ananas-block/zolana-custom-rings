@@ -19,59 +19,90 @@ import {
   X25519Keypair,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
+import {
+  DISCLOSURE_CHUNK_BYTES,
+  ENVELOPE_KEY_LEN,
+  STREAM_FIRST_COUNTER,
+  TAGGED_KEY_LEN,
+  auditorMessageLen,
+  envelopeRegion,
+  recordLen,
+  recordSlots,
+  type AuditStreamLayout,
+} from "../../protocol/codec/ring-disclosure-layout.js";
 import { packBytesBe } from "../derivation/hasher.js";
 
 import { RingKeyError } from "../error.js";
 
-/** Rust `AUDIT_STREAM_INFO`, the envelope and the delivered bodies share its stream schedule. */
+/** Schedule labels, one secret under two labels gives two unrelated keys. */
 export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt1");
-/** Rust `AUDITOR_MESSAGE_PREFIX_LEN`, `0x04 ‖ eph_u ‖ sealed` ahead of the disclosure. */
-export const AUDITOR_MESSAGE_PREFIX_LENGTH = 65;
+export const DELIVERED_BODY_ENC_INFO = new TextEncoder().encode("CRING/bdy1");
+export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk1");
+export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep1");
 
 /** `"CR_S"`, Rust `DOM_SEP_CR_SHARED`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;
-/** `"CR_MD"`, Go `MergeDisclosureDomain`, a merge pad never repeats an output pad. */
+/** `"CR_MD"`, Go `MergeDisclosureDomain`, a merge pad never repeats another pad. */
 const MERGE_DISCLOSURE_DOMAIN = 0x4352_5f4d44n;
-const DISCLOSURE_CHUNK_BYTES = 31;
+const STREAM_LABEL_BYTES = 10;
+const U32_MAX = 0xffff_ffff;
 
-/** The sealed transaction viewing secret, `ephemeralSecret` the audit proof's witness. */
+export interface StreamPosition {
+  readonly label: Uint8Array;
+  /** The first block's counter, a counter that serves two plaintexts reveals their XOR. */
+  readonly counter: number;
+}
+
+export interface AuditorRegion {
+  readonly counter: number;
+  readonly bytes: Uint8Array;
+}
+
+/** The sealed stream of one transfer, `ephemeralSecret` the proof's input. */
 export interface AuditorEnvelope {
   readonly ephemeralSecret: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
-  readonly sealed: Bytes32;
+  readonly envelope: Uint8Array;
+  readonly records: readonly Uint8Array[];
 }
 
 /** The one message a ring transfer publishes under the auditor's view tag. */
 export interface AuditorMessage {
   readonly ephemeralPublicKey: X25519PublicKey;
-  readonly sealed: Bytes32;
-  readonly disclosure: readonly Bytes32[];
-}
-
-/** `pad_j = Poseidon(Poseidon(domain, pack_be(key), salt), j)` at position `j`, Rust `DisclosurePad`. */
-export interface DisclosurePad {
-  readonly key: Bytes32;
-  readonly salt: Bytes16;
-  readonly domain: number;
-  readonly fields: readonly Bytes32[];
+  readonly envelope: Uint8Array;
+  /** The records of the slots that have one, in slot order. */
+  readonly records: readonly Uint8Array[];
 }
 
 /** Two Poseidon outputs supply 31 key bytes, then one key byte and a 12-byte nonce. */
-export function symmetricAuditApply(shared: Bytes32, data: Uint8Array): Uint8Array {
-  const tag = new Uint8Array(11);
-  tag.set(AUDIT_ENC_INFO);
+export function symmetricAuditApply(
+  secret: Bytes32,
+  position: StreamPosition,
+  data: Uint8Array,
+): Uint8Array {
+  const { label, counter: firstCounter } = position;
+  if (label.length !== STREAM_LABEL_BYTES)
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "label" });
+  if (
+    !Number.isInteger(firstCounter) ||
+    firstCounter < STREAM_FIRST_COUNTER ||
+    firstCounter > U32_MAX
+  )
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "counter" });
+  const tag = new Uint8Array(STREAM_LABEL_BYTES + 1);
+  tag.set(label);
   const key = new Uint8Array(32);
   const counter = new Uint8Array(16);
   let head: Uint8Array | undefined;
   let tail: Uint8Array | undefined;
   try {
-    head = poseidon([rightAlign(tag), shared]);
+    head = poseidon([rightAlign(tag), secret]);
     key.set(head.subarray(1), 0);
-    tag[10] = 1;
-    tail = poseidon([rightAlign(tag), shared]);
+    tag[STREAM_LABEL_BYTES] = 1;
+    tail = poseidon([rightAlign(tag), secret]);
     key[31] = tail[19] ?? 0;
     counter.set(tail.subarray(20), 0);
-    counter[15] = 2;
+    counter.set(u32be(firstCounter), 12);
     return ctr(key, counter).encrypt(copyBytes(data));
   } finally {
     tag.fill(0);
@@ -101,83 +132,101 @@ export function auditSharedSecret(
   }
 }
 
-/** A fresh ephemeral key fixes the keystream, the scalar never comes from a caller. */
-export function sealTransactionViewingSecret(
-  txViewingSecret: Bytes32,
-  auditorPublicKey: X25519PublicKey,
+/** A fresh ephemeral key per call, a reused one repeats the keystream over another plaintext. */
+export function sealAuditorStream(
+  input: Readonly<{
+    auditorPublicKey: X25519PublicKey;
+    envelope: Uint8Array;
+    records: readonly AuditorRegion[];
+  }>,
 ): AuditorEnvelope {
+  const { auditorPublicKey } = input;
   const ephemeral = X25519Keypair.generate();
   let shared: Bytes32 | undefined;
   try {
     const ephemeralPublicKey = ephemeral.publicKey();
     shared = envelopeSecret(ephemeral, auditorPublicKey, ephemeralPublicKey, auditorPublicKey);
-    const sealed = symmetricAuditApply(
-      shared,
-      checkedBytes<Bytes32>(txViewingSecret, 32, "tx viewing secret"),
-    ) as Bytes32;
-    return Object.freeze({ ephemeralSecret: ephemeral.secretBytes(), ephemeralPublicKey, sealed });
+    const secret = shared;
+    const seal = ({ counter, bytes }: AuditorRegion): Uint8Array =>
+      symmetricAuditApply(secret, { label: AUDIT_ENC_INFO, counter }, bytes);
+    const envelope = seal({ counter: STREAM_FIRST_COUNTER, bytes: input.envelope });
+    const records = Object.freeze(input.records.map(seal));
+    return Object.freeze({
+      ephemeralSecret: ephemeral.secretBytes(),
+      ephemeralPublicKey,
+      envelope,
+      records,
+    });
   } finally {
     ephemeral.destroy();
     shared?.fill(0);
   }
 }
 
-/** The auditor's side of `sealTransactionViewingSecret`. */
-export function openTransactionViewingSecret(
+/** The auditor's side of `sealAuditorStream`, one plaintext per region. */
+export function openAuditorRegions(
   auditor: X25519Keypair,
-  message: Pick<AuditorMessage, "ephemeralPublicKey" | "sealed">,
-): Bytes32 {
+  ephemeralPublicKey: X25519PublicKey,
+  regions: readonly AuditorRegion[],
+): readonly Uint8Array[] {
   const shared = envelopeSecret(
     auditor,
-    message.ephemeralPublicKey,
-    message.ephemeralPublicKey,
+    ephemeralPublicKey,
+    ephemeralPublicKey,
     auditor.publicKey(),
   );
   try {
-    return symmetricAuditApply(
-      shared,
-      checkedBytes<Bytes32>(message.sealed, 32, "sealed"),
-    ) as Bytes32;
+    return regions.map(({ counter, bytes }) =>
+      symmetricAuditApply(shared, { label: AUDIT_ENC_INFO, counter }, bytes),
+    );
   } finally {
     shared.fill(0);
   }
+}
+
+/** The envelope's leading bytes, the evidence behind them opens with the transfer's layout. */
+export function openTransactionViewingSecret(
+  auditor: X25519Keypair,
+  message: Pick<AuditorMessage, "ephemeralPublicKey" | "envelope">,
+): Bytes32 {
+  const bytes = message.envelope.subarray(0, ENVELOPE_KEY_LEN);
+  if (bytes.length !== ENVELOPE_KEY_LEN)
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "envelope" });
+  const [secret] = openAuditorRegions(auditor, message.ephemeralPublicKey, [
+    { counter: STREAM_FIRST_COUNTER, bytes },
+  ]);
+  return secret as Bytes32;
 }
 
 export function auditorViewTag(auditorPublicKey: X25519PublicKey): Bytes32 {
   return auditorPublicKey.u();
 }
 
-/** `0x04 ‖ eph_u ‖ sealed ‖ disclosure` under the auditor's view tag. */
+/** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct...` under the auditor's view tag. */
 export function auditorMessageData(
   message: AuditorMessage,
   auditorPublicKey: X25519PublicKey,
 ): MessageData {
   return Object.freeze({
     viewTag: auditorViewTag(auditorPublicKey),
-    data: concatBytes(message.ephemeralPublicKey.toBytes(), message.sealed, ...message.disclosure),
+    data: concatBytes(message.ephemeralPublicKey.toBytes(), message.envelope, ...message.records),
   });
 }
 
-/** `fieldCount` comes from the transfer's layout, the program refuses a zero published field. */
-export function parseAuditorMessage(data: Uint8Array, fieldCount: number): AuditorMessage {
-  if (!Number.isInteger(fieldCount) || fieldCount < 1)
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "fieldCount" });
-  const bytes = checkedBytes(
-    data,
-    AUDITOR_MESSAGE_PREFIX_LENGTH + 32 * fieldCount,
-    "auditor message",
-  );
-  const disclosure = Array.from({ length: fieldCount }, (_, index) => {
-    const start = AUDITOR_MESSAGE_PREFIX_LENGTH + 32 * index;
-    const field = bytes.slice(start, start + 32) as Bytes32;
-    if (!isCanonicalField(field) || field.every((byte) => byte === 0))
-      throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "published", index });
-    return field;
+/** The layout fixes every length, a message of any other length is refused. */
+export function parseAuditorMessage(data: Uint8Array, layout: AuditStreamLayout): AuditorMessage {
+  const bytes = checkedBytes(data, auditorMessageLen(layout), "auditor message");
+  const envelopeEnd = TAGGED_KEY_LEN + envelopeRegion(layout).length;
+  let offset = envelopeEnd;
+  const records = recordSlots(layout).map((slot) => {
+    const start = offset;
+    offset += recordLen(layout, slot);
+    return bytes.subarray(start, offset);
   });
   return Object.freeze({
-    ephemeralPublicKey: X25519PublicKey.fromBytes(bytes.subarray(0, 33)),
-    sealed: bytes.slice(33, AUDITOR_MESSAGE_PREFIX_LENGTH) as Bytes32,
-    disclosure: Object.freeze(disclosure),
+    ephemeralPublicKey: X25519PublicKey.fromBytes(bytes.subarray(0, TAGGED_KEY_LEN)),
+    envelope: bytes.subarray(TAGGED_KEY_LEN, envelopeEnd),
+    records: Object.freeze(records),
   });
 }
 
@@ -206,15 +255,6 @@ export function unpackDisclosure(fields: readonly Bytes32[], length: number): Ui
     plaintext.set(field.subarray(1, 1 + chunk), index * DISCLOSURE_CHUNK_BYTES);
   });
   return plaintext;
-}
-
-/** Only the holder of `key` removes the pads. */
-export function maskDisclosure(input: DisclosurePad): readonly Bytes32[] {
-  return applyDisclosurePad(input.key, input.salt, input.fields, true, BigInt(input.domain));
-}
-
-export function unmaskDisclosure(input: DisclosurePad): readonly Bytes32[] {
-  return applyDisclosurePad(input.key, input.salt, input.fields, false, BigInt(input.domain));
 }
 
 /** Masks a merge disclosure plaintext already zero padded to whole chunks, Rust `MergeDisclosureEncryption::seal`. */

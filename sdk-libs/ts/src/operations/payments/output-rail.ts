@@ -28,10 +28,10 @@ import {
   anonymousSenderOutputBody,
   encodeRingOutput,
   readRingOutput,
-  RING_DELIVERED_BODY_LEN,
   RingScheme,
   sealDeliveredBody,
 } from "../../protocol/transaction/output.js";
+import { deliveredBodyLen } from "../../protocol/codec/ring-disclosure-layout.js";
 import {
   DUMMY_RECIPIENT_VIEWING_PK,
   RECIPIENT_BODY_LEN,
@@ -59,8 +59,8 @@ const MAX_OUTPUTS = Math.max(...SPP_SUPPORTED_SHAPES.map((shape) => shape.output
 
 /** How the ring outputs of one transfer reach their recipients, Rust `RingDelivery`. */
 export type RingDelivery =
-  /** Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`. */
-  | Readonly<{ kind: "delivered" }>
+  /** Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`, the ring's key escrow flag fixes its length. */
+  | Readonly<{ kind: "delivered"; keyEscrow: boolean }>
   /** Scheme 1 under view tags at each recipient output, scheme 2 in a message. */
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan }>;
 
@@ -236,14 +236,14 @@ type AnonymousSeal = Readonly<{
 
 /** How a delivered slot publishes. */
 type Slot =
-  | Readonly<{ kind: "ring"; recipient: X25519PublicKey }>
+  | Readonly<{ kind: "ring"; owner: ShieldedAddress }>
   | Readonly<{ kind: "exit" }>
   | Readonly<{ kind: "dummy" }>;
 
 /** The payload SPP binds for one final slot, as the program expands the slot's compact wire. */
 type FramedSlot = Readonly<{ viewTag: Bytes32; data?: Uint8Array }>;
 
-/** Rust `RingOutputRail`, keyed by a transaction viewing key the caller destroys and a salt drawn per rail. */
+/** Rust `RingOutputRail`, keyed by a transaction viewing key the caller destroys, a rebuild draws a new salt so a slot secret never repeats. */
 export class RingOutputRail {
   readonly txViewingKey: ViewingKey;
   readonly salt: Bytes16;
@@ -325,10 +325,12 @@ export class RingOutputRail {
         },
       ];
       frames = this.#anonymousFrames(seal, input.assets);
-    } else
+    } else {
+      const { keyEscrow } = this.delivery;
       frames = outputs.map((output, slotIndex) =>
-        this.#deliveredFrame(output, slotIndex, input.assets),
+        this.#deliveredFrame(output, slotIndex, input.assets, keyEscrow),
       );
+    }
     const published: TransactOutput[] = outputs.map((output, slotIndex) => {
       const frame = frames[slotIndex];
       if (frame === undefined) throw framingError(slotIndex);
@@ -500,24 +502,34 @@ export class RingOutputRail {
   }
 
   /** Rust `RingOutputRail::encode_delivered` under the owner tag `owner_tags` resolves. */
-  #deliveredFrame(output: ProofOutputUtxo, slotIndex: number, assets: AssetRegistry): FramedSlot {
+  #deliveredFrame(
+    output: ProofOutputUtxo,
+    slotIndex: number,
+    assets: AssetRegistry,
+    keyEscrow: boolean,
+  ): FramedSlot {
     const slot = deliveredSlot(output);
     switch (slot.kind) {
       case "exit":
         return this.#exitFrame(output, slotIndex, assets);
       case "ring": {
-        const secret = this.slotSecret(slot.recipient, slotIndex);
+        const secret = this.slotSecret(slot.owner.viewingPublicKey, slotIndex);
         let body: Uint8Array;
         try {
-          body = sealDeliveredBody(secret, { blinding: output.blinding, amount: output.amount });
+          body = sealDeliveredBody(secret, {
+            blinding: output.blinding,
+            amount: output.amount,
+            ownerKey: slot.owner.signingPublicKey.confidentialViewTag(),
+            nullifierPk: keyEscrow ? undefined : slot.owner.nullifierPublicKey,
+          });
         } finally {
           secret.fill(0);
         }
-        const u = slot.recipient.u();
+        const u = slot.owner.viewingPublicKey.u();
         return framed(u, { kind: "delivered", hash: ZERO_32, u, body });
       }
       case "dummy": {
-        const body = randomBytes(RING_DELIVERED_BODY_LEN);
+        const body = randomBytes(deliveredBodyLen(keyEscrow));
         // A random key publishes as a real recipient's would.
         const key = ViewingKey.generate();
         try {
@@ -617,7 +629,7 @@ function deliveredSlot(output: ProofOutputUtxo): Slot {
   const owner = output.ownerAddress;
   if (owner === undefined) return Object.freeze({ kind: "dummy" });
   if (output.ringProgramId === undefined) return Object.freeze({ kind: "exit" });
-  return Object.freeze({ kind: "ring", recipient: owner.viewingPublicKey });
+  return Object.freeze({ kind: "ring", owner });
 }
 
 /** A ring rail slot carries no data and is never compact padding, Rust `check_plain`. */

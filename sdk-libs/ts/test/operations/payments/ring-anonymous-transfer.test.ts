@@ -518,7 +518,7 @@ describe("anonymous ring payment", () => {
 });
 
 describe("anonymous ring exits and entries", () => {
-  it("exits a note to the default ring under scheme 3 with SeedOut in the disclosure", async () => {
+  it("exits a note to the default ring under scheme 3 with its record in the auditor message", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();
     const outside = ShieldedKeypair.generate();
@@ -529,8 +529,7 @@ describe("anonymous ring exits and entries", () => {
 
     expect(data.outputs.map((output) => output.kind)).toEqual(["anonymous", "exit"]);
     checkTransferProof(fixture, data, { kind: "transferAnonymous" });
-    const disclosure = checkDisclosure(fixture, call, data, sender.keypair.shieldedAddress());
-    expect(disclosure.seedOut).toEqual(call.proofInputs.outputBlindingSeed());
+    checkDisclosure(fixture, call, data, sender.keypair.shieldedAddress());
     const exit = data.outputs[1];
     if (exit?.kind !== "exit") throw new Error("no exit slot");
     const viewing = outside.viewingKey();

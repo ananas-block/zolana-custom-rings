@@ -621,10 +621,7 @@ describe("policy ring", () => {
   };
 
   it("refuses an in-proof owner shape past one transaction on a co-signed policy ring before any proof", async () => {
-    for (const [inputs, outputs] of [
-      [5, 16],
-      [8, 16],
-    ] as const) {
+    for (const [inputs, outputs] of [[5, 16]] as const) {
       const signing = SigningKey.generate();
       const sender = ShieldedKeypair.fromKeypair(signing);
       const paid = Array.from({ length: outputs - 1 }, () => ShieldedKeypair.generate());
@@ -686,7 +683,7 @@ describe("policy ring", () => {
     expect([request.inProof, request.delegate]).toEqual([true, false]);
     expect([request.sender, request.senderPkHash]).toEqual([identity, identity]);
     expect(request.privateTxHash).toEqual(data.privateTxHash);
-    expect(request.inputs).toHaveLength(40);
+    expect(request.inputs).toHaveLength(32);
   });
 
   it("refuses a default-ring input on the in-proof owner rail before any proof", async () => {
@@ -1180,7 +1177,7 @@ describe("ring transfer builder", () => {
   }
 
   it("refuses a payment past the widest confidential key before approval and any proof", async () => {
-    const wide = await ringTransfer({ amount: 4_750n, notes: 48 });
+    const wide = await ringTransfer({ amount: 3_950n, notes: 40 });
     await expect(wide.build).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TRANSACT_DATA_INVALID",
@@ -1189,7 +1186,7 @@ describe("ring transfer builder", () => {
     expect(wide.requests).toEqual([]);
     expect(wide.fixture.ringRequests).toHaveLength(0);
     expect(wide.fixture.sppCalls).toHaveLength(0);
-    const widest = await ringTransfer({ amount: 3_950n, notes: 40 });
+    const widest = await ringTransfer({ amount: 3_150n, notes: 32 });
     expect(transactionSize(await widest.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
     expect(widest.requests).toHaveLength(1);
   });
@@ -1291,9 +1288,16 @@ describe("audit seal", () => {
         sealAudit({
           rail: new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), {
             kind: "delivered",
+            keyEscrow: false,
           }),
-          audit: { exits: false, keyEscrow: false, fullOpenings: false },
-          layout: { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
+          audit: { keyEscrow: false, fullOpenings: false },
+          layout: {
+            key: { kind: "confidential", class: 32, inputPrefixes: false },
+            keyEscrow: false,
+            inputs: 1,
+            outputs: 2,
+            exits: 0n,
+          },
           published: [],
           proofInputs,
           sender: sender.shieldedAddress(),
@@ -1303,6 +1307,66 @@ describe("audit seal", () => {
       expect(generate).not.toHaveBeenCalled();
     } finally {
       generate.mockRestore();
+      auditor.destroy();
+    }
+  });
+
+  it("draws a new salt and a new ephemeral key for every build of one transfer", () => {
+    const sender = ShieldedKeypair.generate();
+    const assets = new AssetRegistry();
+    const proofInputs = new ConfidentialTransfer(
+      sender.shieldedAddress(),
+      [noteInput(sender, 10n)],
+      randomAddress(),
+    ).sign(sender, assets);
+    const txViewingKey = ViewingKey.generate();
+    const auditor = X25519Keypair.generate();
+    const build = () => {
+      const rail = new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), {
+        kind: "delivered",
+        keyEscrow: false,
+      });
+      return {
+        salt: rail.salt,
+        sealed: sealAudit({
+          rail,
+          audit: { keyEscrow: false, fullOpenings: false },
+          layout: {
+            key: { kind: "confidential", class: 32, inputPrefixes: false },
+            keyEscrow: false,
+            inputs: 1,
+            outputs: 2,
+            exits: 0n,
+          },
+          published: [{ kind: "delivered" as const }, { kind: "delivered" as const }].map(
+            (wire, slotIndex) => ({
+              output: proofInputs.outputs[slotIndex]!,
+              slotIndex,
+              wire: {
+                ...wire,
+                hash: new Uint8Array(32) as Bytes32,
+                u: new Uint8Array(32) as Bytes32,
+                body: new Uint8Array(104),
+              },
+            }),
+          ),
+          proofInputs,
+          sender: sender.shieldedAddress(),
+          auditor: auditor.publicKey(),
+        }),
+      };
+    };
+    const first = build();
+    const second = build();
+    try {
+      expect(first.salt).not.toEqual(second.salt);
+      expect(first.sealed.ephemeralSecret).not.toEqual(second.sealed.ephemeralSecret);
+      expect(first.sealed.ephemeralPublicKey.u()).not.toEqual(second.sealed.ephemeralPublicKey.u());
+      // One plaintext under two keys, a repeated key and nonce would repeat these bytes.
+      expect(first.sealed.envelope).not.toEqual(second.sealed.envelope);
+    } finally {
+      first.sealed.ephemeralSecret.fill(0);
+      second.sealed.ephemeralSecret.fill(0);
       auditor.destroy();
     }
   });

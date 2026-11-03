@@ -76,6 +76,8 @@ function transaction(
 function delivered(
   recipient: ShieldedKeypair,
   hash = note(recipient).hash,
+  owner = recipient.shieldedAddress(),
+  keyEscrow = false,
 ): IndexedShieldedTransaction {
   const txKey = ViewingKey.generate();
   const viewing = recipient.shieldedAddress().viewingPublicKey;
@@ -87,7 +89,12 @@ function delivered(
     outputIndex: 0,
     firstNullifier: FIRST_NULLIFIER,
   });
-  const body = sealDeliveredBody(slotSecret, { blinding: blinding(), amount: AMOUNT });
+  const body = sealDeliveredBody(slotSecret, {
+    blinding: blinding(),
+    amount: AMOUNT,
+    ownerKey: owner.signingPublicKey.confidentialViewTag(),
+    nullifierPk: keyEscrow ? undefined : owner.nullifierPublicKey,
+  });
   return transaction(
     txKey,
     viewing.u(),
@@ -119,6 +126,32 @@ describe("openRingNotes", () => {
     expect(plain.utxos).toEqual([]);
     const stranger = await opened(LocalRingKeys.fromKeypair(ShieldedKeypair.generate()), [tx]);
     expect(stranger).toEqual({ utxos: [], pending: 0 });
+  });
+
+  it("refuses a body naming another owner though its commitment rebuilds", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const other = ShieldedKeypair.generate().shieldedAddress();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const named = await opened(keys, [delivered(recipient, note(recipient).hash, other)]);
+    expect(named).toEqual({ utxos: [], pending: 0 });
+    const address = recipient.shieldedAddress();
+    const owner = {
+      signingPublicKey: address.signingPublicKey,
+      nullifierPublicKey: other.nullifierPublicKey,
+      viewingPublicKey: address.viewingPublicKey,
+    };
+    const nullifier = await opened(keys, [
+      delivered(recipient, note(recipient).hash, owner as unknown as typeof other),
+    ]);
+    expect(nullifier).toEqual({ utxos: [], pending: 0 });
+  });
+
+  it("opens a key escrow body of the owner's key alone", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
+      delivered(recipient, note(recipient).hash, recipient.shieldedAddress(), true),
+    ]);
+    expect(notes.utxos.map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
   });
 
   it("keeps no note and counts it pending when no registered mint rebuilds its commitment", async () => {

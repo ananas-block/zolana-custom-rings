@@ -37,8 +37,11 @@ import {
   type TransferKeyCircuit,
 } from "../../protocol/proof/transfer-shapes.js";
 import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
-import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
-import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
+import {
+  auditLayoutValue,
+  deliveredBodyLen,
+  type AuditLayout,
+} from "../../protocol/codec/ring-disclosure-layout.js";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
 
@@ -65,7 +68,7 @@ export interface AuditEnvelopeProofInputs {
   /** The auditor's X25519 u without the tag byte. */
   readonly auditorPk: Bytes32;
   readonly salt: Bytes16;
-  /** The statement's layout element, its flags fix the published fields. */
+  /** The statement's layout element, its flags fix the ciphertext lengths. */
   readonly layout: AuditLayout;
 }
 
@@ -147,6 +150,8 @@ export interface TransferProofInputs extends AuditEnvelopeProofInputs, PolicyPro
   readonly publicInputHash: Bytes32;
   readonly exempt: boolean;
   readonly approvalRequired: boolean;
+  /** The published nullifier count, the input slots past it carry no UTXO. */
+  readonly inputCount: number;
   readonly privateTxHash: Bytes32;
   /** SPP's blinding of the hash, the proof reopens it with no address input. */
   readonly privateTxBlinding: Bytes32;
@@ -172,8 +177,6 @@ export interface AnonymousTransferProofRequest extends TransferProofInputs {
   readonly outputs: readonly AnonymousSlotProofInputs[];
   /** Present on the entry key alone. */
   readonly senderKey?: Bytes32;
-  /** The published nullifier count, the slots past it carry no UTXO. */
-  readonly inputCount: number;
   readonly inputs: readonly RingSlotOpening[];
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
 }
@@ -318,7 +321,9 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...transferJson(request),
         inProof: flag(request.inProof),
         delegate: flag(request.delegate),
-        outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
+        outputs: request.outputs.map((output, i) =>
+          deliveredJson(output, deliveredBodyLen(flag(request.layout.keyEscrow)), `outputs[${i}]`),
+        ),
         inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
         inputChain: field(request.inputChain, "inputChain"),
         sender: field(request.sender, "sender"),
@@ -330,7 +335,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...transferJson(request),
         outputs: request.outputs.map((output, i) => anonymousSlotJson(output, `outputs[${i}]`)),
         ...entrySenderKey(request),
-        inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
         inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
         partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
       };
@@ -466,6 +470,7 @@ function transferJson(
     ...envelopeJson(request),
     exempt: flag(request.exempt),
     approvalRequired: flag(request.approvalRequired),
+    inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
     ...policyJson(request, transferCircuit(request)),
@@ -498,12 +503,12 @@ function openingJson(opening: RingSlotOpening, name: string): Json {
   };
 }
 
-function deliveredJson(slot: DeliveredSlotProofInputs, name: string): Json {
+function deliveredJson(slot: DeliveredSlotProofInputs, bodyLength: number, name: string): Json {
   return {
     output: openingJson(slot.output, `${name}.output`),
     recipientKey: hexBytes(slot.recipientKey, 32, `${name}.recipientKey`),
     ownerKey: hexBytes(slot.ownerKey, 32, `${name}.ownerKey`),
-    body: hexBytes(slot.body, RING_DELIVERED_BODY_LEN, `${name}.body`),
+    body: hexBytes(slot.body, bodyLength, `${name}.body`),
   };
 }
 

@@ -43,7 +43,7 @@ import {
   RING_DEPOSIT_AUDIT_SLOTS,
   type RingDepositCapsule,
 } from "../codec/deposit-capsule.js";
-import type { DisclosureLayout } from "../codec/ring-disclosure-layout.js";
+import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
 import {
@@ -67,7 +67,7 @@ export type ConfirmedRingTransaction =
       /** Rust `ConfirmedEvent::input_tree_ids`, an input spent from a tree other than the output tree has no id. */
       inputTreeIds: readonly (number | undefined)[];
       /** The layout the ring program verified the audit proof under, read from its confirmed instruction. */
-      layout: DisclosureLayout;
+      layout: AuditStreamLayout;
     }>
   | Readonly<{
       kind: "deposit";
@@ -820,11 +820,11 @@ function bindConfirmedTransaction(
   }
 }
 
-/** The disclosure layout of the ring's own `Transfer` or `AuthorityTransfer`, the frame the program verified. */
+/** The stream layout of the ring's own `Transfer` or `AuthorityTransfer`, the frame the program verified. */
 function boundLayout(
   found: TrustedEvent,
   published: Readonly<{ anonymous: boolean; outputs: number; inputs: number }>,
-): DisclosureLayout {
+): AuditStreamLayout {
   const instruction = found.wrapper?.data;
   const tag = instruction?.[0];
   if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
@@ -833,7 +833,7 @@ function boundLayout(
   const data = RingTransactData.parse(instruction.subarray(1), rail);
   if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
     throw invalid("transfer.instruction");
-  return RingTransactData.disclosureLayout(data);
+  return RingTransactData.streamLayout(data);
 }
 
 /** Mirrors Rust `settlement_width`, the accounts `append_interface_transfer_accounts` adds. */

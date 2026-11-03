@@ -117,26 +117,35 @@ export interface RingDeliveredNote {
   readonly utxoHash: Bytes32;
 }
 
-/** The body names no mint, `undefined` when no registered asset rebuilds the commitment. */
+/** Held back until a registered asset rebuilds the commitment. */
+export const RING_DELIVERY_UNRESOLVED = "unresolved";
+
+/**
+ * `undefined` for keys other than the owner's, a blinding outside the field or a zero amount in no held asset, a commitment under a sender's choice of keys proves no ownership.
+ */
 export function openRingDelivery(
   slot: RingDeliverySlot,
   opening: RingDeliveryOpening,
   assets: AssetRegistry,
-): RingDeliveredNote | undefined {
+): RingDeliveredNote | typeof RING_DELIVERY_UNRESOLVED | undefined {
   const body = openDeliveredBody(opening.slotSecret, opening.body);
+  const { signingPublicKey, nullifierPublicKey } = opening.owner;
+  const foreign =
+    !equalBytes(body.ownerKey, signingPublicKey.confidentialViewTag()) ||
+    (body.nullifierPk !== undefined && !equalBytes(body.nullifierPk, nullifierPublicKey));
   // be32 below q is the only blinding a commitment binds.
-  if (!isCanonicalField(body.blinding)) return undefined;
+  if (foreign || !isCanonicalField(body.blinding)) return undefined;
   for (const [, asset] of assets.entries()) {
     const utxo = new Utxo({
-      owner: opening.owner.signingPublicKey,
+      owner: signingPublicKey,
       asset,
       amount: body.amount,
       blinding: body.blinding,
       data: new Data(),
       ringProgramId: slot.ring,
     });
-    const utxoHash = utxo.hash(opening.owner.nullifierPublicKey, opening.treeId);
+    const utxoHash = utxo.hash(nullifierPublicKey, opening.treeId);
     if (equalBytes(utxoHash, opening.commitment)) return Object.freeze({ utxo, utxoHash });
   }
-  return undefined;
+  return body.amount === 0n ? undefined : RING_DELIVERY_UNRESOLVED;
 }

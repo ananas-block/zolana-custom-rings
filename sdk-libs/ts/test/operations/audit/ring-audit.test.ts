@@ -5,14 +5,11 @@ import anonymous from "../../../../../test-vectors/audit/audit-disclosure-anonym
 import delivered from "../../../../../test-vectors/audit/audit-disclosure-delivered.json" with { type: "json" };
 import prefixAssignment from "../../../../../test-vectors/audit/prefix-assignment.json" with { type: "json" };
 import {
-  fieldAdd,
   solanaOwnerIdentity,
   encodeBase58,
   treeAddress,
   mergeOutputBlinding,
   mergeOutputKey,
-  bigIntBytes,
-  bytesToBigInt,
   equalBytes,
   poseidon,
   encodeMergeOutputData,
@@ -28,27 +25,48 @@ import {
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import { AssetRegistry, SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
-import { encodeRingOutput, RingScheme } from "../../../src/protocol/transaction/output.js";
+import {
+  encodeRingOutput,
+  readRingOutput,
+  RingScheme,
+  sealDeliveredBody,
+} from "../../../src/protocol/transaction/output.js";
 import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
-import type { DisclosureLayout } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
+  confidentialAuditKey,
+  deliveredBodyLen,
+  firstRecordCounter,
+  maxEvidenceBlocks,
+  recordBlocks,
+  recordRegion,
+  recordSlots,
+  STREAM_FIRST_COUNTER,
+  type AuditStreamLayout,
+} from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  AUDIT_ENC_INFO,
   auditSharedSecret,
   auditorMessageData,
   openTransactionViewingSecret,
-  sealTransactionViewingSecret,
+  symmetricAuditApply,
 } from "../../../src/crypto/audit/audit.js";
+import { ciphertextDigest } from "../../../src/protocol/proof/statement.js";
 import {
+  anonymousCommitments,
+  disclosurePlaintext,
   inputPrefix,
-  openRingDisclosure,
+  inputPrefixes,
   sealRingDisclosure,
   type InputPrefix,
+  type RingDisclosure,
 } from "../../../src/crypto/audit/ring-disclosure.js";
 import {
   KnownUtxoIndex,
   assignPrefixedInputs,
   auditRing,
   auditRingTransaction,
+  auditedUtxos,
   knownUtxoHash,
   type AuditedInput,
   type AuditedUtxo,
@@ -90,19 +108,33 @@ function field(value: string): Bytes32 {
 type Layout = "delivered" | "anonymous";
 type Vector = (typeof delivered.cases)[number] | (typeof anonymous.cases)[number];
 type VectorSlot = Vector["slots"][number];
-type VectorEntry = Readonly<{ layout: Layout; bound: DisclosureLayout; vector: Vector }>;
+type VectorEntry = Readonly<{ layout: Layout; bound: AuditStreamLayout; vector: Vector }>;
 
-/** `exits | key_escrow << 1 | full_openings << 3`, the frame's layout element. */
-function bound(layout: Layout, vector: Vector): DisclosureLayout {
-  const value = vector.layout;
-  const exits = (value & 1) !== 0;
-  const keyEscrow = (value & 2) !== 0;
+/** The delivered case whose rail names its inputs by their prefixes. */
+const IN_PROOF = "in_proof";
+
+/** `key_escrow << 1 | full_openings << 3`, the frame's layout element. */
+function bound(layout: Layout, vector: Vector): AuditStreamLayout {
   const outputs = vector.slots.length;
-  if (layout === "delivered") return { kind: layout, outputs, exits, keyEscrow };
+  const exits = vector.slots.reduce(
+    (bits, slot, index) => (slot.kind === "exit" ? bits | (1n << BigInt(index)) : bits),
+    0n,
+  );
+  if (layout === "delivered") {
+    const key = confidentialAuditKey(outputs, vector.name === IN_PROOF);
+    if (key === undefined) throw new Error("no key at the vector's capacity");
+    return {
+      key,
+      keyEscrow: (vector.layout & 2) !== 0,
+      inputs: vector.input_count,
+      outputs,
+      exits,
+    };
+  }
   if (!("inputs" in vector)) throw new Error("anonymous vector without inputs");
   return {
-    kind: layout,
     key: { kind: vector.key === "entry" ? "entry" : "commitment", class: vector.class },
+    keyEscrow: false,
     inputs: vector.inputs.length,
     outputs,
     exits,
@@ -131,23 +163,107 @@ const PAIR_LAYOUT = PAIR.bound;
 const PAIR_VECTOR = PAIR.vector;
 
 /** The slot's payload under the scheme its rail expands to, exits under scheme 3. */
-function payload(layout: Layout, slot: VectorSlot): Uint8Array {
+function payload(entry: VectorEntryOf, slot: VectorSlot): Uint8Array {
   if (slot.kind === "exit")
     return encodeRingOutput(
       RingScheme.confidential,
       new Uint8Array(CONFIDENTIAL_DATA_FREE_BODY_LEN),
     );
   // The auditor never opens an anonymous body, any scheme 1 or 2 bytes publish.
-  if (layout === "anonymous")
+  if (entry.layout === "anonymous")
     return encodeRingOutput(
       "stream" in slot && slot.stream === "change"
         ? RingScheme.anonymousSender
         : RingScheme.anonymousRecipient,
       new Uint8Array(108).fill(0x5d),
     );
-  const body = "body" in slot ? slot.body : undefined;
-  if (body === undefined) throw new Error("vector slot without a body");
-  return encodeRingOutput(RingScheme.ringConfidentialDelivered, hex(body, 40));
+  const { keyEscrow } = bound(entry.layout, entry.vector);
+  // A hidden dummy publishes bytes no key opens.
+  if (slot.kind === "dummy")
+    return encodeRingOutput(
+      RingScheme.ringConfidentialDelivered,
+      new Uint8Array(deliveredBodyLen(keyEscrow)).fill(0xd0),
+    );
+  return encodeRingOutput(
+    RingScheme.ringConfidentialDelivered,
+    sealDeliveredBody(
+      field(need("slot_secret" in slot ? slot.slot_secret : undefined, "slot_secret")),
+      {
+        blinding: field(slot.blinding),
+        amount: BigInt(need(slot.amount, "amount")),
+        ownerKey: field(need(slot.owner_key, "owner_key")),
+        nullifierPk: keyEscrow ? undefined : field(need(slot.nullifier_pk, "nullifier_pk")),
+      },
+    ),
+  );
+}
+
+type VectorEntryOf = Readonly<{ layout: Layout; vector: Vector }>;
+
+/** The evidence and records of the vector's openings. */
+function vectorDisclosure(entry: VectorEntryOf): RingDisclosure {
+  const { vector } = entry;
+  const layout = bound(entry.layout, vector);
+  const exit = (slot: VectorSlot) => ({
+    kind: "exit" as const,
+    asset: field(need(slot.asset, "asset")),
+    amount: BigInt(need(slot.amount, "amount")),
+  });
+  if (entry.layout === "delivered")
+    return {
+      kind: "delivered",
+      layout,
+      inputs:
+        vector.name === IN_PROOF
+          ? {
+              kind: "prefixes",
+              // The vector names a note it does not list, the evidence is all it publishes of it.
+              prefixes: inputPrefixes([
+                field(`${vector.envelope_plaintext.slice(64, 96)}${"00".repeat(16)}`),
+              ]),
+            }
+          : { kind: "none" },
+      outputs: vector.slots.map((slot) =>
+        slot.kind === "exit"
+          ? {
+              ...exit(slot),
+              nullifierPk: layout.keyEscrow
+                ? undefined
+                : field(need(slot.nullifier_pk, "nullifier_pk")),
+            }
+          : { kind: "body" },
+      ),
+    };
+  if (!("inputs" in vector)) throw new Error("anonymous vector without inputs");
+  return {
+    kind: "anonymous",
+    layout,
+    outputs: vector.slots.map((slot) => {
+      if (slot.kind === "dummy") return { kind: "dummy" };
+      const nullifierPk = field(need(slot.nullifier_pk, "nullifier_pk"));
+      return slot.kind === "exit"
+        ? { ...exit(slot), nullifierPk }
+        : {
+            ...exit(slot),
+            kind: "ring",
+            nullifierPk,
+            ownerKey: field(need(slot.owner_key, "owner_key")),
+          };
+    }),
+    inputs:
+      vector.key === "entry"
+        ? {
+            kind: "openings",
+            senderKey: field(vector.sender_key),
+            senderNullifierPk: field(vector.sender_nullifier_pk),
+            inputs: vector.inputs.map((input) => ({
+              asset: field(input.asset),
+              amount: BigInt(input.amount),
+              blinding: field(input.blinding),
+            })),
+          }
+        : anonymousCommitments(vector.inputs.map((input) => field(input.commitment))),
+  };
 }
 
 /** The nullifier key each owner's escrow record holds, read from the vector's openings. */
@@ -199,14 +315,13 @@ function vectorTransaction(
   entry: Readonly<{ layout: Layout; vector: Vector }>,
   auditor: X25519PublicKey,
 ): IndexedShieldedTransaction {
-  const { layout, vector } = entry;
-  const envelope = sealTransactionViewingSecret(field(vector.tx_viewing_sk), auditor);
+  const { vector } = entry;
   const message = auditorMessageData(
-    {
-      ephemeralPublicKey: envelope.ephemeralPublicKey,
-      sealed: envelope.sealed,
-      disclosure: vector.published.map(field),
-    },
+    sealRingDisclosure({
+      txViewingSecret: field(vector.tx_viewing_sk),
+      auditorPublicKey: auditor,
+      disclosure: vectorDisclosure(entry),
+    }),
     auditor,
   );
   const outputSlots: OutputSlot[] = vector.slots.map((slot, index) => ({
@@ -217,7 +332,7 @@ function vectorTransaction(
       treeId: vector.output_tree_id,
       leafIndex: BigInt(index),
     },
-    payload: payload(layout, slot),
+    payload: payload(entry, slot),
   }));
   const nullifiers =
     "inputs" in vector
@@ -288,7 +403,7 @@ function audit(
     assets?: AssetRegistry;
     transaction?: (transaction: IndexedShieldedTransaction) => IndexedShieldedTransaction;
     inputTreeIds?: readonly (number | undefined)[];
-    layout?: DisclosureLayout;
+    layout?: AuditStreamLayout;
     escrowedKeys?: EscrowedKeys;
     knownUtxos?: KnownUtxos;
   }> = {},
@@ -341,10 +456,49 @@ describe("auditor envelope", () => {
     expect(auditSharedSecret(dh, ephemeralPublicKey, auditor.publicKey())).toEqual(
       field("2590b2b949a2f87b9201e4d065167ea9282c4bd06a32e888e24e33c5bddae54f"),
     );
-    const sealed = field("da94f616e95702bdea89178dd9c4547393ebce9d47e67d0cac1533f13b678b90");
-    expect(openTransactionViewingSecret(auditor, { ephemeralPublicKey, sealed })).toEqual(
+    const envelope = field("da94f616e95702bdea89178dd9c4547393ebce9d47e67d0cac1533f13b678b90");
+    expect(openTransactionViewingSecret(auditor, { ephemeralPublicKey, envelope })).toEqual(
       field("001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e"),
     );
+  });
+});
+
+describe("the shared auditor stream vectors", () => {
+  it.each(VECTORS)("rebuilds the stream of the $layout case $vector.name", (entry) => {
+    const { vector, bound: layout } = entry;
+    expect(layout.exits).toBe(BigInt(vector.exits_bitmap));
+    expect(maxEvidenceBlocks(layout.key)).toBe(vector.max_evidence_blocks);
+    expect(recordBlocks(layout.key)).toBe(vector.record_blocks);
+    expect(firstRecordCounter(layout.key)).toBe(vector.first_record_counter);
+    const eph = X25519Keypair.fromBytes(field(vector.eph_sk));
+    expect(eph.publicKey().u()).toEqual(field(vector.eph_u));
+    const auditor = x25519FromU(field(vector.auditor_u));
+    const secret = auditSharedSecret(eph.ecdh(auditor), eph.publicKey(), auditor);
+    const seal = (counter: number, bytes: Uint8Array) =>
+      symmetricAuditApply(secret, { label: AUDIT_ENC_INFO, counter }, bytes);
+    const plaintext = disclosurePlaintext(vectorDisclosure(entry));
+    const envelopePlaintext = Uint8Array.of(...field(vector.tx_viewing_sk), ...plaintext.evidence);
+    expect(envelopePlaintext).toEqual(hex(vector.envelope_plaintext));
+    const envelope = seal(STREAM_FIRST_COUNTER, envelopePlaintext);
+    expect(envelope).toEqual(hex(vector.envelope));
+    expect(ciphertextDigest(envelope)).toEqual(field(vector.envelope_digest));
+    const slots = recordSlots(layout);
+    expect(vector.records.map((record) => record.slot)).toEqual(slots);
+    const records = vector.records.map((record, index) => {
+      expect(record.record_counter).toBe(recordRegion(layout, record.slot).startCounter);
+      expect(plaintext.records[index]).toEqual(hex(record.record_plaintext));
+      const sealed = seal(record.record_counter, hex(record.record_plaintext));
+      expect(sealed).toEqual(hex(record.record));
+      return sealed;
+    });
+    expect(
+      auditorMessageData({ ephemeralPublicKey: eph.publicKey(), envelope, records }, auditor).data,
+    ).toEqual(hex(vector.message));
+    for (const slot of vector.slots)
+      if (slot.kind === "ring" && "body" in slot) {
+        const payloadBody = readRingOutput(payload(entry, slot)).body;
+        expect(payloadBody).toEqual(hex(need(slot.body, "body")));
+      }
   });
 });
 
@@ -370,7 +524,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     },
   );
 
-  it.each(VECTORS.filter((entry) => entry.bound.kind !== "anonymous" && entry.bound.keyEscrow))(
+  it.each(VECTORS.filter((entry) => entry.bound.keyEscrow))(
     "reports escrowUnknown for every slot of the $layout escrow case without escrow records",
     (entry) => {
       expect(audit(entry).payloadErrors).toEqual(
@@ -380,6 +534,75 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
       );
     },
   );
+
+  it("names each input of the in-proof and authority rails by its prefix, opened or unseen", () => {
+    const auditor = X25519Keypair.generate();
+    const assets = vectorAssets(PAIR.vector);
+    const spentHash = field(PAIR.vector.slots[0]!.output_hash);
+    const layout: AuditStreamLayout = {
+      ...PAIR_LAYOUT,
+      key: { kind: "confidential", class: PAIR_LAYOUT.key.class, inputPrefixes: true },
+      inputs: 2,
+    };
+    const prefix = inputPrefix(spentHash)!;
+    const disclosure = vectorDisclosure(PAIR);
+    const transaction = {
+      ...vectorTransaction(PAIR, auditor.publicKey()),
+      nullifiers: [field(PAIR.vector.first_nullifier), new Uint8Array(32).fill(1) as Bytes32],
+      messages: [
+        auditorMessageData(
+          sealRingDisclosure({
+            txViewingSecret: field(PAIR.vector.tx_viewing_sk),
+            auditorPublicKey: auditor.publicKey(),
+            disclosure: {
+              ...disclosure,
+              layout,
+              inputs: { kind: "prefixes", prefixes: [prefix, undefined] },
+            } as RingDisclosure,
+          }),
+          auditor.publicKey(),
+        ),
+      ],
+    };
+    const audited = auditRingTransaction({ auditor, transaction, assets, layout });
+    expect(audited.payloadErrors).toEqual([]);
+    expect(audited.sender).toBeUndefined();
+    expect(audited.inputs.map((input) => input.opening)).toEqual([
+      { kind: "unseen", prefix },
+      { kind: "dummy" },
+    ]);
+    const known = new KnownUtxoIndex(
+      auditedUtxos(audited).filter(({ commitment }) => equalBytes(commitment, spentHash)),
+    );
+    expect(
+      auditRingTransaction({ auditor, transaction, assets, layout, knownUtxos: known }).inputs[0]
+        ?.opening,
+    ).toMatchObject({ kind: "opened", ring: { kind: "ring", commitment: spentHash } });
+  });
+
+  it("records a body whose blinding is off the slot's as a commitment error", () => {
+    const entry = vectorOf("delivered", "exits");
+    const slot = entry.vector.slots[0]!;
+    const audited = audit(entry, {
+      escrowedKeys: escrowRecords(entry.vector),
+      transaction: withSlot(0, (published) => ({
+        ...published,
+        payload: encodeRingOutput(
+          RingScheme.ringConfidentialDelivered,
+          sealDeliveredBody(
+            field(need("slot_secret" in slot ? slot.slot_secret : undefined, "slot_secret")),
+            {
+              blinding: new Uint8Array(32).fill(0) as Bytes32,
+              amount: BigInt(need(slot.amount, "amount")),
+              ownerKey: field(need(slot.owner_key, "owner_key")),
+              nullifierPk: field(need(slot.nullifier_pk, "nullifier_pk")),
+            },
+          ),
+        ),
+      })),
+    });
+    expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
+  });
 
   it("names a registered mint and leaves an unregistered one to a refresh", () => {
     const exit = (assets: AssetRegistry) =>
@@ -475,6 +698,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
       ({
         utxo: (commitment) =>
           equalBytes(commitment, candidate.commitment) ? candidate.utxo : index.utxo(commitment),
+        withPrefixOfAnyone: (prefix) => index.withPrefixOfAnyone(prefix),
         withPrefix: (ownerKey, prefix) =>
           prefix === inputPrefix(later)
             ? [candidate.commitment]
@@ -503,6 +727,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     const later = field(need(vector.inputs[1], "input 1").commitment);
     const doubled = {
       utxo: (commitment) => index.utxo(commitment),
+      withPrefixOfAnyone: (prefix) => index.withPrefixOfAnyone(prefix),
       withPrefix: (ownerKey, prefix) => [
         ...index.withPrefix(ownerKey, prefix),
         ...index.withPrefix(ownerKey, prefix),
@@ -586,6 +811,7 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
             owner: { kind: "deposited", ownerHash: new Uint8Array(32).fill(9) as Bytes32 },
           };
         },
+        withPrefixOfAnyone: (prefix) => utxos.withPrefixOfAnyone(prefix),
         withPrefix: (ownerKey, prefix) => utxos.withPrefix(ownerKey, prefix),
       },
     });
@@ -635,14 +861,14 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(audit(entry).inputs.every((input) => ringOf(input) === undefined)).toBe(true);
   });
 
-  it("records a disclosed field moved off its opening as that slot's commitment error", () => {
+  it("records a record byte moved off its opening as that slot's commitment error", () => {
     const audited = audit(PAIR, {
       transaction: (transaction) => {
         const message = transaction.messages[0]!;
         const data = message.data.slice();
-        // Field 2 is the exit's masked nullifier key, one more stays a canonical field.
-        const at = 65 + 2 * 32;
-        data.set(bigIntBytes(fieldAdd(bytesToBigInt(data.slice(at, at + 32)), 1n)), at);
+        // The exit's nullifier key ends the message, its low bit keeps the key canonical.
+        const last = data.length - 1;
+        data[last] = (data[last] ?? 0) ^ 1;
         return { ...transaction, messages: [{ viewTag: message.viewTag, data }] };
       },
     });
@@ -650,17 +876,29 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(audited.outputs.map((output) => output.slotIndex)).toEqual([0]);
   });
 
-  it("refuses a delivered body under an anonymous scheme as a frame error", () => {
+  it("opens a delivered ring output from its body and a hidden dummy from its commitment alone", () => {
     const entry = vectorOf("delivered", "exits");
-    const slot = entry.vector.slots[2]!;
-    const body = "body" in slot ? slot.body : undefined;
-    const audited = audit(entry, {
-      transaction: withSlot(2, (published) => ({
-        ...published,
-        payload: encodeRingOutput(RingScheme.anonymousRecipient, hex(need(body, "body"), 40)),
-      })),
+    const assets = vectorAssets(entry.vector);
+    const audited = audit(entry, { assets });
+    entry.vector.slots.forEach((slot, index) => {
+      const opening = audited.outputs[index]?.opening;
+      expect(opening?.kind).toBe(slot.kind);
     });
-    expect(audited.payloadErrors).toEqual([{ slotIndex: 2, kind: "frame" }]);
+  });
+
+  it("refuses a delivered body under an anonymous scheme or of another length as a frame error", () => {
+    const entry = vectorOf("delivered", "exits");
+    const framed = (scheme: RingScheme, length: number) =>
+      audit(entry, {
+        transaction: withSlot(0, (published) => ({
+          ...published,
+          payload: encodeRingOutput(scheme, new Uint8Array(length)),
+        })),
+      }).payloadErrors;
+    expect(framed(RingScheme.anonymousRecipient, 104)).toEqual([{ slotIndex: 0, kind: "frame" }]);
+    expect(framed(RingScheme.ringConfidentialDelivered, 72)).toEqual([
+      { slotIndex: 0, kind: "frame" },
+    ]);
   });
 
   it("opens an anonymous output from its disclosure whatever body it publishes", () => {
@@ -746,13 +984,12 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     const transaction = vectorTransaction(PAIR, auditor.publicKey());
     const alias = field(PAIR_VECTOR.tx_viewing_sk);
     alias[0] = (alias[0] ?? 0) | 1;
-    const envelope = sealTransactionViewingSecret(alias, auditor.publicKey());
     const message = auditorMessageData(
-      {
-        ephemeralPublicKey: envelope.ephemeralPublicKey,
-        sealed: envelope.sealed,
-        disclosure: PAIR_VECTOR.published.map(field),
-      },
+      sealRingDisclosure({
+        txViewingSecret: alias,
+        auditorPublicKey: auditor.publicKey(),
+        disclosure: vectorDisclosure(PAIR),
+      }),
       auditor.publicKey(),
     );
     expect(() =>
@@ -766,24 +1003,19 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
   });
 
   it("audits under the layout the frame bound and refuses one off the published counts", () => {
-    // The escrow layout leaves out every key, the field count no longer matches the message.
+    // The escrow layout leaves out every key, the record length no longer matches the message.
     expect(() =>
       audit(PAIR, {
-        layout: { ...PAIR_LAYOUT, kind: "delivered", keyEscrow: true },
+        layout: { ...PAIR_LAYOUT, keyEscrow: true },
       }),
     ).toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "malformed" }));
     expect(() =>
       audit(PAIR, {
-        layout: {
-          kind: "delivered",
-          outputs: 4,
-          exits: true,
-          keyEscrow: false,
-        },
+        layout: { ...PAIR_LAYOUT, outputs: 4 },
       }),
     ).toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "layout" }));
-    // The program sets the exits bit exactly when a published slot exits.
-    expect(() => audit(PAIR, { layout: { ...PAIR_LAYOUT, exits: false } })).toThrow(
+    // The program sets each exits bit exactly when its published slot exits.
+    expect(() => audit(PAIR, { layout: { ...PAIR_LAYOUT, exits: 0n } })).toThrow(
       ringError("RING_AUDIT_MESSAGE", { reason: "layout" }),
     );
   });
@@ -1063,22 +1295,11 @@ describe("auditRing", () => {
 });
 
 describe("recoverRingMemberNotes", () => {
-  const key = {
-    txViewingSecret: field(PAIR_VECTOR.tx_viewing_sk),
-    salt: hex<Bytes16>(PAIR_VECTOR.salt, 16),
-  };
   const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 
-  /** The delivered `entry` with its first ring output paid to `owner`, the disclosure sealed again. */
+  /** The delivered `entry` with its first ring output paid to `owner`, its stream sealed again. */
   function ownedTransfer(owner: ShieldedKeypair, auditor: X25519PublicKey, entry = PAIR) {
     const address = owner.shieldedAddress();
-    const ownerKey = address.signingPublicKey.ed25519();
-    const opened = openRingDisclosure(key, {
-      layout: entry.bound,
-      fields: entry.vector.published.map(field),
-      exits: entry.vector.slots.map((slot) => slot.kind === "exit"),
-    });
-    if (opened.kind !== "delivered") throw new Error("delivered vector");
     const slot = entry.vector.slots[0]!;
     const commitment = new Utxo({
       owner: address.signingPublicKey,
@@ -1087,17 +1308,17 @@ describe("recoverRingMemberNotes", () => {
       blinding: field(slot.blinding),
       ringProgramId: RING,
     }).hash(address.nullifierPublicKey, entry.vector.output_tree_id);
-    const nullifierPk = opened.layout.keyEscrow ? undefined : address.nullifierPublicKey;
-    const vector: Vector = {
+    const vector = {
       ...entry.vector,
-      published: sealRingDisclosure(key, {
-        ...opened,
-        outputs: opened.outputs.map((output, index) =>
-          index === 0 && output.kind === "ring" ? { ...output, ownerKey, nullifierPk } : output,
-        ),
-      }).map(toHex),
       slots: entry.vector.slots.map((vectorSlot: VectorSlot, index) =>
-        index === 0 ? { ...vectorSlot, output_hash: toHex(commitment) } : vectorSlot,
+        index === 0
+          ? {
+              ...vectorSlot,
+              owner_key: toHex(address.signingPublicKey.ed25519()),
+              nullifier_pk: toHex(address.nullifierPublicKey),
+              output_hash: toHex(commitment),
+            }
+          : vectorSlot,
       ),
     } as Vector;
     return {

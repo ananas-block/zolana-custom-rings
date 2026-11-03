@@ -27,7 +27,6 @@ export {
   RingAddress,
   RingPaymentRequest,
   openTransactionViewingSecret,
-  sealTransactionViewingSecret,
   type AuditorEnvelope,
 } from "@heliuslabs/zolana-custom-rings/keypair";
 export { openRingDisclosure, policyStatementHash } from "@heliuslabs/zolana-custom-rings/advanced";

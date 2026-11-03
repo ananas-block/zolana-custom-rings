@@ -318,7 +318,7 @@ export class CustomRingTransfer {
     const owner = inProofOwnerKey(this.#inProofOwner, sender);
     const prepared = this.#input.transfer.prepare();
     checkWithdrawalAccounts(prepared, this.#withdrawal);
-    const delivery = confidentialDelivery(prepared.shape, "confidential");
+    const delivery = confidentialDelivery(prepared.shape, "confidential", config.keyEscrow);
     const rail = new RingOutputRail(
       await transactionKey(keys, sender, prepared, context),
       prepared.firstNullifier,
@@ -815,7 +815,7 @@ export class DelegateTransfer {
     const rail = new RingOutputRail(
       ViewingKey.generate(),
       prepared.firstNullifier,
-      confidentialDelivery(prepared.shape, "delegate"),
+      confidentialDelivery(prepared.shape, "delegate", config.keyEscrow),
     );
     try {
       const proofInputs = rail.encrypt({
@@ -887,8 +887,12 @@ async function activeConfig(
   return config;
 }
 
-function confidentialDelivery(shape: Shape, rail: "confidential" | "delegate"): RingDelivery {
-  if (DELIVERED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "delivered" };
+function confidentialDelivery(
+  shape: Shape,
+  rail: "confidential" | "delegate",
+  keyEscrow: boolean,
+): RingDelivery {
+  if (DELIVERED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "delivered", keyEscrow };
   throw new RingError("RING_TRANSACT_DATA_INVALID", {
     details: { reason: "RingShapeUnkeyed", rail },
   });

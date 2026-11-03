@@ -52,8 +52,9 @@ import { ringTransferStatement, transferStatementHash } from "../../protocol/pro
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
+  exitsBitmap,
   publishesRecipients,
-  ringDisclosureLayout,
+  ringStreamLayout,
   ringSppInputs,
   type InputTrees,
   type PolicyProof,
@@ -254,18 +255,19 @@ export function sealStagedTransfer(
   const published = rail.publishedSlots(staged.proofInputs, sender);
   const senderBundle = rail.publishedSender(staged.proofInputs);
   const audit: AuditLayout = Object.freeze({
-    exits: published.some((slot) => slot.wire.kind === "exit"),
     keyEscrow: config.keyEscrow,
     // A default-ring input takes the entry key, every commitment key refuses ring id zero.
     fullOpenings: ringRail === "anonymous" && spendsDefaultRing(staged.proofInputs),
   });
-  const layout = ringDisclosureLayout({
+  const layout = ringStreamLayout({
     rail: ringRail,
     nIn: shape.inputs,
     nOut: shape.outputs,
     inputs: publishedInputs.length,
     outputs: published.length,
-    layout: audit,
+    keyEscrow: audit.keyEscrow,
+    fullOpenings: audit.fullOpenings,
+    exits: exitsBitmap(published.map((slot) => slot.wire)),
     ownerInProof: spend.inProofOwner !== undefined,
   });
   const auditor = config.auditorPublicKey;
@@ -387,8 +389,8 @@ async function assembleStagedTransfer<T>(
       ...(senderBundle === undefined ? {} : { sender: senderBundle }),
       txViewingU: rail.txViewingKey.publicKey().u(),
       ephemeralU: sealed.ephemeralPublicKey.u(),
-      sealed: sealed.sealed,
-      disclosure: sealed.fields,
+      envelope: sealed.envelope,
+      records: sealed.records,
       privateTxHash,
       approvalRequired: policy.approvalRequired,
       exempt: policy.exempt,
@@ -600,8 +602,8 @@ function previewData(
     sender?: SenderBundle;
     txViewingU: Bytes32;
     ephemeralU: Bytes32;
-    sealed: Bytes32;
-    disclosure: readonly Bytes32[];
+    envelope: Uint8Array;
+    records: readonly Uint8Array[];
     privateTxHash: Bytes32;
     approvalRequired: boolean;
     exempt: boolean;
@@ -636,8 +638,8 @@ function previewData(
     outputs: Object.freeze(outputs),
     ...(input.sender === undefined ? {} : { sender: input.sender }),
     ephU: input.ephemeralU,
-    sealed: input.sealed,
-    disclosure: input.disclosure,
+    envelope: input.envelope,
+    records: input.records,
     privateTxHash: input.privateTxHash,
     ...(input.rail === "anonymous"
       ? {

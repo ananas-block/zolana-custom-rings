@@ -31,7 +31,6 @@ describe("ring domains", () => {
     expect(RingDomain).toEqual({
       deliveredSlotSecret: ascii("CRDS"),
       blindingSeed: ascii("CRBS"),
-      disclosurePad: ascii("CROD"),
       transferStatement: ascii("CRTX"),
       policyTable: ascii("CRTB"),
       queueWrite: ascii("CRQW"),

@@ -1,60 +1,60 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { BN254_SCALAR_ORDER, bigIntToBytes, isCanonicalField } from "@heliuslabs/zolana/internal";
+import stream from "../../../../test-vectors/audit/auditor-stream.json" with { type: "json" };
+import { BN254_SCALAR_ORDER, bigIntToBytes } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
-  ANONYMOUS_SLOT_BYTES,
-  DISCLOSURE_CHUNK_BYTES,
-  DISCLOSURE_SENDER_KEY_BYTES,
-  anonymousFields,
-  deliveredFields,
-  disclosureFieldCount,
-  type DisclosureLayout,
+  ANONYMOUS_RECORD_LEN,
+  envelopeRegion,
+  recordRegion,
+  recordSlots,
+  type AuditStreamLayout,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import type * as Audit from "../../src/crypto/audit/audit.js";
-import { maskDisclosure, unmaskDisclosure } from "../../src/crypto/audit/audit.js";
+import {
+  AUDIT_ENC_INFO,
+  auditSharedSecret,
+  auditorMessageData,
+  openAuditorRegions,
+  openTransactionViewingSecret,
+  parseAuditorMessage,
+  symmetricAuditApply,
+} from "../../src/crypto/audit/audit.js";
 import {
   anonymousCommitments,
   decodeDisclosure,
-  disclosureFields,
-  disclosureLayout,
+  disclosurePlaintext,
   inputPrefix,
-  inputPrefixPair,
-  splitInputPrefixPair,
+  inputPrefixes,
+  openRingDisclosure,
+  sealRingDisclosure,
   type InputPrefix,
   type RingDisclosure,
 } from "../../src/crypto/audit/ring-disclosure.js";
-import { RingDomain } from "../../src/crypto/derivation/ring-domain.js";
+import { openDeliveredBody, sealDeliveredBody } from "../../src/protocol/transaction/output.js";
 
-const packing = vi.hoisted(
-  (): { blocks: Uint8Array[]; chunks: Uint8Array[]; unpacked: Uint8Array[] } => ({
-    blocks: [],
-    chunks: [],
-    unpacked: [],
-  }),
-);
+const sealedPlaintexts = vi.hoisted((): Uint8Array[] => []);
 vi.mock("../../src/crypto/audit/audit.js", async (importOriginal) => {
   const actual = await importOriginal<typeof Audit>();
   return {
     ...actual,
-    packDisclosure: (plaintext: Uint8Array) => {
-      packing.blocks.push(plaintext);
-      const chunks = actual.packDisclosure(plaintext);
-      packing.chunks.push(...chunks);
-      return chunks;
-    },
-    unpackDisclosure: (fields: readonly Bytes32[], length: number) => {
-      const plaintext = actual.unpackDisclosure(fields, length);
-      packing.unpacked.push(plaintext);
-      return plaintext;
+    sealAuditorStream: (input: Parameters<typeof actual.sealAuditorStream>[0]) => {
+      sealedPlaintexts.push(input.envelope, ...input.records.map((record) => record.bytes));
+      return actual.sealAuditorStream(input);
     },
   };
 });
 
-await initializePoseidon();
+beforeAll(initializePoseidon);
 
 const MODULUS = bigIntToBytes(BN254_SCALAR_ORDER) as Bytes32;
+const TX_SECRET = new Uint8Array(32).fill(0x48) as Bytes32;
+
+function hex(value: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(value, "hex"));
+}
 
 function field(byte: number): Bytes32 {
   const out = new Uint8Array(32).fill(byte);
@@ -66,53 +66,51 @@ function bytes(byte: number): Bytes32 {
   return new Uint8Array(32).fill(byte) as Bytes32;
 }
 
-function wiped(buffer: Uint8Array): boolean {
-  return buffer.every((byte) => byte === 0);
+function prefix(hash: Bytes32): InputPrefix {
+  const value = inputPrefix(hash);
+  if (value === undefined) throw new Error("hash without a prefix");
+  return value;
 }
 
-function setPacked(fields: readonly Bytes32[], start: number, at: number, value: number): void {
-  fields[start + Math.floor(at / DISCLOSURE_CHUNK_BYTES)]![1 + (at % DISCLOSURE_CHUNK_BYTES)] =
-    value;
-}
-
-/** Rust `delivered`. */
-function delivered(): Extract<RingDisclosure, { kind: "delivered" }> {
-  const ring = (byte: number) => ({
-    kind: "ring" as const,
-    ownerKey: bytes(byte),
-    nullifierPk: field(byte),
-  });
+/** An exit at slots 1 and 4, the other slots publish a delivered body. */
+function delivered(
+  keyEscrow = false,
+  inputPrefixesNamed = true,
+): Extract<RingDisclosure, { kind: "delivered" }> {
   const exit = (byte: number, amount: bigint) => ({
     kind: "exit" as const,
-    nullifierPk: field(byte),
+    nullifierPk: keyEscrow ? undefined : field(byte),
     asset: field(byte + 1),
     amount,
   });
-  const dummy = { kind: "dummy" as const };
+  const body = { kind: "body" as const };
   return {
     kind: "delivered",
-    layout: { outputs: 8, exits: true, keyEscrow: false },
-    seedOut: field(1),
-    outputs: [
-      ring(0xb0),
-      exit(0x20, 0n),
-      dummy,
-      ring(0xb3),
-      exit(0x24, 40n),
-      dummy,
-      ring(0xb6),
-      ring(0xb7),
-    ],
+    layout: {
+      key: { kind: "confidential", class: 16, inputPrefixes: inputPrefixesNamed },
+      keyEscrow,
+      inputs: 2,
+      outputs: 8,
+      exits: 0b1_0010n,
+    },
+    inputs: inputPrefixesNamed
+      ? { kind: "prefixes", prefixes: inputPrefixes([field(0x60), undefined]) }
+      : { kind: "none" },
+    outputs: [body, exit(0x20, 0n), body, body, exit(0x24, 40n), body, body, body],
   };
 }
-const DELIVERED_EXITS = [false, true, false, false, true, false, false, false];
 
-/** Rust `anonymous`. */
-function anonymous(): Extract<RingDisclosure, { kind: "anonymous" }> {
+/** The entry key at two published inputs, slot 1 an exit and slot 2 a dummy. */
+function entry(): Extract<RingDisclosure, { kind: "anonymous" }> {
   return {
     kind: "anonymous",
-    layout: { key: { kind: "entry", class: 8 }, inputs: 2, outputs: 4, exits: true },
-    seedOut: field(1),
+    layout: {
+      key: { kind: "entry", class: 8 },
+      keyEscrow: false,
+      inputs: 2,
+      outputs: 4,
+      exits: 0b10n,
+    },
     outputs: [
       {
         kind: "ring",
@@ -139,124 +137,147 @@ function anonymous(): Extract<RingDisclosure, { kind: "anonymous" }> {
     },
   };
 }
-const ANONYMOUS_EXITS = [false, true, false, false];
 
 function commitments(): Extract<RingDisclosure, { kind: "anonymous" }> {
   return {
-    ...anonymous(),
-    layout: { key: { kind: "commitment", class: 16 }, inputs: 4, outputs: 4, exits: true },
+    ...entry(),
+    layout: {
+      key: { kind: "commitment", class: 16 },
+      keyEscrow: false,
+      inputs: 4,
+      outputs: 4,
+      exits: 0b10n,
+    },
     inputs: anonymousCommitments([field(0x60), field(0x61), undefined, field(0x63)]),
   };
 }
 
-/** The smallest delivered capacity, a ring output and an exit. */
-function pair(): Extract<RingDisclosure, { kind: "delivered" }> {
-  return {
-    kind: "delivered",
-    layout: { outputs: 2, exits: true, keyEscrow: false },
-    seedOut: field(1),
-    outputs: [
-      { kind: "ring", ownerKey: bytes(0x30), nullifierPk: field(0x30) },
-      { kind: "exit", nullifierPk: field(0x40), asset: field(0x41), amount: 64n },
-    ],
-  };
-}
-const PAIR_EXITS = [false, true];
+describe("auditor-stream.json", () => {
+  it.each([...stream.labels, ...stream.records])(
+    "$name reads the worked stream at its counter",
+    (vector) => {
+      const secret = hex(vector.secret) as Bytes32;
+      const position = {
+        label: new TextEncoder().encode(vector.label),
+        counter: vector.counter,
+      };
+      expect(symmetricAuditApply(secret, position, hex(vector.plaintext))).toEqual(
+        hex(vector.ciphertext),
+      );
+      expect(symmetricAuditApply(secret, position, hex(vector.ciphertext))).toEqual(
+        hex(vector.plaintext),
+      );
+    },
+  );
 
-function zeros(layout: DisclosureLayout): Bytes32[] {
-  return Array.from({ length: disclosureFieldCount(layout) }, () => new Uint8Array(32) as Bytes32);
-}
-
-describe("ring disclosure codec", () => {
-  beforeEach(() => {
-    packing.blocks.length = 0;
-    packing.chunks.length = 0;
-    packing.unpacked.length = 0;
+  it("roots the auditor stream in the agreement of both tagged keys", () => {
+    const eph = X25519Keypair.fromBytes(hex(stream.eph_sk) as Bytes32);
+    expect(eph.publicKey().u()).toEqual(hex(stream.eph_u));
+    const auditor = X25519PublicKey.fromBytes(
+      Uint8Array.of(4, ...hex(stream.auditor_u)) as Bytes33,
+    );
+    const secret = auditSharedSecret(eph.ecdh(auditor), eph.publicKey(), auditor);
+    const signer = stream.labels.find((vector) => vector.name === "envelope_signer");
+    expect(signer === undefined ? "" : hex(signer.secret)).toEqual(secret);
   });
 
   it.each([
-    ["pair", pair, PAIR_EXITS],
-    ["delivered", delivered, DELIVERED_EXITS],
-    ["anonymous", anonymous, ANONYMOUS_EXITS],
-    ["commitment", commitments, ANONYMOUS_EXITS],
-  ] as const)("wipes every %s block it packs or unpacks and round trips", (_, build, exits) => {
-    const disclosure = build();
-    const plaintext = disclosureFields(disclosure);
+    ["envelope_commitment_n2", { kind: "commitment", class: 24 }, 2],
+    ["envelope_entry_n1", { kind: "entry", class: 8 }, 1],
+    ["envelope_in_proof_n2", { kind: "confidential", class: 32, inputPrefixes: true }, 2],
+    ["envelope_signer", { kind: "confidential", class: 32, inputPrefixes: false }, 2],
+  ] as const)("%s decodes under its layout", (name, key, inputs) => {
+    const vector = stream.labels.find((candidate) => candidate.name === name);
+    if (vector === undefined) throw new Error(`no ${name} vector`);
+    const plaintext = hex(vector.plaintext);
+    const layout: AuditStreamLayout = {
+      key,
+      keyEscrow: false,
+      inputs,
+      outputs: 2,
+      exits: 0n,
+    };
+    expect(plaintext.length).toBe(envelopeRegion(layout).length);
+    const anonymous = key.kind !== "confidential";
+    const records = anonymous
+      ? recordSlots(layout).map(() => new Uint8Array(ANONYMOUS_RECORD_LEN))
+      : [];
+    const opened = decodeDisclosure(layout, { evidence: plaintext.subarray(32), records });
+    expect(disclosurePlaintext(opened).evidence).toEqual(plaintext.subarray(32));
+  });
 
-    expect(packing.blocks.length).toBeGreaterThan(0);
-    expect(packing.blocks.filter((block) => !wiped(block))).toEqual([]);
-    expect(decodeDisclosure({ layout: disclosureLayout(disclosure), exits }, plaintext)).toEqual(
+  it.each(["body_keyed", "body_key_escrow"])("%s opens to its fields", (name) => {
+    const vector = stream.labels.find((candidate) => candidate.name === name);
+    if (vector === undefined) throw new Error(`no ${name} vector`);
+    const plaintext = hex(vector.plaintext);
+    const opened = openDeliveredBody(hex(vector.secret) as Bytes32, hex(vector.ciphertext));
+    expect(opened.blinding).toEqual(plaintext.subarray(0, 32));
+    expect(opened.ownerKey).toEqual(plaintext.subarray(40, 72));
+    expect(opened.nullifierPk).toEqual(
+      plaintext.length === 72 ? undefined : plaintext.subarray(72),
+    );
+    expect(sealDeliveredBody(hex(vector.secret) as Bytes32, opened)).toEqual(
+      hex(vector.ciphertext),
+    );
+  });
+});
+
+describe("ring disclosure codec", () => {
+  it.each([
+    ["delivered with input prefixes", delivered],
+    ["delivered on the signer rail", () => delivered(false, false)],
+    ["delivered under key escrow", () => delivered(true)],
+    ["the entry key", entry],
+    ["the commitment key", commitments],
+  ] as const)("reads back %s", (_, build) => {
+    const disclosure = build();
+    expect(decodeDisclosure(disclosure.layout, disclosurePlaintext(disclosure))).toEqual(
       disclosure,
     );
-    expect(packing.unpacked.length).toBeGreaterThan(0);
-    expect(packing.unpacked.filter((block) => !wiped(block))).toEqual([]);
   });
 
-  it("wipes every field it placed when a later part is refused", () => {
-    const entry = anonymous();
-    if (entry.inputs.kind !== "openings") throw new Error("entry fixture");
-    const disclosure = { ...entry, inputs: { ...entry.inputs, senderNullifierPk: MODULUS } };
-
-    expect(() => disclosureFields(disclosure)).toThrow("KEYPAIR_DISCLOSURE_FIELD");
-    expect(packing.chunks.length).toBeGreaterThan(0);
-    expect(packing.chunks.filter((chunk) => !wiped(chunk))).toEqual([]);
-    expect(packing.blocks.filter((block) => !wiped(block))).toEqual([]);
-  });
-
-  it("marks an empty delivered slot by its disclosed key, by its zero slot under key escrow", () => {
-    const disclosure = delivered();
-    const layout = disclosureLayout(disclosure);
-    const at = deliveredFields(disclosure.layout);
-    const decode = (plaintext: readonly Bytes32[]) =>
-      decodeDisclosure({ layout, exits: DELIVERED_EXITS }, plaintext);
-
-    const zeroKey = disclosureFields(disclosure);
-    zeroKey[at.nullifierPks!.start] = new Uint8Array(32) as Bytes32;
-    expect(() => decode(zeroKey)).toThrow("KEYPAIR_DISCLOSURE_PADDING");
-
-    const zeroOwner = disclosureFields(disclosure);
-    for (let byte = 0; byte < 32; byte++) setPacked(zeroOwner, at.slots.start, byte, 0);
-    const opened = decode(zeroOwner);
-    expect(opened.kind === "delivered" && opened.outputs[0]).toEqual({
-      kind: "ring",
-      ownerKey: new Uint8Array(32),
-      nullifierPk: field(0xb0),
-    });
-
-    const escrowed = {
-      ...disclosure,
-      layout: { ...disclosure.layout, keyEscrow: true },
-      outputs: disclosure.outputs.map((output) =>
-        output.kind === "dummy" ? output : { ...output, nullifierPk: undefined },
-      ),
-    };
-    const escrowedAt = deliveredFields(escrowed.layout);
-    const empty = disclosureFields(escrowed);
-    for (let byte = 0; byte < 32; byte++) setPacked(empty, escrowedAt.slots.start, byte, 0);
-    const reopened = decodeDisclosure(
-      { layout: disclosureLayout(escrowed), exits: DELIVERED_EXITS },
-      empty,
-    );
-    expect(reopened.kind === "delivered" && reopened.outputs[0]).toEqual({ kind: "dummy" });
-  });
-
-  it("names spent UTXO 0 by its hash and packs two later prefixes a field", () => {
-    const disclosure = commitments();
-    const at = anonymousFields(disclosure.layout);
-    if (at.inputs.kind !== "commitments") throw new Error("commitment layout");
-    const plaintext = disclosureFields(disclosure);
-    const prefix = (hash: Bytes32) =>
-      BigInt(`0x${Buffer.from(hash.subarray(0, 16)).toString("hex")}`);
-    expect(plaintext[at.inputs.first]).toEqual(field(0x60));
-    expect(plaintext.slice(at.inputs.prefixPairs.start, at.inputs.prefixPairs.end)).toEqual([
-      bigIntToBytes(prefix(field(0x61)) << 126n),
-      bigIntToBytes(prefix(field(0x63)) << 126n),
+  it("transmits nothing past the published input count and no delivered slot record", () => {
+    const plaintext = disclosurePlaintext(delivered());
+    expect(plaintext.evidence).toHaveLength(32);
+    expect(plaintext.evidence.subarray(0, 16)).toEqual(field(0x60).subarray(0, 16));
+    expect(plaintext.evidence.subarray(16)).toEqual(new Uint8Array(16));
+    expect(plaintext.records.map((record) => record.length)).toEqual([72, 72]);
+    expect(disclosurePlaintext(delivered(true)).records.map((record) => record.length)).toEqual([
+      40, 40,
     ]);
-    // No sender key leads the slots of a commitment key.
-    expect(packing.blocks.at(-1)?.length).toBe(4 * ANONYMOUS_SLOT_BYTES);
+    expect(disclosurePlaintext(delivered(false, false)).evidence).toHaveLength(0);
   });
 
-  it("refuses spent UTXO 0 as a dummy, a later hash below 2^128 and a pair it cannot split", () => {
+  it("lays out every record and the entry evidence as the contract names them", () => {
+    const disclosure = entry();
+    const { evidence, records } = disclosurePlaintext(disclosure);
+    expect(evidence).toHaveLength(64 + 2 * 72);
+    expect(evidence.subarray(0, 32)).toEqual(bytes(0xa1));
+    expect(evidence.subarray(32, 64)).toEqual(field(0x5a));
+    expect(evidence.subarray(64, 72)).toEqual(bigIntToBytes(5000n, 8));
+    expect(evidence.subarray(72, 104)).toEqual(field(0x60));
+    expect(evidence.subarray(104, 136)).toEqual(field(0x61));
+    expect(evidence.subarray(136)).toEqual(new Uint8Array(72));
+    expect(records[0]?.subarray(0, 32)).toEqual(bytes(0xb5));
+    expect(records[0]?.subarray(32, 64)).toEqual(field(0x15));
+    expect(records[0]?.subarray(64, 72)).toEqual(bigIntToBytes(70n, 8));
+    expect(records[0]?.subarray(72)).toEqual(field(0x25));
+    expect(records[1]?.subarray(0, 32)).toEqual(field(0x27));
+    expect(records[1]?.subarray(32, 40)).toEqual(new Uint8Array(8));
+    expect(records[1]?.subarray(40)).toEqual(field(0x26));
+    expect(records[2]).toEqual(new Uint8Array(ANONYMOUS_RECORD_LEN));
+  });
+
+  it("names spent UTXO 0 by its hash and every later one by its prefix", () => {
+    const { evidence } = disclosurePlaintext(commitments());
+    expect(evidence).toHaveLength(32 + 3 * 16);
+    expect(evidence.subarray(0, 32)).toEqual(field(0x60));
+    expect(evidence.subarray(32, 48)).toEqual(field(0x61).subarray(0, 16));
+    expect(evidence.subarray(48, 64)).toEqual(new Uint8Array(16));
+    expect(evidence.subarray(64)).toEqual(field(0x63).subarray(0, 16));
+  });
+
+  it("refuses spent UTXO 0 as a dummy, a later hash below 2^128 and a prefix no hash has", () => {
     const short = new Uint8Array(32) as Bytes32;
     short[31] = 1;
     expect(() => anonymousCommitments([undefined, field(0x61)])).toThrow(
@@ -264,109 +285,137 @@ describe("ring disclosure codec", () => {
     );
     expect(() => anonymousCommitments([field(0x60), short])).toThrow("KEYPAIR_DISCLOSURE_FIELD");
     const disclosure = commitments();
-    const layout = disclosureLayout(disclosure);
-    const at = anonymousFields(disclosure.layout);
-    if (at.inputs.kind !== "commitments") throw new Error("commitment layout");
-    const decode = (change: (plaintext: Bytes32[]) => void) => () => {
-      const plaintext = disclosureFields(disclosure);
-      change(plaintext);
-      return decodeDisclosure({ layout, exits: ANONYMOUS_EXITS }, plaintext);
+    const decode = (change: (evidence: Uint8Array) => void) => () => {
+      const plaintext = disclosurePlaintext(disclosure);
+      change(plaintext.evidence);
+      return decodeDisclosure(disclosure.layout, plaintext);
     };
-    const { first, prefixPairs } = at.inputs;
-    expect(decode((plaintext) => (plaintext[first] = new Uint8Array(32) as Bytes32))).toThrow(
-      "KEYPAIR_DISCLOSURE_SHAPE",
-    );
-    expect(decode((plaintext) => (plaintext[prefixPairs.end - 1]![31] = 1))).toThrow(
-      "KEYPAIR_DISCLOSURE_PADDING",
-    );
-    expect(
-      decode(
-        (plaintext) =>
-          (plaintext[prefixPairs.start] = bigIntToBytes(
-            ((BN254_SCALAR_ORDER >> 128n) + 1n) << 126n,
-          ) as Bytes32),
-      ),
-    ).toThrow("KEYPAIR_DISCLOSURE_FIELD");
+    expect(decode((evidence) => evidence.fill(0, 0, 32))).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(decode((evidence) => evidence.fill(0xff, 32, 48))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
+    expect(decode((evidence) => evidence.set(MODULUS, 0))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
   });
 
-  it("packs two input prefixes below 2^252 and splits them back", () => {
-    const top = inputPrefix(bigIntToBytes(BN254_SCALAR_ORDER - 1n) as Bytes32);
+  it("reads a prefix at the modulus prefix and no zero prefix", () => {
+    const top = prefix(bigIntToBytes(BN254_SCALAR_ORDER - 1n) as Bytes32);
     expect(top).toBe(BN254_SCALAR_ORDER >> 128n);
     expect(inputPrefix(MODULUS)).toBeUndefined();
     const short = new Uint8Array(32) as Bytes32;
     short[16] = 1;
     expect(inputPrefix(short)).toBeUndefined();
-    const low = inputPrefix(new Uint8Array(32).fill(1) as Bytes32);
-    for (const pair of [
-      [top, top],
-      [low, undefined],
-      [undefined, top],
-      [undefined, undefined],
-    ] as const satisfies readonly (readonly [InputPrefix | undefined, InputPrefix | undefined])[]) {
-      const packed = inputPrefixPair(pair[0], pair[1]);
-      expect(isCanonicalField(packed)).toBe(true);
-      expect(splitInputPrefixPair(packed)).toEqual(pair);
-    }
-    const over = inputPrefixPair(undefined, top);
-    over[31] = (over[31] ?? 0) + 1;
-    expect(splitInputPrefixPair(over)).toBeUndefined();
-    const wide = new Uint8Array(32) as Bytes32;
-    wide[0] = 0x10;
-    expect(splitInputPrefixPair(wide)).toBeUndefined();
   });
 
-  it("refuses an anonymous dummy slot with a nonzero byte", () => {
-    const disclosure = anonymous();
-    const at = anonymousFields(disclosure.layout);
-    const plaintext = disclosureFields(disclosure);
-    setPacked(
-      plaintext,
-      at.slots.start,
-      DISCLOSURE_SENDER_KEY_BYTES + 2 * ANONYMOUS_SLOT_BYTES + 5,
-      1,
-    );
-
-    expect(() =>
-      decodeDisclosure({ layout: disclosureLayout(disclosure), exits: ANONYMOUS_EXITS }, plaintext),
-    ).toThrow("KEYPAIR_DISCLOSURE_PADDING");
-  });
-
-  it("refuses a field at or above the modulus instead of reducing it", () => {
-    const disclosure = delivered();
-    const plaintext = disclosureFields(disclosure);
-    plaintext[1] = MODULUS;
-    const pad = {
-      key: field(9),
-      salt: new Uint8Array(16).fill(7) as Bytes16,
-      domain: RingDomain.disclosurePad,
-      fields: plaintext,
+  it("refuses a dummy record with a nonzero byte and a field off the modulus", () => {
+    const disclosure = entry();
+    const decode = (change: (records: readonly Uint8Array[]) => void) => () => {
+      const plaintext = disclosurePlaintext(disclosure);
+      change(plaintext.records);
+      return decodeDisclosure(disclosure.layout, plaintext);
     };
-
-    expect(() =>
-      decodeDisclosure({ layout: disclosureLayout(disclosure), exits: DELIVERED_EXITS }, plaintext),
-    ).toThrow("KEYPAIR_DISCLOSURE_FIELD");
-    expect(() => unmaskDisclosure(pad)).toThrow("KEYPAIR_DISCLOSURE_FIELD");
-    expect(() => maskDisclosure(pad)).toThrow("KEYPAIR_DISCLOSURE_FIELD");
+    expect(decode((records) => records[2]?.set([1], 5))).toThrow("KEYPAIR_DISCLOSURE_PADDING");
+    expect(decode((records) => records[0]?.set(MODULUS, 32))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
+    expect(decode((records) => records[1]?.set(MODULUS, 40))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
   });
+
+  it("refuses an exit its layout does not flag and an evidence or record of another length", () => {
+    const disclosure = entry();
+    expect(() =>
+      disclosurePlaintext({ ...disclosure, layout: { ...disclosure.layout, exits: 0n } }),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    const delivering = delivered();
+    expect(() =>
+      disclosurePlaintext({
+        ...delivering,
+        layout: { ...delivering.layout, exits: 0b1n },
+      }),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    const plaintext = disclosurePlaintext(disclosure);
+    expect(() =>
+      decodeDisclosure(disclosure.layout, {
+        evidence: plaintext.evidence.subarray(1),
+        records: plaintext.records,
+      }),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(() =>
+      decodeDisclosure(disclosure.layout, {
+        evidence: plaintext.evidence,
+        records: plaintext.records.slice(1),
+      }),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+  });
+});
+
+describe("auditor message", () => {
+  const auditor = X25519Keypair.generate();
 
   it.each([
-    { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
-    { kind: "delivered", outputs: 8, exits: false, keyEscrow: false },
-    {
-      kind: "anonymous",
-      key: { kind: "commitment", class: 16 },
-      inputs: 2,
-      outputs: 4,
-      exits: false,
-    },
-  ] as const satisfies readonly DisclosureLayout[])(
-    "refuses an exit its $kind layout of $outputs outputs does not flag",
-    (layout) => {
-      const exits = Array.from({ length: layout.outputs }, (_, index) => index === 1);
+    ["delivered", delivered],
+    ["the entry key", entry],
+    ["the commitment key", commitments],
+  ] as const)("seals and opens %s at the regions the layout fixes", (_, build) => {
+    const disclosure = build();
+    const sealed = sealRingDisclosure({
+      txViewingSecret: TX_SECRET,
+      auditorPublicKey: auditor.publicKey(),
+      disclosure,
+    });
+    const { data, viewTag } = auditorMessageData(sealed, auditor.publicKey());
+    expect(viewTag).toEqual(auditor.publicKey().u());
+    const message = parseAuditorMessage(data, disclosure.layout);
+    expect(message.envelope).toEqual(sealed.envelope);
+    expect(message.records).toEqual(sealed.records);
+    expect(openTransactionViewingSecret(auditor, message)).toEqual(TX_SECRET);
+    expect(openRingDisclosure(auditor, { layout: disclosure.layout, message })).toEqual(disclosure);
+    expect(() => parseAuditorMessage(data.subarray(1), disclosure.layout)).toThrow();
+    expect(() => parseAuditorMessage(Uint8Array.of(...data, 0), disclosure.layout)).toThrow();
+    sealed.ephemeralSecret.fill(0);
+  });
 
-      expect(() => decodeDisclosure({ layout, exits }, zeros(layout))).toThrow(
-        "KEYPAIR_DISCLOSURE_SHAPE",
-      );
-    },
-  );
+  it("wipes the envelope and every record plaintext once sealed", () => {
+    sealedPlaintexts.length = 0;
+    const sealed = sealRingDisclosure({
+      txViewingSecret: TX_SECRET,
+      auditorPublicKey: auditor.publicKey(),
+      disclosure: entry(),
+    });
+    expect(sealedPlaintexts.length).toBeGreaterThan(1);
+    expect(sealedPlaintexts.filter((bytes) => bytes.some((byte) => byte !== 0))).toEqual([]);
+    sealed.ephemeralSecret.fill(0);
+  });
+
+  it("keeps every region of one stream on its own keystream", () => {
+    const disclosure = commitments();
+    const { layout } = disclosure;
+    const sealed = sealRingDisclosure({
+      txViewingSecret: TX_SECRET,
+      auditorPublicKey: auditor.publicKey(),
+      disclosure,
+    });
+    const [zeros] = openAuditorRegions(auditor, sealed.ephemeralPublicKey, [
+      { counter: 2, bytes: new Uint8Array(16 * 256) },
+    ]);
+    const keystream = zeros ?? new Uint8Array();
+    const plaintext = disclosurePlaintext(disclosure);
+    recordSlots(layout).forEach((slot, index) => {
+      const offset = 16 * (recordRegion(layout, slot).startCounter - 2);
+      const record = plaintext.records[index] ?? new Uint8Array();
+      const expected = record.map((byte, at) => byte ^ (keystream[offset + at] ?? 0));
+      expect(sealed.records[index]).toEqual(expected);
+    });
+    expect(recordRegion(layout, 0).startCounter).toBe(2 + envelopeRegion(layout).maxBlocks);
+    sealed.ephemeralSecret.fill(0);
+  });
+
+  it("uses the one label of the auditor stream", () => {
+    expect(new TextDecoder().decode(AUDIT_ENC_INFO)).toBe("CRING/adt1");
+    expect(() =>
+      symmetricAuditApply(TX_SECRET, { label: AUDIT_ENC_INFO, counter: 1 }, new Uint8Array(1)),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(() =>
+      symmetricAuditApply(
+        TX_SECRET,
+        { label: AUDIT_ENC_INFO.subarray(1), counter: 2 },
+        new Uint8Array(1),
+      ),
+    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+  });
 });

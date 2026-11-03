@@ -97,7 +97,11 @@ import {
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
-import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
+import {
+  openRingDelivery,
+  RING_DELIVERY_UNRESOLVED,
+  ringOutputBlinding,
+} from "../../src/crypto/derivation/blinding.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
@@ -587,40 +591,40 @@ export function checkDisclosure(
   data: RingTransactData,
   sender: ShieldedAddress,
 ): RingDisclosure {
-  const txViewingSecret = openTransactionViewingSecret(fixture.auditor, {
+  const message = {
     ephemeralPublicKey: x25519FromU(data.ephU),
-    sealed: data.sealed,
-  });
+    envelope: data.envelope,
+    records: data.records,
+  };
+  const txViewingSecret = openTransactionViewingSecret(fixture.auditor, message);
   const txKey = ViewingKey.fromBytes(txViewingSecret);
   expect(txKey.publicKey().u()).toEqual(data.txViewingU);
   txKey.destroy();
-  const exits = data.outputs.map((output) => output.kind === "exit");
-  const disclosure = openRingDisclosure(
-    { txViewingSecret, salt: data.salt },
-    { layout: RingTransactData.disclosureLayout(data), fields: data.disclosure, exits },
-  );
   txViewingSecret.fill(0);
-  // SeedOut opens the disclosure exactly beside an exit.
-  expect(disclosure.seedOut).toEqual(
-    exits.includes(true) ? call.proofInputs.outputBlindingSeed() : undefined,
-  );
-  const escrowed = disclosure.kind !== "anonymous" && disclosure.layout.keyEscrow;
+  const exits = data.outputs.map((output) => output.kind === "exit");
+  const disclosure = openRingDisclosure(fixture.auditor, {
+    layout: RingTransactData.streamLayout(data),
+    message,
+  });
+  const escrowed = disclosure.layout.keyEscrow;
   const published = call.proofInputs.outputs;
   expect(disclosure.outputs).toHaveLength(published.length);
   disclosure.outputs.forEach((opened, index) => {
     const output = itemAt(published, index);
     const owner = output.ownerAddress;
+    const exit = exits[index] === true;
+    if (disclosure.kind === "delivered" && !exit) {
+      expect(opened).toEqual({ kind: "body" });
+      return;
+    }
     if (owner === undefined) {
       expect(opened).toEqual({ kind: "dummy" });
       return;
     }
-    const exit = exits[index] === true;
     const nullifierPk = escrowed ? undefined : owner.nullifierPublicKey;
     const ownerKey = owner.signingPublicKey.confidentialViewTag();
     const asset = assetField(output.asset);
     if (exit) expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
-    else if (disclosure.kind === "delivered")
-      expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey });
     else
       expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey, asset, amount: output.amount });
   });
@@ -686,7 +690,7 @@ export async function openDelivered(
   const wire = data.outputs[slotIndex];
   if (slotSecret === undefined || wire?.kind !== "delivered") throw new Error("no delivered slot");
   const owner = input.keys.address();
-  return openRingDelivery(
+  const note = openRingDelivery(
     { ring: input.fixture.ringProgramId },
     {
       body: wire.body,
@@ -700,6 +704,8 @@ export async function openDelivered(
     },
     new AssetRegistry(),
   );
+  if (note === RING_DELIVERY_UNRESOLVED) throw new Error("no registered mint rebuilds the slot");
+  return note;
 }
 
 /** A setup instruction of `length` data bytes ahead of the ring instruction. */

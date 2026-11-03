@@ -3,8 +3,13 @@ import type { Bytes32 } from "@heliuslabs/zolana";
 import { bytesToBigInt, checkedBytes, concatBytes, u64be } from "@heliuslabs/zolana/internal";
 import { EncryptedScheme, TransactionError } from "@heliuslabs/zolana/transaction";
 
-import { symmetricAuditApply } from "../../crypto/audit/audit.js";
+import { DELIVERED_BODY_ENC_INFO, symmetricAuditApply } from "../../crypto/audit/audit.js";
 import { checkedCounter } from "../../crypto/error.js";
+import {
+  DELIVERED_BODY_LEN,
+  ESCROWED_DELIVERED_BODY_LEN,
+  STREAM_FIRST_COUNTER,
+} from "../codec/ring-disclosure-layout.js";
 
 /** The schemes a ring output publishes, SPP stores the ring-owned scheme 10 unparsed. */
 export const RingScheme = Object.freeze({
@@ -15,8 +20,6 @@ export const RingScheme = Object.freeze({
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
-/** `be32(blinding) ‖ u64be(amount)` under the audit stream, Rust `RING_DELIVERED_BODY_LEN`. */
-export const RING_DELIVERED_BODY_LEN = 40;
 /** `0x04 ‖ u`, the recipient key a scheme 3 body leads with. */
 export const RECIPIENT_KEY_LEN = 33;
 /** Asset id, amount and blinding open every confidential plaintext. */
@@ -83,33 +86,59 @@ function encryptedOutputBody(data: Uint8Array, scheme: RingScheme): Uint8Array |
 export interface DeliveredBodyOpening {
   readonly blinding: Bytes32;
   readonly amount: bigint;
+  readonly ownerKey: Bytes32;
+  /** `undefined` exactly under key escrow. */
+  readonly nullifierPk: Bytes32 | undefined;
 }
 
-/** AES-256-CTR of `be32(blinding) ‖ u64be(amount)` under the slot secret's audit stream. */
+/** AES-256-CTR of `be32(blinding) ‖ u64be(amount) ‖ owner_key ‖ [be32(nullifier_pk)]` under the slot secret. */
 export function sealDeliveredBody(slotSecret: Bytes32, opening: DeliveredBodyOpening): Uint8Array {
   const plaintext = concatBytes(
     checkedBytes<Bytes32>(opening.blinding, 32, "blinding"),
     u64be(checkedCounter(opening.amount, "amount")),
+    checkedBytes<Bytes32>(opening.ownerKey, 32, "owner key"),
+    ...(opening.nullifierPk === undefined
+      ? []
+      : [checkedBytes<Bytes32>(opening.nullifierPk, 32, "nullifier pk")]),
   );
   try {
-    return symmetricAuditApply(checkedBytes<Bytes32>(slotSecret, 32, "slot secret"), plaintext);
+    return symmetricAuditApply(
+      checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
+      BODY_STREAM,
+      plaintext,
+    );
   } finally {
     plaintext.fill(0);
   }
 }
 
-/** The cipher is unauthenticated, only the rebuilt commitment tells a body of another key. */
+/** The length names the layout, the caller compares the keys, a commitment alone proves no ownership. */
 export function openDeliveredBody(slotSecret: Bytes32, body: Uint8Array): DeliveredBodyOpening {
+  const escrowed = body.length === ESCROWED_DELIVERED_BODY_LEN;
   const plaintext = symmetricAuditApply(
     checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
-    checkedBytes(body, RING_DELIVERED_BODY_LEN, "delivered body"),
+    BODY_STREAM,
+    checkedBytes(
+      body,
+      escrowed ? ESCROWED_DELIVERED_BODY_LEN : DELIVERED_BODY_LEN,
+      "delivered body",
+    ),
   );
   try {
     return Object.freeze({
       blinding: checkedBytes<Bytes32>(plaintext.subarray(0, 32), 32, "blinding"),
-      amount: bytesToBigInt(plaintext.subarray(32)),
+      amount: bytesToBigInt(plaintext.subarray(32, 40)),
+      ownerKey: checkedBytes<Bytes32>(plaintext.subarray(40, 72), 32, "owner key"),
+      nullifierPk: escrowed
+        ? undefined
+        : checkedBytes<Bytes32>(plaintext.subarray(72), 32, "nullifier pk"),
     });
   } finally {
     plaintext.fill(0);
   }
 }
+
+const BODY_STREAM = Object.freeze({
+  label: DELIVERED_BODY_ENC_INFO,
+  counter: STREAM_FIRST_COUNTER,
+});
