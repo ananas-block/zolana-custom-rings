@@ -169,6 +169,20 @@ pub enum RingError {
     DuplicateInput { nullifier: [u8; 32] },
     #[error("the transfer spends one owner's notes, input {index} has another owner")]
     MixedOwners { index: usize },
+    #[error("a transfer of several owners holds no deposit of an asset it spends")]
+    MixedOwnerDeposit,
+    #[error("the anonymous sender holds no enrolled address, enroll before the first transfer")]
+    SenderNotEnrolled,
+    #[error("the anonymous sender's enrolled address is not the wallet's")]
+    SenderAddressMismatch,
+    #[error("the recipient at output {slot_index} holds no enrolled address")]
+    RecipientNotEnrolled { slot_index: usize },
+    #[error("output {slot_index} pays another address than its owner enrolled")]
+    RecipientAddressMismatch { slot_index: usize },
+    #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]
+    HiddenOwnerMissing,
+    #[error("the owner {owner} spends an input with no nullifier key in the transfer")]
+    MissingCoOwnerKey { owner: Address },
     #[error("output {index} owner marker does not match whether it leaves the ring")]
     RingOutputMarkerMismatch { index: usize },
     #[error("the outflow {outflow} of {asset:?} exceeds the cap {cap}")]
@@ -242,6 +256,10 @@ pub enum RingError {
     InputTreeMismatch,
     #[error("the member's nullifier key does not derive its address")]
     NullifierKeyMismatch,
+    #[error("the enrollment key disagrees with the member's record, the first key is permanent")]
+    EnrollmentKeyMismatch,
+    #[error("the owner holds no address enrollment on the registry")]
+    AddressNotEnrolled,
     #[error("the member record is not included under the requested root")]
     InvalidRecordOpening,
     #[error("{owner:?} enrolled no matching nullifier key")]

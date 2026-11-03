@@ -162,17 +162,100 @@ async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
         },
     );
     let config = ring()
-        .require_config(&Chain::ring(RingSettings {
-            co_signer: Some((Address::new_from_array([0x46; 32]), CoSignScope::TRANSFERS)),
-            ..RingSettings::new(RingMode::ConfidentialEscrow)
-        }))
+        .require_config(
+            &Chain::ring(RingSettings {
+                co_signer: Some((Address::new_from_array([0x46; 32]), CoSignScope::TRANSFERS)),
+                ..RingSettings::new(RingMode::ConfidentialEscrow)
+            })
+            .with_records(crate::tests::support::Registry::new(&[(&owner, 0)])),
+        )
         .await
         .unwrap();
     let payer = Address::new_from_array([7; 32]);
     crate::submission::check_transaction_size(
         &payer,
-        &merge.preview_instruction(payer, &config).unwrap(),
+        &merge
+            .prepared
+            .preview_instruction(&merge.input, payer, &config)
+            .unwrap(),
         ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
     )
     .unwrap();
+}
+
+struct MergeFrame {
+    mode: RingMode,
+    width: u64,
+    co_signed: bool,
+    second_tree: bool,
+    bytes: usize,
+}
+
+/// One registry read only under key escrow, a registry address never the system program's.
+#[tokio::test]
+async fn every_merge_width_takes_the_modelled_frame_on_each_ring_mode() {
+    use custom_ring_interface::{compute_unit_limit, InstructionTag};
+    use solana_address::Address;
+    use spr_client::ComputeBudgetConfig;
+    let owner = keypair(1);
+    let co_signer = Address::new_from_array([0x46; 32]);
+    let frame = |mode, width, co_signed, second_tree, bytes| MergeFrame {
+        mode,
+        width,
+        co_signed,
+        second_tree,
+        bytes,
+    };
+    for MergeFrame {
+        mode,
+        width,
+        co_signed,
+        second_tree,
+        bytes,
+    } in [
+        frame(RingMode::Confidential, 8, false, false, 1775),
+        frame(RingMode::Confidential, 8, true, false, 1905),
+        frame(RingMode::Confidential, 24, false, false, 3327),
+        frame(RingMode::Confidential, 24, true, false, 3457),
+        frame(RingMode::Anonymous, 8, false, false, 1775),
+        frame(RingMode::Anonymous, 24, true, true, 3489),
+        frame(RingMode::ConfidentialEscrow, 8, false, false, 1808),
+        frame(RingMode::ConfidentialEscrow, 8, true, false, 1938),
+        frame(RingMode::ConfidentialEscrow, 8, true, true, 1970),
+        frame(RingMode::ConfidentialEscrow, 24, false, false, 3360),
+        frame(RingMode::ConfidentialEscrow, 24, true, false, 3490),
+        frame(RingMode::ConfidentialEscrow, 24, true, true, 3522),
+    ] {
+        let utxos = (0..width)
+            .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
+            .collect();
+        let merge = CustomRingMerge::new(ring(), utxos, None)
+            .unwrap()
+            .encrypt(&owner)
+            .unwrap();
+        let input = MergeProofInput {
+            nullifier_key: owner.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID + u16::from(second_tree)),
+            co_signer: co_signed.then_some(co_signer),
+        };
+        let settings = RingSettings {
+            co_signer: co_signed.then_some((co_signer, CoSignScope::TRANSFERS)),
+            ..RingSettings::new(mode)
+        };
+        let chain = Chain::ring(settings)
+            .with_records(crate::tests::support::Registry::new(&[(&owner, 0)]));
+        let config = ring().require_config(&chain).await.unwrap();
+        let payer = Address::new_from_array([7; 32]);
+        let size = spr_client::transaction_size(
+            &payer,
+            &[merge.preview_instruction(&input, payer, &config).unwrap()],
+            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
+        )
+        .unwrap();
+        assert_eq!(
+            size.bytes, bytes,
+            "{mode:?} width {width}, co-signer {co_signed}, second tree {second_tree}"
+        );
+    }
 }

@@ -2,19 +2,18 @@
 
 use custom_ring_interface::{
     cosign::CoSignDemand, key_catalog::RingCircuit, merge_disclosure_field_count,
-    CustomRingMergeIxData, MergeDisclosure, MergePublicInput, PublicSlots, RingMode, RootRead,
-    MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
+    CustomRingMergeIxData, InstructionTag, MergeDisclosure, MergePublicInput, PublicSlots,
+    RingMode, RootRead, MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::{AsyncRpc, AsyncWitnessReader, ClientError, MergeProver, ProofCompressed};
-use spr_hasher::primitives::{pack_be, right_align};
+use spr_hasher::primitives::right_align;
 use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::merge_transact::{
         MergeOutputEncryption, MergeProof, MergeTransactIxData,
     },
-    instruction::tag::RING_MERGE_TRANSACT,
     tree_slot::tree_id_field,
 };
 use spr_keypair::{NullifierKey, ShieldedAddress, X25519Pubkey};
@@ -39,7 +38,7 @@ use crate::{
     prover::{to_instruction_proof, RingRequest},
     records::{EscrowOpening, EscrowRead},
     request::{MergeRequest, MergeSlot},
-    submission::BoundRoot,
+    submission::{check_transaction_size, send_budget, BoundRoot},
     tree_id, CustomRing, CustomRingConfig, PreparedRelay, RingError,
 };
 
@@ -88,6 +87,7 @@ impl CustomRingMerge {
         Ok(PreparedCustomRingMerge {
             ring: self.ring,
             inner: self.inner.encrypt(keys)?,
+            priority_fee: None,
         })
     }
 }
@@ -98,6 +98,7 @@ impl CustomRingMerge {
 pub struct PreparedCustomRingMerge {
     ring: CustomRing,
     inner: MergeProofInputs,
+    priority_fee: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -124,6 +125,12 @@ pub struct ProvenCustomRingMerge {
 }
 
 impl PreparedCustomRingMerge {
+    /// Lamports the v1 header carries, the size check measures the header it adds.
+    pub const fn with_priority_fee(mut self, lamports: u64) -> Self {
+        self.priority_fee = Some(lamports);
+        self
+    }
+
     pub const fn ring(&self) -> CustomRing {
         self.ring
     }
@@ -155,6 +162,63 @@ impl PreparedCustomRingMerge {
         }
     }
 
+    /// The instruction under zeroed proofs, the size of the proven one.
+    pub(crate) fn preview_instruction(
+        &self,
+        input: &MergeProofInput,
+        payer: Address,
+        config: &CustomRingConfig,
+    ) -> Result<Instruction, RingError> {
+        let merge = self;
+        let disclosure = MergeDisclosure {
+            proof: bytemuck::Zeroable::zeroed(),
+            eph_pk: [0; TAGGED_X25519_KEY_LEN],
+            ciphertext: [0; MERGE_KEY_CIPHERTEXT_LEN],
+            fields: vec![[0; 32]; merge_disclosure_field_count(merge.merge_width()?)],
+        };
+        CustomRingMergeInstruction {
+            ring: merge.ring,
+            input_tree: input.input_tree,
+            output_tree: input.output_tree,
+            payer,
+            records: merge_registry(config)?,
+            co_signer: CoSignerChoice {
+                ring: merge.ring,
+                config,
+                demand: &merge_demand(),
+                supplied: input.co_signer,
+            }
+            .unchecked()?
+            .map(|(_, signer)| signer),
+            data: CustomRingMergeIxData {
+                own_revision: Default::default(),
+                output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
+                disclosure,
+                merge: MergeTransactIxData {
+                    expiry_unix_ts: merge.inner.expiry_unix_ts,
+                    proof: MergeProof::zeroed(),
+                    output_utxo_hash: [0; 32],
+                    output_encryption: MergeOutputEncryption::PoseidonCtrV1 {
+                        salt: merge.inner.output_ciphertext_salt,
+                        ciphertext: merge.inner.output_ciphertext,
+                    },
+                    private_tx_hash: [0; 32],
+                    nullifiers: merge
+                        .inner
+                        .input_utxos
+                        .iter()
+                        .filter(|input| !input.is_compact())
+                        .map(|input| input.nullifier)
+                        .collect(),
+                    utxo_tree_root_index: 0,
+                    nullifier_tree_root_index: 0,
+                    cache_slot: None,
+                },
+            },
+        }
+        .instruction()
+    }
+
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         mut self,
         input: MergeProofInput,
@@ -175,6 +239,11 @@ impl PreparedCustomRingMerge {
         HiddenOwner::of(&self.inner.signing_pubkey)?
             .check_signers(core::iter::once(payer).chain(co_signer))?;
         self.merge_width()?;
+        check_transaction_size(
+            &payer,
+            &self.preview_instruction(&input, payer, &config)?,
+            send_budget(InstructionTag::Merge, self.priority_fee),
+        )?;
         // A key escrow merge reads the owner's escrow record under the newest root before any proof.
         let escrow = match config.mode {
             RingMode::ConfidentialEscrow => {
@@ -307,62 +376,6 @@ impl RingMergeOperation {
     pub fn new(prepared: PreparedCustomRingMerge, input: MergeProofInput) -> Self {
         Self { prepared, input }
     }
-
-    /// The instruction under zeroed proofs, the size of the proven one.
-    pub(crate) fn preview_instruction(
-        &self,
-        payer: Address,
-        config: &CustomRingConfig,
-    ) -> Result<Instruction, RingError> {
-        let merge = &self.prepared;
-        let disclosure = MergeDisclosure {
-            proof: bytemuck::Zeroable::zeroed(),
-            eph_pk: [0; TAGGED_X25519_KEY_LEN],
-            ciphertext: [0; MERGE_KEY_CIPHERTEXT_LEN],
-            fields: vec![[0; 32]; merge_disclosure_field_count(merge.merge_width()?)],
-        };
-        CustomRingMergeInstruction {
-            ring: merge.ring,
-            input_tree: self.input.input_tree,
-            output_tree: self.input.output_tree,
-            payer,
-            records: merge_registry(config)?,
-            co_signer: CoSignerChoice {
-                ring: merge.ring,
-                config,
-                demand: &merge_demand(),
-                supplied: self.input.co_signer,
-            }
-            .unchecked()?
-            .map(|(_, signer)| signer),
-            data: CustomRingMergeIxData {
-                own_revision: Default::default(),
-                output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
-                disclosure,
-                merge: MergeTransactIxData {
-                    expiry_unix_ts: merge.inner.expiry_unix_ts,
-                    proof: MergeProof::zeroed(),
-                    output_utxo_hash: [0; 32],
-                    output_encryption: MergeOutputEncryption::PoseidonCtrV1 {
-                        salt: merge.inner.output_ciphertext_salt,
-                        ciphertext: merge.inner.output_ciphertext,
-                    },
-                    private_tx_hash: [0; 32],
-                    nullifiers: merge
-                        .inner
-                        .input_utxos
-                        .iter()
-                        .filter(|input| !input.is_compact())
-                        .map(|input| input.nullifier)
-                        .collect(),
-                    utxo_tree_root_index: 0,
-                    nullifier_tree_root_index: 0,
-                    cache_slot: None,
-                },
-            },
-        }
-        .instruction()
-    }
 }
 
 /// `[ring, records registry?, co-signer record and signer?]` ahead of SPP's merge list.
@@ -380,7 +393,7 @@ pub struct CustomRingMergeInstruction {
 
 impl CustomRingMergeInstruction {
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let mut data = vec![RING_MERGE_TRANSACT];
+        let mut data = vec![custom_ring_interface::tag::MERGE];
         data.extend(
             self.data
                 .serialize()
@@ -474,11 +487,6 @@ impl MergeDisclosureProof<'_> {
         let owner_key = merge.signing_pubkey.as_ed25519()?;
         let output = &merge.output_utxo;
         let opening = MergeOpening {
-            owner_key,
-            nullifier_pk: self.nullifier_key.pubkey()?,
-            mint: *output.asset.asset.as_array(),
-            amount: output.amount,
-            output_blinding: output.blinding,
             input_commitments: merge
                 .input_utxos
                 .iter()
@@ -503,6 +511,7 @@ impl MergeDisclosureProof<'_> {
             ciphertext: &sealed.ciphertext,
             salt: &merge.output_ciphertext_salt,
             fields: &sealed.fields,
+            input_count: self.spp.nullifiers.len(),
             member_registry_root: root.as_ref(),
         }
         .hash()?;
@@ -533,7 +542,13 @@ impl MergeDisclosureProof<'_> {
             disclosure_key: sealed.disclosure_key,
             owner_key,
             nullifier_secret: Zeroizing::new(right_align(&self.nullifier_key.secret())),
-            mint_chunks: pack_be::<32, 2>(output.asset.asset.as_array()),
+            asset: spr_hasher::primitives::hash_bytes(output.asset.asset.as_array())?,
+            input_count: u8::try_from(self.spp.nullifiers.len()).map_err(|_| {
+                ClientError::UnsupportedShape {
+                    n_in: self.spp.nullifiers.len(),
+                    n_out: 1,
+                }
+            })?,
             inputs,
             output_tree_id: tree_id_field(merge.output_tree_id),
             output_ring_data_hash: output.ring_data_hash.unwrap_or_default(),

@@ -3,8 +3,8 @@
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
     tag, CoSignScope, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
-    DepositPublicInput, DepositRegistry, DepositedAsset, RingDepositAuditCapsule, RingMode,
-    RingPolicy,
+    DepositPublicInput, DepositRegistry, DepositedAsset, InstructionTag, RingDepositAuditCapsule,
+    RingMode, RingPolicy,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -17,14 +17,16 @@ use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxDataRef, pda, state::SplAssetRegistry,
     PROGRAM_ID_PUBKEY,
 };
-use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Keypair, X25519Pubkey};
+use spr_keypair::{
+    random_blinding, viewing_key::ViewTag, Curve, ShieldedAddress, X25519Keypair, X25519Pubkey,
+};
 use spr_program::instruction::{DepositAsset, RingAssetDeposit};
 use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
 use zeroize::Zeroizing;
 use zolana_ring_client::{
     rpc::{PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayQuote},
-    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening, FirstContact,
-    PaymentRecipient, ViewingHistory,
+    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening,
+    ViewingHistory,
 };
 use zolana_ring_keys::RingAddress;
 use zolana_ring_policy::SourceMap;
@@ -39,7 +41,7 @@ use crate::{
     records::{EscrowOpening, EscrowRead, MemberRead},
     relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{self, DepositRequest, MemberOpening, PolicyTable, RecordOpeningRequest},
-    submission::{BoundPolicy, BoundRoot},
+    submission::{check_transaction_size, send_budget, BoundPolicy, BoundRoot},
     CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
     SettledSubmission,
 };
@@ -57,12 +59,10 @@ pub enum DepositRecipient<'a> {
         keys: &'a dyn RingSender,
         history: &'a ViewingHistory,
     },
-    /// Another member of an anonymous ring, its tag by the selection over the depositor's history.
+    /// Another member of an anonymous ring, under its request's tag or else its viewing key's.
     AnonymousPayment {
-        keys: &'a dyn RingSender,
-        history: &'a ViewingHistory,
         to: &'a RingAddress,
-        first_contact: FirstContact,
+        deposit_tag: Option<ViewTag>,
     },
 }
 
@@ -88,29 +88,17 @@ impl DepositRecipient<'_> {
                     history: Some(history),
                 }
             }
-            Self::AnonymousPayment {
-                keys,
-                history,
-                to,
-                first_contact,
-            } => {
+            Self::AnonymousPayment { to, deposit_tag } => {
                 if to.ring_program_id != ring.program_id() {
                     return Err(RingError::ForeignRingAddress {
                         address: to.ring_program_id,
                         ring: ring.program_id(),
                     });
                 }
-                let AdvancedTag { tag, history } = history.deposit_tag(
-                    keys,
-                    &PaymentRecipient {
-                        viewing_pubkey: to.recipient.viewing_pubkey,
-                        first_contact,
-                    },
-                )?;
                 TaggedRecipient {
                     address: to.recipient,
-                    view_tag: tag.payment.tag,
-                    history: Some(history),
+                    view_tag: deposit_tag.unwrap_or(to.recipient.viewing_pubkey.u()),
+                    history: None,
                 }
             }
         })
@@ -145,6 +133,7 @@ pub struct PreparedRingDeposit {
     utxo: Utxo,
     disclosure: DepositDisclosure,
     viewing_history: Option<ViewingHistory>,
+    priority_fee: Option<u64>,
 }
 
 pub(crate) struct BoundDeposit {
@@ -375,6 +364,12 @@ impl RingDeposit<'_> {
 }
 
 impl PreparedRingDeposit {
+    /// Lamports the v1 header carries, the size check measures the header it adds.
+    pub fn with_priority_fee(mut self, lamports: u64) -> Self {
+        self.priority_fee = Some(lamports);
+        self
+    }
+
     pub(crate) fn check_public_signers(
         &self,
         signers: impl IntoIterator<Item = Address>,
@@ -423,6 +418,7 @@ impl PreparedRingDeposit {
                 false => None,
             };
             let body = disclosure.body(records.as_ref())?;
+            self.check_size(records.as_ref().map(DepositRecords::roots))?;
             let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
@@ -440,6 +436,20 @@ impl PreparedRingDeposit {
             })
         })
         .await
+    }
+
+    /// Sized as the proven instruction, the proof is of fixed width.
+    fn check_size(&self, roots: Option<DepositRoots>) -> Result<(), RingError> {
+        let payer = self
+            .spp
+            .accounts
+            .first()
+            .ok_or(CustomRingError::InvalidInstructionData)?;
+        check_transaction_size(
+            &payer.pubkey,
+            &self.instruction(bytemuck::Zeroable::zeroed(), roots)?,
+            send_budget(InstructionTag::Deposit, self.priority_fee),
+        )
     }
 
     /// `[config, registries?, co-signer?]`, then SPP's deposit list.
@@ -664,6 +674,7 @@ impl DepositAssembly<'_> {
         .await?;
         let address = note.address;
         Ok(PreparedRingDeposit {
+            priority_fee: None,
             ring,
             cosigner,
             utxo: Utxo {

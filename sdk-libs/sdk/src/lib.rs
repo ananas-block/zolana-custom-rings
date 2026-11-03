@@ -69,31 +69,31 @@ pub use crate::{
         RingDepositReceipt,
     },
     error::RingError,
-    limits::SenderOutflow,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
         PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
         MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
-        shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer,
+        shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner,
         CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
         DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, ProvenRingTransfer,
         Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
         RingTransfer,
     },
     records::{
-        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
-        WalletRecordUpdate,
+        address_enrollment, AuthorityRecordUpdate, MemberRecords, RecordUpdateService,
+        RecordUpdateTarget, WalletRecordUpdate,
     },
     register_key::{EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, SealedEscrow},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{MessageMismatch, VerifiedMessage},
     select::{select_merge_where, select_spend_where},
-    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
+    storage::{
+        EnrollAddress, InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority,
+    },
     submission::{
         live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },
     trees::tree_id,
 };
-pub use zolana_ring_client::FirstContact;

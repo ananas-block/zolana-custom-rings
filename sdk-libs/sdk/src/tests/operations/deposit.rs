@@ -1,7 +1,6 @@
 use custom_ring_interface::{CoSignScope, CustomRingError, RingMode};
 use solana_address::Address;
 use spr_interface::pda;
-use zolana_ring_client::{FirstContact, PaymentRecipient, StreamCounter, TransferTagging};
 use zolana_ring_keys::RingAddress;
 
 use crate::{
@@ -197,8 +196,7 @@ async fn a_deposit_from_the_stored_history_takes_the_next_sender_tag() {
 }
 
 #[tokio::test]
-async fn a_deposit_to_another_member_takes_a_first_contact_tag_until_a_transfer_pairs() {
-    let member = keypair(1);
+async fn a_deposit_to_another_member_takes_its_request_tag_or_its_viewing_key() {
     let recipient = keypair(2);
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
@@ -207,74 +205,24 @@ async fn a_deposit_to_another_member_takes_a_first_contact_tag_until_a_transfer_
         ring_program_id: ring().program_id(),
     };
     let request = recipient.get_recipient_request_view_tag(0).unwrap();
-    let history = history(&member);
-    let paid = |history, first_contact| {
+    let paid = |deposit_tag| {
         deposit(
             &payer,
             DepositRecipient::AnonymousPayment {
-                keys: &member,
-                history,
                 to: &to,
-                first_contact,
+                deposit_tag,
             },
         )
     };
-    let bootstrap = paid(&history, FirstContact::Bootstrap)
-        .prepare(&chain)
-        .await
-        .unwrap();
+    let bootstrap = paid(None).prepare(&chain).await.unwrap();
     assert!(publishes(&bootstrap, &recipient.viewing_pubkey().u()));
-    let requested = paid(&history, FirstContact::Request(request))
-        .prepare(&chain)
-        .await
-        .unwrap();
+    assert!(bootstrap.viewing_history().is_none(), "no counter moves");
+    let requested = paid(Some(request)).prepare(&chain).await.unwrap();
     assert!(publishes(&requested, &request));
-    let unpaired = bootstrap.viewing_history().unwrap().clone();
-    assert_eq!(
-        unpaired.current().tx_count(),
-        0,
-        "a deposit spends no sender tag"
-    );
-    assert!(
-        unpaired.current().known_recipients().is_empty(),
-        "a deposit names no sender, so it pairs nothing"
-    );
-    let paired = TransferTagging {
-        keys: &member,
-        history: &unpaired,
-        recipients: &[PaymentRecipient {
-            viewing_pubkey: recipient.viewing_pubkey(),
-            first_contact: FirstContact::Bootstrap,
-        }],
-    }
-    .plan()
-    .unwrap()
-    .history;
-    let shared = paid(&paired, FirstContact::Request(request))
-        .prepare(&chain)
-        .await
-        .unwrap();
-    assert!(publishes(
-        &shared,
-        &member
-            .get_send_shared_view_tag(&recipient.viewing_pubkey(), 0)
-            .unwrap()
-    ));
-    assert_eq!(
-        shared
-            .viewing_history()
-            .unwrap()
-            .current()
-            .known_recipients()
-            .get(&recipient.viewing_pubkey())
-            .map(StreamCounter::next),
-        Some(1)
-    );
 }
 
 #[tokio::test]
 async fn a_deposit_refuses_an_address_of_another_ring() {
-    let member = keypair(1);
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
     let other = Address::new_from_array([0x47; 32]);
@@ -282,12 +230,9 @@ async fn a_deposit_refuses_an_address_of_another_ring() {
         recipient: keypair(2).shielded_address().unwrap(),
         ring_program_id: other,
     };
-    let history = history(&member);
     let paid = DepositRecipient::AnonymousPayment {
-        keys: &member,
-        history: &history,
         to: &to,
-        first_contact: FirstContact::Bootstrap,
+        deposit_tag: None,
     };
     assert!(matches!(
         deposit(&payer, paid).prepare(&chain).await,
@@ -516,7 +461,7 @@ mod relay_message {
             &self,
             request: SubmitRelayRequest,
         ) -> Result<RelayStatus, RingError> {
-            let signature = request.signature.clone();
+            let signature = request.signature;
             self.submitted.lock().unwrap().push(request);
             Ok(RelayStatus::Sent { signature })
         }
