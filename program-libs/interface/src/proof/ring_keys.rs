@@ -4,18 +4,18 @@ pub const RING_KEYS: [RingKey; 27] = [
     RingKey {
         circuit: RingCircuit::TransferConfidential {
             outputs: 2,
-            inputs: 32,
+            inputs: 24,
             withdrawals: 4,
         },
-        name: "custom-ring-transfer-confidential-2-in32-w4",
+        name: "custom-ring-transfer-confidential-2-in24-w4",
     },
     RingKey {
         circuit: RingCircuit::TransferConfidential {
             outputs: 2,
-            inputs: 32,
+            inputs: 24,
             withdrawals: 32,
         },
-        name: "custom-ring-transfer-confidential-2-in32-w32",
+        name: "custom-ring-transfer-confidential-2-in24-w32",
     },
     RingKey {
         circuit: RingCircuit::TransferConfidential {

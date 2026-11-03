@@ -50,7 +50,7 @@ pub struct TransferShape {
 pub const CONFIDENTIAL_TRANSFER_SHAPES: [TransferShape; 4] = [
     TransferShape {
         outputs: 2,
-        inputs: 32,
+        inputs: 24,
         withdrawals: [4, 32],
     },
     TransferShape {
@@ -202,10 +202,15 @@ pub struct RecordPools {
     pub curator: usize,
 }
 
+/// `Q` on the confidential and commitment keys.
+pub const SCREENED_OWNERS: usize = 4;
+/// `Q` on the entry keys.
+pub const SCREENED_ENTRY_OWNERS: usize = 1;
+
 struct PolicyShape {
+    screened_owners: usize,
     outputs: usize,
     withdrawals: usize,
-    public_assets: usize,
 }
 
 impl RingCircuit {
@@ -231,23 +236,27 @@ impl RingCircuit {
                 outputs,
                 withdrawals,
                 ..
-            }
-            | Self::TransferAnonymousEntry {
+            } => PolicyShape {
+                screened_owners: SCREENED_OWNERS,
+                outputs: outputs.into(),
+                withdrawals: withdrawals.into(),
+            },
+            Self::TransferAnonymousEntry {
                 outputs,
                 withdrawals,
                 ..
             } => PolicyShape {
+                screened_owners: SCREENED_ENTRY_OWNERS,
                 outputs: outputs.into(),
                 withdrawals: withdrawals.into(),
-                public_assets: N_PUBLIC_SLOTS,
             },
             _ => return None,
         };
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = shape.withdrawals.min(N_PUBLIC_SLOTS);
-        let distinct = 1 + 2 * shape.outputs + shape.withdrawals;
+        let distinct = shape.screened_owners + 2 * shape.outputs + shape.withdrawals;
         Some(RecordPools {
-            own: distinct + withdrawal_assets.max(shape.public_assets),
+            own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
         })
     }
@@ -322,7 +331,7 @@ mod tests {
             spend(RingRail::Confidential, 3, 2, false, 0),
             Some(RingCircuit::TransferConfidential {
                 outputs: 2,
-                inputs: 32,
+                inputs: 24,
                 withdrawals: 4
             })
         );
@@ -330,11 +339,11 @@ mod tests {
             spend(RingRail::Delegate, 2, 2, false, 5),
             Some(RingCircuit::TransferConfidential {
                 outputs: 2,
-                inputs: 32,
+                inputs: 24,
                 withdrawals: 32
             })
         );
-        assert_eq!(spend(RingRail::Confidential, 33, 2, false, 0), None);
+        assert_eq!(spend(RingRail::Confidential, 25, 2, false, 0), None);
         assert_eq!(
             spend(RingRail::Confidential, 5, 16, false, 8),
             Some(RingCircuit::TransferConfidential {
@@ -366,5 +375,41 @@ mod tests {
         );
         assert_eq!(spend(RingRail::Anonymous, 2, 8, true, 5), None);
         assert_eq!(spend(RingRail::Anonymous, 1, 16, false, 0), None);
+    }
+
+    #[test]
+    fn the_pools_hold_every_screened_owner_output_and_withdrawal() {
+        let pools = |circuit: RingCircuit| {
+            let pools = circuit.record_pools().unwrap();
+            (pools.own, pools.curator)
+        };
+        let confidential = |outputs, inputs, withdrawals| RingCircuit::TransferConfidential {
+            outputs,
+            inputs,
+            withdrawals,
+        };
+        let commitment = |outputs, class, withdrawals| RingCircuit::TransferAnonymous {
+            outputs,
+            class,
+            withdrawals,
+        };
+        let entry = |outputs, class, withdrawals| RingCircuit::TransferAnonymousEntry {
+            outputs,
+            class,
+            withdrawals,
+        };
+        assert_eq!(pools(confidential(2, 24, 4)), (15, 15));
+        assert_eq!(pools(confidential(2, 24, 32)), (43, 43));
+        assert_eq!(pools(confidential(4, 24, 4)), (19, 19));
+        assert_eq!(pools(confidential(4, 24, 32)), (47, 47));
+        assert_eq!(pools(confidential(8, 16, 4)), (27, 27));
+        assert_eq!(pools(confidential(8, 16, 32)), (55, 55));
+        assert_eq!(pools(confidential(16, 5, 8)), (47, 47));
+        assert_eq!(pools(commitment(2, 24, 4)), (15, 15));
+        assert_eq!(pools(commitment(4, 16, 32)), (47, 47));
+        assert_eq!(pools(commitment(8, 5, 24)), (47, 47));
+        assert_eq!(pools(entry(2, 8, 4)), (12, 12));
+        assert_eq!(pools(entry(4, 8, 4)), (16, 16));
+        assert_eq!(pools(entry(8, 2, 4)), (24, 24));
     }
 }
