@@ -1,4 +1,4 @@
-//! Ring notes of deposits and anonymous merges, a commitment layout spends them by hash or prefix.
+//! Ring notes of deposits, a spend names them by hash.
 
 use std::{
     collections::HashMap,
@@ -10,11 +10,12 @@ use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig, ProofInputUtxo, ShieldedTransaction};
 use spr_event::EncryptedRingDepositOutput;
 use spr_hasher::primitives::hash_bytes;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::X25519Keypair;
 
+use crate::history::HistoryCursor;
 use crate::{
     encryption::{open_deposit, DepositOpening},
-    merge_audit::MergeOutput,
     origin::{ConfirmedDeposit, ConfirmedEventKind, RingOrigin, TransactionOrigin},
     recover::deposit_output,
     scan::{RingHistory, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
@@ -34,7 +35,7 @@ pub struct CreatedUtxos<'a> {
 pub struct CreatedUtxoScan<'a> {
     ring: Address,
     auditor: &'a X25519Keypair,
-    cursor: Option<Vec<u8>>,
+    cursor: Option<HistoryCursor>,
     page_size: NonZeroU32,
     max_pages: NonZeroUsize,
     indexer_config: Option<IndexerRpcConfig>,
@@ -78,7 +79,7 @@ pub struct CreatedNotes {
 /// `next_cursor` is live only when the page cap stopped the read.
 pub struct CreatedUtxoPage {
     pub utxos: Vec<CreatedUtxo>,
-    pub next_cursor: Option<Vec<u8>>,
+    pub next_cursor: Option<HistoryCursor>,
     pub skipped: Vec<SkippedRow>,
 }
 
@@ -101,7 +102,7 @@ impl<'a> CreatedUtxoScan<'a> {
         }
     }
 
-    pub fn with_cursor(mut self, cursor: Vec<u8>) -> Self {
+    pub fn with_cursor(mut self, cursor: HistoryCursor) -> Self {
         self.cursor = Some(cursor);
         self
     }
@@ -193,11 +194,7 @@ impl CreatedUtxos<'_> {
                 }
                 Ok(notes)
             }
-            ConfirmedEventKind::Merge => Ok(CreatedNotes {
-                utxos: self.merge(auditor)?,
-                unowned: Vec::new(),
-            }),
-            ConfirmedEventKind::Transfer => Ok(CreatedNotes::default()),
+            ConfirmedEventKind::Merge | ConfirmedEventKind::Transfer => Ok(CreatedNotes::default()),
         }
     }
 
@@ -250,42 +247,27 @@ impl CreatedUtxos<'_> {
         }
         Ok(notes)
     }
-
-    fn merge(&self, auditor: &X25519Keypair) -> Result<Vec<CreatedUtxo>, AuditError> {
-        let Some(disclosure) = &self.origin.merge_disclosure else {
-            return Ok(Vec::new());
-        };
-        let output = MergeOutput::of(self.transaction, self.ring)?;
-        let opening = output.disclose(auditor, disclosure)?;
-        let mint = Address::new_from_array(opening.mint);
-        Ok(vec![CreatedUtxo {
-            commitment: output.commitment,
-            slot_index: 0,
-            leaf_index: output.leaf_index,
-            utxo: KnownUtxo {
-                owner_key: opening.owner_key,
-                owner: UtxoOwner::Keyed {
-                    nullifier_pk: opening.nullifier_pk,
-                },
-                asset: hash_bytes(mint.as_array())?,
-                mint: Some(mint),
-                amount: opening.amount,
-                blinding: opening.output_blinding,
-                data_hash: [0; 32],
-                ring_data_hash: output.ring_data_hash,
-                tree_id: output.tree_id,
-            },
-        }])
-    }
 }
 
 impl DepositNote {
-    /// `None` until `owners` names the owner's nullifier key.
+    /// `None` until `owners` names the owner's nullifier key, a zero secret owner registers none.
     pub fn created(&self, owners: &dyn DepositOwners) -> Option<CreatedUtxo> {
-        let escrowed = owners.deposit_owner(&self.owner_hash)?;
-        Some(self.owned_by(UtxoOwner::Keyed {
-            nullifier_pk: escrowed.nullifier_pk,
-        }))
+        let nullifier_pk = match owners.deposit_owner(&self.owner_hash) {
+            Some(escrowed) => escrowed.nullifier_pk,
+            None => self.zero_secret_owner()?,
+        };
+        Some(self.owned_by(UtxoOwner::Keyed { nullifier_pk }))
+    }
+
+    fn zero_secret_owner(&self) -> Option<[u8; 32]> {
+        let zero_owner = UtxoOwner::Keyed {
+            nullifier_pk: ZERO_NULLIFIER_PUBKEY,
+        };
+        let rebuilt = KnownUtxo {
+            owner: zero_owner,
+            ..self.deposited().utxo
+        };
+        (rebuilt.owner_hash().ok()? == self.owner_hash).then_some(ZERO_NULLIFIER_PUBKEY)
     }
 
     pub fn deposited(&self) -> CreatedUtxo {
@@ -299,6 +281,7 @@ impl DepositNote {
             commitment: self.commitment,
             slot_index: self.slot_index,
             leaf_index: self.leaf_index,
+            ring_note: true,
             utxo: KnownUtxo {
                 owner_key: self.owner_key,
                 owner,

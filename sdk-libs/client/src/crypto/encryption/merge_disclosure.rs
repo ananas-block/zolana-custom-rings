@@ -2,50 +2,24 @@
 
 use custom_ring_interface::{
     merge_disclosure_field_count, merge_disclosure_len, pack_disclosure, unpack_disclosure,
-    MERGE_DISCLOSURE_HEADER_LEN, MERGE_DISCLOSURE_INFO, MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS,
+    MERGE_DISCLOSURE_INFO, MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS,
 };
 use spr_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
 use spr_keypair::{random_salt, X25519Keypair, X25519Pubkey};
 use zeroize::Zeroizing;
 
 use super::{open_stream, seal_stream, Result, StreamSchedule};
-use crate::{AuditError, DisclosurePad, REDACTED};
+use crate::{AuditError, DisclosurePad};
 
 /// ASCII "CR_MD", the Go `MergeDisclosureDomain`, a merge pad never repeats an output pad.
 const MERGE_DISCLOSURE_DOMAIN: u64 = 0x4352_5f4d44;
 const MERGE_SCHEDULE: StreamSchedule = StreamSchedule::Labelled(MERGE_DISCLOSURE_INFO);
 
-/// What an anonymous merge discloses, enough to recompute its output commitment.
-#[derive(Clone, PartialEq, Eq)]
+/// The spent commitments of one merge in circuit slot order.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeOpening {
-    pub owner_key: [u8; 32],
-    pub nullifier_pk: [u8; 32],
-    pub mint: [u8; 32],
-    pub amount: u64,
-    pub output_blinding: [u8; 32],
-    /// One per circuit slot, zero for padding.
+    /// One per circuit slot, zero at a dummy, published or not.
     pub input_commitments: Vec<[u8; 32]>,
-}
-
-impl core::fmt::Debug for MergeOpening {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let Self {
-            owner_key,
-            nullifier_pk,
-            mint,
-            amount,
-            output_blinding: _,
-            input_commitments,
-        } = self;
-        f.debug_struct("MergeOpening")
-            .field("owner_key", owner_key)
-            .field("nullifier_pk", nullifier_pk)
-            .field("mint", mint)
-            .field("amount", amount)
-            .field("output_blinding", &REDACTED)
-            .field("input_commitments", input_commitments)
-            .finish()
-    }
 }
 
 /// The sealed disclosure key and masked fields of one merge, with the secrets its proof witnesses.
@@ -64,11 +38,6 @@ impl MergeOpening {
         let mut plaintext = Zeroizing::new(Vec::with_capacity(
             merge_disclosure_field_count(width) * PACK_BE_CHUNK_BYTES,
         ));
-        plaintext.extend_from_slice(&self.owner_key);
-        plaintext.extend_from_slice(&self.nullifier_pk);
-        plaintext.extend_from_slice(&self.mint);
-        plaintext.extend_from_slice(&self.amount.to_be_bytes());
-        plaintext.extend_from_slice(&self.output_blinding);
         for commitment in &self.input_commitments {
             plaintext.extend_from_slice(commitment);
         }
@@ -83,21 +52,8 @@ impl MergeOpening {
         if padding.iter().any(|byte| *byte != 0) {
             return Err(AuditError::DisclosurePadding);
         }
-        let (header, commitments) = opening.split_at(MERGE_DISCLOSURE_HEADER_LEN);
-        let take = |at: usize| -> [u8; 32] {
-            let mut value = [0; 32];
-            value.copy_from_slice(&header[at..at + 32]);
-            value
-        };
-        let mut amount = [0; 8];
-        amount.copy_from_slice(&header[96..104]);
         Ok(Self {
-            owner_key: take(0),
-            nullifier_pk: take(32),
-            mint: take(64),
-            amount: u64::from_be_bytes(amount),
-            output_blinding: take(104),
-            input_commitments: commitments.as_chunks::<32>().0.to_vec(),
+            input_commitments: opening.as_chunks::<32>().0.to_vec(),
         })
     }
 }
@@ -135,7 +91,7 @@ impl MergeDisclosureEncryption {
     }
 }
 
-/// Opens a disclosure the ring program verified, the caller checks the opening against the settled output.
+/// Opens a disclosure the ring program verified, its proof binds the list to the merge's commitments.
 pub fn open_merge_disclosure(
     auditor: &X25519Keypair,
     eph_pk: &X25519Pubkey,
@@ -169,132 +125,45 @@ fn merge_pad(disclosure_key: &[u8; 32], salt: &[u8; 16]) -> Result<DisclosurePad
 pub(crate) mod tests {
     use super::*;
 
-    pub(crate) struct Vector(serde_json::Value);
-
-    impl Vector {
-        pub(crate) fn load() -> Self {
-            Self(
-                serde_json::from_str(include_str!(
-                    "../../../../../test-vectors/merge/ring-merge.json"
-                ))
-                .expect("vector"),
-            )
-        }
-
-        pub(crate) fn bytes(&self, key: &str) -> Vec<u8> {
-            hex::decode(self.0[key].as_str().expect("hex").trim_start_matches("0x")).expect("hex")
-        }
-
-        pub(crate) fn array<const N: usize>(&self, key: &str) -> [u8; N] {
-            self.bytes(key).try_into().expect("length")
-        }
-
-        pub(crate) fn fields(&self, key: &str) -> Vec<[u8; 32]> {
-            self.0[key]
-                .as_array()
-                .expect("fields")
-                .iter()
-                .map(|value| {
-                    hex::decode(value.as_str().expect("hex").trim_start_matches("0x"))
-                        .expect("hex")
-                        .try_into()
-                        .expect("field")
-                })
-                .collect()
-        }
-
-        pub(crate) fn request_array(&self, key: &str) -> [u8; 32] {
-            hex::decode(
-                self.0["request"][key]
-                    .as_str()
-                    .expect("hex")
-                    .trim_start_matches("0x"),
-            )
-            .expect("hex")
-            .try_into()
-            .expect("32 bytes")
-        }
-
-        pub(crate) fn opening(&self) -> MergeOpening {
-            let request = &self.0["request"];
-            MergeOpening {
-                owner_key: hex::decode(
-                    request["ownerKey"]
-                        .as_str()
-                        .expect("owner")
-                        .trim_start_matches("0x"),
-                )
-                .expect("hex")
-                .try_into()
-                .expect("owner key"),
-                nullifier_pk: self.array("nullifier_pk"),
-                mint: self.array("mint"),
-                amount: self.0["amount"].as_u64().expect("amount"),
-                output_blinding: self.array("output_blinding"),
-                input_commitments: self.fields("input_commitments"),
-            }
-        }
+    fn opening() -> MergeOpening {
+        let mut input_commitments = vec![[0; 32]; 8];
+        input_commitments[0] = [1; 32];
+        input_commitments[1] = [2; 32];
+        MergeOpening { input_commitments }
     }
 
-    /// Sealing under the vector's keys reproduces the Go fields, opening them returns the opening.
     #[test]
-    fn the_disclosure_matches_the_go_vector() {
-        let vector = Vector::load();
-        let request = &vector.0["request"];
-        let hex32 = |key: &str| -> [u8; 32] {
-            hex::decode(request[key].as_str().expect("hex").trim_start_matches("0x"))
-                .expect("hex")
-                .try_into()
-                .expect("32 bytes")
-        };
-        let opening = vector.opening();
-        assert_eq!(
-            &opening.encode()[..merge_disclosure_len(8)],
-            vector.bytes("plaintext")
-        );
-        let auditor = X25519Keypair::from_bytes(&vector.array("auditor_sk"));
-        let sealed = MergeDisclosureEncryption::seal(
-            &opening,
-            vector.array("salt"),
-            &auditor.pubkey(),
-            X25519Keypair::from_bytes(&hex32("ephSk")),
-            Zeroizing::new(hex32("disclosureKey")),
-        )
-        .expect("seal");
-        assert_eq!(sealed.fields, vector.fields("fields"));
-        assert_eq!(sealed.ciphertext, vector.array::<32>("envelope_ciphertext"));
-        assert_eq!(sealed.eph_pk.as_bytes(), &vector.array::<33>("eph_pk"));
+    fn a_list_seals_to_its_field_count_and_opens_in_slot_order() {
+        let auditor = X25519Keypair::new();
+        let salt = [5; 16];
+        let sealed = MergeDisclosureEncryption::new(&opening(), salt, &auditor.pubkey()).unwrap();
+        assert_eq!(sealed.fields.len(), 9);
         let opened = open_merge_disclosure(
             &auditor,
             &sealed.eph_pk,
             &sealed.ciphertext,
-            vector.array("salt"),
+            salt,
             &sealed.fields,
         )
-        .expect("open");
-        assert_eq!(opened, opening);
-        let mut other_salt = vector.array::<16>("salt");
+        .unwrap();
+        assert_eq!(opened, opening());
+        let mut other_salt = salt;
         other_salt[0] ^= 1;
         assert!(!matches!(
             open_merge_disclosure(&auditor, &sealed.eph_pk, &sealed.ciphertext, other_salt, &sealed.fields),
-            Ok(wrong) if wrong == opening
+            Ok(wrong) if wrong == opening()
         ));
     }
 
     #[test]
-    fn a_merge_opening_prints_no_blinding() {
-        let blinding = [0xb1; 32];
-        let opening = MergeOpening {
-            owner_key: [3; 32],
-            nullifier_pk: [4; 32],
-            mint: [5; 32],
-            amount: 6,
-            output_blinding: blinding,
-            input_commitments: vec![[7; 32]],
+    fn a_list_off_every_merge_width_is_refused() {
+        let auditor = X25519Keypair::new();
+        let short = MergeOpening {
+            input_commitments: vec![[1; 32]; 7],
         };
-        let printed = format!("{opening:?}");
-        let hidden = format!("{blinding:?}");
-        assert!(!printed.contains(&hidden[1..hidden.len() - 1]), "{printed}");
-        assert!(printed.contains(REDACTED), "{printed}");
+        assert!(matches!(
+            MergeDisclosureEncryption::new(&short, [5; 16], &auditor.pubkey()),
+            Err(AuditError::DisclosureLayout)
+        ));
     }
 }

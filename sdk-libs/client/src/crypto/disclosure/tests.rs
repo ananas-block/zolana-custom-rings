@@ -15,13 +15,11 @@ fn field(byte: u8) -> [u8; 32] {
 
 fn signer_layout(exits: u64) -> AuditStreamLayout {
     AuditStreamLayout {
-        key: AuditKey::Confidential {
-            class: 2,
-            input_prefixes: false,
-        },
+        key: AuditKey::Confidential { class: 2 },
         key_escrow: false,
         inputs: 1,
         outputs: 2,
+        capacity: 2,
         exits,
     }
 }
@@ -32,6 +30,7 @@ fn entry_layout() -> AuditStreamLayout {
         key_escrow: false,
         inputs: 2,
         outputs: 2,
+        capacity: 2,
         exits: 0b10,
     }
 }
@@ -50,6 +49,7 @@ fn entry_evidence() -> AuditEvidence {
         sender_nullifier_pk: field(0x5a),
         inputs: vec![
             EntryInput {
+                hash: field(0x62),
                 amount: 5000,
                 asset: field(0x60),
                 blinding: field(0x61),
@@ -57,6 +57,11 @@ fn entry_evidence() -> AuditEvidence {
             EntryInput::default(),
         ],
     }
+}
+
+/// One hash per published input, the evidence every non-entry rail carries.
+fn hashes(inputs: u8) -> AuditEvidence {
+    AuditEvidence::InputHashes((0..inputs).map(|input| field(0x70 + input)).collect())
 }
 
 fn opened_envelope(
@@ -98,7 +103,7 @@ fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
         AuditStreamSeal {
             layout: signer_layout(0),
             tx_viewing_key: &tx_viewing_key,
-            evidence: AuditEvidence::None,
+            evidence: hashes(1),
             records: vec![OutputRecord::Delivered; 2],
         }
         .seal(&auditor.pubkey())
@@ -109,7 +114,7 @@ fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
     assert_ne!(first.envelope, second.envelope);
     let opened = opened_envelope(&first, &auditor, signer_layout(0)).unwrap();
     assert_eq!(opened.tx_viewing_key.pubkey(), tx_viewing_key.pubkey());
-    assert_eq!(opened.evidence, AuditEvidence::None);
+    assert_eq!(opened.evidence, hashes(1));
     assert!(first.records.iter().all(Vec::is_empty));
 }
 
@@ -119,12 +124,15 @@ fn an_unclamped_envelope_secret_is_refused() {
     let canonical = ViewingKey::new();
     let mut unclamped = *canonical.secret_bytes();
     unclamped[0] |= 0b111;
-    let sealed = raw_envelope(&unclamped, &auditor);
+    let sealed = raw_envelope(&[&unclamped[..], &field(0x70)].concat(), &auditor);
     assert!(matches!(
         opened_envelope(&sealed, &auditor, signer_layout(0)),
         Err(AuditError::NonCanonicalViewingKey)
     ));
-    let sealed = raw_envelope(&*canonical.secret_bytes(), &auditor);
+    let sealed = raw_envelope(
+        &[&canonical.secret_bytes()[..], &field(0x70)].concat(),
+        &auditor,
+    );
     assert_eq!(
         opened_envelope(&sealed, &auditor, signer_layout(0))
             .unwrap()
@@ -154,10 +162,7 @@ fn a_record_opens_only_at_the_counter_of_its_slot() {
     let sealed = AuditStreamSeal {
         layout,
         tx_viewing_key: &tx_viewing_key,
-        evidence: AuditEvidence::Commitment {
-            first_input_hash: field(0x70),
-            later_prefixes: Vec::new(),
-        },
+        evidence: hashes(1),
         records: vec![record, record],
     }
     .seal(&auditor.pubkey())
@@ -206,20 +211,12 @@ fn a_seal_off_its_layout_is_refused() {
     };
     let delivered = vec![OutputRecord::Delivered; 2];
     for (layout, evidence, records) in [
-        (
-            signer_layout(0),
-            AuditEvidence::None,
-            vec![OutputRecord::Delivered],
-        ),
-        (
-            signer_layout(0),
-            AuditEvidence::InputPrefixes(vec![None]),
-            delivered.clone(),
-        ),
-        (signer_layout(0b10), AuditEvidence::None, delivered),
+        (signer_layout(0), hashes(1), vec![OutputRecord::Delivered]),
+        (signer_layout(0), hashes(2), delivered.clone()),
+        (signer_layout(0b10), hashes(1), delivered),
         (
             signer_layout(0b10),
-            AuditEvidence::None,
+            hashes(1),
             vec![OutputRecord::Delivered, exit_record(true)],
         ),
     ] {
@@ -247,23 +244,22 @@ fn evidence_outside_the_field_is_refused() {
         inputs: 2,
         ..signer_layout(0)
     };
-    let prefixes = |first_input_hash| AuditEvidence::Commitment {
-        first_input_hash,
-        later_prefixes: vec![None],
-    };
-    for (first, error) in [
-        ([0; 32], AuditError::DisclosureLayout),
-        (BN254_SCALAR_MODULUS_BE, AuditError::DisclosureField),
-    ] {
-        let sealed = raw_envelope(&plaintext(prefixes(first)), &auditor);
-        let refused = opened_envelope(&sealed, &auditor, commitment)
-            .err()
-            .unwrap();
-        assert_eq!(refused.to_string(), error.to_string());
+    for position in 0..2 {
+        let mut named = [field(0x70), [0; 32]];
+        named[position] = BN254_SCALAR_MODULUS_BE;
+        let sealed = raw_envelope(
+            &plaintext(AuditEvidence::InputHashes(named.to_vec())),
+            &auditor,
+        );
+        assert!(matches!(
+            opened_envelope(&sealed, &auditor, commitment),
+            Err(AuditError::DisclosureField)
+        ));
     }
-    let mut over = plaintext(prefixes(field(0x70)));
-    over[64..80].fill(0xff);
-    let sealed = raw_envelope(&over, &auditor);
+    let sealed = raw_envelope(
+        &plaintext(AuditEvidence::InputHashes(vec![field(0x70)])),
+        &auditor,
+    );
     assert!(matches!(
         opened_envelope(&sealed, &auditor, commitment),
         Err(AuditError::DisclosureField)
@@ -281,20 +277,16 @@ fn evidence_outside_the_field_is_refused() {
 }
 
 #[test]
-fn a_real_input_hash_without_a_prefix_is_refused() {
-    let mut short = [0; 32];
-    short[31] = 1;
+fn input_hash_evidence_keeps_the_full_hash_and_refuses_one_outside_the_field() {
     assert!(matches!(
-        prefix_evidence(&[Some(short)]),
+        input_hash_evidence(&[Some(BN254_SCALAR_MODULUS_BE)]),
         Err(AuditError::DisclosureField)
     ));
-    assert!(matches!(
-        commitment_evidence(&[None]),
-        Err(AuditError::DisclosureLayout)
-    ));
+    let mut short = [0; 32];
+    short[31] = 1;
     assert_eq!(
-        prefix_evidence(&[Some(field(0x70)), None]).unwrap(),
-        AuditEvidence::InputPrefixes(vec![InputPrefix::of(&field(0x70)), None])
+        input_hash_evidence(&[Some(short), None]).unwrap(),
+        AuditEvidence::InputHashes(vec![short, [0; 32]])
     );
 }
 

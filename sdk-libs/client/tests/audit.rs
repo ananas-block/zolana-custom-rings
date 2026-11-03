@@ -2,6 +2,8 @@
 
 #[path = "common/deposit.rs"]
 mod deposit_fixture;
+#[path = "common/history_page.rs"]
+pub mod history_page;
 #[path = "common/origin.rs"]
 mod origin_fixture;
 #[path = "common/transfer.rs"]
@@ -17,13 +19,14 @@ use std::{
 };
 
 use custom_ring_interface::{
-    AuditEvidence, AuditStreamLayout, DeliveredBody, ExitRecord, InputPrefix,
+    AuditEvidence, AuditStreamLayout, DeliveredBody, EntryInput, ExitRecord,
     RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
-    AsyncRpc, Context, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, ShieldedTransaction,
+    AsyncRpc, Context, GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig,
+    PaginationToken, ShieldedTransaction,
 };
 use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
@@ -32,16 +35,19 @@ use spr_event::{
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 use zolana_ring_client::{
-    auditor_view_tag, commitment_evidence, prefix_evidence, ring_event_origin_in, seal_deposits,
-    AuditError, AuditStreamSeal, AuditedInputOpening, AuditedSender, AuditedTransaction,
+    auditor_view_tag, confirmed_merge,
+    history::{HistoryCursor, HistoryQuery, HistoryStream},
+    input_hash_evidence, ring_event_origin_in, seal_deposits, AuditError, AuditStreamSeal,
+    AuditedInputOpening, AuditedSender, AuditedTransaction, ConfirmedMerge,
     ConfirmedMergeDisclosure, CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening,
-    EscrowPendingSlot, InputOpening, InputRing, KnownUtxo, KnownUtxoIndex, KnownUtxos,
-    MergeDisclosureEncryption, MergeOpening, OutputOpening, OutputPayloadError,
-    OutputPayloadErrorKind, OutputRecord, RingOrigin, RingOwnerTag, RingScan, TransactionAudit,
-    TransactionOrigin, UtxoOwner,
+    EscrowPendingSlot, InputOpening, InputRing, KnownUtxo, KnownUtxoIndex, KnownUtxos, MergeAudit,
+    MergeDisclosureEncryption, MergeInput, MergeLedger, MergeOpening, MergedInput, OutputOpening,
+    OutputPayloadError, OutputPayloadErrorKind, OutputRecord, RingOrigin, RingOwnerTag, RingScan,
+    TransactionAudit, TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{seal_delivered_body, RingAssets};
 
+use history_page::{position, EventsPage};
 use transfer::{
     audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Disclosure, Frame,
     Output, Placement, Publish, Rail, Slot, Transfer, UtxoFields,
@@ -109,7 +115,7 @@ fn build_with(transfer: &Transfer, rail: Rail, outputs: Vec<Output>, key_escrow:
 enum Spending {
     /// Every note a ring note, disclosed by its commitment.
     RingUtxos,
-    /// A default-ring note among them, the entry key opens every note.
+    /// Note 0 a ring note and every later one a default-ring note, the entry key opens them all.
     Entry,
 }
 
@@ -123,7 +129,7 @@ fn build_anonymous(
     let slots = transfer.slots(Rail::Anonymous, &outputs);
     let sender = spent[0].utxo;
     let inputs = match spending {
-        Spending::RingUtxos => commitment_evidence(
+        Spending::RingUtxos => input_hash_evidence(
             &spent
                 .iter()
                 .map(|spend| Some(spend.commitment(transfer, Some(transfer.ring))))
@@ -133,14 +139,23 @@ fn build_anonymous(
         Spending::Entry => AuditEvidence::Entry {
             sender_key: sender.owner_key,
             sender_nullifier_pk: sender.nullifier_pk,
-            inputs: spent
-                .iter()
-                .map(|spend| input_opening(&spend.utxo, spend.blinding))
-                .collect(),
+            inputs: entry_inputs(transfer, spent),
         },
     };
     let disclosure = transfer.anonymous_disclosure(&outputs, inputs);
     publish(transfer, slots, outputs, &disclosure)
+}
+
+/// Note 0 under the ring, every later note under the default ring.
+fn entry_inputs(transfer: &Transfer, spent: &[Spend]) -> Vec<EntryInput> {
+    spent
+        .iter()
+        .enumerate()
+        .map(|(index, spend)| {
+            let ring = (index == 0).then_some(transfer.ring);
+            input_opening(&spend.utxo, spend.placement(transfer, ring))
+        })
+        .collect()
 }
 
 impl Spend {
@@ -176,7 +191,7 @@ fn publish(
     Built {
         frame: transfer.frame(Frame {
             tx: &transaction,
-            layout,
+            disclosure,
         }),
         transaction,
         outputs,
@@ -368,15 +383,15 @@ fn a_key_escrow_body_returns_its_proven_fields_until_the_owner_record_arrives() 
     }
 }
 
-struct PrefixedSpend {
+struct HashedSpend {
     transfer: Transfer,
     spent: [Spend; 2],
     built: Built,
     commitments: [[u8; 32]; 2],
 }
 
-/// A transfer of two ring notes, the second named by its prefix.
-fn prefixed_spend() -> PrefixedSpend {
+/// A transfer of two ring notes, each named by its full hash.
+fn hashed_spend() -> HashedSpend {
     let (transfer, _, spent) = anonymous_spend();
     let outputs = vec![
         Output::Ring {
@@ -390,7 +405,7 @@ fn prefixed_spend() -> PrefixedSpend {
     let commitments = spent
         .each_ref()
         .map(|spend| spend.commitment(&transfer, Some(transfer.ring)));
-    PrefixedSpend {
+    HashedSpend {
         transfer,
         spent,
         built,
@@ -399,13 +414,13 @@ fn prefixed_spend() -> PrefixedSpend {
 }
 
 #[test]
-fn a_ring_utxo_input_opens_by_its_prefix_or_is_reported_unseen() {
-    let PrefixedSpend {
+fn a_ring_utxo_input_opens_by_its_full_hash() {
+    let HashedSpend {
         transfer,
         spent,
         built,
         commitments,
-    } = prefixed_spend();
+    } = hashed_spend();
     let known: KnownUtxoIndex = commitments
         .iter()
         .zip(&spent)
@@ -438,12 +453,12 @@ fn a_ring_utxo_input_opens_by_its_prefix_or_is_reported_unseen() {
 
 #[test]
 fn an_unseen_spent_note_withholds_no_slot_and_resolves_once_known() {
-    let PrefixedSpend {
+    let HashedSpend {
         transfer,
         spent,
         built,
         commitments,
-    } = prefixed_spend();
+    } = hashed_spend();
     let audit = |notes: &[usize]| {
         let known: KnownUtxoIndex = notes
             .iter()
@@ -467,20 +482,17 @@ fn an_unseen_spent_note_withholds_no_slot_and_resolves_once_known() {
             }),
         })
     };
-    let hash = InputOpening::UnseenHash {
-        hash: commitments[0],
-    };
-    let prefix = InputOpening::Unseen {
-        prefix: InputPrefix::of(&commitments[1]).unwrap(),
+    let unseen = |note: usize| InputOpening::UnseenHash {
+        hash: commitments[note],
     };
     let sender = Some(AuditedSender {
         owner_key: spent[0].utxo.owner_key,
         nullifier_pk: Some(spent[0].utxo.nullifier_pk),
     });
     for (notes, expected_sender, first, later) in [
-        (&[][..], None, hash.clone(), prefix.clone()),
-        (&[0][..], sender, opening(0), prefix),
-        (&[1][..], None, hash, opening(1)),
+        (&[][..], None, unseen(0), unseen(1)),
+        (&[0][..], sender, opening(0), unseen(1)),
+        (&[1][..], None, unseen(0), opening(1)),
         (&[0, 1][..], sender, opening(0), opening(1)),
     ] {
         let audited = audit(notes);
@@ -494,83 +506,82 @@ fn an_unseen_spent_note_withholds_no_slot_and_resolves_once_known() {
     }
 }
 
-struct Misfiled {
-    index: KnownUtxoIndex,
-    prefix: InputPrefix,
-    answer: Vec<[u8; 32]>,
-}
-
-impl KnownUtxos for Misfiled {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
-        self.index.utxo(commitment)
-    }
-
-    fn with_prefix(&self, owner_key: &[u8; 32], prefix: InputPrefix) -> Vec<[u8; 32]> {
-        match prefix == self.prefix {
-            true => self.answer.clone(),
-            false => self.index.with_prefix(owner_key, prefix),
-        }
-    }
-
-    fn with_prefix_of_anyone(&self, prefix: InputPrefix) -> Vec<[u8; 32]> {
-        self.index.with_prefix_of_anyone(prefix)
-    }
-}
-
+/// Notes sharing 16 leading bytes stay apart, the evidence names one whole hash.
 #[test]
-fn a_prefix_opens_only_a_note_of_the_sender_that_carries_it() {
-    let PrefixedSpend {
+fn a_full_hash_opens_only_the_note_it_names() {
+    let HashedSpend {
         transfer,
         spent,
         built,
         commitments,
-    } = prefixed_spend();
-    let prefix = InputPrefix::of(&commitments[1]).unwrap();
+    } = hashed_spend();
     let first = (commitments[0], spent[0].known(&transfer));
-    let twin = Spend {
-        utxo: spent[1].utxo,
-        blinding: field(0x62),
-    };
-    let twin_commitment = twin.commitment(&transfer, Some(transfer.ring));
-    // A deposited record hashes to the commitment under any owner key.
-    let misowned = KnownUtxo {
-        owner_key: [0x77; 32],
-        owner: UtxoOwner::Deposited {
-            owner_hash: spent[1].utxo.owner_hash(),
-        },
-        ..spent[1].known(&transfer)
-    };
-    let spent_note = (commitments[1], spent[1].known(&transfer));
-    let audit = |index: Vec<([u8; 32], KnownUtxo)>, answer: Vec<[u8; 32]>| {
-        let store = Misfiled {
-            index: index.into_iter().collect(),
-            prefix,
-            answer,
-        };
+    let mut twin = commitments[1];
+    twin[31] ^= 1;
+    assert_eq!(twin[..16], commitments[1][..16]);
+    let audit = |index: KnownUtxoIndex| {
         TransactionAudit::new(&built.transaction, built.layout)
-            .with_known_utxos(&store)
+            .with_known_utxos(&index)
             .run(&auditor(), &assets())
+            .unwrap()
     };
-    for (index, answer) in [
-        (
-            vec![first, spent_note, (twin_commitment, twin.known(&transfer))],
-            twin_commitment,
-        ),
-        (vec![first, (commitments[1], misowned)], commitments[1]),
-    ] {
-        assert_eq!(
-            audit(index, vec![answer]).unwrap().inputs[1].opening,
-            InputOpening::Unseen { prefix }
-        );
-    }
-    let audited = audit(vec![first, spent_note], vec![commitments[1]; 2]).unwrap();
+    let twin_only = KnownUtxoIndex::from_iter([first, (twin, spent[1].known(&transfer))]);
+    assert_eq!(
+        audit(twin_only).inputs[1].opening,
+        InputOpening::UnseenHash {
+            hash: commitments[1]
+        }
+    );
+    let both = KnownUtxoIndex::from_iter([
+        first,
+        (twin, spent[0].known(&transfer)),
+        (commitments[1], spent[1].known(&transfer)),
+    ]);
     assert!(matches!(
-        audited.inputs[1].opening,
+        audit(both).inputs[1].opening,
         InputOpening::Opened(AuditedInputOpening {
             ring: Some(InputRing::Ring { commitment }),
+            amount: 30,
             ..
         }) if commitment == commitments[1]
     ));
+}
+
+/// The signer rail names every published input, a dummy reads zero and never as a note.
+#[test]
+fn a_signer_input_opens_by_its_full_hash_and_a_dummy_reads_zero() {
+    let mut transfer = Transfer::fixture();
+    transfer.nullifiers.push(field(0x1e));
+    let spend = Spend {
+        utxo: utxo(0xa1, SOL, 900),
+        blinding: field(0x60),
+    };
+    let hash = spend.commitment(&transfer, Some(transfer.ring));
+    let outputs = vec![
+        Output::Ring {
+            utxo: utxo(0xb5, SOL, 50),
+            recipient_u: x25519_u(0x50),
+            tag: None,
+        },
+        Output::Dummy,
+    ];
+    let slots = transfer.slots(Rail::Delivered, &outputs);
+    let disclosure =
+        transfer.signer_disclosure(&outputs, input_hash_evidence(&[Some(hash), None]).unwrap());
+    let built = publish(&transfer, slots, outputs, &disclosure);
+    let known: KnownUtxoIndex = [(hash, spend.known(&transfer))].into_iter().collect();
+    let audited = TransactionAudit::new(&built.transaction, built.layout)
+        .with_known_utxos(&known)
+        .run(&auditor(), &assets())
+        .unwrap();
+    assert_eq!(audited.sender, None);
+    assert_eq!(audited.inputs[0].hash, hash);
+    assert!(matches!(
+        audited.inputs[0].opening,
+        InputOpening::Opened(AuditedInputOpening { amount: 900, .. })
+    ));
+    assert_eq!(audited.inputs[1].hash, [0; 32]);
+    assert_eq!(audited.inputs[1].opening, InputOpening::Dummy);
 }
 
 /// The confirmed deposit of `spend` into the ring, its capsule sealed to the auditor.
@@ -619,17 +630,12 @@ fn deposited(transfer: &Transfer, spend: &Spend) -> Confirmed {
     }
 }
 
-/// The confirmed anonymous merge into `spend`, its disclosure sealed to the auditor.
+/// The confirmed merge of `MERGED_INPUT` into `spend`, its disclosure sealed to the auditor.
 fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
     let salt = [0x4d; 16];
-    let opening = MergeOpening {
-        owner_key: spend.utxo.owner_key,
-        nullifier_pk: spend.utxo.nullifier_pk,
-        mint: spend.utxo.asset_address.to_bytes(),
-        amount: spend.utxo.amount,
-        output_blinding: spend.blinding,
-        input_commitments: vec![field(0x71); 8],
-    };
+    let mut input_commitments = vec![[0; 32]; 8];
+    input_commitments[0] = field(MERGED_INPUT);
+    let opening = MergeOpening { input_commitments };
     let sealed = MergeDisclosureEncryption::new(&opening, salt, &auditor().pubkey()).unwrap();
     let payload = encode_merge_output_data(MergeOutputDataRef {
         salt: &salt,
@@ -650,6 +656,8 @@ fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
     }
 }
 
+const MERGED_INPUT: u8 = 0x71;
+
 struct Confirmed {
     transaction: ShieldedTransaction,
     origin: RingOrigin,
@@ -663,6 +671,32 @@ impl Confirmed {
             ring: transfer.ring,
         }
         .open(&auditor())
+    }
+
+    /// `None` off a v3 merge, the disclosure names the merged commitments.
+    fn merge(&self) -> Result<Option<ConfirmedMerge>, AuditError> {
+        confirmed_merge(
+            &self.transaction,
+            self.transaction.event_index.unwrap(),
+            &self.origin,
+            &auditor(),
+        )
+    }
+}
+
+/// Answers an opened note or a merge output the ledger resolved.
+struct LedgerKnown {
+    index: KnownUtxoIndex,
+    ledger: MergeLedger,
+}
+
+impl KnownUtxos for LedgerKnown {
+    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
+        self.index.utxo(commitment)
+    }
+
+    fn merged(&self, commitment: &[u8; 32]) -> Option<MergeInput> {
+        self.ledger.output(commitment).map(MergeInput::from)
     }
 }
 
@@ -710,7 +744,7 @@ fn confirmed(transaction: &ShieldedTransaction) -> RingOrigin {
 }
 
 #[test]
-fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
+fn a_deposited_note_opens_and_a_merge_output_reads_as_its_audit_record() {
     let (transfer, _, spent) = anonymous_spend();
     let outputs = vec![
         Output::Ring {
@@ -721,65 +755,69 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         Output::Dummy,
     ];
     let built = build_anonymous(&transfer, outputs, &spent, Spending::RingUtxos);
+    let deposit_hash = spent[0].commitment(&transfer, Some(transfer.ring));
+    let merge_hash = spent[1].commitment(&transfer, Some(transfer.ring));
     assert_eq!(
         audit(&built.transaction, built.layout).unwrap().inputs[0].opening,
-        InputOpening::UnseenHash {
-            hash: spent[0].commitment(&transfer, Some(transfer.ring))
-        }
+        InputOpening::UnseenHash { hash: deposit_hash }
     );
     let deposit = deposited(&transfer, &spent[0]);
     let merge = merged(&transfer, &spent[1]);
-    let created: Vec<CreatedUtxo> = [&deposit, &merge]
-        .into_iter()
-        .flat_map(|confirmed| confirmed.open(&transfer).unwrap())
-        .collect();
-    let utxos: Vec<KnownUtxo> = created.iter().map(|created| created.utxo).collect();
+    let created = deposit.open(&transfer).unwrap();
     assert_eq!(
-        utxos,
-        [
-            KnownUtxo {
-                owner: UtxoOwner::Deposited {
-                    owner_hash: spent[0].utxo.owner_hash(),
-                },
-                ..spent[0].known(&transfer)
+        created.iter().map(|note| note.utxo).collect::<Vec<_>>(),
+        [KnownUtxo {
+            owner: UtxoOwner::Deposited {
+                owner_hash: spent[0].utxo.owner_hash(),
             },
-            spent[1].known(&transfer),
-        ]
+            ..spent[0].known(&transfer)
+        }]
     );
-    for (created, spend) in created.iter().zip(&spent) {
-        assert_eq!(
-            created.utxo.commitment(Some(transfer.ring)).unwrap(),
-            spend.commitment(&transfer, Some(transfer.ring))
-        );
-    }
-    let known: KnownUtxoIndex = created
-        .iter()
-        .map(|created| (created.commitment, created.utxo))
-        .collect();
+    assert_eq!(
+        created[0].utxo.commitment(Some(transfer.ring)).unwrap(),
+        deposit_hash
+    );
+    // A merge output gets no wallet opening, it holds only what its inputs name.
+    assert!(merge.open(&transfer).unwrap().is_empty());
+    let mut ledger = MergeLedger::default();
+    let inherited = MergeInput::from(&spent[1].known(&transfer));
+    let transition = ledger.apply(merge.merge().unwrap().unwrap(), |commitment| {
+        (*commitment == field(MERGED_INPUT)).then_some(inherited)
+    });
+    assert_eq!(transition.spent, [field(MERGED_INPUT)]);
+    assert_eq!(transition.resolved[0].commitment, merge_hash);
+    assert_eq!(transition.resolved[0].amount, spent[1].utxo.amount);
+
+    let known = LedgerKnown {
+        index: created
+            .iter()
+            .map(|created| (created.commitment, created.utxo))
+            .collect(),
+        ledger,
+    };
     let audited = TransactionAudit::new(&built.transaction, built.layout)
         .with_known_utxos(&known)
         .run(&auditor(), &assets())
         .unwrap();
-    let openings: Vec<Option<AuditedInputOpening>> = audited
-        .inputs
-        .iter()
-        .map(|input| input.opening.opened().copied())
-        .collect();
-    let expected: Vec<Option<AuditedInputOpening>> = spent
-        .iter()
-        .map(|spend| {
-            Some(AuditedInputOpening {
-                asset: spend.utxo.asset(),
-                mint: Some(spend.utxo.asset_address),
-                amount: spend.utxo.amount,
-                blinding: spend.blinding,
-                ring: Some(InputRing::Ring {
-                    commitment: spend.commitment(&transfer, Some(transfer.ring)),
-                }),
-            })
+    assert_eq!(
+        audited.inputs[0].opening,
+        InputOpening::Opened(AuditedInputOpening {
+            asset: spent[0].utxo.asset(),
+            mint: Some(spent[0].utxo.asset_address),
+            amount: spent[0].utxo.amount,
+            blinding: spent[0].blinding,
+            ring: Some(InputRing::Ring {
+                commitment: deposit_hash,
+            }),
         })
-        .collect();
-    assert_eq!(openings, expected);
+    );
+    assert_eq!(
+        audited.inputs[1].opening,
+        InputOpening::Merged(MergedInput {
+            commitment: merge_hash,
+            input: inherited,
+        })
+    );
     assert_eq!(audited.sender.unwrap().nullifier_pk, None);
 
     let mut forged = deposit;
@@ -788,18 +826,18 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         forged.open(&transfer),
         Err(AuditError::DepositOpeningMismatch)
     ));
+    // Nine nullifiers need the 24 slot key, the disclosure holds the 8 slot list.
     let mut forged = merge;
-    forged.transaction.output_slots[0].output_context.hash = field(0x7a);
+    forged.transaction.nullifiers = vec![field(0x74); 9];
     assert!(matches!(
-        forged.open(&transfer),
+        forged.merge(),
         Err(AuditError::MergeDisclosureMismatch)
     ));
 }
 
-/// The in-proof and authority rails name each input by its prefix, a note no earlier audit opened
-/// leaves the outputs readable.
+/// The in-proof and authority rails name each input by its full hash, an unopened note leaves the outputs readable.
 #[test]
-fn an_in_proof_input_opens_by_its_prefix_or_stays_unseen_beside_readable_outputs() {
+fn an_in_proof_input_opens_by_its_hash_or_stays_unseen_beside_readable_outputs() {
     let mut transfer = Transfer::fixture();
     transfer.nullifiers.push(field(0x1e));
     let spend = Spend {
@@ -825,7 +863,7 @@ fn an_in_proof_input_opens_by_its_prefix_or_stays_unseen_beside_readable_outputs
     let slots = transfer.slots(Rail::Delivered, &outputs);
     let disclosure = transfer.in_proof_disclosure(
         &outputs,
-        prefix_evidence(&[Some(hash), Some(unseen)]).unwrap(),
+        input_hash_evidence(&[Some(hash), Some(unseen)]).unwrap(),
     );
     let built = publish(&transfer, slots, outputs, &disclosure);
     let known: KnownUtxoIndex = [(hash, spend.known(&transfer))].into_iter().collect();
@@ -841,9 +879,7 @@ fn an_in_proof_input_opens_by_its_prefix_or_stays_unseen_beside_readable_outputs
     ));
     assert_eq!(
         audited.inputs[1].opening,
-        InputOpening::Unseen {
-            prefix: InputPrefix::of(&unseen).unwrap()
-        }
+        InputOpening::UnseenHash { hash: unseen }
     );
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(opened_slots(&audited), [0, 1]);
@@ -868,10 +904,7 @@ fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
         AuditEvidence::Entry {
             sender_key: spent[0].utxo.owner_key,
             sender_nullifier_pk: spent[0].utxo.nullifier_pk,
-            inputs: spent
-                .iter()
-                .map(|spend| input_opening(&spend.utxo, spend.blinding))
-                .collect(),
+            inputs: entry_inputs(&transfer, &spent),
         },
     );
     let OutputRecord::Anonymous(record) = &mut disclosure.records[0] else {
@@ -888,7 +921,17 @@ fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
     assert!(audited.sender.is_some());
 }
 
-/// Ring history pages in order, a cursor names the next page and the last one states its frontier.
+/// The page after the one a token closes, the first without a token.
+fn page_after(pages: &[Vec<ShieldedTransaction>], token: Option<PaginationToken>) -> usize {
+    token.map_or(0, |token| {
+        pages
+            .iter()
+            .rposition(|page| page.iter().map(position).max() == Some(token))
+            .map_or(pages.len(), |index| index + 1)
+    })
+}
+
+/// Ring history pages in order, a token closes every page but the last.
 struct RingHistory(Vec<Vec<ShieldedTransaction>>);
 
 #[async_trait::async_trait]
@@ -898,18 +941,17 @@ impl AsyncRpc for RingHistory {
         options: spr_client::RingHistoryOptions,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
-        let index = options.cursor.map_or(0, |cursor| usize::from(cursor[0]));
-        let last = index + 1 == self.0.len();
-        Ok(GetShieldedTransactionsByTagsResponse {
+        let index = page_after(&self.0, options.pagination_token);
+        Ok(EventsPage {
             context: Context {
                 block_time: 0,
                 slot: 1,
             },
-            transactions: self.0[index].clone(),
-            next_cursor: (!last).then(|| vec![index as u8 + 1]),
-            scanned_through: last.then(|| vec![index as u8]),
             output_tree_id: None,
-        })
+            rows: self.0.get(index).cloned().unwrap_or_default(),
+            more: index + 1 < self.0.len(),
+        }
+        .response())
     }
 }
 
@@ -933,7 +975,7 @@ impl TransactionOrigin for ConfirmedOrigins {
 }
 
 #[tokio::test]
-async fn the_created_utxo_scan_opens_every_deposit_and_merge_of_the_ring_history() {
+async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_every_merge() {
     let (transfer, built, spent) = anonymous_spend();
     let deposit = deposited(&transfer, &spent[0]);
     let mut merge = merged(&transfer, &spent[1]);
@@ -964,9 +1006,23 @@ async fn the_created_utxo_scan_opens_every_deposit_and_merge_of_the_ring_history
     let opened: Vec<[u8; 32]> = page.utxos.iter().map(|utxo| utxo.commitment).collect();
     assert_eq!(
         opened,
-        spent.map(|spend| spend.commitment(&transfer, Some(transfer.ring)))
+        [spent[0].commitment(&transfer, Some(transfer.ring))]
     );
     assert_eq!(page.next_cursor, None);
+    let merges = MergeAudit::new(transfer.ring, &auditor)
+        .run(&history, &ConfirmedOrigins(origins.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        merges
+            .iter()
+            .map(|merge| (merge.output_commitment, merge.inputs.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            spent[1].commitment(&transfer, Some(transfer.ring)),
+            vec![field(MERGED_INPUT)]
+        )]
+    );
 
     let capped = CreatedUtxoScan::new(transfer.ring, &auditor)
         .with_max_pages(NonZeroUsize::new(1).unwrap())
@@ -974,7 +1030,16 @@ async fn the_created_utxo_scan_opens_every_deposit_and_merge_of_the_ring_history
         .await
         .unwrap();
     assert_eq!(capped.utxos.len(), 1);
-    assert_eq!(capped.next_cursor, Some(vec![1]));
+    assert_eq!(
+        capped.next_cursor,
+        Some(HistoryCursor {
+            query: HistoryQuery {
+                ring: transfer.ring,
+                stream: HistoryStream::Ring,
+            },
+            token: position(&deposit.transaction),
+        })
+    );
 
     // An indexed row its confirmed event does not match is refused.
     let mut altered = pages;
@@ -1105,13 +1170,6 @@ fn anonymous_spend() -> (Transfer, Built, [Spend; 2]) {
     (transfer, built, spent)
 }
 
-fn candidates(transfer: &Transfer, spend: &Spend) -> InputRing {
-    InputRing::Unresolved {
-        ring: spend.commitment(transfer, Some(transfer.ring)),
-        default: spend.commitment(transfer, None),
-    }
-}
-
 #[test]
 fn an_anonymous_input_resolves_to_its_ring_or_the_default_ring() {
     let (transfer, built, spent) = anonymous_spend();
@@ -1123,40 +1181,42 @@ fn an_anonymous_input_resolves_to_its_ring_or_the_default_ring() {
             .map(|input| input.opening.opened().unwrap().ring)
             .collect()
     };
-    let unresolved: Vec<_> = spent
-        .iter()
-        .map(|spend| candidates(&transfer, spend))
-        .collect();
     let audited = TransactionAudit::new(&built.transaction, built.layout)
         .with_input_trees(&trees)
         .unwrap()
-        .run(&auditor(), &assets())
-        .unwrap();
-    assert_eq!(
-        rings(audited),
-        unresolved.iter().copied().map(Some).collect::<Vec<_>>()
-    );
-    let [InputRing::Unresolved { ring, .. }, InputRing::Unresolved { default, .. }] =
-        [unresolved[0], unresolved[1]]
-    else {
-        panic!("unresolved candidates");
-    };
-    let earlier = |commitment| (commitment, spent[0].known(&transfer));
-    let known = KnownUtxoIndex::from_iter([earlier(ring), earlier(default)]);
-    let audited = TransactionAudit::new(&built.transaction, built.layout)
-        .with_input_trees(&trees)
-        .unwrap()
-        .with_known_utxos(&known)
         .run(&auditor(), &assets())
         .unwrap();
     assert_eq!(
         rings(audited),
         [
-            Some(InputRing::Ring { commitment: ring }),
+            Some(InputRing::Ring {
+                commitment: spent[0].commitment(&transfer, Some(transfer.ring)),
+            }),
             Some(InputRing::Default {
-                commitment: default
+                commitment: spent[1].commitment(&transfer, None),
             }),
         ]
+    );
+    // Off the note's tree the named hash rebuilds neither candidate.
+    let other_tree = transfer.tree_id + 1;
+    let candidates = |spend: &Spend| {
+        let placement = |ring| Placement {
+            tree_id: other_tree,
+            ..spend.placement(&transfer, ring)
+        };
+        Some(InputRing::Unresolved {
+            ring: spend.utxo.commitment(placement(Some(transfer.ring))),
+            default: spend.utxo.commitment(placement(None)),
+        })
+    };
+    let audited = TransactionAudit::new(&built.transaction, built.layout)
+        .with_input_trees(&[Some(other_tree); 2])
+        .unwrap()
+        .run(&auditor(), &assets())
+        .unwrap();
+    assert_eq!(
+        rings(audited),
+        [candidates(&spent[0]), candidates(&spent[1])]
     );
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(
@@ -1209,12 +1269,13 @@ fn the_envelope_must_seal_the_published_transaction_key() {
     let sealed = AuditStreamSeal {
         layout: built.layout,
         tx_viewing_key: &other_key,
-        evidence: AuditEvidence::None,
+        evidence: input_hash_evidence(&[None]).unwrap(),
         records: transfer_records(&built),
     }
     .seal(&auditor().pubkey())
     .unwrap();
-    forged.messages[0].data[1..65].copy_from_slice(&[&sealed.eph_u[..], &sealed.envelope].concat());
+    let stream = [&sealed.eph_u[..], &sealed.envelope].concat();
+    forged.messages[0].data[1..=stream.len()].copy_from_slice(&stream);
     assert!(matches!(
         audit(&forged, built.layout),
         Err(AuditError::TxViewingKeyMismatch)
@@ -1299,7 +1360,7 @@ fn the_layout_comes_from_the_ring_frame() {
     ));
 }
 
-/// Cursor paging plus the message-tag filter. Photon's tag filter is an OR over
+/// Token paging plus the message-tag filter. Photon's tag filter is an OR over
 /// output tags and message tags, so a transaction can arrive because an output
 /// tag matched; the scan drops those.
 struct PagedIndexer {
@@ -1314,29 +1375,24 @@ impl AsyncRpc for PagedIndexer {
     async fn get_shielded_transactions_by_tags(
         &self,
         tags: Vec<[u8; 32]>,
-        cursor: Option<Vec<u8>>,
+        pagination_token: Option<PaginationToken>,
         limit: Option<u32>,
+        _filters: HistoryFilters,
         _config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
         assert_eq!(tags, vec![self.expected_tag]);
         self.requested.lock().unwrap().push(limit);
-        let page_index = usize::from(*cursor.unwrap_or_default().first().unwrap_or(&0));
-        let transactions = self.pages.get(page_index).cloned().unwrap_or_default();
-        let next_cursor = (page_index + 1 < self.pages.len())
-            .then(|| vec![u8::try_from(page_index + 1).expect("page index")]);
-        let scanned_through = next_cursor
-            .is_none()
-            .then(|| vec![u8::try_from(page_index).expect("page index")]);
-        Ok(GetShieldedTransactionsByTagsResponse {
+        let index = page_after(&self.pages, pagination_token);
+        Ok(EventsPage {
             context: Context {
                 block_time: 0,
                 slot: 1,
             },
-            transactions,
-            next_cursor,
-            scanned_through,
             output_tree_id: None,
-        })
+            rows: self.pages.get(index).cloned().unwrap_or_default(),
+            more: index + 1 < self.pages.len(),
+        }
+        .response())
     }
 }
 
@@ -1412,7 +1468,7 @@ async fn scan_walks_every_page_and_keeps_only_ring_transactions_tagged_for_the_a
     let first_built = delivered_transfer(1);
     let second_built = delivered_transfer(2);
     let first = with_signature(first_built.transaction.clone(), 1);
-    let second = with_signature(second_built.transaction.clone(), 2);
+    let second = with_signature(second_built.transaction.clone(), 5);
     // An output tag match must still be attributed before it can be excluded.
     let mut output_tag_match = with_signature(delivered_transfer(3).transaction, 3);
     output_tag_match.messages.clear();
@@ -1421,12 +1477,7 @@ async fn scan_walks_every_page_and_keeps_only_ring_transactions_tagged_for_the_a
     let indexer = PagedIndexer {
         expected_tag: auditor_view_tag(&auditor_pk),
         pages: vec![
-            vec![
-                first.clone(),
-                output_tag_match,
-                foreign_ring.clone(),
-                foreign_ring.clone(),
-            ],
+            vec![first.clone(), output_tag_match, foreign_ring.clone()],
             vec![second.clone()],
         ],
         requested: Mutex::new(Vec::new()),
@@ -1714,7 +1765,7 @@ async fn a_scan_stopped_by_max_pages_resumes_where_it_stopped() {
         .run(&indexer, &origin)
         .await
         .expect("first scan");
-    let cursor = stopped.next_cursor.clone().expect("unread history");
+    let cursor = stopped.next_cursor.expect("unread history");
     assert_eq!(
         signatures(&stopped.transactions),
         signatures(&pages[..2].concat())
@@ -1729,20 +1780,48 @@ async fn a_scan_stopped_by_max_pages_resumes_where_it_stopped() {
     assert_eq!(signatures(&resumed.transactions), signatures(&pages[2]));
 }
 
+/// A token names the last transaction returned, so an empty page never carries one.
+struct TokenOnAnEmptyPage;
+
+#[async_trait::async_trait]
+impl AsyncRpc for TokenOnAnEmptyPage {
+    async fn get_shielded_transactions_by_tags(
+        &self,
+        _tags: Vec<[u8; 32]>,
+        _pagination_token: Option<PaginationToken>,
+        _limit: Option<u32>,
+        _filters: HistoryFilters,
+        _config: Option<IndexerRpcConfig>,
+    ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
+        Ok(GetShieldedTransactionsByTagsResponse {
+            context: Context {
+                block_time: 0,
+                slot: 1,
+            },
+            output_tree_id: None,
+            data: Vec::new(),
+            pagination_token: Some(PaginationToken::new(1, Signature::from([1; 64]))),
+        })
+    }
+}
+
 #[tokio::test]
-async fn an_empty_page_does_not_end_the_scan() {
+async fn an_empty_page_with_a_token_is_refused_and_an_empty_terminal_page_ends_the_scan() {
     let auditor_pk = auditor().pubkey();
-    let last = paged_history(1);
-    let pages = vec![Vec::new(), last[0].clone()];
-    let origin = ring_origins(ring(), &pages);
-    let indexer = indexer(&auditor_pk, pages.clone());
-    let page = RingScan::new(ring(), auditor_pk)
-        .with_max_pages(NonZeroUsize::new(2).expect("page limit"))
-        .run(&indexer, &origin)
+    let origin = ring_origins(ring(), &[]);
+    let scan = || {
+        RingScan::new(ring(), auditor_pk).with_max_pages(NonZeroUsize::new(2).expect("page limit"))
+    };
+    assert!(matches!(
+        scan().run(&TokenOnAnEmptyPage, &origin).await,
+        Err(AuditError::InvalidHistoryPage)
+    ));
+    let page = scan()
+        .run(&indexer(&auditor_pk, vec![Vec::new()]), &origin)
         .await
         .expect("scan");
+    assert!(page.transactions.is_empty());
     assert_eq!(page.next_cursor, None);
-    assert_eq!(signatures(&page.transactions), signatures(&pages[1]));
 }
 
 #[tokio::test]
@@ -1750,9 +1829,16 @@ async fn a_cursor_at_the_end_of_history_returns_an_empty_page() {
     let auditor_pk = auditor().pubkey();
     let pages = paged_history(2);
     let origin = ring_origins(ring(), &pages);
+    let token = position(pages[1].last().expect("a row"));
     let indexer = indexer(&auditor_pk, pages);
     let page = RingScan::new(ring(), auditor_pk)
-        .with_cursor(vec![2])
+        .with_cursor(HistoryCursor {
+            query: HistoryQuery {
+                ring: ring(),
+                stream: HistoryStream::Tags,
+            },
+            token,
+        })
         .with_max_pages(NonZeroUsize::new(2).expect("page limit"))
         .run(&indexer, &origin)
         .await
@@ -1994,17 +2080,17 @@ async fn a_lost_auditor_message_stays_fatal_in_a_local_scan() {
 #[tokio::test]
 async fn the_created_utxo_scan_lists_a_row_it_cannot_open_and_opens_the_next() {
     let (transfer, _, spent) = anonymous_spend();
-    let mut merge = merged(&transfer, &spent[1]);
-    merge.transaction.tx_signature = Signature::from([0xd1; 64]);
-    let disclosure = merge.origin.merge_disclosure.as_mut().expect("disclosure");
-    disclosure.ciphertext[0] ^= 1;
+    let mut unopenable = deposited(&transfer, &spent[1]);
+    unopenable.transaction.tx_signature = Signature::from([0xd1; 64]);
+    unopenable.transaction.output_slots[0].output_context.hash = field(0x7c);
+    unopenable.origin.event = origin_fixture::event(&unopenable.transaction);
     let deposit = deposited(&transfer, &spent[0]);
-    let origins: HashMap<Signature, RingOrigin> = [&merge, &deposit]
+    let origins: HashMap<Signature, RingOrigin> = [&unopenable, &deposit]
         .into_iter()
         .map(|row| (row.transaction.tx_signature, row.origin.clone()))
         .collect();
     let history = RingHistory(vec![vec![
-        merge.transaction.clone(),
+        unopenable.transaction.clone(),
         deposit.transaction.clone(),
     ]]);
     let auditor = auditor();
@@ -2020,5 +2106,25 @@ async fn the_created_utxo_scan_lists_a_row_it_cannot_open_and_opens_the_next() {
     let [row] = page.skipped.as_slice() else {
         panic!("one row left unopened");
     };
-    assert_eq!(row.tx_signature, merge.transaction.tx_signature);
+    assert_eq!(row.tx_signature, unopenable.transaction.tx_signature);
+}
+
+/// A tampered disclosure stops the merge audit, a spend it would name stays unread and never unspent.
+#[tokio::test]
+async fn the_merge_audit_refuses_a_disclosure_it_cannot_open() {
+    let (transfer, _, spent) = anonymous_spend();
+    let mut merge = merged(&transfer, &spent[1]);
+    merge.transaction.tx_signature = Signature::from([0xd1; 64]);
+    let disclosure = merge.origin.merge_disclosure.as_mut().expect("disclosure");
+    disclosure.ciphertext[0] ^= 1;
+    let origins: HashMap<Signature, RingOrigin> =
+        [(merge.transaction.tx_signature, merge.origin.clone())]
+            .into_iter()
+            .collect();
+    let history = RingHistory(vec![vec![merge.transaction.clone()]]);
+    let auditor = auditor();
+    assert!(MergeAudit::new(transfer.ring, &auditor)
+        .run(&history, &ConfirmedOrigins(origins))
+        .await
+        .is_err());
 }

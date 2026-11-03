@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     domain::AUDIT_STREAM_LABEL, AnonymousRecord, AuditEvidence, AuditKey, AuditStreamLayout,
-    CustomRingError, ExitRecord, InputPrefix, STREAM_FIRST_COUNTER,
+    CustomRingError, ExitRecord, STREAM_FIRST_COUNTER,
 };
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
@@ -17,6 +17,10 @@ use crate::{
     encryption::{opening_ring_stream, sealing_ring_stream},
     AuditError,
 };
+
+mod historical;
+
+pub use historical::{historical_evidence, HistoricalEvidence};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputRecord {
@@ -190,15 +194,9 @@ impl OpenedAudit {
 /// Refuses evidence the proof cannot have bound, a hash outside the field names no input.
 fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
     match evidence {
-        AuditEvidence::None | AuditEvidence::InputPrefixes(_) => Ok(()),
-        AuditEvidence::Commitment {
-            first_input_hash, ..
-        } => {
-            if *first_input_hash == [0; 32] {
-                return Err(AuditError::DisclosureLayout);
-            }
-            canonical(*first_input_hash).map(drop)
-        }
+        AuditEvidence::InputHashes(hashes) => hashes
+            .iter()
+            .try_for_each(|hash| canonical(*hash).map(drop)),
         AuditEvidence::Entry {
             sender_nullifier_pk,
             inputs,
@@ -206,6 +204,7 @@ fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
         } => {
             canonical(*sender_nullifier_pk)?;
             inputs.iter().try_for_each(|input| {
+                canonical(input.hash)?;
                 canonical(input.asset)?;
                 canonical(input.blinding).map(drop)
             })
@@ -213,30 +212,14 @@ fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
     }
 }
 
-/// Spent UTXO 0 must be real, a `None` input is a published dummy.
-pub fn commitment_evidence(hashes: &[Option<[u8; 32]>]) -> Result<AuditEvidence, AuditError> {
-    let [Some(first), rest @ ..] = hashes else {
-        return Err(AuditError::DisclosureLayout);
-    };
-    Ok(AuditEvidence::Commitment {
-        first_input_hash: canonical(*first)?,
-        later_prefixes: input_prefixes(rest)?,
-    })
-}
-
-/// The in-proof and authority rails name every published input by its prefix.
-pub fn prefix_evidence(hashes: &[Option<[u8; 32]>]) -> Result<AuditEvidence, AuditError> {
-    Ok(AuditEvidence::InputPrefixes(input_prefixes(hashes)?))
-}
-
-fn input_prefixes(hashes: &[Option<[u8; 32]>]) -> Result<Vec<Option<InputPrefix>>, AuditError> {
-    hashes
-        .iter()
-        .map(|hash| {
-            hash.map(|hash| InputPrefix::of(&hash).ok_or(AuditError::DisclosureField))
-                .transpose()
-        })
-        .collect()
+/// `be32(hash_i)` on every non-entry rail, a `None` input is a published dummy and reads zero.
+pub fn input_hash_evidence(hashes: &[Option<[u8; 32]>]) -> Result<AuditEvidence, AuditError> {
+    Ok(AuditEvidence::InputHashes(
+        hashes
+            .iter()
+            .map(|hash| canonical(hash.unwrap_or_default()))
+            .collect::<Result<_, _>>()?,
+    ))
 }
 
 /// `pad_j = Poseidon(seed, j)`, a known pad reveals no other.

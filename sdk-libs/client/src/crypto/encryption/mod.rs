@@ -19,8 +19,6 @@ use crate::AuditError;
 type Result<T> = core::result::Result<T, AuditError>;
 
 mod merge_disclosure;
-#[cfg(test)]
-pub(crate) use merge_disclosure::tests::Vector as MergeVector;
 pub use merge_disclosure::{open_merge_disclosure, MergeDisclosureEncryption, MergeOpening};
 
 /// The auditor key's u-coordinate, the tag the auditor scans for.
