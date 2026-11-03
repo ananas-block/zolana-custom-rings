@@ -23,6 +23,8 @@ const (
 	ModeOff RingMode = iota
 	ModeRegistry
 	ModeAnonymous
+	// ModeZeroKey is a registry ring whose owners stay under ZeroNullifierPk.
+	ModeZeroKey
 )
 
 type Deposit struct {
@@ -68,15 +70,22 @@ func BuildScreened(t testing.TB, count int, policy Policy) *Deposit {
 	return build(t, count, ModeRegistry, ringprotocol.DepositBlinding, policy)
 }
 
+// BuildZeroKey deposits count owners under ZeroNullifierPk into a registry ring, no owner holds a record.
+func BuildZeroKey(t testing.TB, count int) *Deposit {
+	t.Helper()
+	return build(t, count, ModeZeroKey, ringprotocol.DepositBlinding, Policy{Rules: nil, Listed: nil, Curator: false, Asset: ringpolicy.AssetA})
+}
+
 func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *big.Int) *big.Int, policy Policy) *Deposit {
 	t.Helper()
 	anonymous, escrow, screened := mode == ModeAnonymous, mode == ModeRegistry, policy.Rules != nil
+	zeroKey := mode == ModeZeroKey
 	keys, registry, curator := ringaudit.DefaultKeys(t), ringregistry.New(t), ringregistry.New(t)
 	c, err := circuits.NewDepositCircuit(circuits.MaxDeposits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot, c.CuratorRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow), 0, 0
+	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot, c.CuratorRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow || zeroKey), 0, 0
 	c.Table, c.PolicyHash = ringpolicy.Table{}.Wires(), 0
 	if screened {
 		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit}, Curator: map[uint64]bool{ringregistry.AllowBit: policy.Curator}, Rules: policy.Rules}.Wires()
@@ -103,6 +112,9 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 			}
 			ownerPkHash = ringtest.MustSolanaPkField(t, key)
 			nullifierPk = spptest.MustNullifierPk(t, big.NewInt(int64(51+i)))
+			if zeroKey {
+				nullifierPk = shared.ZeroNullifierPk
+			}
 			secret = big.NewInt(int64(91 + i))
 			if escrow {
 				ctHash = big.NewInt(int64(0xc0 + i))
@@ -134,7 +146,7 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 		c.AssetRecords[i] = registry.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
 		c.CuratorAssetRecords[i] = curator.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
 	}
-	if escrow || screened {
+	if escrow || screened || zeroKey {
 		c.MemberRegistryRoot = registry.Root()
 	}
 	if policy.Curator {

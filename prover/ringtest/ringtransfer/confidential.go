@@ -34,6 +34,12 @@ type Confidential struct {
 	// Exits are the audit's exit slots, by default the second to last slot of a key past two outputs.
 	Exits      []int
 	AllDummies bool
+	// CoOwners spend one more input each on the signer rail, each screened beside the sender.
+	CoOwners []*big.Int
+	// PublicFunded spends no input on the signer rail, slot 0 a dummy.
+	PublicFunded  bool
+	FrozenCoOwner bool
+	Omitted       int
 }
 
 // Built is a confidential witness with the fixtures it was derived from.
@@ -42,9 +48,11 @@ type Built struct {
 	Audit        ringaudit.DeliveredAudit
 	Own, Curator *ringregistry.Registry
 	Inputs       []ringaudit.Utxo
-	// Sender is the screened identity, the statement's on the signer and in-proof rails.
+	// Sender is the fixture sender, the signer run's first on the signer rail.
 	Sender *big.Int
 	World  Confidential
+	// Run is the signer set the program rebuilds.
+	Run []*big.Int
 }
 
 // Signed is a policy ring transfer on the signer rail of shape.
@@ -68,20 +76,29 @@ func (w Confidential) Build(t testing.TB) Built {
 	}
 	escrow := w.Escrow || w.Rail == Delegate
 	d.Layout.Escrow = escrow
-	d.InputClass, d.InputCount = w.Shape.Inputs, publishedInputs
+	if w.Omitted > 0 {
+		d = d.Omit(t, w.Omitted)
+	}
+	d.InputClass, d.InputCount = w.Shape.Inputs, publishedInputs+len(w.CoOwners)
 	sender := Sender(t)
 	inputs := make([]ringaudit.Utxo, w.Shape.Inputs)
 	for i := range inputs {
 		inputs[i] = ringaudit.SpareInput(i)
 	}
-	if w.Rail != Signer {
+	if !w.PublicFunded {
+		// Balance sets what a sender's debit reads, half and half across its two notes.
+		owed := w.owedAsset(t, d)
 		nullifierPk := spptest.MustNullifierPk(t, big.NewInt(7))
-		inputs[0] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, 100, 51)
-		inputs[1] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, 60, 52)
-		d.Inputs = inputs
+		inputs[0] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, owed-owed/2, 51)
+		inputs[1] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, owed/2, 52)
+		for k, coOwner := range w.CoOwners {
+			inputs[publishedInputs+k] = ringaudit.SpentUtxo(t, coOwner, nullifierPk, d.RingProgramID, 1, 53+int64(k))
+		}
 	}
+	d.Inputs = inputs
 	wires := d.Wires(d.Layout)
 	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
+	c.OutputCount = d.OutputCount()
 	for i, output := range d.Outputs {
 		c.Outputs[i] = output.Wires()
 	}
@@ -91,16 +108,45 @@ func (w Confidential) Build(t testing.TB) Built {
 	c.InputCount = d.InputCount
 	c.InProof, c.Delegate = bit(w.Rail == InProof), bit(w.Rail == Delegate)
 	c.Exempt, c.ApprovalRequired = bit(w.Exempt), bit(w.ApprovalRequired)
-	c.Sender, c.SenderPkHash = sender, sender
-	if w.Rail == Delegate {
-		c.Sender = 0
+	c.Sender, c.SenderPkHash = 0, 0
+	switch w.Rail {
+	case InProof:
+		c.Sender = sender
+	case Delegate:
+		c.SenderPkHash = sender
 	}
-	c.InputChain = big.NewInt(inputChain)
+	var run []*big.Int
+	if w.Rail == Signer {
+		run = append([]*big.Int{sender}, w.CoOwners...)
+	}
+	c.SignerCount = len(run)
+	copy(c.Signers, senderRows(w.Shape.Inputs, run...))
 	c.PrivateTxBlinding = big.NewInt(privateTxBlinding)
-	b := Built{Circuit: c, Audit: d, Inputs: inputs, Sender: sender, World: w}
-	b.Own, b.Curator = fillPolicy(t, &c.Policy, w.Policy, w.Exempt, escrow, d.Utxos(), b.OutputWires(), w.Public, w.Withdrawals, sender, true, d.RingProgramID)
+	b := Built{Circuit: c, Audit: d, Inputs: inputs, Sender: sender, World: w, Run: run}
+	senders := senderRows(len(c.SenderEntries), append([]*big.Int{sender}, w.CoOwners...)...)
+	b.Own, b.Curator = policyFixture{
+		Policy: w.Policy, Exempt: w.Exempt, Escrow: escrow, Published: true, Outputs: d.Utxos(), Wires: b.OutputWires(), Public: w.Public, Withdrawals: w.Withdrawals,
+		Senders: senders, RingProgramID: d.RingProgramID, FrozenCoOwner: w.FrozenCoOwner,
+	}.fill(t, &c.Policy)
 	b.Rehash(t)
 	return b
+}
+
+// owedAsset is what balance owes of the fixture asset, every output plus every net withdrawal.
+func (w Confidential) owedAsset(t testing.TB, d ringaudit.DeliveredAudit) uint64 {
+	t.Helper()
+	owed := int64(0)
+	for _, utxo := range d.Utxos() {
+		if utxo.IsUtxo() && utxo.Asset.Cmp(Asset(t)) == 0 {
+			owed += int64(utxo.Amount)
+		}
+	}
+	for _, public := range w.Public {
+		if public.Asset.Cmp(Asset(t)) == 0 {
+			owed -= public.Net
+		}
+	}
+	return uint64(max(owed, 0))
 }
 
 // OutputWires are the slot wires the audit and the policy share.
@@ -116,10 +162,7 @@ func (b Built) OutputWires() []shared.UtxoWires {
 func (b Built) Rehash(t testing.TB) {
 	t.Helper()
 	c := b.Circuit
-	chain := ringtest.AsBigInt(c.InputChain)
-	if b.World.Rail != Signer {
-		chain = spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, b.Inputs))
-	}
+	chain := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, b.Inputs))
 	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, b.Audit.Utxos()))
 	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{chain, outputs, big.NewInt(0), ringtest.AsBigInt(c.PrivateTxBlinding)})
 	b.Rebind(t)
@@ -134,6 +177,12 @@ func (b Built) Rebind(t testing.TB) {
 
 func (b Built) Statement(t testing.TB) []*big.Int {
 	t.Helper()
+	return b.Values(t).ConfidentialElements(t)
+}
+
+// Values is what the program holds for the statement.
+func (b Built) Values(t testing.TB) Statement {
+	t.Helper()
 	c := b.Circuit
 	s := policyStatement(&c.Policy)
 	s.PrivateTxHash = ringtest.AsBigInt(c.PrivateTxHash)
@@ -141,5 +190,6 @@ func (b Built) Statement(t testing.TB) []*big.Int {
 	s.InProof, s.Delegate = ringtest.AsBigInt(c.InProof).Sign() != 0, ringtest.AsBigInt(c.Delegate).Sign() != 0
 	s.Exempt, s.ApprovalRequired = ringtest.AsBigInt(c.Exempt).Sign() != 0, ringtest.AsBigInt(c.ApprovalRequired).Sign() != 0
 	s.Sender = ringtest.AsBigInt(c.Sender)
-	return s.ConfidentialElements(t)
+	s.SignerCount, s.SignerChain = len(b.Run), ringaudit.SignerChain(t, b.Run, len(c.Signers))
+	return s
 }

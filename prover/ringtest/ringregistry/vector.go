@@ -34,6 +34,8 @@ type VectorEntry struct {
 	Mask      uint64       `json:"mask"`
 	Value     uint64       `json:"value"`
 	EscrowKey ringtest.Hex `json:"escrow_key"`
+	// AddressHash is zero on every write of ring-records.json.
+	AddressHash ringtest.Hex `json:"address_hash"`
 }
 
 type QueuedWrite struct {
@@ -44,20 +46,22 @@ type QueuedWrite struct {
 
 type AppliedWrite struct {
 	VectorEntry
-	Exists    bool         `json:"exists"`
-	OldNext   ringtest.Hex `json:"old_next"`
-	OldLists  uint64       `json:"old_lists"`
-	OldEscrow ringtest.Hex `json:"old_escrow"`
-	Slot      VectorPath   `json:"slot"`
-	Low       VectorRecord `json:"low"`
-	LowPath   VectorPath   `json:"low_path"`
+	Exists         bool         `json:"exists"`
+	OldNext        ringtest.Hex `json:"old_next"`
+	OldLists       uint64       `json:"old_lists"`
+	OldEscrow      ringtest.Hex `json:"old_escrow"`
+	OldAddressHash ringtest.Hex `json:"old_address_hash"`
+	Slot           VectorPath   `json:"slot"`
+	Low            VectorRecord `json:"low"`
+	LowPath        VectorPath   `json:"low_path"`
 }
 
 type VectorRecord struct {
-	Member    ringtest.Hex `json:"member"`
-	Next      ringtest.Hex `json:"next"`
-	Lists     uint64       `json:"lists"`
-	EscrowKey ringtest.Hex `json:"escrow_key"`
+	Member      ringtest.Hex `json:"member"`
+	Next        ringtest.Hex `json:"next"`
+	Lists       uint64       `json:"lists"`
+	EscrowKey   ringtest.Hex `json:"escrow_key"`
+	AddressHash ringtest.Hex `json:"address_hash"`
 }
 
 type VectorPath struct {
@@ -66,21 +70,22 @@ type VectorPath struct {
 }
 
 func (e VectorEntry) Entry() Entry {
-	return Entry{Member: e.Member.Int, Mask: new(big.Int).SetUint64(e.Mask), Value: new(big.Int).SetUint64(e.Value), EscrowKey: e.EscrowKey.Int}
+	return Entry{Member: e.Member.Int, Mask: new(big.Int).SetUint64(e.Mask), Value: new(big.Int).SetUint64(e.Value), EscrowKey: e.EscrowKey.Int, AddressHash: e.AddressHash.Int}
 }
 
 // Write is w as Apply returns it.
 func (w AppliedWrite) Write(t testing.TB) Write {
 	t.Helper()
 	return Write{
-		Entry:     w.Entry(),
-		Exists:    w.Exists,
-		OldNext:   w.OldNext.Int,
-		OldLists:  new(big.Int).SetUint64(w.OldLists),
-		OldEscrow: w.OldEscrow.Int,
-		Slot:      w.Slot.Path(t),
-		Low:       Record{Member: w.Low.Member.Int, Next: w.Low.Next.Int, Lists: new(big.Int).SetUint64(w.Low.Lists), EscrowKey: w.Low.EscrowKey.Int},
-		LowPath:   w.LowPath.Path(t),
+		Entry:          w.Entry(),
+		Exists:         w.Exists,
+		OldNext:        w.OldNext.Int,
+		OldLists:       new(big.Int).SetUint64(w.OldLists),
+		OldEscrow:      w.OldEscrow.Int,
+		OldAddressHash: w.OldAddressHash.Int,
+		Slot:           w.Slot.Path(t),
+		Low:            Record{Member: w.Low.Member.Int, Next: w.Low.Next.Int, Lists: new(big.Int).SetUint64(w.Low.Lists), EscrowKey: w.Low.EscrowKey.Int, AddressHash: w.Low.AddressHash.Int},
+		LowPath:        w.LowPath.Path(t),
 	}
 }
 

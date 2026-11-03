@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	// inputChain is SPP's input chain of a signer-rail transfer, opaque to the proof.
-	inputChain        = 0x1c
 	privateTxBlinding = 0x5b1d
 	publishedInputs   = 2
 )
@@ -68,34 +66,63 @@ func ctHash(owner *big.Int) *big.Int {
 	return new(big.Int).Add(owner, big.NewInt(0x66))
 }
 
-// registries enrols the sender and every UTXO output owner on the allow list, escrows them under escrow, and limits the fixture asset.
-func registries(t testing.TB, p Policy, sender *big.Int, outputs []ringaudit.Utxo, withdrawals []Withdrawal, escrow bool) (own, curator *ringregistry.Registry) {
+// Addresses holds the bound address hash per owner identity on an anonymous rail.
+type policyFixture struct {
+	Policy      Policy
+	Exempt      bool
+	Escrow      bool
+	Published   bool
+	Delivery    bool
+	Outputs     []ringaudit.Utxo
+	Wires       []shared.UtxoWires
+	Public      []PublicSlot
+	Withdrawals []Withdrawal
+	// Senders fills the key's sender rows, the first the fixture sender.
+	Senders       []frontend.Variable
+	RingProgramID *big.Int
+	Addresses     map[string]*big.Int
+	// FrozenCoOwner puts the second sender row on the frozen list.
+	FrozenCoOwner bool
+}
+
+// registries enrols every sender and UTXO output owner on the allow list, escrows them under escrow, binds their addresses, and limits the fixture asset.
+func (f policyFixture) registries(t testing.TB) (own, curator *ringregistry.Registry) {
 	t.Helper()
 	own, curator = ringregistry.New(t), ringregistry.New(t)
 	zero := big.NewInt(0)
+	seen := map[string]bool{}
 	member := func(identity, nullifierPk *big.Int, lists uint64) {
+		if seen[identity.String()] {
+			return
+		}
+		seen[identity.String()] = true
 		escrowKey := zero
-		if escrow && nullifierPk != nil {
+		if f.Escrow && nullifierPk != nil {
 			escrowKey = ringregistry.EscrowKey(t, nullifierPk, ctHash(identity))
 		}
 		bits := new(big.Int).SetUint64(lists)
-		own.Apply(t, ringregistry.Entry{Member: identity, Mask: bits, Value: bits, EscrowKey: escrowKey, MintPolicy: zero, WithdrawalThreshold: zero})
+		own.Apply(t, ringregistry.Entry{Member: identity, Mask: bits, Value: bits, EscrowKey: escrowKey, MintPolicy: zero, WithdrawalThreshold: zero, AddressHash: f.Addresses[identity.String()]})
 	}
-	senderLists := uint64(ringregistry.AllowBit)
-	if p.Frozen {
-		senderLists |= ringregistry.FrozenBit
+	for j, sender := range f.Senders {
+		identity := ringtest.AsBigInt(sender)
+		if identity.Sign() == 0 {
+			continue
+		}
+		lists := uint64(ringregistry.AllowBit)
+		if (j == 0 && f.Policy.Frozen) || (j == 1 && f.FrozenCoOwner) {
+			lists |= ringregistry.FrozenBit
+		}
+		member(identity, spptest.MustNullifierPk(t, big.NewInt(7)), lists)
 	}
-	member(sender, spptest.MustNullifierPk(t, big.NewInt(7)), senderLists)
-	for _, output := range outputs {
-		if output.IsUtxo() && output.OwnerPkHash.Cmp(sender) != 0 {
+	for _, output := range f.Outputs {
+		if output.IsUtxo() {
 			member(output.OwnerPkHash, output.NullifierPk, ringregistry.AllowBit)
 		}
 	}
-	for _, leg := range withdrawals {
-		if leg.Owner.Cmp(sender) != 0 {
-			member(leg.Owner, nil, ringregistry.AllowBit)
-		}
+	for _, leg := range f.Withdrawals {
+		member(leg.Owner, nil, ringregistry.AllowBit)
 	}
+	p := f.Policy
 	// Bit 192 writes the mint policy, cap at 2^64 and the co-sign bound below it.
 	mintPolicy := new(big.Int).Lsh(big.NewInt(1), 192)
 	mintPolicy.Or(mintPolicy, new(big.Int).Lsh(new(big.Int).SetUint64(p.Cap), 64))
@@ -104,43 +131,54 @@ func registries(t testing.TB, p Policy, sender *big.Int, outputs []ringaudit.Utx
 	return own, curator
 }
 
-// fillPolicy sets every statement value of the policy section and opens its pools.
-func fillPolicy(t testing.TB, p *policy.Policy, w Policy, exempt, escrow bool, outputs []ringaudit.Utxo, wires []shared.UtxoWires, public []PublicSlot, withdrawals []Withdrawal, sender *big.Int, published bool, ringProgramID *big.Int) (own, curator *ringregistry.Registry) {
+// fill sets every statement value of the policy section and opens its pools.
+func (f policyFixture) fill(t testing.TB, p *policy.Policy) (own, curator *ringregistry.Registry) {
 	t.Helper()
-	own, curator = registries(t, w, sender, outputs, withdrawals, escrow)
+	own, curator = f.registries(t)
 	p.Table = table()
 	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
-	if w.Screened {
+	if f.Policy.Screened {
 		p.PolicyHash = ringpolicy.TableHash(t, p.Table)
 	}
-	if w.Screened || exempt || escrow {
+	if f.Policy.Screened || f.Exempt || f.Escrow || f.Delivery {
 		p.OwnRoot = own.Root()
 	}
-	p.RingProgramID = ringProgramID
+	p.RingProgramID = f.RingProgramID
 	for k := range p.PublicAssets {
 		p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = 0, 0, 0
-		if k < len(public) {
-			p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = public[k].Asset, protocol.SignedToField(big.NewInt(public[k].Net)), new(big.Int).SetUint64(public[k].Gross)
+		if k < len(f.Public) {
+			p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = f.Public[k].Asset, protocol.SignedToField(big.NewInt(f.Public[k].Net)), new(big.Int).SetUint64(f.Public[k].Gross)
 		}
 	}
-	p.WithdrawalCount = len(withdrawals)
+	p.WithdrawalCount = len(f.Withdrawals)
 	for i := range p.Withdrawals {
 		p.Withdrawals[i] = policy.WithdrawalWires{Owner: 0, Asset: 0, Amount: 0}
-		if i < len(withdrawals) {
-			p.Withdrawals[i] = policy.WithdrawalWires{Owner: withdrawals[i].Owner, Asset: withdrawals[i].Asset, Amount: new(big.Int).SetUint64(withdrawals[i].Amount)}
+		if i < len(f.Withdrawals) {
+			p.Withdrawals[i] = policy.WithdrawalWires{Owner: f.Withdrawals[i].Owner, Asset: f.Withdrawals[i].Asset, Amount: new(big.Int).SetUint64(f.Withdrawals[i].Amount)}
 		}
 	}
-	for o, output := range outputs {
+	for o, output := range f.Outputs {
 		p.CtHashes[o], p.Recipients[o] = 0, 0
 		if output.IsUtxo() {
 			p.CtHashes[o] = ctHash(output.OwnerPkHash)
-			if w.Screened && published {
+			if f.Policy.Screened && f.Published {
 				p.Recipients[o] = output.OwnerPkHash
 			}
 		}
 	}
-	ringpolicy.FillPools(t, p, wires, sender, own, curator)
+	ringpolicy.FillPools(t, p, f.Wires, f.Senders, own, curator)
 	return own, curator
+}
+
+func senderRows(rows int, owners ...*big.Int) []frontend.Variable {
+	cells := make([]frontend.Variable, rows)
+	for j := range cells {
+		cells[j] = 0
+		if j < len(owners) {
+			cells[j] = owners[j]
+		}
+	}
+	return cells
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.

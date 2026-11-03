@@ -179,8 +179,9 @@ func exitRecord(t testing.TB, u Utxo) []byte {
 	return slices.Concat(asset[:], binary.BigEndian.AppendUint64(nil, u.Amount), nullifierPk[:])
 }
 
-func inputPrefix(t testing.TB, hash *big.Int) []byte {
+// inputEvidence is be32(hash) of one spent slot, zero off a UTXO.
+func inputEvidence(t testing.TB, input Utxo) []byte {
 	t.Helper()
-	bytes := spptest.MustFieldBytes(t, hash)
-	return bytes[:audit.InputPrefixLen]
+	bytes := spptest.MustFieldBytes(t, input.spentHash(t))
+	return bytes[:]
 }

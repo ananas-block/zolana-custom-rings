@@ -30,6 +30,39 @@ func (b Body) Seal(t testing.TB, slotSecret *big.Int) [shared.BodyLen]byte {
 	return [shared.BodyLen]byte(CTREncrypt(t, key, nonce, plaintext))
 }
 
+// RecipientBody is the scheme 11 plaintext, the host twin of audit.AuditWires.assertRecipientBody.
+type RecipientBody struct {
+	Blinding *big.Int
+	Amount   uint64
+	Mint     [32]byte
+}
+
+func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [shared.RecipientBodyLen]byte {
+	t.Helper()
+	blinding := spptest.MustFieldBytes(t, b.Blinding)
+	key, nonce := AuditStreamKeys(t, slotSecret, shared.RecipientBodyEncInfo)
+	return [shared.RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
+}
+
+// SenderBundle is the scheme 12 plaintext, the host twin of audit.AuditWires.sealSenderBundle, one key per published slot.
+type SenderBundle struct {
+	Mint              [32]byte
+	Amount, SolAmount uint64
+	OutputSeed        *big.Int
+	RecipientKeys     [][32]byte
+}
+
+func (b SenderBundle) Seal(t testing.TB, slotSecret *big.Int) []byte {
+	t.Helper()
+	seed := spptest.MustFieldBytes(t, b.OutputSeed)
+	plaintext := slices.Concat(b.Mint[:], binary.BigEndian.AppendUint64(nil, b.Amount), binary.BigEndian.AppendUint64(nil, b.SolAmount), seed[:])
+	for _, key := range b.RecipientKeys {
+		plaintext = append(plaintext, key[:]...)
+	}
+	key, nonce := AuditStreamKeys(t, slotSecret, shared.SenderBundleEncInfo)
+	return CTREncrypt(t, key, nonce, plaintext)
+}
+
 // Clamped is the RFC 7748 clamping of secret, the one encoding the circuit accepts as plaintext.
 func Clamped(secret [32]byte) [32]byte {
 	secret[0] &= 248

@@ -31,11 +31,11 @@ func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
 // pool opens every live subject once, each record once, and fills the pools cyclically to capacity.
 func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry) {
 	t.Helper()
-	FillPools(t, b.Policy(), b.Outputs(), b.SenderPkHash(), ownTree, curatorTree)
+	FillPools(t, b.Policy(), b.Outputs(), b.Circuit.Senders, ownTree, curatorTree)
 }
 
-// FillPools opens every live subject of outputs, the withdrawals and the public assets once under sender, each record once, and fills the pools cyclically to capacity.
-func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.UtxoWires, sender frontend.Variable, ownTree, curatorTree *ringregistry.Registry) {
+// FillPools opens every live subject of outputs, the withdrawals, the public assets and senders once, each record once, and fills the pools cyclically to capacity.
+func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.UtxoWires, senders []frontend.Variable, ownTree, curatorTree *ringregistry.Registry) {
 	t.Helper()
 	own, curator := newCollector(ownTree), newCollector(curatorTree)
 	foreign := false
@@ -49,7 +49,9 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.Utxo
 		}
 		return poolEntry
 	}
-	policyWitness.SenderEntry = entry(sender, true)
+	for j, sender := range senders {
+		policyWitness.SenderEntries[j] = entry(sender, ringtest.AsBigInt(sender).Sign() != 0)
+	}
 	for i, out := range outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
 		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
@@ -64,7 +66,7 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.Utxo
 		policyWitness.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
 	if len(curator.records) == 0 && !policyWitness.OwnOnly {
-		curator.add(sender, true)
+		curator.add(senders[0], true)
 	}
 	policyWitness.OwnProof = own.fill(t, policyWitness.OwnRecords, policyWitness.OwnSubjects)
 	if !policyWitness.OwnOnly {

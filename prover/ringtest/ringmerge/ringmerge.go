@@ -3,7 +3,6 @@ package ringmerge
 
 import (
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/consensys/gnark/frontend"
@@ -53,18 +52,32 @@ type Statement struct {
 // Build is a two-input merge padded to width slots under the default audit keys, on a ring without key escrow.
 func Build(t testing.TB, width int) *Statement {
 	t.Helper()
-	return build(t, width, false)
+	return build(t, width, escrowOff, 19)
+}
+
+// BuildZeroSecret is Build on a key escrow ring under nullifier secret 0, the owner holds no record.
+func BuildZeroSecret(t testing.TB, width int) *Statement {
+	t.Helper()
+	return build(t, width, escrowUnread, 0)
 }
 
 // BuildEscrowed is Build on a key escrow ring, the owner's record escrows the nullifier key the merge spends under.
 func BuildEscrowed(t testing.TB, width int) *Statement {
 	t.Helper()
-	return build(t, width, true)
+	return build(t, width, escrowRecord, 19)
 }
 
-func build(t testing.TB, width int, escrow bool) *Statement {
+type escrowMode int
+
+const (
+	escrowOff escrowMode = iota
+	escrowRecord
+	escrowUnread
+)
+
+func build(t testing.TB, width int, escrow escrowMode, secret int64) *Statement {
 	t.Helper()
-	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(19), CtHash: big.NewInt(0)}
+	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(secret), CtHash: big.NewInt(0)}
 	for i := range s.Salt {
 		s.Salt[i] = byte(0x50 + i)
 	}
@@ -85,7 +98,10 @@ func build(t testing.TB, width int, escrow bool) *Statement {
 	s.OwnerPkHash = ringtest.MustSolanaPkField(t, s.ownerKey)
 	s.NullifierPk = spptest.MustNullifierPk(t, s.secret)
 	c.KeyEscrow, c.MemberRegistryRoot, c.CtHash, c.Member = 0, 0, 0, ringregistry.UnreadRecordWires()
-	if escrow {
+	if escrow == escrowUnread {
+		c.KeyEscrow, c.MemberRegistryRoot = 1, ringregistry.New(t).Root()
+	}
+	if escrow == escrowRecord {
 		s.Registry, s.CtHash = ringregistry.New(t), big.NewInt(0xc7)
 		s.Registry.Apply(t, ringregistry.Entry{
 			Member: s.OwnerPkHash, Mask: big.NewInt(ringregistry.EscrowBit), Value: big.NewInt(ringregistry.EscrowBit),
@@ -126,14 +142,14 @@ func build(t testing.TB, width int, escrow bool) *Statement {
 	}, big.NewInt(outputTreeID))
 	s.PrivateTxHash = s.PrivateTx(t, s.InputHashes)
 
+	c.Asset = asset
+	c.InputCount = realInputs
 	eph, auditor := s.Keys.EphSk(), s.Keys.AuditorPk()
 	ringtest.SetBytes(c.OwnerKey[:], s.ownerKey[:])
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
 	ringtest.SetBytes(c.DisclosureKey[:], s.DisclosureKey[:])
 	c.NullifierSecret = s.secret
-	chunks := protocol.MintChunks(s.Mint)
-	c.MintChunks = [2]frontend.Variable{chunks[0], chunks[1]}
 	c.OutputTreeID = outputTreeID
 	c.OutputRingDataHash = ringData
 	c.RingProgramID = ringProgramID
@@ -159,20 +175,26 @@ func (s *Statement) PrivateTx(t testing.TB, inputHashes []*big.Int) *big.Int {
 
 func (s *Statement) bind(t testing.TB) {
 	t.Helper()
-	nullifierPk, outputBlinding := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.OutputBlinding)
-	var amount [8]byte
-	new(big.Int).Add(s.Amounts[0], s.Amounts[1]).FillBytes(amount[:])
-	plaintext := slices.Concat(s.ownerKey[:], nullifierPk[:], s.Mint[:], amount[:], outputBlinding[:])
-	for _, hash := range s.InputHashes {
+	s.Plaintext = disclosure(t, s.InputHashes)
+	s.Fields = s.Disclosed(t)
+	s.Rebind(t)
+}
+
+// Disclosed masks the list as InputHashes holds it.
+func (s *Statement) Disclosed(t testing.TB) []*big.Int {
+	t.Helper()
+	return ringprotocol.Disclose(t, shared.MergeDisclosureDomain, s.DisclosureKey, s.Salt, ringprotocol.PackDisclosure(disclosure(t, s.InputHashes)))
+}
+
+// disclosure is be32(hash_i) per slot, 32 zero bytes at a dummy.
+func disclosure(t testing.TB, hashes []*big.Int) []byte {
+	t.Helper()
+	plaintext := make([]byte, 0, 32*len(hashes))
+	for _, hash := range hashes {
 		hashBytes := spptest.MustFieldBytes(t, hash)
 		plaintext = append(plaintext, hashBytes[:]...)
 	}
-	if want := disclosureBytes(len(s.Circuit.Inputs)); len(plaintext) != want {
-		t.Fatalf("plaintext %d bytes, want %d", len(plaintext), want)
-	}
-	s.Plaintext = plaintext
-	s.Fields = ringprotocol.Disclose(t, shared.MergeDisclosureDomain, s.DisclosureKey, s.Salt, ringprotocol.PackDisclosure(plaintext))
-	s.Rebind(t)
+	return plaintext
 }
 
 // saltField is the salt right aligned in one field, as SPP binds it.
@@ -186,7 +208,7 @@ func (s *Statement) Elements(t testing.TB) []*big.Int {
 	sealed := s.Keys.Seal(t, s.DisclosureKey[:], shared.MergeEncInfo)
 	return []*big.Int{
 		big.NewInt(shared.MergeStatementDomain), s.PrivateTxHash, s.OutputHash, s.FirstNf, ringtest.AsBigInt(s.Circuit.RingProgramID),
-		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields),
+		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields), ringtest.AsBigInt(s.Circuit.InputCount),
 		ringtest.AsBigInt(s.Circuit.PartyIdentities[0]), ringtest.AsBigInt(s.Circuit.PartyIdentities[1]), ringtest.AsBigInt(s.Circuit.PartyIdentities[2]),
 		ringtest.AsBigInt(s.Circuit.KeyEscrow), ringtest.AsBigInt(s.Circuit.MemberRegistryRoot),
 	}
@@ -196,9 +218,4 @@ func (s *Statement) Elements(t testing.TB) []*big.Int {
 func (s *Statement) Rebind(t testing.TB) {
 	t.Helper()
 	s.Circuit.PublicInputHash = spptest.MustHashChain(t, s.Elements(t))
-}
-
-// disclosureBytes mirrors merge_disclosure_len in program-libs/interface/src/instructions/merge.rs.
-func disclosureBytes(inputs int) int {
-	return 32 + 32 + 32 + 8 + 32 + 32*inputs
 }

@@ -17,8 +17,9 @@ type DeliveredAudit struct {
 	Outputs                []DeliveredOutput
 	Layout                 Layout
 	InputClass, InputCount int
-	// Inputs is nil on the signer rail.
-	Inputs []Utxo
+	// Inputs is nil on a section alone, no evidence then enters the stream.
+	Inputs  []Utxo
+	Omitted int
 }
 
 // NewDeliveredAudit fills capacity slots with ring outputs, then one exit and one dummy.
@@ -58,6 +59,17 @@ func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutp
 	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)))
 }
 
+// Omit cuts the last n slots to omitted dummies, each published slot keeps its index.
+func (d DeliveredAudit) Omit(t testing.TB, n int) DeliveredAudit {
+	t.Helper()
+	d.Outputs = slices.Clone(d.Outputs)
+	for i := len(d.Outputs) - n; i < len(d.Outputs); i++ {
+		d.Outputs[i] = DeliveredOutput{Utxo: Dummy(0, big.NewInt(0))}
+	}
+	d.Omitted = n
+	return d
+}
+
 func (d DeliveredAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
 	return DeliveredStatement(t, d.Head(t), d.StatementOutputs(t))
@@ -79,11 +91,15 @@ func (d DeliveredAudit) evidenceCount() int {
 	return d.InputCount
 }
 
+func (d DeliveredAudit) OutputCount() int {
+	return len(d.Outputs) - d.Omitted
+}
+
 func (d DeliveredAudit) Stream(t testing.TB) Stream {
 	t.Helper()
 	var evidence []byte
 	for _, input := range d.Inputs[:d.evidenceCount()] {
-		evidence = append(evidence, inputPrefix(t, input.spentHash(t))...)
+		evidence = append(evidence, inputEvidence(t, input)...)
 	}
 	records := make([][]byte, len(d.Outputs))
 	for i, output := range d.Outputs {
@@ -108,6 +124,7 @@ func (d DeliveredAudit) StatementOutputs(t testing.TB) []StatementOutput {
 			ciphertext = stream.Record(i, recordLen)
 		}
 		outputs[i] = output.statementOutput(t, ciphertext)
+		outputs[i].Omitted = i >= d.OutputCount()
 	}
 	return outputs
 }
@@ -127,6 +144,7 @@ func (d DeliveredAudit) Circuit(t testing.TB) *DeliveredCircuit {
 	c := NewDeliveredCircuit(d.InputClass, len(d.Outputs))
 	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
 	c.AuditWires = d.Wires(d.Layout)
+	c.OutputCount = d.OutputCount()
 	for i, output := range d.Outputs {
 		c.Outputs[i] = output.Wires()
 	}

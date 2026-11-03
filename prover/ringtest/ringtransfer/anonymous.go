@@ -22,6 +22,12 @@ type Anonymous struct {
 	Public           []PublicSlot
 	Withdrawals      []Withdrawal
 	AllDummies       bool
+	// CoOwners spend one more input each, the public run beside the hidden sender.
+	CoOwners      []*big.Int
+	Omitted       int
+	FrozenCoOwner bool
+	// Unenrolled leaves the sender's row without an address.
+	Unenrolled bool
 }
 
 // BuiltAnonymous is an anonymous witness with the fixtures it was derived from.
@@ -47,11 +53,19 @@ func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
 	if w.AllDummies {
 		a = a.AllDummies(t)
 	}
+	if w.Omitted > 0 {
+		a = a.Omit(t, w.Omitted)
+	}
+	for k, coOwner := range w.CoOwners {
+		a.Inputs[a.InputCount] = ringaudit.SpentUtxo(t, coOwner, a.SenderNullifierPk, a.RingProgramID, 1, 53+int64(k))
+		a.InputCount++
+	}
+	a.Signers = w.CoOwners
 	wires := a.Wires(a.Layout)
 	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
+	c.OutputCount = a.OutputCount()
 	for i, output := range a.Outputs {
-		c.Outputs[i] = audit.AnonymousOutputWires{Output: output.Utxo.Wires()}
-		ringtest.SetBytes(c.Outputs[i].OwnerKey[:], output.OwnerKey[:])
+		c.Outputs[i] = output.Wires()
 	}
 	if w.Shape.FullOpenings {
 		ringtest.SetBytes(c.SenderKey, a.SenderKey[:])
@@ -63,10 +77,20 @@ func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
 	for i, party := range a.PartyIdentities {
 		c.PartyIdentities[i] = party
 	}
+	c.SignerCount = len(a.Signers)
+	copy(c.Signers, a.SignerWires())
+	c.SenderAddress = a.SenderAddressWires(t)
+	c.ReplyDigest = 0
 	c.Exempt, c.ApprovalRequired = bit(w.Exempt), bit(w.ApprovalRequired)
 	b := BuiltAnonymous{Circuit: c, Audit: a, World: w}
-	sender := a.SenderPkHash(t)
-	b.Own, b.Curator = fillPolicy(t, &c.Policy, w.Policy, w.Exempt, false, a.Utxos(), b.OutputWires(), w.Public, w.Withdrawals, sender, false, a.RingProgramID)
+	if w.Unenrolled {
+		delete(a.Rows, a.SenderPkHash(t).String())
+	}
+	senders := senderRows(len(c.SenderEntries), append([]*big.Int{a.SenderPkHash(t)}, w.CoOwners...)...)
+	b.Own, b.Curator = policyFixture{
+		Policy: w.Policy, Exempt: w.Exempt, Delivery: true, Outputs: a.Utxos(), Wires: b.OutputWires(), Public: w.Public, Withdrawals: w.Withdrawals,
+		Senders: senders, RingProgramID: a.RingProgramID, Addresses: a.Rows, FrozenCoOwner: w.FrozenCoOwner,
+	}.fill(t, &c.Policy)
 	c.PrivateTxBlinding = a.PrivateTxBlinding
 	c.PrivateTxHash = a.PrivateTxHash(t)
 	b.Rebind(t)
@@ -91,6 +115,12 @@ func (b BuiltAnonymous) Rebind(t testing.TB) {
 
 func (b BuiltAnonymous) Statement(t testing.TB) []*big.Int {
 	t.Helper()
+	return b.Values(t).AnonymousElements(t)
+}
+
+// Values is what the program holds for the statement.
+func (b BuiltAnonymous) Values(t testing.TB) Statement {
+	t.Helper()
 	c := b.Circuit
 	s := policyStatement(&c.Policy)
 	s.PrivateTxHash = ringtest.AsBigInt(c.PrivateTxHash)
@@ -100,5 +130,7 @@ func (b BuiltAnonymous) Statement(t testing.TB) []*big.Int {
 	for i, party := range c.PartyIdentities {
 		s.PartyIdentities[i] = ringtest.AsBigInt(party)
 	}
-	return s.AnonymousElements(t)
+	tail := b.Audit.Tail(t)
+	s.SignerCount, s.SignerChain, s.BundleDigest, s.BundleTag, s.ReplyDigest = tail.SignerCount, tail.SignerChain, tail.BundleDigest, tail.BundleTag, ringtest.AsBigInt(c.ReplyDigest)
+	return s
 }

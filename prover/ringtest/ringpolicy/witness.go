@@ -88,7 +88,13 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		}
 	}
 	c.PrivateTxBlinding = privateTxBlinding
-	c.SenderPkHash = w.Sender
+	c.Senders[0] = w.Sender
+	for j := 1; j < len(c.Senders); j++ {
+		c.Senders[j] = 0
+		if j-1 < len(w.CoOwners) {
+			c.Senders[j] = w.CoOwners[j-1]
+		}
+	}
 	for o := range c.Outputs {
 		s := pick(w.Slots, o)
 		c.Outputs[o] = s.wires(0xb100 + int64(o))
@@ -105,7 +111,21 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		s := pick(w.Withdrawals, i)
 		p.Withdrawals[i] = policy.WithdrawalWires{Owner: s.Owner, Asset: s.Asset, Amount: s.Amount}
 	}
+	inputs := w.Inputs
+	if inputs == nil {
+		inputs = w.balancedInputs()
+	}
+	if len(inputs) > len(c.Inputs) {
+		t.Fatalf("%d inputs, the harness holds %d", len(inputs), len(c.Inputs))
+	}
+	for i := range c.Inputs {
+		c.Inputs[i] = pick(inputs, i).wires(0xc100 + int64(i))
+		if i < len(inputs) && inputs[i].bigAmount != nil {
+			c.Inputs[i].Amount = inputs[i].bigAmount
+		}
+	}
 	c.InputChain = inputChain
+	c.Delivery = ringtest.Bit(w.Delivery)
 	c.Exempt, c.KeyEscrow, c.Delegate = ringtest.Bit(w.Exempt), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
 	c.Published, c.ApprovalRequired = ringtest.Bit(!w.Anonymous), ringtest.Bit(w.ApprovalRequired)
 	b.pool(t, own, curator)
@@ -115,10 +135,6 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 
 func (b Witness) Policy() *policy.Policy {
 	return &b.Circuit.Policy
-}
-
-func (b Witness) SenderPkHash() frontend.Variable {
-	return b.Circuit.SenderPkHash
 }
 
 func (b Witness) Outputs() []shared.UtxoWires {
@@ -154,6 +170,33 @@ func (b Witness) Rebind(t testing.TB) {
 	b.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Circuit.Statement()))
 }
 
+// balancedInputs spends what balance owes per asset, every output plus every net withdrawal, none on a deposit-funded asset.
+func (w World) balancedInputs() []Slot {
+	owed, order := map[int64]*big.Int{}, []int64{}
+	add := func(asset int64, amount *big.Int) {
+		if owed[asset] == nil {
+			owed[asset] = big.NewInt(0)
+			order = append(order, asset)
+		}
+		owed[asset].Add(owed[asset], amount)
+	}
+	for _, slot := range w.Slots {
+		if slot.Owner != 0 || slot.Unowned {
+			add(slot.Asset, new(big.Int).SetUint64(slot.Amount))
+		}
+	}
+	for _, public := range w.Public {
+		add(public.Asset, big.NewInt(-public.Amount))
+	}
+	var inputs []Slot
+	for _, asset := range order {
+		if owed[asset].Sign() > 0 {
+			inputs = append(inputs, Slot{Owner: w.Sender, Asset: asset, bigAmount: owed[asset]})
+		}
+	}
+	return inputs
+}
+
 // registry writes every member's record in ascending member order.
 func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 	t.Helper()
@@ -170,7 +213,7 @@ func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 			escrow = ringregistry.EscrowKey(t, nullifierPk(id), ctHash(id))
 		}
 		lists := new(big.Int).SetUint64(record.Lists)
-		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow}
+		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow, AddressHash: record.Address}
 		if record.WithdrawalThreshold != 0 {
 			// Bit 192 writes the mint policy, the threshold rides on that write.
 			entry.MintPolicy, entry.WithdrawalThreshold = new(big.Int).Lsh(big.NewInt(1), 192), new(big.Int).SetUint64(record.WithdrawalThreshold)
@@ -192,8 +235,12 @@ func (s Slot) wires(blinding int64) shared.UtxoWires {
 	if s.Exit {
 		ring = 0
 	}
+	key := nullifierPk(s.Owner)
+	if s.ZeroKey {
+		key = shared.ZeroNullifierPk
+	}
 	return shared.UtxoWires{
-		Domain: transaction.UtxoDomain, TreeID: treeID, OwnerPkHash: s.Owner, NullifierPk: nullifierPk(s.Owner), Asset: s.Asset,
+		Domain: transaction.UtxoDomain, TreeID: treeID, OwnerPkHash: s.Owner, NullifierPk: key, Asset: s.Asset,
 		Amount: s.Amount, Blinding: blinding, DataHash: 0, RingDataHash: 0, RingProgramID: ring,
 	}
 }

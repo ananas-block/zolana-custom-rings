@@ -50,3 +50,15 @@ func DepositBlinding(t testing.TB, blindingSecret *big.Int) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DepositBlindingDomain), blindingSecret)
 }
+
+// RecipientTag mirrors the slot tag of audit.assertSlotTag over its preimage.
+func RecipientTag(t testing.TB, preimage *big.Int) *big.Int {
+	t.Helper()
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.RecipientTagDomain), preimage)
+}
+
+// SenderBundleTag mirrors the bundle tag of audit.AuditWires.DeliverRecipients over its slot secret.
+func SenderBundleTag(t testing.TB, secret *big.Int) *big.Int {
+	t.Helper()
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.SenderTagDomain), secret)
+}

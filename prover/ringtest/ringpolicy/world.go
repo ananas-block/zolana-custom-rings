@@ -39,11 +39,15 @@ type World struct {
 	Withdrawals        []Slot
 	// Anonymous publishes no recipient, Unscreened writes no policy hash, Delegate bounds no outflow.
 	Anonymous, Unscreened, Delegate, Exempt, KeyEscrow, ApprovalRequired bool
+	Delivery                                                             bool
 	Sender                                                               int64
-	Table                                                                Table
-	Own, Curator                                                         map[int64]Record
-	Slots                                                                []Slot
-	Public                                                               []PublicSlot
+	CoOwners                                                             []int64
+	// Nil derives one Sender input per asset the balance needs.
+	Inputs       []Slot
+	Table        Table
+	Own, Curator map[int64]Record
+	Slots        []Slot
+	Public       []PublicSlot
 	// Records sizes the record pools, a zero capacity takes the shape's maximum.
 	Records policy.RecordPoolShape
 }
@@ -81,6 +85,8 @@ type Record struct {
 	Registered bool
 	// WithdrawalThreshold is an asset record's exemption bound, zero leaves it unwritten.
 	WithdrawalThreshold uint64
+	// Address is the bound address hash, zero before enrollment.
+	Address *big.Int
 }
 
 // Slot is one output or input, a zero owner leaves it a dummy unless Unowned holds.
@@ -88,6 +94,10 @@ type Slot struct {
 	Owner, Asset  int64
 	Amount        uint64
 	Exit, Unowned bool
+	// ZeroKey takes the owner's note under ZeroNullifierPk.
+	ZeroKey bool
+	// bigAmount carries a balanced input past u64, the harness reads no range.
+	bigAmount *big.Int
 }
 
 // PublicSlot is one folded public slot, Gross zero takes the withdrawn amount.
