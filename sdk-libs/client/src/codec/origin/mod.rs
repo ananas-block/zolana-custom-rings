@@ -156,10 +156,22 @@ impl RingOrigin {
             .transact
             .as_deref()
             .ok_or(AuditError::MissingRingTransact)?;
+        if is_legacy(frame) {
+            return Err(AuditError::HistoricalFrame);
+        }
         parse_frame(mode, frame).map(|parsed| parsed.audit_stream())
     }
 
-    /// The input owners a confidential transfer binds, a legacy frame names none.
+    /// A row of a frame the v3 path never decodes, the historical reader owns it.
+    pub fn is_historical(&self) -> bool {
+        match self.event.kind {
+            ConfirmedEventKind::Deposit => false,
+            ConfirmedEventKind::Merge => self.merge_disclosure.is_none(),
+            ConfirmedEventKind::Transfer => self.transact.as_deref().is_some_and(is_legacy),
+        }
+    }
+
+    /// The input owners a confidential transfer binds, a historical frame names none.
     pub fn spenders(&self, mode: RingMode) -> Result<Vec<Address>, AuditError> {
         let frame = self
             .transact
@@ -344,6 +356,8 @@ fn confirmed_transact(
             Some(
                 &(ring_tag::TRANSFER
                     | ring_tag::AUTHORITY_TRANSFER
+                    | ring_tag::HISTORICAL_TRANSFER
+                    | ring_tag::HISTORICAL_AUTHORITY_TRANSFER
                     | ring_tag::LEGACY_TRANSACT
                     | ring_tag::LEGACY_DELEGATE_TRANSACT)
             )
@@ -374,7 +388,12 @@ fn forwarded_mode(spp: &TransactIxDataRef<'_>, frame: &[u8]) -> RingMode {
 fn is_legacy(frame: &[u8]) -> bool {
     matches!(
         frame.first(),
-        Some(&(ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT))
+        Some(
+            &(ring_tag::HISTORICAL_TRANSFER
+                | ring_tag::HISTORICAL_AUTHORITY_TRANSFER
+                | ring_tag::LEGACY_TRANSACT
+                | ring_tag::LEGACY_DELEGATE_TRANSACT)
+        )
     )
 }
 

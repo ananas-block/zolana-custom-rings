@@ -11,12 +11,13 @@ use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
     GetStorageMemberOpeningsResponse, GetStorageMemberRecordsResponse,
-    GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
-    RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageRecordPoolResponse, RingAuthorizedAddressView, RingMemberOpening,
+    RingMemberRecordView, RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
-    ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, RecordOpening,
-    RecordPool, RecordWriteProofInput, SharedPath, SharedProof,
+    AddressEscrowPair, ApplyProofInputs, AuthorizedAddress, Canopy, MemberRecord, OpeningCheck,
+    PoolSubject, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput, SharedPath,
+    SharedProof,
 };
 use zolana_ring_policy::ListId;
 
@@ -32,6 +33,8 @@ pub struct MemberOpeningRead {
     pub owner_pubkey: Option<Address>,
     /// The key the escrow key binds beside the sealed secret.
     pub nullifier_pk: Option<[u8; 32]>,
+    /// The preimage of the record's `address_hash`, `None` before enrollment.
+    pub address: Option<AuthorizedAddress>,
 }
 
 /// A registry's newest root, every record page is read under it.
@@ -62,6 +65,8 @@ pub struct RecordPoolRead {
     pool: RecordPool,
     /// `sealed[i]` is the key `pool.records[i]` sealed to the auditor.
     sealed: Vec<Option<SealedNullifierKey>>,
+    /// `addresses[i]` is the preimage of `pool.records[i].address_hash`.
+    addresses: Vec<Option<AuthorizedAddress>>,
 }
 
 /// One pool read of distinct `members` under `root`, its canopy sized for `openings` paths.
@@ -122,7 +127,16 @@ impl RecordPoolCheck<'_> {
             .iter()
             .map(|row| sealed_key(&row.record))
             .collect::<Result<_, _>>()?;
-        Ok(RecordPoolRead { pool, sealed })
+        let addresses = response
+            .records
+            .iter()
+            .map(|row| authorized_address(&row.record))
+            .collect::<Result<_, _>>()?;
+        Ok(RecordPoolRead {
+            pool,
+            sealed,
+            addresses,
+        })
     }
 }
 
@@ -136,6 +150,12 @@ impl RecordPoolRead {
         self.position(member)
             .and_then(|index| self.pool.records.get(index))
             .filter(|record| record.member == *member)
+    }
+
+    /// The member's enrolled address, `None` for an absent or unenrolled member.
+    pub fn address(&self, member: &[u8; 32]) -> Option<&AuthorizedAddress> {
+        self.record(member)?;
+        self.addresses.get(self.position(member)?)?.as_ref()
     }
 
     /// The ciphertext hash the member's escrow key binds beside `nullifier_pk`, `None` when it binds none.
@@ -260,6 +280,7 @@ impl MemberOpeningRead {
             nullifier_pk: registered
                 .and_then(|record| record.nullifier_pk.as_ref())
                 .map(|key| key.0),
+            address: registered.map(authorized_address).transpose()?.flatten(),
         })
     }
 
@@ -333,6 +354,27 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
         lists: view.lists,
         escrow_key: view.escrow_key.0,
         mint_policy: view.mint_policy,
+        address_hash: view.address_hash.0,
+    }
+}
+
+/// The wire preimage is unauthenticated until it hashes to the proven `address_hash`.
+fn authorized_address(
+    view: &RingMemberRecordView,
+) -> Result<Option<AuthorizedAddress>, AuditError> {
+    let address = view.address.as_ref().map(address_of);
+    member_record(view)
+        .check_address(address.as_ref())
+        .map_err(|_| AuditError::InvalidMemberRegistry)?;
+    Ok(address)
+}
+
+fn address_of(view: &RingAuthorizedAddressView) -> AuthorizedAddress {
+    AuthorizedAddress {
+        ring_id: view.ring_id.0,
+        nullifier_pk: view.nullifier_pk.0,
+        viewing_u: view.viewing_u.0,
+        address_revision: view.address_revision,
     }
 }
 
@@ -382,14 +424,20 @@ fn record_write(view: &RingRecordWriteView) -> Result<RecordWriteProofInput, Aud
             value: view.value,
             escrow_key: view.escrow_key.0,
             mint_policy: view.mint_policy,
+            address_hash: view.address_hash.0,
         },
         exists: view.exists,
         old_next: view.old_next.0,
         old_lists: view.old_lists,
         old_escrow: view.old_escrow.0,
         old_mint_policy: view.old_mint_policy,
+        old_address_hash: view.old_address_hash.0,
         slot: quad_path(&view.slot)?,
         low: member_record(&view.low),
         low_path: quad_path(&view.low_path)?,
+        pair: view.pair.as_ref().map(|pair| AddressEscrowPair {
+            address: address_of(&pair.address),
+            escrow_ciphertext_hash: pair.escrow_ciphertext_hash.0,
+        }),
     })
 }

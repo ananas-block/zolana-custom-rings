@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use custom_ring_interface::{InputPrefix, INPUT_PREFIX_BYTES};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,6 +31,7 @@ mod record_update;
 mod relay;
 mod relay_deposit;
 mod relay_proof;
+mod unspent;
 mod wallet_activity;
 
 pub use authority_transfer::*;
@@ -42,11 +42,12 @@ pub use record_update::*;
 pub use relay::*;
 pub use relay_deposit::*;
 pub use relay_proof::*;
+pub use unspent::*;
 pub use wallet_activity::*;
 
 use crate::{
-    AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, EscrowPendingSlot,
-    InputOpening, InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening,
+    AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+    ConfirmedMerge, EscrowPendingSlot, InputOpening, InputRing, KnownUtxo, OutputOpening,
     OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
@@ -297,86 +298,60 @@ pub struct AuditedMergesPage {
     pub cursor: Option<Base64String>,
 }
 
+/// A resolved merge output, an audit record of inherited fields and no wallet opening.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditedMergeRecord {
+    pub slot: u64,
     pub tx_signature: SerializableSignature,
     pub event_index: u16,
     pub output_commitment: Hash,
-    /// The authenticated registry member hash, the event names no signing key.
-    pub owner_member: Hash,
+    pub owner_key: SerializablePubkey,
+    pub asset: Hash,
+    /// Absent while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_pubkey: Option<SerializablePubkey>,
-    pub mint: SerializablePubkey,
+    pub mint: Option<SerializablePubkey>,
+    /// The sum of its inputs.
     pub amount: u64,
-    pub blinding: Hash,
-    pub ring_data_hash: Hash,
-    pub input_nullifiers: Vec<Hash>,
-    /// Absent for an anonymous merge, whose nullifier key stays hidden.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier: Option<Hash>,
-    /// The disclosed spent commitments of an anonymous merge, padding zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_commitments: Option<Vec<Hash>>,
+    /// The real inputs in slot order, a dummy of the list left out.
+    pub input_commitments: Vec<Hash>,
 }
 
+/// A confirmed merge with an input the auditor cannot name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UnresolvedMergeRecord {
+    pub slot: u64,
     pub tx_signature: SerializableSignature,
     pub event_index: u16,
     pub output_commitment: Hash,
+    pub input_commitments: Vec<Hash>,
 }
 
-impl From<MergeAuditPage> for GetAuditedMergesResponse {
-    fn from(page: MergeAuditPage) -> Self {
+impl From<&AuditedMergeOutput> for AuditedMergeRecord {
+    fn from(output: &AuditedMergeOutput) -> Self {
         Self {
-            context: page.context,
-            value: AuditedMergesPage {
-                opened: page
-                    .result
-                    .opened
-                    .into_iter()
-                    .map(|merge| {
-                        let (nullifier, input_commitments) = match merge.keys {
-                            MergeKeys::Escrowed { nullifier } => (Some(Hash(nullifier)), None),
-                            MergeKeys::Disclosed { input_commitments } => (
-                                None,
-                                Some(input_commitments.into_iter().map(Hash).collect()),
-                            ),
-                        };
-                        AuditedMergeRecord {
-                            tx_signature: merge.tx_signature.into(),
-                            event_index: merge.event_index,
-                            output_commitment: Hash(merge.output_commitment),
-                            owner_member: Hash(merge.owner_member),
-                            owner_pubkey: merge.owner_pubkey.map(Into::into),
-                            mint: merge.mint.into(),
-                            amount: merge.amount,
-                            blinding: Hash(merge.blinding),
-                            ring_data_hash: Hash(merge.ring_data_hash),
-                            input_nullifiers: merge
-                                .input_nullifiers
-                                .into_iter()
-                                .map(Hash)
-                                .collect(),
-                            nullifier,
-                            input_commitments,
-                        }
-                    })
-                    .collect(),
-                unresolved: page
-                    .result
-                    .unresolved
-                    .into_iter()
-                    .map(|merge| UnresolvedMergeRecord {
-                        tx_signature: merge.tx_signature.into(),
-                        event_index: merge.event_index,
-                        output_commitment: Hash(merge.output_commitment),
-                    })
-                    .collect(),
-                cursor: page.next_cursor.map(Into::into),
-            },
+            slot: output.slot,
+            tx_signature: output.tx_signature.into(),
+            event_index: output.event_index,
+            output_commitment: Hash(output.commitment),
+            owner_key: output.owner_key.into(),
+            asset: Hash(output.asset),
+            mint: output.mint.map(Into::into),
+            amount: output.amount,
+            input_commitments: output.inputs.iter().copied().map(Hash).collect(),
+        }
+    }
+}
+
+impl From<&ConfirmedMerge> for UnresolvedMergeRecord {
+    fn from(merge: &ConfirmedMerge) -> Self {
+        Self {
+            slot: merge.slot,
+            tx_signature: merge.tx_signature.into(),
+            event_index: merge.event_index,
+            output_commitment: Hash(merge.output_commitment),
+            input_commitments: merge.inputs.iter().copied().map(Hash).collect(),
         }
     }
 }
@@ -467,7 +442,7 @@ pub struct DecryptedTransaction {
     /// The hidden sender of an anonymous ring, absent while `hash_0` names an unseen note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<DecryptedSender>,
-    /// One per published nullifier, empty on the signer rail.
+    /// One per published nullifier, every rail's evidence names its hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
@@ -598,28 +573,29 @@ pub struct DecryptedSender {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// Absent for a dummy input, an ambiguous prefix and an unseen note.
+    /// The commitment the evidence names, absent at a dummy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<Hash>,
+    /// Absent for a dummy, a merge output and a note the service lacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<DecryptedInputOpening>,
-    /// The known ring notes that carry the input's prefix, more of them than inputs name it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub candidates: Vec<Hash>,
-    /// The prefix of a spent note the service lacks.
+    /// The inherited fields of a merge output, an audit record with no blinding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unseen_prefix: Option<DecryptedInputPrefix>,
-    /// `hash_0` of a commitment key while the service lacks its note.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unseen_hash: Option<Hash>,
+    pub merged: Option<DecryptedMergedInput>,
+    /// The evidence names a note the service lacks.
+    #[serde(default)]
+    pub unseen: bool,
 }
 
-/// Base64 of the prefix bytes, a JSON number cannot hold 128 bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "Base64String", into = "Base64String")]
-pub struct DecryptedInputPrefix(pub InputPrefix);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("not the prefix of a canonical input hash")]
-pub struct InvalidInputPrefix;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DecryptedMergedInput {
+    pub owner_key: SerializablePubkey,
+    pub asset: Hash,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mint: Option<SerializablePubkey>,
+    pub amount: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1014,48 +990,23 @@ impl GetAuditedUtxosResponse {
     }
 }
 
-impl From<DecryptedInputPrefix> for Base64String {
-    fn from(prefix: DecryptedInputPrefix) -> Self {
-        prefix.0.to_bytes().to_vec().into()
-    }
-}
-
-impl TryFrom<Base64String> for DecryptedInputPrefix {
-    type Error = InvalidInputPrefix;
-
-    fn try_from(bytes: Base64String) -> Result<Self, Self::Error> {
-        let bytes: [u8; INPUT_PREFIX_BYTES] = bytes.0.try_into().map_err(|_| InvalidInputPrefix)?;
-        InputPrefix::from_bytes(&bytes)
-            .ok()
-            .flatten()
-            .map(Self)
-            .ok_or(InvalidInputPrefix)
-    }
-}
-
 impl From<AuditedInput> for DecryptedInput {
     fn from(input: AuditedInput) -> Self {
-        let candidates = match &input.opening {
-            InputOpening::Ambiguous { candidates } => {
-                candidates.iter().copied().map(Into::into).collect()
-            }
-            InputOpening::Dummy
-            | InputOpening::Opened(_)
-            | InputOpening::Unseen { .. }
-            | InputOpening::UnseenHash { .. } => Vec::new(),
-        };
-        let (unseen_prefix, unseen_hash) = match &input.opening {
-            InputOpening::Unseen { prefix } => (Some(DecryptedInputPrefix(*prefix)), None),
-            InputOpening::UnseenHash { hash } => (None, Some((*hash).into())),
-            InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::Ambiguous { .. } => {
-                (None, None)
-            }
-        };
         Self {
             nullifier: input.nullifier.into(),
-            candidates,
-            unseen_prefix,
-            unseen_hash,
+            hash: (input.hash != [0; 32]).then(|| input.hash.into()),
+            unseen: input.opening.is_unseen(),
+            merged: match &input.opening {
+                InputOpening::Merged(merged) => Some(DecryptedMergedInput {
+                    owner_key: merged.input.owner_key.into(),
+                    asset: merged.input.asset.into(),
+                    mint: merged.input.mint.map(Into::into),
+                    amount: merged.input.amount,
+                }),
+                InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::UnseenHash { .. } => {
+                    None
+                }
+            },
             opening: input.opening.opened().map(|opening| DecryptedInputOpening {
                 asset: opening.asset.into(),
                 mint: opening.mint.map(Into::into),

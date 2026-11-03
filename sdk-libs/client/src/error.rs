@@ -47,6 +47,8 @@ pub enum AuditError {
     AuditedUtxoOwner,
     #[error("audited note does not rebuild UTXO hash {utxo_hash:?}")]
     AuditedUtxoMismatch { utxo_hash: [u8; 32] },
+    #[error("the transfer carries a frame only the historical reader decodes")]
+    HistoricalFrame,
     #[error("the transfer names no ring Transact frame its audit layout is bound to")]
     MissingRingTransact,
     #[error("output slot {slot} does not open, {kind:?}")]
@@ -70,10 +72,10 @@ pub enum AuditError {
     InvalidMemberRegistry,
     #[error("ring history exceeds the scan bound, spent notes cannot be excluded")]
     IncompleteScan,
-    #[error("indexer page names neither a next cursor nor a scan frontier")]
-    ScanFrontierMissing,
-    #[error("indexer page holds more rows than its request allowed")]
-    PageOverflow,
+    #[error("indexer page does not answer its request")]
+    InvalidHistoryPage,
+    #[error(transparent)]
+    HistoryCursor(#[from] crate::history::HistoryCursorError),
     #[error("a verified anonymous merge disclosure does not open its settled output")]
     MergeDisclosureMismatch,
     #[error("merge audit exceeded its key-search work budget")]
@@ -189,14 +191,14 @@ impl AuditError {
             Self::MissingEventIndex
             | Self::InvalidMemberRegistry
             | Self::IncompleteScan
-            | Self::ScanFrontierMissing
-            | Self::PageOverflow => AuditFailureKind::IndexerResponse,
+            | Self::InvalidHistoryPage
+            | Self::HistoryCursor(_) => AuditFailureKind::IndexerResponse,
             Self::MissingRingTransact
             | Self::InvalidDepositData(_)
             | Self::SettlementAccounts
             | Self::InvalidEventIndex(_)
             | Self::InvalidConfirmedEvent(_) => AuditFailureKind::OriginDecode,
-            Self::InvalidTransactData(_) => AuditFailureKind::TransactData,
+            Self::InvalidTransactData(_) | Self::HistoricalFrame => AuditFailureKind::TransactData,
             Self::ConfirmedEventMismatch => AuditFailureKind::EventMismatch,
             Self::TxViewingKeyMismatch => AuditFailureKind::ViewingKeyMismatch,
             Self::NonCanonicalViewingKey => AuditFailureKind::NonCanonicalViewingKey,
@@ -269,10 +271,20 @@ pub enum AnonymousError {
     ViewingHistoryVersion { version: u32 },
     #[error("viewing history does not parse because {0}")]
     ViewingHistory(String),
-    #[error("the viewing history's current key is not the wallet's viewing key")]
-    ViewingKeyNotCurrent,
     #[error("a rotated viewing key must be new and created after the current one")]
     RotatedKeyNotNewer,
+    #[error("an imported viewing key must be new and created before the current one")]
+    ImportedKeyNotOlder,
+    #[error("the holder holds a viewing key its history lists no entry for")]
+    HeldKeyNotInHistory,
+    #[error("no pending reply names that sender")]
+    UnknownSenderClaim,
+    #[error("a history page is out of order or repeats a row")]
+    InvalidHistoryPage,
+    #[error("a counter update may not move a stored scan position or watermark")]
+    ScanProgressMoved,
+    #[error("the wallet document does not parse because {0}")]
+    WalletDocument(String),
     #[error("a view tag counter passed u64")]
     CounterOverflow,
     #[error("the recipient's viewing key agrees on no shared secret")]
@@ -318,7 +330,7 @@ mod tests {
             },
             AuditError::InvalidStackHeight(4),
             AuditError::MissingAuditorMessage,
-            AuditError::ScanFrontierMissing,
+            AuditError::InvalidHistoryPage,
             AuditError::InvalidEventIndex(1),
             AuditError::InvalidTransactData("forged".to_owned()),
             AuditError::ConfirmedEventMismatch,

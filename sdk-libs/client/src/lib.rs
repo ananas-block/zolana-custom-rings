@@ -2,6 +2,8 @@
 
 #[path = "operations/anonymous.rs"]
 pub mod anonymous;
+#[path = "state/anonymous_wallet.rs"]
+mod anonymous_wallet;
 #[path = "operations/confidential.rs"]
 mod confidential;
 #[path = "operations/created_utxos.rs"]
@@ -19,16 +21,18 @@ mod disclosure;
 #[path = "crypto/encryption/mod.rs"]
 mod encryption;
 mod error;
+#[path = "rpc/history.rs"]
+pub mod history;
 #[path = "rpc/indexer.rs"]
 mod indexer;
 #[path = "state/known_utxo_index.rs"]
 mod known;
 #[path = "operations/merge_audit.rs"]
 mod merge_audit;
+#[path = "state/merge_ledger.rs"]
+mod merge_ledger;
 #[path = "codec/origin/mod.rs"]
 mod origin;
-#[path = "rpc/paging.rs"]
-mod paging;
 #[path = "codec/program_data.rs"]
 mod program_data;
 #[path = "security/reader.rs"]
@@ -51,14 +55,17 @@ pub mod viewing_history;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SentCheck, SentPayment,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
+    SentPayment,
+};
+pub use crate::anonymous_wallet::{
+    AnonymousWallet, PendingClaim, PendingNote, ANONYMOUS_WALLET_VERSION,
 };
 #[cfg(feature = "solana-rpc")]
 pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
 pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST};
 pub use crate::viewing_history::{
-    AdvancedTag, FirstContact, PaymentRecipient, PaymentTag, StreamCounter, TagSelection,
-    TransferTagging, TransferTags, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
+    AdvancedTag, StreamCounter, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
     VIEWING_HISTORY_VERSION,
 };
 pub use crate::{
@@ -67,12 +74,12 @@ pub use crate::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    decrypt::{EscrowedKeys, KnownUtxos, TransactionAudit},
+    decrypt::{EscrowedKeys, FramedRow, KnownUtxos, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
     disclosure::{
-        commitment_evidence, prefix_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad,
-        OpenedAudit, OutputRecord, SealedAuditStream,
+        historical_evidence, input_hash_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad,
+        HistoricalEvidence, OpenedAudit, OutputRecord, SealedAuditStream,
     },
     encryption::{
         auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
@@ -82,8 +89,9 @@ pub use crate::{
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     known::KnownUtxoIndex,
-    merge_audit::{
-        AuditedMerge, MergeAudit, MergeAuditPage, MergeAuditResult, MergeKeys, UnresolvedMerge,
+    merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
+    merge_ledger::{
+        AuditedMergeOutput, ConfirmedMerge, MergeId, MergeInput, MergeLedger, MergeTransition,
     },
     origin::{
         ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
@@ -99,8 +107,8 @@ pub use crate::{
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
         AuditedUtxo, CreatedUtxo, EscrowPendingOutput, EscrowPendingSlot, InputOpening, InputRing,
-        KnownUtxo, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, OutputResolution,
-        RingOwnerTag, UnresolvedOutput, UtxoOwner,
+        KnownUtxo, MergedInput, OutputOpening, OutputPayloadError, OutputPayloadErrorKind,
+        OutputResolution, RingOwnerTag, UnresolvedOutput, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

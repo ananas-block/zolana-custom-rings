@@ -64,7 +64,7 @@ zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-secret-file = { workspace = true, optional = true }
-spr-transaction = { workspace = true }
+spr-transaction = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 http = { workspace = true }

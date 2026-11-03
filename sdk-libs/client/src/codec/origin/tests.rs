@@ -1197,7 +1197,7 @@ fn origin_of_frame(
     let (hash, u) = ([1u8; 32], [2u8; 32]);
     let body = [3u8; 104];
     let nullifiers = [[7u8; 32]];
-    let envelope = vec![0u8; if in_proof { 48 } else { 32 }];
+    let envelope = [0u8; 64];
     let output = RingOutput::Delivered {
         hash: &hash,
         u: &u,
@@ -1223,6 +1223,7 @@ fn origin_of_frame(
         key_escrow: false,
         full_openings: false,
         outputs: vec![output, output],
+        replies: None,
         sender: None,
         eph_u: &zero,
         envelope: &envelope,

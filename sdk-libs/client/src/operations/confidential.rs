@@ -127,8 +127,8 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
         for opened in opener.open_held(transactions)? {
             match opened {
                 OpenedDeposit::Note(utxo) => decrypted.utxos.push(*utxo),
-                OpenedDeposit::UnknownMint(mint) => {
-                    decrypted.unknown_mints.insert(mint);
+                OpenedDeposit::UnknownMint(held) => {
+                    decrypted.unknown_mints.insert(held.utxo.asset.asset);
                 }
             }
         }

@@ -4,7 +4,8 @@ use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
-    AuditedInputOpening, AuditedSender, EscrowPendingOutput, OutputPayloadError,
+    AuditedInputOpening, AuditedSender, EscrowPendingOutput, MergeInput, MergedInput,
+    OutputPayloadError,
     OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey, UnknownAsset},
 };
 
@@ -314,16 +315,21 @@ fn a_decrypted_page_keeps_its_wire_json() {
 
 /// The TypeScript decoder reads the same page.
 #[test]
-fn an_unseen_input_keeps_its_prefix_and_stays_apart_from_a_dummy() {
-    let prefix = InputPrefix::of(&[0x2a; 32]).expect("canonical");
-    let input = |nullifier, opening| AuditedInput { nullifier, opening };
-    let unseen = InputOpening::Unseen { prefix };
+fn an_unseen_input_keeps_its_hash_and_stays_apart_from_a_dummy() {
+    let hash = [0x2a; 32];
+    let unseen = AuditedInput {
+        nullifier: [12; 32],
+        hash,
+        opening: InputOpening::UnseenHash { hash },
+    };
+    let dummy = AuditedInput {
+        nullifier: [11; 32],
+        hash: [0; 32],
+        opening: InputOpening::Dummy,
+    };
     let mut page = page(
         AuditedTransaction {
-            inputs: vec![
-                input([12; 32], unseen.clone()),
-                input([11; 32], InputOpening::Dummy),
-            ],
+            inputs: vec![unseen.clone(), dummy],
             ..delivered_audited()
         },
         vec![[12; 32], [11; 32]],
@@ -339,17 +345,20 @@ fn an_unseen_input_keeps_its_prefix_and_stays_apart_from_a_dummy() {
     let [read_unseen, read_dummy] = parsed.value.items[0].inputs.as_slice() else {
         panic!("two inputs")
     };
-    assert_eq!(
-        read_unseen.unseen_prefix,
-        Some(DecryptedInputPrefix(prefix))
-    );
+    assert_eq!(read_unseen.hash, Some(hash.into()));
+    assert!(read_unseen.unseen);
     assert_eq!(read_unseen.opening, None);
-    assert_eq!(read_dummy.unseen_prefix, None);
+    assert_eq!(read_dummy.hash, None);
+    assert!(!read_dummy.unseen);
     assert_ne!(
-        DecryptedInput::from(input([12; 32], unseen)),
-        DecryptedInput::from(input([12; 32], InputOpening::Dummy))
+        DecryptedInput::from(unseen.clone()),
+        DecryptedInput::from(AuditedInput {
+            hash: [0; 32],
+            opening: InputOpening::Dummy,
+            ..unseen
+        })
     );
-    // A tagged enum buffers its fields, the prefix must survive that too.
+    // A tagged enum buffers its fields, the hash must survive that too.
     let [transaction] = page.value.items.as_slice() else {
         panic!("one transaction")
     };
@@ -361,14 +370,18 @@ fn an_unseen_input_keeps_its_prefix_and_stays_apart_from_a_dummy() {
     let WalletView::Sender { inputs, .. } = read.view else {
         panic!("the spender's view")
     };
-    assert_eq!(inputs[0].unseen_prefix, Some(DecryptedInputPrefix(prefix)));
+    assert_eq!(inputs[0].hash, Some(hash.into()));
+    assert!(inputs[0].unseen);
 }
 
 /// The TypeScript decoder reads the same page.
 #[test]
 fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
-    let prefix = InputPrefix::of(&[0x2a; 32]).expect("canonical");
-    let input = |nullifier, opening| AuditedInput { nullifier, opening };
+    let input = |nullifier, hash| AuditedInput {
+        nullifier,
+        hash,
+        opening: InputOpening::UnseenHash { hash },
+    };
     let audited = AuditedTransaction {
         outputs: vec![output(
             0,
@@ -379,10 +392,7 @@ fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
         )],
         payload_errors: Vec::new(),
         sender: None,
-        inputs: vec![
-            input([12; 32], InputOpening::UnseenHash { hash: [0x2b; 32] }),
-            input([11; 32], InputOpening::Unseen { prefix }),
-        ],
+        inputs: vec![input([12; 32], [0x2b; 32]), input([11; 32], [0x2a; 32])],
         ..delivered_audited()
     };
     let page = page(audited, vec![[12; 32], [11; 32]]);
@@ -396,8 +406,8 @@ fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
     let [transaction] = parsed.value.items.as_slice() else {
         panic!("one transaction")
     };
-    assert_eq!(transaction.inputs[0].unseen_hash, Some([0x2b; 32].into()));
-    assert_eq!(transaction.inputs[0].unseen_prefix, None);
+    assert_eq!(transaction.inputs[0].hash, Some([0x2b; 32].into()));
+    assert!(transaction.inputs[0].unseen);
     assert_eq!(transaction.inputs[0].opening, None);
     // No key binds the unseen note to a sender, only the output's owner reads the transfer.
     let of =
@@ -407,6 +417,32 @@ fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
         WalletView::Recipient { .. }
     ));
     assert_eq!(of([0x50; 32]), None);
+}
+
+/// A merge output carries its inherited fields and no blinding, a wallet cannot spend from it.
+#[test]
+fn a_merged_input_reads_as_an_audit_record_and_never_as_an_opening() {
+    let commitment = [0xa0; 32];
+    let input = DecryptedInput::from(AuditedInput {
+        nullifier: [7; 32],
+        hash: commitment,
+        opening: InputOpening::Merged(MergedInput {
+            commitment,
+            input: MergeInput {
+                owner_key: [0x50; 32],
+                owner: UtxoOwner::Keyed {
+                    nullifier_pk: [0x51; 32],
+                },
+                asset: [0x60; 32],
+                mint: None,
+                amount: 90,
+            },
+        }),
+    });
+    assert_eq!(input.hash, Some(commitment.into()));
+    assert_eq!(input.opening, None);
+    assert!(!input.unseen);
+    assert_eq!(input.merged.expect("merged").amount, 90);
 }
 
 /// The TypeScript decoder reads the same page.
@@ -469,18 +505,6 @@ fn an_escrow_pending_slot_keeps_its_fields_and_reaches_its_owner() {
     assert_eq!(outputs, [transaction.outputs[1].clone()]);
 }
 
-#[test]
-fn a_prefix_off_its_length_or_range_is_refused() {
-    for bytes in [
-        vec![0x2a; 15],
-        vec![0; INPUT_PREFIX_BYTES],
-        vec![0xff; INPUT_PREFIX_BYTES],
-    ] {
-        let json = serde_json::to_string(&Base64String(bytes)).expect("json");
-        assert!(serde_json::from_str::<DecryptedInputPrefix>(&json).is_err());
-    }
-}
-
 fn anonymous_audited() -> AuditedTransaction {
     let opening = |seed: u8, ring| AuditedInputOpening {
         asset: [seed; 32],
@@ -516,6 +540,7 @@ fn anonymous_audited() -> AuditedTransaction {
         inputs: vec![
             AuditedInput {
                 nullifier: [12; 32],
+                hash: [0x62; 32],
                 opening: InputOpening::Opened(opening(
                     0x60,
                     Some(InputRing::Ring {
@@ -525,6 +550,7 @@ fn anonymous_audited() -> AuditedTransaction {
             },
             AuditedInput {
                 nullifier: [11; 32],
+                hash: [0x74; 32],
                 opening: InputOpening::Opened(opening(
                     0x70,
                     Some(InputRing::Unresolved {
@@ -535,6 +561,7 @@ fn anonymous_audited() -> AuditedTransaction {
             },
             AuditedInput {
                 nullifier: [10; 32],
+                hash: [0x82; 32],
                 opening: InputOpening::Opened(opening(
                     0x80,
                     Some(InputRing::Default {
@@ -544,17 +571,18 @@ fn anonymous_audited() -> AuditedTransaction {
             },
             AuditedInput {
                 nullifier: [9; 32],
+                hash: [0x92; 32],
                 opening: InputOpening::Opened(opening(0x90, None)),
             },
             AuditedInput {
                 nullifier: [8; 32],
+                hash: [0; 32],
                 opening: InputOpening::Dummy,
             },
             AuditedInput {
                 nullifier: [7; 32],
-                opening: InputOpening::Ambiguous {
-                    candidates: vec![[0xa0; 32], [0xa1; 32]],
-                },
+                hash: [0xa0; 32],
+                opening: InputOpening::UnseenHash { hash: [0xa0; 32] },
             },
         ],
         unresolved: Vec::new(),
@@ -857,19 +885,7 @@ fn a_relay_request_serializes_to_the_shared_vector() {
     assert_eq!(read.intent.operation(), RelayOperation::Anonymous);
 }
 
-/// The TypeScript signer writes the same wire bytes.
-#[test]
-fn a_signed_wallet_update_verifies_from_the_shared_vector() {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Vector {
-        wire: String,
-        update_id: RecordUpdateId,
-    }
-    let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/record_update.json"
-    ))
-    .expect("vector");
+fn signed_wallet_update() -> SubmitRecordUpdateRequest {
     let wallet = Keypair::new_from_array([7; 32]);
     let identity = Hash(
         *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
@@ -878,7 +894,7 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
     );
     let reader = Hash(*passkey_reader().member().expect("reader").as_bytes());
     let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
-    let signed = RecordUpdate {
+    RecordUpdate {
         genesis_hash: Hash([3; 32]),
         ring: Address::new_from_array([1; 32]).into(),
         entries: vec![
@@ -898,7 +914,23 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
         awaited_lists: 0,
     }
     .sign(Address::new_from_array([2; 32]), &wallet)
-    .expect("sign");
+    .expect("sign")
+}
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_wallet_update_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/record_update.json"
+    ))
+    .expect("vector");
+    let signed = signed_wallet_update();
     assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
     let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
     assert_eq!(read.verify(), Ok(vector.update_id));
@@ -906,6 +938,27 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
     let mut extended = read;
     extended.update.valid_until_slot += 1;
     assert_eq!(extended.verify(), Err(RecordUpdateError::Signature));
+}
+
+/// Keeps each description, regenerates what the signer writes.
+#[test]
+#[ignore]
+fn write_record_update_vectors() {
+    for (name, signed) in [
+        ("record_update.json", signed_wallet_update()),
+        ("enrolment_update.json", signed_enrolment()),
+    ] {
+        let path = format!(
+            "{}/../../test-vectors/rpc/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("vector");
+        vector["wire"] = serde_json::to_string(&signed).expect("json").into();
+        vector["updateId"] = serde_json::to_value(signed.verify().expect("verify")).expect("id");
+        let json = serde_json::to_string_pretty(&vector).expect("json") + "\n";
+        std::fs::write(&path, json).expect("write");
+    }
 }
 
 fn relay_proof_inputs() -> RelayProofInputs {
@@ -923,7 +976,7 @@ fn relay_proof_inputs() -> RelayProofInputs {
         utxo::SppProofInputUtxo,
         Data, Mint, SppProofOutputUtxo, Utxo,
     };
-    use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
+    use zolana_ring_transaction::AnonymousPlan;
     let owner =
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[5; 32])).expect("owner");
     let sender = owner.shielded_address().expect("address");
@@ -988,12 +1041,8 @@ fn relay_proof_inputs() -> RelayProofInputs {
     };
     RelayProofInputs {
         rail: RelayRail::Anonymous {
-            plan: Box::new(AnonymousPlan::from_tags(
-                [23; 32],
-                vec![TaggedPayment {
-                    recipient: owner.viewing_pubkey(),
-                    tag: [24; 32],
-                }],
+            plan: Box::new(AnonymousPlan::from_parts(
+                vec![owner.viewing_pubkey()],
                 [[25; 32]; MAX_OUTPUTS],
             )),
             exit_token_owner: None,
@@ -1017,13 +1066,33 @@ fn relay_proof_inputs() -> RelayProofInputs {
     }
 }
 
+/// `UPDATE_RING_VECTORS=1` rewrites the payload.
 #[test]
 fn relay_proof_inputs_encode_to_the_shared_vector() {
-    let vector: PayloadVector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/relay_proof_inputs.json"
-    ))
-    .expect("vector");
     let inputs = relay_proof_inputs();
+    if std::env::var_os("UPDATE_RING_VECTORS").is_some() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/rpc/relay_proof_inputs.json"
+        );
+        let mut stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vector")).expect("json");
+        let encoded = Base64String::from(inputs.encode().expect("encode").to_vec());
+        stored["proofInputs"] = serde_json::to_value(encoded).expect("base64");
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&stored).expect("json") + "\n",
+        )
+        .expect("vector");
+    }
+    let vector: PayloadVector = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/rpc/relay_proof_inputs.json"
+        ))
+        .expect("vector"),
+    )
+    .expect("vector");
     assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
     let read = RelayProofInputs::decode(&vector.proof_inputs.0).expect("decode");
     assert_eq!(read.inputs, inputs.inputs);
@@ -1152,19 +1221,7 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
     assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
 }
 
-/// The TypeScript signer writes the same wire bytes.
-#[test]
-fn a_signed_enrolment_verifies_from_the_shared_vector() {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Vector {
-        wire: String,
-        update_id: RecordUpdateId,
-    }
-    let vector: Vector = serde_json::from_str(include_str!(
-        "../../../../test-vectors/rpc/enrolment_update.json"
-    ))
-    .expect("vector");
+fn signed_enrolment() -> SubmitRecordUpdateRequest {
     let wallet = Keypair::new_from_array([7; 32]);
     let identity = Hash(
         *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
@@ -1172,7 +1229,7 @@ fn a_signed_enrolment_verifies_from_the_shared_vector() {
             .as_bytes(),
     );
     let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
-    let signed = RecordUpdate {
+    RecordUpdate {
         genesis_hash: Hash([3; 32]),
         ring: Address::new_from_array([1; 32]).into(),
         entries: vec![RecordUpdateEntry::Write(
@@ -1187,7 +1244,23 @@ fn a_signed_enrolment_verifies_from_the_shared_vector() {
         awaited_lists: zolana_ring_policy::ListId::Allow.record_bit(),
     }
     .sign(Address::new_from_array([2; 32]), &wallet)
-    .expect("sign");
+    .expect("sign")
+}
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_enrolment_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/enrolment_update.json"
+    ))
+    .expect("vector");
+    let signed = signed_enrolment();
     assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
     let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
     assert_eq!(read.verify(), Ok(vector.update_id));

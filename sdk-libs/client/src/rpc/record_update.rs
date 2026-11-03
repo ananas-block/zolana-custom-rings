@@ -1,8 +1,8 @@
 use custom_ring_interface::{
     domain, mint_policy_write, queue_chain,
-    storage_instruction::{EscrowWriteData, StorageWriteData},
-    CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData, GRACE_SLOTS,
-    REGISTER_KEY_CIPHERTEXT_LEN,
+    storage_instruction::{AddressWriteData, EscrowWriteData, StorageWriteData},
+    AuthorizedAddress, CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
+    GRACE_SLOTS, REGISTER_KEY_CIPHERTEXT_LEN,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -36,6 +36,19 @@ pub enum RecordUpdateEntry {
     Escrow(EscrowRegistration),
     /// The writer takes it only on the signature of `wallet`.
     WalletGrant(WalletGrant),
+    /// The service checks it against the owner's authorization account before it queues the entry.
+    Address(AddressEnrollment),
+}
+
+/// The newest address the owner signed on chain, an authority can delay it and never change it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AddressEnrollment {
+    pub owner: SerializablePubkey,
+    pub ring_id: Hash,
+    pub nullifier_pk: Hash,
+    pub viewing_u: Hash,
+    pub address_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +205,9 @@ impl RecordUpdateEntry {
                 )?);
             }
             Self::WalletGrant(grant) => grant.record()?,
+            Self::Address(enrollment) => {
+                return Ok(enrollment.write().entry(&enrollment.address())?);
+            }
         };
         Ok(StorageWriteData::Record(record).entry()?)
     }
@@ -202,7 +218,26 @@ impl RecordUpdateEntry {
             Self::Write(write) => StorageWriteData::Record(list_write(write)),
             Self::Escrow(registration) => StorageWriteData::Escrow(registration.write(signer)?),
             Self::WalletGrant(grant) => StorageWriteData::Record(grant.record()?),
+            Self::Address(enrollment) => StorageWriteData::Address(enrollment.write()),
         })
+    }
+}
+
+impl AddressEnrollment {
+    pub const fn address(&self) -> AuthorizedAddress {
+        AuthorizedAddress {
+            ring_id: self.ring_id.0,
+            nullifier_pk: self.nullifier_pk.0,
+            viewing_u: self.viewing_u.0,
+            address_revision: self.address_revision,
+        }
+    }
+
+    fn write(&self) -> AddressWriteData {
+        AddressWriteData {
+            owner: self.owner.0,
+            address_revision: self.address_revision.to_le_bytes(),
+        }
     }
 }
 

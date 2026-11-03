@@ -1,6 +1,5 @@
 use core::fmt;
 
-use custom_ring_interface::InputPrefix;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -30,7 +29,7 @@ pub struct AuditedTransaction {
     pub payload_errors: Vec<OutputPayloadError>,
     /// `None` outside the anonymous rail and while `hash_0` names a note the auditor lacks.
     pub sender: Option<AuditedSender>,
-    /// One per published nullifier, empty on the signer rail whose evidence names no input.
+    /// One per published nullifier, every rail's evidence names its hash.
     pub inputs: Vec<AuditedInput>,
     /// Slots a nullifier key or a mint can still open, each also in `outputs` or `payload_errors`.
     pub unresolved: Vec<UnresolvedOutput>,
@@ -149,6 +148,8 @@ pub struct CreatedUtxo {
     pub slot_index: u32,
     pub leaf_index: u64,
     pub utxo: KnownUtxo,
+    /// False on an exit, its note leaves the ring.
+    pub ring_note: bool,
 }
 
 /// The sender every spent UTXO of an anonymous transfer belongs to.
@@ -162,6 +163,8 @@ pub struct AuditedSender {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditedInput {
     pub nullifier: [u8; 32],
+    /// The commitment the evidence names, zero at a dummy.
+    pub hash: [u8; 32],
     pub opening: InputOpening,
 }
 
@@ -169,33 +172,30 @@ pub struct AuditedInput {
 pub enum InputOpening {
     Dummy,
     Opened(AuditedInputOpening),
-    /// More of the sender's ring notes carry the disclosed prefix than inputs name it.
-    Ambiguous {
-        candidates: Vec<[u8; 32]>,
-    },
-    /// Too few opened notes carry the disclosed prefix, the outputs still open.
-    Unseen {
-        prefix: InputPrefix,
-    },
-    /// The commitment key's `hash_0` names a note the auditor lacks, the sender stays unnamed.
+    /// A merge output's audit record, a wallet cannot spend from it.
+    Merged(MergedInput),
+    /// The evidence names a note the auditor lacks, the outputs still open.
     UnseenHash {
         hash: [u8; 32],
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MergedInput {
+    pub commitment: [u8; 32],
+    pub input: crate::MergeInput,
 }
 
 impl InputOpening {
     pub fn opened(&self) -> Option<&AuditedInputOpening> {
         match self {
             Self::Opened(opening) => Some(opening),
-            Self::Dummy
-            | Self::Ambiguous { .. }
-            | Self::Unseen { .. }
-            | Self::UnseenHash { .. } => None,
+            Self::Dummy | Self::Merged(_) | Self::UnseenHash { .. } => None,
         }
     }
 
     pub fn is_unseen(&self) -> bool {
-        matches!(self, Self::Unseen { .. } | Self::UnseenHash { .. })
+        matches!(self, Self::UnseenHash { .. })
     }
 }
 
@@ -280,6 +280,7 @@ impl AuditedOutput {
             slot_index: self.slot_index,
             leaf_index: self.context.leaf_index,
             utxo: KnownUtxo::opened(*utxo, self.context.tree_id),
+            ring_note: matches!(self.opening, OutputOpening::Ring { .. }),
         })
     }
 }

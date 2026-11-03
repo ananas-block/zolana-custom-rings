@@ -6,8 +6,8 @@ use spr_instruction::instruction::{
 };
 use spr_interface::{instruction::instruction_data::transact::TransactOutput, pda, MAX_OUTPUTS};
 use spr_keypair::{
-    constants::BLINDING_LEN, viewing_key::ViewTag, KeypairError, NullifierKey, ShieldedAddress,
-    ViewingKey, X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
+    constants::BLINDING_LEN, KeypairError, NullifierKey, ShieldedAddress, ViewingKey,
+    X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
 };
 use spr_transaction::{
     instructions::transact::{CacheAccounts, ExternalData, SettlementTransfer, SppProofInputs},
@@ -17,7 +17,7 @@ use spr_transaction::{
 use thiserror::Error;
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 use zeroize::{Zeroize, Zeroizing};
-use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
+use zolana_ring_transaction::AnonymousPlan;
 
 use super::{RelayOperation, TokenAccountSetup};
 
@@ -275,16 +275,9 @@ enum RailWire {
 
 #[derive(SchemaWrite, SchemaRead)]
 struct PlanWire {
-    sender_tag: ViewTag,
-    #[wincode(with = "containers::Vec<PaymentWire, FixIntLen<u8>>")]
-    payments: Vec<PaymentWire>,
-    dummy_tags: [ViewTag; MAX_OUTPUTS],
-}
-
-#[derive(SchemaWrite, SchemaRead)]
-struct PaymentWire {
-    recipient: [u8; 33],
-    tag: ViewTag,
+    #[wincode(with = "containers::Vec<[u8; 33], FixIntLen<u8>>")]
+    recipients: Vec<[u8; 33]>,
+    dummy_preimages: [[u8; 32]; MAX_OUTPUTS],
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -459,16 +452,12 @@ impl RailWire {
                 exit_token_owner,
             } => Self::Anonymous {
                 plan: Box::new(PlanWire {
-                    sender_tag: *plan.sender_tag(),
-                    payments: plan
-                        .payments()
+                    recipients: plan
+                        .recipients()
                         .iter()
-                        .map(|payment| PaymentWire {
-                            recipient: *payment.recipient.as_bytes(),
-                            tag: payment.tag,
-                        })
+                        .map(|recipient| *recipient.as_bytes())
                         .collect(),
-                    dummy_tags: *plan.dummy_tags(),
+                    dummy_preimages: *plan.dummy_preimages(),
                 }),
                 exit_token_owner: *exit_token_owner,
             },
@@ -485,18 +474,12 @@ impl RailWire {
                 plan,
                 exit_token_owner,
             } => RelayRail::Anonymous {
-                plan: Box::new(AnonymousPlan::from_tags(
-                    plan.sender_tag,
-                    plan.payments
+                plan: Box::new(AnonymousPlan::from_parts(
+                    plan.recipients
                         .iter()
-                        .map(|payment| {
-                            Ok(TaggedPayment {
-                                recipient: X25519Pubkey::from_bytes(payment.recipient)?,
-                                tag: payment.tag,
-                            })
-                        })
+                        .map(|recipient| X25519Pubkey::from_bytes(*recipient))
                         .collect::<Result<_, KeypairError>>()?,
-                    plan.dummy_tags,
+                    plan.dummy_preimages,
                 )),
                 exit_token_owner: *exit_token_owner,
             },
