@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_sdk::{RingError, SenderOutflow};
+use custom_ring_sdk::RingError;
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use sea_orm::{
@@ -16,8 +16,6 @@ use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::compile_message;
-use spr_keypair::PublicKey;
-use spr_transaction::{instructions::transact::SettlementTransfer, SOL_MINT};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use zolana_ring_client::rpc::{
@@ -29,8 +27,8 @@ use zolana_ring_policy::Member;
 
 use crate::{
     cosign::{
-        AssetFlow, CoSignDecision, CoSignPolicy, CoSignRefusal, CoSignRequest, CoSignSettlement,
-        RefusingCoSigner,
+        AssetFlow, CoSignDecision, CoSignFlows, CoSignPolicy, CoSignRefusal, CoSignRequest,
+        CoSignSettlement, OwnerFlow, RefusingCoSigner,
     },
     database::Store,
     error::{redacted, RingRpcError},
@@ -578,7 +576,6 @@ impl Relay {
             let request = CoSignRequest {
                 ring: pending.ring,
                 message: record.message.clone(),
-                sender: pending.sender,
                 flows: pending.flows,
             };
             match self.co_signer.decide(&request).await? {
@@ -694,14 +691,20 @@ impl Relay {
         self.close(relay_id, record).await
     }
 
-    /// Settles the co-signer for the final state before the store keeps it.
+    /// A freed row must never outlive a stored `Sent`, a resend that landed would escape the cap.
     async fn close(&self, relay_id: &RelayId, record: &RelayRecord) -> Result<(), RingRpcError> {
-        let settlement = match record.state {
-            RelayState::Confirmed { .. } => CoSignSettlement::Confirmed,
-            _ => CoSignSettlement::Failed,
-        };
-        self.settle(record.co_signature, settlement).await?;
-        Ok(self.relays().update(relay_id, record).await?)
+        match record.state {
+            RelayState::Confirmed { .. } => {
+                self.settle(record.co_signature, CoSignSettlement::Confirmed)
+                    .await?;
+                Ok(self.relays().update(relay_id, record).await?)
+            }
+            _ => {
+                self.relays().update(relay_id, record).await?;
+                self.settle(record.co_signature, CoSignSettlement::Failed)
+                    .await
+            }
+        }
     }
 
     async fn free_unless_stored(&self, failed: FailedWrite<'_>) -> Result<(), RingRpcError> {
@@ -756,13 +759,11 @@ impl CoSignStep<'_> {
         let signer = co_signer
             .signer_named(named)
             .ok_or(RelayError::CoSignRefused)?;
-        let sender = payload.sender()?;
         Ok(Awaited {
             co_sign: Some(PendingCoSign {
                 signer,
                 ring: payload.ring_program_id(),
-                sender,
-                flows: payload.flows(sender)?,
+                flows: payload.flows()?,
             }),
             signers: proven.signers,
         })
@@ -889,29 +890,28 @@ impl RelayPayload {
         }
     }
 
-    /// The deposit's recipient, the spender otherwise.
-    fn sender(&self) -> Result<Member, RelayError> {
-        let owner: &PublicKey = match self {
-            Self::Transfer(inputs) => &inputs.sender.signing_pubkey,
-            Self::Deposit(inputs) => &inputs.recipient.signing_pubkey,
-            Self::Merge(inputs) => &inputs.sender.signing_pubkey,
-        };
-        let owner_hash = owner
-            .owner_proof_input_hash()
-            .map_err(RelayProofInputsError::from)?;
-        Member::from_bytes(owner_hash).map_err(|error| RelayError::Proof(error.to_string()))
-    }
-
-    fn flows(&self, sender: Member) -> Result<Vec<AssetFlow>, RingRpcError> {
+    /// A transfer's debits come from the frame the co-signer signs.
+    fn flows(&self) -> Result<CoSignFlows, RelayError> {
         Ok(match self {
-            Self::Transfer(proof_inputs) => asset_flows(proof_inputs, sender)?,
-            Self::Deposit(inputs) => vec![AssetFlow {
-                asset: inputs.asset.mint(),
-                transferred: 0,
-                deposited: inputs.amount,
-                withdrawn: 0,
-            }],
-            Self::Merge(_) => Vec::new(),
+            Self::Transfer(_) => CoSignFlows::Frame,
+            Self::Deposit(inputs) => {
+                let owner_hash = inputs
+                    .recipient
+                    .signing_pubkey
+                    .owner_proof_input_hash()
+                    .map_err(RelayProofInputsError::from)?;
+                CoSignFlows::Published(vec![OwnerFlow {
+                    owner: Member::from_bytes(owner_hash)
+                        .map_err(|error| RelayError::Proof(error.to_string()))?,
+                    flow: AssetFlow {
+                        asset: inputs.asset.mint(),
+                        debit: 0,
+                        deposited: inputs.amount,
+                        withdrawn: 0,
+                    },
+                }])
+            }
+            Self::Merge(_) => CoSignFlows::Published(Vec::new()),
         })
     }
 }
@@ -946,63 +946,16 @@ fn relay_status(state: &RelayState) -> RelayStatus {
     match state {
         RelayState::AwaitingSignature => RelayStatus::AwaitingSignature,
         RelayState::Sent { signature } => RelayStatus::Sent {
-            signature: signature.clone(),
+            signature: *signature,
         },
         RelayState::Confirmed { signature, slot } => RelayStatus::Confirmed {
-            signature: signature.clone(),
+            signature: *signature,
             slot: *slot,
         },
         RelayState::Failed { reason } => RelayStatus::Failed {
             reason: reason.clone(),
         },
     }
-}
-
-/// One flow per asset.
-fn asset_flows(
-    proof_inputs: &RelayProofInputs,
-    sender: Member,
-) -> Result<Vec<AssetFlow>, RingRpcError> {
-    let mut flows: Vec<AssetFlow> = Vec::new();
-    let rule = SenderOutflow {
-        sender,
-        ring: proof_inputs.ring_program_id,
-    };
-    for output in &proof_inputs.outputs {
-        if rule.counts(output).map_err(RelayError::proof)? {
-            let flow = flow(&mut flows, output.asset.asset);
-            flow.transferred = flow.transferred.saturating_add(output.amount);
-        }
-    }
-    for transfer in &proof_inputs.external_data.interface_transfers {
-        let asset = match transfer {
-            SettlementTransfer::Spl { mint, .. } => *mint,
-            SettlementTransfer::Sol { .. } => SOL_MINT,
-        };
-        let flow = flow(&mut flows, asset);
-        let total = match transfer.is_deposit() {
-            true => &mut flow.deposited,
-            false => &mut flow.withdrawn,
-        };
-        *total = total.saturating_add(transfer.amount());
-    }
-    Ok(flows)
-}
-
-fn flow(flows: &mut Vec<AssetFlow>, asset: Address) -> &mut AssetFlow {
-    let index = match flows.iter().position(|flow| flow.asset == asset) {
-        Some(index) => index,
-        None => {
-            flows.push(AssetFlow {
-                asset,
-                transferred: 0,
-                deposited: 0,
-                withdrawn: 0,
-            });
-            flows.len() - 1
-        }
-    };
-    &mut flows[index]
 }
 
 #[cfg(test)]

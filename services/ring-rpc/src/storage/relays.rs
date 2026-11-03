@@ -7,7 +7,10 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 use zolana_ring_client::rpc::RelayId;
 use zolana_ring_policy::Member;
 
-use crate::{cosign::AssetFlow, relay_submit::CollectedSignature};
+use crate::{
+    cosign::{AssetFlow, CoSignFlows, OwnerFlow},
+    relay_submit::CollectedSignature,
+};
 
 /// Holds no proof input.
 #[derive(Clone)]
@@ -29,8 +32,7 @@ pub(crate) struct RelayRecord {
 pub(crate) struct PendingCoSign {
     pub signer: Address,
     pub ring: Address,
-    pub sender: Member,
-    pub flows: Vec<AssetFlow>,
+    pub flows: CoSignFlows,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,15 +84,16 @@ struct StoredRelay {
 struct StoredCoSign {
     signer: SerializablePubkey,
     ring: SerializablePubkey,
-    sender: Hash,
-    flows: Vec<StoredFlow>,
+    /// `None` reads the debits from the signed frame.
+    flows: Option<Vec<StoredFlow>>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredFlow {
+    owner: Hash,
     asset: SerializablePubkey,
-    transferred: u64,
+    debit: u64,
     deposited: u64,
     withdrawn: u64,
 }
@@ -197,17 +200,21 @@ fn state(record: &RelayRecord) -> Result<Value, DbErr> {
         co_sign: record.co_sign.as_ref().map(|pending| StoredCoSign {
             signer: pending.signer.into(),
             ring: pending.ring.into(),
-            sender: Hash(*pending.sender.as_bytes()),
-            flows: pending
-                .flows
-                .iter()
-                .map(|flow| StoredFlow {
-                    asset: flow.asset.into(),
-                    transferred: flow.transferred,
-                    deposited: flow.deposited,
-                    withdrawn: flow.withdrawn,
-                })
-                .collect(),
+            flows: match &pending.flows {
+                CoSignFlows::Frame => None,
+                CoSignFlows::Published(flows) => Some(
+                    flows
+                        .iter()
+                        .map(|OwnerFlow { owner, flow }| StoredFlow {
+                            owner: Hash(*owner.as_bytes()),
+                            asset: flow.asset.into(),
+                            debit: flow.debit,
+                            deposited: flow.deposited,
+                            withdrawn: flow.withdrawn,
+                        })
+                        .collect(),
+                ),
+            },
         }),
         co_signature: record.co_signature.map(Into::into),
         last_valid_block_height: record.last_valid_block_height,
@@ -243,17 +250,26 @@ fn pending_co_sign(stored: StoredCoSign) -> Result<PendingCoSign, DbErr> {
     Ok(PendingCoSign {
         signer: stored.signer.0,
         ring: stored.ring.0,
-        sender: Member::from_bytes(stored.sender.0).map_err(|_| corrupt("co_sign"))?,
-        flows: stored
-            .flows
-            .into_iter()
-            .map(|flow| AssetFlow {
-                asset: flow.asset.0,
-                transferred: flow.transferred,
-                deposited: flow.deposited,
-                withdrawn: flow.withdrawn,
-            })
-            .collect(),
+        flows: match stored.flows {
+            None => CoSignFlows::Frame,
+            Some(flows) => CoSignFlows::Published(
+                flows
+                    .into_iter()
+                    .map(|flow| {
+                        Ok(OwnerFlow {
+                            owner: Member::from_bytes(flow.owner.0)
+                                .map_err(|_| corrupt("co_sign"))?,
+                            flow: AssetFlow {
+                                asset: flow.asset.0,
+                                debit: flow.debit,
+                                deposited: flow.deposited,
+                                withdrawn: flow.withdrawn,
+                            },
+                        })
+                    })
+                    .collect::<Result<_, DbErr>>()?,
+            ),
+        },
     })
 }
 

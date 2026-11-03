@@ -32,7 +32,7 @@ use zolana_ring_rpc::{
     ChainOutcome, ChainSubmit, DelegateSeal, LatestBlockhash, ProvenRelay, RelayError,
     RelayParties, RelayPayload, RelayProofRequest, RelayProver, RingRpcError,
 };
-use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
+use zolana_ring_transaction::AnonymousPlan;
 
 pub const SLOT: u64 = 1_000;
 pub const LAST_VALID_BLOCK_HEIGHT: u64 = 500;
@@ -98,6 +98,10 @@ pub struct RecordingChain {
     pub height: AtomicU64,
     /// The next send lands and its reply is lost.
     pub reply_lost: AtomicBool,
+    /// The next send is refused at preflight and forwards nothing.
+    pub refuse_next: AtomicBool,
+    /// Answers every outcome lookup, `None` reads as a sent transaction landing.
+    pub outcome: Mutex<Option<Option<ChainOutcome>>>,
 }
 
 impl Default for RecordingChain {
@@ -106,6 +110,8 @@ impl Default for RecordingChain {
             sent: Mutex::default(),
             height: AtomicU64::new(400),
             reply_lost: AtomicBool::new(false),
+            refuse_next: AtomicBool::new(false),
+            outcome: Mutex::new(None),
         }
     }
 }
@@ -131,6 +137,12 @@ impl ChainSubmit for RecordingChain {
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+        if self.refuse_next.swap(false, Ordering::Relaxed) {
+            return Err(RelayError::SendRefused {
+                reason: "preflight refused".to_owned(),
+            }
+            .into());
+        }
         if self.height.load(Ordering::Relaxed) > LAST_VALID_BLOCK_HEIGHT {
             return Err(RelayError::SendRefused {
                 reason: "Blockhash not found".to_owned(),
@@ -147,6 +159,9 @@ impl ChainSubmit for RecordingChain {
     }
 
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {
+        if let Some(outcome) = self.outcome.lock().expect("outcome").clone() {
+            return Ok(outcome);
+        }
         let sent = self.sent.lock().expect("sent");
         Ok(sent
             .iter()
@@ -165,12 +180,8 @@ pub fn owner_wallet() -> solana_keypair::Keypair {
 
 pub fn anonymous_rail() -> RelayRail {
     RelayRail::Anonymous {
-        plan: Box::new(AnonymousPlan::from_tags(
-            [23; 32],
-            vec![TaggedPayment {
-                recipient: owner().viewing_pubkey(),
-                tag: [24; 32],
-            }],
+        plan: Box::new(AnonymousPlan::from_parts(
+            vec![owner().viewing_pubkey()],
             [[25; 32]; MAX_OUTPUTS],
         )),
         exit_token_owner: None,
