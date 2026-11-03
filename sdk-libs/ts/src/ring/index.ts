@@ -380,6 +380,8 @@ export type {
   KnownUtxo,
   KnownUtxos,
   OutputOpening,
+  EscrowPendingOutput,
+  EscrowPendingSlot,
   RingOwnerTag,
   OutputPayloadError,
   OutputPayloadErrorKind,

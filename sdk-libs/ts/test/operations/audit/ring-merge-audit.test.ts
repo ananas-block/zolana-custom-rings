@@ -27,6 +27,7 @@ import { auditRingMerges, openDisclosedMerge } from "../../../src/operations/aud
 import type { RingMergeDisclosure } from "../../../src/crypto/audit/merge-disclosure.js";
 import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
+import { RingError } from "../../../src/protocol/error.js";
 import type { TransactionOrigin } from "../../../src/protocol/transaction/origin.js";
 import { sealNullifierKey } from "../../../src/operations/management/register-key.js";
 import {
@@ -339,7 +340,61 @@ describe("auditRingMerges", () => {
     const twice = await scanClient({ records, transactions: [[UNOPENED], [UNOPENED]] });
     await expect(
       auditRingMerges({ client: twice.client, ringProgramId: ring, auditor, origin: MERGES }),
-    ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE", details: { reason: "duplicate merge" } });
+    ).rejects.toMatchObject({ code: "RING_RPC", details: { reason: "duplicate merge" } });
+  });
+});
+
+describe("auditRingMerges rows", () => {
+  const auditor = X25519Keypair.generate();
+  const records = [{ member: memberOf(1), lists: 0n }];
+  const listed = {
+    slot: UNOPENED.slot,
+    signature: UNOPENED.txSignature,
+    eventIndex: UNOPENED.eventIndex,
+    reason: "invalidAuditData",
+  };
+
+  it.each<readonly [string, TransactionOrigin]>([
+    [
+      "does not decode",
+      {
+        confirmedTransaction: async () => {
+          throw new RingError("RING_ORIGIN_DECODE");
+        },
+      },
+    ],
+    [
+      "fails its disclosure",
+      {
+        confirmedTransaction: async (transaction) => ({
+          kind: "merge",
+          transaction,
+          disclosure: {
+            proof: new Uint8Array(192),
+            ephemeralPublicKey: new Uint8Array(33) as Bytes33,
+            ciphertext: new Uint8Array(32) as Bytes32,
+            fields: [],
+          },
+        }),
+      },
+    ],
+  ])("lists a merge that %s", async (_name, origin) => {
+    const { client } = await scanClient({ records, transactions: [[UNOPENED]] });
+    await expect(
+      auditRingMerges({ client, ringProgramId: ring, auditor, origin }),
+    ).resolves.toMatchObject({ opened: [], unresolved: [], skipped: [listed] });
+  });
+
+  it("stops at a failed origin read", async () => {
+    const { client } = await scanClient({ records, transactions: [[UNOPENED]] });
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async () => {
+        throw new RingError("RING_ORIGIN_UNAVAILABLE");
+      },
+    };
+    await expect(
+      auditRingMerges({ client, ringProgramId: ring, auditor, origin }),
+    ).rejects.toMatchObject({ code: "RING_ORIGIN_UNAVAILABLE" });
   });
 });
 

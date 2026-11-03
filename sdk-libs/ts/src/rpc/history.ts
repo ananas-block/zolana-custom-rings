@@ -6,11 +6,9 @@ import { PAGE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
 
 import { nextScanCursor } from "../operations/audit/audit.js";
+import { rowEventIndex, type RowOrigins } from "../operations/audit/row-origins.js";
 import { RingError } from "../protocol/error.js";
-import type {
-  ConfirmedRingTransaction,
-  TransactionOrigin,
-} from "../protocol/transaction/origin.js";
+import type { ConfirmedRingTransaction } from "../protocol/transaction/origin.js";
 
 export interface ScanLimits {
   readonly pageSize: number;
@@ -36,12 +34,12 @@ export function scanLimits(
   return Object.freeze({ pageSize, maxPages });
 }
 
-/** The cursor the page cap stopped at, `undefined` once the read reached the scan frontier. */
+/** The cursor the page cap stopped at, `undefined` once the read reached the scan frontier, a bad row lands in `rows`. */
 export async function readRingHistory(
   input: Readonly<{
     client: Pick<IndexerReader, "getShieldedTransactionsByTags">;
     ringProgramId: Address;
-    origin: TransactionOrigin;
+    rows: RowOrigins;
     cursor?: Uint8Array;
     limits: ScanLimits;
   }>,
@@ -67,14 +65,9 @@ export async function readRingHistory(
       });
     for (const indexed of response.transactions) {
       if (indexed.ringProgramId !== input.ringProgramId) continue;
-      if (indexed.eventIndex === undefined)
-        throw new RingError("RING_RPC", { details: { reason: "missing event index" } });
-      const confirmed = await input.origin.confirmedTransaction(
-        indexed,
-        input.ringProgramId,
-        context,
-      );
-      if (confirmed !== undefined) visit(confirmed, indexed.eventIndex);
+      const confirmed = await input.rows.read(indexed);
+      if (confirmed !== undefined)
+        input.rows.attempt(indexed, () => visit(confirmed, rowEventIndex(indexed)));
     }
     const next = nextScanCursor(cursor, response);
     if (next === undefined) return undefined;

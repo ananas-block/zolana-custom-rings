@@ -51,7 +51,7 @@ import {
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
 } from "../../crypto/audit/merge-disclosure.js";
-import { REVISION_LENGTH, RingTransactData, ringRailOf } from "./transact.js";
+import { REVISION_LENGTH, RingTransactData, landedRingRail } from "./transact.js";
 import { decompressG2, readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 
 const base58Encoder = getBase58Encoder();
@@ -477,7 +477,7 @@ export function confirmedRingWithdrawals(
       if (source === undefined) return withdrawals;
       const frame = RingTransactData.parse(
         parent.data.subarray(1),
-        ringRailOf(tag, source.anonymous ? "anonymous" : "confidential"),
+        landedRingRail(parent.data, source.anonymous),
       );
       if (frame.policy === undefined) return withdrawals;
       const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
@@ -569,7 +569,10 @@ export class RpcTransactionOrigin implements TransactionOrigin {
       });
     const wire = record(transaction, "transaction");
     const encoded = record(wire["transaction"], "transaction.transaction");
-    if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
+    if (list(encoded["signatures"], "signatures")[0] !== signature)
+      throw new RingError("RING_ORIGIN_UNAVAILABLE", {
+        details: { transactionId: signature, reason: "another transaction" },
+      });
     return transaction;
   }
 }
@@ -826,10 +829,8 @@ function boundLayout(
   published: Readonly<{ anonymous: boolean; outputs: number; inputs: number }>,
 ): AuditStreamLayout {
   const instruction = found.wrapper?.data;
-  const tag = instruction?.[0];
-  if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
-  // Only an anonymous ring emits an anonymous transfer.
-  const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "confidential");
+  if (instruction === undefined || instruction.length === 0) throw invalid("transfer.instruction");
+  const rail = landedRingRail(instruction, published.anonymous);
   const data = RingTransactData.parse(instruction.subarray(1), rail);
   if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
     throw invalid("transfer.instruction");

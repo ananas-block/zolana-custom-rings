@@ -37,7 +37,6 @@ import {
   RingScheme,
 } from "../../protocol/transaction/output.js";
 import {
-  INPUT_PREFIX_BYTES,
   deliveredBodyLen,
   type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
@@ -58,7 +57,9 @@ import {
 import { deliveredSlotSecret, ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../../protocol/error.js";
+import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
+import { RowOrigins } from "./row-origins.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../crypto/derivation/blinding.js";
 import { dummyUtxoHash, fieldUtxoHash } from "../../protocol/membership/utxo-hash.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
@@ -91,7 +92,25 @@ export type OutputOpening =
   | Readonly<{ kind: "ring"; utxo: AuditedUtxo; ownerTag: RingOwnerTag }>
   /** A default-ring UTXO, its owner the published owner tag. */
   | Readonly<{ kind: "exit"; utxo: AuditedUtxo }>
-  | Readonly<{ kind: "dummy" }>;
+  | Readonly<{ kind: "dummy" }>
+  /** A key escrow slot before its owner's record is read, its proof fixes the fields and no hash rebuilds. */
+  | (Readonly<{ kind: "escrowPending" }> & EscrowPendingOutput);
+
+/** Rust `EscrowPendingOutput`. */
+export interface EscrowPendingOutput {
+  readonly ownerKey: Bytes32;
+  readonly amount: bigint;
+  readonly blinding: Bytes32;
+  readonly slot: EscrowPendingSlot;
+}
+
+/** Rust `EscrowPendingSlot`. */
+export type EscrowPendingSlot =
+  /** A delivered body omits the asset, only the nullifier key finds it. */
+  | Readonly<{ kind: "ring"; recipientU: Bytes32 }>
+  | Readonly<{ kind: "exit"; asset: Bytes32; mint?: Address }>;
+
+type RebuiltOpening = Exclude<OutputOpening, { kind: "escrowPending" }>;
 
 /** Rust `AuditedOutput`, one published slot whose rebuilt commitment is the published one. */
 export interface AuditedRingOutput {
@@ -106,7 +125,6 @@ export type OutputPayloadErrorKind =
   | "disclosure"
   | "recipientKey"
   | "commitment"
-  | "escrowUnknown"
   /** No registered asset rebuilds the commitment. */
   | "unknownAsset";
 
@@ -144,8 +162,10 @@ export type InputOpening =
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
   /** More known ring notes carry the disclosed prefix than inputs name it. */
   | Readonly<{ kind: "ambiguous"; candidates: readonly Bytes32[] }>
-  /** The in-proof and authority rails name a note no opened output holds, the outputs still open. */
-  | Readonly<{ kind: "unseen"; prefix: InputPrefix }>;
+  /** Too few opened notes carry the disclosed prefix, the outputs still open. */
+  | Readonly<{ kind: "unseen"; prefix: InputPrefix }>
+  /** The commitment key's `hash_0` names a note the auditor lacks, the sender stays unnamed. */
+  | Readonly<{ kind: "unseenHash"; hash: Bytes32 }>;
 
 export interface AuditedInput {
   readonly nullifier: Bytes32;
@@ -161,7 +181,9 @@ export interface AuditedRingTransaction {
   /** Published order, a slot that did not open sits in `payloadErrors` instead. */
   readonly outputs: readonly AuditedRingOutput[];
   readonly payloadErrors: readonly OutputPayloadError[];
-  /** The hidden sender of an anonymous transfer. */
+  /** One per published slot, a payload error names its slot here. */
+  readonly outputCommitments: readonly Bytes32[];
+  /** The hidden sender of an anonymous transfer, absent while `hash_0` names a note the auditor lacks. */
   readonly sender?: AuditedSender;
   /** One per published nullifier, empty on the signer rail whose evidence names no input. */
   readonly inputs: readonly AuditedInput[];
@@ -242,6 +264,8 @@ export interface EscrowedKeys {
 
 export interface RingAuditPage {
   readonly transactions: readonly AuditedRingTransaction[];
+  /** Rows that do not decode or fail their audit, each opens nothing and every other row still opens. */
+  readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the scan. */
   readonly nextCursor?: Uint8Array;
 }
@@ -263,24 +287,14 @@ export function nextScanCursor(
   return page.nextCursor;
 }
 
-/** Mirrors Rust `auditor_message`, the program accepts the tagged message only as the unique last entry. */
+/** The program keeps the auditor's message last, a sender bundle before it may carry any tag. */
 export function auditorMessage(
   transaction: IndexedShieldedTransaction,
   auditorPublicKey: X25519PublicKey,
 ): Uint8Array {
-  const viewTag = auditorViewTag(auditorPublicKey);
-  const tagged = transaction.messages.flatMap((message, index) =>
-    equalBytes(message.viewTag, viewTag) ? [index] : [],
-  );
-  const index = tagged[0];
-  const message = index === undefined ? undefined : transaction.messages[index];
-  if (index === undefined || message === undefined)
+  const message = transaction.messages.at(-1);
+  if (message === undefined || !equalBytes(message.viewTag, auditorViewTag(auditorPublicKey)))
     throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "missing" } });
-  if (tagged.length > 1)
-    throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "duplicate" } });
-  const count = transaction.messages.length;
-  if (index + 1 !== count)
-    throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "not last", index, count } });
   return message.data;
 }
 
@@ -393,6 +407,9 @@ export function auditRingTransaction(
       txViewingPublicKey,
       outputs: Object.freeze(audited.outputs),
       payloadErrors: Object.freeze(audited.payloadErrors),
+      outputCommitments: Object.freeze(
+        transaction.outputSlots.map((slot) => slot.outputContext.hash),
+      ),
       ...(spent.sender === undefined ? {} : { sender: spent.sender }),
       inputs: spent.inputs,
     });
@@ -405,7 +422,7 @@ export function auditRingTransaction(
 /** Every opened UTXO by its hash, Rust `AuditedTransaction::utxos`. */
 export function auditedUtxos(transaction: AuditedRingTransaction): readonly CreatedRingUtxo[] {
   return transaction.outputs.flatMap((output) =>
-    output.opening.kind === "dummy"
+    output.opening.kind === "dummy" || output.opening.kind === "escrowPending"
       ? []
       : [
           Object.freeze({
@@ -481,6 +498,7 @@ export async function auditRing(
       throw new RingError("RING_RPC", { details: { reason: "invalid scan limit", name, value } });
   }
   const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
+  const rows = new RowOrigins(origin, input.ringProgramId, context);
   const known = new ScanUtxos(input.knownUtxos);
   const transactions: AuditedRingTransaction[] = [];
   let assetsRefreshed = false;
@@ -493,39 +511,43 @@ export async function auditRing(
     );
     for (const indexed of response.transactions) {
       if (indexed.ringProgramId !== input.ringProgramId) continue;
-      if (indexed.eventIndex === undefined)
-        throw new RingError("RING_RPC", { details: { reason: "missing event index" } });
-      const confirmed = await origin.confirmedTransaction(indexed, input.ringProgramId, context);
+      const confirmed = await rows.read(indexed);
       if (confirmed?.kind !== "transfer") continue;
-      // Photon matches output tags too, only the message match marks an auditor's transfer.
-      if (!confirmed.transaction.messages.some((message) => equalBytes(message.viewTag, viewTag)))
-        throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "missing" } });
       const audit = () =>
-        auditRingTransaction({
-          auditor: input.auditor,
-          transaction: confirmed.transaction,
-          assets: input.assets,
-          layout: confirmed.layout,
-          inputTreeIds: confirmed.inputTreeIds,
-          knownUtxos: known,
-          ...(input.escrowedKeys === undefined ? {} : { escrowedKeys: input.escrowedKeys }),
-        });
+        rows.attempt(indexed, () =>
+          auditRingTransaction({
+            auditor: input.auditor,
+            transaction: confirmed.transaction,
+            assets: input.assets,
+            layout: confirmed.layout,
+            inputTreeIds: confirmed.inputTreeIds,
+            knownUtxos: known,
+            ...(input.escrowedKeys === undefined ? {} : { escrowedKeys: input.escrowedKeys }),
+          }),
+        );
       let audited = audit();
+      if (audited === undefined) continue;
       if (!assetsRefreshed && hasUnknownAssets(audited)) {
         assetsRefreshed = true;
         for (const { assetId, mint } of await fetchSplAssetRegistrations(input.client, context))
           input.assets.register(assetId, mint);
         audited = audit();
+        if (audited === undefined) continue;
       }
       known.add(audited);
       transactions.push(audited);
     }
     const next = nextScanCursor(cursor, response);
-    if (next === undefined) return Object.freeze({ transactions: Object.freeze(transactions) });
+    if (next === undefined)
+      return Object.freeze({
+        transactions: Object.freeze(transactions),
+        skipped: Object.freeze(rows.skipped),
+      });
     cursor = next;
   }
   return Object.freeze({
     transactions: Object.freeze(transactions),
+    skipped: Object.freeze(rows.skipped),
     ...(cursor === undefined ? {} : { nextCursor: cursor }),
   });
 }
@@ -605,7 +627,7 @@ class Transfer {
     }>,
   ) {}
 
-  open(slot: Slot, disclosure: RingDisclosure): SlotOpening | undefined {
+  open(slot: Slot, disclosure: RingDisclosure): SlotOpening {
     switch (disclosure.kind) {
       case "delivered":
         return this.delivered(slot, disclosureSlot(disclosure.outputs, slot), disclosure.layout);
@@ -614,10 +636,7 @@ class Transfer {
     }
   }
 
-  /**
-   * The signer rail names no input, the in-proof and authority rails name each by its prefix, the
-   * commitment key's inputs are ring notes the auditor opened before, the entry key's open in full.
-   */
+  /** The commitment key's inputs are ring notes unseen until the auditor opens them, the entry key's open in full. */
   inputs(
     spent: Readonly<{
       evidence: RingDisclosure["inputs"];
@@ -635,28 +654,26 @@ class Transfer {
       return Object.freeze({
         inputs: spentInputs(
           nullifiers,
-          assignPrefixedInputs(
-            published.prefixes,
-            (prefix) => (known === undefined ? [] : anyOwnerNotes({ known, ringId }, prefix)),
-            "anyOwner",
+          assignPrefixedInputs(published.prefixes, (prefix) =>
+            known === undefined ? [] : anyOwnerNotes({ known, ringId }, prefix),
           ),
         ),
       });
     }
     if (published.kind === "commitments") {
       const { first } = published;
+      const { known } = spent;
+      const ringId = ringIdField(this.keys.ring);
       // The circuit proves spent UTXO 0 real and every spent UTXO under one owner key.
-      const zero = spent.known?.utxo(first);
-      if (spent.known === undefined || zero === undefined)
-        throw new RingError("RING_AUDIT_UNSEEN_INPUT", {
-          details: { commitment: bytesKey(first) },
-        });
-      const source = {
-        known: spent.known,
-        sender: zero.ownerKey,
-        first,
-        ringId: ringIdField(this.keys.ring),
-      };
+      const zero = known?.utxo(first);
+      if (known === undefined || zero === undefined) {
+        const unseen: InputOpening = Object.freeze({ kind: "unseenHash", hash: first });
+        const later = assignPrefixedInputs(published.prefixes, (prefix) =>
+          known === undefined ? [] : anyOwnerNotes({ known, ringId }, prefix),
+        );
+        return Object.freeze({ inputs: spentInputs(nullifiers, [unseen, ...later]) });
+      }
+      const source = { known, sender: zero.ownerKey, first, ringId };
       const later = assignPrefixedInputs(published.prefixes, (prefix) => ringNotes(source, prefix));
       return Object.freeze({
         sender: Object.freeze({
@@ -699,13 +716,13 @@ class Transfer {
     slot: Slot,
     opening: DeliveredOutputOpening,
     layout: AuditStreamLayout,
-  ): SlotOpening | undefined {
+  ): SlotOpening {
     return opening.kind === "exit"
       ? this.exit(slot, opening)
       : this.deliver(slot, deliveredBodyLen(layout.keyEscrow));
   }
 
-  private anonymous(slot: Slot, opening: AnonymousOutputOpening): SlotOpening | undefined {
+  private anonymous(slot: Slot, opening: AnonymousOutputOpening): SlotOpening {
     switch (opening.kind) {
       case "ring": {
         const utxo = this.opened({
@@ -732,7 +749,7 @@ class Transfer {
   }
 
   /** A hidden dummy publishes random bytes under a random key, only its commitment names it. */
-  private deliver(slot: Slot, bodyLength: number): SlotOpening | undefined {
+  private deliver(slot: Slot, bodyLength: number): SlotOpening {
     const dummy = this.verify(slot, DUMMY);
     if (dummy.ok) return dummy;
     const recipientU = slot.output.viewTag;
@@ -746,7 +763,13 @@ class Transfer {
       const blinding = this.blinding(slot);
       if (!equalBytes(opened.blinding, blinding)) return COMMITMENT;
       const nullifierPk = this.nullifierPk(ownerKey, opened.nullifierPk);
-      if (nullifierPk === undefined) return ESCROW_UNKNOWN;
+      if (nullifierPk === undefined)
+        return escrowPending({
+          ownerKey,
+          amount,
+          blinding,
+          slot: Object.freeze({ kind: "ring", recipientU }),
+        });
       if (!isCanonicalField(nullifierPk)) return COMMITMENT;
       // The body names no mint, the first registered asset that rebuilds the commitment is it.
       for (const [, mint] of this.keys.assets.entries()) {
@@ -770,7 +793,7 @@ class Transfer {
         );
         if (verified.ok) return verified;
       }
-      return amount === 0n ? undefined : UNKNOWN_ASSET;
+      return UNKNOWN_ASSET;
     } finally {
       secret.fill(0);
     }
@@ -778,7 +801,19 @@ class Transfer {
 
   private exit(slot: Slot, exit: DeliveredExit): SlotOpening {
     const nullifierPk = this.nullifierPk(slot.output.viewTag, exit.nullifierPk);
-    if (nullifierPk === undefined) return ESCROW_UNKNOWN;
+    if (nullifierPk === undefined) {
+      const mint = this.keys.assets.addressForField(exit.asset);
+      return escrowPending({
+        ownerKey: slot.output.viewTag,
+        amount: exit.amount,
+        blinding: this.blinding(slot),
+        slot: Object.freeze({
+          kind: "exit",
+          asset: exit.asset,
+          ...(mint === undefined ? {} : { mint }),
+        }),
+      });
+    }
     const utxo = this.opened({
       ownerKey: slot.output.viewTag,
       nullifierPk,
@@ -790,7 +825,7 @@ class Transfer {
   }
 
   /** The opening of `slot` when it rebuilds the published commitment. */
-  private verify(slot: Slot, opening: OutputOpening): SlotOpening {
+  private verify(slot: Slot, opening: RebuiltOpening): SlotOpening {
     const treeId = outputTreeId(slot.output.outputContext);
     const commitment =
       opening.kind === "dummy"
@@ -886,14 +921,10 @@ function disclosureSlot<T>(outputs: readonly T[], slot: Slot): T {
 
 type PrefixNote = Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>;
 
-/** A commitment key's inputs are the sender's ring notes the auditor opened, an in-proof or authority input it never opened leaves the outputs readable. */
-export type PrefixScope = "sender" | "anyOwner";
-
 /** @internal Exact only for one note in one position, notes sharing a prefix fit any of its positions. */
 export function assignPrefixedInputs(
   prefixes: readonly (InputPrefix | undefined)[],
   notesOf: (prefix: InputPrefix) => readonly PrefixNote[],
-  scope: PrefixScope = "sender",
 ): InputOpening[] {
   const positions = new Map<InputPrefix, number[]>();
   prefixes.forEach((prefix, position) => {
@@ -903,10 +934,6 @@ export function assignPrefixedInputs(
   for (const [prefix, inputs] of positions) {
     const notes = notesOf(prefix);
     if (notes.length < inputs.length) {
-      if (scope === "sender")
-        throw new RingError("RING_AUDIT_UNSEEN_INPUT_PREFIX", {
-          details: { prefix: prefix.toString(16).padStart(2 * INPUT_PREFIX_BYTES, "0") },
-        });
       const unseen: InputOpening = Object.freeze({ kind: "unseen", prefix });
       for (const position of inputs) openings[position] = unseen;
       continue;
@@ -1005,20 +1032,21 @@ function ownedKey(ownerKey: Bytes32, prefix: InputPrefix): string {
 }
 
 export const DUMMY_INPUT: InputOpening = Object.freeze({ kind: "dummy" });
-const DUMMY: OutputOpening = Object.freeze({ kind: "dummy" });
+const DUMMY: RebuiltOpening = Object.freeze({ kind: "dummy" });
 const FRAME: SlotOpening = Object.freeze({ ok: false, kind: "frame" });
 const COMMITMENT: SlotOpening = Object.freeze({ ok: false, kind: "commitment" });
-const ESCROW_UNKNOWN: SlotOpening = Object.freeze({ ok: false, kind: "escrowUnknown" });
 const UNKNOWN_ASSET: SlotOpening = Object.freeze({ ok: false, kind: "unknownAsset" });
+
+function escrowPending(fields: EscrowPendingOutput): SlotOpening {
+  return Object.freeze({ ok: true, opening: Object.freeze({ kind: "escrowPending", ...fields }) });
+}
 
 /** The outputs and payload errors of one audit, in published order. */
 class AuditRecord {
   readonly outputs: AuditedRingOutput[] = [];
   readonly payloadErrors: OutputPayloadError[] = [];
 
-  /** `undefined` skips a zero-amount body no registered asset rebuilds. */
-  record(slot: Slot, opened: SlotOpening | undefined): void {
-    if (opened === undefined) return;
+  record(slot: Slot, opened: SlotOpening): void {
     if (opened.ok)
       this.outputs.push(
         Object.freeze({

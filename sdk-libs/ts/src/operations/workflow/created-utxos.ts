@@ -21,7 +21,9 @@ import {
 } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
+import { RowOrigins } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
+import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   RpcTransactionOrigin,
   type ConfirmedRingTransaction,
@@ -32,6 +34,8 @@ import { outputTreeId } from "../../protocol/membership/trees.js";
 /** Rust `CreatedUtxoPage`. */
 export interface CreatedRingUtxosPage {
   readonly utxos: readonly CreatedRingUtxo[];
+  /** Rows that do not decode or fail to open, their notes stay out of `utxos`. */
+  readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the read. */
   readonly nextCursor?: Uint8Array;
 }
@@ -51,11 +55,16 @@ export async function scanCreatedRingUtxos(
 ): Promise<CreatedRingUtxosPage> {
   await initializePoseidon();
   const utxos: CreatedRingUtxo[] = [];
+  const rows = new RowOrigins(
+    input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+    input.ringProgramId,
+    context,
+  );
   const nextCursor = await readRingHistory(
     {
       client: input.client,
       ringProgramId: input.ringProgramId,
-      origin: input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+      rows,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limits: scanLimits(input),
     },
@@ -72,6 +81,7 @@ export async function scanCreatedRingUtxos(
   );
   return Object.freeze({
     utxos: Object.freeze(utxos),
+    skipped: Object.freeze(rows.skipped),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });
 }

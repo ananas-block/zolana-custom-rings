@@ -354,11 +354,19 @@ describe("cached ring settlement wire vectors", () => {
 });
 
 /** A real `ring_transact` payload, so the tail is read against decoded transfers. */
-function transactData(transfers: readonly InterfaceTransfer[]): string {
+function transactData(
+  transfers: readonly InterfaceTransfer[],
+  circuit: Parameters<typeof encodeRingTransactInstructionData>[0]["circuit"] = {
+    kind: "confidentialRingEddsa",
+    inputs: 1,
+    outputs: 2,
+    publicAssetSlots: 1,
+  },
+): string {
   const encoded = encodeRingTransactInstructionData({
     expiryUnixTs: 0n,
     privateTxHash: zeros(32) as Bytes32,
-    circuit: { kind: "confidentialRingEddsa", inputs: 1, outputs: 2, publicAssetSlots: 1 },
+    circuit,
     txViewingPk: zeros(33) as Bytes33,
     salt: zeros(16) as Bytes16,
     proof: {
@@ -467,6 +475,41 @@ describe("confirmedRingWithdrawals", () => {
         RING,
       ),
     ).toThrow();
+  });
+
+  it("reads the frame of an in-proof withdrawal under the confidential rail", () => {
+    const transfers: InterfaceTransfer[] = [{ kind: "solWithdrawal", amount: 7n }];
+    const zero = zeros(32) as Bytes32;
+    const data = getBase58Decoder().decode(
+      ringInstructionData({
+        ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
+        interfaceTransfers: transfers,
+        ownRevision: 0n,
+        policy: {
+          splWithdrawalOwners: [],
+          recipients: { kind: "framed", recipients: [zero, zero] },
+        },
+        inProofOwner: { owner: zero, commitment: zero, commitmentPok: zero },
+        envelope: new Uint8Array(32 + 16),
+      }),
+    );
+    const source = {
+      ...(poolInstruction(transfers, [SOL_INTERFACE, RECIPIENT]) as object),
+      data: transactData(transfers, {
+        kind: "anonymousRingEddsa",
+        inputs: 1,
+        outputs: 2,
+        publicAssetSlots: 1,
+        proofData: { bsb22Commitment: { commitment: zero, commitmentPok: zero } },
+      }),
+    };
+    const transaction = settlementTransaction(
+      [{ programIdIndex: keyIndex(RING), accounts: [], data }],
+      [source],
+    );
+    expect(confirmedRingWithdrawals(transaction, RING)).toEqual([
+      { ...SOL_LEG, screenedOwner: RECIPIENT },
+    ]);
   });
 
   it("names the recipient of a SOL withdrawal", () => {
@@ -604,7 +647,12 @@ function rpcWith(result: unknown | Error): ConstructorParameters<typeof RpcTrans
 function transferFixture(
   saltByte = 1,
   tag: number = InstructionTag.ringTransact,
-  rail: Readonly<{ anonymous?: boolean; tail?: Uint8Array; inputTree?: Address }> = {},
+  rail: Readonly<{
+    anonymous?: boolean;
+    inProof?: boolean;
+    tail?: Uint8Array;
+    inputTree?: Address;
+  }> = {},
 ) {
   const key = X25519Keypair.generate();
   const txViewingPublicKey = key.publicKey();
@@ -641,7 +689,7 @@ function transferFixture(
     expiryUnixTs: 0n,
     privateTxHash: field(12),
     circuit:
-      rail.anonymous === true
+      rail.anonymous === true || rail.inProof === true
         ? {
             kind: "anonymousRingEddsa",
             inputs: 2,
@@ -695,9 +743,17 @@ function transferFixture(
     inputs: 2,
     outputs: 2,
   });
-  const ringData = ringInstructionData(frame);
+  const framed: RingTransactData =
+    rail.inProof === true
+      ? {
+          ...frame,
+          inProofOwner: { owner: field(0), commitment: field(0), commitmentPok: field(0) },
+          envelope: new Uint8Array(32 + 2 * 16),
+        }
+      : frame;
+  const ringData = ringInstructionData(framed);
   const confirmed = confirmedEvent(RING, [PAYER], source, event, ringData);
-  return { indexed, confirmed, source, event, frame, ringData };
+  return { indexed, confirmed, source, event, frame: framed, ringData };
 }
 
 function confirmedEvent(
@@ -982,6 +1038,18 @@ describe("RpcTransactionOrigin", () => {
     }
   });
 
+  it("binds an in-proof transfer of a confidential ring to the confidential rail", async () => {
+    const { indexed, confirmed, frame } = transferFixture(1, InstructionTag.ringTransact, {
+      inProof: true,
+    });
+    await expect(
+      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
+    ).resolves.toMatchObject({
+      kind: "transfer",
+      layout: RingTransactData.streamLayout(frame),
+    });
+  });
+
   it("reads the anonymous rail's data to its end and refuses a tail on any rail", async () => {
     const coSigner = new Uint8Array(32).fill(13);
     const anonymous = transferFixture(1, InstructionTag.ringTransact, { anonymous: true });
@@ -1132,6 +1200,6 @@ describe("RpcTransactionOrigin", () => {
     const origin = new RpcTransactionOrigin(rpcWith(confirmed));
     await expect(
       origin.confirmedTransaction({ ...indexed, txSignature: "6".repeat(87) as Signature }, RING),
-    ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
+    ).rejects.toMatchObject({ code: "RING_ORIGIN_UNAVAILABLE" });
   });
 });

@@ -82,6 +82,7 @@ import {
   type ConfirmedRingTransaction,
   type TransactionOrigin,
 } from "../../../src/protocol/transaction/origin.js";
+import { RingError } from "../../../src/protocol/error.js";
 import { recoverRingMemberNotes } from "../../../src/operations/workflow/recover.js";
 import { ringAuditReader } from "../../helpers/clients.js";
 import { transactionsPage } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
@@ -525,13 +526,24 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
   );
 
   it.each(VECTORS.filter((entry) => entry.bound.keyEscrow))(
-    "reports escrowUnknown for every slot of the $layout escrow case without escrow records",
+    "returns the proven fields of every slot of the $layout escrow case until its records arrive",
     (entry) => {
-      expect(audit(entry).payloadErrors).toEqual(
-        entry.vector.slots.flatMap((slot, slotIndex) =>
-          slot.kind === "dummy" ? [] : [{ slotIndex, kind: "escrowUnknown" }],
-        ),
+      const pending = audit(entry);
+      expect(pending.payloadErrors).toEqual([]);
+      expect(auditedUtxos(pending)).toEqual([]);
+      expect(pending.outputs.map((output) => output.opening.kind)).toEqual(
+        entry.vector.slots.map((slot) => (slot.kind === "dummy" ? "dummy" : "escrowPending")),
       );
+      pending.outputs.forEach((output, index) => {
+        const slot = entry.vector.slots[index]!;
+        if (output.opening.kind !== "escrowPending") return;
+        expect(output.opening.amount).toBe(BigInt(need(slot.amount, "amount")));
+        expect(output.opening.slot.kind).toBe(slot.kind === "exit" ? "exit" : "ring");
+      });
+      const assets = vectorAssets(entry.vector);
+      expect(
+        audit(entry, { assets, escrowedKeys: escrowRecords(entry.vector) }).payloadErrors,
+      ).toEqual([]);
     },
   );
 
@@ -604,6 +616,30 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
   });
 
+  it("reports a zero amount delivered output no registered asset rebuilds", () => {
+    const entry = vectorOf("delivered", "exits");
+    const slot = entry.vector.slots[0]!;
+    const audited = audit(entry, {
+      escrowedKeys: escrowRecords(entry.vector),
+      transaction: withSlot(0, (published) => ({
+        ...published,
+        payload: encodeRingOutput(
+          RingScheme.ringConfidentialDelivered,
+          sealDeliveredBody(
+            field(need("slot_secret" in slot ? slot.slot_secret : undefined, "slot_secret")),
+            {
+              blinding: field(slot.blinding),
+              amount: 0n,
+              ownerKey: field(need(slot.owner_key, "owner_key")),
+              nullifierPk: field(need(slot.nullifier_pk, "nullifier_pk")),
+            },
+          ),
+        ),
+      })),
+    });
+    expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "unknownAsset" }]);
+  });
+
   it("names a registered mint and leaves an unregistered one to a refresh", () => {
     const exit = (assets: AssetRegistry) =>
       audit(PAIR, { assets }).outputs.find((output) => output.opening.kind === "exit");
@@ -636,22 +672,48 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
         },
       })),
     );
+  });
+
+  it("withholds no slot for an unseen spent note and resolves once the note is known", () => {
+    const entry = vectorOf("anonymous", "commitment");
+    const vector = anonymousCase("commitment");
+    const assets = new AssetRegistry();
+    const known = spentUtxos(vector, assets);
     const [first, later] = vector.inputs.map((input) => field(input.commitment));
-    const only = (commitment: Bytes32 | undefined) =>
+    const only = (commitments: readonly Bytes32[]) =>
       new KnownUtxoIndex(
-        commitment === undefined ? [] : [{ commitment, utxo: known.utxo(commitment)! }],
+        commitments.map((commitment) => ({ commitment, utxo: known.utxo(commitment)! })),
       );
-    expect(() => audit(entry)).toThrow(
-      ringError("RING_AUDIT_UNSEEN_INPUT", { commitment: vector.inputs[0]!.commitment }),
-    );
-    expect(() => audit(entry, { knownUtxos: only(first) })).toThrow(
-      ringError("RING_AUDIT_UNSEEN_INPUT_PREFIX", {
-        prefix: vector.inputs[1]!.commitment.slice(0, 32),
-      }),
-    );
-    expect(() => audit(entry, { knownUtxos: only(later) })).toThrow(
-      ringError("RING_AUDIT_UNSEEN_INPUT", { commitment: vector.inputs[0]!.commitment }),
-    );
+    const resolved = audit(entry, { assets, knownUtxos: only([first!, later!]) });
+    expect(resolved.outputs).toHaveLength(entry.vector.slots.length);
+    const sender = {
+      ownerKey: field(vector.sender_key),
+      nullifierPk: field(vector.sender_nullifier_pk),
+    };
+    const hash = { kind: "unseenHash", hash: first };
+    const prefix = { kind: "unseen", prefix: inputPrefix(later!) };
+    const opened = (commitment: Bytes32 | undefined) => ({
+      kind: "opened",
+      ring: { kind: "ring", commitment },
+    });
+    for (const [notes, expectedSender, firstInput, laterInput] of [
+      [[], undefined, hash, prefix],
+      [[first!], sender, opened(first), prefix],
+      [[later!], undefined, hash, opened(later)],
+      [[first!, later!], sender, opened(first), opened(later)],
+    ] as const) {
+      const audited = audit(entry, { assets, knownUtxos: only(notes) });
+      expect(audited.payloadErrors).toEqual([]);
+      expect(audited.outputs).toEqual(resolved.outputs);
+      expect(audited.sender).toEqual(expectedSender);
+      expect(audited.inputs.map((input) => input.opening)).toMatchObject([firstInput, laterInput]);
+      expect(audited.inputs.map((input) => input.nullifier)).toEqual(
+        vector.inputs.map((input) => field(input.nullifier)),
+      );
+    }
+    const noIndex = audit(entry, { assets });
+    expect(noIndex.sender).toBeUndefined();
+    expect(noIndex.outputs).toEqual(resolved.outputs);
   });
 
   it("keeps a note's first opening unless a later one names its mint and lists it by owner and prefix", () => {
@@ -708,10 +770,11 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
       { commitment: knownUtxoHash(twin, field(vector.ring_id)), utxo: twin },
       { commitment: later, utxo: foreign },
     ])
-      expect(() => audit(entry, { assets, knownUtxos: answering(candidate) })).toThrow(
-        ringError("RING_AUDIT_UNSEEN_INPUT_PREFIX", {
-          prefix: vector.inputs[1]!.commitment.slice(0, 32),
-        }),
+      expect(audit(entry, { assets, knownUtxos: answering(candidate) }).inputs[1]?.opening).toEqual(
+        {
+          kind: "unseen",
+          prefix: inputPrefix(later),
+        },
       );
     expect(
       audit(entry, { assets, knownUtxos: answering({ commitment: later, utxo: note }) }).inputs[1]
@@ -781,16 +844,12 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
       const prefix = need(inputPrefix(notes[0]!.commitment), "prefix");
       const assign = () => assignPrefixedInputs(Array(vector.inputs).fill(prefix), () => notes);
       const candidates = notes.map(({ commitment }) => commitment);
-      if (vector.expected === "unseen")
-        expect(assign, vector.name).toThrow(
-          ringError("RING_AUDIT_UNSEEN_INPUT_PREFIX", { prefix: vector.notes[0]!.slice(0, 32) }),
-        );
-      else
-        expect(assign(), vector.name).toMatchObject(
-          vector.expected === "opened"
-            ? [{ kind: "opened", ring: { kind: "ring", commitment: notes[0]!.commitment } }]
-            : Array(vector.inputs).fill({ kind: "ambiguous", candidates }),
-        );
+      const expected = {
+        opened: [{ kind: "opened", ring: { kind: "ring", commitment: notes[0]!.commitment } }],
+        ambiguous: Array(vector.inputs).fill({ kind: "ambiguous", candidates }),
+        unseen: Array(vector.inputs).fill({ kind: "unseen", prefix }),
+      }[vector.expected];
+      expect(assign(), vector.name).toMatchObject(expected ?? []);
     }
   });
 
@@ -939,12 +998,13 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
     expect(opening?.kind === "ring" && opening.ownerTag).toEqual({ kind: "view", tag: viewTag });
   });
 
-  it("refuses a message sealed to another auditor, a duplicate and one not last", () => {
+  it("reads the last message alone and refuses one sealed to another auditor or not last", () => {
     const entry = vectorOf("delivered", "exits");
     const auditor = X25519Keypair.generate();
     const sealed = vectorTransaction(entry, auditor.publicKey());
     const message = sealed.messages[0]!;
     const other = { viewTag: new Uint8Array(32).fill(3) as Bytes32, data: Uint8Array.of(1) };
+    const bundle = { viewTag: message.viewTag, data: Uint8Array.of(1) };
     const refused = (messages: IndexedShieldedTransaction["messages"]) => () =>
       auditRingTransaction({
         auditor,
@@ -960,11 +1020,12 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
         layout: entry.bound,
       }),
     ).toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "missing" }));
-    expect(refused([message, message])).toThrow(
-      ringError("RING_AUDIT_MESSAGE", { reason: "duplicate" }),
+    expect(refused([bundle, message])()).toEqual(refused([message])());
+    expect(refused([message, bundle])).toThrow(
+      ringError("RING_AUDIT_MESSAGE", { reason: "malformed" }),
     );
     expect(refused([message, other])).toThrow(
-      ringError("RING_AUDIT_MESSAGE", { reason: "not last" }),
+      ringError("RING_AUDIT_MESSAGE", { reason: "missing" }),
     );
   });
 
@@ -1115,9 +1176,17 @@ describe("auditRing", () => {
       }),
     };
     const assets = new AssetRegistry();
-    await expect(scan([transfer], origin, { auditor, assets })).rejects.toThrow(
-      ringError("RING_AUDIT_UNSEEN_INPUT"),
-    );
+    const unseen = await scan([transfer], origin, {
+      auditor,
+      assets,
+      solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) },
+    });
+    expect(unseen.transactions[0]?.sender).toBeUndefined();
+    expect(unseen.transactions[0]?.inputs[0]?.opening).toEqual({
+      kind: "unseenHash",
+      hash: field(vector.inputs[0]!.commitment),
+    });
+    expect(unseen.transactions[0]?.outputs).toHaveLength(entry.vector.slots.length);
     const page = await scan([transfer], origin, {
       auditor,
       assets,
@@ -1147,6 +1216,73 @@ describe("auditRing", () => {
     const page = await scan([transfer, deposit, foreign], origin, { auditor, assets });
     expect(page.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
     expect(page.nextCursor).toBeUndefined();
+  });
+
+  it("skips a row that does not decode, reports it and stops on a transport failure", async () => {
+    const auditor = X25519Keypair.generate();
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
+    const assets = new AssetRegistry([[2n, FOREIGN_MINT]]);
+    for (const code of ["RING_ORIGIN_DECODE", "RING_TRANSACT_DATA_INVALID"] as const) {
+      const bad = { ...transfer, slot: 9n, txSignature: "2".repeat(64) as Signature };
+      const origin: TransactionOrigin = {
+        confirmedTransaction: async (transaction) => {
+          if (transaction.txSignature === bad.txSignature) throw new RingError(code);
+          return transfers.confirmedTransaction(transaction, ring);
+        },
+      };
+      const page = await scan([bad, transfer], origin, { auditor, assets });
+      expect(page.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
+      expect(page.skipped).toEqual([
+        {
+          slot: 9n,
+          signature: bad.txSignature,
+          eventIndex: bad.eventIndex,
+          reason: "invalidAuditData",
+        },
+      ]);
+    }
+    for (const code of ["RING_ORIGIN_UNAVAILABLE", "RING_ORIGIN_STACK"] as const) {
+      const origin: TransactionOrigin = {
+        confirmedTransaction: async () => {
+          throw new RingError(code);
+        },
+      };
+      await expect(scan([transfer], origin, { auditor, assets })).rejects.toThrow(ringError(code));
+    }
+  });
+
+  it("lists a row that fails its audit, opens the rest and keeps its stops", async () => {
+    const auditor = X25519Keypair.generate();
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
+    const assets = new AssetRegistry([[2n, FOREIGN_MINT]]);
+    const sealed = transfer.messages.at(-1)!;
+    const malformed = {
+      ...transfer,
+      slot: 9n,
+      txSignature: "2".repeat(64) as Signature,
+      messages: [{ viewTag: sealed.viewTag, data: Uint8Array.of(1) }],
+    };
+    const page = await scan([malformed, transfer], transfers, { auditor, assets });
+    expect(page.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
+    expect(page.skipped).toEqual([
+      {
+        slot: 9n,
+        signature: malformed.txSignature,
+        eventIndex: malformed.eventIndex,
+        reason: "invalidAuditData",
+      },
+    ]);
+    await expect(
+      scan([{ ...transfer, messages: [] }], transfers, { auditor, assets }),
+    ).rejects.toThrow(ringError("RING_AUDIT_MESSAGE", { reason: "missing" }));
+    const down = new Error("registry down");
+    await expect(
+      scan([transfer], transfers, {
+        auditor,
+        assets: new AssetRegistry(),
+        solanaRpc: { getProgramAccounts: () => ({ send: () => Promise.reject(down) }) },
+      }),
+    ).rejects.toThrow();
   });
 
   it("never reads the origin of a row another ring or the default ring indexed", async () => {
@@ -1351,6 +1487,7 @@ describe("recoverRingMemberNotes", () => {
             request.tags.length === 0 && history !== undefined
               ? transactionsPage({ transactions: history, scannedThrough: Uint8Array.of(1) })
               : (input.tags ?? page)(),
+          solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) },
         }),
         getShieldedTransactionsByNullifiers: async (request) =>
           transactionsPage({
@@ -1436,6 +1573,68 @@ describe("recoverRingMemberNotes", () => {
     };
     const spent = await recover({ owner, auditor, transaction, spends: [spend] });
     expect(spent.notes).toEqual([]);
+  });
+
+  it("records a slot no registered asset rebuilds as unopened and goes on", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const { transaction } = ownedTransfer(owner, auditor.publicKey());
+    const moved = new Uint8Array(32).fill(4) as Bytes32;
+    const recovered = await recover({
+      owner,
+      auditor,
+      transaction: withSlot(0, (slot) => ({
+        ...slot,
+        outputContext: { ...slot.outputContext, hash: moved },
+      }))(transaction),
+    });
+    expect(recovered.notes).toEqual([]);
+    expect(recovered.unopened).toEqual([moved]);
+  });
+
+  it("refuses a result past a row it could not read and stops at a failed read", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const { transaction } = ownedTransfer(owner, auditor.publicKey());
+    const sealed = transaction.messages.at(-1)!;
+    await expect(
+      recover({
+        owner,
+        auditor,
+        transaction: {
+          ...transaction,
+          messages: [{ viewTag: sealed.viewTag, data: Uint8Array.of(1) }],
+        },
+      }),
+    ).rejects.toThrow(ringError("RING_RECOVERY_INCOMPLETE", { reason: "skipped row" }));
+    const nullifier = (await recover({ owner, auditor, transaction })).notes[0]!.nullifier;
+    const spend = {
+      ...transaction,
+      txSignature: "5".repeat(64) as Signature,
+      nullifiers: [nullifier],
+    };
+    const spending = (code: "RING_ORIGIN_DECODE" | "RING_ORIGIN_UNAVAILABLE") =>
+      recover({
+        owner,
+        auditor,
+        transaction,
+        spends: [spend],
+        origin: {
+          confirmedTransaction: async (row, ring) => {
+            if (row.txSignature === spend.txSignature) throw new RingError(code);
+            return TRANSFERS.confirmedTransaction(row, ring);
+          },
+        },
+      });
+    await expect(spending("RING_ORIGIN_DECODE")).rejects.toThrow(
+      ringError("RING_RECOVERY_INCOMPLETE", {
+        reason: "skipped row",
+        transactionId: spend.txSignature,
+      }),
+    );
+    await expect(spending("RING_ORIGIN_UNAVAILABLE")).rejects.toThrow(
+      ringError("RING_ORIGIN_UNAVAILABLE"),
+    );
   });
 
   it("never reads the origin of a spend another ring indexed", async () => {
@@ -1611,6 +1810,7 @@ describe("recoverRingMemberNotes", () => {
         unopened: [],
         unsupportedDeposits: [],
         unknownMints: [],
+        unseenInputs: [],
       });
     } finally {
       sealed.ephemeralSecret.fill(0);

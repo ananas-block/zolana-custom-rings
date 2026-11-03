@@ -25,7 +25,9 @@ import { createdDepositUtxo, createdRingUtxos } from "./created-utxos.js";
 import { openRingDepositOpening, ringDepositOutput } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
+import { RowOrigins } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
+import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   RpcTransactionOrigin,
   type ConfirmedDeposit,
@@ -59,6 +61,8 @@ export interface RecoveredRingNotes {
   readonly unsupportedDeposits: readonly Bytes32[];
   /** Verified mints missing from the asset registry, their notes stay in `unopened`. */
   readonly unknownMints: readonly Address[];
+  /** Nullifiers of inputs no note matches, a complete anonymous history leaves none. */
+  readonly unseenInputs: readonly Bytes32[];
 }
 
 export async function recoverRingMemberNotes(
@@ -67,8 +71,9 @@ export async function recoverRingMemberNotes(
 ): Promise<RecoveredRingNotes> {
   if (!equalBytes(input.nullifierKey.publicKey(), input.source.nullifierPublicKey))
     throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
+  const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
   const history: RecoveryHistory = {
-    origin: input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+    rows: new RowOrigins(origin, input.ringProgramId, context),
     limits: scanLimits({
       pageSize: input.pageSize ?? Number(PAGE_LIMIT),
       maxPages: input.maxPages,
@@ -84,7 +89,7 @@ export async function recoverRingMemberNotes(
       auditor: input.auditor,
       ringProgramId: input.ringProgramId,
       assets: input.assets,
-      origin: history.origin,
+      origin,
       knownUtxos: found.created,
       escrowedKeys: {
         nullifierPk: (ownerKey) =>
@@ -96,14 +101,21 @@ export async function recoverRingMemberNotes(
     context,
   );
   if (page.nextCursor !== undefined) throw new RingError("RING_RECOVERY_INCOMPLETE");
+  refuseSkipped([...history.rows.skipped, ...page.skipped]);
   const sourceOwner = input.source.ownerHash();
+  const unseenInputs: Bytes32[] = [];
   for (const transaction of page.transactions) {
-    // Any unopened slot but another owner's escrow miss could hide a source UTXO.
-    const error = transaction.payloadErrors.find(({ kind }) => kind !== "escrowUnknown");
-    if (error !== undefined)
-      throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", {
-        details: { reason: "unopened", slotIndex: error.slotIndex },
-      });
+    for (const { nullifier, opening } of transaction.inputs)
+      if (opening.kind === "unseen" || opening.kind === "unseenHash") unseenInputs.push(nullifier);
+    for (const error of transaction.payloadErrors) {
+      // Any other unopened slot could hide a source UTXO.
+      if (error.kind !== "unknownAsset")
+        throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", {
+          details: { reason: "unopened", slotIndex: error.slotIndex },
+        });
+      const commitment = transaction.outputCommitments[error.slotIndex];
+      if (commitment !== undefined) found.unknownAssets.push(commitment);
+    }
     for (const output of transaction.outputs) {
       if (output.opening.kind !== "ring") continue;
       const { utxo } = output.opening;
@@ -136,21 +148,33 @@ export async function recoverRingMemberNotes(
     }
   }
   const spent = await followSpends(input, history, found, context);
+  refuseSkipped(history.rows.skipped);
   return Object.freeze({
     notes: Object.freeze(found.candidates.filter((note) => !spent.has(bytesKey(note.nullifier)))),
     unopened: Object.freeze(
       found.unresolved
         .filter(({ nullifier }) => nullifier === undefined || !spent.has(bytesKey(nullifier)))
-        .map(({ commitment }) => commitment),
+        .map(({ commitment }) => commitment)
+        .concat(found.unknownAssets),
     ),
     unsupportedDeposits: Object.freeze(unsupportedDeposits),
     unknownMints: Object.freeze([...found.unknownMints]),
+    unseenInputs: Object.freeze(unseenInputs),
   });
 }
 
 interface RecoveryHistory {
-  readonly origin: TransactionOrigin;
+  readonly rows: RowOrigins;
   readonly limits: ScanLimits;
+}
+
+/** A row left unread can hold a source note or its spend, Rust `complete`. */
+function refuseSkipped(skipped: readonly SkippedRingTransaction[]): void {
+  const row = skipped[0];
+  if (row !== undefined)
+    throw new RingError("RING_RECOVERY_INCOMPLETE", {
+      details: { reason: "skipped row", transactionId: row.signature, eventIndex: row.eventIndex },
+    });
 }
 
 /** Notes found so far, by the commitments already claimed. */
@@ -159,6 +183,8 @@ class Found {
   /** Commitments without a verified opening, with their nullifier when the key derives one. */
   readonly unresolved: { readonly commitment: Bytes32; readonly nullifier?: Bytes32 }[] = [];
   readonly unknownMints = new Set<Address>();
+  /** Commitments of delivered slots no registered asset rebuilds. */
+  readonly unknownAssets: Bytes32[] = [];
   /** Every deposit and merge UTXO of an anonymous ring, its transfer disclosures name them by hash or prefix. */
   readonly created = new KnownUtxoIndex();
   readonly #seen = new Set<string>();
@@ -304,7 +330,7 @@ async function recoverDeposits(
 /** Mirrors Rust `follow_spends`, spent nullifiers and the merges that spent the source's notes. */
 async function followSpends(
   input: RingRecoveryParams,
-  { origin, limits }: RecoveryHistory,
+  { rows, limits }: RecoveryHistory,
   found: Found,
   context: RequestContext | undefined,
 ): Promise<Set<string>> {
@@ -319,9 +345,7 @@ async function followSpends(
     const requested = new Set(queries.map(bytesKey));
     for (const indexed of await spendingTransactions(input.client, queries, budget, context)) {
       if (indexed.ringProgramId !== input.ringProgramId) continue;
-      if (indexed.eventIndex === undefined)
-        throw new RingError("RING_RPC", { details: { reason: "missing event index" } });
-      const confirmed = await origin.confirmedTransaction(indexed, input.ringProgramId, context);
+      const confirmed = await rows.read(indexed);
       if (confirmed === undefined) continue;
       const { transaction } = confirmed;
       if (!transaction.nullifiers.some((nullifier) => requested.has(bytesKey(nullifier)))) continue;

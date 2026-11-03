@@ -304,14 +304,18 @@ describe("ring disclosure codec", () => {
     expect(inputPrefix(short)).toBeUndefined();
   });
 
-  it("refuses a dummy record with a nonzero byte and a field off the modulus", () => {
+  it("reads a record as a dummy only when every byte is zero and refuses a field off the modulus", () => {
     const disclosure = entry();
     const decode = (change: (records: readonly Uint8Array[]) => void) => () => {
       const plaintext = disclosurePlaintext(disclosure);
       change(plaintext.records);
       return decodeDisclosure(disclosure.layout, plaintext);
     };
-    expect(decode((records) => records[2]?.set([1], 5))).toThrow("KEYPAIR_DISCLOSURE_PADDING");
+    expect(decode(() => {})().outputs[2]).toEqual({ kind: "dummy" });
+    expect(decode((records) => records[2]?.set([1], 5))().outputs[2]).toMatchObject({
+      kind: "ring",
+      nullifierPk: new Uint8Array(32),
+    });
     expect(decode((records) => records[0]?.set(MODULUS, 32))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
     expect(decode((records) => records[1]?.set(MODULUS, 40))).toThrow("KEYPAIR_DISCLOSURE_FIELD");
   });

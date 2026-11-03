@@ -177,6 +177,14 @@ export function ringRailOf(tag: number, mode: RingMode): RingRail {
   return "delegate";
 }
 
+/** The rail of a landed ring instruction, an in-proof owner runs the confidential rail through SPP's anonymous circuit. */
+export function landedRingRail(instruction: Uint8Array, sppAnonymous: boolean): RingRail {
+  const tag = instruction[0];
+  if (tag === undefined) throw invalid("InvalidInstructionData");
+  const ownerInProof = has(instruction[1] ?? 0, Flag.ownerInProof);
+  return ringRailOf(tag, sppAnonymous && !ownerInProof ? "anonymous" : "confidential");
+}
+
 /** Rust `RingRail::new`, the delegate rail needs the delegate only `SetDelegate` writes. */
 export function ringRail(
   tag: number,

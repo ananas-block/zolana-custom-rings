@@ -36,6 +36,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
+import { inputPrefixFromBytes } from "../crypto/audit/ring-disclosure.js";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
@@ -835,9 +836,9 @@ export interface DecryptedRingTransaction {
   /** Published order, every slot sits here or in `payloadErrors` exactly once. */
   readonly outputs: readonly DecryptedRingOutput[];
   readonly payloadErrors: readonly OutputPayloadError[];
-  /** The hidden sender of an anonymous ring. */
+  /** The hidden sender of an anonymous ring, absent while `hash_0` names an unseen note. */
   readonly sender?: AuditedSender;
-  /** One per published nullifier of an anonymous ring. */
+  /** One per published nullifier, empty on the signer rail. */
   readonly inputs: readonly AuditedInput[];
   readonly nullifiers: readonly Bytes32[];
   /** The input owners of a confidential transfer, by owner signature or in proof. */
@@ -857,17 +858,18 @@ export type {
   InputRing,
   KnownUtxo,
   OutputOpening,
+  EscrowPendingOutput,
+  EscrowPendingSlot,
   OutputPayloadError,
   OutputPayloadErrorKind,
 } from "../operations/audit/audit.js";
 
-/** Mirrors Rust `SkippedReason`, `unseenInput` an anonymous input naming a UTXO the service has not opened. */
-export type SkippedReason = "missingAuditorMessage" | "invalidAuditData" | "unseenInput";
+/** Mirrors Rust `SkippedReason`. */
+export type SkippedReason = "missingAuditorMessage" | "invalidAuditData";
 
 const SKIPPED_REASONS: readonly SkippedReason[] = Object.freeze([
   "missingAuditorMessage",
   "invalidAuditData",
-  "unseenInput",
 ]);
 
 export interface SkippedRingTransaction {
@@ -1690,12 +1692,18 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     : list(wire["inputs"], "inputs").map((entry, index) =>
         decodeInput(record(entry, `inputs[${index}]`), `inputs[${index}]`),
       );
-  // An anonymous ring discloses one input per published nullifier, every other ring none.
+  // One input per published nullifier, the signer rail alone discloses none.
   if (
-    sender === undefined
-      ? inputs.length !== 0
-      : inputs.length !== nullifiers.length ||
-        inputs.some((input, index) => !equalBytes(input.nullifier, nullifiers[index]!))
+    (sender !== undefined || inputs.length !== 0) &&
+    (inputs.length !== nullifiers.length ||
+      inputs.some((input, index) => !equalBytes(input.nullifier, nullifiers[index]!)))
+  )
+    throw invalid("inputs");
+  // Only spent note 0 of a commitment key goes unseen by hash, and it leaves the sender unnamed.
+  const senderUnseen = inputs[0]?.opening.kind === "unseenHash";
+  if (
+    (senderUnseen && sender !== undefined) ||
+    inputs.slice(1).some(({ opening }) => opening.kind === "unseenHash")
   )
     throw invalid("inputs");
   // A view tag marks an anonymous ring output, a confidential ring publishes the recipient's u.
@@ -1703,7 +1711,7 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     outputs.some(
       (output) =>
         output.opening.kind === "ring" &&
-        (output.opening.ownerTag.kind === "view") !== (sender !== undefined),
+        (output.opening.ownerTag.kind === "view") !== (sender !== undefined || senderUnseen),
     )
   )
     throw invalid("outputs.tag");
@@ -1824,8 +1832,13 @@ function decodeOutput(wire: Record<string, unknown>, path: string): DecryptedRin
   const utxo = wire["utxo"];
   const recipientU = wire["recipientU"];
   const tag = wire["tag"];
+  const pending = wire["escrowPending"];
+  if (absent(pending) === (kind === "escrowPending")) throw invalid(`${path}.kind`);
   let opening: OutputOpening;
-  if (kind === "ring" && !absent(utxo) && absent(recipientU) !== absent(tag)) {
+  if (kind === "escrowPending") {
+    if (!absent(utxo) || !absent(tag)) throw invalid(`${path}.kind`);
+    opening = decodeEscrowPending(record(pending, `${path}.escrowPending`), recipientU, path);
+  } else if (kind === "ring" && !absent(utxo) && absent(recipientU) !== absent(tag)) {
     opening = Object.freeze({
       kind,
       utxo: decodeDecryptedUtxo(record(utxo, `${path}.utxo`), `${path}.utxo`),
@@ -1853,6 +1866,33 @@ function decodeOutput(wire: Record<string, unknown>, path: string): DecryptedRin
       hash: hash(context["hash"], `${path}.outputContext.hash`),
     }),
     opening,
+  });
+}
+
+/** Rust `DecryptedEscrowPending`, an exit names its asset and a ring output its recipient, never both. */
+function decodeEscrowPending(
+  wire: Record<string, unknown>,
+  recipientU: unknown,
+  path: string,
+): OutputOpening {
+  const asset = wire["asset"];
+  const mint = wire["mint"];
+  if (absent(asset) === absent(recipientU) || (absent(asset) && !absent(mint)))
+    throw invalid(`${path}.escrowPending`);
+  return Object.freeze({
+    kind: "escrowPending",
+    ownerKey: hash(wire["ownerKey"], `${path}.escrowPending.ownerKey`),
+    amount: u64(wire["amount"], `${path}.escrowPending.amount`),
+    blinding: hash(wire["blinding"], `${path}.escrowPending.blinding`),
+    slot: Object.freeze(
+      absent(asset)
+        ? { kind: "ring", recipientU: hash(recipientU, `${path}.recipientU`) }
+        : {
+            kind: "exit",
+            asset: hash(asset, `${path}.escrowPending.asset`),
+            ...(absent(mint) ? {} : { mint: address(mint, `${path}.escrowPending.mint`) }),
+          },
+    ),
   });
 }
 
@@ -1920,10 +1960,26 @@ function decodeSender(wire: Record<string, unknown>): AuditedSender {
   });
 }
 
-/** Rust `DecryptedInput`, an ambiguous prefix names its candidates in place of an opening. */
+/** Rust `DecryptedInput`, an ambiguous prefix or an unseen note stands in place of an opening. */
 function decodeInput(wire: Record<string, unknown>, path: string): AuditedInput {
   const nullifier = hash(wire["nullifier"], `${path}.nullifier`);
   const candidates = wire["candidates"];
+  const unseenPrefix = wire["unseenPrefix"];
+  const unseenHash = wire["unseenHash"];
+  if (!absent(unseenHash)) {
+    if (!absent(unseenPrefix) || !absent(candidates) || !absent(wire["opening"]))
+      throw invalid(`${path}.unseenHash`);
+    return Object.freeze({
+      nullifier,
+      opening: Object.freeze({ kind: "unseenHash", hash: hash(unseenHash, `${path}.unseenHash`) }),
+    });
+  }
+  if (!absent(unseenPrefix)) {
+    const prefix = inputPrefixFromBytes(base64(unseenPrefix, `${path}.unseenPrefix`));
+    if (prefix === undefined || !absent(candidates) || !absent(wire["opening"]))
+      throw invalid(`${path}.unseenPrefix`);
+    return Object.freeze({ nullifier, opening: Object.freeze({ kind: "unseen", prefix }) });
+  }
   if (!absent(candidates)) {
     const listed = list(candidates, `${path}.candidates`).map((candidate, index) =>
       hash(candidate, `${path}.candidates[${index}]`),
@@ -1979,7 +2035,7 @@ export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Objec
   "disclosure",
   "recipientKey",
   "commitment",
-  "escrowUnknown",
+  "unknownAsset",
 ]);
 
 function payloadErrorKind(value: unknown, path: string): OutputPayloadErrorKind {

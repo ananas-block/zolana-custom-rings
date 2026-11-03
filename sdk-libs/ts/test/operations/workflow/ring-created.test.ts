@@ -26,6 +26,7 @@ import {
   ConfirmedDeposit,
   type TransactionOrigin,
 } from "../../../src/protocol/transaction/origin.js";
+import { RingError } from "../../../src/protocol/error.js";
 import { ringAuditReader } from "../../helpers/clients.js";
 import { transactionsPage } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
@@ -199,14 +200,47 @@ describe("createdRingUtxos", () => {
       });
       expect(scanned).toEqual({
         utxos: deposit.created,
+        skipped: [],
+      });
+      const failing = (code: "RING_ORIGIN_DECODE" | "RING_ORIGIN_UNAVAILABLE") =>
+        scanCreatedRingUtxos({
+          client: ringAuditReader({
+            getShieldedTransactionsByTags: async () =>
+              transactionsPage({
+                transactions: [transfer, indexed],
+                scannedThrough: Uint8Array.of(1),
+              }),
+          }),
+          ringProgramId: RING,
+          auditor,
+          origin: {
+            confirmedTransaction: async (row, ring) => {
+              if (row.txSignature === transfer.txSignature) throw new RingError(code);
+              return origin.confirmedTransaction(row, ring);
+            },
+          },
+        });
+      await expect(failing("RING_ORIGIN_DECODE")).resolves.toEqual({
+        utxos: deposit.created,
+        skipped: [
+          {
+            slot: transfer.slot,
+            signature: transfer.txSignature,
+            eventIndex: transfer.eventIndex,
+            reason: "invalidAuditData",
+          },
+        ],
+      });
+      await expect(failing("RING_ORIGIN_UNAVAILABLE")).rejects.toMatchObject({
+        code: "RING_ORIGIN_UNAVAILABLE",
       });
       const foreign = await scan({
         transactions: [{ ...indexed, ringProgramId: address("11111111111111111111111111111111") }],
         scannedThrough: Uint8Array.of(1),
       });
-      expect(foreign).toEqual({ utxos: [] });
+      expect(foreign).toEqual({ utxos: [], skipped: [] });
       const capped = await scan({ transactions: [transfer], nextCursor: Uint8Array.of(7) }, 1);
-      expect(capped).toEqual({ utxos: [], nextCursor: Uint8Array.of(7) });
+      expect(capped).toEqual({ utxos: [], skipped: [], nextCursor: Uint8Array.of(7) });
       await expect(
         scan({ transactions: [], scannedThrough: Uint8Array.of(1) }, 0),
       ).rejects.toMatchObject({

@@ -30,7 +30,9 @@ import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { fetchBoundRoot, type BoundRoot } from "../../rpc/registered-record.js";
 import { RingError } from "../../protocol/error.js";
+import { RowOrigins } from "./row-origins.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
+import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   openRingMergeDisclosure,
   type RingMergeDisclosure,
@@ -82,6 +84,8 @@ export interface UnresolvedRingMerge {
 export interface RingMergeAuditPage {
   readonly opened: readonly AuditedRingMerge[];
   readonly unresolved: readonly UnresolvedRingMerge[];
+  /** Rows that do not decode or fail their disclosure, each opens nothing. */
+  readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the history scan. */
   readonly nextCursor?: Uint8Array;
 }
@@ -121,13 +125,23 @@ export async function auditRingMerges(
     { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
     context,
   );
-  const history = await confirmedMerges(input, limits, context);
+  const rows = new RowOrigins(
+    input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+    input.ringProgramId,
+    context,
+  );
+  const history = await confirmedMerges(input, rows, limits, context);
   let attempts = 0;
   const opened: AuditedRingMerge[] = [];
   const pending: PendingMerge[] = [];
   for (const merge of history.merges) {
-    if (merge.disclosure === undefined) pending.push({ merge });
-    else opened.push(openDisclosed(input, merge, merge.disclosure));
+    const { disclosure, transaction } = merge;
+    if (disclosure === undefined) {
+      pending.push({ merge });
+      continue;
+    }
+    const disclosed = rows.attempt(transaction, () => openDisclosed(input, merge, disclosure));
+    if (disclosed !== undefined) opened.push(disclosed);
   }
   if (pending.length > 0)
     await scanRecords(input, tip, maxMemberPages, context, (member, key, ownerPublicKey) => {
@@ -161,6 +175,7 @@ export async function auditRingMerges(
   return Object.freeze({
     opened: Object.freeze(opened),
     unresolved: Object.freeze(unresolved),
+    skipped: Object.freeze(rows.skipped),
     ...(history.nextCursor === undefined ? {} : { nextCursor: history.nextCursor }),
   });
 }
@@ -215,9 +230,9 @@ async function confirmedMerges(
   input: Readonly<{
     client: RingMergeAuditReader;
     ringProgramId: Address;
-    origin?: TransactionOrigin;
     cursor?: Uint8Array;
   }>,
+  rows: RowOrigins,
   limits: ScanLimits,
   context: RequestContext | undefined,
 ): Promise<{ merges: readonly ConfirmedMerge[]; nextCursor?: Uint8Array }> {
@@ -227,7 +242,7 @@ async function confirmedMerges(
     {
       client: input.client,
       ringProgramId: input.ringProgramId,
-      origin: input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+      rows,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limits,
     },
@@ -235,7 +250,7 @@ async function confirmedMerges(
       if (confirmed.kind !== "merge") return;
       const event = `${confirmed.transaction.txSignature}:${String(eventIndex)}`;
       if (seen.has(event))
-        throw new RingError("RING_ORIGIN_DECODE", { details: { reason: "duplicate merge" } });
+        throw new RingError("RING_RPC", { details: { reason: "duplicate merge" } });
       seen.add(event);
       merges.push(confirmedMerge(confirmed.transaction, eventIndex, confirmed.disclosure));
     },

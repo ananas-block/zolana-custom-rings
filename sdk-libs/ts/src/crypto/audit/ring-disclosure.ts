@@ -143,6 +143,13 @@ export function inputPrefix(hash: Bytes32): InputPrefix | undefined {
   return prefix === 0n ? undefined : (prefix as InputPrefix);
 }
 
+/** `undefined` for bytes off the length, for zero and past the prefix of any canonical hash. */
+export function inputPrefixFromBytes(bytes: Uint8Array): InputPrefix | undefined {
+  if (bytes.length !== INPUT_PREFIX_BYTES) return undefined;
+  const prefix = bytesToBigInt(bytes);
+  return prefix === 0n || prefix > MAX_INPUT_PREFIX ? undefined : (prefix as InputPrefix);
+}
+
 /** Refuses a disclosure off its layout before any ephemeral key exists. */
 export function sealRingDisclosure(
   input: Readonly<{
@@ -377,17 +384,13 @@ function readExit(
   });
 }
 
-/** A hidden dummy is the zero record, a zero key with any other byte set is refused. */
+/** A hidden dummy is the all zero record, a live record may name a zero nullifier key. */
 function readAnonymousRecord(bytes: Uint8Array): AnonymousOutputOpening {
-  const nullifierPk = key(bytes, 2 * KEY_BYTES + AMOUNT_BYTES, "nullifierPk");
-  if (isZero(nullifierPk)) {
-    if (!isZero(bytes)) throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { name: "record" });
-    return DUMMY;
-  }
+  if (isZero(bytes)) return DUMMY;
   return Object.freeze({
     kind: "ring",
     ownerKey: key(bytes, 0, "ownerKey"),
-    nullifierPk: canonical(nullifierPk, "nullifierPk"),
+    nullifierPk: canonical(key(bytes, 2 * KEY_BYTES + AMOUNT_BYTES, "nullifierPk"), "nullifierPk"),
     asset: canonical(key(bytes, KEY_BYTES, "asset"), "asset"),
     amount: bytesToBigInt(bytes.subarray(2 * KEY_BYTES, 2 * KEY_BYTES + AMOUNT_BYTES)),
   });

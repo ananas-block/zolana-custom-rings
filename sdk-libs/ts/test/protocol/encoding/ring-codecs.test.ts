@@ -1269,6 +1269,136 @@ describe("ring read request", () => {
     });
   });
 
+  it("keeps an unseen input with its prefix and apart from a dummy, on the page and in the sender's view", async () => {
+    const wire = rustItem("decrypted_in_proof_page.json");
+    const prefix = BigInt(`0x${"2a".repeat(16)}`);
+    const openings = [{ kind: "unseen", prefix }, { kind: "dummy" }];
+    const item = await readItem(wire);
+    expect(item.sender).toBeUndefined();
+    expect(item.inputs.map((input) => input.opening)).toEqual(openings);
+    expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
+    const { slot, txSignature, eventIndex, inputs, outputs, payloadErrors, withdrawals } = wire;
+    const view = { role: "sender", inputs, outputs, payloadErrors, withdrawals };
+    const { fetch } = capturingFetch({
+      ...rustPage("decrypted_in_proof_page.json"),
+      value: { items: [{ slot, txSignature, eventIndex, view }], cursor: null },
+    });
+    const activity = await new RingRpc("http://ring.example", {
+      fetch,
+      allowInsecureHttp: true,
+    }).getWalletActivity({
+      target: RING_TARGET,
+      signer: await anyReader(),
+      wallet: addressOf(13),
+    });
+    const sent = activity.items[0]!.view;
+    if (sent.role !== "sender") throw new Error("a sender view");
+    expect(sent.inputs.map((input) => input.opening)).toEqual(openings);
+  });
+
+  it.each<readonly [string, (input: Record<string, unknown>) => void]>([
+    ["a prefix off its length", (input) => (input["unseenPrefix"] = "Kioq")],
+    ["a zero prefix", (input) => (input["unseenPrefix"] = Buffer.alloc(16).toString("base64"))],
+    [
+      "a prefix no canonical hash has",
+      (input) => (input["unseenPrefix"] = Buffer.alloc(16, 0xff).toString("base64")),
+    ],
+    ["an unseen input with an opening", (input) => (input["opening"] = { amount: 1 })],
+    ["an unseen input with candidates", (input) => (input["candidates"] = [addressOf(1)])],
+  ])("refuses %s", async (_name, edit) => {
+    const item = rustItem("decrypted_in_proof_page.json");
+    edit((item["inputs"] as Record<string, unknown>[])[0]!);
+    await expect(readItem(item)).rejects.toMatchObject({
+      code: "RING_RPC",
+      details: { path: "inputs[0].unseenPrefix" },
+    });
+  });
+
+  it("reads an unseen first note by its hash with no sender", async () => {
+    const item = await readItem(rustItem("decrypted_unseen_hash_page.json"));
+    expect(item.sender).toBeUndefined();
+    expect(item.inputs.map((input) => input.opening)).toEqual([
+      { kind: "unseenHash", hash: filled(0x2b, 32) },
+      { kind: "unseen", prefix: BigInt(`0x${"2a".repeat(16)}`) },
+    ]);
+    expect(item.outputs[0]?.opening).toMatchObject({
+      kind: "ring",
+      ownerTag: { kind: "view", tag: filled(9, 32) },
+    });
+  });
+
+  it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
+    [
+      "an unseen hash past the first input",
+      (item) => {
+        const inputs = item["inputs"] as Record<string, unknown>[];
+        delete inputs[1]!["unseenPrefix"];
+        inputs[1]!["unseenHash"] = addressOf(1);
+      },
+      "inputs",
+    ],
+    [
+      "an unseen hash beside a sender",
+      (item) => (item["sender"] = { ownerKey: addressOf(2) }),
+      "inputs",
+    ],
+    [
+      "an unseen hash with an opening",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["opening"] = { amount: 1 }),
+      "inputs[0].unseenHash",
+    ],
+  ])("refuses %s", async (_name, edit, path) => {
+    const item = rustItem("decrypted_unseen_hash_page.json");
+    edit(item);
+    await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
+  });
+
+  it("reads an escrow pending slot with its proven fields", async () => {
+    const item = await readItem(rustItem("decrypted_escrow_pending_page.json"));
+    expect(item.payloadErrors).toEqual([]);
+    expect(item.outputs.map((output) => output.opening)).toEqual([
+      {
+        kind: "escrowPending",
+        ownerKey: filled(0x20, 32),
+        amount: 32n,
+        blinding: filled(0x21, 32),
+        slot: { kind: "ring", recipientU: filled(0x21, 32) },
+      },
+      {
+        kind: "escrowPending",
+        ownerKey: filled(0x30, 32),
+        amount: 48n,
+        blinding: filled(0x31, 32),
+        slot: { kind: "exit", asset: filled(0x31, 32), mint: addressOf(4) },
+      },
+      { kind: "dummy" },
+    ]);
+  });
+
+  it.each<readonly [string, (output: Record<string, unknown>) => void]>([
+    ["no recipient and no asset", (output) => delete output["recipientU"]],
+    [
+      "a recipient and an asset",
+      (output) => ((output["escrowPending"] as Record<string, unknown>)["asset"] = addressOf(1)),
+    ],
+  ])("refuses an escrow pending slot with %s", async (_name, edit) => {
+    const item = rustItem("decrypted_escrow_pending_page.json");
+    edit((item["outputs"] as Record<string, unknown>[])[0]!);
+    await expect(readItem(item)).rejects.toMatchObject({
+      code: "RING_RPC",
+      details: { path: "outputs[0].escrowPending" },
+    });
+  });
+
+  it("refuses a page that discloses inputs for only some published nullifiers", async () => {
+    const item = rustItem("decrypted_in_proof_page.json");
+    item["inputs"] = (item["inputs"] as unknown[]).slice(1);
+    await expect(readItem(item)).rejects.toMatchObject({
+      code: "RING_RPC",
+      details: { path: "inputs" },
+    });
+  });
+
   it("reads a sender whose spent UTXO 0 is a deposit and refuses an output UTXO without its key", async () => {
     const deposited = rustItem("decrypted_anonymous_page.json");
     delete (deposited["sender"] as Record<string, unknown>)["nullifierPk"];
@@ -1314,7 +1444,7 @@ describe("ring read request", () => {
       (item) => (outputAt(item, 2)["kind"] = "padding"),
       "outputs[2].kind",
     ],
-    ["a tag without a hidden sender", (item) => delete item["sender"], "inputs"],
+    ["a tag without a hidden sender", (item) => delete item["sender"], "outputs.tag"],
     [
       "an input per published nullifier missing",
       (item) => (item["inputs"] = (item["inputs"] as unknown[]).slice(1)),
