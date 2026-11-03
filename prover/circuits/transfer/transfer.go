@@ -36,13 +36,22 @@ type screenedPolicy struct {
 	policy.Policy
 }
 
-func (p *screenedPolicy) screen(api frontend.API, rc frontend.Rangechecker, rail policy.Rail, sender frontend.Variable, slots []shared.Output) {
+func (p *screenedPolicy) gates(api frontend.API, rail policy.Rail) policy.Gates {
 	// Exempt switches assertExemption and the own pool lookups the thresholds read.
 	api.AssertIsBoolean(p.Exempt)
 	rail.Exempt = p.Exempt
-	// Screen returns zero while Outflow is off, approval_required then reads the outflow's verdict alone.
-	api.AssertIsEqual(p.ApprovalRequired, p.Screen(api, rc, rail, sender, slots))
+	return rail.Gates(api, p.PolicyHash)
 }
+
+func (p *screenedPolicy) screen(api frontend.API, rc frontend.Rangechecker, g policy.Gates, spend policy.Spend, slots []shared.Output) policy.Screening {
+	screening := p.Screen(api, rc, g, spend, slots)
+	// Screen returns zero while Outflow is off, approval_required then reads the outflow's verdict alone.
+	api.AssertIsEqual(p.ApprovalRequired, screening.Approval)
+	return screening
+}
+
+// screenedOwners is the sender rows of the confidential and commitment keys, a policy refuses more distinct owners.
+const screenedOwners = 4
 
 // transactionBinding is SPP's private transaction hash and its blinding, the proof reopens the hash over the slots the audit opened.
 type transactionBinding struct {

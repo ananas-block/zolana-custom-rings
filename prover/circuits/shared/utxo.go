@@ -54,6 +54,19 @@ func (w UtxoWires) Open(api frontend.API) Output {
 	return Output{UtxoWires: w, Hash: hash, Utxo: utxo, Ring: ring, Exit: api.Sub(utxo, ring)}
 }
 
+// OpenInput opens a spent slot, no address input and a dummy that carries nothing but its blinding.
+func (w UtxoWires) OpenInput(api frontend.API) Output {
+	opened := w.Open(api)
+	dummy := api.IsZero(api.Sub(w.Domain, transaction.DummyDomain))
+	api.AssertIsEqual(api.Add(opened.Utxo, dummy), 1)
+	// Open zeroes a dummy's owner hash before the hash reads it.
+	transaction.AssertWhen(api, dummy, transaction.UtxoCircuitFields{
+		Domain: w.Domain, Owner: 0, Asset: w.Asset, Amount: w.Amount, Blinding: w.Blinding,
+		DataHash: w.DataHash, RingDataHash: w.RingDataHash, RingProgramID: w.RingProgramID,
+	}.CheckDummy(api))
+	return opened
+}
+
 // UtxoHashes is utxo * hash per slot, the output list private_tx_hash chains, zero on a dummy.
 func UtxoHashes(api frontend.API, outputs []Output) []frontend.Variable {
 	hashes := make([]frontend.Variable, len(outputs))

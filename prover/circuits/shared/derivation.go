@@ -9,6 +9,8 @@
 package shared
 
 import (
+	"math/big"
+
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -41,10 +43,16 @@ const (
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
 	TransferStatementDomain = 0x43525458
+	// AuthorizedAddressDomain = "CRAD"
+	AuthorizedAddressDomain = 0x43524144
+	// RecipientTagDomain = "CRRT"
+	RecipientTagDomain = 0x43525254
+	// SenderTagDomain = "CRST"
+	SenderTagDomain = 0x43525354
 )
 
 // TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
-const TransferStatementVersion = 2
+const TransferStatementVersion = 3
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 const PolicyStatementVersion = 4
@@ -68,6 +76,10 @@ const (
 	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
 	DepositEncInfo = "CRING/dep1"
 	MergeEncInfo   = "CRING/mrg1"
+	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
+	RecipientBodyEncInfo = "CRING/rcp1"
+	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
+	SenderBundleEncInfo = "CRING/snd1"
 )
 
 const (
@@ -75,7 +87,22 @@ const (
 	BodyLen = 104
 	// EscrowBodyLen mirrors ESCROWED_DELIVERED_BODY_LEN.
 	EscrowBodyLen = 72
+	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
+	RecipientBodyLen = 72
+	// SenderBundleHeadLen mirrors SENDER_BUNDLE_HEAD_LEN, mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed.
+	SenderBundleHeadLen = 80
 )
+
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a note under it waives only the escrow requirement.
+var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
+
+// SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
+var SolAssetField, _ = new(big.Int).SetString("2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864", 16)
+
+// EscrowOwed is escrowed while the key is no ZeroNullifierPk, a program-owned note escrows nothing and still answers every other rule.
+func EscrowOwed(api frontend.API, escrowed, nullifierPk frontend.Variable) frontend.Variable {
+	return api.Mul(escrowed, api.Sub(1, api.IsZero(api.Sub(nullifierPk, ZeroNullifierPk))))
+}
 
 // DeliveredSlot is a delivered slot secret preimage, Agreement = pack_be(X25519(tx_viewing_sk, u)) and each key pack_be(0x04 ‖ u).
 type DeliveredSlot struct {

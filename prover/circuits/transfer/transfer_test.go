@@ -12,11 +12,10 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 var (
-	confidential2 = transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 4}
+	confidential2 = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4}
 	anonymous2    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
 	entry2        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
 )
@@ -61,16 +60,6 @@ func TestAnonymousRailsSolve(t *testing.T) {
 	}
 }
 
-// The signer rail's envelope holds tx_viewing_sk alone at any published count.
-func TestSignerRailEnvelopeIgnoresTheInputCount(t *testing.T) {
-	for _, count := range []int{1, 2, confidential2.Inputs} {
-		b := ringtransfer.Signed(confidential2).Build(t)
-		b.Audit.InputCount, b.Circuit.InputCount = count, count
-		b.Rebind(t)
-		requireSolved(t, b.Circuit)
-	}
-}
-
 // Every shape of the catalog solves its plain honest witness.
 func TestEveryShapeSolves(t *testing.T) {
 	for _, shape := range transfer.ConfidentialShapes {
@@ -89,7 +78,7 @@ func TestEveryShapeSolves(t *testing.T) {
 
 // A wide key screens as many distinct withdrawal owners as it has legs.
 func TestWideWithdrawalKeyScreensEveryLeg(t *testing.T) {
-	shape := transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 32}
+	shape := transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 32}
 	w := ringtransfer.Signed(shape)
 	gross := uint64(0)
 	for i := range shape.Withdrawals {
@@ -136,27 +125,34 @@ var confidentialRefusals = []confidentialRefusal{
 		b.Inputs[1].OwnerPkHash = big.NewInt(0x0ddd)
 		b.Circuit.Inputs[1] = b.Inputs[1].Wires()
 		b.Rehash(t)
-	}, in: "audit.spentBySender"},
-	{name: "signer rail opening an input", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, witness: func(t testing.TB, b ringtransfer.Built) {
-		b.Inputs[0] = ringaudit.SpentUtxo(t, b.Sender, spptest.MustNullifierPk(t, big.NewInt(7)), b.Audit.RingProgramID, 100, 51)
-		b.Circuit.Inputs[0] = b.Inputs[0].Wires()
+	}, in: "transfer.InputSection.AssertOwnedBy"},
+	{name: "signer input of an owner outside the set", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, witness: func(t testing.TB, b ringtransfer.Built) {
+		b.Inputs[1].OwnerPkHash = big.NewInt(0x0ddd)
+		b.Circuit.Inputs[1] = b.Inputs[1].Wires()
 		b.Rehash(t)
-	}, in: "audit.spentBySender"},
+	}, in: "transfer.(*ConfidentialTransferCircuit).spendInputs"},
+	{name: "signer input of another ring", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, witness: func(t testing.TB, b ringtransfer.Built) {
+		b.Inputs[1].RingProgramID = big.NewInt(0)
+		b.Circuit.Inputs[1] = b.Inputs[1].Wires()
+		b.Rehash(t)
+	}, in: "transfer.InputSection.AssertRingNotes"},
 	// A spent note past the published count stays out of the auditor's evidence.
 	{name: "in-proof UTXO at the input count", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.InProof) }, witness: func(t testing.TB, b ringtransfer.Built) {
 		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
 		b.Rebind(t)
-	}, in: "audit.spentBySender"},
+	}, in: "transfer.OpenInputs"},
 	{name: "delegate move with a second member's input", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.Delegate) }, witness: func(t testing.TB, b ringtransfer.Built) {
 		b.Inputs[1].OwnerPkHash = big.NewInt(0x0ddd)
 		b.Circuit.Inputs[1] = b.Inputs[1].Wires()
 		b.Rehash(t)
-	}, in: "audit.spentBySender"},
+	}, in: "transfer.InputSection.AssertOwnedBy"},
 	{name: "delegate move without a spent input", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.Delegate) }, witness: func(t testing.TB, b ringtransfer.Built) {
-		b.Inputs[0] = ringaudit.SpareInput(0)
-		b.Circuit.Inputs[0] = b.Inputs[0].Wires()
+		for i := range 2 {
+			b.Inputs[i] = ringaudit.SpareInput(i)
+			b.Circuit.Inputs[i] = b.Inputs[i].Wires()
+		}
 		b.Rehash(t)
-	}, in: "audit.spentBySender"},
+	}, in: "transfer.InputSection.AssertOwnedBy"},
 	{name: "delegate with the approval bit", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.Delegate) }, world: func(w *ringtransfer.Confidential) { w.ApprovalRequired = true }, in: "transfer.(*ConfidentialTransferCircuit).Define"},
 	{name: "delegate with a statement sender", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.Delegate) }, witness: func(t testing.TB, b ringtransfer.Built) {
 		b.Circuit.Sender = b.Sender
@@ -244,12 +240,12 @@ var anonymousRefusals = []anonymousRefusal{
 		b.Circuit.Inputs[1] = b.Audit.Inputs[1].Wires()
 		b.Circuit.PrivateTxHash = b.Audit.PrivateTxHash(t)
 		b.Rebind(t)
-	}, in: "audit.Spend"},
+	}, in: "transfer.InputSection.AssertRingNotes"},
 	// A spent note past the published count stays out of the auditor's evidence.
 	{name: "hidden UTXO at the input count", honest: func(testing.TB) ringtransfer.Anonymous { return ringtransfer.Hidden(anonymous2) }, witness: func(t testing.TB, b ringtransfer.BuiltAnonymous) {
 		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
 		b.Rebind(t)
-	}, in: "audit.spentBySender"},
+	}, in: "transfer.OpenInputs"},
 	{name: "every output a dummy under an unrelated envelope key", honest: hiddenFullWithdrawal, witness: func(t testing.TB, b ringtransfer.BuiltAnonymous) {
 		b.Audit.Transfer = b.Audit.WithUnrelatedKey(t)
 		sk := b.Audit.Keys.TxViewingSk()
