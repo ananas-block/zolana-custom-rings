@@ -2,18 +2,18 @@
 
 use custom_ring_interface::{
     AnonymousAuditKey, AnonymousRecord, AuditEvidence, AuditKey, AuditLayout, AuditStreamLayout,
-    AuditorMessage, EntryInput, ExitRecord, RingOutput,
+    AuditorMessage, EntryInput, ExitRecord, RingOutput, RECIPIENT_BODY_LEN,
 };
 use spr_event::MessageData;
-use spr_hasher::primitives::hash_bytes;
+use spr_hasher::primitives::{hash_bytes, pack_be};
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_transaction::{
     instructions::transact::SppProofInputs, utxo::SppProofInputUtxo, SppProofOutputUtxo,
     TransactionError,
 };
 use zeroize::Zeroizing;
-use zolana_ring_client::{commitment_evidence, prefix_evidence, AuditStreamSeal, OutputRecord};
-use zolana_ring_transaction::{PublishedSlot, RingOutputRail};
+use zolana_ring_client::{input_hash_evidence, AuditStreamSeal, OutputRecord};
+use zolana_ring_transaction::{AnonymousSlot, PublishedSlot, RingOutputRail};
 
 use crate::{
     request::{owner_key, AnonymousOutput, AuditParams, DeliveredOutput, Opening},
@@ -81,18 +81,10 @@ impl AuditSeal<'_> {
                 .iter()
                 .filter(|input| !input.is_compact())
         };
-        let hashes = || -> Vec<_> { published().map(published_hash).collect() };
         Ok(match self.layout.key {
-            AuditKey::Confidential {
-                input_prefixes: false,
-                ..
-            } => AuditEvidence::None,
-            AuditKey::Confidential {
-                input_prefixes: true,
-                ..
-            } => prefix_evidence(&hashes())?,
-            AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
-                commitment_evidence(&hashes())?
+            AuditKey::Confidential { .. }
+            | AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
+                input_hash_evidence(&published().map(published_hash).collect::<Vec<_>>())?
             }
             AuditKey::Anonymous(AnonymousAuditKey::Entry { .. }) => AuditEvidence::Entry {
                 sender_key: owner_key(&self.sender.signing_pubkey)?,
@@ -101,6 +93,7 @@ impl AuditSeal<'_> {
                     .map(|input| match input.is_dummy() {
                         true => Ok(EntryInput::default()),
                         false => Ok(EntryInput {
+                            hash: input.private_tx_input_hash(),
                             amount: input.utxo.amount,
                             asset: hash_bytes(input.utxo.asset.asset.as_array())?,
                             blinding: input.utxo.blinding,
@@ -158,6 +151,13 @@ impl SealedAudit {
     }
 }
 
+/// A slot's bound address, zero on an exit, a dummy and an omitted slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SlotAddress {
+    pub viewing_u: [u8; 32],
+    pub revision: u64,
+}
+
 pub(super) struct AuditSection<'a> {
     pub rail: &'a RingOutputRail,
     pub sealed: &'a SealedAudit,
@@ -185,24 +185,69 @@ impl AuditSection<'_> {
         })
     }
 
+    /// The key's `N` slots, an omitted one carries no UTXO and a zero body.
     pub fn delivered_outputs(&self) -> Result<Vec<DeliveredOutput>, RingError> {
         let tree = self.inputs.output_tree_id;
         let body_len = self.body_len;
-        self.published
+        self.inputs
+            .output_utxos
             .iter()
-            .map(|slot| delivered_output(slot, tree, body_len))
+            .enumerate()
+            .map(|(index, output)| match self.published.get(index) {
+                Some(slot) => delivered_output(slot, tree, body_len),
+                None => Ok(DeliveredOutput {
+                    output: Opening::output(output, tree)?,
+                    recipient_key: [0; 32],
+                    owner_key: [0; 32],
+                    body: vec![0; body_len],
+                }),
+            })
             .collect()
     }
 
-    pub fn anonymous_outputs(&self) -> Result<Vec<AnonymousOutput>, RingError> {
+    /// The key's `N` slots, `addresses` one per slot and default off a recipient.
+    pub fn anonymous_outputs(
+        &self,
+        addresses: &[SlotAddress],
+    ) -> Result<Vec<AnonymousOutput>, RingError> {
         let tree = self.inputs.output_tree_id;
-        self.published
+        self.inputs
+            .output_utxos
             .iter()
-            .map(|slot| anonymous_output(slot, tree))
+            .enumerate()
+            .map(|(index, output)| {
+                let address = addresses.get(index).copied().unwrap_or_default();
+                let published = self.published.get(index);
+                let body = match published.map(|slot| slot.wire) {
+                    Some(RingOutput::Anonymous {
+                        body: Some(body), ..
+                    }) => body.to_vec(),
+                    _ => vec![0; RECIPIENT_BODY_LEN],
+                };
+                // An exit's owner tag is no view tag.
+                let tag = match published.map(|slot| slot.wire) {
+                    Some(RingOutput::Anonymous { tag, .. }) => *tag,
+                    _ => [0; 32],
+                };
+                let tag_preimage = match published.and_then(|slot| slot.anonymous) {
+                    Some(AnonymousSlot::Dummy { preimage }) => preimage,
+                    _ => [0; 32],
+                };
+                Ok(AnonymousOutput {
+                    output: Opening::output(output, tree)?,
+                    owner_key: slot_owner_key(output)?,
+                    recipient_key: address.viewing_u,
+                    address_revision: address.revision,
+                    mint_chunks: pack_be::<32, 2>(output.asset.asset.as_array()),
+                    body,
+                    tag,
+                    tag_preimage,
+                })
+            })
             .collect()
     }
 
-    /// The spent notes' openings in SPP order, zero past them to the key's input class.
+    /// The spent notes' openings in SPP order, dummies past them to the key's input class.
     pub fn input_openings(&self, class: usize) -> Result<Vec<Opening>, RingError> {
         let mut openings = self
             .inputs
@@ -211,7 +256,7 @@ impl AuditSection<'_> {
             .filter(|input| !input.is_compact())
             .map(Opening::input)
             .collect::<Result<Vec<_>, _>>()?;
-        openings.resize(class, Opening::default());
+        openings.resize(class, Opening::input_padding());
         Ok(openings)
     }
 
@@ -278,14 +323,5 @@ fn delivered_output(
             false => [0; 32],
         },
         body,
-    })
-}
-
-/// An exit's owner key stays out of its record, a dummy names none.
-fn anonymous_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<AnonymousOutput, RingError> {
-    let output = slot.output;
-    Ok(AnonymousOutput {
-        output: Opening::output(output, tree)?,
-        owner_key: slot_owner_key(output)?,
     })
 }

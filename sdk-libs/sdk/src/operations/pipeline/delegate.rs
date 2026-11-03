@@ -88,6 +88,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
         Self {
             ring: input.ring,
             co_signer: None,
+            priority_fee: None,
             rail: Delegated {
                 delegate: input.delegate,
                 payer: input.payer,
@@ -269,6 +270,7 @@ impl Delegated<'_> {
             rail,
             sender: self.source,
             authority: TransferAuthority {
+                co_owners: Vec::new(),
                 owner: Some(self.source_key.clone()),
             },
             owner_signers: Vec::new(),

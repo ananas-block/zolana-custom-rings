@@ -11,6 +11,7 @@ use spr_client::{
     AsyncRpc, AsyncWitnessReader, ClientError, OwnerAuthorization, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
 };
+use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::instruction::{
     instruction_data::transact::Bsb22Commitment, CircuitId, TreeContext,
 };
@@ -71,6 +72,8 @@ enum SppInputs {
 pub(super) struct SppWitness<'a> {
     pub ring: Address,
     pub rail: SppRail<'a>,
+    /// The public co-owners on SPP's anonymous rail.
+    pub owner_signers: &'a [Address],
     pub inputs: &'a SppProofInputs,
     pub trees: &'a SpendTrees,
     pub authority: &'a dyn ProofAuthority,
@@ -122,8 +125,8 @@ impl SppWitness<'_> {
                     output_tree_id: inputs.output_tree_id,
                     external_data: inputs.external_data.clone(),
                     public_transfers: inputs.public_transfers()?,
-                    // The hidden owner signs inside the proof, every public signer slot is zero.
-                    signer_pk_hashes: vec![[0; 32]; shape.signer_width()],
+                    // The hidden owner signs inside the proof, public co-owners lead the run.
+                    signer_pk_hashes: co_owner_hashes(self.owner_signers, shape.signer_width())?,
                     allow_dummy_inputs,
                     owner,
                     ring_program_id: Some(self.ring),
@@ -193,6 +196,15 @@ impl SppWitness<'_> {
         self.authority.complete_inputs(&mut transfer.inputs)?;
         Ok(Spp::Complete(Box::new(complete)))
     }
+}
+
+fn co_owner_hashes(owners: &[Address], width: usize) -> Result<Vec<[u8; 32]>, RingError> {
+    let mut hashes = owners
+        .iter()
+        .map(|owner| Ok(solana_owner_identity(owner.as_array())?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    hashes.resize(width, [0; 32]);
+    Ok(hashes)
 }
 
 impl Spp {

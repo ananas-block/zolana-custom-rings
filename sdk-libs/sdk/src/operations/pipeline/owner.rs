@@ -1,7 +1,8 @@
 //! The confidential rail.
 
-use custom_ring_interface::{CustomRingError, RingMode, RingRail};
+use custom_ring_interface::{key_catalog::SCREENED_OWNERS, CustomRingError, RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
+use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
@@ -10,8 +11,9 @@ use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    canonical_shape, pad_under_rail, sealed, shape_keyed, transaction_key, DeliveredRail, Rail,
-    RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
+    anonymous::CoOwner, canonical_shape, pad_under_rail, sealed, shape_keyed, transaction_key,
+    CoOwnerKey, DeliveredRail, Rail, RailKind, RingSender, RingTransfer, Spend, Staged,
+    TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -24,6 +26,8 @@ pub struct Owner<'a> {
     pub(super) shape: Option<Shape>,
     pub(super) in_proof_owner: Option<&'a SigningKey>,
     pub(super) token_account_setup: Vec<TokenAccountSetup>,
+    /// The other owners of a signer rail spend, each signs the transaction.
+    pub(super) co_owners: Vec<CoOwner<'a>>,
 }
 
 pub struct CustomRingTransferInput<'a> {
@@ -50,6 +54,7 @@ impl<'a> RingTransfer<Owner<'a>> {
         Self {
             ring: input.ring,
             co_signer: None,
+            priority_fee: None,
             rail: Owner {
                 sender: input.sender,
                 nullifier_key: input.nullifier_key,
@@ -58,8 +63,16 @@ impl<'a> RingTransfer<Owner<'a>> {
                 shape: None,
                 in_proof_owner: None,
                 token_account_setup: Vec::new(),
+                co_owners: Vec::new(),
             },
         }
+    }
+
+    /// Another owner of the spent notes, it signs the transaction and one prover holds its secret.
+    #[must_use = "use the updated transfer"]
+    pub fn with_co_owner(mut self, co_owner: CoOwner<'a>) -> Self {
+        self.rail.co_owners.push(co_owner);
+        self
     }
 
     /// The sender's signing key signs inside the proof, any fee payer sends the transaction.
@@ -176,17 +189,31 @@ impl Owner<'_> {
             }
             None => (proof_inputs.owner_signer_pubkeys()?, Spend::Owner),
         };
-        if config.has_policy && self.in_proof_owner.is_none() && owner_signers.len() != 1 {
+        // A policy needs a screened owner, past `Q` owners no key screens them all.
+        if config.has_policy
+            && self.in_proof_owner.is_none()
+            && !(1..=SCREENED_OWNERS).contains(&owner_signers.len())
+        {
             return Err(CustomRingError::OwnerSignerCount.into());
         }
         Ok(Staged {
+            authority: TransferAuthority {
+                owner: self.nullifier_key.cloned(),
+                co_owners: self
+                    .co_owners
+                    .iter()
+                    .map(|co_owner| {
+                        Ok(CoOwnerKey {
+                            owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
+                            key: co_owner.nullifier_key.clone(),
+                        })
+                    })
+                    .collect::<Result<_, RingError>>()?,
+            },
             owner_signers,
             proof_inputs,
             rail,
             sender,
-            authority: TransferAuthority {
-                owner: self.nullifier_key.cloned(),
-            },
             interface_transfer_accounts: self.interface_transfer_accounts.clone(),
             spend,
             presealed: None,

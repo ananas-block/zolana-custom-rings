@@ -1,18 +1,19 @@
 //! The one ring proof of a transfer, one request over the audit and policy sections.
 
+use custom_ring_interface::ciphertext_digest;
 use custom_ring_interface::{
     delivered_body_len, key_catalog::RingCircuit, CustomRingProof, RingRail,
 };
 use serde::Serialize;
 use spr_client::AsyncRpc;
-use spr_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
+use spr_hasher::primitives::solana_owner_identity;
 use spr_transaction::TransactionError;
 
 use super::{audit::AuditSection, policy::PolicyProving, Assembled};
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
-    request::{AnonymousTransfer, ConfidentialTransfer, Opening, TransferParams},
+    request::{AnonymousTransfer, ConfidentialTransfer, TransferParams},
     RingError,
 };
 
@@ -50,12 +51,20 @@ impl Assembled {
                 got: frame.published_inputs,
                 max: usize::from(u8::MAX),
             })?;
+        let too_many = |got: usize| TransactionError::TooManyInputs {
+            got,
+            max: usize::from(u8::MAX),
+        };
+        let owner_run = &frame.accounts.owner_signers;
         let transfer = TransferParams {
             public_input_hash: self.public_input_hash,
             audit: audit.params()?,
             exempt: frame.policy.exempt,
             approval_required: frame.policy.approval_required,
+            output_count: u8::try_from(parts.outputs.len())
+                .map_err(|_| too_many(parts.outputs.len()))?,
             input_count,
+            signer_count: u8::try_from(owner_run.len()).map_err(|_| too_many(owner_run.len()))?,
             private_tx_hash: parts.private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             policy: frame.policy.params(&PolicyProving {
@@ -69,35 +78,45 @@ impl Assembled {
             RingCircuit::TransferConfidential { inputs: class, .. } => {
                 let in_proof = parts.in_proof_owner.is_some();
                 let delegate = parts.rail == RingRail::Delegate;
-                let input_hashes: Vec<[u8; 32]> = frame
-                    .proof_inputs
-                    .input_utxos
-                    .iter()
-                    .map(|input| input.private_tx_input_hash())
-                    .collect();
                 TransferBody::Confidential(Box::new(ConfidentialTransfer {
                     transfer,
                     in_proof,
                     delegate,
                     outputs: audit.delivered_outputs()?,
-                    inputs: match in_proof || delegate {
-                        true => audit.input_openings(usize::from(class))?,
-                        false => vec![Opening::default(); usize::from(class)],
-                    },
-                    input_chain: create_nonzero_hash_chain_from_slice(&input_hashes)?,
+                    inputs: audit.input_openings(usize::from(class))?,
                     sender: self.sender,
                     sender_pk_hash: frame.sender_pk_hash,
+                    signers: signer_identities(owner_run, usize::from(class))?,
                 }))
             }
             RingCircuit::TransferAnonymous { class, .. }
             | RingCircuit::TransferAnonymousEntry { class, .. } => {
                 let entry = matches!(circuit, RingCircuit::TransferAnonymousEntry { .. });
+                let sender_address = frame
+                    .policy
+                    .sender_address
+                    .ok_or(RingError::SenderNotEnrolled)?;
                 TransferBody::Anonymous(Box::new(AnonymousTransfer {
                     transfer,
-                    outputs: audit.anonymous_outputs()?,
+                    outputs: audit.anonymous_outputs(&frame.policy.slot_addresses)?,
                     sender_key: entry.then(|| audit.sender_key()).transpose()?,
                     inputs: audit.input_openings(usize::from(class))?,
                     party_identities: self.party_identities,
+                    signers: match entry {
+                        true => Vec::new(),
+                        false => signer_identities(owner_run, usize::from(class))?,
+                    },
+                    sender_nullifier_pk: sender_address.nullifier_pk,
+                    sender_viewing_key: sender_address.viewing_u,
+                    sender_address_revision: sender_address.address_revision,
+                    sender_bundle_tag: frame
+                        .rail
+                        .published_sender(&frame.proof_inputs, &frame.sender.viewing_pubkey)?
+                        .map_or([0; 32], |bundle| *bundle.tag),
+                    reply_digest: match &parts.replies {
+                        Some((_, region)) => ciphertext_digest(region)?,
+                        None => [0; 32],
+                    },
                 }))
             }
             RingCircuit::ApplyRecords { .. }
@@ -111,6 +130,19 @@ impl Assembled {
             body,
         })
     }
+}
+
+/// The owner run in its order, zero past the run.
+fn signer_identities(
+    owners: &[solana_address::Address],
+    slots: usize,
+) -> Result<Vec<[u8; 32]>, RingError> {
+    let mut identities = owners
+        .iter()
+        .map(|owner| Ok(solana_owner_identity(owner.as_array())?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    identities.resize(slots, [0; 32]);
+    Ok(identities)
 }
 
 impl TransferRequest<'_> {

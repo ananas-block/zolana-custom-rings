@@ -8,7 +8,9 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    storage::{Revision, StorageRegistry},
+    member_registry::AuthorizedAddress,
+    storage::{RegistryId, Revision, StorageRegistry},
+    storage_instruction::InitializeIxData,
     CoSignScope, CoSigner, CoSignerCounts, EscrowKey, NewRing, RingMode, RingPolicy, RingRoles,
     SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
@@ -35,8 +37,8 @@ use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
-    GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, StorageRootView,
+    GetStorageRecordPoolResponse, RingAuthorizedAddressView, RingIndexedMemberRecordView,
+    RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
@@ -264,6 +266,8 @@ pub(crate) struct Chain {
     /// Leaves the indexer serves that the tree's account lacks.
     unsettled: HashMap<[u8; 32], u64>,
     registry: Option<Arc<Registry>>,
+    /// A second registry address the same tree answers for.
+    curator: Option<Address>,
     /// The leaves of every Merkle proof request.
     pub proof_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
     pub witness_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
@@ -332,6 +336,31 @@ impl Chain {
         let policy = registry.policy(self.ring_account(), rules);
         self.with_records(registry)
             .with(ring().policy_pda(), policy)
+    }
+
+    /// `rules` read the Block list from a curator registry the same tree answers for.
+    pub(crate) fn with_curator(self, curator: Address, rules: &RuleTable) -> Self {
+        use zolana_ring_policy::ListId;
+        let mut ring_account = self.ring_account();
+        let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+        for list in rules.referenced().iter() {
+            sources[list.slot()].list_id = list as u8;
+        }
+        sources[ListId::Block.slot()].registry = curator;
+        ring_account
+            .set_policy(sources, rules.encode(), SLOT)
+            .unwrap();
+        let records = self
+            .registry
+            .as_ref()
+            .expect("the records precede the curator")
+            .records();
+        Self {
+            curator: Some(curator),
+            ..self
+        }
+        .with(ring().policy_pda(), account(program(), &*ring_account))
+        .with(curator, records)
     }
 
     /// The ring's records registry alone, the ring stays audit-only.
@@ -477,7 +506,10 @@ impl AsyncRingIndexer for Chain {
         let registry = self
             .registry
             .as_ref()
-            .filter(|_| request.registry == RECORDS.into())
+            .filter(|_| {
+                request.registry == RECORDS.into()
+                    || self.curator.map(Into::into) == Some(request.registry)
+            })
             .ok_or(ClientError::UnsupportedRpcMethod("get_storage_record_pool"))?;
         let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
         let pool = registry
@@ -552,8 +584,21 @@ impl Registry {
                 }
                 .hash()
                 .unwrap();
+                let authorized = AuthorizedAddress {
+                    ring_id: ring().ring_id().unwrap(),
+                    nullifier_pk: address.nullifier_pubkey,
+                    viewing_u: address.viewing_pubkey.u(),
+                    address_revision: 1,
+                };
                 let view = RingMemberRecordView {
                     mint_policy: Default::default(),
+                    address_hash: Hash(authorized.hash(&member).unwrap()),
+                    address: Some(RingAuthorizedAddressView {
+                        ring_id: Hash(authorized.ring_id),
+                        nullifier_pk: Hash(authorized.nullifier_pk),
+                        viewing_u: Hash(authorized.viewing_u),
+                        address_revision: authorized.address_revision,
+                    }),
                     member: Hash(member),
                     next: Hash([0; 32]),
                     lists: *lists,
@@ -587,6 +632,7 @@ impl Registry {
                 next,
                 lists: view.lists,
                 escrow_key: view.escrow_key.0,
+                address_hash: view.address_hash.0,
             });
             views.insert(member, view);
         }
@@ -610,6 +656,7 @@ impl Registry {
                     value: 0,
                     escrow_key: [0; 32],
                     mint_policy: Some(policy),
+                    address_hash: [0; 32],
                 }],
             )
             .unwrap();
@@ -622,7 +669,14 @@ impl Registry {
 
     /// The `RECORDS` registry at `REVISION`.
     fn records(&self) -> Account {
-        let mut records = StorageRegistry::new(authority(), 0);
+        let mut records = StorageRegistry::new(
+            authority(),
+            &InitializeIxData {
+                registry_id: RegistryId([0; 32]),
+                grace_slots: 0u64.to_le_bytes(),
+                ring_id: ring().ring_id().unwrap(),
+            },
+        );
         records.roots[0].hash = self.root();
         records.roots[0].revision = Revision::from(REVISION);
         account(STORAGE_PROGRAM_ID, &records)
@@ -674,6 +728,8 @@ impl Registry {
                 lists: record.lists,
                 escrow_key: Hash(record.escrow_key),
                 mint_policy: record.mint_policy,
+                address_hash: Hash(record.address_hash),
+                address: None,
                 owner_pubkey: None,
                 nullifier_pk: None,
                 eph_pk: None,

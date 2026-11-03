@@ -1,9 +1,9 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SenderBundle, MAX_SPP_CPI_ACCOUNTS,
+    storage::Revision, tag, AnonymousProofData, CustomRingProof, FramedSenderBundle, InProofOwner,
+    InputTrees, PlainGroth16Proof, PolicyProof, PolicyRecipients, Replies, RingOutput, RingPolicy,
+    RingRail, RingTransactData, RootRead, MAX_SPP_CPI_ACCOUNTS, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -24,7 +24,7 @@ pub(crate) enum OwnedOutput {
     Anonymous {
         hash: [u8; 32],
         tag: [u8; 32],
-        body: Option<Vec<u8>>,
+        body: Option<[u8; RECIPIENT_BODY_LEN]>,
         record: Vec<u8>,
     },
     Exit {
@@ -42,15 +42,15 @@ pub(crate) struct OwnedSenderBundle {
 }
 
 impl OwnedSenderBundle {
-    pub fn of(sender: SenderBundle<'_>) -> Self {
+    pub fn of(sender: FramedSenderBundle<'_>) -> Self {
         Self {
             tag: *sender.tag,
             body: sender.body.to_vec(),
         }
     }
 
-    pub fn view(&self) -> SenderBundle<'_> {
-        SenderBundle {
+    pub fn view(&self) -> FramedSenderBundle<'_> {
+        FramedSenderBundle {
             tag: &self.tag,
             body: &self.body,
         }
@@ -73,7 +73,7 @@ impl OwnedOutput {
             } => Self::Anonymous {
                 hash: *hash,
                 tag: *tag,
-                body: body.map(<[u8]>::to_vec),
+                body: body.copied(),
                 record: record.to_vec(),
             },
             RingOutput::Exit {
@@ -101,7 +101,7 @@ impl OwnedOutput {
             } => RingOutput::Anonymous {
                 hash,
                 tag,
-                body: body.as_deref(),
+                body: body.as_ref(),
                 record,
             },
             Self::Exit {
@@ -180,6 +180,8 @@ pub(crate) struct TransactParts {
     pub key_escrow: bool,
     pub full_openings: bool,
     pub outputs: Vec<OwnedOutput>,
+    /// `reply_len` and the region, set exactly under `REPLY_METADATA`.
+    pub replies: Option<(u16, Vec<u8>)>,
     pub sender: Option<OwnedSenderBundle>,
     pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
@@ -222,6 +224,10 @@ impl TransactParts {
             key_escrow: self.key_escrow,
             full_openings: self.full_openings,
             outputs: self.outputs.iter().map(OwnedOutput::view).collect(),
+            replies: self
+                .replies
+                .as_ref()
+                .map(|(len, region)| Replies { len: *len, region }),
             sender: self.sender.as_ref().map(OwnedSenderBundle::view),
             eph_u: &self.eph_u,
             envelope: &self.envelope,

@@ -7,19 +7,16 @@ use custom_ring_interface::RingMode;
 use solana_address::Address;
 use spr_indexer_api::SerializablePubkey;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Mint};
-use zolana_ring_client::{
-    rpc::{
-        GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
-        PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayStatus, RelayStep,
-        SubmitRelayRequest, TokenAccountSetup,
-    },
-    FirstContact,
+use zolana_ring_client::rpc::{
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
+    PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayStatus, RelayStep,
+    SubmitRelayRequest, TokenAccountSetup,
 };
 use zolana_ring_keys::RingAddress;
 
 use crate::tests::{
     pipeline_rules,
-    support::{history, keypair, ring, ring_utxo, Chain, Registry, RingSettings},
+    support::{keypair, ring, ring_utxo, Chain, Registry, RingSettings},
 };
 use crate::{AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RingError, RingRelay};
 
@@ -75,7 +72,6 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
         Registry::new(&[(&sender, 1), (&recipient, 1)]),
         &pipeline_rules(),
     );
-    let state = history(&sender);
     let transaction = ConfidentialTransaction::new_with_ring(
         vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
         fee_payer,
@@ -88,15 +84,15 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
         nullifier_key: Some(&sender.nullifier_key),
         transaction,
     })
-    .with_anonymous_signer(&sender.signing_key, &state)
+    .with_anonymous_signer(&sender.signing_key)
     .with_payment(AnonymousPayment {
         to: RingAddress {
             recipient: recipient.shielded_address().unwrap(),
             ring_program_id: ring().program_id(),
         },
-        first_contact: FirstContact::Bootstrap,
         asset: Mint::SOL,
         amount: 4,
+        reply: None,
     })
     .unwrap();
     let quote = RelayQuote {
@@ -428,7 +424,7 @@ mod delegate_message {
             &self,
             request: SubmitRelayRequest,
         ) -> Result<RelayStatus, RingError> {
-            let signature = request.signature.clone();
+            let signature = request.signature;
             self.submitted.lock().unwrap().push(request);
             Ok(RelayStatus::Sent { signature })
         }

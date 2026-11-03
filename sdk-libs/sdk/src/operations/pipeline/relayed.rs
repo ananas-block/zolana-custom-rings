@@ -8,7 +8,9 @@ use zolana_ring_client::rpc::{RelayProofInputs, RelayRail};
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
-    anonymous::{check_anonymous_inputs, AnonymousExits, AnonymousSpend, HiddenOwner},
+    anonymous::{
+        check_anonymous_inputs, public_co_owners, AnonymousExits, AnonymousSpend, HiddenOwner,
+    },
     audit::PresealedAudit,
     sealed, shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
     TransferAuthority,
@@ -43,6 +45,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
         Self {
             ring: input.ring,
             co_signer: None,
+            priority_fee: None,
             rail: Relayed {
                 proof_inputs: input.proof_inputs,
                 fee_payer: input.fee_payer,
@@ -115,6 +118,10 @@ impl Relayed<'_> {
                 let owner = HiddenOwner::of(&sender.signing_pubkey)?;
                 owner.check_signers([self.fee_payer])?;
                 check_anonymous_inputs(&proof_inputs, &sender)?;
+                // The relay wire carries one nullifier key.
+                if let Some(owner) = public_co_owners(&proof_inputs, &sender)?.first() {
+                    return Err(RingError::MissingCoOwnerKey { owner: *owner });
+                }
                 let exits = AnonymousExits {
                     transfers: &proof_inputs.external_data.interface_transfers,
                     hidden_owner: &owner.0,
@@ -129,7 +136,6 @@ impl Relayed<'_> {
                         owner: sender.signing_pubkey,
                         signature,
                     },
-                    history: None,
                 };
                 (
                     rail(RingDelivery::Anonymous(plan.clone())),
@@ -205,6 +211,7 @@ impl Relayed<'_> {
             sender,
             authority: TransferAuthority {
                 owner: Some(relayed.nullifier_key.clone()),
+                co_owners: Vec::new(),
             },
             owner_signers,
             interface_transfer_accounts: relayed.interface_transfer_accounts.clone(),

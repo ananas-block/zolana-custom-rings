@@ -4,13 +4,18 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::{
     cosign::CoSignDemand,
-    key_catalog::{RecordPools as PoolWidths, RingCircuit, TransferSpend},
-    PolicyWithdrawal, PublicSlots, RingMode, RingRail, TransferRoots,
+    key_catalog::{
+        RecordPools as PoolWidths, RingCircuit, TransferSpend, SCREENED_ENTRY_OWNERS,
+        SCREENED_OWNERS,
+    },
+    member_registry::AuthorizedAddress,
+    CustomRingError, PolicyWithdrawal, PublicSlots, RingMode, RingRail, TransferRoots,
 };
 use solana_address::Address;
 use spr_client::AsyncRpc;
-use spr_hasher::primitives::right_align;
-use spr_interface::N_PUBLIC_SLOTS;
+use spr_hasher::primitives::{right_align, solana_owner_identity};
+use spr_interface::{N_PUBLIC_SLOTS, ZERO_NULLIFIER_PUBKEY};
+use spr_keypair::ShieldedAddress;
 use spr_transaction::instructions::transact::SppProofInputs;
 use zolana_ring_client::{records::RecordPoolRead, AsyncRingIndexer};
 use zolana_ring_member_registry::RecordPool;
@@ -18,9 +23,12 @@ use zolana_ring_policy::{
     EncodedRuleTable, Member, OutputSubjects, RecordLists, SourceMap, TransferSubjects,
 };
 
-use super::withdrawals::{thresholds_cover, waives_co_signer};
+use super::{
+    audit::SlotAddress,
+    withdrawals::{thresholds_cover, waives_co_signer},
+};
 use crate::{
-    limits::{Outflows, SenderOutflow},
+    limits::Outflows,
     records::PoolRead,
     request::{PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools},
     submission::BoundRoot,
@@ -48,7 +56,12 @@ pub(super) struct PolicyInputs {
     /// `None` is the unopened pool of a key whose queries are all off.
     own_pool: Option<RecordPoolRead>,
     curator_pool: Option<RecordPoolRead>,
-    sender_entry: PoolEntry,
+    /// `Q` entries in subject order.
+    sender_entries: Vec<PoolEntry>,
+    /// The sender's bound address, set on the anonymous rail.
+    pub sender_address: Option<AuthorizedAddress>,
+    /// One per output slot, default off a recipient.
+    pub slot_addresses: Vec<SlotAddress>,
     owner_entries: Vec<PoolEntry>,
     asset_entries: Vec<PoolEntry>,
     public_asset_entries: Vec<u32>,
@@ -73,6 +86,10 @@ pub(super) struct PolicyRead<'a> {
     pub n_out: u8,
     /// The owner identity the rules read as the sender.
     pub sender: [u8; 32],
+    pub sender_address: &'a ShieldedAddress,
+    pub in_proof: bool,
+    /// The transaction's owner run, public co-owners on the anonymous rail.
+    pub owner_signers: &'a [Address],
     pub public: &'a PublicSlots,
 }
 
@@ -116,7 +133,9 @@ impl PolicyRead<'_> {
             curator: None,
             own_pool: None,
             curator_pool: None,
-            sender_entry: PoolEntry::default(),
+            sender_entries: vec![PoolEntry::default(); self.screened_owners()],
+            sender_address: None,
+            slot_addresses: Vec::new(),
             owner_entries: Vec::new(),
             asset_entries: Vec::new(),
             public_asset_entries: vec![0; N_PUBLIC_SLOTS],
@@ -128,8 +147,120 @@ impl PolicyRead<'_> {
         };
         if self.config.has_policy {
             self.screen(client, &mut inputs).await?;
+        } else if self.rail == RingRail::Anonymous {
+            self.deliver(client, &mut inputs).await?;
         }
         Ok(inputs)
+    }
+
+    const fn screened_owners(&self) -> usize {
+        match self.spends_default_ring {
+            true => SCREENED_ENTRY_OWNERS,
+            false => SCREENED_OWNERS,
+        }
+    }
+
+    /// The deterministic sender subjects of the rail, never a witness.
+    fn senders(&self) -> Result<Vec<[u8; 32]>, RingError> {
+        let identities = self
+            .owner_signers
+            .iter()
+            .map(|owner| Ok(solana_owner_identity(owner.as_array())?))
+            .collect::<Result<Vec<_>, RingError>>()?;
+        let q = self.screened_owners();
+        let mut senders = match self.rail {
+            RingRail::Confidential if !self.in_proof => identities,
+            RingRail::Confidential | RingRail::Delegate => vec![self.sender],
+            RingRail::Anonymous => core::iter::once(self.sender).chain(identities).collect(),
+        };
+        if senders.len() > q {
+            return Err(CustomRingError::OwnerSignerCount.into());
+        }
+        senders.resize(q, [0; 32]);
+        Ok(senders)
+    }
+
+    /// An audit-only anonymous ring loads its own root for delivery alone, no rule reads it.
+    async fn deliver<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+        &self,
+        client: &R,
+        inputs: &mut PolicyInputs,
+    ) -> Result<(), RingError> {
+        let own = BoundRoot::own(self.config.account(), client).await?;
+        let mut subjects = PoolSubjects::default();
+        let entry = |index: u32| PoolEntry {
+            own: index,
+            curator: [0],
+        };
+        // Delivery reads the first sender alone, a public co-owner carries no rule off a policy.
+        inputs.sender_entries[0] = entry(subjects.index(Some(self.sender)));
+        for output in &self.inputs.output_utxos {
+            let owner = output
+                .owner_address
+                .map(|owner| owner.signing_pubkey.owner_proof_input_hash())
+                .transpose()?;
+            inputs.owner_entries.push(entry(subjects.index(owner)));
+        }
+        let own_pool = PoolRead {
+            root: own,
+            members: &subjects.members,
+            openings: inputs.widths.own,
+        }
+        .read(client)
+        .await?;
+        self.bind_addresses(&own_pool, inputs)?;
+        inputs.own = Some(own);
+        inputs.own_pool = Some(own_pool);
+        Ok(())
+    }
+
+    /// The sender and every live recipient hold the enrolled address the proof opens.
+    fn bind_addresses(
+        &self,
+        pool: &RecordPoolRead,
+        inputs: &mut PolicyInputs,
+    ) -> Result<(), RingError> {
+        let ring_id = self.ring.ring_id()?;
+        let sender_address = pool
+            .address(&self.sender)
+            .filter(|address| address.ring_id == ring_id)
+            .ok_or(RingError::SenderNotEnrolled)?;
+        if !self.binds(sender_address, self.sender_address) {
+            return Err(RingError::SenderAddressMismatch);
+        }
+        inputs.sender_address = Some(*sender_address);
+        inputs.slot_addresses = self
+            .inputs
+            .output_utxos
+            .iter()
+            .enumerate()
+            .map(|(slot_index, output)| {
+                let Some(owner) = output
+                    .owner_address
+                    .filter(|_| output.ring_program_id.is_some())
+                else {
+                    return Ok(SlotAddress::default());
+                };
+                let member = owner.signing_pubkey.owner_proof_input_hash()?;
+                let address = pool
+                    .address(&member)
+                    .filter(|address| address.ring_id == ring_id)
+                    .ok_or(RingError::RecipientNotEnrolled { slot_index })?;
+                if !self.binds(address, &owner) {
+                    return Err(RingError::RecipientAddressMismatch { slot_index });
+                }
+                Ok(SlotAddress {
+                    viewing_u: address.viewing_u,
+                    revision: address.address_revision,
+                })
+            })
+            .collect::<Result<_, RingError>>()?;
+        Ok(())
+    }
+
+    fn binds(&self, address: &AuthorizedAddress, owner: &ShieldedAddress) -> bool {
+        address.nullifier_pk == owner.nullifier_pubkey
+            && address.viewing_u == owner.viewing_pubkey.u()
     }
 
     async fn screen<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
@@ -179,7 +310,11 @@ impl PolicyRead<'_> {
                 None => 0,
             }],
         };
-        inputs.sender_entry = entry(subjects.index(Some(self.sender)));
+        let senders = self.senders()?;
+        inputs.sender_entries = senders
+            .iter()
+            .map(|sender| entry(subjects.index((*sender != [0; 32]).then_some(*sender))))
+            .collect();
         let withdrawals = &inputs.withdrawals;
         let payments = owners
             .iter()
@@ -255,16 +390,26 @@ impl PolicyRead<'_> {
             asset_lists: lists(w.asset),
             mint_policy: mint_policy(&w.asset),
         }));
-        pinned.table.admit(
-            &pinned.sources,
-            &TransferSubjects {
-                sender: lists(self.sender),
-                outputs: &transfer_subjects,
-            },
-        )?;
+        // Every sender passes the sender rules, a co-owner who receives nothing is screened.
+        for sender in senders.iter().filter(|sender| **sender != [0; 32]) {
+            pinned.table.admit(
+                &pinned.sources,
+                &TransferSubjects {
+                    sender: lists(*sender),
+                    outputs: &transfer_subjects,
+                },
+            )?;
+        }
+        if self.rail == RingRail::Anonymous {
+            self.bind_addresses(&own_pool, inputs)?;
+        }
         let key_escrow = inputs.key_escrow;
         for (ct_hash, owner) in inputs.ct_hashes.iter_mut().zip(&owners) {
+            // A zero secret owner owes no escrow.
             if let (true, Some(owner)) = (key_escrow, owner) {
+                if owner.nullifier_pk == ZERO_NULLIFIER_PUBKEY {
+                    continue;
+                }
                 *ct_hash = own_pool
                     .escrowed_ct_hash(&owner.member, &owner.nullifier_pk)?
                     .ok_or(RingError::UnregisteredOutputKey {
@@ -295,18 +440,17 @@ impl PolicyRead<'_> {
                 })
             })
             .collect::<Vec<_>>();
+        let outflows = Outflows {
+            senders: &senders,
+            inputs: &self.inputs.input_utxos,
+            outputs,
+            public_assets: &public_assets,
+            public_amounts: &self.public.amounts(),
+        };
+        outflows.check_deposits()?;
         inputs.approval_required = match self.rail {
             RingRail::Delegate => false,
-            RingRail::Confidential | RingRail::Anonymous => Outflows {
-                rule: SenderOutflow {
-                    sender: Member::from_bytes(self.sender)?,
-                    ring: self.ring.program_id(),
-                },
-                outputs,
-                public_assets: &public_assets,
-                public_amounts: &self.public.amounts(),
-            }
-            .approval_required(&limits)?,
+            RingRail::Confidential | RingRail::Anonymous => outflows.approval_required(&limits)?,
         };
         inputs.rules = policy.rules;
         inputs.sources = pinned.sources;
@@ -475,7 +619,7 @@ impl PolicyInputs {
                 own: pool(&self.own_pool, self.widths.own)?,
                 curator: pool(&self.curator_pool, self.widths.curator)?,
             },
-            sender_entry: self.sender_entry.clone(),
+            sender_entries: self.sender_entries.clone(),
             owner_entries,
             asset_entries,
             public_asset_entries: self.public_asset_entries.clone(),
