@@ -1,12 +1,12 @@
 # The record writer
 
-Ring RPC is the one writer of a ring's records. It turns signed record updates into storage updates, and its checks are the only gate on who writes what. [Spec](../spec.md)
+Ring RPC writes a ring's records when it holds the storage authority key. It turns signed record updates into storage updates, and its checks gate only the writes it sends. [Spec](../spec.md)
 
 ## A record update
 
 - The signer signs one hash over the cluster, the ring, the tree, every entry, an expiry slot and, for an enrolment, the awaited lists. That hash is the update id.
 - Each entry hashes as the tree entry the update proof chains, so the signature binds every write that reaches the tree.
-- A wallet writes its own viewing and recovery flags, its escrow entry and its wallet grants.
+- A wallet writes its own viewing flag, its escrow entry, its address entry and its wallet grants.
 - The policy authority writes the allow, block, frozen, reader and approval lists and the mint settings of any record.
 
 ## Checks before an update queues
@@ -23,12 +23,11 @@ Ring RPC is the one writer of a ring's records. It turns signed record updates i
 - A batch revokes when, under the ring's current rule table, it clears a list a rule accepts on, sets a list a rule accepts off, or restricts mint settings. It then goes out as an immediate update.
 - A wallet batch also goes out early when an authority batch waits behind it.
 - A grant revocation goes graced. A wallet that could force an immediate update would void every member's proof in flight.
-- A reader list clear goes graced even when a rule reads the reader list.
 - When the writer refuses an authority update whose signer lost the policy role, an enrolment that update approved waits again.
 
 ## Enrolment
 
-- A wallet's update can await the allow, reader or approval lists the policy reads from the ring's own records.
+- A wallet's update can await the reader list, or the allow or approval lists the policy reads from the ring's own records.
 - It waits until the policy authority's own update sets every awaited list on the wallet. Both then go out in one batch, the wallet's writes first.
 - The policy authority can refuse it. An enrolment still waiting after its expiry slot is refused, and the expiry has an upper bound.
 - No cap limits pending enrolments. Per-client and per-key rate limits bound how fast they arrive.
@@ -39,6 +38,17 @@ Ring RPC is the one writer of a ring's records. It turns signed record updates i
 - A restart settles the open batch by its signature.
 - An update that rides in a bounded number of failed batches, or outlives its expiry, is refused. Nothing sends it again, so its signer must check that each revocation landed.
 - Run one writer for each storage authority key. Ring RPC does not enforce this.
+
+## Address writes
+
+- The owner signs its address into its authorization account first. A record update then names that address, and the writer refuses it unless it equals the account at an unapplied revision.
+- The program reads the hash from the account at apply time, never from instruction data.
+- The writer refuses an address and an escrow key of one member that name two nullifier keys. It gives an early error, and the apply proof is the enforcement.
+- The program refuses an applied revision and a revision the account does not hold. An authority can delay an address and cannot change or clear one.
+- A record write and an escrow write carry a zero address hash.
+- The apply proof enforces the address and escrow invariant at the running state, in either write order. A conflicting write fails, and an unrelated write opens no preimage.
+- The apply prover needs the escrow preimage, and the ring indexer keeps it beside the record.
+- A revision stays pending until an authority applies it, and proofs read the record's address until then.
 
 ## What the writer does not cover
 

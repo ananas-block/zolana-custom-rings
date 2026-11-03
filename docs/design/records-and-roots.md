@@ -1,17 +1,26 @@
 # Records and live roots
 
-A ring's lists, escrow keys, mint settings and tree grants are records in a Storage program tree. [Spec](../spec.md)
+A ring's lists, escrow keys, addresses, mint settings and tree grants are records in a Storage program tree. [Spec](../spec.md)
 
 ## Records
 
-- A record holds one member's list bits, its escrow key and, for an asset, its mint settings.
+- A record holds one member's list bits, its escrow key, its address hash and, for an asset, its mint settings.
 - A member is an owner identity, a passkey reader, an asset, or the grant key of one wallet and one reader.
 - Each record points to the next member in sort order. The records are the leaves of a 4-ary tree in insert order.
 - A proof opens a present member by its leaf and an absent member by the record that brackets it. A prover cannot leave out the record that convicts its subject.
 - A records tree has a fixed number of leaves, each member keeps its leaf permanently, and a full tree takes no new member.
-- A curator serves list membership only. Mint settings and escrow keys always come from the ring's own records.
-- Rules read authority lists only, so no owner admits itself. The viewing and recovery flags a wallet writes are for off-chain use.
+- A curator serves list membership only. Mint settings, escrow keys and addresses always come from the ring's own records.
+- Rules read the allow, block, frozen and approval lists only. No owner admits itself, and a reader grant moves no funds.
+- The viewing flag a wallet writes is for off-chain use. List slot 5 stays reserved and unused, no writer and no rule reach it.
 - Every write publishes its member and its values in instruction data, and the ring indexer serves each record with its path.
+
+## Addresses
+
+- An address is the nullifier key and the viewing key one owner signed, under the registry's ring id. The leaf holds its hash, and the ring indexer returns the preimage beside each opening.
+- The hash covers the ring id, so a record of another ring does not open under this ring's statement.
+- The authorization account keeps only the newest address. The nullifier key is fixed on one registry, and a later enrollment rotates the viewing key alone.
+- One leaf holds one address, so one own registry serves one ring. `Initialize` and the records write refuse a registry whose ring id is another ring's. A wrong first nullifier key cannot be corrected on that registry.
+- A nonzero address hash and a nonzero escrow key in one record name one nullifier key, see [the record writer](record-writer.md#address-writes).
 
 ## Root history
 
@@ -33,6 +42,6 @@ A ring's lists, escrow keys, mint settings and tree grants are records in a Stor
 
 ## Why live roots
 
-- Every root the program reads is the registry's current state, so no copy can lag a revocation.
+- The program reads every root from the registry account, so no copy can lag a revocation. A graced update leaves the old root usable for the grace period.
 - A forged root needs a forged registry.
 - An operation that reads a root passes one or two registry accounts beside the ring account.

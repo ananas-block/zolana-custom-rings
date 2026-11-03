@@ -4,10 +4,12 @@ SPP authorizes a ring spend in one of four ways. The instruction, the ring mode 
 
 ## The rails
 
-1. **Signer rail.** Each input owner signs the Solana transaction. A policy transfer has exactly one owner, and the policy reads it as the sender.
+1. **Signer rail.** Each input owner signs the Solana transaction, and the statement binds the deduplicated owner run. Slot 0 can be a dummy, so a public-funded transfer stays valid. A policy needs at least one owner and screens each one as a sender.
 2. **In-proof rail.** The owner signs the SPP message inside the proof of SPP's anonymous rail, and SPP hides the owner. The transfer statement publishes the owner as the sender. Any payer sends the transaction.
-3. **Anonymous rail.** A hidden owner signs inside the SPP proof. The policy section screens the owner of spent note zero as the sender, and the statement carries no sender. Only the payer and a demanded co-signer sign the transaction.
+3. **Anonymous rail.** A hidden owner signs inside the SPP proof, and public co-owners can sign the transaction beside it. Spent note zero names the hidden sender, and each co-owner is a sender too. The statement carries no sender. A frame with only public owners belongs to the confidential family.
 4. **Authority rail.** The ring PDA moves notes with no owner signature. The delegate signs instead, and every note stays in the ring.
+
+The anonymous entry key spends one owner's notes and takes no co-owner. Every key on the other rails holds each live input to the ring.
 
 ## Why the in-proof rail exists
 
@@ -25,25 +27,30 @@ SPP authorizes a ring spend in one of four ways. The instruction, the ring mode 
 
 ## Limits of the in-proof rail
 
-- It spends ring notes only. A default-ring input makes SPP publish the owner it hides, so the SDKs refuse it and the signer rail spends it.
+- It spends ring notes only. A default-ring input makes SPP publish the owner it hides, and the confidential key refuses it.
 - SPP refuses an exit to the sender's own default-ring identity on a ring spend. Exits keep their scheme 3 data, and SPP publishes each exit owner.
 - The confidential key holds one input class per output count. The program refuses a transfer that publishes more inputs than the class holds.
-- The envelope carries a prefix per published input, so this rail sets the class. A confidential class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The SDKs refuse a wider shape as unkeyed on every rail, and the sender merges first. A policy ring fits a 16-output transfer on neither rail unless it escrows keys.
+- The envelope carries a hash per published input on every rail. The SDKs refuse a wider shape as unkeyed on every rail, and the sender merges first. A policy ring fits a full 16-output frame on neither rail unless it escrows keys.
 
 ## Why the signer rail stays
 
-- It spends default-ring notes, and its delivered audit opens no spent input.
+- It takes several owners in one transfer, and each signs the transaction. The auditor reads a hash per spent note.
 - It serves owners and operators who send their own transaction, the operator CLI and the tests included.
 
 ## What each rail publishes
 
 - Signer rail: the owner signer, each output's recipient viewing key and, on a policy ring, the owner's identity and each output's owner identity.
 - In-proof rail: the owner key in the transfer data in place of the signer, and the outputs as the signer rail publishes them.
-- Anonymous rail: one view tag per ring output, the sender bundle and each exit owner. A default-ring spend also publishes the hidden owner's key.
+- Anonymous rail: a view tag on each recipient or dummy slot, each exit owner, the change bits and the sender bundle with its tag. Each public co-owner signs in the open, and a default-ring spend also publishes the hidden owner's key.
 - Authority rail: the delegate, and the outputs as the signer rail publishes them.
+
+## A wallet with only its owner key
+
+- The signer rail lets the owner pay. No check stops an in-proof owner paying its own transaction. Neither rail serves an anonymous ring.
+- [Flow 5](../spec.md#5-user-merge) states the merge route for each ring mode.
 
 ## Separation from the hidden owner
 
 - On the anonymous rail SPP separates the hidden owner only from the owner signers.
-- The ring's transfer proof also shows the payer, the co-signer and the withdrawal destination differ from the hidden owner.
+- The ring's transfer proof also shows the payer, the co-signer and the withdrawal destination differ from the hidden owner. It shows the hidden owner is outside the co-owner run.
 - No layer checks a key that is only linked to the owner.

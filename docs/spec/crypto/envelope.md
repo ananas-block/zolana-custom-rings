@@ -1,6 +1,6 @@
 # Envelope
 
-The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, a member's nullifier secret, deposit openings and the merge disclosure key. The stream schedule also keys every delivered body from its slot secret. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
+The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, a member's nullifier secret, deposit openings and the merge disclosure key. The stream schedule also keys every delivered body, recipient body, reply and sender bundle from a slot secret. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
 
 The ring program verifies the transfer, deposit and merge proofs, so the ciphertext's hash in the statement fixes the plaintext. Only Ring RPC verifies the register key proof, off chain. A proof under key escrow takes that ciphertext's hash as a private input and relies on the Ring RPC check.
 
@@ -38,11 +38,14 @@ ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 
 | Label | Line | Secret |
 |---|---|---|
 | `CRING/adt1` | auditor stream | shared secret above |
-| `CRING/bdy1` | delivered body | [slot secret](hashing.md#slot-secret) |
+| `CRING/bdy1` | delivered body, scheme 10 | [slot secret](hashing.md#slot-secret) at `i` |
+| `CRING/rcp1` | recipient body, scheme 11 | slot secret at `i` |
+| `CRING/rpl1` | reply metadata | the secret of slot `i`'s body |
+| `CRING/snd1` | sender bundle, scheme 12 | slot secret at `m` under the sender's viewing key |
 | `CRING/nfk1` | register key | shared secret above |
 | `CRING/dep1` | deposit | shared secret above |
 
-An anonymous body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
+One label per ciphertext kind gives each kind its own key and nonce, so a reply never restarts the body's counter. A live recipient's tag and the bundle tag are each one more Poseidon output of the secret that keys that ciphertext, under its own [domain](hashing.md#domain-tags). An exit's scheme 3 body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
 
 ## Merge schedule
 
@@ -65,6 +68,9 @@ No line has an authentication tag. Integrity comes from the statement.
 |---|---|---|---|
 | Auditor stream | `CRING/adt1` | `tx_viewing_sk`, evidence and records of [Disclosure](disclosure.md) | `pack_be` of both tagged keys and of `tx_viewing_pk`, `digest(envelope_ct)`, `hash_bytes(record)` through `output_ciphertext_chain` |
 | Delivered body | `CRING/bdy1`, slot secret | the [delivered body](disclosure.md#delivered-body) | `hash_bytes(body)` through `output_ciphertext_chain`, `pack_be(u)` through `recipient_key_chain` |
+| Recipient body | `CRING/rcp1`, slot secret | the [recipient body](disclosure.md#recipient-body) | `hash_bytes(body)` through `recipient_body_chain` |
+| Reply metadata | `CRING/rpl1`, slot secret | the [reply](disclosure.md#reply-metadata) | `digest` of the reply region, as `reply_digest` |
+| Sender bundle | `CRING/snd1`, slot secret | the [sender bundle](disclosure.md#sender-bundle) | `digest(bundle)`, as `sender_bundle_digest` |
 | Register key | `CRING/nfk1` | `0x00 \|\| nullifier_secret`, 32 bytes | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
 | Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes | `pack_be` of both tagged keys, `hash_bytes` of each 96-byte slot |
 | Merge | merge schedule | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |

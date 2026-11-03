@@ -32,6 +32,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Owner hash | `Poseidon(owner_identity, nullifier_pk)` |
 | Ring id | `hash_bytes(ring program id)` |
 | Asset | `hash_bytes(mint)`, and `SOL_ASSET_FIELD = Poseidon(0, 0) = 0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864` for SOL |
+| Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`, a note under it owes no escrow |
 | Owner member | `solana_owner_identity(key)` |
 | Asset member | `hash_bytes(mint)`. The CLI names SOL by the zero address. |
 | UTXO hash | `Poseidon(domain, tree_id, asset, amount, data_hash, Poseidon(ring_data_hash, ring_id), Poseidon(owner_hash, blinding))`, domains dummy `1`, address `2`, UTXO `3`, as zolana defines it |
@@ -55,24 +56,34 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 |---|---|
 | Delivered slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
 
-The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
+The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. A delivered body and a recipient body take `i` as the slot. A reply takes the secret of its slot. The sender bundle takes `i = m`, past every body's index.
 
-A ring transfer sets the HKDF slot `i` of that derivation by output position. A recipient body and an exit body take their output position, and the sender bundle takes the output count. The ciphertext ordinal in the zolana text does not apply to a ring transfer.
+| Value | Encoding |
+|---|---|
+| Recipient tag | `Poseidon(CRRT, CRDS_i)`, `Poseidon(CRRT, s)` on a hidden dummy |
+| Bundle tag | `Poseidon(CRST, CRDS_m)` |
+
+Each tag is a canonical field element. `CRRT` and `CRST` sit below `2^32`, and a stream tag sits above `2^80`. A tag and a [stream schedule](envelope.md#stream-schedule) therefore never share a first Poseidon input.
+
+An exit's scheme 3 body keeps zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation), with its output position as the HKDF slot. A deposit keeps zolana's [View Tags](../../../zolana/docs/spec.md#view-tags). The auditor message takes the auditor's `u` as its tag.
 
 ## Record tree
 
 | Value | Encoding |
 |---|---|
 | Member range | `1 <= member <= q - 2`, as big-endian bytes |
-| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE), limits_0, limits_1, limits_2)` |
+| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE), limits_0, limits_1, limits_2, address_hash)` |
 | Mint policy field | `threshold * 2^128 + cap * 2^64 + cosign_above`, each a u64 |
 | Asset limit fields | `limits_0 = sender_cap * 2^128 + sender_window_slots * 2^64 + volume_cap`, `limits_1 = volume_window_slots * 2^128 + deposit_cap * 2^64 + deposit_window_slots`, `limits_2 = withdrawal_cap * 2^64 + withdrawal_window_slots`, each a u64 |
-| Sentinel | `(0, q - 1, 0, 0, 0, 0, 0, 0, 0)` at leaf `0` |
+| Sentinel | `(0, q - 1, 0, 0, 0, 0, 0, 0, 0, 0)` at leaf `0` |
 | Escrow key | `Poseidon(nullifier_pk, hash_bytes(ciphertext))`, the 32-byte sealed secret |
+| Address hash | `Poseidon(CRAD, ring_id, member, nullifier_pk, pack_be(viewing_u), right_align(address_revision as u64 BE))`, 7 inputs, `0` before enrollment |
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 10, the leaf index as 20 bits |
-| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold), limits_0, limits_1, limits_2)` |
+| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold), limits_0, limits_1, limits_2, address_hash)` |
 | Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and every asset limit field are `0` when the write keeps them. |
 | Queue chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
+
+A record write and an escrow write carry a zero `address_hash`. A zero entry hash keeps the record's address. Only write kind `ADDRESS` sets one, from the owner-signed authorization account.
 
 ## Policy table hash
 
@@ -91,6 +102,9 @@ policy_hash = acc_4
 |---|---|---|
 | `CRTX` | `0x43525458` | transfer statement |
 | `CRDS` | `0x43524453` | delivered slot secret |
+| `CRAD` | `0x43524144` | address hash |
+| `CRRT` | `0x43525254` | recipient and dummy tag |
+| `CRST` | `0x43525354` | sender bundle tag |
 | `CRBS` | `0x43524253` | ring blinding seed |
 | `CRTB` | `0x43525442` | policy table hash |
 | `CRPW` | `0x43525057` | withdrawal digest |
