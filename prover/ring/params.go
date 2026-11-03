@@ -53,7 +53,8 @@ type DeliveredOutput struct {
 	Output       Opening `json:"output"`
 	RecipientKey Bytes   `json:"recipientKey"`
 	OwnerKey     Bytes   `json:"ownerKey"`
-	Body         Bytes   `json:"body"`
+	// Body is shared.EscrowBodyLen bytes under key escrow and shared.BodyLen otherwise.
+	Body Bytes `json:"body"`
 }
 
 type AnonymousOutput struct {
@@ -67,6 +68,7 @@ type TransferParams struct {
 	AuditParams
 	Exempt            bool  `json:"exempt"`
 	ApprovalRequired  bool  `json:"approvalRequired"`
+	InputCount        uint8 `json:"inputCount"`
 	PrivateTxHash     Field `json:"privateTxHash"`
 	PrivateTxBlinding Field `json:"privateTxBlinding"`
 	PolicyParams
@@ -89,8 +91,7 @@ type AnonymousTransferParams struct {
 	TransferParams
 	Outputs []AnonymousOutput `json:"outputs"`
 	// SenderKey is the hidden owner's key on an entry key and absent on a commitment key.
-	SenderKey  Bytes `json:"senderKey,omitempty"`
-	InputCount uint8 `json:"inputCount"`
+	SenderKey Bytes `json:"senderKey,omitempty"`
 	// Inputs fill the input class, the slots past InputCount carry no UTXO.
 	Inputs          []Opening `json:"inputs"`
 	PartyIdentities []Field   `json:"partyIdentities"`

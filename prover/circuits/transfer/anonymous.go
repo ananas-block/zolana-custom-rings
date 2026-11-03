@@ -63,18 +63,16 @@ type AnonymousTransferCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	Shape           AnonymousShape    `gnark:"-"`
 	auditStatementWires
-	Exempt           frontend.Variable
-	ApprovalRequired frontend.Variable
-	Outputs          []audit.AnonymousOutputWires
+	Outputs []audit.AnonymousOutputWires
 	// SenderKey is the hidden owner's Ed25519 key on an entry key, a commitment key carries none.
 	SenderKey []frontend.Variable
-	// InputCount equals the published nullifier count on an entry key and lies within one of it on a commitment key.
+	// InputCount is the published nullifier count, the evidence opens the slots below it.
 	InputCount frontend.Variable
 	Inputs     []shared.UtxoWires
 	transactionBinding
 	// PartyIdentities are payer, configured co-signer and withdrawal owner, an absent party is zero.
 	PartyIdentities [3]frontend.Variable
-	policy.Policy
+	screenedPolicy
 }
 
 func NewAnonymousTransferCircuit(shape AnonymousShape) (*AnonymousTransferCircuit, error) {
@@ -91,11 +89,11 @@ func NewAnonymousTransferCircuit(shape AnonymousShape) (*AnonymousTransferCircui
 		senderKey = 32
 	}
 	return &AnonymousTransferCircuit{
-		Shape:     shape,
-		Outputs:   make([]audit.AnonymousOutputWires, shape.Outputs),
-		SenderKey: make([]frontend.Variable, senderKey),
-		Inputs:    make([]shared.UtxoWires, shape.InputClass),
-		Policy:    p,
+		Shape:          shape,
+		Outputs:        make([]audit.AnonymousOutputWires, shape.Outputs),
+		SenderKey:      make([]frontend.Variable, senderKey),
+		Inputs:         make([]shared.UtxoWires, shape.InputClass),
+		screenedPolicy: screenedPolicy{Policy: p},
 	}, nil
 }
 
@@ -111,35 +109,48 @@ func (c *AnonymousTransferCircuit) Define(api frontend.API) error {
 	}
 	rc := rangecheck.New(api)
 	w := c.auditWires(c.RingProgramID)
-	api.AssertIsBoolean(c.Exempt)
-	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields, an anonymous ring escrows no key.
-	envelope := w.Seal(api, rc)
+	// 1. The transaction key opens and its seed fixes every output blinding.
+	envelope := w.OpenEnvelope(api, rc)
+	// 2. The layout names the one key, an anonymous ring escrows no key.
+	c.decodeLayout(api)
+	// 3. Every slot opens once, the sections below read the same wires.
+	opened := audit.OpenSlots(api, rc, w, envelope, c.Outputs)
+	// 4. Every spent UTXO is the sender's, below the published count.
+	spent := audit.Spend(api, rc, c.Shape.audit(), c.Inputs, c.InputCount, c.RingProgramID, c.SenderKey)
+	// 5. Every party differs from the sender.
+	shared.AssertAnonymousParties(api, spent.SenderPkHash, c.PartyIdentities)
+	// 6. SPP's private transaction hash reopens over the opened slots with no address input.
+	c.bindTransaction(api, gadget.NonZeroHashChain(api, spent.InputHashes), opened.Slots)
+	// 7. A record opens every ring output and exit, a dummy's encrypts zeros.
+	records := opened.AnonymousRecords(api, c.Outputs)
+	// 8. The auditor stream seals tx_viewing_sk, the input evidence and every slot's record.
+	stream := w.SealStream(api, c.Shape.audit().Ranges(), spent.Evidence, records)
+	// 9. Each slot chains its record at the length its kind fixes.
+	ciphertextChain := opened.RecordChain(api, stream)
+	// 10. The policy screens the same slots under the sender the inputs prove, no recipient is published and no key escrowed.
+	c.screen(api, rc, policy.Rail{KeyEscrow: 0, Delegate: 0, Published: 0}, spent.SenderPkHash, opened.Slots)
+	// 11. The one public input commits the statement the program rebuilds.
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, stream, opened, ciphertextChain)))
+	return nil
+}
+
+// decodeLayout pins bit 0 and key escrow clear and full openings to the key.
+func (c *AnonymousTransferCircuit) decodeLayout(api frontend.API) {
 	fixed := 0
 	if c.Shape.FullOpenings {
 		fixed = audit.LayoutFullOpenings
 	}
-	layout := audit.DecodeLayout(api, c.Layout, audit.LayoutExits|audit.LayoutReserved, fixed)
-	// 2. Every output slot opens to the auditor, every spent UTXO is the sender's, and every party differs from the sender.
-	anonymous := w.Anonymous(api, rc, envelope, layout, c.Shape.audit(), c.Outputs, c.Inputs, c.InputCount, c.SenderKey)
-	shared.AssertAnonymousParties(api, anonymous.SenderPkHash, c.PartyIdentities)
-	// 3. SPP's private transaction hash reopens over the slots the audit opened with no address input.
-	c.bindTransaction(api, gadget.NonZeroHashChain(api, anonymous.InputHashes), anonymous.Slots)
-	// 4. The policy screens the same slots under the sender the inputs prove, no recipient is published and no key escrowed.
-	approval := c.Screen(api, rc, policy.Rail{Exempt: c.Exempt, KeyEscrow: 0, Delegate: 0, Published: 0}, anonymous.SenderPkHash, anonymous.Slots)
-	// 5. approval_required is the outflow's verdict.
-	api.AssertIsEqual(c.ApprovalRequired, approval)
-	// 6. The one public input commits the statement the program rebuilds.
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, anonymous, anonymous.Disclosure(api, envelope, layout))))
-	return nil
+	audit.DecodeLayout(api, c.Layout, audit.LayoutReserved, fixed)
 }
 
 // statement is the anonymous transfer preimage, mirrored by TransferStatement::elements under TransferFamily::Anonymous in program-libs/interface/src/proof/statement.rs.
 //
-//	head ‖ exempt, approval_required, output_chain, disclosure_chain, private_tx_hash, party0, party1, party2,
-//	policy_hash, own_root, curator_root, asset, net and gross per public slot, withdrawal_hash, length, version
-func (c *AnonymousTransferCircuit) statement(e audit.Envelope, w audit.AuditWires, a audit.Anonymous, disclosure frontend.Variable) []frontend.Variable {
-	fields := slices.Concat(e.Head(w, shared.TransferStatementDomain), []frontend.Variable{
-		c.Exempt, c.ApprovalRequired, a.OutputChain, disclosure, c.PrivateTxHash,
+//	head ‖ exempt, approval_required, output_chain, output_ciphertext_chain, input_count, exits_bitmap, private_tx_hash,
+//	party0, party1, party2, policy_hash, own_root, curator_root, asset, net and gross per public slot, withdrawal_hash, length, version
+func (c *AnonymousTransferCircuit) statement(e audit.Envelope, w audit.AuditWires, stream audit.Stream, opened audit.Opened, outputCiphertextChain frontend.Variable) []frontend.Variable {
+	fields := slices.Concat(e.Head(w, stream, shared.TransferStatementDomain), []frontend.Variable{
+		c.Exempt, c.ApprovalRequired, opened.OutputChain, outputCiphertextChain,
+		c.InputCount, opened.ExitsBitmap, c.PrivateTxHash,
 		c.PartyIdentities[0], c.PartyIdentities[1], c.PartyIdentities[2],
 		c.PolicyHash, c.OwnRoot, c.CuratorRoot,
 	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]))

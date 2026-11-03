@@ -90,11 +90,3 @@ func (u Utxo) Wires() shared.UtxoWires {
 		DataHash: u.DataHash, RingDataHash: u.RingDataHash, RingProgramID: u.RingProgramID,
 	}
 }
-
-// live masks a field the disclosure opens only on a UTXO.
-func live(u Utxo, value *big.Int) *big.Int {
-	if !u.isUtxo() {
-		return big.NewInt(0)
-	}
-	return value
-}

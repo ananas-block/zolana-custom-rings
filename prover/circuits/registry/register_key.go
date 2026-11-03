@@ -31,8 +31,8 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// 1. A zero lead byte keeps the secret below q, the envelope's cipher bounds the other 31 bytes.
 	api.AssertIsEqual(c.NullifierSecret[0], 0)
 	nullifierPk := gadget.PoseidonHash(api, shared.PackBounded(api, c.NullifierSecret[1:]))
-	// 2. The envelope seals the same 32 bytes to the auditor, its cipher bounds every ciphertext byte.
-	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.Seal(api)
+	// 2. The envelope seals the same 32 bytes to the auditor under CRING/nfk1, its cipher bounds every ciphertext byte.
+	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
 	// 3. The statement names the member and the envelope the program reads from the instruction.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, nullifierPk, sealed)))
 	return nil

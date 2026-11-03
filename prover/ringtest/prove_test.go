@@ -19,7 +19,7 @@ import (
 )
 
 func TestAuditAndPolicySectionsProve(t *testing.T) {
-	requireProves(t, ringaudit.NewDeliveredCircuit(2), ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
+	requireProves(t, ringaudit.NewDeliveredCircuit(0, 2), ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
 	section, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestAuditsPinBlindingAndRingData(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
 	anonymous := ringaudit.NewAnonymousCircuit(shape)
 	t.Run("delivered ring data", func(t *testing.T) {
-		delivered := ringaudit.NewDeliveredCircuit(8)
+		delivered := ringaudit.NewDeliveredCircuit(0, 8)
 		d := ringaudit.NewDeliveredAudit(t, 8)
 		honest := d.Circuit(t)
 		d.Outputs[0].Utxo.RingDataHash = big.NewInt(7)

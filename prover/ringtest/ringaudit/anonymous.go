@@ -8,7 +8,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -81,7 +80,7 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 			a.Outputs = append(a.Outputs, AnonymousOutput{Utxo: a.newDummy(t, i).Utxo, OwnerKey: ringtest.Repeat(0xd1 + byte(i))})
 		}
 	}
-	a.Layout = Layout{Exits: hasExit(anonymousUtxos(a.Outputs)), FullOpenings: shape.FullOpenings}
+	a.Layout = Layout{FullOpenings: shape.FullOpenings}
 	return a
 }
 
@@ -150,7 +149,7 @@ func (a AnonymousAudit) NewPayment(t testing.TB, slot DeliverySlot) AnonymousOut
 	return AnonymousOutput{Utxo: a.ringUtxo(t, slot), OwnerKey: slot.OwnerKey}
 }
 
-// NewAnonymousExit carries the exit owner's key, the disclosure masks it.
+// NewAnonymousExit carries the exit owner's key, the record omits it.
 func (a AnonymousAudit) NewAnonymousExit(t testing.TB, i int) AnonymousOutput {
 	t.Helper()
 	return AnonymousOutput{Utxo: a.NewExit(t, i).Utxo, OwnerKey: ExitOwnerKey}
@@ -164,83 +163,85 @@ func (a AnonymousAudit) PrivateTxHash(t testing.TB) *big.Int {
 
 func (a AnonymousAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
-	return AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.Disclosure(t), a.Tail(t))
+	return a.StatementOver(t, a.Stream(t))
+}
+
+func (a AnonymousAudit) StatementOver(t testing.TB, stream Stream) []*big.Int {
+	t.Helper()
+	return AnonymousStatement(t, a.AuditHead(t, a.Layout, stream.Envelope(a.InputCount)), a.StatementOutputs(t, stream), a.Tail(t))
 }
 
 func (a AnonymousAudit) Tail(t testing.TB) AnonymousTail {
 	t.Helper()
-	return AnonymousTail{PrivateTxHash: a.PrivateTxHash(t), PartyIdentities: a.PartyIdentities}
+	return AnonymousTail{InputCount: a.InputCount, PrivateTxHash: a.PrivateTxHash(t), PartyIdentities: a.PartyIdentities}
 }
 
-func (a AnonymousAudit) StatementOutputs(t testing.TB) []StatementOutput {
+func (a AnonymousAudit) StatementOutputs(t testing.TB, stream Stream) []StatementOutput {
 	t.Helper()
 	outputs := make([]StatementOutput, len(a.Outputs))
 	for i, output := range a.Outputs {
-		outputs[i] = StatementOutput{Hash: output.Utxo.Hash(t), Exit: output.Utxo.isExit()}
+		length := audit.AnonymousRecordLen
+		if output.Utxo.isExit() {
+			length = audit.ExitRecordLen
+		}
+		outputs[i] = StatementOutput{Hash: output.Utxo.Hash(t), Exit: output.Utxo.isExit(), Ciphertext: stream.Record(i, length)}
 	}
 	return outputs
 }
 
-// Disclosure is the enciphered anonymous disclosure under a.Layout.
-func (a AnonymousAudit) Disclosure(t testing.TB) []*big.Int {
+func (a AnonymousAudit) Stream(t testing.TB) Stream {
 	t.Helper()
-	return a.DisclosureOf(t, a.SlotBytes(t), a.InputRecords(t))
+	return a.StreamOf(t, a.Evidence(t), a.Records(t))
 }
 
-// SlotBytes mirrors the slot bytes of audit openSlot, one record per output.
-func (a AnonymousAudit) SlotBytes(t testing.TB) [][]byte {
+func (a AnonymousAudit) StreamOf(t testing.TB, evidence []byte, records [][]byte) Stream {
 	t.Helper()
-	slots := make([][]byte, len(a.Outputs))
+	return a.Keys.SealAuditorStream(t, a.Shape.Ranges(), evidence, records)
+}
+
+func (a AnonymousAudit) Records(t testing.TB) [][]byte {
+	t.Helper()
+	records := make([][]byte, len(a.Outputs))
 	for i, output := range a.Outputs {
-		var owner, asset [32]byte
-		var amount [8]byte
-		if output.Utxo.isRingOutput() {
-			owner = output.OwnerKey
+		switch {
+		case output.Utxo.isRingOutput():
+			records[i] = slices.Concat(output.OwnerKey[:], exitRecord(t, output.Utxo))
+		case output.Utxo.isExit():
+			records[i] = exitRecord(t, output.Utxo)
+		default:
+			records[i] = make([]byte, audit.AnonymousRecordLen)
 		}
-		if output.Utxo.isUtxo() {
-			asset = spptest.MustFieldBytes(t, output.Utxo.Asset)
-			binary.BigEndian.PutUint64(amount[:], output.Utxo.Amount)
-		}
-		slots[i] = slices.Concat(owner[:], asset[:], amount[:])
-	}
-	return slots
-}
-
-// InputRecords is input 0's hash and the prefix pairs of the other published inputs, on an entry layout every published input's asset and blinding.
-func (a AnonymousAudit) InputRecords(t testing.TB) []*big.Int {
-	t.Helper()
-	published := a.Inputs[:a.InputCount]
-	if !a.Layout.FullOpenings {
-		return CommitmentRecords(spentHashes(t, published))
-	}
-	var records []*big.Int
-	for _, input := range published {
-		records = append(records, live(input, input.Asset), live(input, input.Blinding))
 	}
 	return records
 }
 
-// DisclosureOf enciphers the head of a.Layout over slots followed by records.
-func (a AnonymousAudit) DisclosureOf(t testing.TB, slots [][]byte, records []*big.Int) []*big.Int {
+func (a AnonymousAudit) Evidence(t testing.TB) []byte {
 	t.Helper()
-	var nullifierPks []*big.Int
-	var slotBytes []byte
-	if a.Layout.FullOpenings {
-		slotBytes = slices.Clone(a.SenderKey[:])
-	}
-	for i, output := range a.Outputs {
-		nullifierPks = append(nullifierPks, live(output.Utxo, output.Utxo.NullifierPk))
-		slotBytes = append(slotBytes, slots[i]...)
-	}
-	head := slices.Concat(nullifierPks, ringprotocol.PackDisclosure(slotBytes))
-	if a.Layout.FullOpenings {
-		var amounts []byte
-		for _, input := range a.Inputs {
-			amounts = binary.BigEndian.AppendUint64(amounts, live(input, new(big.Int).SetUint64(input.Amount)).Uint64())
+	published := a.Inputs[:a.InputCount]
+	var evidence []byte
+	if a.Shape.FullOpenings {
+		nullifierPk := spptest.MustFieldBytes(t, a.Inputs[0].NullifierPk)
+		evidence = slices.Concat(a.SenderKey[:], nullifierPk[:])
+		for _, input := range published {
+			evidence = append(evidence, entryInput(t, input)...)
 		}
-		head = slices.Concat([]*big.Int{a.Inputs[0].NullifierPk}, head, ringprotocol.PackDisclosure(amounts))
+		return evidence
 	}
-	return a.Keys.Disclose(t, a.Salt, slices.Concat(a.seedOut(a.Layout), head, records))
+	first := spptest.MustFieldBytes(t, published[0].spentHash(t))
+	evidence = first[:]
+	for _, input := range published[1:] {
+		evidence = append(evidence, inputPrefix(t, input.spentHash(t))...)
+	}
+	return evidence
+}
+
+func entryInput(t testing.TB, input Utxo) []byte {
+	t.Helper()
+	if !input.isUtxo() {
+		return make([]byte, audit.EntryInputLen)
+	}
+	asset, blinding := spptest.MustFieldBytes(t, input.Asset), spptest.MustFieldBytes(t, input.Blinding)
+	return slices.Concat(binary.BigEndian.AppendUint64(nil, input.Amount), asset[:], blinding[:])
 }
 
 // Circuit is the section assignment proving the statement.
@@ -283,23 +284,6 @@ func spentHashes(t testing.TB, utxos []Utxo) []*big.Int {
 		hashes[i] = utxo.spentHash(t)
 	}
 	return hashes
-}
-
-// CommitmentRecords mirrors the commitment tail of audit.
-func CommitmentRecords(hashes []*big.Int) []*big.Int {
-	records := []*big.Int{hashes[0]}
-	var prefixes []*big.Int
-	for _, hash := range hashes[1:] {
-		prefixes = append(prefixes, new(big.Int).Rsh(hash, 8*(32-audit.InputPrefixLen)))
-	}
-	for k := 0; k < len(prefixes); k += 2 {
-		second := big.NewInt(0)
-		if k+1 < len(prefixes) {
-			second = prefixes[k+1]
-		}
-		records = append(records, new(big.Int).Add(new(big.Int).Lsh(prefixes[k], audit.InputPrefixBits), second))
-	}
-	return records
 }
 
 func spareInput(i int) Utxo {

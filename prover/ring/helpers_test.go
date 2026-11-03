@@ -140,6 +140,10 @@ func (v memberView) request() any {
 	}
 }
 
+func (v deliveredView) request() any {
+	return DeliveredOutput{Output: v.Output, RecipientKey: v.RecipientKey, OwnerKey: v.OwnerKey, Body: v.Body}
+}
+
 func (v writeView) request() any {
 	old, low := v.Old, v.Low
 	return RecordWrite{

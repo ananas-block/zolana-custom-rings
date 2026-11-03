@@ -26,7 +26,7 @@ func compileAudit(t *testing.T, name string, circuit, honest frontend.Circuit) *
 
 func compileDelivered(t *testing.T, capacity int) *ringkey.Bound {
 	t.Helper()
-	return compileAudit(t, deliveredKeyName(capacity), ringaudit.NewDeliveredCircuit(capacity), ringaudit.NewDeliveredAudit(t, capacity).Circuit(t))
+	return compileAudit(t, deliveredKeyName(capacity), ringaudit.NewDeliveredCircuit(0, capacity), ringaudit.NewDeliveredAudit(t, capacity).Circuit(t))
 }
 
 func compileDeliveredSender(t *testing.T, shape ringaudit.SenderShape) *ringkey.Bound {

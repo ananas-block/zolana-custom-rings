@@ -5,16 +5,20 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // DeliveredAudit is a delivered confidential audit witness with every derived value explicit.
 type DeliveredAudit struct {
 	Transfer
-	Outputs []DeliveredOutput
-	Layout  Layout
+	Outputs                []DeliveredOutput
+	Layout                 Layout
+	InputClass, InputCount int
+	// Inputs is nil on the signer rail.
+	Inputs []Utxo
 }
 
 // NewDeliveredAudit fills capacity slots with ring outputs, then one exit and one dummy.
@@ -37,7 +41,6 @@ func DeliveredAuditOf(t testing.TB, capacity int, exits ...int) DeliveredAudit {
 			d.Outputs[i] = d.NewConfidentialOutput(t, i)
 		}
 	}
-	d.Layout.Exits = len(exits) > 0
 	return d
 }
 
@@ -49,34 +52,56 @@ func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutp
 
 func (d DeliveredAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
-	return DeliveredStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t))
+	return DeliveredStatement(t, d.Head(t), d.StatementOutputs(t))
+}
+
+func (d DeliveredAudit) Head(t testing.TB) AuditHead {
+	t.Helper()
+	return d.AuditHead(t, d.Layout, d.Stream(t).Envelope(d.evidenceCount()))
+}
+
+func (d DeliveredAudit) Ranges() audit.StreamRanges {
+	return audit.ConfidentialRanges(d.InputClass, len(d.Outputs))
+}
+
+func (d DeliveredAudit) evidenceCount() int {
+	if d.Inputs == nil {
+		return 0
+	}
+	return d.InputCount
+}
+
+func (d DeliveredAudit) Stream(t testing.TB) Stream {
+	t.Helper()
+	var evidence []byte
+	for _, input := range d.Inputs[:d.evidenceCount()] {
+		evidence = append(evidence, inputPrefix(t, input.spentHash(t))...)
+	}
+	records := make([][]byte, len(d.Outputs))
+	for i, output := range d.Outputs {
+		if output.Utxo.isExit() {
+			records[i] = exitRecord(t, output.Utxo)
+		}
+	}
+	return d.Keys.SealAuditorStream(t, d.Ranges(), evidence, records)
 }
 
 func (d DeliveredAudit) StatementOutputs(t testing.TB) []StatementOutput {
 	t.Helper()
+	bodyLen, recordLen := shared.BodyLen, audit.ExitRecordLen
+	if d.Layout.Escrow {
+		bodyLen, recordLen = shared.EscrowBodyLen, audit.EscrowExitRecordLen
+	}
+	stream := d.Stream(t)
 	outputs := make([]StatementOutput, len(d.Outputs))
 	for i, output := range d.Outputs {
-		outputs[i] = output.statementOutput(t)
+		ciphertext := output.Body[:bodyLen]
+		if output.Utxo.isExit() {
+			ciphertext = stream.Record(i, recordLen)
+		}
+		outputs[i] = output.statementOutput(t, ciphertext)
 	}
 	return outputs
-}
-
-// Disclosure is the enciphered delivered disclosure under d.Layout, slots without their 8 tail bytes on an exit-free transfer.
-func (d DeliveredAudit) Disclosure(t testing.TB) []*big.Int {
-	t.Helper()
-	var nullifierPks []*big.Int
-	var slotBytes []byte
-	for _, output := range d.Outputs {
-		if !d.Layout.Escrow {
-			nullifierPks = append(nullifierPks, live(output.Utxo, output.Utxo.NullifierPk))
-		}
-		bytes := output.slotBytes(t, make([]byte, 8))
-		if !d.Layout.Exits {
-			bytes = bytes[:32]
-		}
-		slotBytes = append(slotBytes, bytes...)
-	}
-	return d.Keys.Disclose(t, d.Salt, slices.Concat(d.seedOut(d.Layout), nullifierPks, ringprotocol.PackDisclosure(slotBytes)))
 }
 
 // Utxos is the opening of every output slot.
@@ -91,7 +116,7 @@ func (d DeliveredAudit) Utxos() []Utxo {
 // Circuit is the section assignment proving the statement.
 func (d DeliveredAudit) Circuit(t testing.TB) *DeliveredCircuit {
 	t.Helper()
-	c := NewDeliveredCircuit(len(d.Outputs))
+	c := NewDeliveredCircuit(d.InputClass, len(d.Outputs))
 	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
 	c.AuditWires = d.Wires(d.Layout)
 	for i, output := range d.Outputs {
@@ -106,7 +131,6 @@ type DeliveredSenderAudit struct {
 	Shape             SenderShape
 	SenderKey         [32]byte
 	PrivateTxBlinding *big.Int
-	Inputs            []Utxo
 }
 
 func NewDeliveredSenderAudit(t testing.TB, shape SenderShape) DeliveredSenderAudit {
@@ -116,8 +140,8 @@ func NewDeliveredSenderAudit(t testing.TB, shape SenderShape) DeliveredSenderAud
 		Shape:             shape,
 		SenderKey:         ringtest.Repeat(0xa1),
 		PrivateTxBlinding: big.NewInt(0x5b1d),
-		Inputs:            make([]Utxo, shape.Inputs),
 	}
+	d.InputClass, d.InputCount, d.Inputs = shape.Inputs, 2, make([]Utxo, shape.Inputs)
 	for i := range d.Inputs {
 		d.Inputs[i] = spareInput(i)
 	}
@@ -145,7 +169,7 @@ func (d DeliveredSenderAudit) PrivateTxHash(t testing.TB) *big.Int {
 
 func (d DeliveredSenderAudit) Statement(t testing.TB) []*big.Int {
 	t.Helper()
-	return DeliveredSenderStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t), d.PrivateTxHash(t), d.Sender(t))
+	return DeliveredSenderStatement(t, d.Head(t), d.StatementOutputs(t), d.InputCount, d.PrivateTxHash(t), d.Sender(t))
 }
 
 func (d DeliveredSenderAudit) Circuit(t testing.TB) *DeliveredSenderCircuit {
@@ -153,6 +177,7 @@ func (d DeliveredSenderAudit) Circuit(t testing.TB) *DeliveredSenderCircuit {
 	c := NewDeliveredSenderCircuit(d.Shape)
 	c.DeliveredCircuit = *d.DeliveredAudit.Circuit(t)
 	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
+	c.InputCount = d.InputCount
 	c.Sender = d.Sender(t)
 	c.PrivateTxHash = d.PrivateTxHash(t)
 	c.PrivateTxBlinding = d.PrivateTxBlinding

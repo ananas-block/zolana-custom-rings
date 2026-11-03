@@ -44,7 +44,7 @@ func TestRingRpcEscrowFixture(t *testing.T) {
 		"nullifierPk": fb(spptest.MustNullifierPk(t, new(big.Int).SetBytes(params.NullifierSecret[1:]))),
 		"auditorPk":   Bytes(auditor[:]),
 		"ephPk":       Bytes(eph[:]),
-		"ciphertext":  Bytes(keys.EnvelopeCiphertext(t, params.NullifierSecret, shared.NfKeyEncInfo)),
+		"ciphertext":  Bytes(keys.StreamCiphertext(t, params.NullifierSecret, shared.NfKeyEncInfo)),
 		"proof":       proof,
 	}, "", "  ")
 	if err != nil {

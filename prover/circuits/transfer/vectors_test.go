@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
@@ -23,16 +22,17 @@ type transferStatementVector struct {
 	TxViewingU       string `json:"tx_viewing_u"`
 	AuditorPubkey    string `json:"auditor_pubkey"`
 	EphU             string `json:"eph_u"`
-	Sealed           string `json:"sealed"`
+	Envelope         string `json:"envelope"`
 	Salt             string `json:"salt"`
 	Layout           int64  `json:"layout"`
 	Outputs          []struct {
-		Kind string `json:"kind"`
-		Hash string `json:"hash"`
-		U    string `json:"u"`
-		Body string `json:"body"`
+		Kind   string `json:"kind"`
+		Hash   string `json:"hash"`
+		U      string `json:"u"`
+		Body   string `json:"body"`
+		Record string `json:"record"`
 	} `json:"outputs"`
-	Disclosure      []string  `json:"disclosure"`
+	InputCount      int       `json:"input_count"`
 	PrivateTxHash   string    `json:"private_tx_hash"`
 	Sender          string    `json:"sender"`
 	PartyIdentities []string  `json:"party_identities"`
@@ -64,11 +64,12 @@ func TestTransferStatementsMatchRustVectors(t *testing.T) {
 					TxViewingU:     [32]byte(ringtest.VectorBytes(t, v.TxViewingU, 32)),
 					AuditorPubkey:  [33]byte(ringtest.VectorBytes(t, v.AuditorPubkey, 33)),
 					EphU:           [32]byte(ringtest.VectorBytes(t, v.EphU, 32)),
-					Sealed:         ringtest.VectorBytes(t, v.Sealed, 32),
+					Envelope:       ringtest.VectorBytes(t, v.Envelope, len(v.Envelope)/2),
 					Salt:           [16]byte(ringtest.VectorBytes(t, v.Salt, 16)),
 					Layout:         v.Layout,
 				},
 				InProof: v.InProof, Delegate: v.Delegate, Exempt: v.Exempt, ApprovalRequired: v.ApprovalRequired,
+				InputCount:     v.InputCount,
 				PrivateTxHash:  ringtest.VectorField(t, v.PrivateTxHash),
 				PolicyHash:     ringtest.VectorField(t, v.PolicyHash),
 				OwnRoot:        ringtest.VectorField(t, v.OwnRoot),
@@ -80,13 +81,9 @@ func TestTransferStatementsMatchRustVectors(t *testing.T) {
 				if o.U != "" {
 					output.U = [32]byte(ringtest.VectorBytes(t, o.U, 32))
 				}
-				if o.Body != "" {
-					output.Body = ringtest.VectorBytes(t, o.Body, shared.BodyLen)
-				}
+				ciphertext := o.Body + o.Record
+				output.Ciphertext = ringtest.VectorBytes(t, ciphertext, len(ciphertext)/2)
 				s.Outputs = append(s.Outputs, output)
-			}
-			for _, field := range v.Disclosure {
-				s.Disclosure = append(s.Disclosure, ringtest.VectorField(t, field))
 			}
 			for k := range s.PublicAssets {
 				s.PublicAssets[k], s.PublicNets[k], s.PublicGross[k] = ringtest.VectorField(t, v.PublicAssets[k]), ringtest.VectorField(t, v.PublicAmounts[k]), ringtest.VectorField(t, v.PublicGross[k])

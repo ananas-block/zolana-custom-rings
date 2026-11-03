@@ -6,7 +6,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // Statement is what the program holds for a transfer statement, the family picks the elements.
@@ -14,7 +13,7 @@ type Statement struct {
 	Head                                        ringaudit.AuditHead
 	InProof, Delegate, Exempt, ApprovalRequired bool
 	Outputs                                     []ringaudit.StatementOutput
-	Disclosure                                  []*big.Int
+	InputCount                                  int
 	PrivateTxHash                               *big.Int
 	// Sender is the confidential family's statement sender, PartyIdentities the anonymous family's parties.
 	Sender                                *big.Int
@@ -30,8 +29,8 @@ func (s Statement) ConfidentialElements(t testing.TB) []*big.Int {
 	t.Helper()
 	elements := append(s.Head.ElementsUnder(t, shared.TransferStatementDomain),
 		bitField(s.InProof), bitField(s.Delegate), bitField(s.Exempt), bitField(s.ApprovalRequired),
-		ringaudit.OutputChain(t, s.Outputs), ringaudit.BodyChain(t, s.Outputs), ringaudit.RecipientKeyChain(t, s.Outputs),
-		spptest.MustHashChain4(t, s.Disclosure),
+		ringaudit.OutputChain(t, s.Outputs), ringaudit.OutputCiphertextChain(t, s.Outputs), ringaudit.RecipientKeyChain(t, s.Outputs),
+		big.NewInt(int64(s.InputCount)), ringaudit.ExitsBitmap(s.Outputs),
 		s.PrivateTxHash, s.Sender, s.PolicyHash, s.OwnRoot, s.CuratorRoot,
 	)
 	elements = append(elements, s.Recipients...)
@@ -43,7 +42,8 @@ func (s Statement) AnonymousElements(t testing.TB) []*big.Int {
 	t.Helper()
 	elements := append(s.Head.ElementsUnder(t, shared.TransferStatementDomain),
 		bitField(s.Exempt), bitField(s.ApprovalRequired),
-		ringaudit.OutputChain(t, s.Outputs), spptest.MustHashChain4(t, s.Disclosure), s.PrivateTxHash,
+		ringaudit.OutputChain(t, s.Outputs), ringaudit.OutputCiphertextChain(t, s.Outputs),
+		big.NewInt(int64(s.InputCount)), ringaudit.ExitsBitmap(s.Outputs), s.PrivateTxHash,
 		s.PartyIdentities[0], s.PartyIdentities[1], s.PartyIdentities[2],
 		s.PolicyHash, s.OwnRoot, s.CuratorRoot,
 	)

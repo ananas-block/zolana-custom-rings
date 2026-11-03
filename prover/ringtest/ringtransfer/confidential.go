@@ -64,6 +64,7 @@ func (w Confidential) Build(t testing.TB) Built {
 	d := ringaudit.DeliveredAuditOf(t, w.Shape.Outputs, exits...)
 	escrow := w.Escrow || w.Rail == Delegate
 	d.Layout.Escrow = escrow
+	d.InputClass, d.InputCount = w.Shape.Inputs, publishedInputs
 	sender := Sender(t)
 	inputs := make([]ringaudit.Utxo, w.Shape.Inputs)
 	for i := range inputs {
@@ -73,6 +74,7 @@ func (w Confidential) Build(t testing.TB) Built {
 		nullifierPk := spptest.MustNullifierPk(t, big.NewInt(7))
 		inputs[0] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, 100, 51)
 		inputs[1] = ringaudit.SpentUtxo(t, sender, nullifierPk, d.RingProgramID, 60, 52)
+		d.Inputs = inputs
 	}
 	wires := d.Wires(d.Layout)
 	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
@@ -82,6 +84,7 @@ func (w Confidential) Build(t testing.TB) Built {
 	for i, input := range inputs {
 		c.Inputs[i] = input.Wires()
 	}
+	c.InputCount = d.InputCount
 	c.InProof, c.Delegate = bit(w.Rail == InProof), bit(w.Rail == Delegate)
 	c.Exempt, c.ApprovalRequired = bit(w.Exempt), bit(w.ApprovalRequired)
 	c.Sender, c.SenderPkHash = sender, sender
@@ -130,7 +133,7 @@ func (b Built) Statement(t testing.TB) []*big.Int {
 	c := b.Circuit
 	s := policyStatement(&c.Policy)
 	s.PrivateTxHash = ringtest.AsBigInt(c.PrivateTxHash)
-	s.Head, s.Outputs, s.Disclosure = b.Audit.AuditHead(t, b.Audit.Layout), b.Audit.StatementOutputs(t), b.Audit.Disclosure(t)
+	s.Head, s.Outputs, s.InputCount = b.Audit.Head(t), b.Audit.StatementOutputs(t), b.Audit.InputCount
 	s.InProof, s.Delegate = ringtest.AsBigInt(c.InProof).Sign() != 0, ringtest.AsBigInt(c.Delegate).Sign() != 0
 	s.Exempt, s.ApprovalRequired = ringtest.AsBigInt(c.Exempt).Sign() != 0, ringtest.AsBigInt(c.ApprovalRequired).Sign() != 0
 	s.Sender = ringtest.AsBigInt(c.Sender)

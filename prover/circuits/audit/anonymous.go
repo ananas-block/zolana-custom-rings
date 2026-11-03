@@ -7,7 +7,6 @@
 package audit
 
 import (
-	"math/big"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -19,195 +18,141 @@ import (
 )
 
 // Properties:
-// 1. tx_viewing_sk is clamped, its tagged public key and the envelope sealing it to the auditor are statement values.
+// 1. tx_viewing_sk is clamped, its tagged public key and the stream sealing it to the auditor are statement values.
 // 2. Every output slot is published, every UTXO is a ring output or an exit and carries no data hash and no ring data.
-// 3. A ring output's owner is the identity of the owner key the disclosure opens.
-// 4. Every UTXO's amount lies below 2^64, the disclosure opens every UTXO's asset and amount and leaves a dummy slot zero.
-// 5. Every exit discloses its full opening to the auditor, SeedOut opens the disclosure exactly when a UTXO exits.
+// 3. A ring output's owner is the identity of the owner key its record opens.
+// 4. Every UTXO's amount lies below 2^64, a ring output's and an exit's record open its asset, amount and nullifier key, a dummy's record encrypts zeros.
+// 5. Slot i's ciphertext is its record at the length its kind fixes.
 // 6. Every spent UTXO lies below the published input count, ahead of every dummy, and belongs to the hidden sender.
-// 7. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
+// 7. A commitment key spends notes of the ring only and its evidence holds spent UTXO 0's hash and the prefix of every other spent hash, an entry key's evidence opens every spent UTXO under one nullifier key with no data.
 // 8. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 9. The sender is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
-
-const (
-	// InputPrefixLen is the byte width of a spent hash's prefix on a commitment key.
-	InputPrefixLen = 16
-	// InputPrefixBits bounds a prefix of a canonical hash, two of them pack below q.
-	InputPrefixBits = 126
-)
 
 type AnonymousOutputWires struct {
 	Output   shared.UtxoWires
 	OwnerKey [32]frontend.Variable
 }
 
-type anonymousSlot struct {
-	shared.Output
-	// bytes is mask(ring, owner_key) ‖ be32(live * asset) ‖ u64be(live * amount), mirrored by ANONYMOUS_SLOT_BYTES in program-libs/interface/src/proof/disclosure.rs.
-	bytes []frontend.Variable
-}
+func (o AnonymousOutputWires) utxoWires() shared.UtxoWires { return o.Output }
 
-type spentInputs struct {
-	count ringgadget.Count
-	// hashes are the private_tx_hash input hashes, zero off a UTXO.
-	hashes []frontend.Variable
-	// tail is the disclosure of the input slots, zero off a UTXO.
-	tail countedTail
-	// amounts are u64be(amount) of every input slot on an entry key, zero off a UTXO.
-	amounts []frontend.Variable
-}
+func (AnonymousOutputWires) carriesBlinding() bool { return false }
 
-// Anonymous is the audit of every output slot and spent note of an anonymous transfer.
-type Anonymous struct {
-	Slots       []shared.Output
-	OutputChain frontend.Variable
-	// SenderPkHash is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
+type Spent struct {
 	SenderPkHash frontend.Variable
-	// InputHashes are utxo * hash per input slot, the input list of private_tx_hash.
-	InputHashes  []frontend.Variable
-	shape        AnonymousAuditShape
-	senderKey    []frontend.Variable
-	inputs       []shared.UtxoWires
-	nullifierPks []frontend.Variable
-	slotBytes    []frontend.Variable
-	spent        spentInputs
+	// InputHashes are utxo * hash per slot, the input list of private_tx_hash.
+	InputHashes []frontend.Variable
+	Evidence    Evidence
 }
 
-// Anonymous opens every output slot to the auditor and holds every spent UTXO to the hidden sender, below inputCount and ahead of every dummy.
-func (w AuditWires) Anonymous(api frontend.API, rc frontend.Rangechecker, e Envelope, layout Layout, shape AnonymousAuditShape, outputs []AnonymousOutputWires, inputs []shared.UtxoWires, inputCount frontend.Variable, senderKey []frontend.Variable) Anonymous {
-	senderPkHash := anonymousSender(api, shape, inputs, senderKey)
-	slots := make([]shared.Output, len(outputs))
-	var hashes, nullifierPks, slotBytes []frontend.Variable
-	for i, output := range outputs {
-		s := w.openSlot(api, rc, e, output, i)
-		slots[i] = s.Output
-		hashes = append(hashes, s.Hash)
-		nullifierPks = append(nullifierPks, api.Mul(s.Utxo, s.NullifierPk))
-		slotBytes = append(slotBytes, s.bytes...)
-	}
-	layout.AssertExits(api, slots)
-	spent := spend(api, rc, shape, inputs, inputCount, senderPkHash, w.RingProgramID)
-	return Anonymous{
-		Slots:        slots,
-		OutputChain:  gadget.HashChain4(api, hashes),
-		SenderPkHash: senderPkHash,
-		InputHashes:  spent.hashes,
-		shape:        shape,
-		senderKey:    senderKey,
-		inputs:       inputs,
-		nullifierPks: nullifierPks,
-		slotBytes:    slotBytes,
-		spent:        spent,
-	}
-}
-
-func anonymousSender(api frontend.API, shape AnonymousAuditShape, inputs []shared.UtxoWires, senderKey []frontend.Variable) frontend.Variable {
-	if shape.FullOpenings {
-		return gadget.SolanaOwnerIdentity(api, [32]frontend.Variable(senderKey))
-	}
-	return inputs[0].OwnerPkHash
-}
-
-func (w AuditWires) openSlot(api frontend.API, rc frontend.Rangechecker, e Envelope, o AnonymousOutputWires, i int) anonymousSlot {
-	slot := OpenOutput(api, o.Output)
-	w.AssertBlinding(api, e, slot, i)
-	// 1. No UTXO carries ring data the auditor cannot open.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: slot.RingDataHash})
-	// 2. The identity gadget bounds every owner key byte the disclosure packs.
-	assertOwnerKey(api, slot, o.OwnerKey)
-	// 3. be32 is the one asset encoding below q, the decomposition bounds a live amount below 2^64.
-	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Asset))
-	amount := ringgadget.UintBytesBE(api, api.Mul(slot.Utxo, slot.Amount), 8)
-	return anonymousSlot{Output: slot, bytes: slices.Concat(masked(api, slot.Ring, o.OwnerKey[:]), asset[:], amount)}
-}
-
-// spend proves every spent UTXO is the hidden sender's and lies below the published count.
-func spend(api frontend.API, rc frontend.Rangechecker, shape AnonymousAuditShape, inputs []shared.UtxoWires, inputCount, senderPkHash, ringProgramID frontend.Variable) spentInputs {
-	// 1. The published field count pins the input count, up to one trailing dummy on a commitment key.
-	spent := spentInputs{count: ringgadget.SelectCount(api, inputCount, 1, shape.InputClass)}
-	var openings [][]frontend.Variable
-	previousUtxo := frontend.Variable(1)
+// Spend holds every spent UTXO to the hidden sender, below the published count and ahead of every dummy.
+func Spend(api frontend.API, rc frontend.Rangechecker, shape AnonymousAuditShape, inputs []shared.UtxoWires, inputCount, ringProgramID frontend.Variable, senderKey []frontend.Variable) Spent {
+	// 1. Every input slot opens once, the steps below read the same wires.
+	slots := make([]shared.Output, len(inputs))
 	for i, input := range inputs {
-		// 2. Every spent UTXO lies below the count and is the hidden sender's.
-		opened, hash := spentBySender(api, input, spent.count.Active[i], 1, senderPkHash, i)
-		spent.hashes = append(spent.hashes, hash)
-		if !shape.FullOpenings {
-			// 3. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
-			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.RingProgramID, B: ringProgramID})
-		}
+		slots[i] = input.Open(api)
+	}
+	// 2. The sender is input 0's owner, or SenderKey's identity on an entry key.
+	senderPkHash := anonymousSender(api, shape, slots, senderKey)
+	// 3. SelectCount refuses a count outside 1 to the class, the count selects the evidence and the digest's length.
+	count := ringgadget.SelectCount(api, inputCount, 1, shape.InputClass)
+	spent := Spent{SenderPkHash: senderPkHash, Evidence: Evidence{Count: count}}
+	previousUtxo := frontend.Variable(1)
+	for i, slot := range slots {
+		// 4. Every spent UTXO lies below the count and is the hidden sender's.
+		hash := spentBySender(api, slot, count.Active[i], 1, senderPkHash, i)
+		spent.InputHashes = append(spent.InputHashes, hash)
 		if i > 0 {
-			// 4. A UTXO follows only a UTXO as in SPP, so spent UTXO k owns nullifier k.
-			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
+			// 5. A UTXO follows only a UTXO as SPP's AssertDummiesLast holds, so spent UTXO k owns nullifier k.
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: api.Sub(1, previousUtxo)})
 		}
-		previousUtxo = opened.Utxo
-		if !shape.FullOpenings {
+		previousUtxo = slot.Utxo
+		if shape.FullOpenings {
+			spent.Evidence.Entries = append(spent.Evidence.Entries, entryInput(api, rc, slot, slots[0].NullifierPk))
 			continue
 		}
-		// 5. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.NullifierPk, B: inputs[0].NullifierPk})
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.DataHash})
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.RingDataHash})
-		spent.amounts = append(spent.amounts, ringgadget.UintBytesBE(api, api.Mul(opened.Utxo, input.Amount), 8)...)
-		openings = append(openings, []frontend.Variable{api.Mul(opened.Utxo, input.Asset), api.Mul(opened.Utxo, input.Blinding)})
+		// 6. An evidence hash names a note of the ring, an audited output whose opening the auditor holds.
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Utxo, A: slot.RingProgramID, B: ringProgramID})
+		spent.Evidence.Entries = append(spent.Evidence.Entries, commitmentEntry(api, rc, hash, i))
 	}
 	if shape.FullOpenings {
-		spent.tail = uniformTail(openings)
-		return spent
+		// 7. The head opens the sender key SolanaOwnerIdentity bounds and the nullifier key of input 0, a UTXO, every live entry holds the same key.
+		nullifierPk := ringgadget.FieldToBytesBEWith(api, rc, slots[0].NullifierPk)
+		spent.Evidence.Head = slices.Concat(senderKey, nullifierPk[:])
 	}
-	// 5. Input 0 opens by its hash and names the sender, every other spent UTXO matches among the sender's notes by its prefix.
-	spent.tail = countedTail{fields: commitmentTail(api, rc, spent.hashes), published: func(n int) int { return 1 + n/2 }}
 	return spent
 }
 
-// Disclosure is the anonymous disclosure the layout selects, mirrored by DisclosureLayout::Anonymous in program-libs/interface/src/proof/disclosure.rs.
-//
-//	SeedOut under LayoutExits, then on a commitment key
-//	nullifier_pk per output, pack_disclosure(slot bytes per output), hash of input 0, prefix pairs of the other published inputs
-//	and on an entry key
-//	sender nullifier_pk, nullifier_pk per output, pack_disclosure(sender_key ‖ slot bytes per output),
-//	pack_disclosure(u64be(amount) per input slot), asset and blinding per published input
-func (a Anonymous) Disclosure(api frontend.API, e Envelope, layout Layout) frontend.Variable {
-	// SolanaOwnerIdentity bounds the sender key bytes, openSlot the slot bytes.
-	head := slices.Concat(a.nullifierPks, shared.PackDisclosure(api, slices.Concat(a.senderKey, a.slotBytes)))
-	if a.shape.FullOpenings {
-		// Input 0 is a UTXO, its key is the key of every spent UTXO.
-		head = slices.Concat([]frontend.Variable{a.inputs[0].NullifierPk}, head, shared.PackDisclosure(api, a.spent.amounts))
+func anonymousSender(api frontend.API, shape AnonymousAuditShape, slots []shared.Output, senderKey []frontend.Variable) frontend.Variable {
+	if shape.FullOpenings {
+		return gadget.SolanaOwnerIdentity(api, [32]frontend.Variable(senderKey))
 	}
-	return e.disclose(api, layout.choices(api, LayoutExits), func(choice layoutChoice) disclosureLayout {
-		return choice.counted(api, slices.Concat(e.seedOut(choice), head), a.spent.tail, a.spent.count)
-	})
+	return slots[0].OwnerPkHash
+}
+
+// entryInput holds a live entry input to the one nullifier key with no data, zero bytes off a UTXO, mirrored by EntryInput in program-libs/interface/src/proof/audit_stream.rs.
+//
+//	u64be(amount) ‖ be32(asset) ‖ be32(blinding)
+func entryInput(api frontend.API, rc frontend.Rangechecker, slot shared.Output, nullifierPk frontend.Variable) []frontend.Variable {
+	// 1. The auditor rebuilds a live input's owner from the head's one nullifier key, another key would hide a note of another owner.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Utxo, A: slot.NullifierPk, B: nullifierPk})
+	// 2. The evidence opens no data, a data hash would commit a note the auditor cannot rebuild.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: slot.DataHash})
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: slot.RingDataHash})
+	// 3. FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
+	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Asset))
+	blinding := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Blinding))
+	return slices.Concat(ringgadget.UintBytesBE(api, api.Mul(slot.Utxo, slot.Amount), amountLen), asset[:], blinding[:])
+}
+
+// commitmentEntry is be32(input_hash_0) naming the sender on slot 0 and prefix16(input_hash_i) past it.
+func commitmentEntry(api frontend.API, rc frontend.Rangechecker, hash frontend.Variable, i int) []frontend.Variable {
+	if i > 0 {
+		return inputPrefix(api, rc, hash)
+	}
+	bytes := ringgadget.FieldToBytesBEWith(api, rc, hash)
+	return bytes[:]
+}
+
+// AnonymousRecords holds a ring output's owner key and returns every slot's record, zero on a dummy, mirrored by AnonymousRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
+//
+//	owner_key ‖ be32(asset) ‖ u64be(amount) ‖ be32(nullifier_pk) on a ring output, the exit record on an exit
+func (o Opened) AnonymousRecords(api frontend.API, outputs []AnonymousOutputWires) [][]frontend.Variable {
+	records := make([][]frontend.Variable, len(outputs))
+	for i, output := range outputs {
+		slot, exitRecord := o.Slots[i], o.bytes[i].exitRecord()
+		// 1. A ring output's owner is the identity of its owner key, SolanaOwnerIdentity bounds every byte the record reads.
+		assertOwnerKey(api, slot, output.OwnerKey)
+		ringRecord := slices.Concat(output.OwnerKey[:], exitRecord)
+		// 2. Ring and Exit exclude each other and both clear on a dummy, every byte holds one kind and a dummy encrypts zeros.
+		records[i] = make([]frontend.Variable, AnonymousRecordLen)
+		for j := range records[i] {
+			records[i][j] = api.Mul(slot.Ring, ringRecord[j])
+			if j < ExitRecordLen {
+				records[i][j] = api.Add(records[i][j], api.Mul(slot.Exit, exitRecord[j]))
+			}
+		}
+	}
+	return records
+}
+
+// RecordChain is HashChain4 of hash_bytes(record), 72 bytes on an exit and 104 otherwise, the program hashes the same bytes.
+func (o Opened) RecordChain(api frontend.API, stream Stream) frontend.Variable {
+	ciphertexts := make([]frontend.Variable, len(o.Slots))
+	for i, slot := range o.Slots {
+		record := stream.record(i)
+		ciphertexts[i] = api.Select(slot.Exit, gadget.HashBoundedBytes(api, record[:ExitRecordLen]), gadget.HashBoundedBytes(api, record[:AnonymousRecordLen]))
+	}
+	return gadget.HashChain4(api, ciphertexts)
 }
 
 // spentBySender holds slot i to the sender and to live, slot 0 a UTXO while required, and returns its spent hash, zero off a UTXO.
-func spentBySender(api frontend.API, input shared.UtxoWires, live, required, sender frontend.Variable, i int) (shared.Output, frontend.Variable) {
-	opened := input.Open(api)
+func spentBySender(api frontend.API, slot shared.Output, live, required, sender frontend.Variable, i int) frontend.Variable {
 	// An input at or past the count is no UTXO, so no spent UTXO escapes the published inputs.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, live), V: opened.Utxo})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.OwnerPkHash, B: sender})
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, live), V: slot.Utxo})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Utxo, A: slot.OwnerPkHash, B: sender})
 	if i == 0 {
 		// Input 0 is a UTXO while required, so the sender owns a real spent UTXO.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: required, V: api.Sub(1, opened.Utxo)})
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: required, V: api.Sub(1, slot.Utxo)})
 	}
-	return opened, api.Mul(opened.Utxo, opened.Hash)
-}
-
-// commitmentTail is hashes[0] in full, then the prefixes of the other hashes two per field, the last half zero for an odd prefix count.
-func commitmentTail(api frontend.API, rc frontend.Rangechecker, hashes []frontend.Variable) []frontend.Variable {
-	prefixes := make([]frontend.Variable, 0, len(hashes))
-	for _, hash := range hashes[1:] {
-		// The canonical split leaves one prefix per hash, the prefix of hash + q would name another note.
-		prefix, _ := ringgadget.SplitField(api, rc, hash, 8*(32-InputPrefixLen))
-		prefixes = append(prefixes, prefix)
-	}
-	shift := new(big.Int).Lsh(big.NewInt(1), InputPrefixBits)
-	tail := []frontend.Variable{hashes[0]}
-	for k := 0; k < len(prefixes); k += 2 {
-		second := frontend.Variable(0)
-		if k+1 < len(prefixes) {
-			second = prefixes[k+1]
-		}
-		// Both prefixes lie below 2^InputPrefixBits, the pair packs without a wrap and decodes to one pair.
-		tail = append(tail, api.Add(api.Mul(prefixes[k], shift), second))
-	}
-	return tail
+	return api.Mul(slot.Utxo, slot.Hash)
 }

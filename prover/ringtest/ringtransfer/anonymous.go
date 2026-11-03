@@ -90,7 +90,8 @@ func (b BuiltAnonymous) Statement(t testing.TB) []*big.Int {
 	c := b.Circuit
 	s := policyStatement(&c.Policy)
 	s.PrivateTxHash = ringtest.AsBigInt(c.PrivateTxHash)
-	s.Head, s.Outputs, s.Disclosure = b.Audit.AuditHead(t, b.Audit.Layout), b.Audit.StatementOutputs(t), b.Audit.Disclosure(t)
+	stream := b.Audit.Stream(t)
+	s.Head, s.Outputs, s.InputCount = b.Audit.AuditHead(t, b.Audit.Layout, stream.Envelope(b.Audit.InputCount)), b.Audit.StatementOutputs(t, stream), b.Audit.InputCount
 	s.Exempt, s.ApprovalRequired = ringtest.AsBigInt(c.Exempt).Sign() != 0, ringtest.AsBigInt(c.ApprovalRequired).Sign() != 0
 	for i, party := range c.PartyIdentities {
 		s.PartyIdentities[i] = ringtest.AsBigInt(party)

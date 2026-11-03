@@ -1,6 +1,6 @@
 {
   "circuitType": "custom-ring-transfer-anonymous-2-in24-w4",
-  "publicInputHash": "0x2859150e081d9e26cbd4cc5a4ff808f9a2178365dc7c6febc7a61fc03a3eb1d8",
+  "publicInputHash": "0x0710fb3a0b798158025b563e76e494cce6de223fe80b229793c4c4c379ace645",
   "firstNullifier": "0x0000000000000000000000000000000000000000000000000000000000001f1f",
   "txViewingSk": "0x001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e",
   "ephSk": "0x01232021262724252a2b28292e2f2c2d32333031363734353a3b38393e3f3c3d",
@@ -9,6 +9,7 @@
   "layout": 0,
   "exempt": false,
   "approvalRequired": false,
+  "inputCount": 2,
   "privateTxHash": "0x1db5f0fb306ff81af1cb3c79f973db52e896f464611e7d3bbcb9d5d28ce3ac62",
   "privateTxBlinding": "0x0000000000000000000000000000000000000000000000000000000000005b1d",
   "withdrawalCount": 1,
@@ -1774,7 +1775,6 @@
       "ownerKey": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
     }
   ],
-  "inputCount": 2,
   "inputs": [
     {
       "domain": "0x0000000000000000000000000000000000000000000000000000000000000003",

@@ -3,8 +3,10 @@ package ringaudit
 
 import (
 	"math/big"
+	"slices"
 	"testing"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
@@ -76,7 +78,7 @@ type Sealed struct {
 	CiphertextHash *big.Int
 }
 
-// Seal mirrors shared.Envelope.Seal under the key schedule of info.
+// Seal mirrors shared.Envelope.Seal, the merge envelope.
 func (k Keys) Seal(t testing.TB, plaintext []byte, info string) Sealed {
 	t.Helper()
 	return k.Sealed(t, k.EnvelopeCiphertext(t, plaintext, info))
@@ -88,14 +90,18 @@ func (k Keys) EnvelopeCiphertext(t testing.TB, plaintext []byte, info string) []
 	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
 }
 
-// SealAuditStream mirrors shared.Envelope.SealAuditStream.
-func (k Keys) SealAuditStream(t testing.TB, plaintext []byte) Sealed {
+func (k Keys) SealStream(t testing.TB, plaintext []byte, label string) Sealed {
 	t.Helper()
-	return k.Sealed(t, k.auditStreamCiphertext(t, plaintext))
+	return k.Sealed(t, k.StreamCiphertext(t, plaintext, label))
 }
 
-// AuditHead is the statement head of a transfer sealing the transaction viewing key under the audit stream.
-func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]byte) AuditHead {
+func (k Keys) StreamCiphertext(t testing.TB, plaintext []byte, label string) []byte {
+	t.Helper()
+	key, nonce := ringprotocol.AuditStreamKeys(t, k.envelopeSecret(t), label)
+	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
+}
+
+func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]byte, envelope []byte) AuditHead {
 	t.Helper()
 	return AuditHead{
 		FirstNullifier: firstNullifier,
@@ -103,21 +109,9 @@ func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]
 		TxViewingU:     [32]byte(k.txPk[1:]),
 		AuditorPubkey:  ringprotocol.Tagged(k.auditorPk[:]),
 		EphU:           [32]byte(k.ephPk[1:]),
-		Sealed:         k.auditStreamCiphertext(t, k.txViewingSk[:]),
+		Envelope:       envelope,
 		Salt:           salt,
 	}
-}
-
-func (k Keys) auditStreamCiphertext(t testing.TB, plaintext []byte) []byte {
-	t.Helper()
-	key, nonce := ringprotocol.AuditStreamKeys(t, k.envelopeSecret(t))
-	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
-}
-
-// Disclose adds the CROD pad of the transaction key and salt to every field.
-func (k Keys) Disclose(t testing.TB, salt [16]byte, fields []*big.Int) []*big.Int {
-	t.Helper()
-	return ringprotocol.Disclose(t, shared.DisclosurePadDomain, k.txViewingSk, salt, fields)
 }
 
 // envelopeSecret is Poseidon(CR_S, pack_be(dh), pack_be(eph), pack_be(auditor)) of the envelope.
@@ -140,4 +134,30 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 		EphHi:          ephHi,
 		CiphertextHash: ringtest.HashBytes(t, ciphertext),
 	}
+}
+
+// Stream keeps the whole ciphertext, Envelope and Record cut what the frame transmits.
+type Stream struct {
+	Ranges     audit.StreamRanges
+	Ciphertext []byte
+}
+
+// SealAuditorStream mirrors audit.AuditWires.SealStream.
+func (k Keys) SealAuditorStream(t testing.TB, ranges audit.StreamRanges, evidence []byte, records [][]byte) Stream {
+	t.Helper()
+	plaintext := slices.Concat(k.txViewingSk[:], evidence)
+	plaintext = append(plaintext, make([]byte, ranges.RecordOffset(0)-len(plaintext))...)
+	for i, record := range records {
+		plaintext = append(append(plaintext, record...), make([]byte, ranges.RecordOffset(i+1)-len(plaintext)-len(record))...)
+	}
+	return Stream{Ranges: ranges, Ciphertext: k.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
+}
+
+func (s Stream) Envelope(count int) []byte {
+	return s.Ciphertext[:s.Ranges.EnvelopeLen(count)]
+}
+
+func (s Stream) Record(i, length int) []byte {
+	offset := s.Ranges.RecordOffset(i)
+	return s.Ciphertext[offset : offset+length]
 }

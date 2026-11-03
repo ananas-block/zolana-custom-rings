@@ -2,7 +2,6 @@ package ringaudit
 
 import (
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
@@ -19,10 +18,10 @@ type AuditHead struct {
 	TxViewingU     [32]byte
 	AuditorPubkey  [33]byte
 	EphU           [32]byte
-	Sealed         []byte
-	Salt           [16]byte
-	// Layout is the raw statement value, Layout.Value of the transfer's flags.
-	Layout int64
+	// Envelope is the transmitted envelope ciphertext, its digest head element 9.
+	Envelope []byte
+	Salt     [16]byte
+	Layout   int64
 }
 
 func (h AuditHead) Elements(t testing.TB) []*big.Int {
@@ -32,7 +31,7 @@ func (h AuditHead) Elements(t testing.TB) []*big.Int {
 	ephLo, ephHi := ringprotocol.Pack33(ringprotocol.Tagged(h.EphU[:]))
 	return []*big.Int{
 		big.NewInt(shared.AuditStatementDomain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
-		auditorLo, auditorHi, ephLo, ephHi, ringtest.HashBytes(t, h.Sealed), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
+		auditorLo, auditorHi, ephLo, ephHi, ringprotocol.EnvelopeDigest(t, h.Envelope), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
 	}
 }
 
@@ -46,44 +45,36 @@ func (h AuditHead) ElementsUnder(t testing.TB, domain int64) []*big.Int {
 
 // Layout is a transfer's layout flags, mirrors the Layout flags of package audit.
 type Layout struct {
-	Exits        bool
 	Escrow       bool
 	Reserved     bool
 	FullOpenings bool
 }
 
 func (l Layout) Value() int64 {
-	return ringtest.Bit(l.Exits)*audit.LayoutExits | ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
+	return ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
 		ringtest.Bit(l.Reserved)*audit.LayoutReserved | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
-}
-
-func hasExit(utxos []Utxo) bool {
-	return slices.ContainsFunc(utxos, Utxo.isExit)
 }
 
 // StatementOutput is one published output as an audit statement reads it.
 type StatementOutput struct {
-	Hash *big.Int
-	// Exit chains zero for its body and recipient key.
-	Exit bool
-	U    [32]byte
-	Body []byte
+	Hash       *big.Int
+	Exit       bool
+	U          [32]byte
+	Ciphertext []byte
 }
 
-// AnonymousTail is what only an anonymous audit statement binds.
 type AnonymousTail struct {
+	InputCount      int
 	PrivateTxHash   *big.Int
 	PartyIdentities [3]*big.Int
 }
 
-// DeliveredStatement mirrors AuditKind::Delivered.
-func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
+func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput) []*big.Int {
 	t.Helper()
 	return append(head.Elements(t),
-		OutputChain(t, outputs), BodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), RecipientKeyChain(t, outputs))
+		OutputChain(t, outputs), OutputCiphertextChain(t, outputs), RecipientKeyChain(t, outputs), ExitsBitmap(outputs))
 }
 
-// RecipientKeyChain chains pack_be(u) per slot, zeros on an exit.
 func RecipientKeyChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	var keys []*big.Int
@@ -97,21 +88,18 @@ func RecipientKeyChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	return spptest.MustHashChain4(t, keys)
 }
 
-// DeliveredSenderStatement mirrors AuditKind::Delivered on the in-proof owner rail.
-func DeliveredSenderStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, privateTxHash, sender *big.Int) []*big.Int {
+func DeliveredSenderStatement(t testing.TB, head AuditHead, outputs []StatementOutput, inputCount int, privateTxHash, sender *big.Int) []*big.Int {
 	t.Helper()
-	return append(DeliveredStatement(t, head, outputs, disclosure), privateTxHash, sender)
+	return append(DeliveredStatement(t, head, outputs), big.NewInt(int64(inputCount)), privateTxHash, sender)
 }
 
-// AnonymousStatement mirrors AuditKind::Anonymous.
-func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
+func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, tail AnonymousTail) []*big.Int {
 	t.Helper()
 	return append(head.Elements(t),
-		OutputChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash,
+		OutputChain(t, outputs), OutputCiphertextChain(t, outputs), big.NewInt(int64(tail.InputCount)), ExitsBitmap(outputs), tail.PrivateTxHash,
 		tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
 }
 
-// OutputChain is HashChain4 over every slot hash, dummies included.
 func OutputChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, len(outputs))
@@ -121,15 +109,21 @@ func OutputChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	return spptest.MustHashChain4(t, hashes)
 }
 
-// BodyChain chains hash_bytes(body), zero on an exit.
-func BodyChain(t testing.TB, outputs []StatementOutput) *big.Int {
+func OutputCiphertextChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, len(outputs))
 	for i, output := range outputs {
-		hashes[i] = big.NewInt(0)
-		if !output.Exit {
-			hashes[i] = ringtest.HashBytes(t, output.Body)
-		}
+		hashes[i] = ringtest.HashBytes(t, output.Ciphertext)
 	}
 	return spptest.MustHashChain4(t, hashes)
+}
+
+func ExitsBitmap(outputs []StatementOutput) *big.Int {
+	bitmap := new(big.Int)
+	for i, output := range outputs {
+		if output.Exit {
+			bitmap.SetBit(bitmap, i, 1)
+		}
+	}
+	return bitmap
 }

@@ -140,7 +140,7 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 	if policy.Curator {
 		c.CuratorRoot = curator.Root()
 	}
-	ciphertext := keys.EnvelopeCiphertext(t, plaintext, shared.DepositEncInfo)
+	ciphertext := keys.StreamCiphertext(t, plaintext, shared.DepositEncInfo)
 	sealed := keys.Sealed(t, ciphertext)
 	// Ordered as DepositPublicInput::elements.
 	chain := []*big.Int{big.NewInt(shared.DepositStatementDomain), ringtest.AsBigInt(c.ContextHash), big.NewInt(int64(count)), ringtest.AsBigInt(c.Anonymous)}

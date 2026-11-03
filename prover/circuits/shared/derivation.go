@@ -23,8 +23,6 @@ const (
 	DeliveredSlotSecretDomain = 0x43524453
 	// BlindingSeedDomain = "CRBS"
 	BlindingSeedDomain = 0x43524253
-	// DisclosurePadDomain = "CROD"
-	DisclosurePadDomain = 0x43524f44
 	// PolicyTableDomain = "CRTB"
 	PolicyTableDomain = 0x43525442
 	// QueueWriteDomain = "CRQW"
@@ -46,7 +44,7 @@ const (
 )
 
 // TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
-const TransferStatementVersion = 1
+const TransferStatementVersion = 2
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 const PolicyStatementVersion = 4
@@ -61,16 +59,23 @@ const (
 
 // Key schedule labels, distinct per ciphertext kind.
 const (
-	// AuditEncInfo is the audit stream schedule tag, mirrored by AUDIT_STREAM_INFO in program-libs/interface/src/codec/anonymous_output.rs.
+	// AuditEncInfo labels the auditor stream, mirrored by AUDIT_STREAM_LABEL in program-libs/interface/src/proof/domain.rs.
 	AuditEncInfo = "CRING/adt1"
-	// NfKeyEncInfo separates the key ciphertext from the audit one, mirrored by NF_KEY_ENC_INFO in sdk-libs/client/src/crypto/encryption/mod.rs.
-	NfKeyEncInfo   = "CRING/nfk1"
+	// BodyEncInfo labels a delivered body, mirrored by DELIVERED_BODY_LABEL.
+	BodyEncInfo = "CRING/bdy1"
+	// NfKeyEncInfo labels the register key ciphertext, mirrored by REGISTER_KEY_LABEL.
+	NfKeyEncInfo = "CRING/nfk1"
+	// DepositEncInfo labels the deposit stream, mirrored by DEPOSIT_AUDIT_LABEL.
 	DepositEncInfo = "CRING/dep1"
 	MergeEncInfo   = "CRING/mrg1"
 )
 
-// BodyLen is be32(blinding) ‖ u64be(amount).
-const BodyLen = 40
+const (
+	// BodyLen is a delivered body, mirrored by DELIVERED_BODY_LEN.
+	BodyLen = 104
+	// EscrowBodyLen is a delivered body under key escrow, mirrored by ESCROWED_DELIVERED_BODY_LEN.
+	EscrowBodyLen = 72
+)
 
 // DeliveredSlot is a delivered slot secret preimage, Agreement = pack_be(X25519(tx_viewing_sk, u)) and each key pack_be(0x04 ‖ u).
 type DeliveredSlot struct {

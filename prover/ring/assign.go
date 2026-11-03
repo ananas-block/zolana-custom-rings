@@ -10,6 +10,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
 var errMissing = errors.New("missing")
@@ -163,6 +164,21 @@ func (m MemberOpening) view() any {
 		}},
 		Path: newQuadPath(m.Index, m.Path),
 	}
+}
+
+// deliveredView mirrors audit.DeliveryWires field for field.
+type deliveredView struct {
+	Output                       Opening
+	RecipientKey, OwnerKey, Body Bytes
+}
+
+// view pads an escrow body to the circuit's array, the circuit binds its first bytes alone.
+func (d DeliveredOutput) view() any {
+	body := d.Body
+	if len(body) == shared.EscrowBodyLen {
+		body = slices.Concat(body, make(Bytes, shared.BodyLen-shared.EscrowBodyLen))
+	}
+	return deliveredView{Output: d.Output, RecipientKey: d.RecipientKey, OwnerKey: d.OwnerKey, Body: body}
 }
 
 // writeView mirrors registry.RecordWrite field for field.

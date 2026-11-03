@@ -26,7 +26,7 @@ func keyEnvelope(t *testing.T, member *big.Int) *registry.RegisterKeyCircuit {
 	ringtest.SetBytes(c.NullifierSecret[:], secret[:])
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
-	c.PublicInputHash = keyStatement(t, member, spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:])), keys.Seal(t, secret[:], shared.NfKeyEncInfo))
+	c.PublicInputHash = keyStatement(t, member, spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:])), keys.SealStream(t, secret[:], shared.NfKeyEncInfo))
 	return c
 }
 
@@ -61,14 +61,14 @@ func TestRegisterKeyRefusals(t *testing.T) {
 			// The statement seals the 32 tampered bytes, the key still derives from the low 31.
 			secret := ringtest.Scalar(0x07)
 			secret[0] = 1
-			sealed := ringaudit.DefaultKeys(t).Seal(t, secret[:], shared.NfKeyEncInfo)
+			sealed := ringaudit.DefaultKeys(t).SealStream(t, secret[:], shared.NfKeyEncInfo)
 			c.NullifierSecret[0] = 1
 			c.PublicInputHash = keyStatement(t, big.NewInt(0x0a), spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:])), sealed)
 		}, statement},
 		{"statement naming a key the envelope does not seal", func(t *testing.T, c *registry.RegisterKeyCircuit) {
 			secret := ringtest.Scalar(0x07)
 			secret[0] = 0
-			sealed := ringaudit.DefaultKeys(t).Seal(t, secret[:], shared.NfKeyEncInfo)
+			sealed := ringaudit.DefaultKeys(t).SealStream(t, secret[:], shared.NfKeyEncInfo)
 			c.PublicInputHash = keyStatement(t, big.NewInt(0x0a), spptest.MustNullifierPk(t, big.NewInt(0x08)), sealed)
 		}, statement},
 		{"envelope sealed to another auditor", func(_ *testing.T, c *registry.RegisterKeyCircuit) {

@@ -120,8 +120,8 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	}
 	// 7. On a policy ring every deposited asset meets the asset rules under the bound roots.
 	c.DepositAssets.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)
-	// 8. The statement binds each commitment SPP receives to the ciphertext the auditor opens, the cipher bounds its bytes.
-	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.Seal(api)
+	// 8. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep1 stream puts slot i at counter 2 + 6i and the cipher bounds its bytes.
+	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))
 	return nil
 }

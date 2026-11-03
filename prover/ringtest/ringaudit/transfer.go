@@ -58,20 +58,11 @@ func (tr Transfer) DeliveredSlotSecret(t testing.TB, u [32]byte, i int) *big.Int
 	return ringprotocol.DeliveredSlotSecret(t, tr.Keys.txViewingSk, u, tr.Salt, i, tr.FirstNullifier)
 }
 
-// AuditHead is the statement head the program builds for the transfer under layout.
-func (tr Transfer) AuditHead(t testing.TB, layout Layout) AuditHead {
+func (tr Transfer) AuditHead(t testing.TB, layout Layout, envelope []byte) AuditHead {
 	t.Helper()
-	head := tr.Keys.AuditHead(t, tr.FirstNullifier, tr.RingProgramID, tr.Salt)
+	head := tr.Keys.AuditHead(t, tr.FirstNullifier, tr.RingProgramID, tr.Salt, envelope)
 	head.Layout = layout.Value()
 	return head
-}
-
-// seedOut is SeedOut when the layout discloses it.
-func (tr Transfer) seedOut(layout Layout) []*big.Int {
-	if layout.Exits {
-		return []*big.Int{tr.SeedOut}
-	}
-	return nil
 }
 
 // Wires are the audit wires of the transfer under layout.
@@ -100,7 +91,7 @@ func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot) DeliveredOutpu
 		Utxo:         utxo,
 		RecipientKey: slot.RecipientKey,
 		OwnerKey:     slot.OwnerKey,
-		Body:         ringprotocol.SealBody(t, tr.DeliveredSlotSecret(t, slot.RecipientKey, slot.Index), utxo.Blinding, slot.Amount),
+		Body:         ringprotocol.Body{Blinding: utxo.Blinding, Amount: slot.Amount, OwnerKey: slot.OwnerKey, NullifierPk: slot.NullifierPk}.Seal(t, tr.DeliveredSlotSecret(t, slot.RecipientKey, slot.Index)),
 	}
 }
 
@@ -171,21 +162,19 @@ func (o DeliveredOutput) Wires() audit.DeliveryWires {
 	return w
 }
 
-func (o DeliveredOutput) statementOutput(t testing.TB) StatementOutput {
+func (o DeliveredOutput) statementOutput(t testing.TB, ciphertext []byte) StatementOutput {
 	t.Helper()
-	return StatementOutput{Hash: o.Utxo.Hash(t), Exit: o.Utxo.isExit(), U: o.RecipientKey, Body: o.Body[:]}
+	return StatementOutput{Hash: o.Utxo.Hash(t), Exit: o.Utxo.isExit(), U: o.RecipientKey, Ciphertext: ciphertext}
 }
 
-// slotBytes mirrors audit slotDisclosure.
-func (o DeliveredOutput) slotBytes(t testing.TB, ringTail []byte) []byte {
+func exitRecord(t testing.TB, u Utxo) []byte {
 	t.Helper()
-	out := make([]byte, 32+len(ringTail))
-	switch {
-	case o.Utxo.isRingOutput():
-		copy(out, slices.Concat(o.OwnerKey[:], ringTail))
-	case o.Utxo.isExit():
-		asset := spptest.MustFieldBytes(t, o.Utxo.Asset)
-		copy(out, binary.BigEndian.AppendUint64(asset[:], o.Utxo.Amount))
-	}
-	return out
+	asset, nullifierPk := spptest.MustFieldBytes(t, u.Asset), spptest.MustFieldBytes(t, u.NullifierPk)
+	return slices.Concat(asset[:], binary.BigEndian.AppendUint64(nil, u.Amount), nullifierPk[:])
+}
+
+func inputPrefix(t testing.TB, hash *big.Int) []byte {
+	t.Helper()
+	bytes := spptest.MustFieldBytes(t, hash)
+	return bytes[:audit.InputPrefixLen]
 }

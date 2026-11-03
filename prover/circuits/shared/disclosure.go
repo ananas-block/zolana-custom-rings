@@ -1,8 +1,9 @@
-// Packs and masks the fields a disclosure shows the auditor. A salt used twice
-// under one key repeats the mask, so every disclosure needs a fresh salt.
+// Packs ciphertext bytes for a statement digest and masks the merge fields. A
+// salt used twice under one key repeats the merge mask, so every merge needs a
+// fresh salt.
 //
 // Read after ringgadget/bytes.go, shared/derivation.go. Read before
-// shared/envelope.go, audit/layout.go, merge.go.
+// shared/envelope.go, audit/audit.go, merge.go.
 
 package shared
 
@@ -32,7 +33,7 @@ func Zeros(n int) []frontend.Variable {
 	return out
 }
 
-// DisclosurePad needs a fresh salt per key, a reused salt repeats the pad.
+// DisclosurePad is the merge pad, a reused salt under one key repeats it.
 func DisclosurePad(api frontend.API, domain uint64, key [2]frontend.Variable, salt frontend.Variable, n int) []frontend.Variable {
 	seed := gadget.PoseidonHash(api, []frontend.Variable{domain, key[0], key[1], salt})
 	pad := make([]frontend.Variable, n)

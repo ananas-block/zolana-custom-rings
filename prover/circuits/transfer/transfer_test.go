@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	confidential2 = transfer.ConfidentialShape{Inputs: 40, Outputs: 2, Withdrawals: 4}
+	confidential2 = transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 4}
 	anonymous2    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
 	entry2        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
 )
@@ -61,6 +61,16 @@ func TestAnonymousRailsSolve(t *testing.T) {
 	}
 }
 
+// The signer rail's envelope holds tx_viewing_sk alone at any published count.
+func TestSignerRailEnvelopeIgnoresTheInputCount(t *testing.T) {
+	for _, count := range []int{1, 2, confidential2.Inputs} {
+		b := ringtransfer.Signed(confidential2).Build(t)
+		b.Audit.InputCount, b.Circuit.InputCount = count, count
+		b.Rebind(t)
+		requireSolved(t, b.Circuit)
+	}
+}
+
 // Every shape of the catalog solves its plain honest witness.
 func TestEveryShapeSolves(t *testing.T) {
 	for _, shape := range transfer.ConfidentialShapes {
@@ -79,7 +89,7 @@ func TestEveryShapeSolves(t *testing.T) {
 
 // A wide key screens as many distinct withdrawal owners as it has legs.
 func TestWideWithdrawalKeyScreensEveryLeg(t *testing.T) {
-	shape := transfer.ConfidentialShape{Inputs: 40, Outputs: 2, Withdrawals: 32}
+	shape := transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 32}
 	w := ringtransfer.Signed(shape)
 	gross := uint64(0)
 	for i := range shape.Withdrawals {
@@ -131,6 +141,11 @@ var confidentialRefusals = []confidentialRefusal{
 		b.Inputs[0] = ringaudit.SpentUtxo(t, b.Sender, spptest.MustNullifierPk(t, big.NewInt(7)), b.Audit.RingProgramID, 100, 51)
 		b.Circuit.Inputs[0] = b.Inputs[0].Wires()
 		b.Rehash(t)
+	}, in: "audit.spentBySender"},
+	// A spent note past the published count stays out of the auditor's evidence.
+	{name: "in-proof UTXO at the input count", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.InProof) }, witness: func(t testing.TB, b ringtransfer.Built) {
+		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
+		b.Rebind(t)
 	}, in: "audit.spentBySender"},
 	{name: "delegate move with a second member's input", honest: func(testing.TB) ringtransfer.Confidential { return onRail(ringtransfer.Delegate) }, witness: func(t testing.TB, b ringtransfer.Built) {
 		b.Inputs[1].OwnerPkHash = big.NewInt(0x0ddd)
@@ -223,7 +238,12 @@ var anonymousRefusals = []anonymousRefusal{
 		b.Circuit.Inputs[1] = b.Audit.Inputs[1].Wires()
 		b.Circuit.PrivateTxHash = b.Audit.PrivateTxHash(t)
 		b.Rebind(t)
-	}, in: "audit.spend"},
+	}, in: "audit.Spend"},
+	// A spent note past the published count stays out of the auditor's evidence.
+	{name: "hidden UTXO at the input count", honest: func(testing.TB) ringtransfer.Anonymous { return ringtransfer.Hidden(anonymous2) }, witness: func(t testing.TB, b ringtransfer.BuiltAnonymous) {
+		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
+		b.Rebind(t)
+	}, in: "audit.spentBySender"},
 	{name: "exempt gross above the threshold", honest: func(t testing.TB) ringtransfer.Anonymous { return hiddenExempt(t, 100) }, world: func(w *ringtransfer.Anonymous) {
 		w.Withdrawals[0].Amount, w.Public[0].Net, w.Public[0].Gross = 101, -101, 101
 	}, in: "policy.(*PolicyInputs).assertExemption"},

@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in40-w4"
-	wideConfidentialKey common.CircuitType = "custom-ring-transfer-confidential-16-in8-w8"
+	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in32-w4"
+	wideConfidentialKey common.CircuitType = "custom-ring-transfer-confidential-16-in5-w8"
 	anonymousKey        common.CircuitType = "custom-ring-transfer-anonymous-2-in24-w4"
 	wideAnonymousKey    common.CircuitType = "custom-ring-transfer-anonymous-8-in5-w24"
 	entryKey            common.CircuitType = "custom-ring-transfer-anonymous-entry-2-in8-w4"
@@ -164,7 +164,7 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 	keys := ringaudit.DefaultKeys(t)
 	secret := ringtest.Scalar(0x07)
 	secret[0] = 0
-	sealed := keys.Seal(t, secret[:], shared.NfKeyEncInfo)
+	sealed := keys.SealStream(t, secret[:], shared.NfKeyEncInfo)
 	nullifierPk := spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:]))
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	return &RegisterKeyParams{

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"encoding/binary"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -14,12 +15,18 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// SealBody is the delivered body, AES-256-CTR of be32(blinding) ‖ u64be(amount) under the stream of the slot secret.
-func SealBody(t testing.TB, slotSecret, blinding *big.Int, amount uint64) [shared.BodyLen]byte {
+type Body struct {
+	Blinding    *big.Int
+	Amount      uint64
+	OwnerKey    [32]byte
+	NullifierPk *big.Int
+}
+
+func (b Body) Seal(t testing.TB, slotSecret *big.Int) [shared.BodyLen]byte {
 	t.Helper()
-	blindingBytes := spptest.MustFieldBytes(t, blinding)
-	plaintext := binary.BigEndian.AppendUint64(blindingBytes[:], amount)
-	key, nonce := AuditStreamKeys(t, slotSecret)
+	blinding, nullifierPk := spptest.MustFieldBytes(t, b.Blinding), spptest.MustFieldBytes(t, b.NullifierPk)
+	plaintext := slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.OwnerKey[:], nullifierPk[:])
+	key, nonce := AuditStreamKeys(t, slotSecret, shared.BodyEncInfo)
 	return [shared.BodyLen]byte(CTREncrypt(t, key, nonce, plaintext))
 }
 
@@ -62,14 +69,20 @@ func Pack33(key [33]byte) (lo, hi *big.Int) {
 }
 
 // AuditStreamKeys mirrors shared.AuditStreamKeySchedule.
-func AuditStreamKeys(t testing.TB, secret *big.Int) (key [32]byte, nonce [12]byte) {
+func AuditStreamKeys(t testing.TB, secret *big.Int, label string) (key [32]byte, nonce [12]byte) {
 	t.Helper()
-	head := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(shared.AuditEncInfo), 0)), secret))
-	tail := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(shared.AuditEncInfo), 1)), secret))
+	head := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(label), 0)), secret))
+	tail := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(label), 1)), secret))
 	copy(key[:31], head[1:])
 	key[31] = tail[19]
 	copy(nonce[:], tail[20:])
 	return key, nonce
+}
+
+// EnvelopeDigest is Poseidon(len, HashChain4(pack_left31(ciphertext))), head element 9 of a transfer statement.
+func EnvelopeDigest(t testing.TB, ciphertext []byte) *big.Int {
+	t.Helper()
+	return ringtest.MustPoseidonHash(t, big.NewInt(int64(len(ciphertext))), spptest.MustHashChain4(t, PackDisclosure(ciphertext)))
 }
 
 // KeySchedule mirrors ve.KeySchedule for an info string of at most 31 bytes.
@@ -91,13 +104,18 @@ func KeySchedule(t testing.TB, secret *big.Int, info string) (key [32]byte, nonc
 // CTREncrypt mirrors aes.Cipher.CTREncrypt, the first keystream block counts from nonce || 2.
 func CTREncrypt(t testing.TB, key [32]byte, nonce [12]byte, plaintext []byte) []byte {
 	t.Helper()
+	return CTREncryptAt(t, key, nonce, 2, plaintext)
+}
+
+func CTREncryptAt(t testing.TB, key [32]byte, nonce [12]byte, first uint32, plaintext []byte) []byte {
+	t.Helper()
 	block, err := stdaes.NewCipher(key[:])
 	if err != nil {
 		t.Fatalf("aes: %v", err)
 	}
 	var counter [16]byte
 	copy(counter[:12], nonce[:])
-	counter[15] = 2
+	binary.BigEndian.PutUint32(counter[12:], first)
 
 	ciphertext := make([]byte, len(plaintext))
 	cipher.NewCTR(block, counter[:]).XORKeyStream(ciphertext, plaintext)

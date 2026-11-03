@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	confidentialShape = transfer.ConfidentialShape{Inputs: 40, Outputs: 2, Withdrawals: 4}
+	confidentialShape = transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 4}
 	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
 	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
 )

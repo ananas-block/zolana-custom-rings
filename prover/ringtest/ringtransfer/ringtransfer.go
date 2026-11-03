@@ -21,6 +21,7 @@ const (
 	// inputChain is SPP's input chain of a signer-rail transfer, opaque to the proof.
 	inputChain        = 0x1c
 	privateTxBlinding = 0x5b1d
+	publishedInputs   = 2
 )
 
 // PublicSlot is one folded public slot, Gross the withdrawn total of its asset.

@@ -26,8 +26,7 @@ type Envelope struct {
 	Plaintext []frontend.Variable
 	EphSk     [32]frontend.Variable
 	AuditorPk [32]frontend.Variable
-	// Info keys the schedule of Seal, SealAuditStream reads no info.
-	Info string
+	Info      string
 }
 
 // Every Ciphertext byte is bounded to 8 bits by the cipher's tables.
@@ -41,17 +40,17 @@ func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
 
 type keySchedule func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable)
 
-// Seal encrypts under the verifiable-encryption key schedule of Info.
+// Seal is the merge envelope under ve.KeySchedule of Info, every other ring line takes SealStream.
 func (e Envelope) Seal(api frontend.API) Sealed {
 	return e.seal(api, func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable) {
 		return ve.KeySchedule(api, secret, ringgadget.ConstBytes(e.Info), len(e.Info))
 	})
 }
 
-// SealAuditStream encrypts under the audit stream schedule every delivered body shares.
-func (e Envelope) SealAuditStream(api frontend.API) Sealed {
+// SealStream encrypts under AuditStreamKeySchedule at the label Info, its first block at counter 2.
+func (e Envelope) SealStream(api frontend.API) Sealed {
 	return e.seal(api, func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable) {
-		return AuditStreamKeySchedule(api, secret)
+		return AuditStreamKeySchedule(api, secret, e.Info)
 	})
 }
 
@@ -71,11 +70,11 @@ func (e Envelope) seal(api frontend.API, schedule keySchedule) Sealed {
 	return sealed
 }
 
-// AuditStreamKeySchedule draws the AES-256 key and CTR nonce from the low canonical bytes of Poseidon(AuditEncInfo ‖ 0, secret) and Poseidon(AuditEncInfo ‖ 1, secret).
-func AuditStreamKeySchedule(api frontend.API, secret frontend.Variable) (key [32]frontend.Variable, nonce [12]frontend.Variable) {
+// AuditStreamKeySchedule draws the AES-256 key and CTR nonce from the low canonical bytes of Poseidon(label ‖ 0, secret) and Poseidon(label ‖ 1, secret), the label separates every ring line over one secret, mirrored by RingStream::new in sdk-libs/keys/src/stream_cipher.rs.
+func AuditStreamKeySchedule(api frontend.API, secret frontend.Variable, label string) (key [32]frontend.Variable, nonce [12]frontend.Variable) {
 	rc := rangecheck.New(api)
 	tag := func(counter byte) *big.Int {
-		return new(big.Int).SetBytes(append([]byte(AuditEncInfo), counter))
+		return new(big.Int).SetBytes(append([]byte(label), counter))
 	}
 	head := gadget.FieldLowBytesBE(api, rc, gadget.PoseidonHash(api, []frontend.Variable{tag(0), secret}), 31)
 	tail := gadget.FieldLowBytesBE(api, rc, gadget.PoseidonHash(api, []frontend.Variable{tag(1), secret}), 13)
