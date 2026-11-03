@@ -1,6 +1,8 @@
 # Envelope
 
-The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for the transaction viewing secret, a member's nullifier secret, deposit openings and the merge disclosure key. The same stream cipher keys every delivered body from its slot secret. Each circuit proves every step, so the ciphertext's hash in the statement fixes the plaintext. [Spec](../../spec.md) [Hashing](hashing.md)
+The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, a member's nullifier secret, deposit openings and the merge disclosure key. The stream schedule also keys every delivered body from its slot secret. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
+
+The ring program verifies the transfer, deposit and merge proofs, so the ciphertext's hash in the statement fixes the plaintext. Only Ring RPC verifies the register key proof, off chain. A proof under key escrow takes that ciphertext's hash as a private input and relies on the Ring RPC check.
 
 ## Key encoding
 
@@ -17,25 +19,34 @@ eph_pk = 0x04 || X25519(eph_sk, 9)
 secret = Poseidon(CR_S, pack_be(dh), pack_be(eph_pk), pack_be(auditor_pk))   // 7 inputs
 ```
 
-The circuit does not prove that `eph_sk` is fresh. A reused `eph_sk` under one auditor key repeats the keystream. The SDKs draw a fresh key per envelope.
+The circuit does not prove that `eph_sk` is fresh. A reused `eph_sk` under one auditor key repeats the keystream. The SDKs draw a fresh salt and a fresh `eph_sk` per build, so a rebuilt transfer never reuses a key and nonce with another plaintext.
 
-## Audit stream schedule
+## Stream schedule
 
-The audit envelope and every delivered body use the following schedule, with `info = "CRING/adt1"`:
+Every ring encryption line except merge uses one schedule, with a 10-byte label as a parameter:
 
 ```text
-head  = Poseidon(right_align(info || 0x00), secret)
-tail  = Poseidon(right_align(info || 0x01), secret)
+head  = Poseidon(right_align(label || 0x00), secret)
+tail  = Poseidon(right_align(label || 0x01), secret)
 key   = low31_be(head) || low13_be(tail)[0]          // 32 bytes
 nonce = low13_be(tail)[1..13]                        // 12 bytes
 ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 2
 ```
 
-`lowN_be` takes the low `N` bytes of the canonical field value. For a body, `secret` is the slot secret of [Slot secret](hashing.md#slot-secret). An anonymous body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
+`lowN_be` takes the low `N` bytes of the canonical field value. The label enters the first Poseidon input, so one secret gives one key per label.
 
-## Labelled schedule
+| Label | Line | Secret |
+|---|---|---|
+| `CRING/adt1` | auditor stream | shared secret above |
+| `CRING/bdy1` | delivered body | [slot secret](hashing.md#slot-secret) |
+| `CRING/nfk1` | register key | shared secret above |
+| `CRING/dep1` | deposit | shared secret above |
 
-The register key, deposit and merge envelopes use the zolana verifiable encryption schedule with a 10-byte label:
+An anonymous body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
+
+## Merge schedule
+
+The merge envelope uses the zolana verifiable encryption schedule under `CRING/mrg1`:
 
 ```text
 siloed = Poseidon(TMSI, secret, PackBytesBE(label)[0])
@@ -44,19 +55,21 @@ nonce  = low12_be(Poseidon(TMSN, siloed))
 ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 2
 ```
 
-The cipher carries no authentication tag. Integrity comes from `hash_bytes(ciphertext)` in the statement.
+The first Poseidon input is `TMSI` here and a right-aligned label in the stream schedule, so the two schedules never give one key from one secret.
 
 ## Envelope uses
 
+No line has an authentication tag. Integrity comes from the statement.
+
 | Use | Schedule | Plaintext | Statement binds |
 |---|---|---|---|
-| Audit envelope | audit stream | `tx_viewing_sk`, 32 bytes | `hash_bytes(sealed)` |
-| Delivered body | audit stream, slot secret | `fe32(blinding) \|\| u64be(amount)`, 40 bytes | `hash_bytes(body)` per slot |
-| Register key | `CRING/nfk1` | the 32-byte nullifier secret, first byte zero | `hash_bytes(ciphertext)` |
-| Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes, one stream for the batch | `hash_bytes` of each 96-byte slot |
-| Merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
+| Auditor stream | `CRING/adt1` | `tx_viewing_sk`, evidence and records of [Disclosure](disclosure.md) | `pack_be` of both tagged keys and of `tx_viewing_pk`, `digest(envelope_ct)`, `hash_bytes(record)` through `output_ciphertext_chain` |
+| Delivered body | `CRING/bdy1`, slot secret | the [delivered body](disclosure.md#delivered-body) | `hash_bytes(body)` through `output_ciphertext_chain`, `pack_be(u)` through `recipient_key_chain` |
+| Register key | `CRING/nfk1` | `0x00 \|\| nullifier_secret`, 32 bytes | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
+| Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes | `pack_be` of both tagged keys, `hash_bytes` of each 96-byte slot |
+| Merge | merge schedule | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `pack_be` of both tagged keys, `hash_bytes(ciphertext)` |
 
-The deposit owner key is the key whose `solana_owner_identity` is the note's `owner_pk_hash`.
+The deposit batch is one contiguous stream under one `eph_sk`, slot `i` at counter `2 + 6i`. The deposit owner key is the key whose `solana_owner_identity` is the note's `owner_pk_hash`.
 
 ## Deposit capsule
 

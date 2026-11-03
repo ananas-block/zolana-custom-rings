@@ -10,7 +10,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 
 - `HashChain([x_0, ..., x_n])` is the left fold `h = x_0`, then `h = Poseidon(h, x_i)`. An empty list hashes to `0`.
 - `NonZeroHashChain(xs)` is `HashChain` over the nonzero elements of `xs`, and `0` when none is nonzero.
-- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length. A transfer's disclosure chain follows its layout and, on the anonymous rail, its spent note count, so the ring program refuses every zero disclosure field. Every other use has a fixed element count per key.
+- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length, so every use has a fixed element count per key or hashes the length beside the chain, as `digest` does.
 - `HashPrefix4(xs, n)` is `HashChain4` of the first `n` elements. A circuit selects `n` by a one-hot flag set over the key's range.
 
 ## Bytes to fields
@@ -20,7 +20,8 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 - `right_align(x)` places `x` in the low bytes of a 32-byte big-endian field.
 - `fe32(x)` is the canonical 32-byte big-endian encoding of the field element `x`. `u32be` and `u64be` are big-endian integers of 4 and 8 bytes.
 - A 33-byte tagged key `0x04 || u` packs to `[BE(bytes[0..31]), BE(bytes[31..33])]`. A 32-byte value packs to `[BE(bytes[0..31]), bytes[31]]`.
-- `pack_disclosure(b)` splits `b` into 31-byte chunks, each placed at byte 1 of a field and padded with zeros at the end. It differs from `PackBytesBE` only in a short last chunk.
+- `pack_left31(b)` splits `b` into 31-byte chunks, each placed at byte 1 of a field and padded with zeros at the end. It differs from `PackBytesBE` only in a short last chunk. Rust names it `pack_disclosure`, Go `PackDisclosure` and TypeScript `packDisclosure`.
+- `digest(b) = Poseidon(u32 len(b), HashChain4(pack_left31(b)))`. The length closes the trailing zero ambiguity of `HashChain4`. The envelope ciphertext of a transfer uses it, because its length follows the input count. Rust names it `ciphertext_digest`.
 
 ## Identities
 
@@ -46,7 +47,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Deposit blinding | `Poseidon(CRDB, blinding_secret)` |
 | Merge output blinding | `TMOB(nullifier_secret, n0)`, as zolana defines it |
 
-`n0` is the transfer's first nullifier. The transfer proof pins each live output's blinding. SPP derives every output blinding and `private_tx_blinding` from one seed, so one live output fixes the seed to `CRBS(tx_viewing_sk, salt)`, and the auditor derives both from the sealed key.
+`n0` is the transfer's first nullifier. The transfer proof pins each live output's blinding. SPP derives every output blinding and `private_tx_blinding` from one seed, so one live output fixes the seed to `CRBS(tx_viewing_sk, salt)`. The auditor derives both from the sealed key. No frame field carries the output seed.
 
 ## Slot secret
 
@@ -55,6 +56,8 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Delivered slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
 
 The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
+
+A ring transfer sets the HKDF slot `i` of that derivation by output position. A recipient body and an exit body take their output position, and the sender bundle takes the output count. The ciphertext ordinal in the zolana text does not apply to a ring transfer.
 
 ## Record tree
 
@@ -89,7 +92,6 @@ policy_hash = acc_4
 | `CRTX` | `0x43525458` | transfer statement |
 | `CRDS` | `0x43524453` | delivered slot secret |
 | `CRBS` | `0x43524253` | ring blinding seed |
-| `CROD` | `0x43524f44` | disclosure pad |
 | `CRTB` | `0x43525442` | policy table hash |
 | `CRPW` | `0x43525057` | withdrawal digest |
 | `CRQW` | `0x43525157` | queue entry |
@@ -104,6 +106,6 @@ policy_hash = acc_4
 | `CR_MD` | `0x43525f4d44` | merge disclosure pad |
 | `TMOB` | `0x544d4f42` | zolana merge output blinding |
 | `TXOS`, `TXOB`, `TXPB` | `0x54584f53`, `0x54584f42`, `0x54585042` | zolana output seed, output blinding, private transaction blinding |
-| `TMSI`, `TMSK`, `TMSL`, `TMSN` | `0x544d5349`, `0x544d534b`, `0x544d534c`, `0x544d534e` | zolana key schedule silo, key halves and nonce |
+| `TMSI`, `TMSK`, `TMSL`, `TMSN` | `0x544d5349`, `0x544d534b`, `0x544d534c`, `0x544d534e` | zolana key schedule silo, key halves and nonce, merge only |
 
 Each tag is its ASCII bytes read as one big-endian integer and placed with `right_align`.

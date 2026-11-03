@@ -14,7 +14,7 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 ## Anonymous rings
 
 - Chain observers see the payer and the spent note count. They see one view tag and one body length per ring output, and the sender bundle.
-- They see each exit owner and each public leg.
+- They see each exit owner and each public leg. The auditor message length follows the published input count, the exits bitmap and the layout.
 - They do not see the sender, the recipients, the amounts, the assets or the spent notes.
 - The hiding holds only while all of these hold:
   1. The payer does not link to the owner.
@@ -36,7 +36,7 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 
 ## Who else sees what
 
-- The auditor opens every output, deposit and merge and every hidden sender. With an escrowed nullifier secret it also links that owner's spends.
+- The auditor opens every output, deposit and merge and every hidden sender. It reads a spent note's hash, prefix or opening on the in-proof, authority and anonymous rails. With an escrowed nullifier secret it also links that owner's spends.
 - A reader sees what its grant covers, blindings included, and keeps it after a revocation.
 - Ring RPC as relayer receives every secret the proofs need. It links the owner's spends and opens the outputs, so a relayed transfer is anonymous only toward a trusted Ring RPC.
 - Ring RPC as co-signer sees the sender and each asset's flow.

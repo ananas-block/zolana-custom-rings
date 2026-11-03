@@ -1,64 +1,118 @@
 # Disclosure
 
-The disclosure is the field list of the auditor message after `0x04 || eph_u || sealed`. It opens every output of a transfer to the holder of the transaction viewing secret. On the anonymous rail it also covers the spent notes. The commitment key (`AnonymousAudit`) names each spent note by hash or prefix. The entry key (`AnonymousEntryAudit`) serves a spend of default-ring notes and opens each one. [Spec](../../spec.md) [Envelope](envelope.md)
+A ring transfer opens to the auditor through one AES-256-CTR stream and its delivered bodies. The stream's envelope region seals the transaction viewing secret and names the spent notes. Its record regions open the outputs that carry no delivered body. [Spec](../../spec.md) [Envelope](envelope.md)
 
-## Pad
+## Auditor message
+
+The auditor message data, under the auditor view tag, is:
 
 ```text
-seed   = Poseidon(CROD, sk_0, sk_1, right_align(salt))   // (sk_0, sk_1) = PackBytesBE(tx_viewing_sk)
-pad_j  = Poseidon(seed, j)
-field_j = plaintext_j + pad_j  (mod q)
+0x04 || eph_u || envelope_ct || record_ct...
 ```
 
-The salt is the 16-byte SPP salt of the transfer. A reused salt under one transaction viewing key repeats the pad. The program refuses a zero published field, because the disclosure chain hashes trailing zeros alike and honest fields are nonzero after the pad.
+`record_ct...` holds the records of the slots that have one, in slot order. A delivered body stays in the slot frame under scheme 10, its length fixed by the layout's key escrow bit. The zolana scheme 1 body of an anonymous output stays in its slot.
 
-The auditor opens the envelope, derives the pad, subtracts it, and rebuilds each output commitment from the disclosed fields and the blinding `TXOB(n0, TXOS(n0, CRBS(tx_viewing_sk, salt)), i)`. Under exits the disclosure also carries `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` as its first field.
+`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. Family, layout, `n_out`, `n`, the exits bitmap and the rail bits fix every length. The program refuses a frame of any other length.
+
+## Stream regions
+
+The stream has one key, one nonce and one `CTREncrypt` call in the circuit over the capacity-sized plaintext. Each region is zero padded to a multiple of 16 bytes, so it starts on its own counter and no counter serves two regions. The prover and the readers use a keystream. The frame carries only transmitted bytes, and padding and unused ranges never leave the prover.
+
+| Region | Start counter | Maximum blocks | Transmitted bytes |
+|---|---|---|---|
+| Envelope | `2` | `2 + E_max(key)` | `32 + evidence_len` |
+| Record of slot `i` | `R0 + i * R`, `R0 = 2 + 2 + E_max(key)` | `R(family)` | the record length of the slot's kind, none for a delivered slot |
+
+`E_max(key)` is `ceil(max_evidence_len(key) / 16)` at the key's input class `c`:
+
+| Key | `max_evidence_len` |
+|---|---|
+| Confidential family | `16 * c` |
+| Anonymous, commitment key | `32 + 16 * (c - 1)` |
+| Anonymous, entry key | `64 + 72 * c` |
+
+`R(family)` is 7 on the anonymous family and 5 on the confidential family.
+
+## Envelope plaintext
+
+The envelope plaintext is `tx_viewing_sk || evidence`. `prefix16` is the first 16 bytes of a big-endian hash.
+
+| Rail or key | Evidence |
+|---|---|
+| Signer rail | empty |
+| In-proof and authority rails | `prefix16(input_hash_i)` for `i < n` |
+| Anonymous, commitment key | `fe32(input_hash_0) \|\| prefix16(input_hash_i)` for `1 <= i < n` |
+| Anonymous, entry key | `sender_key \|\| fe32(sender_nullifier_pk) \|\| (u64be(amount) \|\| fe32(asset) \|\| fe32(blinding)) * n` |
+
+Slots at or past `n` stay absent. A published dummy slot contributes zeros.
+
+## Spent notes
+
+- The commitment key discloses `hash_0`, the full hash of the first spent note, and the 16-byte prefix of every other.
+- The auditor finds `hash_0` among the notes it opened before and matches every prefix among the sender's ring notes. Several matches leave candidates, and no match leaves the input unseen.
+- The in-proof and authority rails disclose a prefix for each spent note. The auditor matches each among the ring notes it opened.
+- The entry key spends default-ring notes, which the auditor never opened. It discloses every spent note's amount, asset and blinding, and the sender's key and nullifier key. The circuit holds every entry input to that one nullifier key.
+- The signer rail discloses no spent note.
+
+## Records
+
+| Slot kind | Record plaintext | Bytes |
+|---|---|---|
+| Anonymous ring output | `owner_key \|\| fe32(asset) \|\| u64be(amount) \|\| fe32(nullifier_pk)` | 104 |
+| Exit | `fe32(asset) \|\| u64be(amount) \|\| fe32(nullifier_pk)`, the last field omitted under key escrow | 72 or 40 |
+
+An exit's owner stays where zolana publishes it.
+
+## Delivered body
+
+```text
+fe32(blinding) || u64be(amount) || owner_key || fe32(nullifier_pk)
+```
+
+The last field is omitted under key escrow, so a body has 72 bytes under key escrow and 104 otherwise. The secret is the [slot secret](hashing.md#slot-secret) under `CRING/bdy1`. The recipient and the auditor read the same bytes.
+
+The body omits the asset. A reader tries each asset it knows against the commitment. The recipient also compares the decrypted owner key and nullifier key with its own before it accepts the note. A rebuilt commitment alone does not establish ownership. Under key escrow the body has no nullifier key, so the recipient compares the owner key and rebuilds the commitment with its own nullifier key.
+
+## One ring disclosure ciphertext per output
+
+| Slot kind | Ciphertext | Bytes |
+|---|---|---|
+| Confidential ring output | delivered body | 72 or 104 |
+| Anonymous ring output | auditor record | 104 |
+| Exit, either family | auditor record | 72 or 40 |
+| Hidden dummy, confidential family | random delivered body | 72 or 104 |
+| Hidden dummy, anonymous family | auditor record over a zero plaintext | 104 |
+
+Anonymous outputs and exits also keep zolana's recipient ciphertexts, and no ring proof opens those. The anonymous family pins key escrow to `0`, so its exit record has 72 bytes.
+
+## Opening a transfer
+
+1. The auditor computes `X25519(auditor_sk, eph_u)`, derives the stream and recovers `tx_viewing_sk` from the envelope.
+2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
+3. It rebuilds each slot secret from `tx_viewing_sk` and the published `u`, then opens each delivered body. A slot whose commitment is the dummy hash under its blinding opens as a hidden dummy.
+4. It opens each record at its counter from the stream.
+5. It rebuilds each output commitment from the opened fields and the blinding. Under key escrow the escrow records give the output nullifier keys.
 
 ## Layout bits
 
 | Bit | Name | Set when |
 |---|---|---|
-| 1 | exits | some output goes to the default ring |
-| 2 | key escrow | the ring is in `ConfidentialEscrow` mode. Output nullifier keys are withheld, the escrow records give them. |
+| 1 | none | always clear, every key refuses it |
+| 2 | key escrow | the ring is in `ConfidentialEscrow` mode. Bodies and exit records omit the nullifier key, and the escrow records give it. |
 | 4 | reserved | always clear, every key accepts either value |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
-The confidential family varies exits and key escrow. The anonymous family's commitment layout varies exits and pins key escrow to `0`. Its entry layout varies exits, pins full openings to `1` and pins key escrow to `0`.
-
-## Fields per layout
-
-`[x]` is present only when its condition holds. `pack` is `pack_disclosure`.
-
-| Layout | Fields in order |
-|---|---|
-| Delivered, capacity `c` | `[seed_out if exits]`, `[nullifier_pk × c unless key escrow]`, `pack(slot × c)` with 40-byte slots under exits and 32-byte slots otherwise |
-| Anonymous, commitment key | `[seed_out if exits]`, `nullifier_pk × outputs`, `pack(slot × outputs)` with 72-byte slots, `hash_0`, then the `n - 1` other prefixes in `floor(n / 2)` pairs |
-| Anonymous, entry key | `[seed_out if exits]`, `sender_nullifier_pk`, `nullifier_pk × outputs`, `pack(sender_key \|\| slot × outputs)`, `pack(u64be(amount_i) × class)` over the key's input class, `(asset_i, blinding_i) × n` |
-
-Slot bytes:
-
-| Layout | Ring output | Exit | Dummy |
-|---|---|---|---|
-| Delivered | `owner_key \|\| 0^8` | `fe32(asset) \|\| u64be(amount)` | zeros |
-| Anonymous | `owner_key \|\| fe32(asset) \|\| u64be(amount)` | `0^32 \|\| fe32(asset) \|\| u64be(amount)` | zeros |
-
-A delivered ring output's amount and blinding are in its body, not in the disclosure. The auditor rebuilds the slot secret from `tx_viewing_sk` and the published `u`, and opens the body. An anonymous slot opens the asset and the amount of every live output, the auditor derives the blinding, and no anonymous body enters the disclosure.
-
-## Spent notes on the anonymous rail
-
-- The commitment key discloses `hash_0`, the full hash of the first spent note, and the 16-byte prefix `p_k = hash_k >> 128` of every other. Prefixes pack in pairs as `p_k * 2^126 + p_{k+1}`, the last half zero for an odd count. Each prefix is below `2^126`.
-- The auditor finds `hash_0` among the notes it opened before, and matches every prefix among the sender's ring notes. Several matches leave candidates, no match leaves the input unseen.
-- The entry key spends default-ring notes, which the auditor never opened. It discloses every spent note's amount, asset and blinding, and the sender's key and nullifier key.
+The layout value is `key_escrow << 1 | full_openings << 3`. `exits_bitmap` is the one record of exits. The confidential family varies key escrow and pins full openings to `0`. The anonymous family's commitment layout pins both to `0`. Its entry layout pins full openings to `1` and key escrow to `0`.
 
 ## Merge disclosure
 
-A merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
+Only a merge uses a field pad. A merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
 
 ```text
 seed  = Poseidon(CR_MD, PackBytesBE(disclosure_key), right_align(salt))
 pad_i = Poseidon(seed, i)
 plaintext = owner_key || fe32(nullifier_pk) || mint || u64be(amount) || fe32(output_blinding) || fe32(input_hash) × width
-fields    = pack(plaintext) + pad
+fields    = pack_left31(plaintext) + pad
 ```
 
 The salt is the SPP merge output salt. The field count is 13 at width 8 and 30 at width 24.

@@ -174,7 +174,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 | 15 | **Record update** | Signed request | A signed list of record writes that Ring RPC queues and applies. |
 | 16 | **Enrolment** | Record update | A wallet's update that waits for the policy authority to set the lists it needs. |
 | 17 | **Relay** | Ring RPC operation | Ring RPC proves, co-signs, pays for and sends an operation the wallet requested. |
-| 18 | **Shape** | Proof width | The input and output counts of a transfer. Each shape has its own proving key. |
+| 18 | **Shape** | Proof width | The input and output counts of a transfer. SPP has one proving key per shape, and a ring key serves every shape up to its input class. |
 | 19 | **Wallet** | User | Holds spending keys and authorizes transfers of its ring notes. |
 | 20 | **Reader** | User | Uses granted read access to query decrypted ring activity through Ring RPC. |
 | 21 | **Auditor** | Authority | Holds the auditor key and decrypts ring transfers, deposits and merges, and each escrowed key whose escrow proof Ring RPC checked. |
@@ -183,6 +183,8 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 | 24 | **Policy authority** | Authority | Sets the ring's rules, lists, mint settings and ring-wide grants. |
 | 25 | **Storage authority** | Authority | Signs the updates of one record tree. Ring RPC holds it for the ring's records. |
 | 26 | **Upgrade authority** | Authority | Deploys and upgrades the ring program and signs `Initialize`. |
+| 27 | **Auditor stream** | Ciphertext | One AES-256-CTR stream per transfer, sealed to the auditor key. It carries the transaction viewing secret, the spent note evidence and the records of outputs without a delivered body. |
+| 28 | **Delivered body** | Ciphertext | A confidential ring output's opening, encrypted under its slot secret. Its recipient and the auditor read the same bytes. |
 
 ## Flows
 
@@ -263,7 +265,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals.
 
 **Steps:**
 
-1. **Wallet:** takes a quote that names the fee payer and builds the transfer from its own notes. It seals the **Auditor** message, signs the SPP message hash and sends the proof inputs to **Ring RPC**. It reads no Merkle path and no record.
+1. **Wallet:** takes a quote that names the fee payer and builds the transfer from its own notes. It seals the **Auditor** stream, signs the SPP message hash and sends the proof inputs to **Ring RPC**. It reads no Merkle path and no record.
 2. **Ring RPC:**
    1. Verifies the owner's signature.
    2. Reads the required member records and Merkle paths.
@@ -273,7 +275,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals.
 
 Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
 
-The SDKs refuse a shape that does not fit one transaction. A 16-output confidential policy payout sits at the byte ceiling, the sender splits one the SDKs refuse or merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
+The SDKs refuse a shape that does not fit one transaction. A 16-output confidential policy payout sits at the byte ceiling, the sender splits one the SDKs refuse or merges first. A confidential key takes 32 inputs at 2 outputs, 24 at 4, 16 at 8 and 5 at 16. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
 
@@ -404,6 +406,9 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 26. No instruction migrates an older ring layout. Rings are created fresh, and the repository forbids compatibility shims.
 27. `Initialize` creates the ring account, binds the records and registers the ring with SPP in one instruction. No half-created ring exists.
 28. Ring RPC creates the ring's records tree under its storage authority, and `Initialize` binds it. The program accepts any storage registry as the records, so whoever binds them picks the records writer, and a tree written outside Ring RPC skips its checks.
+29. One Poseidon schedule under a 10-byte label keys the auditor stream, the delivered body, the register key and the deposit. Merge keeps zolana's schedule and its field pad.
+30. Every output has one ring disclosure ciphertext, and the statement chains them. The transfer circuit expands one AES key for the auditor stream, and no counter serves two regions.
+31. A confidential key's input class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The in-proof envelope names every spent note, so a wider key could only serve a transfer that never fits both rails.
 
 ## Notes
 

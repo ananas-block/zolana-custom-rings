@@ -13,13 +13,13 @@ Pairing one output's fields with another output's hash can screen a payment diff
 
 Design section interfaces around constrained results. Construct each result where its opening constraints are added.
 Let audit and policy consume the same result. Avoid interfaces that accept raw outputs and their openings as independently ordered slices.
-The [policy view adapter](../../prover/circuits/policy/transaction.go) is the boundary to inspect for that pairing.
+The [policy screen](../../prover/circuits/policy/screen.go) is the boundary to inspect for that pairing.
 
 Preserve both output projections. The audit chain covers every output slot.
 The private transaction chain uses each slot's hash multiplied by its UTXO indicator and skips zero entries.
 Test dummy slots and exits when changing either projection.
 
-Keep witness allocation outside the constraint flow. Read the constraint flow as envelope, output openings, sender binding, policy predicates, then statement binding.
+Keep witness allocation outside the constraint flow. Read the constraint flow as envelope, layout, output openings, input spend, transaction binding, stream, policy predicates, then statement binding.
 Return constrained facts between sections. Keep statement assembly separate from witness construction.
 
 ## Derive gates from the rail
@@ -72,7 +72,7 @@ For a binding test, retain the proof and change a program-derived field or settl
 
 Cover each active and inactive gate with assignments that differ only in the obligation under test.
 Include wrong input owners, missing records, wrong roots, foreign sources, invalid delegate flags, and threshold boundaries.
-Mutate recipient identity, recipient body, disclosure, and private transaction hash independently.
+Mutate recipient identity, delivered body, auditor stream, and private transaction hash independently.
 Check entry and commitment input restrictions under their respective keys.
 
 Use [Rust statement vectors](../../program-libs/interface/tests/statements.rs) as independent inputs to Go and TypeScript checks.
@@ -129,7 +129,7 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
   `TestConfidentialRefusals/delegate with a statement sender`, `TestAnonymousRefusals/party identity
   equal to the hidden sender` and `TestConfidentialRailsSolve/in-proof on an audit-only ring`.
 - Spent input ownership. Private source, the opened input slots. Constraint, `SpentBySender` under
-  `in_proof OR delegate`, every slot a dummy on the signer rail, `spend` in `audit/anonymous.go` on the
+  `in_proof OR delegate`, every slot a dummy on the signer rail, `Spend` in `audit/anonymous.go` on the
   anonymous rail. Tests, `TestConfidentialRefusals/in-proof input of another owner`, `delegate move
   with a second member's input`, `delegate move without a spent input`, `signer rail opening an input`
   and `TestAnonymousRefusals/commitment key spending a default-ring note`.
@@ -137,22 +137,23 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
   `private_tx_hash`. Constraint, `transfer.bindTransaction` over `shared.UtxoHashes` of the slots the audit
   opened, with the input chain of the rail. Tests, `TestExitEntersBothProjections` and
   `TestDummySlotEntersTheOutputChainOnly`.
-- Output openings. Private source, every slot's wires. Fields, `output_chain`, `body_chain`,
-  `recipient_key_chain` and `disclosure_chain`. Constraint, `shared.UtxoWires.Open` classifies and
-  hashes once, `Deliver` and `Anonymous` in `audit` build every chain from that `shared.Output`, the
-  policy screens the same values. Tests, the audit section refusals in
+- Output openings. Private source, every slot's wires. Fields, `output_chain`,
+  `output_ciphertext_chain` and `recipient_key_chain`. Constraint, `shared.UtxoWires.Open` classifies and
+  hashes once, `OpenSlots` in `audit/audit.go` hands that `shared.Output` and its `slotBytes`
+  to `Deliver` and `AnonymousRecords`, `screenedPolicy.screen` in `transfer/transfer.go` screens the
+  same values. Tests, the audit section refusals in
   `prover/circuits/audit/delivered_test.go` and `anonymous_test.go`.
 - Recipients. Source, the frame's recipient identities under a policy on the confidential family,
   none on the anonymous family. Fields, `recipient_o`. Constraint, `assertRecipients` under
   `screened AND published`. Tests, `TestConfidentialRefusals/recipient other than the slot owner` and
   `TestAnonymousRefusals/recipient published on the anonymous rail`.
 - Key escrow. Source, the ring mode, the frame flag must agree. Field, the `key_escrow` bit of
-  `layout`. Constraint, `assertEscrow` in `policy/subjects.go` under `utxo AND key_escrow`, the owner
+  `layout`. Constraint, `decodeLayout` in `transfer/confidential.go` reads the bit, `assertEscrow` in `policy/subjects.go` under `utxo AND key_escrow`, the owner
   record opened under `screened OR key_escrow`. Tests, `TestConfidentialRefusals/escrow of another key
   ciphertext` and `delegate without key escrow`.
 - Outflow and approval. Source, the frame's approval flag, refused by the program on the authority
   rail. Field, `approval_required`. Constraint, `constrainOutflow` under `screened AND NOT delegate`,
-  the approval equality in `Define`. Tests, `TestConfidentialRefusals/approval bit clear past the
+  the approval equality in `screenedPolicy.screen`. Tests, `TestConfidentialRefusals/approval bit clear past the
   co-sign bound`, `approval bit set within every co-sign bound`, `delegate with the approval bit` and
   `TestGateOffDropsItsPredicates/the delegate rail bounds no outflow`.
 - Withdrawal exemption. Source, the program folds the settled legs into `PublicSlots` in
@@ -168,15 +169,59 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
   `pooledTable.lookup` holding every active query to an active pool. Tests,
   `TestConfidentialRefusals/screened under another own root` and the pool tests in
   `prover/circuits/policy/pooled_policy_test.go`.
-- Authority rail. Source, the instruction tag. Field, `delegate`. Constraints, `AssertZeroWhen` on
-  `in_proof`, on `sender` and on a clear escrow flag in `transfer/confidential.go`, the outflow gate
-  above. Tests, `TestConfidentialRefusals/delegate with in_proof`, `delegate with a statement sender`,
+- Authority rail. Source, the instruction tag. Field, `delegate`. Constraints, `assertRail` in
+  `transfer/confidential.go` holds `in_proof` and `sender` to zero, `decodeLayout` there requires the
+  escrow flag, the outflow gate above. Tests, `TestConfidentialRefusals/delegate with in_proof`, `delegate with a statement sender`,
   `delegate without key escrow`. The program refuses a public leg on this rail in
   `programs/custom-ring/src/instructions/transfer/accounts.rs`, no circuit covers that refusal.
-- Exits and layout. Source, the exits bitmap of the frame and the key's family. Field, `layout`.
-  Constraint, `DecodeLayout` pins every flag outside the key's free set and `Layout.AssertExits` holds
-  the exits bit to the slots. Tests, `TestDeliveredAuditRefusals` and `TestAnonymousAuditRefusals`
-  in `prover/circuits/audit`.
+- Exits and layout. Source, the exits bitmap of the frame and the key's family. Fields, `layout` and
+  `exits_bitmap`. Constraint, `DecodeLayout` pins bit 0 clear and every flag outside the
+  free set `decodeLayout` names on each circuit. `exitsBitmap` derives the bitmap from the opened slots,
+  the one record of exits. Tests, `TestLayoutRefusesBitZero`, `TestDeliveredAuditRefusals`,
+  `TestAnonymousAuditRefusals` and `TestAnonymousRecordsStayOnTheirSlots/changed exit positions` in
+  `prover/circuits/audit`.
+- Auditor stream. Source, the ring account's auditor key, the frame's `eph_u`, envelope ciphertext and
+  records. Private source, `tx_viewing_sk`, `eph_sk`, the input slots and the opened output slots.
+  Fields, `aud0`, `aud1`, `eph0`, `eph1`, `txpk0`, `txpk1`, head element 9 `digest(envelope_ct)` and
+  `output_ciphertext_chain`. Constraint, `OpenEnvelope` and `SealStream` in `audit/audit.go` prove one key expansion and one
+  `CTREncrypt` under `CRING/adt1` over every region, `envelopeDigest` covers the transmitted bytes.
+  Tests, `TestStatementBindsEveryElement` in `transfer/binding_test.go`, and in `prover/circuits/audit`
+  `TestAnonymousEvidenceHoldsInputHashAndPrefixes`, `TestAnonymousEntryEvidenceOpensEachInput`,
+  `TestAnonymousRecordsKeepTheirKind` and `TestAnonymousRecordsStayOnTheirSlots`. The circuit proves
+  no freshness of `eph_sk` or the salt. `two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key`
+  in `sdk-libs/sdk/src/tests/operations/pipeline.rs` and `draws a new salt and a new ephemeral key for
+  every build of one transfer` in `sdk-libs/ts/test/operations/payments/ring-transfer.test.ts` pin the
+  SDKs.
+- Stream ranges. Source, the program derives every length from family, layout, `n_out`, the frame's
+  nullifier count and exits bitmap, and refuses a frame of any other length. Fields, `input_count`,
+  `exits_bitmap` and `layout`. Constraint, `envelopeDigest` selects the envelope length from the input count, `SealStream` places
+  each record at `R0 + i * R` and `exitsBitmap` derives the bitmap. Tests, in `prover/circuits/audit`
+  `TestAnonymousAuditRefusals/UTXO input at the input count`,
+  `TestAnonymousEvidenceFollowsTheInputCount`, `TestDeliveredSenderEvidenceFollowsTheInputCount`,
+  `TestStreamRangesAreTheSharedVector` and `TestStreamRegionsHoldTheirPlaintext`,
+  `TestSignerRailEnvelopeIgnoresTheInputCount` in `transfer/transfer_test.go` and
+  `the_counts_fix_every_length_and_trailing_bytes_are_refused` in `program-libs/interface/tests/transact.rs`.
+- Delivered body. Source, the frame's scheme 10 body and recipient key per slot. Fields,
+  `output_ciphertext_chain` and `recipient_key_chain`. Constraint, `deliver` in `audit/delivered.go`
+  proves the body under `CRING/bdy1` and the `CRDS` slot secret on a ring output, with no constraint on
+  a dummy's random bytes. `assertOwnerKey` holds the slot's owner to the body's owner key.
+  `slotCiphertextHash` picks the body or the exit record at the length key escrow fixes, and
+  `recipientKeyFields` masks the key off an exit. Tests, in
+  `prover/circuits/audit`, `TestDeliveredAuditRefusals/body encrypting another amount`,
+  `TestDeliveredAuditRefusals/body naming another owner key`,
+  `TestDeliveredAuditRefusals/body naming another nullifier key`,
+  `TestDeliveredAuditRefusals/body under the auditor stream label` and
+  `TestDeliveredAuditRefusals/recipient key given as its high-bit alias`.
+- Recipient ownership. Source, the recipient's own owner key and nullifier key, held off chain. Field,
+  none, `output_ciphertext_chain` fixes only the bytes the recipient reads. Constraint, none in a
+  circuit. `RingDeliveryOpening::open` in `sdk-libs/transaction/src/ring_delivered.rs` and
+  `openRingDelivery` in `sdk-libs/ts/src/crypto/derivation/blinding.ts` compare the decrypted owner key
+  and nullifier key with the recipient's before they accept the note. Under key escrow the body has no
+  nullifier key, and they compare the owner key and rebuild the commitment with the recipient's own
+  nullifier key. A rebuilt commitment alone does not establish ownership. Tests,
+  `a_recipient_refuses_a_body_that_names_other_keys` in `sdk-libs/transaction/tests/rails.rs`,
+  `refuses a body naming another owner though its commitment rebuilds` and `opens a key escrow body of
+  the owner's key alone` in `sdk-libs/ts/test/state/ring-wallet-sync.test.ts`.
 
 A disabled gate leaves the section's range checks, table decoding and lookups in the circuit. The
 inactive witness is dummy slots, zero rows and index zero. The SDKs send it as the unopened pool,

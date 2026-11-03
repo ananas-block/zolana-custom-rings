@@ -4,10 +4,13 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 
 ## Transfers
 
-- The sender draws a transaction viewing key for each transfer. The transfer proof shows its secret is sealed to the auditor in the auditor message.
+- The sender draws a transaction viewing key for each transfer. The transfer proof shows its secret is sealed to the auditor in one auditor stream.
 - The proof forces every output blinding to derive from that secret, the salt and the first nullifier. The auditor rebuilds every output.
-- On the confidential and authority rails the proof also shows each output body encrypts the blinding and the amount to the viewing key the output publishes.
-- On the anonymous rail the disclosure opens each output's owner, asset and amount, and names each spent note by its hash or a prefix. A spend of default-ring notes opens every spent note.
+- On the confidential and authority rails the proof also shows each delivered body opens for the viewing key the output publishes. The body holds the blinding, the amount, the owner key and the nullifier key. Under key escrow it omits the nullifier key.
+- The recipient compares the decrypted keys with its own before it accepts the note. Under key escrow it compares the owner key and rebuilds the commitment with its own nullifier key.
+- On the anonymous rail a record in the stream opens each output's owner, asset, amount and nullifier key. An exit's record opens its asset, its amount and, off key escrow, its nullifier key.
+- The stream names each spent note by its hash or a prefix on the anonymous rail, and by a prefix on the in-proof and authority rails. An anonymous spend of default-ring notes opens every spent note. The signer rail names no spent note.
+- Every output has one ring disclosure ciphertext, and the statement chains them.
 - No proof checks an anonymous output's recipient body. A sender can settle an output the auditor opens and its recipient cannot.
 - The program builds the ring statement from the frame it forwards to SPP, so the proof binds the transfer that settles. The policy and the withdrawal thresholds are sections of the same proof, switched by the policy hash and the exempt flag.
 
@@ -29,7 +32,8 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 
 - A 16-output confidential policy payout sits at the byte ceiling, the payer, the co-signer and the registries the transaction names decide whether it fits.
 - Fitting a wider one needs SPP to publish less per output, or a transfer statement without the recipient viewing key. The second loses the proof that each body opens for its recipient.
-- The SDKs refuse those shapes instead. A sender splits the payout or merges first.
+- A confidential key's input class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The envelope names each spent note on the in-proof rail, so its inputs set that limit.
+- The SDKs refuse a shape past the class as unkeyed, and the sender merges first. They refuse a keyed shape over the byte limit as too wide, and the sender splits the payout or merges first.
 
 ## Reading through Ring RPC
 

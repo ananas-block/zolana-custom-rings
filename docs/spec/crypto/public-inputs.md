@@ -4,8 +4,8 @@ Every ring proof has one public input. It is the fold of a statement the program
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Transfer, confidential family | `HashChain4` | `37 + n_out` | `Transfer`, `AuthorityTransfer` |
-| Transfer, anonymous family | `HashChain4` | 35 | `Transfer` |
+| Transfer, confidential family | `HashChain4` | `38 + n_out` | `Transfer`, `AuthorityTransfer` |
+| Transfer, anonymous family | `HashChain4` | 37 | `Transfer` |
 | Apply | `HashChain4` | 8 | Storage `Update`, `UpdateImmediate` |
 | Register key | `HashChain4` | 8 | Ring RPC writer, off chain |
 | Deposit | `HashChain` | 44 | `Deposit` |
@@ -24,8 +24,9 @@ anonymous rail with the commitment or the entry disclosure by the head's `layout
   in_proof, delegate,                 confidential family only
   exempt, approval_required,
   output_chain,
-  body_chain, recipient_key_chain,    confidential family only
-  disclosure_chain, private_tx_hash,
+  output_ciphertext_chain,
+  recipient_key_chain,                confidential family only
+  input_count, exits_bitmap, private_tx_hash,
   sender,                             confidential family only
   party_0, party_1, party_2,          anonymous family only
   policy_hash, own_root, curator_root,
@@ -33,16 +34,18 @@ anonymous rail with the commitment or the entry disclosure by the head's `layout
   (asset_k, net_k, gross_k) per public slot,
   withdrawal_hash,
   length,                             the element count, the count and the version included
-  1 ]                                 TRANSFER_STATEMENT_VERSION
+  2 ]                                 TRANSFER_STATEMENT_VERSION
 ```
 
-- The head is the audit head under `CRTX` in place of `CRAU`, the `layout` bits are `exits`,
-  `key_escrow` and `full_openings` as below. `key_escrow` equals `mode == ConfidentialEscrow`.
+- The head is the audit head under `CRTX` in place of `CRAU`, the `layout` bits are
+  `key_escrow` and `full_openings` of [Layout bits](disclosure.md#layout-bits). `key_escrow` equals `mode == ConfidentialEscrow`.
 - `in_proof` is the frame's `OWNER_IN_PROOF` flag, `delegate` is the `AuthorityTransfer` tag.
   `exempt` is the frame's `EXEMPT` flag, `approval_required` its `APPROVAL_REQUIRED` flag,
   refused on the authority rail.
-- `output_chain`, `body_chain`, `recipient_key_chain` and `disclosure_chain` are the delivered
-  and anonymous audit chains below.
+- `output_chain`, `output_ciphertext_chain` and `recipient_key_chain` are the chains below.
+- `input_count` is `right_align(n)`, `n` the frame's nullifier count. `exits_bitmap` is the right-aligned
+  bitmap with bit `i` set when slot `i` is an exit. The program writes both from the frame. The circuit holds the input count to its evidence
+  selection and derives the bitmap from the opened slots.
 - `sender` is `solana_owner_identity` of the sole owner signer under a policy, of the framed
   owner key on the in-proof rail, and zero on the signer rail off a policy and on the authority
   rail. The party identities are those of the anonymous audit.
@@ -68,22 +71,21 @@ The head has 12 elements:
 | 3, 4 | `pack_be(0x04 \|\| tx_viewing_u)` | frame, SPP `tx_viewing_pk` |
 | 5, 6 | `pack_be(auditor_pubkey)` | ring policy |
 | 7, 8 | `pack_be(0x04 \|\| eph_u)` | frame |
-| 9 | `hash_bytes(sealed)` | frame |
+| 9 | `digest(envelope_ct)` | frame |
 | 10 | `right_align(salt)` | frame, SPP salt |
-| 11 | `right_align(layout)` | exits from the outputs, the other bits from the frame, bit value `4` clear |
+| 11 | `right_align(layout)` | the frame's flags, bit values `1` and `4` clear |
 
 The chains over the published output slots:
 
 - `output_chain = HashChain4(output hashes)`, every slot, a dummy included.
-- `body_chain = HashChain4(body hash per slot)`, `hash_bytes(body)` of a delivered slot and `0` for an exit, confidential family only.
+- `output_ciphertext_chain = HashChain4(hash_bytes(ct_i) per slot)`, in output order. `ct_i` is the slot's [ring disclosure ciphertext](disclosure.md#one-ring-disclosure-ciphertext-per-output). Layout and exits bitmap fix each length, so `hash_bytes` needs no length.
 - `recipient_key_chain = HashChain4(pack_be(u) per slot)`, two zero fields for an exit, confidential family only.
-- `disclosure_chain = HashChain4(disclosure)` over exactly the fields the layout publishes.
 - `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`,
   in settlement order under a policy and over no leg otherwise. A SOL leg's owner is
   `solana_owner_identity(recipient)`, an SPL leg's owner is the identity of the token account's
   owner.
 
-No tag and no body of an anonymous slot enters the statement. The party identities are
+No view tag and no zolana ciphertext enters the statement. The party identities are
 `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0`
 when absent. The circuit holds every spent UTXO to the sender on the in-proof and authority rails
 and to the hidden owner on the anonymous rail, and reopens SPP's `private_tx_hash` over the same
