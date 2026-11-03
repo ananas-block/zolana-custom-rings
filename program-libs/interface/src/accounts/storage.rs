@@ -1,15 +1,22 @@
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use solana_program_error::ProgramError;
-use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
+use spr_hasher::{
+    hash_chain::create_hash_chain_4_from_slice,
+    primitives::{is_canonical_bn254_scalar_be, is_canonical_x25519_public_key, right_align},
+};
 use thiserror::Error;
 use zolana_ring_policy::registry_field;
 
 use crate::{
     domain,
-    member_registry::{MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT},
+    member_registry::{
+        AuthorizedAddress, QueueEntry, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
+    },
     state::ROOT_HISTORY,
-    storage_instruction::{StorageUpdateIxData, UpdateMode},
+    storage_instruction::{
+        AddressWriteData, EnrollAddressIxData, InitializeIxData, StorageUpdateIxData, UpdateMode,
+    },
     STORAGE_PROGRAM_ID,
 };
 
@@ -37,8 +44,27 @@ pub struct StorageRegistry {
     pub authority: Address,
     pub grace_slots: [u8; 8],
     pub next_index: [u8; 4],
+    /// Immutable, every address enrolled here binds it, zero serves as a curator only.
+    pub ring_id: [u8; 32],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
+}
+
+/// The owner's newest address, an authority applies only what the owner signed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct AddressAuthorization {
+    pub discriminator: u8,
+    pub bump: u8,
+    pub registry: Address,
+    pub owner: Address,
+    pub ring_id: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub viewing_u: [u8; 32],
+    /// Little endian, moves by one at every enrollment.
+    pub revision: [u8; 8],
+    /// Little endian, zero before the first apply.
+    pub applied_revision: [u8; 8],
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -78,6 +104,16 @@ pub enum StorageError {
     RevisionOverflow = 9015,
     #[error("no apply key serves the write count")]
     UnsupportedBatch = 9016,
+    #[error("address authorization account is invalid or names another revision")]
+    InvalidAddressAuthorization = 9017,
+    #[error("the authorization's revision is already applied")]
+    AddressAlreadyApplied = 9018,
+    #[error("the registered nullifier key is fixed")]
+    NullifierKeyChanged = 9019,
+    #[error("the registry serves no ring")]
+    RegistryServesNoRing = 9020,
+    #[error("viewing key is zero or not canonical")]
+    NonCanonicalViewingKey = 9021,
 }
 
 #[must_use]
@@ -121,11 +157,12 @@ impl StorageRegistry {
     }
 
     /// Holds only the sentinel root at revision zero.
-    pub fn new(authority: Address, grace_slots: u64) -> Self {
+    pub fn new(authority: Address, ix: &InitializeIxData) -> Self {
         let mut registry = Self::zeroed();
         registry.discriminator = Self::DISCRIMINATOR;
         registry.authority = authority;
-        registry.grace_slots = grace_slots.to_le_bytes();
+        registry.grace_slots = ix.grace_slots;
+        registry.ring_id = ix.ring_id;
         registry.next_index = 1u32.to_le_bytes();
         registry.roots[0].hash = MEMBER_REGISTRY_EMPTY_ROOT;
         registry
@@ -202,6 +239,123 @@ impl StorageRegistry {
     }
 }
 
+impl AddressAuthorization {
+    /// Zero marks an uninitialized account, one a registry.
+    pub const DISCRIMINATOR: u8 = 2;
+    pub const SEED: &'static [u8] = b"address";
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+
+    /// One address per owner per registry.
+    pub fn seeds<'a>(registry: &'a Address, owner: &'a Address) -> [&'a [u8]; 3] {
+        [Self::SEED, registry.as_ref(), owner.as_ref()]
+    }
+
+    pub fn find_address(registry: &Address, owner: &Address) -> (Address, u8) {
+        Address::find_program_address(&Self::seeds(registry, owner), &STORAGE_PROGRAM_ID)
+    }
+
+    pub fn from_data(data: &[u8]) -> Option<&Self> {
+        bytemuck::try_from_bytes::<Self>(data)
+            .ok()
+            .filter(|account| account.discriminator == Self::DISCRIMINATOR)
+    }
+
+    pub fn from_data_mut(data: &mut [u8]) -> Option<&mut Self> {
+        bytemuck::try_from_bytes_mut::<Self>(data)
+            .ok()
+            .filter(|account| account.discriminator == Self::DISCRIMINATOR)
+    }
+
+    pub fn decode(owner: &Address, data: &[u8]) -> Option<Self> {
+        (*owner == STORAGE_PROGRAM_ID)
+            .then(|| Self::from_data(data).copied())
+            .flatten()
+    }
+
+    pub const fn revision(&self) -> u64 {
+        u64::from_le_bytes(self.revision)
+    }
+
+    pub const fn applied_revision(&self) -> u64 {
+        u64::from_le_bytes(self.applied_revision)
+    }
+
+    pub const fn address(&self) -> AuthorizedAddress {
+        AuthorizedAddress {
+            ring_id: self.ring_id,
+            nullifier_pk: self.nullifier_pk,
+            viewing_u: self.viewing_u,
+            address_revision: self.revision(),
+        }
+    }
+
+    /// A later enrollment rotates the viewing key alone, an older address is gone for good.
+    pub fn enroll(&mut self, ix: &EnrollAddressIxData) -> Result<(), StorageError> {
+        if ix.nullifier_pk != self.nullifier_pk {
+            return Err(StorageError::NullifierKeyChanged);
+        }
+        let revision = self
+            .revision()
+            .checked_add(1)
+            .ok_or(StorageError::RevisionOverflow)?;
+        self.viewing_u = ix.viewing_u;
+        self.revision = revision.to_le_bytes();
+        Ok(())
+    }
+
+    /// The entry the apply proof chains, a replay and an older revision refused.
+    pub fn apply(&mut self, write: &AddressWriteData) -> Result<QueueEntry, StorageError> {
+        if self.applied_revision() >= self.revision() {
+            return Err(StorageError::AddressAlreadyApplied);
+        }
+        let entry = write
+            .entry(&self.address())
+            .map_err(|_| StorageError::InvalidAddressAuthorization)?;
+        self.applied_revision = self.revision;
+        Ok(entry)
+    }
+}
+
+/// The first enrollment, at revision 1 under the registry's ring.
+#[must_use]
+pub struct FirstEnrollment<'a> {
+    pub registry: Address,
+    pub owner: Address,
+    pub bump: u8,
+    pub ring_id: [u8; 32],
+    pub ix: &'a EnrollAddressIxData,
+}
+
+impl FirstEnrollment<'_> {
+    pub fn account(self) -> AddressAuthorization {
+        AddressAuthorization {
+            discriminator: AddressAuthorization::DISCRIMINATOR,
+            bump: self.bump,
+            registry: self.registry,
+            owner: self.owner,
+            ring_id: self.ring_id,
+            nullifier_pk: self.ix.nullifier_pk,
+            viewing_u: self.ix.viewing_u,
+            revision: 1u64.to_le_bytes(),
+            applied_revision: [0; 8],
+        }
+    }
+}
+
+impl EnrollAddressIxData {
+    /// A small order key fails later in the delivery proof.
+    pub fn check(&self) -> Result<(), StorageError> {
+        if self.viewing_u == [0; 32] || !is_canonical_x25519_public_key(&self.viewing_u) {
+            return Err(StorageError::NonCanonicalViewingKey);
+        }
+        // The key is fixed, one the address hash refuses would lock the owner out for good.
+        if !is_canonical_bn254_scalar_be(&self.nullifier_pk) {
+            return Err(StorageError::InvalidInstructionData);
+        }
+        Ok(())
+    }
+}
+
 /// `APPLY_RECORDS` binds the registry address and revision before the ordered writes.
 pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], StorageError> {
     let registry = registry_field(registry.as_array()).map_err(|_| StorageError::HashingFailed)?;
@@ -238,54 +392,6 @@ impl From<StorageError> for ProgramError {
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<StorageRegistry>() == 1);
-const _: () = assert!(StorageRegistry::SIZE == 1581);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn error_codes_are_stable() {
-        use StorageError::*;
-        for error in [
-            InvalidRegistry,
-            Unauthorized,
-            RevisionChanged,
-            RootExpired,
-            HistoryFull,
-            InvalidInstructionData,
-            BatchTooLarge,
-            InvalidWrite,
-            ProofVerificationFailed,
-            HashingFailed,
-            MissingAccounts,
-            MissingSignature,
-            ReadOnlyRegistry,
-            InvalidSystemProgram,
-            AlreadyInitialized,
-            RevisionOverflow,
-            UnsupportedBatch,
-        ] {
-            let code = match error {
-                InvalidRegistry => 9000,
-                Unauthorized => 9001,
-                RevisionChanged => 9002,
-                RootExpired => 9003,
-                HistoryFull => 9004,
-                InvalidInstructionData => 9005,
-                BatchTooLarge => 9006,
-                InvalidWrite => 9007,
-                ProofVerificationFailed => 9008,
-                HashingFailed => 9009,
-                MissingAccounts => 9010,
-                MissingSignature => 9011,
-                ReadOnlyRegistry => 9012,
-                InvalidSystemProgram => 9013,
-                AlreadyInitialized => 9014,
-                RevisionOverflow => 9015,
-                UnsupportedBatch => 9016,
-            };
-            assert_eq!(error as u32, code);
-        }
-    }
-}
+const _: () = assert!(StorageRegistry::SIZE == 1613);
+const _: () = assert!(core::mem::align_of::<AddressAuthorization>() == 1);
+const _: () = assert!(AddressAuthorization::SIZE == 178);

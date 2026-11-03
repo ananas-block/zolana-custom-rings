@@ -6,7 +6,7 @@ use zolana_ring_policy::ListSet;
 use crate::{
     error::CustomRingError,
     instruction::{list_and_mint_entry, mint_policy_write, write_count},
-    member_registry::{EscrowKey, QueueEntry},
+    member_registry::{AuthorizedAddress, EscrowKey, QueueEntry},
     storage::{RegistryId, Revision, StorageError},
     ApplyRecordsIxData, RecordWriteData, REGISTER_KEY_CIPHERTEXT_LEN,
 };
@@ -18,12 +18,14 @@ pub mod tag {
     // 3 retired.
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
+    pub const ENROLL_ADDRESS: u8 = 5;
 }
 
 /// The first byte of each write in an update.
 pub mod write_kind {
     pub const RECORD: u8 = 0;
     pub const ESCROW: u8 = 1;
+    pub const ADDRESS: u8 = 2;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +43,8 @@ pub struct InitializeIxData {
     pub registry_id: RegistryId,
     /// Little endian.
     pub grace_slots: [u8; 8],
+    /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
+    pub ring_id: [u8; 32],
 }
 
 /// Encoded as its `write_kind` byte and body.
@@ -48,6 +52,7 @@ pub struct InitializeIxData {
 pub enum StorageWriteData {
     Record(RecordWriteData),
     Escrow(EscrowWriteData),
+    Address(AddressWriteData),
 }
 
 /// The leaf binds every field except `eph_u`.
@@ -59,6 +64,25 @@ pub struct EscrowWriteData {
     pub nullifier_pk: [u8; 32],
     pub eph_u: [u8; 32],
     pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
+}
+
+/// Tag 5, the owner's signature is the only authorization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct EnrollAddressIxData {
+    /// Fixed after the first enrollment.
+    pub nullifier_pk: [u8; 32],
+    /// Canonical and nonzero.
+    pub viewing_u: [u8; 32],
+}
+
+/// Names an enrollment, the address comes from the owner's authorization account and never from data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct AddressWriteData {
+    pub owner: Address,
+    /// Little endian, the revision the authorization holds.
+    pub address_revision: [u8; 8],
 }
 
 /// Tags 1 and 2, `revision || count u8 || count writes || ApplyRecordsIxData`.
@@ -86,8 +110,34 @@ impl InitializeIxData {
     }
 }
 
+impl EnrollAddressIxData {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+}
+
+impl AddressWriteData {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+
+    pub const fn address_revision(&self) -> u64 {
+        u64::from_le_bytes(self.address_revision)
+    }
+
+    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
+        Ok(solana_owner_identity(self.owner.as_array())?)
+    }
+
+    /// The leaf write of `address`, the owner's authorized address at the named revision.
+    pub fn entry(&self, address: &AuthorizedAddress) -> Result<QueueEntry, CustomRingError> {
+        if address.address_revision != self.address_revision() {
+            return Err(CustomRingError::AddressRevisionMismatch);
+        }
+        let member = self.member()?;
+        QueueEntry::address(member, address.hash(&member)?)
+    }
+}
+
 impl StorageWriteData {
-    /// The leaf write the apply proof hashes.
+    /// The leaf write the apply proof hashes, an address write reads its hash from the owner's
+    /// authorization through [`AddressWriteData::entry`].
     pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
         match self {
             Self::Record(write) => list_and_mint_entry(
@@ -98,6 +148,7 @@ impl StorageWriteData {
             ),
             // The leaf binds the published envelope and no other key.
             Self::Escrow(write) => QueueEntry::escrow(write.member()?, &write.key()),
+            Self::Address(_) => Err(CustomRingError::AddressWriteNeedsAuthorization),
         }
     }
 
@@ -105,6 +156,7 @@ impl StorageWriteData {
         match self {
             Self::Record(write) => Ok(write.member),
             Self::Escrow(write) => write.member(),
+            Self::Address(write) => write.member(),
         }
     }
 
@@ -139,6 +191,7 @@ impl StorageWriteData {
         match *kind {
             write_kind::RECORD => leading(rest).map(|(write, rest)| (Self::Record(write), rest)),
             write_kind::ESCROW => leading(rest).map(|(write, rest)| (Self::Escrow(write), rest)),
+            write_kind::ADDRESS => leading(rest).map(|(write, rest)| (Self::Address(write), rest)),
             _ => Err(CustomRingError::InvalidInstructionData),
         }
     }
@@ -147,6 +200,7 @@ impl StorageWriteData {
         let (kind, body) = match self {
             Self::Record(write) => (write_kind::RECORD, bytemuck::bytes_of(write)),
             Self::Escrow(write) => (write_kind::ESCROW, bytemuck::bytes_of(write)),
+            Self::Address(write) => (write_kind::ADDRESS, bytemuck::bytes_of(write)),
         };
         out.push(kind);
         out.extend_from_slice(body);
@@ -221,6 +275,10 @@ fn leading<T: Pod>(data: &[u8]) -> Result<(T, &[u8]), CustomRingError> {
 }
 
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
-const _: () = assert!(InitializeIxData::SIZE == 40);
+const _: () = assert!(InitializeIxData::SIZE == 72);
 const _: () = assert!(core::mem::align_of::<EscrowWriteData>() == 1);
 const _: () = assert!(EscrowWriteData::SIZE == 128);
+const _: () = assert!(core::mem::align_of::<EnrollAddressIxData>() == 1);
+const _: () = assert!(EnrollAddressIxData::SIZE == 64);
+const _: () = assert!(core::mem::align_of::<AddressWriteData>() == 1);
+const _: () = assert!(AddressWriteData::SIZE == 40);

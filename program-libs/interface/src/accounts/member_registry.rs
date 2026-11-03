@@ -2,7 +2,7 @@
 //! lives in `zolana-ring-member-registry`.
 
 use spr_hasher::{
-    primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
+    primitives::{hash_bytes, pack_be, right_align, BN254_SCALAR_MODULUS_BE},
     Hasher, HasherError, Poseidon,
 };
 use zolana_ring_policy::{ListId, MintPolicy};
@@ -26,8 +26,8 @@ pub const FIELD_MAX: [u8; 32] = {
 
 /// Root of the tree holding only the sentinel, the first history entry of a registry.
 pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
-    0x00, 0xc0, 0xb0, 0x7d, 0x78, 0x02, 0x4d, 0x98, 0x5b, 0x99, 0x5b, 0xd9, 0xdb, 0x52, 0x5f, 0x32,
-    0x9d, 0x0b, 0xfb, 0x28, 0x5f, 0x75, 0xcc, 0x22, 0x2f, 0x90, 0x0d, 0x8f, 0x6f, 0xaf, 0x51, 0x30,
+    0x23, 0xe7, 0xf5, 0x5d, 0xac, 0x8a, 0xce, 0xcf, 0x4f, 0x3c, 0x2e, 0xe3, 0xcc, 0xea, 0x5b, 0xd3,
+    0xb4, 0x2e, 0xd7, 0x8e, 0x23, 0x81, 0xe6, 0x7e, 0x0d, 0x75, 0x6d, 0x0f, 0x8c, 0xe3, 0xcb, 0x71,
 ];
 
 /// The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly.
@@ -51,6 +51,33 @@ impl EscrowKey<'_> {
     }
 }
 
+/// The owner-signed delivery address beside a record, the leaf holds its hash.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthorizedAddress {
+    /// `ring_id_field` of the ring program, a record of another ring does not open.
+    pub ring_id: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub viewing_u: [u8; 32],
+    pub address_revision: u64,
+}
+
+impl AuthorizedAddress {
+    /// `Poseidon(CRAD, ring_id, member, nullifier_pk, view0, view1, address_revision)`, mirror
+    /// `prover/circuits/registry`.
+    pub fn hash(&self, member: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+        let [view0, view1] = pack_be(&self.viewing_u);
+        Poseidon::hashv(&[
+            &domain::field(domain::AUTHORIZED_ADDRESS),
+            &self.ring_id,
+            member,
+            &self.nullifier_pk,
+            &view0,
+            &view1,
+            &right_align(&self.address_revision.to_be_bytes()),
+        ])
+    }
+}
+
 /// One queued masked write, `lists' = (lists & !mask) | value`, the escrow key fills once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueEntry {
@@ -60,6 +87,8 @@ pub struct QueueEntry {
     pub escrow_key: [u8; 32],
     /// Only authority writes replace mint settings; list and key writes preserve them.
     pub mint_policy: Option<MintPolicy>,
+    /// Zero keeps the bound address, only an owner-signed authorization sets one.
+    pub address_hash: [u8; 32],
 }
 
 impl QueueEntry {
@@ -77,10 +106,21 @@ impl QueueEntry {
             value: bit,
             escrow_key,
             mint_policy: None,
+            address_hash: [0; 32],
         })
     }
 
-    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`, mirror
+    /// `address_hash` is the [`AuthorizedAddress::hash`] of an owner-signed authorization.
+    pub fn address(member: [u8; 32], address_hash: [u8; 32]) -> Result<Self, CustomRingError> {
+        check_member(&member)?;
+        Ok(Self {
+            member,
+            address_hash,
+            ..Self::default()
+        })
+    }
+
+    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2, address_hash)`, mirror
     /// `prover/circuits/registry/apply_records.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         let policy = self.mint_policy.unwrap_or_default();
@@ -96,6 +136,7 @@ impl QueueEntry {
             &limits_0,
             &limits_1,
             &limits_2,
+            &self.address_hash,
         ])
     }
 

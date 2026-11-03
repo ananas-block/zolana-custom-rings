@@ -335,10 +335,11 @@ pub enum RootRead {
 }
 
 impl RootRead {
+    /// An anonymous transfer opens every delivery address under the own root.
     pub fn transfer(ring: &RingPolicy, exempt: bool) -> Self {
         if ring.has_policy() {
             Self::Policy
-        } else if exempt {
+        } else if exempt || ring.mode == RingMode::Anonymous as u8 {
             Self::Own
         } else {
             Self::None
