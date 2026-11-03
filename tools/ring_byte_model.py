@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predicted frame lengths, provisional until checked against serialized frames."""
+"""Frame lengths from the serialized size pins, with the extras no pin carries."""
 
 import math
 import re
@@ -23,17 +23,17 @@ INPUT_COUNT_FIELD_LIMIT = 63
 MERGE_WIDTHS = (8, 24, 52)
 
 COLUMN_SLOPES = {
-    "Confidential": (65, 168),
-    "ConfidentialPolicy": (65, 200),
-    "ConfidentialEscrow": (65, 168),
-    "InProofOwner": (81, 168),
-    "InProofOwnerPolicy": (81, 200),
-    "InProofOwnerEscrow": (81, 168),
-    "Anonymous": (81, 343),
-    "AnonymousPolicy": (81, 343),
-    "AnonymousEntry": (137, 343),
-    "AnonymousEntryPolicy": (137, 343),
-    "Delegate": (81, 168),
+    "Confidential": (97, 168),
+    "ConfidentialPolicy": (97, 200),
+    "ConfidentialEscrow": (97, 168),
+    "InProofOwner": (97, 168),
+    "InProofOwnerPolicy": (97, 200),
+    "InProofOwnerEscrow": (97, 168),
+    "Anonymous": (97, 272),
+    "AnonymousPolicy": (97, 272),
+    "AnonymousEntry": (169, 272),
+    "AnonymousEntryPolicy": (169, 272),
+    "Delegate": (97, 168),
 }
 
 
@@ -52,6 +52,12 @@ class RingMode(Enum):
 
 
 ANONYMOUS_RAILS = (Rail.COMMITMENT, Rail.ENTRY)
+KEY_CLASSES = {
+    Rail.SIGNER: {2: 24, 4: 24, 8: 16, 16: 5},
+    Rail.IN_PROOF: {2: 24, 4: 24, 8: 16, 16: 5},
+    Rail.COMMITMENT: {2: 24, 4: 16, 8: 5},
+    Rail.ENTRY: {2: 8, 4: 8, 8: 2},
+}
 CO_OWNER_RAILS = (Rail.SIGNER, Rail.COMMITMENT)
 
 PIN_COLUMNS = {
@@ -64,7 +70,9 @@ PIN_COLUMNS = {
     (Rail.AUTHORITY, RingMode.ESCROW): "Delegate",
     # Anonymous frames always read the records registry, hence the policy pin.
     (Rail.COMMITMENT, RingMode.AUDIT): "AnonymousPolicy",
+    (Rail.COMMITMENT, RingMode.PLAIN_POLICY): "AnonymousPolicy",
     (Rail.ENTRY, RingMode.AUDIT): "AnonymousEntryPolicy",
+    (Rail.ENTRY, RingMode.PLAIN_POLICY): "AnonymousEntryPolicy",
 }
 
 
@@ -139,50 +147,46 @@ class Frame:
     legs: int = 0
     reply_length: int = 0
     change_slots: int = 1
-
-    def anonymous_delta(self):
-        recipients = self.outputs - 1
-        change_bits = slot_bits_length(self.outputs)
-        recipient_bodies = (RECIPIENT_BODY - 142) * recipients
-        change_body_length_prefix = -2
-        missing_change_bodies = RECIPIENT_BODY * (1 - self.change_slots)
-        sender_bundle = (80 + FIELD * self.outputs) - (119 + 33 * recipients)
-        reply_metadata = (
-            2 + self.reply_length * (self.outputs - self.change_slots) if self.reply_length else 0
-        )
-        return (
-            change_bits
-            + recipient_bodies
-            + change_body_length_prefix
-            + missing_change_bodies
-            + sender_bundle
-            + reply_metadata
-        )
-
-    def rail_delta(self):
-        if self.rail is Rail.SIGNER:
-            return FIELD * self.inputs + (SIGNATURE + ADDRESS if self.outsider_payer else 0)
-        if self.rail in (Rail.IN_PROOF, Rail.AUTHORITY):
-            return 16 * self.inputs
-        if self.rail is Rail.COMMITMENT:
-            return 16 * (self.inputs - 1) + self.anonymous_delta()
-        return FIELD * self.inputs + self.anonymous_delta()
+    spl_legs: bool = False
+    second_input_tree: bool = False
 
     def legs_delta(self):
         if not self.legs:
             return 0
-        return 75 + (self.legs - 1) * (11 if self.rail in ANONYMOUS_RAILS else 43)
+        later_legs = self.legs - 1
+        # An anonymous exit repeats its destination.
+        repeated_destination = self.rail in ANONYMOUS_RAILS
+        if not self.spl_legs:
+            return 75 + later_legs * (11 if repeated_destination else 43)
+        token_owner_field = 0 if self.mode is RingMode.AUDIT else FIELD
+        later_leg = 15 if repeated_destination else 47
+        return 175 + token_owner_field + later_legs * (later_leg + token_owner_field)
+
+    def reply_delta(self):
+        if not self.reply_length:
+            return 0
+        return 2 + self.reply_length * (self.outputs - self.change_slots)
+
+    def second_tree_delta(self):
+        if not self.second_input_tree:
+            return 0
+        root_indices = 4
+        return ACCOUNT + root_indices + slot_bits_length(self.inputs)
 
     def length(self):
-        output_count_byte = 1
+        outsider_signer = SIGNATURE + ADDRESS
         co_owner_signer = SIGNATURE + ACCOUNT
+        # The pins carry one change slot.
+        change_slot_bodies = RECIPIENT_BODY * (1 - self.change_slots)
         return (
             PINS.predict(PIN_COLUMNS[self.rail, self.mode], self.inputs, self.outputs)
-            + output_count_byte
-            + self.rail_delta()
+            + (outsider_signer if self.rail is Rail.SIGNER and self.outsider_payer else 0)
             + co_owner_signer * self.co_owners
             + (CO_SIGNER if self.co_signer else 0)
             + self.legs_delta()
+            + change_slot_bodies
+            + self.reply_delta()
+            + self.second_tree_delta()
         )
 
     def most_inputs(self):
@@ -297,6 +301,11 @@ def input_limit_cell(frame):
 
 
 def print_input_limits():
+    print(
+        "Limits are published counts. Default padding publishes up to the next SPP shape, "
+        "only compact padding reaches a count between shapes."
+    )
+    print()
     print("Published input limit, zero extras / co-signer and 4 legs / one co-owner")
     print_table(
         ["Rail and mode", "2 outputs", "4 outputs", "8 outputs", "16 outputs"],
@@ -427,6 +436,61 @@ def print_merge_fit():
     )
 
 
+def print_spl_legs():
+    print("SPL legs, bytes of the first leg / each later leg")
+    rows = []
+    for name, frame in (
+        ("Confidential audit", Frame(Rail.SIGNER, legs=1, spl_legs=True)),
+        (
+            "Confidential plain policy or escrow",
+            Frame(Rail.SIGNER, RingMode.ESCROW, legs=1, spl_legs=True),
+        ),
+        ("Anonymous audit", Frame(Rail.COMMITMENT, legs=1, spl_legs=True)),
+        (
+            "Anonymous policy",
+            Frame(Rail.COMMITMENT, RingMode.PLAIN_POLICY, legs=1, spl_legs=True),
+        ),
+    ):
+        first_leg = frame.legs_delta()
+        later_leg = replace(frame, legs=2).legs_delta() - first_leg
+        rows.append([name, f"{first_leg} / {later_leg}"])
+    print_table(["Rail and mode", "Bytes"], rows)
+
+
+def print_second_tree_losses():
+    print("Frames at their key class one input tree fits and a second does not")
+    extras_variants = (
+        ("no extras", {}),
+        ("co-signer", {"co_signer": True}),
+        ("4 legs", {"legs": 4}),
+        ("co-signer and 4 legs", LOADED_EXTRAS),
+        ("one co-owner", CO_OWNER_EXTRAS),
+    )
+    rows = []
+    for name, frame in (
+        *CONFIDENTIAL_ROWS,
+        ("Commitment", Frame(Rail.COMMITMENT)),
+        ("Entry", Frame(Rail.ENTRY)),
+    ):
+        for outputs, input_class in KEY_CLASSES[frame.rail].items():
+            for label, extras in extras_variants:
+                if extras is CO_OWNER_EXTRAS and frame.rail not in CO_OWNER_RAILS:
+                    continue
+                one_tree = replace(frame, inputs=input_class, outputs=outputs, **extras)
+                two_trees = replace(one_tree, second_input_tree=True)
+                if one_tree.length() <= TRANSACTION_LIMIT < two_trees.length():
+                    rows.append(
+                        [
+                            name,
+                            f"{input_class}x{outputs}",
+                            label,
+                            one_tree.length(),
+                            two_trees.length(),
+                        ]
+                    )
+    print_table(["Rail and mode", "Frame", "Extras", "One tree", "Two trees"], rows)
+
+
 def print_compact():
     print("Compact, bytes one omitted slot saves")
     saved = {
@@ -483,6 +547,8 @@ def main():
     print_frame_bytes()
     print_merge_fit()
     print_compact()
+    print_spl_legs()
+    print_second_tree_losses()
     print_pool_capacity()
     return 1 if mismatches else 0
 
