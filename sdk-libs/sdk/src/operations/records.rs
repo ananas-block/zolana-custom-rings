@@ -1,18 +1,20 @@
 //! Registry records, read under a root or signed as record updates.
 
 use async_trait::async_trait;
+use custom_ring_interface::storage::AddressAuthorization;
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_api::ZolanaApi;
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::Hash;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_client::{
     records::{EscrowedRecord, MemberOpeningRead, RecordPoolCheck, RecordPoolRead},
     rpc::{
         method::{GetRecordUpdateStatus, SubmitRecordUpdate},
-        EscrowRegistration, GetRecordUpdateStatusRequest, ReaderAccess, RecordUpdate,
-        RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
-        WalletGrant, ENROLMENT_LISTS,
+        AddressEnrollment, EscrowRegistration, GetRecordUpdateStatusRequest, ReaderAccess,
+        RecordUpdate, RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus,
+        SubmitRecordUpdateRequest, WalletGrant, ENROLMENT_LISTS,
     },
     AsyncRingIndexer, ReaderKey,
 };
@@ -20,6 +22,7 @@ use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest, RingListWriteView,
     MAX_RING_MEMBER_PAGE_LIMIT,
 };
+use zolana_ring_member_registry::RecordOpening;
 use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
 use crate::{request::RecordOpeningRequest, submission::BoundRoot, CustomRing, RingError};
@@ -153,6 +156,28 @@ impl<'a> OwnerRead<'a> {
     }
 }
 
+/// The owner's enrollment as a record update entry, the writer checks it against the same account.
+pub async fn address_enrollment(
+    rpc: &(impl AsyncRpc + ?Sized),
+    registry: Address,
+    owner: Address,
+) -> Result<AddressEnrollment, RingError> {
+    let (account, _) = AddressAuthorization::find_address(&registry, &owner);
+    let authorization = rpc
+        .get_account(account)
+        .await?
+        .and_then(|account| AddressAuthorization::decode(&account.owner, &account.data))
+        .ok_or(RingError::AddressNotEnrolled)?;
+    let address = authorization.address();
+    Ok(AddressEnrollment {
+        owner: owner.into(),
+        ring_id: Hash(address.ring_id),
+        nullifier_pk: Hash(address.nullifier_pk),
+        viewing_u: Hash(address.viewing_u),
+        address_revision: address.address_revision,
+    })
+}
+
 /// The owner's record under `root`, refused unless it escrows `nullifier_pk`.
 #[derive(Clone, Copy)]
 pub(crate) struct EscrowRead {
@@ -177,6 +202,17 @@ impl EscrowRead {
         }
         .read(rpc)
         .await?;
+        // A zero secret owner owes no record, the proof reads none of the opening.
+        if self.nullifier_pk == ZERO_NULLIFIER_PUBKEY {
+            let (record, path) = match &read.opening {
+                RecordOpening::Present { record, path } => (record, path),
+                RecordOpening::Absent { low, path } => (low, path),
+            };
+            return Ok(EscrowOpening {
+                opening: RecordOpeningRequest::present(record, path),
+                ct_hash: [0; 32],
+            });
+        }
         let escrowed = OwnerRead {
             owner: self.owner,
             read: &read,
@@ -283,6 +319,14 @@ impl WalletRecordUpdate {
     }
 
     /// The writer holds the update until a config authority update sets every list of `lists` on the member.
+    /// The wallet's own enrollment, `address_enrollment` reads it from the account.
+    pub fn with_address(mut self, enrollment: AddressEnrollment) -> Self {
+        self.draft
+            .entries
+            .push(RecordUpdateEntry::Address(enrollment));
+        self
+    }
+
     pub fn awaiting_authority(mut self, lists: ListSet) -> Result<Self, RingError> {
         if lists.is_empty() || !lists.is_subset(ENROLMENT_LISTS) {
             return Err(RingError::EnrolmentLists);
@@ -316,6 +360,14 @@ impl AuthorityRecordUpdate {
     }
 
     /// Replaces all mint settings, zero values clear them.
+    /// A PDA's enrollment, its program signed the account and the authority only carries it.
+    pub fn with_address(mut self, enrollment: AddressEnrollment) -> Self {
+        self.draft
+            .entries
+            .push(RecordUpdateEntry::Address(enrollment));
+        self
+    }
+
     pub fn with_mint_policy(mut self, member: Member, policy: MintPolicy) -> Self {
         self.draft
             .entries

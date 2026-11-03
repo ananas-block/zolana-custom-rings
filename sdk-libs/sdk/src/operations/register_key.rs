@@ -48,7 +48,10 @@ impl EscrowedRecipients<'_> {
         .read(rpc)
         .await?;
         for ((recipient, owner), read) in self.recipients.iter().zip(owners).zip(&reads) {
-            OwnerRead { owner, read }.escrowed(&recipient.nullifier_pubkey)?;
+            // A zero secret recipient owes no escrow.
+            if recipient.nullifier_pubkey != spr_interface::ZERO_NULLIFIER_PUBKEY {
+                OwnerRead { owner, read }.escrowed(&recipient.nullifier_pubkey)?;
+            }
         }
         Ok(())
     }

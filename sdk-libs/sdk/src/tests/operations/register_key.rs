@@ -73,3 +73,50 @@ async fn a_recipient_without_an_escrowed_key_is_refused_before_any_proof() {
     .await
     .is_ok());
 }
+
+mod enrollment {
+    use custom_ring_interface::RingMode;
+    use solana_address::Address;
+
+    use crate::{
+        storage::EnrollAddress,
+        tests::support::{keypair, Chain, Registry, RingSettings},
+        RingError,
+    };
+
+    #[tokio::test]
+    async fn an_enrollment_key_that_disagrees_with_the_record_is_refused_before_the_owner_signs() {
+        let member = keypair(1);
+        let stranger = keypair(2);
+        let chain = Chain::ring(RingSettings {
+            has_policy: true,
+            ..RingSettings::new(RingMode::ConfidentialEscrow)
+        })
+        .with_records(Registry::new(&[(&member, 0)]));
+        let registry = crate::tests::support::RECORDS;
+        let client = chain.client();
+        let enroll = |owner: &spr_keypair::ShieldedKeypair, nullifier_pk| EnrollAddress {
+            payer: Address::new_from_array([7; 32]),
+            owner: owner.shielded_address().unwrap().solana_address().unwrap(),
+            registry,
+            nullifier_pk,
+            viewing_u: [3; 32],
+        };
+        let held = member.shielded_address().unwrap().nullifier_pubkey;
+        enroll(&member, held)
+            .checked_instruction(client.zolana())
+            .await
+            .unwrap();
+        assert!(matches!(
+            enroll(&member, [7; 32])
+                .checked_instruction(client.zolana())
+                .await,
+            Err(RingError::EnrollmentKeyMismatch)
+        ));
+        // No leaf holds a key to disagree with.
+        enroll(&stranger, [7; 32])
+            .checked_instruction(client.zolana())
+            .await
+            .unwrap();
+    }
+}
