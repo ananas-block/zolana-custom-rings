@@ -72,7 +72,7 @@ ring_errors! {
     AnonymousRingRefused = 8175 => "an anonymous ring refuses this operation",
     // 8176 retired.
     InvalidAnonymousOutput = 8177 => "an anonymous ring output must carry a zero owner tag",
-    InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no owner signer",
+    InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run and the co-signer, and no owner run on the entry key",
     InvalidMergeDisclosure = 8179 =>
         "the merge disclosure does not match the ring mode or the auditor key",
     InvalidDepositData = 8180 => "forwarded deposit data is invalid",
@@ -85,7 +85,7 @@ ring_errors! {
     FlagNotAllowed = 8202 => "a transact flag the ring mode or policy forbids",
     // 8203 to 8205 retired.
     // 8206 and 8207 retired.
-    OwnerSignerCount = 8208 => "a policy transfer takes exactly one owner signer",
+    OwnerSignerCount = 8208 => "the owner run is empty under a policy or exceeds the key's signer slots",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
     ValueOutsideMask = 8211 => "the list value leaves its mask or the mask is zero",
@@ -130,9 +130,19 @@ ring_errors! {
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
-    AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
+    // 8252 retired.
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
     ExemptionWithoutWithdrawal = 8254 => "an exempt transfer settles no public withdrawal",
+    AnonymousRingNeedsRecords = 8256 => "an anonymous ring needs a records registry",
+    OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
+    InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
+    ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
+    AddressWriteNeedsAuthorization = 8264 => "an address write reads its hash from an authorization",
+    AddressRevisionMismatch = 8265 => "the address write names another revision than the authorization",
+    RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
+    ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
+    ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
+    ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
     CoSignerOutOfScope = 8262 => "the co-signer's scope misses a demanded class",
@@ -169,6 +179,7 @@ impl From<RuleTableError> for CustomRingError {
     fn from(error: RuleTableError) -> Self {
         match error {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
+            RuleTableError::ListNotPolicyReadable => Self::ListNotPolicyReadable,
             _ => Self::InvalidPolicyRules,
         }
     }

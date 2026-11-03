@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use custom_ring_interface::CustomRingError::{self, *};
+use custom_ring_interface::{
+    storage::StorageError,
+    CustomRingError::{self, *},
+};
 
 macro_rules! pinned_codes {
     ($($variant:ident = $code:literal,)*) => {
@@ -89,9 +92,18 @@ pinned_codes! {
     AnonymousExitTokenAccountOnCurve = 8249,
     AnonymousExitTokenAccountInvalid = 8250,
     AnonymousRingDataNotZero = 8251,
-    AnonymousBodyLength = 8252,
     OutputBodyLength = 8253,
     ExemptionWithoutWithdrawal = 8254,
+    AnonymousRingNeedsRecords = 8256,
+    OutputCountOutOfRange = 8257,
+    InvalidChangeBits = 8258,
+    ReplyLength = 8259,
+    AddressWriteNeedsAuthorization = 8264,
+    AddressRevisionMismatch = 8265,
+    RecordsRegistryOtherRing = 8266,
+    ViewTagNotCanonical = 8267,
+    ChangeTagNotZero = 8268,
+    ListNotPolicyReadable = 8255,
     InvalidCoSignerRecord = 8260,
     CoSignerRecordAlreadyExists = 8261,
     CoSignerOutOfScope = 8262,
@@ -123,6 +135,47 @@ fn error_codes_are_stable() {
     let actual = VARIANTS
         .iter()
         .map(|&error| (format!("{error:?}"), error as u32))
+        .collect();
+    assert_eq!(fixture, actual, "shared error code fixture drifted");
+}
+
+#[test]
+fn storage_error_codes_are_stable() {
+    use StorageError as Error;
+    let pins = [
+        (Error::InvalidRegistry, 9000),
+        (Error::Unauthorized, 9001),
+        (Error::RevisionChanged, 9002),
+        (Error::RootExpired, 9003),
+        (Error::HistoryFull, 9004),
+        (Error::InvalidInstructionData, 9005),
+        (Error::BatchTooLarge, 9006),
+        (Error::InvalidWrite, 9007),
+        (Error::ProofVerificationFailed, 9008),
+        (Error::HashingFailed, 9009),
+        (Error::MissingAccounts, 9010),
+        (Error::MissingSignature, 9011),
+        (Error::ReadOnlyRegistry, 9012),
+        (Error::InvalidSystemProgram, 9013),
+        (Error::AlreadyInitialized, 9014),
+        (Error::RevisionOverflow, 9015),
+        (Error::UnsupportedBatch, 9016),
+        (Error::InvalidAddressAuthorization, 9017),
+        (Error::AddressAlreadyApplied, 9018),
+        (Error::NullifierKeyChanged, 9019),
+        (Error::RegistryServesNoRing, 9020),
+        (Error::NonCanonicalViewingKey, 9021),
+    ];
+    for (error, code) in pins {
+        assert_eq!(error as u32, code, "{error:?}");
+    }
+    let fixture: BTreeMap<String, u32> = serde_json::from_str(include_str!(
+        "../../../test-vectors/errors/storage-errors.json"
+    ))
+    .unwrap();
+    let actual = pins
+        .iter()
+        .map(|(error, code)| (format!("{error:?}"), *code))
         .collect();
     assert_eq!(fixture, actual, "shared error code fixture drifted");
 }
