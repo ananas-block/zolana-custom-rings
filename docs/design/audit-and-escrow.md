@@ -41,8 +41,10 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 
 ## Why the audit stays provable
 
-- A 16-output confidential policy payout sits at the byte ceiling, the payer, the co-signer and the registries the transaction names decide whether it fits.
-- Fitting a wider one needs SPP to publish less per output, or a transfer statement without the recipient viewing key. The second loses the proof that each body opens for its recipient.
+- A confidential policy ring publishes each output's owner identity beside its body, and only key escrow drops the nullifier key from that body.
+- A keyed 16-output transfer with no withdrawal fits one transaction on a confidential audit-only ring. On a confidential policy ring no 16-output transfer fits without key escrow.
+- Under key escrow the payer, the co-signer, the registries and the notes spent decide whether it fits.
+- Fitting a 16-output transfer without key escrow needs less published per output. A transfer statement without the recipient viewing key publishes less, and it loses the proof that each body opens for its recipient.
 - A confidential key's input class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The envelope names each spent note on the in-proof rail, so its inputs set that limit.
 - The SDKs refuse a shape past the class as unkeyed, and the sender merges first. They refuse a keyed shape over the byte limit as too wide, and the sender splits the payout or merges first.
 

@@ -18,6 +18,21 @@ const UTXO_AMOUNT: u64 = 1_000_000;
 const DESTINATION_FUNDING: u64 = 1_000_000;
 const LEG_AMOUNT: u64 = 1_000;
 
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../sdk-libs/sdk/src/tests/operations/size_pins.rs"
+));
+
+fn pinned_bytes(rail: Measured, n_in: usize, n_out: usize) -> Option<usize> {
+    let column = Measured::COLUMNS
+        .iter()
+        .position(|column| *column == rail)?;
+    SIZE_PINS
+        .iter()
+        .find(|pin| (pin.n_in, pin.n_out) == (n_in, n_out))?
+        .bytes[column]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Column {
     Confidential,
@@ -63,6 +78,28 @@ impl Column {
     fn keyed(self, shape: Shape) -> bool {
         custom_ring_sdk::shape_keyed(self.rail(), shape)
     }
+
+    fn measured(self, spend: Spend, spends_default_ring: bool) -> Measured {
+        match spend {
+            Spend::Rail(RingRail::Delegate) => Measured::Delegate,
+            Spend::Rail(RingRail::Anonymous) => match self {
+                Self::AnonymousPolicy if spends_default_ring => Measured::AnonymousEntryPolicy,
+                Self::AnonymousPolicy => Measured::AnonymousPolicy,
+                _ if spends_default_ring => Measured::AnonymousEntry,
+                _ => Measured::Anonymous,
+            },
+            Spend::Rail(RingRail::Confidential) => match self {
+                Self::Delegate => Measured::ConfidentialEscrow,
+                Self::ConfidentialPolicy => Measured::ConfidentialPolicy,
+                _ => Measured::Confidential,
+            },
+            Spend::InProofOwner => match self {
+                Self::Delegate => Measured::InProofOwnerEscrow,
+                Self::ConfidentialPolicy => Measured::InProofOwnerPolicy,
+                _ => Measured::InProofOwner,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -82,10 +119,13 @@ impl KeyFamily {
         }
     }
 
-    /// A policy ring alone keys the legs.
-    const fn column(self) -> Column {
+    /// A policy ring alone keys the legs, sixteen outputs fit only under key escrow.
+    const fn column(self, outputs: u8) -> Column {
         match self {
-            Self::ConfidentialSigner | Self::ConfidentialInProof => Column::ConfidentialPolicy,
+            Self::ConfidentialSigner | Self::ConfidentialInProof => match outputs {
+                16 => Column::Delegate,
+                _ => Column::ConfidentialPolicy,
+            },
             Self::Anonymous | Self::AnonymousEntry => Column::AnonymousPolicy,
         }
     }
@@ -98,10 +138,11 @@ impl KeyFamily {
         }
     }
 
-    fn keys(self, circuit: RingCircuit) -> bool {
+    fn keys(self, circuit: RingCircuit, column: Column) -> bool {
         match self {
             Self::ConfidentialSigner | Self::ConfidentialInProof => {
-                matches!(circuit, RingCircuit::TransferConfidential { .. })
+                matches!(circuit, RingCircuit::TransferConfidential { outputs, .. }
+                    if self.column(outputs) == column)
             }
             Self::Anonymous => matches!(circuit, RingCircuit::TransferAnonymous { .. }),
             Self::AnonymousEntry => matches!(circuit, RingCircuit::TransferAnonymousEntry { .. }),
@@ -528,7 +569,11 @@ impl ShapeRing<'_> {
             mint: env.usdc_mint,
             token_accounts: self.token_accounts(distinct)?,
         };
-        for shape in family.shapes() {
+        for shape in family
+            .shapes()
+            .iter()
+            .filter(|shape| family.column(shape.outputs) == self.column)
+        {
             let [narrow, wide] = shape.withdrawals.map(usize::from);
             // A note count no wide frame fits keeps its notes for the narrow key.
             let mut unspent: HashMap<(LegKind, usize), Vec<WalletUtxo>> = HashMap::new();
@@ -576,7 +621,7 @@ impl ShapeRing<'_> {
                 }
             }
         }
-        coverage.assert_keys(|circuit| family.keys(circuit));
+        coverage.assert_keys(|circuit| family.keys(circuit, self.column));
         Ok(())
     }
 
@@ -765,6 +810,21 @@ impl ShapeRing<'_> {
                 Some(Leg::Sol(_)) | None => "",
             }
         );
+        let pinned = transfer
+            .legs
+            .is_empty()
+            .then(|| {
+                let spends_default_ring = transfer
+                    .inputs
+                    .iter()
+                    .any(|input| input.utxo.ring_program_id.is_none());
+                pinned_bytes(
+                    self.column.measured(spend, spends_default_ring),
+                    transfer.shape.n_inputs(),
+                    transfer.shape.n_outputs(),
+                )
+            })
+            .flatten();
         let mut paid: HashMap<Leg, u64> = HashMap::new();
         for leg in &transfer.legs {
             *paid.entry(*leg).or_default() += LEG_AMOUNT;
@@ -782,6 +842,12 @@ impl ShapeRing<'_> {
             Proven::Transfer(proven) => proven,
             Proven::Unfit(reason) => {
                 println!("RING_TOO_LARGE {label} {reason}");
+                if let RingError::TransferTooWide { bytes, .. } = reason {
+                    assert!(
+                        pinned.is_none_or(|pinned| pinned == bytes),
+                        "{label} takes {bytes}, its pin {pinned:?}"
+                    );
+                }
                 return Ok(Settlement::TooLarge);
             }
         };
@@ -800,6 +866,9 @@ impl ShapeRing<'_> {
             std::slice::from_ref(&instruction),
             budget,
         )?;
+        if let Some(pinned) = pinned {
+            assert_eq!(pinned, size.bytes, "{label} takes its pinned size");
+        }
         let before: HashMap<Leg, u64> = paid
             .keys()
             .map(|leg| Ok((*leg, balance(leg)?)))
@@ -1060,26 +1129,36 @@ fn spl_confidential_policy_withdrawals_settle() -> Result<()> {
 
 #[test]
 fn sweep_widest_frames_confidential_signer() -> Result<()> {
-    widest_frames(KeyFamily::ConfidentialSigner)
+    widest_frames(KeyFamily::ConfidentialSigner, Column::ConfidentialPolicy)
+}
+
+#[test]
+fn sweep_widest_frames_confidential_signer_escrowed() -> Result<()> {
+    widest_frames(KeyFamily::ConfidentialSigner, Column::Delegate)
 }
 
 #[test]
 fn sweep_widest_frames_confidential_in_proof() -> Result<()> {
-    widest_frames(KeyFamily::ConfidentialInProof)
+    widest_frames(KeyFamily::ConfidentialInProof, Column::ConfidentialPolicy)
+}
+
+#[test]
+fn sweep_widest_frames_confidential_in_proof_escrowed() -> Result<()> {
+    widest_frames(KeyFamily::ConfidentialInProof, Column::Delegate)
 }
 
 #[test]
 fn sweep_widest_frames_anonymous() -> Result<()> {
-    widest_frames(KeyFamily::Anonymous)
+    widest_frames(KeyFamily::Anonymous, Column::AnonymousPolicy)
 }
 
 #[test]
 fn sweep_widest_frames_anonymous_entry() -> Result<()> {
-    widest_frames(KeyFamily::AnonymousEntry)
+    widest_frames(KeyFamily::AnonymousEntry, Column::AnonymousPolicy)
 }
 
-fn widest_frames(family: KeyFamily) -> Result<()> {
-    configured(family.column(), |ring, coverage| {
+fn widest_frames(family: KeyFamily, column: Column) -> Result<()> {
+    configured(column, |ring, coverage| {
         ring.widest_frames(family, coverage)
     })
 }

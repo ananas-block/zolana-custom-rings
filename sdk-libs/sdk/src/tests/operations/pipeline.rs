@@ -1736,31 +1736,9 @@ async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
     assert_eq!(request_layout(&built), request_layout(&pinned));
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Measured {
-    Confidential,
-    ConfidentialPolicy,
-    InProofOwner,
-    InProofOwnerPolicy,
-    Anonymous,
-    AnonymousPolicy,
-    Delegate,
-    /// Spends default-ring notes, measured but not pinned.
-    AnonymousEntry,
-    AnonymousEntryPolicy,
-}
+include!("size_pins.rs");
 
 impl Measured {
-    const COLUMNS: [Self; 7] = [
-        Self::Confidential,
-        Self::ConfidentialPolicy,
-        Self::InProofOwner,
-        Self::InProofOwnerPolicy,
-        Self::Anonymous,
-        Self::AnonymousPolicy,
-        Self::Delegate,
-    ];
-
     /// A delegate moves only on a policy ring.
     fn policy(self) -> bool {
         !matches!(
@@ -1783,26 +1761,69 @@ impl Measured {
         matches!(self, Self::AnonymousEntry | Self::AnonymousEntryPolicy)
     }
 
+    fn ring_rail(self) -> RingRail {
+        match self {
+            Self::Confidential
+            | Self::ConfidentialPolicy
+            | Self::ConfidentialEscrow
+            | Self::InProofOwner
+            | Self::InProofOwnerPolicy
+            | Self::InProofOwnerEscrow => RingRail::Confidential,
+            Self::Anonymous
+            | Self::AnonymousPolicy
+            | Self::AnonymousEntry
+            | Self::AnonymousEntryPolicy => RingRail::Anonymous,
+            Self::Delegate => RingRail::Delegate,
+        }
+    }
+
     fn keyed(self, shape: spr_client::Shape) -> bool {
-        let rail = match self {
+        match self.entry() {
+            true => super::anonymous::AnonymousKey::Entry.serves(shape),
+            false => shape_keyed(self.ring_rail(), shape),
+        }
+    }
+
+    fn sweep_payer(self) -> Payer {
+        match self {
+            Self::Confidential | Self::ConfidentialPolicy | Self::ConfidentialEscrow => {
+                Payer::Owner
+            }
+            Self::Delegate => Payer::Delegate,
+            Self::InProofOwner
+            | Self::InProofOwnerPolicy
+            | Self::InProofOwnerEscrow
+            | Self::Anonymous
+            | Self::AnonymousPolicy
+            | Self::AnonymousEntry
+            | Self::AnonymousEntryPolicy => Payer::Outsider,
+        }
+    }
+
+    fn mode(self) -> RingMode {
+        match self {
+            Self::Anonymous
+            | Self::AnonymousPolicy
+            | Self::AnonymousEntry
+            | Self::AnonymousEntryPolicy => RingMode::Anonymous,
+            Self::ConfidentialEscrow | Self::InProofOwnerEscrow | Self::Delegate => {
+                RingMode::ConfidentialEscrow
+            }
             Self::Confidential
             | Self::ConfidentialPolicy
             | Self::InProofOwner
-            | Self::InProofOwnerPolicy => RingRail::Confidential,
-            Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
-            Self::AnonymousEntry | Self::AnonymousEntryPolicy => {
-                return super::anonymous::AnonymousKey::Entry.serves(shape);
-            }
-            Self::Delegate => RingRail::Delegate,
-        };
-        shape_keyed(rail, shape)
+            | Self::InProofOwnerPolicy => RingMode::Confidential,
+        }
     }
 }
 
-#[derive(Clone, Copy)]
+const MEASURED_DELEGATE: Address = Address::new_from_array([0x44; 32]);
+
+#[derive(Clone, Copy, Debug)]
 enum Payer {
     Outsider,
     Owner,
+    Delegate,
 }
 
 impl Payer {
@@ -1810,6 +1831,7 @@ impl Payer {
         match self {
             Self::Outsider => crate::tests::support::payer(),
             Self::Owner => owner.shielded_address().unwrap().solana_address().unwrap(),
+            Self::Delegate => MEASURED_DELEGATE,
         }
     }
 }
@@ -1838,13 +1860,21 @@ struct Fit {
 }
 
 impl Measure {
+    /// The frame the validator sweep compares against `SIZE_PINS`.
     fn pinned(rail: Measured, shape: spr_client::Shape) -> Self {
         Self {
             rail,
             shape,
-            payer: Payer::Outsider,
-            co_signer: rail.policy().then_some(MEASURED_CO_SIGNER),
+            payer: rail.sweep_payer(),
+            co_signer: None,
             legs: 0,
+        }
+    }
+
+    fn relayed(rail: Measured, shape: spr_client::Shape) -> Self {
+        Self {
+            payer: Payer::Outsider,
+            ..Self::pinned(rail, shape)
         }
     }
 
@@ -1907,22 +1937,11 @@ impl Measure {
                 })
                 .collect::<Vec<_>>()
         };
-        let delegate = Address::new_from_array([0x44; 32]);
-        let mode = match rail {
-            Measured::Anonymous
-            | Measured::AnonymousPolicy
-            | Measured::AnonymousEntry
-            | Measured::AnonymousEntryPolicy => RingMode::Anonymous,
-            Measured::ConfidentialPolicy | Measured::InProofOwnerPolicy | Measured::Delegate => {
-                RingMode::ConfidentialEscrow
-            }
-            Measured::Confidential | Measured::InProofOwner => RingMode::Confidential,
-        };
         let settings = RingSettings {
             has_policy: policy,
             co_signer,
-            delegate: (rail == Measured::Delegate).then_some(delegate),
-            ..RingSettings::new(mode)
+            delegate: (rail == Measured::Delegate).then_some(MEASURED_DELEGATE),
+            ..RingSettings::new(rail.mode())
         };
         let owners: Vec<(&ShieldedKeypair, u64)> = core::iter::once(&sender)
             .chain(&recipients)
@@ -1961,10 +1980,12 @@ impl Measure {
             owner_transfer(&sender, transaction).with_interface_transfer_accounts(accounts)
         };
         match rail {
-            Measured::Confidential | Measured::ConfidentialPolicy => {
-                size.of(confidential(utxos)).await
-            }
-            Measured::InProofOwner | Measured::InProofOwnerPolicy => {
+            Measured::Confidential
+            | Measured::ConfidentialPolicy
+            | Measured::ConfidentialEscrow => size.of(confidential(utxos)).await,
+            Measured::InProofOwner
+            | Measured::InProofOwnerPolicy
+            | Measured::InProofOwnerEscrow => {
                 size.of(confidential(utxos).with_in_proof_owner(&sender.signing_key))
                     .await
             }
@@ -1988,7 +2009,7 @@ impl Measure {
                 assert_eq!(legs, 0, "the authority rail carries no public leg");
                 let transfer = DelegateTransfer::new(DelegateTransferInput {
                     ring: ring(),
-                    delegate,
+                    delegate: MEASURED_DELEGATE,
                     payer,
                     source: sender.shielded_address().unwrap(),
                     source_nullifier_key: &sender.nullifier_key,
@@ -2051,120 +2072,58 @@ impl FrameSize<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct SizePin {
-    n_in: usize,
-    n_out: usize,
-    /// One per [`Measured::COLUMNS`] entry, `None` for a shape the rail has no key for.
-    bytes: [Option<usize>; Measured::COLUMNS.len()],
-}
-
-/// A policy ring demands its co-signer, a value past `MAX_TRANSACTION_SIZE` fails assembly.
-#[rustfmt::skip]
-const SIZE_PINS: [SizePin; 38] = [
-    SizePin { n_in: 1, n_out: 2, bytes: [Some(1325), Some(1496), Some(1340), Some(1511), Some(1652), Some(1823), None] },
-    SizePin { n_in: 1, n_out: 4, bytes: [Some(1661), Some(1832), Some(1676), Some(1847), Some(2338), Some(2509), None] },
-    SizePin { n_in: 1, n_out: 8, bytes: [Some(2333), Some(2504), Some(2348), Some(2519), Some(3710), Some(3881), None] },
-    SizePin { n_in: 2, n_out: 2, bytes: [Some(1390), Some(1561), Some(1421), Some(1592), Some(1733), Some(1904), Some(1593)] },
-    SizePin { n_in: 2, n_out: 4, bytes: [Some(1726), Some(1897), Some(1757), Some(1928), Some(2419), Some(2590), None] },
-    SizePin { n_in: 1, n_out: 16, bytes: [Some(3678), Some(3849), Some(3693), Some(3864), None, None, None] },
-    SizePin { n_in: 2, n_out: 8, bytes: [Some(2398), Some(2569), Some(2429), Some(2600), Some(3791), Some(3962), None] },
-    SizePin { n_in: 3, n_out: 2, bytes: [Some(1455), Some(1626), Some(1502), Some(1673), Some(1814), Some(1985), None] },
-    SizePin { n_in: 3, n_out: 4, bytes: [Some(1791), Some(1962), Some(1838), Some(2009), Some(2500), Some(2671), None] },
-    SizePin { n_in: 2, n_out: 16, bytes: [Some(3743), Some(3914), Some(3774), Some(3945), None, None, None] },
-    SizePin { n_in: 3, n_out: 8, bytes: [Some(2463), Some(2634), Some(2510), Some(2681), Some(3872), Some(4043), None] },
-    SizePin { n_in: 4, n_out: 2, bytes: [Some(1520), Some(1691), Some(1583), Some(1754), Some(1895), Some(2066), None] },
-    SizePin { n_in: 4, n_out: 4, bytes: [Some(1856), Some(2027), Some(1919), Some(2090), Some(2581), Some(2752), Some(2091)] },
-    SizePin { n_in: 4, n_out: 8, bytes: [Some(2528), Some(2699), Some(2591), Some(2762), Some(3953), Some(4124), None] },
-    SizePin { n_in: 5, n_out: 2, bytes: [Some(1585), Some(1756), Some(1664), Some(1835), Some(1976), Some(2147), None] },
-    SizePin { n_in: 5, n_out: 4, bytes: [Some(1921), Some(2092), Some(2000), Some(2171), Some(2662), Some(2833), None] },
-    SizePin { n_in: 4, n_out: 16, bytes: [Some(3873), Some(4044), Some(3936), Some(4107), None, None, None] },
-    SizePin { n_in: 5, n_out: 8, bytes: [Some(2593), Some(2764), Some(2672), Some(2843), Some(4034), Some(4205), None] },
-    SizePin { n_in: 6, n_out: 2, bytes: [Some(1650), Some(1821), Some(1745), Some(1916), Some(2057), Some(2228), None] },
-    SizePin { n_in: 6, n_out: 4, bytes: [Some(1986), Some(2157), Some(2081), Some(2252), Some(2743), Some(2914), None] },
-    SizePin { n_in: 5, n_out: 16, bytes: [Some(3938), Some(4109), Some(4017), Some(4188), None, None, None] },
-    SizePin { n_in: 6, n_out: 8, bytes: [Some(2658), Some(2829), Some(2753), Some(2924), None, None, None] },
-    SizePin { n_in: 8, n_out: 2, bytes: [Some(1780), Some(1951), Some(1907), Some(2078), Some(2219), Some(2390), None] },
-    SizePin { n_in: 8, n_out: 4, bytes: [Some(2116), Some(2287), Some(2243), Some(2414), Some(2905), Some(3076), None] },
-    SizePin { n_in: 8, n_out: 8, bytes: [Some(2788), Some(2959), Some(2915), Some(3086), None, None, None] },
-    SizePin { n_in: 8, n_out: 16, bytes: [None, None, None, None, None, None, None] },
-    SizePin { n_in: 12, n_out: 2, bytes: [Some(2040), Some(2211), Some(2231), Some(2402), Some(2543), Some(2714), None] },
-    SizePin { n_in: 12, n_out: 4, bytes: [Some(2376), Some(2547), Some(2567), Some(2738), Some(3229), Some(3400), None] },
-    SizePin { n_in: 12, n_out: 8, bytes: [Some(3048), Some(3219), Some(3239), Some(3410), None, None, None] },
-    SizePin { n_in: 16, n_out: 2, bytes: [Some(2300), Some(2471), Some(2555), Some(2726), Some(2867), Some(3038), None] },
-    SizePin { n_in: 16, n_out: 4, bytes: [Some(2636), Some(2807), Some(2891), Some(3062), Some(3553), Some(3724), None] },
-    SizePin { n_in: 16, n_out: 8, bytes: [Some(3308), Some(3479), Some(3563), Some(3734), None, None, None] },
-    SizePin { n_in: 24, n_out: 2, bytes: [Some(2820), Some(2991), Some(3203), Some(3374), Some(3515), Some(3686), None] },
-    SizePin { n_in: 24, n_out: 4, bytes: [Some(3156), Some(3327), Some(3539), Some(3710), None, None, None] },
-    SizePin { n_in: 32, n_out: 2, bytes: [Some(3340), Some(3511), Some(3851), Some(4022), None, None, None] },
-    SizePin { n_in: 40, n_out: 2, bytes: [None, None, None, None, None, None, None] },
-    SizePin { n_in: 48, n_out: 2, bytes: [None, None, None, None, None, None, None] },
-    SizePin { n_in: 49, n_out: 2, bytes: [None, None, None, None, None, None, None] },
-];
-
-/// One JSON line per keyed rail, shape and SOL leg count when `RING_FIT_REPORT` names the file.
+/// One JSON line per keyed measurement when `RING_FIT_REPORT` names the file.
 #[tokio::test]
 async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
     let Ok(path) = std::env::var("RING_FIT_REPORT") else {
         return;
     };
-    let only = std::env::var("RING_FIT_RAILS").ok();
     let mut lines = Vec::new();
     for shape in spr_client::SPP_SUPPORTED_SHAPES {
         for rail in Measured::COLUMNS
             .into_iter()
-            .chain([Measured::AnonymousEntry, Measured::AnonymousEntryPolicy])
+            .filter(|rail| rail.keyed(shape))
         {
-            let named = format!("{rail:?}");
-            if only
-                .as_ref()
-                .is_some_and(|only| !only.split(',').any(|name| name == named))
-            {
-                continue;
-            }
-            if !rail.keyed(shape) {
-                continue;
-            }
-            for legs in [0usize, 1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32] {
-                if legs > 0 && rail == Measured::Delegate {
-                    break;
-                }
-                let served = custom_ring_interface::key_catalog::RingCircuit::transfer(
-                    custom_ring_interface::key_catalog::TransferSpend {
-                        rail: match rail {
-                            Measured::Anonymous
-                            | Measured::AnonymousPolicy
-                            | Measured::AnonymousEntry
-                            | Measured::AnonymousEntryPolicy => RingRail::Anonymous,
-                            Measured::Delegate => RingRail::Delegate,
-                            _ => RingRail::Confidential,
-                        },
-                        inputs: shape.n_inputs(),
-                        outputs: shape.n_outputs(),
-                        spends_default_ring: rail.entry(),
-                        legs,
-                    },
-                );
-                if served.is_none() {
-                    break;
-                }
-                let fit = Measure {
-                    legs,
-                    ..Measure::pinned(rail, shape)
-                }
-                .fit()
-                .await;
-                let addresses = fit
-                    .addresses
-                    .map_or_else(|| "null".to_owned(), |addresses| addresses.to_string());
-                lines.push(format!(
-                    r#"{{"rail":"{rail:?}","n_in":{},"n_out":{},"legs":{legs},"bytes":{},"addresses":{addresses}}}"#,
-                    shape.n_inputs(),
-                    shape.n_outputs(),
-                    fit.bytes
-                ));
-                if fit.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
-                    break;
+            for payer in [rail.sweep_payer(), Payer::Outsider] {
+                for co_signer in [None, Some(MEASURED_CO_SIGNER)] {
+                    for legs in [0usize, 1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32] {
+                        if legs > 0 && rail == Measured::Delegate {
+                            break;
+                        }
+                        let served = custom_ring_interface::key_catalog::RingCircuit::transfer(
+                            custom_ring_interface::key_catalog::TransferSpend {
+                                rail: rail.ring_rail(),
+                                inputs: shape.n_inputs(),
+                                outputs: shape.n_outputs(),
+                                spends_default_ring: rail.entry(),
+                                legs,
+                            },
+                        );
+                        if served.is_none() {
+                            break;
+                        }
+                        let fit = Measure {
+                            payer,
+                            co_signer,
+                            legs,
+                            ..Measure::pinned(rail, shape)
+                        }
+                        .fit()
+                        .await;
+                        let addresses = fit
+                            .addresses
+                            .map_or_else(|| "null".to_owned(), |addresses| addresses.to_string());
+                        lines.push(format!(
+                            r#"{{"rail":"{rail:?}","payer":"{payer:?}","co_signer":{},"n_in":{},"n_out":{},"legs":{legs},"bytes":{},"addresses":{addresses}}}"#,
+                            co_signer.is_some(),
+                            shape.n_inputs(),
+                            shape.n_outputs(),
+                            fit.bytes
+                        ));
+                        if fit.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -2204,7 +2163,7 @@ async fn every_confidential_class_fits_the_signer_and_in_proof_rails_relayed() {
     for family in custom_ring_interface::key_catalog::CONFIDENTIAL_TRANSFER_SHAPES {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
-            let bytes = Measure::pinned(rail, shape).bytes().await;
+            let bytes = Measure::relayed(rail, shape).bytes().await;
             assert!(
                 bytes <= solana_message::v1::MAX_TRANSACTION_SIZE,
                 "{rail:?} {shape:?} takes {bytes}"
@@ -2227,17 +2186,28 @@ fn a_shape_past_a_confidential_class_is_unkeyed() {
     }
 }
 
+/// A framed recipient replaces the nullifier key's bytes only in an escrowed output.
 #[tokio::test]
-async fn the_widest_sixteen_output_policy_shape_fits_only_when_the_owner_pays() {
+async fn sixteen_policy_outputs_fit_only_under_key_escrow() {
+    for family in spr_client::SPP_SUPPORTED_SHAPES
+        .into_iter()
+        .filter(|shape| shape.n_outputs() == 16 && Measured::ConfidentialPolicy.keyed(*shape))
+    {
+        let plain = Measure::pinned(Measured::ConfidentialPolicy, family);
+        let escrowed = Measure::pinned(Measured::ConfidentialEscrow, family);
+        assert!(plain.bytes().await > solana_message::v1::MAX_TRANSACTION_SIZE);
+        assert!(escrowed.bytes().await <= solana_message::v1::MAX_TRANSACTION_SIZE);
+    }
+}
+
+#[tokio::test]
+async fn the_widest_escrowed_sixteen_output_shape_with_a_co_signer_fits_only_when_the_owner_pays() {
     let fits = |measure: Measure| async move {
         measure.bytes().await <= solana_message::v1::MAX_TRANSACTION_SIZE
     };
     let policy = Measure {
-        rail: Measured::ConfidentialPolicy,
-        shape: spr_client::Shape::IN5_OUT16,
-        payer: Payer::Owner,
         co_signer: Some(MEASURED_CO_SIGNER),
-        legs: 0,
+        ..Measure::pinned(Measured::ConfidentialEscrow, spr_client::Shape::IN5_OUT16)
     };
     assert!(fits(policy).await);
     assert!(

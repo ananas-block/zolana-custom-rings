@@ -382,6 +382,12 @@ jobs:
           - name: widest frames, confidential in-proof
             recipe: test-custom-ring-validator 'test(=shapes::sweep_widest_frames_confidential_in_proof)'
             timeout: 300
+          - name: widest frames, confidential signer escrowed
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_widest_frames_confidential_signer_escrowed)'
+            timeout: 300
+          - name: widest frames, confidential in-proof escrowed
+            recipe: test-custom-ring-validator 'test(=shapes::sweep_widest_frames_confidential_in_proof_escrowed)'
+            timeout: 300
           - name: widest frames, anonymous
             recipe: test-custom-ring-validator 'test(=shapes::sweep_widest_frames_anonymous)'
             timeout: 300

@@ -275,7 +275,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals.
 
 Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
 
-The SDKs refuse a shape that does not fit one transaction. A 16-output confidential policy payout sits at the byte ceiling, the sender splits one the SDKs refuse or merges first. A confidential key takes 32 inputs at 2 outputs, 24 at 4, 16 at 8 and 5 at 16. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
+The SDKs refuse a shape that does not fit one transaction. On a confidential policy ring each output publishes its owner identity beside its body, and only key escrow drops the nullifier key from that body. A 16-output transfer on such a ring therefore fits one transaction only with a delegate set, and without one the sender splits the payout. A confidential key takes 32 inputs at 2 outputs, 24 at 4, 16 at 8 and 5 at 16. The SDKs refuse a wider shape as unkeyed, and the sender merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
 
@@ -427,7 +427,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 6. Should the delegate move a blocked or frozen member's funds?
 7. A ring reads lists from one curator. Is one enough?
 8. Third-party ZK programs settle through plain SPP transfers and cannot touch ring notes. Should the ring program offer a hook for allowlisted programs?
-9. Do you need 16-output confidential policy payouts in one transaction? They sit at the byte ceiling, and a wider one needs SPP to publish less per output.
+9. Do you need 16-output payouts in one transaction on a confidential policy ring without a delegate? They do not fit, and fitting them needs less published per output.
 10. An escrow key cannot change once set. Should a wallet be able to rotate it?
 11. Roots are read live from the storage registries, so a policy transfer passes the ring account plus one or two registry accounts. Do you accept this over your question 3.1, which syncs roots into the policy account?
 12. On a ring with a delegate an exit pays only an escrowed owner, though neither the delegate nor a managed merge moves default-ring notes. Should an exit pay any owner the rules admit, as a public withdrawal does?

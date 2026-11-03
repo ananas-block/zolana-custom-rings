@@ -28,7 +28,7 @@ SPP authorizes a ring spend in one of four ways. The instruction, the ring mode 
 - It spends ring notes only. A default-ring input makes SPP publish the owner it hides, so the SDKs refuse it and the signer rail spends it.
 - SPP refuses an exit to the sender's own default-ring identity on a ring spend. Exits keep their scheme 3 data, and SPP publishes each exit owner.
 - The confidential key holds one input class per output count. The program refuses a transfer that publishes more inputs than the class holds.
-- The envelope carries a prefix per published input, so this rail sets the class. A confidential class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The SDKs refuse a wider shape as unkeyed on every rail, and the sender merges first.
+- The envelope carries a prefix per published input, so this rail sets the class. A confidential class is the widest shape that fits one transaction on the signer and in-proof rails without a policy. The SDKs refuse a wider shape as unkeyed on every rail, and the sender merges first. A policy ring fits a 16-output transfer on neither rail unless it escrows keys.
 
 ## Why the signer rail stays
 
