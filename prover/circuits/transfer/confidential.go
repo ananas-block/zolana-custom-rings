@@ -1,8 +1,3 @@
-// Proves a transfer on the signer, in-proof or authority rail, the rails whose
-// recipients read their notes under a published viewing key.
-//
-// Read after transfer/transfer.go. Read before transfer/anonymous.go.
-
 package transfer
 
 import (
@@ -92,31 +87,24 @@ func (c *ConfidentialTransferCircuit) Define(api frontend.API) error {
 	}
 	rc := rangecheck.New(api)
 	w := c.auditWires(c.RingProgramID)
-	// 1. The rail bits are bits, the authority rail names no public sender and no in-proof owner.
 	for _, bit := range []frontend.Variable{c.InProof, c.Delegate, c.Exempt, c.ApprovalRequired} {
 		api.AssertIsBoolean(bit)
 	}
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.InProof})
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.Sender})
-	// 2. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields, the authority rail escrows keys.
 	envelope := w.Seal(api, rc)
 	layout := audit.DecodeLayout(api, c.Layout, audit.LayoutExits|audit.LayoutEscrow|audit.LayoutReserved, 0)
 	keyEscrow := layout.Flag(audit.LayoutEscrow)
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: api.Sub(1, keyEscrow)})
-	// 3. Every slot opens for its recipient and the auditor.
+	// Live ring bodies bind their openings, exit recipient bodies remain outside the proof.
 	delivered := w.Deliver(api, rc, envelope, layout, c.Outputs)
-	// 4. The in-proof and authority rails open every input to the sender, the signer rail keeps SPP's input chain.
 	opened := api.Or(c.InProof, c.Delegate)
 	sender := api.Select(c.Delegate, c.SenderPkHash, c.Sender)
 	inputHashes := audit.SpentBySender(api, c.Inputs, opened, opened, sender)
 	inputChain := api.Select(opened, gadget.NonZeroHashChain(api, inputHashes), c.InputChain)
-	// 5. SPP's private transaction hash reopens over the slots the audit opened with no address input.
 	c.bindTransaction(api, inputChain, delivered.Slots)
-	// 6. The policy screens the same slots under the rail, every recipient published, the authority rail bounds no outflow.
 	approval := c.Screen(api, rc, policy.Rail{Exempt: c.Exempt, KeyEscrow: keyEscrow, Delegate: c.Delegate, Published: 1}, sender, delivered.Slots)
-	// 7. approval_required is the outflow's verdict, zero on the authority rail.
 	api.AssertIsEqual(c.ApprovalRequired, approval)
-	// 8. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, delivered, delivered.Disclosure(api, envelope, layout))))
 	return nil
 }

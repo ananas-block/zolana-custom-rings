@@ -1,8 +1,3 @@
-// Proves a transfer on the anonymous rail, the policy screens the hidden owner
-// the audit names.
-//
-// Read after transfer/confidential.go. Read before prover/ring/ring.go.
-
 package transfer
 
 import (
@@ -112,23 +107,17 @@ func (c *AnonymousTransferCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	w := c.auditWires(c.RingProgramID)
 	api.AssertIsBoolean(c.Exempt)
-	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields, an anonymous ring escrows no key.
 	envelope := w.Seal(api, rc)
 	fixed := 0
 	if c.Shape.FullOpenings {
 		fixed = audit.LayoutFullOpenings
 	}
 	layout := audit.DecodeLayout(api, c.Layout, audit.LayoutExits|audit.LayoutReserved, fixed)
-	// 2. Every output slot opens to the auditor, every spent UTXO is the sender's, and every party differs from the sender.
 	anonymous := w.Anonymous(api, rc, envelope, layout, c.Shape.audit(), c.Outputs, c.Inputs, c.InputCount, c.SenderKey)
 	shared.AssertAnonymousParties(api, anonymous.SenderPkHash, c.PartyIdentities)
-	// 3. SPP's private transaction hash reopens over the slots the audit opened with no address input.
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, anonymous.InputHashes), anonymous.Slots)
-	// 4. The policy screens the same slots under the sender the inputs prove, no recipient is published and no key escrowed.
 	approval := c.Screen(api, rc, policy.Rail{Exempt: c.Exempt, KeyEscrow: 0, Delegate: 0, Published: 0}, anonymous.SenderPkHash, anonymous.Slots)
-	// 5. approval_required is the outflow's verdict.
 	api.AssertIsEqual(c.ApprovalRequired, approval)
-	// 6. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, anonymous, anonymous.Disclosure(api, envelope, layout))))
 	return nil
 }

@@ -13,10 +13,11 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     shape_flag,
     storage::{Revision, Root, StorageRegistry},
-    transact_flag, AnonymousAuditKey, AnonymousLayout, CustomRingError, DeliveredLayout,
-    DisclosureLayout, InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyProof,
-    RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData, SenderBundle,
-    Settlement, SourceSlot, TransferBinding, TransferFamily, TransferRoots,
+    transact_flag, AnonymousAuditKey, AnonymousLayout, ConfidentialSender, CustomRingError,
+    DeliveredLayout, DisclosureLayout, InstructionTag, LiveRoots, ParsedTransact,
+    PlainGroth16Proof, PolicyProof, RailSigner, RingMode, RingOutput, RingPolicy, RingRail,
+    RingTransactData, SenderBundle, Settlement, SourceSlot, TransferBinding, TransferFamily,
+    TransferRoots,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -851,9 +852,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
             .unwrap()
             .family,
         TransferFamily::Confidential {
-            in_proof: false,
-            delegate: false,
-            sender: &fixture.fields[61],
+            sender: ConfidentialSender::Signer(&fixture.fields[61]),
             recipients: &none,
         }
     );
@@ -870,9 +869,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
             .unwrap()
             .family,
         TransferFamily::Confidential {
-            in_proof: true,
-            delegate: false,
-            sender: &fixture.fields[61],
+            sender: ConfidentialSender::InProof(&fixture.fields[61]),
             recipients: &framed,
         }
     );
@@ -884,9 +881,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
             .unwrap()
             .family,
         TransferFamily::Confidential {
-            in_proof: false,
-            delegate: true,
-            sender: &fixture.fields[61],
+            sender: ConfidentialSender::Authority,
             recipients: &moved,
         }
     );

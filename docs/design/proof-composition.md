@@ -13,7 +13,7 @@ Pairing one output's fields with another output's hash can screen a payment diff
 
 Design section interfaces around constrained results. Construct each result where its opening constraints are added.
 Let audit and policy consume the same result. Avoid interfaces that accept raw outputs and their openings as independently ordered slices.
-The [policy view adapter](../../prover/circuits/policy/transaction.go) is the boundary to inspect for that pairing.
+The [policy screen](../../prover/circuits/policy/screen.go) receives the opened slots and derives their payment views.
 
 Preserve both output projections. The audit chain covers every output slot.
 The private transaction chain uses each slot's hash multiplied by its UTXO indicator and skips zero entries.
@@ -34,6 +34,7 @@ Review both levels whenever a predicate changes.
 - Sender queries require screening. Output owner queries require screening or escrow. Output asset and withdrawal subject queries require screening.
 - Public asset queries require screening or exemption. Inactive slots add no subject obligation.
 - Member outflow checks require screening and exclude the delegate rail. Delegate approval remains zero.
+- Nonzero caps and co-sign bounds require nonnegative outflow. A zero cap or co-sign bound disables that limit.
 - In-proof and delegate rails open inputs under one sender. Delegate statements carry sender zero and require escrow.
 
 A disabled predicate still leaves internal range checks, table decoding, and lookup constraints in the circuit.
