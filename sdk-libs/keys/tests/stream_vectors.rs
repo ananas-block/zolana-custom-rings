@@ -9,8 +9,8 @@ use ctr::Ctr32BE;
 use custom_ring_interface::{
     domain::{AUDIT_STREAM_LABEL, DELIVERED_BODY_LABEL, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL},
     stream::DeliveredSlot,
-    AnonymousAuditKey, AuditKey, AuditStreamLayout, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    STREAM_BLOCK_LEN, STREAM_FIRST_COUNTER,
+    AnonymousAuditKey, AuditEnvelope, AuditEvidence, AuditKey, AuditStreamLayout, EntryInput,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, STREAM_BLOCK_LEN, STREAM_FIRST_COUNTER,
 };
 use serde_json::{json, Value};
 use spr_hasher::{
@@ -126,6 +126,14 @@ fn labels() -> Vec<Value> {
     let (input_0, input_1) = (field(0x60), field(0x61));
     let (sender_key, sender_nullifier_pk) = ([0xa1; 32], field(0x5a));
     let (asset, blinding) = (field(0x0a), field(0x40));
+    let hashes = AuditEvidence::InputHashes(vec![input_0, input_1]);
+    let envelope = |evidence| {
+        AuditEnvelope {
+            tx_viewing_secret: tx_viewing_sk,
+            evidence,
+        }
+        .encode()
+    };
     let auditor_stream = |name, plaintext| Worked {
         name,
         label: AUDIT_STREAM_LABEL,
@@ -164,25 +172,21 @@ fn labels() -> Vec<Value> {
         plaintext: concat(&[&field(seed), &field(seed + 1), &[seed + 2; 32]]),
     };
     [
-        auditor_stream("envelope_signer", tx_viewing_sk.to_vec()),
-        auditor_stream(
-            "envelope_in_proof_n2",
-            concat(&[&tx_viewing_sk, &input_0[..16], &input_1[..16]]),
-        ),
-        auditor_stream(
-            "envelope_commitment_n2",
-            concat(&[&tx_viewing_sk, &input_0, &input_1[..16]]),
-        ),
+        auditor_stream("envelope_signer", envelope(hashes.clone())),
+        auditor_stream("envelope_in_proof_n2", envelope(hashes.clone())),
+        auditor_stream("envelope_commitment_n2", envelope(hashes)),
         auditor_stream(
             "envelope_entry_n1",
-            concat(&[
-                &tx_viewing_sk,
-                &sender_key,
-                &sender_nullifier_pk,
-                &be64(500),
-                &asset,
-                &blinding,
-            ]),
+            envelope(AuditEvidence::Entry {
+                sender_key,
+                sender_nullifier_pk,
+                inputs: vec![EntryInput {
+                    hash: input_0,
+                    amount: 500,
+                    asset,
+                    blinding,
+                }],
+            }),
         ),
         body(
             "body_keyed",
@@ -217,6 +221,7 @@ fn record_counter(key: AuditKey, slot: usize) -> u32 {
         key_escrow: false,
         inputs: 1,
         outputs: slot + 1,
+        capacity: slot + 1,
         exits: 0,
     }
     .record(slot)
@@ -228,10 +233,7 @@ fn records() -> Vec<Value> {
     let owner_key = [0xb0; 32];
     let (asset, nullifier_pk) = (field(0x0a), field(0x20));
     let anonymous = AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 4 });
-    let confidential = AuditKey::Confidential {
-        class: 2,
-        input_prefixes: true,
-    };
+    let confidential = AuditKey::Confidential { class: 2 };
     let record = |name, key, slot, plaintext| Worked {
         name,
         label: AUDIT_STREAM_LABEL,

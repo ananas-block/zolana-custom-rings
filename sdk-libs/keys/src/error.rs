@@ -24,8 +24,6 @@ pub enum RingKeyError {
     UnknownRingPaymentKey,
     #[error("duplicated ring payment query key")]
     DuplicateRingPaymentKey,
-    #[error("ring payment request names no request tag")]
-    MissingRingPaymentTag,
     #[error("ring payment tag is not 32 lowercase hex bytes led by a zero byte")]
     InvalidRingPaymentTag,
     #[error("ring payment amount is not a u64")]

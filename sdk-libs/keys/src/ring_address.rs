@@ -33,7 +33,6 @@ const LABEL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// Shared off chain, never published, a payment to it without a request takes the bootstrap tag.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RingAddress {
     pub recipient: ShieldedAddress,
@@ -113,12 +112,12 @@ fn checksum(body: &[u8]) -> [u8; CHECKSUM_LEN] {
     core::array::from_fn(|i| digest[i])
 }
 
-/// `zolana:<address>?tag=&amount=&mint=&label=`, the query part is unauthenticated.
+/// `zolana:<address>?deposit_tag=&amount=&mint=&label=`, the query part is unauthenticated.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RingPaymentRequest {
     pub address: RingAddress,
-    /// The recipient's `recipient_request_view_tag`, a sender pays it until the pair is known.
-    pub request_view_tag: ViewTag,
+    /// The recipient's `recipient_request_view_tag`, read by a deposit and never by a transfer.
+    pub deposit_tag: Option<ViewTag>,
     pub amount: Option<u64>,
     pub mint: Option<Address>,
     pub label: Option<String>,
@@ -136,10 +135,10 @@ impl fmt::Debug for RingPaymentRequest {
 }
 
 impl RingPaymentRequest {
-    pub fn new(address: RingAddress, request_view_tag: ViewTag) -> Self {
+    pub fn new(address: RingAddress) -> Self {
         Self {
             address,
-            request_view_tag,
+            deposit_tag: None,
             amount: None,
             mint: None,
             label: None,
@@ -151,10 +150,15 @@ impl fmt::Display for RingPaymentRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(RING_PAYMENT_SCHEME)?;
         formatter.write_str(&self.address.to_base58())?;
-        write!(formatter, "?tag={}", hex::encode(self.request_view_tag))?;
+        let mut separator = '?';
         let mut write = |key: &str, value: fmt::Arguments<'_>| -> fmt::Result {
-            write!(formatter, "&{key}={value}")
+            write!(formatter, "{separator}{key}={value}")?;
+            separator = '&';
+            Ok(())
         };
+        if let Some(tag) = &self.deposit_tag {
+            write("deposit_tag", format_args!("{}", hex::encode(tag)))?;
+        }
         if let Some(amount) = self.amount {
             write("amount", format_args!("{amount}"))?;
         }
@@ -188,7 +192,7 @@ impl FromStr for RingPaymentRequest {
         for part in query.into_iter().flat_map(|query| query.split('&')) {
             let (key, value) = part.split_once('=').unwrap_or((part, ""));
             match key {
-                "tag" => replace_once(&mut tag, parse_tag(value)?)?,
+                "deposit_tag" => replace_once(&mut tag, parse_tag(value)?)?,
                 "amount" => replace_once(&mut amount, parse_amount(value)?)?,
                 "mint" => replace_once(&mut mint, parse_mint(value)?)?,
                 "label" => replace_once(&mut label, parse_label(value)?)?,
@@ -197,7 +201,7 @@ impl FromStr for RingPaymentRequest {
         }
         Ok(Self {
             address,
-            request_view_tag: tag.ok_or(RingKeyError::MissingRingPaymentTag)?,
+            deposit_tag: tag,
             amount,
             mint,
             label,

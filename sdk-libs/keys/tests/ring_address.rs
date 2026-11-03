@@ -24,7 +24,7 @@ struct ValidCase {
     uri: String,
     recipient: String,
     ring_program_id: String,
-    request_view_tag: String,
+    deposit_tag: Option<String>,
     amount: Option<String>,
     mint: Option<String>,
     label: Option<String>,
@@ -58,11 +58,15 @@ fn fixture_address() -> RingAddress {
     }
 }
 
+fn fixture_tag() -> [u8; 32] {
+    viewing_key().get_recipient_request_view_tag(0).unwrap()
+}
+
 fn fixture_request() -> RingPaymentRequest {
-    RingPaymentRequest::new(
-        fixture_address(),
-        viewing_key().get_recipient_request_view_tag(0).unwrap(),
-    )
+    RingPaymentRequest {
+        deposit_tag: Some(fixture_tag()),
+        ..RingPaymentRequest::new(fixture_address())
+    }
 }
 
 fn valid_case(name: &str, request: &RingPaymentRequest) -> ValidCase {
@@ -71,7 +75,7 @@ fn valid_case(name: &str, request: &RingPaymentRequest) -> ValidCase {
         uri: request.to_string(),
         recipient: hex::encode(request.address.recipient.to_bytes()),
         ring_program_id: request.address.ring_program_id.to_string(),
-        request_view_tag: hex::encode(request.request_view_tag),
+        deposit_tag: request.deposit_tag.map(hex::encode),
         amount: request.amount.map(|amount| amount.to_string()),
         mint: request.mint.map(|mint| mint.to_string()),
         label: request.label.clone(),
@@ -110,7 +114,14 @@ fn compute() -> RingAddressVectors {
         label: Some("rent".into()),
         ..bare.clone()
     };
+    let untagged = RingPaymentRequest::new(fixture_address());
+    let label_without_tag = RingPaymentRequest {
+        label: Some("rent".into()),
+        ..untagged.clone()
+    };
     let valid = vec![
+        valid_case("no_tag", &untagged),
+        valid_case("label_without_tag", &label_without_tag),
         valid_case("bare", &bare),
         valid_case("amount_mint_label", &full),
         valid_case("label_only", &labelled),
@@ -119,33 +130,44 @@ fn compute() -> RingAddressVectors {
     let address = &bare.address;
     let payload = address.to_bytes().to_vec();
     let base58 = address.to_base58();
-    let tag = hex::encode(bare.request_view_tag);
-    let uri = |payload: &[u8]| format!("zolana:{}?tag={tag}", bs58::encode(payload).into_string());
+    let tag = hex::encode(fixture_tag());
+    let uri = |payload: &[u8]| {
+        format!(
+            "zolana:{}?deposit_tag={tag}",
+            bs58::encode(payload).into_string()
+        )
+    };
     let mut wrong_version = payload.clone();
     wrong_version[0] = RING_ADDRESS_VERSION - 1;
     let mut bad_checksum = payload.clone();
     *bad_checksum.last_mut().unwrap() ^= 1;
     let mut bad_viewing_key = payload.clone();
     bad_viewing_key[1 + 34 + 32] = 5;
-    let mut nonzero_lead = bare.request_view_tag;
+    let mut nonzero_lead = fixture_tag();
     nonzero_lead[0] = 1;
     let rejected = vec![
-        ("missing_scheme", format!("{base58}?tag={tag}")),
-        ("non_base58", format!("zolana:0{}?tag={tag}", &base58[1..])),
+        ("missing_scheme", format!("{base58}?deposit_tag={tag}")),
+        (
+            "non_base58",
+            format!("zolana:0{}?deposit_tag={tag}", &base58[1..]),
+        ),
         ("short_payload", uri(&payload[..payload.len() - 1])),
         ("long_payload", uri(&[payload.as_slice(), &[0]].concat())),
         ("unknown_version", uri(&with_checksum(wrong_version))),
         ("bad_checksum", uri(&bad_checksum)),
         ("bad_viewing_key", uri(&with_checksum(bad_viewing_key))),
-        ("missing_tag", format!("zolana:{base58}")),
+        ("delivery_tag_key", format!("zolana:{base58}?tag={tag}")),
         (
             "uppercase_tag",
-            format!("zolana:{base58}?tag={}", tag.to_uppercase()),
+            format!("zolana:{base58}?deposit_tag={}", tag.to_uppercase()),
         ),
-        ("short_tag", format!("zolana:{base58}?tag={}", &tag[2..])),
+        (
+            "short_tag",
+            format!("zolana:{base58}?deposit_tag={}", &tag[2..]),
+        ),
         (
             "tag_without_zero_byte",
-            format!("zolana:{base58}?tag={}", hex::encode(nonzero_lead)),
+            format!("zolana:{base58}?deposit_tag={}", hex::encode(nonzero_lead)),
         ),
         ("unknown_query_key", format!("{bare}&memo=hi")),
         ("duplicate_query_key", format!("{bare}&amount=1&amount=2")),
@@ -179,7 +201,7 @@ fn shared_vectors_match() {
             request.address.ring_program_id.to_string(),
             case.ring_program_id
         );
-        assert_eq!(hex::encode(request.request_view_tag), case.request_view_tag);
+        assert_eq!(request.deposit_tag.map(hex::encode), case.deposit_tag);
         assert_eq!(
             request.address,
             RingAddress::from_base58(&request.address.to_base58()).unwrap()
@@ -193,7 +215,7 @@ fn shared_vectors_match() {
         ("unknown_version", "UnknownRingAddressVersion"),
         ("bad_checksum", "InvalidRingAddressChecksum"),
         ("bad_viewing_key", "InvalidPublicKey"),
-        ("missing_tag", "MissingRingPaymentTag"),
+        ("delivery_tag_key", "UnknownRingPaymentKey"),
         ("uppercase_tag", "InvalidRingPaymentTag"),
         ("short_tag", "InvalidRingPaymentTag"),
         ("tag_without_zero_byte", "InvalidRingPaymentTag"),
@@ -232,7 +254,7 @@ fn a_request_prints_neither_its_recipient_keys_nor_its_tag() {
         for key in [
             format!("{:?}", address.recipient.viewing_pubkey),
             format!("{:?}", address.recipient.signing_pubkey),
-            format!("{:?}", request.request_view_tag),
+            format!("{:?}", fixture_tag()),
         ] {
             assert!(!printed.contains(&key), "{printed}");
         }
