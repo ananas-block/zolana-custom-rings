@@ -10,6 +10,7 @@ package registry
 import (
 	"errors"
 	"math/big"
+	"slices"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
@@ -21,9 +22,10 @@ import (
 
 // Properties:
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
-// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask, and never replaces a registered escrow key.
+// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask, never replaces a registered escrow key, and keeps the address while its entry carries a zero hash.
 // 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
 // 4. The statement binds both roots, both next indexes, both chain ends and the count.
+// 5. A write that leaves a record with both an address and an escrow key, having set either, opens both preimages under one nullifier key.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -31,7 +33,7 @@ const ApplyBatch = 16
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
-// QueueEntry's EscrowKey is zero except on a RegisterKey write.
+// QueueEntry's EscrowKey is zero except on a RegisterKey write, its AddressHash except on an owner-signed address write.
 type QueueEntry struct {
 	Member              frontend.Variable
 	Mask                frontend.Variable
@@ -40,11 +42,12 @@ type QueueEntry struct {
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
 	AssetLimits         [LimitFields]frontend.Variable
+	AddressHash         frontend.Variable
 }
 
 // Hash is the entry the program chains at write time in program-libs/interface/src/accounts/member_registry.rs.
 func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, append([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:]...))
+	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:], []frontend.Variable{e.AddressHash}))
 }
 
 // RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
@@ -55,6 +58,8 @@ type RecordWrite struct {
 	Slot    QuadPath
 	Low     Record
 	LowSlot QuadPath
+	// The preimages of the written record's address and escrow key, read only while a write can pair them.
+	NullifierPk, AddressRing, View0, View1, AddressRevision, EscrowCtHash frontend.Variable
 }
 
 type ApplyRecordsCircuit struct {
@@ -115,6 +120,9 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	for i := range updated.AssetLimits {
 		updated.AssetLimits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.Old.AssetLimits[i])
 	}
+	// A zero hash keeps the address, an authority batch cannot clear one and only the chained entry can set one.
+	updated.AddressHash = api.Select(api.IsZero(w.Entry.AddressHash), w.Old.AddressHash, w.Entry.AddressHash)
+	w.assertAddressMatchesEscrow(api, active, updated)
 	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
@@ -148,6 +156,17 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 		next:  api.Add(s.next, insert),
 		chain: api.Select(active, chain, s.chain),
 	}
+}
+
+// assertAddressMatchesEscrow holds the invariant at the running state, conflicting writes of one batch fail at the second and an unrelated write opens no preimage.
+func (w RecordWrite) assertAddressMatchesEscrow(api frontend.API, active frontend.Variable, updated RecordBody) {
+	setsEscrow := api.Mul(api.IsZero(w.Old.EscrowKey), ringgadget.IsNonZero(api, w.Entry.EscrowKey))
+	changed := api.Or(ringgadget.IsNonZero(api, w.Entry.AddressHash), setsEscrow)
+	bound := api.Mul(active, ringgadget.IsNonZero(api, updated.AddressHash), ringgadget.IsNonZero(api, updated.EscrowKey), changed)
+	// A delivery key apart from the escrow key leaves the auditor unable to open what the recipient spends.
+	address := Address{RingID: w.AddressRing, Member: w.Entry.Member, NullifierPk: w.NullifierPk, View: [2]frontend.Variable{w.View0, w.View1}, Revision: w.AddressRevision}
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: bound, A: updated.AddressHash, B: address.Hash(api)})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: bound, A: updated.EscrowKey, B: EscrowKey(api, w.NullifierPk, w.EscrowCtHash)})
 }
 
 func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable {

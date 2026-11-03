@@ -14,6 +14,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -29,7 +30,7 @@ const (
 	LimitFields = 3
 )
 
-// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
+// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
 type Record struct {
 	Member frontend.Variable
 	RecordBody
@@ -42,6 +43,8 @@ type RecordBody struct {
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
 	AssetLimits         [LimitFields]frontend.Variable
+	// Hash of the owner-signed address, zero before enrollment.
+	AddressHash frontend.Variable
 }
 
 func (r Record) Hash(api frontend.API) frontend.Variable {
@@ -50,7 +53,7 @@ func (r Record) Hash(api frontend.API) frontend.Variable {
 
 // contents keeps the record hash order.
 func (b RecordBody) contents() []frontend.Variable {
-	return append([]frontend.Variable{b.Lists, b.EscrowKey, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:]...)
+	return slices.Concat([]frontend.Variable{b.Lists, b.EscrowKey, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:], []frontend.Variable{b.AddressHash})
 }
 
 func (b RecordBody) selectWhen(api frontend.API, cond frontend.Variable, other RecordBody) RecordBody {
@@ -60,6 +63,7 @@ func (b RecordBody) selectWhen(api frontend.API, cond frontend.Variable, other R
 		EscrowKey:           api.Select(cond, b.EscrowKey, other.EscrowKey),
 		MintPolicy:          api.Select(cond, b.MintPolicy, other.MintPolicy),
 		WithdrawalThreshold: api.Select(cond, b.WithdrawalThreshold, other.WithdrawalThreshold),
+		AddressHash:         api.Select(cond, b.AddressHash, other.AddressHash),
 	}
 	for i := range selected.AssetLimits {
 		selected.AssetLimits[i] = api.Select(cond, b.AssetLimits[i], other.AssetLimits[i])
@@ -76,6 +80,18 @@ func (b RecordBody) assertEmptyWhen(api frontend.API, cond frontend.Variable) {
 // EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.
 func EscrowKey(api frontend.API, nullifierPk, ciphertextHash frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{nullifierPk, ciphertextHash})
+}
+
+// Address is one owner's delivery address preimage, View the pack_be of its X25519 u.
+type Address struct {
+	RingID, Member, NullifierPk frontend.Variable
+	View                        [2]frontend.Variable
+	Revision                    frontend.Variable
+}
+
+// Hash mirrors AuthorizedAddress::hash in program-libs/interface/src/accounts/member_registry.rs, the ring id keeps a record of another ring from opening.
+func (a Address) Hash(api frontend.API) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{shared.AuthorizedAddressDomain, a.RingID, a.Member, a.NullifierPk, a.View[0], a.View[1], a.Revision})
 }
 
 type QuadPath struct {

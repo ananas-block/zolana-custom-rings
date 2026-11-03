@@ -66,16 +66,22 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 	if w.Exists {
 		exists = 1
 	}
+	zero := big.NewInt(0)
+	pair := ringregistry.Preimages{NullifierPk: zero, AddressRing: zero, View0: zero, View1: zero, EscrowCtHash: zero}
+	if e.Pair != nil {
+		pair = *e.Pair
+	}
 	return registry.RecordWrite{
-		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
+		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires(), AddressHash: policyValue(e.AddressHash)},
 		Exists: exists,
 		Old: registry.RecordBody{
 			Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: policyValue(w.OldMintPolicy),
-			WithdrawalThreshold: policyValue(w.OldWithdrawalThreshold), AssetLimits: w.OldAssetLimits.Wires(),
+			WithdrawalThreshold: policyValue(w.OldWithdrawalThreshold), AssetLimits: w.OldAssetLimits.Wires(), AddressHash: policyValue(w.OldAddressHash),
 		},
-		Slot:    w.Slot.Wires(),
-		Low:     w.Low.Wires(),
-		LowSlot: w.LowPath.Wires(),
+		Slot:        w.Slot.Wires(),
+		Low:         w.Low.Wires(),
+		LowSlot:     w.LowPath.Wires(),
+		NullifierPk: pair.NullifierPk, AddressRing: pair.AddressRing, View0: pair.View0, View1: pair.View1, AddressRevision: pair.AddressRevision, EscrowCtHash: pair.EscrowCtHash,
 	}
 }
 
