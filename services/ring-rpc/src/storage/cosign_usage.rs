@@ -1,14 +1,13 @@
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_ring_policy::Member;
 
-use crate::cosign::AssetFlow;
+use crate::cosign::{AssetFlow, OwnerFlow};
 
 /// Counts until its window passes or an unconfirmed failure frees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reservation {
-    pub sender: [u8; 32],
+    pub owner: [u8; 32],
     pub slot: u64,
     pub flow: AssetFlow,
 }
@@ -19,13 +18,12 @@ pub(crate) struct UsageWindow<'a> {
     pub since_slot: u64,
 }
 
-/// Keyed by the co-signature, one row per flow.
+/// Keyed by the co-signature, one row per owner and asset.
 pub(crate) struct Reserve<'a> {
     pub signature: &'a Signature,
     pub ring: &'a Address,
-    pub sender: &'a Member,
     pub slot: u64,
-    pub flows: &'a [AssetFlow],
+    pub flows: &'a [OwnerFlow],
 }
 
 pub(crate) struct UsageLedger<'a, C> {
@@ -56,8 +54,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
     }
 
     pub async fn window(&self, window: UsageWindow<'_>) -> Result<Vec<Reservation>, DbErr> {
-        let sql =
-            "SELECT asset, sender, slot, transferred, deposited, withdrawn FROM cosign_usage \
+        let sql = "SELECT asset, owner, slot, debit, deposited, withdrawn FROM cosign_usage \
                    WHERE ring=$1 AND asset=$2 AND slot>=$3";
         let mut reservations = Vec::new();
         for asset in window.assets {
@@ -74,17 +71,16 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
     }
 
     pub async fn reserve(&self, reserve: Reserve<'_>) -> Result<(), DbErr> {
-        let sql =
-            "INSERT INTO cosign_usage(signature,asset,ring,sender,slot,transferred,deposited,\
+        let sql = "INSERT INTO cosign_usage(signature,asset,ring,owner,slot,debit,deposited,\
                    withdrawn,confirmed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
-        for flow in reserve.flows {
+        for OwnerFlow { owner, flow } in reserve.flows {
             let values = vec![
                 signature_value(reserve.signature),
                 address_value(&flow.asset),
                 address_value(reserve.ring),
-                Value::from(reserve.sender.as_bytes().to_vec()),
+                Value::from(owner.as_bytes().to_vec()),
                 slot_value(reserve.slot)?,
-                amount_value(flow.transferred),
+                amount_value(flow.debit),
                 amount_value(flow.deposited),
                 amount_value(flow.withdrawn),
                 Value::from(false),
@@ -94,6 +90,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
         Ok(())
     }
 
+    /// One statement over every row of the message, no row settles alone.
     pub async fn confirm(&self, signature: &Signature) -> Result<(), DbErr> {
         let sql = "UPDATE cosign_usage SET confirmed=$2 WHERE signature=$1";
         let values = vec![signature_value(signature), Value::from(true)];
@@ -101,7 +98,7 @@ impl<C: ConnectionTrait> UsageLedger<'_, C> {
         Ok(())
     }
 
-    /// A confirmed transaction keeps its usage.
+    /// One statement over every row of the message, a confirmed transaction keeps its usage.
     pub async fn free(&self, signature: &Signature) -> Result<(), DbErr> {
         let sql = "DELETE FROM cosign_usage WHERE signature=$1 AND confirmed=$2";
         let values = vec![signature_value(signature), Value::from(false)];
@@ -118,11 +115,11 @@ fn reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
     let amount = |column| bytes::<8>(row, column).map(u64::from_be_bytes);
     let slot = row.try_get::<i64>("", "slot")?;
     Ok(Reservation {
-        sender: bytes(row, "sender")?,
+        owner: bytes(row, "owner")?,
         slot: u64::try_from(slot).map_err(|_| DbErr::Custom("negative usage slot".into()))?,
         flow: AssetFlow {
             asset: Address::new_from_array(bytes(row, "asset")?),
-            transferred: amount("transferred")?,
+            debit: amount("debit")?,
             deposited: amount("deposited")?,
             withdrawn: amount("withdrawn")?,
         },

@@ -11,15 +11,29 @@ use crate::error::RingRpcError;
 pub struct CoSignRequest {
     pub ring: Address,
     pub message: VersionedMessage,
-    pub sender: Member,
-    /// Each asset once.
-    pub flows: Vec<AssetFlow>,
+    pub flows: CoSignFlows,
+}
+
+/// A caller names no transfer debit, the co-signer reads each from the frame it signs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoSignFlows {
+    Frame,
+    /// A deposit's public leg, or nothing on a merge.
+    Published(Vec<OwnerFlow>),
+}
+
+/// One reservation row, each owner and asset once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerFlow {
+    pub owner: Member,
+    pub flow: AssetFlow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AssetFlow {
     pub asset: Address,
-    pub transferred: u64,
+    /// `zolana_ring_policy::owner_debits`, what the owner's ring balance lost.
+    pub debit: u64,
     pub deposited: u64,
     pub withdrawn: u64,
 }
@@ -45,10 +59,12 @@ pub enum CoSignError {
     Disabled = -32160,
     #[error("the transaction exceeds a co-signer limit")]
     OverLimit = -32161,
-    #[error("the co-sign request names an asset twice")]
+    #[error("the co-sign flows name an owner and asset twice")]
     RepeatedAsset = -32162,
-    #[error("the asset limits are unreadable")]
+    #[error("the asset limits or an input opening are unreadable")]
     LimitsUnavailable = -32163,
+    #[error("the message holds anything but one ring transfer the co-signer can read")]
+    MessageScope = -32164,
     #[error("the co-sign request names an asset with no record")]
     UnrecordedAsset = -32296,
 }
@@ -127,6 +143,7 @@ mod tests {
             (OverLimit, -32161),
             (RepeatedAsset, -32162),
             (LimitsUnavailable, -32163),
+            (MessageScope, -32164),
             (UnrecordedAsset, -32296),
         ] {
             assert_eq!(ErrorObjectOwned::from(error).code(), code);
