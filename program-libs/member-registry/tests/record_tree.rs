@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, HashMap};
 
 use custom_ring_interface::{
-    QueueEntry, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
+    member_registry::EscrowKey, QueueEntry, FIELD_MAX, MEMBER_REGISTRY_CAPACITY,
+    MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
-    quad_node, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition, OpeningCheck,
-    QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
+    quad_node, AuthorizedAddress, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree,
+    NodePosition, OpeningCheck, QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError,
+    ZERO_SUBTREES,
 };
 use zolana_ring_policy::ListId;
 
@@ -21,6 +23,7 @@ fn write(byte: u8, mask: u64, value: u64) -> QueueEntry {
         mask,
         value,
         escrow_key: [0; 32],
+        address_hash: [0; 32],
     }
 }
 
@@ -32,6 +35,7 @@ fn escrow(byte: u8, key: u8) -> QueueEntry {
         mask: bit,
         value: bit,
         escrow_key: member(key),
+        address_hash: [0; 32],
     }
 }
 
@@ -359,6 +363,7 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
             next: FIELD_MAX,
             lists: ALLOW,
             escrow_key: [0; 32],
+            address_hash: [0; 32],
         },
     };
     let mut full = PreloadedStore {
@@ -437,4 +442,149 @@ fn mint_settings_survive_relinks_list_and_key_writes_and_clear_explicitly() {
             ..before
         }
     );
+}
+
+fn address(revision: u64, viewing: u8) -> AuthorizedAddress {
+    AuthorizedAddress {
+        ring_id: member(0x41),
+        nullifier_pk: member(0x42),
+        viewing_u: [viewing; 32],
+        address_revision: revision,
+    }
+}
+
+fn address_write(byte: u8, bound: &AuthorizedAddress) -> QueueEntry {
+    let member = member(byte);
+    QueueEntry::address(member, bound.hash(&member).unwrap()).unwrap()
+}
+
+#[test]
+fn an_address_survives_relinks_and_unrelated_writes_until_a_rotation_replaces_it() {
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let first = address(1, 0x51);
+    tree.apply([0; 32], &[address_write(5, &first)]).unwrap();
+    let enrolled = record(&tree, 5).unwrap();
+    assert_eq!(enrolled.address_hash, first.hash(&member(5)).unwrap());
+    enrolled.check_address(Some(&first)).unwrap();
+    let inputs = tree
+        .apply(
+            [0; 32],
+            &[
+                write(7, ALLOW, ALLOW),
+                write(5, BLOCK, BLOCK),
+                escrow(5, 0x31),
+            ],
+        )
+        .unwrap();
+    assert_eq!(inputs.writes[0].low.address_hash, enrolled.address_hash);
+    assert_eq!(inputs.writes[1].old_address_hash, enrolled.address_hash);
+    let kept = record(&tree, 5).unwrap();
+    assert_eq!(kept.next, member(7));
+    assert_eq!(kept.address_hash, enrolled.address_hash);
+    let rotated = address(2, 0x52);
+    tree.apply([0; 32], &[address_write(5, &rotated)]).unwrap();
+    let current = record(&tree, 5).unwrap();
+    assert_eq!(
+        (current.lists, current.next, current.escrow_key),
+        (kept.lists, kept.next, kept.escrow_key)
+    );
+    current.check_address(Some(&rotated)).unwrap();
+    assert_eq!(
+        current.check_address(Some(&first)),
+        Err(RecordTreeError::AddressMismatch)
+    );
+}
+
+#[test]
+fn an_address_only_write_inserts_a_record_and_a_zero_hash_is_no_write() {
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let empty = tree.root().unwrap();
+    tree.apply([0; 32], &[write(5, 0, 0)]).unwrap();
+    assert_eq!(tree.root().unwrap(), empty);
+    let inputs = tree
+        .apply([0; 32], &[address_write(5, &address(1, 0x51))])
+        .unwrap();
+    assert!(!inputs.writes[0].exists);
+    assert_eq!(inputs.new_next_index, inputs.old_next_index + 1);
+    assert!(!record(&tree, 5).unwrap().is_empty());
+}
+
+#[test]
+fn a_record_refuses_an_address_it_does_not_hash_to() {
+    let mut tree = MemberRegistryTree::new().unwrap();
+    tree.apply([0; 32], &[write(5, ALLOW, ALLOW)]).unwrap();
+    let plain = record(&tree, 5).unwrap();
+    plain.check_address(None).unwrap();
+    assert_eq!(
+        plain.check_address(Some(&address(1, 0x51))),
+        Err(RecordTreeError::AddressMismatch)
+    );
+    tree.apply([0; 32], &[address_write(5, &address(1, 0x51))])
+        .unwrap();
+    let bound = record(&tree, 5).unwrap();
+    assert_eq!(
+        bound.check_address(None),
+        Err(RecordTreeError::AddressMismatch)
+    );
+    assert_eq!(
+        bound.check_address(Some(&AuthorizedAddress {
+            ring_id: member(0x43),
+            ..address(1, 0x51)
+        })),
+        Err(RecordTreeError::AddressMismatch)
+    );
+}
+
+/// Test mirror of the circuit's invariant, one nullifier key behind both hashes.
+fn assert_pair_agrees(record: &MemberRecord, address: &AuthorizedAddress, escrow: &EscrowKey<'_>) {
+    record.check_address(Some(address)).unwrap();
+    assert_eq!(record.escrow_key, escrow.hash().unwrap());
+    assert_eq!(address.nullifier_pk, *escrow.nullifier_pk);
+}
+
+#[test]
+fn a_write_binds_the_pair_only_when_it_creates_or_changes_it() {
+    let bound = address(1, 0x51);
+    let nullifier_pk = bound.nullifier_pk;
+    let ciphertext = [0x77; 32];
+    let key = EscrowKey {
+        nullifier_pk: &nullifier_pk,
+        ciphertext: &ciphertext,
+    };
+    let escrow_write = QueueEntry::escrow(member(5), &key).unwrap();
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let mut apply = |entry: QueueEntry| tree.apply([0; 32], &[entry]).unwrap().writes[0];
+    assert!(!apply(address_write(5, &bound)).binds_pair());
+    let binding = apply(escrow_write);
+    assert!(binding.binds_pair());
+    let pair = binding
+        .pair_witness(Some(&bound), Some(&key))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pair.address, bound);
+    let unrelated = apply(write(5, ALLOW, ALLOW));
+    assert!(!unrelated.binds_pair());
+    assert_eq!(unrelated.pair_witness(None, None), Ok(None));
+    let repeat_escrow = apply(escrow(5, 0x31));
+    assert!(!repeat_escrow.binds_pair());
+    let rotated = address(2, 0x52);
+    let rotation = apply(address_write(5, &rotated));
+    assert!(rotation.binds_pair());
+    assert_eq!(
+        rotation.pair_witness(Some(&rotated), None),
+        Err(RecordTreeError::PairPreimageMissing)
+    );
+    let other_key = member(0x43);
+    assert_eq!(
+        rotation.pair_witness(
+            Some(&rotated),
+            Some(&EscrowKey {
+                nullifier_pk: &other_key,
+                ciphertext: &ciphertext,
+            })
+        ),
+        Err(RecordTreeError::PairNullifierMismatch)
+    );
+    let stored = record(&tree, 5).unwrap();
+    assert_pair_agrees(&stored, &rotated, &key);
 }

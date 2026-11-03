@@ -1,4 +1,5 @@
 use custom_ring_interface::{
+    member_registry::{AuthorizedAddress, EscrowKey},
     queue_chain, ApplyRecordsStatement, QueueEntry, MEMBER_REGISTRY_CAPACITY, QUAD_ARITY,
     QUAD_HEIGHT,
 };
@@ -6,7 +7,8 @@ use custom_ring_interface::{
 use crate::{
     path::{children, quad_node, NodePosition, QuadPath, ZERO_SUBTREES},
     record::check_member,
-    Canopy, MemberRecord, PoolSubject, RecordPool, RecordTreeError, SharedPath, SharedProof,
+    AddressEscrowPair, Canopy, MemberRecord, PoolSubject, RecordPool, RecordTreeError, SharedPath,
+    SharedProof,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,11 +90,41 @@ pub struct RecordWriteProofInput {
     pub old_lists: u64,
     pub old_escrow: [u8; 32],
     pub old_mint_policy: zolana_ring_policy::MintPolicy,
+    pub old_address_hash: [u8; 32],
     /// The record's leaf, an absent member's `next_index` leaf after the relink or low leaf when full.
     pub slot: QuadPath,
     /// An absent member's low record and its path before the relink, empty for a present member.
     pub low: MemberRecord,
     pub low_path: QuadPath,
+    /// Filled through [`Self::pair_witness`], the tree holds no preimage.
+    pub pair: Option<AddressEscrowPair>,
+}
+
+impl RecordWriteProofInput {
+    /// `bound` of `RecordWrite.assertAddressMatchesEscrow`, a write leaving the pair unchanged opens no preimage.
+    pub fn binds_pair(&self) -> bool {
+        let zero = [0; 32];
+        let entry = &self.entry;
+        let creates_escrow = self.old_escrow == zero && entry.escrow_key != zero;
+        let has_address = entry.address_hash != zero || self.old_address_hash != zero;
+        let has_escrow = self.old_escrow != zero || entry.escrow_key != zero;
+        (entry.address_hash != zero || creates_escrow) && has_address && has_escrow
+    }
+
+    /// `None` unless the write binds the pair, the sides are the record's after the write.
+    pub fn pair_witness(
+        &self,
+        address: Option<&AuthorizedAddress>,
+        escrow: Option<&EscrowKey<'_>>,
+    ) -> Result<Option<AddressEscrowPair>, RecordTreeError> {
+        if !self.binds_pair() {
+            return Ok(None);
+        }
+        match (address, escrow) {
+            (Some(address), Some(escrow)) => AddressEscrowPair::new(*address, escrow).map(Some),
+            _ => Err(RecordTreeError::PairPreimageMissing),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,9 +316,11 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
                 old_lists: record.lists,
                 old_escrow: record.escrow_key,
                 old_mint_policy: record.mint_policy,
+                old_address_hash: record.address_hash,
                 slot,
                 low: MemberRecord::default(),
                 low_path: QuadPath::default(),
+                pair: None,
             });
         }
         let IndexedRecord {
@@ -303,6 +337,7 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
             lists: 0,
             escrow_key: [0; 32],
             mint_policy: zolana_ring_policy::MintPolicy::EMPTY,
+            address_hash: [0; 32],
         }
         .written(entry);
         let absent = |slot| RecordWriteProofInput {
@@ -312,9 +347,11 @@ impl<S: RecordStore + ?Sized> Growing<'_, S> {
             old_lists: 0,
             old_escrow: [0; 32],
             old_mint_policy: zolana_ring_policy::MintPolicy::EMPTY,
+            old_address_hash: [0; 32],
             slot,
             low,
             low_path,
+            pair: None,
         };
         let full = self.next_index >= MEMBER_REGISTRY_CAPACITY;
         // An empty record is never inserted, the write proves the absence and keeps the root.

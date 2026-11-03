@@ -61,6 +61,7 @@ struct QueuedWrite {
     eph_u: Option<String>,
     ciphertext: Option<String>,
     escrow_key: String,
+    address_hash: String,
     entry_hash: String,
     /// `chain(position)`.
     chain: String,
@@ -72,10 +73,12 @@ struct WriteInput {
     mask: u64,
     value: u64,
     escrow_key: String,
+    address_hash: String,
     exists: bool,
     old_next: String,
     old_lists: u64,
     old_escrow: String,
+    old_address_hash: String,
     slot: Path,
     low: Record,
     low_path: Path,
@@ -87,6 +90,7 @@ struct Record {
     next: String,
     lists: u64,
     escrow_key: String,
+    address_hash: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -186,6 +190,7 @@ impl Queued {
             eph_u: key.map(|(_, eph_u, _)| hex::encode(eph_u)),
             ciphertext: key.map(|(_, _, ciphertext)| hex::encode(ciphertext)),
             escrow_key: hex::encode(entry.escrow_key),
+            address_hash: hex::encode(entry.address_hash),
             entry_hash: hex::encode(entry.hash().expect("entry hash")),
             chain: hex::encode(chain),
         }
@@ -323,10 +328,12 @@ fn write_input(input: &RecordWriteProofInput) -> WriteInput {
         mask: input.entry.mask,
         value: input.entry.value,
         escrow_key: hex::encode(input.entry.escrow_key),
+        address_hash: hex::encode(input.entry.address_hash),
         exists: input.exists,
         old_next: hex::encode(input.old_next),
         old_lists: input.old_lists,
         old_escrow: hex::encode(input.old_escrow),
+        old_address_hash: hex::encode(input.old_address_hash),
         slot: path_vector(&input.slot),
         low: record_vector(&input.low),
         low_path: path_vector(&input.low_path),
@@ -339,6 +346,7 @@ fn record_vector(record: &MemberRecord) -> Record {
         next: hex::encode(record.next),
         lists: record.lists,
         escrow_key: hex::encode(record.escrow_key),
+        address_hash: hex::encode(record.address_hash),
     }
 }
 
@@ -354,7 +362,7 @@ fn path_vector(path: &QuadPath) -> Path {
 }
 
 fn compute_vectors() -> RecordVectors {
-    use ListId::{Allow, Approval, Block, Frozen, Reader, Recovery, RingViewing};
+    use ListId::{Allow, Approval, Block, Frozen, Reader, RingViewing};
     let mut registry = Registry::new();
     let none = ListSet::EMPTY;
     let first = registry.apply(
@@ -387,11 +395,11 @@ fn compute_vectors() -> RecordVectors {
     registry.write(Queued::Member {
         signer: signer(0x24),
         write: none,
-        clear: lists(&[Recovery]),
+        clear: lists(&[RingViewing]),
     });
     registry.write(Queued::Member {
         signer: signer(0x21),
-        write: lists(&[Recovery]),
+        write: none,
         clear: lists(&[RingViewing]),
     });
     let members = registry.apply("member_writes_updates_escrow_and_no_op", Vec::new());
@@ -426,7 +434,7 @@ fn compute_vectors() -> RecordVectors {
                       applications that fold them into the 4-ary member record tree. A \
                       member or register-key write's member is owner_identity(signer), an \
                       escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry \
-                      hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold) and chain(p) = \
+                      hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2, address_hash) and chain(p) = \
                       Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an \
                       application are its pending writes then its authority writes, each with \
                       the apply circuit's proof inputs. Paths list three siblings per level, \

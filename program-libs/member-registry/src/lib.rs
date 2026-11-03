@@ -10,9 +10,10 @@ mod tree;
 use spr_hasher::HasherError;
 use thiserror::Error;
 
+pub use custom_ring_interface::member_registry::AuthorizedAddress;
 pub use memory::MemberRegistryTree;
 pub use path::{quad_node, NodePosition, QuadPath, ZERO_SUBTREES};
-pub use record::MemberRecord;
+pub use record::{AddressEscrowPair, MemberRecord};
 pub use record_pool::{Canopy, PoolSubject, RecordPool, SharedPath, SharedProof};
 pub use tree::{
     ApplyProofInputs, IndexedRecord, OpeningCheck, RecordOpening, RecordStore, RecordTree,
@@ -49,6 +50,12 @@ pub enum RecordTreeError {
     PoolCapacity,
     #[error("the record pool proof has the wrong shape")]
     PoolShape,
+    #[error("the authorized address does not hash to the record's address hash")]
+    AddressMismatch,
+    #[error("the address and the escrow key hold two nullifier keys")]
+    PairNullifierMismatch,
+    #[error("a write binding the address and the escrow key lacks a preimage")]
+    PairPreimageMissing,
 }
 
 impl From<HasherError> for RecordTreeError {
