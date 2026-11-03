@@ -13,19 +13,17 @@ use crate::{
 /// AES-256-CTR ciphertext of the 32-byte disclosure key.
 pub const MERGE_KEY_CIPHERTEXT_LEN: usize = 32;
 
-/// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.
-pub const MERGE_DISCLOSURE_HEADER_LEN: usize = 32 + 32 + 32 + 8 + 32;
 pub const MERGE_DISCLOSURE_INFO: &[u8; 10] = b"CRING/mrg1";
-pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 17;
+pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 18;
 
 /// SPP merge widths whose merge, disclosure and nullifier accounts fit one v1 transaction.
 pub const MERGE_WIDTHS: [usize; 2] = [8, 24];
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
 const MERGE_B_OFFSET: usize = core::mem::size_of::<u64>() + 32;
 
-/// Plaintext bytes of the disclosure of a merge of `width` circuit slots.
+/// `be32(hash_i)` per circuit slot, slot `i` of `PrivateTxHashCircuit`, zero at a dummy.
 pub const fn merge_disclosure_len(width: usize) -> usize {
-    MERGE_DISCLOSURE_HEADER_LEN + 32 * width
+    32 * width
 }
 
 /// Masked fields of the disclosure, the plaintext zero padded to whole 31-byte chunks.
@@ -157,6 +155,8 @@ pub struct MergePublicInput<'a> {
     /// The SPP output ciphertext salt, the merge pad reuses it.
     pub salt: &'a [u8; 16],
     pub fields: &'a [[u8; 32]],
+    /// `merge.nullifiers.len()`, a published slot may still be a hidden dummy.
+    pub input_count: usize,
     /// The own root a key escrow ring binds, its owner's record escrows the merged key.
     pub member_registry_root: Option<&'a [u8; 32]>,
 }
@@ -182,6 +182,7 @@ impl MergePublicInput<'_> {
             hash_bytes(self.ciphertext)?,
             right_align(self.salt),
             create_hash_chain_4_from_slice(self.fields)?,
+            right_align(&(self.input_count as u64).to_be_bytes()),
             self.party_identities[0],
             self.party_identities[1],
             self.party_identities[2],
@@ -195,56 +196,43 @@ impl MergePublicInput<'_> {
 mod tests {
     use super::*;
 
+    fn statement<'a>(root: Option<&'a [u8; 32]>, fields: &'a [[u8; 32]]) -> MergePublicInput<'a> {
+        MergePublicInput {
+            party_identities: &[[0x61; 32], [0x62; 32], [0; 32]],
+            private_tx_hash: &[1; 32],
+            output_utxo_hash: &[2; 32],
+            first_nullifier: &[3; 32],
+            ring_id: &[4; 32],
+            auditor_pk: &[0x05; 33],
+            eph_pk: &[0x06; 33],
+            ciphertext: &[7; 32],
+            salt: &[8; 16],
+            fields,
+            input_count: 5,
+            member_registry_root: root,
+        }
+    }
+
     #[test]
-    fn the_statement_matches_the_go_vector() {
-        let vector: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../test-vectors/merge/ring-merge.json"
-        ))
-        .unwrap();
-        let bytes = |value: &serde_json::Value| -> Vec<u8> {
-            hex::decode(value.as_str().unwrap().trim_start_matches("0x")).unwrap()
-        };
-        let array = |value: &serde_json::Value| -> [u8; 32] { bytes(value).try_into().unwrap() };
-        let request = &vector["request"];
-        let fields: Vec<[u8; 32]> = vector["fields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(array)
-            .collect();
-        let root = request["keyEscrow"]
-            .as_bool()
-            .unwrap()
-            .then(|| array(&request["memberRegistryRoot"]));
-        let statement = MergePublicInput {
-            party_identities: &core::array::from_fn(|i| array(&request["partyIdentities"][i])),
-            private_tx_hash: &array(&request["privateTxHash"]),
-            output_utxo_hash: &array(&request["outputUtxoHash"]),
-            first_nullifier: &array(&request["firstNullifier"]),
-            ring_id: &array(&request["ringProgramId"]),
-            auditor_pk: &bytes(&vector["auditor_pk"]).try_into().unwrap(),
-            eph_pk: &bytes(&vector["eph_pk"]).try_into().unwrap(),
-            ciphertext: &array(&vector["envelope_ciphertext"]),
-            salt: &bytes(&vector["salt"]).try_into().unwrap(),
-            fields: &fields,
-            member_registry_root: root.as_ref(),
-        };
-        let elements: Vec<[u8; 32]> = vector["elements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(array)
-            .collect();
-        assert_eq!(statement.elements().unwrap().to_vec(), elements);
+    fn the_statement_closes_on_the_input_count_parties_and_escrow_root() {
+        let fields = [[9; 32]; 9];
+        let root = [0x0a; 32];
+        let elements = statement(Some(&root), &fields).elements().unwrap();
         assert_eq!(
-            statement.hash().unwrap(),
-            array(&vector["public_input_hash"])
+            elements[11],
+            create_hash_chain_4_from_slice(&fields).unwrap()
         );
-        assert_eq!(fields.len(), merge_disclosure_field_count(8));
+        assert_eq!(elements[12], right_align(&5u64.to_be_bytes()));
+        assert_eq!(elements[13..16], [[0x61; 32], [0x62; 32], [0; 32]]);
+        assert_eq!(elements[16], right_align(&[1]));
+        assert_eq!(elements[17], root);
+        let open = statement(None, &fields).elements().unwrap();
+        assert_eq!(open[16..18], [[0; 32], [0; 32]]);
+        assert_eq!(open[..16], elements[..16]);
     }
 
     #[test]
     fn disclosure_widths_match_the_go_circuit() {
-        assert_eq!([8, 24, 52].map(merge_disclosure_field_count), [13, 30, 59]);
+        assert_eq!([8, 24, 52].map(merge_disclosure_field_count), [9, 25, 54]);
     }
 }

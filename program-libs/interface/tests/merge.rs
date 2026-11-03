@@ -13,6 +13,11 @@ use spr_interface::instruction::instruction_data::merge_transact::{
     MergeOutputEncryption, MergeProof, MergeTransactIxData,
 };
 
+const FRAME_VECTOR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-vectors/merge/merge_frame_v2.hex"
+);
+
 fn request() -> CustomRingMergeIxData {
     CustomRingMergeIxData {
         own_revision: Revision::from(3),
@@ -54,6 +59,22 @@ fn disclosure() -> MergeDisclosure {
         ciphertext: [14; 32],
         fields: vec![[15; 32]; merge_disclosure_field_count(8)],
     }
+}
+
+#[test]
+fn the_frame_is_the_shared_vector() {
+    let committed = std::fs::read_to_string(FRAME_VECTOR).expect("vector file");
+    assert_eq!(
+        committed.trim(),
+        hex::encode(request().serialize().unwrap())
+    );
+}
+
+#[test]
+#[ignore = "rewrites test-vectors/merge/merge_frame_v2.hex"]
+fn write_merge_frame_vector() {
+    let line = hex::encode(request().serialize().unwrap()) + "\n";
+    std::fs::write(FRAME_VECTOR, line).expect("write vector file");
 }
 
 #[test]
