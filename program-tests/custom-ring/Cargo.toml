@@ -47,7 +47,10 @@ spr-tree = { workspace = true }
 spr-user-registry-interface = { workspace = true, features = ["solana"] }
 
 [dev-dependencies]
+bytemuck = { workspace = true }
 solana-rpc-client-api = { workspace = true }
+spr-hasher = { workspace = true }
+zeroize = { workspace = true }
 
 [[test]]
 name = "ring"

@@ -210,11 +210,11 @@ fn key_owner(circuit: RingCircuit) -> Option<Column> {
         },
         RingCircuit::TransferAnonymousEntry { .. } | RingCircuit::Merge { .. } => Column::Anonymous,
         RingCircuit::Deposit { capacity: 1 } => Column::Confidential,
-        RingCircuit::RegisterKey | RingCircuit::ApplyRecords { writes: 1 } => {
-            Column::ConfidentialPolicy
-        }
+        RingCircuit::ApplyRecords { writes: 1 } => Column::ConfidentialPolicy,
         RingCircuit::ApplyRecords { writes: 2 } => Column::Delegate,
-        RingCircuit::Deposit { .. } | RingCircuit::ApplyRecords { .. } => return None,
+        RingCircuit::RegisterKey
+        | RingCircuit::Deposit { .. }
+        | RingCircuit::ApplyRecords { .. } => return None,
     })
 }
 
@@ -369,7 +369,6 @@ impl<'a> ColumnSetup<'a> {
             Column::Confidential | Column::Anonymous | Column::AnonymousPolicy => None,
         };
         if let Some(applied) = applied {
-            coverage.cover(RingCircuit::RegisterKey);
             coverage.cover(RingCircuit::apply_records(applied));
         }
         let config = env.run(ring.require_config(env.client.as_async()))?;
@@ -667,16 +666,32 @@ impl ShapeRing<'_> {
                 width,
                 "{count} notes merge at width {width}"
             );
-            let merge = RingMergeOperation::new(
-                prepared,
+            let merge = env.run(prepared.prove(
                 MergeProofInput {
                     nullifier_key: env.sender.keypair.nullifier_key.clone(),
                     input_tree: env.tree,
                     output_tree: env.tree,
                     co_signer: None,
                 },
-            );
-            land(env, merge, &env.payer, &[])?;
+                env.payer.pubkey(),
+                env.client.ring_client(),
+            ))?;
+            let instruction = merge.instruction(env.payer.pubkey())?;
+            let view = custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(
+                &instruction.data[1..],
+            )?;
+            let offset =
+                view.disclosure.ciphertext.as_ptr() as usize - instruction.data.as_ptr() as usize;
+            let mut altered = instruction.clone();
+            altered.data[offset] ^= 1;
+            let before = fetch_account(env.client.rpc(), &env.tree)?;
+            let rejected = send_expecting_rejection(env.client.rpc(), &env.payer, altered)?;
+            Rejection::custom(CustomRingError::ProofVerificationFailed as u32)
+                .at(0)
+                .assert_client(&rejected);
+            assert_account_unchanged(env.client.rpc(), &env.tree, &before)?;
+            land(env, instruction, &env.payer, &[])?;
+            println!("RING_MERGE_KEY width={width} mutation_refused=true settled=true");
             coverage.cover(RingCircuit::Merge { width: proved });
             count = width + 1;
         }
@@ -859,7 +874,7 @@ impl ShapeRing<'_> {
         let instruction = proven.instruction()?;
         let parsed = ParsedTransact::new(frame(&instruction, rail)?)?;
         let data = parsed.data();
-        coverage.cover(data.transfer_circuit(keyed_legs(data))?);
+        let circuit = data.transfer_circuit(keyed_legs(data))?;
         let tag = instruction
             .data
             .first()
@@ -878,6 +893,24 @@ impl ShapeRing<'_> {
             .keys()
             .map(|leg| Ok((*leg, balance(leg)?)))
             .collect::<Result<_>>()?;
+        let tree_before = fetch_account(rpc, &env.tree)?;
+        let mut salt = *data.salt;
+        salt[0] ^= 1;
+        let altered = reframed(
+            &instruction,
+            &RingTransactData {
+                salt: &salt,
+                ..data.clone()
+            },
+        )?;
+        let rejection = send_expecting_rejection(rpc, payer, altered)?;
+        Rejection::custom(CustomRingError::ProofVerificationFailed as u32)
+            .at(0)
+            .assert_client(&rejection);
+        assert_account_unchanged(rpc, &env.tree, &tree_before)?;
+        for leg in paid.keys() {
+            assert_eq!(balance(leg)?, before[leg]);
+        }
         let signature = match land(env, instruction.clone(), payer, &[]) {
             Ok(signature) => signature,
             Err(error) => {
@@ -885,6 +918,8 @@ impl ShapeRing<'_> {
                 return Err(error.context(format!("{label} logs {logs:#?}")));
             }
         };
+        coverage.cover(circuit);
+        println!("RING_TRANSFER_KEY {circuit:?} mutation_refused=true settled=true");
         for (leg, amount) in &paid {
             assert_eq!(balance(leg)?, before[leg] + amount, "{label} leg {leg:?}");
         }
@@ -1256,4 +1291,104 @@ fn sweep(column: Column) -> Result<()> {
     }
     coverage.assert_transfer_keys(column);
     Ok(())
+}
+
+#[test]
+fn sanity_confidential_keys() -> Result<()> {
+    sanity_keys(Column::Confidential)
+}
+
+#[test]
+fn sanity_confidential_wide_keys() -> Result<()> {
+    sanity_keys(Column::ConfidentialPolicy)
+}
+
+#[test]
+fn sanity_anonymous_and_entry_keys() -> Result<()> {
+    sanity_keys(Column::Anonymous)
+}
+
+#[test]
+fn sanity_anonymous_wide_keys() -> Result<()> {
+    sanity_keys(Column::AnonymousPolicy)
+}
+
+fn sanity_keys(column: Column) -> Result<()> {
+    configured(column, |ring, coverage| {
+        let family = match column.rail() {
+            RingRail::Anonymous => &ANONYMOUS_TRANSFER_SHAPES[..],
+            _ => &CONFIDENTIAL_TRANSFER_SHAPES[..],
+        };
+        let wide = matches!(column, Column::ConfidentialPolicy | Column::AnonymousPolicy);
+        let destinations = funded_destinations(ring.env, 5)?;
+        for shape in family {
+            if wide && shape.withdrawals[1] == 0 {
+                continue;
+            }
+            let legs = if wide {
+                usize::from(shape.withdrawals[0]) + 1
+            } else {
+                0
+            };
+            ring.settled(
+                ShapeTransfer {
+                    shape: Shape::new(1, shape.outputs.into()),
+                    inputs: ring.utxos(1, coverage)?,
+                    spend: Spend::Rail(column.rail()),
+                    legs: (0..legs)
+                        .map(|index| {
+                            Leg::Sol(
+                                destinations[if column.rail() == RingRail::Anonymous {
+                                    0
+                                } else {
+                                    index.min(4)
+                                }],
+                            )
+                        })
+                        .collect(),
+                },
+                coverage,
+            )?;
+        }
+        if column == Column::Anonymous {
+            ring.entries(coverage)?;
+            ring.merges(coverage)?;
+        }
+        coverage.assert_transfer_keys(column);
+        Ok(())
+    })
+}
+
+#[test]
+fn sanity_in_proof_and_delegate_modes() -> Result<()> {
+    configured(Column::Delegate, |ring, coverage| {
+        for spend in [Spend::InProofOwner, Spend::Rail(RingRail::Delegate)] {
+            ring.settled(
+                ShapeTransfer {
+                    shape: Shape::IN2_OUT2,
+                    inputs: ring.utxos(1, coverage)?,
+                    spend,
+                    legs: Vec::new(),
+                },
+                coverage,
+            )?;
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn sanity_wide_withdrawal_heap_sentinel() -> Result<()> {
+    configured(Column::AnonymousPolicy, |ring, coverage| {
+        let destination = funded_destinations(ring.env, 1)?[0];
+        ring.settled(
+            ShapeTransfer {
+                shape: Shape::IN1_OUT4,
+                inputs: ring.utxos(1, coverage)?,
+                spend: Spend::Rail(RingRail::Anonymous),
+                legs: vec![Leg::Sol(destination); 32],
+            },
+            coverage,
+        )
+    })
 }

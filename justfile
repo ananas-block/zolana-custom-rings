@@ -65,6 +65,7 @@ build-ring-program: build-storage-program
 
 build-storage-program:
     #!/usr/bin/env bash
+    set -euo pipefail
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/storage/Cargo.toml -- --locked --features bpf-entrypoint
@@ -138,6 +139,9 @@ test-custom-ring-validator filter="all()" *args: fetch-custom-ring-keys build-pr
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
     ZOLANA_SPP_KEYS_DIR="{{spp-keys-dir}}" bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
+
+test-custom-ring-sanity *args:
+    @{{just_executable()}} test-custom-ring-validator 'test(sanity)' {{args}}
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")

@@ -397,6 +397,29 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     assert_eq!(rebuilt.tx_count(), stored.tx_count());
     assert_eq!(rebuilt.request_count(), stored.request_count());
     assert!(rebuilt.known_senders().is_empty());
+    let empty_history =
+        ViewingHistory::new(sender_keys.viewing_pubkey(), 0).with_ring(ring_program, None);
+    let assets = zolana_ring_transaction::RingAssets::new([])?;
+    let recovered = env.client.block_on(async {
+        zolana_ring_client::AnonymousSync::new(sender_keys, &assets)
+            .with_deposit_payload(zolana_ring_client::deposit_payload)
+            .full_scan(
+                env.client.as_async().indexer(),
+                &empty_history,
+                ring_program,
+            )
+            .await
+            .map_err(anyhow::Error::from)
+    })?;
+    let recovered = spr_transaction::verify_spendable(sender_keys, recovered.decrypted())?;
+    for held in fresh_sender.unspent() {
+        ensure!(
+            recovered
+                .utxos()
+                .any(|note| note.utxo_hash == held.utxo_hash),
+            "full scan omitted an unspent note after the wallet state was cleared"
+        );
+    }
 
     // 9. The recipient merges both notes, a fresh wallet finds the merge from
     //    its own spends and sees both inputs spent.

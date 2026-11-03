@@ -71,6 +71,7 @@ pub const PROTOCOL_VAULT_AIRDROP: u64 = 5_000_000_000;
 pub const ACTOR_AIRDROP: u64 = 10_000_000_000;
 /// The bring-up registers USDC first.
 pub const USDC_ASSET_ID: u64 = SplAssetCounter::FIRST_ASSET_ID;
+pub const STORAGE_CPI_OWNER_PROGRAM: Address = Address::new_from_array([0x63; 32]);
 /// A live localnet with the protocol bootstrapped and two funded actors. The
 /// custom-ring program's own config account is NOT created here: that is the
 /// first step of the lifecycle under test.
@@ -503,6 +504,12 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         account_dir: account_dir.into(),
         log_dir: artifacts.path("test-ledger").into(),
         programs: [
+            (
+                STORAGE_CPI_OWNER_PROGRAM,
+                ring_artifacts
+                    .path("target/deploy/storage_cpi_owner.so")
+                    .into(),
+            ),
             (
                 user_registry_program_id(),
                 artifacts.path("target/deploy/spr_user_registry.so").into(),

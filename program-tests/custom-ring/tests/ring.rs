@@ -28,6 +28,15 @@
 #[path = "ring_shapes.rs"]
 mod shapes;
 
+#[path = "ring/sanity.rs"]
+mod sanity;
+
+#[path = "ring/sanity_deposits.rs"]
+mod sanity_deposits;
+
+#[path = "ring/sanity_mixed_owners.rs"]
+mod sanity_mixed_owners;
+
 #[path = "ring/anonymous.rs"]
 mod anonymous;
 #[path = "ring/exemptions.rs"]

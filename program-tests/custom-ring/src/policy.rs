@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use custom_ring_cli::{patiently, Zolana};
+use custom_ring_cli::{wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
@@ -446,11 +446,32 @@ impl StorageRecords<'_> {
             registry: registry.into(),
             writes,
         };
-        let response = patiently("the storage apply proof inputs", || {
-            env.client
+        let response = wait_for("the storage apply proof inputs", || {
+            match env
+                .client
                 .indexer()
                 .get_storage_apply_proof_inputs(request.clone())
-                .map_err(RingError::from)
+            {
+                Ok(response) => Ok(Probe::Ready(response)),
+                Err(error) => {
+                    let error = RingError::from(error);
+                    let pending_enrollment = self
+                        .writes
+                        .iter()
+                        .any(|write| matches!(write, StorageWriteData::Address(_)))
+                        && (error
+                            .to_string()
+                            .contains("an address write has no enrollment")
+                            || error
+                                .to_string()
+                                .contains("an address write names no newest enrollment"));
+                    if error.is_projection_lag() || pending_enrollment {
+                        Ok(Probe::Retry(error.into()))
+                    } else {
+                        Err(error.into())
+                    }
+                }
+            }
         })?;
         let inputs = storage_apply_proof_inputs(&response)?;
         let apply =
@@ -464,8 +485,37 @@ impl StorageRecords<'_> {
                 writes: self.writes,
                 apply: &apply,
             },
+        };
+        let instruction = update.clone().instruction()?;
+        let mut altered_apply = apply;
+        altered_apply.new_root[31] ^= 1;
+        let altered = UpdateStorage {
+            data: StorageUpdateIxData {
+                apply: &altered_apply,
+                ..update.data
+            },
+            ..update
         }
         .instruction()?;
-        send(env.client.rpc(), &env.payer, &[update])
+        let before =
+            spr_test_utils::test_validator_asserts::fetch_account(env.client.rpc(), &registry)?;
+        let rejection =
+            crate::shared::send_expecting_rejection(env.client.rpc(), &env.payer, altered)?;
+        spr_program_test::Rejection::custom(
+            custom_ring_interface::storage::StorageError::ProofVerificationFailed as u32,
+        )
+        .at(0)
+        .assert_client(&rejection);
+        spr_test_utils::test_validator_asserts::assert_account_unchanged(
+            env.client.rpc(),
+            &registry,
+            &before,
+        )?;
+        let signature = send(env.client.rpc(), &env.payer, &[instruction])?;
+        println!(
+            "RING_APPLY_KEY writes={} mutation_refused=true settled=true",
+            inputs.writes.len()
+        );
+        Ok(signature)
     }
 }
