@@ -116,12 +116,22 @@ impl AuditStore {
         created_in: CreatedIn,
         utxos: impl IntoIterator<Item = CreatedUtxo>,
     ) {
+        let assets = self.assets.read().unwrap_or_else(PoisonError::into_inner);
         let mut stored = self.utxos.write().unwrap_or_else(PoisonError::into_inner);
         for created in utxos {
+            // A read under an older registry never unnames a stored note.
+            let mint = created
+                .utxo
+                .mint
+                .or_else(|| stored.get(&created.commitment)?.utxo.mint)
+                .or_else(|| Some(assets.as_ref()?.by_field(&created.utxo.asset)?.asset));
             stored.insert(
                 created.commitment,
                 StoredUtxo {
-                    utxo: created.utxo,
+                    utxo: KnownUtxo {
+                        mint,
+                        ..created.utxo
+                    },
                     created_in,
                     slot_index: created.slot_index,
                     leaf_index: created.leaf_index,
@@ -467,6 +477,30 @@ mod tests {
         assert_eq!(stored_mint(), Some(mint));
         store.record(created_in, [created(None)]);
         assert_eq!(stored_mint(), Some(mint));
+    }
+
+    #[test]
+    fn a_note_from_an_older_registry_snapshot_stays_named() {
+        let store = AuditStore::default();
+        let created_in = CreatedIn {
+            slot: 1,
+            tx_signature: Signature::from([7; 64]),
+            event_index: 0,
+        };
+        let mint = Address::new_from_array([6; 32]);
+        let assets = RingAssets::new([Mint::new(mint, 6)]).unwrap();
+        store.name_assets(&assets);
+        let mut stale = created(None);
+        stale.utxo.asset = assets
+            .fields()
+            .find(|(_, registered)| registered.asset == mint)
+            .unwrap()
+            .0;
+        store.record(created_in, [stale]);
+        assert_eq!(
+            store.stored(&[1; 32]).map(|stored| stored.utxo.mint),
+            Some(Some(mint))
+        );
     }
 
     #[test]

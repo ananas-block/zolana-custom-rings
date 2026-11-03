@@ -1816,6 +1816,44 @@ fn a_mint_the_registry_lacks_reads_as_an_unknown_asset_and_opens_once_registered
 }
 
 #[test]
+fn a_commitment_error_leaves_every_pending_output_for_the_retry() {
+    let outputs = vec![
+        delivered_outputs()[0],
+        Output::Exit(utxo(0xe5, SOL, 40)),
+        Output::Dummy,
+        Output::Dummy,
+    ];
+    let built = build_with(&Transfer::fixture(), Rail::Delivered, outputs, true);
+    let keys: HashMap<[u8; 32], [u8; 32]> = built
+        .outputs
+        .iter()
+        .filter_map(|output| match output {
+            Output::Ring { utxo, .. } | Output::Exit(utxo) => {
+                Some((utxo.owner_key, utxo.nullifier_pk))
+            }
+            Output::Dummy => None,
+        })
+        .collect();
+    let opened = TransactionAudit::new(&built.transaction, built.layout)
+        .with_escrowed_keys(&keys)
+        .run(&auditor(), &assets())
+        .unwrap();
+    let mut pending = TransactionAudit::new(&built.transaction, built.layout)
+        .with_escrowed_keys(&HashMap::new())
+        .run(&auditor(), &assets())
+        .unwrap();
+    assert_eq!(pending.unresolved.len(), 2);
+    let noncanonical: HashMap<[u8; 32], [u8; 32]> =
+        keys.keys().map(|owner| (*owner, [0xff; 32])).collect();
+    let before = pending.clone();
+    assert!(pending.resolve(&noncanonical, &assets()).is_err());
+    assert_eq!(pending, before);
+    pending.resolve(&keys, &assets()).unwrap();
+    assert!(pending.unresolved.is_empty());
+    assert_eq!(pending.outputs, opened.outputs);
+}
+
+#[test]
 fn a_sender_bundle_under_the_auditor_tag_leaves_the_transfer_open() {
     let (_, built, _) = anonymous_spend();
     let expected = audit(&built.transaction, built.layout).unwrap();

@@ -761,8 +761,16 @@ impl AuditedTransaction {
                 opening.mint = opening.mint.or_else(|| mint_of(assets, &opening.asset));
             }
         }
-        for output in core::mem::take(&mut self.unresolved) {
-            let resolution = output.resolve(escrowed, assets)?;
+        // A commitment error settles no output.
+        let resolutions = self
+            .unresolved
+            .iter()
+            .map(|output| output.resolve(escrowed, assets))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (output, resolution) in core::mem::take(&mut self.unresolved)
+            .into_iter()
+            .zip(resolutions)
+        {
             self.settle(output, resolution);
         }
         Ok(())
