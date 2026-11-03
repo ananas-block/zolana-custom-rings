@@ -1,53 +1,53 @@
-//! Scheme 1 recipient and scheme 2 sender bundle plaintexts, the verified fields first.
+//! Scheme 1 recipient and scheme 2 sender bundle plaintexts.
 
 use solana_address::Address;
 use spr_keypair::{constants::PUBLIC_KEY_LEN, x25519::X25519_PUBKEY_LEN, PublicKey, X25519Pubkey};
-use spr_transaction::{
-    utxo::derive_transact_output_blinding, AssetRegistry, Data, Mint, TransactionError, Utxo,
-};
+use spr_transaction::{utxo::derive_transact_output_blinding, Data, Mint, TransactionError, Utxo};
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnonymousTransferRecipientPlaintext {
-    pub verified: VerifiedRecipientPlaintext,
-    pub unverified: UnverifiedRecipientPlaintext,
+    pub committed: CommittedRecipientPlaintext,
+    pub uncommitted: UncommittedRecipientPlaintext,
 }
 
+/// Unchecked until `AnonymousOutput::rebuilds` matches the output hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VerifiedRecipientPlaintext {
+pub struct CommittedRecipientPlaintext {
     pub owner_pubkey: PublicKey,
     pub mint: Address,
     pub amount: u64,
+    pub blinding: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnverifiedRecipientPlaintext {
+pub struct UncommittedRecipientPlaintext {
     /// Unauthenticated, the recipient pairs with whichever key the sender writes.
     pub sender_pubkey: X25519Pubkey,
-    pub blinding: [u8; 32],
     pub data: Data,
 }
 
 /// Published as a message, its change outputs carry no ciphertext.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnonymousTransferSenderPlaintext {
-    pub verified: VerifiedSenderPlaintext,
-    pub unverified: UnverifiedSenderPlaintext,
+    pub committed: CommittedSenderPlaintext,
+    pub uncommitted: UncommittedSenderPlaintext,
 }
 
+/// Unchecked until `AnonymousOutput::rebuilds` matches each change hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VerifiedSenderPlaintext {
+pub struct CommittedSenderPlaintext {
     pub owner_pubkey: PublicKey,
     pub spl_mint: Address,
     pub spl_amount: u64,
     pub sol_amount: u64,
-    /// One per recipient output, in output order.
-    pub recipient_viewing_pks: Vec<X25519Pubkey>,
+    pub blinding_seed: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnverifiedSenderPlaintext {
-    pub blinding_seed: [u8; 32],
+pub struct UncommittedSenderPlaintext {
+    /// One per recipient output, in output order.
+    pub recipient_viewing_pks: Vec<X25519Pubkey>,
     pub spl_data: Data,
     pub sol_data: Data,
 }
@@ -55,17 +55,17 @@ pub struct UnverifiedSenderPlaintext {
 impl AnonymousTransferRecipientPlaintext {
     pub fn serialize(&self) -> Result<Vec<u8>, TransactionError> {
         let Self {
-            verified,
-            unverified,
+            committed,
+            uncommitted,
         } = self;
-        unverified.data.validate()?;
+        uncommitted.data.validate()?;
         Ok(wincode::serialize(&RecipientWire {
-            owner_pubkey: *verified.owner_pubkey.as_bytes(),
-            mint: verified.mint,
-            amount: verified.amount,
-            sender_pubkey: *unverified.sender_pubkey.as_bytes(),
-            blinding: unverified.blinding,
-            data: unverified.data.clone(),
+            owner_pubkey: *committed.owner_pubkey.as_bytes(),
+            mint: committed.mint,
+            amount: committed.amount,
+            sender_pubkey: *uncommitted.sender_pubkey.as_bytes(),
+            blinding: committed.blinding,
+            data: uncommitted.data.clone(),
         })?)
     }
 
@@ -73,35 +73,35 @@ impl AnonymousTransferRecipientPlaintext {
         let wire: RecipientWire = wincode::deserialize_exact(bytes)?;
         wire.data.validate()?;
         Ok(Self {
-            verified: VerifiedRecipientPlaintext {
+            committed: CommittedRecipientPlaintext {
                 owner_pubkey: PublicKey::from_bytes(wire.owner_pubkey)?,
                 mint: wire.mint,
                 amount: wire.amount,
-            },
-            unverified: UnverifiedRecipientPlaintext {
-                sender_pubkey: X25519Pubkey::from_bytes(wire.sender_pubkey)?,
                 blinding: wire.blinding,
+            },
+            uncommitted: UncommittedRecipientPlaintext {
+                sender_pubkey: X25519Pubkey::from_bytes(wire.sender_pubkey)?,
                 data: wire.data,
             },
         })
     }
 
-    /// A memo is the only record a recipient output carries.
-    pub fn into_utxo(self, assets: &AssetRegistry) -> Result<Utxo, TransactionError> {
+    /// A memo is the only record a recipient output carries, `asset` names `committed.mint`.
+    pub fn into_utxo(self, asset: Mint) -> Result<Utxo, TransactionError> {
         let Self {
-            verified,
-            unverified,
+            committed,
+            uncommitted,
         } = self;
-        if unverified.data.ring_data().is_some() || unverified.data.utxo_data().is_some() {
+        if uncommitted.data.ring_data().is_some() || uncommitted.data.utxo_data().is_some() {
             return Err(TransactionError::UnsupportedOutputData);
         }
         Ok(Utxo {
-            owner: verified.owner_pubkey,
-            asset: assets.mint(&verified.mint)?,
-            amount: verified.amount,
-            blinding: unverified.blinding,
+            owner: committed.owner_pubkey,
+            asset,
+            amount: committed.amount,
+            blinding: committed.blinding,
             ring_program_id: None,
-            data: unverified.data,
+            data: uncommitted.data,
         })
     }
 }
@@ -109,24 +109,24 @@ impl AnonymousTransferRecipientPlaintext {
 impl AnonymousTransferSenderPlaintext {
     pub fn serialize(&self) -> Result<Vec<u8>, TransactionError> {
         let Self {
-            verified,
-            unverified,
+            committed,
+            uncommitted,
         } = self;
-        unverified.spl_data.validate()?;
-        unverified.sol_data.validate()?;
+        uncommitted.spl_data.validate()?;
+        uncommitted.sol_data.validate()?;
         Ok(wincode::serialize(&SenderWire {
-            owner_pubkey: *verified.owner_pubkey.as_bytes(),
-            spl_mint: verified.spl_mint,
-            spl_amount: verified.spl_amount,
-            sol_amount: verified.sol_amount,
-            recipient_viewing_pks: verified
+            owner_pubkey: *committed.owner_pubkey.as_bytes(),
+            spl_mint: committed.spl_mint,
+            spl_amount: committed.spl_amount,
+            sol_amount: committed.sol_amount,
+            recipient_viewing_pks: uncommitted
                 .recipient_viewing_pks
                 .iter()
                 .map(|key| *key.as_bytes())
                 .collect(),
-            blinding_seed: unverified.blinding_seed,
-            spl_data: unverified.spl_data.clone(),
-            sol_data: unverified.sol_data.clone(),
+            blinding_seed: committed.blinding_seed,
+            spl_data: uncommitted.spl_data.clone(),
+            sol_data: uncommitted.sol_data.clone(),
         })?)
     }
 
@@ -135,19 +135,19 @@ impl AnonymousTransferSenderPlaintext {
         wire.spl_data.validate()?;
         wire.sol_data.validate()?;
         Ok(Self {
-            verified: VerifiedSenderPlaintext {
+            committed: CommittedSenderPlaintext {
                 owner_pubkey: PublicKey::from_bytes(wire.owner_pubkey)?,
                 spl_mint: wire.spl_mint,
                 spl_amount: wire.spl_amount,
                 sol_amount: wire.sol_amount,
+                blinding_seed: wire.blinding_seed,
+            },
+            uncommitted: UncommittedSenderPlaintext {
                 recipient_viewing_pks: wire
                     .recipient_viewing_pks
                     .into_iter()
                     .map(X25519Pubkey::from_bytes)
                     .collect::<Result<_, _>>()?,
-            },
-            unverified: UnverifiedSenderPlaintext {
-                blinding_seed: wire.blinding_seed,
                 spl_data: wire.spl_data,
                 sol_data: wire.sol_data,
             },
@@ -158,25 +158,26 @@ impl AnonymousTransferSenderPlaintext {
     pub fn into_utxos(
         self,
         first_nullifier: &[u8; 32],
-        assets: &AssetRegistry,
+        spl_asset: Mint,
     ) -> Result<Vec<Utxo>, TransactionError> {
         let Self {
-            verified,
-            unverified,
+            committed,
+            uncommitted,
         } = self;
-        if (verified.spl_amount == 0 && !unverified.spl_data.is_empty())
-            || (verified.sol_amount == 0 && !unverified.sol_data.is_empty())
+        if (committed.spl_amount == 0 && !uncommitted.spl_data.is_empty())
+            || (committed.sol_amount == 0 && !uncommitted.sol_data.is_empty())
         {
             return Err(TransactionError::DataWithoutOutput);
         }
-        let spl = (verified.spl_amount > 0)
-            .then(|| assets.mint(&verified.spl_mint))
-            .transpose()?
-            .map(|mint| (mint, verified.spl_amount, unverified.spl_data));
-        let sol = (verified.sol_amount > 0).then_some((
+        let spl = (committed.spl_amount > 0).then_some((
+            spl_asset,
+            committed.spl_amount,
+            uncommitted.spl_data,
+        ));
+        let sol = (committed.sol_amount > 0).then_some((
             Mint::SOL,
-            verified.sol_amount,
-            unverified.sol_data,
+            committed.sol_amount,
+            uncommitted.sol_data,
         ));
         let mut utxos = Vec::new();
         for (slot, (asset, amount, data)) in (0u32..).zip(spl.into_iter().chain(sol)) {
@@ -184,12 +185,12 @@ impl AnonymousTransferSenderPlaintext {
                 return Err(TransactionError::MissingRingProgramId);
             }
             utxos.push(Utxo {
-                owner: verified.owner_pubkey,
+                owner: committed.owner_pubkey,
                 asset,
                 amount,
                 blinding: derive_transact_output_blinding(
                     first_nullifier,
-                    &unverified.blinding_seed,
+                    &committed.blinding_seed,
                     slot,
                 )?,
                 ring_program_id: None,
