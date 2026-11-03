@@ -1,22 +1,23 @@
 //! Exact-tag reads of the indexer, an output nobody can decrypt still occupies its tag.
 
-use std::{
-    collections::{HashMap, HashSet},
-    future::Future,
-};
+use std::{collections::HashMap, future::Future};
 
-use solana_signature::Signature;
+use solana_address::Address;
 use spr_keypair::viewing_key::ViewTag;
 
 use spr_client::{
-    rpc::{
-        Context, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
-        GetShieldedTransactionsByNullifiersResponse, GetShieldedTransactionsByTagsResponse,
-    },
-    AsyncRpc, ClientError, IndexerRpcConfig, ShieldedTransaction,
+    rpc::{Context, EncryptedUtxoMatch, HistoryFilters, Page, PaginationToken},
+    AsyncRpc, ClientError, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
+    RingHistoryOptions, ShieldedTransaction,
 };
+use spr_indexer_api::Positioned;
 
-use crate::paging::{PageCursor, PAGE_LIMIT};
+use crate::history::{HistoryPosition, PageEnd};
+
+const PAGE_LIMIT: u32 = spr_indexer_api::PAGE_LIMIT as u32;
+
+/// Photon's refusal of a response above its size limit, as `ClientError::Indexer` prints it.
+const RESPONSE_TOO_LARGE: &str = "code=Some(-32008)";
 
 /// The indexer's cap on the tags or nullifiers one request names.
 pub const TAGS_PER_REQUEST: usize = spr_indexer_api::PAGE_LIMIT as usize;
@@ -55,6 +56,8 @@ pub struct IndexerReads<'a, I: ?Sized> {
     indexer: &'a I,
     config: Option<IndexerRpcConfig>,
     persisted: Option<u64>,
+    /// Halved in place while a ring page is too large, the rest of the read asks for less.
+    ring_page_limit: u32,
 }
 
 impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
@@ -74,6 +77,7 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
             indexer,
             config,
             persisted: None,
+            ring_page_limit: PAGE_LIMIT,
         }
     }
 
@@ -82,25 +86,39 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         self.persisted
     }
 
-    /// Every transaction published under one of `tags`, each once.
-    pub async fn transactions(
+    /// The next page of `ring` and the limit it was asked at, a refused limit loses no row.
+    pub(crate) async fn ring_page(
         &mut self,
-        tags: &[ViewTag],
-    ) -> Result<Vec<ShieldedTransaction>, ClientError> {
-        let (indexer, config) = (self.indexer, self.config);
-        let transactions = self
-            .paged(tags, |tags, cursor| async move {
-                indexer
-                    .get_shielded_transactions_by_tags(tags, cursor, Some(PAGE_LIMIT), config)
-                    .await
-                    .map(Page::from)
-            })
-            .await?;
-        let mut seen: HashSet<(Signature, Option<u16>)> = HashSet::new();
-        Ok(transactions
-            .into_iter()
-            .filter(|tx| seen.insert((tx.tx_signature, tx.event_index)))
-            .collect())
+        ring: Address,
+        position: &HistoryPosition,
+    ) -> Result<(GetShieldedTransactionsByTagsResponse, u32), ClientError> {
+        loop {
+            let limit = self.ring_page_limit;
+            match self
+                .indexer
+                .get_shielded_transactions_by_ring(
+                    RingHistoryOptions {
+                        ring_program_id: ring,
+                        pagination_token: position.token(),
+                        limit: Some(limit),
+                        filters: position.filters(),
+                    },
+                    self.config,
+                )
+                .await
+            {
+                Ok(page) => {
+                    self.observe(&page.context);
+                    return Ok((page, limit));
+                }
+                Err(ClientError::Indexer(message))
+                    if limit > 1 && message.contains(RESPONSE_TOO_LARGE) =>
+                {
+                    self.ring_page_limit = limit / 2;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// The deposits published under one of `tags`, one transaction per deposited output.
@@ -110,15 +128,15 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
     ) -> Result<Vec<ShieldedTransaction>, ClientError> {
         let (indexer, config) = (self.indexer, self.config);
         let matches = self
-            .paged(tags, |tags, cursor| async move {
+            .paged(tags, |tags, token, filters| async move {
                 indexer
-                    .get_encrypted_utxos_by_tags(tags, cursor, Some(PAGE_LIMIT), config)
+                    .get_encrypted_utxos_by_tags(tags, token, Some(PAGE_LIMIT), filters, config)
                     .await
-                    .map(Page::from)
             })
             .await?;
         Ok(matches
             .into_iter()
+            .flat_map(|item| item.outputs)
             .filter_map(EncryptedUtxoMatch::into_proofless_transaction)
             .collect())
     }
@@ -128,18 +146,23 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         nullifiers: &[[u8; 32]],
     ) -> Result<Vec<ShieldedTransaction>, ClientError> {
         let (indexer, config) = (self.indexer, self.config);
-        self.paged(nullifiers, |nullifiers, cursor| async move {
-            indexer
-                .get_shielded_transactions_by_nullifiers(
-                    nullifiers,
-                    cursor,
-                    Some(PAGE_LIMIT),
-                    config,
-                )
-                .await
-                .map(Page::from)
-        })
-        .await
+        let transactions = self
+            .paged(nullifiers, |nullifiers, token, filters| async move {
+                indexer
+                    .get_shielded_transactions_by_nullifiers(
+                        nullifiers,
+                        token,
+                        Some(PAGE_LIMIT),
+                        filters,
+                        config,
+                    )
+                    .await
+            })
+            .await?;
+        Ok(transactions
+            .into_iter()
+            .flat_map(|item| item.events)
+            .collect())
     }
 
     async fn paged<T, F, Fut>(
@@ -148,17 +171,21 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         fetch: F,
     ) -> Result<Vec<T>, ClientError>
     where
-        F: Fn(Vec<[u8; 32]>, Option<Vec<u8>>) -> Fut,
+        T: Positioned,
+        F: Fn(Vec<[u8; 32]>, Option<PaginationToken>, HistoryFilters) -> Fut,
         Fut: Future<Output = Result<Page<T>, ClientError>>,
     {
         let mut items = Vec::new();
         for chunk in queried.chunks(TAGS_PER_REQUEST) {
-            let mut cursor = PageCursor::default();
+            let mut position = HistoryPosition::default();
             loop {
-                let page = fetch(chunk.to_vec(), cursor.current()).await?;
+                let page = fetch(chunk.to_vec(), position.token(), position.filters()).await?;
+                let end = position
+                    .advance(&page, PAGE_LIMIT)
+                    .map_err(|_| ClientError::IndexerCursorNotAdvanced)?;
                 self.observe(&page.context);
-                items.extend(page.items);
-                if !cursor.advance(page.next_cursor, &page.scanned_through)? {
+                items.extend(page.data);
+                if let PageEnd::Terminal(_) = end {
                     break;
                 }
             }
@@ -172,32 +199,4 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
                 .map_or(context.slot, |slot| slot.min(context.slot)),
         );
     }
-}
-
-struct Page<T> {
-    context: Context,
-    items: Vec<T>,
-    next_cursor: Option<Vec<u8>>,
-    scanned_through: Option<Vec<u8>>,
-}
-
-macro_rules! pages {
-    ($($response:ty => $item:ty, $items:ident;)*) => {$(
-        impl From<$response> for Page<$item> {
-            fn from(page: $response) -> Self {
-                Self {
-                    context: page.context,
-                    items: page.$items,
-                    next_cursor: page.next_cursor,
-                    scanned_through: page.scanned_through,
-                }
-            }
-        }
-    )*};
-}
-
-pages! {
-    GetShieldedTransactionsByTagsResponse => ShieldedTransaction, transactions;
-    GetShieldedTransactionsByNullifiersResponse => ShieldedTransaction, transactions;
-    GetEncryptedUtxosByTagsResponse => EncryptedUtxoMatch, matches;
 }

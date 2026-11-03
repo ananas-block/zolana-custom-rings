@@ -26,11 +26,12 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     created::{CreatedUtxos, DepositSlot},
     decrypt::TransactionAudit,
+    history::HistoryPosition,
     known::KnownUtxoIndex,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     scan::{
-        Page, PageEnd, Pages, RingHistory, RingScan, RowOrigins, ScanPage, SkippedRow,
-        RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE,
+        Pages, RingHistory, RingScan, RowOrigins, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES,
+        RING_HISTORY_PAGE_SIZE,
     },
     types::{OutputOpening, OutputPayloadErrorKind},
     AuditError,
@@ -568,33 +569,27 @@ impl<'a> MemberRecovery<'a> {
             let budget = NonZeroUsize::new(*remaining).ok_or(AuditError::IncompleteScan)?;
             let read = Cell::new(0);
             let page = Pages {
-                cursor: None,
+                position: HistoryPosition::default(),
                 max_pages: budget,
                 page_size: SPEND_PAGE_SIZE,
             }
-            .read(|cursor| {
+            .read(|token, filters| {
                 read.set(read.get() + 1);
                 async move {
-                    let page = indexer
+                    indexer
                         .get_shielded_transactions_by_nullifiers(
                             batch.to_vec(),
-                            cursor,
+                            token,
                             Some(SPEND_PAGE_SIZE.get()),
+                            filters,
                             config,
                         )
-                        .await?;
-                    Ok(Page {
-                        transactions: page.transactions,
-                        end: PageEnd {
-                            next_cursor: page.next_cursor,
-                            scanned_through: page.scanned_through,
-                        },
-                    })
+                        .await
                 }
             })
             .await?;
             *remaining -= read.get();
-            if page.next_cursor.is_some() {
+            if page.next.is_some() {
                 return Err(AuditError::IncompleteScan);
             }
             transactions.extend(page.transactions);

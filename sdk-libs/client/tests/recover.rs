@@ -1,5 +1,7 @@
 #[path = "common/deposit.rs"]
 mod deposit_fixture;
+#[path = "common/history_page.rs"]
+pub mod history_page;
 #[path = "common/origin.rs"]
 mod origin_fixture;
 #[path = "common/transfer.rs"]
@@ -12,7 +14,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncRpc, ClientError, Context,
-    GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
+    GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig, PaginationToken,
 };
 use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositOutput,
@@ -25,11 +27,12 @@ use spr_transaction::{
     ShieldedTransaction, SppProofOutputUtxo, Utxo, WalletUtxo, SOL_MINT,
 };
 use zolana_ring_client::{
-    commitment_evidence, seal_deposits, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
+    input_hash_evidence, seal_deposits, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
     RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
 use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
 
+use history_page::EventsPage;
 use transfer::{field, x25519_u, Frame, Output, Publish, Rail, Transfer, UtxoFields};
 
 const RING: Address = Address::new_from_array([42; 32]);
@@ -215,7 +218,7 @@ impl Fixture {
         transaction.tx_signature = signature;
         let frame = transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout,
+            disclosure: &disclosure,
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -367,7 +370,7 @@ impl Fixture {
         let commitments: Vec<_> = spent.iter().map(|held| Some(held.utxo_hash)).collect();
         let disclosure = transfer.anonymous_disclosure(
             &outputs,
-            commitment_evidence(&commitments).expect("ring notes"),
+            input_hash_evidence(&commitments).expect("ring notes"),
         );
         let mut transaction = transfer.publish(Publish {
             slots: published,
@@ -378,7 +381,7 @@ impl Fixture {
         transaction.tx_signature = signature;
         let frame = transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout,
+            disclosure: &disclosure,
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -433,6 +436,19 @@ impl History {
             _ => Ok(()),
         }
     }
+
+    fn page(&self, rows: Vec<ShieldedTransaction>) -> GetShieldedTransactionsByTagsResponse {
+        EventsPage {
+            context: Context {
+                block_time: 0,
+                slot: INDEXED,
+            },
+            output_tree_id: None,
+            rows,
+            more: false,
+        }
+        .response()
+    }
 }
 
 #[async_trait::async_trait]
@@ -444,32 +460,19 @@ impl AsyncRpc for History {
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.read(config)?;
         assert_eq!(options.ring_program_id, RING);
-        Ok(GetShieldedTransactionsByTagsResponse {
-            context: Context {
-                block_time: 0,
-                slot: INDEXED,
-            },
-            transactions: self.transactions.clone(),
-            output_tree_id: None,
-            next_cursor: None,
-            scanned_through: Some(Vec::new()),
-        })
+        Ok(self.page(self.transactions.clone()))
     }
     async fn get_shielded_transactions_by_tags(
         &self,
         tags: Vec<[u8; 32]>,
-        _cursor: Option<Vec<u8>>,
+        _pagination_token: Option<PaginationToken>,
         _limit: Option<u32>,
+        _filters: HistoryFilters,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.read(config)?;
-        Ok(GetShieldedTransactionsByTagsResponse {
-            context: Context {
-                block_time: 0,
-                slot: INDEXED,
-            },
-            transactions: self
-                .transactions
+        Ok(self.page(
+            self.transactions
                 .iter()
                 .filter(|tx| {
                     tx.messages
@@ -482,28 +485,21 @@ impl AsyncRpc for History {
                 })
                 .cloned()
                 .collect(),
-            output_tree_id: None,
-            next_cursor: None,
-            scanned_through: Some(Vec::new()),
-        })
+        ))
     }
 
     async fn get_shielded_transactions_by_nullifiers(
         &self,
         nullifiers: Vec<[u8; 32]>,
-        _cursor: Option<Vec<u8>>,
+        _pagination_token: Option<PaginationToken>,
         _limit: Option<u32>,
+        _filters: HistoryFilters,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
         self.read(config)?;
         self.queried.lock().unwrap().push(nullifiers.clone());
-        Ok(GetShieldedTransactionsByNullifiersResponse {
-            context: Context {
-                block_time: 0,
-                slot: INDEXED,
-            },
-            transactions: self
-                .transactions
+        Ok(self.page(
+            self.transactions
                 .iter()
                 .chain(&self.spends_only)
                 .filter(|tx| {
@@ -513,10 +509,7 @@ impl AsyncRpc for History {
                 })
                 .cloned()
                 .collect(),
-            output_tree_id: None,
-            next_cursor: Some(vec![1]),
-            scanned_through: Some(vec![1]),
-        })
+        ))
     }
 }
 
