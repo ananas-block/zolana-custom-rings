@@ -79,7 +79,7 @@ pub use crate::{
         DepositOpening, MergeDisclosureEncryption, MergeOpening, NullifierKeyEnvelope,
         SealedNullifierKey,
     },
-    error::{AnonymousError, AuditError},
+    error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     known::KnownUtxoIndex,
     merge_audit::{
@@ -99,8 +99,8 @@ pub use crate::{
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
         AuditedUtxo, CreatedUtxo, EscrowPendingOutput, EscrowPendingSlot, InputOpening, InputRing,
-        KnownUtxo, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag,
-        UtxoOwner,
+        KnownUtxo, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, OutputResolution,
+        RingOwnerTag, UnresolvedOutput, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

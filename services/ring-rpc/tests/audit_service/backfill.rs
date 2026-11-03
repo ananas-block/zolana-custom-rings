@@ -656,3 +656,196 @@ async fn a_mint_registered_inside_the_refresh_interval_opens_on_a_miss() {
     assert!(second.value.items[0].payload_errors.is_empty());
     assert_eq!(amounts(&second.value.items[0]), [40]);
 }
+
+fn held_output(
+    fixture: &Fixture,
+    owners: &[UtxoFields],
+    registered: &[UtxoFields],
+) -> (StaticSource, Hash) {
+    let source = escrowed_source(fixture, owners, registered);
+    let hash = Hash(source.transactions[0].output_slots[0].output_context.hash);
+    (source, hash)
+}
+
+async fn stored_amount(service: &AuditService<StaticSource>, hash: &Hash) -> Option<u64> {
+    let found = service
+        .audited_utxos(&utxos_request(vec![hash.clone()]))
+        .await
+        .expect("UTXO read");
+    found.value.utxos[0].as_ref().map(|view| view.utxo.amount)
+}
+
+fn cursors(source: &StaticSource) -> Vec<Option<Vec<u8>>> {
+    source.history_cursors.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn an_escrow_refresh_failure_then_recovery_stores_the_output_with_no_rescan() {
+    let fixture = Fixture::new();
+    let owners = [sol(0xc0, 30)];
+    let (source, hash) = held_output(&fixture, &owners, &owners);
+    source.records_down.store(true, Ordering::Relaxed);
+    let down = source.records_down.clone();
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash).await, None);
+
+    down.store(false, Ordering::Relaxed);
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash).await, Some(30));
+    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unknown_mint_then_registration_stores_the_output_with_no_rescan() {
+    let fixture = Fixture::new();
+    let fresh = Address::new_from_array([0xee; 32]);
+    let outputs = [
+        paid(utxo(0xb4, fresh, 40), fixture.recipient_u),
+        Output::Dummy,
+    ];
+    let transaction = Indexed {
+        transfer: &ring_transfer(84),
+        outputs: &outputs,
+        auditor: &fixture.auditor.pubkey(),
+        signature: 84,
+        frames: &fixture.frames,
+    }
+    .delivered_with(false);
+    let hash = Hash(transaction.output_slots[0].output_context.hash);
+    let mut source = fixture
+        .source()
+        .with_transactions(vec![transaction.clone()]);
+    source.pages = HashMap::from([
+        (None, paged(vec![transaction], None, Some(1))),
+        (Some(vec![1]), paged(Vec::new(), None, Some(1))),
+    ]);
+    let registry = source.assets.clone();
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash).await, None);
+
+    *registry.lock().unwrap() = Some(RingAssets::new([Mint::new(fresh, 9)]).expect("assets"));
+    tokio::time::advance(Duration::from_secs(60)).await;
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash).await, Some(40));
+    let found = service
+        .audited_utxos(&utxos_request(vec![hash]))
+        .await
+        .expect("UTXO read");
+    let view = found.value.utxos[0].as_ref().expect("stored output");
+    assert_eq!(view.utxo.mint.as_ref().map(|mint| mint.0), Some(fresh));
+    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+}
+
+#[tokio::test]
+async fn a_restart_keeps_a_row_its_dependency_left_open() {
+    let fixture = Fixture::new();
+    let owners = [sol(0xc0, 30)];
+    let (source, hash) = held_output(&fixture, &owners, &owners);
+    source.records_down.store(true, Ordering::Relaxed);
+    let down = source.records_down.clone();
+    let probe = source.clone();
+    let before = fixture.hub(source.clone()).service(None).expect("service");
+    before.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&before, &hash).await, None);
+
+    let restarted = fixture.hub(source).service(None).expect("service");
+    restarted.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&restarted, &hash).await, None);
+    down.store(false, Ordering::Relaxed);
+    restarted.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&restarted, &hash).await, Some(30));
+    assert_eq!(cursors(&probe), [None, None, Some(vec![1])]);
+}
+
+#[tokio::test]
+async fn a_permanently_invalid_row_passes_the_cursor() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.foreign_key.clone(), fixture.audited.clone()];
+    let hash = Hash(fixture.audited.output_slots[0].output_context.hash);
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([
+        (None, paged(rows, None, Some(1))),
+        (Some(vec![1]), paged(Vec::new(), None, Some(1))),
+    ]);
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash).await, Some(500));
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+}
+
+#[tokio::test]
+async fn a_lost_auditor_message_holds_the_backfill_and_lists_on_a_read() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.missing_message.clone(), fixture.audited.clone()];
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([(None, paged(rows, None, Some(1)))]);
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    assert!(service.backfill_utxos().await.is_err());
+    assert!(service.backfill_utxos().await.is_err());
+    assert_eq!(cursors(&probe), [None, None]);
+    let page = read_at(&service, None).await;
+    let [skipped] = page.value.skipped.as_slice() else {
+        panic!("one lost message, {:?}", page.value.skipped);
+    };
+    assert_eq!(skipped.reason, SkippedReason::MissingAuditorMessage);
+    assert_eq!(page.value.items.len(), 1);
+}
+
+#[tokio::test]
+async fn a_faulty_call_stack_stops_the_backfill_and_the_read() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.audited.clone()];
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([(None, paged(rows, None, Some(1)))]);
+    source.stack_faults.insert(fixture.audited.tx_signature);
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    assert!(service.backfill_utxos().await.is_err());
+    assert!(service.backfill_utxos().await.is_err());
+    assert_eq!(cursors(&probe), [None, None]);
+    assert!(read_at_result(&service, None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_replaced_registry_replaces_the_escrowed_keys() {
+    let fixture = Fixture::new();
+    let owner_a = sol(0xc0, 30);
+    let owner_b = sol(0xc1, 12);
+    let other = sol(0xc2, 1);
+    let source = escrowed_source(&fixture, &[owner_a, owner_b], &[owner_a, other]);
+    let record_reads = source.record_reads.clone();
+    let probe = source.clone();
+    let hash_b = Hash(source.transactions[0].output_slots[1].output_context.hash);
+    let hash_a = Hash(source.transactions[0].output_slots[0].output_context.hash);
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    assert_eq!(stored_amount(&service, &hash_a).await, Some(30));
+    assert_eq!(stored_amount(&service, &hash_b).await, None);
+    let revision_a = probe.records.root().revision;
+    let reads = record_reads.load(Ordering::Relaxed);
+
+    let replacement = Records::listing(&[
+        reader_member(ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader")),
+        reader_member(ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader")),
+    ]);
+    replacement.escrow(&escrow_writes(&[owner_b]));
+    assert!(replacement.root().revision < revision_a);
+    probe.records.replace_with(replacement);
+    *probe.registry.lock().unwrap() = Address::new_from_array([12; 32]);
+    service.backfill_utxos().await.expect("backfill");
+    assert!(record_reads.load(Ordering::Relaxed) > reads);
+    assert_eq!(stored_amount(&service, &hash_b).await, Some(12));
+    let page = read_at(&service, None).await;
+    let pending = escrow_pending(&page);
+    let [pending] = pending.as_slice() else {
+        panic!("registry A's owner lost its key, {pending:?}");
+    };
+    assert_eq!(pending.owner_key, owner_a.owner_key.into());
+}

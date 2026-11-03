@@ -521,8 +521,7 @@ impl<'a> Sealed<'a> {
         .read(client.zolana())
         .await?;
         let transfers = &proof_inputs.external_data.interface_transfers;
-        let legs: Vec<_> = transfers.iter().map(public_leg).collect();
-        let demand = CoSignDemand::transact(policy.approval_required, &legs);
+        let demand = CoSignDemand::transact(policy.approval_required, &public);
         policy
             .exempt_withdrawals(config, &demand, &public, client.zolana())
             .await?;

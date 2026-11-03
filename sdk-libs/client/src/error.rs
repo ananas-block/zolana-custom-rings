@@ -117,22 +117,120 @@ pub enum AuditError {
     Stream(#[from] StreamError),
 }
 
-impl AuditError {
-    /// A read that failed says nothing of the row, a retry can succeed.
-    pub fn is_transport(&self) -> bool {
-        matches!(
-            self,
-            Self::Unavailable { .. } | Self::Client(_) | Self::Indexer(_)
-        )
+/// What a reader does with a row that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowDisposition {
+    /// The read failed or the RPC contradicts the program, the position stays.
+    Retry,
+    /// The row never opens, the position passes it.
+    Invalid,
+}
+
+/// Names a failure across the SDKs, `test-vectors/audit/row-dispositions.json` pins each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditFailureKind {
+    Transport,
+    OriginUnavailable,
+    InvalidStackHeight,
+    MissingAuditorMessage,
+    IndexerResponse,
+    OriginDecode,
+    TransactData,
+    EventMismatch,
+    ViewingKeyMismatch,
+    NonCanonicalViewingKey,
+    KeyMaterial,
+    AuditData,
+}
+
+impl AuditFailureKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::OriginUnavailable => "originUnavailable",
+            Self::InvalidStackHeight => "invalidStackHeight",
+            Self::MissingAuditorMessage => "missingAuditorMessage",
+            Self::IndexerResponse => "indexerResponse",
+            Self::OriginDecode => "originDecode",
+            Self::TransactData => "transactData",
+            Self::EventMismatch => "eventMismatch",
+            Self::ViewingKeyMismatch => "viewingKeyMismatch",
+            Self::NonCanonicalViewingKey => "nonCanonicalViewingKey",
+            Self::KeyMaterial => "keyMaterial",
+            Self::AuditData => "auditData",
+        }
     }
 
-    /// A bad stack height or a lost auditor message names a faulty RPC, a retry can succeed.
-    pub(crate) fn is_row_failure(&self) -> bool {
-        !self.is_transport()
-            && !matches!(
-                self,
-                Self::InvalidStackHeight(_) | Self::MissingAuditorMessage
-            )
+    pub const fn disposition(self) -> RowDisposition {
+        match self {
+            Self::Transport
+            | Self::OriginUnavailable
+            | Self::InvalidStackHeight
+            | Self::MissingAuditorMessage
+            | Self::IndexerResponse => RowDisposition::Retry,
+            Self::OriginDecode
+            | Self::TransactData
+            | Self::EventMismatch
+            | Self::ViewingKeyMismatch
+            | Self::NonCanonicalViewingKey
+            | Self::KeyMaterial
+            | Self::AuditData => RowDisposition::Invalid,
+        }
+    }
+}
+
+impl AuditError {
+    pub fn kind(&self) -> AuditFailureKind {
+        match self {
+            Self::Client(_) | Self::Indexer(_) => AuditFailureKind::Transport,
+            Self::Unavailable { .. } => AuditFailureKind::OriginUnavailable,
+            Self::InvalidStackHeight(_) => AuditFailureKind::InvalidStackHeight,
+            Self::MissingAuditorMessage => AuditFailureKind::MissingAuditorMessage,
+            Self::MissingEventIndex
+            | Self::InvalidMemberRegistry
+            | Self::IncompleteScan
+            | Self::ScanFrontierMissing
+            | Self::PageOverflow => AuditFailureKind::IndexerResponse,
+            Self::MissingRingTransact
+            | Self::InvalidDepositData(_)
+            | Self::SettlementAccounts
+            | Self::InvalidEventIndex(_)
+            | Self::InvalidConfirmedEvent(_) => AuditFailureKind::OriginDecode,
+            Self::InvalidTransactData(_) => AuditFailureKind::TransactData,
+            Self::ConfirmedEventMismatch => AuditFailureKind::EventMismatch,
+            Self::TxViewingKeyMismatch => AuditFailureKind::ViewingKeyMismatch,
+            Self::NonCanonicalViewingKey => AuditFailureKind::NonCanonicalViewingKey,
+            Self::Keypair(_) | Self::RingKeys(_) => AuditFailureKind::KeyMaterial,
+            Self::AuditorMessageLength(_)
+            | Self::MissingTxViewingPk
+            | Self::MissingSalt
+            | Self::MissingNullifier
+            | Self::MissingRingProgram
+            | Self::DisclosureField
+            | Self::DisclosureLayout
+            | Self::DisclosurePadding
+            | Self::InputTreeCount { .. }
+            | Self::AuditedUtxosCount { .. }
+            | Self::AuditedUtxoOwner
+            | Self::AuditedUtxoMismatch { .. }
+            | Self::UnopenedOutput { .. }
+            | Self::NullifierPad
+            | Self::DepositCount(_)
+            | Self::DepositSlot(_)
+            | Self::DepositOpeningMismatch
+            | Self::NullifierKeyMismatch
+            | Self::MergeDisclosureMismatch
+            | Self::MergeAuditWorkBudget
+            | Self::RingRail(_)
+            | Self::Transaction(_)
+            | Self::Member(_)
+            | Self::Hasher(_)
+            | Self::Stream(_) => AuditFailureKind::AuditData,
+        }
+    }
+
+    pub fn disposition(&self) -> RowDisposition {
+        self.kind().disposition()
     }
 }
 
@@ -179,4 +277,64 @@ pub enum AnonymousError {
     CounterOverflow,
     #[error("the recipient's viewing key agrees on no shared secret")]
     RecipientKeyNotContributory,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde::Deserialize;
+    use spr_hasher::HasherError;
+
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct Vector {
+        cases: Vec<Case>,
+    }
+
+    #[derive(Deserialize)]
+    struct Case {
+        kind: String,
+        disposition: String,
+    }
+
+    #[test]
+    fn every_failure_kind_keeps_its_shared_disposition() {
+        let vector: Vector = serde_json::from_str(include_str!(
+            "../../../test-vectors/audit/row-dispositions.json"
+        ))
+        .unwrap();
+        let pinned: HashMap<String, String> = vector
+            .cases
+            .into_iter()
+            .map(|case| (case.kind, case.disposition))
+            .collect();
+        let failures = [
+            AuditError::Client(ClientError::Rpc("down".to_owned())),
+            AuditError::Unavailable {
+                signature: Signature::default(),
+                message: "not found".to_owned(),
+            },
+            AuditError::InvalidStackHeight(4),
+            AuditError::MissingAuditorMessage,
+            AuditError::ScanFrontierMissing,
+            AuditError::InvalidEventIndex(1),
+            AuditError::InvalidTransactData("forged".to_owned()),
+            AuditError::ConfirmedEventMismatch,
+            AuditError::TxViewingKeyMismatch,
+            AuditError::NonCanonicalViewingKey,
+            AuditError::Keypair(KeypairError::InvalidPublicKey),
+            AuditError::Hasher(HasherError::InvalidInputLength(1, 2)),
+        ];
+        assert_eq!(pinned.len(), failures.len());
+        for failure in failures {
+            let kind = failure.kind();
+            let disposition = match failure.disposition() {
+                RowDisposition::Retry => "retry",
+                RowDisposition::Invalid => "invalid",
+            };
+            assert_eq!(pinned[kind.name()], disposition, "{}", kind.name());
+        }
+    }
 }

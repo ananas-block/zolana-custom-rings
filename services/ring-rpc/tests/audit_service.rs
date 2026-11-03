@@ -33,7 +33,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -416,6 +416,11 @@ struct StaticSource {
     history_reads: Arc<AtomicUsize>,
     /// Rows whose confirmed call does not decode.
     undecodable: HashSet<Signature>,
+    /// Rows whose confirmed call stack names a parent no instruction holds.
+    stack_faults: HashSet<Signature>,
+    history_cursors: Arc<Mutex<Vec<Option<Vec<u8>>>>>,
+    registry: Arc<Mutex<Address>>,
+    records_down: Arc<AtomicBool>,
 }
 
 /// The indexer page one cursor reads.
@@ -529,6 +534,10 @@ impl TransactionSource for StaticSource {
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send
     {
         let capped = self.history_reads.fetch_add(1, Ordering::Relaxed) >= HISTORY_READ_CAP;
+        self.history_cursors
+            .lock()
+            .unwrap()
+            .push(request.page.cursor().map(ToOwned::to_owned));
         let response = self.page_at(request.page, None);
         async move {
             match capped {
@@ -545,6 +554,7 @@ impl TransactionSource for StaticSource {
         _ring: Address,
     ) -> impl Future<Output = Result<RingOrigin, AuditError>> + Send {
         let undecodable = self.undecodable.contains(&signature);
+        let stack_fault = self.stack_faults.contains(&signature);
         let origin = self
             .origins
             .get(&(signature, event_index))
@@ -592,9 +602,10 @@ impl TransactionSource for StaticSource {
                 message: "not found".to_owned(),
             });
         async move {
-            match undecodable {
-                true => Err(AuditError::InvalidTransactData("forged".to_owned())),
-                false => origin,
+            match (undecodable, stack_fault) {
+                (true, _) => Err(AuditError::InvalidTransactData("forged".to_owned())),
+                (_, true) => Err(AuditError::InvalidStackHeight(4)),
+                (false, false) => origin,
             }
         }
     }
@@ -656,7 +667,7 @@ impl TransactionSource for StaticSource {
         }
         let root = self.records.root();
         Ok(RecordsTip::Newest(StorageTip {
-            registry: RECORDS,
+            registry: *self.registry.lock().unwrap(),
             root: root.root.0,
             revision: root.revision,
         }))
@@ -666,7 +677,7 @@ impl TransactionSource for StaticSource {
         &self,
         request: GetStorageMemberOpeningsRequest,
     ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
-        assert_eq!(request.registry.0, RECORDS);
+        assert_eq!(request.registry.0, *self.registry.lock().unwrap());
         let root = self.records.root();
         assert_eq!(request.expected_root, root.root);
         Ok(GetStorageMemberOpeningsResponse {
@@ -688,6 +699,9 @@ impl TransactionSource for StaticSource {
         request: GetStorageMemberRecordsRequest,
     ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
         self.record_reads.fetch_add(1, Ordering::Relaxed);
+        if self.records_down.load(Ordering::Relaxed) {
+            return Err(ClientError::Rpc("records down".to_owned()).into());
+        }
         let root = self.records.root();
         assert_eq!(request.expected_root, root.root);
         // A network page never answers in the same poll.
@@ -972,6 +986,10 @@ impl Fixture {
             record_reads: Arc::new(AtomicUsize::new(0)),
             history_reads: Arc::new(AtomicUsize::new(0)),
             undecodable: HashSet::new(),
+            stack_faults: HashSet::new(),
+            history_cursors: Arc::default(),
+            registry: Arc::new(Mutex::new(RECORDS)),
+            records_down: Arc::default(),
         };
         source.with_transactions(vec![
             self.audited.clone(),
@@ -1308,6 +1326,11 @@ impl Records {
 
     fn shorten_pages(&self) {
         self.0.lock().unwrap().short_pages = true;
+    }
+
+    /// Every clone of the source serves `other`'s tree from here on.
+    fn replace_with(&self, other: Records) {
+        std::mem::swap(&mut *self.0.lock().unwrap(), &mut *other.0.lock().unwrap());
     }
 
     fn apply(&self, entry: QueueEntry) {

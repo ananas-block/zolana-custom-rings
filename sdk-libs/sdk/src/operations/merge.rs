@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     cosign::CoSignDemand, key_catalog::RingCircuit, merge_disclosure_field_count,
-    CustomRingMergeIxData, MergeDisclosure, MergePublicInput, RingMode, RootRead,
+    CustomRingMergeIxData, MergeDisclosure, MergePublicInput, PublicSlots, RingMode, RootRead,
     MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
@@ -556,5 +556,5 @@ impl MergeDisclosureProof<'_> {
 
 /// A merge is a transfer, no public leg adds a class.
 fn merge_demand() -> CoSignDemand {
-    CoSignDemand::transact(false, &[])
+    CoSignDemand::transact(false, &PublicSlots::default())
 }

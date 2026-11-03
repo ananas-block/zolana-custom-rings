@@ -17,6 +17,7 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     decrypt::TransactionAudit,
     encryption::auditor_view_tag,
+    error::RowDisposition,
     known::KnownUtxoIndex,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     paging::next_page,
@@ -94,14 +95,14 @@ impl Pages {
 impl SkippedRow {
     /// `Err` when `error` must stop the read instead.
     pub(crate) fn of(row: &ShieldedTransaction, error: AuditError) -> Result<Self, AuditError> {
-        if !error.is_row_failure() {
-            return Err(error);
+        match error.disposition() {
+            RowDisposition::Retry => Err(error),
+            RowDisposition::Invalid => Ok(Self {
+                tx_signature: row.tx_signature,
+                event_index: row.event_index.ok_or(AuditError::MissingEventIndex)?,
+                error,
+            }),
         }
-        Ok(Self {
-            tx_signature: row.tx_signature,
-            event_index: row.event_index.ok_or(AuditError::MissingEventIndex)?,
-            error,
-        })
     }
 }
 

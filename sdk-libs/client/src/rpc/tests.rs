@@ -295,6 +295,7 @@ fn delivered_audited() -> AuditedTransaction {
         }],
         sender: None,
         inputs: Vec::new(),
+        unresolved: Vec::new(),
     }
 }
 
@@ -556,6 +557,7 @@ fn anonymous_audited() -> AuditedTransaction {
                 },
             },
         ],
+        unresolved: Vec::new(),
     }
 }
 

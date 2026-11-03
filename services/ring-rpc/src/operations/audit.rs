@@ -20,7 +20,7 @@ use zolana_ring_client::{
         SkippedReason, SkippedTransaction, AUDIT_PAGE_LIMIT,
     },
     AuditError, AuditedTransaction, CreatedUtxos, DepositNote, MergeAuditPage, ReaderKey,
-    RingOrigin, TransactionAudit,
+    RingOrigin, RowDisposition, TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
@@ -40,7 +40,7 @@ use crate::{
         MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
         TransactionSource,
     },
-    utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, MAX_BACKFILL_PAGES},
+    utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, HeldNote, MAX_BACKFILL_PAGES},
 };
 
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -110,6 +110,8 @@ struct BoundTransaction<'a> {
 struct AuditedRows {
     items: Vec<DecryptedTransaction>,
     skipped: Vec<SkippedTransaction>,
+    /// The first failure a retry can change, the backfill stops on it and a page read goes on.
+    unfinished: Option<AuditError>,
 }
 
 impl Page {
@@ -443,7 +445,10 @@ impl<S: TransactionSource> AuditService<S> {
                 block_time: response.context.block_time,
                 slot: response.context.slot,
             };
-            self.audit_rows(response, config.mode, &store).await?;
+            let rows = self.audit_rows(response, config.mode, &store).await?;
+            if let Some(error) = rows.unfinished {
+                return Err(error.into());
+            }
             match (frontier, next) {
                 (Some(frontier), _) => {
                     store.absorbed(context);
@@ -464,13 +469,13 @@ impl<S: TransactionSource> AuditService<S> {
             return Ok(());
         };
         let root = EscrowRoot {
+            registry: tip.registry,
             root: tip.root,
             revision: tip.revision,
         };
-        // A lagging RPC node answers an older root, the map never moves back to it.
         let settled = store
             .escrow_root()
-            .is_some_and(|current| current.root == root.root || root.revision < current.revision);
+            .is_some_and(|current| current.settles(&root));
         if !settled {
             store.replace_escrow(root, self.rescan_records(tip).await?);
         }
@@ -610,15 +615,15 @@ impl<S: TransactionSource> AuditService<S> {
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
         let mut assets = self.shared.due_assets().await;
-        let mut refreshed = false;
+        store.name_assets(&assets);
         let mut items = Vec::new();
         let mut skipped = Vec::new();
+        let mut unfinished = None;
         let mut origins: HashMap<(Signature, u16), RingOrigin> = HashMap::new();
         for mut tx in response.transactions {
             if tx.ring_program_id != Some(self.ring) {
                 continue;
             }
-            store.spend(tx.nullifiers.iter().copied());
             let event_index = tx.event_index.ok_or(RingRpcError::InvalidIndexerResponse)?;
             let origin = match origins.get(&(tx.tx_signature, event_index)) {
                 Some(known) => known.clone(),
@@ -631,8 +636,9 @@ impl<S: TransactionSource> AuditService<S> {
                             origins.insert((tx.tx_signature, event_index), found.clone());
                             found
                         }
-                        Err(error) if error.is_transport() => return Err(error.into()),
-                        // A retry never decodes it, the cursor must pass the row.
+                        Err(error) if error.disposition() == RowDisposition::Retry => {
+                            return Err(error.into())
+                        }
                         Err(error) => {
                             log::warn!(
                                 "ring {} event {}:{event_index} has no readable origin because {}",
@@ -651,47 +657,58 @@ impl<S: TransactionSource> AuditService<S> {
                     }
                 }
             };
+            if !origin.ring_invoked {
+                continue;
+            }
+            let bound = origin.bind_transaction(&mut tx, self.ring);
+            // A confirmed spend holds even when its outputs cannot open yet.
+            if bound.is_ok() {
+                store.spend(tx.nullifiers.iter().copied());
+            }
+            let created_in = CreatedIn {
+                slot: tx.slot,
+                tx_signature: tx.tx_signature,
+                event_index,
+            };
             if !origin.requires_audit() {
-                if origin.ring_invoked {
-                    // A later commitment layout spends a deposited or merged UTXO by hash or prefix.
-                    let created = origin.bind_transaction(&mut tx, self.ring).and_then(|()| {
-                        CreatedUtxos {
-                            transaction: &tx,
-                            origin: &origin,
-                            ring: self.ring,
+                // A later commitment layout spends a deposited or merged UTXO by hash or prefix.
+                let created = bound.and_then(|()| {
+                    CreatedUtxos {
+                        transaction: &tx,
+                        origin: &origin,
+                        ring: self.ring,
+                    }
+                    .open_for(&self.auditor, store)
+                });
+                match created {
+                    Ok(created) => {
+                        store.record(created_in, created.utxos);
+                        match mode {
+                            // Only an escrow ring's backfill names a held owner.
+                            RingMode::ConfidentialEscrow => store.hold(
+                                created_in,
+                                created.unowned.into_iter().map(HeldNote::Deposit),
+                            ),
+                            RingMode::Confidential | RingMode::Anonymous => store.record(
+                                created_in,
+                                created.unowned.iter().map(DepositNote::deposited),
+                            ),
                         }
-                        .open_for(&self.auditor, store)
-                    });
-                    match created {
-                        Ok(created) => {
-                            let created_in = CreatedIn {
-                                slot: tx.slot,
-                                tx_signature: tx.tx_signature,
-                                event_index,
-                            };
-                            store.record(created_in, created.utxos);
-                            match mode {
-                                // Only an escrow ring's backfill names a held owner.
-                                RingMode::ConfidentialEscrow => {
-                                    store.hold(created_in, created.unowned)
-                                }
-                                RingMode::Confidential | RingMode::Anonymous => store.record(
-                                    created_in,
-                                    created.unowned.iter().map(DepositNote::deposited),
-                                ),
-                            }
-                        }
-                        Err(error) => log::warn!(
+                    }
+                    Err(error) => {
+                        log::warn!(
                             "ring {} event {}:{event_index} opened no UTXOs because {}",
                             self.ring,
                             tx.tx_signature,
                             redacted(&error)
-                        ),
+                        );
+                        if error.disposition() == RowDisposition::Retry {
+                            unfinished.get_or_insert(error);
+                        }
                     }
                 }
                 continue;
             }
-            let bound = origin.bind_transaction(&mut tx, self.ring);
             let audit = BoundTransaction {
                 transaction: &tx,
                 origin: &origin,
@@ -700,51 +717,63 @@ impl<S: TransactionSource> AuditService<S> {
             };
             let mut opened = bound.and_then(|()| self.audit(audit, &assets));
             // A mint registered inside the refresh interval misses the cache.
-            if !refreshed
-                && opened
-                    .as_ref()
-                    .is_ok_and(AuditedTransaction::has_unknown_assets)
+            if opened
+                .as_ref()
+                .is_ok_and(AuditedTransaction::has_unknown_assets)
             {
-                refreshed = true;
-                assets = self.shared.assets_after_miss().await;
-                opened = self.audit(audit, &assets);
+                let fresh = self.shared.assets_after_miss().await;
+                if fresh != assets {
+                    assets = fresh;
+                    store.name_assets(&assets);
+                    opened = opened.and_then(|mut opened| {
+                        opened.resolve(store, &assets)?;
+                        Ok(opened)
+                    });
+                }
             }
-            // Missing mint preimages affect optional metadata, never verified disclosure.
+            if let Ok(opened) = &opened {
+                store.record(created_in, opened.utxos());
+                store.hold(
+                    created_in,
+                    opened.unresolved.iter().cloned().map(HeldNote::Output),
+                );
+            }
             let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
-                Ok((opened, spenders)) => {
-                    store.record(
-                        CreatedIn {
-                            slot: opened.slot,
-                            tx_signature: opened.tx_signature,
-                            event_index,
+                Ok((opened, spenders)) => items.push(
+                    ConfirmedAudit {
+                        audited: opened,
+                        event_index,
+                        nullifiers: tx.nullifiers,
+                        spenders,
+                        signers: origin.signers,
+                        withdrawals: origin.withdrawals,
+                    }
+                    .into(),
+                ),
+                Err(error) => {
+                    skipped.push(SkippedTransaction {
+                        slot: tx.slot,
+                        tx_signature: tx.tx_signature.into(),
+                        event_index,
+                        reason: match error {
+                            AuditError::MissingAuditorMessage => {
+                                SkippedReason::MissingAuditorMessage
+                            }
+                            _ => SkippedReason::InvalidAuditData,
                         },
-                        opened.utxos(),
-                    );
-                    items.push(
-                        ConfirmedAudit {
-                            audited: opened,
-                            event_index,
-                            nullifiers: tx.nullifiers,
-                            spenders,
-                            signers: origin.signers,
-                            withdrawals: origin.withdrawals,
-                        }
-                        .into(),
-                    )
+                    });
+                    if error.disposition() == RowDisposition::Retry {
+                        unfinished.get_or_insert(error);
+                    }
                 }
-                Err(reason) => skipped.push(SkippedTransaction {
-                    slot: tx.slot,
-                    tx_signature: tx.tx_signature.into(),
-                    event_index,
-                    reason: match reason {
-                        AuditError::MissingAuditorMessage => SkippedReason::MissingAuditorMessage,
-                        _ => SkippedReason::InvalidAuditData,
-                    },
-                }),
             }
         }
-        Ok(AuditedRows { items, skipped })
+        Ok(AuditedRows {
+            items,
+            skipped,
+            unfinished,
+        })
     }
 }
 
@@ -882,9 +911,89 @@ fn validate_merge_page(page: &MergeAuditPage, request: &Page) -> Result<(), Ring
 #[cfg(test)]
 mod tests {
     use spr_indexer_api::Context;
+    use spr_keypair::ViewingKey;
+    use spr_transaction::ShieldedTransaction;
     use zolana_ring_client::{MergeAuditResult, UnresolvedMerge};
 
     use super::*;
+    use crate::{
+        managed_merge::tests::{Fixture, RING},
+        upstream::origin_fixture,
+    };
+
+    fn row(signature: u8, nullifier: u8) -> ShieldedTransaction {
+        ShieldedTransaction {
+            slot: 1,
+            tx_signature: Signature::from([signature; 64]),
+            event_index: Some(0),
+            tx_viewing_pk: Some(ViewingKey::from_bytes(&[signature; 32]).pubkey()),
+            salt: Some([signature; 16]),
+            output_slots: Vec::new(),
+            messages: Vec::new(),
+            nullifiers: vec![[nullifier; 32]],
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(RING),
+        }
+    }
+
+    fn origin_of(confirmed: &ShieldedTransaction, ring_invoked: bool) -> RingOrigin {
+        RingOrigin {
+            ring_invoked,
+            event: origin_fixture::event(confirmed),
+            signers: Vec::new(),
+            withdrawals: Vec::new(),
+            deposits: Vec::new(),
+            merge_disclosure: None,
+            transact: None,
+            pool_accounts: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_confirmed_event_marks_a_note_spent() {
+        let fixture = Fixture::serving(None, None).await;
+        let shared = fixture.hub.shared();
+        let forged = row(1, 9);
+        let foreign = row(2, 8);
+        let confirmed = row(3, 7);
+        {
+            let mut origins = shared.source.origins.lock().expect("origins");
+            origins.insert(forged.tx_signature, origin_of(&row(1, 6), true));
+            origins.insert(foreign.tx_signature, origin_of(&foreign, false));
+            origins.insert(confirmed.tx_signature, origin_of(&confirmed, true));
+        }
+        let service = fixture.hub.service(None).expect("service");
+        let store = shared.store(RING);
+        let rows = service
+            .audit_rows(
+                GetShieldedTransactionsByTagsResponse {
+                    context: spr_client::Context {
+                        slot: 1,
+                        block_time: 1,
+                    },
+                    transactions: vec![forged, foreign, confirmed],
+                    next_cursor: None,
+                    scanned_through: None,
+                    output_tree_id: None,
+                },
+                RingMode::ConfidentialEscrow,
+                &store,
+            )
+            .await
+            .expect("rows");
+        assert!(!store.is_spent(&[9; 32]), "the rejected row");
+        assert!(!store.is_spent(&[6; 32]), "the rejected row's event");
+        assert!(!store.is_spent(&[8; 32]), "the ring never ran");
+        // The row names no ring frame, its outputs cannot open.
+        assert!(store.is_spent(&[7; 32]));
+        let skipped: Vec<_> = rows.skipped.iter().map(|row| row.tx_signature.0).collect();
+        assert_eq!(
+            skipped,
+            [Signature::from([1; 64]), Signature::from([3; 64])]
+        );
+        assert!(rows.unfinished.is_none());
+    }
 
     #[test]
     fn merge_page_rejects_an_unchanged_cursor_and_extra_rows() {

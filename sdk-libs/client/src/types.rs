@@ -32,6 +32,8 @@ pub struct AuditedTransaction {
     pub sender: Option<AuditedSender>,
     /// One per published nullifier, empty on the signer rail whose evidence names no input.
     pub inputs: Vec<AuditedInput>,
+    /// Slots a nullifier key or a mint can still open, each also in `outputs` or `payload_errors`.
+    pub unresolved: Vec<UnresolvedOutput>,
 }
 
 /// One opened slot, its note rebuilt to the published commitment.
@@ -71,6 +73,25 @@ pub enum EscrowPendingSlot {
         asset: [u8; 32],
         mint: Option<Address>,
     },
+}
+
+/// A slot's decrypted fields, unverified until a nullifier key and a delivered slot's mint rebuild its commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedOutput {
+    pub slot_index: u32,
+    pub context: OutputContext,
+    pub ring: Address,
+    /// The key the opening discloses, `None` leaves it to the owner's escrow record.
+    pub nullifier_pk: Option<[u8; 32]>,
+    pub fields: EscrowPendingOutput,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OutputResolution {
+    AwaitsKey,
+    AwaitsAsset,
+    Opened(Box<OutputOpening>),
+    Refused(OutputPayloadErrorKind),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,17 +250,10 @@ pub enum OutputPayloadErrorKind {
 impl AuditedTransaction {
     /// The ring and exit notes its outputs opened, the index a [`crate::KnownUtxos`] keeps.
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
-        self.outputs.iter().filter_map(|output| {
-            output.opening.utxo().map(|utxo| CreatedUtxo {
-                commitment: output.context.hash,
-                slot_index: output.slot_index,
-                leaf_index: output.context.leaf_index,
-                utxo: KnownUtxo::opened(*utxo, output.context.tree_id),
-            })
-        })
+        self.outputs.iter().filter_map(AuditedOutput::created)
     }
 
-    /// An unknown mint leaves the opening verified, a registry refresh may name it.
+    /// A registry refresh may name the mint, a delivered slot opens only after it.
     pub fn has_unknown_assets(&self) -> bool {
         let outputs = self
             .outputs
@@ -256,6 +270,17 @@ impl AuditedTransaction {
                 .payload_errors
                 .iter()
                 .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
+    }
+}
+
+impl AuditedOutput {
+    pub fn created(&self) -> Option<CreatedUtxo> {
+        self.opening.utxo().map(|utxo| CreatedUtxo {
+            commitment: self.context.hash,
+            slot_index: self.slot_index,
+            leaf_index: self.context.leaf_index,
+            utxo: KnownUtxo::opened(*utxo, self.context.tree_id),
+        })
     }
 }
 

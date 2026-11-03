@@ -703,7 +703,6 @@ fn deposit_demand() -> CoSignDemand {
     CoSignDemand {
         approval_required: false,
         classes: CoSignScope::DEPOSITS,
-        withdrawals: Vec::new(),
     }
 }
 

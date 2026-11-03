@@ -1804,6 +1804,15 @@ fn a_mint_the_registry_lacks_reads_as_an_unknown_asset_and_opens_once_registered
     assert!(resolved.payload_errors.is_empty());
     assert_eq!(opened_slots(&resolved), [0, 1]);
     assert!(!resolved.has_unknown_assets());
+
+    let mut retried = audited.clone();
+    let no_keys = HashMap::new();
+    retried.resolve(&no_keys, &assets()).unwrap();
+    assert_eq!(retried, audited);
+    retried.resolve(&no_keys, &registered).unwrap();
+    assert_eq!(retried.outputs, resolved.outputs);
+    assert!(retried.payload_errors.is_empty());
+    assert!(retried.unresolved.is_empty());
 }
 
 #[test]

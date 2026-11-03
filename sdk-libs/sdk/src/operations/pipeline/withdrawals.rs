@@ -1,6 +1,6 @@
 //! The withdrawal exemption, the waiver of the co-signer the withdrawal class alone demands.
 
-use custom_ring_interface::{cosign::CoSignDemand, RingPolicy};
+use custom_ring_interface::{cosign::CoSignDemand, CoSignScope, RingPolicy};
 use spr_interface::N_PUBLIC_SLOTS;
 use zolana_ring_client::records::RecordPoolRead;
 
@@ -10,7 +10,7 @@ pub(super) fn waives_co_signer(
     ring: &RingPolicy,
     demand: &CoSignDemand,
 ) -> Result<bool, RingError> {
-    Ok(!demand.withdrawals.is_empty()
+    Ok(demand.classes.contains(CoSignScope::WITHDRAWALS)
         && demand.requirement(ring)?.is_some()
         && demand
             .clone()

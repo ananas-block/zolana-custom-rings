@@ -389,6 +389,7 @@ pub(crate) mod tests {
 
     pub(crate) struct EscrowRingSource {
         config: RingConfiguration,
+        pub(crate) origins: Mutex<HashMap<Signature, RingOrigin>>,
     }
 
     fn unused<T>() -> Result<T, ClientError> {
@@ -423,10 +424,14 @@ pub(crate) mod tests {
             _event_index: u16,
             _ring: Address,
         ) -> Result<RingOrigin, AuditError> {
-            Err(AuditError::Unavailable {
-                signature,
-                message: "unused source".to_owned(),
-            })
+            let origins = self.origins.lock().expect("origins");
+            origins
+                .get(&signature)
+                .cloned()
+                .ok_or_else(|| AuditError::Unavailable {
+                    signature,
+                    message: "unused source".to_owned(),
+                })
         }
 
         async fn ring_deposits(&self, _page: DepositPage) -> Result<DepositHistory, ClientError> {
@@ -628,6 +633,7 @@ pub(crate) mod tests {
                     mode: RingMode::ConfidentialEscrow,
                     delegate,
                 },
+                origins: Mutex::default(),
             };
             let store = match &relay {
                 Some(relay) => relay.store.clone(),
@@ -675,6 +681,7 @@ pub(crate) mod tests {
             };
             store.replace_escrow(
                 EscrowRoot {
+                    registry: Address::new_from_array([1; 32]),
                     root: [1; 32],
                     revision: 0,
                 },

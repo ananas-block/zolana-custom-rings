@@ -852,7 +852,6 @@ impl Requirement {
         let demanded = CoSignDemand {
             approval_required: demand == Demand::Approval,
             classes: demand.classes(),
-            withdrawals: Vec::new(),
         };
         Ok(Self {
             demanded: demanded.requirement(config)?,

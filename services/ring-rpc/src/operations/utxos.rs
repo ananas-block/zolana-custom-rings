@@ -14,9 +14,11 @@ use spr_keypair::{NullifierKey, PublicKey};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
-    rpc::AuditedUtxoView, CreatedUtxo, DepositNote, DepositOwner, DepositOwners, EscrowedKeys,
-    KnownUtxo, KnownUtxoIndex, SealedNullifierKey, UtxoOwner,
+    rpc::AuditedUtxoView, AuditedOutput, CreatedUtxo, DepositNote, DepositOwner, DepositOwners,
+    EscrowedKeys, KnownUtxo, KnownUtxoIndex, OutputResolution, SealedNullifierKey,
+    UnresolvedOutput, UtxoOwner,
 };
+use zolana_ring_transaction::RingAssets;
 
 use crate::error::RingRpcError;
 
@@ -30,14 +32,15 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 pub(crate) struct AuditStore {
     utxos: RwLock<KnownUtxoIndex<StoredUtxo>>,
     escrow: RwLock<EscrowMap>,
-    /// Escrow ring deposits by commitment, each opens once the escrow names its owner.
-    unowned: RwLock<HashMap<[u8; 32], (CreatedIn, DepositNote)>>,
-    /// Every nullifier the ring history published.
+    /// Notes by commitment that wait for an escrow key or a mint.
+    held: RwLock<HashMap<[u8; 32], (CreatedIn, HeldNote)>>,
+    /// The registry last tried on the held notes, a different one retries them.
+    assets: RwLock<Option<RingAssets>>,
+    /// Every nullifier a confirmed event of the ring history published.
     spent: RwLock<HashSet<[u8; 32]>>,
     /// The indexer context when the backfill last reached the scan frontier.
     context: RwLock<Context>,
-    /// The ring history position the next backfill resumes from, one backfill and escrow
-    /// refresh at a time.
+    /// The next backfill's position, one backfill and escrow refresh at a time, a restart loses it with the held notes and replays the history.
     pub(crate) backfill: AsyncMutex<Option<Vec<u8>>>,
 }
 
@@ -50,8 +53,28 @@ pub(crate) struct CreatedIn {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EscrowRoot {
+    pub registry: Address,
     pub root: [u8; 32],
     pub revision: u64,
+}
+
+impl EscrowRoot {
+    /// A lagging RPC node answers an older root, revisions order one registry alone.
+    pub(crate) fn settles(&self, read: &EscrowRoot) -> bool {
+        self.registry == read.registry && (self.root == read.root || read.revision < self.revision)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum HeldNote {
+    Deposit(DepositNote),
+    Output(UnresolvedOutput),
+}
+
+enum HeldOpening {
+    Waits,
+    Opened(Box<CreatedUtxo>),
+    Refused,
 }
 
 /// Verified under the registry root.
@@ -107,14 +130,54 @@ impl AuditStore {
         }
     }
 
-    pub(crate) fn hold(&self, created_in: CreatedIn, notes: impl IntoIterator<Item = DepositNote>) {
-        let mut unowned = self.unowned.write().unwrap_or_else(PoisonError::into_inner);
-        for note in notes {
-            unowned.insert(note.commitment, (created_in, note));
+    /// Tries each note under the current keys and registry, a read's snapshot can be older.
+    pub(crate) fn hold(&self, created_in: CreatedIn, notes: impl IntoIterator<Item = HeldNote>) {
+        let mut opened = Vec::new();
+        {
+            let mut held = self.held.write().unwrap_or_else(PoisonError::into_inner);
+            let assets = self.assets.read().unwrap_or_else(PoisonError::into_inner);
+            for note in notes {
+                match note.open(self, assets.as_ref(), created_in) {
+                    HeldOpening::Waits => {
+                        held.insert(note.commitment(), (created_in, note));
+                    }
+                    HeldOpening::Opened(utxo) => opened.push(*utxo),
+                    HeldOpening::Refused => {}
+                }
+            }
         }
+        self.record(created_in, opened);
     }
 
-    /// A Photon nullifier enters unbound, a false one only holds a note back from a merge.
+    /// A different registry names the notes stored without a mint and retries the held ones.
+    pub(crate) fn name_assets(&self, assets: &RingAssets) {
+        {
+            let mut current = self.assets.write().unwrap_or_else(PoisonError::into_inner);
+            if current.as_ref() == Some(assets) {
+                return;
+            }
+            *current = Some(assets.clone());
+        }
+        {
+            let mut stored = self.utxos.write().unwrap_or_else(PoisonError::into_inner);
+            let named: Vec<_> = stored
+                .iter()
+                .filter(|(_, stored)| stored.utxo.mint.is_none())
+                .filter_map(|(commitment, stored)| {
+                    let mint = assets.by_field(&stored.utxo.asset)?;
+                    let utxo = KnownUtxo {
+                        mint: Some(mint.asset),
+                        ..stored.utxo
+                    };
+                    Some((*commitment, StoredUtxo { utxo, ..*stored }))
+                })
+                .collect();
+            stored.extend(named);
+        }
+        self.open_held();
+    }
+
+    /// Only a confirmed event's nullifiers enter, a note stays spendable past a rejected row.
     pub(crate) fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
         self.spent
             .write()
@@ -221,17 +284,25 @@ impl AuditStore {
     }
 
     fn open_held(&self) {
+        let assets = self
+            .assets
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let mut opened = Vec::new();
-        self.unowned
+        self.held
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|_, (created_in, note)| match note.created(self) {
-                Some(utxo) => {
-                    opened.push((*created_in, utxo));
-                    false
-                }
-                None => true,
-            });
+            .retain(
+                |_, (created_in, note)| match note.open(self, assets.as_ref(), *created_in) {
+                    HeldOpening::Waits => true,
+                    HeldOpening::Opened(utxo) => {
+                        opened.push((*created_in, *utxo));
+                        false
+                    }
+                    HeldOpening::Refused => false,
+                },
+            );
         for (created_in, utxo) in opened {
             self.record(created_in, [utxo]);
         }
@@ -239,6 +310,56 @@ impl AuditStore {
 
     fn stored(&self, utxo_hash: &[u8; 32]) -> Option<StoredUtxo> {
         self.known().get(utxo_hash).copied()
+    }
+}
+
+impl HeldNote {
+    fn commitment(&self) -> [u8; 32] {
+        match self {
+            Self::Deposit(note) => note.commitment,
+            Self::Output(output) => output.context.hash,
+        }
+    }
+
+    fn open(
+        &self,
+        store: &AuditStore,
+        assets: Option<&RingAssets>,
+        created_in: CreatedIn,
+    ) -> HeldOpening {
+        match self {
+            Self::Deposit(note) => note.created(store).map_or(HeldOpening::Waits, |utxo| {
+                HeldOpening::Opened(Box::new(utxo))
+            }),
+            Self::Output(output) => {
+                let Some(assets) = assets else {
+                    return HeldOpening::Waits;
+                };
+                match output.resolve(store, assets) {
+                    Ok(OutputResolution::AwaitsKey | OutputResolution::AwaitsAsset) => {
+                        HeldOpening::Waits
+                    }
+                    Ok(OutputResolution::Opened(opening)) => AuditedOutput {
+                        slot_index: output.slot_index,
+                        context: output.context.clone(),
+                        opening: *opening,
+                    }
+                    .created()
+                    .map_or(HeldOpening::Refused, |utxo| {
+                        HeldOpening::Opened(Box::new(utxo))
+                    }),
+                    Ok(OutputResolution::Refused(_)) | Err(_) => {
+                        log::warn!(
+                            "held output {} of {}:{} rebuilds no commitment",
+                            output.slot_index,
+                            created_in.tx_signature,
+                            created_in.event_index
+                        );
+                        HeldOpening::Refused
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -349,6 +470,55 @@ mod tests {
     }
 
     #[test]
+    fn a_new_registry_names_a_stored_mint() {
+        let store = AuditStore::default();
+        let created_in = CreatedIn {
+            slot: 1,
+            tx_signature: Signature::from([7; 64]),
+            event_index: 0,
+        };
+        let mint = Address::new_from_array([6; 32]);
+        let assets = RingAssets::new([Mint::new(mint, 3)]).expect("assets");
+        let mut unnamed = created(None);
+        unnamed.utxo.asset = spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap();
+        store.record(created_in, [unnamed]);
+        store.name_assets(&assets);
+        assert_eq!(store.stored(&[1; 32]).unwrap().utxo.mint, Some(mint));
+    }
+
+    #[test]
+    fn revisions_order_one_registry_alone() {
+        let current = EscrowRoot {
+            registry: Address::new_from_array([1; 32]),
+            root: [1; 32],
+            revision: 100,
+        };
+        let older = EscrowRoot {
+            root: [2; 32],
+            revision: 99,
+            ..current
+        };
+        let newer = EscrowRoot {
+            root: [3; 32],
+            revision: 101,
+            ..current
+        };
+        let replaced = EscrowRoot {
+            registry: Address::new_from_array([2; 32]),
+            root: [4; 32],
+            revision: 1,
+        };
+        assert!(current.settles(&current));
+        assert!(current.settles(&older));
+        assert!(!current.settles(&newer));
+        assert!(!current.settles(&replaced));
+        assert!(!current.settles(&EscrowRoot {
+            root: current.root,
+            ..replaced
+        }));
+    }
+
+    #[test]
     fn an_escrowed_owner_opens_the_deposits_audited_before_its_key() {
         let store = AuditStore::default();
         let created_in = CreatedIn {
@@ -381,10 +551,11 @@ mod tests {
             .expect("envelope")
             .sealed,
         };
-        store.hold(created_in, [note]);
+        store.hold(created_in, [HeldNote::Deposit(note)]);
         assert!(store.stored(&note.commitment).is_none());
         store.replace_escrow(
             EscrowRoot {
+                registry: Address::new_from_array([1; 32]),
                 root: [1; 32],
                 revision: 1,
             },

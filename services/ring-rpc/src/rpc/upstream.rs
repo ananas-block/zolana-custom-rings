@@ -689,7 +689,7 @@ impl CanonicalAccount<'_> {
 
 #[cfg(test)]
 #[path = "../../../../sdk-libs/client/tests/common/origin.rs"]
-mod origin_fixture;
+pub(crate) mod origin_fixture;
 
 #[cfg(test)]
 mod tests {

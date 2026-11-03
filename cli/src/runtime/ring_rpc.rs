@@ -170,7 +170,7 @@ impl RingRpcClient {
         Ok(())
     }
 
-    /// A failed read is retried, a transaction the service skipped is final.
+    /// A failed read is retried, a transaction the service skipped ends the wait.
     pub fn wait_for_decrypted(
         &self,
         target: ReadTarget,
