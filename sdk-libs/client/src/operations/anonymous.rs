@@ -1,31 +1,39 @@
-//! Anonymous ring sync, spec First Time Sync Wallet, every stream resumed from its scan watermark.
+//! Anonymous ring sync, each ring's history read from its stored position under the proven tags.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use custom_ring_interface::{anonymous_recipient_output_body, anonymous_sender_output_body};
+use custom_ring_interface::{
+    ring_recipient_output_body, ring_sender_bundle_output_body, stream::SlotSecret,
+    SENDER_BUNDLE_HEAD_LEN,
+};
+use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
-    viewing_key::ViewTag, KeypairError, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey,
+    viewing_key::ViewTag, NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey,
 };
 use spr_transaction::{
     DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
     ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
-use zeroize::Zeroizing;
 use zolana_ring_keys::{
-    RingKeys, SharedTagPair, SharedTagsRequest, SharedViewTags, ViewTagRequest, ViewTagStream,
+    RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind, RingTagProbe, ViewTagRequest,
+    ViewTagStream,
 };
 use zolana_ring_transaction::{
-    is_contributory, is_dummy_recipient, listed_recipients, AnonymousOutput,
-    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, RingAssets,
+    historical::{HistoricalBody, HistoricalReader, HistoricalSite},
+    is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
+    OpenedBody, ReplyClaim, RingAssets,
 };
 
+use crate::history::{HistoryPosition, PageEnd};
 use crate::{
+    anonymous_wallet::PendingNote,
     confidential::RingMerges,
     delivered::{self, RingDeliveryContext},
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
-    deposit_payload, exactly_one_each,
+    deposit_payload, exactly_one, exactly_one_each,
     tags::{IndexerReads, TagWindow},
     viewing_history::{GapScan, StreamCounter, ViewingHistory, ViewingKeyEntry},
     AnonymousError,
@@ -41,14 +49,15 @@ pub enum AnonymousStream {
         index: u64,
     },
     Bootstrap,
-    /// Under `get_recipient_shared_view_tag(sender, index)`.
-    Shared {
-        sender: X25519Pubkey,
-        index: u64,
-    },
+    /// A transfer's slot or bundle whose proven tag matched.
+    ProvenTag,
     Merge {
         first_nullifier: [u8; 32],
     },
+    /// Found by trying the slot with no use of its tag.
+    FullScan,
+    /// A scheme 1 or 2 body of a row older than the proven tags.
+    Historical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,9 +74,18 @@ pub struct SentPayment {
     pub utxo_hash: [u8; 32],
     pub position: u32,
     pub recipient_viewing_pubkey: X25519Pubkey,
-    pub owner_pubkey: PublicKey,
+    /// The held address that rebuilt the hash, `None` under `SentCheck::Unverified`.
+    pub owner_pubkey: Option<PublicKey>,
     pub amount: u64,
     pub check: SentCheck,
+}
+
+/// A decrypted reply, an unauthenticated claim about who paid, never a verified sender.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SenderClaim {
+    pub utxo_hash: [u8; 32],
+    pub viewing_pubkey: X25519Pubkey,
+    pub claim: ReplyClaim,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,20 +96,56 @@ pub enum SentCheck {
     Unverified,
 }
 
-#[derive(Clone)]
+/// Only [`crate::AnonymousWallet::absorb`] stores what it covers.
 pub struct AnonymousScan {
-    /// Counters, watermarks and counterparties raised to what the indexer holds, never lowered.
-    pub history: ViewingHistory,
-    /// The notes found past each watermark, their spends read from every fetched nullifier.
-    pub decrypted: DecryptionResult,
+    history: ViewingHistory,
+    decrypted: DecryptionResult,
+    pending: Vec<PendingNote>,
+    sender_claims: Vec<SenderClaim>,
     pub utxos: Vec<AnonymousRingUtxo>,
-    /// Bodies that decoded as the wallet's but rebuilt under no mint of `assets`.
+    /// Bodies that rebuilt under no mint of `assets`, each among the pending notes.
     pub unmatched: Vec<[u8; 32]>,
-    /// The wallet's payments in the transfers whose change it found, a body that fails to open left out.
+    /// The wallet's payments in the transfers whose bundle it opened, a body that fails to open left out.
     pub sent: Vec<SentPayment>,
 }
 
-/// Reads every anonymous stream of each held viewing key, each tag derived by `keys`.
+impl AnonymousScan {
+    pub fn history(&self) -> &ViewingHistory {
+        &self.history
+    }
+
+    pub fn decrypted(&self) -> &DecryptionResult {
+        &self.decrypted
+    }
+
+    /// Notes verified under a mint `assets` does not name, none spendable.
+    pub fn pending_notes(&self) -> &[PendingNote] {
+        &self.pending
+    }
+
+    /// Replies on the wallet's notes, unauthenticated, [`ViewingHistory::confirm_sender`] is the only trust path.
+    pub fn sender_claims(&self) -> &[SenderClaim] {
+        &self.sender_claims
+    }
+
+    pub(crate) fn into_stored(
+        self,
+    ) -> (
+        ViewingHistory,
+        DecryptionResult,
+        Vec<PendingNote>,
+        Vec<SenderClaim>,
+    ) {
+        (
+            self.history,
+            self.decrypted,
+            self.pending,
+            self.sender_claims,
+        )
+    }
+}
+
+/// Reads every ring and deposit stream of each held viewing key, each tag answered by `keys`.
 #[must_use]
 pub struct AnonymousSync<'a, K: ?Sized> {
     keys: &'a K,
@@ -101,6 +155,7 @@ pub struct AnonymousSync<'a, K: ?Sized> {
     from: ScanFrom,
     held: &'a [WalletUtxo],
     recipients: &'a [ShieldedAddress],
+    sender_fast_path: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,6 +174,7 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
             from: ScanFrom::Watermark,
             held: &[],
             recipients: &[],
+            sender_fast_path: false,
         }
     }
 
@@ -133,7 +189,13 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
         self
     }
 
-    /// Every stream from index 0, for a wallet that keeps no notes between syncs.
+    /// A bundle under the wallet's own transaction key skips its tag test, every other candidate keeps it.
+    pub fn with_sender_fast_path(mut self) -> Self {
+        self.sender_fast_path = true;
+        self
+    }
+
+    /// Every stream and ring from its start, for a wallet that keeps no notes between syncs.
     pub fn with_full_rescan(mut self) -> Self {
         self.from = ScanFrom::Start;
         self
@@ -151,70 +213,106 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
         self
     }
 
-    /// An entry whose key the holder lacks stays as stored.
+    /// An entry whose key the holder lacks stays as stored, a failed page moves nothing.
     pub async fn fetch<I: AsyncRpc + ?Sized>(
         &self,
         indexer: &I,
         history: &ViewingHistory,
     ) -> Result<AnonymousScan, AnonymousError> {
-        let held = self.keys.viewing_public_keys();
-        let mut scan = Scan {
+        let mut scan = self.scan(indexer, history)?;
+        let held = scan.held_entries();
+        for index in &held {
+            scan.entry(*index).await?;
+        }
+        for read in scan.ring_reads(&held) {
+            scan.read_ring(read, Trial::ProvenTags).await?;
+        }
+        scan.merges().await?;
+        scan.finish(self.keys)
+    }
+
+    /// Tries every slot, bundle and deposit of `ring` from its start with no use of a tag, a sender's wrong tag hides nothing.
+    pub async fn full_scan<I: AsyncRpc + ?Sized>(
+        &self,
+        indexer: &I,
+        history: &ViewingHistory,
+        ring: Address,
+    ) -> Result<AnonymousScan, AnonymousError> {
+        let mut scan = self.scan(indexer, history)?;
+        let held = scan.held_entries();
+        for index in &held {
+            scan.entry(*index).await?;
+        }
+        scan.read_ring(
+            RingRead {
+                ring,
+                position: HistoryPosition::default(),
+                entries: held,
+            },
+            Trial::EverySite,
+        )
+        .await?;
+        scan.merges().await?;
+        scan.finish(self.keys)
+    }
+
+    fn scan<'s, 'r, I: AsyncRpc + ?Sized>(
+        &'s self,
+        indexer: &'r I,
+        history: &ViewingHistory,
+    ) -> Result<Scan<'s, 'a, 'r, I, K>, AnonymousError> {
+        // A held key with no entry would read nothing and report nothing missed.
+        if self
+            .keys
+            .viewing_public_keys()
+            .iter()
+            .any(|key| history.entry(key).is_none())
+        {
+            return Err(AnonymousError::HeldKeyNotInHistory);
+        }
+        Ok(Scan {
             sync: self,
             address: self.keys.address()?,
             reads: IndexerReads::configured(indexer, self.config),
             history: history.clone(),
             found: Vec::new(),
+            held_back: Vec::new(),
             utxos: Vec::new(),
             decrypted: DecryptionResult::default(),
-            opened: HashSet::new(),
             spends: HashSet::new(),
             unmatched: Vec::new(),
             sent: Vec::new(),
-        };
-        for index in 0..scan.history.entries().len() {
-            let viewing_pubkey = scan.history.entries()[index].viewing_pubkey();
-            if held.contains(&viewing_pubkey) {
-                scan.entry(index).await?;
-            }
-        }
-        scan.merges().await?;
-        let Scan {
-            history,
-            found,
-            utxos,
-            mut decrypted,
-            unmatched,
-            sent,
-            ..
-        } = scan;
-        assign_nullifiers(self.keys, &mut decrypted, found)?;
-        Ok(AnonymousScan {
-            history,
-            decrypted,
-            utxos,
-            unmatched,
-            sent,
+            sender_claims: Vec::new(),
         })
     }
+}
+
+fn sites_of(tx: &ShieldedTransaction) -> impl Iterator<Item = Site> {
+    let outputs = (0..tx.output_slots.len()).map(Site::Output);
+    outputs.chain((0..tx.messages.len()).map(Site::Message))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Trial {
+    ProvenTags,
+    EverySite,
+}
+
+/// One history query, every entry listed shares its position and pays one read.
+struct RingRead {
+    ring: Address,
+    position: HistoryPosition,
+    entries: Vec<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Stream {
     Sender,
     Request,
-    /// `ToRecipient` streams are the wallet's own payments, observed and never opened.
-    Pair(SharedTagPair),
-}
-
-/// Derives a stream's tags round by round, a pair's ECDH once per sync.
-enum TagSource {
-    Own(fn(u64) -> ViewTagStream),
-    Shared(SharedViewTags),
 }
 
 struct ActiveStream {
     stream: Stream,
-    source: TagSource,
     scan: GapScan,
 }
 
@@ -225,14 +323,19 @@ enum RoundTag {
 }
 
 impl Stream {
-    fn found(self, index: u64) -> Option<AnonymousStream> {
+    fn found(self, index: u64) -> AnonymousStream {
         match self {
-            Self::Sender => Some(AnonymousStream::Sender { index }),
-            Self::Request => Some(AnonymousStream::Request { index }),
-            Self::Pair(SharedTagPair::FromSender(sender)) => {
-                Some(AnonymousStream::Shared { sender, index })
-            }
-            Self::Pair(SharedTagPair::ToRecipient(_)) => None,
+            Self::Sender => AnonymousStream::Sender { index },
+            Self::Request => AnonymousStream::Request { index },
+        }
+    }
+
+    fn view_tag(self, index: u64) -> ViewTagStream {
+        match self {
+            Self::Sender => ViewTagStream::Sender { tx_count: index },
+            Self::Request => ViewTagStream::Request {
+                request_count: index,
+            },
         }
     }
 }
@@ -244,13 +347,14 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     history: ViewingHistory,
     /// Notes whose rebuilt hash matched, before their nullifiers.
     found: Vec<WalletUtxo>,
+    /// The same under a mint `assets` does not name.
+    held_back: Vec<WalletUtxo>,
     utxos: Vec<AnonymousRingUtxo>,
     decrypted: DecryptionResult,
-    /// Sites already read, a body under two tags opens once.
-    opened: HashSet<(Signature, Option<u16>, Site)>,
     spends: HashSet<(Signature, Option<u16>)>,
     unmatched: Vec<[u8; 32]>,
     sent: Vec<SentPayment>,
+    sender_claims: Vec<SenderClaim>,
 }
 
 /// A recipient body at an output, a sender bundle in a message.
@@ -260,44 +364,335 @@ enum Site {
     Message(usize),
 }
 
-struct Hit<'t> {
-    tx: &'t ShieldedTransaction,
-    site: Site,
-    found: Option<AnonymousStream>,
-}
-
-/// A scheme 1 or 2 body the entry's key may open.
+/// A scheme 11 or 12 payload the entry's key may open.
 struct Body<'t> {
     tx: &'t ShieldedTransaction,
     site: Site,
-    ciphertext: Vec<u8>,
+    /// The frame's `m` on a bundle, a recipient body's own index otherwise.
+    slot_index: u32,
     context: RingDeliveryContext,
     found: AnonymousStream,
 }
 
-impl Body<'_> {
-    /// Messages follow the outputs.
-    fn slot_index(&self) -> Result<u32, TransactionError> {
-        let index = match self.site {
-            Site::Output(position) => position,
-            Site::Message(message) => self.tx.output_slots.len() + message,
+impl<'t> Body<'t> {
+    fn probe(&self) -> RingTagProbe {
+        let (kind, tag) = match self.site {
+            Site::Output(position) => (
+                RingTagKind::Recipient,
+                self.tx.output_slots[position].view_tag,
+            ),
+            Site::Message(message) => (
+                RingTagKind::SenderBundle,
+                self.tx.messages[message].view_tag,
+            ),
         };
-        u32::try_from(index).map_err(|_| TransactionError::TooManyOutputs)
+        RingTagProbe {
+            kind,
+            output_index: self.slot_index,
+            tag,
+        }
+    }
+
+    /// `None` on a site of another scheme, a bundle's length names `m` and must fit the row.
+    fn of(tx: &'t ShieldedTransaction, site: Site, found: AnonymousStream) -> Option<Self> {
+        let slot_index = match site {
+            Site::Output(position) => {
+                ring_recipient_output_body(&tx.output_slots[position].payload)?;
+                position
+            }
+            Site::Message(message) => {
+                let bundle = ring_sender_bundle_output_body(&tx.messages[message].data)?;
+                let keys = bundle.len().checked_sub(SENDER_BUNDLE_HEAD_LEN)?;
+                (keys % 32 == 0 && keys / 32 == tx.output_slots.len()).then_some(keys / 32)?
+            }
+        };
+        Some(Self {
+            tx,
+            site,
+            slot_index: u32::try_from(slot_index).ok()?,
+            context: RingDeliveryContext::of(tx)?,
+            found,
+        })
     }
 }
 
 impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_, I, K> {
-    /// All streams share each round's reads, a counterparty learned in a round joins the next.
-    async fn entry(&mut self, index: usize) -> Result<(), AnonymousError> {
-        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let mut started: HashSet<Stream> = HashSet::new();
-        let mut active: Vec<ActiveStream> = Vec::new();
-        let mut bootstrap = Some(viewing_pubkey.u());
+    fn held_entries(&self) -> Vec<usize> {
+        let held = self.sync.keys.viewing_public_keys();
+        self.history
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| held.contains(&entry.viewing_pubkey()))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Entries at one position of one ring share a read, a key added later is its own query.
+    fn ring_reads(&self, held: &[usize]) -> Vec<RingRead> {
+        let rescan = self.sync.from == ScanFrom::Start;
+        let mut reads: BTreeMap<(Address, Option<u64>), Vec<usize>> = BTreeMap::new();
+        for index in held {
+            let entry = &self.history.entries()[*index];
+            for (ring, after_slot) in entry.ring_positions() {
+                let after_slot = after_slot.filter(|_| !rescan);
+                reads.entry((*ring, after_slot)).or_default().push(*index);
+            }
+        }
+        reads
+            .into_iter()
+            .map(|((ring, after_slot), entries)| RingRead {
+                ring,
+                position: after_slot
+                    .map_or_else(HistoryPosition::default, HistoryPosition::after_slot),
+                entries,
+            })
+            .collect()
+    }
+
+    /// Reads to a terminal page, only its `context.slot` becomes a position.
+    async fn read_ring(&mut self, read: RingRead, trial: Trial) -> Result<(), AnonymousError> {
+        let RingRead {
+            ring,
+            mut position,
+            entries,
+        } = read;
         loop {
-            active.extend(self.start_streams(index, &mut started)?);
-            if active.is_empty() {
+            let (page, limit) = self.reads.ring_page(ring, &position).await?;
+            let end = position
+                .advance(&page, limit)
+                .map_err(|_| AnonymousError::InvalidHistoryPage)?;
+            // A custom indexer client answers here unchecked, a repeated row would count twice.
+            if page.data.iter().any(|transaction| {
+                transaction
+                    .validate_events(|row| (row.slot, row.tx_signature, row.event_index))
+                    .is_err()
+            }) {
+                return Err(AnonymousError::InvalidHistoryPage);
+            }
+            let rows: Vec<ShieldedTransaction> =
+                page.data.into_iter().flat_map(|item| item.events).collect();
+            self.note_spends(&rows);
+            for index in &entries {
+                match trial {
+                    Trial::ProvenTags => self.test_tags(*index, &rows)?,
+                    Trial::EverySite => self.try_every_site(*index, &rows)?,
+                }
+                self.open_historical(*index, &rows)?;
+            }
+            if let PageEnd::Terminal(context) = end {
+                for index in &entries {
+                    self.entry_mut(*index).set_ring_position(ring, context.slot);
+                }
                 return Ok(());
             }
+        }
+    }
+
+    /// One agreement per candidate per key inside the holder, only a matching tag opens a body.
+    fn test_tags(
+        &mut self,
+        index: usize,
+        rows: &[ShieldedTransaction],
+    ) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let mut candidates: Vec<Vec<Body<'_>>> = Vec::new();
+        for tx in rows {
+            let bodies: Vec<Body<'_>> = sites_of(tx)
+                .filter_map(|site| Body::of(tx, site, AnonymousStream::ProvenTag))
+                .collect();
+            if !bodies.is_empty() {
+                candidates.push(bodies);
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let own = match self.sync.sender_fast_path {
+            true => {
+                let bundles: Vec<&Body<'_>> = candidates.iter().flatten().collect();
+                self.own_transactions(viewing_pubkey, &bundles)?
+            }
+            false => HashMap::new(),
+        };
+        let mut recognized = Vec::new();
+        let mut frames = Vec::with_capacity(candidates.len());
+        let mut tested: Vec<Vec<Body<'_>>> = Vec::with_capacity(candidates.len());
+        for bodies in candidates {
+            let (skip, test): (Vec<Body<'_>>, Vec<Body<'_>>) =
+                bodies.into_iter().partition(|body| {
+                    matches!(body.site, Site::Message(_))
+                        && own.contains_key(&body.context.first_nullifier)
+                });
+            recognized.extend(skip);
+            if let Some(first) = test.first() {
+                frames.push(RingTagFrame {
+                    viewing_pubkey,
+                    tx_viewing_pk: first.context.tx_viewing_pk,
+                    salt: first.context.salt,
+                    first_nullifier: first.context.first_nullifier,
+                    probes: test.iter().map(Body::probe).collect(),
+                });
+                tested.push(test);
+            }
+        }
+        let answers = exactly_one_each(self.sync.keys.ring_tag_matches(&frames)?, frames.len())?;
+        let mut matched: Vec<(Body<'_>, SlotSecret)> = Vec::new();
+        for (bodies, answers) in tested.into_iter().zip(answers) {
+            let answers = exactly_one_each(answers, bodies.len())?;
+            matched.extend(
+                bodies
+                    .into_iter()
+                    .zip(answers)
+                    .filter_map(|(body, answer)| answer.map(|secret| (body, secret))),
+            );
+        }
+        matched.extend(self.body_secrets(viewing_pubkey, recognized)?);
+        self.read_bodies(index, &matched)
+    }
+
+    /// Recovery, every body and bundle opens with no tag read and every deposit is tried.
+    fn try_every_site(
+        &mut self,
+        index: usize,
+        rows: &[ShieldedTransaction],
+    ) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let bodies: Vec<Body<'_>> = rows
+            .iter()
+            .flat_map(|tx| {
+                sites_of(tx).filter_map(move |site| Body::of(tx, site, AnonymousStream::FullScan))
+            })
+            .collect();
+        let opened = self.body_secrets(viewing_pubkey, bodies)?;
+        self.read_bodies(index, &opened)?;
+        for deposit in rows.iter().filter(|tx| tx.proofless) {
+            for position in 0..deposit.output_slots.len() {
+                self.open_deposit(index, deposit, position, AnonymousStream::FullScan)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Each body's slot secret, one agreement per transaction inside the holder.
+    fn body_secrets<'t>(
+        &self,
+        viewing_pubkey: X25519Pubkey,
+        bodies: Vec<Body<'t>>,
+    ) -> Result<Vec<(Body<'t>, SlotSecret)>, AnonymousError> {
+        if bodies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let requests: Vec<RingDeliveryRequest> = bodies
+            .iter()
+            .map(|body| RingDeliveryRequest {
+                viewing_pubkey,
+                tx_viewing_pk: body.context.tx_viewing_pk,
+                salt: body.context.salt,
+                output_index: body.slot_index,
+                first_nullifier: body.context.first_nullifier,
+            })
+            .collect();
+        let secrets = exactly_one_each(
+            self.sync.keys.ring_delivery_secrets(&requests)?,
+            requests.len(),
+        )?;
+        bodies
+            .into_iter()
+            .zip(secrets)
+            .map(|(body, secret)| Ok((body, SlotSecret::new(secret)?)))
+            .collect()
+    }
+
+    fn read_bodies(
+        &mut self,
+        index: usize,
+        opened: &[(Body<'_>, SlotSecret)],
+    ) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let bodies: Vec<&Body<'_>> = opened.iter().map(|(body, _)| body).collect();
+        let own = self.own_transactions(viewing_pubkey, &bodies)?;
+        for (body, secret) in opened {
+            match body.site {
+                Site::Output(position) => self.open_recipient(index, body, position, secret)?,
+                Site::Message(message) => {
+                    let own = own.get(&body.context.first_nullifier);
+                    self.open_bundle(index, body, message, secret, own)?
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Rows before the proven tags carry scheme 1 and 2 bodies no tag test answers.
+    fn open_historical(
+        &mut self,
+        index: usize,
+        rows: &[ShieldedTransaction],
+    ) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        for tx in rows {
+            let Some(context) = RingDeliveryContext::of(tx) else {
+                continue;
+            };
+            let outputs = (0..tx.output_slots.len()).map(HistoricalSite::Output);
+            let messages = (0..tx.messages.len()).map(HistoricalSite::Message);
+            for site in outputs.chain(messages) {
+                let Some(body) = HistoricalBody::of(tx, site) else {
+                    continue;
+                };
+                let request = DecryptRequest {
+                    viewing_pubkey,
+                    ciphertext: body.ciphertext,
+                    tx_viewing_pubkey: context.tx_viewing_pk,
+                    salt: context.salt,
+                    slot_index: body.slot_index,
+                    label: DecryptLabel::Utxo,
+                };
+                // The cipher is unauthenticated, an error is the holder failing and no foreign ciphertext.
+                let plaintext = exactly_one(self.sync.keys.decrypt(&[request])?)?;
+                let notes = HistoricalReader {
+                    owner: &self.address,
+                    assets: self.sync.assets,
+                    ring: context.ring,
+                    first_nullifier: &context.first_nullifier,
+                }
+                .notes(tx, site, &plaintext);
+                for note in notes {
+                    match note.registered {
+                        true => self.accept(
+                            index,
+                            tx,
+                            AnonymousStream::Historical,
+                            note.position,
+                            note.utxo,
+                            note.nullifier_pk,
+                        )?,
+                        false => self.hold_back(tx, note.position, note.utxo, note.nullifier_pk)?,
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The deposit streams, their rounds sharing each read.
+    async fn entry(&mut self, index: usize) -> Result<(), AnonymousError> {
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let rescan = self.sync.from == ScanFrom::Start;
+        let mut active: Vec<ActiveStream> = [Stream::Sender, Stream::Request]
+            .into_iter()
+            .map(|stream| {
+                let counter = self.counter_mut(index, stream);
+                let from = if rescan { 0 } else { counter.scanned() };
+                ActiveStream {
+                    stream,
+                    scan: GapScan::new(from, counter),
+                }
+            })
+            .collect();
+        let mut bootstrap = Some(viewing_pubkey.u());
+        while !active.is_empty() {
             let mut tagged: Vec<(RoundTag, ViewTag)> = bootstrap
                 .take()
                 .map(|tag| (RoundTag::Bootstrap, tag))
@@ -305,7 +700,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 .collect();
             for (slot, stream) in active.iter_mut().enumerate() {
                 let indices = stream.scan.round();
-                let tags = self.tags(viewing_pubkey, &stream.source, &indices)?;
+                let tags = self.tags(viewing_pubkey, stream.stream, &indices)?;
                 tagged.extend(
                     indices
                         .into_iter()
@@ -317,9 +712,9 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             let seen = self
                 .window(index, &window, |tag| match tag {
                     RoundTag::Bootstrap => Some(AnonymousStream::Bootstrap),
-                    RoundTag::Stream { slot, index } => active
-                        .get(slot)
-                        .and_then(|active| active.stream.found(index)),
+                    RoundTag::Stream { slot, index } => {
+                        active.get(slot).map(|active| active.stream.found(index))
+                    }
                 })
                 .await?;
             let mut continuing = Vec::with_capacity(active.len());
@@ -330,135 +725,43 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 });
                 if stream.scan.advance(found) {
                     continuing.push(stream);
-                } else if let Some(counter) = self.counter_mut(index, stream.stream) {
-                    stream.scan.finish(counter);
+                } else {
+                    stream.scan.finish(self.counter_mut(index, stream.stream));
                 }
             }
             active = continuing;
         }
-    }
-
-    /// Every new pair's ECDH in one request.
-    fn start_streams(
-        &mut self,
-        index: usize,
-        started: &mut HashSet<Stream>,
-    ) -> Result<Vec<ActiveStream>, AnonymousError> {
-        let entry = &self.history.entries()[index];
-        let viewing_pubkey = entry.viewing_pubkey();
-        let pairs: Vec<SharedTagPair> = entry
-            .known_senders()
-            .keys()
-            .map(|sender| SharedTagPair::FromSender(*sender))
-            .chain(
-                entry
-                    .known_recipients()
-                    .keys()
-                    .map(|recipient| SharedTagPair::ToRecipient(*recipient)),
-            )
-            .filter(|pair| started.insert(Stream::Pair(*pair)))
-            .collect();
-        let requests: Vec<SharedTagsRequest> = pairs
-            .iter()
-            .map(|pair| SharedTagsRequest {
-                viewing_pubkey,
-                pair: *pair,
-            })
-            .collect();
-        let shared = match requests.is_empty() {
-            true => Vec::new(),
-            false => exactly_one_each(self.sync.keys.shared_view_tags(&requests)?, requests.len())?,
-        };
-        let own = [
-            (
-                Stream::Sender,
-                TagSource::Own(|tx_count| ViewTagStream::Sender { tx_count }),
-            ),
-            (
-                Stream::Request,
-                TagSource::Own(|request_count| ViewTagStream::Request { request_count }),
-            ),
-        ]
-        .into_iter()
-        .filter(|(stream, _)| started.insert(*stream));
-        let rescan = self.sync.from == ScanFrom::Start;
-        Ok(own
-            .chain(
-                pairs
-                    .into_iter()
-                    .map(Stream::Pair)
-                    .zip(shared.into_iter().map(TagSource::Shared)),
-            )
-            .filter_map(|(stream, source)| {
-                let counter = self.counter_mut(index, stream)?;
-                let from = if rescan { 0 } else { counter.scanned() };
-                Some(ActiveStream {
-                    stream,
-                    source,
-                    scan: GapScan::new(from, counter),
-                })
-            })
-            .collect())
+        Ok(())
     }
 
     fn tags(
         &self,
         viewing_pubkey: X25519Pubkey,
-        source: &TagSource,
+        stream: Stream,
         counters: &[u64],
     ) -> Result<Vec<ViewTag>, AnonymousError> {
-        match source {
-            TagSource::Own(stream) => {
-                let requests: Vec<ViewTagRequest> = counters
-                    .iter()
-                    .map(|counter| ViewTagRequest {
-                        viewing_pubkey,
-                        stream: stream(*counter),
-                    })
-                    .collect();
-                Ok(exactly_one_each(
-                    self.sync.keys.view_tags(&requests)?,
-                    requests.len(),
-                )?)
-            }
-            TagSource::Shared(shared) => Ok(counters
-                .iter()
-                .map(|counter| shared.tag(*counter))
-                .collect::<Result<_, KeypairError>>()?),
-        }
+        let requests: Vec<ViewTagRequest> = counters
+            .iter()
+            .map(|counter| ViewTagRequest {
+                viewing_pubkey,
+                stream: stream.view_tag(*counter),
+            })
+            .collect();
+        Ok(exactly_one_each(
+            self.sync.keys.view_tags(&requests)?,
+            requests.len(),
+        )?)
     }
 
-    /// Opens every output under a tag of `window`, the tags any output holds.
+    /// Opens every deposit under a tag of `window`, the tags any deposit holds.
     async fn window<T: Copy + Ord>(
         &mut self,
         index: usize,
         window: &TagWindow<T>,
         found: impl Fn(T) -> Option<AnonymousStream>,
     ) -> Result<BTreeSet<T>, AnonymousError> {
-        let tags = window.tags();
-        let transactions = self.reads.transactions(&tags).await?;
-        let deposits = self.reads.deposits(&tags).await?;
+        let deposits = self.reads.deposits(&window.tags()).await?;
         let mut observed = BTreeSet::new();
-        let mut hits = Vec::new();
-        for tx in &transactions {
-            let outputs = tx.output_slots.iter().map(|slot| &slot.view_tag);
-            let messages = tx.messages.iter().map(|message| &message.view_tag);
-            let sites = (0..).map(Site::Output).zip(outputs);
-            let sites = sites.chain((0..).map(Site::Message).zip(messages));
-            for (site, tag) in sites {
-                let Some(counter) = window.index_of(tag) else {
-                    continue;
-                };
-                observed.insert(counter);
-                hits.push(Hit {
-                    tx,
-                    site,
-                    found: found(counter),
-                });
-            }
-        }
-        self.note_spends(&transactions);
-        self.open(index, &hits)?;
         for deposit in &deposits {
             for (position, slot) in deposit.output_slots.iter().enumerate() {
                 let Some(counter) = window.index_of(&slot.view_tag) else {
@@ -473,76 +776,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         Ok(observed)
     }
 
-    /// Decrypts every scheme 1 and 2 body of `hits` under its slot index in one request.
-    fn open(&mut self, index: usize, hits: &[Hit<'_>]) -> Result<(), AnonymousError> {
-        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let mut bodies = Vec::new();
-        for hit in hits {
-            let Some(found) = hit.found else {
-                continue;
-            };
-            let tx = hit.tx;
-            if !self
-                .opened
-                .insert((tx.tx_signature, tx.event_index, hit.site))
-            {
-                continue;
-            }
-            let Some(context) = RingDeliveryContext::of(tx) else {
-                continue;
-            };
-            let ciphertext = match hit.site {
-                Site::Output(position) => {
-                    anonymous_recipient_output_body(&tx.output_slots[position].payload)
-                }
-                Site::Message(message) => anonymous_sender_output_body(&tx.messages[message].data),
-            };
-            let Some(ciphertext) = ciphertext else {
-                continue;
-            };
-            bodies.push(Body {
-                tx,
-                site: hit.site,
-                ciphertext: ciphertext.to_vec(),
-                context,
-                found,
-            });
-        }
-        if bodies.is_empty() {
-            return Ok(());
-        }
-        let requests = bodies
-            .iter()
-            .map(|body| {
-                Ok(DecryptRequest {
-                    ciphertext: &body.ciphertext,
-                    viewing_pubkey,
-                    tx_viewing_pubkey: body.context.tx_viewing_pk,
-                    salt: body.context.salt,
-                    slot_index: body.slot_index()?,
-                    label: DecryptLabel::Utxo,
-                })
-            })
-            .collect::<Result<Vec<_>, AnonymousError>>()?;
-        let plaintexts = exactly_one_each(self.sync.keys.decrypt(&requests)?, requests.len())?;
-        let own = self.own_transactions(viewing_pubkey, &bodies)?;
-        for (body, plaintext) in bodies.iter().zip(plaintexts) {
-            match body.site {
-                Site::Output(position) => self.open_recipient(index, body, position, &plaintext)?,
-                Site::Message(_) => {
-                    let own = own.get(&body.context.first_nullifier);
-                    self.open_bundle(index, body, &plaintext, own)?
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// The transaction key of each transaction the entry's key sent, keyed by its first nullifier.
     fn own_transactions(
         &self,
         viewing_pubkey: X25519Pubkey,
-        bodies: &[Body<'_>],
+        bodies: &[&Body<'_>],
     ) -> Result<HashMap<[u8; 32], ViewingKey>, AnonymousError> {
         let mut contexts: Vec<RingDeliveryContext> = Vec::new();
         for body in bodies {
@@ -574,100 +812,99 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             .collect())
     }
 
-    /// A body that rebuilds no hash is unmatched, one that fails to decode or names another owner skipped.
+    /// Only a rebuilt commitment proves the note the wallet's, every other body stays silent.
     fn open_recipient(
         &mut self,
         index: usize,
         body: &Body<'_>,
         position: usize,
-        plaintext: &[u8],
+        secret: &SlotSecret,
     ) -> Result<(), AnonymousError> {
-        let Ok(note) = AnonymousTransferRecipientPlaintext::deserialize(plaintext) else {
+        let slot = &body.tx.output_slots[position];
+        let Some((ciphertext, reply)) = ring_recipient_output_body(&slot.payload) else {
             return Ok(());
         };
-        if note.verified.owner_pubkey != self.address.signing_pubkey {
+        let Ok(plain) = open_recipient_body(ciphertext, secret) else {
             return Ok(());
-        }
-        let sender = note.unverified.sender_pubkey;
-        match self
+        };
+        let opened = self
             .output_at(body, &self.address, position)
-            .open_recipient(note)
-        {
-            Ok(Some(utxo)) => {
-                self.accept(index, body, position, utxo)?;
-                self.learn(index, SharedTagPair::FromSender(sender));
+            .open_body(&plain);
+        match opened {
+            Ok(Some(OpenedBody::Note { utxo, nullifier_pk })) => {
+                self.accept(index, body.tx, body.found, position, utxo, nullifier_pk)?;
+                if let Ok(Some(claim)) = open_reply(reply, secret) {
+                    let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+                    self.sender_claims.push(SenderClaim {
+                        utxo_hash: slot.output_context.hash,
+                        viewing_pubkey,
+                        claim,
+                    });
+                }
             }
-            Ok(None) | Err(_) => self.unmatched.push(output_hash(body, position)),
+            Ok(Some(OpenedBody::UnknownMint { utxo, nullifier_pk })) => {
+                self.hold_back(body.tx, position, utxo, nullifier_pk)?;
+            }
+            Ok(None) | Err(_) => {}
         }
         Ok(())
     }
 
-    /// Each change output the bundle rebuilds, the change leading at output 0.
+    /// Each change slot its cells rebuild, under the wallet's own address and `TXOB(i)`.
     fn open_bundle(
         &mut self,
         index: usize,
         body: &Body<'_>,
-        plaintext: &[u8],
+        message: usize,
+        secret: &SlotSecret,
         own: Option<&ViewingKey>,
     ) -> Result<(), AnonymousError> {
-        let Ok(bundle) = AnonymousTransferSenderPlaintext::deserialize(plaintext) else {
+        let Some(ciphertext) = ring_sender_bundle_output_body(&body.tx.messages[message].data)
+        else {
             return Ok(());
         };
-        if bundle.verified.owner_pubkey != self.address.signing_pubkey {
+        let Ok(bundle) = open_sender_bundle(ciphertext, secret, body.slot_index as usize) else {
             return Ok(());
-        }
-        let listed = bundle.verified.recipient_viewing_pks.clone();
-        let recipients: Vec<X25519Pubkey> = listed_recipients(&bundle).copied().collect();
-        let outputs = body.tx.output_slots.len();
-        if outputs == 0 {
-            return Ok(());
-        }
+        };
         let first_nullifier = body.context.first_nullifier;
-        let change = match self
-            .output_at(body, &self.address, 0)
-            .sender_change(bundle, &first_nullifier)
-        {
-            Ok(change) => change,
-            Err(_) => {
-                self.unmatched.push(output_hash(body, 0));
-                return Ok(());
-            }
-        };
-        for (position, utxo) in change.into_iter().enumerate().take(outputs) {
+        for position in (0u32..2).take(body.tx.output_slots.len()) {
             match self
-                .output_at(body, &self.address, position)
-                .rebuilds(&utxo)
+                .output_at(body, &self.address, position as usize)
+                .open_change(&bundle, &first_nullifier, position)
             {
-                true => self.accept(index, body, position, utxo)?,
-                false => self.unmatched.push(output_hash(body, position)),
+                Ok(Some(OpenedBody::Note { utxo, nullifier_pk })) => {
+                    let position = position as usize;
+                    self.accept(index, body.tx, body.found, position, utxo, nullifier_pk)?
+                }
+                Ok(Some(OpenedBody::UnknownMint { utxo, nullifier_pk })) => {
+                    self.hold_back(body.tx, position as usize, utxo, nullifier_pk)?;
+                }
+                Ok(None) | Err(_) => {}
             }
         }
         // Only the wallet's own transaction key proves the listed payments its own.
         let Some(tx_viewing_key) = own else {
             return Ok(());
         };
-        self.record_sent(body, &listed, tx_viewing_key);
-        for recipient in recipients {
-            self.learn(index, SharedTagPair::ToRecipient(recipient));
-        }
+        self.record_sent(body, &bundle.recipient_keys, tx_viewing_key);
         Ok(())
     }
 
-    /// The bundle lists one key per output after the change, in output order.
+    /// Each cell names one slot, a zero cell reads change, exit or dummy.
     fn record_sent(
         &mut self,
         body: &Body<'_>,
-        listed: &[X25519Pubkey],
+        recipient_keys: &[[u8; 32]],
         tx_viewing_key: &ViewingKey,
     ) {
-        let Some(first) = body.tx.output_slots.len().checked_sub(listed.len()) else {
-            return;
-        };
-        for (position, recipient) in (first..).zip(listed) {
-            if is_dummy_recipient(recipient) || !is_contributory(recipient) {
+        for (position, key) in recipient_keys.iter().enumerate() {
+            let Ok(recipient) = X25519Pubkey::from_u(*key) else {
+                continue;
+            };
+            if *key == [0; 32] || !is_contributory(&recipient) {
                 continue;
             }
-            if let Some(sent) = self.sent_payment(body, position, recipient, tx_viewing_key) {
+            if let Some(sent) = self.sent_payment(body, position, &recipient, tx_viewing_key) {
                 self.sent.push(sent);
             }
         }
@@ -682,38 +919,47 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         tx_viewing_key: &ViewingKey,
     ) -> Option<SentPayment> {
         let slot = &body.tx.output_slots[position];
-        let ciphertext = anonymous_recipient_output_body(&slot.payload)?;
+        let (ciphertext, _) = ring_recipient_output_body(&slot.payload)?;
         let slot_index = u32::try_from(position).ok()?;
-        let plaintext = Zeroizing::new(
-            tx_viewing_key
-                .decrypt_slot_ephemeral(recipient, ciphertext, body.context.salt, slot_index)
-                .ok()?,
-        );
-        let note = AnonymousTransferRecipientPlaintext::deserialize(&plaintext).ok()?;
-        let (owner_pubkey, amount) = (note.verified.owner_pubkey, note.verified.amount);
-        let check = self
+        let agreement = zeroize::Zeroizing::new(tx_viewing_key.ecdh(recipient).ok()?);
+        let secret = custom_ring_interface::stream::DeliveredSlot {
+            agreement: &agreement,
+            tx_viewing_pk: body.context.tx_viewing_pk.as_bytes(),
+            recipient_viewing_pk: recipient.as_bytes(),
+            salt: &body.context.salt,
+            output_index: slot_index,
+            first_nullifier: &body.context.first_nullifier,
+        }
+        .secret()
+        .ok()?;
+        let plain = open_recipient_body(ciphertext, &secret).ok()?;
+        let verified = self
             .sync
             .recipients
             .iter()
-            .filter(|address| {
-                address.viewing_pubkey == *recipient && address.signing_pubkey == owner_pubkey
-            })
+            .filter(|address| address.viewing_pubkey == *recipient)
             .find_map(|address| {
-                self.output_at(body, address, position)
-                    .open_recipient(note.clone())
+                match self
+                    .output_at(body, address, position)
+                    .open_body(&plain)
                     .ok()
-                    .flatten()
-            })
-            .map_or(SentCheck::Unverified, |utxo| SentCheck::Verified {
-                mint: utxo.asset,
+                    .flatten()?
+                {
+                    OpenedBody::Note { utxo, .. } => Some((address.signing_pubkey, utxo.asset)),
+                    OpenedBody::UnknownMint { .. } => None,
+                }
             });
+        let (owner_pubkey, check) = match verified {
+            Some((owner, mint)) => (Some(owner), SentCheck::Verified { mint }),
+            None => (None, SentCheck::Unverified),
+        };
         Some(SentPayment {
             tx_signature: body.tx.tx_signature,
             utxo_hash: slot.output_context.hash,
             position: slot_index,
             recipient_viewing_pubkey: *recipient,
             owner_pubkey,
-            amount,
+            amount: plain.amount,
             check,
         })
     }
@@ -734,44 +980,43 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         }
     }
 
-    /// A key no ECDH accepts never enters the map.
-    fn learn(&mut self, index: usize, pair: SharedTagPair) {
-        let (SharedTagPair::FromSender(key) | SharedTagPair::ToRecipient(key)) = pair;
-        if is_contributory(&key) {
-            self.entry_mut(index).learn(pair);
-        }
-    }
-
     /// Keeps a rebuilt note once, under the stream that found it.
     fn accept(
         &mut self,
         index: usize,
-        body: &Body<'_>,
+        tx: &ShieldedTransaction,
+        stream: AnonymousStream,
         position: usize,
         utxo: Utxo,
+        nullifier_pubkey: [u8; 32],
     ) -> Result<(), AnonymousError> {
-        let context = &body.tx.output_slots[position].output_context;
-        if self.is_found(&context.hash) {
+        if self.is_found(&tx.output_slots[position].output_context.hash) {
             return Ok(());
         }
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let utxo = WalletUtxo {
-            utxo,
-            nullifier_pubkey: self.address.nullifier_pubkey,
-            utxo_hash: context.hash,
-            nullifier: [0; 32],
-            tx_viewing_key: None,
-            data_hash: None,
-            ring_data_hash: None,
-            tree_id: context.tree_id,
-            leaf_index: context.leaf_index,
-            latest_tree_id: None,
-            slot: body.tx.slot,
-            tx_signature: body.tx.tx_signature,
-            slot_index: u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?,
-        };
-        self.keep(utxo, viewing_pubkey, body.found);
+        let utxo = published_note(tx, position, utxo, nullifier_pubkey)?;
+        self.keep(utxo, viewing_pubkey, stream);
         Ok(())
+    }
+
+    /// Verified under a mint `assets` does not name, it waits among the pending notes.
+    fn hold_back(
+        &mut self,
+        tx: &ShieldedTransaction,
+        position: usize,
+        utxo: Utxo,
+        nullifier_pubkey: [u8; 32],
+    ) -> Result<(), AnonymousError> {
+        let utxo = published_note(tx, position, utxo, nullifier_pubkey)?;
+        self.hold_back_note(utxo);
+        Ok(())
+    }
+
+    fn hold_back_note(&mut self, utxo: WalletUtxo) {
+        if !self.unmatched.contains(&utxo.utxo_hash) {
+            self.unmatched.push(utxo.utxo_hash);
+            self.held_back.push(utxo);
+        }
     }
 
     fn is_found(&self, utxo_hash: &[u8; 32]) -> bool {
@@ -811,9 +1056,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         })?;
         match opened {
             Some(OpenedDeposit::Note(utxo)) => self.keep(*utxo, viewing_pubkey, found),
-            Some(OpenedDeposit::UnknownMint(mint)) => {
-                self.decrypted.unknown_mints.insert(mint);
-            }
+            Some(OpenedDeposit::UnknownMint(utxo)) => self.hold_back_note(*utxo),
             None => {}
         }
         Ok(())
@@ -891,12 +1134,38 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         }
     }
 
-    fn counter_mut(&mut self, index: usize, stream: Stream) -> Option<&mut StreamCounter> {
+    /// A held back note carries its nullifier, an absorb stores it with the position past its row.
+    fn finish<S: ShieldedKeys + ?Sized>(self, keys: &S) -> Result<AnonymousScan, AnonymousError> {
+        let Scan {
+            history,
+            found,
+            held_back,
+            utxos,
+            mut decrypted,
+            unmatched,
+            sent,
+            sender_claims,
+            ..
+        } = self;
+        assign_nullifiers(keys, &mut decrypted, found)?;
+        let mut held = DecryptionResult::default();
+        assign_nullifiers(keys, &mut held, held_back)?;
+        Ok(AnonymousScan {
+            history,
+            decrypted,
+            pending: held.utxos.into_iter().map(PendingNote::new).collect(),
+            sender_claims,
+            utxos,
+            unmatched,
+            sent,
+        })
+    }
+
+    fn counter_mut(&mut self, index: usize, stream: Stream) -> &mut StreamCounter {
         let entry = self.entry_mut(index);
         match stream {
-            Stream::Sender => Some(entry.tx_stream_mut()),
-            Stream::Request => Some(entry.request_stream_mut()),
-            Stream::Pair(pair) => entry.pair_mut(&pair),
+            Stream::Sender => entry.tx_stream_mut(),
+            Stream::Request => entry.request_stream_mut(),
         }
     }
 
@@ -905,8 +1174,28 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     }
 }
 
-fn output_hash(body: &Body<'_>, position: usize) -> [u8; 32] {
-    body.tx.output_slots[position].output_context.hash
+fn published_note(
+    tx: &ShieldedTransaction,
+    position: usize,
+    utxo: Utxo,
+    nullifier_pubkey: [u8; 32],
+) -> Result<WalletUtxo, AnonymousError> {
+    let context = &tx.output_slots[position].output_context;
+    Ok(WalletUtxo {
+        utxo,
+        nullifier_pubkey,
+        utxo_hash: context.hash,
+        nullifier: [0; 32],
+        tx_viewing_key: None,
+        data_hash: None,
+        ring_data_hash: None,
+        tree_id: context.tree_id,
+        leaf_index: context.leaf_index,
+        latest_tree_id: None,
+        slot: tx.slot,
+        tx_signature: tx.tx_signature,
+        slot_index: u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?,
+    })
 }
 
 /// Derives the nullifiers of `found` and adds them to `decrypted` in publication order.
@@ -919,6 +1208,14 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
         return Ok(());
     }
     delivered::assign_nullifiers(keys, &mut found)?;
+    // A note under the zero key spends under nullifier secret zero, not the wallet's.
+    let zero_secret = NullifierKey::from_secret([0; 31]);
+    for utxo in found
+        .iter_mut()
+        .filter(|utxo| utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY)
+    {
+        utxo.nullifier = zero_secret.nullifier(&utxo.utxo_hash, &utxo.utxo.blinding)?;
+    }
     decrypted.utxos.extend(found);
     delivered::sort_by_publication(&mut decrypted.utxos);
     Ok(())

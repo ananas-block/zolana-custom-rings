@@ -1,28 +1,10 @@
-use serde::Deserialize;
+use zolana_ring_transaction::RingAssets;
 
 use super::*;
 use crate::types::UtxoOwner;
 
-#[derive(Deserialize)]
-struct AssignmentCase {
-    name: String,
-    inputs: usize,
-    notes: Vec<String>,
-    expected: Expected,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Expected {
-    Opened,
-    Ambiguous,
-    Unseen,
-}
-
-fn note(commitment: &str) -> ([u8; 32], KnownUtxo) {
-    let commitment: [u8; 32] = hex::decode(commitment).unwrap().try_into().unwrap();
-    let byte = commitment[31];
-    let utxo = KnownUtxo {
+fn note(byte: u8) -> KnownUtxo {
+    KnownUtxo {
         owner_key: [0xa1; 32],
         owner: UtxoOwner::Keyed {
             nullifier_pk: [byte; 32],
@@ -34,45 +16,51 @@ fn note(commitment: &str) -> ([u8; 32], KnownUtxo) {
         data_hash: [0; 32],
         ring_data_hash: [0; 32],
         tree_id: 1,
-    };
-    (commitment, utxo)
+    }
 }
 
-#[test]
-fn the_inputs_under_one_prefix_open_only_when_one_note_fills_one_position() {
-    let vector: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../test-vectors/audit/prefix-assignment.json"
-    ))
-    .unwrap();
-    let cases: Vec<AssignmentCase> = serde_json::from_value(vector["cases"].clone()).unwrap();
-    for case in cases {
-        let notes: Vec<_> = case.notes.iter().map(String::as_str).map(note).collect();
-        let prefix = InputPrefix::of(&notes[0].0).unwrap();
-        let assigned = PrefixNotes {
-            prefix,
-            notes: notes.clone(),
-        }
-        .assign(case.inputs);
-        let candidates = notes.iter().map(|(commitment, _)| *commitment).collect();
-        match case.expected {
-            Expected::Opened => assert_eq!(
-                assigned,
-                [InputOpening::Opened(ring_input(notes[0].0, notes[0].1))],
-                "{}",
-                case.name
-            ),
-            Expected::Ambiguous => assert_eq!(
-                assigned,
-                vec![InputOpening::Ambiguous { candidates }; case.inputs],
-                "{}",
-                case.name
-            ),
-            Expected::Unseen => assert_eq!(
-                assigned,
-                vec![InputOpening::Unseen { prefix }; case.inputs],
-                "{}",
-                case.name
-            ),
-        }
+fn opening_of(evidence: &AuditEvidence, known: &dyn KnownUtxos, nullifiers: &[[u8; 32]]) -> Spent {
+    let tx_key = ViewingKey::new();
+    let assets = RingAssets::new([]).unwrap();
+    Transfer {
+        ring: Address::new_from_array([1; 32]),
+        tx_viewing_pk: tx_key.pubkey(),
+        tx_key: &tx_key,
+        salt: [2; 16],
+        first_nullifier: nullifiers[0],
+        seed_out: [3; 32],
+        body_len: 0,
+        assets: &assets,
     }
+    .inputs(SpentInputs {
+        key: AuditKey::Confidential { class: 4 },
+        evidence,
+        nullifiers,
+        trees: None,
+        known: Some(known),
+    })
+    .unwrap()
+}
+
+/// Two notes share one 16 byte prefix, a full hash names one.
+#[test]
+fn a_named_hash_opens_exactly_its_note_and_absence_reads_unseen() {
+    let named = [0x2a; 32];
+    let mut sibling = named;
+    sibling[31] ^= 1;
+    let missing = [0x2b; 32];
+    let known = KnownUtxoIndex::from_iter([(named, note(7)), (sibling, note(8))]);
+    let evidence = AuditEvidence::InputHashes(vec![named, missing, [0; 32]]);
+    let spent = opening_of(&evidence, &known, &[[11; 32], [12; 32], [13; 32]]);
+    let openings: Vec<_> = spent.inputs.iter().map(|input| &input.opening).collect();
+    assert_eq!(
+        openings,
+        [
+            &InputOpening::Opened(ring_input(named, note(7))),
+            &InputOpening::UnseenHash { hash: missing },
+            &InputOpening::Dummy,
+        ]
+    );
+    let hashes: Vec<_> = spent.inputs.iter().map(|input| input.hash).collect();
+    assert_eq!(hashes, [named, missing, [0; 32]]);
 }

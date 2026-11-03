@@ -1,20 +1,22 @@
-//! The anonymous rail's wallet state, spec `ViewingKeyEntry` per retained viewing key, and the
-//! spec view tag selection over it.
+//! The anonymous rail's wallet state, spec `ViewingKeyEntry` per retained viewing key.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
 };
 
 use serde::{Deserialize, Serialize};
+use solana_address::Address;
 use spr_keypair::{viewing_key::ViewTag, x25519::X25519_PUBKEY_LEN, X25519Pubkey};
-use spr_transaction::ShieldedKeys;
-use zolana_ring_keys::{RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream};
-use zolana_ring_transaction::{is_contributory, AnonymousPlan, TaggedPayment};
+use zolana_ring_keys::{RingKeys, ViewTagRequest, ViewTagStream};
+use zolana_ring_transaction::is_contributory;
 
 use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
 
-pub const VIEWING_HISTORY_VERSION: u32 = 7;
+pub const VIEWING_HISTORY_VERSION: u32 = 8;
+
+/// Read once and rewritten as [`VIEWING_HISTORY_VERSION`].
+const MIGRATED_VIEWING_HISTORY_VERSION: u32 = 7;
 
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
@@ -37,9 +39,10 @@ pub struct ViewingKeyEntry {
     created_at: i64,
     tx: StreamCounter,
     request: StreamCounter,
-    /// Keyed by the viewing key a sender's recipient bodies name.
-    known_senders: HashMap<X25519Pubkey, StreamCounter>,
-    known_recipients: HashMap<X25519Pubkey, StreamCounter>,
+    /// Viewing keys whose reply claim the wallet confirmed.
+    known_senders: HashSet<X25519Pubkey>,
+    /// `after_slot` per ring, `None` reads from the first indexed block.
+    ring_positions: BTreeMap<Address, Option<u64>>,
 }
 
 /// Every retained viewing key, oldest first, the last one current.
@@ -48,64 +51,12 @@ pub struct ViewingHistory {
     entries: Vec<ViewingKeyEntry>,
 }
 
-/// The tag a first payment to a recipient takes, chosen by the caller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FirstContact {
-    Request(ViewTag),
-    /// The recipient's `recipient_bootstrap_view_tag`, readable by anyone who knows its address.
-    Bootstrap,
-}
-
-/// A first contact pairs only when its body names the sender.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FirstContactPairing {
-    Pairs,
-    Unpaired,
-}
-
-/// Paid under `first_contact` until the pair is known.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PaymentRecipient {
-    pub viewing_pubkey: X25519Pubkey,
-    pub first_contact: FirstContact,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TagSelection {
-    Shared { index: u64 },
-    Request,
-    Bootstrap,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PaymentTag {
-    pub payment: TaggedPayment,
-    pub selection: TagSelection,
-}
-
-/// `history` is advanced past the tags and stored before the transfer is sent.
-#[must_use]
-#[derive(Clone, Debug)]
-pub struct TransferTags {
-    pub sender_tag: ViewTag,
-    pub payments: Vec<PaymentTag>,
-    pub history: ViewingHistory,
-}
-
 /// `history` is advanced past `tag`.
 #[must_use]
 #[derive(Clone, Debug)]
 pub struct AdvancedTag<T> {
     pub tag: T,
     pub history: ViewingHistory,
-}
-
-/// The tags of a transfer from the current viewing key, payments in declared order.
-#[must_use]
-pub struct TransferTagging<'a, K: ?Sized> {
-    pub keys: &'a K,
-    pub history: &'a ViewingHistory,
-    pub recipients: &'a [PaymentRecipient],
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +95,10 @@ impl StreamCounter {
         self.pending.extend(from.max(floor)..reached);
         self.pending
             .retain(|index| *index >= floor && !observed.contains(index));
+    }
+
+    fn same_progress(&self, stored: &Self) -> bool {
+        self.scanned == stored.scanned && self.pending == stored.pending
     }
 
     fn take_next(&mut self) -> Result<u64, AnonymousError> {
@@ -196,8 +151,8 @@ impl ViewingKeyEntry {
             created_at,
             tx: StreamCounter::default(),
             request: StreamCounter::default(),
-            known_senders: HashMap::new(),
-            known_recipients: HashMap::new(),
+            known_senders: HashSet::new(),
+            ring_positions: BTreeMap::new(),
         }
     }
 
@@ -225,12 +180,12 @@ impl ViewingKeyEntry {
         &self.request
     }
 
-    pub fn known_senders(&self) -> &HashMap<X25519Pubkey, StreamCounter> {
+    pub fn known_senders(&self) -> &HashSet<X25519Pubkey> {
         &self.known_senders
     }
 
-    pub fn known_recipients(&self) -> &HashMap<X25519Pubkey, StreamCounter> {
-        &self.known_recipients
+    pub fn ring_positions(&self) -> &BTreeMap<Address, Option<u64>> {
+        &self.ring_positions
     }
 
     pub(crate) fn tx_stream_mut(&mut self) -> &mut StreamCounter {
@@ -241,60 +196,30 @@ impl ViewingKeyEntry {
         &mut self.request
     }
 
-    pub(crate) fn pair_mut(&mut self, pair: &SharedTagPair) -> Option<&mut StreamCounter> {
-        match pair {
-            SharedTagPair::FromSender(sender) => self.known_senders.get_mut(sender),
-            SharedTagPair::ToRecipient(recipient) => self.known_recipients.get_mut(recipient),
+    /// Only a terminal page's `context.slot` reaches here.
+    pub(crate) fn set_ring_position(&mut self, ring: Address, after_slot: u64) {
+        self.ring_positions.insert(ring, Some(after_slot));
+    }
+
+    /// A reply is a claim, the wallet confirms a sender here and nothing else does.
+    pub fn confirm_sender(&mut self, sender: X25519Pubkey) -> Result<(), AnonymousError> {
+        if !is_contributory(&sender) {
+            return Err(AnonymousError::RecipientKeyNotContributory);
         }
+        self.known_senders.insert(sender);
+        Ok(())
     }
 
-    pub(crate) fn learn(&mut self, pair: SharedTagPair) {
-        let (known, key) = match pair {
-            SharedTagPair::FromSender(sender) => (&mut self.known_senders, sender),
-            SharedTagPair::ToRecipient(recipient) => (&mut self.known_recipients, recipient),
-        };
-        known.entry(key).or_default();
-    }
-
-    /// Shared once known, else the caller's first contact tag.
-    fn select<K: RingKeys + ?Sized>(
-        &mut self,
-        keys: &K,
-        recipient: &PaymentRecipient,
-        pairing: FirstContactPairing,
-    ) -> Result<PaymentTag, AnonymousError> {
-        let viewing_pubkey = self.viewing_pubkey;
-        let (tag, selection) = match self.known_recipients.get_mut(&recipient.viewing_pubkey) {
-            Some(counter) => {
-                let index = counter.take_next()?;
-                let shared = exactly_one(keys.shared_view_tags(&[SharedTagsRequest {
-                    viewing_pubkey,
-                    pair: SharedTagPair::ToRecipient(recipient.viewing_pubkey),
-                }])?)?;
-                (shared.tag(index)?, TagSelection::Shared { index })
-            }
-            None => {
-                if !is_contributory(&recipient.viewing_pubkey) {
-                    return Err(AnonymousError::RecipientKeyNotContributory);
-                }
-                if pairing == FirstContactPairing::Pairs {
-                    self.learn(SharedTagPair::ToRecipient(recipient.viewing_pubkey));
-                }
-                match recipient.first_contact {
-                    FirstContact::Request(tag) => (tag, TagSelection::Request),
-                    FirstContact::Bootstrap => {
-                        (recipient.viewing_pubkey.u(), TagSelection::Bootstrap)
-                    }
-                }
-            }
-        };
-        Ok(PaymentTag {
-            payment: TaggedPayment {
-                recipient: recipient.viewing_pubkey,
-                tag,
-            },
-            selection,
-        })
+    fn progress_matches(&self, stored: &Self) -> bool {
+        self.tx.same_progress(&stored.tx)
+            && self.request.same_progress(&stored.request)
+            && stored
+                .ring_positions
+                .iter()
+                .all(|(ring, after_slot)| self.ring_positions.get(ring) == Some(after_slot))
+            && self.ring_positions.iter().all(|(ring, after_slot)| {
+                stored.ring_positions.contains_key(ring) || after_slot.is_none()
+            })
     }
 }
 
@@ -305,7 +230,6 @@ impl fmt::Debug for ViewingKeyEntry {
             .field("tx", &self.tx)
             .field("request", &self.request)
             .field("known_senders", &REDACTED)
-            .field("known_recipients", &REDACTED)
             .finish_non_exhaustive()
     }
 }
@@ -328,13 +252,62 @@ impl ViewingHistory {
         if created_at <= current.created_at || self.entry(&viewing_pubkey).is_some() {
             return Err(AnonymousError::RotatedKeyNotNewer);
         }
-        self.entries
-            .push(ViewingKeyEntry::new(viewing_pubkey, created_at));
+        let entry = self.unread_entry(viewing_pubkey, created_at);
+        self.entries.push(entry);
         Ok(self)
+    }
+
+    /// A key the wallet held before its current one, the current key stays last.
+    pub fn with_imported_key(
+        mut self,
+        viewing_pubkey: X25519Pubkey,
+        created_at: i64,
+    ) -> Result<Self, AnonymousError> {
+        let taken = self
+            .entries
+            .iter()
+            .any(|entry| entry.created_at == created_at);
+        if created_at >= self.current().created_at || taken || self.entry(&viewing_pubkey).is_some()
+        {
+            return Err(AnonymousError::ImportedKeyNotOlder);
+        }
+        let entry = self.unread_entry(viewing_pubkey, created_at);
+        let at = self
+            .entries
+            .partition_point(|entry| entry.created_at < created_at);
+        self.entries.insert(at, entry);
+        Ok(self)
+    }
+
+    /// The current key reads `ring` from the slot `after_slot`, a watched ring keeps its position.
+    pub fn with_ring(mut self, ring: Address, after_slot: Option<u64>) -> Self {
+        self.current_mut()
+            .ring_positions
+            .entry(ring)
+            .or_insert(after_slot);
+        self
+    }
+
+    /// Every ring the wallet reads is unread under an added key, its next sync reads their history.
+    fn unread_entry(&self, viewing_pubkey: X25519Pubkey, created_at: i64) -> ViewingKeyEntry {
+        ViewingKeyEntry {
+            ring_positions: self
+                .entries
+                .iter()
+                .flat_map(|entry| entry.ring_positions.keys())
+                .map(|ring| (*ring, None))
+                .collect(),
+            ..ViewingKeyEntry::new(viewing_pubkey, created_at)
+        }
     }
 
     pub fn entries(&self) -> &[ViewingKeyEntry] {
         &self.entries
+    }
+
+    /// Reads `sender`'s shared tags under the current key once the wallet trusts its claim.
+    pub fn confirm_sender(&mut self, sender: X25519Pubkey) -> Result<(), AnonymousError> {
+        self.current_mut().confirm_sender(sender)
     }
 
     pub fn current(&self) -> &ViewingKeyEntry {
@@ -364,20 +337,7 @@ impl ViewingHistory {
         })
     }
 
-    /// A deposit's tag, a first contact pairs nothing since a deposit names no sender.
-    pub fn deposit_tag<K: RingKeys + ?Sized>(
-        &self,
-        keys: &K,
-        recipient: &PaymentRecipient,
-    ) -> Result<AdvancedTag<PaymentTag>, AnonymousError> {
-        let mut history = self.clone();
-        let tag = history
-            .current_mut()
-            .select(keys, recipient, FirstContactPairing::Unpaired)?;
-        Ok(AdvancedTag { tag, history })
-    }
-
-    /// A fresh `recipient_request_view_tag` for a payment request.
+    /// A fresh `recipient_request_view_tag` for a request a deposit pays under.
     pub fn request_tag<K: RingKeys + ?Sized>(
         &self,
         keys: &K,
@@ -408,6 +368,19 @@ impl ViewingHistory {
         let last = self.entries.len() - 1;
         &mut self.entries[last]
     }
+
+    /// Whether every stored key's progress is unmoved, an added key starts with none.
+    pub(crate) fn progress_matches(&self, stored: &Self) -> bool {
+        stored.entries.iter().all(|stored| {
+            self.entry(&stored.viewing_pubkey)
+                .is_some_and(|entry| entry.progress_matches(stored))
+        }) && self.entries.iter().all(|entry| {
+            stored.entry(&entry.viewing_pubkey).is_some()
+                || (entry.tx.scanned == 0
+                    && entry.request.scanned == 0
+                    && entry.ring_positions.values().all(Option::is_none))
+        })
+    }
 }
 
 impl fmt::Debug for ViewingHistory {
@@ -415,40 +388,6 @@ impl fmt::Debug for ViewingHistory {
         f.debug_struct("ViewingHistory")
             .field("entries", &self.entries)
             .finish()
-    }
-}
-
-impl TransferTags {
-    pub fn anonymous_plan(&self) -> AnonymousPlan {
-        self.payments
-            .iter()
-            .fold(AnonymousPlan::new(self.sender_tag), |plan, tag| {
-                plan.with_payment(tag.payment)
-            })
-    }
-}
-
-impl<K: ShieldedKeys + RingKeys + ?Sized> TransferTagging<'_, K> {
-    /// Refused unless the history's current key is the wallet's viewing key.
-    pub fn plan(self) -> Result<TransferTags, AnonymousError> {
-        if self.history.current().viewing_pubkey != self.keys.address()?.viewing_pubkey {
-            return Err(AnonymousError::ViewingKeyNotCurrent);
-        }
-        let AdvancedTag {
-            tag: sender_tag,
-            mut history,
-        } = self.history.sender_tag(self.keys)?;
-        let current = history.current_mut();
-        let payments = self
-            .recipients
-            .iter()
-            .map(|recipient| current.select(self.keys, recipient, FirstContactPairing::Pairs))
-            .collect::<Result<_, _>>()?;
-        Ok(TransferTags {
-            sender_tag,
-            payments,
-            history,
-        })
     }
 }
 
@@ -467,8 +406,31 @@ struct EntryJson {
     created_at: i64,
     tx: CounterJson,
     request: CounterJson,
-    known_senders: Vec<CounterpartyJson>,
-    known_recipients: Vec<CounterpartyJson>,
+    known_senders: Vec<String>,
+    ring_positions: Vec<RingPositionJson>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RingPositionJson {
+    ring: String,
+    after_slot: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryV7 {
+    viewing_history: Vec<EntryV7>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryV7 {
+    viewing_pubkey: String,
+    created_at: i64,
+    tx: CounterJson,
+    request: CounterJson,
+    known_senders: Vec<CounterpartyV7>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -479,13 +441,9 @@ struct CounterJson {
     pending: Vec<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct CounterpartyJson {
+#[derive(Deserialize)]
+struct CounterpartyV7 {
     pubkey: String,
-    next: u64,
-    scanned: u64,
-    pending: Vec<u64>,
 }
 
 impl From<&StreamCounter> for CounterJson {
@@ -525,78 +483,76 @@ impl TryFrom<CounterJson> for StreamCounter {
 }
 
 impl ViewingHistory {
-    /// Its counterparties link the wallet's payments, store it as key material.
-    pub fn to_json(&self) -> String {
-        let counterparties = |known: &HashMap<X25519Pubkey, StreamCounter>| {
-            let mut rows: Vec<CounterpartyJson> = known
-                .iter()
-                .map(|(pubkey, counter)| {
-                    let CounterJson {
-                        next,
-                        scanned,
-                        pending,
-                    } = counter.into();
-                    CounterpartyJson {
-                        pubkey: hex::encode(pubkey.as_bytes()),
-                        next,
-                        scanned,
-                        pending,
-                    }
-                })
-                .collect();
-            rows.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
-            rows
-        };
+    /// Stored only inside `AnonymousWallet`, its positions and watermarks cover the wallet's notes.
+    pub(crate) fn to_json_value(&self) -> serde_json::Value {
         let history = HistoryJson {
             version: VIEWING_HISTORY_VERSION,
             viewing_history: self
                 .entries
                 .iter()
-                .map(|entry| EntryJson {
-                    viewing_pubkey: hex::encode(entry.viewing_pubkey.as_bytes()),
-                    created_at: entry.created_at,
-                    tx: (&entry.tx).into(),
-                    request: (&entry.request).into(),
-                    known_senders: counterparties(&entry.known_senders),
-                    known_recipients: counterparties(&entry.known_recipients),
+                .map(|entry| {
+                    let mut known_senders: Vec<String> = entry
+                        .known_senders
+                        .iter()
+                        .map(|sender| hex::encode(sender.as_bytes()))
+                        .collect();
+                    known_senders.sort();
+                    EntryJson {
+                        viewing_pubkey: hex::encode(entry.viewing_pubkey.as_bytes()),
+                        created_at: entry.created_at,
+                        tx: (&entry.tx).into(),
+                        request: (&entry.request).into(),
+                        known_senders,
+                        ring_positions: entry
+                            .ring_positions
+                            .iter()
+                            .map(|(ring, after_slot)| RingPositionJson {
+                                ring: ring.to_string(),
+                                after_slot: *after_slot,
+                            })
+                            .collect(),
+                    }
                 })
                 .collect(),
         };
-        serde_json::to_string(&history)
+        serde_json::to_value(&history)
             .expect("a struct of strings, integers and vectors serializes")
     }
 
     /// Another version fails with [`AnonymousError::ViewingHistoryVersion`], a sync rebuilds it.
-    pub fn from_json(text: &str) -> Result<Self, AnonymousError> {
+    pub(crate) fn from_json_value(value: serde_json::Value) -> Result<Self, AnonymousError> {
         #[derive(Deserialize)]
         struct Versioned {
             version: u32,
         }
-        let Versioned { version } = serde_json::from_str(text).map_err(unparsed)?;
-        if version != VIEWING_HISTORY_VERSION {
-            return Err(AnonymousError::ViewingHistoryVersion { version });
-        }
-        let history: HistoryJson = serde_json::from_str(text).map_err(unparsed)?;
-        let mut entries: Vec<ViewingKeyEntry> = Vec::with_capacity(history.viewing_history.len());
-        for stored in history.viewing_history {
-            let entry = ViewingKeyEntry {
-                viewing_pubkey: pubkey("viewingPubkey", &stored.viewing_pubkey)?,
-                created_at: stored.created_at,
-                tx: stored.tx.try_into()?,
-                request: stored.request.try_into()?,
-                known_senders: counterparties("knownSenders", stored.known_senders)?,
-                known_recipients: counterparties("knownRecipients", stored.known_recipients)?,
-            };
-            if entries
-                .last()
-                .is_some_and(|last| last.created_at >= entry.created_at)
-                || entries
+        let Versioned { version } = Versioned::deserialize(&value).map_err(unparsed)?;
+        let entries = match version {
+            VIEWING_HISTORY_VERSION => {
+                let history = HistoryJson::deserialize(&value).map_err(unparsed)?;
+                history
+                    .viewing_history
+                    .into_iter()
+                    .map(entry_of)
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            MIGRATED_VIEWING_HISTORY_VERSION => {
+                let history = HistoryV7::deserialize(&value).map_err(unparsed)?;
+                history
+                    .viewing_history
+                    .into_iter()
+                    .map(entry_of_v7)
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            version => return Err(AnonymousError::ViewingHistoryVersion { version }),
+        };
+        for (at, entry) in entries.iter().enumerate() {
+            if at > 0 && entries[at - 1].created_at >= entry.created_at
+                || entries[..at]
                     .iter()
                     .any(|earlier| earlier.viewing_pubkey == entry.viewing_pubkey)
             {
                 return Err(invalid("viewing keys repeat or are not oldest first"));
             }
-            entries.push(entry);
         }
         if entries.is_empty() {
             return Err(invalid("holds no viewing key"));
@@ -605,29 +561,56 @@ impl ViewingHistory {
     }
 }
 
-fn counterparties(
-    name: &str,
-    rows: Vec<CounterpartyJson>,
-) -> Result<HashMap<X25519Pubkey, StreamCounter>, AnonymousError> {
-    let mut known = HashMap::with_capacity(rows.len());
-    for row in rows {
-        let key = pubkey(name, &row.pubkey)?;
-        if !is_contributory(&key) {
-            return Err(invalid(&format!("{name} holds a small-order key")));
+fn entry_of(stored: EntryJson) -> Result<ViewingKeyEntry, AnonymousError> {
+    let mut ring_positions = BTreeMap::new();
+    for position in stored.ring_positions {
+        let ring: Address = position
+            .ring
+            .parse()
+            .map_err(|_| invalid("ringPositions holds a ring that is not an address"))?;
+        if ring_positions.insert(ring, position.after_slot).is_some() {
+            return Err(invalid("ringPositions repeats a ring"));
         }
-        if known
-            .insert(
-                key,
-                CounterJson {
-                    next: row.next,
-                    scanned: row.scanned,
-                    pending: row.pending,
-                }
-                .try_into()?,
-            )
-            .is_some()
-        {
-            return Err(invalid(&format!("{name} repeats a key")));
+    }
+    Ok(ViewingKeyEntry {
+        viewing_pubkey: pubkey("viewingPubkey", &stored.viewing_pubkey)?,
+        created_at: stored.created_at,
+        tx: stored.tx.try_into()?,
+        request: stored.request.try_into()?,
+        known_senders: senders(stored.known_senders.iter())?,
+        ring_positions,
+    })
+}
+
+/// Its notes were never stored beside it, each watermark restarts and each `next` stays.
+fn entry_of_v7(stored: EntryV7) -> Result<ViewingKeyEntry, AnonymousError> {
+    let counter = |counter: CounterJson| -> Result<StreamCounter, AnonymousError> {
+        let mut counter = StreamCounter::try_from(counter)?;
+        counter.scanned = 0;
+        counter.pending.clear();
+        Ok(counter)
+    };
+    Ok(ViewingKeyEntry {
+        viewing_pubkey: pubkey("viewingPubkey", &stored.viewing_pubkey)?,
+        created_at: stored.created_at,
+        tx: counter(stored.tx)?,
+        request: counter(stored.request)?,
+        known_senders: senders(stored.known_senders.iter().map(|sender| &sender.pubkey))?,
+        ring_positions: BTreeMap::new(),
+    })
+}
+
+fn senders<'a>(
+    keys: impl Iterator<Item = &'a String>,
+) -> Result<HashSet<X25519Pubkey>, AnonymousError> {
+    let mut known = HashSet::new();
+    for text in keys {
+        let key = pubkey("knownSenders", text)?;
+        if !is_contributory(&key) {
+            return Err(invalid("knownSenders holds a small-order key"));
+        }
+        if !known.insert(key) {
+            return Err(invalid("knownSenders repeats a key"));
         }
     }
     Ok(known)
@@ -707,17 +690,17 @@ mod tests {
         counter.observe(0, &BTreeSet::from([PENDING_RETENTION + 1]));
         let mut history = ViewingHistory::new(ViewingKey::new().pubkey(), 0);
         history.entries_mut()[0].tx = counter;
+        let stored = history.to_json_value();
         assert_eq!(
-            ViewingHistory::from_json(&history.to_json()).unwrap(),
+            ViewingHistory::from_json_value(stored.clone()).unwrap(),
             history
         );
-        let stored: serde_json::Value = serde_json::from_str(&history.to_json()).unwrap();
         for pending in [vec![0], vec![2, 2], vec![3, 2], vec![PENDING_RETENTION + 2]] {
             let mut refused = stored.clone();
             refused["viewingHistory"][0]["tx"]["pending"] = pending.clone().into();
             assert!(
                 matches!(
-                    ViewingHistory::from_json(&refused.to_string()),
+                    ViewingHistory::from_json_value(refused),
                     Err(AnonymousError::ViewingHistory(_))
                 ),
                 "{pending:?}"
@@ -728,11 +711,75 @@ mod tests {
     #[test]
     fn a_stored_watermark_past_its_next_index_is_refused() {
         let history = ViewingHistory::new(ViewingKey::new().pubkey(), 0);
-        let mut stored: serde_json::Value = serde_json::from_str(&history.to_json()).unwrap();
+        let mut stored = history.to_json_value();
         stored["viewingHistory"][0]["tx"]["scanned"] = 1.into();
         assert!(matches!(
-            ViewingHistory::from_json(&stored.to_string()),
+            ViewingHistory::from_json_value(stored),
             Err(AnonymousError::ViewingHistory(_))
         ));
+    }
+
+    #[test]
+    fn version_7_migrates_with_no_progress_and_its_next_indices_kept() {
+        let viewing = ViewingKey::new().pubkey();
+        let sender = hex::encode(ViewingKey::new().pubkey().as_bytes());
+        let stored = serde_json::json!({
+            "version": 7,
+            "viewingHistory": [{
+                "viewingPubkey": hex::encode(viewing.as_bytes()),
+                "createdAt": 1,
+                "tx": { "next": 5, "scanned": 4, "pending": [1] },
+                "request": { "next": 2, "scanned": 2, "pending": [] },
+                "knownSenders": [{ "pubkey": sender, "next": 3, "scanned": 3, "pending": [] }],
+                "knownRecipients": [{ "pubkey": sender, "next": 1, "scanned": 1, "pending": [] }],
+            }],
+        });
+        let migrated = ViewingHistory::from_json_value(stored).unwrap();
+        let entry = migrated.current();
+        assert_eq!((entry.tx_count(), entry.tx.scanned()), (5, 0));
+        assert_eq!(entry.tx.pending().count(), 0);
+        assert_eq!((entry.request_count(), entry.request.scanned()), (2, 0));
+        assert_eq!(entry.known_senders().len(), 1);
+        assert!(entry.ring_positions().is_empty());
+        assert_eq!(
+            ViewingHistory::from_json_value(migrated.to_json_value()).unwrap(),
+            migrated
+        );
+    }
+
+    #[test]
+    fn an_added_key_reads_every_watched_ring_from_its_start() {
+        let ring = Address::new_from_array([7; 32]);
+        let synced = ViewingHistory::new(ViewingKey::new().pubkey(), 10).with_ring(ring, Some(40));
+        let imported = ViewingKey::new().pubkey();
+        let rotated = ViewingKey::new().pubkey();
+        let added = synced
+            .with_imported_key(imported, 5)
+            .unwrap()
+            .with_rotated_key(rotated, 20)
+            .unwrap();
+        assert_eq!(
+            added.entry(&imported).unwrap().ring_positions()[&ring],
+            None
+        );
+        assert_eq!(added.current().viewing_pubkey(), rotated);
+        assert_eq!(added.current().ring_positions()[&ring], None);
+        assert_eq!(added.entries()[1].ring_positions()[&ring], Some(40));
+    }
+
+    #[test]
+    fn an_import_newer_than_the_current_key_or_repeated_is_refused() {
+        let current = ViewingKey::new().pubkey();
+        let history = ViewingHistory::new(current, 10);
+        for (key, created_at) in [
+            (ViewingKey::new().pubkey(), 11),
+            (ViewingKey::new().pubkey(), 10),
+            (current, 5),
+        ] {
+            assert!(matches!(
+                history.clone().with_imported_key(key, created_at),
+                Err(AnonymousError::ImportedKeyNotOlder)
+            ));
+        }
     }
 }

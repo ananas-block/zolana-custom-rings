@@ -1,27 +1,21 @@
-//! The notes an auditor opened, by commitment and by spent-hash prefix with or without its owner.
+//! The notes an auditor opened, by commitment.
 
 use std::{
     borrow::Borrow,
     collections::{hash_map::Entry, HashMap},
 };
 
-use custom_ring_interface::InputPrefix;
-
 use crate::types::KnownUtxo;
 
 #[derive(Clone, Debug)]
 pub struct KnownUtxoIndex<T = KnownUtxo> {
     utxos: HashMap<[u8; 32], T>,
-    owned: HashMap<([u8; 32], InputPrefix), Vec<[u8; 32]>>,
-    prefixes: HashMap<InputPrefix, Vec<[u8; 32]>>,
 }
 
 impl<T> Default for KnownUtxoIndex<T> {
     fn default() -> Self {
         Self {
             utxos: HashMap::new(),
-            owned: HashMap::new(),
-            prefixes: HashMap::new(),
         }
     }
 }
@@ -36,13 +30,6 @@ impl<T: Borrow<KnownUtxo>> KnownUtxoIndex<T> {
                 }
             }
             Entry::Vacant(free) => {
-                if let Some(prefix) = InputPrefix::of(&commitment) {
-                    self.owned
-                        .entry((record.borrow().owner_key, prefix))
-                        .or_default()
-                        .push(commitment);
-                    self.prefixes.entry(prefix).or_default().push(commitment);
-                }
                 free.insert(record);
             }
         }
@@ -50,17 +37,6 @@ impl<T: Borrow<KnownUtxo>> KnownUtxoIndex<T> {
 
     pub fn get(&self, commitment: &[u8; 32]) -> Option<&T> {
         self.utxos.get(commitment)
-    }
-
-    pub fn prefixed(&self, owner_key: &[u8; 32], prefix: InputPrefix) -> &[[u8; 32]] {
-        self.owned
-            .get(&(*owner_key, prefix))
-            .map_or(&[], Vec::as_slice)
-    }
-
-    /// The authority rail names no owner for its inputs.
-    pub fn prefixed_by_anyone(&self, prefix: InputPrefix) -> &[[u8; 32]] {
-        self.prefixes.get(&prefix).map_or(&[], Vec::as_slice)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&[u8; 32], &T)> {

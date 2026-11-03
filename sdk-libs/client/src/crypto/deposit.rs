@@ -6,8 +6,8 @@ use spr_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_D
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_transaction::{
-    AssetRegistry, DecryptLabel, DecryptRequest, DepositPayload, ShieldedKeys, ShieldedTransaction,
-    TransactionError, WalletUtxo,
+    AssetRegistry, DecryptLabel, DecryptRequest, DepositPayload, Mint, ShieldedKeys,
+    ShieldedTransaction, TransactionError, WalletUtxo,
 };
 use zeroize::Zeroizing;
 use zolana_ring_transaction::{is_contributory, RingDepositPlaintext};
@@ -65,7 +65,8 @@ pub(crate) struct DepositSlot<'a> {
 
 pub(crate) enum OpenedDeposit {
     Note(Box<WalletUtxo>),
-    UnknownMint(Address),
+    /// Its hash rebuilt under a mint the registry does not name, the asset id zero.
+    UnknownMint(Box<WalletUtxo>),
 }
 
 impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
@@ -128,11 +129,17 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
         let Ok(plaintext) = RingDepositPlaintext::deserialize(&plaintext) else {
             return Ok(None);
         };
-        let asset = match self.assets.mint(&Address::new_from_array(output.asset)) {
-            Ok(asset) => asset,
-            Err(TransactionError::UnknownMint(mint)) => {
-                return Ok(Some(OpenedDeposit::UnknownMint(mint)))
-            }
+        let mint = Address::new_from_array(output.asset);
+        let (asset, registered) = match self.assets.mint(&mint) {
+            Ok(asset) => (asset, true),
+            // The commitment reads the mint alone.
+            Err(TransactionError::UnknownMint(mint)) => (
+                Mint {
+                    asset: mint,
+                    asset_id: 0,
+                },
+                false,
+            ),
             Err(_) => return Ok(None),
         };
         let utxo = plaintext.into_utxo(
@@ -155,7 +162,7 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
         if !rebuilt.is_ok_and(|hash| hash == context.hash) {
             return Ok(None);
         }
-        Ok(Some(OpenedDeposit::Note(Box::new(WalletUtxo {
+        let opened = Box::new(WalletUtxo {
             utxo,
             nullifier_pubkey: self.address.nullifier_pubkey,
             utxo_hash: context.hash,
@@ -169,7 +176,11 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
             slot: deposit.slot,
             tx_signature: deposit.tx_signature,
             slot_index: u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?,
-        }))))
+        });
+        Ok(Some(match registered {
+            true => OpenedDeposit::Note(opened),
+            false => OpenedDeposit::UnknownMint(opened),
+        }))
     }
 }
 
