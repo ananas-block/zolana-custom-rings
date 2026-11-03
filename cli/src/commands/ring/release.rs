@@ -52,7 +52,9 @@ impl RingRelease {
     }
 
     pub(crate) fn parse(lock: &str) -> Result<Self> {
-        serde_json::from_str(lock).context("the embedded release lock does not parse")
+        serde_json::from_str::<Option<Self>>(lock)
+            .context("the embedded release lock does not parse")?
+            .context("no packaged ring release is embedded, use a workspace build or generate a complete release with ring-xtask create-release")
     }
 
     pub fn program(&self) -> Result<&Asset> {
@@ -136,6 +138,27 @@ mod tests {
         "transfer_confidential_2_in40_w4_key": {"asset": "custom-ring-transfer-confidential-2-in40-w4-key-v1.key", "size": 1, "sha256": "x"},
         "register_key": {"asset": "custom-ring-register-key-v1.key", "size": 1, "sha256": "x"}
     }"#;
+
+    #[test]
+    fn an_unreleased_build_refuses_packaged_artifacts() {
+        let error = RingRelease::parse("null").unwrap_err().to_string();
+        assert!(
+            error.contains("no packaged ring release is embedded"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_embedded_release_is_absent_or_matches_the_verifiers() {
+        let release: Option<RingRelease> = serde_json::from_str(LOCK_JSON).unwrap();
+        if let Some(release) = release {
+            release
+                .validate_keys(custom_ring_interface::proving_key_hashes())
+                .unwrap();
+            release.program().unwrap();
+            release.genesis_program("storage_program").unwrap();
+        }
+    }
 
     #[test]
     fn release_keys_must_be_complete_and_match_the_compiled_verifiers() {
