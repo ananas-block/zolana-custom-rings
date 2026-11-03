@@ -1804,15 +1804,15 @@ mod tests {
 
     #[test]
     fn an_anonymous_held_spend_stays_within_a_keyed_width() {
-        assert_eq!(Spendable::RingOnly.widest_anonymous(2), Some(16));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(2), Some(24));
         assert_eq!(Spendable::RingOnly.widest_anonymous(4), Some(16));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(5), Some(8));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(8), Some(8));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(5), Some(5));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(8), Some(5));
         assert_eq!(Spendable::RingOnly.widest_anonymous(9), None);
-        for outputs in [2, 4, 8] {
+        for (outputs, widest) in [(2, 8), (4, 8), (8, 2)] {
             assert_eq!(
                 Spendable::DefaultRingOnly.widest_anonymous(outputs),
-                Some(8)
+                Some(widest)
             );
         }
         assert_eq!(Spendable::WithDefaultRing.widest_anonymous(2), None);

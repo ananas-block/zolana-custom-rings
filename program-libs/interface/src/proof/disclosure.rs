@@ -6,17 +6,9 @@ use spr_hasher::primitives::{
     is_canonical_bn254_scalar_be, pack_be_chunks, BN254_SCALAR_MODULUS_BE, PACK_BE_CHUNK_BYTES,
 };
 
+use crate::key_catalog::{TransferShape, ANONYMOUS_TRANSFER_SHAPES, ENTRY_TRANSFER_SHAPES};
+
 pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
-/// The input class of the sender key per delivered capacity.
-pub const DELIVERED_SENDER_CLASSES: [(usize, usize); 4] = [(2, 48), (4, 24), (8, 16), (16, 8)];
-/// Input slots of the widest SPP shape a compact confidential ring spend uses.
-pub const CONFIDENTIAL_RING_MAX_INPUTS: usize = 48;
-/// Input classes of the anonymous commitment keys per output capacity, ascending.
-pub const ANONYMOUS_AUDIT_CLASSES: [(usize, &[usize]); 3] =
-    [(2, &[4, 16]), (4, &[4, 16]), (8, &[4, 8])];
-/// Input slots of every anonymous entry key.
-pub const ANONYMOUS_ENTRY_CLASS: usize = 8;
-pub const ANONYMOUS_ENTRY_OUTPUTS: [usize; 3] = [2, 4, 8];
 /// A delivered slot of a transfer with an exit, ring `owner_key || 0^8`, exit `asset || u64be(amount)`.
 pub const DELIVERED_SLOT_BYTES: usize = 40;
 /// A delivered ring slot of an exit-free transfer, `owner_key`.
@@ -32,7 +24,7 @@ pub const INPUT_PREFIX_BITS: u32 = 126;
 /// One `u64be(amount)` per input slot of the entry class.
 pub const DISCLOSURE_INPUT_AMOUNT_BYTES: usize = 8;
 
-/// The audit statement's layout element, mirror `prover/circuits/audit/layout.go`.
+/// The transfer statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuditLayout {
     /// A published output exits, `SeedOut` opens the disclosure.
@@ -55,14 +47,13 @@ pub enum AnonymousAuditKey {
     /// Publishes spent UTXO 0's hash and the prefix of every later one, every spent UTXO a note of the ring.
     Commitment { class: usize },
     /// Opens every spent UTXO, the key of a transfer that spends a default-ring note.
-    Entry,
+    Entry { class: usize },
 }
 
 impl AnonymousAuditKey {
     pub const fn class(self) -> usize {
         match self {
-            Self::Commitment { class } => class,
-            Self::Entry => ANONYMOUS_ENTRY_CLASS,
+            Self::Commitment { class } | Self::Entry { class } => class,
         }
     }
 }
@@ -77,26 +68,20 @@ pub struct AnonymousSpend {
 }
 
 impl AnonymousSpend {
-    /// `None` when no key serves the spend, a larger entry spend splits.
+    /// `None` when no key serves the spend, a larger spend splits.
     pub fn audit_key(self) -> Option<AnonymousAuditKey> {
-        match self.spends_default_ring {
-            true => (ANONYMOUS_ENTRY_OUTPUTS.contains(&self.outputs)
-                && self.inputs <= ANONYMOUS_ENTRY_CLASS)
-                .then_some(AnonymousAuditKey::Entry),
-            false => self
-                .commitment_class()
-                .map(|class| AnonymousAuditKey::Commitment { class }),
+        let shapes = match self.spends_default_ring {
+            true => &ENTRY_TRANSFER_SHAPES[..],
+            false => &ANONYMOUS_TRANSFER_SHAPES[..],
+        };
+        let class = usize::from(TransferShape::of(shapes, self.outputs)?.inputs);
+        if self.inputs == 0 || self.inputs > class {
+            return None;
         }
-    }
-
-    /// The smallest commitment class holding the inputs, `None` when no key serves them.
-    fn commitment_class(self) -> Option<usize> {
-        for (capacity, classes) in ANONYMOUS_AUDIT_CLASSES {
-            if capacity == self.outputs {
-                return classes.iter().copied().find(|class| *class >= self.inputs);
-            }
-        }
-        None
+        Some(match self.spends_default_ring {
+            true => AnonymousAuditKey::Entry { class },
+            false => AnonymousAuditKey::Commitment { class },
+        })
     }
 }
 
@@ -122,8 +107,6 @@ pub struct DeliveredLayout {
     pub outputs: usize,
     pub exits: bool,
     pub key_escrow: bool,
-    /// The in-proof owner rail's sender key input class, the disclosure fields stay the same.
-    pub sender_class: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,16 +121,6 @@ pub struct DeliveredFields {
 }
 
 impl DeliveredLayout {
-    /// The sender key's input class at `outputs`, `None` when it holds fewer than `inputs`.
-    pub fn sender_class(outputs: usize, inputs: usize) -> Option<usize> {
-        for (capacity, class) in DELIVERED_SENDER_CLASSES {
-            if capacity == outputs {
-                return (inputs <= class).then_some(class);
-            }
-        }
-        None
-    }
-
     pub fn fields(self) -> DeliveredFields {
         let mut next = Cursor::default();
         let seed_out = self.exits.then(|| next.one());
@@ -199,7 +172,7 @@ pub enum AnonymousInputFields {
     Openings {
         /// The `nullifier_pk` of every spent UTXO.
         sender_nullifier_pk: usize,
-        /// `pack_disclosure(u64be(amount))` over the class, zero past the inputs.
+        /// `pack_disclosure(u64be(amount))` over the key's input class, zero past the inputs.
         amounts: Range<usize>,
         /// `asset, blinding` per published input.
         openings: Range<usize>,
@@ -208,7 +181,7 @@ pub enum AnonymousInputFields {
 
 impl AnonymousLayout {
     pub fn fields(self) -> AnonymousFields {
-        let entry = self.key == AnonymousAuditKey::Entry;
+        let entry = matches!(self.key, AnonymousAuditKey::Entry { .. });
         let mut next = Cursor::default();
         let seed_out = self.exits.then(|| next.one());
         let sender_nullifier_pk = entry.then(|| next.one());
@@ -220,7 +193,7 @@ impl AnonymousLayout {
             Some(sender_nullifier_pk) => AnonymousInputFields::Openings {
                 sender_nullifier_pk,
                 amounts: next.run(pack_be_chunks(
-                    DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS,
+                    DISCLOSURE_INPUT_AMOUNT_BYTES * self.key.class(),
                 )),
                 openings: next.run(2 * self.inputs),
             },
@@ -371,16 +344,14 @@ mod tests {
                 outputs: count(record, "outputs"),
                 exits: flag(record, "exits"),
                 key_escrow: flag(record, "key_escrow"),
-                sender_class: None,
             };
             (DisclosureLayout::Delivered(layout), record)
         });
         let anonymous = records("anonymous").map(|record| {
+            let class = count(record, "class");
             let key = match record["key"].as_str().unwrap() {
-                "entry" => AnonymousAuditKey::Entry,
-                _ => AnonymousAuditKey::Commitment {
-                    class: count(record, "class"),
-                },
+                "entry" => AnonymousAuditKey::Entry { class },
+                _ => AnonymousAuditKey::Commitment { class },
             };
             assert_eq!(key.class(), count(record, "class"));
             let layout = AnonymousLayout {
@@ -443,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commitment_spend_takes_the_smallest_class_and_an_entry_spend_its_one_key() {
+    fn a_spend_takes_its_family_class_at_its_output_count() {
         let key = |inputs, outputs, spends_default_ring| {
             AnonymousSpend {
                 inputs,
@@ -453,17 +424,20 @@ mod tests {
             .audit_key()
         };
         let commitment = |class| Some(AnonymousAuditKey::Commitment { class });
-        assert_eq!(key(1, 2, false), commitment(4));
-        assert_eq!(key(4, 2, false), commitment(4));
-        assert_eq!(key(5, 2, false), commitment(16));
+        let entry = |class| Some(AnonymousAuditKey::Entry { class });
+        assert_eq!(key(1, 2, false), commitment(24));
+        assert_eq!(key(24, 2, false), commitment(24));
+        assert_eq!(key(25, 2, false), None);
         assert_eq!(key(16, 4, false), commitment(16));
-        assert_eq!(key(17, 2, false), None);
         assert_eq!(key(17, 4, false), None);
-        assert_eq!(key(5, 8, false), commitment(8));
-        assert_eq!(key(9, 8, false), None);
+        assert_eq!(key(5, 8, false), commitment(5));
+        assert_eq!(key(6, 8, false), None);
+        assert_eq!(key(0, 2, false), None);
         assert_eq!(key(1, 16, false), None);
-        assert_eq!(key(1, 2, true), Some(AnonymousAuditKey::Entry));
-        assert_eq!(key(8, 8, true), Some(AnonymousAuditKey::Entry));
+        assert_eq!(key(1, 2, true), entry(8));
+        assert_eq!(key(8, 4, true), entry(8));
+        assert_eq!(key(2, 8, true), entry(2));
+        assert_eq!(key(3, 8, true), None);
         assert_eq!(key(9, 4, true), None);
         assert_eq!(key(2, 16, true), None);
     }

@@ -504,6 +504,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
         ring,
         owner: sender,
         amount: RING_DEPOSIT_B,
+        asset: DepositAsset::Sol,
         count: 1,
         env: &env,
     }

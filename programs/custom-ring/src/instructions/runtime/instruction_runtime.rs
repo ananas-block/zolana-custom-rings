@@ -9,6 +9,8 @@ use pinocchio::{
 use spr_interface::{RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
 use wincode::{config::DefaultConfig, SchemaRead};
 
+const _: () = assert!(custom_ring_interface::MAX_SPP_CPI_ACCOUNTS == MAX_CPI_ACCOUNTS);
+
 /// Instruction data of `T`, trailing bytes refused.
 #[inline(never)]
 pub(crate) fn parse<'a, T: SchemaRead<'a, DefaultConfig, Dst = T>>(

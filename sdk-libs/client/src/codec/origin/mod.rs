@@ -362,12 +362,7 @@ fn parse_frame(mode: RingMode, frame: &[u8]) -> Result<ParsedTransact<'_>, Audit
     let rail = InstructionTag::try_from(tag)
         .and_then(|tag| RingRail::of(tag, mode))
         .map_err(invalid)?;
-    let parsed = if is_legacy(frame) {
-        RingTransactData::parse_legacy(data, rail)
-    } else {
-        RingTransactData::parse(data, rail)
-    };
-    parsed.map_err(invalid)
+    RingTransactData::parse(data, rail).map_err(invalid)
 }
 
 fn is_legacy(frame: &[u8]) -> bool {

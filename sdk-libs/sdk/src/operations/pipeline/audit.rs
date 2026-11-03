@@ -1,11 +1,9 @@
 //! The audit half of a ring transfer, its disclosure sealed to the auditor.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, AnonymousAuditKey, AuditLayout, AuditorMessage, DisclosureLayout,
-    RingOutput, RING_DELIVERED_BODY_LEN,
+    AnonymousAuditKey, AuditLayout, AuditorMessage, DisclosureLayout, RingOutput,
+    RING_DELIVERED_BODY_LEN,
 };
-use serde::Serialize;
-use spr_client::AsyncRpc;
 use spr_event::MessageData;
 use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
@@ -20,18 +18,12 @@ use zolana_ring_client::{
 };
 use zolana_ring_transaction::{PublishedSlot, RingOutputRail};
 
-use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    prover::{to_instruction_proof, RingRequest},
-    request::{
-        owner_key, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit, DeliveredOutput,
-        DeliveredSenderAudit, Opening,
-    },
+    request::{owner_key, AnonymousOutput, AuditParams, DeliveredOutput, Opening},
     RingError,
 };
 
 pub(crate) struct SealedAudit {
-    pub layout: DisclosureLayout,
     pub flags: AuditLayout,
     pub eph_u: [u8; 32],
     pub sealed: [u8; 32],
@@ -75,7 +67,6 @@ impl AuditSeal<'_> {
         let envelope = AuditEnvelope::seal(self.rail.tx_viewing_key(), self.auditor)?;
         let pad = DisclosurePad::new(self.rail.tx_viewing_key(), &self.rail.salt())?;
         Ok(SealedAudit {
-            layout: self.layout,
             flags: self.flags,
             eph_u: envelope.envelope.eph_u,
             sealed: envelope.envelope.sealed,
@@ -122,7 +113,7 @@ impl AuditSeal<'_> {
                     .map(|input| (!input.is_dummy()).then(|| input.private_tx_input_hash()))
                     .collect::<Vec<_>>(),
             )?,
-            AnonymousAuditKey::Entry => AnonymousInputs::Openings {
+            AnonymousAuditKey::Entry { .. } => AnonymousInputs::Openings {
                 sender_key: owner_key(&self.sender.signing_pubkey)?,
                 sender_nullifier_pk: self.sender.nullifier_pubkey,
                 inputs: published
@@ -155,7 +146,6 @@ impl PresealedAudit {
             .try_into()
             .map_err(|_| RingError::RelayAuditorMessage)?;
         Ok(SealedAudit {
-            layout,
             flags,
             eph_u,
             sealed: *message.sealed,
@@ -175,131 +165,50 @@ impl SealedAudit {
     }
 }
 
-pub(crate) struct AuditProving<'a> {
+pub(super) struct AuditSection<'a> {
     pub rail: &'a RingOutputRail,
     pub sealed: &'a SealedAudit,
     pub published: Vec<PublishedSlot<'a>>,
     pub inputs: &'a SppProofInputs,
-    pub n_out: u8,
     pub sender: &'a ShieldedAddress,
     pub auditor: &'a X25519Pubkey,
-    pub ring_id: [u8; 32],
-    pub public_input_hash: [u8; 32],
-    pub private_tx_hash: [u8; 32],
-    pub private_tx_blinding: [u8; 32],
-    /// The sender's owner identity, the sender key's statement value.
-    pub sender_pk_hash: [u8; 32],
-    /// `None` outside the anonymous rail.
-    pub anonymous: Option<&'a AnonymousStatement>,
 }
 
-pub(crate) struct AuditRequest {
-    pub circuit: RingCircuit,
-    pub body: AuditBody,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub(crate) enum AuditBody {
-    Delivered(Box<DeliveredAudit>),
-    DeliveredSender(Box<DeliveredSenderAudit>),
-    Anonymous(Box<AnonymousAudit>),
-}
-
-pub(crate) struct AnonymousStatement {
-    pub party_identities: [[u8; 32]; 3],
-    pub sender_commitment: [u8; 32],
-}
-
-impl AuditProving<'_> {
-    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        &self,
-        client: &RingClient<R, I>,
-    ) -> Result<custom_ring_interface::CustomRingProof, RingError> {
-        let request = self.request()?;
-        let proof = RingRequest::new(request.circuit, &request.body)?
-            .prove(client, self.public_input_hash)
-            .await?;
-        to_instruction_proof(proof)
-    }
-
-    /// The circuit the sealed layout selects and the body it proves.
-    pub fn request(&self) -> Result<AuditRequest, RingError> {
-        let inputs = self.inputs;
-        let n_out = self.n_out;
-        let circuit = RingCircuit::audit(self.sealed.layout, n_out);
-        let first_nullifier = inputs
-            .input_utxos
-            .first()
-            .ok_or(TransactionError::NoInputs)?
-            .nullifier();
-        let audit = AuditParams {
-            first_nullifier,
-            ring_id: self.ring_id,
+impl AuditSection<'_> {
+    pub fn params(&self) -> Result<AuditParams, RingError> {
+        Ok(AuditParams {
+            first_nullifier: self
+                .inputs
+                .input_utxos
+                .first()
+                .ok_or(TransactionError::NoInputs)?
+                .nullifier(),
             tx_viewing_sk: self.rail.tx_viewing_key().secret_bytes(),
             eph_sk: self.sealed.eph_sk.clone(),
             auditor_pk: *self.auditor,
             salt: self.rail.salt(),
             layout: self.sealed.flags.value(),
-        };
-        let tree = inputs.output_tree_id;
-        let body = match (self.sealed.layout, self.anonymous) {
-            (DisclosureLayout::Delivered(layout), _) => {
-                let delivered = DeliveredAudit {
-                    public_input_hash: self.public_input_hash,
-                    audit,
-                    outputs: self
-                        .published
-                        .iter()
-                        .map(|slot| delivered_output(slot, tree))
-                        .collect::<Result<_, _>>()?,
-                };
-                match layout.sender_class {
-                    None => AuditBody::Delivered(Box::new(delivered)),
-                    Some(class) => AuditBody::DeliveredSender(Box::new(DeliveredSenderAudit {
-                        delivered,
-                        sender: self.sender_pk_hash,
-                        private_tx_hash: self.private_tx_hash,
-                        private_tx_blinding: self.private_tx_blinding,
-                        inputs: self.input_openings(class)?,
-                    })),
-                }
-            }
-            (DisclosureLayout::Anonymous(layout), Some(statement)) => {
-                let (class, count) = (layout.key.class(), layout.inputs);
-                AuditBody::Anonymous(Box::new(AnonymousAudit {
-                    party_identities: statement.party_identities,
-                    public_input_hash: self.public_input_hash,
-                    audit,
-                    outputs: self
-                        .published
-                        .iter()
-                        .map(|slot| anonymous_output(slot, tree))
-                        .collect::<Result<_, _>>()?,
-                    private_tx_hash: self.private_tx_hash,
-                    private_tx_blinding: self.private_tx_blinding,
-                    sender_key: (layout.key == AnonymousAuditKey::Entry)
-                        .then(|| owner_key(&self.sender.signing_pubkey))
-                        .transpose()?,
-                    input_count: u8::try_from(count).map_err(|_| {
-                        TransactionError::TooManyInputs {
-                            got: count,
-                            max: usize::from(u8::MAX),
-                        }
-                    })?,
-                    inputs: self.input_openings(class)?,
-                    sender_commitment: statement.sender_commitment,
-                }))
-            }
-            (DisclosureLayout::Anonymous(_), None) => {
-                return Err(RingError::MissingAnonymousSigner)
-            }
-        };
-        Ok(AuditRequest { circuit, body })
+        })
     }
 
-    /// One opening per published input, zero padded to the key's input class.
-    fn input_openings(&self, class: usize) -> Result<Vec<Opening>, RingError> {
+    pub fn delivered_outputs(&self) -> Result<Vec<DeliveredOutput>, RingError> {
+        let tree = self.inputs.output_tree_id;
+        self.published
+            .iter()
+            .map(|slot| delivered_output(slot, tree))
+            .collect()
+    }
+
+    pub fn anonymous_outputs(&self) -> Result<Vec<AnonymousOutput>, RingError> {
+        let tree = self.inputs.output_tree_id;
+        self.published
+            .iter()
+            .map(|slot| anonymous_output(slot, tree))
+            .collect()
+    }
+
+    /// The spent notes' openings in SPP order, zero past them to the key's input class.
+    pub fn input_openings(&self, class: usize) -> Result<Vec<Opening>, RingError> {
         let mut openings = self
             .inputs
             .input_utxos
@@ -309,6 +218,10 @@ impl AuditProving<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         openings.resize(class, Opening::default());
         Ok(openings)
+    }
+
+    pub fn sender_key(&self) -> Result<[u8; 32], RingError> {
+        owner_key(&self.sender.signing_pubkey)
     }
 }
 

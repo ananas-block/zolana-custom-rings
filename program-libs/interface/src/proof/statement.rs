@@ -1,7 +1,7 @@
-//! The `HashChain4` public input of the transfer, audit, policy, apply and register key proofs.
+//! The `HashChain4` public input of the transfer, apply and register key proofs.
 
 use spr_hasher::{
-    hash_chain::create_hash_chain_4_from_slice,
+    hash_chain::{create_hash_chain_4, create_hash_chain_4_from_slice},
     primitives::{hash_bytes, pack_be, right_align},
     HasherError,
 };
@@ -12,7 +12,7 @@ use crate::{
     TAGGED_X25519_KEY_LEN,
 };
 
-/// `[CRAU, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout]`.
+/// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout]`.
 pub const AUDIT_HEAD_ELEMENTS: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,10 +29,6 @@ pub struct AuditHead<'a> {
 }
 
 impl AuditHead<'_> {
-    fn elements(&self) -> Result<[[u8; 32]; AUDIT_HEAD_ELEMENTS], HasherError> {
-        self.elements_under(domain::AUDIT_STATEMENT)
-    }
-
     fn elements_under(
         &self,
         statement: u32,
@@ -57,100 +53,26 @@ impl AuditHead<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnonymousAudit<'a> {
-    pub party_identities: &'a [[u8; 32]; 3],
-    pub private_tx_hash: &'a [u8; 32],
-    /// Zero outside a policy ring.
-    pub sender_commitment: &'a [u8; 32],
-}
-
-/// The in-proof owner rail's binding, every spent UTXO is the sender's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeliveredSender<'a> {
-    pub private_tx_hash: &'a [u8; 32],
-    /// The in-proof owner's identity.
-    pub sender: [u8; 32],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditKind<'a> {
-    /// `Some` on the in-proof owner rail.
-    Delivered(Option<DeliveredSender<'a>>),
-    Anonymous(AnonymousAudit<'a>),
-}
-
-/// Every ring transfer's audit proof, mirror `prover/circuits/audit`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuditStatement<'a> {
-    pub head: AuditHead<'a>,
-    /// Published output order.
-    pub outputs: &'a [RingOutput<'a>],
-    /// Exactly the published disclosure fields.
-    pub disclosure: &'a [[u8; 32]],
-    pub kind: AuditKind<'a>,
-}
-
-impl AuditStatement<'_> {
-    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
-        let mut elements = self.head.elements()?.to_vec();
-        let output_chain = output_chain(self.outputs)?;
-        let disclosure_chain = create_hash_chain_4_from_slice(self.disclosure)?;
-        match self.kind {
-            AuditKind::Delivered(sender) => {
-                elements.extend([
-                    output_chain,
-                    body_chain(self.outputs)?,
-                    disclosure_chain,
-                    recipient_key_chain(self.outputs)?,
-                ]);
-                if let Some(sender) = sender {
-                    elements.extend([*sender.private_tx_hash, sender.sender]);
-                }
-            }
-            AuditKind::Anonymous(anonymous) => {
-                elements.extend([
-                    output_chain,
-                    disclosure_chain,
-                    *anonymous.private_tx_hash,
-                    *anonymous.sender_commitment,
-                    anonymous.party_identities[0],
-                    anonymous.party_identities[1],
-                    anonymous.party_identities[2],
-                ]);
-            }
-        }
-        Ok(elements)
-    }
-
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_4_from_slice(&self.elements()?)
-    }
-}
-
 fn output_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
-    let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash()).collect();
-    create_hash_chain_4_from_slice(&hashes)
+    create_hash_chain_4(outputs.iter().map(RingOutput::hash))
 }
 
-/// Zero for every slot but a delivered one.
 fn body_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
-    let bodies = outputs
-        .iter()
-        .map(RingOutput::body_hash)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut bodies = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        bodies.push(output.body_hash()?);
+    }
     create_hash_chain_4_from_slice(&bodies)
 }
 
 fn recipient_key_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
-    let keys: Vec<[u8; 32]> = outputs
-        .iter()
-        .flat_map(RingOutput::recipient_key_fields)
-        .collect();
+    let mut keys = Vec::with_capacity(2 * outputs.len());
+    for output in outputs {
+        keys.extend(output.recipient_key_fields());
+    }
     create_hash_chain_4_from_slice(&keys)
 }
 
-/// The rail-bound elements of a transfer statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferFamily<'a> {
     /// The signer, in-proof and authority rails.
@@ -195,11 +117,18 @@ pub struct TransferStatement<'a> {
 }
 
 impl TransferStatement<'_> {
+    /// `elements().len()`, fixed by the family and the output count.
+    pub fn element_count(&self) -> usize {
+        let family = match self.family {
+            TransferFamily::Confidential { recipients, .. } => 5 + recipients.len(),
+            TransferFamily::Anonymous { .. } => 3,
+        };
+        AUDIT_HEAD_ELEMENTS + 3 + 2 + family + 3 + 3 * N_PUBLIC_SLOTS + 1 + 2
+    }
+
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
-        let mut elements = self
-            .head
-            .elements_under(domain::TRANSFER_STATEMENT)?
-            .to_vec();
+        let mut elements = Vec::with_capacity(self.element_count());
+        elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
         if let TransferFamily::Confidential {
             in_proof, delegate, ..
         } = self.family
@@ -232,8 +161,11 @@ impl TransferStatement<'_> {
         for (slot, asset) in self.public_assets.iter().enumerate() {
             elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
         }
+        elements.push(*self.withdrawal_hash);
+        // The length counts itself and the version, both close the chain.
+        let length = (elements.len() + 2) as u64;
         elements.extend([
-            *self.withdrawal_hash,
+            right_align(&length.to_be_bytes()),
             right_align(&[domain::TRANSFER_STATEMENT_VERSION]),
         ]);
         Ok(elements)
@@ -241,70 +173,6 @@ impl TransferStatement<'_> {
 
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         create_hash_chain_4_from_slice(&self.elements()?)
-    }
-}
-
-/// The member key reads the sender by the ring mode, the delegate key proves every input the sender's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PolicyKey {
-    Member { anonymous: bool },
-    Delegate,
-}
-
-/// A policy ring transfer's policy proof, mirror `prover/circuits/policy`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolicyStatement<'a> {
-    pub withdrawal_hash: &'a [u8; 32],
-    pub key: PolicyKey,
-    pub private_tx_hash: &'a [u8; 32],
-    pub policy_hash: &'a [u8; 32],
-    pub ring_id: &'a [u8; 32],
-    pub approval_required: bool,
-    pub key_escrow: bool,
-    pub own_root: &'a [u8; 32],
-    /// Zero without a curator source.
-    pub curator_root: &'a [u8; 32],
-    /// The owner signer's or in-proof owner's identity, the sender commitment on an anonymous ring, zero on the delegate rail.
-    pub sender: &'a [u8; 32],
-    /// One owner identity per output slot, zero on a dummy and on the anonymous rail.
-    pub recipients: &'a [[u8; 32]],
-    /// SPP's public asset fields, zero past the used slots.
-    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    /// SPP's public amount fields, a withdrawal is `q - |amount|`.
-    pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-}
-
-impl PolicyStatement<'_> {
-    pub fn elements(&self) -> Vec<[u8; 32]> {
-        let mut elements = vec![
-            domain::field(domain::POLICY_STATEMENT),
-            *self.private_tx_hash,
-            *self.policy_hash,
-            *self.ring_id,
-        ];
-        if let PolicyKey::Member { anonymous } = self.key {
-            elements.push(bit(anonymous));
-        }
-        elements.extend([
-            bit(self.approval_required),
-            bit(self.key_escrow),
-            *self.own_root,
-            *self.curator_root,
-            *self.sender,
-        ]);
-        elements.extend_from_slice(self.recipients);
-        for (asset, amount) in self.public_assets.iter().zip(self.public_amounts) {
-            elements.extend([*asset, *amount]);
-        }
-        elements.extend([
-            right_align(&[domain::POLICY_STATEMENT_VERSION]),
-            *self.withdrawal_hash,
-        ]);
-        elements
-    }
-
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_4_from_slice(&self.elements())
     }
 }
 

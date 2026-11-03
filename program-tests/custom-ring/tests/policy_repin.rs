@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Result};
 use custom_ring_cli::ModeName;
 use custom_ring_interface::CustomRingError;
-use custom_ring_sdk::{CustomRing, ListRegistry};
+use custom_ring_sdk::{CustomRing, DepositAsset, ListRegistry};
 use custom_ring_test_validator::{
     cli::{ListWrite, RingProject, RingToml},
     policy::{
@@ -67,6 +67,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env,
     }
@@ -228,6 +229,7 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env,
     }

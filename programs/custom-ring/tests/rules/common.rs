@@ -443,17 +443,24 @@ pub fn retired(revision: u64, hash: [u8; 32], expires_at: u64) -> Root {
 
 /// Only a ring proof check raises either code, every earlier check passed.
 pub fn reaches_verification(sent: Sent) -> u64 {
+    match reached_verification(&sent) {
+        Some(units) => units,
+        None => panic!("expected the proof check, got {sent:?}"),
+    }
+}
+
+pub fn reached_verification(sent: &Sent) -> Option<u64> {
     let proof_check = [
         CustomRingError::InvalidRingProofPoint,
         CustomRingError::ProofVerificationFailed,
     ];
     match sent {
         Err((TransactionError::InstructionError(0, InstructionError::Custom(code)), units))
-            if proof_check.iter().any(|error| *error as u32 == code) =>
+            if proof_check.iter().any(|error| *error as u32 == *code) =>
         {
-            units
+            Some(*units)
         }
-        other => panic!("expected the proof check, got {other:?}"),
+        _ => None,
     }
 }
 

@@ -16,7 +16,7 @@
       "sender_key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "sender_nullifier_pk": "005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
       "key": "commitment",
-      "class": 4,
+      "class": 16,
       "inputs": [
         {
           "nullifier": "0000000000000000000000000000000000000000000000000000000000001f1f",
@@ -165,7 +165,7 @@
       "sender_key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "sender_nullifier_pk": "005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
       "key": "commitment",
-      "class": 4,
+      "class": 16,
       "inputs": [
         {
           "nullifier": "0000000000000000000000000000000000000000000000000000000000001f1f",
@@ -324,7 +324,7 @@
       "sender_key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "sender_nullifier_pk": "005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
       "key": "commitment",
-      "class": 4,
+      "class": 16,
       "inputs": [
         {
           "nullifier": "0000000000000000000000000000000000000000000000000000000000001f1f",

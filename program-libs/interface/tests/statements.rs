@@ -1,10 +1,9 @@
 //! Pins `test-vectors/proof/ring-statements.json` for the Go circuits and the TS SDK.
 
 use custom_ring_interface::{
-    AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
-    AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DeliveredSender, DepositContext,
-    DepositPublicInput, DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey,
-    PolicyStatement, RegisterKeyStatement, RingOutput, TransferFamily, TransferStatement,
+    AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead, AuditLayout,
+    DeliveredLayout, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
+    DisclosureLayout, RegisterKeyStatement, RingOutput, TransferFamily, TransferStatement,
     ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
@@ -27,35 +26,10 @@ const WITHDRAWAL_1200: &str = "30644e72e131a029b85045b68181585d2833e84879b970914
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct StatementVectors {
     description: String,
-    audit: Vec<AuditCase>,
-    policy: Vec<PolicyCase>,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct AuditCase {
-    /// `delivered`, `delivered_sender` or `anonymous`.
-    kind: String,
-    first_nullifier: String,
-    ring_id: String,
-    tx_viewing_u: String,
-    auditor_pubkey: String,
-    eph_u: String,
-    sealed: String,
-    salt: String,
-    /// `exits | key_escrow << 1 | full_openings << 3`.
-    layout: u8,
-    outputs: Vec<OutputCase>,
-    disclosure: Vec<String>,
-    private_tx_hash: Option<String>,
-    sender: Option<String>,
-    sender_commitment: Option<String>,
-    party_identities: Option<Vec<String>>,
-    elements: Vec<String>,
-    public_input_hash: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -65,27 +39,6 @@ struct OutputCase {
     hash: String,
     u: Option<String>,
     body: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct PolicyCase {
-    withdrawal_hash: String,
-    /// `member` or `delegate`.
-    key: String,
-    anonymous: Option<bool>,
-    private_tx_hash: String,
-    policy_hash: String,
-    ring_id: String,
-    approval_required: bool,
-    key_escrow: bool,
-    own_root: String,
-    curator_root: String,
-    sender: String,
-    recipients: Vec<String>,
-    public_assets: Vec<String>,
-    public_amounts: Vec<String>,
-    elements: Vec<String>,
-    public_input_hash: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -267,41 +220,6 @@ impl Values {
     }
 }
 
-fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
-    let head = statement.head;
-    let (anonymous, sender) = match statement.kind {
-        AuditKind::Anonymous(anonymous) => (Some(anonymous), None),
-        AuditKind::Delivered(sender) => (None, sender),
-    };
-    let kind = match statement.kind {
-        AuditKind::Delivered(None) => "delivered",
-        AuditKind::Delivered(Some(_)) => "delivered_sender",
-        AuditKind::Anonymous(_) => "anonymous",
-    };
-    AuditCase {
-        kind: kind.to_string(),
-        first_nullifier: hex::encode(head.first_nullifier),
-        ring_id: hex::encode(head.ring_id),
-        tx_viewing_u: hex::encode(head.tx_viewing_u),
-        auditor_pubkey: hex::encode(head.auditor_pubkey),
-        eph_u: hex::encode(head.eph_u),
-        sealed: hex::encode(head.sealed),
-        salt: hex::encode(head.salt),
-        layout: head.layout.value(),
-        outputs: statement.outputs.iter().map(output_case).collect(),
-        disclosure: hexes(statement.disclosure),
-        private_tx_hash: anonymous
-            .map(|anonymous| anonymous.private_tx_hash)
-            .or(sender.map(|sender| sender.private_tx_hash))
-            .map(hex::encode),
-        sender: sender.map(|sender| hex::encode(sender.sender)),
-        sender_commitment: anonymous.map(|anonymous| hex::encode(anonymous.sender_commitment)),
-        party_identities: anonymous.map(|anonymous| hexes(anonymous.party_identities)),
-        elements: hexes(&statement.elements().unwrap()),
-        public_input_hash: hex::encode(statement.hash().unwrap()),
-    }
-}
-
 fn output_case(output: &RingOutput<'_>) -> OutputCase {
     let (kind, u, body) = match output {
         RingOutput::Delivered { u, body, .. } => ("delivered", Some(*u), Some(*body)),
@@ -313,31 +231,6 @@ fn output_case(output: &RingOutput<'_>) -> OutputCase {
         hash: hex::encode(output.hash()),
         u: u.map(hex::encode),
         body: body.map(hex::encode),
-    }
-}
-
-fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
-    let (key, anonymous) = match statement.key {
-        PolicyKey::Member { anonymous } => ("member", Some(anonymous)),
-        PolicyKey::Delegate => ("delegate", None),
-    };
-    PolicyCase {
-        withdrawal_hash: hex::encode(statement.withdrawal_hash),
-        key: key.to_string(),
-        anonymous,
-        private_tx_hash: hex::encode(statement.private_tx_hash),
-        policy_hash: hex::encode(statement.policy_hash),
-        ring_id: hex::encode(statement.ring_id),
-        approval_required: statement.approval_required,
-        key_escrow: statement.key_escrow,
-        own_root: hex::encode(statement.own_root),
-        curator_root: hex::encode(statement.curator_root),
-        sender: hex::encode(statement.sender),
-        recipients: hexes(statement.recipients),
-        public_assets: hexes(statement.public_assets),
-        public_amounts: hexes(statement.public_amounts),
-        elements: hexes(&statement.elements()),
-        public_input_hash: hex::encode(statement.hash().unwrap()),
     }
 }
 
@@ -407,125 +300,18 @@ fn compute_vectors() -> StatementVectors {
         values.delivered_outputs(8, &[2, 5]),
         values.anonymous_outputs(),
     );
-    let anonymous_tail = AuditKind::Anonymous(AnonymousAudit {
-        party_identities: &[right_aligned(11), right_aligned(12), [0; 32]],
-        private_tx_hash: &values.fields[3],
-        sender_commitment: &values.fields[5],
-    });
     let commitment = AnonymousLayout {
-        key: AnonymousAuditKey::Commitment { class: 4 },
+        key: AnonymousAuditKey::Commitment { class: 16 },
         inputs: 3,
         outputs: 4,
         exits: true,
     };
-    let audit = [
-        AuditStatement {
-            head: values.head(AuditLayout {
-                exits: true,
-                key_escrow: true,
-                full_openings: false,
-            }),
-            outputs: &escrowed,
-            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
-                outputs: 2,
-                exits: true,
-                key_escrow: true,
-                sender_class: None,
-            })),
-            kind: AuditKind::Delivered(None),
-        },
-        AuditStatement {
-            head: values.head(AuditLayout {
-                exits: true,
-                ..AuditLayout::default()
-            }),
-            outputs: &delivered,
-            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
-                outputs: 8,
-                exits: true,
-                key_escrow: false,
-                sender_class: None,
-            })),
-            kind: AuditKind::Delivered(None),
-        },
-        AuditStatement {
-            head: values.head(AuditLayout {
-                exits: true,
-                ..AuditLayout::default()
-            }),
-            outputs: &delivered,
-            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
-                outputs: 8,
-                exits: true,
-                key_escrow: false,
-                sender_class: Some(16),
-            })),
-            kind: AuditKind::Delivered(Some(DeliveredSender {
-                private_tx_hash: &values.fields[3],
-                sender: solana_owner_identity(&[0x42; 32]).unwrap(),
-            })),
-        },
-        AuditStatement {
-            head: values.head(AuditLayout {
-                exits: true,
-                ..AuditLayout::default()
-            }),
-            outputs: &anonymous,
-            disclosure: values.disclosure(DisclosureLayout::Anonymous(commitment)),
-            kind: anonymous_tail,
-        },
-        AuditStatement {
-            head: values.head(AuditLayout {
-                exits: true,
-                full_openings: true,
-                ..AuditLayout::default()
-            }),
-            outputs: &anonymous,
-            disclosure: values.disclosure(DisclosureLayout::Anonymous(AnonymousLayout {
-                key: AnonymousAuditKey::Entry,
-                ..commitment
-            })),
-            kind: anonymous_tail,
-        },
-    ];
     let assets = [values.fields[60], values.fields[61], [0; 32]];
     let mut withdrawal = [0u8; 32];
     hex::decode_to_slice(WITHDRAWAL_1200, &mut withdrawal).unwrap();
     let amounts = [right_aligned(500), withdrawal, [0; 32]];
     let owner_signer = solana_owner_identity(&[0x42; 32]).unwrap();
     let zero = [0u8; 32];
-    let recipients = [values.fields[62], zero];
-    let confidential = PolicyStatement {
-        withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&[]).unwrap(),
-        key: PolicyKey::Member { anonymous: false },
-        private_tx_hash: &values.fields[3],
-        policy_hash: &values.fields[6],
-        ring_id: &values.ring_id,
-        approval_required: true,
-        key_escrow: false,
-        own_root: &values.fields[7],
-        curator_root: &values.fields[8],
-        sender: &owner_signer,
-        recipients: &recipients,
-        public_assets: &assets,
-        public_amounts: &amounts,
-    };
-    let anonymous_policy = PolicyStatement {
-        key: PolicyKey::Member { anonymous: true },
-        approval_required: false,
-        sender: &values.fields[5],
-        recipients: &[zero; 2],
-        ..confidential
-    };
-    let delegate = PolicyStatement {
-        key: PolicyKey::Delegate,
-        approval_required: false,
-        key_escrow: true,
-        curator_root: &zero,
-        sender: &zero,
-        recipients: &[values.fields[62], values.fields[63]],
-        ..confidential
-    };
     let gross = [zero, right_aligned(1200), zero];
     let no_withdrawals = custom_ring_interface::policy_withdrawal_hash(&[]).unwrap();
     let eight_recipients: [[u8; 32]; 8] = core::array::from_fn(|slot| values.fields[62 + slot]);
@@ -548,7 +334,6 @@ fn compute_vectors() -> StatementVectors {
             outputs: 8,
             exits: true,
             key_escrow: false,
-            sender_class: None,
         })),
         private_tx_hash: &values.fields[3],
         policy_hash: &values.fields[6],
@@ -600,7 +385,6 @@ fn compute_vectors() -> StatementVectors {
             outputs: 2,
             exits: true,
             key_escrow: true,
-            sender_class: None,
         })),
         curator_root: &zero,
         public_assets: &no_slots,
@@ -630,7 +414,7 @@ fn compute_vectors() -> StatementVectors {
             ..exits_only
         }),
         disclosure: values.disclosure(DisclosureLayout::Anonymous(AnonymousLayout {
-            key: AnonymousAuditKey::Entry,
+            key: AnonymousAuditKey::Entry { class: 8 },
             ..commitment
         })),
         policy_hash: &zero,
@@ -701,18 +485,13 @@ fn compute_vectors() -> StatementVectors {
         }),
     };
     StatementVectors {
-        description: "Every ring statement and its public input HashChain4(elements). Audit \
-                      heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), \
-                      pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), \
-                      salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 \
-                      | full_openings << 3, the tails chain the published output \
-                      hashes, then on the delivered rail the body hashes (zero for an exit), the \
-                      disclosure fields and pack_be(u) per delivered slot, then on the in-proof \
-                      owner rail private_tx_hash and the sender identity, on the anonymous rail \
-                      the disclosure fields, private_tx_hash, the sender commitment and the three \
-                      party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 \
-                      escrowed outputs and with 8, anonymous of commitment class 4 and of the entry \
-                      key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) \
+        description: "Every ring statement and its public input HashChain4(elements). The transfer \
+                      head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), \
+                      pack_be(0x04 || eph_u), hash_bytes(sealed), salt, layout] with the frame's \
+                      random salt and layout = exits | key_escrow << 1 | full_openings << 3. Each \
+                      disclosure holds the field count of its layout, delivered with 2 escrowed \
+                      outputs and with 8, anonymous of commitment class 16 and of the entry key of \
+                      class 8 with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
@@ -723,14 +502,9 @@ fn compute_vectors() -> StatementVectors {
                       recipient key chains, the disclosure chain, private_tx_hash, the sender on the \
                       confidential family or the three party identities on the anonymous family, \
                       policy_hash, own_root, curator_root, one recipient per output on the confidential \
-                      family, asset, net and gross per public slot, withdrawal_hash and the version. \
-                      Produced by program-libs/interface/tests/statements.rs."
+                      family, asset, net and gross per public slot, withdrawal_hash, the element \
+                      count and the version. Produced by program-libs/interface/tests/statements.rs."
             .to_string(),
-        audit: audit.iter().map(audit_case).collect(),
-        policy: [confidential, anonymous_policy, delegate]
-            .iter()
-            .map(policy_case)
-            .collect(),
         transfer: transfers.iter().map(transfer_case).collect(),
         apply_records: ApplyCase {
             old_root: hex::encode(apply.old_root),
@@ -792,24 +566,12 @@ fn ring_statements_vector() {
         serde_json::from_str(&std::fs::read_to_string(VECTORS).expect("vector file"))
             .expect("vector json");
     assert_eq!(committed, compute_vectors());
-    let lengths: Vec<usize> = committed
-        .audit
-        .iter()
-        .map(|case| case.elements.len())
-        .collect();
-    assert_eq!(lengths, [16, 16, 18, 19, 19]);
-    let policy: Vec<usize> = committed
-        .policy
-        .iter()
-        .map(|case| case.elements.len())
-        .collect();
-    assert_eq!(policy, [20, 20, 19]);
     let transfer: Vec<usize> = committed
         .transfer
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(transfer, [44, 44, 44, 38, 34, 34, 34]);
+    assert_eq!(transfer, [45, 45, 45, 39, 35, 35, 35]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -833,72 +595,71 @@ fn anonymous_and_exit_slots_contribute_no_body_hash_or_recipient_key() {
 }
 
 #[test]
-fn the_anonymous_statement_chains_outputs_disclosure_private_tx_sender_and_parties() {
+fn the_anonymous_transfer_statement_chains_outputs_disclosure_private_tx_and_parties() {
     let values = Values::new();
     let outputs = values.anonymous_outputs();
     let parties = [field(70), field(71), field(72)];
     let layout = DisclosureLayout::Anonymous(AnonymousLayout {
-        key: AnonymousAuditKey::Commitment { class: 4 },
+        key: AnonymousAuditKey::Commitment { class: 16 },
         inputs: 3,
         outputs: 4,
         exits: true,
     });
-    let statement = AuditStatement {
+    let zero = [0u8; 32];
+    let slots = [zero; 3];
+    let statement = TransferStatement {
         head: values.head(AuditLayout {
             exits: true,
             ..AuditLayout::default()
         }),
+        family: TransferFamily::Anonymous {
+            party_identities: &parties,
+        },
+        exempt: false,
+        approval_required: true,
         outputs: &outputs,
         disclosure: values.disclosure(layout),
-        kind: AuditKind::Anonymous(AnonymousAudit {
-            party_identities: &parties,
-            private_tx_hash: &values.fields[3],
-            sender_commitment: &values.fields[5],
-        }),
+        private_tx_hash: &values.fields[3],
+        policy_hash: &values.fields[6],
+        own_root: &values.fields[7],
+        curator_root: &zero,
+        public_assets: &slots,
+        public_amounts: &slots,
+        public_gross: &slots,
+        withdrawal_hash: &values.fields[8],
     };
     let elements = statement.elements().unwrap();
     let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash()).collect();
-    let tail = [
+    let mut tail = vec![
+        right_aligned(0),
+        right_aligned(1),
         create_hash_chain_4_from_slice(&hashes).unwrap(),
         create_hash_chain_4_from_slice(values.disclosure(layout)).unwrap(),
         values.fields[3],
-        values.fields[5],
         parties[0],
         parties[1],
         parties[2],
+        values.fields[6],
+        values.fields[7],
+        zero,
     ];
+    tail.extend([zero; 9]);
+    tail.extend([values.fields[8], right_aligned(35), right_aligned(1)]);
     assert_eq!(elements.len(), AUDIT_HEAD_ELEMENTS + tail.len());
     assert_eq!(elements[AUDIT_HEAD_ELEMENTS..], tail);
-}
-
-/// The audit proof binds no tag or body, a wallet picks both freely.
-#[test]
-fn an_anonymous_statement_ignores_every_tag_and_body() {
-    let values = Values::new();
-    let other_tag = [0xff; 32];
-    let statement_hash = |outputs: &[RingOutput<'_>]| {
-        AuditStatement {
-            head: values.head(AuditLayout::default()),
-            outputs,
-            disclosure: &[],
-            kind: AuditKind::Anonymous(AnonymousAudit {
-                party_identities: &[[0; 32]; 3],
-                private_tx_hash: &values.fields[3],
-                sender_commitment: &values.fields[5],
-            }),
-        }
-        .hash()
-        .unwrap()
-    };
-    let published = values.anonymous_outputs();
-    let mut rewritten = published.clone();
+    // No tag or body of an anonymous slot enters the statement, a wallet picks both freely.
+    let mut rewritten = outputs.clone();
     rewritten[0] = RingOutput::Anonymous {
-        hash: published[0].hash(),
-        tag: &other_tag,
+        hash: outputs[0].hash(),
+        tag: &[0xff; 32],
         body: Some(&values.bodies[6]),
     };
     rewritten[2] = values.anonymous(2, None);
-    assert_eq!(statement_hash(&published), statement_hash(&rewritten));
+    let reworded = TransferStatement {
+        outputs: &rewritten,
+        ..statement
+    };
+    assert_eq!(reworded.hash().unwrap(), statement.hash().unwrap());
 }
 
 /// Counted by hand from 72-byte slots packed 31 bytes to a field.
@@ -912,15 +673,19 @@ fn anonymous_disclosures_take_seventy_two_bytes_per_output_slot() {
             exits,
         })
     };
-    let commitment = AnonymousAuditKey::Commitment { class: 4 };
+    let commitment = AnonymousAuditKey::Commitment { class: 16 };
     assert_eq!(ANONYMOUS_SLOT_BYTES, 72);
     for (layout, fields) in [
         (layout(commitment, 2, 2, false), 2 + 5 + 1 + 1),
         (layout(commitment, 3, 4, true), 1 + 4 + 10 + 1 + 1),
         (layout(commitment, 2, 8, false), 8 + 19 + 1 + 1),
         (
-            layout(AnonymousAuditKey::Entry, 3, 4, true),
+            layout(AnonymousAuditKey::Entry { class: 8 }, 3, 4, true),
             1 + 1 + 4 + 11 + 3 + 6,
+        ),
+        (
+            layout(AnonymousAuditKey::Entry { class: 2 }, 2, 8, false),
+            1 + 8 + 20 + 1 + 4,
         ),
     ] {
         assert_eq!(layout.field_count(), fields, "{layout:?}");

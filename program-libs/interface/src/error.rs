@@ -133,6 +133,7 @@ ring_errors! {
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
     AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
+    ExemptionWithoutWithdrawal = 8254 => "an exempt transfer settles no public withdrawal",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
     CoSignerOutOfScope = 8262 => "the co-signer's scope misses a demanded class",

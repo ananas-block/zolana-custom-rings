@@ -73,10 +73,10 @@ fn a_policy_transfer_proves_under_a_live_storage_root() {
         &[root(1, [0x0d; 32]), retired(0, [0x0e; 32], 1_000)],
     );
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.policy.as_mut().unwrap().own_revision = Revision::from(1);
+    data.own_revision = Some(Revision::from(1));
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
     // A retired root verifies until its registry expiry.
-    data.policy.as_mut().unwrap().own_revision = Revision::from(0);
+    data.own_revision = Some(Revision::from(0));
     ring.warp(999);
     reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
     ring.warp(1_000);
@@ -142,7 +142,7 @@ fn update_policy_rebinds_the_records_to_a_registry_of_any_authority() {
     assert_eq!(after.policy_hash, before.policy_hash);
     assert_eq!(after.generation(), before.generation() + 1);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.policy.as_mut().unwrap().own_revision = Revision::from(3);
+    data.own_revision = Some(Revision::from(3));
     refused(
         transfer_reading(&mut ring, &[RECORDS], &data),
         CustomRingError::UnboundRegistry,

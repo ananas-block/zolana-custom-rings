@@ -4,7 +4,7 @@
 //! the source re-admits it.
 
 use anyhow::Result;
-use custom_ring_sdk::{ListRegistry, SourceOwner};
+use custom_ring_sdk::{DepositAsset, ListRegistry, SourceOwner};
 use custom_ring_test_validator::{
     policy::{
         owner_member, policy_registry, CuratedRings, PolicyTransfer, RegistryWrite, RingNotes,
@@ -72,6 +72,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         ring: subscriber,
         owner: &env.sender.keypair,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 3,
         env,
     }
@@ -103,6 +104,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         ring: subscriber,
         owner: &env.sender.keypair,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 1,
         env,
     }

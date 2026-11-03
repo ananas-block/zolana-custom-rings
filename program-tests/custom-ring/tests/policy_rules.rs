@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
 use custom_ring_cli::ModeName;
-use custom_ring_sdk::CustomRing;
+use custom_ring_sdk::{CustomRing, DepositAsset};
 use custom_ring_test_validator::{
     cli::{merged, ListWrite, RingProject, RingToml},
     policy::{
@@ -89,6 +89,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env: &env,
     }
@@ -111,6 +112,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         ring,
         owner: &blocked,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 1,
         env: &env,
     }

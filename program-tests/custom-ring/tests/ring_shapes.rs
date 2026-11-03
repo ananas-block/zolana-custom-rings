@@ -3,13 +3,20 @@
 
 use super::*;
 use custom_ring_interface::{
-    key_catalog::{RingCircuit, RING_KEYS},
-    ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS,
+    key_catalog::{
+        RingCircuit, TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
+        ENTRY_TRANSFER_SHAPES, RING_KEYS,
+    },
+    ParsedTransact, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS,
 };
 use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
 use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
+use spr_test_utils::wallet::create_associated_token_account;
 
 const UTXO_AMOUNT: u64 = 1_000_000;
+/// Rent-exempt before the first leg lands on it.
+const DESTINATION_FUNDING: u64 = 1_000_000;
+const LEG_AMOUNT: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Column {
@@ -41,8 +48,8 @@ impl Column {
     /// The widest shapes a spend padded to its full published width still fits.
     const fn widest(self) -> &'static [Shape] {
         match self {
-            Self::Anonymous => &[Shape::IN16_OUT2, Shape::IN16_OUT4, Shape::IN5_OUT8],
-            Self::AnonymousPolicy => &[Shape::IN16_OUT2, Shape::IN16_OUT4],
+            Self::Anonymous => &[Shape::IN24_OUT2, Shape::IN16_OUT4, Shape::IN5_OUT8],
+            Self::AnonymousPolicy => &[Shape::IN24_OUT2, Shape::IN16_OUT4],
             Self::Confidential | Self::ConfidentialPolicy | Self::Delegate => &[],
         }
     }
@@ -68,39 +75,7 @@ impl Coverage {
         let missing: Vec<RingCircuit> = RING_KEYS
             .iter()
             .map(|key| key.circuit)
-            .filter(|circuit| match circuit {
-                RingCircuit::MemberPolicy {
-                    withdrawals,
-                    own_only,
-                    ..
-                } => *withdrawals == 0 && *own_only,
-                RingCircuit::DelegatePolicy { own_only, .. } => *own_only,
-                RingCircuit::Deposit { capacity } => *capacity == 1,
-                RingCircuit::ApplyRecords { writes } => matches!(writes, 1 | 2),
-                // Threshold exemptions are covered by the withdrawal controls suite.
-                RingCircuit::WithdrawalExemption => false,
-                _ => true,
-            })
-            // Each required key belongs to one independently runnable sweep.
-            .filter(|circuit| {
-                let owner = match circuit {
-                    RingCircuit::DeliveredAudit { .. }
-                    | RingCircuit::DeliveredSenderAudit { .. }
-                    | RingCircuit::Deposit { .. } => Column::Confidential,
-                    RingCircuit::AnonymousAudit { .. }
-                    | RingCircuit::AnonymousEntryAudit { .. }
-                    | RingCircuit::Merge { .. } => Column::Anonymous,
-                    RingCircuit::MemberPolicy { outputs: 16, .. } => Column::Delegate,
-                    RingCircuit::MemberPolicy { .. }
-                    | RingCircuit::RegisterKey
-                    | RingCircuit::WithdrawalExemption => Column::ConfidentialPolicy,
-                    RingCircuit::ApplyRecords { writes: 1 } => Column::ConfidentialPolicy,
-                    RingCircuit::ApplyRecords { .. } | RingCircuit::DelegatePolicy { .. } => {
-                        Column::Delegate
-                    }
-                };
-                owner == column
-            })
+            .filter(|circuit| key_owner(*circuit) == Some(column))
             .filter(|circuit| !self.circuits.contains(circuit))
             .collect();
         assert!(missing.is_empty(), "no landed operation proved {missing:?}");
@@ -111,10 +86,85 @@ impl Coverage {
     }
 }
 
+/// The one sweep that proves the key, every transfer key has one.
+fn key_owner(circuit: RingCircuit) -> Option<Column> {
+    // A sweep without public legs proves the narrowest withdrawal key, a policy ring keys the legs.
+    let wide = |family: &[TransferShape], outputs: u8, withdrawals: u8| {
+        TransferShape::of(family, outputs.into())
+            .is_some_and(|shape| shape.withdrawals[0] != withdrawals)
+    };
+    Some(match circuit {
+        RingCircuit::TransferConfidential {
+            outputs,
+            withdrawals,
+            ..
+        } => match wide(&CONFIDENTIAL_TRANSFER_SHAPES, outputs, withdrawals) {
+            true => Column::ConfidentialPolicy,
+            false => Column::Confidential,
+        },
+        RingCircuit::TransferAnonymous {
+            outputs,
+            withdrawals,
+            ..
+        } => match wide(&ANONYMOUS_TRANSFER_SHAPES, outputs, withdrawals) {
+            true => Column::AnonymousPolicy,
+            false => Column::Anonymous,
+        },
+        RingCircuit::TransferAnonymousEntry { .. } | RingCircuit::Merge { .. } => Column::Anonymous,
+        RingCircuit::Deposit { capacity: 1 } => Column::Confidential,
+        RingCircuit::RegisterKey | RingCircuit::ApplyRecords { writes: 1 } => {
+            Column::ConfidentialPolicy
+        }
+        RingCircuit::ApplyRecords { writes: 2 } => Column::Delegate,
+        RingCircuit::Deposit { .. } | RingCircuit::ApplyRecords { .. } => return None,
+    })
+}
+
+/// The legs the program keys the transfer by, the policy withdrawals alone.
+fn keyed_legs(data: &RingTransactData<'_>) -> usize {
+    match data.policy {
+        Some(_) => data
+            .interface_transfers
+            .iter()
+            .filter(|transfer| !transfer.is_deposit())
+            .count(),
+        None => 0,
+    }
+}
+
+fn funded_destinations(env: &TestEnv, count: usize) -> Result<Vec<Address>> {
+    let destinations: Vec<Address> = (0..count).map(|_| Keypair::new().pubkey()).collect();
+    for batch in destinations.chunks(16) {
+        let transfers: Vec<Instruction> = batch
+            .iter()
+            .map(|destination| {
+                solana_system_interface::instruction::transfer(
+                    &env.payer.pubkey(),
+                    destination,
+                    DESTINATION_FUNDING,
+                )
+            })
+            .collect();
+        send(env.client.rpc(), &env.payer, &transfers)?;
+    }
+    Ok(destinations)
+}
+
 struct ShapeTransfer {
     shape: Shape,
     inputs: Vec<WalletUtxo>,
     spend: Spend,
+    legs: Vec<Leg>,
+}
+
+/// One public withdrawal of `LEG_AMOUNT`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Leg {
+    Sol(Address),
+    Spl {
+        mint: Address,
+        token_account: Address,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,7 +185,8 @@ impl Spend {
 
 enum Proven {
     Transfer(Box<ProvenRingTransfer>),
-    TooLarge { bytes: usize },
+    /// Refused before any proof, the transaction fits no ceiling.
+    Unfit(RingError),
 }
 
 enum Settlement {
@@ -254,6 +305,7 @@ impl ShapeRing<'_> {
                 shape,
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::Rail(self.column.rail()),
+                legs: Vec::new(),
             };
             match self.settle(transfer, coverage)? {
                 Settlement::Settled => settled.push(shape),
@@ -279,7 +331,7 @@ impl ShapeRing<'_> {
     /// A spend of a default-ring note opens every input under the entry keys.
     fn entries(&self, coverage: &mut Coverage) -> Result<()> {
         let env = self.env;
-        for outputs in ANONYMOUS_ENTRY_OUTPUTS {
+        for shape in ENTRY_TRANSFER_SHAPES {
             restart_prover()?;
             let utxo = DefaultRingDeposit {
                 depositor: &env.sender.keypair,
@@ -289,9 +341,10 @@ impl ShapeRing<'_> {
             }
             .send(env.client.rpc(), env.client.indexer(), &env.assets)?;
             let transfer = ShapeTransfer {
-                shape: Shape::new(1, outputs),
+                shape: Shape::new(1, shape.outputs.into()),
                 inputs: vec![utxo.input_utxo(env)?],
                 spend: Spend::Rail(RingRail::Anonymous),
+                legs: Vec::new(),
             };
             self.settled(transfer, coverage)?;
         }
@@ -305,11 +358,99 @@ impl ShapeRing<'_> {
             shape: Shape::IN1_OUT16,
             inputs: self.utxos(1, coverage)?,
             spend: Spend::Rail(RingRail::Confidential),
+            legs: Vec::new(),
         };
         self.settled(transfer, coverage)
     }
 
-    /// Each delivered capacity proves its sender key once.
+    /// Every wider withdrawal capacity of the column's family, selected by as many legs under the policy.
+    fn wide_withdrawals(&self, coverage: &mut Coverage) -> Result<()> {
+        let (family, rail): (&[TransferShape], RingRail) = match self.column.rail() {
+            RingRail::Confidential => (&CONFIDENTIAL_TRANSFER_SHAPES, RingRail::Confidential),
+            RingRail::Anonymous => (&ANONYMOUS_TRANSFER_SHAPES, RingRail::Anonymous),
+            RingRail::Delegate => return Ok(()),
+        };
+        let widest = family
+            .iter()
+            .map(|shape| usize::from(shape.withdrawals[1]))
+            .max()
+            .unwrap_or(0);
+        // The anonymous rail leaves to one destination, the confidential rail pays distinct ones.
+        let destinations = funded_destinations(
+            self.env,
+            widest.min(1).max(match rail {
+                RingRail::Anonymous => 1,
+                RingRail::Confidential | RingRail::Delegate => widest,
+            }),
+        )?;
+        for shape in family.iter().filter(|shape| shape.withdrawals[1] != 0) {
+            // One leg past the narrow capacity selects the wide key, its capacity fills it.
+            for legs in [shape.withdrawals[0] + 1, shape.withdrawals[1]].map(usize::from) {
+                restart_prover()?;
+                let transfer = ShapeTransfer {
+                    shape: Shape::new(1, shape.outputs.into()),
+                    inputs: self.utxos(1, coverage)?,
+                    spend: Spend::Rail(rail),
+                    legs: match rail {
+                        RingRail::Anonymous => vec![Leg::Sol(destinations[0]); legs],
+                        RingRail::Confidential | RingRail::Delegate => {
+                            destinations[..legs].iter().copied().map(Leg::Sol).collect()
+                        }
+                    },
+                };
+                self.settled(transfer, coverage)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The widest SPL leg count one transaction carries under the two output wide key.
+    fn spl_withdrawals(&self, coverage: &mut Coverage) -> Result<()> {
+        let (family, rail): (&[TransferShape], RingRail) = match self.column.rail() {
+            RingRail::Confidential => (&CONFIDENTIAL_TRANSFER_SHAPES, RingRail::Confidential),
+            RingRail::Anonymous => (&ANONYMOUS_TRANSFER_SHAPES, RingRail::Anonymous),
+            RingRail::Delegate => return Ok(()),
+        };
+        let env = self.env;
+        let rpc = env.client.rpc();
+        let mint = env.usdc_mint;
+        let widest = TransferShape::of(family, 2)
+            .map(|shape| usize::from(shape.withdrawals[1]))
+            .context("a two output key")?;
+        // The anonymous rail leaves to one token account, the confidential rail pays distinct owners.
+        let token_accounts = (0..match rail {
+            RingRail::Anonymous => 1,
+            RingRail::Confidential | RingRail::Delegate => widest,
+        })
+            .map(|_| {
+                let owner = Keypair::new().pubkey();
+                let (_, ata) = create_associated_token_account(rpc, &env.payer, &owner, &mint)?;
+                Ok(ata)
+            })
+            .collect::<Result<Vec<Address>>>()?;
+        let inputs = self.usdc_utxos(1, coverage)?;
+        restart_prover()?;
+        for legs in (1..=widest).rev() {
+            let transfer = ShapeTransfer {
+                shape: Shape::IN1_OUT2,
+                inputs: inputs.clone(),
+                spend: Spend::Rail(rail),
+                legs: (0..legs)
+                    .map(|index| Leg::Spl {
+                        mint,
+                        token_account: token_accounts[index.min(token_accounts.len() - 1)],
+                    })
+                    .collect(),
+            };
+            if let Settlement::Settled = self.settle(transfer, coverage)? {
+                println!("RING_SPL_LEGS {:?} legs={legs}", self.column);
+                return Ok(());
+            }
+        }
+        Err(anyhow!("{:?} settles no SPL withdrawal", self.column))
+    }
+
+    /// Each delivered capacity holds the in-proof owner's spent note once.
     fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
         for outputs in DELIVERED_AUDIT_CAPACITIES {
             restart_prover()?;
@@ -318,6 +459,7 @@ impl ShapeRing<'_> {
                 shape,
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::InProofOwner,
+                legs: Vec::new(),
             };
             // The policy disclosure pushes only the sixteen output transfer past the size ceiling.
             if self.column == Column::ConfidentialPolicy && shape == Shape::IN1_OUT16 {
@@ -361,13 +503,44 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// Each deposit proves under the deposit key.
     fn utxos(&self, count: usize, coverage: &mut Coverage) -> Result<Vec<WalletUtxo>> {
+        self.notes(count, DepositAsset::Sol, coverage)
+    }
+
+    /// USDC notes, minted to the depositor first.
+    fn usdc_utxos(&self, count: usize, coverage: &mut Coverage) -> Result<Vec<WalletUtxo>> {
+        let env = self.env;
+        let rpc = env.client.rpc();
+        let mint = env.usdc_mint;
+        let user_token = create_token_account(rpc, &env.payer, &mint, &env.payer.pubkey())?;
+        mint_to(
+            rpc,
+            &env.payer,
+            &mint,
+            &user_token,
+            UTXO_AMOUNT * count as u64,
+        )?;
+        let asset = DepositAsset::Spl(DepositSplAccounts {
+            mint,
+            user_token,
+            token_program: pda::spl_token_program_id(),
+        });
+        self.notes(count, asset, coverage)
+    }
+
+    /// Each deposit proves under the deposit key.
+    fn notes(
+        &self,
+        count: usize,
+        asset: DepositAsset,
+        coverage: &mut Coverage,
+    ) -> Result<Vec<WalletUtxo>> {
         let env = self.env;
         let utxos = RingNotes {
             ring: self.ring,
             owner: &env.sender.keypair,
             amount: UTXO_AMOUNT,
+            asset,
             count,
             env,
         };
@@ -397,31 +570,41 @@ impl ShapeRing<'_> {
         let spend = transfer.spend;
         let rail = spend.rail();
         let label = format!(
-            "{:?} {spend:?} {}x{} inputs={}",
+            "{:?} {spend:?} {}x{} inputs={} legs={}{}",
             self.column,
             transfer.shape.n_inputs(),
             transfer.shape.n_outputs(),
-            transfer.inputs.len()
+            transfer.inputs.len(),
+            transfer.legs.len(),
+            match transfer.legs.first() {
+                Some(Leg::Spl { .. }) => " spl",
+                Some(Leg::Sol(_)) | None => "",
+            }
         );
+        let mut paid: HashMap<Leg, u64> = HashMap::new();
+        for leg in &transfer.legs {
+            *paid.entry(*leg).or_default() += LEG_AMOUNT;
+        }
+        let balance = |leg: &Leg| -> Result<u64> {
+            Ok(match leg {
+                Leg::Sol(destination) => fetch_account(rpc, destination)?.lamports,
+                Leg::Spl { token_account, .. } => token_amount(&fetch_account(rpc, token_account)?),
+            })
+        };
         let proven = match self
             .prove(transfer)
             .with_context(|| format!("prove {label}"))?
         {
             Proven::Transfer(proven) => proven,
-            Proven::TooLarge { bytes } => {
-                println!("RING_TOO_LARGE {label} bytes={bytes}");
+            Proven::Unfit(reason) => {
+                println!("RING_TOO_LARGE {label} {reason}");
                 return Ok(Settlement::TooLarge);
             }
         };
         let instruction = proven.instruction()?;
         let parsed = ParsedTransact::new(frame(&instruction, rail)?)?;
         let data = parsed.data();
-        coverage.cover(RingCircuit::audit(parsed.layout(), data.n_out));
-        if data.policy.is_some() {
-            coverage.cover(RingCircuit::policy(
-                data.rail, data.n_in, data.n_out, 0, true,
-            ));
-        }
+        coverage.cover(data.transfer_circuit(keyed_legs(data))?);
         let tag = instruction
             .data
             .first()
@@ -433,7 +616,20 @@ impl ShapeRing<'_> {
             std::slice::from_ref(&instruction),
             budget,
         )?;
-        let signature = land(env, instruction, payer, &[])?;
+        let before: HashMap<Leg, u64> = paid
+            .keys()
+            .map(|leg| Ok((*leg, balance(leg)?)))
+            .collect::<Result<_>>()?;
+        let signature = match land(env, instruction.clone(), payer, &[]) {
+            Ok(signature) => signature,
+            Err(error) => {
+                let logs = self.simulated_logs(&instruction, payer)?;
+                return Err(error.context(format!("{label} logs {logs:#?}")));
+            }
+        };
+        for (leg, amount) in &paid {
+            assert_eq!(balance(leg)?, before[leg] + amount, "{label} leg {leg:?}");
+        }
         let units = assert_transaction_compute_units(
             rpc,
             &signature,
@@ -467,27 +663,63 @@ impl ShapeRing<'_> {
             shape,
             inputs,
             spend,
+            legs,
         } = transfer;
         let total: u64 = inputs.iter().map(|input| input.utxo.amount).sum();
-        let amount = total / (2 * shape.n_outputs() as u64);
+        let withdrawn = LEG_AMOUNT * legs.len() as u64;
+        let amount = (total - withdrawn) / (2 * shape.n_outputs() as u64);
+        let asset = inputs
+            .first()
+            .map(|input| input.utxo.asset.asset)
+            .context("a spent note")?;
         let payments = 1..shape.n_outputs();
-        let transaction =
-            |payer: Address| ConfidentialTransaction::new_with_ring(inputs.clone(), payer, program);
-        let owner_transfer = |transaction| {
+        let transaction = |payer: Address| -> Result<_> {
+            let mut transaction =
+                ConfidentialTransaction::new_with_ring(inputs.clone(), payer, program)?;
+            let settlements = legs
+                .iter()
+                .map(|leg| match *leg {
+                    Leg::Sol(destination) => {
+                        Ok(transaction.withdraw_to(SOL_MINT, LEG_AMOUNT, destination, None)?)
+                    }
+                    Leg::Spl {
+                        mint,
+                        token_account,
+                    } => {
+                        transaction.withdraw(mint, LEG_AMOUNT, token_account)?;
+                        Ok(TransactInterfaceTransferAccounts::SplWithdrawal(
+                            TransactSplWithdrawalAccounts {
+                                mint,
+                                spl_interface: pda::spl_interface(&mint),
+                                user_token_account: token_account,
+                                token_program: pda::spl_token_program_id(),
+                            },
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((transaction, settlements))
+        };
+        let owner_transfer = |(transaction, settlements)| {
             CustomRingTransfer::new(CustomRingTransferInput {
                 ring: self.ring,
                 sender,
                 nullifier_key: Some(&sender.nullifier_key),
                 transaction,
             })
+            .with_interface_transfer_accounts(settlements)
         };
         let confidential = |spend: Spend| -> Result<_> {
             let recipient = env.recipient.keypair.shielded_address()?;
-            let mut transaction = transaction(self.payer(spend).pubkey())?;
+            let (mut transaction, settlements) = transaction(self.payer(spend).pubkey())?;
             for _ in payments.clone() {
-                transaction.transfer_sol(&recipient, amount)?;
+                if asset == SOL_MINT {
+                    transaction.transfer_sol(&recipient, amount)?;
+                } else {
+                    transaction.transfer(&recipient, asset, amount)?;
+                }
             }
-            Ok(owner_transfer(transaction))
+            Ok(owner_transfer((transaction, settlements)))
         };
         let proven = match spend {
             Spend::Rail(RingRail::Confidential) => {
@@ -507,7 +739,7 @@ impl ShapeRing<'_> {
                     anonymous = anonymous.with_payment(custom_ring_sdk::AnonymousPayment {
                         to: ring_address(&ShieldedKeypair::new_ed25519()?, program)?,
                         first_contact: custom_ring_sdk::FirstContact::Bootstrap,
-                        asset: Mint::SOL,
+                        asset: env.assets.mint(&asset)?,
                         amount,
                     })?;
                 }
@@ -516,6 +748,7 @@ impl ShapeRing<'_> {
                 env.run(anonymous.prove(client))
             }
             Spend::Rail(RingRail::Delegate) => {
+                ensure!(legs.is_empty(), "the authority rail settles no public leg");
                 let recipient = env.recipient.keypair.shielded_address()?;
                 let delegated = DelegateTransfer::new(DelegateTransferInput {
                     ring: self.ring,
@@ -539,9 +772,28 @@ impl ShapeRing<'_> {
         };
         match proven {
             Ok(proven) => Ok(Proven::Transfer(Box::new(proven))),
-            Err(RingError::TransferTooWide { bytes, .. }) => Ok(Proven::TooLarge { bytes }),
+            Err(
+                reason @ (RingError::TransferTooWide { .. }
+                | RingError::TooManySettlementAccounts { .. }),
+            ) => Ok(Proven::Unfit(reason)),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// A refused settlement reports its program logs, the landing alone names the error.
+    fn simulated_logs(&self, instruction: &Instruction, payer: &dyn Signer) -> Result<Vec<String>> {
+        let rpc = self.env.client.rpc();
+        let (blockhash, _) = rpc.get_latest_blockhash()?;
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer));
+        let message = compile_message(
+            &payer.pubkey(),
+            std::slice::from_ref(instruction),
+            blockhash,
+            budget,
+        )?;
+        let transaction = sign_transaction(message, &[payer])?;
+        let simulated = rpc.client().simulate_transaction(&transaction)?;
+        Ok(simulated.value.logs.unwrap_or_default())
     }
 
     /// The owner on SPP's anonymous rail never signs, the payer alone does.
@@ -588,9 +840,54 @@ fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
             shape: Shape::IN5_OUT8,
             inputs: ring.utxos(5, &mut coverage)?,
             spend: Spend::Rail(RingRail::Anonymous),
+            legs: Vec::new(),
         },
         &mut coverage,
     )
+}
+
+#[test]
+fn wide_anonymous_policy_withdrawals_settle() -> Result<()> {
+    wide_withdrawals(Column::AnonymousPolicy)
+}
+
+#[test]
+fn wide_confidential_policy_withdrawals_settle() -> Result<()> {
+    wide_withdrawals(Column::ConfidentialPolicy)
+}
+
+#[test]
+fn spl_anonymous_policy_withdrawals_settle() -> Result<()> {
+    spl_withdrawals(Column::AnonymousPolicy)
+}
+
+#[test]
+fn spl_confidential_policy_withdrawals_settle() -> Result<()> {
+    spl_withdrawals(Column::ConfidentialPolicy)
+}
+
+/// The wide withdrawal keys of one policy column alone, the sweep proves them beside every shape.
+fn wide_withdrawals(column: Column) -> Result<()> {
+    configured(column, |ring, coverage| ring.wide_withdrawals(coverage))
+}
+
+fn spl_withdrawals(column: Column) -> Result<()> {
+    configured(column, |ring, coverage| ring.spl_withdrawals(coverage))
+}
+
+fn configured(
+    column: Column,
+    run: impl FnOnce(&ShapeRing<'_>, &mut Coverage) -> Result<()>,
+) -> Result<()> {
+    let env = setup()?;
+    let mut coverage = Coverage::default();
+    let ring = ColumnSetup {
+        env: &env,
+        column,
+        program: custom_ring_program_id()?,
+    }
+    .configure(&mut coverage)?;
+    run(&ring, &mut coverage)
 }
 
 #[test]
@@ -631,8 +928,16 @@ fn sweep(column: Column) -> Result<()> {
     match column {
         Column::Anonymous => ring.entries(&mut coverage)?,
         Column::Delegate => ring.escrowed_owner_transfer(&mut coverage)?,
-        Column::Confidential | Column::ConfidentialPolicy => ring.in_proof_owners(&mut coverage)?,
-        Column::AnonymousPolicy => {}
+        Column::Confidential => ring.in_proof_owners(&mut coverage)?,
+        Column::ConfidentialPolicy => {
+            ring.in_proof_owners(&mut coverage)?;
+            ring.wide_withdrawals(&mut coverage)?;
+            ring.spl_withdrawals(&mut coverage)?;
+        }
+        Column::AnonymousPolicy => {
+            ring.wide_withdrawals(&mut coverage)?;
+            ring.spl_withdrawals(&mut coverage)?;
+        }
     }
     // One column per rail proves the merges, the delegate one also opens the key escrow record.
     if matches!(

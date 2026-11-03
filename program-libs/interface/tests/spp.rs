@@ -1,12 +1,14 @@
 //! The SPP account positions the ring program reads, against the pinned SPP builders.
 
 use custom_ring_interface::{
-    amount_field, signed_amount, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
-    RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
+    amount_field, signed_amount, PublicLeg, PublicSlotError, PublicSlots,
+    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
+    RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, SOL_ASSET_ADDRESS, SYSTEM_PROGRAM_ID, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use spr_event::EncryptedRingDepositData;
+use spr_hasher::primitives::{hash_bytes, right_align};
 use spr_instruction::instruction::{
     DepositAsset, MergeRing, RingAssetDeposit, RingDeposit, RingTransact,
 };
@@ -15,7 +17,7 @@ use spr_interface::{
         instruction_data::merge_transact::{MergeOutputEncryption, MergeProof},
         CircuitId, InterfaceTransfer, MergeTransactIxData, TransactIxData, TransactProof,
     },
-    pda, N_PUBLIC_SLOTS,
+    pda, N_PUBLIC_SLOTS, SOL_ASSET_FIELD,
 };
 use spr_transaction::instructions::transact::signed_magnitude_to_field;
 
@@ -176,4 +178,82 @@ fn public_amount_fields_match_the_spp_proof_inputs() {
     let beyond = i128::from(u64::MAX) + 1;
     assert!(amount_field(beyond).is_err());
     assert!(amount_field(-beyond).is_err());
+}
+
+fn sol(amount: u64, deposit: bool) -> PublicLeg {
+    PublicLeg {
+        transfer: match deposit {
+            true => InterfaceTransfer::SolDeposit { amount },
+            false => InterfaceTransfer::SolWithdrawal { amount },
+        },
+        mint: None,
+    }
+}
+
+fn spl(mint: [u8; 32], amount: u64, deposit: bool) -> PublicLeg {
+    let spl_interface_bump = 0;
+    PublicLeg {
+        transfer: match deposit {
+            true => InterfaceTransfer::SplDeposit {
+                amount,
+                spl_interface_bump,
+            },
+            false => InterfaceTransfer::SplWithdrawal {
+                amount,
+                spl_interface_bump,
+            },
+        },
+        mint: Some(mint),
+    }
+}
+
+fn fold<const N: usize>(legs: [PublicLeg; N]) -> Result<PublicSlots, PublicSlotError> {
+    PublicSlots::fold(legs.map(Ok))
+}
+
+#[test]
+fn public_slots_fold_the_gross_withdrawal_per_asset_without_its_deposits() {
+    let mint = [9; 32];
+    let slots = fold([
+        sol(60, false),
+        spl(mint, 100, true),
+        sol(40, false),
+        spl(mint, 5, false),
+    ])
+    .unwrap();
+    assert_eq!(
+        slots.asset_fields().unwrap(),
+        [SOL_ASSET_FIELD, hash_bytes(&mint).unwrap(), [0; 32]]
+    );
+    assert_eq!(slots.amounts(), [-100, 95, 0]);
+    assert_eq!(slots.gross(), [100, 5, 0]);
+    assert_eq!(
+        slots.gross_fields(),
+        slots.gross().map(|gross| right_align(&gross.to_be_bytes()))
+    );
+    let fourth = fold([
+        spl([1; 32], 1, false),
+        spl([2; 32], 1, false),
+        spl([3; 32], 1, false),
+        spl([4; 32], 1, false),
+    ]);
+    assert!(matches!(
+        fourth,
+        Err(PublicSlotError::TooManyAssets { asset }) if asset == [4; 32]
+    ));
+}
+
+#[test]
+fn a_gross_past_u64_survives_a_net_within_it() {
+    let slots = fold([sol(u64::MAX, false), sol(u64::MAX, true), sol(1, false)]).unwrap();
+    assert_eq!(slots.amounts()[0], -1);
+    assert_eq!(slots.gross()[0], u128::from(u64::MAX) + 1);
+    assert!(matches!(
+        fold([sol(u64::MAX, false), sol(1, false)]),
+        Err(PublicSlotError::AmountOverflow { .. })
+    ));
+    assert!(matches!(
+        fold([sol(7, false), sol(7, true)]),
+        Err(PublicSlotError::ZeroNet { .. })
+    ));
 }

@@ -3,18 +3,12 @@
 
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 
-/// `"CRAU"`
-pub const AUDIT_STATEMENT: u32 = 0x4352_4155;
 /// `"CRDS"`
 pub const DELIVERED_SLOT_SECRET: u32 = 0x4352_4453;
 /// `"CRBS"`
 pub const BLINDING_SEED: u32 = 0x4352_4253;
-/// `"CRSC"`
-pub const SENDER_COMMITMENT: u32 = 0x4352_5343;
 /// `"CROD"`
 pub const DISCLOSURE_PAD: u32 = 0x4352_4f44;
-/// `"CRPO"`
-pub const POLICY_STATEMENT: u32 = 0x4352_504f;
 /// `"CRTB"`, defined beside the table hash in the policy crate the interface depends on.
 pub use zolana_ring_policy::POLICY_TABLE_DOMAIN as POLICY_TABLE;
 /// `"CRQW"`
@@ -31,15 +25,11 @@ pub const DEPOSIT_STATEMENT: u32 = 0x4352_4450;
 pub const MERGE_STATEMENT: u32 = 0x4352_4d47;
 /// `"CRPW"`
 pub const WITHDRAWALS: u32 = 0x4352_5057;
-/// `"CRWX"`
-pub const WITHDRAWAL_EXEMPTION: u32 = 0x4352_5758;
 /// `"CRRU"`
 pub const RECORD_UPDATE: u32 = 0x4352_5255;
 /// `"CRWG"`
 pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
 
-/// Bound into every policy statement, a layout change raises it.
-pub const POLICY_STATEMENT_VERSION: u8 = 4;
 /// `"CRTX"`
 pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
 /// Bound nonzero and last into every transfer statement, a layout change raises it.

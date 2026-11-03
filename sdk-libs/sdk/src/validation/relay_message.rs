@@ -1,7 +1,8 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
 use custom_ring_interface::{
-    compute_unit_limit, tag, DepositPrefix, InstructionTag, RingRail, RingTransactData,
+    compute_unit_limit, tag, DepositPrefix, InstructionTag, PolicyRecipients, RingRail,
+    RingTransactData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -165,9 +166,11 @@ impl ExpectedDelegate {
         if !data.interface_transfers.is_empty() {
             return Err(MessageMismatch::Data);
         }
-        let recipients = data
-            .policy_recipients()
-            .map_err(|_| MessageMismatch::Data)?;
+        // A delegate moves under a policy, the frame names every recipient.
+        let recipients = match data.policy.map(|policy| policy.recipients) {
+            Some(PolicyRecipients::Framed(recipients)) => recipients,
+            Some(PolicyRecipients::Hidden) | None => return Err(MessageMismatch::Data),
+        };
         let (paid, rest) = recipients
             .split_at_checked(self.payees.len())
             .ok_or(MessageMismatch::Recipients)?;

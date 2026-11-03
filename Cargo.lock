@@ -1534,6 +1534,7 @@ dependencies = [
  "solana-signer",
  "solana-transaction",
  "solana-transaction-error",
+ "spl-token-2022-interface 2.1.0",
  "spr-account-checks",
  "spr-hasher",
  "spr-interface",

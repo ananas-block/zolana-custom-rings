@@ -11,7 +11,7 @@ use zolana_ring_policy::{
 use crate::{
     error::CustomRingError,
     storage::{Revision, StorageRegistry},
-    WithdrawalExemptionProof, TAGGED_X25519_KEY_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 
 /// Roots a transfer proof may bind, applications in between leave it provable.
@@ -335,10 +335,10 @@ pub enum RootRead {
 }
 
 impl RootRead {
-    pub fn transfer(ring: &RingPolicy, exemption: Option<&WithdrawalExemptionProof>) -> Self {
+    pub fn transfer(ring: &RingPolicy, exempt: bool) -> Self {
         if ring.has_policy() {
             Self::Policy
-        } else if exemption.is_some() {
+        } else if exempt {
             Self::Own
         } else {
             Self::None

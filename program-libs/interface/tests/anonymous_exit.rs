@@ -278,6 +278,33 @@ fn policy_withdrawals_authenticate_live_owners_and_preserve_order() {
 }
 
 #[test]
+fn repeated_owners_and_mints_screen_as_their_first_leg() {
+    use custom_ring_interface::{policy_withdrawals, PolicyWithdrawal};
+    let spl = InterfaceTransfer::SplWithdrawal {
+        amount: 9,
+        spl_interface_bump: 0,
+    };
+    let sol = InterfaceTransfer::SolWithdrawal { amount: 7 };
+    let mut accounts = sol_group(Address::new_from_array(OWNER), vec![]);
+    accounts.extend(sol_group(Address::new_from_array(OWNER), vec![]));
+    for _ in 0..2 {
+        let mut group = spl_group(ON_CURVE, token_account(|_| {}));
+        group[spl.mint_account_position().unwrap()].address = Address::new_from_array(MINT);
+        accounts.extend(group);
+    }
+    let legs = policy_withdrawals(&[sol, sol, spl, spl], &accounts, &[OWNER, OWNER]).unwrap();
+    assert_eq!(
+        legs,
+        [
+            PolicyWithdrawal::new(&OWNER, None, 7).unwrap(),
+            PolicyWithdrawal::new(&OWNER, None, 7).unwrap(),
+            PolicyWithdrawal::new(&OWNER, Some(&MINT), 9).unwrap(),
+            PolicyWithdrawal::new(&OWNER, Some(&MINT), 9).unwrap(),
+        ]
+    );
+}
+
+#[test]
 fn policy_deposits_are_not_screened_and_zero_withdrawals_are_refused() {
     use custom_ring_interface::policy_withdrawals;
     let deposits = [

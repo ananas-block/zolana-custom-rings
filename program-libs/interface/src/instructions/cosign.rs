@@ -38,7 +38,7 @@ impl CoSignDemand {
         }
     }
 
-    /// Only a verified exemption proof may waive the withdrawal class.
+    /// Only a transfer proof verified under the exempt bit may waive the withdrawal class.
     #[must_use]
     pub fn exempt_withdrawals(mut self) -> Self {
         self.withdrawals.clear();
@@ -88,42 +88,6 @@ impl CoSignRequirement {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WithdrawalExemptionStatement {
-    pub root: [u8; 32],
-    pub assets: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
-    pub amounts: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
-}
-impl WithdrawalExemptionStatement {
-    pub fn new(root: [u8; 32], demand: &CoSignDemand) -> Result<Self, CustomRingError> {
-        let mut result = Self {
-            root,
-            assets: [[0; 32]; spr_interface::N_PUBLIC_SLOTS],
-            amounts: [[0; 32]; spr_interface::N_PUBLIC_SLOTS],
-        };
-        if demand.withdrawals.len() > result.assets.len() {
-            return Err(CustomRingError::InvalidInstructionData);
-        }
-        for (i, (mint, amount)) in demand.withdrawals.iter().enumerate() {
-            result.assets[i] = *zolana_ring_policy::Member::asset(mint)
-                .map_err(|_| CustomRingError::InvalidInstructionData)?
-                .as_bytes();
-            result.amounts[i] = spr_hasher::primitives::right_align(&amount.to_be_bytes());
-        }
-        Ok(result)
-    }
-    pub fn hash(&self) -> Result<[u8; 32], spr_hasher::HasherError> {
-        let mut fields = vec![
-            crate::domain::field(crate::domain::WITHDRAWAL_EXEMPTION),
-            self.root,
-        ];
-        for i in 0..self.assets.len() {
-            fields.extend([self.assets[i], self.amounts[i]]);
-        }
-        spr_hasher::hash_chain::create_hash_chain_4_from_slice(&fields)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,7 +110,7 @@ mod tests {
                 mint: None,
             },
         ];
-        let mut demand = CoSignDemand::transact(false, &legs);
+        let demand = CoSignDemand::transact(false, &legs);
         assert_eq!(demand.withdrawals, vec![(Address::default(), 120)]);
         let config = |scope: CoSignScope| {
             let mut config = RingPolicy::zeroed();
@@ -172,18 +136,6 @@ mod tests {
         assert_eq!(
             approval.requirement(&RingPolicy::zeroed()),
             Err(CustomRingError::ApprovalWithoutCoSigner)
-        );
-        let hash = WithdrawalExemptionStatement::new([1; 32], &demand)
-            .unwrap()
-            .hash()
-            .unwrap();
-        demand.withdrawals[0].1 -= 1;
-        assert_ne!(
-            hash,
-            WithdrawalExemptionStatement::new([1; 32], &demand)
-                .unwrap()
-                .hash()
-                .unwrap()
         );
     }
 }

@@ -30,6 +30,8 @@ mod shapes;
 
 #[path = "ring/anonymous.rs"]
 mod anonymous;
+#[path = "ring/exemptions.rs"]
+mod exemptions;
 #[path = "ring/lifecycle.rs"]
 mod lifecycle;
 #[path = "ring/merge.rs"]
@@ -50,7 +52,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
     anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
@@ -91,6 +93,7 @@ use spr_client::{
 };
 use spr_interface::{
     error::ShieldedPoolError,
+    instruction::InterfaceTransfer,
     pda,
     state::{
         discriminator::{PROTOCOL_CONFIG, RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
@@ -165,15 +168,9 @@ const MERGED_SPEND: u64 = 100_000_000;
 const CHANGE_SLOT: u32 = 1;
 const RECIPIENT_SLOT: u32 = 0;
 
-/// The program audit's estimate for the widest keyed transfer.
-const WIDEST_TRANSACT_ESTIMATE_CU: u64 = 720_000;
-const CUSTOM_RING_TRANSACT_CU_LIMIT: u64 = 1_000_000;
-
-// Below the requested budget a confirmed transfer can still exceed the ceiling.
-const _: () = assert!(
-    WIDEST_TRANSACT_ESTIMATE_CU <= CUSTOM_RING_TRANSACT_CU_LIMIT
-        && CUSTOM_RING_TRANSACT_CU_LIMIT < compute_unit_limit(InstructionTag::Transfer) as u64
-);
+/// Every settled transfer stays at or under four fifths of the declared budget.
+const CUSTOM_RING_TRANSACT_CU_LIMIT: u64 =
+    compute_unit_limit(InstructionTag::Transfer) as u64 / 5 * 4;
 
 const DEFAULT_DEPOSIT: u64 = 4_000_000_000;
 const ENTRY_AMOUNT: u64 = 2_500_000_000;

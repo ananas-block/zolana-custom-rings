@@ -394,7 +394,6 @@ impl Transfer {
                     outputs: outputs.len(),
                     exits,
                     key_escrow,
-                    sender_class: None,
                 },
                 seed_out,
                 outputs: outputs
@@ -470,7 +469,7 @@ impl Transfer {
                 RingRail::Anonymous,
                 anonymous.outputs,
                 false,
-                anonymous.key == AnonymousAuditKey::Entry,
+                matches!(anonymous.key, AnonymousAuditKey::Entry { .. }),
             ),
         };
         let shape = SPP_SUPPORTED_SHAPES
@@ -486,18 +485,19 @@ impl Transfer {
             proof_b: [0; 64],
             proof_c: zero,
         };
-        let audit_proof = CustomRingProof {
+        let proof = CustomRingProof {
             groth16,
             commitment: zero,
             commitment_pok: zero,
         };
         let data = RingTransactData {
-            withdrawal_exemption: Default::default(),
             rail,
             n_in: shape.n_inputs() as u8,
             n_out: shape.n_outputs() as u8,
-            audit_proof: &audit_proof,
+            proof: &proof,
+            own_revision: None,
             policy: None,
+            exempt: false,
             approval_required: false,
             expiry_unix_ts: 0,
             tx_viewing_u: &tx_viewing_u,

@@ -1,49 +1,34 @@
 //! Every ring circuit and its proving key, no verifying keys.
 use spr_interface::N_PUBLIC_SLOTS;
 
-use crate::{
-    disclosure::{AnonymousAuditKey, DisclosureLayout},
-    member_registry::APPLY_BATCH,
-    transact::RingRail,
-};
+use crate::{member_registry::APPLY_BATCH, transact::RingRail};
 
 pub use crate::ring_keys::RING_KEYS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingCircuit {
-    DeliveredAudit {
+    /// The signer, in-proof and authority rails, every recipient published.
+    TransferConfidential {
         outputs: u8,
-    },
-    /// Holds every spent UTXO to the in-proof owner the statement publishes.
-    DeliveredSenderAudit {
         inputs: u8,
-        outputs: u8,
-    },
-    AnonymousAudit {
-        class: u8,
-        outputs: u8,
-    },
-    /// Opens every spent UTXO, the key of a transfer spending a default-ring note.
-    AnonymousEntryAudit {
-        class: u8,
-        outputs: u8,
-    },
-    /// A statement bit reads the sender.
-    MemberPolicy {
         withdrawals: u8,
-        own_only: bool,
-        outputs: u8,
     },
-    DelegatePolicy {
-        own_only: bool,
-        inputs: u8,
+    /// The anonymous rail over ring notes, spent UTXO 0 names the hidden sender.
+    TransferAnonymous {
         outputs: u8,
+        class: u8,
+        withdrawals: u8,
+    },
+    /// The anonymous rail spending a default-ring note, every spent UTXO opens to the auditor.
+    TransferAnonymousEntry {
+        outputs: u8,
+        class: u8,
+        withdrawals: u8,
     },
     ApplyRecords {
         writes: u8,
     },
     RegisterKey,
-    WithdrawalExemption,
     Deposit {
         capacity: u8,
     },
@@ -52,51 +37,138 @@ pub enum RingCircuit {
     },
 }
 
-impl RingCircuit {
-    pub const fn audit(layout: DisclosureLayout, n_out: u8) -> Self {
-        match layout {
-            DisclosureLayout::Delivered(layout) => match layout.sender_class {
-                None => Self::DeliveredAudit { outputs: n_out },
-                Some(class) => Self::DeliveredSenderAudit {
-                    inputs: class as u8,
-                    outputs: n_out,
-                },
-            },
-            DisclosureLayout::Anonymous(layout) => {
-                let class = layout.key.class() as u8;
-                match layout.key {
-                    AnonymousAuditKey::Commitment { .. } => Self::AnonymousAudit {
-                        class,
-                        outputs: n_out,
-                    },
-                    AnonymousAuditKey::Entry => Self::AnonymousEntryAudit {
-                        class,
-                        outputs: n_out,
-                    },
-                }
-            }
-        }
+/// One transfer family at one output count, mirror `ConfidentialShapes`, `AnonymousShapes` and `EntryShapes` in `prover/circuits/transfer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferShape {
+    pub outputs: u8,
+    /// The widest published input count the key serves.
+    pub inputs: u8,
+    /// Keyed leg capacities, ascending, zero past them.
+    pub withdrawals: [u8; 2],
+}
+
+pub const CONFIDENTIAL_TRANSFER_SHAPES: [TransferShape; 4] = [
+    TransferShape {
+        outputs: 2,
+        inputs: 40,
+        withdrawals: [4, 32],
+    },
+    TransferShape {
+        outputs: 4,
+        inputs: 24,
+        withdrawals: [4, 32],
+    },
+    TransferShape {
+        outputs: 8,
+        inputs: 16,
+        withdrawals: [4, 32],
+    },
+    TransferShape {
+        outputs: 16,
+        inputs: 8,
+        withdrawals: [8, 0],
+    },
+];
+
+pub const ANONYMOUS_TRANSFER_SHAPES: [TransferShape; 3] = [
+    TransferShape {
+        outputs: 2,
+        inputs: 24,
+        withdrawals: [4, 32],
+    },
+    TransferShape {
+        outputs: 4,
+        inputs: 16,
+        withdrawals: [4, 32],
+    },
+    TransferShape {
+        outputs: 8,
+        inputs: 5,
+        withdrawals: [24, 0],
+    },
+];
+
+pub const ENTRY_TRANSFER_SHAPES: [TransferShape; 3] = [
+    TransferShape {
+        outputs: 2,
+        inputs: 8,
+        withdrawals: [4, 0],
+    },
+    TransferShape {
+        outputs: 4,
+        inputs: 8,
+        withdrawals: [4, 0],
+    },
+    TransferShape {
+        outputs: 8,
+        inputs: 2,
+        withdrawals: [4, 0],
+    },
+];
+
+impl TransferShape {
+    /// The family's shape at `outputs`, `None` off the catalog.
+    pub fn of(family: &[Self], outputs: usize) -> Option<Self> {
+        family
+            .iter()
+            .copied()
+            .find(|shape| usize::from(shape.outputs) == outputs)
     }
 
-    pub const fn policy(
-        rail: RingRail,
-        n_in: u8,
-        n_out: u8,
-        withdrawals: u8,
-        own_only: bool,
-    ) -> Self {
-        match rail {
-            RingRail::Confidential | RingRail::Anonymous => Self::MemberPolicy {
-                outputs: n_out,
-                withdrawals: withdrawal_capacity(withdrawals),
-                own_only,
-            },
-            RingRail::Delegate => Self::DelegatePolicy {
-                own_only,
-                inputs: n_in,
-                outputs: n_out,
-            },
+    /// The smallest keyed capacity holding `legs`, `None` past the widest.
+    pub fn withdrawal_capacity(self, legs: usize) -> Option<u8> {
+        self.withdrawals
+            .iter()
+            .copied()
+            .filter(|capacity| *capacity != 0)
+            .find(|capacity| usize::from(*capacity) >= legs)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferSpend {
+    pub rail: RingRail,
+    /// Published inputs, the spent notes.
+    pub inputs: usize,
+    pub outputs: usize,
+    pub spends_default_ring: bool,
+    /// Public withdrawal legs.
+    pub legs: usize,
+}
+
+impl RingCircuit {
+    /// The one transfer key serving the spend, `None` when the catalog keys none.
+    pub fn transfer(spend: TransferSpend) -> Option<Self> {
+        let shapes = match (spend.rail, spend.spends_default_ring) {
+            (RingRail::Anonymous, false) => &ANONYMOUS_TRANSFER_SHAPES[..],
+            (RingRail::Anonymous, true) => &ENTRY_TRANSFER_SHAPES[..],
+            (RingRail::Confidential | RingRail::Delegate, false) => {
+                &CONFIDENTIAL_TRANSFER_SHAPES[..]
+            }
+            (RingRail::Confidential | RingRail::Delegate, true) => return None,
+        };
+        let shape = TransferShape::of(shapes, spend.outputs)?;
+        if spend.inputs == 0 || spend.inputs > usize::from(shape.inputs) {
+            return None;
         }
+        let withdrawals = shape.withdrawal_capacity(spend.legs)?;
+        Some(match (spend.rail, spend.spends_default_ring) {
+            (RingRail::Anonymous, false) => Self::TransferAnonymous {
+                outputs: shape.outputs,
+                class: shape.inputs,
+                withdrawals,
+            },
+            (RingRail::Anonymous, true) => Self::TransferAnonymousEntry {
+                outputs: shape.outputs,
+                class: shape.inputs,
+                withdrawals,
+            },
+            _ => Self::TransferConfidential {
+                outputs: shape.outputs,
+                inputs: shape.inputs,
+                withdrawals,
+            },
+        })
     }
 
     pub const fn deposit(count: u8) -> Self {
@@ -123,11 +195,10 @@ impl RingCircuit {
     }
 }
 
-/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/record_pool.go`.
+/// A transfer key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/record_pool.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordPools {
     pub own: usize,
-    /// Zero without a curator registry.
     pub curator: usize,
 }
 
@@ -135,30 +206,40 @@ struct PolicyShape {
     outputs: usize,
     withdrawals: usize,
     public_assets: usize,
-    own_only: bool,
 }
 
 impl RingCircuit {
-    /// Each pool takes as many subjects as records, `None` outside the policy keys.
+    /// The withdrawal slots of a transfer key, `None` outside the transfer keys.
+    pub fn withdrawals(self) -> Option<u8> {
+        match self {
+            Self::TransferConfidential { withdrawals, .. }
+            | Self::TransferAnonymous { withdrawals, .. }
+            | Self::TransferAnonymousEntry { withdrawals, .. } => Some(withdrawals),
+            _ => None,
+        }
+    }
+
+    /// Each pool takes as many subjects as records, `None` outside the transfer keys.
     pub fn record_pools(self) -> Option<RecordPools> {
         let shape = match self {
-            Self::MemberPolicy {
+            Self::TransferConfidential {
                 outputs,
                 withdrawals,
-                own_only,
+                ..
+            }
+            | Self::TransferAnonymous {
+                outputs,
+                withdrawals,
+                ..
+            }
+            | Self::TransferAnonymousEntry {
+                outputs,
+                withdrawals,
+                ..
             } => PolicyShape {
                 outputs: outputs.into(),
                 withdrawals: withdrawals.into(),
                 public_assets: N_PUBLIC_SLOTS,
-                own_only,
-            },
-            Self::DelegatePolicy {
-                outputs, own_only, ..
-            } => PolicyShape {
-                outputs: outputs.into(),
-                withdrawals: 0,
-                public_assets: 0,
-                own_only,
             },
             _ => return None,
         };
@@ -167,11 +248,7 @@ impl RingCircuit {
         let distinct = 1 + 2 * shape.outputs + shape.withdrawals;
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(shape.public_assets),
-            curator: if shape.own_only {
-                0
-            } else {
-                distinct + withdrawal_assets
-            },
+            curator: distinct + withdrawal_assets,
         })
     }
 }
@@ -188,7 +265,7 @@ impl RingKey {
         format!("{}.key", self.name.replace('-', "_"))
     }
 
-    /// The release lock section, `custom-ring-audit-delivered-2` reads `audit_delivered_2_key`.
+    /// The release lock section, `custom-ring-deposit-2` reads `deposit_2_key`.
     pub fn section(self) -> String {
         let stem = self.name.strip_prefix(NAME_PREFIX).unwrap_or(self.name);
         key_suffixed(&stem.replace('-', "_"), "_")
@@ -209,40 +286,76 @@ fn key_suffixed(name: &str, separator: &str) -> String {
     }
 }
 
-/// Smallest compiled capacity covering the public withdrawal count.
-pub const fn withdrawal_capacity(count: u8) -> u8 {
-    match count {
-        0 => 0,
-        1 => 1,
-        2 => 2,
-        3..=4 => 4,
-        5..=8 => 8,
-        9..=16 => 16,
-        _ => 32,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn key_names_carry_one_key_suffix() {
-        let delivered = RingKey {
-            circuit: RingCircuit::DeliveredAudit { outputs: 2 },
-            name: "custom-ring-audit-delivered-2",
+        let deposit = RingKey {
+            circuit: RingCircuit::Deposit { capacity: 2 },
+            name: "custom-ring-deposit-2",
         };
         let register = RingKey {
             circuit: RingCircuit::RegisterKey,
             name: "custom-ring-register-key",
         };
-        assert_eq!(delivered.file_name(), "custom_ring_audit_delivered_2.key");
-        assert_eq!(delivered.section(), "audit_delivered_2_key");
-        assert_eq!(
-            delivered.asset("v5"),
-            "custom-ring-audit-delivered-2-key-v5.key"
-        );
+        assert_eq!(deposit.file_name(), "custom_ring_deposit_2.key");
+        assert_eq!(deposit.section(), "deposit_2_key");
+        assert_eq!(deposit.asset("v6"), "custom-ring-deposit-2-key-v6.key");
         assert_eq!(register.section(), "register_key");
-        assert_eq!(register.asset("v5"), "custom-ring-register-key-v5.key");
+        assert_eq!(register.asset("v6"), "custom-ring-register-key-v6.key");
+    }
+
+    #[test]
+    fn a_transfer_takes_the_smallest_keyed_capacity_of_its_family() {
+        let spend = |rail, inputs, outputs, spends_default_ring, legs| {
+            RingCircuit::transfer(TransferSpend {
+                rail,
+                inputs,
+                outputs,
+                spends_default_ring,
+                legs,
+            })
+        };
+        assert_eq!(
+            spend(RingRail::Confidential, 3, 2, false, 0),
+            Some(RingCircuit::TransferConfidential {
+                outputs: 2,
+                inputs: 40,
+                withdrawals: 4
+            })
+        );
+        assert_eq!(
+            spend(RingRail::Delegate, 2, 2, false, 5),
+            Some(RingCircuit::TransferConfidential {
+                outputs: 2,
+                inputs: 40,
+                withdrawals: 32
+            })
+        );
+        assert_eq!(spend(RingRail::Confidential, 9, 16, false, 0), None);
+        assert_eq!(spend(RingRail::Confidential, 1, 16, false, 9), None);
+        assert_eq!(spend(RingRail::Confidential, 0, 2, false, 0), None);
+        assert_eq!(spend(RingRail::Confidential, 1, 2, true, 0), None);
+        assert_eq!(
+            spend(RingRail::Anonymous, 5, 8, false, 24),
+            Some(RingCircuit::TransferAnonymous {
+                outputs: 8,
+                class: 5,
+                withdrawals: 24
+            })
+        );
+        assert_eq!(spend(RingRail::Anonymous, 6, 8, false, 0), None);
+        assert_eq!(
+            spend(RingRail::Anonymous, 2, 8, true, 4),
+            Some(RingCircuit::TransferAnonymousEntry {
+                outputs: 8,
+                class: 2,
+                withdrawals: 4
+            })
+        );
+        assert_eq!(spend(RingRail::Anonymous, 2, 8, true, 5), None);
+        assert_eq!(spend(RingRail::Anonymous, 1, 16, false, 0), None);
     }
 }

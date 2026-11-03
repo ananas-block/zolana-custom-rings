@@ -66,23 +66,6 @@ impl SlotSecret {
     }
 }
 
-/// `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, binding the audit and
-/// policy proofs to one hidden sender.
-pub struct SenderCommitment {
-    pub sender_pk_hash: [u8; 32],
-    pub private_tx_blinding: [u8; 32],
-}
-
-impl SenderCommitment {
-    pub fn derive(self) -> Result<[u8; 32], HasherError> {
-        Poseidon::hashv(&[
-            &domain::field(domain::SENDER_COMMITMENT),
-            &self.sender_pk_hash,
-            &self.private_tx_blinding,
-        ])
-    }
-}
-
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {
     if key[0] != VIEWING_PUBKEY_TAG {
         return Err(StreamError::UntaggedKey);

@@ -57,7 +57,6 @@ fn delivered() -> (AuditDisclosure, [bool; 8]) {
             outputs: 8,
             exits: true,
             key_escrow: false,
-            sender_class: None,
         },
         seed_out: Some(field(1)),
         outputs,
@@ -92,7 +91,7 @@ fn anonymous_outputs() -> Vec<AnonymousOutputOpening> {
 fn anonymous() -> (AuditDisclosure, [bool; 4]) {
     let disclosure = AuditDisclosure::Anonymous(AnonymousDisclosure {
         layout: AnonymousLayout {
-            key: AnonymousAuditKey::Entry,
+            key: AnonymousAuditKey::Entry { class: 8 },
             inputs: 2,
             outputs: 4,
             exits: true,
@@ -121,7 +120,7 @@ fn anonymous_commitment() -> (AuditDisclosure, [bool; 4]) {
     outputs[1] = AnonymousOutputOpening::Dummy;
     let disclosure = AuditDisclosure::Anonymous(AnonymousDisclosure {
         layout: AnonymousLayout {
-            key: AnonymousAuditKey::Commitment { class: 4 },
+            key: AnonymousAuditKey::Commitment { class: 16 },
             inputs: 2,
             outputs: 4,
             exits: false,
@@ -155,7 +154,6 @@ fn delivered_pair(key_escrow: bool, exits: bool) -> (AuditDisclosure, [bool; 2])
             outputs: 2,
             exits,
             key_escrow,
-            sender_class: None,
         },
         seed_out: exits.then(|| field(1)),
         outputs: vec![

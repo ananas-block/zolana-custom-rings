@@ -44,7 +44,7 @@ pub fn process_transfer_ix(
     .validate(accounts)?;
     // 5. A bad SPP proof point is refused before either pairing.
     let spp_data = data.spp_instruction_data(&ring)?;
-    // 6. The audit proof and the policy proof verify over values the program derives.
+    // 6. The ring proof verifies over program-derived values before the SPP call the exempt bit relaxes.
     RingStatements {
         program_id,
         ring: &ring,

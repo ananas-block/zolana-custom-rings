@@ -76,22 +76,20 @@ impl Fixture {
         policy: bool,
     ) -> RingTransactData<'_> {
         let mut data = RingTransactData {
-            withdrawal_exemption: Default::default(),
             rail,
             n_in,
             n_out,
-            audit_proof: &self.proofs[0],
+            proof: &self.proofs[0],
+            own_revision: policy.then(Default::default),
             policy: policy.then(|| PolicyProof {
                 spl_withdrawal_owners: &[],
-                proof: &self.proofs[1],
-                own_revision: Default::default(),
                 curator_revision: None,
-                sender_commitment: (rail == RingRail::Anonymous).then_some(&self.fields[3]),
                 recipients: match rail.publishes_recipients() {
                     true => PolicyRecipients::Framed(&self.fields[100..100 + usize::from(n_out)]),
                     false => PolicyRecipients::Hidden,
                 },
             }),
+            exempt: false,
             approval_required: false,
             expiry_unix_ts: 1_800_000_000,
             tx_viewing_u: &self.keys[0],
@@ -202,7 +200,7 @@ pub fn send(
     let policy: RingPolicy = ring.read(&policy_pda());
     let accounts = [
         vec![AccountMeta::new_readonly(policy_pda(), false)],
-        ring.registries(RootRead::transfer(&policy, None)),
+        ring.registries(RootRead::transfer(&policy, false)),
         prefix,
         spp,
     ]
@@ -291,7 +289,7 @@ fn flags_follow_the_rings_mode_and_policy() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     let mut bytes = data.encode().unwrap();
-    bytes[transact_flag::BYTE] |= 1 << 4;
+    bytes[transact_flag::BYTE] |= 1 << 6;
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     refused(
         send(&mut ring, tag::TRANSFER, Vec::new(), bytes, spp, &[]),
@@ -526,11 +524,12 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let parsed = RingTransactData::parse(&bytes, RingRail::Anonymous).unwrap();
     let data = parsed.data();
     assert_eq!(
-        RingCircuit::audit(parsed.layout(), data.n_out),
-        RingCircuit::AnonymousEntryAudit {
+        data.transfer_circuit(0),
+        Ok(RingCircuit::TransferAnonymousEntry {
+            outputs: data.n_out,
             class: 8,
-            outputs: data.n_out
-        }
+            withdrawals: 4
+        })
     );
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
     reaches_verification(send(
@@ -680,16 +679,18 @@ fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[
     withdraw_with_exemption(ring, legs, prefix, signers, None)
 }
 
+/// `exempt` names the own registry revision the exempt frame reads.
 fn withdraw_with_exemption(
     ring: &mut Ring,
     legs: &[u64],
     prefix: Vec<AccountMeta>,
     signers: &[&Keypair],
-    exemption: Option<&custom_ring_interface::WithdrawalExemptionProof>,
+    exempt: Option<u64>,
 ) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    data.withdrawal_exemption = exemption;
+    data.exempt = exempt.is_some();
+    data.own_revision = exempt.map(custom_ring_interface::storage::Revision::from);
     data.interface_transfers = legs
         .iter()
         .map(|amount| InterfaceTransfer::SolWithdrawal { amount: *amount })
@@ -701,7 +702,7 @@ fn withdraw_with_exemption(
                 .map(|_| AccountMeta::new(Address::new_unique(), false)),
         );
     }
-    let records = exemption.map(|_| AccountMeta::new_readonly(RECORDS, false));
+    let records = exempt.map(|_| AccountMeta::new_readonly(RECORDS, false));
     send(
         ring,
         tag::TRANSFER,
@@ -1289,25 +1290,19 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
 }
 
 #[test]
-fn withdrawal_exemptions_must_prove_under_a_live_own_root() {
-    use bytemuck::Zeroable;
-    use custom_ring_interface::{storage::Revision, WithdrawalExemptionProof};
+fn an_exempt_withdrawal_reads_a_live_own_root_and_still_reaches_the_pairing() {
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(&mut ring, &Keypair::new().pubkey(), 4);
-    let exemption = |revision: u64| WithdrawalExemptionProof {
-        proof: custom_ring_interface::CustomRingProof::zeroed(),
-        own_revision: Revision::from(revision),
-    };
     refused(
-        withdraw_with_exemption(&mut ring, &[60, 60], Vec::new(), &[], Some(&exemption(1))),
+        withdraw_with_exemption(&mut ring, &[60, 60], Vec::new(), &[], Some(1)),
         CustomRingError::RootNotServed,
     );
-    // A served revision alone cannot waive the signature, the proof is checked.
+    // The exempt bit drops the co-signer slot, the proof over the bound bit is still checked.
     reaches_verification(withdraw_with_exemption(
         &mut ring,
         &[60, 60],
         Vec::new(),
         &[],
-        Some(&exemption(0)),
+        Some(0),
     ));
 }

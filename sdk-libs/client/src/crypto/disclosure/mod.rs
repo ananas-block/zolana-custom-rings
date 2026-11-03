@@ -2,9 +2,9 @@
 
 use custom_ring_interface::{
     domain, pack_disclosure, unpack_disclosure, AnonymousAuditKey, AnonymousInputFields,
-    AnonymousLayout, DeliveredLayout, DisclosureLayout, InputPrefix, ANONYMOUS_ENTRY_CLASS,
-    ANONYMOUS_SLOT_BYTES, AUDIT_CIPHERTEXT_LEN, DELIVERED_SLOT_BYTES,
-    DISCLOSURE_INPUT_AMOUNT_BYTES, DISCLOSURE_SENDER_KEY_BYTES,
+    AnonymousLayout, DeliveredLayout, DisclosureLayout, InputPrefix, ANONYMOUS_SLOT_BYTES,
+    AUDIT_CIPHERTEXT_LEN, DELIVERED_SLOT_BYTES, DISCLOSURE_INPUT_AMOUNT_BYTES,
+    DISCLOSURE_SENDER_KEY_BYTES,
 };
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
@@ -528,8 +528,8 @@ impl AnonymousDisclosure {
                     amounts,
                     openings: openings_at,
                 },
-                AnonymousAuditKey::Entry,
-            ) if openings.len() == layout.inputs && layout.inputs <= ANONYMOUS_ENTRY_CLASS => {
+                AnonymousAuditKey::Entry { class },
+            ) if openings.len() == layout.inputs && layout.inputs <= class => {
                 block.extend_from_slice(sender_key);
                 let openings: Vec<_> = openings
                     .iter()
@@ -538,7 +538,7 @@ impl AnonymousDisclosure {
                 for (pair, opening) in fields[openings_at.clone()].chunks_mut(2).zip(&openings) {
                     pair.copy_from_slice(&[opening.asset, opening.blinding]);
                 }
-                let mut packed = vec![0; DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS];
+                let mut packed = vec![0; DISCLOSURE_INPUT_AMOUNT_BYTES * class];
                 for (slot, opening) in packed
                     .as_chunks_mut::<DISCLOSURE_INPUT_AMOUNT_BYTES>()
                     .0
@@ -592,7 +592,7 @@ impl AnonymousDisclosure {
             } => {
                 let amounts = packed_bytes(
                     &fields[amounts.clone()],
-                    DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS,
+                    DISCLOSURE_INPUT_AMOUNT_BYTES * layout.key.class(),
                 )?;
                 let (spent, unpublished) = amounts
                     .split_at_checked(DISCLOSURE_INPUT_AMOUNT_BYTES * layout.inputs)

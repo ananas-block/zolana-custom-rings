@@ -121,14 +121,12 @@ impl Opening {
     }
 }
 
-/// The audit head's witness, shared by every audit circuit.
+/// The ring id sits in `PolicyParams`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuditParams {
     #[serde(with = "fe")]
     pub first_nullifier: [u8; 32],
-    #[serde(with = "fe")]
-    pub ring_id: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub tx_viewing_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "fe::zeroizing")]
@@ -153,32 +151,6 @@ pub(crate) struct DeliveredOutput {
     pub body: [u8; RING_DELIVERED_BODY_LEN],
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DeliveredAudit {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(flatten)]
-    pub audit: AuditParams,
-    pub outputs: Vec<DeliveredOutput>,
-}
-
-/// The in-proof owner rail's delivered audit, every spent UTXO the sender's.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DeliveredSenderAudit {
-    #[serde(flatten)]
-    pub delivered: DeliveredAudit,
-    #[serde(with = "fe")]
-    pub sender: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_blinding: [u8; 32],
-    /// Zero padded past the published inputs to the input class.
-    pub inputs: Vec<Opening>,
-}
-
 /// The owner key is bytes, never a field.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,30 +158,6 @@ pub(crate) struct AnonymousOutput {
     pub output: Opening,
     #[serde(with = "fe")]
     pub owner_key: [u8; 32],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AnonymousAudit {
-    #[serde(serialize_with = "fe::seq")]
-    pub party_identities: [[u8; 32]; 3],
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(flatten)]
-    pub audit: AuditParams,
-    pub outputs: Vec<AnonymousOutput>,
-    #[serde(with = "fe")]
-    pub private_tx_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_blinding: [u8; 32],
-    /// Present on the entry key alone.
-    #[serde(with = "option_field", skip_serializing_if = "Option::is_none")]
-    pub sender_key: Option<[u8; 32]>,
-    pub input_count: u8,
-    /// The input class, slots past `input_count` zero.
-    pub inputs: Vec<Opening>,
-    #[serde(with = "fe")]
-    pub sender_commitment: [u8; 32],
 }
 
 /// A member's record, or the low record proving it absent, as one subject entry opens it.
@@ -293,17 +241,17 @@ impl From<&RecordOpening> for MemberOpening {
     }
 }
 
-/// One subject's index in each pool, `curator` empty without a curator registry.
+/// One subject's index in each pool, the curator index 0 without a curator registry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct PoolEntry {
     pub own: u32,
-    pub curator: Vec<u32>,
+    pub curator: [u32; 1],
 }
 
-/// The pools as Go `PolicyParams` names them, the curator pool empty without a curator registry.
+/// Both pools at the key's widths, an unopened pool where the key binds no root.
 pub(crate) struct RecordPools {
     pub own: RecordPool,
-    pub curator: Option<RecordPool>,
+    pub curator: RecordPool,
 }
 
 impl Serialize for RecordPools {
@@ -354,29 +302,28 @@ impl Serialize for RecordPools {
             own_subjects: Vec<Subject>,
             curator_subjects: Vec<Subject>,
         }
-        let records = |pool: Option<&RecordPool>| {
-            pool.map_or_else(Vec::new, |pool| {
-                pool.records
-                    .iter()
-                    .map(|record| Record {
-                        member: record.member,
-                        next: record.next,
-                        lists: record.lists,
-                        escrow_key: record.escrow_key,
-                        mint_policy: record.mint_policy.field(),
-                        withdrawal_threshold: right_align(
-                            &record.mint_policy.withdrawal_threshold.to_be_bytes(),
-                        ),
-                        asset_limits: record.mint_policy.limits.fields(),
-                    })
-                    .collect()
-            })
+        let records = |pool: &RecordPool| {
+            pool.records
+                .iter()
+                .map(|record| Record {
+                    member: record.member,
+                    next: record.next,
+                    lists: record.lists,
+                    escrow_key: record.escrow_key,
+                    mint_policy: record.mint_policy.field(),
+                    withdrawal_threshold: right_align(
+                        &record.mint_policy.withdrawal_threshold.to_be_bytes(),
+                    ),
+                    asset_limits: record.mint_policy.limits.fields(),
+                })
+                .collect()
         };
-        fn proof(pool: Option<&RecordPool>) -> Proof<'_> {
+        fn proof(pool: &RecordPool) -> Proof<'_> {
             Proof {
-                canopy: pool.map_or(&[], |pool| &pool.proof.canopy),
+                canopy: &pool.proof.canopy,
                 paths: pool
-                    .map_or(&[][..], |pool| &pool.proof.paths)
+                    .proof
+                    .paths
                     .iter()
                     .map(|path| Path {
                         index: path.index,
@@ -385,26 +332,22 @@ impl Serialize for RecordPools {
                     .collect(),
             }
         }
-        let subjects = |pool: Option<&RecordPool>| {
-            pool.map_or_else(Vec::new, |pool| {
-                pool.subjects
-                    .iter()
-                    .map(|subject| Subject {
-                        member: subject.member,
-                        record_index: subject.record_index,
-                    })
-                    .collect()
-            })
+        let subjects = |pool: &RecordPool| {
+            pool.subjects
+                .iter()
+                .map(|subject| Subject {
+                    member: subject.member,
+                    record_index: subject.record_index,
+                })
+                .collect()
         };
-        let own = Some(&self.own);
-        let curator = self.curator.as_ref();
         Pools {
-            own_records: records(own),
-            curator_records: records(curator),
-            own_proof: proof(own),
-            curator_proof: proof(curator),
-            own_subjects: subjects(own),
-            curator_subjects: subjects(curator),
+            own_records: records(&self.own),
+            curator_records: records(&self.curator),
+            own_proof: proof(&self.own),
+            curator_proof: proof(&self.curator),
+            own_subjects: subjects(&self.own),
+            curator_subjects: subjects(&self.curator),
         }
         .serialize(serializer)
     }
@@ -446,15 +389,7 @@ impl Serialize for PolicyTable<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct OutputOpening {
-    #[serde(flatten)]
-    pub opening: Opening,
-    #[serde(with = "option_field", skip_serializing_if = "Option::is_none")]
-    pub ct_hash: Option<[u8; 32]>,
-}
-
+/// The policy section as Go `PolicyParams` reads it, every list at the key's capacity.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PolicyParams<'a> {
@@ -462,8 +397,6 @@ pub(crate) struct PolicyParams<'a> {
     #[serde(with = "fe")]
     pub withdrawal_hash: [u8; 32],
     pub withdrawals: Vec<PolicyWithdrawalRequest>,
-    #[serde(with = "fe")]
-    pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
     pub policy_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -476,50 +409,74 @@ pub(crate) struct PolicyParams<'a> {
     pub public_assets: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
     pub public_amounts: Vec<[u8; 32]>,
+    #[serde(serialize_with = "fe::seq")]
+    pub public_gross: Vec<[u8; 32]>,
     #[serde(flatten)]
     pub table: PolicyTable<'a>,
-    #[serde(with = "fe")]
-    pub address_chain: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_blinding: [u8; 32],
-    pub outputs: Vec<OutputOpening>,
+    /// One per output slot, zero without key escrow.
+    #[serde(serialize_with = "fe::seq")]
+    pub ct_hashes: Vec<[u8; 32]>,
     #[serde(serialize_with = "fe::seq")]
     pub recipients: &'a [[u8; 32]],
-    #[serde(with = "fe")]
-    pub sender_pk_hash: [u8; 32],
     #[serde(flatten)]
     pub pools: RecordPools,
     pub sender_entry: PoolEntry,
     pub owner_entries: Vec<PoolEntry>,
     pub asset_entries: Vec<PoolEntry>,
-    /// Empty on the delegate key.
     pub public_asset_entries: Vec<u32>,
 }
 
+/// Mirror Go `TransferParams`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemberPolicy<'a> {
+pub(crate) struct TransferParams<'a> {
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
-    pub anonymous: bool,
+    #[serde(flatten)]
+    pub audit: AuditParams,
+    pub exempt: bool,
     pub approval_required: bool,
-    pub key_escrow: bool,
     #[serde(with = "fe")]
-    pub sender: [u8; 32],
+    pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
-    pub input_chain: [u8; 32],
+    pub private_tx_blinding: [u8; 32],
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DelegatePolicy<'a> {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    pub inputs: Vec<Opening>,
+pub(crate) struct ConfidentialTransfer<'a> {
     #[serde(flatten)]
-    pub policy: PolicyParams<'a>,
+    pub transfer: TransferParams<'a>,
+    pub in_proof: bool,
+    pub delegate: bool,
+    pub outputs: Vec<DeliveredOutput>,
+    /// The input class, every slot a dummy on the signer rail and past the spent notes.
+    pub inputs: Vec<Opening>,
+    #[serde(with = "fe")]
+    pub input_chain: [u8; 32],
+    /// The statement's sender, zero on the authority rail where `sender_pk_hash` names the member.
+    #[serde(with = "fe")]
+    pub sender: [u8; 32],
+    #[serde(with = "fe")]
+    pub sender_pk_hash: [u8; 32],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnonymousTransfer<'a> {
+    #[serde(flatten)]
+    pub transfer: TransferParams<'a>,
+    pub outputs: Vec<AnonymousOutput>,
+    /// The hidden owner's key on an entry key, absent on a commitment key.
+    #[serde(with = "option_field", skip_serializing_if = "Option::is_none")]
+    pub sender_key: Option<[u8; 32]>,
+    pub input_count: u8,
+    /// The input class, slots past `input_count` zero.
+    pub inputs: Vec<Opening>,
+    #[serde(serialize_with = "fe::seq")]
+    pub party_identities: [[u8; 32]; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -887,18 +844,4 @@ pub(crate) struct PolicyWithdrawalRequest {
     pub asset: [u8; 32],
     #[serde(with = "fe")]
     pub amount: [u8; 32],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WithdrawalExemption {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub root: [u8; 32],
-    #[serde(serialize_with = "fe::seq")]
-    pub assets: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
-    #[serde(serialize_with = "fe::seq")]
-    pub amounts: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
-    pub entries: Vec<Option<MemberOpening>>,
 }

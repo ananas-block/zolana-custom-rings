@@ -98,6 +98,33 @@ impl RecordPool {
         })
     }
 
+    /// Every opening the zero record, the pool of a key whose queries are all off.
+    pub fn unopened(openings: usize) -> Result<Self, RecordTreeError> {
+        let canopy = Canopy::covering(openings)?;
+        let path = SharedPath {
+            index: 0,
+            siblings: vec![[[0; 32]; QUAD_ARITY - 1]; canopy.path_levels()],
+        };
+        let record = MemberRecord::default();
+        let node = path.fold(record.hash()?)?;
+        let mut nodes = vec![[0; 32]; canopy.width()];
+        nodes[node.position] = node.value;
+        Ok(Self {
+            records: vec![record; openings],
+            proof: SharedProof {
+                canopy: nodes,
+                paths: vec![path; openings],
+            },
+            subjects: vec![
+                PoolSubject {
+                    member: [0; 32],
+                    record_index: 0,
+                };
+                openings
+            ],
+        })
+    }
+
     /// Repeats the records and the subjects cyclically to the `openings` a key's pool takes.
     pub fn padded(self, openings: usize) -> Result<Self, RecordTreeError> {
         if self.records.is_empty()

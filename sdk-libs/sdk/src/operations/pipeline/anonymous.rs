@@ -291,14 +291,7 @@ pub(super) enum AnonymousKey {
 
 impl AnonymousKey {
     pub fn serves(self, shape: Shape) -> bool {
-        shape.is_supported()
-            && custom_ring_interface::AnonymousSpend {
-                inputs: shape.n_inputs(),
-                outputs: shape.n_outputs(),
-                spends_default_ring: self == Self::Entry,
-            }
-            .audit_key()
-            .is_some()
+        super::keyed(RingRail::Anonymous, shape, self == Self::Entry)
     }
 }
 

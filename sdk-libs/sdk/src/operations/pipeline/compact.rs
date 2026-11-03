@@ -3,7 +3,8 @@
 use custom_ring_interface::{
     storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
+    RingTransactData, RootRead, SenderBundle, AUDIT_CIPHERTEXT_LEN, MAX_SPP_CPI_ACCOUNTS,
+    RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -104,10 +105,7 @@ impl OwnedOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OwnedPolicyProof {
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
-    pub proof: CustomRingProof,
-    pub own_revision: Revision,
     pub curator_revision: Option<Revision>,
-    pub sender_commitment: Option<[u8; 32]>,
     pub recipients: OwnedRecipients,
 }
 
@@ -146,9 +144,10 @@ pub(crate) struct TransactParts {
     pub rail: RingRail,
     pub n_in: u8,
     pub n_out: u8,
-    pub audit_proof: CustomRingProof,
+    pub proof: CustomRingProof,
+    pub own_revision: Option<Revision>,
     pub policy: Option<OwnedPolicyProof>,
-    pub withdrawal_exemption: Option<custom_ring_interface::WithdrawalExemptionProof>,
+    pub exempt: bool,
     pub approval_required: bool,
     pub expiry_unix_ts: u32,
     pub tx_viewing_u: [u8; 32],
@@ -175,16 +174,14 @@ impl TransactParts {
             rail: self.rail,
             n_in: self.n_in,
             n_out: self.n_out,
-            audit_proof: &self.audit_proof,
+            proof: &self.proof,
+            own_revision: self.own_revision,
             policy: self.policy.as_ref().map(|policy| PolicyProof {
                 spl_withdrawal_owners: &policy.spl_withdrawal_owners,
-                proof: &policy.proof,
-                own_revision: policy.own_revision,
                 curator_revision: policy.curator_revision,
-                sender_commitment: policy.sender_commitment.as_ref(),
                 recipients: policy.recipients.view(),
             }),
-            withdrawal_exemption: self.withdrawal_exemption.as_ref(),
+            exempt: self.exempt,
             approval_required: self.approval_required,
             expiry_unix_ts: self.expiry_unix_ts,
             tx_viewing_u: &self.tx_viewing_u,
@@ -265,13 +262,16 @@ impl TransactAccounts {
                 .accounts
             }
         };
+        if spp.len() > MAX_SPP_CPI_ACCOUNTS {
+            return Err(RingError::TooManySettlementAccounts {
+                accounts: spp.len(),
+                limit: MAX_SPP_CPI_ACCOUNTS,
+            });
+        }
         let mut accounts = vec![AccountMeta::new_readonly(ring.policy_pda(), false)];
         accounts.extend(
             config
-                .root_registries(RootRead::transfer(
-                    config,
-                    parts.withdrawal_exemption.as_ref(),
-                ))
+                .root_registries(RootRead::transfer(config, parts.exempt))
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
         accounts.extend(

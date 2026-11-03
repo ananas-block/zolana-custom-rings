@@ -106,6 +106,7 @@ pub struct RingNotes<'a> {
     pub ring: CustomRing,
     pub owner: &'a ShieldedKeypair,
     pub amount: u64,
+    pub asset: DepositAsset,
     pub count: usize,
     pub env: &'a TestEnv,
 }
@@ -162,7 +163,7 @@ impl RingNotes<'_> {
             payer,
             recipient,
             tree: self.env.tree,
-            asset: DepositAsset::Sol,
+            asset: self.asset,
             amount: self.amount,
             cosigner: None,
         }

@@ -1,0 +1,369 @@
+//! Pins the heap the transfer path's codec phases take for the widest frame of every key, the
+//! hashing and the pairing are syscalls the rule tests cover on the target.
+
+mod frames;
+
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+use custom_ring_interface::{
+    cosign::CoSignDemand,
+    key_catalog::{
+        TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
+        ENTRY_TRANSFER_SHAPES,
+    },
+    storage::Revision,
+    AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PolicyRecipients, PublicLeg,
+    PublicSlots, RingRail, RingTransactData,
+};
+use frames::{config, field, Fixture};
+use spr_interface::instruction::{InterfaceTransfer, TransactProof};
+
+/// The codec phases of one invocation, parse, the public legs, the SPP expansion and the
+/// recipients, modeled as Pinocchio's bump that reclaims nothing.
+const BUDGET: usize = 12 * 1024;
+
+const MINT: [u8; 32] = [0x11; 32];
+
+/// Pinocchio's forward bump allocator, the cursor word first, nothing reclaimed.
+struct BumpModel;
+
+static POS: AtomicUsize = AtomicUsize::new(0);
+static ON: AtomicBool = AtomicBool::new(false);
+
+fn bump(layout: Layout) {
+    if !ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let _ = POS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |pos| {
+        let start = (pos + layout.align() - 1) & !(layout.align() - 1);
+        Some(start + layout.size())
+    });
+}
+
+unsafe impl GlobalAlloc for BumpModel {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        bump(layout);
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        bump(layout);
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        bump(unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) });
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: BumpModel = BumpModel;
+
+struct Arena;
+
+impl Arena {
+    fn start() {
+        POS.store(core::mem::size_of::<usize>(), Ordering::Relaxed);
+        ON.store(true, Ordering::Relaxed);
+    }
+
+    fn used() -> usize {
+        POS.load(Ordering::Relaxed)
+    }
+
+    fn stop() {
+        ON.store(false, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Legs {
+    Sol,
+    Spl,
+}
+
+#[derive(Clone, Copy)]
+struct Widest {
+    rail: RingRail,
+    inputs: usize,
+    outputs: usize,
+    legs: usize,
+    kind: Legs,
+    policy: bool,
+    exempt: bool,
+    entry: bool,
+    in_proof: bool,
+}
+
+impl Widest {
+    fn name(&self) -> String {
+        format!(
+            "{} {}x{} {}{} {}{}{}",
+            self.rail,
+            self.inputs,
+            self.outputs,
+            self.legs,
+            match self.kind {
+                Legs::Sol => " sol",
+                Legs::Spl => " spl",
+            },
+            if self.policy { "policy" } else { "audit-only" },
+            if self.exempt { " exempt" } else { "" },
+            if self.entry {
+                " entry"
+            } else if self.in_proof {
+                " in-proof"
+            } else {
+                ""
+            },
+        )
+    }
+}
+
+/// The owners and recipients the widest frames reference.
+struct Pool {
+    owners: Vec<[u8; 32]>,
+    recipients: Vec<[u8; 32]>,
+}
+
+fn widest_legs(shape: &TransferShape) -> usize {
+    shape
+        .withdrawals
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, usize::from)
+}
+
+fn cases() -> Vec<Widest> {
+    let mut cases = Vec::new();
+    for shape in &CONFIDENTIAL_TRANSFER_SHAPES {
+        let base = Widest {
+            rail: RingRail::Confidential,
+            inputs: shape.inputs.into(),
+            outputs: shape.outputs.into(),
+            legs: widest_legs(shape),
+            kind: Legs::Sol,
+            policy: true,
+            exempt: false,
+            entry: false,
+            in_proof: false,
+        };
+        cases.push(base);
+        cases.push(Widest {
+            kind: Legs::Spl,
+            ..base
+        });
+        cases.push(Widest {
+            in_proof: true,
+            ..base
+        });
+        cases.push(Widest {
+            policy: false,
+            exempt: true,
+            ..base
+        });
+    }
+    for shape in &ANONYMOUS_TRANSFER_SHAPES {
+        let base = Widest {
+            rail: RingRail::Anonymous,
+            inputs: shape.inputs.into(),
+            outputs: shape.outputs.into(),
+            legs: widest_legs(shape),
+            kind: Legs::Sol,
+            policy: true,
+            exempt: false,
+            entry: false,
+            in_proof: false,
+        };
+        cases.push(base);
+        cases.push(Widest {
+            kind: Legs::Spl,
+            ..base
+        });
+        cases.push(Widest {
+            policy: false,
+            exempt: true,
+            ..base
+        });
+    }
+    for shape in &ENTRY_TRANSFER_SHAPES {
+        let base = Widest {
+            rail: RingRail::Anonymous,
+            inputs: shape.inputs.into(),
+            outputs: shape.outputs.into(),
+            legs: widest_legs(shape),
+            kind: Legs::Sol,
+            policy: true,
+            exempt: false,
+            entry: true,
+            in_proof: false,
+        };
+        cases.push(base);
+        cases.push(Widest {
+            policy: false,
+            exempt: true,
+            ..base
+        });
+    }
+    cases.push(Widest {
+        rail: RingRail::Delegate,
+        inputs: 4,
+        outputs: 4,
+        legs: 0,
+        kind: Legs::Sol,
+        policy: true,
+        exempt: false,
+        entry: false,
+        in_proof: false,
+    });
+    cases
+}
+
+fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransactData<'a> {
+    let anonymous = case.rail == RingRail::Anonymous;
+    let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
+    data.key_escrow = case.policy && !anonymous;
+    data.full_openings = case.entry;
+    data.exempt = case.exempt;
+    data.approval_required = case.policy && case.rail != RingRail::Delegate;
+    data.own_revision = (case.policy || case.exempt).then(|| Revision::from(7));
+    data.interface_transfers = (0..case.legs)
+        .map(|leg| {
+            let amount = 1_000 + leg as u64;
+            match case.kind {
+                Legs::Sol => InterfaceTransfer::SolWithdrawal { amount },
+                Legs::Spl => InterfaceTransfer::SplWithdrawal {
+                    amount,
+                    spl_interface_bump: 254,
+                },
+            }
+        })
+        .collect();
+    if case.policy {
+        data.policy = Some(PolicyProof {
+            spl_withdrawal_owners: match case.kind {
+                Legs::Sol => &[],
+                Legs::Spl => &pool.owners[..case.legs],
+            },
+            curator_revision: (!anonymous).then(|| Revision::from(3)),
+            recipients: match anonymous {
+                true => PolicyRecipients::Hidden,
+                false => PolicyRecipients::Framed(&pool.recipients[..case.outputs]),
+            },
+        });
+    }
+    let exit_slot = (case.rail != RingRail::Delegate).then_some(case.outputs - 1);
+    data.outputs = (0..case.outputs)
+        .map(|slot| match (anonymous, Some(slot) == exit_slot) {
+            (_, true) => fixture.exit(slot, &fixture.payload),
+            (true, false) => fixture.tagged(slot),
+            (false, false) => fixture.delivered(slot),
+        })
+        .collect();
+    if anonymous {
+        data.sender = fixture.sender();
+        data.anonymous = Some(AnonymousProofData {
+            commitment: &fixture.bytes[20],
+            commitment_pok: &fixture.bytes[21],
+            default_owner_tag: (!case.entry).then_some(&fixture.bytes[22]),
+        });
+    }
+    if case.in_proof {
+        data.in_proof_owner = Some(InProofOwner {
+            owner: &fixture.bytes[16],
+            commitment: &fixture.bytes[20],
+            commitment_pok: &fixture.bytes[21],
+        });
+    }
+    fixture.with_disclosure(data)
+}
+
+struct Phases {
+    parse: usize,
+    legs: usize,
+    spp: usize,
+    recipients: usize,
+}
+
+/// The codec phases in the program's order, the public legs built as the program builds them.
+fn measure(compact: &[u8], rail: RingRail) -> Phases {
+    let config = config();
+    Arena::start();
+    let parsed = RingTransactData::parse(compact, rail).unwrap();
+    let parse = Arena::used();
+    let data = parsed.data();
+    let mut legs = Vec::with_capacity(data.interface_transfers.len());
+    for transfer in &data.interface_transfers {
+        legs.push(PublicLeg {
+            transfer: *transfer,
+            mint: transfer.mint_account_position().map(|_| MINT),
+        });
+    }
+    let slots = PublicSlots::fold(legs.iter().copied().map(Ok::<_, CustomRingError>)).unwrap();
+    let demand = CoSignDemand::transact(data.approval_required, &legs);
+    let legs = Arena::used();
+    let spp_data = data
+        .spp_instruction_data_under(&config, TransactProof::zeroed())
+        .unwrap();
+    let spp = Arena::used();
+    let recipients = data.recipients();
+    let used = Arena::used();
+    Arena::stop();
+    assert!(
+        demand.classes.bits() != 0
+            && slots.len() <= spr_interface::N_PUBLIC_SLOTS
+            && spp_data.len() > 1
+            && recipients.len() == data.outputs.len()
+    );
+    Phases {
+        parse,
+        legs,
+        spp,
+        recipients: used,
+    }
+}
+
+#[test]
+fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
+    let fixture = Fixture::new();
+    let pool = Pool {
+        owners: vec![[0x70; 32]; spr_interface::MAX_INTERFACE_TRANSFERS],
+        recipients: (0..16).map(|slot| field(0xc0 + slot)).collect(),
+    };
+    let mut report = Vec::new();
+    let committed = fixture.cases();
+    let widest: Vec<(String, RingTransactData<'_>)> = cases()
+        .into_iter()
+        .map(|case| (case.name(), frame(&fixture, &pool, case)))
+        .collect();
+    for (name, data) in committed
+        .iter()
+        .map(|(name, data)| (name.to_string(), data))
+        .chain(widest.iter().map(|(name, data)| (name.clone(), data)))
+    {
+        let compact = data.encode().unwrap();
+        let phases = measure(&compact, data.rail);
+        report.push((name, compact.len(), phases));
+    }
+    for (name, bytes, phases) in &report {
+        println!(
+            "{name:<48} frame {bytes:>5} parse {:>5} legs {:>5} spp {:>5} recipients {:>5}",
+            phases.parse, phases.legs, phases.spp, phases.recipients
+        );
+    }
+    let over: Vec<_> = report
+        .iter()
+        .filter(|(_, _, phases)| phases.recipients > BUDGET)
+        .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.recipients))
+        .collect();
+    assert!(over.is_empty(), "{over:#?}");
+}

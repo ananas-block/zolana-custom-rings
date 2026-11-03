@@ -45,6 +45,7 @@ solana-sbpf = { workspace = true }
 solana-signer = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }
+spl-token-2022-interface = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [lints.rust.unexpected_cfgs]

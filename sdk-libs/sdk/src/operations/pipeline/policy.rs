@@ -1,30 +1,28 @@
-//! The policy half of a ring transfer, every record read under a root the statement binds.
+//! The policy section of a ring transfer, every record read under a root the statement binds.
 
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, PolicyKey, PolicyStatement, RingMode, RingRail,
+    cosign::CoSignDemand,
+    key_catalog::{RecordPools as PoolWidths, RingCircuit, TransferSpend},
+    PolicyWithdrawal, PublicSlots, RingMode, RingRail, TransferRoots,
 };
-use serde::Serialize;
 use solana_address::Address;
 use spr_client::AsyncRpc;
-use spr_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
+use spr_hasher::primitives::right_align;
 use spr_interface::N_PUBLIC_SLOTS;
 use spr_transaction::instructions::transact::SppProofInputs;
 use zolana_ring_client::{records::RecordPoolRead, AsyncRingIndexer};
+use zolana_ring_member_registry::RecordPool;
 use zolana_ring_policy::{
     EncodedRuleTable, Member, OutputSubjects, RecordLists, SourceMap, TransferSubjects,
 };
 
-use crate::client::{RingClient, RingIndexerBackend};
+use super::withdrawals::{thresholds_cover, waives_co_signer};
 use crate::{
     limits::{Outflows, SenderOutflow},
-    prover::{to_instruction_proof, RingRequest},
     records::PoolRead,
-    request::{
-        DelegatePolicy, MemberPolicy, Opening, OutputOpening, PolicyParams, PolicyTable, PoolEntry,
-        RecordPools,
-    },
+    request::{PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools},
     submission::BoundRoot,
     CustomRing, CustomRingConfig, PinnedPolicy, RingError,
 };
@@ -37,26 +35,30 @@ struct OutputOwner {
 
 pub(super) struct PolicyInputs {
     circuit: RingCircuit,
-    pools: custom_ring_interface::key_catalog::RecordPools,
+    widths: PoolWidths,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
-    withdrawals: Vec<custom_ring_interface::PolicyWithdrawal>,
+    withdrawals: Vec<PolicyWithdrawal>,
     rules: EncodedRuleTable,
     sources: SourceMap,
+    /// Zero off a policy, the gate of every rule.
     pub policy_hash: [u8; 32],
-    pub own: BoundRoot,
+    /// Bound under a policy or an exemption, `None` leaves the own root zero.
+    pub own: Option<BoundRoot>,
     pub curator: Option<BoundRoot>,
-    own_pool: RecordPoolRead,
+    /// `None` is the unopened pool of a key whose queries are all off.
+    own_pool: Option<RecordPoolRead>,
     curator_pool: Option<RecordPoolRead>,
     sender_entry: PoolEntry,
     owner_entries: Vec<PoolEntry>,
     asset_entries: Vec<PoolEntry>,
     public_asset_entries: Vec<u32>,
-    /// The escrowed key ciphertext hash of every UTXO output's owner, under key escrow.
-    ct_hashes: Vec<Option<[u8; 32]>>,
-    /// One per output slot, zero on a dummy and on the anonymous rail.
+    /// One per output slot, zero without key escrow.
+    ct_hashes: Vec<[u8; 32]>,
+    /// One per output slot, zero on a dummy, off a policy and on the anonymous rail.
     pub recipients: Vec<[u8; 32]>,
     pub approval_required: bool,
     pub key_escrow: bool,
+    pub exempt: bool,
 }
 
 pub(super) struct PolicyRead<'a> {
@@ -65,12 +67,13 @@ pub(super) struct PolicyRead<'a> {
     pub config: &'a CustomRingConfig,
     pub rail: RingRail,
     pub inputs: &'a SppProofInputs,
-    pub n_in: u8,
+    /// The spent notes, every input but the compact ones.
+    pub published_inputs: usize,
+    pub spends_default_ring: bool,
     pub n_out: u8,
     /// The owner identity the rules read as the sender.
     pub sender: [u8; 32],
-    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    pub public_amounts: &'a [i128; N_PUBLIC_SLOTS],
+    pub public: &'a PublicSlots,
 }
 
 impl PolicyRead<'_> {
@@ -78,27 +81,67 @@ impl PolicyRead<'_> {
         self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
+        let n_out = usize::from(self.n_out);
+        let (withdrawals, spl_withdrawal_owners) = match self.config.has_policy {
+            true => {
+                read_withdrawals(
+                    client,
+                    &self.inputs.external_data.interface_transfers,
+                    self.token_owner_hint,
+                )
+                .await?
+            }
+            false => (Vec::new(), Vec::new()),
+        };
+        let circuit = RingCircuit::transfer(TransferSpend {
+            rail: self.rail,
+            inputs: self.published_inputs,
+            outputs: n_out,
+            spends_default_ring: self.spends_default_ring,
+            legs: withdrawals.len(),
+        })
+        .ok_or(RingError::ShapeUnkeyed { rail: self.rail })?;
+        let widths = circuit
+            .record_pools()
+            .ok_or(RingError::UnpinnedProvingKey(circuit))?;
+        let mut inputs = PolicyInputs {
+            circuit,
+            widths,
+            spl_withdrawal_owners,
+            withdrawals,
+            rules: EncodedRuleTable::default(),
+            sources: SourceMap::default(),
+            policy_hash: [0; 32],
+            own: None,
+            curator: None,
+            own_pool: None,
+            curator_pool: None,
+            sender_entry: PoolEntry::default(),
+            owner_entries: Vec::new(),
+            asset_entries: Vec::new(),
+            public_asset_entries: vec![0; N_PUBLIC_SLOTS],
+            ct_hashes: vec![[0; 32]; n_out],
+            recipients: vec![[0; 32]; n_out],
+            approval_required: false,
+            key_escrow: self.config.mode == RingMode::ConfidentialEscrow,
+            exempt: false,
+        };
+        if self.config.has_policy {
+            self.screen(client, &mut inputs).await?;
+        }
+        Ok(inputs)
+    }
+
+    async fn screen<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+        &self,
+        client: &R,
+        inputs: &mut PolicyInputs,
+    ) -> Result<(), RingError> {
         let policy = self.config.account();
         let pinned = PinnedPolicy::of(policy)?;
         let own = BoundRoot::own(policy, client).await?;
         let curator = BoundRoot::curator(policy, client).await?;
-        let (withdrawals, spl_withdrawal_owners) = read_withdrawals(
-            client,
-            &self.inputs.external_data.interface_transfers,
-            self.token_owner_hint,
-        )
-        .await?;
         let outputs = &self.inputs.output_utxos;
-        let circuit = RingCircuit::policy(
-            self.rail,
-            self.n_in,
-            self.n_out,
-            withdrawals.len() as u8,
-            curator.is_none(),
-        );
-        let pools = circuit
-            .record_pools()
-            .ok_or(RingError::UnpinnedProvingKey(circuit))?;
         let owners = outputs
             .iter()
             .map(|output| {
@@ -121,7 +164,7 @@ impl PolicyRead<'_> {
             })
             .collect::<Result<Vec<_>, RingError>>()?;
         let publishes = self.rail.publishes_recipients();
-        let recipients = owners
+        inputs.recipients = owners
             .iter()
             .map(|owner| match owner {
                 Some(owner) if publishes => owner.member,
@@ -129,33 +172,36 @@ impl PolicyRead<'_> {
             })
             .collect();
         let mut subjects = PoolSubjects::default();
-        let entry = |index| pool_entry(index, curator.as_ref());
-        let sender_entry = entry(subjects.index(Some(self.sender)));
-        let mut owner_entries = Vec::with_capacity(outputs.len() + withdrawals.len());
-        let mut asset_entries = Vec::with_capacity(outputs.len() + withdrawals.len());
+        let entry = |index: u32| PoolEntry {
+            own: index,
+            curator: [match curator {
+                Some(_) => index,
+                None => 0,
+            }],
+        };
+        inputs.sender_entry = entry(subjects.index(Some(self.sender)));
+        let withdrawals = &inputs.withdrawals;
         let payments = owners
             .iter()
             .zip(&assets)
             .map(|(owner, asset)| (owner.map(|owner| owner.member), *asset))
             .chain(withdrawals.iter().map(|w| (Some(w.owner), Some(w.asset))));
+        let (mut owner_entries, mut asset_entries) = (Vec::new(), Vec::new());
         for (owner, asset) in payments {
             owner_entries.push(entry(subjects.index(owner)));
             asset_entries.push(entry(subjects.index(asset)));
         }
         // Public assets resolve in the own pool alone.
         let curator_members = subjects.members.clone();
-        let public_asset_entries = match self.rail {
-            RingRail::Delegate => Vec::new(),
-            RingRail::Confidential | RingRail::Anonymous => self
-                .public_assets
-                .iter()
-                .map(|asset| subjects.index((*asset != [0; 32]).then_some(*asset)))
-                .collect(),
-        };
+        let public_assets = self.public.asset_fields()?;
+        inputs.public_asset_entries = public_assets
+            .iter()
+            .map(|asset| subjects.index((*asset != [0; 32]).then_some(*asset)))
+            .collect();
         let own_pool = PoolRead {
             root: own,
             members: &subjects.members,
-            openings: pools.own,
+            openings: inputs.widths.own,
         }
         .read(client)
         .await?;
@@ -164,7 +210,7 @@ impl PolicyRead<'_> {
                 PoolRead {
                     root: curator,
                     members: &curator_members,
-                    openings: pools.curator,
+                    openings: inputs.widths.curator,
                 }
                 .read(client)
                 .await?,
@@ -216,28 +262,22 @@ impl PolicyRead<'_> {
                 outputs: &transfer_subjects,
             },
         )?;
-        let key_escrow = self.config.mode == RingMode::ConfidentialEscrow;
-        let ct_hashes = owners
-            .iter()
-            .map(|owner| {
-                owner
-                    .filter(|_| key_escrow)
-                    .map(|owner| -> Result<[u8; 32], RingError> {
-                        own_pool
-                            .escrowed_ct_hash(&owner.member, &owner.nullifier_pk)?
-                            .ok_or(RingError::UnregisteredOutputKey {
-                                owner: Member::from_bytes(owner.member)?,
-                            })
-                    })
-                    .transpose()
-            })
-            .collect::<Result<Vec<_>, RingError>>()?;
+        let key_escrow = inputs.key_escrow;
+        for (ct_hash, owner) in inputs.ct_hashes.iter_mut().zip(&owners) {
+            if let (true, Some(owner)) = (key_escrow, owner) {
+                *ct_hash = own_pool
+                    .escrowed_ct_hash(&owner.member, &owner.nullifier_pk)?
+                    .ok_or(RingError::UnregisteredOutputKey {
+                        owner: Member::from_bytes(owner.member)?,
+                    })?;
+            }
+        }
         let limit_assets: BTreeSet<_> = assets
             .iter()
             .flatten()
             .copied()
             .chain(
-                self.public_assets
+                public_assets
                     .iter()
                     .copied()
                     .filter(|asset| *asset != [0; 32]),
@@ -255,7 +295,7 @@ impl PolicyRead<'_> {
                 })
             })
             .collect::<Vec<_>>();
-        let approval_required = match self.rail {
+        inputs.approval_required = match self.rail {
             RingRail::Delegate => false,
             RingRail::Confidential | RingRail::Anonymous => Outflows {
                 rule: SenderOutflow {
@@ -263,32 +303,21 @@ impl PolicyRead<'_> {
                     ring: self.ring.program_id(),
                 },
                 outputs,
-                public_assets: self.public_assets,
-                public_amounts: self.public_amounts,
+                public_assets: &public_assets,
+                public_amounts: &self.public.amounts(),
             }
             .approval_required(&limits)?,
         };
-        Ok(PolicyInputs {
-            circuit,
-            pools,
-            withdrawals,
-            spl_withdrawal_owners,
-            rules: policy.rules,
-            sources: pinned.sources,
-            policy_hash: pinned.policy_hash,
-            own,
-            curator,
-            own_pool,
-            curator_pool,
-            sender_entry,
-            owner_entries,
-            asset_entries,
-            public_asset_entries,
-            ct_hashes,
-            recipients,
-            approval_required,
-            key_escrow,
-        })
+        inputs.rules = policy.rules;
+        inputs.sources = pinned.sources;
+        inputs.policy_hash = pinned.policy_hash;
+        inputs.own = Some(own);
+        inputs.curator = curator;
+        inputs.own_pool = Some(own_pool);
+        inputs.curator_pool = curator_pool;
+        inputs.owner_entries = owner_entries;
+        inputs.asset_entries = asset_entries;
+        Ok(())
     }
 }
 
@@ -315,183 +344,141 @@ impl PoolSubjects {
     }
 }
 
-/// The subject at `index` in both pools, a key without a curator pool reads none.
-fn pool_entry(index: u32, curator: Option<&BoundRoot>) -> PoolEntry {
-    PoolEntry {
-        own: index,
-        curator: curator.map(|_| index).into_iter().collect(),
-    }
-}
-
-pub(crate) struct PolicyRequest<'a> {
-    pub circuit: RingCircuit,
-    pub public_input_hash: [u8; 32],
-    pub body: PolicyBody<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub(crate) enum PolicyBody<'a> {
-    Member(Box<MemberPolicy<'a>>),
-    Delegate(Box<DelegatePolicy<'a>>),
-}
-
 pub(super) struct PolicyProving<'a> {
     pub ring_id: [u8; 32],
-    pub rail: RingRail,
-    pub inputs: &'a SppProofInputs,
-    pub private_tx_hash: [u8; 32],
-    pub private_tx_blinding: [u8; 32],
-    /// The owner identity, the anonymous rail's sender commitment, zero on the delegate rail.
-    pub sender: [u8; 32],
-    pub sender_pk_hash: [u8; 32],
-    pub public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
-    pub public_amount_fields: [[u8; 32]; N_PUBLIC_SLOTS],
+    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    pub public_gross: &'a [[u8; 32]; N_PUBLIC_SLOTS],
 }
 
 impl PolicyInputs {
-    pub fn curator_root(&self) -> [u8; 32] {
-        self.curator.map_or([0; 32], |curator| curator.root)
+    pub fn circuit(&self) -> RingCircuit {
+        self.circuit
     }
 
-    pub fn statement(&self, proving: &PolicyProving<'_>) -> Result<[u8; 32], RingError> {
-        let key = proving.rail.policy_key();
-        let delegate = key == PolicyKey::Delegate;
-        Ok(PolicyStatement {
-            withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&self.withdrawals)?,
-            key,
-            private_tx_hash: &proving.private_tx_hash,
-            policy_hash: &self.policy_hash,
-            ring_id: &proving.ring_id,
-            approval_required: self.approval_required,
-            key_escrow: delegate || self.key_escrow,
-            own_root: &self.own.root,
-            curator_root: &self.curator_root(),
-            sender: &proving.sender,
-            recipients: &self.recipients,
-            public_assets: &proving.public_assets,
-            public_amounts: &proving.public_amount_fields,
+    pub fn screened(&self) -> bool {
+        self.policy_hash != [0; 32]
+    }
+
+    pub fn roots(&self) -> TransferRoots {
+        TransferRoots {
+            policy_hash: self.policy_hash,
+            own_root: self.own.map_or([0; 32], |own| own.root),
+            curator_root: self.curator.map_or([0; 32], |curator| curator.root),
         }
-        .hash()?)
     }
 
-    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        &self,
-        client: &RingClient<R, I>,
-        proving: &PolicyProving<'_>,
-    ) -> Result<custom_ring_interface::CustomRingProof, RingError> {
-        let request = self.request(proving)?;
-        let proof = RingRequest::new(request.circuit, &request.body)?
-            .prove(client, request.public_input_hash)
-            .await?;
-        to_instruction_proof(proof)
+    pub fn withdrawal_hash(&self) -> Result<[u8; 32], RingError> {
+        Ok(custom_ring_interface::policy_withdrawal_hash(
+            &self.withdrawals,
+        )?)
     }
 
-    /// The circuit the shape and the pools select and the body it proves.
-    pub fn request(&self, proving: &PolicyProving<'_>) -> Result<PolicyRequest<'_>, RingError> {
-        let inputs = proving.inputs;
-        let circuit = self.circuit;
-        let pools = self.pools;
-        let own_pool = self.own_pool.pool().clone().padded(pools.own)?;
-        let curator_pool = self
-            .curator_pool
-            .as_ref()
-            .map(|read| read.pool().clone().padded(pools.curator))
-            .transpose()?;
-        let public_input_hash = self.statement(proving)?;
-        let outputs = inputs
-            .output_utxos
-            .iter()
-            .zip(&self.ct_hashes)
-            .map(|(output, ct_hash)| {
-                Ok(OutputOpening {
-                    opening: Opening::output(output, inputs.output_tree_id)?,
-                    ct_hash: *ct_hash,
-                })
-            })
-            .collect::<Result<Vec<_>, RingError>>()?;
-        let address_nullifiers: Vec<[u8; 32]> = inputs
-            .input_utxos
-            .iter()
-            .map(|input| input.private_tx_address_nullifier())
-            .collect();
-        let capacity = usize::from(custom_ring_interface::key_catalog::withdrawal_capacity(
-            self.withdrawals.len() as u8,
-        ));
+    /// A no-op when the waiver removes no co-signer or a threshold is short.
+    pub async fn exempt_withdrawals<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+        &mut self,
+        config: &CustomRingConfig,
+        demand: &CoSignDemand,
+        public: &PublicSlots,
+        client: &R,
+    ) -> Result<(), RingError> {
+        if !waives_co_signer(config.account(), demand)? {
+            return Ok(());
+        }
+        let (assets, gross) = (public.asset_fields()?, public.gross());
+        match &self.own_pool {
+            Some(pool) => {
+                if !thresholds_cover(pool, &assets, &gross) {
+                    return Ok(());
+                }
+            }
+            None => {
+                if config.account().records == Address::default() {
+                    return Ok(());
+                }
+                let own = BoundRoot::own(config.account(), client).await?;
+                let members: Vec<_> = assets
+                    .iter()
+                    .copied()
+                    .filter(|asset| *asset != [0; 32])
+                    .collect();
+                let pool = PoolRead {
+                    root: own,
+                    members: &members,
+                    openings: self.widths.own,
+                }
+                .read(client)
+                .await?;
+                if !thresholds_cover(&pool, &assets, &gross) {
+                    return Ok(());
+                }
+                self.public_asset_entries = assets
+                    .iter()
+                    .map(|asset| {
+                        members
+                            .iter()
+                            .position(|member| member == asset)
+                            .map_or(0, |index| index as u32)
+                    })
+                    .collect();
+                self.own = Some(own);
+                self.own_pool = Some(pool);
+            }
+        }
+        self.exempt = true;
+        Ok(())
+    }
+
+    pub fn params(&self, proving: &PolicyProving<'_>) -> Result<PolicyParams<'_>, RingError> {
+        let capacity = usize::from(
+            self.circuit
+                .withdrawals()
+                .ok_or(RingError::UncataloguedCircuit(self.circuit))?,
+        );
+        let outputs = self.ct_hashes.len();
+        let roots = self.roots();
         let mut withdrawals = self.withdrawals.clone();
-        withdrawals.resize(capacity, custom_ring_interface::PolicyWithdrawal::default());
+        withdrawals.resize(capacity, PolicyWithdrawal::default());
         let mut owner_entries = self.owner_entries.clone();
         let mut asset_entries = self.asset_entries.clone();
-        let absent = pool_entry(0, self.curator.as_ref());
-        owner_entries.resize(outputs.len() + capacity, absent.clone());
-        asset_entries.resize(outputs.len() + capacity, absent);
-        let params = PolicyParams {
+        owner_entries.resize(outputs + capacity, PoolEntry::default());
+        asset_entries.resize(outputs + capacity, PoolEntry::default());
+        let pool = |read: &Option<RecordPoolRead>, width: usize| match read {
+            Some(read) => read.pool().clone().padded(width),
+            None => RecordPool::unopened(width),
+        };
+        Ok(PolicyParams {
             withdrawal_count: self.withdrawals.len() as u8,
-            withdrawal_hash: custom_ring_interface::policy_withdrawal_hash(&self.withdrawals)?,
+            withdrawal_hash: self.withdrawal_hash()?,
             withdrawals: withdrawals
                 .iter()
-                .map(|w| crate::request::PolicyWithdrawalRequest {
+                .map(|w| PolicyWithdrawalRequest {
                     owner: w.owner,
                     asset: w.asset,
-                    amount: spr_hasher::primitives::right_align(&w.amount.to_be_bytes()),
+                    amount: right_align(&w.amount.to_be_bytes()),
                 })
                 .collect(),
-            private_tx_hash: proving.private_tx_hash,
             policy_hash: self.policy_hash,
             ring_id: proving.ring_id,
-            own_root: self.own.root,
-            curator_root: self.curator_root(),
+            own_root: roots.own_root,
+            curator_root: roots.curator_root,
             public_assets: proving.public_assets.to_vec(),
-            public_amounts: proving.public_amount_fields.to_vec(),
+            public_amounts: proving.public_amounts.to_vec(),
+            public_gross: proving.public_gross.to_vec(),
             table: PolicyTable {
                 rules: &self.rules,
                 sources: &self.sources,
             },
-            address_chain: create_nonzero_hash_chain_from_slice(&address_nullifiers)?,
-            private_tx_blinding: proving.private_tx_blinding,
-            outputs,
+            ct_hashes: self.ct_hashes.clone(),
             recipients: &self.recipients,
-            sender_pk_hash: proving.sender_pk_hash,
             pools: RecordPools {
-                own: own_pool,
-                curator: curator_pool,
+                own: pool(&self.own_pool, self.widths.own)?,
+                curator: pool(&self.curator_pool, self.widths.curator)?,
             },
             sender_entry: self.sender_entry.clone(),
             owner_entries,
             asset_entries,
             public_asset_entries: self.public_asset_entries.clone(),
-        };
-        let body = match proving.rail {
-            RingRail::Delegate => PolicyBody::Delegate(Box::new(DelegatePolicy {
-                public_input_hash,
-                inputs: inputs
-                    .input_utxos
-                    .iter()
-                    .map(Opening::input)
-                    .collect::<Result<_, _>>()?,
-                policy: params,
-            })),
-            RingRail::Confidential | RingRail::Anonymous => {
-                let input_hashes: Vec<[u8; 32]> = inputs
-                    .input_utxos
-                    .iter()
-                    .map(|input| input.private_tx_input_hash())
-                    .collect();
-                PolicyBody::Member(Box::new(MemberPolicy {
-                    public_input_hash,
-                    anonymous: proving.rail == RingRail::Anonymous,
-                    approval_required: self.approval_required,
-                    key_escrow: self.key_escrow,
-                    sender: proving.sender,
-                    input_chain: create_nonzero_hash_chain_from_slice(&input_hashes)?,
-                    policy: params,
-                }))
-            }
-        };
-        Ok(PolicyRequest {
-            circuit,
-            public_input_hash,
-            body,
         })
     }
 }
@@ -501,7 +488,7 @@ async fn read_withdrawals<R: AsyncRpc + ?Sized>(
     client: &R,
     transfers: &[spr_transaction::instructions::transact::SettlementTransfer],
     hint: Option<Address>,
-) -> Result<(Vec<custom_ring_interface::PolicyWithdrawal>, Vec<[u8; 32]>), RingError> {
+) -> Result<(Vec<PolicyWithdrawal>, Vec<[u8; 32]>), RingError> {
     use spr_interface::{SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
     use spr_transaction::instructions::transact::SettlementTransfer;
     let mut payments = Vec::new();
@@ -512,11 +499,7 @@ async fn read_withdrawals<R: AsyncRpc + ?Sized>(
                 user_sol_account,
                 amount,
                 ..
-            } => custom_ring_interface::PolicyWithdrawal::new(
-                user_sol_account.as_array(),
-                None,
-                amount,
-            )?,
+            } => PolicyWithdrawal::new(user_sol_account.as_array(), None, amount)?,
             SettlementTransfer::Spl {
                 mint,
                 user_spl_token,
@@ -557,7 +540,7 @@ async fn read_withdrawals<R: AsyncRpc + ?Sized>(
                     }
                 };
                 owners.push(owner);
-                custom_ring_interface::PolicyWithdrawal::new(&owner, Some(mint.as_array()), amount)?
+                PolicyWithdrawal::new(&owner, Some(mint.as_array()), amount)?
             }
         };
         payments.push(payment);

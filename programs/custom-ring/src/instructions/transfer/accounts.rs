@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
-    funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, PublicSlots,
-    RailSigner, RingPolicy, RingTransactData, RootRead, ANONYMOUS_PARTIES,
+    funder_account_position, AnonymousParties, CustomRingError, PublicSlots, RailSigner,
+    RingPolicy, RingTransactData, RootRead, TransferRoots, ANONYMOUS_PARTIES,
     RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
@@ -16,21 +16,14 @@ use crate::instructions::{
 
 const RING_INDEX: usize = 0;
 
-pub(super) struct PolicyRoots<'a> {
-    pub own_only: bool,
-    pub proof: &'a CustomRingProof,
-    pub policy_hash: [u8; 32],
-    pub own_root: [u8; 32],
-    /// Zero without a curator source.
-    pub curator_root: [u8; 32],
-}
-
-pub(super) struct TransactAccounts<'a> {
-    pub policy: Option<PolicyRoots<'a>>,
+pub(super) struct TransactAccounts {
+    pub roots: TransferRoots,
+    /// The in-proof owner's identity, the sole owner signer's under a policy, zero otherwise.
     pub sender: [u8; 32],
-    /// The anonymous rail's party identities, `None` on the other rails.
-    pub anonymous_parties: Option<[[u8; 32]; ANONYMOUS_PARTIES]>,
+    /// The anonymous rail's party identities, zeros on the other rails.
+    pub party_identities: [[u8; 32]; ANONYMOUS_PARTIES],
     pub public_slots: PublicSlots,
+    /// Empty off a policy.
     pub withdrawals: Vec<custom_ring_interface::PolicyWithdrawal>,
     /// Index of the first forwarded SPP account.
     pub spp: usize,
@@ -49,11 +42,11 @@ pub(super) struct TransactCheck<'a> {
 impl<'a> TransactCheck<'a> {
     /// The co-signer demand comes first, its slot moves the SPP list.
     #[inline(never)]
-    pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts<'a>, ProgramError> {
+    pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts, ProgramError> {
         let (ring, data) = (self.ring, self.data);
         let registries = RegistrySlots {
             ring,
-            read: RootRead::transfer(ring, data.withdrawal_exemption),
+            read: RootRead::transfer(ring, data.exempt),
         }
         .load({
             let mut after_ring = accounts.iter().skip(RING_INDEX + 1);
@@ -64,38 +57,17 @@ impl<'a> TransactCheck<'a> {
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let legs = PublicLegs::new(&data.interface_transfers, window)?;
         let demand = CoSignDemand::transact(data.approval_required, legs.legs());
-        if let Some(exemption) = data.withdrawal_exemption {
-            let root = roots.own(exemption.own_revision)?;
-            crate::instructions::verifier::RingProof {
-                proof: &exemption.proof,
-                statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
-                    root, &demand,
-                )?
-                .hash()
-                .map_err(CustomRingError::from)?,
-                key: crate::instructions::verifier::ring_key(
-                    custom_ring_interface::key_catalog::RingCircuit::WithdrawalExemption,
-                )?,
-            }
-            .verify()?;
-        }
-        let demand = match data.withdrawal_exemption {
-            Some(_) => demand.exempt_withdrawals(),
-            None => demand,
+        // The exempt bit is unverified here, the statement binds it and the gross per slot.
+        let demand = match data.exempt {
+            true => demand.exempt_withdrawals(),
+            false => demand,
         };
         let requirement = demand.requirement(ring);
-        let binding = data.check_policy(Some(ring).filter(|ring| ring.has_policy()), &roots)?;
+        let bound = data.roots(Some(ring).filter(|ring| ring.has_policy()), &roots)?;
         let prefix = self.prefix(
             RING_INDEX + 1 + registries.len,
             requirement.as_ref().ok().copied().flatten(),
         );
-        let policy = binding.map(|binding| PolicyRoots {
-            own_only: binding.curator_root.is_none(),
-            proof: binding.proof.proof,
-            policy_hash: binding.policy_hash,
-            own_root: binding.own_root,
-            curator_root: binding.curator_root.unwrap_or_default(),
-        });
 
         let co_signer = prefix
             .co_signer
@@ -116,29 +88,24 @@ impl<'a> TransactCheck<'a> {
                 {
                     return Err(CustomRingError::InvalidAnonymousSigner.into());
                 }
-                *data.sender_commitment()
+                [0; 32]
             }
             SignerSlot::InProofOwner(owner) => {
-                // Every input belongs to the in-proof owner, the one the policy reads as sender.
+                // The proof holds every spent note to the statement's sender, the framed owner names it on every ring.
                 if !data.owner_signers(spp, window.len())?.is_empty() {
                     return Err(CustomRingError::OwnerSignerOnInProofRail.into());
                 }
                 if co_signer == Some(owner) {
                     return Err(CustomRingError::CoSignerIsOwner.into());
                 }
-                match policy {
-                    Some(_) => {
-                        solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?
-                    }
-                    None => [0; 32],
-                }
+                solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?
             }
             SignerSlot::Owners => {
                 let owners = data.owner_signers(spp, window.len())?;
                 if owners.iter().any(|owner| !owner.is_signer()) {
                     return Err(CustomRingError::MissingOwnerSigner.into());
                 }
-                let sender = match policy {
+                let sender = match data.policy {
                     Some(_) => solana_owner_identity(sole_owner(owners)?.as_array())
                         .map_err(CustomRingError::from)?,
                     None => [0; 32],
@@ -188,7 +155,7 @@ impl<'a> TransactCheck<'a> {
             None => Vec::new(),
         };
         // SPP settles any exit, the anonymous rail leaves only to a destination that names one key.
-        let anonymous_parties = match self.signer {
+        let party_identities = match self.signer {
             RailSigner::Payer => {
                 let exit = load_anonymous_exit(&data.interface_transfers, window)?;
                 let parties = AnonymousParties {
@@ -196,16 +163,16 @@ impl<'a> TransactCheck<'a> {
                     cosigner: co_signer.as_ref().map(Address::as_array),
                     exit_destination: exit.as_ref(),
                 };
-                Some(parties.identities().map_err(CustomRingError::from)?)
+                parties.identities().map_err(CustomRingError::from)?
             }
-            RailSigner::Owners | RailSigner::Delegate(_) => None,
+            RailSigner::Owners | RailSigner::Delegate(_) => [[0; 32]; ANONYMOUS_PARTIES],
         };
 
         requirement?;
         Ok(TransactAccounts {
-            policy,
+            roots: bound,
             sender,
-            anonymous_parties,
+            party_identities,
             public_slots,
             withdrawals,
             spp: prefix.spp,

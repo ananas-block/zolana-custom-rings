@@ -273,6 +273,7 @@ impl RelayedRing {
             ring: self.ring,
             owner,
             amount: DEPOSIT,
+            asset: DepositAsset::Sol,
             count,
             env: &self.env,
         }

@@ -329,19 +329,29 @@ impl Chain {
 
     /// The ring account pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let account = self
-            .accounts
-            .get(&ring().policy_pda())
-            .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
-            .expect("Chain::ring writes the ring account");
-        let policy = registry.policy(account, rules);
+        let policy = registry.policy(self.ring_account(), rules);
+        self.with_records(registry)
+            .with(ring().policy_pda(), policy)
+    }
+
+    /// The ring's records registry alone, the ring stays audit-only.
+    pub(crate) fn with_records(self, registry: Registry) -> Self {
+        let mut ring_account = self.ring_account();
+        ring_account.records = RECORDS;
         let records = registry.records();
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
-        .with(ring().policy_pda(), policy)
+        .with(ring().policy_pda(), account(program(), &*ring_account))
         .with(RECORDS, records)
+    }
+
+    fn ring_account(&self) -> Box<RingPolicy> {
+        self.accounts
+            .get(&ring().policy_pda())
+            .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
+            .expect("Chain::ring writes the ring account")
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.

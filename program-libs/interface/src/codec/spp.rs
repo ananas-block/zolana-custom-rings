@@ -57,6 +57,9 @@ pub struct PublicLeg {
     pub mint: Option<[u8; 32]>,
 }
 
+/// Pinocchio's `MAX_CPI_ACCOUNTS`, the ring program's ceiling for the SPP call.
+pub const MAX_SPP_CPI_ACCOUNTS: usize = 128;
+
 /// Assets in first-seen leg order, the fold SPP's `assign_public_amounts_and_assets` runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PublicSlots {
@@ -111,17 +114,13 @@ impl PublicSlots {
         core::array::from_fn(|index| self.slots.get(index).map_or(0, |slot| slot.net))
     }
 
-    /// Gross withdrawals as right-aligned u128, zero past the used slots.
+    /// Zero past the used slots.
+    pub fn gross(&self) -> [u128; N_PUBLIC_SLOTS] {
+        core::array::from_fn(|index| self.slots.get(index).map_or(0, |slot| slot.gross))
+    }
+
     pub fn gross_fields(&self) -> [[u8; 32]; N_PUBLIC_SLOTS] {
-        core::array::from_fn(|index| {
-            right_align(
-                &self
-                    .slots
-                    .get(index)
-                    .map_or(0, |slot| slot.gross)
-                    .to_be_bytes(),
-            )
-        })
+        self.gross().map(|gross| right_align(&gross.to_be_bytes()))
     }
 
     /// Zero past the used slots.

@@ -584,7 +584,7 @@ fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletU
     )
 }
 
-/// Ordinary padding publishes the shape's inputs, 16 at 2 outputs is the widest keyed spend.
+/// Ordinary padding publishes the shape's inputs, 24 at 2 outputs is the widest keyed spend.
 #[tokio::test]
 async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     use crate::tests::support::{keypair, payer};
@@ -602,25 +602,25 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     };
     let pay =
         |amount| owner.anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), amount)]);
-    let widest = pay(16).select(&client).await.unwrap();
+    let widest = pay(24).select(&client).await.unwrap();
     let assembled = widest.assemble(&client).await.unwrap();
     assert_eq!(
         assembled.frame.proof_inputs.check_shape().unwrap(),
-        spr_client::Shape::IN16_OUT2
+        spr_client::Shape::IN24_OUT2
     );
     assert!(matches!(
-        pay(17).select(&client).await,
+        pay(25).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 17,
-            max_inputs: 16,
+            amount: 25,
+            max_inputs: 24,
             ..
         })
     ));
 }
 
-/// Five payments and the change pad to 8 outputs, an anonymous ring fits 5 inputs there and not 6.
+/// Five payments and the change pad to 8 outputs, the anonymous key there holds 5 inputs and not 6.
 #[tokio::test]
-async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving() {
+async fn an_anonymous_move_past_the_eight_output_key_is_refused_before_proving() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let recipients: Vec<ShieldedKeypair> = (10..15).map(keypair).collect();
@@ -657,7 +657,11 @@ async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving()
     );
     assert!(matches!(
         pay(2).select(&client).await,
-        Err(RingError::TransferTooWide { bytes, limit, .. }) if bytes > limit
+        Err(RingError::Unfunded {
+            amount: 6,
+            max_inputs: 5,
+            ..
+        })
     ));
 }
 
@@ -1329,7 +1333,15 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
         .assemble(&Chain::ring(anonymous()).client())
         .await
         .unwrap();
-    let request = assembled.audit().unwrap().request().unwrap();
+    let request = assembled.request().unwrap();
+    assert_eq!(
+        request.circuit,
+        custom_ring_interface::key_catalog::RingCircuit::TransferAnonymous {
+            outputs: 4,
+            class: 16,
+            withdrawals: 4
+        }
+    );
     let built = serde_json::to_value(
         crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
     )
@@ -1339,8 +1351,10 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
         slot_kinds(&built, &sender_key),
         ["change", "exit", "payment", "padding"]
     );
+    assert_eq!(built["inputCount"], 1);
+    assert_eq!(built["inputs"].as_array().unwrap().len(), 16);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/custom-ring-audit-anonymous-exit.json");
+        .join("tests/fixtures/custom-ring-transfer-anonymous-exit.json");
     if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
         std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
     }
@@ -1353,9 +1367,9 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     );
 }
 
-/// SPP hides the in-proof owner, the delivered audit holds both spent notes to the sender it publishes.
+/// SPP hides the in-proof owner, the ring proof holds both spent notes to the sender it publishes.
 #[tokio::test]
-async fn the_in_proof_owner_audit_request_publishes_the_sender_of_every_spent_note() {
+async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
     let sender = &crate::tests::support::keypair(1);
     let recipient = crate::tests::support::keypair(2)
         .shielded_address()
@@ -1372,12 +1386,13 @@ async fn the_in_proof_owner_audit_request_publishes_the_sender_of_every_spent_no
         .assemble(&Chain::ring(RingSettings::new(RingMode::Confidential)).client())
         .await
         .unwrap();
-    let request = assembled.audit().unwrap().request().unwrap();
+    let request = assembled.request().unwrap();
     assert_eq!(
         request.circuit,
-        custom_ring_interface::key_catalog::RingCircuit::DeliveredSenderAudit {
-            inputs: 48,
-            outputs: 2
+        custom_ring_interface::key_catalog::RingCircuit::TransferConfidential {
+            outputs: 2,
+            inputs: 40,
+            withdrawals: 4
         }
     );
     let built = serde_json::to_value(
@@ -1385,13 +1400,24 @@ async fn the_in_proof_owner_audit_request_publishes_the_sender_of_every_spent_no
     )
     .unwrap();
     let sender_pk_hash = sender.signing_pubkey().owner_proof_input_hash().unwrap();
+    // The audit-only ring screens nothing, the in-proof owner still names the sender.
     assert_eq!(
         built["sender"],
         format!("0x{}", hex::encode(sender_pk_hash))
     );
-    assert_eq!(built["inputs"].as_array().unwrap().len(), 48);
+    assert_eq!(built["inProof"], true);
+    assert_eq!(built["policyHash"], format!("0x{}", "00".repeat(32)));
+    let inputs = built["inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 40);
+    assert_eq!(
+        inputs
+            .iter()
+            .filter(|input| nonzero(&input["ownerPkHash"]))
+            .count(),
+        2
+    );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/custom-ring-audit-delivered-sender-48-2.json");
+        .join("tests/fixtures/custom-ring-transfer-confidential-in-proof.json");
     if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
         std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
     }
@@ -1641,7 +1667,7 @@ async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
         .assemble(&client)
         .await
         .unwrap();
-    let request = assembled.policy_request().unwrap().unwrap();
+    let request = assembled.request().unwrap();
     let built = serde_json::to_value(
         crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
     )
@@ -1734,7 +1760,7 @@ impl Measured {
             | Self::InProofOwnerPolicy => RingRail::Confidential,
             Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
             Self::AnonymousEntry | Self::AnonymousEntryPolicy => {
-                return shape.n_inputs() <= 8 && matches!(shape.n_outputs(), 2 | 4 | 8);
+                return super::anonymous::AnonymousKey::Entry.serves(shape);
             }
             Self::Delegate => RingRail::Delegate,
         };
@@ -1773,7 +1799,7 @@ struct Measure {
     legs: usize,
 }
 
-/// Both v1 ceilings of one framed transfer, the address count unknown past the byte ceiling.
+/// `addresses` stays `None` past the byte ceiling.
 #[derive(Clone, Copy, Debug)]
 struct Fit {
     bytes: usize,
@@ -2005,43 +2031,43 @@ struct SizePin {
 /// A policy ring demands its co-signer, a value past `MAX_TRANSACTION_SIZE` fails assembly.
 #[rustfmt::skip]
 const SIZE_PINS: [SizePin; 38] = [
-    SizePin { n_in: 1, n_out: 2, bytes: [Some(1357), Some(1720), Some(1356), Some(1719), Some(1668), Some(2063), None] },
-    SizePin { n_in: 1, n_out: 4, bytes: [Some(1693), Some(2056), Some(1692), Some(2055), Some(2370), Some(2765), None] },
-    SizePin { n_in: 1, n_out: 8, bytes: [Some(2365), Some(2728), Some(2364), Some(2727), Some(3742), Some(4137), None] },
-    SizePin { n_in: 2, n_out: 2, bytes: [Some(1422), Some(1785), Some(1421), Some(1784), Some(1765), Some(2160), Some(1785)] },
-    SizePin { n_in: 2, n_out: 4, bytes: [Some(1758), Some(2121), Some(1757), Some(2120), Some(2467), Some(2862), None] },
-    SizePin { n_in: 1, n_out: 16, bytes: [Some(3710), Some(4073), Some(3709), Some(4072), None, None, None] },
-    SizePin { n_in: 2, n_out: 8, bytes: [Some(2430), Some(2793), Some(2429), Some(2792), Some(3839), Some(4234), None] },
-    SizePin { n_in: 3, n_out: 2, bytes: [Some(1487), Some(1850), Some(1486), Some(1849), Some(1830), Some(2225), None] },
-    SizePin { n_in: 3, n_out: 4, bytes: [Some(1823), Some(2186), Some(1822), Some(2185), Some(2532), Some(2927), None] },
-    SizePin { n_in: 2, n_out: 16, bytes: [Some(3775), Some(4138), Some(3774), Some(4137), None, None, None] },
-    SizePin { n_in: 3, n_out: 8, bytes: [Some(2495), Some(2858), Some(2494), Some(2857), Some(3904), Some(4299), None] },
-    SizePin { n_in: 4, n_out: 2, bytes: [Some(1552), Some(1915), Some(1551), Some(1914), Some(1927), Some(2322), None] },
-    SizePin { n_in: 4, n_out: 4, bytes: [Some(1888), Some(2251), Some(1887), Some(2250), Some(2629), Some(3024), Some(2251)] },
-    SizePin { n_in: 4, n_out: 8, bytes: [Some(2560), Some(2923), Some(2559), Some(2922), Some(4001), Some(4396), None] },
-    SizePin { n_in: 5, n_out: 2, bytes: [Some(1617), Some(1980), Some(1616), Some(1979), Some(1992), Some(2387), None] },
-    SizePin { n_in: 5, n_out: 4, bytes: [Some(1953), Some(2316), Some(1952), Some(2315), Some(2694), Some(3089), None] },
-    SizePin { n_in: 4, n_out: 16, bytes: [Some(3905), Some(4268), Some(3904), Some(4267), None, None, None] },
-    SizePin { n_in: 5, n_out: 8, bytes: [Some(2625), Some(2988), Some(2624), Some(2987), Some(4066), Some(4461), None] },
-    SizePin { n_in: 6, n_out: 2, bytes: [Some(1682), Some(2045), Some(1681), Some(2044), Some(2089), Some(2484), None] },
-    SizePin { n_in: 6, n_out: 4, bytes: [Some(2018), Some(2381), Some(2017), Some(2380), Some(2791), Some(3186), None] },
-    SizePin { n_in: 5, n_out: 16, bytes: [Some(3970), Some(4333), Some(3969), Some(4332), None, None, None] },
-    SizePin { n_in: 6, n_out: 8, bytes: [Some(2690), Some(3053), Some(2689), Some(3052), Some(4163), Some(4558), None] },
-    SizePin { n_in: 8, n_out: 2, bytes: [Some(1812), Some(2175), Some(1811), Some(2174), Some(2251), Some(2646), None] },
-    SizePin { n_in: 8, n_out: 4, bytes: [Some(2148), Some(2511), Some(2147), Some(2510), Some(2953), Some(3348), None] },
-    SizePin { n_in: 8, n_out: 8, bytes: [Some(2820), Some(3183), Some(2819), Some(3182), Some(4325), Some(4720), None] },
-    SizePin { n_in: 8, n_out: 16, bytes: [Some(4165), Some(4528), Some(4164), Some(4527), None, None, None] },
-    SizePin { n_in: 12, n_out: 2, bytes: [Some(2072), Some(2435), Some(2071), Some(2434), Some(2575), Some(2970), None] },
-    SizePin { n_in: 12, n_out: 4, bytes: [Some(2408), Some(2771), Some(2407), Some(2770), Some(3277), Some(3672), None] },
-    SizePin { n_in: 12, n_out: 8, bytes: [Some(3080), Some(3443), Some(3079), Some(3442), None, None, None] },
-    SizePin { n_in: 16, n_out: 2, bytes: [Some(2332), Some(2695), Some(2331), Some(2694), Some(2899), Some(3294), None] },
-    SizePin { n_in: 16, n_out: 4, bytes: [Some(2668), Some(3031), Some(2667), Some(3030), Some(3601), Some(3996), None] },
-    SizePin { n_in: 16, n_out: 8, bytes: [Some(3340), Some(3703), Some(3339), Some(3702), None, None, None] },
-    SizePin { n_in: 24, n_out: 2, bytes: [Some(2852), Some(3215), Some(2851), Some(3214), None, None, None] },
-    SizePin { n_in: 24, n_out: 4, bytes: [Some(3188), Some(3551), Some(3187), Some(3550), None, None, None] },
-    SizePin { n_in: 32, n_out: 2, bytes: [Some(3372), Some(3735), Some(3371), Some(3734), None, None, None] },
-    SizePin { n_in: 40, n_out: 2, bytes: [Some(3892), Some(4255), Some(3891), Some(4254), None, None, None] },
-    SizePin { n_in: 48, n_out: 2, bytes: [Some(4412), Some(4775), Some(4411), Some(4774), None, None, None] },
+    SizePin { n_in: 1, n_out: 2, bytes: [Some(1357), Some(1528), Some(1356), Some(1527), Some(1668), Some(1839), None] },
+    SizePin { n_in: 1, n_out: 4, bytes: [Some(1693), Some(1864), Some(1692), Some(1863), Some(2370), Some(2541), None] },
+    SizePin { n_in: 1, n_out: 8, bytes: [Some(2365), Some(2536), Some(2364), Some(2535), Some(3742), Some(3913), None] },
+    SizePin { n_in: 2, n_out: 2, bytes: [Some(1422), Some(1593), Some(1421), Some(1592), Some(1765), Some(1936), Some(1593)] },
+    SizePin { n_in: 2, n_out: 4, bytes: [Some(1758), Some(1929), Some(1757), Some(1928), Some(2467), Some(2638), None] },
+    SizePin { n_in: 1, n_out: 16, bytes: [Some(3710), Some(3881), Some(3709), Some(3880), None, None, None] },
+    SizePin { n_in: 2, n_out: 8, bytes: [Some(2430), Some(2601), Some(2429), Some(2600), Some(3839), Some(4010), None] },
+    SizePin { n_in: 3, n_out: 2, bytes: [Some(1487), Some(1658), Some(1486), Some(1657), Some(1830), Some(2001), None] },
+    SizePin { n_in: 3, n_out: 4, bytes: [Some(1823), Some(1994), Some(1822), Some(1993), Some(2532), Some(2703), None] },
+    SizePin { n_in: 2, n_out: 16, bytes: [Some(3775), Some(3946), Some(3774), Some(3945), None, None, None] },
+    SizePin { n_in: 3, n_out: 8, bytes: [Some(2495), Some(2666), Some(2494), Some(2665), Some(3904), Some(4075), None] },
+    SizePin { n_in: 4, n_out: 2, bytes: [Some(1552), Some(1723), Some(1551), Some(1722), Some(1927), Some(2098), None] },
+    SizePin { n_in: 4, n_out: 4, bytes: [Some(1888), Some(2059), Some(1887), Some(2058), Some(2629), Some(2800), Some(2059)] },
+    SizePin { n_in: 4, n_out: 8, bytes: [Some(2560), Some(2731), Some(2559), Some(2730), Some(4001), Some(4172), None] },
+    SizePin { n_in: 5, n_out: 2, bytes: [Some(1617), Some(1788), Some(1616), Some(1787), Some(1992), Some(2163), None] },
+    SizePin { n_in: 5, n_out: 4, bytes: [Some(1953), Some(2124), Some(1952), Some(2123), Some(2694), Some(2865), None] },
+    SizePin { n_in: 4, n_out: 16, bytes: [Some(3905), Some(4076), Some(3904), Some(4075), None, None, None] },
+    SizePin { n_in: 5, n_out: 8, bytes: [Some(2625), Some(2796), Some(2624), Some(2795), Some(4066), Some(4237), None] },
+    SizePin { n_in: 6, n_out: 2, bytes: [Some(1682), Some(1853), Some(1681), Some(1852), Some(2089), Some(2260), None] },
+    SizePin { n_in: 6, n_out: 4, bytes: [Some(2018), Some(2189), Some(2017), Some(2188), Some(2791), Some(2962), None] },
+    SizePin { n_in: 5, n_out: 16, bytes: [Some(3970), Some(4141), Some(3969), Some(4140), None, None, None] },
+    SizePin { n_in: 6, n_out: 8, bytes: [Some(2690), Some(2861), Some(2689), Some(2860), None, None, None] },
+    SizePin { n_in: 8, n_out: 2, bytes: [Some(1812), Some(1983), Some(1811), Some(1982), Some(2251), Some(2422), None] },
+    SizePin { n_in: 8, n_out: 4, bytes: [Some(2148), Some(2319), Some(2147), Some(2318), Some(2953), Some(3124), None] },
+    SizePin { n_in: 8, n_out: 8, bytes: [Some(2820), Some(2991), Some(2819), Some(2990), None, None, None] },
+    SizePin { n_in: 8, n_out: 16, bytes: [Some(4165), Some(4336), Some(4164), Some(4335), None, None, None] },
+    SizePin { n_in: 12, n_out: 2, bytes: [Some(2072), Some(2243), Some(2071), Some(2242), Some(2575), Some(2746), None] },
+    SizePin { n_in: 12, n_out: 4, bytes: [Some(2408), Some(2579), Some(2407), Some(2578), Some(3277), Some(3448), None] },
+    SizePin { n_in: 12, n_out: 8, bytes: [Some(3080), Some(3251), Some(3079), Some(3250), None, None, None] },
+    SizePin { n_in: 16, n_out: 2, bytes: [Some(2332), Some(2503), Some(2331), Some(2502), Some(2899), Some(3070), None] },
+    SizePin { n_in: 16, n_out: 4, bytes: [Some(2668), Some(2839), Some(2667), Some(2838), Some(3601), Some(3772), None] },
+    SizePin { n_in: 16, n_out: 8, bytes: [Some(3340), Some(3511), Some(3339), Some(3510), None, None, None] },
+    SizePin { n_in: 24, n_out: 2, bytes: [Some(2852), Some(3023), Some(2851), Some(3022), Some(3547), Some(3718), None] },
+    SizePin { n_in: 24, n_out: 4, bytes: [Some(3188), Some(3359), Some(3187), Some(3358), None, None, None] },
+    SizePin { n_in: 32, n_out: 2, bytes: [Some(3372), Some(3543), Some(3371), Some(3542), None, None, None] },
+    SizePin { n_in: 40, n_out: 2, bytes: [Some(3892), Some(4063), Some(3891), Some(4062), None, None, None] },
+    SizePin { n_in: 48, n_out: 2, bytes: [None, None, None, None, None, None, None] },
     SizePin { n_in: 49, n_out: 2, bytes: [None, None, None, None, None, None, None] },
 ];
 
@@ -2144,7 +2170,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     );
     let policy = Measure {
         rail: Measured::ConfidentialPolicy,
-        shape: spr_client::Shape::IN2_OUT16,
+        shape: spr_client::Shape::IN5_OUT16,
         co_signer: Some(MEASURED_CO_SIGNER),
         ..audit_only
     };
@@ -2162,7 +2188,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
 async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_proving() {
     use crate::tests::support::{keypair, payer, Registry};
     let sender = keypair(1);
-    for shape in [spr_client::Shape::IN2_OUT16, spr_client::Shape::IN40_OUT2] {
+    for shape in [spr_client::Shape::IN5_OUT16, spr_client::Shape::IN8_OUT16] {
         let recipients: Vec<ShieldedKeypair> = (0..shape.n_outputs() - 1)
             .map(|index| keypair(10 + index as u8))
             .collect();
@@ -2284,78 +2310,79 @@ fn a_payment_total_past_a_u64_is_refused() {
 }
 
 #[tokio::test]
-async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
-    use crate::tests::support::Registry;
-    use custom_ring_interface::{CoSignScope, PublicLeg};
-    use spr_interface::instruction::InterfaceTransfer;
-    use zolana_ring_policy::{MintPolicy, RuleTable};
-    let mut registry = Registry::new(&[]);
-    for i in 1..=12 {
-        registry = registry.with_mint(
-            Address::new_from_array([i; 32]),
+async fn an_audit_only_withdrawal_is_exempt_within_its_threshold_and_co_signed_past_it() {
+    use crate::tests::support::{keypair, Registry};
+    use custom_ring_interface::CoSignScope;
+    use spr_program::instruction::TransactSolTransferAccounts;
+    use zolana_ring_policy::MintPolicy;
+    let sender = keypair(1);
+    let co_signer = Address::new_from_array([77; 32]);
+    let settings = RingSettings {
+        co_signer: Some((co_signer, CoSignScope::WITHDRAWALS)),
+        ..RingSettings::new(RingMode::Confidential)
+    };
+    let recorded = Chain::ring(settings)
+        .with_records(Registry::new(&[]).with_mint(
+            Mint::SOL.asset,
             MintPolicy {
                 withdrawal_threshold: 100,
                 ..MintPolicy::EMPTY
             },
-        );
-    }
-    let chain = Chain::ring(RingSettings {
-        co_signer: Some((Address::new_from_array([77; 32]), CoSignScope::WITHDRAWALS)),
-        ..RingSettings::new(RingMode::Confidential)
-    })
-    .with_registry(registry, &RuleTable::empty());
-    let config = ring().require_config(&chain).await.unwrap();
-    let leg = |amount| PublicLeg {
-        transfer: InterfaceTransfer::SplWithdrawal {
-            spl_interface_bump: 0,
-            amount,
-        },
-        mint: Some([9; 32]),
+        ))
+        .client();
+    let withdrawing = |legs: &[u64], deposit: Option<u64>| {
+        let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 200, 0)]);
+        let mut accounts: Vec<_> = legs
+            .iter()
+            .enumerate()
+            .map(|(index, amount)| {
+                let recipient = keypair(40 + index as u8)
+                    .shielded_address()
+                    .unwrap()
+                    .solana_address()
+                    .unwrap();
+                transaction.withdraw_sol(*amount, recipient).unwrap();
+                TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts { recipient })
+            })
+            .collect();
+        if let Some(amount) = deposit {
+            let funder = crate::tests::support::payer();
+            transaction.deposit_sol(amount, funder).unwrap();
+            accounts.push(TransactInterfaceTransferAccounts::Sol(
+                TransactSolTransferAccounts { recipient: funder },
+            ));
+        }
+        owner_transfer(&sender, transaction).with_interface_transfer_accounts(accounts)
     };
-    let demand = CoSignDemand::transact(false, &[leg(40), leg(60)]);
-    let exemption = withdrawals::Exemption::read(&config, &demand, None, &chain)
+    let exempt = withdrawing(&[40, 60], None)
+        .frame(&recorded)
         .await
-        .unwrap();
+        .unwrap()
+        .frame;
+    assert!(exempt.parts.exempt);
+    assert!(exempt.parts.own_revision.is_some());
+    assert_eq!(exempt.accounts.co_signer, None);
+    // The gross is the withdrawal total, a deposit of the same mint offsets nothing.
+    let offset = withdrawing(&[60, 60], Some(100))
+        .with_co_signer(co_signer)
+        .frame(&recorded)
+        .await
+        .unwrap()
+        .frame;
+    assert!(!offset.parts.exempt);
+    assert_eq!(offset.parts.own_revision, None);
+    assert_eq!(offset.accounts.co_signer, Some(co_signer));
+    let unrecorded = Chain::ring(settings)
+        .with_records(Registry::new(&[]))
+        .client();
+    let missing = withdrawing(&[40], None)
+        .with_co_signer(co_signer)
+        .frame(&unrecorded)
+        .await
+        .unwrap()
+        .frame;
     assert!(
-        exemption.is_some(),
-        "ninth mint at its threshold is exempt on an audit-only ring"
-    );
-    let demand = CoSignDemand::transact(
-        false,
-        &[
-            leg(60),
-            leg(60),
-            PublicLeg {
-                transfer: InterfaceTransfer::SplDeposit {
-                    spl_interface_bump: 0,
-                    amount: 100,
-                },
-                mint: Some([9; 32]),
-            },
-        ],
-    );
-    assert!(
-        withdrawals::Exemption::read(&config, &demand, None, &chain)
-            .await
-            .unwrap()
-            .is_none(),
-        "deposits never offset gross withdrawals"
-    );
-    let demand = CoSignDemand::transact(
-        false,
-        &[PublicLeg {
-            transfer: InterfaceTransfer::SplWithdrawal {
-                spl_interface_bump: 0,
-                amount: 1,
-            },
-            mint: Some([13; 32]),
-        }],
-    );
-    assert!(
-        withdrawals::Exemption::read(&config, &demand, None, &chain)
-            .await
-            .unwrap()
-            .is_none(),
-        "missing records still require the co-signer"
+        !missing.parts.exempt,
+        "a mint without a record keeps the co-signer"
     );
 }

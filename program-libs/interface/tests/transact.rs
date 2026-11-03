@@ -1,8 +1,9 @@
 //! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK and the ring program tests.
 
-mod common;
+mod frames;
 
-use bytemuck::Zeroable;
+use frames::{config, spp_b, Fixture};
+
 use custom_ring_interface::{
     encode_anonymous_recipient_output, encode_anonymous_sender_output,
     ring_confidential_delivered_output_body, CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -12,15 +13,13 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     shape_flag,
     storage::{Revision, Root, StorageRegistry},
-    transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
-    CustomRingError, CustomRingProof, DeliveredLayout, DeliveredSender, DisclosureLayout,
-    InProofOwner, InputTrees, InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof,
-    PolicyBinding, PolicyProof, PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy,
-    RingRail, RingTransactData, SenderBundle, Settlement, SourceSlot, RING_POLICY,
+    transact_flag, AnonymousAuditKey, AnonymousLayout, CustomRingError, DeliveredLayout,
+    DisclosureLayout, InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyProof,
+    RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData, SenderBundle,
+    Settlement, SourceSlot, TransferBinding, TransferFamily, TransferRoots,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
-use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_event::{
     confidential_encrypted_output_body, OutputDataEncoding,
     ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
@@ -28,7 +27,7 @@ use spr_event::{
 };
 use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::{
-    instruction::{CircuitId, InterfaceTransfer, OwnerTag, TreeContext},
+    instruction::{CircuitId, InterfaceTransfer, OwnerTag},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };
 use zolana_ring_policy::ListId;
@@ -58,288 +57,14 @@ struct Case {
     external_data_hash: String,
 }
 
-struct Fixture {
-    proofs: [CustomRingProof; 2],
-    spp_proof: PlainGroth16Proof,
-    fields: Vec<[u8; 32]>,
-    bytes: [[u8; 32]; 24],
-    bodies: [[u8; 40]; 8],
-    tags: [[u8; 32]; 4],
-    recipient_body: Vec<u8>,
-    sender_body: Vec<u8>,
-    payload: Vec<u8>,
-    salt: [u8; 16],
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let proof = |seed: u8| CustomRingProof {
-            groth16: PlainGroth16Proof {
-                proof_a: [seed; 32],
-                proof_b: [seed + 1; 64],
-                proof_c: [seed + 2; 32],
-            },
-            commitment: [seed + 3; 32],
-            commitment_pok: [seed + 4; 32],
-        };
-        Self {
-            proofs: [proof(0x10), proof(0x20)],
-            spp_proof: PlainGroth16Proof {
-                proof_a: [0x31; 32],
-                proof_b: alt_bn128_g2_compress_be(&common::spp_b()).unwrap(),
-                proof_c: [0x32; 32],
-            },
-            fields: (0..64u8).map(field).collect(),
-            bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
-            bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
-            tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
-            recipient_body: (0..120u8).map(|byte| byte ^ 0x5a).collect(),
-            sender_body: (0..90u8).map(|byte| byte ^ 0x2d).collect(),
-            payload: (0..CONFIDENTIAL_DATA_FREE_BODY_LEN as u8)
-                .map(|byte| byte ^ 0x66)
-                .collect(),
-            salt: [0x5c; 16],
-        }
-    }
-
-    fn base(&self, rail: RingRail, n_in: u8, n_out: u8) -> RingTransactData<'_> {
-        RingTransactData {
-            withdrawal_exemption: Default::default(),
-            rail,
-            n_in,
-            n_out,
-            audit_proof: &self.proofs[0],
-            policy: None,
-            approval_required: false,
-            expiry_unix_ts: 1_800_000_000,
-            tx_viewing_u: &self.bytes[0],
-            salt: &self.salt,
-            interface_transfers: Vec::new(),
-            key_escrow: false,
-            full_openings: false,
-            outputs: Vec::new(),
-            sender: None,
-            eph_u: &self.bytes[1],
-            sealed: &self.bytes[2],
-            disclosure: &[],
-            private_tx_hash: &self.fields[0],
-            anonymous: None,
-            in_proof_owner: None,
-            spp_proof: &self.spp_proof,
-            nullifiers: &self.fields[1..1 + usize::from(n_in)],
-            input_trees: InputTrees::One(TreeContext {
-                utxo_tree_root_index: 11,
-                nullifier_tree_root_index: 12,
-            }),
-        }
-    }
-
-    fn exit<'a>(&'a self, slot: usize, payload: &'a [u8]) -> RingOutput<'a> {
-        RingOutput::Exit {
-            hash: &self.fields[10 + slot],
-            owner_tag: &self.bytes[12 + slot],
-            payload,
-        }
-    }
-
-    fn with_disclosure<'a>(&'a self, mut data: RingTransactData<'a>) -> RingTransactData<'a> {
-        let count = data.disclosure_layout().unwrap().field_count();
-        data.disclosure = &self.fields[30..30 + count];
-        data
-    }
-
-    fn confidential_policy(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Confidential, 2, 2);
-        data.key_escrow = true;
-        data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
-            proof: &self.proofs[1],
-            own_revision: Revision::from(7),
-            curator_revision: Some(Revision::from(3)),
-            sender_commitment: None,
-            recipients: PolicyRecipients::Framed(&self.fields[50..52]),
-        });
-        data.approval_required = true;
-        data.interface_transfers = vec![
-            InterfaceTransfer::SolWithdrawal { amount: 5_000 },
-            InterfaceTransfer::SplDeposit {
-                amount: 77,
-                spl_interface_bump: 254,
-            },
-        ];
-        data.outputs = vec![self.delivered(0), self.exit(1, &self.payload)];
-        data.input_trees = InputTrees::Two {
-            first: TreeContext {
-                utxo_tree_root_index: 1,
-                nullifier_tree_root_index: 2,
-            },
-            second: TreeContext {
-                utxo_tree_root_index: 3,
-                nullifier_tree_root_index: 4,
-            },
-            second_inputs: 0b10,
-        };
-        self.with_disclosure(data)
-    }
-
-    /// No owner signs, SPP's anonymous rail hides the owner the delivered audit publishes.
-    fn confidential_in_proof_owner(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Confidential, 2, 4);
-        data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
-            proof: &self.proofs[1],
-            own_revision: Revision::from(5),
-            curator_revision: None,
-            sender_commitment: None,
-            recipients: PolicyRecipients::Framed(&self.fields[50..54]),
-        });
-        data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 4_000 }];
-        data.outputs = (0..4)
-            .map(|slot| match slot {
-                1 => self.exit(slot, &self.payload),
-                _ => self.delivered(slot),
-            })
-            .collect();
-        data.in_proof_owner = Some(InProofOwner {
-            owner: &self.bytes[16],
-            commitment: &self.bytes[20],
-            commitment_pok: &self.bytes[21],
-        });
-        self.with_disclosure(data)
-    }
-
-    fn confidential_delivered(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Confidential, 1, 8);
-        data.outputs = (0..8)
-            .map(|slot| match slot {
-                3 | 6 => self.exit(slot, &self.payload),
-                _ => self.delivered(slot),
-            })
-            .collect();
-        self.with_disclosure(data)
-    }
-
-    fn anonymous(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Anonymous, 3, 4);
-        data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
-            proof: &self.proofs[1],
-            own_revision: Revision::from(31),
-            curator_revision: None,
-            sender_commitment: Some(&self.fields[4]),
-            recipients: PolicyRecipients::Hidden,
-        });
-        data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
-        data.outputs = (0..4)
-            .map(|slot| match slot {
-                2 => self.exit(slot, &self.payload),
-                _ => self.tagged(slot),
-            })
-            .collect();
-        data.sender = self.sender();
-        data.anonymous = Some(AnonymousProofData {
-            commitment: &self.bytes[20],
-            commitment_pok: &self.bytes[21],
-            default_owner_tag: Some(&self.bytes[22]),
-        });
-        self.with_disclosure(data)
-    }
-
-    fn anonymous_entry(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Anonymous, 2, 2);
-        data.full_openings = true;
-        data.outputs = vec![self.tagged(0), self.exit(1, &self.payload)];
-        data.sender = self.sender();
-        data.anonymous = Some(AnonymousProofData {
-            commitment: &self.bytes[20],
-            commitment_pok: &self.bytes[21],
-            default_owner_tag: None,
-        });
-        self.with_disclosure(data)
-    }
-
-    fn delegate(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Delegate, 2, 2);
-        data.key_escrow = true;
-        data.policy = Some(self.delegate_policy(2));
-        data.outputs = vec![self.delivered(0), self.delivered(1)];
-        self.with_disclosure(data)
-    }
-
-    /// A delegate move into eight delivered slots, a shape SPP keys no ring authority for.
-    fn delegate_delivered(&self) -> RingTransactData<'_> {
-        let mut data = self.base(RingRail::Delegate, 2, 8);
-        data.key_escrow = true;
-        data.policy = Some(self.delegate_policy(8));
-        data.outputs = (0..8).map(|slot| self.delivered(slot)).collect();
-        data
-    }
-
-    fn delegate_policy(&self, outputs: usize) -> PolicyProof<'_> {
-        PolicyProof {
-            spl_withdrawal_owners: &[],
-            proof: &self.proofs[1],
-            own_revision: Revision::from(0),
-            curator_revision: None,
-            sender_commitment: None,
-            recipients: PolicyRecipients::Framed(&self.fields[50..50 + outputs]),
-        }
-    }
-
-    fn delivered(&self, slot: usize) -> RingOutput<'_> {
-        RingOutput::Delivered {
-            hash: &self.fields[10 + slot],
-            u: &self.bytes[3 + slot],
-            body: &self.bodies[slot],
-        }
-    }
-
-    /// Slot 0 a change output, any other slot a recipient body.
-    fn tagged(&self, slot: usize) -> RingOutput<'_> {
-        RingOutput::Anonymous {
-            hash: &self.fields[10 + slot],
-            tag: &self.tags[slot],
-            body: (slot != 0).then_some(&self.recipient_body[..]),
-        }
-    }
-
-    fn sender(&self) -> Option<SenderBundle<'_>> {
-        Some(SenderBundle {
-            tag: &self.tags[0],
-            body: &self.sender_body,
-        })
-    }
-
-    fn cases(&self) -> [(&'static str, RingTransactData<'_>); 6] {
-        [
-            ("confidential_delivered_policy", self.confidential_policy()),
-            (
-                "confidential_in_proof_owner_policy",
-                self.confidential_in_proof_owner(),
-            ),
-            (
-                "confidential_delivered_audit_only",
-                self.confidential_delivered(),
-            ),
-            ("anonymous_policy", self.anonymous()),
-            ("anonymous_entry_audit_only", self.anonymous_entry()),
-            ("delegate_move", self.delegate()),
-        ]
-    }
-}
-
-fn field(seed: u8) -> [u8; 32] {
-    let mut value = [seed; 32];
-    value[0] = 0x0f;
-    value
-}
-
-fn config() -> Box<RingPolicy> {
-    let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
-    config.discriminator = RING_POLICY;
-    config.auditor_pubkey[0] = 4;
-    config.auditor_pubkey[1..].copy_from_slice(&[0xa1; 32]);
-    config
+/// A delegate move into eight delivered slots, a shape SPP keys no ring authority for.
+fn delegate_delivered(fixture: &Fixture) -> RingTransactData<'_> {
+    let mut data = fixture.base(RingRail::Delegate, 2, 8);
+    data.key_escrow = true;
+    data.own_revision = Some(Revision::from(0));
+    data.policy = Some(fixture.delegate_policy(8));
+    data.outputs = (0..8).map(|slot| fixture.delivered(slot)).collect();
+    data
 }
 
 fn settlements(legs: usize) -> Vec<[[u8; 32]; 2]> {
@@ -381,7 +106,11 @@ fn compute_vectors() -> ExpansionVectors {
                       for it, the SPP TransactIxData, the SPP instruction data (tag 19 or 21 then the \
                       data) and the external data \
                       hash over the SPP tag, the data before private_tx_hash and two settlement \
-                      accounts per leg. Byte 1 of the compact data indexes \
+                      accounts per leg. Byte 0 carries the policy, curator, approval, in-proof \
+                      owner (bit 3), exempt (bit 4) and second tree flags, the one ring proof \
+                      follows the header, the own registry revision under the policy or exempt \
+                      flag, the curator revision under the curator flag and the recipients under \
+                      the policy flag on a publishing rail. Byte 1 of the compact data indexes \
                       SPP_SUPPORTED_SHAPES below the default owner tag flag (bit 6), bit 7 refused. \
                       Byte 2 is the input count below the key escrow flag (bit 6) and the \
                       anonymous entry key flag (bit 7), the expiry is a u32, every rail \
@@ -426,7 +155,7 @@ fn ring_transact_expansion_vector() {
             .into_data();
         assert_eq!(data.encode().unwrap(), compact, "{}", case.name);
         let spp = data.expand(&config).unwrap();
-        assert_eq!(spp.proof.b, common::spp_b());
+        assert_eq!(spp.proof.b, spp_b());
         assert_eq!(&spp.salt, data.salt, "{}", case.name);
         let (auditor, sender) = spp.messages.split_last().unwrap();
         assert_eq!(auditor.view_tag, config.auditor_pubkey[1..]);
@@ -641,22 +370,53 @@ fn the_reserved_frame_bits_are_refused() {
 }
 
 #[test]
-fn flag_bit_4_is_refused_on_every_rail_and_the_in_proof_owner_off_the_confidential_rail() {
+fn the_in_proof_owner_is_refused_off_the_confidential_rail() {
     let fixture = Fixture::new();
-    assert_eq!(transact_flag::KNOWN & 1 << 4, 0);
     for (name, data) in fixture.cases() {
-        let foreign_owner =
-            (data.rail != RingRail::Confidential).then_some(transact_flag::OWNER_IN_PROOF);
-        for bit in [Some(1 << 4), foreign_owner].into_iter().flatten() {
-            let mut compact = data.encode().unwrap();
-            compact[transact_flag::BYTE] |= bit;
-            assert_eq!(
-                RingTransactData::parse(&compact, data.rail),
-                Err(CustomRingError::FlagNotAllowed),
-                "{name} bit {bit:#x}"
-            );
+        if data.rail == RingRail::Confidential {
+            continue;
         }
+        let mut compact = data.encode().unwrap();
+        compact[transact_flag::BYTE] |= transact_flag::OWNER_IN_PROOF;
+        assert_eq!(
+            RingTransactData::parse(&compact, data.rail),
+            Err(CustomRingError::FlagNotAllowed),
+            "{name}"
+        );
     }
+}
+
+#[test]
+fn an_exempt_frame_needs_a_withdrawal_leg_and_the_own_revision_off_the_delegate_rail() {
+    let fixture = Fixture::new();
+    let exempt = fixture.confidential_exempt();
+    let compact = exempt.encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Confidential)
+        .unwrap()
+        .into_data();
+    assert!(parsed.exempt);
+    assert_eq!(parsed.own_revision, Some(Revision::from(7)));
+    assert_eq!(parsed.policy, None);
+    assert_eq!(parsed.encode().unwrap(), compact);
+    let mut deposit_only = exempt.clone();
+    deposit_only.interface_transfers = vec![InterfaceTransfer::SolDeposit { amount: 2_500 }];
+    assert_eq!(
+        deposit_only.encode(),
+        Err(CustomRingError::ExemptionWithoutWithdrawal)
+    );
+    let mut unrevised = exempt.clone();
+    unrevised.own_revision = None;
+    assert_eq!(unrevised.encode(), Err(CustomRingError::RingTransactLength));
+    // The flag alone shifts every later field, the error varies.
+    let mut claimed = fixture.confidential_delivered().encode().unwrap();
+    claimed[transact_flag::BYTE] |= transact_flag::EXEMPT;
+    assert!(RingTransactData::parse(&claimed, RingRail::Confidential).is_err());
+    let mut delegate = fixture.delegate().encode().unwrap();
+    delegate[transact_flag::BYTE] |= transact_flag::EXEMPT;
+    assert_eq!(
+        RingTransactData::parse(&delegate, RingRail::Delegate),
+        Err(CustomRingError::FlagNotAllowed)
+    );
 }
 
 #[test]
@@ -846,11 +606,11 @@ fn the_policy_proof_follows_the_ring_policy() {
         slot: 0,
     };
     assert_eq!(
-        policy.check_policy(None, &live),
+        policy.roots(None, &live),
         Err(CustomRingError::UnexpectedPolicyProof)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), &live),
+        policy.roots(Some(&ring_policy), &live),
         Err(CustomRingError::FlagNotAllowed)
     );
     ring_policy.sources[0] = SourceSlot {
@@ -864,29 +624,28 @@ fn the_policy_proof_follows_the_ring_policy() {
         ..policy
     });
     assert_eq!(
-        uncurated.check_policy(Some(&ring_policy), &live),
+        uncurated.roots(Some(&ring_policy), &live),
         Err(CustomRingError::FlagNotAllowed)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), &live),
+        policy.roots(Some(&ring_policy), &live),
         Err(CustomRingError::PolicyNotSet)
     );
     ring_policy.policy_hash = [9; 32];
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), &unpassed),
+        policy.roots(Some(&ring_policy), &unpassed),
         Err(CustomRingError::MissingRegistry)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), &live),
-        Ok(Some(PolicyBinding {
-            proof: policy.policy.unwrap(),
+        policy.roots(Some(&ring_policy), &live),
+        Ok(TransferRoots {
             policy_hash: [9; 32],
             own_root: [7; 32],
-            curator_root: Some([3; 32]),
-        }))
+            curator_root: [3; 32],
+        })
     );
     assert_eq!(
-        policy.check_policy(
+        policy.roots(
             Some(&ring_policy),
             &LiveRoots {
                 own: Some(&replaced),
@@ -898,14 +657,23 @@ fn the_policy_proof_follows_the_ring_policy() {
     assert_eq!(
         fixture
             .confidential_delivered()
-            .check_policy(Some(&ring_policy), &live),
+            .roots(Some(&ring_policy), &live),
         Err(CustomRingError::MissingPolicyProof)
     );
     assert_eq!(
-        fixture
-            .confidential_delivered()
-            .check_policy(None, &unpassed),
-        Ok(None)
+        fixture.confidential_delivered().roots(None, &unpassed),
+        Ok(TransferRoots::default())
+    );
+    assert_eq!(
+        fixture.confidential_exempt().roots(None, &live),
+        Ok(TransferRoots {
+            own_root: [7; 32],
+            ..TransferRoots::default()
+        })
+    );
+    assert_eq!(
+        fixture.confidential_exempt().roots(None, &unpassed),
+        Err(CustomRingError::MissingRegistry)
     );
 }
 
@@ -918,7 +686,6 @@ fn every_rail_reads_its_disclosure_layout() {
             outputs: 2,
             exits: true,
             key_escrow: true,
-            sender_class: None,
         }))
     );
     assert_eq!(
@@ -927,7 +694,6 @@ fn every_rail_reads_its_disclosure_layout() {
             outputs: 8,
             exits: true,
             key_escrow: false,
-            sender_class: None,
         }))
     );
     assert_eq!(
@@ -936,13 +702,12 @@ fn every_rail_reads_its_disclosure_layout() {
             outputs: 4,
             exits: true,
             key_escrow: false,
-            sender_class: Some(24),
         }))
     );
     assert_eq!(
         fixture.anonymous().disclosure_layout(),
         Ok(DisclosureLayout::Anonymous(AnonymousLayout {
-            key: AnonymousAuditKey::Commitment { class: 4 },
+            key: AnonymousAuditKey::Commitment { class: 16 },
             inputs: 3,
             outputs: 4,
             exits: true,
@@ -951,14 +716,14 @@ fn every_rail_reads_its_disclosure_layout() {
     assert_eq!(
         fixture.anonymous_entry().disclosure_layout(),
         Ok(DisclosureLayout::Anonymous(AnonymousLayout {
-            key: AnonymousAuditKey::Entry,
+            key: AnonymousAuditKey::Entry { class: 8 },
             inputs: 2,
             outputs: 2,
             exits: true,
         }))
     );
     assert_eq!(
-        fixture.delegate_delivered().disclosure_layout(),
+        delegate_delivered(&fixture).disclosure_layout(),
         Err(CustomRingError::RingShapeUnkeyed)
     );
 }
@@ -1019,47 +784,111 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(proof.default_owner_tag, None);
     assert_eq!(proof.bsb22_commitment.commitment, fixture.bytes[20]);
     assert_eq!(
-        RingCircuit::audit(data.disclosure_layout().unwrap(), data.n_out),
-        RingCircuit::DeliveredSenderAudit {
+        data.transfer_circuit(1),
+        Ok(RingCircuit::TransferConfidential {
+            outputs: 4,
             inputs: 24,
-            outputs: 4
-        }
+            withdrawals: 4
+        })
+    );
+    assert_eq!(
+        data.transfer_circuit(33),
+        Err(CustomRingError::RingShapeUnkeyed)
     );
 }
 
+fn binding<'a>(
+    fixture: &'a Fixture,
+    config: &'a RingPolicy,
+    roots: &'a TransferRoots,
+    recipients: &'a [[u8; 32]],
+    key_escrow: bool,
+) -> TransferBinding<'a> {
+    TransferBinding {
+        ring_id: &fixture.fields[60],
+        auditor_pubkey: &config.auditor_pubkey,
+        key_escrow,
+        sender: &fixture.fields[61],
+        party_identities: &[[0; 32]; 3],
+        recipients,
+        roots,
+        public_assets: &[[0; 32]; 3],
+        public_amounts: &[[0; 32]; 3],
+        public_gross: &[[0; 32]; 3],
+        withdrawal_hash: &fixture.fields[62],
+    }
+}
+
 #[test]
-fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
+fn the_transfer_statement_reads_the_frame_and_names_its_family() {
     let fixture = Fixture::new();
+    let config = config();
+    let roots = TransferRoots::default();
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
     let data = parsed.data();
-    let binding = AuditBinding {
-        party_identities: &[[0; 32]; 3],
-        ring_id: &fixture.fields[60],
-        auditor_pubkey: &config().auditor_pubkey,
-        key_escrow: false,
-    };
-    let statement = parsed.audit_statement(binding).unwrap();
+    let recipients = data.recipients();
+    assert_eq!(recipients, vec![[0; 32]; 4]);
+    let statement = parsed
+        .transfer_statement(binding(&fixture, &config, &roots, &recipients, false))
+        .unwrap();
     assert_eq!(statement.head.first_nullifier, &data.nullifiers[0]);
     assert_eq!(statement.head.salt, data.salt);
     assert_eq!(statement.head.layout.value(), 0b0001);
     assert_eq!(statement.disclosure, data.disclosure);
-    let AuditKind::Anonymous(anonymous) = statement.kind else {
-        panic!("an anonymous rail binds the anonymous tail");
-    };
-    assert_eq!(anonymous.sender_commitment, &fixture.fields[4]);
-    assert_eq!(anonymous.private_tx_hash, data.private_tx_hash);
-    let delivered = ParsedTransact::new(fixture.confidential_delivered()).unwrap();
+    assert_eq!(statement.private_tx_hash, data.private_tx_hash);
     assert_eq!(
-        delivered.audit_statement(binding).unwrap().kind,
-        AuditKind::Delivered(None)
+        statement.family,
+        TransferFamily::Anonymous {
+            party_identities: &[[0; 32]; 3]
+        }
+    );
+    let delivered = ParsedTransact::new(fixture.confidential_delivered()).unwrap();
+    let none = delivered.data().recipients();
+    assert_eq!(none, vec![[0; 32]; 8]);
+    assert_eq!(
+        delivered
+            .transfer_statement(binding(&fixture, &config, &roots, &none, false))
+            .unwrap()
+            .family,
+        TransferFamily::Confidential {
+            in_proof: false,
+            delegate: false,
+            sender: &fixture.fields[61],
+            recipients: &none,
+        }
     );
     let in_proof = ParsedTransact::new(fixture.confidential_in_proof_owner()).unwrap();
+    let framed = in_proof.data().recipients();
+    assert_eq!(framed, fixture.fields[50..54]);
     assert_eq!(
-        in_proof.audit_statement(binding).unwrap().kind,
-        AuditKind::Delivered(Some(DeliveredSender {
-            private_tx_hash: in_proof.data().private_tx_hash,
-            sender: solana_owner_identity(&fixture.bytes[16]).unwrap(),
-        }))
+        in_proof.data().in_proof_sender(),
+        Ok(Some(solana_owner_identity(&fixture.bytes[16]).unwrap()))
+    );
+    assert_eq!(
+        in_proof
+            .transfer_statement(binding(&fixture, &config, &roots, &framed, false))
+            .unwrap()
+            .family,
+        TransferFamily::Confidential {
+            in_proof: true,
+            delegate: false,
+            sender: &fixture.fields[61],
+            recipients: &framed,
+        }
+    );
+    let delegate = ParsedTransact::new(fixture.delegate()).unwrap();
+    let moved = delegate.data().recipients();
+    assert_eq!(
+        delegate
+            .transfer_statement(binding(&fixture, &config, &roots, &moved, true))
+            .unwrap()
+            .family,
+        TransferFamily::Confidential {
+            in_proof: false,
+            delegate: true,
+            sender: &fixture.fields[61],
+            recipients: &moved,
+        }
     );
 }
 
@@ -1067,16 +896,12 @@ fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
 fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
     let fixture = Fixture::new();
     let config = config();
-    let binding = |key_escrow| AuditBinding {
-        party_identities: &[[0; 32]; 3],
-        ring_id: &fixture.fields[60],
-        auditor_pubkey: &config.auditor_pubkey,
-        key_escrow,
-    };
+    let roots = TransferRoots::default();
     let statement = |data: &RingTransactData<'_>, key_escrow| {
+        let recipients = data.recipients();
         ParsedTransact::new(data.clone())
             .unwrap()
-            .audit_statement(binding(key_escrow))
+            .transfer_statement(binding(&fixture, &config, &roots, &recipients, key_escrow))
             .map(|statement| statement.head.layout.value())
     };
     let escrowed = fixture.confidential_policy();
@@ -1125,35 +950,6 @@ fn withdrawal_owner_metadata_is_required_in_transfer_order() {
     let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
     assert_eq!(parsed.data().policy.unwrap().spl_withdrawal_owners, owners);
     assert_eq!(parsed.data().interface_transfers, data.interface_transfers);
-    assert!(RingTransactData::parse_legacy(&encoded, RingRail::Confidential).is_err());
     data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners[..1];
     assert!(data.encode().is_err());
-}
-
-#[test]
-fn withdrawal_exemption_suffix_round_trips_and_rejects_partial_proofs() {
-    use custom_ring_interface::WithdrawalExemptionProof;
-    let fixture = Fixture::new();
-    let exemption = WithdrawalExemptionProof {
-        proof: CustomRingProof::zeroed(),
-        own_revision: Revision::from(7),
-    };
-    let (_, mut data) = fixture
-        .cases()
-        .into_iter()
-        .find(|(_, data)| data.rail == RingRail::Confidential)
-        .unwrap();
-    let bare = data.encode().unwrap();
-    data.withdrawal_exemption = Some(&exemption);
-    let encoded = data.encode().unwrap();
-    assert_eq!(encoded.len(), bare.len() + WithdrawalExemptionProof::SIZE);
-    let parsed = RingTransactData::parse(&encoded, data.rail).unwrap();
-    assert_eq!(parsed.data().withdrawal_exemption, Some(&exemption));
-    assert_eq!(parsed.data().encode().unwrap(), encoded);
-    for length in [bare.len() + 1, encoded.len() - 1] {
-        assert_eq!(
-            RingTransactData::parse(&encoded[..length], data.rail),
-            Err(CustomRingError::RingTransactLength)
-        );
-    }
 }

@@ -18,17 +18,14 @@ impl PublicLegs {
             ShieldedPoolError::TooManyInterfaceTransfers => CustomRingError::TooManyPublicLegs,
             _ => CustomRingError::ZeroPublicLegAmount,
         })?;
-        let legs = transfers
-            .iter()
-            .zip(settlement_mints(transfers, window))
-            .map(|(transfer, mint)| {
-                Ok(PublicLeg {
-                    transfer: *transfer,
-                    mint: mint?.map(|account| account.address().to_bytes()),
-                })
-            })
-            .collect::<Result<_, ShieldedPoolError>>()
-            .map_err(|_| CustomRingError::InvalidSettlementAccounts)?;
+        let mut legs = Vec::with_capacity(transfers.len());
+        for (transfer, mint) in transfers.iter().zip(settlement_mints(transfers, window)) {
+            let mint = mint.map_err(|_| CustomRingError::InvalidSettlementAccounts)?;
+            legs.push(PublicLeg {
+                transfer: *transfer,
+                mint: mint.map(|account| account.address().to_bytes()),
+            });
+        }
         Ok(Self(legs))
     }
 

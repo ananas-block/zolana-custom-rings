@@ -128,6 +128,8 @@ pub enum RingError {
     TransactionTooLarge { bytes: usize, limit: usize },
     #[error("the transaction names {addresses} addresses, a v1 transaction carries {limit}")]
     TooManyAddresses { addresses: usize, limit: usize },
+    #[error("the transfer hands SPP {accounts} accounts, one call takes {limit}")]
+    TooManySettlementAccounts { accounts: usize, limit: usize },
     #[error(
         "a {inputs}x{outputs} transfer of {bytes} bytes exceeds {limit}, split the payout or merge notes first"
     )]

@@ -101,7 +101,7 @@
   "anonymous": [
     {
       "key": "commitment",
-      "class": 4,
+      "class": 24,
       "inputs": 1,
       "outputs": 2,
       "exits": false,
@@ -109,7 +109,7 @@
     },
     {
       "key": "commitment",
-      "class": 4,
+      "class": 24,
       "inputs": 2,
       "outputs": 2,
       "exits": false,
@@ -117,7 +117,7 @@
     },
     {
       "key": "commitment",
-      "class": 4,
+      "class": 24,
       "inputs": 3,
       "outputs": 2,
       "exits": false,
@@ -125,7 +125,7 @@
     },
     {
       "key": "commitment",
-      "class": 4,
+      "class": 24,
       "inputs": 4,
       "outputs": 2,
       "exits": false,
@@ -133,7 +133,23 @@
     },
     {
       "key": "commitment",
-      "class": 4,
+      "class": 24,
+      "inputs": 23,
+      "outputs": 2,
+      "exits": false,
+      "fields": 19
+    },
+    {
+      "key": "commitment",
+      "class": 24,
+      "inputs": 24,
+      "outputs": 2,
+      "exits": false,
+      "fields": 20
+    },
+    {
+      "key": "commitment",
+      "class": 16,
       "inputs": 2,
       "outputs": 4,
       "exits": true,
@@ -141,7 +157,23 @@
     },
     {
       "key": "commitment",
-      "class": 4,
+      "class": 16,
+      "inputs": 15,
+      "outputs": 4,
+      "exits": true,
+      "fields": 23
+    },
+    {
+      "key": "commitment",
+      "class": 16,
+      "inputs": 16,
+      "outputs": 4,
+      "exits": true,
+      "fields": 24
+    },
+    {
+      "key": "commitment",
+      "class": 5,
       "inputs": 2,
       "outputs": 8,
       "exits": true,
@@ -149,19 +181,11 @@
     },
     {
       "key": "commitment",
-      "class": 16,
-      "inputs": 15,
-      "outputs": 2,
-      "exits": false,
-      "fields": 15
-    },
-    {
-      "key": "commitment",
-      "class": 16,
-      "inputs": 16,
-      "outputs": 2,
-      "exits": false,
-      "fields": 16
+      "class": 5,
+      "inputs": 5,
+      "outputs": 8,
+      "exits": true,
+      "fields": 31
     },
     {
       "key": "entry",
@@ -170,6 +194,14 @@
       "outputs": 2,
       "exits": false,
       "fields": 16
+    },
+    {
+      "key": "entry",
+      "class": 8,
+      "inputs": 8,
+      "outputs": 2,
+      "exits": false,
+      "fields": 28
     },
     {
       "key": "entry",
@@ -181,11 +213,19 @@
     },
     {
       "key": "entry",
-      "class": 8,
+      "class": 2,
+      "inputs": 1,
+      "outputs": 8,
+      "exits": true,
+      "fields": 33
+    },
+    {
+      "key": "entry",
+      "class": 2,
       "inputs": 2,
       "outputs": 8,
       "exits": true,
-      "fields": 37
+      "fields": 35
     }
   ]
 }

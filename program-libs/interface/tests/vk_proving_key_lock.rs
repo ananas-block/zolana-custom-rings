@@ -4,11 +4,10 @@
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::{RingCircuit, RING_KEYS},
-    verifying_key, AnonymousLayout, AnonymousSpend, DeliveredLayout, DisclosureLayout, RingRail,
-    APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS, PROVING_KEY_SHA256S,
+    key_catalog::{RingCircuit, TransferSpend, RING_KEYS},
+    verifying_key, RingRail, APPLY_BATCH, MERGE_WIDTHS, PROVING_KEY_SHA256S,
 };
-use spr_interface::shape::SPP_SUPPORTED_SHAPES;
+use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
 const LOCK: &str = include_str!("../../../prover/ring/proving-keys.lock");
 
@@ -53,65 +52,26 @@ fn every_catalog_key_is_locked_with_its_verifying_key() {
 
 /// Every circuit the program selects for a supported shape, as the generated catalog spells it.
 fn selectable_circuits() -> BTreeSet<String> {
-    let mut circuits = vec![RingCircuit::RegisterKey, RingCircuit::WithdrawalExemption];
+    let mut circuits = vec![RingCircuit::RegisterKey];
     circuits.extend((1..=8).map(RingCircuit::deposit));
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
-        let outputs = n_out as u8;
-        if DELIVERED_AUDIT_CAPACITIES.contains(&n_out) {
-            circuits.push(RingCircuit::DeliveredAudit { outputs });
-        }
-        if let Some(class) = DeliveredLayout::sender_class(n_out, n_in) {
-            let layout = DeliveredLayout {
-                outputs: n_out,
-                exits: false,
-                key_escrow: false,
-                sender_class: Some(class),
-            };
-            circuits.push(RingCircuit::audit(
-                DisclosureLayout::Delivered(layout),
-                outputs,
-            ));
-        }
-        for inputs in 1..=n_in {
-            for spends_default_ring in [false, true] {
-                let spend = AnonymousSpend {
-                    inputs,
-                    outputs: n_out,
-                    spends_default_ring,
-                };
-                if let Some(key) = spend.audit_key() {
-                    let layout = AnonymousLayout {
-                        key,
-                        inputs,
-                        outputs: n_out,
-                        exits: false,
-                    };
-                    circuits.push(RingCircuit::audit(
-                        DisclosureLayout::Anonymous(layout),
-                        outputs,
-                    ));
+        let rails = [RingRail::Confidential, RingRail::Anonymous]
+            .into_iter()
+            .chain(shape.is_ring_authority().then_some(RingRail::Delegate));
+        for rail in rails {
+            for inputs in 1..=n_in {
+                for spends_default_ring in [false, true] {
+                    for legs in 0..=MAX_INTERFACE_TRANSFERS {
+                        circuits.extend(RingCircuit::transfer(TransferSpend {
+                            rail,
+                            inputs,
+                            outputs: n_out,
+                            spends_default_ring,
+                            legs,
+                        }));
+                    }
                 }
-            }
-        }
-        for own_only in [false, true] {
-            for withdrawals in 0..=32 {
-                circuits.push(RingCircuit::policy(
-                    RingRail::Confidential,
-                    n_in as u8,
-                    outputs,
-                    withdrawals,
-                    own_only,
-                ));
-            }
-            if shape.is_ring_authority() {
-                circuits.push(RingCircuit::policy(
-                    RingRail::Delegate,
-                    n_in as u8,
-                    outputs,
-                    0,
-                    own_only,
-                ));
             }
         }
     }

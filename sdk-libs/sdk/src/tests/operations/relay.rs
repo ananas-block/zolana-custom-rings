@@ -305,9 +305,12 @@ mod delegate_message {
     fn paying(honest: &Instruction, slot: usize, owner: [u8; 32]) -> Instruction {
         let parsed = RingTransactData::parse(&honest.data[1..], RingRail::Delegate).unwrap();
         let mut data = parsed.into_data();
-        let mut recipients = data.policy_recipients().unwrap();
-        recipients[slot] = owner;
         let policy = data.policy.unwrap();
+        let PolicyRecipients::Framed(framed) = policy.recipients else {
+            panic!("a delegate frame names its recipients");
+        };
+        let mut recipients = framed.to_vec();
+        recipients[slot] = owner;
         data.policy = Some(PolicyProof {
             recipients: PolicyRecipients::Framed(&recipients),
             ..policy

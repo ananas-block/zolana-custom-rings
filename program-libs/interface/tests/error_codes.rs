@@ -92,6 +92,7 @@ pinned_codes! {
     AnonymousRingDataNotZero = 8251,
     AnonymousBodyLength = 8252,
     OutputBodyLength = 8253,
+    ExemptionWithoutWithdrawal = 8254,
     InvalidCoSignerRecord = 8260,
     CoSignerRecordAlreadyExists = 8261,
     CoSignerOutOfScope = 8262,
