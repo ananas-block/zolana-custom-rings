@@ -66,7 +66,7 @@ pub fn process_merge_ix(
 
     // 4. A bad SPP proof point is refused before the disclosure pairing.
     let spp_body = request.spp_merge_body()?;
-    // 5. The disclosure proves the owner's opening to the auditor, under key escrow its record too.
+    // 5. The disclosure proves the input hashes to the auditor, under key escrow the owner's record too.
     let parties = custom_ring_interface::AnonymousParties {
         payer: spp_accounts[RING_MERGE_PAYER_INDEX].address().as_array(),
         cosigner: co_signer.as_ref().map(Address::as_array),

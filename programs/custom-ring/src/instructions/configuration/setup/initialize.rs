@@ -12,7 +12,7 @@ use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 use crate::{
     instructions::{
         instruction_runtime::{check_system_program, parse, Pda, RingAuth},
-        loader::{load_storage_registry, validate_spp_program, UpgradeAuthorityCheck},
+        loader::{load_records_registry, validate_spp_program, UpgradeAuthorityCheck},
         policy_binding::TableBinding,
     },
     state::{is_x25519_key, Init},
@@ -61,11 +61,15 @@ pub fn process_initialize_ix(
     // 4. A policy ring pins its table, an audit-only ring may bind records alone for its withdrawal exemptions.
     let records = match &ix.policy {
         Some(binding) => PolicyCreation {
+            program_id,
             binding,
             kind: ix.kind,
         }
         .records(&mut iter)?,
         None if ix.kind.has_policy() => return Err(CustomRingError::PolicyNotSet.into()),
+        None if ix.kind.anonymous() => {
+            return Err(CustomRingError::AnonymousRingNeedsRecords.into())
+        }
         None => Address::default(),
     };
     let slot = Clock::get()?.slot;
@@ -110,6 +114,7 @@ pub fn process_initialize_ix(
 
 #[must_use]
 struct PolicyCreation<'a> {
+    program_id: &'a Address,
     binding: &'a PolicyBindingIxData,
     kind: RingKind,
 }
@@ -122,7 +127,7 @@ impl PolicyCreation<'_> {
         if !self.kind.has_policy() && !(table.sources.is_empty() && table.rules.is_empty()) {
             return Err(CustomRingError::PolicyOnAuditOnlyRing.into());
         }
-        load_storage_registry(records)?;
+        load_records_registry(self.program_id, records)?;
         Ok(*records.address())
     }
 }

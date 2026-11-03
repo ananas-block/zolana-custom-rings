@@ -28,9 +28,11 @@ pub fn process_instruction(
         InstructionTag::Transfer | InstructionTag::AuthorityTransfer => {
             process_transfer_ix(program_id, accounts, ix_data, ix_tag)
         }
-        InstructionTag::LegacyTransact | InstructionTag::LegacyDelegateTransact => {
-            Err(CustomRingError::InvalidInstructionData.into())
-        }
+        InstructionTag::LegacyTransact
+        | InstructionTag::LegacyDelegateTransact
+        | InstructionTag::HistoricalTransfer
+        | InstructionTag::HistoricalAuthorityTransfer
+        | InstructionTag::HistoricalMerge => Err(CustomRingError::InvalidInstructionData.into()),
         // The deposit prefix layout starts at the tag byte.
         InstructionTag::Deposit => process_deposit_ix(program_id, accounts, instruction_data),
         // SPP proves that owner, asset, value and ring ownership stay unchanged.

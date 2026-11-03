@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
-    funder_account_position, AnonymousParties, CustomRingError, PublicSlots, RailSigner,
-    RingPolicy, RingTransactData, RootRead, TransferRoots, ANONYMOUS_PARTIES,
+    funder_account_position, AnonymousParties, CustomRingError, ParsedTransact, PublicSlots,
+    RailSigner, RingPolicy, RootRead, SignerSet, TransferRoots, ANONYMOUS_PARTIES,
     RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
@@ -18,8 +18,10 @@ const RING_INDEX: usize = 0;
 
 pub(super) struct TransactAccounts {
     pub roots: TransferRoots,
-    /// The in-proof owner's identity, the sole owner signer's under a policy, zero otherwise.
+    /// The in-proof owner's identity, zero otherwise.
     pub sender: [u8; 32],
+    /// SPP's owner signer run, default on the in-proof and authority rails.
+    pub signers: SignerSet,
     /// The anonymous rail's party identities, zeros on the other rails.
     pub party_identities: [[u8; 32]; ANONYMOUS_PARTIES],
     pub public_slots: PublicSlots,
@@ -34,7 +36,7 @@ pub(super) struct TransactAccounts {
 pub(super) struct TransactCheck<'a> {
     pub program_id: &'a Address,
     pub ring: &'a RingPolicy,
-    pub data: &'a RingTransactData<'a>,
+    pub transfer: &'a ParsedTransact<'a>,
     pub signer: RailSigner,
     pub slot: u64,
 }
@@ -43,7 +45,7 @@ impl<'a> TransactCheck<'a> {
     /// The co-signer demand comes first, its slot moves the SPP list.
     #[inline(never)]
     pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts, ProgramError> {
-        let (ring, data) = (self.ring, self.data);
+        let (ring, data) = (self.ring, self.transfer.data());
         let registries = RegistrySlots {
             ring,
             read: RootRead::transfer(ring, data.exempt),
@@ -80,15 +82,25 @@ impl<'a> TransactCheck<'a> {
         let ring_auth =
             RingAuth::derive(self.program_id)?.check_slot(spp, RING_TRANSACT_RING_CONFIG_INDEX)?;
         let payer = check_funding_signer(spp, TRANSACT_PAYER_INDEX)?;
-        let sender = match prefix.signer {
+        let slots = self.transfer.audit_stream().key.signer_slots();
+        let (sender, signers) = match prefix.signer {
             SignerSlot::Payer => {
-                if spp
-                    .iter()
-                    .any(|account| account.is_signer() && account.address() != payer.address())
-                {
+                let owners = data.owner_signers(spp, window.len())?;
+                if data.full_openings && !owners.is_empty() {
                     return Err(CustomRingError::InvalidAnonymousSigner.into());
                 }
-                [0; 32]
+                check_owner_run(owners, co_signer.as_ref())?;
+                if spp.iter().any(|account| {
+                    account.is_signer()
+                        && account.address() != payer.address()
+                        && Some(account.address()) != co_signer.as_ref()
+                        && !owners
+                            .iter()
+                            .any(|owner| owner.address() == account.address())
+                }) {
+                    return Err(CustomRingError::InvalidAnonymousSigner.into());
+                }
+                ([0; 32], signer_set(owners, slots)?)
             }
             SignerSlot::InProofOwner(owner) => {
                 // The proof holds every spent note to the statement's sender, the framed owner names it on every ring.
@@ -98,24 +110,17 @@ impl<'a> TransactCheck<'a> {
                 if co_signer == Some(owner) {
                     return Err(CustomRingError::CoSignerIsOwner.into());
                 }
-                solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?
+                let sender =
+                    solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?;
+                (sender, SignerSet::default())
             }
             SignerSlot::Owners => {
                 let owners = data.owner_signers(spp, window.len())?;
-                if owners.iter().any(|owner| !owner.is_signer()) {
-                    return Err(CustomRingError::MissingOwnerSigner.into());
+                check_owner_run(owners, co_signer.as_ref())?;
+                if data.policy.is_some() && owners.is_empty() {
+                    return Err(CustomRingError::OwnerSignerCount.into());
                 }
-                let sender = match data.policy {
-                    Some(_) => solana_owner_identity(sole_owner(owners)?.as_array())
-                        .map_err(CustomRingError::from)?,
-                    None => [0; 32],
-                };
-                if co_signer.is_some_and(|co_signer| {
-                    owners.iter().any(|owner| owner.address() == &co_signer)
-                }) {
-                    return Err(CustomRingError::CoSignerIsOwner.into());
-                }
-                sender
+                ([0; 32], signer_set(owners, slots)?)
             }
             SignerSlot::Delegate(slot) => {
                 if !data.interface_transfers.is_empty() {
@@ -128,7 +133,7 @@ impl<'a> TransactCheck<'a> {
                 if co_signer == Some(slot.expected) {
                     return Err(CustomRingError::CoSignerIsDelegate.into());
                 }
-                [0; 32]
+                ([0; 32], SignerSet::default())
             }
         };
 
@@ -171,6 +176,7 @@ impl<'a> TransactCheck<'a> {
         Ok(TransactAccounts {
             roots: bound,
             sender,
+            signers,
             party_identities,
             public_slots,
             withdrawals,
@@ -183,7 +189,7 @@ impl<'a> TransactCheck<'a> {
     fn prefix(&self, first: usize, co_signer: Option<CoSignRequirement>) -> Prefix {
         let mut next = Cursor(first);
         let co_signer = co_signer.map(|requirement| next.pair(requirement));
-        let signer = match (self.signer, self.data.in_proof_owner) {
+        let signer = match (self.signer, self.transfer.data().in_proof_owner) {
             (RailSigner::Owners, Some(owner)) => {
                 SignerSlot::InProofOwner(Address::new_from_array(*owner.owner))
             }
@@ -257,13 +263,23 @@ fn account_at(accounts: &[AccountView], index: usize) -> Result<&AccountView, Pr
         .ok_or(ProgramError::NotEnoughAccountKeys)
 }
 
-/// A policy transfer spends for exactly one owner, repeats of it are one signer.
-fn sole_owner(owners: &[AccountView]) -> Result<&Address, CustomRingError> {
-    let (first, rest) = owners
-        .split_first()
-        .ok_or(CustomRingError::OwnerSignerCount)?;
-    if rest.iter().any(|owner| owner.address() != first.address()) {
-        return Err(CustomRingError::OwnerSignerCount);
+/// Every owner signs, the co-signer stays outside the run.
+fn check_owner_run(
+    owners: &[AccountView],
+    co_signer: Option<&Address>,
+) -> Result<(), CustomRingError> {
+    if owners.iter().any(|owner| !owner.is_signer()) {
+        return Err(CustomRingError::MissingOwnerSigner);
     }
-    Ok(first.address())
+    if owners
+        .iter()
+        .any(|owner| Some(owner.address()) == co_signer)
+    {
+        return Err(CustomRingError::CoSignerIsOwner);
+    }
+    Ok(())
+}
+
+fn signer_set(owners: &[AccountView], slots: usize) -> Result<SignerSet, CustomRingError> {
+    SignerSet::new(owners.iter().map(|owner| owner.address().as_array()), slots)
 }

@@ -12,6 +12,7 @@ use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use spr_interface::{
     instruction::InterfaceTransfer, BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID,
 };
+use zolana_ring_policy::ring_id_field;
 
 /// Owner and discriminator suffice, accounts are created only at their canonical PDA.
 #[inline(always)]
@@ -91,6 +92,19 @@ pub fn load_storage_registry(
     }
     let data = account.try_borrow().map_err(|_| invalid)?;
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
+}
+
+/// A registry fit to hold the ring's records, one own registry per ring, its ring id scopes every address.
+pub fn load_records_registry<'a>(
+    program_id: &Address,
+    account: &'a AccountView,
+) -> Result<Ref<'a, StorageRegistry>, ProgramError> {
+    let registry = load_storage_registry(account)?;
+    let ring_id = ring_id_field(program_id.as_array()).map_err(CustomRingError::from)?;
+    if registry.ring_id != ring_id {
+        return Err(CustomRingError::RecordsRegistryOtherRing.into());
+    }
+    Ok(registry)
 }
 
 /// The ring's live registries, read where an instruction names them after the ring account.

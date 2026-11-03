@@ -36,6 +36,7 @@ impl RingStatements<'_> {
                 auditor_pubkey: &self.ring.auditor_pubkey,
                 key_escrow: self.key_escrow,
                 sender: &self.accounts.sender,
+                signers: self.accounts.signers,
                 party_identities: &self.accounts.party_identities,
                 recipients: &recipients,
                 roots: &self.accounts.roots,

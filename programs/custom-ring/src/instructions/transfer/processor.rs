@@ -33,7 +33,7 @@ pub fn process_transfer_ix(
     let validated = TransactCheck {
         program_id,
         ring: &ring,
-        data,
+        transfer: &transfer,
         signer,
         slot,
     }

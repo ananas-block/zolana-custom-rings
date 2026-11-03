@@ -10,7 +10,7 @@ use zolana_ring_policy::ring_id_field;
 
 use crate::instructions::verifier::{ring_key, RingProof};
 
-/// A merge names its owner only to the auditor, the proof binds that opening to the SPP body and any key escrow record.
+/// The auditor reads the merged input hashes, the proof binds the list to the SPP body and any key escrow record.
 #[must_use]
 pub(crate) struct MergeAudit<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
@@ -57,6 +57,7 @@ impl MergeAudit<'_> {
             ciphertext: disclosure.ciphertext,
             salt,
             fields: disclosure.fields,
+            input_count: merge.nullifiers.len(),
             member_registry_root: self.member_registry_root,
         }
         .hash()

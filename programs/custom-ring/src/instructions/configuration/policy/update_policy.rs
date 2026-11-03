@@ -11,7 +11,7 @@ use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_storage_registry, RoleHolder},
+    loader::{load_records_registry, RoleHolder},
     policy_binding::{curator_source, TableBinding},
 };
 
@@ -35,6 +35,7 @@ pub fn process_update_policy_ix(
     }
     .load_mut(ring)?;
     let write = PolicyWrite {
+        program_id,
         policy: &mut policy,
         trailing,
         slot: Clock::get()?.slot,
@@ -49,6 +50,7 @@ pub fn process_update_policy_ix(
 
 #[must_use]
 struct PolicyWrite<'a> {
+    program_id: &'a Address,
     policy: &'a mut RingPolicy,
     trailing: &'a [AccountView],
     slot: u64,
@@ -99,7 +101,7 @@ impl PolicyWrite<'_> {
         let [records] = self.trailing else {
             return Err(CustomRingError::InvalidStorageRegistry.into());
         };
-        load_storage_registry(records)?;
+        load_records_registry(self.program_id, records)?;
         self.policy.rebind_records(*records.address(), self.slot)?;
         Ok(())
     }
