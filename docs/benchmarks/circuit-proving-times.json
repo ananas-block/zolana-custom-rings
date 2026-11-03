@@ -1,0 +1,1501 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-11-01T14:58:42.247310+00:00",
+  "source": {
+    "repository": "helius-labs/zolana-custom-rings",
+    "commit": "cac79b020e209d6bfb7ab82254a7a65fa70bdbf4",
+    "zolana_commit": "965180b24e5d3ea641f02c299fd102e760b81245",
+    "key_release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/ring-production-keys-v5",
+    "key_lock_sha256": "258ef25347b7c0a389ce9eeb0588aabf5f8df248bc6383519b3f4c8e6b1aa10d",
+    "constraint_counts": "prover/ringtest/ringkey/constraints.json",
+    "witness_source": "hostRequest(testing.TB, Key) in prover/ring/solve_test.go"
+  },
+  "hardware": {
+    "cpu": "Apple M5 Pro",
+    "logical_cpus": 18,
+    "physical_cpus": 18,
+    "memory_bytes": 51539607552,
+    "power_source": "AC Power"
+  },
+  "runtime": {
+    "go_version": "go1.27.3",
+    "gomaxprocs": 18,
+    "goos": "darwin",
+    "goarch": "arm64",
+    "os_version": "26.7.1",
+    "os_build": "25G241",
+    "gnark_version": "v0.16.4",
+    "gnark_crypto_version": "v0.22.0"
+  },
+  "method": {
+    "curve": "BN254",
+    "scheme": "Groth16 with BSB22 commitment",
+    "backend": "gnark CPU",
+    "serial_keys": true,
+    "warmup_proofs_per_key": 1,
+    "measured_proofs_per_key": 3,
+    "reported_statistic": "median",
+    "unit": "milliseconds",
+    "timed_call": "groth16.Prove(constraintSystem, provingKey, prebuiltWitness)",
+    "includes": [
+      "constraint solving",
+      "Groth16 proof generation"
+    ],
+    "excludes": [
+      "circuit compilation",
+      "trusted setup",
+      "key loading",
+      "host fixture generation",
+      "request decoding",
+      "frontend witness construction",
+      "proof verification"
+    ],
+    "verification": "Each warmup and timed proof verified with groth16.Verify outside the timed interval.",
+    "key_integrity": "All downloaded release files SHA-256 matched proving-keys.lock before the benchmark. All loaded constraint counts matched the committed per-key pins.",
+    "environment": "Local host on AC power; no other heavy CPU process observed during the sweep."
+  },
+  "key_count": 90,
+  "proof_count": 360,
+  "results": [
+    {
+      "key": "custom_ring_apply_records_1",
+      "circuit": "custom-ring-apply-records-1",
+      "constraints": 16339,
+      "key_sha256": "259ac113a38e72fc7a29e91327743bea5475d097da9c8b6158e620402a56bf89",
+      "key_load_ms": 42.308292,
+      "witness_creation_ms": 0.071167,
+      "warmup_prove_ms": 35.179875,
+      "prove_ms": [
+        33.674333,
+        33.834666,
+        33.087167
+      ],
+      "median_prove_ms": 33.674333,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_apply_records_16",
+      "circuit": "custom-ring-apply-records-16",
+      "constraints": 246444,
+      "key_sha256": "072025ded1108d347874cad611f249a8b0aabaf1e548ae0ea74ef1faaf833d81",
+      "key_load_ms": 479.248334,
+      "witness_creation_ms": 0.446208,
+      "warmup_prove_ms": 385.138958,
+      "prove_ms": [
+        381.291167,
+        387.956292,
+        341.789333
+      ],
+      "median_prove_ms": 381.291167,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_apply_records_2",
+      "circuit": "custom-ring-apply-records-2",
+      "constraints": 31727,
+      "key_sha256": "ece055034c26799a8664e22ddc0438e1e3d42228399198b13542c753e85143b9",
+      "key_load_ms": 89.650584,
+      "witness_creation_ms": 0.081083,
+      "warmup_prove_ms": 62.918666,
+      "prove_ms": [
+        67.0405,
+        65.508208,
+        60.017917
+      ],
+      "median_prove_ms": 65.508208,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_apply_records_4",
+      "circuit": "custom-ring-apply-records-4",
+      "constraints": 62469,
+      "key_sha256": "de151de0288c149dbf7d644a820c64482543ec8919d356e7c8527e046fb9faf3",
+      "key_load_ms": 139.869417,
+      "witness_creation_ms": 0.153292,
+      "warmup_prove_ms": 117.0625,
+      "prove_ms": [
+        113.706667,
+        114.1305,
+        119.277208
+      ],
+      "median_prove_ms": 114.1305,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_apply_records_8",
+      "circuit": "custom-ring-apply-records-8",
+      "constraints": 123794,
+      "key_sha256": "1674abaf675446989e7418b0467eebe24f6c71d26f76dbbaf78e12b536ee79fd",
+      "key_load_ms": 253.768042,
+      "witness_creation_ms": 0.23175,
+      "warmup_prove_ms": 216.429625,
+      "prove_ms": [
+        222.417083,
+        215.298209,
+        219.324792
+      ],
+      "median_prove_ms": 219.324792,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_entry_v2_8_2",
+      "circuit": "custom-ring-audit-anonymous-entry-v2-8-2",
+      "constraints": 72152,
+      "key_sha256": "e464a09206e60759c624e7d8df0ec9a6e7185643faaa049106f829e94108e0c8",
+      "key_load_ms": 217.553458,
+      "witness_creation_ms": 0.108458,
+      "warmup_prove_ms": 183.325334,
+      "prove_ms": [
+        186.804583,
+        175.352417,
+        180.303125
+      ],
+      "median_prove_ms": 180.303125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_entry_v2_8_4",
+      "circuit": "custom-ring-audit-anonymous-entry-v2-8-4",
+      "constraints": 78750,
+      "key_sha256": "141e7db2a5a48099b4c5d93241bf71ecb6233ed07c3aeb7f4235fdafddc3a3cd",
+      "key_load_ms": 217.37025,
+      "witness_creation_ms": 0.115916,
+      "warmup_prove_ms": 190.707208,
+      "prove_ms": [
+        194.066625,
+        190.054625,
+        201.171208
+      ],
+      "median_prove_ms": 194.066625,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_entry_v2_8_8",
+      "circuit": "custom-ring-audit-anonymous-entry-v2-8-8",
+      "constraints": 92281,
+      "key_sha256": "e6cf0d9d651211fe08976974e8f3c1ab2ea9bfe9e861b3dc60dd935eb2c1c1af",
+      "key_load_ms": 239.173833,
+      "witness_creation_ms": 0.14475,
+      "warmup_prove_ms": 207.046084,
+      "prove_ms": [
+        211.998583,
+        212.699542,
+        206.408333
+      ],
+      "median_prove_ms": 211.998583,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_16_2",
+      "circuit": "custom-ring-audit-anonymous-v2-16-2",
+      "constraints": 78054,
+      "key_sha256": "b81a5378693b45cb311b27cf4d4271efedc56a4b71d883c2366ec4c7d687311e",
+      "key_load_ms": 239.768916,
+      "witness_creation_ms": 0.136375,
+      "warmup_prove_ms": 187.333583,
+      "prove_ms": [
+        192.254375,
+        190.367791,
+        193.249708
+      ],
+      "median_prove_ms": 192.254375,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_16_4",
+      "circuit": "custom-ring-audit-anonymous-v2-16-4",
+      "constraints": 84652,
+      "key_sha256": "c620cb6801399f1ef87e151853698b71e5fe4e1c1c3016ff5fa3d2a21162240e",
+      "key_load_ms": 237.558666,
+      "witness_creation_ms": 0.127834,
+      "warmup_prove_ms": 207.676458,
+      "prove_ms": [
+        208.287833,
+        211.56075,
+        210.368041
+      ],
+      "median_prove_ms": 210.368041,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_4_2",
+      "circuit": "custom-ring-audit-anonymous-v2-4-2",
+      "constraints": 57604,
+      "key_sha256": "2bf7d2a1278c9a55c6232a4b109ef839432dddefe5dee2afa70c168150355cf6",
+      "key_load_ms": 173.900875,
+      "witness_creation_ms": 0.093083,
+      "warmup_prove_ms": 142.88275,
+      "prove_ms": [
+        144.092125,
+        140.592917,
+        151.1145
+      ],
+      "median_prove_ms": 144.092125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_4_4",
+      "circuit": "custom-ring-audit-anonymous-v2-4-4",
+      "constraints": 64202,
+      "key_sha256": "1e219d9ba0a76d8cfb2cb8a620a3db458b7e8fd598c45dd76953f67d3ca75261",
+      "key_load_ms": 186.225292,
+      "witness_creation_ms": 0.108125,
+      "warmup_prove_ms": 157.854209,
+      "prove_ms": [
+        155.627375,
+        148.341833,
+        150.376875
+      ],
+      "median_prove_ms": 150.376875,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_4_8",
+      "circuit": "custom-ring-audit-anonymous-v2-4-8",
+      "constraints": 77733,
+      "key_sha256": "b8d0978f158002a9d45e7585422aa2d0736e0e78fd2c2253b4e98813402e4333",
+      "key_load_ms": 249.533917,
+      "witness_creation_ms": 0.134333,
+      "warmup_prove_ms": 188.96025,
+      "prove_ms": [
+        188.597791,
+        184.554958,
+        195.358875
+      ],
+      "median_prove_ms": 188.597791,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_anonymous_v2_8_8",
+      "circuit": "custom-ring-audit-anonymous-v2-8-8",
+      "constraints": 84547,
+      "key_sha256": "8ad4193aa60443fc4adee578c81a2b5a57dfbbf0a0be35300436a971dc48a5b6",
+      "key_load_ms": 247.562167,
+      "witness_creation_ms": 0.142792,
+      "warmup_prove_ms": 204.851584,
+      "prove_ms": [
+        201.019875,
+        210.522792,
+        203.980417
+      ],
+      "median_prove_ms": 203.980417,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_16",
+      "circuit": "custom-ring-audit-delivered-16",
+      "constraints": 518961,
+      "key_sha256": "f3bf53a88bf45dbbbe1a4fd005176a25ce4e3b2c0c6559b477afc534f187d014",
+      "key_load_ms": 1321.613792,
+      "witness_creation_ms": 0.351792,
+      "warmup_prove_ms": 970.30175,
+      "prove_ms": [
+        1026.234125,
+        969.15075,
+        1067.176042
+      ],
+      "median_prove_ms": 1026.234125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_2",
+      "circuit": "custom-ring-audit-delivered-2",
+      "constraints": 103182,
+      "key_sha256": "171da544cadd9584906039671825cd4616e2f651a1de07d9e56d536a6df67040",
+      "key_load_ms": 292.713875,
+      "witness_creation_ms": 0.12625,
+      "warmup_prove_ms": 260.6375,
+      "prove_ms": [
+        260.842208,
+        257.037917,
+        277.202792
+      ],
+      "median_prove_ms": 260.842208,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_4",
+      "circuit": "custom-ring-audit-delivered-4",
+      "constraints": 162641,
+      "key_sha256": "f7c6e72d5b41bdf27fb3d7f6f69225e7c2d5cf4733b67ac948fa4a3bab82fadd",
+      "key_load_ms": 456.851375,
+      "witness_creation_ms": 0.145042,
+      "warmup_prove_ms": 415.082042,
+      "prove_ms": [
+        414.53225,
+        403.137541,
+        407.670917
+      ],
+      "median_prove_ms": 407.670917,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_8",
+      "circuit": "custom-ring-audit-delivered-8",
+      "constraints": 281902,
+      "key_sha256": "92facd093e1e9436e92b88063c0c6766bb206cda8517c236ee6640cfda58af4f",
+      "key_load_ms": 778.486583,
+      "witness_creation_ms": 0.233125,
+      "warmup_prove_ms": 655.346958,
+      "prove_ms": [
+        637.574417,
+        614.748375,
+        650.66275
+      ],
+      "median_prove_ms": 637.574417,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_sender_16_8",
+      "circuit": "custom-ring-audit-delivered-sender-16-8",
+      "constraints": 305624,
+      "key_sha256": "5fffc98c2b0dac781f99d3e5cd9b3d98e6c85f96ff855856050925c0c5f052e2",
+      "key_load_ms": 812.240666,
+      "witness_creation_ms": 0.255708,
+      "warmup_prove_ms": 640.675458,
+      "prove_ms": [
+        666.226333,
+        668.826375,
+        693.651708
+      ],
+      "median_prove_ms": 668.826375,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_sender_24_4",
+      "circuit": "custom-ring-audit-delivered-sender-24-4",
+      "constraints": 196199,
+      "key_sha256": "4715c00597e2346b648817b8fec82397de3a35b6986ac7a72c1c088b900e84a0",
+      "key_load_ms": 482.216625,
+      "witness_creation_ms": 0.190333,
+      "warmup_prove_ms": 461.048083,
+      "prove_ms": [
+        446.285792,
+        437.010708,
+        435.2175
+      ],
+      "median_prove_ms": 437.010708,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_sender_48_2",
+      "circuit": "custom-ring-audit-delivered-sender-48-2",
+      "constraints": 168718,
+      "key_sha256": "d2e24837a1cebac149e6f5c527e3d01ab35fdb9c8da6d46d47d24b6f46da6ff8",
+      "key_load_ms": 398.493667,
+      "witness_creation_ms": 0.233208,
+      "warmup_prove_ms": 390.256,
+      "prove_ms": [
+        378.557333,
+        374.25525,
+        383.929375
+      ],
+      "median_prove_ms": 378.557333,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_audit_delivered_sender_8_16",
+      "circuit": "custom-ring-audit-delivered-sender-8-16",
+      "constraints": 533835,
+      "key_sha256": "fc7dffab38da3c515728d1e2644ec0ca632f918ea007703bf3c7fe8ea8cf9ddf",
+      "key_load_ms": 1540.807417,
+      "witness_creation_ms": 0.370417,
+      "warmup_prove_ms": 1129.438541,
+      "prove_ms": [
+        1227.754333,
+        1182.237875,
+        1188.313042
+      ],
+      "median_prove_ms": 1188.313042,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_deposit_1",
+      "circuit": "custom-ring-deposit-1",
+      "constraints": 68333,
+      "key_sha256": "59fc582856c9285591585108e78e092097d6d519659df9e42c2e2209c2aa2fe6",
+      "key_load_ms": 219.781458,
+      "witness_creation_ms": 0.1005,
+      "warmup_prove_ms": 169.344416,
+      "prove_ms": [
+        172.954292,
+        176.249708,
+        179.935875
+      ],
+      "median_prove_ms": 176.249708,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_deposit_2",
+      "circuit": "custom-ring-deposit-2",
+      "constraints": 90435,
+      "key_sha256": "03ab065cef986f79c346b0e9795e49352ce23a1e3be88170df5d452ec6b22628",
+      "key_load_ms": 250.826833,
+      "witness_creation_ms": 0.136958,
+      "warmup_prove_ms": 199.549958,
+      "prove_ms": [
+        212.378542,
+        194.962625,
+        205.8055
+      ],
+      "median_prove_ms": 205.8055,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_deposit_4",
+      "circuit": "custom-ring-deposit-4",
+      "constraints": 134668,
+      "key_sha256": "1f6e192e849da02c36e6dd5b498fdeb737336829f6f2b71e5953bbaa5d0b76a6",
+      "key_load_ms": 371.763333,
+      "witness_creation_ms": 0.2455,
+      "warmup_prove_ms": 302.749375,
+      "prove_ms": [
+        304.300375,
+        287.359583,
+        284.872625
+      ],
+      "median_prove_ms": 287.359583,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_deposit_8",
+      "circuit": "custom-ring-deposit-8",
+      "constraints": 223256,
+      "key_sha256": "00999a12b7dd07e311c29ba9b56297d83b537c5185ea0480fc611699e29f5522",
+      "key_load_ms": 509.533042,
+      "witness_creation_ms": 0.425417,
+      "warmup_prove_ms": 352.104917,
+      "prove_ms": [
+        382.718333,
+        363.609875,
+        364.809583
+      ],
+      "median_prove_ms": 364.809583,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_merge_v3_24",
+      "circuit": "custom-ring-merge-v3-24",
+      "constraints": 86674,
+      "key_sha256": "f0f61c71f100f817efc797356143d64c386bd82096179b5d84be65db1fe101f0",
+      "key_load_ms": 224.774791,
+      "witness_creation_ms": 0.102042,
+      "warmup_prove_ms": 203.282375,
+      "prove_ms": [
+        207.354541,
+        209.585167,
+        206.744458
+      ],
+      "median_prove_ms": 207.354541,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_merge_v3_8",
+      "circuit": "custom-ring-merge-v3-8",
+      "constraints": 61168,
+      "key_sha256": "7c07b069efccb6cdbb32f614d145777c1c4744fd1bddd3b61234c6f91bfa7561",
+      "key_load_ms": 169.890166,
+      "witness_creation_ms": 0.086167,
+      "warmup_prove_ms": 146.735875,
+      "prove_ms": [
+        145.08125,
+        153.920875,
+        151.153959
+      ],
+      "median_prove_ms": 151.153959,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_delegate_v3_2x2_curator",
+      "circuit": "custom-ring-policy-delegate-v3-2x2-curator",
+      "constraints": 48530,
+      "key_sha256": "2e9b3eae38b66b104fcaecf7402a9ec04b92f860ffa1e8b86f23ea57347962cb",
+      "key_load_ms": 129.998959,
+      "witness_creation_ms": 0.184292,
+      "warmup_prove_ms": 92.001208,
+      "prove_ms": [
+        92.68575,
+        100.005458,
+        98.93925
+      ],
+      "median_prove_ms": 98.93925,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_delegate_v3_2x2_own",
+      "circuit": "custom-ring-policy-delegate-v3-2x2-own",
+      "constraints": 30640,
+      "key_sha256": "f6d462da4263c35974d9f4660ee0e70fe203c88bde4ba1a2979b14b651f4597e",
+      "key_load_ms": 80.507208,
+      "witness_creation_ms": 0.11375,
+      "warmup_prove_ms": 59.070041,
+      "prove_ms": [
+        59.518083,
+        61.589125,
+        57.888958
+      ],
+      "median_prove_ms": 59.518083,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_delegate_v3_4x4_curator",
+      "circuit": "custom-ring-policy-delegate-v3-4x4-curator",
+      "constraints": 82395,
+      "key_sha256": "d81763a07e03b58a22185087a30d8f3a2f68f1619fdb2827b4f89905ff10eb4d",
+      "key_load_ms": 196.929833,
+      "witness_creation_ms": 0.271583,
+      "warmup_prove_ms": 147.225875,
+      "prove_ms": [
+        155.54575,
+        154.443167,
+        149.420333
+      ],
+      "median_prove_ms": 154.443167,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_delegate_v3_4x4_own",
+      "circuit": "custom-ring-policy-delegate-v3-4x4-own",
+      "constraints": 51437,
+      "key_sha256": "0880460eaf6fe116d0d93f10a1be191514ff6afc495f8fcb03b2ccdf8908ccd8",
+      "key_load_ms": 132.925792,
+      "witness_creation_ms": 0.178959,
+      "warmup_prove_ms": 96.441,
+      "prove_ms": [
+        99.381084,
+        102.215208,
+        101.474625
+      ],
+      "median_prove_ms": 101.474625,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w0_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w0-curator",
+      "constraints": 263885,
+      "key_sha256": "bcb61766e4317ec725d44442b0f6c92dc8e63d274d6097feac90a078220412c6",
+      "key_load_ms": 567.238292,
+      "witness_creation_ms": 0.788,
+      "warmup_prove_ms": 440.850041,
+      "prove_ms": [
+        455.3385,
+        448.461458,
+        415.307375
+      ],
+      "median_prove_ms": 448.461458,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w0_own",
+      "circuit": "custom-ring-policy-member-v3-16-w0-own",
+      "constraints": 160536,
+      "key_sha256": "e22bbf53f7c92e9cabc5006622f2813730d1ece2c8e85edbf2f31d31a71cf456",
+      "key_load_ms": 331.85225,
+      "witness_creation_ms": 0.43525,
+      "warmup_prove_ms": 276.598916,
+      "prove_ms": [
+        271.933333,
+        269.088375,
+        268.275959
+      ],
+      "median_prove_ms": 269.088375,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w16_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w16-curator",
+      "constraints": 387129,
+      "key_sha256": "e54f78155035bf3309d4719d2d1ac2d7e0d9be2ad2595f559f729b89e7132852",
+      "key_load_ms": 764.810458,
+      "witness_creation_ms": 1.165,
+      "warmup_prove_ms": 539.88375,
+      "prove_ms": [
+        502.660792,
+        536.351542,
+        521.213125
+      ],
+      "median_prove_ms": 521.213125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w16_own",
+      "circuit": "custom-ring-policy-member-v3-16-w16-own",
+      "constraints": 227718,
+      "key_sha256": "798164c492e70eded32aadcc2994302014a96c1d9ac6dca1b416fcbfec5276b6",
+      "key_load_ms": 435.338792,
+      "witness_creation_ms": 0.63625,
+      "warmup_prove_ms": 312.37675,
+      "prove_ms": [
+        315.8965,
+        315.09225,
+        319.980709
+      ],
+      "median_prove_ms": 315.8965,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w1_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w1-curator",
+      "constraints": 273892,
+      "key_sha256": "ee03b4c2adfc3b31bbe0e8b748c292214820afce27847939ec6c47a01a5e5c7a",
+      "key_load_ms": 604.247,
+      "witness_creation_ms": 0.766125,
+      "warmup_prove_ms": 458.409125,
+      "prove_ms": [
+        497.3345,
+        463.864875,
+        449.228958
+      ],
+      "median_prove_ms": 463.864875,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w1_own",
+      "circuit": "custom-ring-policy-member-v3-16-w1-own",
+      "constraints": 164697,
+      "key_sha256": "bd93f22dd33ffb38e8d8062547c10bc552cdd76edcdb26a33fae4c34526467f7",
+      "key_load_ms": 345.559167,
+      "witness_creation_ms": 0.475333,
+      "warmup_prove_ms": 284.014958,
+      "prove_ms": [
+        277.186334,
+        275.622416,
+        269.5905
+      ],
+      "median_prove_ms": 275.622416,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w2_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w2-curator",
+      "constraints": 283910,
+      "key_sha256": "25c5afa11bce42a9293b1853d18847700183f3a816531b5ac3747e8670c050a7",
+      "key_load_ms": 607.192209,
+      "witness_creation_ms": 0.817917,
+      "warmup_prove_ms": 442.76375,
+      "prove_ms": [
+        449.074667,
+        452.376042,
+        465.774334
+      ],
+      "median_prove_ms": 452.376042,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w2_own",
+      "circuit": "custom-ring-policy-member-v3-16-w2-own",
+      "constraints": 168868,
+      "key_sha256": "6e5b55df36b085dcde1342729728cb4273c3ef6114c78a05244e9919d131cc62",
+      "key_load_ms": 364.69075,
+      "witness_creation_ms": 0.454083,
+      "warmup_prove_ms": 260.880708,
+      "prove_ms": [
+        296.241917,
+        291.951375,
+        276.781958
+      ],
+      "median_prove_ms": 291.951375,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w32_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w32-curator",
+      "constraints": 501564,
+      "key_sha256": "1f29678cfc778115ba5b5b2983fd8065d4f372b1425d5be5b310459c01907b55",
+      "key_load_ms": 924.268209,
+      "witness_creation_ms": 1.344,
+      "warmup_prove_ms": 671.500833,
+      "prove_ms": [
+        584.792083,
+        574.573083,
+        583.194959
+      ],
+      "median_prove_ms": 583.194959,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w32_own",
+      "circuit": "custom-ring-policy-member-v3-16-w32-own",
+      "constraints": 296265,
+      "key_sha256": "2bedd829fa6dd836465ebf679b5858c7a06d2ab9f35a41a068cd87354a2b2c7c",
+      "key_load_ms": 609.831042,
+      "witness_creation_ms": 0.835958,
+      "warmup_prove_ms": 413.297375,
+      "prove_ms": [
+        433.959667,
+        434.3195,
+        458.182292
+      ],
+      "median_prove_ms": 434.3195,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w4_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w4-curator",
+      "constraints": 301093,
+      "key_sha256": "1ef0cf322e8c6f3516952a368caa7fe83134f0b67030feebfdd88770d6667c72",
+      "key_load_ms": 626.211,
+      "witness_creation_ms": 0.8855,
+      "warmup_prove_ms": 456.1,
+      "prove_ms": [
+        483.598291,
+        468.94575,
+        467.850208
+      ],
+      "median_prove_ms": 468.94575,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w4_own",
+      "circuit": "custom-ring-policy-member-v3-16-w4-own",
+      "constraints": 177241,
+      "key_sha256": "478db8173e5fe03dc2b69bc5275e2775701feb42f0007fc8444442c155d8ef77",
+      "key_load_ms": 402.762042,
+      "witness_creation_ms": 0.526459,
+      "warmup_prove_ms": 319.439583,
+      "prove_ms": [
+        308.801958,
+        317.935875,
+        312.874084
+      ],
+      "median_prove_ms": 312.874084,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w8_curator",
+      "circuit": "custom-ring-policy-member-v3-16-w8-curator",
+      "constraints": 329813,
+      "key_sha256": "01d612ab514cf38b848bbaa9bb3f0421356e61426c52859056b4e5ef0c424320",
+      "key_load_ms": 720.922,
+      "witness_creation_ms": 0.947459,
+      "warmup_prove_ms": 523.856875,
+      "prove_ms": [
+        496.520958,
+        480.090292,
+        471.852125
+      ],
+      "median_prove_ms": 480.090292,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_16_w8_own",
+      "circuit": "custom-ring-policy-member-v3-16-w8-own",
+      "constraints": 194108,
+      "key_sha256": "e674b5956a7b883be1637882eca8a86d69648a8565583c252dfc8254b644ae57",
+      "key_load_ms": 373.619833,
+      "witness_creation_ms": 0.54525,
+      "warmup_prove_ms": 301.430042,
+      "prove_ms": [
+        301.966791,
+        313.944834,
+        303.260833
+      ],
+      "median_prove_ms": 303.260833,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w0_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w0-curator",
+      "constraints": 56778,
+      "key_sha256": "fe7d23fc2aef69ccb69ae86f505f0e0db031541ddfe7dcb5b31f75699d7b2415",
+      "key_load_ms": 132.895416,
+      "witness_creation_ms": 0.227,
+      "warmup_prove_ms": 104.751125,
+      "prove_ms": [
+        110.544625,
+        104.802667,
+        109.865083
+      ],
+      "median_prove_ms": 109.865083,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w0_own",
+      "circuit": "custom-ring-policy-member-v3-2-w0-own",
+      "constraints": 38889,
+      "key_sha256": "31bf412f5fb9bc6ec79a09464e61bfa320530b438d8a2e84dc695cb2222309e6",
+      "key_load_ms": 87.509333,
+      "witness_creation_ms": 0.166375,
+      "warmup_prove_ms": 75.689417,
+      "prove_ms": [
+        82.071334,
+        76.5165,
+        74.8515
+      ],
+      "median_prove_ms": 76.5165,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w16_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w16-curator",
+      "constraints": 185241,
+      "key_sha256": "841ac46d93384b7966d8b6cf40fd26e26845f4650b3cde76abe83ff8f20ea5d2",
+      "key_load_ms": 402.332125,
+      "witness_creation_ms": 0.566125,
+      "warmup_prove_ms": 321.372458,
+      "prove_ms": [
+        298.926292,
+        306.90125,
+        296.199
+      ],
+      "median_prove_ms": 298.926292,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w16_own",
+      "circuit": "custom-ring-policy-member-v3-2-w16-own",
+      "constraints": 107708,
+      "key_sha256": "fecf6d151ab4538c4da7260d62d5de4957b3b645dccd0534092a429976fb0cd3",
+      "key_load_ms": 212.755791,
+      "witness_creation_ms": 0.351375,
+      "warmup_prove_ms": 162.640708,
+      "prove_ms": [
+        165.697833,
+        175.38625,
+        173.348583
+      ],
+      "median_prove_ms": 173.348583,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w1_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w1-curator",
+      "constraints": 67690,
+      "key_sha256": "063deca9d8e42e35e6a91b35a6451e7db0b0336113b399a3b4b504e3de5667d6",
+      "key_load_ms": 143.717417,
+      "witness_creation_ms": 0.232625,
+      "warmup_prove_ms": 126.264959,
+      "prove_ms": [
+        128.664875,
+        126.708459,
+        128.122916
+      ],
+      "median_prove_ms": 128.122916,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w1_own",
+      "circuit": "custom-ring-policy-member-v3-2-w1-own",
+      "constraints": 43280,
+      "key_sha256": "11828bc12144b348073df4d8702b1b2d628c8efa4baa84099887ebd79c7f55c2",
+      "key_load_ms": 117.533084,
+      "witness_creation_ms": 0.161333,
+      "warmup_prove_ms": 89.847667,
+      "prove_ms": [
+        83.510208,
+        85.787542,
+        81.604583
+      ],
+      "median_prove_ms": 83.510208,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w2_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w2-curator",
+      "constraints": 78641,
+      "key_sha256": "9944bd928bd7534c8e622541baaac99991ef6c2a894058eea1e2520f0980a9d1",
+      "key_load_ms": 177.807625,
+      "witness_creation_ms": 0.289041,
+      "warmup_prove_ms": 143.203042,
+      "prove_ms": [
+        144.126292,
+        145.943375,
+        140.002417
+      ],
+      "median_prove_ms": 144.126292,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w2_own",
+      "circuit": "custom-ring-policy-member-v3-2-w2-own",
+      "constraints": 47683,
+      "key_sha256": "f3746cd754ed27e285fe9d6dcf404e06b4dadab63cec4563c2edec3560f41da3",
+      "key_load_ms": 117.680875,
+      "witness_creation_ms": 0.1735,
+      "warmup_prove_ms": 95.136791,
+      "prove_ms": [
+        91.169833,
+        92.412209,
+        96.139375
+      ],
+      "median_prove_ms": 92.412209,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w32_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w32-curator",
+      "constraints": 300205,
+      "key_sha256": "d33f0b4e6e9ca34502f712706a11185797ea9a2d50948a81950a9c1029681226",
+      "key_load_ms": 629.249083,
+      "witness_creation_ms": 0.884583,
+      "warmup_prove_ms": 467.193042,
+      "prove_ms": [
+        463.2455,
+        445.368792,
+        439.440667
+      ],
+      "median_prove_ms": 445.368792,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w32_own",
+      "circuit": "custom-ring-policy-member-v3-2-w32-own",
+      "constraints": 175233,
+      "key_sha256": "28d3cfb398a6b57facea8a142727a3461eae22b1531b17c4e25d35cf7af11f93",
+      "key_load_ms": 345.508166,
+      "witness_creation_ms": 0.511125,
+      "warmup_prove_ms": 275.351042,
+      "prove_ms": [
+        273.745875,
+        260.121833,
+        285.596459
+      ],
+      "median_prove_ms": 273.745875,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w4_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w4-curator",
+      "constraints": 97297,
+      "key_sha256": "e39ab020bca2025e0b5b19abd5d851f82e4fbe90d08cf51feaeb90b9b4a62321",
+      "key_load_ms": 209.626666,
+      "witness_creation_ms": 0.346375,
+      "warmup_prove_ms": 167.912167,
+      "prove_ms": [
+        179.94625,
+        164.423125,
+        172.261958
+      ],
+      "median_prove_ms": 172.261958,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w4_own",
+      "circuit": "custom-ring-policy-member-v3-2-w4-own",
+      "constraints": 56518,
+      "key_sha256": "22f8058080d44658a8b03b3914cd7f23821906e399d228735357fbc8b62a39ba",
+      "key_load_ms": 129.98075,
+      "witness_creation_ms": 0.197917,
+      "warmup_prove_ms": 119.623084,
+      "prove_ms": [
+        108.902167,
+        101.820875,
+        108.442875
+      ],
+      "median_prove_ms": 108.442875,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w8_curator",
+      "circuit": "custom-ring-policy-member-v3-2-w8-curator",
+      "constraints": 128277,
+      "key_sha256": "f22243d16b361fe829a737d564e0c9dfe3711242b2897f933880970c4fc02084",
+      "key_load_ms": 289.794,
+      "witness_creation_ms": 0.436875,
+      "warmup_prove_ms": 204.147667,
+      "prove_ms": [
+        214.869625,
+        206.593,
+        228.568708
+      ],
+      "median_prove_ms": 214.869625,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_2_w8_own",
+      "circuit": "custom-ring-policy-member-v3-2-w8-own",
+      "constraints": 74336,
+      "key_sha256": "1a62eb1a9f5bed3acfa66925e84984c93d2d52854e3294c64c8b34701a6ce3d1",
+      "key_load_ms": 192.071583,
+      "witness_creation_ms": 0.2435,
+      "warmup_prove_ms": 139.033,
+      "prove_ms": [
+        141.096125,
+        152.906125,
+        139.951917
+      ],
+      "median_prove_ms": 141.096125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w0_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w0-curator",
+      "constraints": 87826,
+      "key_sha256": "585a073d10dad4a72452a9eb0f227a8980dd2a57f2e80749deea0ccc00085205",
+      "key_load_ms": 184.3835,
+      "witness_creation_ms": 0.307416,
+      "warmup_prove_ms": 180.463917,
+      "prove_ms": [
+        162.318041,
+        161.912542,
+        159.755417
+      ],
+      "median_prove_ms": 161.912542,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w0_own",
+      "circuit": "custom-ring-policy-member-v3-4-w0-own",
+      "constraints": 56869,
+      "key_sha256": "9d0a4849e2551f852f427fdc4a0c93224159e1523365b224f28dcdaa9c22451a",
+      "key_load_ms": 138.310208,
+      "witness_creation_ms": 0.220041,
+      "warmup_prove_ms": 113.13175,
+      "prove_ms": [
+        104.533917,
+        108.536791,
+        105.435542
+      ],
+      "median_prove_ms": 105.435542,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w16_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w16-curator",
+      "constraints": 213818,
+      "key_sha256": "bdea67408600703cdb4f5cb03937b44de87099399855a914d4daaf6d5a20b6e2",
+      "key_load_ms": 424.651083,
+      "witness_creation_ms": 0.614583,
+      "warmup_prove_ms": 319.595,
+      "prove_ms": [
+        337.607833,
+        306.204125,
+        322.177584
+      ],
+      "median_prove_ms": 322.177584,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w16_own",
+      "circuit": "custom-ring-policy-member-v3-4-w16-own",
+      "constraints": 124580,
+      "key_sha256": "9f6d9685a21bfe1ca5d674f7e3abe6f2ffcc45bc2905df9b6437b7dc66367980",
+      "key_load_ms": 245.40625,
+      "witness_creation_ms": 0.374084,
+      "warmup_prove_ms": 193.556333,
+      "prove_ms": [
+        199.702917,
+        196.983584,
+        199.965583
+      ],
+      "median_prove_ms": 199.702917,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w1_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w1-curator",
+      "constraints": 98759,
+      "key_sha256": "92b1c1a5695a01df35799442417769368462b4381cb5d2cc2561db1e36dca5b1",
+      "key_load_ms": 214.340375,
+      "witness_creation_ms": 0.363167,
+      "warmup_prove_ms": 186.369667,
+      "prove_ms": [
+        173.299875,
+        164.497542,
+        173.0845
+      ],
+      "median_prove_ms": 173.0845,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w1_own",
+      "circuit": "custom-ring-policy-member-v3-4-w1-own",
+      "constraints": 61280,
+      "key_sha256": "6f3e40913be750aff64b3ad95c5cb742e29eee77bed93561012bce33ef6df817",
+      "key_load_ms": 145.214167,
+      "witness_creation_ms": 0.201917,
+      "warmup_prove_ms": 110.461584,
+      "prove_ms": [
+        106.740917,
+        106.10025,
+        115.905916
+      ],
+      "median_prove_ms": 106.740917,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w2_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w2-curator",
+      "constraints": 109702,
+      "key_sha256": "5344e24fe7b8b8f49fc6c760594e82ef124d9046297e73678963f18ee2d072f7",
+      "key_load_ms": 234.337459,
+      "witness_creation_ms": 0.3395,
+      "warmup_prove_ms": 192.09875,
+      "prove_ms": [
+        185.792167,
+        192.866375,
+        189.972084
+      ],
+      "median_prove_ms": 189.972084,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w2_own",
+      "circuit": "custom-ring-policy-member-v3-4-w2-own",
+      "constraints": 65703,
+      "key_sha256": "138ba5f33c30513b107504a22fce828a9bfb9a23d0381731756773c74a46dcf8",
+      "key_load_ms": 175.060792,
+      "witness_creation_ms": 0.214458,
+      "warmup_prove_ms": 137.418792,
+      "prove_ms": [
+        125.573,
+        136.224083,
+        129.945625
+      ],
+      "median_prove_ms": 129.945625,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w32_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w32-curator",
+      "constraints": 329049,
+      "key_sha256": "4e8066bc0e7094508c26e4a2b89fe05a5c015bec4d2d2a8cef467ae67275adae",
+      "key_load_ms": 670.3275,
+      "witness_creation_ms": 0.946542,
+      "warmup_prove_ms": 488.394459,
+      "prove_ms": [
+        479.538541,
+        478.061542,
+        463.284917
+      ],
+      "median_prove_ms": 478.061542,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w32_own",
+      "circuit": "custom-ring-policy-member-v3-4-w32-own",
+      "constraints": 192384,
+      "key_sha256": "2554f25f5afcfb01d14512062d68f0efdd3dbee5ca6dc9c1e156b4ab604fc8a5",
+      "key_load_ms": 368.537125,
+      "witness_creation_ms": 0.530916,
+      "warmup_prove_ms": 293.003667,
+      "prove_ms": [
+        295.024958,
+        308.970541,
+        312.852375
+      ],
+      "median_prove_ms": 308.970541,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w4_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w4-curator",
+      "constraints": 128443,
+      "key_sha256": "9b47728ef203f8755619db9a185b97fcc2c9efad97101391020ce226f438cc4e",
+      "key_load_ms": 267.08925,
+      "witness_creation_ms": 0.415458,
+      "warmup_prove_ms": 199.0515,
+      "prove_ms": [
+        198.234375,
+        205.783625,
+        201.05975
+      ],
+      "median_prove_ms": 201.05975,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w4_own",
+      "circuit": "custom-ring-policy-member-v3-4-w4-own",
+      "constraints": 74605,
+      "key_sha256": "bdc40871de50d112825c58e42468b0fa026d11a84e06e81028a7dd32ec738f50",
+      "key_load_ms": 152.446083,
+      "witness_creation_ms": 0.246708,
+      "warmup_prove_ms": 139.101292,
+      "prove_ms": [
+        136.913583,
+        142.889292,
+        142.690875
+      ],
+      "median_prove_ms": 142.690875,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w8_curator",
+      "circuit": "custom-ring-policy-member-v3-4-w8-curator",
+      "constraints": 156834,
+      "key_sha256": "57da127c63115d957274920b8a1425a788e72b4ae543795733b9d22b8cbad6c6",
+      "key_load_ms": 347.736833,
+      "witness_creation_ms": 0.471667,
+      "warmup_prove_ms": 274.61325,
+      "prove_ms": [
+        284.21975,
+        263.693875,
+        288.887208
+      ],
+      "median_prove_ms": 284.21975,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_4_w8_own",
+      "circuit": "custom-ring-policy-member-v3-4-w8-own",
+      "constraints": 91268,
+      "key_sha256": "993515e5d79053c5c5edf0f14a43b4bdc50cc050de8db6f4b834d8ae7227e92d",
+      "key_load_ms": 191.966583,
+      "witness_creation_ms": 0.28325,
+      "warmup_prove_ms": 159.705,
+      "prove_ms": [
+        163.9405,
+        167.339459,
+        159.464291
+      ],
+      "median_prove_ms": 163.9405,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w0_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w0-curator",
+      "constraints": 149124,
+      "key_sha256": "e8e810a97cb1b3f3949360f4672a3ff23a9eaec48fd2f544268bbd0e9ffd44ec",
+      "key_load_ms": 326.841916,
+      "witness_creation_ms": 0.46975,
+      "warmup_prove_ms": 269.647167,
+      "prove_ms": [
+        258.891959,
+        271.75,
+        275.410458
+      ],
+      "median_prove_ms": 271.75,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w0_own",
+      "circuit": "custom-ring-policy-member-v3-8-w0-own",
+      "constraints": 92416,
+      "key_sha256": "d89f7eba1bdfd0aaa70d2b33b4a7b6d4c4cfb519586c6cfa4bfb56213116df6b",
+      "key_load_ms": 185.672167,
+      "witness_creation_ms": 0.306459,
+      "warmup_prove_ms": 171.02475,
+      "prove_ms": [
+        180.606583,
+        167.28925,
+        167.264333
+      ],
+      "median_prove_ms": 167.28925,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w16_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w16-curator",
+      "constraints": 271744,
+      "key_sha256": "dc30c9715f2e4258555a18eb13928bd5aedf2b659a01c230849c349863ce0579",
+      "key_load_ms": 585.222,
+      "witness_creation_ms": 0.7965,
+      "warmup_prove_ms": 441.076166,
+      "prove_ms": [
+        434.799166,
+        439.481125,
+        444.467667
+      ],
+      "median_prove_ms": 439.481125,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w16_own",
+      "circuit": "custom-ring-policy-member-v3-8-w16-own",
+      "constraints": 159105,
+      "key_sha256": "9e136cc46463fa50c7db8bfbcd988c99680a5fc665192817bc7f925dc5689a27",
+      "key_load_ms": 334.856834,
+      "witness_creation_ms": 0.486708,
+      "warmup_prove_ms": 267.280416,
+      "prove_ms": [
+        267.540916,
+        260.237834,
+        258.38825
+      ],
+      "median_prove_ms": 260.237834,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w1_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w1-curator",
+      "constraints": 159051,
+      "key_sha256": "9261ca599bc228a3f27de4fb7ec96f125bc7c0cf38291f04f7db807d719e2b7e",
+      "key_load_ms": 365.059542,
+      "witness_creation_ms": 0.474792,
+      "warmup_prove_ms": 274.748292,
+      "prove_ms": [
+        288.231542,
+        267.761875,
+        268.198041
+      ],
+      "median_prove_ms": 268.198041,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w1_own",
+      "circuit": "custom-ring-policy-member-v3-8-w1-own",
+      "constraints": 96546,
+      "key_sha256": "29c1b5bbc215ce41f98912bba0e525bc66b7eada3274b6dc2e2e014718891a82",
+      "key_load_ms": 218.963708,
+      "witness_creation_ms": 0.346958,
+      "warmup_prove_ms": 167.094333,
+      "prove_ms": [
+        172.098625,
+        175.42125,
+        164.695292
+      ],
+      "median_prove_ms": 172.098625,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w2_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w2-curator",
+      "constraints": 168989,
+      "key_sha256": "757bb749d6a1fcffd090a9123bd48deb153967a17f9e1c5c86276eeea1064b2e",
+      "key_load_ms": 367.706084,
+      "witness_creation_ms": 0.504458,
+      "warmup_prove_ms": 281.530375,
+      "prove_ms": [
+        279.638583,
+        287.49325,
+        279.150292
+      ],
+      "median_prove_ms": 279.638583,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w2_own",
+      "circuit": "custom-ring-policy-member-v3-8-w2-own",
+      "constraints": 100688,
+      "key_sha256": "55827f6ce6ae22086564efab9a9f8a4c25f6db0b8493c5cbe986a2a66e3dd87f",
+      "key_load_ms": 205.627958,
+      "witness_creation_ms": 0.32075,
+      "warmup_prove_ms": 174.959708,
+      "prove_ms": [
+        166.061792,
+        174.60275,
+        174.94925
+      ],
+      "median_prove_ms": 174.60275,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w32_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w32-curator",
+      "constraints": 387533,
+      "key_sha256": "0c82a39e387bcbc39e0a7b5ec68b6ca2616077e8d5a28f6d09877c124bc3d0cd",
+      "key_load_ms": 761.334209,
+      "witness_creation_ms": 1.115917,
+      "warmup_prove_ms": 514.548667,
+      "prove_ms": [
+        522.231083,
+        489.270667,
+        502.354375
+      ],
+      "median_prove_ms": 502.354375,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w32_own",
+      "circuit": "custom-ring-policy-member-v3-8-w32-own",
+      "constraints": 227469,
+      "key_sha256": "55c4221ac0d70c9a89583f084349cb0b0bd6f64a814c9460f20a7819662a778e",
+      "key_load_ms": 415.522458,
+      "witness_creation_ms": 0.620959,
+      "warmup_prove_ms": 322.710875,
+      "prove_ms": [
+        310.249834,
+        311.386292,
+        314.7395
+      ],
+      "median_prove_ms": 311.386292,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w4_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w4-curator",
+      "constraints": 186012,
+      "key_sha256": "1fb11c48b6ff64870458856d7e207078b67596e7bda897f8785493b6021cc71e",
+      "key_load_ms": 382.713333,
+      "witness_creation_ms": 0.577208,
+      "warmup_prove_ms": 310.7035,
+      "prove_ms": [
+        311.246166,
+        305.519208,
+        318.277041
+      ],
+      "median_prove_ms": 311.246166,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w4_own",
+      "circuit": "custom-ring-policy-member-v3-8-w4-own",
+      "constraints": 108960,
+      "key_sha256": "7e7ba39de9202be1faf30eb476726b5272467c7b73b75027545153c1f642bff7",
+      "key_load_ms": 228.439166,
+      "witness_creation_ms": 0.345292,
+      "warmup_prove_ms": 185.716667,
+      "prove_ms": [
+        176.838875,
+        172.450792,
+        175.9485
+      ],
+      "median_prove_ms": 175.9485,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w8_curator",
+      "circuit": "custom-ring-policy-member-v3-8-w8-curator",
+      "constraints": 214424,
+      "key_sha256": "157bb0393247fa38dbb2356a674004bf10d5deaf37a1e60c3d9cc99abc50420c",
+      "key_load_ms": 425.726875,
+      "witness_creation_ms": 0.597541,
+      "warmup_prove_ms": 323.294583,
+      "prove_ms": [
+        320.211208,
+        316.785917,
+        312.068291
+      ],
+      "median_prove_ms": 316.785917,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_policy_member_v3_8_w8_own",
+      "circuit": "custom-ring-policy-member-v3-8-w8-own",
+      "constraints": 125519,
+      "key_sha256": "7f2ecdf83ad6a35537f996774b7ff8e2d9a5f00d30b6cb93583712feca5bd9ad",
+      "key_load_ms": 236.948875,
+      "witness_creation_ms": 0.398375,
+      "warmup_prove_ms": 197.063042,
+      "prove_ms": [
+        206.306916,
+        198.142041,
+        196.28175
+      ],
+      "median_prove_ms": 198.142041,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_register_key",
+      "circuit": "custom-ring-register-key",
+      "constraints": 36991,
+      "key_sha256": "4ae9314bc5c05392dc93f753a32a328ace377172ae5636caf2d50894e9796d4f",
+      "key_load_ms": 132.402708,
+      "witness_creation_ms": 0.03075,
+      "warmup_prove_ms": 119.27475,
+      "prove_ms": [
+        106.421917,
+        112.553875,
+        109.308
+      ],
+      "median_prove_ms": 109.308,
+      "verified": true
+    },
+    {
+      "key": "custom_ring_withdrawal_exemption",
+      "circuit": "custom-ring-withdrawal-exemption",
+      "constraints": 12318,
+      "key_sha256": "1c4ae46b7d3f42361398bb7880d0dbcc13707ceba1b46625fe73100863c07aba",
+      "key_load_ms": 39.596792,
+      "witness_creation_ms": 0.199042,
+      "warmup_prove_ms": 34.22575,
+      "prove_ms": [
+        31.500125,
+        29.169875,
+        27.249291
+      ],
+      "median_prove_ms": 29.169875,
+      "verified": true
+    }
+  ]
+}
