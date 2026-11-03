@@ -74,8 +74,7 @@ Through the relay the wallet reads no Merkle path and no record.
 and `prepareRingWithdrawalRelay` take the quote of `RingRpc.getRelayQuote`,
 the nullifier key and the sender's signer, as `anonymous` on an anonymous Ring
 and as `confidential` on any other, and `relay.send` hands the spend to Ring
-RPC. On an anonymous Ring they also take the sender's `ViewingHistory`.
-`PreparedRingDeposit.prepareRelay` relays a deposit, whose message the
+RPC. `PreparedRingDeposit.prepareRelay` relays a deposit, whose message the
 depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
 smallest notes. `RingRpc` reads
 decrypted Ring transactions for a granted reader.
@@ -92,14 +91,24 @@ with `inProofOwner` signs inside the proof, spends ring notes only, and only
 the fee payer and a demanded co-signer sign the transaction. Without it each
 input owner signs. A withdrawal creates its recipient's missing associated
 token account in the same transaction. On an anonymous Ring a spend
-takes `anonymous`, the hidden owner's signer and `ViewingHistory`, and the
-wallet stores `viewingHistory` before `send`. The fee payer and any co-signer
-must differ from the hidden owner. On every Ring they must also differ from the
+takes `anonymous`, the hidden owner's signer and an explicit `reply`. The fee
+payer and any co-signer must differ from the hidden owner. On every Ring they must also differ from the
 owner of a merge. `CustomRingClient` proves SPP's anonymous rail, the rail of
 an anonymous spend and of a spend with `inProofOwner`.
 The `build*Transaction` functions return one unsigned transaction. A spend or
-deposit on an anonymous Ring goes through its submission, which returns the
-viewing history.
+deposit on an anonymous Ring goes through its submission. A deposit to the
+wallet's own note returns the viewing history, and the wallet stores it before
+`send`.
+
+On an anonymous Ring the transfer proof binds each live recipient slot's
+ciphertext, its recipient and its discovery tag. A wallet finds its notes with
+`AnonymousSync.fetch`, which scans every Ring its `ViewingHistory` names, and
+adds a Ring with `withRing` when a key enrolls. `AnonymousSync.fullScan` reads a
+Ring from its start and uses no tag. `AnonymousWallet` holds the notes, spends,
+reply claims and scan positions in one document. Absorb a scan, then replace
+the stored `toJson` in one atomic write, so a position is never saved without
+what it covers. `@heliuslabs/zolana-custom-rings/scan-worker` is a `Worker`
+entry for the tag test. Pass it with `scanWorkerMatcher`.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:
 
