@@ -46,14 +46,13 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Deposit blinding | `Poseidon(CRDB, blinding_secret)` |
 | Merge output blinding | `TMOB(nullifier_secret, n0)`, as zolana defines it |
 
-`n0` is the transfer's first nullifier. The audit proof pins each live output's blinding. SPP derives every output blinding and `private_tx_blinding` from one seed, so one live output fixes the seed to `CRBS(tx_viewing_sk, salt)`, and the auditor derives both from the sealed key.
+`n0` is the transfer's first nullifier. The transfer proof pins each live output's blinding. SPP derives every output blinding and `private_tx_blinding` from one seed, so one live output fixes the seed to `CRBS(tx_viewing_sk, salt)`, and the auditor derives both from the sealed key.
 
-## Slot secret and sender commitment
+## Slot secret
 
 | Value | Encoding |
 |---|---|
 | Delivered slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
-| Sender commitment | `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)` |
 
 The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
 
@@ -87,12 +86,10 @@ policy_hash = acc_4
 
 | Tag | Value | Use |
 |---|---|---|
-| `CRAU` | `0x43524155` | audit statement |
+| `CRTX` | `0x43525458` | transfer statement |
 | `CRDS` | `0x43524453` | delivered slot secret |
 | `CRBS` | `0x43524253` | ring blinding seed |
-| `CRSC` | `0x43525343` | sender commitment |
 | `CROD` | `0x43524f44` | disclosure pad |
-| `CRPO` | `0x4352504f` | policy statement |
 | `CRTB` | `0x43525442` | policy table hash |
 | `CRPW` | `0x43525057` | withdrawal digest |
 | `CRQW` | `0x43525157` | queue entry |
@@ -100,7 +97,6 @@ policy_hash = acc_4
 | `CRRG` | `0x43525247` | register key statement |
 | `CRDP` | `0x43524450` | deposit statement |
 | `CRDB` | `0x43524442` | deposit blinding |
-| `CRWX` | `0x43525758` | withdrawal exemption statement |
 | `CRMG` | `0x43524d47` | merge statement |
 | `CRRU` | `0x43525255` | record update statement |
 | `CRWG` | `0x43525747` | wallet grant record key |

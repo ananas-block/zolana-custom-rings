@@ -31,7 +31,7 @@ nonce = low13_be(tail)[1..13]                        // 12 bytes
 ciphertext = AES-256-CTR(key, nonce || u32be(counter), plaintext), counter from 2
 ```
 
-`lowN_be` takes the low `N` bytes of the canonical field value. For a body, `secret` is the slot secret of [Slot secret and sender commitment](hashing.md#slot-secret-and-sender-commitment). An anonymous body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
+`lowN_be` takes the low `N` bytes of the canonical field value. For a body, `secret` is the slot secret of [Slot secret](hashing.md#slot-secret). An anonymous body takes zolana's [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation) outside every circuit.
 
 ## Labelled schedule
 

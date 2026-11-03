@@ -4,20 +4,16 @@ Every ring proof has one public input. It is the fold of a statement the program
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Transfer, confidential family | `HashChain4` | `36 + n_out` | `Transfer`, `AuthorityTransfer` |
-| Transfer, anonymous family | `HashChain4` | 34 | `Transfer` |
-| Audit, delivered | `HashChain4` | 16 | `Transfer`, `AuthorityTransfer` |
-| Audit, delivered sender | `HashChain4` | 18 | `Transfer` on the in-proof rail |
-| Audit, anonymous | `HashChain4` | 19 | `Transfer` |
-| Policy, member key | `HashChain4` | `18 + n_out` | `Transfer` |
-| Policy, delegate key | `HashChain4` | `17 + n_out` | `AuthorityTransfer` |
+| Transfer, confidential family | `HashChain4` | `37 + n_out` | `Transfer`, `AuthorityTransfer` |
+| Transfer, anonymous family | `HashChain4` | 35 | `Transfer` |
 | Apply | `HashChain4` | 8 | Storage `Update`, `UpdateImmediate` |
 | Register key | `HashChain4` | 8 | Ring RPC writer, off chain |
-| Withdrawal exemption | `HashChain4` | 8 | `Transfer` |
 | Deposit | `HashChain` | 44 | `Deposit` |
 | Merge | `HashChain` | 17 | `Merge` |
 
 ## Transfer
+
+Use [Proof composition](../../design/proof-composition.md) to review the constraint handoffs and program-derived fields.
 
 One proof covers the audit, the policy and the withdrawal exemption of a transfer. The
 confidential family serves the signer, in-proof and authority rails, the anonymous family the
@@ -36,6 +32,7 @@ anonymous rail with the commitment or the entry disclosure by the head's `layout
   recipient_0 .. recipient_{n_out-1}, confidential family only
   (asset_k, net_k, gross_k) per public slot,
   withdrawal_hash,
+  length,                             the element count, the count and the version included
   1 ]                                 TRANSFER_STATEMENT_VERSION
 ```
 
@@ -58,18 +55,16 @@ anonymous rail with the commitment or the entry disclosure by the head's `layout
   a negative one, and the gross withdrawal of the asset as `right_align` of a u128, deposits
   excluded. Slots past the used ones are zeros. Under `exempt` the circuit bounds every gross
   to u64 and to the asset's own-record `withdrawal_threshold`.
-- `withdrawal_hash` is the policy withdrawal hash below. The version is nonzero and last, so a
-  statement missing trailing elements hashes apart from a complete one.
-
-## Audit
+- `withdrawal_hash` is the policy withdrawal hash below. The count and the nonzero version close
+  the chain, a statement of another length or layout hashes apart.
 
 The head has 12 elements:
 
 | # | Element | Source |
 |---|---|---|
-| 0 | `CRAU` | constant |
+| 0 | `CRTX` | constant |
 | 1 | `n0` | the frame's first nullifier, SPP nullifier `0` |
-| 2 | `ring_id` | the executing program id |
+| 2 | `ring_id` | `hash_bytes` of the executing program id |
 | 3, 4 | `pack_be(0x04 \|\| tx_viewing_u)` | frame, SPP `tx_viewing_pk` |
 | 5, 6 | `pack_be(auditor_pubkey)` | ring policy |
 | 7, 8 | `pack_be(0x04 \|\| eph_u)` | frame |
@@ -77,37 +72,22 @@ The head has 12 elements:
 | 10 | `right_align(salt)` | frame, SPP salt |
 | 11 | `right_align(layout)` | exits from the outputs, the other bits from the frame, bit value `4` clear |
 
-Then by layout:
+The chains over the published output slots:
 
-- Delivered: `HashChain4(output hashes)`, `HashChain4(body hash per slot)`, `HashChain4(disclosure)`, `HashChain4(pack_be(u) per slot)`. A body hash is `hash_bytes(body)`, and an exit contributes `0` and two zero key fields.
-- Delivered sender: the delivered elements, then `private_tx_hash` and `sender`.
-- Anonymous: `HashChain4(output hashes)`, `HashChain4(disclosure)`, `private_tx_hash`, `sender_commitment`, `party_0`, `party_1`, `party_2`. No tag and no body enters it.
+- `output_chain = HashChain4(output hashes)`, every slot, a dummy included.
+- `body_chain = HashChain4(body hash per slot)`, `hash_bytes(body)` of a delivered slot and `0` for an exit, confidential family only.
+- `recipient_key_chain = HashChain4(pack_be(u) per slot)`, two zero fields for an exit, confidential family only.
+- `disclosure_chain = HashChain4(disclosure)` over exactly the fields the layout publishes.
+- `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`,
+  in settlement order under a policy and over no leg otherwise. A SOL leg's owner is
+  `solana_owner_identity(recipient)`, an SPL leg's owner is the identity of the token account's
+  owner.
 
-The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0` when absent.
-
-The delivered sender `sender` is `solana_owner_identity` of the frame's in-proof owner key. Its circuit holds every spent UTXO to `sender`, requires input 0 to be a UTXO and reopens SPP's `private_tx_hash` over the same inputs and outputs with no address input. `private_tx_blinding` stays private. The key takes one input class per capacity, 48 at 2 outputs, 24 at 4, 16 at 8 and 8 at 16.
-
-The delivered statement of the signer and authority rails carries no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
-
-## Policy
-
-```text
-[ CRPO, private_tx_hash, policy_hash, ring_id,
-  anonymous,                  // member key only, 1 on the anonymous rail
-  approval_required, key_escrow,
-  own_root, curator_root, sender,
-  recipient_0, …, recipient_{n_out - 1},
-  asset_0, amount_0, asset_1, amount_1, asset_2, amount_2,
-  4,                          // POLICY_STATEMENT_VERSION
-  withdrawal_hash ]
-```
-
-- `policy_hash` comes from the ring policy, and `own_root` and `curator_root` are the roots the records and curator registries serve at the frame's `own_revision` and `curator_revision`. `curator_root` is `0` without a curator.
-- `key_escrow` is `mode == ConfidentialEscrow`. The delegate key binds `approval_required = 0` and `key_escrow = 1`.
-- `sender` is `solana_owner_identity` of the sole owner signer or of the in-proof owner on the confidential rail, `sender_commitment` on the anonymous rail and `0` on the delegate rail.
-- `recipient_o` is output `o`'s owner identity from the frame on the confidential and delegate rails, `0` for a dummy slot. Every `recipient_o` is `0` on the anonymous rail.
-- The public slots are SPP's per-asset nets in first-seen order. A slot holds the asset field, then `right_align(net)` for a positive net or `q - |net|` for a negative net. Slots past the used ones are zeros.
-- `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, an SPL leg's owner is the identity of the token account's owner.
+No tag and no body of an anonymous slot enters the statement. The party identities are
+`solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0`
+when absent. The circuit holds every spent UTXO to the sender on the in-proof and authority rails
+and to the hidden owner on the anonymous rail, and reopens SPP's `private_tx_hash` over the same
+inputs and outputs with no address input. `private_tx_blinding` stays private.
 
 ## Apply
 
@@ -126,14 +106,6 @@ The storage program supplies `old_root` as the registry's newest root, `old_next
 ```
 
 The statement has 8 elements and no registry root.
-
-## Withdrawal exemption
-
-```text
-[ CRWX, own_root, asset_0, amount_0, asset_1, amount_1, asset_2, amount_2 ]
-```
-
-`own_root` is the records registry's root at the exemption's `own_revision`. Each used slot holds `hash_bytes(mint)` of one withdrawn mint, in first-seen order of the withdrawal legs, and `right_align` of the gross sum of that mint's withdrawal legs. Deposit legs do not enter the sum. Slots past the withdrawn mints are zeros.
 
 ## Deposit
 

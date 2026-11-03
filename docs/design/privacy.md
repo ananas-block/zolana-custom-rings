@@ -14,7 +14,7 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 ## Anonymous rings
 
 - Chain observers see the payer and the spent note count. They see one view tag and one body length per ring output, and the sender bundle.
-- They see each exit owner, each public leg and, on a policy ring, a blinded sender commitment.
+- They see each exit owner and each public leg.
 - They do not see the sender, the recipients, the amounts, the assets or the spent notes.
 - The hiding holds only while all of these hold:
   1. The payer does not link to the owner.

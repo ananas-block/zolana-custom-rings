@@ -50,6 +50,12 @@ The zolana notes above apply here, with their paths read under `zolana/`.
   prepared files to the pinned public release before merging a rotation;
   downloads must need no credentials.
 
+## Ring proof review
+
+Follow [Proof composition](docs/design/proof-composition.md) when changing ring circuits,
+statement builders, or their program bindings. Trace each predicate from its trusted source
+to its refusal test. Review shared output openings and gate derivation before capacity tuning.
+
 ## Common Commands
 
 ```bash

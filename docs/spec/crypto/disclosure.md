@@ -23,7 +23,7 @@ The auditor opens the envelope, derives the pad, subtracts it, and rebuilds each
 | 4 | reserved | always clear, every key accepts either value |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
-The delivered key and the delivered sender key vary exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key varies exits, pins full openings to `1` and pins key escrow to `0`.
+The confidential family varies exits and key escrow. The anonymous family's commitment layout varies exits and pins key escrow to `0`. Its entry layout varies exits, pins full openings to `1` and pins key escrow to `0`.
 
 ## Fields per layout
 
@@ -33,7 +33,7 @@ The delivered key and the delivered sender key vary exits and key escrow. The an
 |---|---|
 | Delivered, capacity `c` | `[seed_out if exits]`, `[nullifier_pk × c unless key escrow]`, `pack(slot × c)` with 40-byte slots under exits and 32-byte slots otherwise |
 | Anonymous, commitment key | `[seed_out if exits]`, `nullifier_pk × outputs`, `pack(slot × outputs)` with 72-byte slots, `hash_0`, then the `n - 1` other prefixes in `floor(n / 2)` pairs |
-| Anonymous, entry key | `[seed_out if exits]`, `sender_nullifier_pk`, `nullifier_pk × outputs`, `pack(sender_key \|\| slot × outputs)`, `pack(u64be(amount_i) × 8)` (3 fields), `(asset_i, blinding_i) × n` |
+| Anonymous, entry key | `[seed_out if exits]`, `sender_nullifier_pk`, `nullifier_pk × outputs`, `pack(sender_key \|\| slot × outputs)`, `pack(u64be(amount_i) × class)` over the key's input class, `(asset_i, blinding_i) × n` |
 
 Slot bytes:
 

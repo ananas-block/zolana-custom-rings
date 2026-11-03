@@ -1,17 +1,17 @@
 # Co-signing and limits
 
-A ring bounds what moves with three mechanisms: co-signer approval in the ring program, outflow limits in the policy proof, and window limits in Ring RPC. [Spec](../spec.md)
+A ring bounds what moves with three mechanisms: co-signer approval in the ring program, outflow limits in the transfer proof, and window limits in Ring RPC. [Spec](../spec.md)
 
 ## Who must co-sign
 
 - An operation demands each of its classes that some co-signer account covers.
 - The transfers class covers every transfer, delegate move and merge. The deposits class covers a deposit and a transfer with a deposit leg. The withdrawals class covers a transfer with a withdrawal leg.
-- A withdrawal exemption proof waives the withdrawals class when each withdrawn asset's gross amount is at or below the asset's withdrawal threshold.
+- The frame's exempt flag waives the withdrawals class. The program folds the legs into each public slot's gross withdrawal. The transfer proof then holds that gross at or below the asset record's withdrawal threshold. A mint without a record admits no exempt withdrawal.
 - One co-signer whose scope covers every demanded class signs. A transfer that only crosses a co-sign bound takes any co-signer. With no co-signer account, that transfer fails.
 - The co-signer differs from every owner signer, the in-proof owner, the hidden owner and the delegate.
 - Ring RPC co-signs only with its own key. Where the demanded co-signer is an outside key, a wallet sends its transfer, deposit or merge itself, and a managed merge cannot run.
 
-## Outflow limits, in the policy proof
+## Outflow limits, in the transfer proof
 
 - An asset's outflow is its live outputs, exits included and change to the sender excluded, minus the signed public net of the transfer.
 - A deposit counts positive in the net and a withdrawal negative, so a withdrawal adds to the outflow.
