@@ -40,7 +40,8 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 
 ## Who else sees what
 
-- The auditor opens every output, deposit and merge and every hidden sender. It reads a spent note's hash or opening on every rail. With an escrowed nullifier secret it also links that owner's spends.
+- The auditor decrypts each transfer output disclosure and deposit opening. It reads a spent note's hash or opening on every rail. With an escrowed nullifier secret it also links that owner's spends.
+- Merge recovery needs known metadata for every real input. Naming the hidden sender on the anonymous commitment rail needs the first input's owner key.
 - A reader sees what its grant covers, blindings included, and keeps it after a revocation.
 - Ring RPC as relayer receives every secret the proofs need. It links the owner's spends and opens the outputs, so a relayed transfer is anonymous only toward a trusted Ring RPC.
 - Ring RPC as co-signer sees each owner's debit of each asset. It reads them from the frame with the auditor key.

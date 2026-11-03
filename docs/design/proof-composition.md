@@ -171,7 +171,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - `EnrollAddress::check_record` in `sdk-libs/sdk/src/operations/storage.rs` and Ring RPC's `KeyAgreement::check` refuse a disagreeing key early. Neither is the enforcement.
 - The tests are `TestAddressAndEscrowAgreeInEitherOrder`, `TestAddressAndEscrowMismatchIsRefused` and `TestPairingWriteWithoutPreimagesIsRefused` in `prover/circuits/registry`.
 
-### Each live ring slot pays an enrolled address
+### Each live anonymous ring slot pays an enrolled address
 
 - The circuit opens `address_hash(ring_id, owner, nullifier_pk, viewing key, revision)` against the owner's pool row, in `DeliverRecipients`. An absent record reads zero and never matches.
 - The ring id in that hash keeps a record of another ring from opening.
@@ -181,16 +181,16 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - An exit opens no address, because `Ring` is zero on it. A dummy and an omitted slot open none.
 - The tests are `TestSlotAddressBindsEveryKey`, `TestSenderAddressBindsTheBundleKey` and `TestChangeIsTheExactAddressMatch` in `prover/circuits/audit`, `a sender with no enrollment`.
 
-### Each body and bundle encrypts the opened fields
+### Live anonymous recipient bodies and sender bundles encrypt the opened fields
 
-- The circuit holds a live non-change slot's 72 byte body to scheme 11 under `CRING/rcp1` and that slot's `CRDS` secret, in `assertRecipientBody`.
+- The circuit holds a live ring recipient's body to scheme 11 under `CRING/rcp1` and its `CRDS` secret, in `assertRecipientBody`.
 - The circuit binds `slot.Asset` to the body's mint chunks through `HashChain`, so a recipient learns a mint it has never seen.
 - The circuit seals the bundle under `CRING/snd1` at index `m`, past every body's index. The bundle encrypts the same slot wires, recipient keys and `output_seed`.
 - The program hashes each body and the bundle from the frame, into `recipient_body_chain` and `sender_bundle_digest`.
 - A reader rebuilds the commitment with its own bound keys, so a match establishes ownership. The commitment is the only authentication, since the cipher has none.
 - The tests are `TestRecipientBodyEncryptsTheOpening`, `TestSenderBundleBindsTheSlots` and `TestAnonymousBodiesVector` in `prover/circuits/audit`.
 
-### Each tag has its form
+### Each anonymous tag has its form
 
 - The circuit holds a live recipient's tag to `Poseidon(CRRT, CRDS_i)` and the bundle's to `Poseidon(CRST, CRDS_m)`, in `DeliverRecipients`. The live flag is computed, so a slot cannot take the dummy path.
 - The circuit holds a hidden dummy's tag to `Poseidon(CRRT, s)` for a witness `s`, and proves no random sampling. Deliberate encoding through `s` stays open to a sender.
