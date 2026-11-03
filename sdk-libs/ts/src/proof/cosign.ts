@@ -2,7 +2,6 @@ import type { Address } from "@solana/kit";
 
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type { SettlementTransfer } from "@heliuslabs/zolana/transaction";
 
 import {
@@ -15,38 +14,23 @@ import {
 import { RingError } from "../protocol/error.js";
 import { fetchRingCoSignerRecord } from "../protocol/membership/config.js";
 
-/** Describes the operation classes and withdrawal amounts requiring approval. */
 export interface CoSignDemand {
   readonly classes: number;
-  /** Each withdrawn mint once, SOL under the zero address. */
-  readonly withdrawals: readonly Readonly<{ mint: Address; amount: bigint }>[];
 }
 
 export const TRANSFER_DEMAND: CoSignDemand = Object.freeze({
   classes: RING_COSIGN_TRANSFERS,
-  withdrawals: Object.freeze([]),
 });
 export const DEPOSIT_DEMAND: CoSignDemand = Object.freeze({
   classes: RING_COSIGN_DEPOSITS,
-  withdrawals: Object.freeze([]),
 });
 
-/** Rust `CoSignDemand::transact`, a transfer plus each public leg's class and withdrawal. */
+/** Rust `CoSignDemand::transact`, a transfer plus each public leg's class. */
 export function transactDemand(transfers: readonly SettlementTransfer[]): CoSignDemand {
   let classes = RING_COSIGN_TRANSFERS;
-  const totals = new Map<Address, bigint>();
-  for (const transfer of transfers) {
+  for (const transfer of transfers)
     classes |= transfer.isDeposit ? RING_COSIGN_DEPOSITS : RING_COSIGN_WITHDRAWALS;
-    if (transfer.isDeposit) continue;
-    const mint = transfer.kind === "sol" ? SOL_MINT : transfer.mint;
-    totals.set(mint, (totals.get(mint) ?? 0n) + transfer.amount);
-  }
-  return Object.freeze({
-    classes,
-    withdrawals: Object.freeze(
-      [...totals].map(([mint, amount]) => Object.freeze({ mint, amount })),
-    ),
-  });
+  return Object.freeze({ classes });
 }
 
 /** Rust `CoSignRequirement`, one `CoSigner` record must satisfy it. */
@@ -59,7 +43,7 @@ type RequirementInput = Readonly<{
   config: RingPolicy;
   demand: CoSignDemand;
   approvalRequired: boolean;
-  /** Only a verified exemption proof waives the withdrawal class. */
+  /** The exempt flag waives the withdrawal class, the transfer proof binds it. */
   withdrawalExempt?: boolean;
 }>;
 
@@ -67,8 +51,7 @@ type RequirementInput = Readonly<{
 export function coSignRequirement(input: RequirementInput): CoSignRequirement | undefined {
   const covered = input.config.coSignerClasses ?? 0;
   let shared = covered & input.demand.classes;
-  if (input.withdrawalExempt === true || input.demand.withdrawals.length === 0)
-    shared &= ~RING_COSIGN_WITHDRAWALS;
+  if (input.withdrawalExempt === true) shared &= ~RING_COSIGN_WITHDRAWALS;
   if (shared !== 0) return Object.freeze({ kind: "covering", classes: shared });
   if (!input.approvalRequired) return undefined;
   if (covered === 0) throw coSignerRequired(input.ringProgramId, "approvalWithoutCoSigner");

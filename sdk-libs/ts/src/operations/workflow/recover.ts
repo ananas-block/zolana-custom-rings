@@ -25,7 +25,7 @@ import { createdDepositUtxo, createdRingUtxos } from "./created-utxos.js";
 import { openRingDepositOpening, ringDepositOutput } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
-import { RowOrigins } from "../audit/row-origins.js";
+import { rowDisposition, RowOrigins } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
@@ -127,7 +127,7 @@ export async function recoverRingMemberNotes(
         continue;
       const mint = registeredMint(input.assets, utxo.mint);
       if (mint === undefined) {
-        // Ownership and spentness stay known without the asset preimage.
+        // The opening derives its nullifier, without a registered mint the note stays unspendable.
         if (utxo.mint !== undefined) found.unknownMints.add(utxo.mint);
         found.unresolve(context.hash, input.nullifierKey.nullifier(context.hash, utxo.blinding));
         continue;
@@ -277,7 +277,8 @@ async function recoverDeposits(
         let opening;
         try {
           opening = openRingDepositOpening(capsule, input.auditor, deposit.ownerUtxoHash, binding);
-        } catch {
+        } catch (error) {
+          if (rowDisposition(error) === "retry") throw error;
           unsupported.push(commitment);
           continue;
         }

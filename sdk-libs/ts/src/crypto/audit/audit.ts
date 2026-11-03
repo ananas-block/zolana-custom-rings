@@ -74,42 +74,68 @@ export interface AuditorMessage {
   readonly records: readonly Uint8Array[];
 }
 
-/** Two Poseidon outputs supply 31 key bytes, then one key byte and a 12-byte nonce. */
+/** One label and secret fix one schedule, each region applies it at its own counter. */
+export class AuditSchedule {
+  readonly #key: Uint8Array;
+  readonly #nonce: Uint8Array;
+
+  private constructor(key: Uint8Array, nonce: Uint8Array) {
+    this.#key = key;
+    this.#nonce = nonce;
+  }
+
+  /** Two Poseidon outputs supply 31 key bytes, then one key byte and a 12-byte nonce. */
+  static derive(secret: Bytes32, label: Uint8Array): AuditSchedule {
+    checkLabel(label);
+    const tag = new Uint8Array(STREAM_LABEL_BYTES + 1);
+    tag.set(label);
+    let head: Uint8Array | undefined;
+    let tail: Uint8Array | undefined;
+    try {
+      head = poseidon([rightAlign(tag), secret]);
+      tag[STREAM_LABEL_BYTES] = 1;
+      tail = poseidon([rightAlign(tag), secret]);
+      const key = new Uint8Array(32);
+      key.set(head.subarray(1), 0);
+      key[31] = tail[19] ?? 0;
+      return new AuditSchedule(key, tail.slice(20));
+    } finally {
+      tag.fill(0);
+      head?.fill(0);
+      tail?.fill(0);
+    }
+  }
+
+  apply(firstCounter: number, data: Uint8Array): Uint8Array {
+    checkCounter(firstCounter);
+    const counter = new Uint8Array(16);
+    try {
+      counter.set(this.#nonce, 0);
+      counter.set(u32be(firstCounter), 12);
+      return ctr(this.#key, counter).encrypt(copyBytes(data));
+    } finally {
+      counter.fill(0);
+    }
+  }
+
+  destroy(): void {
+    this.#key.fill(0);
+    this.#nonce.fill(0);
+  }
+}
+
 export function symmetricAuditApply(
   secret: Bytes32,
   position: StreamPosition,
   data: Uint8Array,
 ): Uint8Array {
-  const { label, counter: firstCounter } = position;
-  if (label.length !== STREAM_LABEL_BYTES)
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "label" });
-  if (
-    !Number.isInteger(firstCounter) ||
-    firstCounter < STREAM_FIRST_COUNTER ||
-    firstCounter > U32_MAX
-  )
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "counter" });
-  const tag = new Uint8Array(STREAM_LABEL_BYTES + 1);
-  tag.set(label);
-  const key = new Uint8Array(32);
-  const counter = new Uint8Array(16);
-  let head: Uint8Array | undefined;
-  let tail: Uint8Array | undefined;
+  checkLabel(position.label);
+  checkCounter(position.counter);
+  const schedule = AuditSchedule.derive(secret, position.label);
   try {
-    head = poseidon([rightAlign(tag), secret]);
-    key.set(head.subarray(1), 0);
-    tag[STREAM_LABEL_BYTES] = 1;
-    tail = poseidon([rightAlign(tag), secret]);
-    key[31] = tail[19] ?? 0;
-    counter.set(tail.subarray(20), 0);
-    counter.set(u32be(firstCounter), 12);
-    return ctr(key, counter).encrypt(copyBytes(data));
+    return schedule.apply(position.counter, data);
   } finally {
-    tag.fill(0);
-    key.fill(0);
-    counter.fill(0);
-    head?.fill(0);
-    tail?.fill(0);
+    schedule.destroy();
   }
 }
 
@@ -143,14 +169,15 @@ export function sealAuditorStream(
   const { auditorPublicKey } = input;
   const ephemeral = X25519Keypair.generate();
   let shared: Bytes32 | undefined;
+  let schedule: AuditSchedule | undefined;
   try {
     const ephemeralPublicKey = ephemeral.publicKey();
     shared = envelopeSecret(ephemeral, auditorPublicKey, ephemeralPublicKey, auditorPublicKey);
-    const secret = shared;
-    const seal = ({ counter, bytes }: AuditorRegion): Uint8Array =>
-      symmetricAuditApply(secret, { label: AUDIT_ENC_INFO, counter }, bytes);
-    const envelope = seal({ counter: STREAM_FIRST_COUNTER, bytes: input.envelope });
-    const records = Object.freeze(input.records.map(seal));
+    const stream = (schedule = AuditSchedule.derive(shared, AUDIT_ENC_INFO));
+    const envelope = stream.apply(STREAM_FIRST_COUNTER, input.envelope);
+    const records = Object.freeze(
+      input.records.map(({ counter, bytes }) => stream.apply(counter, bytes)),
+    );
     return Object.freeze({
       ephemeralSecret: ephemeral.secretBytes(),
       ephemeralPublicKey,
@@ -160,6 +187,25 @@ export function sealAuditorStream(
   } finally {
     ephemeral.destroy();
     shared?.fill(0);
+    schedule?.destroy();
+  }
+}
+
+/** The schedule `sealAuditorStream` encrypted under, the caller destroys it. */
+export function auditorSchedule(
+  auditor: X25519Keypair,
+  ephemeralPublicKey: X25519PublicKey,
+): AuditSchedule {
+  const shared = envelopeSecret(
+    auditor,
+    ephemeralPublicKey,
+    ephemeralPublicKey,
+    auditor.publicKey(),
+  );
+  try {
+    return AuditSchedule.derive(shared, AUDIT_ENC_INFO);
+  } finally {
+    shared.fill(0);
   }
 }
 
@@ -169,18 +215,11 @@ export function openAuditorRegions(
   ephemeralPublicKey: X25519PublicKey,
   regions: readonly AuditorRegion[],
 ): readonly Uint8Array[] {
-  const shared = envelopeSecret(
-    auditor,
-    ephemeralPublicKey,
-    ephemeralPublicKey,
-    auditor.publicKey(),
-  );
+  const schedule = auditorSchedule(auditor, ephemeralPublicKey);
   try {
-    return regions.map(({ counter, bytes }) =>
-      symmetricAuditApply(shared, { label: AUDIT_ENC_INFO, counter }, bytes),
-    );
+    return regions.map(({ counter, bytes }) => schedule.apply(counter, bytes));
   } finally {
-    shared.fill(0);
+    schedule.destroy();
   }
 }
 
@@ -281,6 +320,16 @@ export function openMergeDisclosureFields(
 ): Uint8Array {
   const chunks = applyDisclosurePad(key, salt, fields, false, MERGE_DISCLOSURE_DOMAIN);
   return unpackDisclosure(chunks, chunks.length * DISCLOSURE_CHUNK_BYTES);
+}
+
+function checkLabel(label: Uint8Array): void {
+  if (label.length !== STREAM_LABEL_BYTES)
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "label" });
+}
+
+function checkCounter(counter: number): void {
+  if (!Number.isInteger(counter) || counter < STREAM_FIRST_COUNTER || counter > U32_MAX)
+    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "counter" });
 }
 
 function envelopeSecret(

@@ -21,7 +21,7 @@ import {
 } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
-import { RowOrigins } from "../audit/row-origins.js";
+import { rowEventIndex, RowOrigins } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
@@ -103,9 +103,7 @@ export function createdRingUtxos(
     case "merge": {
       const { disclosure, transaction } = confirmed;
       if (disclosure === undefined) return Object.freeze([]);
-      if (transaction.eventIndex === undefined)
-        throw new RingError("RING_RPC", { details: { reason: "missing event index" } });
-      const merge = confirmedMerge(transaction, transaction.eventIndex, disclosure);
+      const merge = confirmedMerge(transaction, rowEventIndex(transaction), disclosure);
       const opening = disclosedMergeOpening(input, merge, disclosure);
       const utxo: KnownUtxo = Object.freeze({
         ownerKey: addressBytes(opening.ownerKey) as Bytes32,

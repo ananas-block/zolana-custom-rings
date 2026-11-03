@@ -1,14 +1,21 @@
 /** The evidence and record codecs of the auditor stream, Rust `custom_ring_interface::audit_stream`. */
 import {
   BN254_SCALAR_ORDER,
+  clampViewingSecret,
   isCanonicalField,
   bigIntToBytes,
   bytesToBigInt,
   checkedBytes,
   concatBytes,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes32, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  ViewingKey,
+  type Bytes32,
+  type X25519Keypair,
+  type X25519PublicKey,
+} from "@heliuslabs/zolana/keypair";
 
+import { RingError } from "../../protocol/error.js";
 import { RingKeyError } from "../error.js";
 import {
   ANONYMOUS_RECORD_LEN,
@@ -29,10 +36,12 @@ import {
 } from "../../protocol/codec/ring-disclosure-layout.js";
 
 import {
-  openAuditorRegions,
+  auditorSchedule,
   sealAuditorStream,
+  type AuditSchedule,
   type AuditorEnvelope,
   type AuditorMessage,
+  type AuditorRegion,
 } from "./audit.js";
 
 export type DummySlot = Readonly<{ kind: "dummy" }>;
@@ -101,6 +110,12 @@ export type RingDisclosure =
       inputs: AnonymousInputs;
       outputs: readonly AnonymousOutputOpening[];
     }>;
+
+/** `layout` is the one the program verified. */
+export interface PublishedAudit {
+  readonly layout: AuditStreamLayout;
+  readonly message: AuditorMessage;
+}
 
 /** The plaintexts of one auditor stream behind `tx_viewing_sk`. */
 export interface DisclosurePlaintext {
@@ -183,26 +198,65 @@ export function sealRingDisclosure(
 /** Opens the evidence and every record under the layout the program verified. */
 export function openRingDisclosure(
   auditor: X25519Keypair,
-  published: Readonly<{ layout: AuditStreamLayout; message: AuditorMessage }>,
+  published: PublishedAudit,
 ): RingDisclosure {
-  const { layout, message } = published;
-  const slots = recordSlots(checkedLayout(layout));
-  if (message.records.length !== slots.length) throw shapeError("records");
-  const [envelope, ...records] = openAuditorRegions(auditor, message.ephemeralPublicKey, [
-    { counter: STREAM_FIRST_COUNTER, bytes: message.envelope },
-    ...slots.map((slot, index) => ({
-      counter: recordRegion(layout, slot).startCounter,
-      bytes: required(message.records[index]),
-    })),
-  ]);
+  const regions = recordRegions(published);
+  const stream = openStream(auditor, published.message);
   try {
-    return decodeDisclosure(layout, {
-      evidence: required(envelope).subarray(ENVELOPE_KEY_LEN),
-      records,
-    });
+    return disclosureOf(published.layout, stream, regions);
   } finally {
-    envelope?.fill(0);
-    for (const record of records) record.fill(0);
+    closeStream(stream);
+  }
+}
+
+/** @internal Rust `OpenedAudit`, the evidence and records read from the envelope's schedule. */
+export class OpenedAudit {
+  readonly #stream: OpenedStream;
+  readonly #published: PublishedAudit;
+
+  constructor(
+    readonly txViewingKey: ViewingKey,
+    stream: OpenedStream,
+    published: PublishedAudit,
+  ) {
+    this.#stream = stream;
+    this.#published = published;
+  }
+
+  disclosure(): RingDisclosure {
+    return disclosureOf(this.#published.layout, this.#stream, recordRegions(this.#published));
+  }
+
+  destroy(): void {
+    this.txViewingKey.destroy();
+    closeStream(this.#stream);
+  }
+}
+
+/** @internal Rust `AuditEnvelope::open`, one agreement and one schedule behind the key and the disclosure. */
+export function openAuditEnvelope(auditor: X25519Keypair, published: PublishedAudit): OpenedAudit {
+  const stream = openStream(auditor, published.message);
+  try {
+    const secret = stream.envelope.slice(0, ENVELOPE_KEY_LEN) as Bytes32;
+    return new OpenedAudit(canonicalViewingKey(secret), stream, published);
+  } catch (error) {
+    closeStream(stream);
+    throw error;
+  }
+}
+
+/** Wipes `recovered`, the circuit seals the clamped encoding and an alias is refused. */
+export function canonicalViewingKey(recovered: Bytes32): ViewingKey {
+  const canonical = clampViewingSecret(recovered);
+  try {
+    let difference = 0;
+    for (let index = 0; index < ENVELOPE_KEY_LEN; index++)
+      difference |= (recovered[index] ?? 0) ^ (canonical[index] ?? 0);
+    if (difference !== 0) throw new RingError("RING_AUDIT_NONCANONICAL_KEY");
+    return ViewingKey.fromBytes(recovered);
+  } finally {
+    canonical.fill(0);
+    recovered.fill(0);
   }
 }
 
@@ -281,6 +335,49 @@ const BODY: DeliveredOutputOpening = Object.freeze({ kind: "body" });
 const DUMMY: DummySlot = Object.freeze({ kind: "dummy" });
 /** No canonical hash has a larger prefix. */
 const MAX_INPUT_PREFIX = BN254_SCALAR_ORDER >> BigInt(8 * INPUT_PREFIX_BYTES);
+
+interface OpenedStream {
+  readonly schedule: AuditSchedule;
+  readonly envelope: Uint8Array;
+}
+
+function openStream(
+  auditor: X25519Keypair,
+  message: Pick<AuditorMessage, "ephemeralPublicKey" | "envelope">,
+): OpenedStream {
+  const schedule = auditorSchedule(auditor, message.ephemeralPublicKey);
+  return { schedule, envelope: schedule.apply(STREAM_FIRST_COUNTER, message.envelope) };
+}
+
+function closeStream({ schedule, envelope }: OpenedStream): void {
+  envelope.fill(0);
+  schedule.destroy();
+}
+
+function recordRegions({ layout, message }: PublishedAudit): readonly AuditorRegion[] {
+  const slots = recordSlots(checkedLayout(layout));
+  if (message.records.length !== slots.length) throw shapeError("records");
+  return slots.map((slot, index) => ({
+    counter: recordRegion(layout, slot).startCounter,
+    bytes: required(message.records[index]),
+  }));
+}
+
+function disclosureOf(
+  layout: AuditStreamLayout,
+  { schedule, envelope }: OpenedStream,
+  regions: readonly AuditorRegion[],
+): RingDisclosure {
+  const records = regions.map(({ counter, bytes }) => schedule.apply(counter, bytes));
+  try {
+    return decodeDisclosure(layout, {
+      evidence: envelope.subarray(ENVELOPE_KEY_LEN),
+      records,
+    });
+  } finally {
+    for (const record of records) record.fill(0);
+  }
+}
 
 /** A structural layout names one key of the catalog, its counts within what that key serves. */
 function checkedLayout(layout: AuditStreamLayout): AuditStreamLayout {

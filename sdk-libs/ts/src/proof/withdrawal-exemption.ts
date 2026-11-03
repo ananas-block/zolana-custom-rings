@@ -5,6 +5,7 @@ import { equalBytes } from "@heliuslabs/zolana/internal";
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import type { MemberRecord, RecordPool } from "../protocol/membership/member-registry.js";
 import { coSignRequirement, type CoSignDemand } from "./cosign.js";
+import { RING_COSIGN_WITHDRAWALS } from "../protocol/codec/ring-codecs.js";
 
 /** `true` when waiving the withdrawals leaves no co-signer demand, approval and the other classes stay. */
 export function waivesCoSigner(
@@ -17,7 +18,7 @@ export function waivesCoSigner(
 ): boolean {
   const required = (withdrawalExempt: boolean) => coSignRequirement({ ...input, withdrawalExempt });
   return (
-    input.demand.withdrawals.length > 0 &&
+    (input.demand.classes & RING_COSIGN_WITHDRAWALS) !== 0 &&
     required(false) !== undefined &&
     required(true) === undefined
   );

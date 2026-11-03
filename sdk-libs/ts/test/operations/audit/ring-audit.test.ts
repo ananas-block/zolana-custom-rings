@@ -1,5 +1,5 @@
 import { getAddressEncoder, type Address, type Signature } from "@solana/kit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import anonymous from "../../../../../test-vectors/audit/audit-disclosure-anonymous.json" with { type: "json" };
 import delivered from "../../../../../test-vectors/audit/audit-disclosure-delivered.json" with { type: "json" };
@@ -46,9 +46,12 @@ import {
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   AUDIT_ENC_INFO,
+  AuditSchedule,
   auditSharedSecret,
   auditorMessageData,
   openTransactionViewingSecret,
+  parseAuditorMessage,
+  sealAuditorStream,
   symmetricAuditApply,
 } from "../../../src/crypto/audit/audit.js";
 import { ciphertextDigest } from "../../../src/protocol/proof/statement.js";
@@ -57,6 +60,8 @@ import {
   disclosurePlaintext,
   inputPrefix,
   inputPrefixes,
+  openAuditEnvelope,
+  openRingDisclosure,
   sealRingDisclosure,
   type InputPrefix,
   type RingDisclosure,
@@ -67,7 +72,9 @@ import {
   auditRing,
   auditRingTransaction,
   auditedUtxos,
+  hasUnknownAssets,
   knownUtxoHash,
+  openRingTransfer,
   type AuditedInput,
   type AuditedUtxo,
   type EscrowedKeys,
@@ -464,6 +471,153 @@ describe("auditor envelope", () => {
   });
 });
 
+describe("openAuditEnvelope", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(VECTORS)("returns the key and disclosure of $layout $vector.name", (entry) => {
+    const auditor = X25519Keypair.generate();
+    const transaction = vectorTransaction(entry, auditor.publicKey());
+    const layout = entry.bound;
+    const message = parseAuditorMessage(transaction.messages.at(-1)!.data, layout);
+    const opened = openAuditEnvelope(auditor, { layout, message });
+    expect(opened.txViewingKey.secretBytes()).toEqual(field(entry.vector.tx_viewing_sk));
+    expect(opened.disclosure()).toEqual(openRingDisclosure(auditor, { layout, message }));
+    opened.destroy();
+    expect(() => opened.txViewingKey.secretBytes()).toThrow();
+  });
+
+  it.each(VECTORS)("audits $layout $vector.name under one agreement and schedule", (entry) => {
+    const auditor = X25519Keypair.generate();
+    const transaction = vectorTransaction(entry, auditor.publicKey());
+    const ecdh = vi.spyOn(auditor, "ecdh");
+    const derive = vi.spyOn(AuditSchedule, "derive");
+    auditRingTransaction({
+      auditor,
+      transaction,
+      assets: vectorAssets(entry.vector),
+      layout: entry.bound,
+    });
+    expect(ecdh).toHaveBeenCalledTimes(1);
+    expect(derive.mock.calls.filter(([, label]) => label === AUDIT_ENC_INFO)).toHaveLength(1);
+  });
+
+  it("refuses a forged published key before the evidence decodes", () => {
+    const auditor = X25519Keypair.generate();
+    const entry = vectorOf("anonymous", "commitment");
+    const plaintext = disclosurePlaintext(vectorDisclosure(entry));
+    const sealed = sealAuditorStream({
+      auditorPublicKey: auditor.publicKey(),
+      envelope: Uint8Array.of(
+        ...field(entry.vector.tx_viewing_sk),
+        ...new Uint8Array(plaintext.evidence.length).fill(0xff),
+      ),
+      records: recordSlots(entry.bound).map((slot, index) => ({
+        counter: recordRegion(entry.bound, slot).startCounter,
+        bytes: plaintext.records[index]!,
+      })),
+    });
+    const forged = (transaction: IndexedShieldedTransaction) => ({
+      ...transaction,
+      messages: [auditorMessageData(sealed, auditor.publicKey())],
+    });
+    expect(() => audit(entry, { auditor, transaction: forged })).toThrow(
+      expect.objectContaining({ code: "KEYPAIR_DISCLOSURE_FIELD" }),
+    );
+    expect(() =>
+      audit(entry, {
+        auditor,
+        transaction: (transaction) => ({
+          ...forged(transaction),
+          txViewingPublicKey: X25519Keypair.generate().publicKey(),
+        }),
+      }),
+    ).toThrow(ringError("RING_AUDIT_KEY_MISMATCH"));
+    sealed.ephemeralSecret.fill(0);
+  });
+});
+
+describe("OpenedRingTransfer.withAssets", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function withInputMints(vector: Vector): AssetRegistry {
+    const assets = vectorAssets(vector);
+    const spent = "inputs" in vector ? vector.inputs : [];
+    spent.forEach((input, index) => {
+      if (assets.addressForField(field(input.asset)) === undefined)
+        assets.register(BigInt(index + 100), encodeBase58(field(input.asset_address)));
+    });
+    return assets;
+  }
+
+  it("names the mint of a known note stored without one", () => {
+    const auditor = X25519Keypair.generate();
+    const entry = vectorOf("anonymous", "commitment");
+    const known = spentUtxos(entry.vector, new AssetRegistry());
+    const opened = openRingTransfer({
+      auditor,
+      transaction: vectorTransaction(entry, auditor.publicKey()),
+      assets: new AssetRegistry(),
+      layout: entry.bound,
+      knownUtxos: known,
+    });
+    const assets = withInputMints(entry.vector);
+    const named = (inputs: readonly AuditedInput[]) =>
+      inputs.flatMap(({ opening }) =>
+        opening.kind === "opened" && opening.mint !== undefined ? [opening.mint] : [],
+      );
+    expect(named(opened.withAssets(assets).inputs).length).toBeGreaterThan(
+      named(opened.audited.inputs).length,
+    );
+    expect(hasUnknownAssets(opened.withAssets(assets))).toBe(false);
+  });
+
+  describe.each([
+    ["without", (): EscrowedKeys | undefined => undefined],
+    ["with", (vector: Vector) => escrowRecords(vector)],
+  ] as const)("%s escrow records", (_, escrow) => {
+    it.each(VECTORS)("matches a new audit of $layout $vector.name", (entry) => {
+      const auditor = X25519Keypair.generate();
+      const escrowedKeys = escrow(entry.vector);
+      const fields = {
+        auditor,
+        transaction: vectorTransaction(entry, auditor.publicKey()),
+        layout: entry.bound,
+        knownUtxos: spentUtxos(entry.vector, withInputMints(entry.vector)),
+        ...(escrowedKeys === undefined ? {} : { escrowedKeys }),
+      };
+      const opened = openRingTransfer({ ...fields, assets: new AssetRegistry() });
+      const assets = withInputMints(entry.vector);
+      const ecdh = vi.spyOn(auditor, "ecdh");
+      const resolved = opened.withAssets(assets);
+      expect(ecdh).not.toHaveBeenCalled();
+      expect(resolved).toEqual(auditRingTransaction({ ...fields, assets }));
+    });
+  });
+
+  it("opens a delivered slot a registered mint rebuilds and keeps published order", () => {
+    const auditor = X25519Keypair.generate();
+    const entry = vectorOf("delivered", "dense");
+    const opened = openRingTransfer({
+      auditor,
+      transaction: vectorTransaction(entry, auditor.publicKey()),
+      assets: new AssetRegistry(),
+      layout: entry.bound,
+    });
+    const closed = opened.audited.payloadErrors.map(({ slotIndex }) => slotIndex);
+    expect(closed.length).toBeGreaterThan(0);
+    const resolved = opened.withAssets(vectorAssets(entry.vector));
+    expect(resolved.payloadErrors).toEqual([]);
+    expect(resolved.outputs.map(({ slotIndex }) => slotIndex)).toEqual(
+      entry.vector.slots.map((_, index) => index),
+    );
+    expect(opened.withAssets(new AssetRegistry())).toEqual(opened.audited);
+  });
+});
+
 describe("the shared auditor stream vectors", () => {
   it.each(VECTORS)("rebuilds the stream of the $layout case $vector.name", (entry) => {
     const { vector, bound: layout } = entry;
@@ -638,6 +792,16 @@ describe("auditRingTransaction over the shared disclosure vectors", () => {
       })),
     });
     expect(audited.payloadErrors).toEqual([{ slotIndex: 0, kind: "unknownAsset" }]);
+  });
+
+  it("keeps a delivered slot closed until its mint is registered", () => {
+    const entry = vectorOf("delivered", "dense");
+    const audited = audit(entry, { assets: new AssetRegistry() });
+    const closed = audited.payloadErrors.map(({ slotIndex }) => slotIndex);
+    expect(closed).toContain(1);
+    expect(audited.outputs.map(({ slotIndex }) => slotIndex)).not.toContain(1);
+    expect(hasUnknownAssets(audited)).toBe(true);
+    expect(audited.outputCommitments[1]).toEqual(field(entry.vector.slots[1]!.output_hash));
   });
 
   it("names a registered mint and leaves an unregistered one to a refresh", () => {
@@ -1352,6 +1516,48 @@ describe("auditRing", () => {
     }
   });
 
+  it("repeats no agreement or schedule across the refresh", async () => {
+    const auditor = X25519Keypair.generate();
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
+    const ecdh = vi.spyOn(auditor, "ecdh");
+    const derive = vi.spyOn(AuditSchedule, "derive");
+    const getProgramAccounts = vi.fn(() => ({ send: async () => [] }));
+    try {
+      const page = await scan([transfer], transfers, {
+        auditor,
+        assets: new AssetRegistry(),
+        solanaRpc: { getProgramAccounts },
+      });
+      expect(page.transactions).toHaveLength(1);
+      expect(getProgramAccounts).toHaveBeenCalledTimes(1);
+      expect(ecdh).toHaveBeenCalledTimes(1);
+      expect(derive.mock.calls.filter(([, label]) => label === AUDIT_ENC_INFO)).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("opens a row on a retry once the RPC serves its auditor message", async () => {
+    const auditor = X25519Keypair.generate();
+    const transfer = vectorTransaction(PAIR, auditor.publicKey());
+    const assets = new AssetRegistry([[2n, FOREIGN_MINT]]);
+    let served = false;
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async (transaction, ring) =>
+        transfers.confirmedTransaction(
+          served ? transaction : { ...transaction, messages: [] },
+          ring,
+        ),
+    };
+    await expect(scan([transfer], origin, { auditor, assets })).rejects.toThrow(
+      ringError("RING_AUDIT_MESSAGE", { reason: "missing" }),
+    );
+    served = true;
+    const page = await scan([transfer], origin, { auditor, assets });
+    expect(page.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
+    expect(page.skipped).toEqual([]);
+  });
+
   it("follows the cursor to the page that states its frontier and stops at the page cap", async () => {
     const auditor = X25519Keypair.generate();
     const first = vectorTransaction(PAIR, auditor.publicKey());
@@ -1817,6 +2023,94 @@ describe("recoverRingMemberNotes", () => {
       disclosed.ephemeralSecret.fill(0);
       disclosed.disclosureKey.fill(0);
       auditor.destroy();
+    }
+  });
+
+  it("reports a deposit that does not open and stops at an error no row explains", async () => {
+    const auditor = X25519Keypair.generate();
+    const entry = vectorOf("anonymous", "commitment");
+    const vector = anonymousCase("commitment");
+    const deposited = vector.inputs[0]!;
+    const signature = "2".repeat(87) as Signature;
+    const sealed = sealRingDepositOpenings(
+      [
+        {
+          ownerHash: field(deposited.owner_hash),
+          blinding: field(deposited.blinding),
+          ownerKey: field(vector.sender_key),
+          recipientCiphertext: Uint8Array.of(1),
+        },
+      ],
+      auditor.publicKey(),
+    );
+    const owner = ownerUtxoHash(field(deposited.owner_hash), field(deposited.blinding));
+    const deposits = ConfirmedDeposit.fromTransaction(
+      confirmedDepositTransaction(RING, signature, sealed.capsules, [owner]),
+      signature,
+      0,
+      RING,
+    );
+    const deposit: IndexedShieldedTransaction = {
+      slot: 5n,
+      txSignature: signature,
+      eventIndex: 0,
+      proofless: true,
+      ringProgramId: RING,
+      nullifiers: [],
+      messages: [],
+      outputSlots: [
+        {
+          viewTag: new Uint8Array(32) as Bytes32,
+          outputContext: {
+            hash: field(deposited.commitment),
+            tree: treeAddress(deposited.input_tree_id),
+            treeId: deposited.input_tree_id,
+            leafIndex: 0n,
+          },
+          payload: ringDepositPayload({
+            ring: RING,
+            ownerCommitment: owner,
+            asset: encodeBase58(field(deposited.asset_address)),
+            amount: BigInt(deposited.amount),
+            capsule: sealed.capsules[0]!,
+          }),
+        },
+      ],
+    };
+    const recovered = () =>
+      recover({
+        owner: ShieldedKeypair.generate(),
+        auditor,
+        transaction: vectorTransaction(entry, auditor.publicKey()),
+        history: [deposit],
+        origin: {
+          confirmedTransaction: async (indexed) =>
+            indexed.txSignature === signature
+              ? { kind: "deposit", transaction: indexed, deposits }
+              : {
+                  kind: "transfer",
+                  transaction: indexed,
+                  inputTreeIds: indexed.nullifiers.map(() => undefined),
+                  layout: entry.bound,
+                },
+        },
+      });
+    const authenticate = vi.spyOn(ConfirmedDeposit.prototype, "authenticate");
+    try {
+      authenticate.mockImplementation(() => {
+        throw new RingError("RING_AUDIT_MESSAGE");
+      });
+      await expect(recovered()).resolves.toMatchObject({
+        unsupportedDeposits: [field(deposited.commitment)],
+      });
+      const bug = new TypeError("no row explains it");
+      authenticate.mockImplementation(() => {
+        throw bug;
+      });
+      await expect(recovered()).rejects.toBe(bug);
+    } finally {
+      vi.restoreAllMocks();
+      sealed.ephemeralSecret.fill(0);
     }
   });
 
