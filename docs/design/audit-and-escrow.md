@@ -9,10 +9,20 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 - On the confidential and authority rails the proof also shows each delivered body opens for the viewing key the output publishes. The body holds the blinding, the amount, the owner key and the nullifier key. Under key escrow it omits the nullifier key.
 - The recipient compares the decrypted keys with its own before it accepts the note. Under key escrow it compares the owner key and rebuilds the commitment with its own nullifier key.
 - On the anonymous rail a record in the stream opens each output's owner, asset, amount and nullifier key. An exit's record opens its asset, its amount and, off key escrow, its nullifier key.
-- The stream names each spent note by its hash or a prefix on the anonymous rail, and by a prefix on the in-proof and authority rails. An anonymous spend of default-ring notes opens every spent note. The signer rail names no spent note.
-- Every output has one ring disclosure ciphertext, and the statement chains them.
-- No proof checks an anonymous output's recipient body. A sender can settle an output the auditor opens and its recipient cannot.
+- The stream names each spent note by its hash or a prefix on the anonymous rail, and by a prefix on the in-proof and authority rails. An anonymous spend of default-ring notes opens every spent note.
 - The program builds the ring statement from the frame it forwards to SPP, so the proof binds the transfer that settles. The policy and the withdrawal thresholds are sections of the same proof, switched by the policy hash and the exempt flag.
+
+## Verified audit recovery
+
+- Every slot of a transfer whose proof verifies opens for the auditor.
+- One ring disclosure ciphertext per slot is the guarantee, and the statement chains these ciphertexts.
+- Anonymous recipient and sender ciphertexts and exit recipient bodies are zolana ciphertexts, and no ring proof binds them. A sender can settle an output the auditor opens and its recipient cannot.
+- The signer rail discloses no spent note.
+- Tracing by prefix can stay ambiguous or unseen. Several ring notes can carry one prefix, and the auditor can lack the note a prefix or a full hash names.
+- An unseen note leaves every output open on every rail. A transfer read before its note marks the input with its hash or prefix.
+- Under the anonymous commitment key an unseen first note leaves the sender unnamed, because only that note binds the owner key. A later read with the note names the sender and opens the input.
+- A key escrow slot gives its proven owner key, amount and blinding before the auditor reads the owner's escrow record, and the asset of an exit. Its commitment is not rebuilt, and the asset of a ring output stays unknown, because a delivered body omits the asset and only the nullifier key finds it.
+- Ring RPC derives a note's nullifier from a secret nullifier key to decide that the note is spendable. It decides this only for an owner whose key it holds.
 
 ## Deposits and merges
 

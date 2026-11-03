@@ -2,6 +2,16 @@
 
 A ring transfer opens to the auditor through one AES-256-CTR stream and its delivered bodies. The stream's envelope region seals the transaction viewing secret and, off the signer rail, names the spent notes. Its record regions open the outputs that carry no delivered body. [Spec](../../spec.md) [Envelope](envelope.md)
 
+## Verified audit recovery
+
+Every slot of a transfer whose proof verifies opens for the auditor. One ring disclosure ciphertext per slot is the guarantee.
+
+- Anonymous recipient and sender ciphertexts and exit recipient bodies are zolana ciphertexts, and no ring proof binds them.
+- The signer rail discloses no spent note.
+- Tracing by prefix can stay ambiguous or unseen. Several ring notes can carry one prefix, and the auditor can lack the note a prefix or `hash_0` names. An unseen note withholds no output slot.
+- A key escrow slot needs its owner's nullifier key to rebuild its commitment. Until the auditor reads the owner's escrow record, the slot gives the proven owner key, amount and blinding, and the asset of an exit. A delivered body omits the asset, so the asset of a ring output stays unknown until the key arrives.
+- Ring RPC derives a note's nullifier from a secret nullifier key to decide that the note is spendable. It decides this only for an owner whose key it holds.
+
 ## Auditor message
 
 The auditor message data, under the auditor view tag, is:
@@ -49,10 +59,10 @@ Slots at or past `n` stay absent. Spent notes come first in SPP's order and publ
 ## Spent notes
 
 - The commitment key discloses `hash_0`, the full hash of the first spent note, and the 16-byte prefix of every other.
-- The auditor finds `hash_0` among the notes it opened before and matches every prefix among the sender's ring notes. Several matches leave candidates, and no match fails the audit of the transaction.
+- The auditor finds `hash_0` among the notes it opened before and matches every prefix among the sender's ring notes. Several matches leave candidates, and no match leaves the input unseen with its hash or prefix.
+- While `hash_0` is unseen the transfer names no sender, because no opened note binds the owner key. Its outputs open, and the auditor matches each prefix among all the ring notes it opened. A later read with the note names the sender and opens the input.
 - The in-proof and authority rails disclose a prefix for each spent note. The auditor matches each among the ring notes it opened, and no match leaves the input unseen.
 - The entry key spends default-ring notes, which the auditor never opened. It discloses every spent note's amount, asset and blinding, and the sender's key and nullifier key. The circuit holds every entry input to that one nullifier key.
-- The signer rail discloses no spent note.
 
 ## Records
 
@@ -83,7 +93,7 @@ The body omits the asset. A reader tries each asset it knows against the commitm
 | Hidden dummy, confidential family | random delivered body | 72 or 104 |
 | Hidden dummy, anonymous family | auditor record over a zero plaintext | 104 |
 
-Anonymous outputs and exits also keep zolana's recipient ciphertexts, and no ring proof opens those. The anonymous family pins key escrow to `0`, so its exit record has 72 bytes.
+The anonymous family pins key escrow to `0`, so its exit record has 72 bytes.
 
 ## Opening a transfer
 
@@ -91,7 +101,7 @@ Anonymous outputs and exits also keep zolana's recipient ciphertexts, and no rin
 2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
 3. It rebuilds each slot secret from `tx_viewing_sk` and the published `u`, then opens each delivered body. A slot whose commitment is the dummy hash under its blinding opens as a hidden dummy.
 4. It opens each record at its counter from the stream.
-5. It rebuilds each output commitment from the opened fields and the blinding. Under key escrow the escrow records give the output nullifier keys.
+5. It rebuilds each output commitment from the opened fields and the blinding. Under key escrow the escrow records give the output nullifier keys, and a slot whose record the auditor has not read keeps its opened fields without a rebuilt commitment.
 
 ## Layout bits
 

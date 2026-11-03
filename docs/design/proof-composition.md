@@ -131,19 +131,39 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
   equal to the hidden sender` and `TestConfidentialRailsSolve/in-proof on an audit-only ring`.
 - Spent input ownership and order. Private source, the opened input slots. Constraint, `SpentBySender`
   under `in_proof OR delegate`, every slot a dummy on the signer rail, `Spend` in `audit/anonymous.go` on
-  the anonymous rail, `assertFollowsUtxo` on both, so entry k names nullifier k. Tests,
-  `TestDummyBetweenSpentInputsIsRefused`, `TestConfidentialRefusals/in-proof input of another owner`, `delegate move
+  the anonymous rail, `assertFollowsUtxo` on both. Entry k names nullifier k only across both proofs,
+  `assertFollowsUtxo` keeps the opened UTXOs ahead of the dummies, SPP's `AssertDummiesLast` keeps its
+  slots the same way and the reopened `private_tx_hash` fixes the UTXO order. The signer rail opens no
+  input and transmits no entry. Tests, `TestDummyBetweenSpentInputsIsRefused`,
+  `TestConfidentialRefusals/in-proof input of another owner`, `delegate move
   with a second member's input`, `delegate move without a spent input`, `signer rail opening an input`
   and `TestAnonymousRefusals/commitment key spending a default-ring note`.
 - Settled outputs. Source, SPP's `private_tx_hash` from the frame, bound by SPP's own proof. Field,
   `private_tx_hash`. Constraint, `transfer.bindTransaction` over `shared.UtxoHashes` of the slots the audit
   opened, with the input chain of the rail. Tests, `TestExitEntersBothProjections` and
   `TestDummySlotEntersTheOutputChainOnly`.
+- Output blinding seed. Source, SPP's private `blinding_seed`, `Transaction.Constrain` in
+  `zolana/prover/server/circuits/spp_transaction/shared/transaction.go` holds every output slot's blinding
+  to `TXOB` under it on the confidential, anonymous and authority rails, a dummy's included. Private
+  source, `tx_viewing_sk` and the salt. Fields, `n0`, `txpk0`, `txpk1`, `salt` and `output_chain`.
+  Constraint, `AssertBlinding` in `audit/audit.go` holds every published slot to `TXOB` over
+  `CRBS(tx_viewing_sk, salt)` without a slot gate. The program hands SPP the hashes `output_chain` covers
+  and a ring rail publishes no compact padding, so equal slot hashes make the sealed key's seed SPP's
+  seed on a transfer with no note. SPP derives `private_tx_blinding` from the same seed, the reopened
+  `private_tx_hash` then fixes that witness with no constraint of its own. The readers rebuild every
+  slot's commitment from the sealed key, `Transfer::verify` in `sdk-libs/client/src/crypto/decrypt/mod.rs`
+  and `verify` in `sdk-libs/ts/src/operations/audit/audit.ts`. Tests,
+  `TestConfidentialRefusals/every output a dummy under an unrelated envelope key`,
+  `TestAnonymousRefusals/every output a dummy under an unrelated envelope key`,
+  `TestDeliveredAuditRefusals/dummy blinding off the CRBS seed` and
+  `TestAnonymousAuditRefusals/dummy blinding off the CRBS seed` in `prover/circuits/audit`. No Go test
+  composes this proof with SPP's, the seed equality holds across the program binding.
 - Output openings. Private source, every slot's wires. Fields, `output_chain`,
   `output_ciphertext_chain` and `recipient_key_chain`. Constraint, `shared.UtxoWires.Open` classifies and
   hashes once, `OpenSlots` in `audit/audit.go` hands that `shared.Output` and its `slotBytes`
   to `Deliver` and `AnonymousRecords`, `screenedPolicy.screen` in `transfer/transfer.go` screens the
-  same values. Tests, the audit section refusals in
+  same values. `OpenOutput` and `OpenSlots` hold a UTXO's data hash and ring data to zero, the auditor
+  rebuilds its commitment without either. Tests, the audit section refusals in
   `prover/circuits/audit/delivered_test.go` and `anonymous_test.go`.
 - Recipients. Source, the frame's recipient identities under a policy on the confidential family,
   none on the anonymous family. Fields, `recipient_o`. Constraint, `assertRecipients` under
@@ -179,14 +199,18 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
 - Exits and layout. Source, the exits bitmap of the frame and the key's family. Fields, `layout` and
   `exits_bitmap`. Constraint, `DecodeLayout` pins bit 0 clear and every flag outside the
   free set `decodeLayout` names on each circuit. `exitsBitmap` derives the bitmap from the opened slots,
-  the one record of exits. Tests, `TestLayoutRefusesTheClearBits`, `TestDeliveredAuditRefusals`,
+  the one record of exits. `AssertRingMemberOrFree` in `spp_transaction/shared/ring.go` holds every UTXO's
+  ring id to 0 or the ring's, so `Exit` names a note of the default ring. `AssertRingMember` admits no
+  exit on the authority rail. Tests, `TestLayoutRefusesTheClearBits`, `TestDeliveredAuditRefusals`,
   `TestAnonymousAuditRefusals` and `TestAnonymousRecordsStayOnTheirSlots/changed exit positions` in
   `prover/circuits/audit`.
-- Auditor stream. Source, the ring account's auditor key, the frame's `eph_u`, envelope ciphertext and
-  records. Private source, `tx_viewing_sk`, `eph_sk`, the input slots and the opened output slots.
-  Fields, `aud0`, `aud1`, `eph0`, `eph1`, `txpk0`, `txpk1`, head element 9 `digest(envelope_ct)` and
+- Auditor stream. Source, the ring account's auditor key, the instruction's salt, the frame's `eph_u`,
+  envelope ciphertext and records. Private source, `tx_viewing_sk`, `eph_sk`, the input slots and the
+  opened output slots.
+  Fields, `aud0`, `aud1`, `eph0`, `eph1`, `txpk0`, `txpk1`, `salt`, head element 9 `digest(envelope_ct)` and
   `output_ciphertext_chain`. Constraint, `OpenEnvelope` and `SealStream` in `audit/audit.go` prove one key expansion and one
   `CTREncrypt` under `CRING/adt1` over every region, `envelopeDigest` covers the transmitted bytes.
+  `AssertClamped` keeps one byte string per key, an unclamped alias would key another stream.
   Tests, `TestStatementBindsEveryElement` in `transfer/binding_test.go`, and in `prover/circuits/audit`
   `TestAnonymousEvidenceHoldsInputHashAndPrefixes`, `TestAnonymousEntryEvidenceOpensEachInput`,
   `TestAnonymousRecordsKeepTheirKind` and `TestAnonymousRecordsStayOnTheirSlots`. The circuit proves
@@ -197,16 +221,32 @@ live under `prover/circuits`, tests under `prover/circuits/transfer` unless name
 - Stream ranges. Source, the program derives every length from family, layout, `n_out`, the frame's
   nullifier count and exits bitmap, and refuses a frame of any other length. Fields, `input_count`,
   `exits_bitmap` and `layout`. Constraint, `envelopeDigest` selects the envelope length from the input count, `SealStream` places
-  each record at `R0 + i * R` and `exitsBitmap` derives the bitmap. Tests, in `prover/circuits/audit`
+  each record at `R0 + i * R` and `exitsBitmap` derives the bitmap. A counter serving two regions reveals
+  the XOR of their plaintexts, a digest over another length lets a frame cut what the auditor opens.
+  An entry at or past the count packs as zero. Tests, in `prover/circuits/audit`
   `TestAnonymousAuditRefusals/UTXO input at the input count`,
   `TestAnonymousEvidenceFollowsTheInputCount`, `TestDeliveredSenderEvidenceFollowsTheInputCount`,
   `TestStreamRangesAreTheSharedVector` and `TestStreamRegionsHoldTheirPlaintext`,
   `TestSignerRailEnvelopeIgnoresTheInputCount` in `transfer/transfer_test.go` and
   `the_counts_fix_every_length_and_trailing_bytes_are_refused` in `program-libs/interface/tests/transact.rs`.
+- Input evidence. Private source, the input slots of the anonymous family. Field, head element 9
+  `digest(envelope_ct)`. Constraint, `commitmentEntry` holds spent UTXO 0's hash and the prefix of every
+  other spent hash on a commitment key, `Spend` holds it to notes of the ring. `entryInput` opens every
+  spent UTXO under input 0's nullifier key with no data on an entry key. Tests, in `prover/circuits/audit`
+  `TestAnonymousEvidenceHoldsInputHashAndPrefixes` and `TestAnonymousEntryEvidenceOpensEachInput`.
+- Anonymous records. Private source, the opened slots. Field, `output_ciphertext_chain`. Constraint,
+  `AnonymousRecords` in `audit/anonymous.go` opens a ring output's owner key, asset, amount and nullifier
+  key, an exit's record and zeros on a dummy, `RecordChain` hashes each at the length its kind fixes, the
+  decomposition keeps a UTXO's amount below 2^64. Tests, in `prover/circuits/audit`
+  `TestAnonymousRecordsKeepTheirKind`, `TestAnonymousRecordsStayOnTheirSlots` and
+  `TestAnonymousAmountsStayBelowTwoTo64`.
 - Delivered body. Source, the frame's scheme 10 body and recipient key per slot. Fields,
   `output_ciphertext_chain` and `recipient_key_chain`. Constraint, `deliver` in `audit/delivered.go`
   proves the body under `CRING/bdy1` and the `CRDS` slot secret on a ring output, with no constraint on
-  a dummy's random bytes. `assertOwnerKey` holds the slot's owner to the body's owner key.
+  a dummy's random bytes. The secret binds the agreement, both keys, the salt, the slot and `n0`, no two
+  slots share a keystream. Under key escrow the equality covers the first `EscrowBodyLen` bytes while the
+  cipher runs over the whole body. An exit's record opens its asset and amount, and its nullifier key
+  off key escrow. `assertOwnerKey` holds the slot's owner to the body's owner key.
   `slotCiphertextHash` picks the body or the exit record at the length key escrow fixes, and
   `recipientKeyFields` masks the key off an exit. Tests, in
   `prover/circuits/audit`, `TestDeliveredAuditRefusals/body encrypting another amount`,
