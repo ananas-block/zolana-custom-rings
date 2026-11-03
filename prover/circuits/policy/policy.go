@@ -12,7 +12,9 @@ import (
 )
 
 type PolicyInputs struct {
-	OwnOnly         bool `gnark:"-"`
+	OwnOnly bool `gnark:"-"`
+	// Senders counts the owners the key screens, the pool holds a row for each.
+	Senders         int `gnark:"-"`
 	WithdrawalCount frontend.Variable
 	WithdrawalHash  frontend.Variable
 	Withdrawals     []WithdrawalWires
@@ -40,15 +42,19 @@ type Policy struct {
 	CuratorProof       registry.SharedQuadProof
 	OwnSubjects        []PoolSubject
 	CuratorSubjects    []PoolSubject
-	SenderEntry        PoolEntry
+	SenderEntries      []PoolEntry
 	OwnerEntries       []PoolEntry
 	AssetEntries       []PoolEntry
 	PublicAssetEntries []frontend.Variable
 }
 
-// NewPolicyInputs sizes the statement wires of a policy over outputs output slots and withdrawals legs.
-func NewPolicyInputs(outputs, withdrawals int, ownOnly bool) PolicyInputs {
-	return PolicyInputs{OwnOnly: ownOnly, CtHashes: make([]frontend.Variable, outputs), Recipients: make([]frontend.Variable, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
+type InputsShape struct {
+	Outputs, Withdrawals, Senders int
+	OwnOnly                       bool
+}
+
+func (s InputsShape) Inputs() PolicyInputs {
+	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, CtHashes: make([]frontend.Variable, s.Outputs), Recipients: make([]frontend.Variable, s.Outputs), Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
 }
 
 // NewPolicy sizes the record pools, capacity zero fields take the shape's limits.
@@ -65,10 +71,13 @@ func NewPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) 
 		CuratorRecords:     make([]registry.Record, capacity.Curator),
 		OwnSubjects:        make([]PoolSubject, capacity.OwnSubjects),
 		CuratorSubjects:    make([]PoolSubject, capacity.CuratorSubjects),
-		SenderEntry:        newPoolEntry(inputs.OwnOnly),
+		SenderEntries:      make([]PoolEntry, inputs.Senders),
 		OwnerEntries:       make([]PoolEntry, payments),
 		AssetEntries:       make([]PoolEntry, payments),
 		PublicAssetEntries: make([]frontend.Variable, publicAssets),
+	}
+	for i := range p.SenderEntries {
+		p.SenderEntries[i] = newPoolEntry(inputs.OwnOnly)
 	}
 	for i := range p.OwnerEntries {
 		p.OwnerEntries[i], p.AssetEntries[i] = newPoolEntry(inputs.OwnOnly), newPoolEntry(inputs.OwnOnly)
@@ -98,6 +107,9 @@ func (p *Policy) Validate(publicAssets int) error {
 	if len(p.Recipients) != len(p.CtHashes) {
 		return fmt.Errorf("policy requires one recipient per output")
 	}
+	if p.Senders == 0 || len(p.SenderEntries) != p.Senders {
+		return fmt.Errorf("policy requires one reference per screened sender")
+	}
 	if len(p.PublicAssetEntries) != publicAssets {
 		return fmt.Errorf("policy requires one public asset reference per public slot")
 	}
@@ -112,7 +124,7 @@ func (p *Policy) Validate(publicAssets int) error {
 			return err
 		}
 	}
-	for _, entry := range slices.Concat([]PoolEntry{p.SenderEntry}, p.OwnerEntries, p.AssetEntries) {
+	for _, entry := range slices.Concat(p.SenderEntries, p.OwnerEntries, p.AssetEntries) {
 		if err := entry.validate(p.OwnOnly); err != nil {
 			return err
 		}

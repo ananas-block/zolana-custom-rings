@@ -75,7 +75,7 @@ func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
 	outputs, withdrawals := len(p.CtHashes), len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
-	distinct := 1 + outputs + withdrawals + outputs
+	distinct := p.Senders + outputs + withdrawals + outputs
 	limits := RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets)}
 	if !p.OwnOnly {
 		limits.Curator = distinct + withdrawalAssets
@@ -108,29 +108,46 @@ type pooledRecord struct {
 	onList              [NSources]frontend.Variable
 	mintPolicy          mintPolicyWires
 	withdrawalThreshold frontend.Variable
+	addressHash         frontend.Variable
 }
 
-const pooledColumns = 5 + NSources
+// recordColumns picks the fields a pool's lookups read, the leaf hash still covers the whole record.
+type recordColumns struct {
+	width   int
+	project func(api frontend.API, record registry.Record) []frontend.Variable
+}
+
+var (
+	ownColumns = recordColumns{width: 6 + NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
+		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
+		return pooledRecord{escrowKey: record.EscrowKey, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: record.AddressHash}.columns()
+	}}
+	// A curator lookup reads list bits alone, every other field binds through the leaf hash only.
+	curatorColumns = recordColumns{width: NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
+		onList := sourceLists(api, record.Lists)
+		return onList[:]
+	}}
+)
 
 type pooledTable struct {
 	active frontend.Variable
 	table  *lookup.Table
 }
 
-type recordPool struct{ pooledTable }
+type recordPool struct {
+	pooledTable
+	width int
+}
 
 type subjectPool struct{ pooledTable }
 
-func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof) recordPool {
+func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof, columns recordColumns) recordPool {
 	api.AssertIsBoolean(active)
-	pool := recordPool{pooledTable{active: active, table: lookup.New(api, 2+pooledColumns)}}
+	pool := recordPool{pooledTable{active: active, table: lookup.New(api, 2+columns.width)}, columns.width}
 	leaves := make([]frontend.Variable, len(records))
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
-		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		onList := sourceLists(api, record.Lists)
-		row := pooledRecord{escrowKey: record.EscrowKey, onList: onList, mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold}
-		pool.table.Insert(row.columns(record.Member, record.Next))
+		pool.table.Insert(append([]frontend.Variable{record.Member, record.Next}, columns.project(api, record)...))
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
@@ -163,49 +180,43 @@ func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Vari
 	return p.table.Lookup(query.index)
 }
 
-func (p recordPool) resolve(api frontend.API, query recordQuery) pooledRecord {
+func (p recordPool) resolve(api frontend.API, query recordQuery) []frontend.Variable {
 	row := p.lookup(api, query)
-	result := pooledRecordAt(row[2:])
 	present := api.IsZero(api.Sub(row[0], query.member))
 	ringgadget.AssertOrderedWhen(api, api.Mul(query.active, api.Sub(1, present)), row[0], query.member, row[1])
-	live := api.Mul(query.active, present)
-	return result.gated(api, live)
+	// An absent member reads zeros whatever its predecessor holds.
+	return gated(api, api.Mul(query.active, present), row[2:])
 }
 
-func (r pooledRecord) columns(prefix ...frontend.Variable) []frontend.Variable {
-	row := append(prefix, r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove, r.withdrawalThreshold)
-	return append(row, r.onList[:]...)
+func (r pooledRecord) columns() []frontend.Variable {
+	return append([]frontend.Variable{r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove, r.withdrawalThreshold, r.addressHash}, r.onList[:]...)
 }
 
 func pooledRecordAt(columns []frontend.Variable) pooledRecord {
-	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}, withdrawalThreshold: columns[4]}
-	copy(record.onList[:], columns[5:])
+	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}, withdrawalThreshold: columns[4], addressHash: columns[5]}
+	copy(record.onList[:], columns[6:])
 	return record
 }
 
-func (r pooledRecord) gated(api frontend.API, active frontend.Variable) pooledRecord {
-	for i, bit := range r.onList {
-		r.onList[i] = api.Mul(active, bit)
+func gated(api frontend.API, active frontend.Variable, columns []frontend.Variable) []frontend.Variable {
+	zeroed := make([]frontend.Variable, len(columns))
+	for i, column := range columns {
+		zeroed[i] = api.Mul(active, column)
 	}
-	r.escrowKey = api.Mul(active, r.escrowKey)
-	r.mintPolicy.threshold = api.Mul(active, r.mintPolicy.threshold)
-	r.mintPolicy.cap = api.Mul(active, r.mintPolicy.cap)
-	r.mintPolicy.cosignAbove = api.Mul(active, r.mintPolicy.cosignAbove)
-	r.withdrawalThreshold = api.Mul(active, r.withdrawalThreshold)
-	return r
+	return zeroed
 }
 
 func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubject) subjectPool {
-	pool := subjectPool{pooledTable{active: records.active, table: lookup.New(api, 1+pooledColumns)}}
+	pool := subjectPool{pooledTable{active: records.active, table: lookup.New(api, 1+records.width)}}
 	for _, subject := range subjects {
 		resolved := records.resolve(api, recordQuery{active: records.active, member: subject.Member, index: subject.RecordIndex})
-		pool.table.Insert(resolved.columns(subject.Member))
+		pool.table.Insert(append([]frontend.Variable{subject.Member}, resolved...))
 	}
 	return pool
 }
 
-func (p subjectPool) resolve(api frontend.API, query recordQuery) pooledRecord {
+func (p subjectPool) resolve(api frontend.API, query recordQuery) []frontend.Variable {
 	row := p.lookup(api, query)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: query.active, A: row[0], B: query.member})
-	return pooledRecordAt(row[1:]).gated(api, query.active)
+	return gated(api, query.active, row[1:])
 }

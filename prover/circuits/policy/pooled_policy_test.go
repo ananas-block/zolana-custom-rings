@@ -150,7 +150,7 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 		name   string
 		mutate func(*policy.Policy)
 	}{
-		{"sender subject", func(p *policy.Policy) { p.SenderEntry.Own = 1 }},
+		{"sender subject", func(p *policy.Policy) { p.SenderEntries[0].Own = 1 }},
 		{"owner subject", func(p *policy.Policy) { p.OwnerEntries[1].Own = 0 }},
 		{"asset subject", func(p *policy.Policy) { p.AssetEntries[1].Own = 0 }},
 		{"public subject", func(p *policy.Policy) { p.PublicAssetEntries[0] = 0 }},

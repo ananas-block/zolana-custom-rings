@@ -35,11 +35,13 @@ func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, screened fr
 	screen := newPaymentScreen(api, cmp, resolved, outputs)
 	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
 	assertScalarAssets(api, outputs, api.Mul(screened, table.scalarOwner))
-	// 3. Every active rule holds for its subjects, the sender once and each live output owner or asset.
+	// 3. Every active rule holds for its subjects, each screened sender and each live output owner or asset.
 	for r, rule := range table.rules {
 		active := api.Mul(screened, table.ruleActive[r])
-		// The one sender meets every sender rule, with or without a spent input.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active, rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
+		// Every screened sender meets every sender rule, with or without a spent input or an output.
+		for j, sender := range resolved.senders {
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active, rule.onSender, resolved.liveSenders[j]), V: rule.refuses(api, sender.onList)})
+		}
 		screen.assert(api, rule, api.Mul(active, api.Add(rule.onOwner, rule.onAsset)))
 	}
 }

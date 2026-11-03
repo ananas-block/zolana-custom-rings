@@ -24,13 +24,14 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		{"missing asset references", func(p *Policy) { p.AssetEntries = nil }},
 		{"missing own records", func(p *Policy) { p.OwnRecords = nil }},
 		{"missing own subjects", func(p *Policy) { p.OwnSubjects = nil }},
-		{"missing curator reference", func(p *Policy) { p.SenderEntry.Curator = nil }},
+		{"missing sender references", func(p *Policy) { p.SenderEntries = nil }},
+		{"missing curator reference", func(p *Policy) { p.SenderEntries[0].Curator = nil }},
 		{"oversized own pool", func(p *Policy) { p.OwnRecords = append(p.OwnRecords, p.OwnRecords[0]) }},
 		{"missing public asset references", func(p *Policy) { p.PublicAssetEntries = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := NewPolicy(NewPolicyInputs(2, 0, false), RecordPoolShape{}, transaction.NPublicSlots)
+			p, err := NewPolicy(InputsShape{Outputs: 2, Senders: 4}.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -41,7 +42,7 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		})
 	}
 	t.Run("own registry with curator records", func(t *testing.T) {
-		p, err := NewPolicy(NewPolicyInputs(2, 0, true), RecordPoolShape{}, transaction.NPublicSlots)
+		p, err := NewPolicy(InputsShape{Outputs: 2, Senders: 4, OwnOnly: true}.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
 		if err != nil {
 			t.Fatal(err)
 		}

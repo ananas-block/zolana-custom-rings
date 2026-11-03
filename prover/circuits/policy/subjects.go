@@ -15,10 +15,13 @@ type subjectView struct {
 	onList [NSources]frontend.Variable
 	// escrowKey is the own record's escrow key, zero for an absent member.
 	escrowKey frontend.Variable
+	// addressHash is the own record's bound address, zero for an absent member.
+	addressHash frontend.Variable
 }
 
 type subjects struct {
-	sender         subjectView
+	senders        []subjectView
+	liveSenders    []frontend.Variable
 	owners, assets []subjectView
 	mintPolicies   []mintPolicyWires
 	publicAssets   []publicAsset
@@ -34,6 +37,8 @@ type Rail struct {
 	Delegate frontend.Variable
 	// Published is set when the statement carries every recipient identity, the confidential rails.
 	Published frontend.Variable
+	// Delivery opens the sender's and each output owner's row off a policy, the anonymous rails bind addresses on every ring.
+	Delivery frontend.Variable
 }
 
 // Gates switch the policy sections on, derived once from the rail and policy_hash.
@@ -45,39 +50,51 @@ type Gates struct {
 	// Outflow switches the caps and the approval, screened and off the authority rail.
 	Outflow   frontend.Variable
 	Published frontend.Variable
+	Delivery  frontend.Variable
 }
 
-func (r Rail) gates(api frontend.API, policyHash frontend.Variable) Gates {
+func (r Rail) Gates(api frontend.API, policyHash frontend.Variable) Gates {
 	screened := ringgadget.IsNonZero(api, policyHash)
-	return Gates{Screened: screened, Exempt: r.Exempt, KeyEscrow: r.KeyEscrow, Outflow: api.Mul(screened, api.Sub(1, r.Delegate)), Published: r.Published}
+	return Gates{Screened: screened, Exempt: r.Exempt, KeyEscrow: r.KeyEscrow, Outflow: api.Mul(screened, api.Sub(1, r.Delegate)), Published: r.Published, Delivery: r.Delivery}
 }
 
 // resolveSubjects opens one record per subject the gates activate, an inactive query reads zeros and a pool activates as the OR of its queries.
-func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, sender frontend.Variable, payments []Payment, outputs int) subjects {
-	escrowed := api.Or(g.Screened, g.KeyEscrow)
-	ownActive := api.Or(escrowed, g.Exempt)
-	own := openSubjectPool(api, openRecordPool(api, ownActive, p.OwnRoot, p.OwnRecords, p.OwnProof), p.OwnSubjects)
+func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, senders []frontend.Variable, payments []Payment, escrows []frontend.Variable) subjects {
+	ownActive := ringgadget.IsAny(api, g.Screened, g.KeyEscrow, g.Exempt, g.Delivery)
+	own := openSubjectPool(api, openRecordPool(api, ownActive, p.OwnRoot, p.OwnRecords, p.OwnProof, ownColumns), p.OwnSubjects)
 	var curator subjectPool
 	curated := api.Mul(g.Screened, table.sources.anyForeign)
 	if !p.OwnOnly {
-		curator = openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof), p.CuratorSubjects)
+		curator = openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof, curatorColumns), p.CuratorSubjects)
 	}
 	resolve := func(entry PoolEntry, active, member frontend.Variable) (subjectView, pooledRecord) {
-		record := own.resolve(api, recordQuery{active: active, member: member, index: entry.Own})
-		view := subjectView{onList: record.onList, escrowKey: record.escrowKey}
+		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: member, index: entry.Own}))
+		view := subjectView{onList: record.onList, escrowKey: record.escrowKey, addressHash: record.addressHash}
 		if !p.OwnOnly {
 			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curated), member: member, index: entry.Curator[0]})
-			view.onList = table.sources.lists(api, record.onList, foreign.onList)
+			view.onList = table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))
 		}
 		return view, record
 	}
 	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
-	resolved.sender, _ = resolve(p.SenderEntry, g.Screened, sender)
+	resolved.senders, resolved.liveSenders = make([]subjectView, len(senders)), make([]frontend.Variable, len(senders))
+	for j, sender := range senders {
+		// A zero identity pads the list and carries no rule.
+		resolved.liveSenders[j] = ringgadget.IsNonZero(api, sender)
+		active := api.Mul(g.Screened, resolved.liveSenders[j])
+		if j == 0 {
+			// Delivery reads the first sender's bound address off a policy.
+			active = api.Or(active, g.Delivery)
+		}
+		resolved.senders[j], _ = resolve(p.SenderEntries[j], active, sender)
+	}
+	delivered := api.Or(g.Screened, g.Delivery)
 	for i, pay := range payments {
-		// An escrowed output owner resolves off a policy, a withdrawal owner only under one.
+		// A withdrawal owner resolves only under a policy.
 		ownerActive := api.Mul(pay.Active, g.Screened)
-		if i < outputs {
-			ownerActive = api.Mul(pay.Active, escrowed)
+		if i < len(escrows) {
+			// An escrowed output owner and a delivered output owner resolve off a policy.
+			ownerActive = api.Or(api.Mul(pay.Active, delivered), escrows[i])
 		}
 		resolved.owners[i], _ = resolve(p.OwnerEntries[i], ownerActive, pay.Owner)
 		var record pooledRecord
@@ -88,18 +105,25 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, sen
 		asset := p.PublicAssets[k]
 		// A public asset's record serves the outflow limits under a policy and the withdrawal threshold under an exemption.
 		active := api.Mul(ringgadget.IsNonZero(api, asset), api.Or(g.Screened, g.Exempt))
-		record := own.resolve(api, recordQuery{active: active, member: asset, index: index})
+		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: asset, index: index}))
 		resolved.publicAssets = append(resolved.publicAssets, publicAsset{asset: asset, active: active, policy: record.mintPolicy, withdrawalThreshold: record.withdrawalThreshold})
 	}
 	return resolved
 }
 
-func (p *PolicyInputs) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []shared.Output) {
+func escrowsOwed(api frontend.API, keyEscrow frontend.Variable, outputs []shared.Output) []frontend.Variable {
+	owed := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
-		escrowed := api.Mul(out.Utxo, keyEscrow)
+		owed[o] = shared.EscrowOwed(api, api.Mul(out.Utxo, keyEscrow), out.NullifierPk)
+	}
+	return owed
+}
+
+func (p *PolicyInputs) assertEscrow(api frontend.API, escrows []frontend.Variable, owners []subjectView, outputs []shared.Output) {
+	for o, out := range outputs {
 		key := registry.EscrowKey(api, out.NullifierPk, p.CtHashes[o])
 		// The owner's record escrows Poseidon(nullifier_pk, ct_hash), an absent owner resolves zero and never matches.
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: owners[o].escrowKey, B: key})
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrows[o], A: owners[o].escrowKey, B: key})
 	}
 }
 

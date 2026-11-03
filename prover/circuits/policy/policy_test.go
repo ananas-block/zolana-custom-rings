@@ -45,6 +45,9 @@ func TestPolicySections(t *testing.T) {
 	t.Run("curator", func(t *testing.T) {
 		requireCompiledSolved(t, compiled(t, sectionName(2), section(2)), curated().Build(t))
 	})
+	t.Run("curator absent owners behind a filled predecessor", func(t *testing.T) {
+		requireCompiledSolved(t, compiled(t, sectionName(2), section(2)), curatedAbsent().Build(t))
+	})
 	for _, outputs := range ringpolicy.OutputCapacities {
 		name := sectionName(outputs)
 		t.Run(name+" u64 extremes", func(t *testing.T) {
@@ -139,8 +142,6 @@ var refusals = []struct {
 	{name: "owner record claiming a list it lacks", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) {
 		b.OwnRecord(b.Policy().OwnerEntries[0]).Lists = ringregistry.AllowBit | ringregistry.BlockBit
 	}, in: "registry.SharedQuadProof.AssertLeavesWhen", wide: true},
-	{name: "public deposit above the outflow to others", honest: deposited, world: func(w *ringpolicy.World) { w.Public[0].Amount = 400 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
-	{name: "dummy amount covering a public deposit", honest: dummyDeposit, world: func(w *ringpolicy.World) { w.Public[0].Amount = 150 }, in: "policy.(*PolicyInputs).constrainOutflow"},
 	{name: "withdrawal past the cap", honest: withdrawn, world: func(w *ringpolicy.World) { w.Public[0].Amount = -800 }, in: "policy.(*PolicyInputs).constrainOutflow", wide: true},
 	{name: "approval bit 0 past the co-sign bound", honest: cosigned, world: func(w *ringpolicy.World) { w.ApprovalRequired = false }, in: "ringpolicy.(*SectionCircuit).Define", wide: true},
 	{name: "approval bit 1 within every co-sign bound", honest: ringpolicy.Four, world: func(w *ringpolicy.World) { w.ApprovalRequired = true }, in: "ringpolicy.(*SectionCircuit).Define"},
@@ -182,6 +183,9 @@ var refusals = []struct {
 		b.Policy().OwnRoot = 5
 		b.Rebind(t)
 	}, in: "registry.SharedQuadProof.AssertLeavesWhen"},
+	{name: "curator member behind a filled predecessor on the list", honest: curatedAbsent, world: func(w *ringpolicy.World) {
+		w.Curator[ringpolicy.Alice] = ringpolicy.Record{Lists: ringregistry.BlockBit}
+	}, in: "policy.paymentScreen.assert"},
 	{name: "curator root outside the statement", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) { b.Policy().CuratorRoot = 5 }, in: "ringpolicy.(*SectionCircuit).Define"},
 }
 
@@ -195,9 +199,12 @@ func curated() ringpolicy.World {
 	return w
 }
 
-func deposited() ringpolicy.World {
+// curatedAbsent opens every owner's nonmembership through one record carrying fields the policy never reads.
+func curatedAbsent() ringpolicy.World {
 	w := ringpolicy.Confidential()
-	w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: 100}}
+	w.Table.Curator = map[uint64]bool{ringregistry.BlockBit: true}
+	w.Table.Rules = append(w.Table.Rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
+	w.Curator[ringpolicy.Sender-1] = ringpolicy.Record{Lists: ringregistry.BlockBit, Registered: true, WithdrawalThreshold: 77}
 	return w
 }
 
@@ -231,13 +238,6 @@ func extremes(t testing.TB, outputs int) ringpolicy.Witness {
 func capOnly() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.Table.Limits = []ringpolicy.OutflowLimit{{Asset: ringpolicy.AssetA, Cap: 1000}}
-	return w
-}
-
-func dummyDeposit() ringpolicy.World {
-	w := ringpolicy.Four()
-	w.Slots = append(w.Slots, ringpolicy.Slot{Asset: ringpolicy.AssetA, Amount: 50})
-	w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: 100}}
 	return w
 }
 
