@@ -55,22 +55,22 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
-    anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
+    ring_recipient_output_body, ring_sender_bundle_output_body, AnonymousProofData,
     CustomRingError, RingMode, RingPolicy, RingRail, RingRole, RingTransactData, RING_POLICY,
     RING_POLICY_PDA_SEED,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
     CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
-    DelegateTransferInput, DepositRecipient, FirstContact, InstructionTag, KeyRegistration,
-    MergeProofInput, ProvenRingTransfer, RingClient, RingDeposit, RingDepositReceipt, RingError,
-    RingMergeOperation, RingOperation, RingRegistration,
+    DelegateTransferInput, DepositRecipient, InstructionTag, KeyRegistration, MergeProofInput,
+    ProvenRingTransfer, RingClient, RingDeposit, RingDepositReceipt, RingError, RingMergeOperation,
+    RingOperation, RingRegistration,
 };
 use custom_ring_test_validator::{
     cli::{merged, RingProject, RingToml},
     policy::{
-        owner_member, policy_registry, RegistryWrite, RingNotes, StorageRecords, EMPTY, LIMIT_CAP,
-        LIMIT_COSIGN_ABOVE,
+        owner_member, policy_registry, EnrollAddresses, RegistryWrite, RingNotes, StorageRecords,
+        EMPTY, LIMIT_CAP, LIMIT_COSIGN_ABOVE,
     },
     ring_rpc::RingRpcSpec,
     ring_wallet::RingWallet,
@@ -790,12 +790,9 @@ impl AuditLookup<'_> {
 struct AnonymousPayment<'a> {
     ring: CustomRing,
     sender: &'a ShieldedKeypair,
-    /// The sender's counterparties pick the payment's tag.
-    history: &'a ViewingHistory,
     payer: Address,
     inputs: Vec<WalletUtxo>,
     to: RingAddress,
-    first_contact: FirstContact,
     amount: u64,
 }
 
@@ -813,12 +810,12 @@ impl<'a> AnonymousPayment<'a> {
             nullifier_key: Some(&self.sender.nullifier_key),
             transaction,
         })
-        .with_anonymous_signer(&self.sender.signing_key, self.history)
+        .with_anonymous_signer(&self.sender.signing_key)
         .with_payment(custom_ring_sdk::AnonymousPayment {
             to: self.to,
-            first_contact: self.first_contact,
             asset: Mint::SOL,
             amount: self.amount,
+            reply: None,
         })?
         .with_shape(shape)?)
     }
@@ -832,13 +829,10 @@ struct PaymentLanding<'a> {
 
 struct LandedPayment {
     indexed: ShieldedTransaction,
-    /// The sender's history past the payment's tags, stored before it was sent.
-    history: ViewingHistory,
 }
 
 impl PaymentLanding<'_> {
     fn land(self, env: &TestEnv) -> Result<LandedPayment> {
-        let history = self.transfer.viewing_history()?;
         let signature = Landing {
             operation: self.transfer.into(),
             payer: self.payer,
@@ -851,7 +845,6 @@ impl PaymentLanding<'_> {
                 self.auditor_tag,
                 signature,
             ),
-            history,
         })
     }
 }

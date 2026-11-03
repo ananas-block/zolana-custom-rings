@@ -20,17 +20,21 @@ fn a_relayed_anonymous_payment_reaches_its_recipient() -> Result<()> {
     let ring_rpc = relayed.serve()?;
     let (sender, recipient) = (&env.sender.keypair, &env.recipient.keypair);
     let ring_program = relayed.ring.program_id();
+    EnrollAddresses {
+        ring: relayed.ring,
+        owners: &[sender, recipient],
+        env,
+    }
+    .send()?;
     relayed.notes(sender, 2).deposit_hidden_from(&env.payer)?;
     let mut sender_wallet = RingWallet::new(sender, env.ring_assets()?, ring_program);
     sender_wallet.sync(env)?;
     let transfer = AnonymousPayment {
         ring: relayed.ring,
         sender,
-        history: &sender_wallet.history,
         payer: ring_rpc.fee_payer,
         inputs: sender_wallet.unspent().cloned().collect(),
         to: ring_address(recipient, ring_program)?,
-        first_contact: FirstContact::Bootstrap,
         amount: TRANSFER_AMOUNT,
     }
     .transfer()?;

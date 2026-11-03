@@ -9,7 +9,10 @@ use custom_ring_interface::{
     },
     ParsedTransact, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS,
 };
-use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
+use custom_ring_test_validator::{
+    policy::{EnrollAddresses, RingNotes},
+    shared::restart_prover,
+};
 use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
 use spr_test_utils::wallet::create_associated_token_account;
 
@@ -331,8 +334,6 @@ struct ShapeRing<'a> {
     /// Signs and pays every move of the delegate rail.
     delegate: Keypair,
     mode: RingMode,
-    /// The anonymous sender's history, advanced past every proven transfer.
-    sender: std::cell::RefCell<ViewingHistory>,
     escrowed: HashMap<[u8; 32], [u8; 32]>,
 }
 
@@ -399,6 +400,14 @@ impl<'a> ColumnSetup<'a> {
                 .collect::<Result<_>>()?,
             RingMode::Confidential | RingMode::Anonymous => HashMap::new(),
         };
+        if config.mode == RingMode::Anonymous {
+            EnrollAddresses {
+                ring,
+                owners: &[&env.sender.keypair],
+                env,
+            }
+            .send()?;
+        }
         Ok(ShapeRing {
             env,
             ring,
@@ -406,10 +415,6 @@ impl<'a> ColumnSetup<'a> {
             auditor,
             delegate,
             mode: config.mode,
-            sender: std::cell::RefCell::new(ViewingHistory::new(
-                env.sender.keypair.viewing_pubkey(),
-                0,
-            )),
             escrowed,
         })
     }
@@ -985,20 +990,26 @@ impl ShapeRing<'_> {
                     .prove(client),
             ),
             Spend::Rail(RingRail::Anonymous) => {
-                let history = self.sender.borrow().clone();
+                let recipients = payments
+                    .map(|_| ShieldedKeypair::new_ed25519())
+                    .collect::<Result<Vec<_>, _>>()?;
+                EnrollAddresses {
+                    ring: self.ring,
+                    owners: &recipients.iter().collect::<Vec<_>>(),
+                    env,
+                }
+                .send()?;
                 let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)
-                    .with_anonymous_signer(&sender.signing_key, &history);
-                for _ in payments {
+                    .with_anonymous_signer(&sender.signing_key);
+                for recipient in &recipients {
                     anonymous = anonymous.with_payment(custom_ring_sdk::AnonymousPayment {
-                        to: ring_address(&ShieldedKeypair::new_ed25519()?, program)?,
-                        first_contact: custom_ring_sdk::FirstContact::Bootstrap,
+                        to: ring_address(recipient, program)?,
                         asset: env.assets.mint(&asset)?,
                         amount,
+                        reply: None,
                     })?;
                 }
-                let anonymous = anonymous.with_shape(shape)?;
-                *self.sender.borrow_mut() = anonymous.viewing_history()?;
-                env.run(anonymous.prove(client))
+                env.run(anonymous.with_shape(shape)?.prove(client))
             }
             Spend::Rail(RingRail::Delegate) => {
                 ensure!(legs.is_empty(), "the authority rail settles no public leg");

@@ -11,14 +11,15 @@ use custom_ring_cli::{patiently, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
-    storage_instruction::{StorageUpdateIxData, StorageWriteData, UpdateMode},
-    RecordWriteData, RingPolicy, WriteRecordsIxData,
+    storage_instruction::{AddressWriteData, StorageUpdateIxData, StorageWriteData, UpdateMode},
+    AuthorizedAddress, QueueEntry, RecordWriteData, RingPolicy, WriteRecordsIxData,
 };
 use custom_ring_sdk::{
-    CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
-    StorageApplyProof, UpdateStorage,
+    address_enrollment, CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
+    DepositRecipient, EnrollAddress, InitializeStorage, ProvenRingTransfer, RingDeposit,
+    RingDepositReceipt, RingError, StorageApplyProof, UpdateStorage,
 };
+use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
@@ -33,7 +34,7 @@ use zolana_ring_policy::{
 };
 
 use crate::shared::{
-    custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, TestEnv, Tier,
+    custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, SendAs, TestEnv, Tier,
 };
 
 pub const DEPOSIT: u64 = 1_000_000_000;
@@ -327,6 +328,67 @@ impl RegistryWrite<'_> {
     }
 }
 
+/// Each owner's address, signed by the owner, applied and indexed on return, an anonymous sender or recipient needs one.
+pub struct EnrollAddresses<'a> {
+    pub ring: CustomRing,
+    pub owners: &'a [&'a ShieldedKeypair],
+    pub env: &'a TestEnv,
+}
+
+impl EnrollAddresses<'_> {
+    pub fn send(self) -> Result<()> {
+        let env = self.env;
+        let payer = env.payer.pubkey();
+        let registry = InitializeStorage::records(self.ring, payer).registry();
+        let mut writes = Vec::with_capacity(self.owners.len());
+        for owner in self.owners {
+            let address = owner.shielded_address()?;
+            let enrollment = EnrollAddress {
+                payer,
+                owner: owner.pubkey(),
+                registry,
+                nullifier_pk: address.nullifier_pubkey,
+                viewing_u: address.viewing_pubkey.u(),
+            };
+            SendAs {
+                rpc: env.client.rpc(),
+                payer: &env.payer,
+                holder: *owner,
+            }
+            .send(&[enrollment.instruction()])?;
+            let enrolled = env.run(address_enrollment(
+                env.client.as_async(),
+                registry,
+                owner.pubkey(),
+            ))?;
+            writes.push(StorageWriteData::Address(AddressWriteData {
+                owner: owner.pubkey(),
+                address_revision: enrolled.address_revision.to_le_bytes(),
+            }));
+        }
+        StorageRecords {
+            ring: self.ring,
+            writes,
+            env,
+        }
+        .send()?;
+        let deadline = Instant::now() + INDEXING_TIMEOUT;
+        for owner in self.owners {
+            let member = owner_member(owner)?;
+            while !env
+                .member_record(self.ring, member)
+                .is_ok_and(|read| read.address.is_some())
+            {
+                if Instant::now() > deadline {
+                    return Err(anyhow!("the address of {member:?} not indexed"));
+                }
+                sleep(Duration::from_millis(500));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Needs the payer as storage authority of the ring's records.
 pub struct StorageRecords<'a> {
     pub ring: CustomRing,
@@ -353,6 +415,24 @@ impl StorageRecords<'_> {
         }
     }
 
+    /// An address write reads its hash from the owner's authorization.
+    fn entry(&self, registry: Address, write: &StorageWriteData) -> Result<QueueEntry> {
+        let StorageWriteData::Address(address) = write else {
+            return Ok(write.entry()?);
+        };
+        let enrolled = self.env.run(address_enrollment(
+            self.env.client.as_async(),
+            registry,
+            address.owner,
+        ))?;
+        Ok(address.entry(&AuthorizedAddress {
+            ring_id: enrolled.ring_id.0,
+            nullifier_pk: enrolled.nullifier_pk.0,
+            viewing_u: enrolled.viewing_u.0,
+            address_revision: enrolled.address_revision,
+        })?)
+    }
+
     pub fn send(self) -> Result<Signature> {
         let env = self.env;
         let authority = env.payer.pubkey();
@@ -360,7 +440,7 @@ impl StorageRecords<'_> {
         let writes = self
             .writes
             .iter()
-            .map(|write| Ok(StorageWriteView::from(&write.entry()?)))
+            .map(|write| Ok(StorageWriteView::from(&self.entry(registry, write)?)))
             .collect::<Result<Vec<_>>>()?;
         let request = GetStorageApplyProofInputsRequest {
             registry: registry.into(),
