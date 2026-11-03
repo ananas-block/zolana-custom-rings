@@ -37,6 +37,7 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 - A ring with a delegate requires an escrowed owner for every output, every deposit and every merge.
 - With the secret the auditor computes that owner's nullifiers and links its spends. Ring RPC uses it for managed merges and delegate moves.
 - An escrow key never changes. A write the storage authority signs directly can escrow a key the auditor cannot open.
+- Ring RPC refuses a second escrow key, and the records circuit keeps a nonzero one. A secret sealed under an older schedule stays bound to its record, so a schedule change needs a fresh records registry or a fresh deployment.
 
 ## Why the audit stays provable
 

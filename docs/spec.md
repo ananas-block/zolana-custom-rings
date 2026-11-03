@@ -403,7 +403,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 23. A passkey reader's record is keyed by a hash of its tagged key. Ed25519 and passkey readers share one record space.
 24. Wallet scope admits the anonymous sender, a confidential spender and the owner of an output. A key that only signs or pays is no party to the transfer.
 25. One Ring RPC process serves a ring. Its store serializes co-sign admission and keeps spent replay nonces across a restart, so no allowance is granted twice and no nonce is accepted twice.
-26. No instruction migrates an older ring layout. Rings are created fresh, and the repository forbids compatibility shims.
+26. No instruction migrates an older ring layout. Rings are created fresh, and the repository forbids compatibility shims. A change to the register key schedule needs a fresh records registry or a fresh deployment, because a member with an escrow key cannot register again.
 27. `Initialize` creates the ring account, binds the records and registers the ring with SPP in one instruction. No half-created ring exists.
 28. Ring RPC creates the ring's records tree under its storage authority, and `Initialize` binds it. The program accepts any storage registry as the records, so whoever binds them picks the records writer, and a tree written outside Ring RPC skips its checks.
 29. One Poseidon schedule under a 10-byte label keys the auditor stream, the delivered body, the register key and the deposit. Merge keeps zolana's schedule and its field pad.
