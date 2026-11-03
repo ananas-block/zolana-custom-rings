@@ -1,5 +1,6 @@
 use core::fmt;
 
+use custom_ring_interface::InputPrefix;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -27,7 +28,7 @@ pub struct AuditedTransaction {
     /// Published order, a slot that did not open sits in `payload_errors` instead.
     pub outputs: Vec<AuditedOutput>,
     pub payload_errors: Vec<OutputPayloadError>,
-    /// `None` outside the anonymous rail.
+    /// `None` outside the anonymous rail and while `hash_0` names a note the auditor lacks.
     pub sender: Option<AuditedSender>,
     /// One per published nullifier, empty on the signer rail whose evidence names no input.
     pub inputs: Vec<AuditedInput>,
@@ -50,6 +51,26 @@ pub enum OutputOpening {
     /// A default-ring note, its owner the published owner tag.
     Exit(AuditedUtxo),
     Dummy,
+    /// A key escrow slot before its owner's record is read, its proof fixes the fields and no hash rebuilds.
+    EscrowPending(EscrowPendingOutput),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct EscrowPendingOutput {
+    pub owner_key: [u8; 32],
+    pub amount: u64,
+    pub blinding: [u8; 32],
+    pub slot: EscrowPendingSlot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscrowPendingSlot {
+    /// A delivered body omits the asset, only the nullifier key finds it.
+    Ring { recipient_u: [u8; 32] },
+    Exit {
+        asset: [u8; 32],
+        mint: Option<Address>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,9 +152,13 @@ pub enum InputOpening {
     Ambiguous {
         candidates: Vec<[u8; 32]>,
     },
-    /// The in-proof and authority rails name a note no opened output holds, the outputs still open.
+    /// Too few opened notes carry the disclosed prefix, the outputs still open.
     Unseen {
-        prefix: u128,
+        prefix: InputPrefix,
+    },
+    /// The commitment key's `hash_0` names a note the auditor lacks, the sender stays unnamed.
+    UnseenHash {
+        hash: [u8; 32],
     },
 }
 
@@ -141,8 +166,15 @@ impl InputOpening {
     pub fn opened(&self) -> Option<&AuditedInputOpening> {
         match self {
             Self::Opened(opening) => Some(opening),
-            Self::Dummy | Self::Ambiguous { .. } | Self::Unseen { .. } => None,
+            Self::Dummy
+            | Self::Ambiguous { .. }
+            | Self::Unseen { .. }
+            | Self::UnseenHash { .. } => None,
         }
+    }
+
+    pub fn is_unseen(&self) -> bool {
+        matches!(self, Self::Unseen { .. } | Self::UnseenHash { .. })
     }
 }
 
@@ -190,8 +222,8 @@ pub enum OutputPayloadErrorKind {
     RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// The auditor holds no escrowed key for the owner.
-    EscrowUnknown,
+    /// No held asset rebuilds a delivered body's commitment, a registry refresh may name it.
+    UnknownAsset,
 }
 
 impl AuditedTransaction {
@@ -220,6 +252,10 @@ impl AuditedTransaction {
             .filter_map(|input| input.opening.opened())
             .map(|opening| opening.mint);
         outputs.chain(inputs).any(|mint| mint.is_none())
+            || self
+                .payload_errors
+                .iter()
+                .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
     }
 }
 
@@ -227,7 +263,7 @@ impl OutputOpening {
     pub fn utxo(&self) -> Option<&AuditedUtxo> {
         match self {
             Self::Ring { utxo, .. } | Self::Exit(utxo) => Some(utxo),
-            Self::Dummy => None,
+            Self::Dummy | Self::EscrowPending(_) => None,
         }
     }
 }
@@ -329,6 +365,23 @@ impl fmt::Debug for AuditedUtxo {
             .field("blinding", &REDACTED)
             .field("data_hash", data_hash)
             .field("ring_data_hash", ring_data_hash)
+            .finish()
+    }
+}
+
+impl fmt::Debug for EscrowPendingOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            owner_key,
+            amount,
+            blinding: _,
+            slot,
+        } = self;
+        f.debug_struct("EscrowPendingOutput")
+            .field("owner_key", owner_key)
+            .field("amount", amount)
+            .field("blinding", &REDACTED)
+            .field("slot", slot)
             .finish()
     }
 }

@@ -171,7 +171,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
         .iter()
         .filter_map(|output| match &output.opening {
             OutputOpening::Ring { utxo, .. } => Some((output.slot_index, utxo.owner_key)),
-            OutputOpening::Exit(_) | OutputOpening::Dummy => None,
+            OutputOpening::Exit(_) | OutputOpening::Dummy | OutputOpening::EscrowPending(_) => None,
         })
         .collect();
     assert_eq!(owners.len(), 2, "change and recipient stay in the ring");

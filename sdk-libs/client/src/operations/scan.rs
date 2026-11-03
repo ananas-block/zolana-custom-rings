@@ -8,6 +8,7 @@ use std::{
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
+use solana_signature::Signature;
 use spr_client::{AsyncRpc, ClientError, IndexerRpcConfig, RingHistoryOptions};
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use spr_transaction::ShieldedTransaction;
@@ -27,6 +28,15 @@ use crate::{
 pub struct ScanPage<T> {
     pub transactions: Vec<T>,
     pub next_cursor: Option<Vec<u8>>,
+    pub skipped: Vec<SkippedRow>,
+}
+
+/// A row that opened nothing, the read goes past it.
+#[derive(Debug)]
+pub struct SkippedRow {
+    pub tx_signature: Signature,
+    pub event_index: u16,
+    pub error: AuditError,
 }
 
 pub type RingScanPage = ScanPage<ShieldedTransaction>;
@@ -76,7 +86,49 @@ impl Pages {
         Ok(ScanPage {
             transactions,
             next_cursor: cursor,
+            skipped: Vec::new(),
         })
+    }
+}
+
+impl SkippedRow {
+    /// `Err` when `error` must stop the read instead.
+    pub(crate) fn of(row: &ShieldedTransaction, error: AuditError) -> Result<Self, AuditError> {
+        if !error.is_row_failure() {
+            return Err(error);
+        }
+        Ok(Self {
+            tx_signature: row.tx_signature,
+            event_index: row.event_index.ok_or(AuditError::MissingEventIndex)?,
+            error,
+        })
+    }
+}
+
+pub(crate) struct RowOrigins<'a, O> {
+    pub origin: &'a O,
+    pub ring: Address,
+    pub skipped: Vec<SkippedRow>,
+}
+
+impl<O: TransactionOrigin> RowOrigins<'_, O> {
+    /// `None` once the row is in `skipped`.
+    pub(crate) async fn read(
+        &mut self,
+        row: &ShieldedTransaction,
+    ) -> Result<Option<RingOrigin>, AuditError> {
+        let event_index = row.event_index.ok_or(AuditError::MissingEventIndex)?;
+        match self
+            .origin
+            .origin(row.tx_signature, event_index, self.ring)
+            .await
+        {
+            Ok(confirmed) => Ok(Some(confirmed)),
+            Err(error) => {
+                self.skipped.push(SkippedRow::of(row, error)?);
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -148,16 +200,18 @@ impl RingHistory<'_> {
         })
         .await?;
         let mut bound = Vec::new();
+        let mut origins = RowOrigins {
+            origin,
+            ring,
+            skipped: page.skipped,
+        };
         for mut transaction in page.transactions {
             if transaction.ring_program_id != Some(ring) {
                 continue;
             }
-            let event_index = transaction
-                .event_index
-                .ok_or(AuditError::MissingEventIndex)?;
-            let confirmed = origin
-                .origin(transaction.tx_signature, event_index, ring)
-                .await?;
+            let Some(confirmed) = origins.read(&transaction).await? else {
+                continue;
+            };
             if !confirmed.ring_invoked || !kinds.contains(&confirmed.event.kind()) {
                 continue;
             }
@@ -167,6 +221,7 @@ impl RingHistory<'_> {
         Ok(ScanPage {
             transactions: bound,
             next_cursor: page.next_cursor,
+            skipped: origins.skipped,
         })
     }
 }
@@ -257,6 +312,7 @@ impl RingScan {
                 .map(|(transaction, _)| transaction)
                 .collect(),
             next_cursor: page.next_cursor,
+            skipped: page.skipped,
         })
     }
 
@@ -274,23 +330,32 @@ impl RingScan {
         let escrowed = core::mem::take(&mut self.escrowed);
         let page = self.confirmed(indexer, origin).await?;
         let mut transactions = Vec::with_capacity(page.transactions.len());
+        let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
-            let trees = confirmed.event.input_tree_ids(transaction);
-            let audited = TransactionAudit::new(transaction, confirmed.audit_stream(mode)?)
-                .with_input_trees(&trees)?
-                .with_known_utxos(&known)
-                .with_escrowed_keys(&escrowed)
-                .run(auditor, assets)?;
-            known.extend(
-                audited
-                    .utxos()
-                    .map(|created| (created.commitment, created.utxo)),
-            );
-            transactions.push(audited);
+            let opened = confirmed.audit_stream(mode).and_then(|layout| {
+                let trees = confirmed.event.input_tree_ids(transaction);
+                TransactionAudit::new(transaction, layout)
+                    .with_input_trees(&trees)?
+                    .with_known_utxos(&known)
+                    .with_escrowed_keys(&escrowed)
+                    .run(auditor, assets)
+            });
+            match opened {
+                Ok(audited) => {
+                    known.extend(
+                        audited
+                            .utxos()
+                            .map(|created| (created.commitment, created.utxo)),
+                    );
+                    transactions.push(audited);
+                }
+                Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
+            }
         }
         Ok(ScanPage {
             transactions,
             next_cursor: page.next_cursor,
+            skipped,
         })
     }
 
@@ -325,15 +390,19 @@ impl RingScan {
         })
         .await?;
         let mut transactions = Vec::new();
+        let mut origins = RowOrigins {
+            origin,
+            ring: self.ring_program_id,
+            skipped: page.skipped,
+        };
         for mut tx in page.transactions {
             // A row of another ring never reaches the origin read.
             if tx.ring_program_id != Some(self.ring_program_id) {
                 continue;
             }
-            let event_index = tx.event_index.ok_or(AuditError::MissingEventIndex)?;
-            let confirmed = origin
-                .origin(tx.tx_signature, event_index, self.ring_program_id)
-                .await?;
+            let Some(confirmed) = origins.read(&tx).await? else {
+                continue;
+            };
             if confirmed.requires_audit() {
                 confirmed.bind_transaction(&mut tx, self.ring_program_id)?;
                 if !tx
@@ -349,6 +418,7 @@ impl RingScan {
         Ok(ScanPage {
             transactions,
             next_cursor: page.next_cursor,
+            skipped: origins.skipped,
         })
     }
 }

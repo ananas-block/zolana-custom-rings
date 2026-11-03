@@ -17,7 +17,7 @@ use crate::{
     merge_audit::MergeOutput,
     origin::{ConfirmedDeposit, ConfirmedEventKind, RingOrigin, TransactionOrigin},
     recover::deposit_output,
-    scan::{RingHistory, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
+    scan::{RingHistory, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
     types::{CreatedUtxo, KnownUtxo, UtxoOwner},
     AuditError,
 };
@@ -79,6 +79,7 @@ pub struct CreatedNotes {
 pub struct CreatedUtxoPage {
     pub utxos: Vec<CreatedUtxo>,
     pub next_cursor: Option<Vec<u8>>,
+    pub skipped: Vec<SkippedRow>,
 }
 
 /// A deposit output beside the confirmed bindings of its transaction.
@@ -144,19 +145,23 @@ impl<'a> CreatedUtxoScan<'a> {
         .bound(indexer, origin)
         .await?;
         let mut utxos = Vec::new();
+        let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
-            utxos.extend(
-                CreatedUtxos {
-                    transaction,
-                    origin: confirmed,
-                    ring,
-                }
-                .open(auditor)?,
-            );
+            let opened = CreatedUtxos {
+                transaction,
+                origin: confirmed,
+                ring,
+            }
+            .open(auditor);
+            match opened {
+                Ok(created) => utxos.extend(created),
+                Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
+            }
         }
         Ok(CreatedUtxoPage {
             utxos,
             next_cursor: page.next_cursor,
+            skipped,
         })
     }
 }

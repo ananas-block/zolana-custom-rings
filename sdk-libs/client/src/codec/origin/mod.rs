@@ -18,8 +18,8 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
-    tag as ring_tag, AuditStreamLayout, CustomRingError, InstructionTag, ParsedTransact, RingMode,
-    RingRail, RingTransactData,
+    tag as ring_tag, transact_flag, AuditStreamLayout, CustomRingError, InstructionTag,
+    ParsedTransact, RingMode, RingRail, RingTransactData,
 };
 
 /// What a confirmed transaction says about its ring, its signers and the value it settled out.
@@ -305,12 +305,7 @@ fn bind_withdrawal_owners(
     }
     let (spp, _) = TransactIxDataRef::parse_with_external_data_prefix(&source.data[1..])
         .map_err(|e| AuditError::InvalidTransactData(e.to_string()))?;
-    let mode = if spp.circuit.is_anonymous() {
-        RingMode::Anonymous
-    } else {
-        RingMode::Confidential
-    };
-    let parsed = parse_frame(mode, frame)?;
+    let parsed = parse_frame(forwarded_mode(&spp, frame), frame)?;
     let Some(policy) = parsed.data().policy else {
         return Ok(());
     };
@@ -363,6 +358,17 @@ fn parse_frame(mode: RingMode, frame: &[u8]) -> Result<ParsedTransact<'_>, Audit
         .and_then(|tag| RingRail::of(tag, mode))
         .map_err(invalid)?;
     RingTransactData::parse(data, rail).map_err(invalid)
+}
+
+/// An in-proof confidential frame forwards `AnonymousRingEddsa`, only its `OWNER_IN_PROOF` flag names the rail.
+fn forwarded_mode(spp: &TransactIxDataRef<'_>, frame: &[u8]) -> RingMode {
+    let in_proof = frame
+        .get(1 + transact_flag::BYTE)
+        .is_some_and(|flags| flags & transact_flag::OWNER_IN_PROOF != 0);
+    match spp.circuit.is_anonymous() && !in_proof {
+        true => RingMode::Anonymous,
+        false => RingMode::Confidential,
+    }
 }
 
 fn is_legacy(frame: &[u8]) -> bool {

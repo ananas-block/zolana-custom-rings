@@ -92,6 +92,15 @@ fn print(transaction: &AuditedTransaction) {
                 println!("  slot {}  dummy", output.slot_index);
                 continue;
             }
+            OutputOpening::EscrowPending(pending) => {
+                println!(
+                    "  slot {}  escrow pending  owner {}  amount {}",
+                    output.slot_index,
+                    Address::new_from_array(pending.owner_key),
+                    pending.amount
+                );
+                continue;
+            }
         };
         let opened = OpenedSlot {
             slot: output.slot_index,

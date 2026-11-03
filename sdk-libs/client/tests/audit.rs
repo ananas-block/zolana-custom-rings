@@ -33,11 +33,12 @@ use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, commitment_evidence, prefix_evidence, ring_event_origin_in, seal_deposits,
-    AuditError, AuditStreamSeal, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
-    CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening, InputOpening, InputRing, KnownUtxo,
-    KnownUtxoIndex, KnownUtxos, MergeDisclosureEncryption, MergeOpening, OutputOpening,
-    OutputPayloadError, OutputPayloadErrorKind, OutputRecord, RingOrigin, RingOwnerTag, RingScan,
-    TransactionAudit, TransactionOrigin, UtxoOwner,
+    AuditError, AuditStreamSeal, AuditedInputOpening, AuditedSender, AuditedTransaction,
+    ConfirmedMergeDisclosure, CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening,
+    EscrowPendingSlot, InputOpening, InputRing, KnownUtxo, KnownUtxoIndex, KnownUtxos,
+    MergeDisclosureEncryption, MergeOpening, OutputOpening, OutputPayloadError,
+    OutputPayloadErrorKind, OutputRecord, RingOrigin, RingOwnerTag, RingScan, TransactionAudit,
+    TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{seal_delivered_body, RingAssets};
 
@@ -281,15 +282,89 @@ fn a_key_escrow_transfer_opens_each_slot_under_its_owners_escrowed_key() {
             .outputs
             .iter()
             .position(|output| matches!(output, Output::Exit(_)))
-            .unwrap() as u32;
+            .unwrap();
         let unescrowed = TransactionAudit::new(&built.transaction, built.layout)
             .with_escrowed_keys(&escrowed)
             .run(&auditor(), &assets())
             .unwrap();
+        assert!(unescrowed.payload_errors.is_empty());
+        assert_eq!(unescrowed.outputs.len(), built.outputs.len());
+        let OutputOpening::EscrowPending(pending) = unescrowed.outputs[exit_slot].opening else {
+            panic!("the exit awaits its owner's escrow record");
+        };
+        let Output::Exit(exit) = &built.outputs[exit_slot] else {
+            panic!("an exit");
+        };
+        assert_eq!(pending.owner_key, exit.owner_key);
+        assert_eq!(pending.amount, exit.amount);
+        assert_eq!(pending.blinding, built.slots[exit_slot].blinding);
         assert_eq!(
-            unescrowed.payload_errors,
-            [slot_error(exit_slot, OutputPayloadErrorKind::EscrowUnknown)]
+            pending.slot,
+            EscrowPendingSlot::Exit {
+                asset: exit.asset(),
+                mint: Some(exit.asset_address),
+            }
         );
+    }
+}
+
+#[test]
+fn a_key_escrow_body_returns_its_proven_fields_until_the_owner_record_arrives() {
+    let built = build_with(
+        &Transfer::fixture(),
+        Rail::Delivered,
+        delivered_outputs(),
+        true,
+    );
+    let pending = TransactionAudit::new(&built.transaction, built.layout)
+        .run(&auditor(), &assets())
+        .unwrap();
+    assert!(pending.payload_errors.is_empty());
+    assert_eq!(pending.utxos().count(), 0);
+    for ((audited, output), slot) in pending.outputs.iter().zip(&built.outputs).zip(&built.slots) {
+        match (output, &audited.opening) {
+            (Output::Dummy, OutputOpening::Dummy) => {}
+            (
+                Output::Ring {
+                    utxo, recipient_u, ..
+                },
+                OutputOpening::EscrowPending(opening),
+            ) => {
+                assert_eq!(opening.owner_key, utxo.owner_key);
+                assert_eq!(opening.amount, utxo.amount);
+                assert_eq!(opening.blinding, slot.blinding);
+                assert_eq!(
+                    opening.slot,
+                    EscrowPendingSlot::Ring {
+                        recipient_u: *recipient_u
+                    }
+                );
+            }
+            (Output::Exit(_), OutputOpening::EscrowPending(_)) => {}
+            (output, opening) => panic!("{output:?} opened as {opening:?}"),
+        }
+    }
+    let escrowed: HashMap<[u8; 32], [u8; 32]> = built
+        .outputs
+        .iter()
+        .filter_map(|output| match output {
+            Output::Ring { utxo, .. } | Output::Exit(utxo) => {
+                Some((utxo.owner_key, utxo.nullifier_pk))
+            }
+            Output::Dummy => None,
+        })
+        .collect();
+    let resolved = TransactionAudit::new(&built.transaction, built.layout)
+        .with_escrowed_keys(&escrowed)
+        .run(&auditor(), &assets())
+        .unwrap();
+    for ((output, slot), audited) in built
+        .outputs
+        .iter()
+        .zip(&built.slots)
+        .zip(&resolved.outputs)
+    {
+        assert_eq!(audited.opening, audited_opening(output, slot));
     }
 }
 
@@ -359,26 +434,64 @@ fn a_ring_utxo_input_opens_by_its_prefix_or_is_reported_unseen() {
         (sender.owner_key, sender.nullifier_pk),
         (spent[0].utxo.owner_key, Some(spent[0].utxo.nullifier_pk))
     );
-    let audit = |known: &KnownUtxoIndex| {
+}
+
+#[test]
+fn an_unseen_spent_note_withholds_no_slot_and_resolves_once_known() {
+    let PrefixedSpend {
+        transfer,
+        spent,
+        built,
+        commitments,
+    } = prefixed_spend();
+    let audit = |notes: &[usize]| {
+        let known: KnownUtxoIndex = notes
+            .iter()
+            .map(|&note| (commitments[note], spent[note].known(&transfer)))
+            .collect();
         TransactionAudit::new(&built.transaction, built.layout)
-            .with_known_utxos(known)
+            .with_known_utxos(&known)
             .run(&auditor(), &assets())
+            .unwrap()
     };
-    let prefix = InputPrefix::of(&commitments[1]).unwrap().get();
-    let first_only: KnownUtxoIndex = [(commitments[0], spent[0].known(&transfer))]
-        .into_iter()
-        .collect();
-    assert!(matches!(
-        audit(&first_only),
-        Err(AuditError::UnseenInputPrefix { prefix: unseen }) if unseen == prefix
-    ));
-    let second_only: KnownUtxoIndex = [(commitments[1], spent[1].known(&transfer))]
-        .into_iter()
-        .collect();
-    assert!(matches!(
-        audit(&second_only),
-        Err(AuditError::UnseenInput { commitment }) if commitment == commitments[0]
-    ));
+    let resolved = audit(&[0, 1]);
+    assert_eq!(resolved.outputs.len(), built.transaction.output_slots.len());
+    let opening = |note: usize| {
+        InputOpening::Opened(AuditedInputOpening {
+            asset: spent[note].utxo.asset(),
+            mint: Some(spent[note].utxo.asset_address),
+            amount: spent[note].utxo.amount,
+            blinding: spent[note].blinding,
+            ring: Some(InputRing::Ring {
+                commitment: commitments[note],
+            }),
+        })
+    };
+    let hash = InputOpening::UnseenHash {
+        hash: commitments[0],
+    };
+    let prefix = InputOpening::Unseen {
+        prefix: InputPrefix::of(&commitments[1]).unwrap(),
+    };
+    let sender = Some(AuditedSender {
+        owner_key: spent[0].utxo.owner_key,
+        nullifier_pk: Some(spent[0].utxo.nullifier_pk),
+    });
+    for (notes, expected_sender, first, later) in [
+        (&[][..], None, hash.clone(), prefix.clone()),
+        (&[0][..], sender, opening(0), prefix),
+        (&[1][..], None, hash, opening(1)),
+        (&[0, 1][..], sender, opening(0), opening(1)),
+    ] {
+        let audited = audit(notes);
+        assert!(audited.payload_errors.is_empty());
+        assert_eq!(audited.outputs, resolved.outputs, "{notes:?}");
+        assert_eq!(audited.sender, expected_sender, "{notes:?}");
+        let inputs: Vec<_> = audited.inputs.iter().map(|input| &input.opening).collect();
+        assert_eq!(inputs, [&first, &later], "{notes:?}");
+        let nullifiers: Vec<_> = audited.inputs.iter().map(|input| input.nullifier).collect();
+        assert_eq!(nullifiers, built.transaction.nullifiers);
+    }
 }
 
 struct Misfiled {
@@ -445,10 +558,10 @@ fn a_prefix_opens_only_a_note_of_the_sender_that_carries_it() {
         ),
         (vec![first, (commitments[1], misowned)], commitments[1]),
     ] {
-        assert!(matches!(
-            audit(index, vec![answer]),
-            Err(AuditError::UnseenInputPrefix { prefix: unseen }) if unseen == prefix.get()
-        ));
+        assert_eq!(
+            audit(index, vec![answer]).unwrap().inputs[1].opening,
+            InputOpening::Unseen { prefix }
+        );
     }
     let audited = audit(vec![first, spent_note], vec![commitments[1]; 2]).unwrap();
     assert!(matches!(
@@ -608,10 +721,12 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         Output::Dummy,
     ];
     let built = build_anonymous(&transfer, outputs, &spent, Spending::RingUtxos);
-    assert!(matches!(
-        audit(&built.transaction, built.layout),
-        Err(AuditError::UnseenInput { .. })
-    ));
+    assert_eq!(
+        audit(&built.transaction, built.layout).unwrap().inputs[0].opening,
+        InputOpening::UnseenHash {
+            hash: spent[0].commitment(&transfer, Some(transfer.ring))
+        }
+    );
     let deposit = deposited(&transfer, &spent[0]);
     let merge = merged(&transfer, &spent[1]);
     let created: Vec<CreatedUtxo> = [&deposit, &merge]
@@ -727,7 +842,7 @@ fn an_in_proof_input_opens_by_its_prefix_or_stays_unseen_beside_readable_outputs
     assert_eq!(
         audited.inputs[1].opening,
         InputOpening::Unseen {
-            prefix: InputPrefix::of(&unseen).unwrap().get()
+            prefix: InputPrefix::of(&unseen).unwrap()
         }
     );
     let audited = audit(&built.transaction, built.layout).unwrap();
@@ -1119,17 +1234,11 @@ fn the_auditor_message_is_unique_and_last() {
         audit(&missing, built.layout),
         Err(AuditError::MissingAuditorMessage)
     ));
-    let mut duplicate = built.transaction.clone();
-    duplicate.messages.push(duplicate.messages[0].clone());
-    assert!(matches!(
-        audit(&duplicate, built.layout),
-        Err(AuditError::DuplicateAuditorMessage)
-    ));
     let mut misplaced = built.transaction.clone();
     misplaced.messages.push(free_form);
     assert!(matches!(
         audit(&misplaced, built.layout),
-        Err(AuditError::AuditorMessageNotLast { index: 0, count: 2 })
+        Err(AuditError::MissingAuditorMessage)
     ));
     assert!(matches!(
         TransactionAudit::new(&built.transaction, built.layout)
@@ -1458,10 +1567,22 @@ async fn an_input_an_earlier_page_opened_resolves_through_the_known_utxos() {
     let (paid, spent) = paid_and_spent();
     let (indexer, origin) = anonymous_page(&[&spent]);
     let scan = || RingScan::new(ring(), auditor().pubkey()).with_mode(RingMode::Anonymous);
-    assert!(matches!(
-        scan().audit(&auditor(), &indexer, &origin, &assets()).await,
-        Err(AuditError::UnseenInput { .. })
-    ));
+    let unseen = scan()
+        .audit(&auditor(), &indexer, &origin, &assets())
+        .await
+        .expect("audit")
+        .transactions;
+    assert_eq!(unseen[0].sender, None);
+    assert_eq!(
+        unseen[0].outputs.len(),
+        spent.transaction.output_slots.len()
+    );
+    assert_eq!(
+        unseen[0].inputs[0].opening,
+        InputOpening::UnseenHash {
+            hash: paid.slots[0].output.output_context.hash
+        }
+    );
     let known = audit(&paid.transaction, paid.layout)
         .unwrap()
         .utxos()
@@ -1655,4 +1776,202 @@ async fn a_row_of_another_ring_never_reaches_the_created_scan_origin_read() {
         .await
         .unwrap();
     assert!(page.utxos.is_empty());
+}
+
+#[test]
+fn a_mint_the_registry_lacks_reads_as_an_unknown_asset_and_opens_once_registered() {
+    let fresh = Address::new_from_array([0xee; 32]);
+    let outputs = vec![
+        Output::Ring {
+            utxo: utxo(0xb5, fresh, 0),
+            recipient_u: x25519_u(0x50),
+            tag: None,
+        },
+        Output::Dummy,
+    ];
+    let built = build(&Transfer::fixture(), Rail::Delivered, outputs);
+    let audited = audit(&built.transaction, built.layout).unwrap();
+    assert_eq!(opened_slots(&audited), [1]);
+    assert_eq!(
+        audited.payload_errors,
+        [slot_error(0, OutputPayloadErrorKind::UnknownAsset)]
+    );
+    assert!(audited.has_unknown_assets());
+    let registered = RingAssets::new([Mint::new(fresh, 8)]).unwrap();
+    let resolved = TransactionAudit::new(&built.transaction, built.layout)
+        .run(&auditor(), &registered)
+        .unwrap();
+    assert!(resolved.payload_errors.is_empty());
+    assert_eq!(opened_slots(&resolved), [0, 1]);
+    assert!(!resolved.has_unknown_assets());
+}
+
+#[test]
+fn a_sender_bundle_under_the_auditor_tag_leaves_the_transfer_open() {
+    let (_, built, _) = anonymous_spend();
+    let expected = audit(&built.transaction, built.layout).unwrap();
+    let mut transaction = built.transaction.clone();
+    assert_eq!(transaction.messages.len(), 2);
+    transaction.messages[0].view_tag = auditor_view_tag(&auditor().pubkey());
+    assert_eq!(audit(&transaction, built.layout).unwrap(), expected);
+}
+
+#[test]
+fn an_anonymous_output_under_a_zero_nullifier_key_opens() {
+    let (transfer, _, spent) = anonymous_spend();
+    let outputs = vec![
+        Output::Ring {
+            utxo: UtxoFields {
+                nullifier_pk: [0; 32],
+                ..utxo(0xb5, SOL, 50)
+            },
+            recipient_u: x25519_u(0x50),
+            tag: Some(field(0x51)),
+        },
+        Output::Dummy,
+    ];
+    let built = build_anonymous(&transfer, outputs, &spent, Spending::Entry);
+    let audited = audit(&built.transaction, built.layout).unwrap();
+    assert_eq!(opened_slots(&audited), [0, 1]);
+    assert!(audited.payload_errors.is_empty());
+}
+
+/// Answers one row with `error`, the known origin for the rest.
+struct FailingOrigin {
+    known: KnownOrigins,
+    failing: Signature,
+    error: fn(Signature) -> AuditError,
+}
+
+impl TransactionOrigin for FailingOrigin {
+    async fn origin(
+        &self,
+        signature: Signature,
+        event_index: u16,
+        ring: Address,
+    ) -> Result<RingOrigin, AuditError> {
+        if signature == self.failing {
+            return Err((self.error)(signature));
+        }
+        self.known.origin(signature, event_index, ring).await
+    }
+}
+
+fn anonymous_scan() -> RingScan {
+    RingScan::new(ring(), auditor().pubkey()).with_mode(RingMode::Anonymous)
+}
+
+#[tokio::test]
+async fn a_scan_goes_past_a_row_that_does_not_decode_and_stops_at_a_failed_read() {
+    let (paid, spent) = paid_and_spent();
+    let (indexer, known) = anonymous_page(&[&paid, &spent]);
+    let mut origin = FailingOrigin {
+        known,
+        failing: Signature::from([5; 64]),
+        error: |_| AuditError::InvalidTransactData("forged".to_owned()),
+    };
+    let page = anonymous_scan()
+        .audit(&auditor(), &indexer, &origin, &assets())
+        .await
+        .expect("audit");
+    assert_eq!(page.transactions.len(), 1);
+    let [row] = page.skipped.as_slice() else {
+        panic!("one bad row");
+    };
+    assert_eq!(row.tx_signature, origin.failing);
+    assert!(matches!(row.error, AuditError::InvalidTransactData(_)));
+    origin.error = |signature| AuditError::Unavailable {
+        signature,
+        message: "unreachable".to_owned(),
+    };
+    assert!(matches!(
+        anonymous_scan()
+            .audit(&auditor(), &indexer, &origin, &assets())
+            .await,
+        Err(AuditError::Unavailable { .. })
+    ));
+    origin.error = |_| AuditError::InvalidStackHeight(4);
+    assert!(matches!(
+        anonymous_scan()
+            .audit(&auditor(), &indexer, &origin, &assets())
+            .await,
+        Err(AuditError::InvalidStackHeight(4))
+    ));
+}
+
+#[tokio::test]
+async fn a_scan_lists_a_row_its_audit_refuses_and_opens_the_next() {
+    let (mut paid, spent) = paid_and_spent();
+    // The envelope's first byte, past the tagged ephemeral key.
+    let refused = paid
+        .transaction
+        .messages
+        .last_mut()
+        .expect("auditor message");
+    refused.data[33] ^= 1;
+    let (indexer, origin) = anonymous_page(&[&paid, &spent]);
+    let page = anonymous_scan()
+        .audit(&auditor(), &indexer, &origin, &assets())
+        .await
+        .expect("audit");
+    let [row] = page.skipped.as_slice() else {
+        panic!("one refused row");
+    };
+    assert_eq!(row.tx_signature, Signature::from([5; 64]));
+    // The refused row opened nothing, the spend of its output stays unseen.
+    let [opened] = page.transactions.as_slice() else {
+        panic!("the row after the refused one");
+    };
+    assert!(matches!(
+        opened.inputs[0].opening,
+        InputOpening::UnseenHash { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_lost_auditor_message_stays_fatal_in_a_local_scan() {
+    let (_, mut built, _) = anonymous_spend();
+    let tag = auditor_view_tag(&auditor().pubkey());
+    // A free tag keeps the row on the auditor's page, the last message names no auditor.
+    built.transaction.messages[0].view_tag = tag;
+    built.transaction.messages[1].view_tag = field(0x7c);
+    let (indexer, origin) = anonymous_page(&[&built]);
+    assert!(matches!(
+        anonymous_scan()
+            .audit(&auditor(), &indexer, &origin, &assets())
+            .await,
+        Err(AuditError::MissingAuditorMessage)
+    ));
+}
+
+#[tokio::test]
+async fn the_created_utxo_scan_lists_a_row_it_cannot_open_and_opens_the_next() {
+    let (transfer, _, spent) = anonymous_spend();
+    let mut merge = merged(&transfer, &spent[1]);
+    merge.transaction.tx_signature = Signature::from([0xd1; 64]);
+    let disclosure = merge.origin.merge_disclosure.as_mut().expect("disclosure");
+    disclosure.ciphertext[0] ^= 1;
+    let deposit = deposited(&transfer, &spent[0]);
+    let origins: HashMap<Signature, RingOrigin> = [&merge, &deposit]
+        .into_iter()
+        .map(|row| (row.transaction.tx_signature, row.origin.clone()))
+        .collect();
+    let history = RingHistory(vec![vec![
+        merge.transaction.clone(),
+        deposit.transaction.clone(),
+    ]]);
+    let auditor = auditor();
+    let page = CreatedUtxoScan::new(transfer.ring, &auditor)
+        .run(&history, &ConfirmedOrigins(origins))
+        .await
+        .expect("scan");
+    let opened: Vec<[u8; 32]> = page.utxos.iter().map(|utxo| utxo.commitment).collect();
+    assert_eq!(
+        opened,
+        [spent[0].commitment(&transfer, Some(transfer.ring))]
+    );
+    let [row] = page.skipped.as_slice() else {
+        panic!("one row left unopened");
+    };
+    assert_eq!(row.tx_signature, merge.transaction.tx_signature);
 }

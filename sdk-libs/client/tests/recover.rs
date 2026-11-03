@@ -412,6 +412,10 @@ struct History {
     required_slots: Mutex<Vec<Option<u64>>>,
     /// Signatures whose origin read fails.
     unread: Vec<Signature>,
+    /// Signatures whose confirmed call does not decode.
+    undecodable: Vec<Signature>,
+    /// Rows only a query by nullifier returns.
+    spends_only: Vec<ShieldedTransaction>,
 }
 
 const INDEXED: u64 = 100;
@@ -501,6 +505,7 @@ impl AsyncRpc for History {
             transactions: self
                 .transactions
                 .iter()
+                .chain(&self.spends_only)
                 .filter(|tx| {
                     tx.nullifiers
                         .iter()
@@ -527,6 +532,9 @@ impl TransactionOrigin for History {
                 signature,
                 message: "no origin read".to_owned(),
             });
+        }
+        if self.undecodable.contains(&signature) {
+            return Err(AuditError::InvalidTransactData("forged".to_owned()));
         }
         Ok(RingOrigin {
             event: self
@@ -610,6 +618,74 @@ async fn deposit_and_merge_tag_collisions_do_not_require_transfer_disclosure() {
     assert!(recovered.utxos.contains(&deposited));
     assert!(recovered.unopened.is_empty());
     assert!(recovered.unsupported_deposits.is_empty());
+}
+
+#[tokio::test]
+async fn a_delivered_slot_of_an_unregistered_mint_stays_unopened_beside_the_rest() {
+    let fixture = Fixture::new();
+    let fresh = Mint::new(Address::new_from_array([0xee; 32]), 9);
+    let output = SppProofOutputUtxo::new(fresh, 4, fixture.address)
+        .expect("output")
+        .with_ring_program_id(RING);
+    let (unopened, fresh_tx) = fixture.encrypt(output, 2);
+    let (kept, kept_tx) = fixture.encrypt(fixture.output(5), 2);
+    let history = History {
+        transactions: vec![fresh_tx, kept_tx],
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert_eq!(recovered.utxos, [kept]);
+    assert_eq!(recovered.unopened, [unopened.utxo_hash]);
+}
+
+#[tokio::test]
+async fn a_row_that_does_not_decode_fails_the_recovery_it_leaves_incomplete() {
+    let fixture = Fixture::new();
+    let (_, tx) = fixture.encrypt(fixture.output(4), 2);
+    let history = History {
+        undecodable: vec![tx.tx_signature],
+        transactions: vec![tx],
+        ..Default::default()
+    };
+    assert!(matches!(
+        fixture.run(fixture.recovery(), &history).await,
+        Err(AuditError::InvalidTransactData(_))
+    ));
+}
+
+#[tokio::test]
+async fn the_spend_read_goes_past_a_row_that_does_not_decode_and_the_recovery_then_fails() {
+    let fixture = Fixture::new();
+    let (held, tx) = fixture.encrypt(fixture.output(4), 2);
+    let spender = |byte: u8| {
+        let (_, mut spend) = fixture.encrypt(fixture.output(5), 2);
+        spend.tx_signature = Signature::from([byte; 64]);
+        spend.nullifiers = vec![held.nullifier];
+        spend
+    };
+    let (bad, unreachable) = (spender(0xd5), spender(0xd6));
+    // A failed read past the bad row proves the read went on.
+    let history = History {
+        transactions: vec![tx.clone()],
+        undecodable: vec![bad.tx_signature],
+        unread: vec![unreachable.tx_signature],
+        spends_only: vec![bad.clone(), unreachable],
+        ..Default::default()
+    };
+    assert!(matches!(
+        fixture.run(fixture.recovery(), &history).await,
+        Err(AuditError::Unavailable { .. })
+    ));
+    let history = History {
+        transactions: vec![tx],
+        undecodable: vec![bad.tx_signature],
+        spends_only: vec![bad],
+        ..Default::default()
+    };
+    assert!(matches!(
+        fixture.run(fixture.recovery(), &history).await,
+        Err(AuditError::InvalidTransactData(_))
+    ));
 }
 
 #[tokio::test]
@@ -1197,14 +1273,15 @@ async fn an_anonymous_spend_of_deposits_under_the_commitment_key_leaves_the_chan
         ..Default::default()
     };
     let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
-    assert_eq!(recovered.utxos, [change]);
+    assert_eq!(recovered.utxos, std::slice::from_ref(&change));
     assert!(recovered.unopened.is_empty());
+    assert!(recovered.unseen_inputs.is_empty());
+    let unseen_nullifier = spend_tx.nullifiers[1];
     let unseen = History {
         transactions: vec![first_tx, spend_tx],
         ..Default::default()
     };
-    assert!(matches!(
-        fixture.run(fixture.recovery(), &unseen).await,
-        Err(AuditError::UnseenInputPrefix { .. })
-    ));
+    let gap = fixture.run(fixture.recovery(), &unseen).await.unwrap();
+    assert_eq!(gap.utxos, [change]);
+    assert_eq!(gap.unseen_inputs, [unseen_nullifier]);
 }

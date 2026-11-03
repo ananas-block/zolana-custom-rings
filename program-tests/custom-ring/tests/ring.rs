@@ -509,7 +509,7 @@ fn opened(audited: &AuditedTransaction) -> Vec<Opened> {
             let (utxo, exit) = match &output.opening {
                 OutputOpening::Ring { utxo, .. } => (utxo, false),
                 OutputOpening::Exit(utxo) => (utxo, true),
-                OutputOpening::Dummy => return None,
+                OutputOpening::Dummy | OutputOpening::EscrowPending(_) => return None,
             };
             Some(Opened {
                 slot_index: output.slot_index,

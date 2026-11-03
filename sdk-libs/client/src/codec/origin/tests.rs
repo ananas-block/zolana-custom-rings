@@ -1174,3 +1174,110 @@ fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts()
     source.data = ring_transact_bytes(vec![InterfaceTransfer::SolWithdrawal { amount: 8 }]);
     assert!(bind_withdrawal_owners(&source, &frame, &mut legs).is_err());
 }
+
+/// One in-proof or signer frame and its forwarded SPP data, the pool accounts ending in a SOL leg.
+fn origin_of_frame(
+    in_proof: bool,
+    interface_transfers: Vec<InterfaceTransfer>,
+) -> Result<RingOrigin, AuditError> {
+    use custom_ring_interface::{
+        CustomRingProof, InProofOwner, InputTrees, PlainGroth16Proof, RingOutput,
+    };
+    let zero = [0u8; 32];
+    let groth16 = PlainGroth16Proof {
+        proof_a: zero,
+        proof_b: [0; 64],
+        proof_c: zero,
+    };
+    let proof = CustomRingProof {
+        groth16,
+        commitment: zero,
+        commitment_pok: zero,
+    };
+    let (hash, u) = ([1u8; 32], [2u8; 32]);
+    let body = [3u8; 104];
+    let nullifiers = [[7u8; 32]];
+    let envelope = vec![0u8; if in_proof { 48 } else { 32 }];
+    let output = RingOutput::Delivered {
+        hash: &hash,
+        u: &u,
+        body: &body,
+    };
+    let context = TreeContext {
+        utxo_tree_root_index: 0,
+        nullifier_tree_root_index: 0,
+    };
+    let data = RingTransactData {
+        rail: RingRail::Confidential,
+        n_in: 1,
+        n_out: 2,
+        proof: &proof,
+        own_revision: None,
+        policy: None,
+        exempt: false,
+        approval_required: false,
+        expiry_unix_ts: 0,
+        tx_viewing_u: &zero,
+        salt: &[0; 16],
+        interface_transfers: interface_transfers.clone(),
+        key_escrow: false,
+        full_openings: false,
+        outputs: vec![output, output],
+        sender: None,
+        eph_u: &zero,
+        envelope: &envelope,
+        private_tx_hash: &zero,
+        anonymous: None,
+        in_proof_owner: in_proof.then_some(InProofOwner {
+            owner: &zero,
+            commitment: &zero,
+            commitment_pok: &zero,
+        }),
+        spp_proof: &groth16,
+        nullifiers: &nullifiers,
+        input_trees: InputTrees::One(context),
+    };
+    let frame = [vec![ring_tag::TRANSFER], data.encode().unwrap()].concat();
+    let spp = TransactIxData {
+        expiry_unix_ts: u64::MAX,
+        private_tx_hash: zero,
+        circuit: data.circuit(),
+        tx_viewing_pk: [0u8; 33],
+        salt: [0u8; 16],
+        proof: TransactProof::zeroed(),
+        inputs: Vec::new(),
+        interface_transfers,
+        data_hash: None,
+        ring_data_hash: None,
+        outputs: Vec::new(),
+        messages: Vec::new(),
+        tree_contexts: vec![context],
+    };
+    let mut source = instruction(POOL, 2);
+    source.data = [vec![tag::RING_TRANSACT], spp.serialize().unwrap()].concat();
+    source.accounts = vec![OTHER, OTHER, SOL, RECIPIENT];
+    let mut event = instruction(POOL, 3);
+    event.data = bs58::decode(event_data()).into_vec().unwrap();
+    let mut outer = instruction(RING, 1);
+    outer.data = frame;
+    ring_event_origin_in(
+        &[InstructionGroup {
+            outer,
+            inner: vec![source, event],
+        }],
+        0,
+        RING,
+    )
+}
+
+#[test]
+fn an_in_proof_withdrawal_reads_under_the_confidential_rail() {
+    let leg = vec![InterfaceTransfer::SolWithdrawal { amount: 4_200 }];
+    let signer = origin_of_frame(false, leg.clone()).expect("signer rail reads");
+    assert_eq!(signer.withdrawals.len(), 1);
+    let no_leg = origin_of_frame(true, Vec::new()).expect("in-proof without a leg reads");
+    assert!(no_leg.audit_stream(RingMode::Confidential).is_ok());
+    let in_proof = origin_of_frame(true, leg).expect("in-proof with a leg reads");
+    assert_eq!(in_proof.withdrawals.len(), 1);
+    assert!(in_proof.audit_stream(RingMode::Confidential).is_ok());
+}

@@ -25,7 +25,7 @@ pub mod transfer;
 use custom_ring_interface::{
     encode_ring_confidential_delivered_output,
     storage_instruction::{EscrowWriteData, StorageWriteData},
-    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, QueueEntry, RingMode,
+    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, InputPrefix, QueueEntry, RingMode,
     DELIVERED_AUDIT_CAPACITIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
@@ -52,16 +52,17 @@ use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::ViewingKey;
 use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
-    auditor_view_tag, commitment_evidence, ring_event_origin_in,
+    auditor_view_tag, commitment_evidence, prefix_evidence, ring_event_origin_in,
     rpc::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError, DecryptedSender,
-        DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
-        GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, GetWalletActivityResponse, HealthResponse, KeyMode,
-        PagedRead, ReadAttestation, ReadAuth, ReadBuildError, ReadSignature, ReadSigner,
-        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, ReaderGrantRequest, RingActivation,
-        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
+        DecryptedEscrowPending, DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError,
+        DecryptedSender, DecryptedTransaction, DecryptedWithdrawal, DepositRecord,
+        GetAuditedMergesResponse, GetAuditedUtxosRequest, GetAuditedUtxosResponse,
+        GetDecryptedTransactionsRequest, GetDecryptedTransactionsResponse,
+        GetWalletActivityResponse, HealthResponse, KeyMode, PagedRead, ReadAttestation, ReadAuth,
+        ReadBuildError, ReadSignature, ReadSigner, ReadTarget, ReaderGrantAction,
+        ReaderGrantAttestation, ReaderGrantRequest, RingActivation, RingChainStatus,
+        RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
         RingStatusResponse, SkippedReason, WalletActivity, WalletView, WebAuthnAssertion,
         AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
         GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
@@ -402,7 +403,8 @@ struct StaticSource {
     /// Per program, absent when immutable or not deployed.
     upgrade_authorities: HashMap<Address, Address>,
     healthy: bool,
-    assets: Option<RingAssets>,
+    /// Rewritten while a hub serves it, a mint registers after the first read.
+    assets: Arc<Mutex<Option<RingAssets>>>,
     asset_reads: Arc<AtomicUsize>,
     asset_delay: Option<Duration>,
     /// Ring history, newest first.
@@ -412,6 +414,8 @@ struct StaticSource {
     pages: HashMap<Option<Vec<u8>>, Paged>,
     record_reads: Arc<AtomicUsize>,
     history_reads: Arc<AtomicUsize>,
+    /// Rows whose confirmed call does not decode.
+    undecodable: HashSet<Signature>,
 }
 
 /// The indexer page one cursor reads.
@@ -540,6 +544,7 @@ impl TransactionSource for StaticSource {
         event_index: u16,
         _ring: Address,
     ) -> impl Future<Output = Result<RingOrigin, AuditError>> + Send {
+        let undecodable = self.undecodable.contains(&signature);
         let origin = self
             .origins
             .get(&(signature, event_index))
@@ -586,7 +591,12 @@ impl TransactionSource for StaticSource {
                 signature,
                 message: "not found".to_owned(),
             });
-        async move { origin }
+        async move {
+            match undecodable {
+                true => Err(AuditError::InvalidTransactData("forged".to_owned())),
+                false => origin,
+            }
+        }
     }
 
     async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, ClientError> {
@@ -723,6 +733,8 @@ impl TransactionSource for StaticSource {
         }
         tokio::task::yield_now().await;
         self.assets
+            .lock()
+            .unwrap()
             .clone()
             .ok_or_else(|| ClientError::Rpc("asset registry unavailable".to_owned()))
     }
@@ -822,6 +834,13 @@ impl Indexed<'_> {
     /// The commitment key's disclosure, spent UTXO 0 named by its hash and every later one by its prefix.
     fn anonymous_commitments(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
         self.anonymous_with(commitment_evidence(spent).expect("spent UTXO 0"))
+    }
+
+    /// The in-proof rail's disclosure, every published input named by its prefix.
+    fn in_proof(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
+        let evidence = prefix_evidence(spent).expect("canonical hashes");
+        let disclosure = self.transfer.in_proof_disclosure(self.outputs, evidence);
+        self.publish(Rail::Delivered, self.outputs, &disclosure)
     }
 
     fn anonymous_with(self, inputs: AuditEvidence) -> ShieldedTransaction {
@@ -944,7 +963,7 @@ impl Fixture {
             records_registered: true,
             upgrade_authorities: HashMap::from([(RING, deployer().pubkey())]),
             healthy: true,
-            assets: Some(RingAssets::new([]).expect("ring assets")),
+            assets: Arc::new(Mutex::new(Some(RingAssets::new([]).expect("ring assets")))),
             asset_reads: Arc::new(AtomicUsize::new(0)),
             asset_delay: None,
             history: Vec::new(),
@@ -952,6 +971,7 @@ impl Fixture {
             pages: HashMap::new(),
             record_reads: Arc::new(AtomicUsize::new(0)),
             history_reads: Arc::new(AtomicUsize::new(0)),
+            undecodable: HashSet::new(),
         };
         source.with_transactions(vec![
             self.audited.clone(),
@@ -979,8 +999,17 @@ impl Fixture {
         &self,
         transactions: Vec<ShieldedTransaction>,
     ) -> GetDecryptedTransactionsResponse {
+        self.read_transactions(transactions, RingMode::Anonymous)
+            .await
+    }
+
+    async fn read_transactions(
+        &self,
+        transactions: Vec<ShieldedTransaction>,
+        mode: RingMode,
+    ) -> GetDecryptedTransactionsResponse {
         let mut source = self.source().with_transactions(transactions);
-        source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
+        source.configs.get_mut(&RING).expect("config").mode = mode;
         self.hub(source)
             .service(None)
             .expect("service")
@@ -998,8 +1027,8 @@ impl Fixture {
 fn amounts(item: &DecryptedTransaction) -> Vec<u64> {
     item.outputs
         .iter()
-        .filter(|output| output.kind != DecryptedOutputKind::Dummy)
-        .map(|output| output.utxo.as_ref().expect("utxo").amount)
+        .filter_map(|output| output.utxo.as_ref())
+        .map(|utxo| utxo.amount)
         .collect()
 }
 
@@ -1114,6 +1143,13 @@ async fn read_at(
     service: &AuditService<StaticSource>,
     cursor: Option<u8>,
 ) -> GetDecryptedTransactionsResponse {
+    read_at_result(service, cursor).await.expect("read")
+}
+
+async fn read_at_result(
+    service: &AuditService<StaticSource>,
+    cursor: Option<u8>,
+) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
     let page = Page::new(cursor.map(|byte| vec![byte].into()), None).expect("page");
     let request = match cursor {
         Some(byte) => GetDecryptedTransactionsRequest::read(target(RING))
@@ -1131,7 +1167,6 @@ async fn read_at(
             wallet: None,
         })
         .await
-        .expect("read")
 }
 
 fn utxos_request(hashes: Vec<Hash>) -> GetAuditedUtxosRequest {
@@ -1389,11 +1424,16 @@ fn escrowed_source(
     source
 }
 
-fn escrow_errors(page: &GetDecryptedTransactionsResponse) -> Vec<OutputPayloadErrorKind> {
+/// The slots of the page's one transfer that await their owner's escrow record.
+fn escrow_pending(page: &GetDecryptedTransactionsResponse) -> Vec<DecryptedEscrowPending> {
     let [item] = page.value.items.as_slice() else {
         panic!("one escrowed transfer, {:?}", page.value.skipped);
     };
-    item.payload_errors.iter().map(|error| error.kind).collect()
+    assert!(item.payload_errors.is_empty(), "{:?}", item.payload_errors);
+    item.outputs
+        .iter()
+        .filter_map(|output| output.escrow_pending.clone())
+        .collect()
 }
 
 /// The commitment of `owner`'s output on the ring's audited page.

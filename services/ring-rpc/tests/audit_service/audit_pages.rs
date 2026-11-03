@@ -216,15 +216,118 @@ async fn an_input_spending_a_utxo_the_page_opened_resolves_its_ring() {
         input_ring(&fixture.read_anonymous(vec![utxos.entry.clone()]).await),
         Some(DecryptedInputRing::Unresolved { .. })
     ));
-    let alone = fixture.read_anonymous(vec![utxos.spent.clone()]).await;
-    assert!(alone.value.items.is_empty());
-    let reasons: Vec<SkippedReason> = alone
-        .value
-        .skipped
-        .iter()
-        .map(|skipped| skipped.reason)
-        .collect();
-    assert_eq!(reasons, [SkippedReason::UnseenInput]);
+}
+
+#[tokio::test]
+async fn a_transfer_read_before_its_input_note_returns_every_slot_then_resolves() {
+    let fixture = Fixture::new();
+    let utxos = SpentUtxo::new(&fixture);
+    let mut source = utxos.source(
+        &fixture,
+        [
+            (None, paged(vec![utxos.paid.clone()], None, Some(1))),
+            (Some(vec![1]), paged(Vec::new(), None, Some(1))),
+        ],
+    );
+    source.pages.insert(
+        Some(vec![9]),
+        paged(vec![utxos.spent.clone()], None, Some(10)),
+    );
+    let service = fixture.hub(source).service(None).expect("service");
+    let before = read_at(&service, Some(9)).await;
+    assert!(before.value.skipped.is_empty());
+    let [unseen] = before.value.items.as_slice() else {
+        panic!("the spend opens before its input note");
+    };
+    assert!(unseen.payload_errors.is_empty());
+    assert_eq!(unseen.outputs.len(), utxos.spent.output_slots.len());
+    assert_eq!(amounts(unseen), [70]);
+    // Nothing yet binds the spent note to an owner.
+    assert_eq!(unseen.sender, None);
+    assert_eq!(unseen.inputs[0].opening, None);
+    assert_eq!(unseen.inputs[0].unseen_hash, Some(utxos.commitment.into()));
+    // The outputs enter the store at once, a later spend of them resolves.
+    let exit = utxos.spent.output_slots[0].output_context.hash;
+    let stored = service
+        .audited_utxos(&utxos_request(vec![exit.into()]))
+        .await
+        .expect("UTXO read");
+    assert!(stored.value.utxos[0].is_some());
+    read_at(&service, None).await;
+    let after = read_at(&service, Some(9)).await;
+    let [resolved] = after.value.items.as_slice() else {
+        panic!("the same spend");
+    };
+    assert_eq!(resolved.outputs, unseen.outputs);
+    assert_eq!(resolved.inputs[0].unseen_hash, None);
+    assert_eq!(
+        input_ring(&after),
+        Some(DecryptedInputRing::Ring {
+            commitment: utxos.commitment.into(),
+        })
+    );
+    assert_eq!(
+        resolved
+            .sender
+            .as_ref()
+            .expect("the note names its owner")
+            .owner_key,
+        utxos.member.owner_key.into()
+    );
+}
+
+#[tokio::test]
+async fn a_row_of_another_ring_outside_every_shape_leaves_the_page_readable() {
+    let fixture = Fixture::new();
+    let mut foreign = fixture.audited.clone();
+    foreign.tx_signature = Signature::from([0xee; 64]);
+    foreign.ring_program_id = Some(OTHER_RING);
+    foreign.nullifiers.clear();
+    let rows = vec![foreign, fixture.audited.clone()];
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([(None, paged(rows, None, Some(1)))]);
+    let service = fixture.hub(source).service(None).expect("service");
+    let page = read_at(&service, None).await;
+    assert_eq!(page.value.items.len(), 1);
+    assert!(page.value.skipped.is_empty());
+}
+
+#[tokio::test]
+async fn an_in_proof_input_the_service_never_opened_reads_as_unseen_with_its_prefix() {
+    let fixture = Fixture::new();
+    let mut transfer = ring_transfer(83);
+    let spent_nullifier = transfer.nullifiers[0];
+    let dummy_nullifier = field(0x1e);
+    transfer.nullifiers.push(dummy_nullifier);
+    let unseen = field(0x61);
+    let transaction = Indexed {
+        transfer: &transfer,
+        outputs: &[paid(sol(0xb4, 40), fixture.recipient_u), Output::Dummy],
+        auditor: &fixture.auditor.pubkey(),
+        signature: 83,
+        frames: &fixture.frames,
+    }
+    .in_proof(&[Some(unseen), None]);
+    let response = fixture
+        .read_transactions(vec![transaction], RingMode::Confidential)
+        .await;
+    assert!(response.value.skipped.is_empty());
+    let [item] = response.value.items.as_slice() else {
+        panic!("expected one audited transaction");
+    };
+    assert_eq!(amounts(item), [40]);
+    let [spent, dummy] = item.inputs.as_slice() else {
+        panic!("one input per published nullifier");
+    };
+    assert_eq!(spent.nullifier, spent_nullifier.into());
+    assert_eq!(spent.opening, None);
+    assert_eq!(
+        spent.unseen_prefix.map(|prefix| prefix.0),
+        InputPrefix::of(&unseen)
+    );
+    assert_eq!(dummy.nullifier, dummy_nullifier.into());
+    assert_eq!(dummy.opening, None);
+    assert_eq!(dummy.unseen_prefix, None);
 }
 
 #[tokio::test]

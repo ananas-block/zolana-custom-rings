@@ -66,15 +66,13 @@ async fn a_backfill_opens_a_deposited_utxo_a_later_spend_names() {
     ]);
     let service = fixture.hub(source).service(None).expect("service");
     let before = read_at(&service, Some(9)).await;
-    assert_eq!(
-        before
-            .value
-            .skipped
-            .iter()
-            .map(|row| row.reason)
-            .collect::<Vec<_>>(),
-        [SkippedReason::UnseenInput]
-    );
+    assert!(before.value.skipped.is_empty());
+    let [unresolved] = before.value.items.as_slice() else {
+        panic!("the spend opens before its deposit");
+    };
+    assert_eq!(unresolved.sender, None);
+    assert_eq!(unresolved.inputs[0].unseen_hash, Some(commitment.into()));
+    assert_eq!(amounts(unresolved), [64]);
     service.backfill_utxos().await.expect("backfill");
     let found = service
         .audited_utxos(&utxos_request(vec![commitment.into()]))
@@ -226,10 +224,7 @@ async fn a_read_never_reads_the_registry() {
     let record_reads = source.record_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     let page = read_at(&service, None).await;
-    assert_eq!(
-        escrow_errors(&page),
-        [OutputPayloadErrorKind::EscrowUnknown; 2]
-    );
+    assert_eq!(escrow_pending(&page).len(), 2);
     assert_eq!(record_reads.load(Ordering::Relaxed), 0);
 }
 
@@ -255,19 +250,16 @@ async fn a_moved_records_root_rereads_the_records() {
     let record_reads = source.record_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
-    assert_eq!(
-        escrow_errors(&read_at(&service, None).await),
-        [OutputPayloadErrorKind::EscrowUnknown]
-    );
+    assert_eq!(escrow_pending(&read_at(&service, None).await).len(), 1);
 
     records.escrow(&escrow_writes(&owners[1..]));
     service.backfill_utxos().await.expect("backfill");
-    assert!(escrow_errors(&read_at(&service, None).await).is_empty());
+    assert!(escrow_pending(&read_at(&service, None).await).is_empty());
     assert_eq!(record_reads.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]
-async fn an_owner_the_registry_never_escrowed_reports_its_slot() {
+async fn an_owner_the_registry_never_escrowed_keeps_its_proven_fields() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
     let source = escrowed_source(&fixture, &owners, &owners[..1]);
@@ -278,13 +270,13 @@ async fn an_owner_the_registry_never_escrowed_reports_its_slot() {
         panic!("one escrowed transfer, {:?}", page.value.skipped);
     };
     assert_eq!(amounts(item), [30]);
-    assert_eq!(
-        item.payload_errors,
-        [DecryptedPayloadError {
-            slot_index: 1,
-            kind: OutputPayloadErrorKind::EscrowUnknown,
-        }]
-    );
+    assert!(item.payload_errors.is_empty());
+    let pending = &item.outputs[1];
+    assert_eq!(pending.kind, DecryptedOutputKind::EscrowPending);
+    assert_eq!(pending.recipient_u, Some(fixture.recipient_u.into()));
+    let fields = pending.escrow_pending.as_ref().expect("proven fields");
+    assert_eq!(fields.owner_key, owners[1].owner_key.into());
+    assert_eq!((fields.amount, fields.asset.as_ref()), (12, None));
 }
 
 /// A page short of a record keeps no partial key map, the next backfill reads again.
@@ -297,10 +289,7 @@ async fn a_registry_page_short_of_a_record_escrows_no_key() {
     let record_reads = source.record_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
-    assert_eq!(
-        escrow_errors(&read_at(&service, None).await),
-        [OutputPayloadErrorKind::EscrowUnknown; 2]
-    );
+    assert_eq!(escrow_pending(&read_at(&service, None).await).len(), 2);
     let refreshed = record_reads.load(Ordering::Relaxed);
     service.backfill_utxos().await.expect("backfill");
     assert!(record_reads.load(Ordering::Relaxed) > refreshed);
@@ -402,11 +391,10 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
     let mut invalid_disclosure = delivered(10);
     // The envelope's first byte, past the tagged ephemeral key.
     invalid_disclosure.messages[0].data[33] ^= 1;
-    let mut source =
-        fixture
-            .source()
-            .with_transactions(vec![corrupted, unmatched, invalid_disclosure]);
-    source.assets = None;
+    let source = fixture
+        .source()
+        .with_transactions(vec![corrupted, unmatched, invalid_disclosure]);
+    *source.assets.lock().unwrap() = None;
     let reads = source.asset_reads.clone();
     let service = fixture.hub(source).service(None).unwrap();
     let response = service
@@ -425,7 +413,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
             item.payload_errors,
             [DecryptedPayloadError {
                 slot_index,
-                kind: OutputPayloadErrorKind::Commitment,
+                kind: OutputPayloadErrorKind::UnknownAsset,
             }]
         );
     }
@@ -434,7 +422,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
         response.value.skipped[0].reason,
         SkippedReason::InvalidAuditData
     );
-    // One timed read at the page start.
+    // One read at the page start, the miss floor holds back a read per poisoned slot.
     assert_eq!(reads.load(Ordering::Relaxed), 1);
 }
 
@@ -443,7 +431,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
     const ASSET_ID: u64 = 2;
     let asset = Address::new_from_array([8; 32]);
     let fixture = Fixture::new();
-    let mut source = fixture.source().with_transactions(vec![Indexed {
+    let source = fixture.source().with_transactions(vec![Indexed {
         transfer: &ring_transfer(8),
         outputs: &[Output::Exit(utxo(0xb8, asset, 13))],
         auditor: &fixture.auditor.pubkey(),
@@ -451,7 +439,8 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
         frames: &fixture.frames,
     }
     .delivered()]);
-    source.assets = Some(RingAssets::new([Mint::new(asset, ASSET_ID)]).expect("ring assets"));
+    *source.assets.lock().unwrap() =
+        Some(RingAssets::new([Mint::new(asset, ASSET_ID)]).expect("ring assets"));
     let unknown_transactions = source.transactions.clone();
     let reads = source.asset_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
@@ -481,10 +470,10 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
     }
     assert_eq!(reads.load(Ordering::Relaxed), 1);
 
-    let mut source = fixture
+    let source = fixture
         .source()
         .with_transactions(unknown_transactions.clone());
-    source.assets = None;
+    *source.assets.lock().unwrap() = None;
     let reads = source.asset_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     for signer in [&delegate() as &dyn ReadSigner, &Passkey::new(46)] {
@@ -580,4 +569,90 @@ async fn an_unconfigured_ring_backfills_nothing() {
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("unconfigured ring");
     assert_eq!(reads.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn a_row_whose_origin_does_not_decode_is_skipped_and_the_backfill_goes_past_it() {
+    let fixture = Fixture::new();
+    let utxos = SpentUtxo::new(&fixture);
+    let rows = vec![utxos.entry.clone(), utxos.paid.clone()];
+    let mut source = utxos.source(
+        &fixture,
+        [
+            (None, paged(rows, Some(1), None)),
+            (Some(vec![1]), paged(Vec::new(), None, Some(2))),
+        ],
+    );
+    source.undecodable.insert(utxos.entry.tx_signature);
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    let found = service
+        .audited_utxos(&utxos_request(vec![utxos.commitment.into()]))
+        .await
+        .expect("UTXO read");
+    assert!(found.value.utxos[0].is_some(), "the row after the bad one");
+    let page = read_at(&service, None).await;
+    let [skipped] = page.value.skipped.as_slice() else {
+        panic!("one bad row, {:?}", page.value.skipped);
+    };
+    assert_eq!(skipped.tx_signature.0, utxos.entry.tx_signature);
+    assert_eq!(skipped.reason, SkippedReason::InvalidAuditData);
+    assert_eq!(page.value.items.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_origin_read_stops_the_backfill_at_its_position() {
+    let fixture = Fixture::new();
+    let utxos = SpentUtxo::new(&fixture);
+    let mut source = utxos.source(
+        &fixture,
+        [
+            (None, paged(vec![utxos.paid.clone()], None, Some(1))),
+            (Some(vec![1]), paged(Vec::new(), None, Some(1))),
+        ],
+    );
+    source.origins.clear();
+    let service = fixture.hub(source).service(None).expect("service");
+    assert!(service.backfill_utxos().await.is_err());
+    assert!(read_at_result(&service, None).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mint_registered_inside_the_refresh_interval_opens_on_a_miss() {
+    let fixture = Fixture::new();
+    let fresh = Address::new_from_array([0xee; 32]);
+    let outputs = [
+        paid(utxo(0xb4, fresh, 40), fixture.recipient_u),
+        Output::Dummy,
+    ];
+    let transaction = Indexed {
+        transfer: &ring_transfer(84),
+        outputs: &outputs,
+        auditor: &fixture.auditor.pubkey(),
+        signature: 84,
+        frames: &fixture.frames,
+    }
+    .delivered_with(false);
+    let source = fixture.source().with_transactions(vec![transaction]);
+    let registry = source.assets.clone();
+    let reads = source.asset_reads.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    let first = read_at(&service, None).await;
+    assert_eq!(
+        first.value.items[0].payload_errors,
+        [DecryptedPayloadError {
+            slot_index: 0,
+            kind: OutputPayloadErrorKind::UnknownAsset,
+        }]
+    );
+    assert_eq!(reads.load(Ordering::Relaxed), 1);
+    // A slot no registration names misses on every read, the floor holds the registry reads.
+    read_at(&service, None).await;
+    assert_eq!(reads.load(Ordering::Relaxed), 1);
+    *registry.lock().unwrap() = Some(RingAssets::new([Mint::new(fresh, 9)]).expect("assets"));
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let second = read_at(&service, None).await;
+    assert_eq!(reads.load(Ordering::Relaxed), 2);
+    assert!(second.value.items[0].payload_errors.is_empty());
+    assert_eq!(amounts(&second.value.items[0]), [40]);
 }

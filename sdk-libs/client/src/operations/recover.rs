@@ -29,7 +29,8 @@ use crate::{
     known::KnownUtxoIndex,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
     scan::{
-        Page, PageEnd, Pages, RingHistory, RingScan, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE,
+        Page, PageEnd, Pages, RingHistory, RingScan, RowOrigins, ScanPage, SkippedRow,
+        RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE,
     },
     types::{OutputOpening, OutputPayloadErrorKind},
     AuditError,
@@ -74,6 +75,8 @@ pub struct RecoveredNotes {
     pub unsupported_deposits: Vec<[u8; 32]>,
     /// Verified merge mints the asset registry lacks, their notes stay unresolved.
     pub unknown_mints: BTreeSet<Address>,
+    /// Nullifiers of anonymous inputs no note matches, a complete history leaves none.
+    pub unseen_inputs: Vec<[u8; 32]>,
 }
 
 impl<'a> RingRecovery<'a> {
@@ -175,6 +178,10 @@ struct Found {
     unknown_mints: BTreeSet<Address>,
     /// Every note an anonymous transfer may name by hash or prefix, in history order.
     known: KnownUtxoIndex,
+    unseen_inputs: Vec<[u8; 32]>,
+    /// Commitments of delivered slots no held asset rebuilds.
+    unknown_assets: Vec<[u8; 32]>,
+    skipped: Vec<SkippedRow>,
 }
 
 impl<'a> MemberRecovery<'a> {
@@ -213,22 +220,21 @@ impl<'a> MemberRecovery<'a> {
             .indexer_config(recovery.indexer_config)
             .confirmed(indexer, origin)
             .await?;
-        if page.next_cursor.is_some() {
-            return Err(AuditError::IncompleteScan);
-        }
-        for confirmed in &page.transactions {
+        for confirmed in &complete(page)? {
             self.audited_utxos(confirmed, owner_hash, assets, &mut found)?;
         }
         let unsupported_deposits = self.deposited_utxos(&history, assets, &mut found)?;
         let (spent, merges) = self
             .follow_spends(indexer, origin, assets, &mut found)
             .await?;
+        refuse_skipped(found.skipped)?;
         let mut unopened: Vec<_> = found
             .unresolved
             .into_iter()
             .filter(|(_, nullifier)| !spent.contains(nullifier))
             .map(|(commitment, _)| commitment)
             .collect();
+        unopened.extend(found.unknown_assets);
         unopened.extend(
             merges
                 .iter()
@@ -244,6 +250,7 @@ impl<'a> MemberRecovery<'a> {
             unopened,
             unsupported_deposits,
             unknown_mints: found.unknown_mints,
+            unseen_inputs: found.unseen_inputs,
         })
     }
 
@@ -269,16 +276,27 @@ impl<'a> MemberRecovery<'a> {
                 .utxos()
                 .map(|created| (created.commitment, created.utxo)),
         );
-        // Any unopened slot but another owner's escrow miss could hide a source note.
-        if let Some(error) = audited
-            .payload_errors
-            .iter()
-            .find(|error| error.kind != OutputPayloadErrorKind::EscrowUnknown)
-        {
-            return Err(AuditError::UnopenedOutput {
-                slot: error.slot_index,
-                kind: error.kind,
-            });
+        found.unseen_inputs.extend(
+            audited
+                .inputs
+                .iter()
+                .filter(|input| input.opening.is_unseen())
+                .map(|input| input.nullifier),
+        );
+        for error in &audited.payload_errors {
+            // A mint the registry lacks reads here, another member's recovery goes on.
+            if error.kind != OutputPayloadErrorKind::UnknownAsset {
+                return Err(AuditError::UnopenedOutput {
+                    slot: error.slot_index,
+                    kind: error.kind,
+                });
+            }
+            found.unknown_assets.extend(
+                transaction
+                    .output_slots
+                    .get(error.slot_index as usize)
+                    .map(|slot| slot.output_context.hash),
+            );
         }
         for output in &audited.outputs {
             let OutputOpening::Ring { utxo: opened, .. } = &output.opening else {
@@ -357,10 +375,7 @@ impl<'a> MemberRecovery<'a> {
         }
         .bound(indexer, origin)
         .await?;
-        if page.next_cursor.is_some() {
-            return Err(AuditError::IncompleteScan);
-        }
-        Ok(page.transactions)
+        complete(page)
     }
 
     /// Disclosed deposits are found without trusting their recipient view tags.
@@ -455,6 +470,11 @@ impl<'a> MemberRecovery<'a> {
         let mut merges: Vec<ShieldedTransaction> = Vec::new();
         let mut merge_outputs = HashSet::new();
         let mut remaining = self.recovery.max_pages.get();
+        let mut rows = RowOrigins {
+            origin,
+            ring,
+            skipped: Vec::new(),
+        };
         loop {
             for mut transaction in self
                 .spend_history(indexer, &nullifiers, &mut remaining)
@@ -463,12 +483,9 @@ impl<'a> MemberRecovery<'a> {
                 if transaction.ring_program_id != Some(ring) {
                     continue;
                 }
-                let event_index = transaction
-                    .event_index
-                    .ok_or(AuditError::MissingEventIndex)?;
-                let confirmed = origin
-                    .origin(transaction.tx_signature, event_index, ring)
-                    .await?;
+                let Some(confirmed) = rows.read(&transaction).await? else {
+                    continue;
+                };
                 if !confirmed.ring_invoked {
                     continue;
                 }
@@ -498,8 +515,14 @@ impl<'a> MemberRecovery<'a> {
                 if found.seen.contains(&output.hash) {
                     continue;
                 }
-                let Some(mut successor) = merge_successor(&self.source, transaction, ring)? else {
-                    continue;
+                let successor = merge_successor(&self.source, transaction, ring);
+                let mut successor = match successor {
+                    Ok(Some(successor)) => successor,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        rows.skipped.push(SkippedRow::of(transaction, error)?);
+                        continue;
+                    }
                 };
                 found.seen.insert(output.hash);
                 match assets.registry().mint(&successor.utxo.asset.asset) {
@@ -517,6 +540,7 @@ impl<'a> MemberRecovery<'a> {
                 }
             }
             if previous == found.candidates.len() && previous_unresolved == found.unresolved.len() {
+                found.skipped = rows.skipped;
                 return Ok((spent, merges));
             }
             nullifiers = found.candidates[previous..]
@@ -576,6 +600,22 @@ impl<'a> MemberRecovery<'a> {
             transactions.extend(page.transactions);
         }
         Ok(transactions)
+    }
+}
+
+fn complete<T>(page: ScanPage<T>) -> Result<Vec<T>, AuditError> {
+    if page.next_cursor.is_some() {
+        return Err(AuditError::IncompleteScan);
+    }
+    refuse_skipped(page.skipped)?;
+    Ok(page.transactions)
+}
+
+/// A row left unread can hold a source note or its spend, the result would not be complete.
+fn refuse_skipped(skipped: Vec<SkippedRow>) -> Result<(), AuditError> {
+    match skipped.into_iter().next() {
+        Some(row) => Err(row.error),
+        None => Ok(()),
     }
 }
 

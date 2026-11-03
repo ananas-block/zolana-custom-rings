@@ -56,19 +56,20 @@ fn the_inputs_under_one_prefix_open_only_when_one_note_fills_one_position() {
         let candidates = notes.iter().map(|(commitment, _)| *commitment).collect();
         match case.expected {
             Expected::Opened => assert_eq!(
-                assigned.unwrap(),
+                assigned,
                 [InputOpening::Opened(ring_input(notes[0].0, notes[0].1))],
                 "{}",
                 case.name
             ),
             Expected::Ambiguous => assert_eq!(
-                assigned.unwrap(),
+                assigned,
                 vec![InputOpening::Ambiguous { candidates }; case.inputs],
                 "{}",
                 case.name
             ),
-            Expected::Unseen => assert!(
-                matches!(assigned, Err(AuditError::UnseenInputPrefix { prefix: unseen }) if unseen == prefix.get()),
+            Expected::Unseen => assert_eq!(
+                assigned,
+                vec![InputOpening::Unseen { prefix }; case.inputs],
                 "{}",
                 case.name
             ),

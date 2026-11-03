@@ -44,6 +44,8 @@ use crate::{
 };
 
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+/// A delivered output of a mint no registration names misses on every read, the floor bounds the registry reads it causes.
+pub(crate) const ASSET_MISS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The attested limit is what the reader signed, absent for the default page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -422,7 +424,7 @@ impl<S: TransactionSource> AuditService<S> {
                     page: &page,
                 })
                 .await?;
-            validate_indexer_response(&response, &page, self.view_tag)?;
+            self.validate_indexer_response(&response, &page)?;
             // Read after the page, the root every transfer on it proves under is already on chain.
             if config.mode == RingMode::ConfidentialEscrow {
                 if let Err(error) = self.refresh_escrow(&store).await {
@@ -537,7 +539,7 @@ impl<S: TransactionSource> AuditService<S> {
                 page,
             })
             .await?;
-        validate_indexer_response(&response, page, self.view_tag)?;
+        self.validate_indexer_response(&response, page)?;
         let context = spr_indexer_api::Context {
             block_time: response.context.block_time,
             slot: response.context.slot,
@@ -561,6 +563,44 @@ impl<S: TransactionSource> AuditService<S> {
         })
     }
 
+    /// Only a row of the served ring meets the shape check, a feature build can publish other shapes.
+    fn validate_indexer_response(
+        &self,
+        response: &GetShieldedTransactionsByTagsResponse,
+        page: &Page,
+    ) -> Result<(), RingRpcError> {
+        let next = response.next_cursor.as_deref();
+        let frontier = response.scanned_through.as_deref();
+        if response.transactions.len() > page.limit.get() as usize
+            || (next.or(frontier).is_none() && !response.transactions.is_empty())
+            || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
+            || frontier.is_some_and(|cursor| {
+                !cursor_in_bounds(cursor)
+                    || response.transactions.len() >= page.limit.get() as usize
+            })
+        {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        // Compact padding leaves trailing slots out, a transaction publishes at most its shape.
+        let unsupported = response.transactions.iter().any(|transaction| {
+            transaction.ring_program_id == Some(self.ring)
+                && transaction
+                    .messages
+                    .iter()
+                    .any(|message| message.view_tag == self.view_tag)
+                && (transaction.nullifiers.is_empty()
+                    || canonical_shape(
+                        transaction.nullifiers.len(),
+                        transaction.output_slots.len(),
+                    )
+                    .is_err())
+        });
+        if unsupported {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        Ok(())
+    }
+
     /// Every opened UTXO enters `store` before the next row, a later input resolves through it.
     async fn audit_rows(
         &self,
@@ -569,7 +609,8 @@ impl<S: TransactionSource> AuditService<S> {
         store: &AuditStore,
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
-        let assets = self.shared.due_assets().await;
+        let mut assets = self.shared.due_assets().await;
+        let mut refreshed = false;
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut origins: HashMap<(Signature, u16), RingOrigin> = HashMap::new();
@@ -582,11 +623,32 @@ impl<S: TransactionSource> AuditService<S> {
             let origin = match origins.get(&(tx.tx_signature, event_index)) {
                 Some(known) => known.clone(),
                 None => {
-                    let found = source
+                    match source
                         .transaction_origin(tx.tx_signature, event_index, self.ring)
-                        .await?;
-                    origins.insert((tx.tx_signature, event_index), found.clone());
-                    found
+                        .await
+                    {
+                        Ok(found) => {
+                            origins.insert((tx.tx_signature, event_index), found.clone());
+                            found
+                        }
+                        Err(error) if error.is_transport() => return Err(error.into()),
+                        // A retry never decodes it, the cursor must pass the row.
+                        Err(error) => {
+                            log::warn!(
+                                "ring {} event {}:{event_index} has no readable origin because {}",
+                                self.ring,
+                                tx.tx_signature,
+                                redacted(&error)
+                            );
+                            skipped.push(SkippedTransaction {
+                                slot: tx.slot,
+                                tx_signature: tx.tx_signature.into(),
+                                event_index,
+                                reason: SkippedReason::InvalidAuditData,
+                            });
+                            continue;
+                        }
+                    }
                 }
             };
             if !origin.requires_audit() {
@@ -636,10 +698,19 @@ impl<S: TransactionSource> AuditService<S> {
                 store,
                 mode,
             };
+            let mut opened = bound.and_then(|()| self.audit(audit, &assets));
+            // A mint registered inside the refresh interval misses the cache.
+            if !refreshed
+                && opened
+                    .as_ref()
+                    .is_ok_and(AuditedTransaction::has_unknown_assets)
+            {
+                refreshed = true;
+                assets = self.shared.assets_after_miss().await;
+                opened = self.audit(audit, &assets);
+            }
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            let result = bound
-                .and_then(|()| self.audit(audit, &assets))
-                .and_then(|opened| Ok((opened, origin.spenders(mode)?)));
+            let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
                 Ok((opened, spenders)) => {
                     store.record(
@@ -668,9 +739,6 @@ impl<S: TransactionSource> AuditService<S> {
                     event_index,
                     reason: match reason {
                         AuditError::MissingAuditorMessage => SkippedReason::MissingAuditorMessage,
-                        AuditError::UnseenInput { .. } | AuditError::UnseenInputPrefix { .. } => {
-                            SkippedReason::UnseenInput
-                        }
                         _ => SkippedReason::InvalidAuditData,
                     },
                 }),
@@ -806,38 +874,6 @@ fn validate_merge_page(page: &MergeAuditPage, request: &Page) -> Result<(), Ring
             .as_deref()
             .is_some_and(|cursor| !cursor_in_bounds(cursor) || request.cursor() == Some(cursor))
     {
-        return Err(RingRpcError::InvalidIndexerResponse);
-    }
-    Ok(())
-}
-
-fn validate_indexer_response(
-    response: &GetShieldedTransactionsByTagsResponse,
-    page: &Page,
-    auditor_tag: [u8; 32],
-) -> Result<(), RingRpcError> {
-    let next = response.next_cursor.as_deref();
-    let frontier = response.scanned_through.as_deref();
-    if response.transactions.len() > page.limit.get() as usize
-        || (next.or(frontier).is_none() && !response.transactions.is_empty())
-        || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
-        || frontier.is_some_and(|cursor| {
-            !cursor_in_bounds(cursor) || response.transactions.len() >= page.limit.get() as usize
-        })
-    {
-        return Err(RingRpcError::InvalidIndexerResponse);
-    }
-    // Compact padding leaves trailing slots out, a transaction publishes at most its shape.
-    let unsupported = response.transactions.iter().any(|transaction| {
-        transaction
-            .messages
-            .iter()
-            .any(|message| message.view_tag == auditor_tag)
-            && (transaction.nullifiers.is_empty()
-                || canonical_shape(transaction.nullifiers.len(), transaction.output_slots.len())
-                    .is_err())
-    });
-    if unsupported {
         return Err(RingRpcError::InvalidIndexerResponse);
     }
     Ok(())

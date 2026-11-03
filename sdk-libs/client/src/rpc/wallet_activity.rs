@@ -83,12 +83,7 @@ impl WalletActivity {
             false => {
                 let outputs: Vec<_> = outputs
                     .into_iter()
-                    .filter(|output| {
-                        output
-                            .utxo
-                            .as_ref()
-                            .is_some_and(|utxo| names(utxo.owner_key))
-                    })
+                    .filter(|output| output.owner_key().is_some_and(names))
                     .collect();
                 if outputs.is_empty() {
                     return None;

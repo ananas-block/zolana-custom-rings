@@ -95,11 +95,12 @@ pub use crate::{
         RecordPoolRead, StorageTip,
     },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
-    scan::{AuditedPage, RingScan, RingScanPage, ScanPage},
+    scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
-        AuditedUtxo, CreatedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening,
-        OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
+        AuditedUtxo, CreatedUtxo, EscrowPendingOutput, EscrowPendingSlot, InputOpening, InputRing,
+        KnownUtxo, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag,
+        UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

@@ -627,7 +627,7 @@ async fn an_escrow_written_through_the_writer_opens_the_wallets_outputs() {
     own_records.escrow(&[*published]);
     let service = records.hub.service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
-    assert!(escrow_errors(&read_at(&service, None).await).is_empty());
+    assert!(escrow_pending(&read_at(&service, None).await).is_empty());
 }
 
 #[tokio::test]

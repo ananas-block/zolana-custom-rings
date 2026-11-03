@@ -70,6 +70,7 @@ zolana-ring-transaction = { workspace = true }
 spr-transaction = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 borsh = { workspace = true }
 spr-event = { workspace = true }
 spr-event-parser = { workspace = true }

@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use custom_ring_interface::{InputPrefix, INPUT_PREFIX_BYTES};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,9 +45,9 @@ pub use relay_proof::*;
 pub use wallet_activity::*;
 
 use crate::{
-    AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
-    InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening, OutputPayloadErrorKind,
-    ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
+    AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, EscrowPendingSlot,
+    InputOpening, InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening,
+    OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -463,10 +464,10 @@ pub struct DecryptedTransaction {
     /// Every slot whose rebuilt opening reaches its published commitment, in published order.
     pub outputs: Vec<DecryptedOutput>,
     pub payload_errors: Vec<DecryptedPayloadError>,
-    /// The hidden sender of an anonymous ring.
+    /// The hidden sender of an anonymous ring, absent while `hash_0` names an unseen note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<DecryptedSender>,
-    /// One per published nullifier of an anonymous ring.
+    /// One per published nullifier, empty on the signer rail.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
@@ -511,7 +512,7 @@ pub struct DecryptedOutput {
     pub slot_index: u32,
     pub output_context: DecryptedOutputContext,
     pub kind: DecryptedOutputKind,
-    /// Absent for a dummy.
+    /// Absent for a dummy and a slot awaiting its owner's escrow record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utxo: Option<DecryptedUtxo>,
     /// The recipient's X25519 u of a ring output.
@@ -520,6 +521,22 @@ pub struct DecryptedOutput {
     /// The view tag of an anonymous ring output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escrow_pending: Option<DecryptedEscrowPending>,
+}
+
+/// The fields a key escrow slot's proof fixes, its commitment rebuilds once the service holds the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DecryptedEscrowPending {
+    pub owner_key: SerializablePubkey,
+    pub amount: u64,
+    pub blinding: Hash,
+    /// Set on an exit, a delivered ring body omits the asset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mint: Option<SerializablePubkey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -528,6 +545,7 @@ pub enum DecryptedOutputKind {
     Ring,
     Exit,
     Dummy,
+    EscrowPending,
 }
 
 /// Exact field encodings keep an unknown asset readable.
@@ -580,13 +598,28 @@ pub struct DecryptedSender {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// Absent for a dummy input and an input under an ambiguous prefix.
+    /// Absent for a dummy input, an ambiguous prefix and an unseen note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<DecryptedInputOpening>,
     /// The known ring notes that carry the input's prefix, more of them than inputs name it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Hash>,
+    /// The prefix of a spent note the service lacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unseen_prefix: Option<DecryptedInputPrefix>,
+    /// `hash_0` of a commitment key while the service lacks its note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unseen_hash: Option<Hash>,
 }
+
+/// Base64 of the prefix bytes, a JSON number cannot hold 128 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Base64String", into = "Base64String")]
+pub struct DecryptedInputPrefix(pub InputPrefix);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("not the prefix of a canonical input hash")]
+pub struct InvalidInputPrefix;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -634,8 +667,6 @@ pub struct SkippedTransaction {
 pub enum SkippedReason {
     MissingAuditorMessage,
     InvalidAuditData,
-    /// An anonymous input names a note the service has not opened yet.
-    UnseenInput,
 }
 
 /// What a signed request covers, besides its timestamp and nonce.
@@ -811,7 +842,7 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
 
 impl From<AuditedOutput> for DecryptedOutput {
     fn from(output: AuditedOutput) -> Self {
-        let (kind, utxo, recipient_u, tag) = match output.opening {
+        let (kind, utxo, recipient_u, tag, escrow_pending) = match output.opening {
             OutputOpening::Ring {
                 utxo,
                 owner_tag: RingOwnerTag::Recipient(recipient_u),
@@ -819,6 +850,7 @@ impl From<AuditedOutput> for DecryptedOutput {
                 DecryptedOutputKind::Ring,
                 Some(utxo),
                 Some(recipient_u.into()),
+                None,
                 None,
             ),
             OutputOpening::Ring {
@@ -829,9 +861,33 @@ impl From<AuditedOutput> for DecryptedOutput {
                 Some(utxo),
                 None,
                 Some(tag.into()),
+                None,
             ),
-            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None, None),
-            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None, None),
+            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None, None, None),
+            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None, None, None),
+            OutputOpening::EscrowPending(pending) => {
+                let (recipient_u, asset, mint) = match pending.slot {
+                    EscrowPendingSlot::Ring { recipient_u } => {
+                        (Some(recipient_u.into()), None, None)
+                    }
+                    EscrowPendingSlot::Exit { asset, mint } => {
+                        (None, Some(asset.into()), mint.map(Into::into))
+                    }
+                };
+                (
+                    DecryptedOutputKind::EscrowPending,
+                    None,
+                    recipient_u,
+                    None,
+                    Some(DecryptedEscrowPending {
+                        owner_key: pending.owner_key.into(),
+                        amount: pending.amount,
+                        blinding: pending.blinding.into(),
+                        asset,
+                        mint,
+                    }),
+                )
+            }
         };
         Self {
             slot_index: output.slot_index,
@@ -844,7 +900,19 @@ impl From<AuditedOutput> for DecryptedOutput {
             utxo: utxo.map(Into::into),
             recipient_u,
             tag,
+            escrow_pending,
         }
+    }
+}
+
+impl DecryptedOutput {
+    /// `None` for a dummy.
+    pub fn owner_key(&self) -> Option<SerializablePubkey> {
+        self.utxo.as_ref().map(|utxo| utxo.owner_key).or_else(|| {
+            self.escrow_pending
+                .as_ref()
+                .map(|pending| pending.owner_key)
+        })
     }
 }
 
@@ -946,19 +1014,48 @@ impl GetAuditedUtxosResponse {
     }
 }
 
+impl From<DecryptedInputPrefix> for Base64String {
+    fn from(prefix: DecryptedInputPrefix) -> Self {
+        prefix.0.to_bytes().to_vec().into()
+    }
+}
+
+impl TryFrom<Base64String> for DecryptedInputPrefix {
+    type Error = InvalidInputPrefix;
+
+    fn try_from(bytes: Base64String) -> Result<Self, Self::Error> {
+        let bytes: [u8; INPUT_PREFIX_BYTES] = bytes.0.try_into().map_err(|_| InvalidInputPrefix)?;
+        InputPrefix::from_bytes(&bytes)
+            .ok()
+            .flatten()
+            .map(Self)
+            .ok_or(InvalidInputPrefix)
+    }
+}
+
 impl From<AuditedInput> for DecryptedInput {
     fn from(input: AuditedInput) -> Self {
         let candidates = match &input.opening {
             InputOpening::Ambiguous { candidates } => {
                 candidates.iter().copied().map(Into::into).collect()
             }
-            InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::Unseen { .. } => {
-                Vec::new()
+            InputOpening::Dummy
+            | InputOpening::Opened(_)
+            | InputOpening::Unseen { .. }
+            | InputOpening::UnseenHash { .. } => Vec::new(),
+        };
+        let (unseen_prefix, unseen_hash) = match &input.opening {
+            InputOpening::Unseen { prefix } => (Some(DecryptedInputPrefix(*prefix)), None),
+            InputOpening::UnseenHash { hash } => (None, Some((*hash).into())),
+            InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::Ambiguous { .. } => {
+                (None, None)
             }
         };
         Self {
             nullifier: input.nullifier.into(),
             candidates,
+            unseen_prefix,
+            unseen_hash,
             opening: input.opening.opened().map(|opening| DecryptedInputOpening {
                 asset: opening.asset.into(),
                 mint: opening.mint.map(Into::into),

@@ -1301,6 +1301,7 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
             DecryptedOutputKind::Ring => "ring",
             DecryptedOutputKind::Exit => "exit",
             DecryptedOutputKind::Dummy => "dummy",
+            DecryptedOutputKind::EscrowPending => "escrow pending",
         };
         let Some(utxo) = &output.utxo else {
             println!("  slot {}  {kind}", output.slot_index);

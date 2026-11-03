@@ -21,7 +21,7 @@ use zolana_ring_client::{
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
-    audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
+    audit::{AuditService, AuditServiceInit, ASSET_MISS_INTERVAL, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
     cosign::{CoSignPolicy, RefusingCoSigner},
@@ -160,8 +160,8 @@ struct AssetCache {
 
 enum RefreshState {
     Never,
-    Succeeded(Instant),
-    Failed(Instant),
+    Succeeded(tokio::time::Instant),
+    Failed(tokio::time::Instant),
 }
 
 struct ReadinessCache {
@@ -285,7 +285,7 @@ impl<S: TransactionSource> Shared<S> {
         self.assets.lock().await.registry.clone()
     }
 
-    /// Delivered bodies name no mint, so a new mint arrives only through the interval refresh.
+    /// Delivered bodies name no mint, a new mint arrives through the interval refresh or a read after a miss.
     pub(crate) async fn due_assets(&self) -> RingAssets {
         match self.refresh_assets().await {
             Ok(assets) => assets,
@@ -293,19 +293,29 @@ impl<S: TransactionSource> Shared<S> {
         }
     }
 
-    /// At most one registry read per interval, a failed one blocks retries until it ends.
+    /// The cache reads the registry again ahead of its interval, a failed read keeps it.
+    pub(crate) async fn assets_after_miss(&self) -> RingAssets {
+        match self.assets_read_within(ASSET_MISS_INTERVAL).await {
+            Ok(assets) => assets,
+            Err(_) => self.cached_assets().await,
+        }
+    }
+
     pub(crate) async fn refresh_assets(&self) -> Result<RingAssets, RingRpcError> {
+        self.assets_read_within(ASSET_REFRESH_INTERVAL).await
+    }
+
+    /// At most one registry read per interval, a failed one blocks retries until it ends.
+    async fn assets_read_within(&self, interval: Duration) -> Result<RingAssets, RingRpcError> {
         let mut cache = self.assets.lock().await;
         let refresh_due = match cache.refresh {
             RefreshState::Never => true,
-            RefreshState::Succeeded(at) | RefreshState::Failed(at) => {
-                at.elapsed() >= ASSET_REFRESH_INTERVAL
-            }
+            RefreshState::Succeeded(at) | RefreshState::Failed(at) => at.elapsed() >= interval,
         };
         if refresh_due {
-            cache.refresh = RefreshState::Failed(Instant::now());
+            cache.refresh = RefreshState::Failed(tokio::time::Instant::now());
             cache.registry = self.source.ring_assets().await?;
-            cache.refresh = RefreshState::Succeeded(Instant::now());
+            cache.refresh = RefreshState::Succeeded(tokio::time::Instant::now());
         } else if matches!(cache.refresh, RefreshState::Failed(_)) {
             return Err(ClientError::Rpc("asset registry is unavailable".to_owned()).into());
         }

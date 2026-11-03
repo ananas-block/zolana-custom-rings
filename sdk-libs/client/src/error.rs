@@ -17,13 +17,8 @@ use crate::OutputPayloadErrorKind;
 
 #[derive(Debug, Error)]
 pub enum AuditError {
-    #[error("transaction carries no message tagged for the auditor")]
+    #[error("the last message of the transaction is not tagged for the auditor")]
     MissingAuditorMessage,
-    #[error("transaction carries more than one message tagged for the auditor")]
-    DuplicateAuditorMessage,
-    /// The program accepts the auditor message only as the last message.
-    #[error("auditor message is at index {index} of {count} messages, expected the last")]
-    AuditorMessageNotLast { index: usize, count: usize },
     #[error("auditor message of {0} bytes does not fit the disclosure layout")]
     AuditorMessageLength(usize),
     #[error("transaction publishes no tx_viewing_pk")]
@@ -46,12 +41,6 @@ pub enum AuditError {
     DisclosurePadding,
     #[error("{trees} input trees do not match {inputs} published inputs")]
     InputTreeCount { trees: usize, inputs: usize },
-    #[error("spent UTXO {commitment:?} is in no output the auditor opened")]
-    UnseenInput { commitment: [u8; 32] },
-    #[error(
-        "fewer known notes of the sender carry spent prefix {prefix:#034x} than inputs name it"
-    )]
-    UnseenInputPrefix { prefix: u128 },
     #[error("audited notes answer {got} of {want} requested hashes")]
     AuditedUtxosCount { got: usize, want: usize },
     #[error("audited note names both or neither of its nullifier key and owner hash")]
@@ -126,6 +115,25 @@ pub enum AuditError {
     Hasher(#[from] HasherError),
     #[error(transparent)]
     Stream(#[from] StreamError),
+}
+
+impl AuditError {
+    /// A read that failed says nothing of the row, a retry can succeed.
+    pub fn is_transport(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable { .. } | Self::Client(_) | Self::Indexer(_)
+        )
+    }
+
+    /// A bad stack height or a lost auditor message names a faulty RPC, a retry can succeed.
+    pub(crate) fn is_row_failure(&self) -> bool {
+        !self.is_transport()
+            && !matches!(
+                self,
+                Self::InvalidStackHeight(_) | Self::MissingAuditorMessage
+            )
+    }
 }
 
 impl From<BlockingInsideRuntime> for AuditError {

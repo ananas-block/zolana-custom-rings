@@ -31,8 +31,8 @@ use crate::{
     known::KnownUtxoIndex,
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
-        AuditedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening, OutputPayloadError,
-        OutputPayloadErrorKind, RingOwnerTag,
+        AuditedUtxo, EscrowPendingOutput, EscrowPendingSlot, InputOpening, InputRing, KnownUtxo,
+        OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag,
     },
     AuditError,
 };
@@ -204,25 +204,16 @@ fn check_published(layout: AuditStreamLayout, tx: &ShieldedTransaction) -> Resul
     }
 }
 
+/// The program keeps the auditor message last, the tag of any earlier message is free frame bytes.
 fn auditor_message<'a>(
     tx: &'a ShieldedTransaction,
     auditor_pk: &X25519Pubkey,
 ) -> Result<&'a [u8], AuditError> {
-    let view_tag = auditor_view_tag(auditor_pk);
-    let mut tagged = tx
-        .messages
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| message.view_tag == view_tag);
-    let (index, message) = tagged.next().ok_or(AuditError::MissingAuditorMessage)?;
-    if tagged.next().is_some() {
-        return Err(AuditError::DuplicateAuditorMessage);
-    }
-    let count = tx.messages.len();
-    if index + 1 != count {
-        return Err(AuditError::AuditorMessageNotLast { index, count });
-    }
-    Ok(&message.data)
+    tx.messages
+        .last()
+        .filter(|message| message.view_tag == auditor_view_tag(auditor_pk))
+        .map(|message| message.data.as_slice())
+        .ok_or(AuditError::MissingAuditorMessage)
 }
 
 /// The ring program encodes every exit under scheme 3, every other slot under its layout's scheme.
@@ -335,7 +326,12 @@ impl Transfer<'_> {
         }
         let owner_key = body.owner_key;
         let Some(nullifier_pk) = self.nullifier_pk(&owner_key, body.nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
+            return Ok(Ok(OutputOpening::EscrowPending(EscrowPendingOutput {
+                owner_key,
+                amount: body.amount,
+                blinding,
+                slot: EscrowPendingSlot::Ring { recipient_u },
+            })));
         };
         for (asset, mint) in self.assets.fields() {
             let utxo = AuditedUtxo {
@@ -356,8 +352,7 @@ impl Transfer<'_> {
                 }));
             }
         }
-        // A mint missing from the held assets reads as a foreign body.
-        Ok(Err(OutputPayloadErrorKind::Commitment))
+        Ok(Err(OutputPayloadErrorKind::UnknownAsset))
     }
 
     fn exit(&self, slot: Slot<'_>, record: ExitRecord) -> Result<SlotOpening, AuditError> {
@@ -366,7 +361,15 @@ impl Transfer<'_> {
         }
         let owner_key = slot.owner_tag();
         let Some(nullifier_pk) = self.nullifier_pk(&owner_key, record.nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
+            return Ok(Ok(OutputOpening::EscrowPending(EscrowPendingOutput {
+                owner_key,
+                amount: record.amount,
+                blinding: self.blinding(slot)?,
+                slot: EscrowPendingSlot::Exit {
+                    asset: record.asset,
+                    mint: self.mint(&record.asset),
+                },
+            })));
         };
         let utxo = AuditedUtxo {
             owner_key,
@@ -393,6 +396,8 @@ impl Transfer<'_> {
                 ..ProofInputUtxo::default()
             }
             .hash()?,
+            // Callers return a pending slot ahead of verify, no hash rebuilds without its nullifier key.
+            OutputOpening::EscrowPending(_) => return Ok(Err(OutputPayloadErrorKind::Commitment)),
         };
         Ok(match commitment == slot.output.output_context.hash {
             true => Ok(opening),
@@ -465,42 +470,39 @@ impl Transfer<'_> {
                 sender: None,
                 inputs: Vec::new(),
             }),
-            AuditEvidence::InputPrefixes(prefixes) => {
-                let openings = match known {
-                    Some(known) => PrefixedInputs {
+            AuditEvidence::InputPrefixes(prefixes) => Ok(Spent {
+                sender: None,
+                inputs: name_inputs(
+                    PrefixedInputs {
                         known,
                         scope: PrefixScope::AnyOwner,
                         ring: self.ring,
                     }
-                    .open(prefixes)?,
-                    None => prefixes.iter().map(|prefix| unseen(*prefix)).collect(),
-                };
-                Ok(Spent {
-                    sender: None,
-                    inputs: name_inputs(openings),
-                })
-            }
+                    .open(prefixes),
+                ),
+            }),
             AuditEvidence::Commitment {
                 first_input_hash: first,
                 later_prefixes: prefixes,
             } => {
-                let unseen = || AuditError::UnseenInput { commitment: *first };
                 // The circuit proves spent UTXO 0 real and every spent UTXO under one owner key.
-                let known = known.ok_or_else(unseen)?;
-                let zero = known.utxo(first).ok_or_else(unseen)?;
+                let zero = known.and_then(|known| known.utxo(first));
                 let later = PrefixedInputs {
                     known,
-                    scope: PrefixScope::Sender {
+                    scope: zero.map_or(PrefixScope::AnyOwner, |zero| PrefixScope::Sender {
                         owner_key: zero.owner_key,
                         first: *first,
-                    },
+                    }),
                     ring: self.ring,
                 }
-                .open(prefixes)?;
-                let mut openings = vec![InputOpening::Opened(ring_input(*first, zero))];
+                .open(prefixes);
+                let mut openings = vec![zero
+                    .map_or(InputOpening::UnseenHash { hash: *first }, |zero| {
+                        InputOpening::Opened(ring_input(*first, zero))
+                    })];
                 openings.extend(later);
                 Ok(Spent {
-                    sender: Some(AuditedSender {
+                    sender: zero.map(|zero| AuditedSender {
                         owner_key: zero.owner_key,
                         nullifier_pk: zero.owner.nullifier_pk(),
                     }),
@@ -578,14 +580,8 @@ impl Transfer<'_> {
     }
 }
 
-fn unseen(prefix: Option<InputPrefix>) -> InputOpening {
-    prefix.map_or(InputOpening::Dummy, |prefix| InputOpening::Unseen {
-        prefix: prefix.get(),
-    })
-}
-
 struct PrefixedInputs<'a> {
-    known: &'a dyn KnownUtxos,
+    known: Option<&'a dyn KnownUtxos>,
     scope: PrefixScope,
     ring: Address,
 }
@@ -597,12 +593,12 @@ enum PrefixScope {
         owner_key: [u8; 32],
         first: [u8; 32],
     },
-    /// The in-proof and authority rails, a note the auditor never opened leaves the outputs readable.
+    /// The rails that name no owner, and a commitment key before its first note opens.
     AnyOwner,
 }
 
 impl PrefixedInputs<'_> {
-    fn open(self, prefixes: &[Option<InputPrefix>]) -> Result<Vec<InputOpening>, AuditError> {
+    fn open(self, prefixes: &[Option<InputPrefix>]) -> Vec<InputOpening> {
         let mut groups: Vec<(InputPrefix, Vec<usize>)> = Vec::new();
         for (position, prefix) in prefixes.iter().enumerate() {
             let Some(prefix) = *prefix else {
@@ -615,30 +611,31 @@ impl PrefixedInputs<'_> {
         }
         let mut openings = vec![InputOpening::Dummy; prefixes.len()];
         for (prefix, positions) in groups {
-            let assigned = match (self.notes(prefix).assign(positions.len()), self.scope) {
-                (Err(AuditError::UnseenInputPrefix { .. }), PrefixScope::AnyOwner) => {
-                    vec![unseen(Some(prefix)); positions.len()]
-                }
-                (assigned, _) => assigned?,
-            };
+            let assigned = self.notes(prefix).assign(positions.len());
             for (position, opening) in positions.into_iter().zip(assigned) {
                 openings[position] = opening;
             }
         }
-        Ok(openings)
+        openings
     }
 
     fn notes(&self, prefix: InputPrefix) -> PrefixNotes {
+        let Some(known) = self.known else {
+            return PrefixNotes {
+                prefix,
+                notes: Vec::new(),
+            };
+        };
         let mut seen = HashSet::new();
         let candidates = match self.scope {
-            PrefixScope::Sender { owner_key, .. } => self.known.with_prefix(&owner_key, prefix),
-            PrefixScope::AnyOwner => self.known.with_prefix_of_anyone(prefix),
+            PrefixScope::Sender { owner_key, .. } => known.with_prefix(&owner_key, prefix),
+            PrefixScope::AnyOwner => known.with_prefix_of_anyone(prefix),
         };
         PrefixNotes {
             prefix,
             notes: candidates
                 .into_iter()
-                .filter_map(|commitment| Some((commitment, self.known.utxo(&commitment)?)))
+                .filter_map(|commitment| Some((commitment, known.utxo(&commitment)?)))
                 .filter(|(commitment, utxo)| {
                     let in_scope = match self.scope {
                         PrefixScope::Sender { owner_key, first } => {
@@ -665,19 +662,22 @@ struct PrefixNotes {
 
 impl PrefixNotes {
     /// Exact only for one note in one position, notes sharing a prefix fit any of its positions.
-    fn assign(self, inputs: usize) -> Result<Vec<InputOpening>, AuditError> {
+    fn assign(self, inputs: usize) -> Vec<InputOpening> {
         match self.notes[..] {
-            _ if self.notes.len() < inputs => Err(AuditError::UnseenInputPrefix {
-                prefix: self.prefix.get(),
-            }),
-            [(commitment, utxo)] => Ok(vec![InputOpening::Opened(ring_input(commitment, utxo))]),
+            _ if self.notes.len() < inputs => vec![
+                InputOpening::Unseen {
+                    prefix: self.prefix,
+                };
+                inputs
+            ],
+            [(commitment, utxo)] => vec![InputOpening::Opened(ring_input(commitment, utxo))],
             _ => {
                 let candidates = self
                     .notes
                     .iter()
                     .map(|(commitment, _)| *commitment)
                     .collect();
-                Ok(vec![InputOpening::Ambiguous { candidates }; inputs])
+                vec![InputOpening::Ambiguous { candidates }; inputs]
             }
         }
     }

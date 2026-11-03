@@ -4,8 +4,8 @@ use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
-    AuditedInputOpening, AuditedSender, OutputPayloadError,
-    OutputPayloadErrorKind::{self, Commitment, Disclosure, EscrowUnknown, Frame, RecipientKey},
+    AuditedInputOpening, AuditedSender, EscrowPendingOutput, OutputPayloadError,
+    OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey, UnknownAsset},
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -273,10 +273,8 @@ fn page(
     }
 }
 
-/// The JSON clients parse, pinned byte for byte.
-#[test]
-fn a_decrypted_page_keeps_its_wire_json() {
-    let audited = AuditedTransaction {
+fn delivered_audited() -> AuditedTransaction {
+    AuditedTransaction {
         tx_signature: Signature::from([1; 64]),
         slot: 42,
         tx_viewing_pk: ViewingKey::from_bytes(&[3; 32]).pubkey(),
@@ -297,8 +295,13 @@ fn a_decrypted_page_keeps_its_wire_json() {
         }],
         sender: None,
         inputs: Vec::new(),
-    };
-    let mut page = page(audited, vec![[12; 32]]);
+    }
+}
+
+/// The JSON clients parse, pinned byte for byte.
+#[test]
+fn a_decrypted_page_keeps_its_wire_json() {
+    let mut page = page(delivered_audited(), vec![[12; 32]]);
     page.value.items[0].spenders = vec![[13; 32].into()];
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(json, include_str!("decrypted_page.json").trim_end());
@@ -306,6 +309,175 @@ fn a_decrypted_page_keeps_its_wire_json() {
         serde_json::from_str::<GetDecryptedTransactionsResponse>(&json).expect("parses"),
         page
     );
+}
+
+/// The TypeScript decoder reads the same page.
+#[test]
+fn an_unseen_input_keeps_its_prefix_and_stays_apart_from_a_dummy() {
+    let prefix = InputPrefix::of(&[0x2a; 32]).expect("canonical");
+    let input = |nullifier, opening| AuditedInput { nullifier, opening };
+    let unseen = InputOpening::Unseen { prefix };
+    let mut page = page(
+        AuditedTransaction {
+            inputs: vec![
+                input([12; 32], unseen.clone()),
+                input([11; 32], InputOpening::Dummy),
+            ],
+            ..delivered_audited()
+        },
+        vec![[12; 32], [11; 32]],
+    );
+    page.value.items[0].spenders = vec![[13; 32].into()];
+    let json = serde_json::to_string(&page).expect("json");
+    assert_eq!(
+        json,
+        include_str!("decrypted_in_proof_page.json").trim_end()
+    );
+    let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
+    assert_eq!(parsed, page);
+    let [read_unseen, read_dummy] = parsed.value.items[0].inputs.as_slice() else {
+        panic!("two inputs")
+    };
+    assert_eq!(
+        read_unseen.unseen_prefix,
+        Some(DecryptedInputPrefix(prefix))
+    );
+    assert_eq!(read_unseen.opening, None);
+    assert_eq!(read_dummy.unseen_prefix, None);
+    assert_ne!(
+        DecryptedInput::from(input([12; 32], unseen)),
+        DecryptedInput::from(input([12; 32], InputOpening::Dummy))
+    );
+    // A tagged enum buffers its fields, the prefix must survive that too.
+    let [transaction] = page.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    let activity = WalletActivity::of(Address::new_from_array([13; 32]), transaction.clone())
+        .expect("a spender");
+    let read: WalletActivity =
+        serde_json::from_str(&serde_json::to_string(&activity).expect("json")).expect("parses");
+    assert_eq!(read, activity);
+    let WalletView::Sender { inputs, .. } = read.view else {
+        panic!("the spender's view")
+    };
+    assert_eq!(inputs[0].unseen_prefix, Some(DecryptedInputPrefix(prefix)));
+}
+
+/// The TypeScript decoder reads the same page.
+#[test]
+fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
+    let prefix = InputPrefix::of(&[0x2a; 32]).expect("canonical");
+    let input = |nullifier, opening| AuditedInput { nullifier, opening };
+    let audited = AuditedTransaction {
+        outputs: vec![output(
+            0,
+            OutputOpening::Ring {
+                utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
+                owner_tag: RingOwnerTag::View([9; 32]),
+            },
+        )],
+        payload_errors: Vec::new(),
+        sender: None,
+        inputs: vec![
+            input([12; 32], InputOpening::UnseenHash { hash: [0x2b; 32] }),
+            input([11; 32], InputOpening::Unseen { prefix }),
+        ],
+        ..delivered_audited()
+    };
+    let page = page(audited, vec![[12; 32], [11; 32]]);
+    let json = serde_json::to_string(&page).expect("json");
+    assert_eq!(
+        json,
+        include_str!("decrypted_unseen_hash_page.json").trim_end()
+    );
+    let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
+    assert_eq!(parsed, page);
+    let [transaction] = parsed.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    assert_eq!(transaction.inputs[0].unseen_hash, Some([0x2b; 32].into()));
+    assert_eq!(transaction.inputs[0].unseen_prefix, None);
+    assert_eq!(transaction.inputs[0].opening, None);
+    // No key binds the unseen note to a sender, only the output's owner reads the transfer.
+    let of =
+        |wallet: [u8; 32]| WalletActivity::of(Address::new_from_array(wallet), transaction.clone());
+    assert!(matches!(
+        of([0x10; 32]).expect("the output's owner").view,
+        WalletView::Recipient { .. }
+    ));
+    assert_eq!(of([0x50; 32]), None);
+}
+
+/// The TypeScript decoder reads the same page.
+#[test]
+fn an_escrow_pending_slot_keeps_its_fields_and_reaches_its_owner() {
+    let pending = |seed: u8, slot| {
+        OutputOpening::EscrowPending(EscrowPendingOutput {
+            owner_key: [seed; 32],
+            amount: u64::from(seed),
+            blinding: [seed + 1; 32],
+            slot,
+        })
+    };
+    let audited = AuditedTransaction {
+        outputs: vec![
+            output(
+                0,
+                pending(
+                    0x20,
+                    EscrowPendingSlot::Ring {
+                        recipient_u: [0x21; 32],
+                    },
+                ),
+            ),
+            output(
+                1,
+                pending(
+                    0x30,
+                    EscrowPendingSlot::Exit {
+                        asset: [0x31; 32],
+                        mint: Some(Address::new_from_array([4; 32])),
+                    },
+                ),
+            ),
+            output(2, OutputOpening::Dummy),
+        ],
+        payload_errors: Vec::new(),
+        ..delivered_audited()
+    };
+    let page = page(audited, vec![[12; 32]]);
+    let json = serde_json::to_string(&page).expect("json");
+    assert_eq!(
+        json,
+        include_str!("decrypted_escrow_pending_page.json").trim_end()
+    );
+    let parsed: GetDecryptedTransactionsResponse = serde_json::from_str(&json).expect("parses");
+    assert_eq!(parsed, page);
+    let [transaction] = parsed.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    assert_eq!(transaction.outputs[0].utxo, None);
+    assert_eq!(transaction.outputs[0].recipient_u, Some([0x21; 32].into()));
+    let owner = Address::new_from_array([0x30; 32]);
+    let WalletView::Recipient { outputs, .. } = WalletActivity::of(owner, transaction.clone())
+        .expect("the slot's owner")
+        .view
+    else {
+        panic!("the recipient's view")
+    };
+    assert_eq!(outputs, [transaction.outputs[1].clone()]);
+}
+
+#[test]
+fn a_prefix_off_its_length_or_range_is_refused() {
+    for bytes in [
+        vec![0x2a; 15],
+        vec![0; INPUT_PREFIX_BYTES],
+        vec![0xff; INPUT_PREFIX_BYTES],
+    ] {
+        let json = serde_json::to_string(&Base64String(bytes)).expect("json");
+        assert!(serde_json::from_str::<DecryptedInputPrefix>(&json).is_err());
+    }
 }
 
 fn anonymous_audited() -> AuditedTransaction {
@@ -450,9 +622,9 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     .expect("vector");
     // A new kind fails to compile here, `kinds` and the vector must then name it.
     let named = |kind: OutputPayloadErrorKind| match kind {
-        Frame | Disclosure | RecipientKey | Commitment | EscrowUnknown => kind,
+        Frame | Disclosure | RecipientKey | Commitment | UnknownAsset => kind,
     };
-    let kinds = [Frame, Disclosure, RecipientKey, Commitment, EscrowUnknown].map(named);
+    let kinds = [Frame, Disclosure, RecipientKey, Commitment, UnknownAsset].map(named);
     assert_eq!(serde_json::to_value(kinds).unwrap(), vector.kinds);
     let slots = [(2, Commitment), (5, RecipientKey)]
         .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });
