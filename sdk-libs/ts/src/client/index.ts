@@ -1,4 +1,8 @@
-export { CustomRingClient, createCustomRingClient } from "../rpc/client.js";
+export {
+  CustomRingClient,
+  createCustomRingClient,
+  type CustomRingClientConfig,
+} from "../rpc/client.js";
 export { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 export { customRingProof } from "../rpc/prover/proof.js";
 export { CUSTOM_RING_PROOF_LENGTH } from "../protocol/proof/custom-ring-proof.js";

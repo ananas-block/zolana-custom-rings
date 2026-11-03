@@ -7274,6 +7274,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-bn254",

@@ -29,9 +29,13 @@ import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
+export type CustomRingClientConfig = Omit<ZolanaClientConfig, "provingKeys"> & {
+  readonly provingKeys?: never;
+};
+
 /** Initializes Poseidon, the constructor alone does not. */
 export async function createCustomRingClient(
-  config: ZolanaClientConfig = {},
+  config: CustomRingClientConfig = {},
 ): Promise<CustomRingClient> {
   await initializePoseidon();
   return new CustomRingClient(config);
@@ -41,7 +45,15 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
   readonly #ringProver: CustomRingProver;
   readonly #ringIndexer: RingIndexer;
 
-  constructor(config: ZolanaClientConfig) {
+  constructor(config: CustomRingClientConfig) {
+    if (
+      typeof config === "object" &&
+      config !== null &&
+      "provingKeys" in config &&
+      config.provingKeys !== undefined
+    ) {
+      throw new ClientError("CLIENT_INVALID_CONFIG", { details: { field: "provingKeys" } });
+    }
     super(config);
     // The parent's prover keeps one attested session for both rails.
     if (!(this.proofService instanceof ProverClient)) {

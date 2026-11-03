@@ -12,14 +12,14 @@ export {
   registerKeyStatementHash,
   ringRail,
   ringRailOf,
-  openRecipient,
+  openRecipientBody,
   OutputBlindings,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
-  AuditStatement,
+  TransferStatement,
   DepositStatement,
-  DisclosureLayout,
-  PolicyStatement,
+  AuditStreamLayout,
+  TransferRoots,
   RegisterKeyStatement,
   RuleRefusal,
 } from "@heliuslabs/zolana-custom-rings/advanced";
@@ -29,7 +29,10 @@ export {
   openTransactionViewingSecret,
   type AuditorEnvelope,
 } from "@heliuslabs/zolana-custom-rings/keypair";
-export { openRingDisclosure, policyStatementHash } from "@heliuslabs/zolana-custom-rings/advanced";
+export {
+  openRingDisclosure,
+  transferStatementHash,
+} from "@heliuslabs/zolana-custom-rings/advanced";
 export type { RingDisclosure } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   RingAuditReader,
@@ -113,5 +116,9 @@ export type {
   RecordWriteProofInput,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export { RING_RULE_SLOTS } from "@heliuslabs/zolana-custom-rings/client";
-export { CustomRingClient, createCustomRingClient } from "@heliuslabs/zolana-custom-rings";
+export {
+  CustomRingClient,
+  createCustomRingClient,
+  type CustomRingClientConfig,
+} from "@heliuslabs/zolana-custom-rings";
 export { AnonymousSync, ViewingHistory, type AnonymousScan } from "@heliuslabs/zolana-custom-rings";

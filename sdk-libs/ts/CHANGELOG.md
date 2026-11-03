@@ -21,6 +21,7 @@ reads one stream per transfer.
 
 Breaking
 
+- `CustomRingClientConfig` excludes `provingKeys`, and ring clients reject runtime key sets → omit `provingKeys` from ring client configuration.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from
   `@heliuslabs/zolana-custom-rings` or its `client` and `keypair` entry points.
