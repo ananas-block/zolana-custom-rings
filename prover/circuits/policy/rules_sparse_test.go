@@ -42,7 +42,7 @@ func TestScalarOwnerGuardAcrossInactivePayments(t *testing.T) {
 }
 
 func TestWithdrawalPrefixZeroPadding(t *testing.T) {
-	for _, capacity := range policy.WithdrawalCapacities {
+	for _, capacity := range withdrawalCapacities {
 		for _, count := range []int{0, max(0, capacity-1), capacity} {
 			world := ringpolicy.Confidential()
 			world.OwnOnly, world.WithdrawalCapacity = true, capacity
@@ -55,7 +55,7 @@ func TestWithdrawalPrefixZeroPadding(t *testing.T) {
 				t.Fatalf("capacity=%d count=%d error=%v", capacity, count, err)
 			}
 			if count < capacity {
-				witness.Member.Withdrawals[count].Asset = ringpolicy.AssetB
+				witness.Circuit.Withdrawals[count].Asset = ringpolicy.AssetB
 				if test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()) == nil {
 					t.Fatalf("nonzero suffix passed at capacity=%d count=%d", capacity, count)
 				}

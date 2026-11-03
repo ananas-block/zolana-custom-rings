@@ -13,13 +13,12 @@ from ring_key_layout import verifier_relative_path
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def variant(k):
-    i, o, w, own = k['Inputs'], k['Outputs'], k['Withdrawals'], str(k['OwnOnly']).lower()
-    return [f'DeliveredAudit {{ outputs: {o} }}', f'DeliveredSenderAudit {{ inputs: {i}, outputs: {o} }}',
-            f'AnonymousAudit {{ class: {i}, outputs: {o} }}', f'AnonymousEntryAudit {{ class: {i}, outputs: {o} }}',
-            f'MemberPolicy {{ outputs: {o}, withdrawals: {w}, own_only: {own} }}',
-            f'DelegatePolicy {{ inputs: {i}, outputs: {o}, own_only: {own} }}',
+    i, o, w = k['Inputs'], k['Outputs'], k['Withdrawals']
+    return [f'TransferConfidential {{ outputs: {o}, inputs: {i}, withdrawals: {w} }}',
+            f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
+            f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w} }}',
             f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
-            f'Merge {{ width: {i} }}', 'WithdrawalExemption'][k['Family']]
+            f'Merge {{ width: {i} }}'][k['Family']]
 
 def main():
     parser = argparse.ArgumentParser()

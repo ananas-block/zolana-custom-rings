@@ -2,49 +2,44 @@ package ring
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
-const ownMemberKey common.CircuitType = "custom-ring-policy-member-v3-2-w0-own"
+var (
+	confidentialShape = transfer.ConfidentialShape{Inputs: 40, Outputs: 2, Withdrawals: 4}
+	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
+	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
+)
 
-func TestPolicyRequestsDecodeAndSolve(t *testing.T) {
-	for _, own := range []bool{false, true} {
-		for _, anonymous := range []bool{false, true} {
-			world := ringpolicy.Confidential()
-			world.OwnOnly, world.Anonymous = own, anonymous
-			world.WithdrawalCapacity = 2
-			world.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1}}
-			if !own {
-				world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-				world.Curator = world.Own
-			}
-			key := Key{Family: MemberPolicy, Outputs: 2, Withdrawals: 2, OwnOnly: own}.circuitType()
-			t.Run(fmt.Sprintf("%s-anonymous%v", key, anonymous), func(t *testing.T) {
-				requireRequestSolved(t, key, requestOf[MemberPolicyParams](t, key, world.Build(t).Assignment()))
-			})
-		}
-		for _, width := range []int{2, 4} {
-			key := Key{Family: DelegatePolicy, Inputs: width, Outputs: width, OwnOnly: own}.circuitType()
-			t.Run(string(key), func(t *testing.T) {
-				world := ringpolicy.Delegate(transaction.Shape{NInputs: width, NOutputs: width})
-				world.OwnOnly = own
-				if !own {
-					world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-					world.Curator = world.Own
-				}
-				requireRequestSolved(t, key, requestOf[DelegatePolicyParams](t, key, world.Build(t).Assignment()))
-			})
-		}
+// A request of every rail decodes strictly and solves on its key.
+func TestTransferRequestsDecodeAndSolve(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rail ringtransfer.Rail
+	}{{"signer", ringtransfer.Signer}, {"in-proof", ringtransfer.InProof}, {"delegate", ringtransfer.Delegate}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := ringtransfer.Signed(confidentialShape)
+			w.Rail = tc.rail
+			requireRequestSolved(t, confidentialKey, requestOf[ConfidentialTransferParams](t, confidentialKey, w.Build(t).Circuit))
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		key   common.CircuitType
+		shape transfer.AnonymousShape
+	}{{"commitment", anonymousKey, anonymousShape}, {"entry", entryKey, entryShape}} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireRequestSolved(t, tc.key, requestOf[AnonymousTransferParams](t, tc.key, ringtransfer.Hidden(tc.shape).Build(t).Circuit))
+		})
 	}
 }
 
@@ -55,16 +50,13 @@ func requireRequestSolved(t *testing.T, key common.CircuitType, params any) {
 	}
 }
 
-func memberPayload(t testing.TB) []byte {
+func transferPayload(t testing.TB) []byte {
 	t.Helper()
-	world := ringpolicy.Confidential()
-	world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-	world.Curator = world.Own
-	return mustMarshal(t, requestOf[MemberPolicyParams](t, memberKey, world.Build(t).Assignment()))
+	return mustMarshal(t, requestOf[ConfidentialTransferParams](t, confidentialKey, ringtransfer.Signed(confidentialShape).Build(t).Circuit))
 }
 
 func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
-	payload := memberPayload(t)
+	payload := transferPayload(t)
 	record := func(m map[string]any) map[string]any { return m["ownRecords"].([]any)[0].(map[string]any) }
 	subject := func(m map[string]any) map[string]any { return m["ownSubjects"].([]any)[0].(map[string]any) }
 	entry := func(m map[string]any) map[string]any { return m["senderEntry"].(map[string]any) }
@@ -94,7 +86,7 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 		{"short canopy", func(m map[string]any) { proof(m)["canopy"] = proof(m)["canopy"].([]any)[1:] }, "expected"},
 		{"short path", func(m map[string]any) { path(m)["siblings"] = path(m)["siblings"].([]any)[1:] }, "expected"},
 		{"short sibling row", func(m map[string]any) { rows := path(m)["siblings"].([]any); rows[0] = rows[0].([]any)[1:] }, "expected"},
-		{"wrong circuit label", func(m map[string]any) { m["circuitType"] = delegateKey }, "request on"},
+		{"wrong circuit label", func(m map[string]any) { m["circuitType"] = anonymousKey }, "request on"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var raw map[string]any
@@ -102,34 +94,16 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.mutate(raw)
-			if _, err := decode(memberKey, mustMarshal(t, raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := decode(confidentialKey, mustMarshal(t, raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want %q, got %v", tc.want, err)
 			}
 		})
 	}
-	if _, err := decode(memberKey, append(payload, []byte("{}")...)); err == nil {
+	if _, err := decode(confidentialKey, append(payload, []byte("{}")...)); err == nil {
 		t.Fatal("trailing payload accepted")
 	}
-	duplicate := append([]byte(`{"circuitType":"`+string(memberKey)+`",`), payload[1:]...)
-	if _, err := decode(memberKey, duplicate); err == nil || !strings.Contains(err.Error(), "repeated field") {
+	duplicate := append([]byte(`{"circuitType":"`+string(confidentialKey)+`",`), payload[1:]...)
+	if _, err := decode(confidentialKey, duplicate); err == nil || !strings.Contains(err.Error(), "repeated field") {
 		t.Fatalf("duplicate header accepted %v", err)
-	}
-}
-
-func TestOwnPolicyRequestsRequireEmptyCuratorReferences(t *testing.T) {
-	world := ringpolicy.Confidential()
-	world.OwnOnly = true
-	params := requestOf[MemberPolicyParams](t, ownMemberKey, world.Build(t).Assignment())
-	params.SenderEntry.Curator = []uint32{0}
-	if _, err := decode(ownMemberKey, mustMarshal(t, params)); err == nil {
-		t.Fatal("own key accepted a curator reference")
-	}
-}
-
-func TestDelegateRequestsCarryNoPublicAssetEntries(t *testing.T) {
-	params := requestOf[DelegatePolicyParams](t, delegateKey, ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2}).Build(t).Assignment())
-	params.PublicAssetEntries = []uint32{0}
-	if _, err := decode(delegateKey, mustMarshal(t, params)); err == nil {
-		t.Fatal("delegate key accepted a public asset reference")
 	}
 }

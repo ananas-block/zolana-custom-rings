@@ -79,7 +79,7 @@ func (e PoolEntry) validate(ownOnly bool) error {
 }
 
 func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
-	outputs, withdrawals := len(p.Outputs), len(p.Withdrawals)
+	outputs, withdrawals := len(p.CtHashes), len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
 	distinct := 1 + outputs + withdrawals + outputs
@@ -111,12 +111,13 @@ type recordQuery struct {
 }
 
 type pooledRecord struct {
-	escrowKey  frontend.Variable
-	onList     [NSources]frontend.Variable
-	mintPolicy mintPolicyWires
+	escrowKey           frontend.Variable
+	onList              [NSources]frontend.Variable
+	mintPolicy          mintPolicyWires
+	withdrawalThreshold frontend.Variable
 }
 
-const pooledColumns = 4 + NSources
+const pooledColumns = 5 + NSources
 
 type pooledTable struct {
 	active frontend.Variable
@@ -135,7 +136,7 @@ func openRecordPool(api frontend.API, active, root frontend.Variable, records []
 		leaves[i] = record.Hash(api)
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
 		onList := sourceLists(api, record.Lists)
-		row := pooledRecord{escrowKey: record.EscrowKey, onList: onList, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
+		row := pooledRecord{escrowKey: record.EscrowKey, onList: onList, mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold}
 		pool.table.Insert(row.columns(record.Member, record.Next))
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
@@ -179,13 +180,13 @@ func (p recordPool) resolve(api frontend.API, query recordQuery) pooledRecord {
 }
 
 func (r pooledRecord) columns(prefix ...frontend.Variable) []frontend.Variable {
-	row := append(prefix, r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove)
+	row := append(prefix, r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove, r.withdrawalThreshold)
 	return append(row, r.onList[:]...)
 }
 
 func pooledRecordAt(columns []frontend.Variable) pooledRecord {
-	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}}
-	copy(record.onList[:], columns[4:])
+	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}, withdrawalThreshold: columns[4]}
+	copy(record.onList[:], columns[5:])
 	return record
 }
 
@@ -197,6 +198,7 @@ func (r pooledRecord) gated(api frontend.API, active frontend.Variable) pooledRe
 	r.mintPolicy.threshold = api.Mul(active, r.mintPolicy.threshold)
 	r.mintPolicy.cap = api.Mul(active, r.mintPolicy.cap)
 	r.mintPolicy.cosignAbove = api.Mul(active, r.mintPolicy.cosignAbove)
+	r.withdrawalThreshold = api.Mul(active, r.withdrawalThreshold)
 	return r
 }
 

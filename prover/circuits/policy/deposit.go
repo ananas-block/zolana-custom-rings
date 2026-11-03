@@ -21,22 +21,19 @@ type DepositAssets struct {
 	CuratorAssetRecords []registry.QuadOpening
 }
 
-// DepositSlot is zero past the deposit count.
-type DepositSlot struct{ Owner, Asset, Amount, Active frontend.Variable }
-
 func NewDepositAssets(capacity int) DepositAssets {
 	return DepositAssets{AssetRecords: make([]registry.QuadOpening, capacity), CuratorAssetRecords: make([]registry.QuadOpening, capacity)}
 }
 
 // Assert screens nothing under a zero policyHash, the program binds zero off a policy ring.
-func (d DepositAssets) Assert(api frontend.API, rc frontend.Rangechecker, policyHash, ownRoot frontend.Variable, deposits []DepositSlot) {
+func (d DepositAssets) Assert(api frontend.API, rc frontend.Rangechecker, policyHash, ownRoot frontend.Variable, deposits []Payment) {
 	// 1. A nonzero policy_hash fixes the table the rules read.
 	screened := ringgadget.IsNonZero(api, policyHash)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: screened, A: policyHash, B: d.Table.hash(api)})
 	table := d.Table.view(api, rc)
 	// 2. Each deposited asset opens its record, or its absence, under own_root and under curator_root when a source names the curator.
 	resolved := subjects{assets: make([]subjectView, len(deposits)), mintPolicies: make([]mintPolicyWires, len(deposits))}
-	payments := make([]utxoView, len(deposits))
+	payments := make([]Payment, len(deposits))
 	for i, deposit := range deposits {
 		active := api.Mul(screened, deposit.Active)
 		// The comparator width holds for u64 amounts only.
@@ -45,7 +42,7 @@ func (d DepositAssets) Assert(api frontend.API, rc frontend.Rangechecker, policy
 		curated, _, _, _ := d.CuratorAssetRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Asset)
 		resolved.assets[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, lists), sourceLists(api, curated)), escrowKey: 0}
 		resolved.mintPolicies[i] = decodeMintPolicy(api, mintPolicy)
-		payments[i] = utxoView{ownerPkHash: deposit.Owner, asset: deposit.Asset, amount: deposit.Amount, utxo: active}
+		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active}
 	}
 	// Only asset rules reach a deposit, the owner lists stay unread.
 	resolved.owners = resolved.assets

@@ -24,9 +24,7 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 		{"CRAU", shared.AuditStatementDomain},
 		{"CRDS", shared.DeliveredSlotSecretDomain},
 		{"CRBS", shared.BlindingSeedDomain},
-		{"CRSC", shared.SenderCommitmentDomain},
 		{"CROD", shared.DisclosurePadDomain},
-		{"CRPO", shared.PolicyStatementDomain},
 		{"CRTB", shared.PolicyTableDomain},
 		{"CRQW", shared.QueueWriteDomain},
 		{"CRAP", shared.ApplyRecordsDomain},
@@ -35,7 +33,7 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 		{"CRMG", shared.MergeStatementDomain},
 		{"CRDB", shared.DepositBlindingDomain},
 		{"CRPW", shared.WithdrawalsDomain},
-		{"CRWX", shared.WithdrawalExemptionDomain},
+		{"CRTX", shared.TransferStatementDomain},
 		{"CR_S", shared.DomSepCRShared},
 		{"CR_MD", shared.MergeDisclosureDomain},
 	} {

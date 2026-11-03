@@ -31,7 +31,6 @@ type ringSecretVectors struct {
 	SenderKey             string `json:"sender_key"`
 	SenderPkHash          string `json:"sender_pk_hash"`
 	PrivateTxBlinding     string `json:"private_tx_blinding"`
-	SenderCommitment      string `json:"sender_commitment"`
 	DepositBlindingSecret string `json:"deposit_blinding_secret"`
 	DepositBlinding       string `json:"deposit_blinding"`
 }
@@ -50,7 +49,6 @@ type ringSecretsCircuit struct {
 	SenderKey             [32]frontend.Variable
 	SenderPkHash          frontend.Variable
 	PrivateTxBlinding     frontend.Variable
-	SenderCommitment      frontend.Variable
 	DepositBlindingSecret frontend.Variable
 	DepositBlinding       frontend.Variable
 }
@@ -82,7 +80,6 @@ func (c *ringSecretsCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(senderPkHash, c.SenderPkHash)
 	privateTxBlinding := transaction.DerivePrivateTxBlinding(api, c.FirstNullifier, seed)
 	api.AssertIsEqual(privateTxBlinding, c.PrivateTxBlinding)
-	api.AssertIsEqual(shared.SenderCommitment(api, senderPkHash, privateTxBlinding), c.SenderCommitment)
 	api.AssertIsEqual(shared.DepositBlinding(api, c.DepositBlindingSecret), c.DepositBlinding)
 	return nil
 }
@@ -97,7 +94,6 @@ func TestRingSecretsMatchRustVectors(t *testing.T) {
 		OutputBlindingSeed:    ringtest.VectorField(t, vectors.OutputBlindingSeed),
 		SenderPkHash:          ringtest.VectorField(t, vectors.SenderPkHash),
 		PrivateTxBlinding:     ringtest.VectorField(t, vectors.PrivateTxBlinding),
-		SenderCommitment:      ringtest.VectorField(t, vectors.SenderCommitment),
 		DepositBlindingSecret: ringtest.VectorField(t, vectors.DepositBlindingSecret),
 		DepositBlinding:       ringtest.VectorField(t, vectors.DepositBlinding),
 	}

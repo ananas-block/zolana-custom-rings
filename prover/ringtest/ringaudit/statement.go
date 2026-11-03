@@ -36,6 +36,14 @@ func (h AuditHead) Elements(t testing.TB) []*big.Int {
 	}
 }
 
+// ElementsUnder is the head under domain, the transfer statement's CRTX in place of CRAU.
+func (h AuditHead) ElementsUnder(t testing.TB, domain int64) []*big.Int {
+	t.Helper()
+	elements := h.Elements(t)
+	elements[0] = big.NewInt(domain)
+	return elements
+}
+
 // Layout is a transfer's layout flags, mirrors the Layout flags of package audit.
 type Layout struct {
 	Exits        bool
@@ -64,13 +72,19 @@ type StatementOutput struct {
 
 // AnonymousTail is what only an anonymous audit statement binds.
 type AnonymousTail struct {
-	PrivateTxHash    *big.Int
-	SenderCommitment *big.Int
-	PartyIdentities  [3]*big.Int
+	PrivateTxHash   *big.Int
+	PartyIdentities [3]*big.Int
 }
 
 // DeliveredStatement mirrors AuditKind::Delivered.
 func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
+	t.Helper()
+	return append(head.Elements(t),
+		OutputChain(t, outputs), BodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), RecipientKeyChain(t, outputs))
+}
+
+// RecipientKeyChain chains pack_be(u) per slot, zeros on an exit.
+func RecipientKeyChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	var keys []*big.Int
 	for _, output := range outputs {
@@ -80,8 +94,7 @@ func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 		}
 		keys = append(keys, lo, hi)
 	}
-	return append(head.Elements(t),
-		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), spptest.MustHashChain4(t, keys))
+	return spptest.MustHashChain4(t, keys)
 }
 
 // DeliveredSenderStatement mirrors AuditKind::Delivered on the in-proof owner rail.
@@ -94,11 +107,12 @@ func DeliveredSenderStatement(t testing.TB, head AuditHead, outputs []StatementO
 func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
 	t.Helper()
 	return append(head.Elements(t),
-		outputChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash, tail.SenderCommitment,
+		OutputChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash,
 		tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
 }
 
-func outputChain(t testing.TB, outputs []StatementOutput) *big.Int {
+// OutputChain is HashChain4 over every slot hash, dummies included.
+func OutputChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, len(outputs))
 	for i, output := range outputs {
@@ -107,8 +121,8 @@ func outputChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	return spptest.MustHashChain4(t, hashes)
 }
 
-// bodyChain chains hash_bytes(body), zero on an exit.
-func bodyChain(t testing.TB, outputs []StatementOutput) *big.Int {
+// BodyChain chains hash_bytes(body), zero on an exit.
+func BodyChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, len(outputs))
 	for i, output := range outputs {

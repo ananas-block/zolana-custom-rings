@@ -74,7 +74,8 @@ func (tr Transfer) seedOut(layout Layout) []*big.Int {
 	return nil
 }
 
-func (tr Transfer) wires(layout Layout) audit.AuditWires {
+// Wires are the audit wires of the transfer under layout.
+func (tr Transfer) Wires(layout Layout) audit.AuditWires {
 	w := audit.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, Layout: layout.Value()}
 	ringtest.SetBytes(w.TxViewingSk[:], tr.Keys.txViewingSk[:])
 	ringtest.SetBytes(w.EphSk[:], tr.Keys.ephSk[:])
@@ -162,7 +163,7 @@ func Recipient(t testing.TB, n byte, index int, amount uint64) DeliverySlot {
 // OutputTreeID is the fixture tree every output is appended to.
 const OutputTreeID = 9
 
-func (o DeliveredOutput) wires() audit.DeliveryWires {
+func (o DeliveredOutput) Wires() audit.DeliveryWires {
 	w := audit.DeliveryWires{Output: o.Utxo.Wires()}
 	ringtest.SetBytes(w.RecipientKey[:], o.RecipientKey[:])
 	ringtest.SetBytes(w.OwnerKey[:], o.OwnerKey[:])

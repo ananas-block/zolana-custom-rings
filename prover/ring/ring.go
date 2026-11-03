@@ -9,10 +9,9 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 	"github.com/helius-labs/zolana/prover/server/prover/provingkeys"
 )
@@ -29,20 +28,12 @@ func init() {
 
 func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
-	case DeliveredAudit:
-		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
-	case DeliveredSenderAudit:
-		return bind[DeliveredSenderAuditParams](k, audit.NewDeliveredSenderAuditCircuit, k.deliveredSenderShape())
-	case AnonymousAudit, AnonymousEntryAudit:
-		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
-	case MemberPolicy:
-		return bindPolicy[MemberPolicyParams](k, policy.NewMemberPolicyCircuit, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
-	case DelegatePolicy:
-		return bindPolicy[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuit, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
+	case TransferConfidential:
+		return bindPolicy[ConfidentialTransferParams](k, transfer.NewConfidentialTransferCircuit, k.confidentialShape())
+	case TransferAnonymous, TransferAnonymousEntry:
+		return bindPolicy[AnonymousTransferParams](k, transfer.NewAnonymousTransferCircuit, k.anonymousShape())
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
-	case WithdrawalExemption:
-		return bind[WithdrawalExemptionParams](k, unsized[policy.WithdrawalExemptionCircuit], struct{}{})
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:

@@ -50,9 +50,3 @@ func DepositBlinding(t testing.TB, blindingSecret *big.Int) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DepositBlindingDomain), blindingSecret)
 }
-
-// SenderCommitment mirrors shared.SenderCommitment.
-func SenderCommitment(t testing.TB, senderPkHash, privateTxBlinding *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.SenderCommitmentDomain), senderPkHash, privateTxBlinding)
-}

@@ -87,22 +87,13 @@ func goldenFiles(t testing.TB) []string {
 func goldenPath(name string) string {
 	var family string
 	switch {
-	case strings.HasPrefix(name, "custom-ring-audit-anonymous-entry-"):
-		family = "audit/entry"
-	case strings.HasPrefix(name, "custom-ring-audit-anonymous-v2-"):
-		parts := strings.Split(name, "-")
-		outputs := parts[len(parts)-1]
-		if outputs != "2" && outputs != "4" && outputs != "8" {
-			panic("unknown anonymous audit shape: " + name)
-		}
-		family = "audit/anonymous/outputs_" + outputs
-	case strings.HasPrefix(name, "custom-ring-audit-"):
-		family = "audit"
-	case strings.HasPrefix(name, "custom-ring-policy-member-"):
-		family = "policy/member"
-	case strings.HasPrefix(name, "custom-ring-policy-delegate-"):
-		family = "policy/delegate"
-	case strings.HasPrefix(name, "custom-ring-apply-records-"), name == "custom-ring-register-key", name == "custom-ring-withdrawal-exemption":
+	case strings.HasPrefix(name, "custom-ring-transfer-anonymous-entry-"):
+		family = "transfer/entry"
+	case strings.HasPrefix(name, "custom-ring-transfer-anonymous-"):
+		family = "transfer/anonymous"
+	case strings.HasPrefix(name, "custom-ring-transfer-confidential-"):
+		family = "transfer/confidential"
+	case strings.HasPrefix(name, "custom-ring-apply-records-"), name == "custom-ring-register-key":
 		family = "records"
 	case strings.HasPrefix(name, "custom-ring-deposit-"):
 		family = "deposit"

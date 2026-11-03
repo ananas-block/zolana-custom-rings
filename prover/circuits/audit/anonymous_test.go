@@ -14,29 +14,29 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// entryShape is the cheapest entry key, its fixture spends a ring note and a default-ring note.
-var entryShape = audit.AnonymousEntryShapes[0]
+// entryShape is the cheapest entry layout, its fixture spends a ring note and a default-ring note.
+var entryShape = audit.AnonymousAuditShape{InputClass: 8, Outputs: 2, FullOpenings: true}
 
-// Every commitment and entry key solves its honest fixture under a policy and as an audit-only transfer.
+// sectionShapes are the commitment classes and entry layouts the section tests sweep, the transfer keys' among them.
+var sectionShapes = []audit.AnonymousAuditShape{
+	{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2}, {InputClass: 24, Outputs: 2},
+	{InputClass: 4, Outputs: 4}, {InputClass: 16, Outputs: 4},
+	{InputClass: 4, Outputs: 8}, {InputClass: 5, Outputs: 8}, {InputClass: 8, Outputs: 8},
+	entryShape, {InputClass: 8, Outputs: 4, FullOpenings: true}, {InputClass: 2, Outputs: 8, FullOpenings: true}, {InputClass: 8, Outputs: 8, FullOpenings: true},
+}
+
+// Every commitment class and entry layout solves its honest fixture.
 func TestAnonymousAuditSolvesEveryShape(t *testing.T) {
-	for _, shape := range slices.Concat(audit.AnonymousAuditShapes[:], audit.AnonymousEntryShapes[:]) {
+	for _, shape := range sectionShapes {
 		t.Run(anonymousKeyName(shape), func(t *testing.T) {
 			c, ok := compiledAudits[anonymousKeyName(shape)]
 			if !ok {
-				circuit, err := audit.NewAnonymousAuditCircuit(shape)
-				if err != nil {
-					t.Fatal(err)
-				}
-				c = &compiledAudit{cs: ringkey.Compile(t, circuit)}
+				c = ringkey.Bind(t, ringaudit.NewAnonymousCircuit(shape), ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
 			}
-			a := ringaudit.NewAnonymousAudit(t, shape)
-			c.requireSolved(t, a.Circuit(t))
-			a.SenderCommitment = big.NewInt(0)
-			c.requireSolved(t, a.Circuit(t))
+			c.RequireSolved(t, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
 		})
 	}
 }
@@ -45,10 +45,10 @@ func TestAnonymousAuditSolvesEveryShape(t *testing.T) {
 func TestAnonymousEntrySolvesBothLayouts(t *testing.T) {
 	c := compileAnonymous(t, entryShape)
 	a := ringaudit.NewAnonymousAudit(t, entryShape)
-	c.requireSolved(t, a.Circuit(t))
+	c.RequireSolved(t, a.Circuit(t))
 	a.Outputs[1] = a.NewAnonymousExit(t, 1)
 	a.Layout.Exits = true
-	c.requireSolved(t, a.Circuit(t))
+	c.RequireSolved(t, a.Circuit(t))
 }
 
 // Every published input count solves on a commitment key and on the entry key, the reserved flag either way.
@@ -59,7 +59,7 @@ func TestAnonymousAuditSolvesEveryInputCount(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(shape), count), func(t *testing.T) {
 				a := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count)
 				a.Layout.Reserved = count%2 == 0
-				c.requireSolved(t, a.Circuit(t))
+				c.RequireSolved(t, a.Circuit(t))
 			})
 		}
 	}
@@ -87,14 +87,11 @@ func TestAnonymousAuditRefusals(t *testing.T) {
 		{"escrow flag on an anonymous key", func(a *ringaudit.AnonymousAudit) { a.Layout.Escrow = true }},
 		{"ring output blinding of another slot", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Utxo.Blinding = a.Blinding(t, 0) }},
 		{"exit blinding off the CRBS seed", func(a *ringaudit.AnonymousAudit) { a.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) }},
-		{"sender commitment of another sender", func(a *ringaudit.AnonymousAudit) {
-			a.SenderCommitment = ringprotocol.SenderCommitment(t, ringtest.MustSolanaPkField(t, stranger), a.PrivateTxBlinding)
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, shape)
 			tc.mutate(&a)
-			c.refuse(t, a.Circuit(t))
+			c.Refuse(t, a.Circuit(t))
 		})
 	}
 }
@@ -107,10 +104,10 @@ func TestAnonymousAmountsStayBelowTwoTo64(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, shape)
 			a.Outputs[slot].Utxo.Amount = math.MaxUint64
-			c.requireSolved(t, a.Circuit(t))
+			c.RequireSolved(t, a.Circuit(t))
 			assignment := a.Circuit(t)
 			assignment.Outputs[slot].Output.Amount = new(big.Int).Lsh(big.NewInt(1), 64)
-			c.refuse(t, assignment)
+			c.Refuse(t, assignment)
 		})
 	}
 }
@@ -121,14 +118,14 @@ func TestAnonymousInputsKeepDummiesLast(t *testing.T) {
 		t.Run(anonymousKeyName(shape), func(t *testing.T) {
 			c := compileAnonymous(t, shape)
 			trailing := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(3)
-			c.requireSolved(t, trailing.Circuit(t))
+			c.RequireSolved(t, trailing.Circuit(t))
 			gap := trailing
 			gap.Inputs = slices.Clone(trailing.Inputs)
 			gap.Inputs[1], gap.Inputs[2] = gap.Inputs[2], gap.Inputs[1]
 			if gap.PrivateTxHash(t).Cmp(trailing.PrivateTxHash(t)) != 0 {
 				t.Fatal("the gap changed SPP's private transaction hash")
 			}
-			c.refuse(t, gap.Circuit(t))
+			c.Refuse(t, gap.Circuit(t))
 		})
 	}
 }
@@ -146,8 +143,8 @@ func TestAnonymousSpentPrefixRefusesTheAliasSplit(t *testing.T) {
 		if hash.Cmp(limit) >= 0 {
 			continue
 		}
-		c.requireSolved(t, a.Circuit(t))
-		c.refuse(t, a.Circuit(t), splitOf(t, hash, new(big.Int).Add(hash, q)))
+		c.RequireSolved(t, a.Circuit(t))
+		c.Refuse(t, a.Circuit(t), splitOf(t, hash, new(big.Int).Add(hash, q)))
 		return
 	}
 	t.Fatal("no fixture hash below 2^254 - q")
@@ -162,7 +159,7 @@ func TestAnonymousPrefixPairClosesWithAZeroHalf(t *testing.T) {
 	last := len(records) - 1
 	records[last] = new(big.Int).Add(records[last], big.NewInt(1))
 	statement := ringaudit.AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.DisclosureOf(t, a.SlotBytes(t), records), a.Tail(t))
-	c.refuseStatementOf(t, a.Circuit(t), statement)
+	c.RefuseStatement(t, a.Circuit(t), statement)
 }
 
 // The widest class solves at both ends of its counts and across a pair boundary.
@@ -171,7 +168,7 @@ func TestAnonymousWideClassSolves(t *testing.T) {
 	c := compileAnonymous(t, shape)
 	for _, count := range []int{1, 2, 3, 15, 16} {
 		t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(shape), count), func(t *testing.T) {
-			c.requireSolved(t, ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count).Circuit(t))
+			c.RequireSolved(t, ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count).Circuit(t))
 		})
 	}
 }
@@ -204,13 +201,12 @@ func TestAnonymousEntryRefusals(t *testing.T) {
 		{"sender key of another owner", func(a *ringaudit.AnonymousAudit) {
 			a.SenderKey = ringtest.Repeat(0xc3)
 			a.Outputs[1] = a.NewPayment(t, a.Change(t, 1))
-			a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := ringaudit.NewAnonymousAudit(t, entryShape)
 			tc.mutate(&a)
-			c.refuse(t, a.Circuit(t))
+			c.Refuse(t, a.Circuit(t))
 		})
 	}
 }
@@ -291,16 +287,16 @@ func TestAnonymousMaskedSlotBytesStayZero(t *testing.T) {
 			slots := a.SlotBytes(t)
 			tc.tamper(a, slots)
 			statement := ringaudit.AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.DisclosureOf(t, slots, a.InputRecords(t)), a.Tail(t))
-			c.refuseStatementOf(t, a.Circuit(t), statement)
+			c.RefuseStatement(t, a.Circuit(t), statement)
 		})
 	}
 }
 
 // refuseOtherDisclosure requires honest's statement carrying other's disclosure to fail the public input binding.
-func refuseOtherDisclosure(t *testing.T, c *compiledAudit, honest, other ringaudit.AnonymousAudit) {
+func refuseOtherDisclosure(t *testing.T, c *ringkey.Bound, honest, other ringaudit.AnonymousAudit) {
 	t.Helper()
 	statement := ringaudit.AnonymousStatement(t, honest.AuditHead(t, honest.Layout), honest.StatementOutputs(t), other.Disclosure(t), honest.Tail(t))
-	c.refuseStatementOf(t, honest.Circuit(t), statement)
+	c.RefuseStatement(t, honest.Circuit(t), statement)
 }
 
 // Rebinding a forbidden party into a valid statement cannot bypass the circuit.
@@ -310,12 +306,12 @@ func TestAnonymousParties(t *testing.T) {
 		for i := range 3 {
 			a := ringaudit.NewAnonymousAudit(t, shape)
 			a.PartyIdentities[i] = a.SenderPkHash(t)
-			c.refuse(t, a.Circuit(t))
+			c.Refuse(t, a.Circuit(t))
 			a.PartyIdentities[i] = big.NewInt(0)
-			c.requireSolved(t, a.Circuit(t))
+			c.RequireSolved(t, a.Circuit(t))
 			assignment := a.Circuit(t)
 			assignment.PartyIdentities[i] = 99 // differs from the verifier's bound identity
-			c.refuseStatementOf(t, assignment, a.Statement(t))
+			c.RefuseStatement(t, assignment, a.Statement(t))
 		}
 	}
 }

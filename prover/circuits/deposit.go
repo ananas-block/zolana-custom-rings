@@ -92,7 +92,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, c.Capacity)
 	var plaintext []frontend.Variable
-	deposits := make([]policy.DepositSlot, c.Capacity)
+	deposits := make([]policy.Payment, c.Capacity)
 	for i := range commitments {
 		active := count.Active[i]
 		// 2. A padding slot carries no owner, key, blinding secret, asset or amount, the plaintext past Count stays fixed.
@@ -116,7 +116,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		// 6. The canonical field encodings keep one plaintext per opening.
 		ownerBytes, blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, owner), ringgadget.FieldToBytesBEWith(api, rc, blinding)
 		plaintext = slices.Concat(plaintext, ownerBytes[:], blindingBytes[:], c.OwnerKeys[i][:])
-		deposits[i] = policy.DepositSlot{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
+		deposits[i] = policy.Payment{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
 	}
 	// 7. On a policy ring every deposited asset meets the asset rules under the bound roots.
 	c.DepositAssets.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)

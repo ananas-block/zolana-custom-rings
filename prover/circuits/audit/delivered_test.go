@@ -46,7 +46,7 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := ringaudit.NewDeliveredAudit(t, 8)
 			tc.mutate(&d)
-			c.refuse(t, d.Circuit(t))
+			c.Refuse(t, d.Circuit(t))
 		})
 	}
 
@@ -55,7 +55,7 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 		d := ringaudit.NewDeliveredAudit(t, 8)
 		escrowed := d
 		escrowed.Layout.Escrow = true
-		c.refuseStatementOf(t, d.Circuit(t),
+		c.RefuseStatement(t, d.Circuit(t),
 			ringaudit.DeliveredStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), escrowed.Disclosure(t)))
 	})
 }
@@ -73,7 +73,7 @@ func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 					d = ringaudit.NewDeliveredAudit(t, capacity)
 				}
 				d.Layout = layout
-				c.requireSolved(t, d.Circuit(t))
+				c.RequireSolved(t, d.Circuit(t))
 			})
 		}
 	}
@@ -81,29 +81,29 @@ func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 
 // Each case changes one value of an honest in-proof owner transfer spending two sender UTXOs.
 func TestDeliveredSenderAuditRefusals(t *testing.T) {
-	shape := audit.DeliveredSenderShapes[0]
+	shape := ringaudit.SenderShape{Inputs: 40, Outputs: 2}
 	c := compileDeliveredSender(t, shape)
 	other := ringtest.MustSolanaPkField(t, ringtest.Repeat(0xb2))
 	for _, tc := range []struct {
 		name   string
-		mutate func(*testing.T, *ringaudit.DeliveredSenderAudit, *audit.DeliveredSenderAuditCircuit)
+		mutate func(*testing.T, *ringaudit.DeliveredSenderAudit, *ringaudit.DeliveredSenderCircuit)
 	}{
 		// The policy and the auditor would read a sender that owns no spent input.
-		{"published sender other than the input owners", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+		{"published sender other than the input owners", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *ringaudit.DeliveredSenderCircuit) {
 			circuit.Sender = other
 			circuit.PublicInputHash = spptest.MustHashChain4(t, ringaudit.DeliveredSenderStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t), d.PrivateTxHash(t), other))
 		}},
 		// SPP's hidden owner would spend a note the sender does not own.
-		{"second input of another owner", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+		{"second input of another owner", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *ringaudit.DeliveredSenderCircuit) {
 			circuit.Inputs[1].OwnerPkHash = other
 		}},
 		// The statement would name no input SPP spends.
-		{"no spent UTXO", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+		{"no spent UTXO", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *ringaudit.DeliveredSenderCircuit) {
 			d.Inputs[0], d.Inputs[1] = d.Inputs[2], d.Inputs[3]
 			*circuit = *d.Circuit(t)
 		}},
 		// The audited inputs would be other than the ones SPP settles.
-		{"private tx hash over another blinding", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+		{"private tx hash over another blinding", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *ringaudit.DeliveredSenderCircuit) {
 			circuit.PrivateTxBlinding = big.NewInt(0x5b1e)
 		}},
 	} {
@@ -111,7 +111,7 @@ func TestDeliveredSenderAuditRefusals(t *testing.T) {
 			d := ringaudit.NewDeliveredSenderAudit(t, shape)
 			circuit := d.Circuit(t)
 			tc.mutate(t, &d, circuit)
-			c.refuse(t, circuit)
+			c.Refuse(t, circuit)
 		})
 	}
 }

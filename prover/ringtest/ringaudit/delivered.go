@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -80,17 +79,23 @@ func (d DeliveredAudit) Disclosure(t testing.TB) []*big.Int {
 	return d.Keys.Disclose(t, d.Salt, slices.Concat(d.seedOut(d.Layout), nullifierPks, ringprotocol.PackDisclosure(slotBytes)))
 }
 
-// Circuit is the audit assignment proving the statement.
-func (d DeliveredAudit) Circuit(t testing.TB) *audit.DeliveredAuditCircuit {
-	t.Helper()
-	c, err := audit.NewDeliveredAuditCircuit(len(d.Outputs))
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
-	c.AuditWires = d.wires(d.Layout)
+// Utxos is the opening of every output slot.
+func (d DeliveredAudit) Utxos() []Utxo {
+	utxos := make([]Utxo, len(d.Outputs))
 	for i, output := range d.Outputs {
-		c.Outputs[i] = output.wires()
+		utxos[i] = output.Utxo
+	}
+	return utxos
+}
+
+// Circuit is the section assignment proving the statement.
+func (d DeliveredAudit) Circuit(t testing.TB) *DeliveredCircuit {
+	t.Helper()
+	c := NewDeliveredCircuit(len(d.Outputs))
+	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
+	c.AuditWires = d.Wires(d.Layout)
+	for i, output := range d.Outputs {
+		c.Outputs[i] = output.Wires()
 	}
 	return c
 }
@@ -98,13 +103,13 @@ func (d DeliveredAudit) Circuit(t testing.TB) *audit.DeliveredAuditCircuit {
 // DeliveredSenderAudit is a delivered audit of the in-proof owner rail spending two inputs of the sender.
 type DeliveredSenderAudit struct {
 	DeliveredAudit
-	Shape             audit.DeliveredSenderShape
+	Shape             SenderShape
 	SenderKey         [32]byte
 	PrivateTxBlinding *big.Int
 	Inputs            []Utxo
 }
 
-func NewDeliveredSenderAudit(t testing.TB, shape audit.DeliveredSenderShape) DeliveredSenderAudit {
+func NewDeliveredSenderAudit(t testing.TB, shape SenderShape) DeliveredSenderAudit {
 	t.Helper()
 	d := DeliveredSenderAudit{
 		DeliveredAudit:    NewDeliveredAudit(t, shape.Outputs),
@@ -143,13 +148,10 @@ func (d DeliveredSenderAudit) Statement(t testing.TB) []*big.Int {
 	return DeliveredSenderStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t), d.PrivateTxHash(t), d.Sender(t))
 }
 
-func (d DeliveredSenderAudit) Circuit(t testing.TB) *audit.DeliveredSenderAuditCircuit {
+func (d DeliveredSenderAudit) Circuit(t testing.TB) *DeliveredSenderCircuit {
 	t.Helper()
-	c, err := audit.NewDeliveredSenderAuditCircuit(d.Shape)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.DeliveredAuditCircuit = *d.DeliveredAudit.Circuit(t)
+	c := NewDeliveredSenderCircuit(d.Shape)
+	c.DeliveredCircuit = *d.DeliveredAudit.Circuit(t)
 	c.PublicInputHash = spptest.MustHashChain4(t, d.Statement(t))
 	c.Sender = d.Sender(t)
 	c.PrivateTxHash = d.PrivateTxHash(t)

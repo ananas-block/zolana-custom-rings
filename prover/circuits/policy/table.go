@@ -13,6 +13,7 @@ import (
 
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -94,8 +95,13 @@ var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8
 
 // decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
 func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) tableView {
+	return t.decodeWhen(api, rc, 1, policyHash)
+}
+
+// decodeWhen binds the table to policy_hash while screened, an unscreened table binds nothing the rules read.
+func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, policyHash frontend.Variable) tableView {
 	// The rules read the table the program hashed at its last policy write.
-	api.AssertIsEqual(policyHash, t.hash(api))
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: screened, A: policyHash, B: t.hash(api)})
 	return t.view(api, rc)
 }
 

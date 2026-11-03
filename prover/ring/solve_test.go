@@ -15,28 +15,26 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
 const (
-	smallDeliveredKey common.CircuitType = "custom-ring-audit-delivered-2"
-	deliveredKey      common.CircuitType = "custom-ring-audit-delivered-8"
-	senderKey         common.CircuitType = "custom-ring-audit-delivered-sender-48-2"
-	anonymousKey      common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
-	entryKey          common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
-	memberKey         common.CircuitType = "custom-ring-policy-member-v3-2-w0-curator"
-	delegateKey       common.CircuitType = "custom-ring-policy-delegate-v3-2x2-curator"
-	applyKey          common.CircuitType = "custom-ring-apply-records-1"
-	batchKey          common.CircuitType = "custom-ring-apply-records-16"
-	registerKey       common.CircuitType = "custom-ring-register-key"
-	depositKey        common.CircuitType = "custom-ring-deposit-8"
-	mergeKey          common.CircuitType = "custom-ring-merge-v3-8"
+	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in40-w4"
+	wideConfidentialKey common.CircuitType = "custom-ring-transfer-confidential-16-in8-w8"
+	anonymousKey        common.CircuitType = "custom-ring-transfer-anonymous-2-in24-w4"
+	wideAnonymousKey    common.CircuitType = "custom-ring-transfer-anonymous-8-in5-w24"
+	entryKey            common.CircuitType = "custom-ring-transfer-anonymous-entry-2-in8-w4"
+	applyKey            common.CircuitType = "custom-ring-apply-records-1"
+	batchKey            common.CircuitType = "custom-ring-apply-records-16"
+	registerKey         common.CircuitType = "custom-ring-register-key"
+	depositKey          common.CircuitType = "custom-ring-deposit-8"
+	mergeKey            common.CircuitType = "custom-ring-merge-v3-8"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{smallDeliveredKey, deliveredKey, senderKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{confidentialKey, wideConfidentialKey, anonymousKey, wideAnonymousKey, entryKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -58,42 +56,16 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 func hostRequest(t testing.TB, k Key) any {
 	t.Helper()
 	switch k.Family {
-	case DeliveredAudit:
-		return requestOf[DeliveredAuditParams](t, k.Circuit, ringaudit.NewDeliveredAudit(t, k.Outputs).Circuit(t))
-	case DeliveredSenderAudit:
-		return requestOf[DeliveredSenderAuditParams](t, k.Circuit, ringaudit.NewDeliveredSenderAudit(t, k.deliveredSenderShape()).Circuit(t))
-	case AnonymousAudit, AnonymousEntryAudit:
-		return requestOf[AnonymousAuditParams](t, k.Circuit, ringaudit.NewAnonymousAudit(t, k.anonymousShape()).Circuit(t))
-	case MemberPolicy:
-		world, ok := ringpolicy.MemberWorlds[k.Outputs]
-		if !ok {
-			t.Fatalf("no member world for %d outputs", k.Outputs)
-		}
-		w := world()
-		w.WithdrawalCapacity, w.OwnOnly = k.Withdrawals, k.OwnOnly
-		if !k.OwnOnly {
-			w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-			w.Curator = w.Own
-		}
-		for range k.Withdrawals {
-			w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1})
-		}
-		if k.Withdrawals > 0 {
-			w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -int64(k.Withdrawals)}}
-		}
-		return requestOf[MemberPolicyParams](t, k.Circuit, w.Build(t).Assignment())
-	case DelegatePolicy:
-		world := ringpolicy.Delegate(transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
-		world.OwnOnly = k.OwnOnly
-		if !k.OwnOnly {
-			world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-			world.Curator = world.Own
-		}
-		return requestOf[DelegatePolicyParams](t, k.Circuit, world.Build(t).Assignment())
+	case TransferConfidential:
+		w := ringtransfer.Signed(k.confidentialShape())
+		w.Withdrawals, w.Public = fixtureLeg(t)
+		return requestOf[ConfidentialTransferParams](t, k.Circuit, w.Build(t).Circuit)
+	case TransferAnonymous, TransferAnonymousEntry:
+		w := ringtransfer.Hidden(k.anonymousShape())
+		w.Withdrawals, w.Public = fixtureLeg(t)
+		return requestOf[AnonymousTransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:
 		return applyRequest(t, k.Circuit, k.Inputs)
-	case WithdrawalExemption:
-		return requestOf[WithdrawalExemptionParams](t, k.Circuit, ringpolicy.Exemption(t))
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
@@ -103,6 +75,13 @@ func hostRequest(t testing.TB, k Key) any {
 	}
 	t.Fatalf("no host request for ring family %d", k.Family)
 	return nil
+}
+
+// fixtureLeg withdraws one leg of the fixture asset, so every transfer request carries a withdrawal.
+func fixtureLeg(t testing.TB) ([]ringtransfer.Withdrawal, []ringtransfer.PublicSlot) {
+	t.Helper()
+	asset := ringtransfer.Asset(t)
+	return []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: asset, Amount: 10}}, []ringtransfer.PublicSlot{{Asset: asset, Net: -10, Gross: 10}}
 }
 
 func keyOf(t testing.TB, circuit common.CircuitType) Key {

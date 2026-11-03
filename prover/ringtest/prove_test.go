@@ -11,45 +11,36 @@ import (
 	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 )
 
-func TestDeliveredAuditAndMemberPolicyProve(t *testing.T) {
-	delivered, err := audit.NewDeliveredAuditCircuit(2)
+func TestAuditAndPolicySectionsProve(t *testing.T) {
+	requireProves(t, ringaudit.NewDeliveredCircuit(2), ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
+	section, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, delivered, ringaudit.DeliveredAuditOf(t, 2).Circuit(t))
-	member, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireProves(t, member, ringpolicy.Confidential().Build(t).Assignment())
+	requireProves(t, section, ringpolicy.Confidential().Build(t).Assignment())
 }
 
-func TestAnonymousAuditTransferProves(t *testing.T) {
-	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
+func TestAnonymousTransferProves(t *testing.T) {
+	shape := transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
+	circuit, err := transfer.NewAnonymousTransferCircuit(shape)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProves(t, anonymous, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
+	requireProves(t, circuit, ringtransfer.Hidden(shape).Build(t).Circuit)
 }
 
 func TestAuditsPinBlindingAndRingData(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	anonymous, err := audit.NewAnonymousAuditCircuit(shape)
-	if err != nil {
-		t.Fatal(err)
-	}
+	anonymous := ringaudit.NewAnonymousCircuit(shape)
 	t.Run("delivered ring data", func(t *testing.T) {
-		delivered, err := audit.NewDeliveredAuditCircuit(8)
-		if err != nil {
-			t.Fatal(err)
-		}
+		delivered := ringaudit.NewDeliveredCircuit(8)
 		d := ringaudit.NewDeliveredAudit(t, 8)
 		honest := d.Circuit(t)
 		d.Outputs[0].Utxo.RingDataHash = big.NewInt(7)

@@ -3,7 +3,7 @@
 // each proof matches exactly one shielded pool transfer.
 //
 // Read after shared/envelope.go, shared/derivation.go, shared/utxo.go. Read
-// before audit/layout.go, audit/delivered.go, audit/anonymous.go.
+// before audit/layout.go, audit/delivered.go, audit/anonymous.go, transfer/transfer.go.
 
 // Package audit proves what a ring auditor reads from a ring transfer.
 package audit
@@ -14,58 +14,18 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/x25519"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
+// AnonymousAuditShape sizes the anonymous section, FullOpenings the entry layout of a spend of default-ring notes.
 type AnonymousAuditShape struct {
 	InputClass   int
 	Outputs      int
 	FullOpenings bool
 }
-
-// layout is the flags the shape fixes.
-func (s AnonymousAuditShape) layout() int {
-	if s.FullOpenings {
-		return LayoutFullOpenings
-	}
-	return 0
-}
-
-func (s AnonymousAuditShape) senderKeyLen() int {
-	if s.FullOpenings {
-		return 32
-	}
-	return 0
-}
-
-type DeliveredSenderShape struct {
-	Inputs  int
-	Outputs int
-}
-
-// Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/proof/disclosure.rs.
-var (
-	// DeliveredAuditCapacities prove every confidential and delegate body.
-	DeliveredAuditCapacities = [...]int{2, 4, 8, 16}
-	// DeliveredSenderShapes take the widest SPP input count of a confidential ring spend at each capacity, mirrored by DELIVERED_SENDER_CLASSES.
-	DeliveredSenderShapes = [...]DeliveredSenderShape{{Inputs: 48, Outputs: 2}, {Inputs: 24, Outputs: 4}, {Inputs: 16, Outputs: 8}, {Inputs: 8, Outputs: 16}}
-	// AnonymousAuditShapes name spent notes by hash and prefix, a transfer takes the smallest class holding its published inputs.
-	AnonymousAuditShapes = [...]AnonymousAuditShape{
-		{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2},
-		{InputClass: 4, Outputs: 4}, {InputClass: 16, Outputs: 4},
-		{InputClass: 4, Outputs: 8}, {InputClass: 8, Outputs: 8},
-	}
-	// AnonymousEntryShapes open every spent UTXO, the keys of a transfer that spends a default-ring note.
-	AnonymousEntryShapes = [...]AnonymousAuditShape{
-		{InputClass: 8, Outputs: 2, FullOpenings: true},
-		{InputClass: 8, Outputs: 4, FullOpenings: true},
-		{InputClass: 8, Outputs: 8, FullOpenings: true},
-	}
-)
 
 type AuditWires struct {
 	FirstNullifier frontend.Variable
@@ -78,7 +38,8 @@ type AuditWires struct {
 	Layout        frontend.Variable
 }
 
-type auditEnvelope struct {
+// Envelope is one transfer's opened auditor envelope.
+type Envelope struct {
 	txViewingSk [32]frontend.Variable
 	// txPk is pack_be(0x04 ‖ tx_u).
 	txPk [2]frontend.Variable
@@ -89,15 +50,8 @@ type auditEnvelope struct {
 	sealedFields      []frontend.Variable
 }
 
-type outputSlot struct {
-	shared.OpenedUtxo
-	live frontend.Variable
-	ring frontend.Variable
-	exit frontend.Variable
-}
-
-// sealEnvelope binds tx_viewing_sk to its tagged public key and seals it to the auditor.
-func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) auditEnvelope {
+// Seal binds tx_viewing_sk to its tagged public key and seals it to the auditor.
+func (w AuditWires) Seal(api frontend.API, rc frontend.Rangechecker) Envelope {
 	// 1. The salt is 16 bytes, one field below 2^128 the program rebuilds from the instruction.
 	salt := gadget.BytesToFieldWith(api, rc, w.Salt[:])
 	// 2. The auditor reads the recovered bytes as they are, an unclamped alias would key another stream.
@@ -107,7 +61,7 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 	// 4. The envelope seals tx_viewing_sk to the auditor under the audit stream schedule.
 	sealed := shared.Envelope{Plaintext: w.TxViewingSk[:], EphSk: w.EphSk, AuditorPk: w.AuditorPk}.SealAuditStream(api)
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
-	return auditEnvelope{
+	return Envelope{
 		txViewingSk:       w.TxViewingSk,
 		txPk:              [2]frontend.Variable(txPk),
 		packedTxViewingSk: packedTxViewingSk,
@@ -117,35 +71,41 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 	}
 }
 
-// openOutput classifies every UTXO of an output slot as a ring output or an exit.
-func openOutput(api frontend.API, o shared.UtxoWires) outputSlot {
+// OpenOutput opens an output slot the auditor reads, no UTXO carries a data hash the recipient never learns.
+func OpenOutput(api frontend.API, o shared.UtxoWires) shared.Output {
 	opened := o.Open(api)
-	// SPP holds every UTXO's ring id to 0 or the ring's on the same output hashes, AssertRingMemberOrFree in spp_transaction/shared/ring.go.
-	ring := api.Mul(opened.Utxo, ringgadget.IsNonZero(api, o.RingProgramID))
-	// No UTXO carries a data hash, the recipient never learns one.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: o.DataHash})
-	return outputSlot{OpenedUtxo: opened, live: opened.Utxo, ring: ring, exit: api.Sub(opened.Utxo, ring)}
+	return opened
 }
 
-func assertOwnerKey(api frontend.API, slot outputSlot, o shared.UtxoWires, key [32]frontend.Variable) {
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: o.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, key)})
+func assertOwnerKey(api frontend.API, slot shared.Output, key [32]frontend.Variable) {
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Ring, A: slot.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, key)})
 }
 
-// assertBlinding pins a live UTXO's blinding to SPP's TXOB blinding over the seed tx_viewing_sk fixes.
-func (w AuditWires) assertBlinding(api frontend.API, e auditEnvelope, o shared.UtxoWires, slot outputSlot, i int) {
+// AssertBlinding pins a live UTXO's blinding to SPP's TXOB blinding over the seed tx_viewing_sk fixes.
+func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, i int) {
 	blinding := transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.live, A: o.Blinding, B: blinding})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Utxo, A: slot.Blinding, B: blinding})
 }
 
-// statementHead opens every audit statement, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs.
+// Head opens every audit statement under domain, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs.
 //
-//	CRAU, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout
-func (e auditEnvelope) statementHead(w AuditWires) []frontend.Variable {
+//	domain, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout
+func (e Envelope) Head(w AuditWires, domain frontend.Variable) []frontend.Variable {
 	return slices.Concat(
-		[]frontend.Variable{shared.AuditStatementDomain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1]},
+		[]frontend.Variable{domain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1]},
 		e.sealedFields,
 		[]frontend.Variable{e.salt, w.Layout},
 	)
+}
+
+// SpentBySender holds every input slot to the sender while live, slot 0 to a UTXO while required, and returns utxo * hash per slot.
+func SpentBySender(api frontend.API, inputs []shared.UtxoWires, live, required, sender frontend.Variable) []frontend.Variable {
+	hashes := make([]frontend.Variable, len(inputs))
+	for i, input := range inputs {
+		_, hashes[i] = spentBySender(api, input, live, required, sender, i)
+	}
+	return hashes
 }
 
 // AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.

@@ -23,12 +23,8 @@ const (
 	DeliveredSlotSecretDomain = 0x43524453
 	// BlindingSeedDomain = "CRBS"
 	BlindingSeedDomain = 0x43524253
-	// SenderCommitmentDomain = "CRSC"
-	SenderCommitmentDomain = 0x43525343
 	// DisclosurePadDomain = "CROD"
 	DisclosurePadDomain = 0x43524f44
-	// PolicyStatementDomain = "CRPO"
-	PolicyStatementDomain = 0x4352504f
 	// PolicyTableDomain = "CRTB"
 	PolicyTableDomain = 0x43525442
 	// QueueWriteDomain = "CRQW"
@@ -45,9 +41,12 @@ const (
 	DepositBlindingDomain = 0x43524442
 	// WithdrawalsDomain = "CRPW"
 	WithdrawalsDomain = 0x43525057
-	// WithdrawalExemptionDomain = "CRWX"
-	WithdrawalExemptionDomain = 0x43525758
+	// TransferStatementDomain = "CRTX"
+	TransferStatementDomain = 0x43525458
 )
+
+// TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
+const TransferStatementVersion = 1
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 const PolicyStatementVersion = 4
@@ -94,11 +93,6 @@ func (s DeliveredSlot) Secret(api frontend.API) frontend.Variable {
 // BlindingSeed is SPP's blinding_seed Poseidon(CRBS, sk0, sk1, salt), every output blinding rebuilds from tx_viewing_sk.
 func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{BlindingSeedDomain, txViewingSk[0], txViewingSk[1], salt})
-}
-
-// SenderCommitment binds the anonymous audit and the member policy to one sender, private_tx_hash fixes the blinding both read.
-func SenderCommitment(api frontend.API, senderPkHash, privateTxBlinding frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{SenderCommitmentDomain, senderPkHash, privateTxBlinding})
 }
 
 // DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.

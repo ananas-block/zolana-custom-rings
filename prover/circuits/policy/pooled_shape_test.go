@@ -1,9 +1,9 @@
 package policy
 
 import (
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"testing"
+
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
@@ -12,7 +12,7 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		mutate func(*Policy)
 	}{
 		{"missing outputs", func(p *Policy) {
-			p.Outputs = nil
+			p.CtHashes = nil
 			p.OwnerEntries = nil
 			p.AssetEntries = nil
 			p.OwnRecords = p.OwnRecords[:1]
@@ -26,50 +26,28 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		{"missing own subjects", func(p *Policy) { p.OwnSubjects = nil }},
 		{"missing curator reference", func(p *Policy) { p.SenderEntry.Curator = nil }},
 		{"oversized own pool", func(p *Policy) { p.OwnRecords = append(p.OwnRecords, p.OwnRecords[0]) }},
+		{"missing public asset references", func(p *Policy) { p.PublicAssetEntries = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := NewMemberPolicyCircuit(MemberShape{Outputs: 2})
+			p, err := NewPolicy(NewPolicyInputs(2, 0, false), RecordPoolShape{}, transaction.NPublicSlots)
 			if err != nil {
 				t.Fatal(err)
 			}
-			tc.mutate(&c.Policy)
-			if err = c.Policy.validate(transaction.NPublicSlots); err == nil {
+			tc.mutate(&p)
+			if err = p.Validate(transaction.NPublicSlots); err == nil {
 				t.Fatal("invalid policy shape accepted")
 			}
 		})
 	}
 	t.Run("own registry with curator records", func(t *testing.T) {
-		c, err := NewMemberPolicyCircuit(MemberShape{Outputs: 2, OwnOnly: true})
+		p, err := NewPolicy(NewPolicyInputs(2, 0, true), RecordPoolShape{}, transaction.NPublicSlots)
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.CuratorRecords = c.OwnRecords[:1]
-		if err = c.Policy.validate(transaction.NPublicSlots); err == nil {
+		p.CuratorRecords = p.OwnRecords[:1]
+		if err = p.Validate(transaction.NPublicSlots); err == nil {
 			t.Fatal("curator records accepted by own only shape")
-		}
-	})
-	t.Run("delegate without inputs", func(t *testing.T) {
-		c, err := NewDelegatePolicyCircuit(DelegateShape{Shape: transaction.Shape{NInputs: 2, NOutputs: 2}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.Inputs = nil
-		if err := c.Define(nil); err == nil {
-			t.Fatal("delegate without inputs accepted")
-		}
-	})
-	t.Run("delegate with extra public records", func(t *testing.T) {
-		c, err := NewMemberPolicyCircuit(MemberShape{Outputs: 2})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.OwnRecords = c.OwnRecords[:6]
-		c.OwnSubjects = c.OwnSubjects[:5]
-		delegate := DelegatePolicyCircuit{Policy: c.Policy}
-		delegate.Inputs = make([]shared.UtxoWires, 2)
-		if err = delegate.Define(nil); err == nil {
-			t.Fatal("delegate accepted oversized record capacity")
 		}
 	})
 }

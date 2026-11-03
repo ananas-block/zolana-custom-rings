@@ -31,7 +31,8 @@ const (
 
 const layoutBits = 4
 
-type auditLayout struct {
+// Layout is the decoded layout value, every flag outside free pinned.
+type Layout struct {
 	flags       [layoutBits]frontend.Variable
 	free, fixed int
 }
@@ -54,13 +55,13 @@ type layoutEnd struct {
 	selected frontend.Variable
 }
 
-// decodeLayout pins every flag outside free to its bit of fixed.
-func decodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) auditLayout {
+// DecodeLayout pins every flag outside free to its bit of fixed.
+func DecodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) Layout {
 	if free&fixed != 0 {
 		panic("audit: a layout flag is both free and fixed")
 	}
 	// The decomposition bounds the layout to its flags.
-	l := auditLayout{flags: [layoutBits]frontend.Variable(api.ToBinary(layout, layoutBits)), free: free, fixed: fixed}
+	l := Layout{flags: [layoutBits]frontend.Variable(api.ToBinary(layout, layoutBits)), free: free, fixed: fixed}
 	for i, flag := range l.flags {
 		if free&(1<<i) == 0 {
 			// A pinned flag names the one layout the key proves.
@@ -70,17 +71,18 @@ func decodeLayout(api frontend.API, layout frontend.Variable, free, fixed int) a
 	return l
 }
 
-func (l auditLayout) flag(f int) frontend.Variable {
+// Flag is the statement's bit of f, a pinned flag a constant.
+func (l Layout) Flag(f int) frontend.Variable {
 	return l.flags[bits.TrailingZeros(uint(f))]
 }
 
-// assertExits pins the exits flag to the slots, a disclosure without SeedOut holds no exit.
-func (l auditLayout) assertExits(api frontend.API, slots []outputSlot) {
+// AssertExits pins the exits flag to the slots, a disclosure without SeedOut holds no exit.
+func (l Layout) AssertExits(api frontend.API, slots []shared.Output) {
 	exits := frontend.Variable(0)
 	for _, slot := range slots {
-		exits = api.Add(exits, slot.exit)
+		exits = api.Add(exits, slot.Exit)
 	}
-	api.AssertIsEqual(l.flag(LayoutExits), ringgadget.IsNonZero(api, exits))
+	api.AssertIsEqual(l.Flag(LayoutExits), ringgadget.IsNonZero(api, exits))
 }
 
 func (c layoutChoice) has(f int) bool {
@@ -88,7 +90,7 @@ func (c layoutChoice) has(f int) bool {
 }
 
 // choices is every assignment of the free flags in vary over the pinned ones, the statement selects exactly one.
-func (l auditLayout) choices(api frontend.API, vary int) []layoutChoice {
+func (l Layout) choices(api frontend.API, vary int) []layoutChoice {
 	if vary&^l.free != 0 {
 		panic("audit: a varied layout flag is pinned")
 	}
@@ -109,7 +111,7 @@ func (l auditLayout) choices(api frontend.API, vary int) []layoutChoice {
 	return choices
 }
 
-func (e auditEnvelope) seedOut(c layoutChoice) []frontend.Variable {
+func (e Envelope) seedOut(c layoutChoice) []frontend.Variable {
 	if c.has(LayoutExits) {
 		return []frontend.Variable{e.outputSeed}
 	}
@@ -150,7 +152,7 @@ func (c layoutChoice) counted(api frontend.API, head []frontend.Variable, tail c
 }
 
 // disclose is HashChain4 over the fields of the layout the statement selects, field j enciphered with CROD pad j.
-func (e auditEnvelope) disclose(api frontend.API, choices []layoutChoice, layoutOf func(layoutChoice) disclosureLayout) frontend.Variable {
+func (e Envelope) disclose(api frontend.API, choices []layoutChoice, layoutOf func(layoutChoice) disclosureLayout) frontend.Variable {
 	layouts := make([]disclosureLayout, len(choices))
 	width := 0
 	for i, choice := range choices {

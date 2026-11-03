@@ -6,6 +6,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	circuitregistry "github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -30,7 +31,12 @@ func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
 // pool opens every live subject once, each record once, and fills the pools cyclically to capacity.
 func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry) {
 	t.Helper()
-	policyWitness := b.Policy()
+	FillPools(t, b.Policy(), b.Outputs(), b.SenderPkHash(), ownTree, curatorTree)
+}
+
+// FillPools opens every live subject of outputs, the withdrawals and the public assets once under sender, each record once, and fills the pools cyclically to capacity.
+func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.UtxoWires, sender frontend.Variable, ownTree, curatorTree *ringregistry.Registry) {
+	t.Helper()
 	own, curator := newCollector(ownTree), newCollector(curatorTree)
 	foreign := false
 	for _, source := range policyWitness.Sources {
@@ -43,14 +49,14 @@ func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry)
 		}
 		return poolEntry
 	}
-	policyWitness.SenderEntry = entry(policyWitness.SenderPkHash, true)
-	for i, out := range policyWitness.Outputs {
+	policyWitness.SenderEntry = entry(sender, true)
+	for i, out := range outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
 		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
 	}
 	for i, out := range policyWitness.Withdrawals {
 		active := int64(i) < ringtest.AsBigInt(policyWitness.WithdrawalCount).Int64()
-		index := len(policyWitness.Outputs) + i
+		index := len(outputs) + i
 		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
 	}
 	for i := range policyWitness.PublicAssetEntries {
@@ -58,7 +64,7 @@ func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry)
 		policyWitness.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
 	if len(curator.records) == 0 && !policyWitness.OwnOnly {
-		curator.add(policyWitness.SenderPkHash, true)
+		curator.add(sender, true)
 	}
 	policyWitness.OwnProof = own.fill(t, policyWitness.OwnRecords, policyWitness.OwnSubjects)
 	if !policyWitness.OwnOnly {

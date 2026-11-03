@@ -41,6 +41,11 @@ func (u Utxo) isUtxo() bool {
 	return u.Domain == protocol.UtxoDomain
 }
 
+// IsUtxo is set for a spendable or created note, a dummy carries no obligation.
+func (u Utxo) IsUtxo() bool {
+	return u.isUtxo()
+}
+
 // isExit is a UTXO leaving the ring for the default ring.
 func (u Utxo) isExit() bool {
 	return u.isUtxo() && u.RingProgramID.Sign() == 0

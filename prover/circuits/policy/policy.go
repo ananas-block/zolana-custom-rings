@@ -1,9 +1,9 @@
-// Holds the public statement that the member and delegate policy proofs share
-// with the program. Every value a rule reads ties back to the statement, so the
-// proof checks the transfer the program settles.
+// Holds the statement values the policy section reads from the program. Every
+// value a rule reads ties back to the statement, so the proof checks the
+// transfer the program settles.
 //
 // Read after policy/table.go, policy/record_pool.go. Read before
-// policy/transaction.go, policy/member.go, policy/delegate.go.
+// policy/transaction.go, policy/screen.go.
 
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 package policy
@@ -15,26 +15,36 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
-	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-// Properties:
-// 1. The rules read the policy table the program validated and hashed into policy_hash.
-// 2. The outputs are the ones SPP settles under the private_tx_hash its proof binds.
-// 3. One sender, the owner signer of a confidential ring, the sender an anonymous ring's commitment hides, or the one member a delegate move spends.
-// 4. Every output slot's public recipient is its owner identity, zero on a dummy and on an anonymous ring.
-// 5. Every enabled rule holds for the sender and every live output or withdrawal owner and asset on the lists their records carry, unless an amount guard exempts it.
-// 6. On the member key every limit row's outflow is never negative and within its cap, and approval_required is set exactly when one passes its co-sign bound.
-// 7. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
+// Local constraints, Screen asserts them:
+// 1. While screened the table hashes to policy_hash and every enabled rule holds for the sender and for every live payment's owner and asset on the lists their records carry, unless an amount guard exempts it.
+// 2. Each recipient is its slot's owner identity while screened and published, zero otherwise.
+// 3. withdrawal_hash reopens over the live legs, a live leg a nonzero amount of a nonzero asset, every amount below 2^64.
+// 4. While Outflow is on every limit row's outflow is never negative and within its cap, and the approval is set exactly when one passes its co-sign bound.
+// 5. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
+// 6. Under exempt every public slot's gross withdrawal lies at or under its asset record's threshold, zero off a record.
+// 7. Every record a gate queries opens under own_root, under curator_root when its list is foreign.
+//
+// Program-derived facts, the statement fixes them:
+// 8. policy_hash is the ring account's written table hash, zero on an audit-only ring.
+// 9. own_root and curator_root are the registry roots at the frame's revisions, zero where no pool is active.
+// 10. Each public slot's asset, net and gross come from the program's fold of the settled legs, a deposit never lowers a gross.
+// 11. The recipients are the frame's identities on a confidential rail under a policy, zero otherwise.
+// 12. The gates come from the rail, the instruction tag, the frame flags and policy_hash.
+// 13. The statement's sender is the sole owner signer under a policy on the signer rail, the framed owner key on the in-proof rail, zero on the authority rail, absent on the anonymous family.
+//
+// Guarantees the section leans on:
+// 14. SPP authorizes the owner signer over every spent input, the signer rail's sender owns the inputs with no ring constraint.
+// 15. The transfer circuit passes the statement's sender on the signer and in-proof rails and a private member it holds every opened input to on the authority and anonymous rails.
+// 16. SPP settles exactly the outputs under private_tx_hash, the transfer circuit reopens the hash over the slots the policy screens.
 
 type PolicyInputs struct {
 	OwnOnly         bool `gnark:"-"`
 	WithdrawalCount frontend.Variable
 	WithdrawalHash  frontend.Variable
 	Withdrawals     []WithdrawalWires
-	PrivateTxHash   frontend.Variable
 	PolicyHash      frontend.Variable
 	RingProgramID   frontend.Variable
 	OwnRoot         frontend.Variable
@@ -42,14 +52,13 @@ type PolicyInputs struct {
 	PublicAssets    [transaction.NPublicSlots]frontend.Variable
 	// PublicAmounts are SPP's signed nets, a withdrawal enters as the field negation of its amount.
 	PublicAmounts [transaction.NPublicSlots]frontend.Variable
+	// PublicGross are the gross withdrawals per slot, read under an exemption.
+	PublicGross [transaction.NPublicSlots]frontend.Variable
 	Table
 
-	AddressChain      frontend.Variable
-	PrivateTxBlinding frontend.Variable
-	Outputs           []OutputWires
-	Recipients        []frontend.Variable
-	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
-	SenderPkHash frontend.Variable
+	// CtHashes are each output owner's escrowed key ciphertext hashes, read only under key escrow.
+	CtHashes   []frontend.Variable
+	Recipients []frontend.Variable
 }
 
 type Policy struct {
@@ -66,18 +75,14 @@ type Policy struct {
 	PublicAssetEntries []frontend.Variable
 }
 
-type railValues struct {
-	// anonymous is the member key's mode bit, absent from the delegate statement.
-	anonymous                           []frontend.Variable
-	approvalRequired, keyEscrow, sender frontend.Variable
+// NewPolicyInputs sizes the statement wires of a policy over outputs output slots and withdrawals legs.
+func NewPolicyInputs(outputs, withdrawals int, ownOnly bool) PolicyInputs {
+	return PolicyInputs{OwnOnly: ownOnly, CtHashes: make([]frontend.Variable, outputs), Recipients: make([]frontend.Variable, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
 }
 
-func newPolicyInputs(outputs, withdrawals int, ownOnly bool) PolicyInputs {
-	return PolicyInputs{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Recipients: make([]frontend.Variable, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
-}
-
-func newPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) (Policy, error) {
-	payments := len(inputs.Outputs) + len(inputs.Withdrawals)
+// NewPolicy sizes the record pools, capacity zero fields take the shape's limits.
+func NewPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) (Policy, error) {
+	payments := len(inputs.CtHashes) + len(inputs.Withdrawals)
 	limits := inputs.recordCapacity(publicAssets)
 	capacity = capacity.withDefaults(limits)
 	if err := capacity.validate(limits); err != nil {
@@ -113,12 +118,13 @@ func (p *Policy) RecordPools() RecordPoolShape {
 	return RecordPoolShape{Own: len(p.OwnRecords), Curator: len(p.CuratorRecords), OwnSubjects: len(p.OwnSubjects), CuratorSubjects: len(p.CuratorSubjects)}
 }
 
-func (p *Policy) validate(publicAssets int) error {
-	payments := len(p.Outputs) + len(p.Withdrawals)
-	if len(p.Outputs) == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
+// Validate refuses a pool or reference list sized off the key's shape before any wire is read.
+func (p *Policy) Validate(publicAssets int) error {
+	payments := len(p.CtHashes) + len(p.Withdrawals)
+	if len(p.CtHashes) == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
 		return fmt.Errorf("policy requires owner and asset references for every payment")
 	}
-	if len(p.Recipients) != len(p.Outputs) {
+	if len(p.Recipients) != len(p.CtHashes) {
 		return fmt.Errorf("policy requires one recipient per output")
 	}
 	if len(p.PublicAssetEntries) != publicAssets {
@@ -141,24 +147,4 @@ func (p *Policy) validate(publicAssets int) error {
 		}
 	}
 	return nil
-}
-
-// statement is the policy preimage, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
-//
-//	CRPO, private_tx_hash, policy_hash, ring_id, anonymous on the member key only, approval_required,
-//	key_escrow, own_root, curator_root, sender, recipient_o per output slot, asset_k and amount_k per public slot, version, withdrawal_hash
-func (p *PolicyInputs) statement(rail railValues) []frontend.Variable {
-	fields := []frontend.Variable{shared.PolicyStatementDomain, p.PrivateTxHash, p.PolicyHash, p.RingProgramID}
-	fields = append(fields, rail.anonymous...)
-	fields = append(fields, rail.approvalRequired, rail.keyEscrow, p.OwnRoot, p.CuratorRoot, rail.sender)
-	fields = append(fields, p.Recipients...)
-	for k := range p.PublicAssets {
-		fields = append(fields, p.PublicAssets[k], p.PublicAmounts[k])
-	}
-	return append(fields, shared.PolicyStatementVersion, p.WithdrawalHash)
-}
-
-func bindStatement(api frontend.API, publicInputHash frontend.Variable, statement []frontend.Variable) {
-	// The one public input fixes every statement value the steps read to the ones the program rebuilds.
-	api.AssertIsEqual(publicInputHash, gadget.HashChain4(api, statement))
 }

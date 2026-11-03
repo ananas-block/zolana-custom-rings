@@ -4,7 +4,7 @@
 // total.
 //
 // Read after policy/table.go, policy/subjects.go, policy/transaction.go. Read
-// before policy/outflow.go, policy/deposit.go, policy/delegate.go.
+// before policy/outflow.go, policy/deposit.go, policy/screen.go.
 
 package policy
 
@@ -18,40 +18,53 @@ import (
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
+
+// Payment is an output slot or a withdrawal leg as the policy screens it, inactive on a dummy or past the count.
+type Payment struct{ Owner, Asset, Amount, Active frontend.Variable }
+
+func slotPayments(slots []shared.Output) []Payment {
+	payments := make([]Payment, len(slots))
+	for i, slot := range slots {
+		payments[i] = Payment{Owner: slot.OwnerPkHash, Asset: slot.Asset, Amount: slot.Amount, Active: slot.Utxo}
+	}
+	return payments
+}
 
 type outputTotals struct {
 	byOwner, byAsset, byOwnerAndAsset frontend.Variable
 }
 
-func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table tableView, resolved subjects, outputs []utxoView) {
+func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, screened frontend.Variable, table tableView, resolved subjects, outputs []Payment) {
 	// 1. Every payment's guard inputs fold once.
 	screen := newPaymentScreen(api, cmp, resolved, outputs)
 	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	assertScalarAssets(api, outputs, table.scalarOwner)
+	assertScalarAssets(api, outputs, api.Mul(screened, table.scalarOwner))
 	// 3. Every active rule holds for its subjects, the sender once and each live output owner or asset.
 	for r, rule := range table.rules {
+		active := api.Mul(screened, table.ruleActive[r])
 		// The one sender meets every sender rule, with or without a spent input.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
-		screen.assert(api, rule, api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset)))
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active, rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
+		screen.assert(api, rule, api.Mul(active, api.Add(rule.onOwner, rule.onAsset)))
 	}
 }
 
 type paymentScreen struct {
 	cmp                    comparator
 	resolved               subjects
-	outputs                []utxoView
+	outputs                []Payment
 	liveOwner, assetExempt []frontend.Variable
 	totals                 []outputTotals
 }
 
-func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, outputs []utxoView) paymentScreen {
+func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, outputs []Payment) paymentScreen {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
-		liveOwner[o] = api.Mul(out.utxo, ringgadget.IsNonZero(api, out.ownerPkHash))
+		liveOwner[o] = api.Mul(out.Active, ringgadget.IsNonZero(api, out.Owner))
 	}
 	// 2. An asset guard exempts an owner whose outputs of one asset stay within the asset's inline limit.
 	totals := sumOutputs(api, outputs, liveOwner)
@@ -65,7 +78,7 @@ func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, outpu
 // assert holds one rule for every live payment while onOutput is set.
 func (s paymentScreen) assert(api frontend.API, rule ruleFields, onOutput frontend.Variable) {
 	for o := range s.outputs {
-		enabled := api.Mul(onOutput, api.Select(rule.onAsset, s.outputs[o].utxo, s.liveOwner[o]))
+		enabled := api.Mul(onOutput, api.Select(rule.onAsset, s.outputs[o].Active, s.liveOwner[o]))
 		refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.resolved.assets[o], s.resolved.owners[o]))
 		// An asset guarded rule needs an inline limit for the output's asset.
 		transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, s.resolved.mintPolicies[o].threshold))
@@ -77,27 +90,27 @@ func (s paymentScreen) assert(api frontend.API, rule ruleFields, onOutput fronte
 	}
 }
 
-func assertScalarAssets(api frontend.API, outputs []utxoView, enabled frontend.Variable) {
+func assertScalarAssets(api frontend.API, outputs []Payment, enabled frontend.Variable) {
 	var asset, seen frontend.Variable = 0, 0
 	for _, out := range outputs {
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(enabled, seen, out.utxo), A: asset, B: out.asset})
-		asset = api.Select(out.utxo, out.asset, asset)
-		seen = api.Or(seen, out.utxo)
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(enabled, seen, out.Active), A: asset, B: out.Asset})
+		asset = api.Select(out.Active, out.Asset, asset)
+		seen = api.Or(seen, out.Active)
 	}
 }
 
 // sumOutputs gives each output the totals of every output sharing its owner, its asset or both.
-func sumOutputs(api frontend.API, outputs []utxoView, liveOwner []frontend.Variable) []outputTotals {
+func sumOutputs(api frontend.API, outputs []Payment, liveOwner []frontend.Variable) []outputTotals {
 	ownerAmounts, assetAmounts := make([]frontend.Variable, len(outputs)), make([]frontend.Variable, len(outputs))
 	totals := make([]outputTotals, len(outputs))
 	for o, out := range outputs {
-		ownerAmounts[o], assetAmounts[o] = api.Mul(liveOwner[o], out.amount), api.Mul(out.utxo, out.amount)
+		ownerAmounts[o], assetAmounts[o] = api.Mul(liveOwner[o], out.Amount), api.Mul(out.Active, out.Amount)
 		totals[o] = outputTotals{byOwner: ownerAmounts[o], byAsset: assetAmounts[o], byOwnerAndAsset: ownerAmounts[o]}
 	}
 	for i := range outputs {
 		for j := range outputs[:i] {
-			sameOwner := api.IsZero(api.Sub(outputs[i].ownerPkHash, outputs[j].ownerPkHash))
-			sameAsset := api.IsZero(api.Sub(outputs[i].asset, outputs[j].asset))
+			sameOwner := api.IsZero(api.Sub(outputs[i].Owner, outputs[j].Owner))
+			sameAsset := api.IsZero(api.Sub(outputs[i].Asset, outputs[j].Asset))
 			for _, pair := range [2][2]int{{i, j}, {j, i}} {
 				into, from := pair[0], pair[1]
 				owned := api.Mul(sameOwner, ownerAmounts[from])
@@ -136,7 +149,7 @@ type comparator struct {
 
 // comparator bounds gross output/withdrawal sums and the existing public net, each leg bounded to u64.
 func (p *PolicyInputs) comparator(rc frontend.Rangechecker) comparator {
-	return newComparator(rc, len(p.Outputs)+len(p.Withdrawals))
+	return newComparator(rc, len(p.CtHashes)+len(p.Withdrawals))
 }
 
 func newComparator(rc frontend.Rangechecker, payments int) comparator {
@@ -174,4 +187,12 @@ func comparisonHint(_ *big.Int, inputs, outputs []*big.Int) error {
 	outputs[0].And(inputs[0], mask)
 	outputs[1].Rsh(inputs[0], width)
 	return nil
+}
+
+// assertRecipients holds each statement recipient to its slot's owner identity while screened and published, zero otherwise.
+func (p *PolicyInputs) assertRecipients(api frontend.API, screened, published frontend.Variable, outputs []shared.Output) {
+	for o, out := range outputs {
+		// The owner rules screen the same OwnerPkHash.
+		api.AssertIsEqual(p.Recipients[o], api.Mul(screened, published, out.Utxo, out.OwnerPkHash))
+	}
 }

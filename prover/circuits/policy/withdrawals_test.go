@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// withdrawalCapacities are the leg capacities the padding and binding tests sweep.
+var withdrawalCapacities = []int{0, 1, 2, 4, 8, 16, 32}
+
 func withdrawalWorld() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.WithdrawalCapacity = 2
@@ -122,7 +125,7 @@ func TestCuratorWithdrawalLists(t *testing.T) {
 }
 
 func TestWithdrawalCapacitiesBindEveryLeg(t *testing.T) {
-	for _, capacity := range policy.WithdrawalCapacities {
+	for _, capacity := range withdrawalCapacities {
 		for _, own := range []bool{false, true} {
 			w := withdrawalWorld()
 			w.WithdrawalCapacity = capacity

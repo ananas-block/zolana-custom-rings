@@ -26,12 +26,10 @@ type AnonymousAudit struct {
 	SenderKey         [32]byte
 	SenderNullifierPk *big.Int
 	PrivateTxBlinding *big.Int
-	// SenderCommitment is 0 on an audit-only transfer.
-	SenderCommitment *big.Int
-	PartyIdentities  [3]*big.Int
-	InputCount       int
-	Inputs           []Utxo
-	Layout           Layout
+	PartyIdentities   [3]*big.Int
+	InputCount        int
+	Inputs            []Utxo
+	Layout            Layout
 }
 
 const (
@@ -59,7 +57,6 @@ func NewAnonymousAudit(t testing.TB, shape audit.AnonymousAuditShape) AnonymousA
 		PartyIdentities:   [3]*big.Int{big.NewInt(11), big.NewInt(12), big.NewInt(0)},
 		InputCount:        2,
 	}
-	a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
 	a.Inputs = make([]Utxo, shape.InputClass)
 	for i := range a.Inputs {
 		a.Inputs[i] = spareInput(i)
@@ -109,6 +106,28 @@ func (a AnonymousAudit) SenderUtxo(t testing.TB, ringID *big.Int, amount uint64,
 	return spentUtxo(t, a.SenderPkHash(t), a.SenderNullifierPk, ringID, amount, blinding)
 }
 
+// SpentUtxo is a data-free input of owner in the given ring, 0 for the default ring.
+func SpentUtxo(t testing.TB, ownerPkHash, nullifierPk, ringID *big.Int, amount uint64, blinding int64) Utxo {
+	t.Helper()
+	return spentUtxo(t, ownerPkHash, nullifierPk, ringID, amount, blinding)
+}
+
+// SpareInput is a slot past the published count.
+func SpareInput(i int) Utxo {
+	return spareInput(i)
+}
+
+// SpentHashes is the private_tx_hash entry of every slot, zero off a UTXO.
+func SpentHashes(t testing.TB, utxos []Utxo) []*big.Int {
+	t.Helper()
+	return spentHashes(t, utxos)
+}
+
+// Utxos is the opening of every output slot.
+func (a AnonymousAudit) Utxos() []Utxo {
+	return anonymousUtxos(a.Outputs)
+}
+
 // spentUtxo is a data-free input of owner in the given ring.
 func spentUtxo(t testing.TB, ownerPkHash, nullifierPk, ringID *big.Int, amount uint64, blinding int64) Utxo {
 	t.Helper()
@@ -150,7 +169,7 @@ func (a AnonymousAudit) Statement(t testing.TB) []*big.Int {
 
 func (a AnonymousAudit) Tail(t testing.TB) AnonymousTail {
 	t.Helper()
-	return AnonymousTail{PrivateTxHash: a.PrivateTxHash(t), SenderCommitment: a.SenderCommitment, PartyIdentities: a.PartyIdentities}
+	return AnonymousTail{PrivateTxHash: a.PrivateTxHash(t), PartyIdentities: a.PartyIdentities}
 }
 
 func (a AnonymousAudit) StatementOutputs(t testing.TB) []StatementOutput {
@@ -224,15 +243,12 @@ func (a AnonymousAudit) DisclosureOf(t testing.TB, slots [][]byte, records []*bi
 	return a.Keys.Disclose(t, a.Salt, slices.Concat(a.seedOut(a.Layout), head, records))
 }
 
-// Circuit is the audit assignment proving the statement.
-func (a AnonymousAudit) Circuit(t testing.TB) *audit.AnonymousAuditCircuit {
+// Circuit is the section assignment proving the statement.
+func (a AnonymousAudit) Circuit(t testing.TB) *AnonymousCircuit {
 	t.Helper()
-	c, err := audit.NewAnonymousAuditCircuit(a.Shape)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := NewAnonymousCircuit(a.Shape)
 	c.PublicInputHash = spptest.MustHashChain4(t, a.Statement(t))
-	c.AuditWires = a.wires(a.Layout)
+	c.AuditWires = a.Wires(a.Layout)
 	for i, output := range a.Outputs {
 		c.Outputs[i] = audit.AnonymousOutputWires{Output: output.Utxo.Wires()}
 		ringtest.SetBytes(c.Outputs[i].OwnerKey[:], output.OwnerKey[:])
@@ -246,7 +262,6 @@ func (a AnonymousAudit) Circuit(t testing.TB) *audit.AnonymousAuditCircuit {
 	for i, input := range a.Inputs {
 		c.Inputs[i] = input.Wires()
 	}
-	c.SenderCommitment = a.SenderCommitment
 	for i, party := range a.PartyIdentities {
 		c.PartyIdentities[i] = party
 	}

@@ -58,6 +58,8 @@ def main():
     unknown = sorted(name for name, sha256 in found.items() if not known(name, sha256))
     if unknown:
         raise SystemExit("Existing keys match no lock pin or setup record, remove them: " + ", ".join(unknown))
+    if any(filename_of(key) not in found and filename_of(key) not in downloads for key in catalog):
+        subprocess.run(["just", "build-prover-server"], cwd=ROOT, check=True)
 
     def prepare(key):
         name = key["Circuit"]

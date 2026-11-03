@@ -10,16 +10,15 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
+// Witness is a built world, Circuit its assignment.
 type Witness struct {
-	Member   *policy.MemberPolicyCircuit
-	Delegate *policy.DelegatePolicyCircuit
+	Circuit *SectionCircuit
 }
 
 func (w World) Build(t testing.TB) Witness {
@@ -30,21 +29,12 @@ func (w World) Build(t testing.TB) Witness {
 // BuildRows builds the world under rows in place of Table's, the table a vector carries.
 func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	t.Helper()
-	var b Witness
-	if w.Outputs != 0 {
-		c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly, Records: w.Records})
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.Member = c
-	} else {
-		c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: w.Shape, OwnOnly: w.OwnOnly, Records: w.Records})
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.Delegate = c
+	c, err := NewSectionCircuit(SectionShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly, Records: w.Records})
+	if err != nil {
+		t.Fatal(err)
 	}
-	p := b.Policy()
+	b := Witness{Circuit: c}
+	p := &c.Policy
 	own, curator := registry(t, w.Own), registry(t, w.Curator)
 	mintPolicies := map[string]*big.Int{}
 	assets := map[string]*big.Int{}
@@ -71,31 +61,43 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	slices.Sort(keys)
 	for _, key := range keys {
 		update := new(big.Int).Or(mintPolicies[key], new(big.Int).Lsh(big.NewInt(1), 192))
-		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update})
+		// A mint policy write carries the threshold again, the record keeps the world's.
+		threshold := big.NewInt(0)
+		if assets[key].IsInt64() {
+			threshold.SetUint64(w.Own[assets[key].Int64()].WithdrawalThreshold)
+		}
+		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update, WithdrawalThreshold: threshold})
 	}
 
 	p.Table = rows.Wires()
-	p.PolicyHash = TableHash(t, p.Table)
+	p.PolicyHash = 0
+	if !w.Unscreened {
+		p.PolicyHash = TableHash(t, p.Table)
+	}
 	p.RingProgramID, p.OwnRoot, p.CuratorRoot = ringID, own.Root(), 0
 	if slices.ContainsFunc(rows.Sources, func(s policy.SourceWires) bool { return ringtest.AsBigInt(s.Registry).Sign() != 0 }) {
 		p.CuratorRoot = curator.Root()
 	}
 	for k := range p.PublicAssets {
-		p.PublicAssets[k], p.PublicAmounts[k] = 0, 0
+		p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = 0, 0, 0
 		if k < len(w.Public) {
-			p.PublicAssets[k], p.PublicAmounts[k] = w.Public[k].Asset, protocol.SignedToField(big.NewInt(w.Public[k].Amount))
+			p.PublicAssets[k], p.PublicAmounts[k], p.PublicGross[k] = w.Public[k].Asset, protocol.SignedToField(big.NewInt(w.Public[k].Amount)), w.Public[k].Gross
+			if w.Public[k].Gross == 0 && w.Public[k].Amount < 0 {
+				p.PublicGross[k] = -w.Public[k].Amount
+			}
 		}
 	}
-	p.AddressChain, p.PrivateTxBlinding, p.SenderPkHash = 0, privateTxBlinding, w.Sender
-	for o := range p.Outputs {
+	c.PrivateTxBlinding = privateTxBlinding
+	c.SenderPkHash = w.Sender
+	for o := range c.Outputs {
 		s := pick(w.Slots, o)
-		p.Outputs[o] = policy.OutputWires{UtxoWires: s.wires(0xb100 + int64(o)), CtHash: 0}
-		p.Recipients[o] = 0
-		if !w.Anonymous {
+		c.Outputs[o] = s.wires(0xb100 + int64(o))
+		p.CtHashes[o], p.Recipients[o] = 0, 0
+		if !w.Anonymous && !w.Unscreened {
 			p.Recipients[o] = s.Owner
 		}
 		if s.Owner != 0 {
-			p.Outputs[o].CtHash = ctHash(s.Owner)
+			p.CtHashes[o] = ctHash(s.Owner)
 		}
 	}
 	p.WithdrawalCount = len(w.Withdrawals)
@@ -103,57 +105,40 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		s := pick(w.Withdrawals, i)
 		p.Withdrawals[i] = policy.WithdrawalWires{Owner: s.Owner, Asset: s.Asset, Amount: s.Amount}
 	}
-	if b.Delegate != nil {
-		for i := range b.Delegate.Inputs {
-			b.Delegate.Inputs[i] = pick(w.Inputs, i).wires(0xa100 + int64(i))
-		}
-	}
-	if c := b.Member; c != nil {
-		c.InputChain = inputChain
-		c.Anonymous, c.KeyEscrow, c.ApprovalRequired = ringtest.Bit(w.Anonymous), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.ApprovalRequired)
-		c.Sender = big.NewInt(w.Sender)
-		if w.Anonymous {
-			c.Sender = ringprotocol.SenderCommitment(t, big.NewInt(w.Sender), big.NewInt(privateTxBlinding))
-		}
-	}
+	c.InputChain = inputChain
+	c.Exempt, c.KeyEscrow, c.Delegate = ringtest.Bit(w.Exempt), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
+	c.Published, c.ApprovalRequired = ringtest.Bit(!w.Anonymous), ringtest.Bit(w.ApprovalRequired)
 	b.pool(t, own, curator)
 	b.Rehash(t)
 	return b
 }
 
 func (b Witness) Policy() *policy.Policy {
-	if b.Member != nil {
-		return &b.Member.Policy
-	}
-	return &b.Delegate.Policy
+	return &b.Circuit.Policy
+}
+
+func (b Witness) SenderPkHash() frontend.Variable {
+	return b.Circuit.SenderPkHash
+}
+
+func (b Witness) Outputs() []shared.UtxoWires {
+	return b.Circuit.Outputs
 }
 
 func (b Witness) Assignment() frontend.Circuit {
-	if b.Member != nil {
-		return b.Member
-	}
-	return b.Delegate
+	return b.Circuit
 }
 
 // Rehash recomputes private_tx_hash from the slot wires after one changes, then the public input.
 func (b Witness) Rehash(t testing.TB) {
 	t.Helper()
-	p := b.Policy()
-	outputs := make([]*big.Int, len(p.Outputs))
-	for o, w := range p.Outputs {
-		outputs[o] = utxoHash(t, w.UtxoWires)
+	wires := b.Outputs()
+	outputs := make([]*big.Int, len(wires))
+	for o, w := range wires {
+		outputs[o] = utxoHash(t, w)
 	}
-	var chain *big.Int
-	if b.Member != nil {
-		chain = ringtest.AsBigInt(b.Member.InputChain)
-	} else {
-		inputs := make([]*big.Int, len(b.Delegate.Inputs))
-		for i, w := range b.Delegate.Inputs {
-			inputs[i] = utxoHash(t, w)
-		}
-		chain = spptest.MustNonZeroHashChain(t, inputs)
-	}
-	p.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{chain, spptest.MustNonZeroHashChain(t, outputs), ringtest.AsBigInt(p.AddressChain), ringtest.AsBigInt(p.PrivateTxBlinding)})
+	chain := ringtest.AsBigInt(b.Circuit.InputChain)
+	b.Circuit.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{chain, spptest.MustNonZeroHashChain(t, outputs), big.NewInt(0), ringtest.AsBigInt(b.Circuit.PrivateTxBlinding)})
 	b.Rebind(t)
 }
 
@@ -166,11 +151,7 @@ func (b Witness) Rebind(t testing.TB) {
 		fields = append(fields, ringtest.AsBigInt(w.Owner), ringtest.AsBigInt(w.Asset), ringtest.AsBigInt(w.Amount))
 	}
 	p.WithdrawalHash = spptest.MustHashChain4(t, fields)
-	if c := b.Member; c != nil {
-		c.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(c.Statement()))
-		return
-	}
-	b.Delegate.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Delegate.Statement()))
+	b.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Circuit.Statement()))
 }
 
 // registry writes every member's record in ascending member order.
@@ -189,7 +170,12 @@ func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 			escrow = ringregistry.EscrowKey(t, nullifierPk(id), ctHash(id))
 		}
 		lists := new(big.Int).SetUint64(record.Lists)
-		r.Apply(t, ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow})
+		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists, EscrowKey: escrow}
+		if record.WithdrawalThreshold != 0 {
+			// Bit 192 writes the mint policy, the threshold rides on that write.
+			entry.MintPolicy, entry.WithdrawalThreshold = new(big.Int).Lsh(big.NewInt(1), 192), new(big.Int).SetUint64(record.WithdrawalThreshold)
+		}
+		r.Apply(t, entry)
 	}
 	return r
 }

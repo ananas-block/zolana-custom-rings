@@ -1,7 +1,7 @@
 // Brings public withdrawals under the ring's rules. The proof checks the same
 // list of withdrawals the program pays, so no withdrawal escapes the rules.
 //
-// Read after policy/transaction.go. Read before policy/member.go.
+// Read after policy/transaction.go. Read before policy/screen.go.
 
 package policy
 
@@ -18,10 +18,10 @@ import (
 // These payments do not enter private_tx_hash, escrow or net outflow a second time.
 type WithdrawalWires struct{ Owner, Asset, Amount frontend.Variable }
 
-func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []utxoView {
+func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []Payment {
 	count := ringgadget.SelectCount(api, p.WithdrawalCount, 0, len(p.Withdrawals)+1)
 	fields := []frontend.Variable{shared.WithdrawalsDomain, p.WithdrawalCount}
-	payments := make([]utxoView, len(p.Withdrawals))
+	payments := make([]Payment, len(p.Withdrawals))
 	for i, w := range p.Withdrawals {
 		active := count.Active[i]
 		rc.Check(w.Amount, 64)
@@ -33,7 +33,7 @@ func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecke
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: v})
 		}
 		fields = append(fields, w.Owner, w.Asset, w.Amount)
-		payments[i] = utxoView{ownerPkHash: w.Owner, asset: w.Asset, amount: w.Amount, utxo: active}
+		payments[i] = Payment{Owner: w.Owner, Asset: w.Asset, Amount: w.Amount, Active: active}
 	}
 	api.AssertIsEqual(p.WithdrawalHash, paddedWithdrawalHash(api, fields, count.OneHot))
 	return payments

@@ -34,12 +34,12 @@ func TestPooledPolicyModes(t *testing.T) {
 
 func TestPooledPolicyConstraintMatrix(t *testing.T) {
 	for _, own := range []bool{false, true} {
-		for _, shape := range []policy.MemberShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
+		for _, shape := range []ringpolicy.SectionShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
 			shape.OwnOnly = own
 			for _, compact := range []bool{true, false} {
 				capacity := compactPools(compact, own)
 				shape.Records = capacity
-				c, err := policy.NewMemberPolicyCircuit(shape)
+				c, err := ringpolicy.NewSectionCircuit(shape)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -48,18 +48,18 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 				if !compact {
 					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, false).Build(t))
 				}
-				t.Logf("member-%d-w%d-own%v capacity=%d/%d constraints=%d", shape.Outputs, shape.Withdrawals, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
+				t.Logf("section-%d-w%d-own%v capacity=%d/%d constraints=%d", shape.Outputs, shape.Withdrawals, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
 			}
 		}
 		for _, width := range []int{2, 4} {
 			for _, compact := range []bool{true, false} {
 				capacity := compactPools(compact, own)
-				c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: transaction.Shape{NInputs: width, NOutputs: width}, OwnOnly: own, Records: capacity})
+				shape := ringpolicy.SectionShape{Outputs: width, OwnOnly: own, Records: capacity}
+				c, err := ringpolicy.NewSectionCircuit(shape)
 				if err != nil {
 					t.Fatal(err)
 				}
 				cs := ringkey.Compile(t, c)
-				shape := policy.MemberShape{Outputs: width, OwnOnly: own, Records: capacity}
 				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, true).Build(t))
 				if !compact {
 					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, true).Build(t))
@@ -95,7 +95,7 @@ func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, p
 	}
 }
 
-func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.World {
+func poolWorld(shape ringpolicy.SectionShape, distinct, delegate bool) ringpolicy.World {
 	world := ringpolicy.Confidential()
 	world.Outputs, world.WithdrawalCapacity, world.OwnOnly, world.Records = shape.Outputs, shape.Withdrawals, shape.OwnOnly, shape.Records
 	world.Table.Limits = nil
@@ -134,11 +134,7 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 			world.Public = append(world.Public, ringpolicy.PublicSlot{Asset: asset, Amount: -1})
 		}
 	} else {
-		world.Outputs = 0
-		world.Shape = transaction.Shape{NInputs: shape.Outputs, NOutputs: shape.Outputs}
-		for range shape.Outputs {
-			world.Inputs = append(world.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 1})
-		}
+		world.Delegate = true
 	}
 	if !shape.OwnOnly {
 		world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
@@ -167,7 +163,7 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			world := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 1}, false, false)
+			world := poolWorld(ringpolicy.SectionShape{Outputs: 2, Withdrawals: 1}, false, false)
 			world.KeyEscrow = false
 			world.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
 			witness := world.Build(t)
@@ -184,20 +180,20 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 
 func TestPooledPolicyRejectsCapacityOverflow(t *testing.T) {
 	for _, capacity := range []policy.RecordPoolShape{{Own: -1}, {Own: int(^uint(0) >> 1)}, {Curator: -1}, {Curator: int(^uint(0) >> 1)}, {OwnSubjects: -1}, {OwnSubjects: int(^uint(0) >> 1)}, {CuratorSubjects: -1}, {CuratorSubjects: int(^uint(0) >> 1)}} {
-		if _, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: capacity}); err == nil {
+		if _, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2, Records: capacity}); err == nil {
 			t.Fatal("invalid capacity accepted")
 		}
 	}
 }
 
 func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
-	world := poolWorld(policy.MemberShape{Outputs: 2}, true, false)
+	world := poolWorld(ringpolicy.SectionShape{Outputs: 2}, true, false)
 	world.KeyEscrow = false
 	world.Own, world.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
 	world.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
 	world.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}
 	witness := world.Build(t)
-	c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: world.Records})
+	c, err := ringpolicy.NewSectionCircuit(ringpolicy.SectionShape{Outputs: 2, Records: world.Records})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +202,7 @@ func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
 }
 
 func TestPooledPolicyDistinctWithdrawalCapacity(t *testing.T) {
-	world := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 2}, true, false)
+	world := poolWorld(ringpolicy.SectionShape{Outputs: 2, Withdrawals: 2}, true, false)
 	witness := world.Build(t)
 	if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
 		t.Fatal(err)

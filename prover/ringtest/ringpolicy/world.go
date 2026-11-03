@@ -6,7 +6,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 const (
@@ -34,21 +33,23 @@ var curatorRegistry = big.NewInt(0xc0ffee)
 
 // World is one transfer with the registries and table it reads, Build derives every hash from it.
 type World struct {
-	// Outputs is the member key's capacity, zero selects the delegate key of Shape.
-	Outputs                                int
-	WithdrawalCapacity                     int
-	OwnOnly                                bool
-	Withdrawals                            []Slot
-	Shape                                  transaction.Shape
-	Anonymous, KeyEscrow, ApprovalRequired bool
-	Sender                                 int64
-	Table                                  Table
-	Own, Curator                           map[int64]Record
-	Slots, Inputs                          []Slot
-	Public                                 []PublicSlot
-	// Records sizes the record pools, a zero capacity takes the key's maximum.
+	Outputs            int
+	WithdrawalCapacity int
+	OwnOnly            bool
+	Withdrawals        []Slot
+	// Anonymous publishes no recipient, Unscreened writes no policy hash, Delegate bounds no outflow.
+	Anonymous, Unscreened, Delegate, Exempt, KeyEscrow, ApprovalRequired bool
+	Sender                                                               int64
+	Table                                                                Table
+	Own, Curator                                                         map[int64]Record
+	Slots                                                                []Slot
+	Public                                                               []PublicSlot
+	// Records sizes the record pools, a zero capacity takes the shape's maximum.
 	Records policy.RecordPoolShape
 }
+
+// OutputCapacities are the output counts of the transfer keys.
+var OutputCapacities = []int{2, 4, 8, 16}
 
 // Table is a policy table of ringregistry list bits, a list reads the curator registry when Curator holds its bit.
 type Table struct {
@@ -78,6 +79,8 @@ type OutflowLimit struct {
 type Record struct {
 	Lists      uint64
 	Registered bool
+	// WithdrawalThreshold is an asset record's exemption bound, zero leaves it unwritten.
+	WithdrawalThreshold uint64
 }
 
 // Slot is one output or input, a zero owner leaves it a dummy unless Unowned holds.
@@ -87,8 +90,10 @@ type Slot struct {
 	Exit, Unowned bool
 }
 
+// PublicSlot is one folded public slot, Gross zero takes the withdrawn amount.
 type PublicSlot struct {
 	Asset, Amount int64
+	Gross         uint64
 }
 
 func Confidential() World {
@@ -148,10 +153,10 @@ func Wide16() World {
 // MemberWorlds is the honest world of every member key capacity.
 var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8, 16: Wide16}
 
-func Delegate(shape transaction.Shape) World {
+// Delegate is a move on the authority rail, every output escrowed and no outflow bounded.
+func Delegate(outputs int) World {
 	w := Four()
-	w.Outputs, w.Shape = 0, shape
-	w.Inputs = []Slot{{Owner: Sender, Asset: AssetA, Amount: 150}, {Owner: Sender, Asset: AssetB, Amount: 100}}[:min(2, shape.NInputs)]
+	w.Outputs, w.Delegate = outputs, true
 	return w
 }
 

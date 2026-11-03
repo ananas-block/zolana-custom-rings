@@ -39,9 +39,9 @@ type Opening struct {
 	RingProgramID Field `json:"ringProgramId"`
 }
 
+// AuditParams are the envelope wires of a transfer, the ring id sits beside the policy values.
 type AuditParams struct {
 	FirstNullifier Field `json:"firstNullifier"`
-	RingProgramID  Field `json:"ringId"`
 	TxViewingSk    Bytes `json:"txViewingSk"`
 	EphSk          Bytes `json:"ephSk"`
 	AuditorPk      Bytes `json:"auditorPk"`
@@ -56,39 +56,44 @@ type DeliveredOutput struct {
 	Body         Bytes   `json:"body"`
 }
 
-type DeliveredAuditParams struct {
-	RequestHead
-	AuditParams
-	Outputs []DeliveredOutput `json:"outputs"`
-}
-
-type DeliveredSenderAuditParams struct {
-	DeliveredAuditParams
-	Sender            Field `json:"sender"`
-	PrivateTxHash     Field `json:"privateTxHash"`
-	PrivateTxBlinding Field `json:"privateTxBlinding"`
-	// Inputs fill the input class, a slot SPP spends no UTXO from carries none.
-	Inputs []Opening `json:"inputs"`
-}
-
 type AnonymousOutput struct {
 	Output   Opening `json:"output"`
 	OwnerKey Bytes   `json:"ownerKey"`
 }
 
-type AnonymousAuditParams struct {
+// TransferParams is what every transfer key reads, the rail's own values follow in its family's params.
+type TransferParams struct {
 	RequestHead
-	PartyIdentities []Field `json:"partyIdentities"`
 	AuditParams
-	Outputs           []AnonymousOutput `json:"outputs"`
-	PrivateTxHash     Field             `json:"privateTxHash"`
-	PrivateTxBlinding Field             `json:"privateTxBlinding"`
+	Exempt            bool  `json:"exempt"`
+	ApprovalRequired  bool  `json:"approvalRequired"`
+	PrivateTxHash     Field `json:"privateTxHash"`
+	PrivateTxBlinding Field `json:"privateTxBlinding"`
+	PolicyParams
+}
+
+type ConfidentialTransferParams struct {
+	TransferParams
+	InProof  bool              `json:"inProof"`
+	Delegate bool              `json:"delegate"`
+	Outputs  []DeliveredOutput `json:"outputs"`
+	// Inputs fill the input class, every slot a dummy on the signer rail and past the spent notes.
+	Inputs     []Opening `json:"inputs"`
+	InputChain Field     `json:"inputChain"`
+	// Sender is the statement's sender, zero on the authority rail where SenderPkHash names the member.
+	Sender       Field `json:"sender"`
+	SenderPkHash Field `json:"senderPkHash"`
+}
+
+type AnonymousTransferParams struct {
+	TransferParams
+	Outputs []AnonymousOutput `json:"outputs"`
 	// SenderKey is the hidden owner's key on an entry key and absent on a commitment key.
 	SenderKey  Bytes `json:"senderKey,omitempty"`
 	InputCount uint8 `json:"inputCount"`
 	// Inputs fill the input class, the slots past InputCount carry no UTXO.
-	Inputs           []Opening `json:"inputs"`
-	SenderCommitment Field     `json:"senderCommitment"`
+	Inputs          []Opening `json:"inputs"`
+	PartyIdentities []Field   `json:"partyIdentities"`
 }
 
 type Source struct {
@@ -101,12 +106,6 @@ type PolicyTable struct {
 	Sources   []Source `json:"sources"`
 	PolicyLen uint8    `json:"policyLen"`
 	Rules     []Field  `json:"rules"`
-}
-
-type OutputOpening struct {
-	Opening
-	// CtHash is the hash of the owner's escrowed key ciphertext, absent without escrow.
-	CtHash *Field `json:"ctHash,omitempty"`
 }
 
 // RecordOpening opens a member's record in a member registry, Path the three siblings of every level from the leaf up in child order.
@@ -144,19 +143,17 @@ type PolicyInputsParams struct {
 	WithdrawalCount uint8        `json:"withdrawalCount"`
 	WithdrawalHash  Field        `json:"withdrawalHash"`
 	Withdrawals     []Withdrawal `json:"withdrawals"`
-	PrivateTxHash   Field        `json:"privateTxHash"`
 	PolicyHash      Field        `json:"policyHash"`
 	RingProgramID   Field        `json:"ringId"`
 	OwnRoot         Field        `json:"ownRoot"`
 	CuratorRoot     Field        `json:"curatorRoot"`
 	PublicAssets    []Field      `json:"publicAssets"`
 	PublicAmounts   []Field      `json:"publicAmounts"`
+	PublicGross     []Field      `json:"publicGross"`
 	PolicyTable
-	AddressChain      Field           `json:"addressChain"`
-	PrivateTxBlinding Field           `json:"privateTxBlinding"`
-	Outputs           []OutputOpening `json:"outputs"`
-	Recipients        []Field         `json:"recipients"`
-	SenderPkHash      Field           `json:"senderPkHash"`
+	// CtHashes are each output owner's escrowed key ciphertext hashes, zero without escrow.
+	CtHashes   []Field `json:"ctHashes"`
+	Recipients []Field `json:"recipients"`
 }
 
 type PooledRecord struct {
@@ -199,34 +196,9 @@ type PolicyParams struct {
 	CuratorSubjects []PooledSubject     `json:"curatorSubjects"`
 	SenderEntry     PooledEntry         `json:"senderEntry"`
 	// OwnerEntries[o] and AssetEntries[o] index payment o's owner and asset subjects.
-	OwnerEntries []PooledEntry `json:"ownerEntries"`
-	AssetEntries []PooledEntry `json:"assetEntries"`
-	// PublicAssetEntries is empty on a delegate key.
-	PublicAssetEntries []uint32 `json:"publicAssetEntries"`
-}
-
-type MemberPolicyInputsParams struct {
-	RequestHead
-	Anonymous        bool  `json:"anonymous"`
-	ApprovalRequired bool  `json:"approvalRequired"`
-	KeyEscrow        bool  `json:"keyEscrow"`
-	Sender           Field `json:"sender"`
-	InputChain       Field `json:"inputChain"`
-}
-
-type MemberPolicyParams struct {
-	MemberPolicyInputsParams
-	PolicyParams
-}
-
-type DelegatePolicyInputsParams struct {
-	RequestHead
-	Inputs []Opening `json:"inputs"`
-}
-
-type DelegatePolicyParams struct {
-	DelegatePolicyInputsParams
-	PolicyParams
+	OwnerEntries       []PooledEntry `json:"ownerEntries"`
+	AssetEntries       []PooledEntry `json:"assetEntries"`
+	PublicAssetEntries []uint32      `json:"publicAssetEntries"`
 }
 
 type QueueEntry struct {
@@ -468,12 +440,4 @@ func jsonFields(t reflect.Type, fields []jsonField) []jsonField {
 		fields = append(fields, jsonField{name: name, typ: field.Type, optional: slices.Contains(strings.Split(options, ","), "omitempty")})
 	}
 	return fields
-}
-
-type WithdrawalExemptionParams struct {
-	RequestHead
-	Root    Field            `json:"root"`
-	Assets  []Field          `json:"assets"`
-	Amounts []Field          `json:"amounts"`
-	Entries []*MemberOpening `json:"entries"`
 }

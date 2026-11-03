@@ -46,7 +46,7 @@ type anonymousFieldCount struct {
 
 func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 	want := fieldCounts{Description: fieldCountDescription}
-	for _, capacity := range audit.DeliveredAuditCapacities {
+	for _, capacity := range []int{2, 4, 8, 16} {
 		delivered := compileDelivered(t, capacity)
 		for _, layout := range []ringaudit.Layout{{Exits: true}, {}, {Exits: true, Escrow: true}, {Escrow: true}} {
 			d := ringaudit.DeliveredAuditOf(t, capacity)
@@ -54,7 +54,7 @@ func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 				d = ringaudit.NewDeliveredAudit(t, capacity)
 			}
 			d.Layout = layout
-			delivered.requireSolved(t, d.Circuit(t))
+			delivered.RequireSolved(t, d.Circuit(t))
 			want.Delivered = append(want.Delivered, deliveredFieldCount{Outputs: capacity, Exits: layout.Exits, KeyEscrow: layout.Escrow, Fields: len(d.Disclosure(t))})
 		}
 	}
@@ -63,13 +63,12 @@ func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 		counts []int
 	}
 	anonymous := []anonymousCounts{
-		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}, []int{1, 2, 3, 4}},
-		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}, []int{2}},
-		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 8}, []int{2}},
-		{audit.AnonymousAuditShape{InputClass: 16, Outputs: 2}, []int{15, 16}},
-	}
-	for _, shape := range audit.AnonymousEntryShapes {
-		anonymous = append(anonymous, anonymousCounts{shape, []int{2}})
+		{audit.AnonymousAuditShape{InputClass: 24, Outputs: 2}, []int{1, 2, 3, 4, 23, 24}},
+		{audit.AnonymousAuditShape{InputClass: 16, Outputs: 4}, []int{2, 15, 16}},
+		{audit.AnonymousAuditShape{InputClass: 5, Outputs: 8}, []int{2, 5}},
+		{audit.AnonymousAuditShape{InputClass: 8, Outputs: 2, FullOpenings: true}, []int{2, 8}},
+		{audit.AnonymousAuditShape{InputClass: 8, Outputs: 4, FullOpenings: true}, []int{2}},
+		{audit.AnonymousAuditShape{InputClass: 2, Outputs: 8, FullOpenings: true}, []int{1, 2}},
 	}
 	for _, tc := range anonymous {
 		c := compileAnonymous(t, tc.shape)
@@ -79,7 +78,7 @@ func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 		}
 		for _, count := range tc.counts {
 			a := ringaudit.NewAnonymousAudit(t, tc.shape).AtInputCount(count)
-			c.requireSolved(t, a.Circuit(t))
+			c.RequireSolved(t, a.Circuit(t))
 			want.Anonymous = append(want.Anonymous, anonymousFieldCount{Key: key, Class: tc.shape.InputClass, Inputs: count, Outputs: tc.shape.Outputs, Exits: a.Layout.Exits, Fields: len(a.Disclosure(t))})
 		}
 	}
