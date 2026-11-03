@@ -23,6 +23,8 @@ use crate::{
     transact_rules::{spp_list, Fixture},
 };
 
+const IN_PROOF_OWNER: [u8; 32] = [0x6e; 32];
+
 #[derive(Clone, Copy)]
 enum Legs {
     Sol(usize),
@@ -54,6 +56,7 @@ struct Wide {
     policy: bool,
     exempt: bool,
     entry: bool,
+    in_proof: bool,
 }
 
 impl Wide {
@@ -63,13 +66,14 @@ impl Wide {
             Legs::Spl(count) => (count, "spl"),
         };
         format!(
-            "{} {}x{} {legs} {kind}{}{}{}",
+            "{} {}x{} {legs} {kind}{}{}{}{}",
             self.rail,
             self.inputs,
             self.outputs,
             if self.policy { " policy" } else { "" },
             if self.exempt { " exempt" } else { "" },
             if self.entry { " entry" } else { "" },
+            if self.in_proof { " in-proof" } else { "" },
         )
     }
 }
@@ -107,8 +111,16 @@ fn cases() -> Vec<Wide> {
             policy: true,
             exempt: false,
             entry: false,
+            in_proof: false,
         };
         push(policy, shape);
+        push(
+            Wide {
+                in_proof: true,
+                ..policy
+            },
+            shape,
+        );
         push(
             Wide {
                 legs: Legs::Spl(0),
@@ -141,6 +153,7 @@ fn cases() -> Vec<Wide> {
                     policy: true,
                     exempt: false,
                     entry,
+                    in_proof: false,
                 },
                 shape,
             );
@@ -150,7 +163,10 @@ fn cases() -> Vec<Wide> {
 }
 
 fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTransactData<'a> {
-    let mut data = fixture.transfer(case.rail, case.inputs, case.outputs, case.policy);
+    let mut data = match case.in_proof {
+        true => fixture.in_proof_owner(&IN_PROOF_OWNER, case.inputs, case.outputs, case.policy),
+        false => fixture.transfer(case.rail, case.inputs, case.outputs, case.policy),
+    };
     data.exempt = case.exempt;
     if case.exempt {
         data.own_revision = Some(Revision::from(0));
@@ -174,7 +190,7 @@ fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTr
     if let (Legs::Spl(_), Some(policy)) = (case.legs, &mut data.policy) {
         policy.spl_withdrawal_owners = &owners[..count];
     }
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     data
 }
 
@@ -236,9 +252,9 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
         .collect();
     let data = frame(&fixture, &owners, case);
     let payer = ring.payer.pubkey();
-    let owner_run = match case.rail {
-        RingRail::Confidential => vec![AccountMeta::new_readonly(payer, true)],
-        RingRail::Anonymous | RingRail::Delegate => Vec::new(),
+    let owner_run = match (case.rail, case.in_proof) {
+        (RingRail::Confidential, false) => vec![AccountMeta::new_readonly(payer, true)],
+        _ => Vec::new(),
     };
     let mut spp = spp_list(&payer, &data, &owner_run);
     spp.extend(settlements(ring, &data, &owners));

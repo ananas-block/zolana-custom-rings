@@ -276,7 +276,7 @@ impl RingScan {
         let mut transactions = Vec::with_capacity(page.transactions.len());
         for (transaction, confirmed) in &page.transactions {
             let trees = confirmed.event.input_tree_ids(transaction);
-            let audited = TransactionAudit::new(transaction, confirmed.disclosure_layout(mode)?)
+            let audited = TransactionAudit::new(transaction, confirmed.audit_stream(mode)?)
                 .with_input_trees(&trees)?
                 .with_known_utxos(&known)
                 .with_escrowed_keys(&escrowed)

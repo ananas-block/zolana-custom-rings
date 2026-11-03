@@ -40,12 +40,12 @@ pub mod transfer_anonymous_entry_2_in8_w4_verifying_key;
 pub mod transfer_anonymous_entry_4_in8_w4_verifying_key;
 #[path = "transfer/entry/transfer_anonymous_entry_8_in2_w4_verifying_key.rs"]
 pub mod transfer_anonymous_entry_8_in2_w4_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_16_in8_w8_verifying_key.rs"]
-pub mod transfer_confidential_16_in8_w8_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_2_in40_w32_verifying_key.rs"]
-pub mod transfer_confidential_2_in40_w32_verifying_key;
-#[path = "transfer/confidential/transfer_confidential_2_in40_w4_verifying_key.rs"]
-pub mod transfer_confidential_2_in40_w4_verifying_key;
+#[path = "transfer/confidential/transfer_confidential_16_in5_w8_verifying_key.rs"]
+pub mod transfer_confidential_16_in5_w8_verifying_key;
+#[path = "transfer/confidential/transfer_confidential_2_in32_w32_verifying_key.rs"]
+pub mod transfer_confidential_2_in32_w32_verifying_key;
+#[path = "transfer/confidential/transfer_confidential_2_in32_w4_verifying_key.rs"]
+pub mod transfer_confidential_2_in32_w4_verifying_key;
 #[path = "transfer/confidential/transfer_confidential_4_in24_w32_verifying_key.rs"]
 pub mod transfer_confidential_4_in24_w32_verifying_key;
 #[path = "transfer/confidential/transfer_confidential_4_in24_w4_verifying_key.rs"]
@@ -56,12 +56,12 @@ pub mod transfer_confidential_8_in16_w32_verifying_key;
 pub mod transfer_confidential_8_in16_w4_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
-        "custom_ring_transfer_confidential_2_in40_w4.key",
-        transfer_confidential_2_in40_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_transfer_confidential_2_in32_w4.key",
+        transfer_confidential_2_in32_w4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_transfer_confidential_2_in40_w32.key",
-        transfer_confidential_2_in40_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_transfer_confidential_2_in32_w32.key",
+        transfer_confidential_2_in32_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_transfer_confidential_4_in24_w4.key",
@@ -80,8 +80,8 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         transfer_confidential_8_in16_w32_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_transfer_confidential_16_in8_w8.key",
-        transfer_confidential_16_in8_w8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_transfer_confidential_16_in5_w8.key",
+        transfer_confidential_16_in5_w8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_transfer_anonymous_2_in24_w4.key",
@@ -170,14 +170,14 @@ pub fn verifying_key(
     match circuit {
         key_catalog::RingCircuit::TransferConfidential {
             outputs: 2,
-            inputs: 40,
+            inputs: 32,
             withdrawals: 4,
-        } => Some(&transfer_confidential_2_in40_w4_verifying_key::VERIFYINGKEY),
+        } => Some(&transfer_confidential_2_in32_w4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::TransferConfidential {
             outputs: 2,
-            inputs: 40,
+            inputs: 32,
             withdrawals: 32,
-        } => Some(&transfer_confidential_2_in40_w32_verifying_key::VERIFYINGKEY),
+        } => Some(&transfer_confidential_2_in32_w32_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::TransferConfidential {
             outputs: 4,
             inputs: 24,
@@ -200,9 +200,9 @@ pub fn verifying_key(
         } => Some(&transfer_confidential_8_in16_w32_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::TransferConfidential {
             outputs: 16,
-            inputs: 8,
+            inputs: 5,
             withdrawals: 8,
-        } => Some(&transfer_confidential_16_in8_w8_verifying_key::VERIFYINGKEY),
+        } => Some(&transfer_confidential_16_in5_w8_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::TransferAnonymous {
             outputs: 2,
             class: 24,

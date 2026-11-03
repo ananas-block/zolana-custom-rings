@@ -29,7 +29,7 @@ pub struct AuditedTransaction {
     pub payload_errors: Vec<OutputPayloadError>,
     /// `None` outside the anonymous rail.
     pub sender: Option<AuditedSender>,
-    /// One per published nullifier of an anonymous transfer.
+    /// One per published nullifier, empty on the signer rail whose evidence names no input.
     pub inputs: Vec<AuditedInput>,
 }
 
@@ -131,13 +131,17 @@ pub enum InputOpening {
     Ambiguous {
         candidates: Vec<[u8; 32]>,
     },
+    /// The in-proof and authority rails name a note no opened output holds, the outputs still open.
+    Unseen {
+        prefix: u128,
+    },
 }
 
 impl InputOpening {
     pub fn opened(&self) -> Option<&AuditedInputOpening> {
         match self {
             Self::Opened(opening) => Some(opening),
-            Self::Dummy | Self::Ambiguous { .. } => None,
+            Self::Dummy | Self::Ambiguous { .. } | Self::Unseen { .. } => None,
         }
     }
 }
@@ -152,7 +156,7 @@ pub struct AuditedInputOpening {
     pub ring: Option<InputRing>,
 }
 
-/// SPP spends a UTXO of the ring or of the default ring, an entry disclosure names neither.
+/// SPP spends a UTXO of the ring or of the default ring, the entry evidence names neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputRing {
     Ring {
@@ -180,7 +184,7 @@ pub struct OutputPayloadError {
 pub enum OutputPayloadErrorKind {
     /// No body of the layout's scheme and length, or no tag in the owner tag.
     Frame,
-    /// The slot's disclosure bytes do not parse under the layout.
+    /// The slot's record names an asset outside the field.
     Disclosure,
     /// The recipient key admits no X25519 agreement.
     RecipientKey,

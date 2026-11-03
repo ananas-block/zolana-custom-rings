@@ -13,10 +13,10 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     shape_flag,
     storage::{Revision, Root, StorageRegistry},
-    transact_flag, AnonymousAuditKey, AnonymousLayout, CustomRingError, DeliveredLayout,
-    DisclosureLayout, InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyProof,
-    RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData, SenderBundle,
-    Settlement, SourceSlot, TransferBinding, TransferFamily, TransferRoots,
+    transact_flag, AnonymousAuditKey, AuditKey, AuditStreamLayout, AuditorMessage, CustomRingError,
+    InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyProof, RailSigner,
+    RingMode, RingOutput, RingPolicy, RingRail, RingTransactData, SenderBundle, Settlement,
+    SourceSlot, TransferBinding, TransferFamily, TransferRoots,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -117,12 +117,16 @@ fn compute_vectors() -> ExpansionVectors {
                       publishes all n_out slots with no output count, exit payloads take 83 \
                       bytes without a u16 prefix, an anonymous slot is its hash, a 32-byte \
                       owner tag, a u16 little-endian length and the scheme 1 body, empty on \
-                      a change output, the anonymous rail's scheme 2 sender bundle follows \
-                      the outputs as a 32-byte tag, a nonzero u16 length and the body, and \
-                      the random 16-byte salt follows the transaction viewing key. Under the \
-                      in-proof owner flag (byte 0 bit 3) SPP proves the anonymous rail with no \
-                      default owner tag, and the owner key, commitment and commitment pok \
-                      follow private_tx_hash. Produced by \
+                      a change output, a delivered slot is its hash, recipient key and the \
+                      scheme 10 body of 72 bytes under key escrow and 104 otherwise, the \
+                      anonymous rail's scheme 2 sender bundle follows the outputs as a 32-byte \
+                      tag, a nonzero u16 length and the body, then eph_u, the envelope and the \
+                      records of the slots that have one in slot order, the lengths those of \
+                      ring-disclosure-ranges.json, and the random 16-byte salt follows the \
+                      transaction viewing key. The auditor message is 0x04 || eph_u || envelope \
+                      || records. Under the in-proof owner flag (byte 0 bit 3) SPP proves the \
+                      anonymous rail with no default owner tag, and the owner key, commitment \
+                      and commitment pok follow private_tx_hash. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),
         auditor_pubkey: hex::encode(config.auditor_pubkey),
@@ -159,6 +163,8 @@ fn ring_transact_expansion_vector() {
         assert_eq!(&spp.salt, data.salt, "{}", case.name);
         let (auditor, sender) = spp.messages.split_last().unwrap();
         assert_eq!(auditor.view_tag, config.auditor_pubkey[1..]);
+        assert_eq!(auditor.data, data.auditor_message(), "{}", case.name);
+        assert_eq!(auditor.data.capacity(), auditor.data.len(), "{}", case.name);
         let sender: Vec<_> = sender
             .iter()
             .map(|message| (message.view_tag, message.data.clone()))
@@ -335,7 +341,7 @@ fn flags_the_rail_forbids_are_refused() {
     let mut exit = fixture.delegate();
     exit.rail = RingRail::Confidential;
     exit.outputs[1] = fixture.exit(1, &fixture.payload);
-    let compact = fixture.with_disclosure(exit).encode().unwrap();
+    let compact = fixture.with_audit_stream(exit).encode().unwrap();
     assert_eq!(
         RingTransactData::parse(&compact, RingRail::Delegate),
         Err(CustomRingError::FlagNotAllowed)
@@ -520,6 +526,7 @@ fn an_anonymous_body_the_frame_cannot_carry_is_refused_at_encoding() {
             hash: &fixture.fields[11],
             tag: &fixture.tags[1],
             body: Some(body),
+            record: &fixture.ciphertexts[1],
         };
         assert_eq!(
             data.encode(),
@@ -678,54 +685,182 @@ fn the_policy_proof_follows_the_ring_policy() {
 }
 
 #[test]
-fn every_rail_reads_its_disclosure_layout() {
+fn every_rail_reads_its_audit_stream() {
     let fixture = Fixture::new();
+    let confidential = |class, input_prefixes| AuditKey::Confidential {
+        class,
+        input_prefixes,
+    };
+    for (data, key, key_escrow, inputs, outputs, exits) in [
+        (
+            fixture.confidential_policy(),
+            confidential(32, false),
+            true,
+            2,
+            2,
+            0b10,
+        ),
+        (
+            fixture.confidential_delivered(),
+            confidential(16, false),
+            false,
+            1,
+            8,
+            0b100_1000,
+        ),
+        (
+            fixture.confidential_in_proof_owner(),
+            confidential(24, true),
+            false,
+            2,
+            4,
+            0b10,
+        ),
+        (fixture.delegate(), confidential(32, true), true, 2, 2, 0),
+        (
+            fixture.anonymous(),
+            AuditKey::Anonymous(AnonymousAuditKey::Commitment { class: 16 }),
+            false,
+            3,
+            4,
+            0b100,
+        ),
+        (
+            fixture.anonymous_entry(),
+            AuditKey::Anonymous(AnonymousAuditKey::Entry { class: 8 }),
+            false,
+            2,
+            2,
+            0b10,
+        ),
+    ] {
+        let expected = AuditStreamLayout {
+            key,
+            key_escrow,
+            inputs,
+            outputs,
+            exits,
+        };
+        assert_eq!(data.audit_stream(), Ok(expected), "{key:?}");
+        assert_eq!(expected.checked(), Ok(expected), "{key:?}");
+        let compact = data.encode().unwrap();
+        assert_eq!(
+            RingTransactData::parse(&compact, data.rail)
+                .unwrap()
+                .audit_stream(),
+            expected,
+            "{key:?}"
+        );
+    }
     assert_eq!(
-        fixture.confidential_policy().disclosure_layout(),
-        Ok(DisclosureLayout::Delivered(DeliveredLayout {
-            outputs: 2,
-            exits: true,
-            key_escrow: true,
-        }))
-    );
-    assert_eq!(
-        fixture.confidential_delivered().disclosure_layout(),
-        Ok(DisclosureLayout::Delivered(DeliveredLayout {
-            outputs: 8,
-            exits: true,
-            key_escrow: false,
-        }))
-    );
-    assert_eq!(
-        fixture.confidential_in_proof_owner().disclosure_layout(),
-        Ok(DisclosureLayout::Delivered(DeliveredLayout {
-            outputs: 4,
-            exits: true,
-            key_escrow: false,
-        }))
-    );
-    assert_eq!(
-        fixture.anonymous().disclosure_layout(),
-        Ok(DisclosureLayout::Anonymous(AnonymousLayout {
-            key: AnonymousAuditKey::Commitment { class: 16 },
-            inputs: 3,
-            outputs: 4,
-            exits: true,
-        }))
-    );
-    assert_eq!(
-        fixture.anonymous_entry().disclosure_layout(),
-        Ok(DisclosureLayout::Anonymous(AnonymousLayout {
-            key: AnonymousAuditKey::Entry { class: 8 },
-            inputs: 2,
-            outputs: 2,
-            exits: true,
-        }))
-    );
-    assert_eq!(
-        delegate_delivered(&fixture).disclosure_layout(),
+        delegate_delivered(&fixture).audit_stream(),
         Err(CustomRingError::RingShapeUnkeyed)
     );
+}
+
+fn encoded_cases(fixture: &Fixture) -> Vec<(&'static str, RingTransactData<'_>, Vec<u8>)> {
+    fixture
+        .cases()
+        .into_iter()
+        .map(|(name, data)| {
+            let compact = data.encode().unwrap();
+            (name, data, compact)
+        })
+        .collect()
+}
+
+#[test]
+fn the_compact_data_reads_back_at_exact_capacity() {
+    let fixture = Fixture::new();
+    for (name, data, compact) in encoded_cases(&fixture) {
+        assert_eq!(compact.capacity(), compact.len(), "{name}");
+        let parsed = RingTransactData::parse(&compact, data.rail)
+            .unwrap()
+            .into_data();
+        assert_eq!(parsed, data, "{name}");
+    }
+}
+
+#[test]
+fn a_truncated_or_appended_ciphertext_is_refused() {
+    let fixture = Fixture::new();
+    for (name, data, compact) in encoded_cases(&fixture) {
+        let stream = data.audit_stream().unwrap();
+        let envelope = stream.envelope().len;
+        // The envelope and the records sit whole between eph_u and private_tx_hash.
+        let start = compact
+            .windows(data.eph_u.len())
+            .position(|window| window == data.eph_u)
+            .unwrap()
+            + data.eph_u.len();
+        let end = start + envelope + stream.records_len();
+        assert_eq!(compact[start..start + envelope], *data.envelope, "{name}");
+        assert_eq!(&compact[end..end + 32], data.private_tx_hash, "{name}");
+        // A byte fewer or more shifts every later section.
+        let mut truncated = compact.clone();
+        truncated.remove(end - 1);
+        let mut appended = compact.clone();
+        appended.insert(end, 0x7a);
+        for refused in [truncated, appended] {
+            assert_eq!(
+                RingTransactData::parse(&refused, data.rail),
+                Err(CustomRingError::RingTransactLength),
+                "{name}"
+            );
+        }
+        for len in [envelope - 1, envelope + 1] {
+            let mut resized = data.clone();
+            resized.envelope = &fixture.envelope[..len];
+            assert_eq!(
+                resized.encode(),
+                Err(CustomRingError::RingTransactLength),
+                "{name}"
+            );
+        }
+        let message = data.auditor_message();
+        assert_eq!(message.len(), stream.message_len(), "{name}");
+        let parsed = AuditorMessage::parse(&message, stream).unwrap();
+        assert_eq!(parsed.envelope, data.envelope, "{name}");
+        for (slot, output) in data.outputs.iter().enumerate() {
+            assert_eq!(parsed.record(stream, slot), Some(output.record()), "{name}");
+        }
+        assert_eq!(
+            AuditorMessage::parse(&message[..message.len() - 1], stream),
+            None
+        );
+        let longer = [&message[..], &[0]].concat();
+        assert_eq!(AuditorMessage::parse(&longer, stream), None);
+        let mut untagged = message.clone();
+        untagged[0] = 2;
+        assert_eq!(AuditorMessage::parse(&untagged, stream), None);
+    }
+}
+
+#[test]
+fn a_slot_ciphertext_off_the_layout_is_refused_at_encoding() {
+    let fixture = Fixture::new();
+    let long = [0x11; 105];
+    let mut delivered = fixture.confidential_delivered();
+    delivered.outputs[0] = RingOutput::Delivered {
+        hash: &fixture.fields[10],
+        u: &fixture.bytes[3],
+        body: &long[..72],
+    };
+    assert_eq!(delivered.encode(), Err(CustomRingError::RingTransactLength));
+    let mut escrowed = fixture.confidential_policy();
+    escrowed.outputs[0] = fixture.delivered(0);
+    assert_eq!(escrowed.encode(), Err(CustomRingError::RingTransactLength));
+    let mut record = fixture.anonymous();
+    record.outputs[1] = RingOutput::Anonymous {
+        hash: &fixture.fields[11],
+        tag: &fixture.tags[1],
+        body: None,
+        record: &long,
+    };
+    assert_eq!(record.encode(), Err(CustomRingError::RingTransactLength));
+    let mut exit = fixture.confidential_policy();
+    exit.outputs[1] = fixture.exit(1, &fixture.payload);
+    assert_eq!(exit.encode(), Err(CustomRingError::RingTransactLength));
 }
 
 #[test]
@@ -833,8 +968,9 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
         .unwrap();
     assert_eq!(statement.head.first_nullifier, &data.nullifiers[0]);
     assert_eq!(statement.head.salt, data.salt);
-    assert_eq!(statement.head.layout.value(), 0b0001);
-    assert_eq!(statement.disclosure, data.disclosure);
+    assert_eq!(statement.head.layout.value(), 0);
+    assert_eq!(statement.head.envelope, data.envelope);
+    assert_eq!(statement.input_count, data.nullifiers.len());
     assert_eq!(statement.private_tx_hash, data.private_tx_hash);
     assert_eq!(
         statement.family,
@@ -909,7 +1045,7 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
         statement(&escrowed, false),
         Err(CustomRingError::FlagNotAllowed)
     );
-    assert_eq!(statement(&escrowed, true), Ok(0b0011));
+    assert_eq!(statement(&escrowed, true), Ok(0b0010));
     assert_eq!(
         statement(&fixture.confidential_delivered(), true),
         Err(CustomRingError::FlagNotAllowed)
@@ -917,13 +1053,13 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
     let mut anonymous = fixture.anonymous();
     anonymous.key_escrow = true;
     assert_eq!(
-        statement(&fixture.with_disclosure(anonymous), false),
+        statement(&fixture.with_audit_stream(anonymous), false),
         Err(CustomRingError::FlagNotAllowed)
     );
     let mut delegate = fixture.delegate();
     delegate.key_escrow = false;
     assert_eq!(
-        statement(&fixture.with_disclosure(delegate), true),
+        statement(&fixture.with_audit_stream(delegate), true),
         Err(CustomRingError::FlagNotAllowed)
     );
 }

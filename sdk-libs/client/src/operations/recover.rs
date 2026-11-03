@@ -255,7 +255,7 @@ impl<'a> MemberRecovery<'a> {
         assets: &RingAssets,
         found: &mut Found,
     ) -> Result<(), AuditError> {
-        let layout = origin.disclosure_layout(self.recovery.mode)?;
+        let layout = origin.audit_stream(self.recovery.mode)?;
         let source_key = HashMap::from([(
             self.source.address.signing_pubkey.confidential_view_tag()?,
             self.source.address.nullifier_pubkey,

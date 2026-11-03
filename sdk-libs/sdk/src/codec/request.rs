@@ -1,6 +1,6 @@
 //! The ring prover's request bodies, field for field the Go `prover/custom_ring` params.
 
-use custom_ring_interface::{QueueEntry, QUAD_ARITY, RING_DELIVERED_BODY_LEN};
+use custom_ring_interface::{QueueEntry, QUAD_ARITY};
 use serde::{Serialize, Serializer};
 use spr_hasher::primitives::right_align;
 use spr_keypair::{PublicKey, X25519Pubkey};
@@ -139,7 +139,7 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeliveredOutput {
     pub output: Opening,
@@ -148,7 +148,7 @@ pub(crate) struct DeliveredOutput {
     #[serde(with = "fe")]
     pub owner_key: [u8; 32],
     #[serde(with = "fe")]
-    pub body: [u8; RING_DELIVERED_BODY_LEN],
+    pub body: Vec<u8>,
 }
 
 /// The owner key is bytes, never a field.
@@ -436,6 +436,8 @@ pub(crate) struct TransferParams<'a> {
     pub audit: AuditParams,
     pub exempt: bool,
     pub approval_required: bool,
+    /// `n`, the frame's nullifier count.
+    pub input_count: u8,
     #[serde(with = "fe")]
     pub private_tx_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -472,7 +474,6 @@ pub(crate) struct AnonymousTransfer<'a> {
     /// The hidden owner's key on an entry key, absent on a commitment key.
     #[serde(with = "option_field", skip_serializing_if = "Option::is_none")]
     pub sender_key: Option<[u8; 32]>,
-    pub input_count: u8,
     /// The input class, slots past `input_count` zero.
     pub inputs: Vec<Opening>,
     #[serde(serialize_with = "fe::seq")]

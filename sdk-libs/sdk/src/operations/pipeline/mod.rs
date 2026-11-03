@@ -418,7 +418,7 @@ impl<'a> Pipeline<'a> {
         // The auditor message precedes every hash over the external data.
         let unsealed = preview.parts(&proof_inputs, &rail, &sender)?;
         let (layout, flags) = (
-            unsealed.data().disclosure_layout()?,
+            unsealed.data().audit_stream()?,
             unsealed.data().audit_layout(),
         );
         let sealed = match presealed {
@@ -565,9 +565,7 @@ impl<'a> Sealed<'a> {
             delegate,
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
-        parts.eph_u = sealed.eph_u;
-        parts.sealed = sealed.sealed;
-        parts.disclosure = sealed.fields.clone();
+        parts.seal_audit(sealed.eph_u, sealed.envelope.clone(), &sealed.records);
         parts.approval_required = policy.approval_required;
         parts.exempt = policy.exempt;
         parts.own_revision = policy.own.map(|own| own.revision);
@@ -894,8 +892,7 @@ fn preview_parts(preview: PreviewParts<'_>) -> TransactParts {
             .collect(),
         sender: preview.sender.map(OwnedSenderBundle::of),
         eph_u: [0; 32],
-        sealed: [0; 32],
-        disclosure: Vec::new(),
+        envelope: Vec::new(),
         private_tx_hash: [0; 32],
         anonymous: None,
         in_proof_owner: preview.in_proof_owner.map(|owner| OwnedInProofOwner {
@@ -935,10 +932,20 @@ fn default_ring_input(inputs: &[SppProofInputUtxo]) -> Option<usize> {
         .position(|input| !input.is_dummy() && input.utxo.ring_program_id.is_none())
 }
 
-fn delivered(outputs: usize, rail: RingRail) -> Result<RingDelivery, RingError> {
-    match DELIVERED_AUDIT_CAPACITIES.contains(&outputs) {
-        true => Ok(RingDelivery::Delivered),
-        false => Err(RingError::ShapeUnkeyed { rail }),
+struct DeliveredRail {
+    outputs: usize,
+    rail: RingRail,
+    mode: RingMode,
+}
+
+impl DeliveredRail {
+    fn delivery(self) -> Result<RingDelivery, RingError> {
+        match DELIVERED_AUDIT_CAPACITIES.contains(&self.outputs) {
+            true => Ok(RingDelivery::Delivered {
+                key_escrow: self.mode == RingMode::ConfidentialEscrow,
+            }),
+            false => Err(RingError::ShapeUnkeyed { rail: self.rail }),
+        }
     }
 }
 

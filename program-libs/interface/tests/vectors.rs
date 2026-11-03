@@ -34,7 +34,7 @@ fn domains_are_their_ascii_tags() {
         (domain::TRANSFER_STATEMENT, b"CRTX"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
-        (domain::DISCLOSURE_PAD, b"CROD"),
+        (domain::AUDIT_SHARED_SECRET, b"CR_S"),
         (domain::POLICY_TABLE, b"CRTB"),
         (domain::QUEUE_WRITE, b"CRQW"),
         (domain::APPLY_RECORDS, b"CRAP"),

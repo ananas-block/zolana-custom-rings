@@ -50,7 +50,13 @@ impl Column {
         match self {
             Self::Anonymous => &[Shape::IN24_OUT2, Shape::IN16_OUT4, Shape::IN5_OUT8],
             Self::AnonymousPolicy => &[Shape::IN24_OUT2, Shape::IN16_OUT4],
-            Self::Confidential | Self::ConfidentialPolicy | Self::Delegate => &[],
+            Self::Confidential => &[
+                Shape::IN32_OUT2,
+                Shape::IN24_OUT4,
+                Shape::IN16_OUT8,
+                Shape::IN5_OUT16,
+            ],
+            Self::ConfidentialPolicy | Self::Delegate => &[],
         }
     }
 
@@ -351,7 +357,7 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// Sixteen policy outputs fit only when key escrow keeps the nullifier keys out of the disclosure.
+    /// Sixteen policy outputs fit only when key escrow keeps the nullifier keys out of the bodies.
     fn escrowed_owner_transfer(&self, coverage: &mut Coverage) -> Result<()> {
         restart_prover()?;
         let transfer = ShapeTransfer {
@@ -461,7 +467,7 @@ impl ShapeRing<'_> {
                 spend: Spend::InProofOwner,
                 legs: Vec::new(),
             };
-            // The policy disclosure pushes only the sixteen output transfer past the size ceiling.
+            // The policy bodies push only the sixteen output transfer past the size ceiling.
             if self.column == Column::ConfidentialPolicy && shape == Shape::IN1_OUT16 {
                 self.settle(transfer, coverage)?;
             } else {

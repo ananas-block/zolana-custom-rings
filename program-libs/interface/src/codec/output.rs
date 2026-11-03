@@ -5,12 +5,12 @@ use spr_event::{
     ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
 };
 
-use crate::CustomRingError;
+use crate::{
+    audit_stream::{DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN},
+    CustomRingError,
+};
 
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
-
-/// AES-CTR of the 32-byte blinding then the big-endian u64 amount.
-pub const RING_DELIVERED_BODY_LEN: usize = 40;
 
 /// `0x04 || u`, the recipient key a scheme 3 body leads with.
 pub const RECIPIENT_KEY_LEN: usize = 33;
@@ -25,21 +25,20 @@ pub const CONFIDENTIAL_DATA_FREE_BODY_LEN: usize =
 /// The encoding tag and the u32 body length before the scheme byte.
 const BODY_OFFSET: usize = 1 + 4;
 
-pub fn ring_confidential_delivered_output_body(
-    data: &[u8],
-) -> Option<&[u8; RING_DELIVERED_BODY_LEN]> {
-    encrypted_output_body(data, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG)?
-        .try_into()
-        .ok()
+/// `None` unless the body has a delivered length.
+pub fn ring_confidential_delivered_output_body(data: &[u8]) -> Option<&[u8]> {
+    encrypted_output_body(data, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG)
+        .filter(|body| is_delivered_body_len(body.len()))
 }
 
 pub fn encode_confidential_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
     encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body)
 }
 
-pub fn encode_ring_confidential_delivered_output(
-    body: &[u8; RING_DELIVERED_BODY_LEN],
-) -> Result<Vec<u8>, CustomRingError> {
+pub fn encode_ring_confidential_delivered_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
+    if !is_delivered_body_len(body.len()) {
+        return Err(CustomRingError::RingTransactLength);
+    }
     encode_encrypted_output(RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, body)
 }
 
@@ -57,6 +56,10 @@ pub fn anonymous_recipient_output_body(data: &[u8]) -> Option<&[u8]> {
 
 pub fn anonymous_sender_output_body(data: &[u8]) -> Option<&[u8]> {
     encrypted_output_body(data, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG)
+}
+
+const fn is_delivered_body_len(len: usize) -> bool {
+    matches!(len, ESCROWED_DELIVERED_BODY_LEN | DELIVERED_BODY_LEN)
 }
 
 /// `Encrypted(len || scheme || payload)`, the length counting the scheme byte.

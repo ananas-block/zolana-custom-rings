@@ -3,9 +3,10 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     merge_disclosure_field_count, tag, CoSignScope, CustomRingError, CustomRingMergeIxData,
-    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, RootRead, AUDIT_CIPHERTEXT_LEN,
-    MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
-    RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
+    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, RootRead,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, MERGE_KEY_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
+    RING_MERGE_RING_CONFIG_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -56,7 +57,7 @@ pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
     MergeDisclosure {
         proof: Zeroable::zeroed(),
         eph_pk: auditor_pubkey(),
-        ciphertext: [3; AUDIT_CIPHERTEXT_LEN],
+        ciphertext: [3; MERGE_KEY_CIPHERTEXT_LEN],
         fields: vec![[0x0f; 32]; merge_disclosure_field_count(width)],
     }
 }

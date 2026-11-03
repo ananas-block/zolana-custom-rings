@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-use custom_ring_interface::{
-    ring_confidential_delivered_output_body, stream::SlotSecret, RING_DELIVERED_BODY_LEN,
-};
+use custom_ring_interface::{ring_confidential_delivered_output_body, stream::SlotSecret};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
@@ -98,7 +96,7 @@ impl PendingUtxo {
     }
 }
 
-fn delivered_body(slot: &OutputSlot) -> Option<&[u8; RING_DELIVERED_BODY_LEN]> {
+fn delivered_body(slot: &OutputSlot) -> Option<&[u8]> {
     ring_confidential_delivered_output_body(&slot.payload)
 }
 

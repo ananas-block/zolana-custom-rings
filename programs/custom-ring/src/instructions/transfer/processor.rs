@@ -1,4 +1,4 @@
-use custom_ring_interface::{CustomRingError, InstructionTag, RailSigner, RingTransactData};
+use custom_ring_interface::{InstructionTag, RailSigner, RingTransactData};
 use pinocchio::{
     error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
@@ -29,11 +29,7 @@ pub fn process_transfer_ix(
     // 2. Every length follows from the flags and the shape, trailing bytes refused.
     let transfer = RingTransactData::parse(data, signer.rail())?;
     let data = transfer.data();
-    // 3. The disclosure chain hashes trailing zeros alike, honest fields are padded nonzero.
-    if data.disclosure.contains(&[0; 32]) {
-        return Err(CustomRingError::ZeroDisclosureField.into());
-    }
-    // 4. Each account sits in the slot the statements and SPP read it from.
+    // 3. Each account sits in the slot the statements and SPP read it from.
     let validated = TransactCheck {
         program_id,
         ring: &ring,
@@ -42,9 +38,9 @@ pub fn process_transfer_ix(
         slot,
     }
     .validate(accounts)?;
-    // 5. A bad SPP proof point is refused before either pairing.
+    // 4. A bad SPP proof point is refused before either pairing.
     let spp_data = data.spp_instruction_data(&ring)?;
-    // 6. The ring proof verifies over program-derived values before the SPP call the exempt bit relaxes.
+    // 5. The ring proof verifies over program-derived values before the SPP call the exempt bit relaxes.
     RingStatements {
         program_id,
         ring: &ring,
@@ -53,7 +49,7 @@ pub fn process_transfer_ix(
         key_escrow: escrows_keys(&ring)?,
     }
     .verify()?;
-    // 7. SPP verifies its own proof over the expanded data the ring PDA signs.
+    // 6. SPP verifies its own proof over the expanded data the ring PDA signs.
     let spp = accounts
         .get(validated.spp..)
         .ok_or(ProgramError::NotEnoughAccountKeys)?;

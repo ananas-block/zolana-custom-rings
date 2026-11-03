@@ -131,7 +131,11 @@ fn held(owner: &ShieldedKeypair, transactions: &[ShieldedTransaction]) -> Vec<(u
 #[test]
 fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
     let (sender, recipient) = (keypair(1), keypair(2));
-    let tx = transfer(&sender, &recipient, RingDelivery::Delivered);
+    let tx = transfer(
+        &sender,
+        &recipient,
+        RingDelivery::Delivered { key_escrow: false },
+    );
     assert_eq!(held(&recipient, std::slice::from_ref(&tx)), [(SENT, false)]);
     assert_eq!(
         held(&sender, std::slice::from_ref(&tx)),
@@ -143,7 +147,11 @@ fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
 #[test]
 fn a_note_reads_spent_once_a_scanned_transaction_spends_it() {
     let (sender, recipient) = (keypair(1), keypair(2));
-    let received = transfer(&sender, &recipient, RingDelivery::Delivered);
+    let received = transfer(
+        &sender,
+        &recipient,
+        RingDelivery::Delivered { key_escrow: false },
+    );
     let notes = open_ring_confidential(
         &recipient,
         &RingAssets::new([]).unwrap(),

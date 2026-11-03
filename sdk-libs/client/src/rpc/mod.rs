@@ -952,7 +952,9 @@ impl From<AuditedInput> for DecryptedInput {
             InputOpening::Ambiguous { candidates } => {
                 candidates.iter().copied().map(Into::into).collect()
             }
-            InputOpening::Dummy | InputOpening::Opened(_) => Vec::new(),
+            InputOpening::Dummy | InputOpening::Opened(_) | InputOpening::Unseen { .. } => {
+                Vec::new()
+            }
         };
         Self {
             nullifier: input.nullifier.into(),

@@ -2,6 +2,7 @@
 
 use super::*;
 use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
+use zolana_ring_client::prefix_evidence;
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -334,12 +335,27 @@ fn owner_signed(fixture: &Fixture, owners: &[Address]) -> StaticSource {
     source
 }
 
-/// The fixture's confidential transfer, `owner` verified in the SPP proof.
+/// The fixture's confidential transfer sealed for the in-proof rail, `owner` verified in the SPP proof.
 fn owned_in_proof(fixture: &Fixture, owner: Address) -> StaticSource {
+    let transfer = ring_transfer(1);
+    let outputs = [
+        paid(sol(0xb0, 500), fixture.recipient_u),
+        paid(sol(0xb1, 7), fixture.recipient_u),
+    ];
+    let disclosure = transfer.in_proof_disclosure(
+        &outputs,
+        prefix_evidence(&[Some(field(0x70))]).expect("input hash"),
+    );
+    let audited = Indexed {
+        transfer: &transfer,
+        outputs: &outputs,
+        auditor: &fixture.auditor.pubkey(),
+        signature: 1,
+        frames: &fixture.frames,
+    }
+    .publish(Rail::Delivered, &outputs, &disclosure);
     let mut frames = fixture.frames.lock().unwrap();
-    let frame = frames
-        .get_mut(&fixture.audited.tx_signature)
-        .expect("frame");
+    let frame = frames.get_mut(&audited.tx_signature).expect("frame");
     let zero = [0; 32];
     let mut data = RingTransactData::parse(&frame[1..], RingRail::Confidential)
         .expect("frame")
@@ -352,7 +368,11 @@ fn owned_in_proof(fixture: &Fixture, owner: Address) -> StaticSource {
     let encoded = [vec![frame[0]], data.encode().expect("frame")].concat();
     *frame = encoded;
     drop(frames);
-    owner_signed(fixture, &[])
+    let mut source = fixture.source().with_transactions(vec![audited.clone()]);
+    source
+        .owner_signers
+        .insert(audited.tx_signature, Vec::new());
+    source
 }
 
 async fn wallet_activity(
@@ -365,7 +385,7 @@ async fn wallet_activity(
     activity(wallet_read(&service, &reader, wallet).await)
 }
 
-/// A spender sees every output and no input opening.
+/// A spender sees every output and no input opening, a note the auditor never opened names none.
 fn assert_spent_in_full(items: Vec<WalletActivity>) {
     let [item] = items.try_into().expect("the spender's transfer");
     let WalletView::Sender {
@@ -380,7 +400,7 @@ fn assert_spent_in_full(items: Vec<WalletActivity>) {
         .map(|utxo| utxo.amount)
         .collect();
     assert_eq!(amounts, [500, 7]);
-    assert!(inputs.is_empty());
+    assert!(inputs.iter().all(|input| input.opening.is_none()));
 }
 
 #[tokio::test]

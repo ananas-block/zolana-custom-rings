@@ -74,10 +74,15 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
             .iter_mut()
             .zip([(&tags[0], None), (&tags[1], Some(&body[..1]))])
         {
-            let RingOutput::Anonymous { hash, .. } = *output else {
+            let RingOutput::Anonymous { hash, record, .. } = *output else {
                 panic!("an anonymous transfer publishes anonymous slots");
             };
-            *output = RingOutput::Anonymous { hash, tag, body };
+            *output = RingOutput::Anonymous {
+                hash,
+                tag,
+                body,
+                record,
+            };
         }
         data.sender = Some(SenderBundle {
             tag: &tags[1],
@@ -123,7 +128,7 @@ fn an_anonymous_policy_ring_escrows_no_key() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, true);
     data.key_escrow = true;
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     refused(
         transfer(&mut ring, Vec::new(), &data),
         CustomRingError::FlagNotAllowed,
@@ -201,7 +206,7 @@ fn an_anonymous_policy_ring_refuses_a_confidential_transfer() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     let sent = transfer(&mut ring, Vec::new(), &data);
     assert!(
         sent.is_err(),

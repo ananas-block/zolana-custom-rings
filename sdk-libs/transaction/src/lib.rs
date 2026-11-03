@@ -15,9 +15,9 @@ use std::cell::RefCell;
 
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
-    encode_anonymous_sender_output,
+    delivered_body_len, encode_anonymous_sender_output,
     stream::{DeliveredSlot, SlotSecret},
-    RingOutput, RING_DELIVERED_BODY_LEN,
+    DeliveredBody, RingOutput,
 };
 use rand::{rngs::OsRng, RngCore};
 use spr_event::MessageData;
@@ -46,15 +46,15 @@ pub use assets::RingAssets;
 pub use error::RingRailError;
 pub use published::PublishedSlot;
 pub use ring_delivered::{
-    is_contributory, RingDelivered, RingDeliveredBody, RingDeliveredNote, RingDeliveryOpening,
-    RingUtxoOwner,
+    is_contributory, open_delivered_body, seal_delivered_body, RingDelivered, RingDeliveredNote,
+    RingDeliveryOpening, RingUtxoOwner,
 };
 pub use ring_deposit::RingDepositPlaintext;
 
 #[derive(Clone, Debug)]
 pub enum RingDelivery {
     /// Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`.
-    Delivered,
+    Delivered { key_escrow: bool },
     /// Scheme 1 under view tags at each recipient output, scheme 2 in a message.
     Anonymous(Box<AnonymousPlan>),
 }
@@ -69,7 +69,7 @@ pub struct RingOutputRail {
 
 #[derive(Clone, Copy)]
 enum Slot {
-    Ring { recipient: X25519Pubkey },
+    Ring { owner: ShieldedAddress },
     Exit,
     Dummy,
 }
@@ -105,7 +105,7 @@ impl RingOutputRail {
             false => transaction.with_blinding_seed(blinding_seed)?,
         };
         let mut inputs = match &self.delivery {
-            RingDelivery::Delivered => self.spp_encrypt(transaction, sender)?,
+            RingDelivery::Delivered { .. } => self.spp_encrypt(transaction, sender)?,
             RingDelivery::Anonymous(_) => {
                 let mut inputs = OutputEncryption {
                     sender,
@@ -118,7 +118,7 @@ impl RingOutputRail {
             }
         };
         match &self.delivery {
-            RingDelivery::Delivered => self.reencode_delivered(&mut inputs)?,
+            RingDelivery::Delivered { .. } => self.reencode_delivered(&mut inputs)?,
             RingDelivery::Anonymous(plan) => self.reencode_anonymous(plan, &mut inputs, sender)?,
         }
         inputs.external_data.salt = self.salt;
@@ -187,6 +187,7 @@ impl RingOutputRail {
 
     /// Replaces every published slot with its scheme 10, scheme 3 or dummy encoding.
     fn reencode_delivered(&self, inputs: &mut SppProofInputs) -> Result<(), RingRailError> {
+        let key_escrow = matches!(self.delivery, RingDelivery::Delivered { key_escrow: true });
         let first_nullifier = inputs.first_nullifier()?;
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
@@ -201,6 +202,7 @@ impl RingOutputRail {
                 output,
                 slot_index,
                 first_nullifier,
+                key_escrow,
                 owner_tag: ResolvedOwnerTag {
                     tag: transact_output.owner_tag,
                     resolved: *resolved,
@@ -246,6 +248,7 @@ impl RingOutputRail {
                         hash: &hash,
                         tag,
                         body: body.as_deref(),
+                        record: &[],
                     };
                     (wire.transact_output()?, *tag)
                 }
@@ -284,9 +287,7 @@ impl RingOutputRail {
         check_plain(output, slot_index)?;
         Ok(match output.owner_address {
             None => Slot::Dummy,
-            Some(owner) if output.ring_program_id.is_some() => Slot::Ring {
-                recipient: owner.viewing_pubkey,
-            },
+            Some(owner) if output.ring_program_id.is_some() => Slot::Ring { owner },
             Some(_) => Slot::Exit,
         })
     }
@@ -322,7 +323,7 @@ impl RingOutputRail {
         {
             let resolved = match self.slot(output, index)? {
                 Slot::Exit => owner_tag.resolved,
-                Slot::Ring { recipient } => recipient.u(),
+                Slot::Ring { owner } => owner.viewing_pubkey.u(),
                 // A random key publishes as a real recipient's would.
                 Slot::Dummy => ViewingKey::new().pubkey().u(),
             };
@@ -372,16 +373,23 @@ impl RingOutputRail {
         let owner_tag = &slot.owner_tag;
         let body = match self.slot(slot.output, slot_index)? {
             Slot::Exit => return self.exit_slot(slot.output, owner_tag.resolved, slot.slot_index),
-            Slot::Ring { recipient } => {
-                let secret =
-                    self.slot_secret(&recipient, &slot.first_nullifier, slot.slot_index)?;
-                RingDeliveredBody {
-                    blinding: slot.output.blinding,
-                    amount: slot.output.amount,
-                }
-                .seal(&secret)?
+            Slot::Ring { owner } => {
+                let secret = self.slot_secret(
+                    &owner.viewing_pubkey,
+                    &slot.first_nullifier,
+                    slot.slot_index,
+                )?;
+                seal_delivered_body(
+                    &DeliveredBody {
+                        blinding: slot.output.blinding,
+                        amount: slot.output.amount,
+                        owner_key: owner.signing_pubkey.confidential_view_tag()?,
+                        nullifier_pk: (!slot.key_escrow).then_some(owner.nullifier_pubkey),
+                    },
+                    &secret,
+                )?
             }
-            Slot::Dummy => random_body(),
+            Slot::Dummy => random_body(delivered_body_len(slot.key_escrow)),
         };
         Self::framed(
             RingOutput::Delivered {
@@ -436,6 +444,7 @@ struct SlotEncode<'a> {
     output: &'a SppProofOutputUtxo,
     slot_index: u32,
     first_nullifier: [u8; 32],
+    key_escrow: bool,
     owner_tag: ResolvedOwnerTag,
 }
 
@@ -452,8 +461,8 @@ fn check_plain(output: &SppProofOutputUtxo, slot_index: usize) -> Result<(), Rin
     }
 }
 
-fn random_body() -> [u8; RING_DELIVERED_BODY_LEN] {
-    let mut body = [0u8; RING_DELIVERED_BODY_LEN];
+fn random_body(len: usize) -> Vec<u8> {
+    let mut body = vec![0u8; len];
     OsRng.fill_bytes(&mut body);
     body
 }

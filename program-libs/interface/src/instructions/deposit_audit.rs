@@ -8,7 +8,6 @@ pub const MAX_RING_DEPOSIT_AUDIT_SLOTS: usize = 8;
 pub const RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN: usize = 96;
 pub const RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET: usize = 64;
 pub const RING_DEPOSIT_AUDIT_PREFIX_LEN: usize = core::mem::size_of::<CapsuleHeader>();
-pub const RING_DEPOSIT_AUDIT_INFO: &[u8; 10] = b"CRING/dep1";
 
 const MAGIC: &[u8; 8] = b"CRDEP001";
 

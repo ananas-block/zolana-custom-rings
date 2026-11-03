@@ -388,16 +388,20 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
     let mut unmatched = delivered(9);
     let transfer = ring_transfer(9);
     let secret = transfer.delivered_secret(&x25519_u(0x42), 2);
-    let body = RingDeliveredBody {
-        blinding: transfer.blinding(2),
-        amount: 13,
-    }
-    .seal(&secret)
+    let body = seal_delivered_body(
+        &DeliveredBody {
+            blinding: transfer.blinding(2),
+            amount: 13,
+            owner_key: [0x13; 32],
+            nullifier_pk: Some(field(0x13)),
+        },
+        &secret,
+    )
     .expect("delivered body");
     unmatched.output_slots[2].payload = encode_ring_confidential_delivered_output(&body).unwrap();
     let mut invalid_disclosure = delivered(10);
-    // The first disclosure field, past the tagged ephemeral key and the sealed key.
-    invalid_disclosure.messages[0].data[65] = 0xff;
+    // The envelope's first byte, past the tagged ephemeral key.
+    invalid_disclosure.messages[0].data[33] ^= 1;
     let mut source =
         fixture
             .source()

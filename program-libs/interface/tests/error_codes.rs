@@ -64,7 +64,6 @@ pinned_codes! {
     AuthorityBatchTooLarge = 8214,
     PolicyNotSet = 8217,
     InvalidSppProofPoint = 8218,
-    ZeroDisclosureField = 8220,
     PolicyAlreadySet = 8221,
     DataFreeBodyLength = 8224,
     ZeroPublicLegAmount = 8225,

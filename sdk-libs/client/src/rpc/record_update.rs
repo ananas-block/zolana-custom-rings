@@ -1,8 +1,8 @@
 use custom_ring_interface::{
     domain, mint_policy_write, queue_chain,
     storage_instruction::{EscrowWriteData, StorageWriteData},
-    CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
-    AUDIT_CIPHERTEXT_LEN, GRACE_SLOTS,
+    CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData, GRACE_SLOTS,
+    REGISTER_KEY_CIPHERTEXT_LEN,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -147,7 +147,7 @@ pub struct RecordUpdateStatement {
 pub enum RecordUpdateError {
     #[error(transparent)]
     Entry(#[from] CustomRingError),
-    #[error("escrow ciphertext is not {AUDIT_CIPHERTEXT_LEN} bytes")]
+    #[error("escrow ciphertext is not {REGISTER_KEY_CIPHERTEXT_LEN} bytes")]
     CiphertextLength,
     #[error("escrow ephemeral key is not a tagged X25519 key")]
     EphemeralKey,

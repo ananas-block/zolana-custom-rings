@@ -17,7 +17,8 @@ use std::{
 };
 
 use custom_ring_interface::{
-    DeliveredLayout, DisclosureLayout, InputPrefix, RingDepositAuditCapsule, RingMode,
+    AuditEvidence, AuditStreamLayout, DeliveredBody, ExitRecord, InputPrefix,
+    RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -31,18 +32,18 @@ use spr_event::{
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 use zolana_ring_client::{
-    auditor_view_tag, ring_event_origin_in, seal_deposits, AnonymousInputs, AuditDisclosure,
-    AuditEnvelope, AuditError, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
+    auditor_view_tag, commitment_evidence, prefix_evidence, ring_event_origin_in, seal_deposits,
+    AuditError, AuditStreamSeal, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
     CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening, InputOpening, InputRing, KnownUtxo,
     KnownUtxoIndex, KnownUtxos, MergeDisclosureEncryption, MergeOpening, OutputOpening,
-    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    OutputPayloadError, OutputPayloadErrorKind, OutputRecord, RingOrigin, RingOwnerTag, RingScan,
     TransactionAudit, TransactionOrigin, UtxoOwner,
 };
-use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
+use zolana_ring_transaction::{seal_delivered_body, RingAssets};
 
 use transfer::{
-    audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Frame, Output, Placement,
-    Publish, Rail, Slot, Transfer, UtxoFields,
+    audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Disclosure, Frame,
+    Output, Placement, Publish, Rail, Slot, Transfer, UtxoFields,
 };
 
 const SOL: Address = Address::new_from_array([0; 32]);
@@ -77,7 +78,7 @@ struct Built {
     transaction: ShieldedTransaction,
     outputs: Vec<Output>,
     slots: Vec<Slot>,
-    layout: DisclosureLayout,
+    layout: AuditStreamLayout,
     frame: Vec<u8>,
 }
 
@@ -92,7 +93,13 @@ fn build(transfer: &Transfer, rail: Rail, outputs: Vec<Output>) -> Built {
 }
 
 fn build_with(transfer: &Transfer, rail: Rail, outputs: Vec<Output>, key_escrow: bool) -> Built {
-    let slots = transfer.slots(rail, &outputs);
+    let slots = transfer.slots(
+        match key_escrow {
+            true => Rail::Escrowed,
+            false => rail,
+        },
+        &outputs,
+    );
     let disclosure = transfer.disclosure(rail, &outputs, key_escrow);
     publish(transfer, slots, outputs, &disclosure)
 }
@@ -115,19 +122,19 @@ fn build_anonymous(
     let slots = transfer.slots(Rail::Anonymous, &outputs);
     let sender = spent[0].utxo;
     let inputs = match spending {
-        Spending::RingUtxos => AnonymousInputs::commitments(
+        Spending::RingUtxos => commitment_evidence(
             &spent
                 .iter()
                 .map(|spend| Some(spend.commitment(transfer, Some(transfer.ring))))
                 .collect::<Vec<_>>(),
         )
         .unwrap(),
-        Spending::Entry => AnonymousInputs::Openings {
+        Spending::Entry => AuditEvidence::Entry {
             sender_key: sender.owner_key,
             sender_nullifier_pk: sender.nullifier_pk,
             inputs: spent
                 .iter()
-                .map(|spend| Some(input_opening(&spend.utxo, spend.blinding)))
+                .map(|spend| input_opening(&spend.utxo, spend.blinding))
                 .collect(),
         },
     };
@@ -157,14 +164,14 @@ fn publish(
     transfer: &Transfer,
     slots: Vec<Slot>,
     outputs: Vec<Output>,
-    disclosure: &AuditDisclosure,
+    disclosure: &Disclosure,
 ) -> Built {
     let transaction = transfer.publish(Publish {
         slots: slots.iter().map(|slot| slot.output.clone()).collect(),
         disclosure,
         auditor: &auditor().pubkey(),
     });
-    let layout = disclosure.layout();
+    let layout = disclosure.layout;
     Built {
         frame: transfer.frame(Frame {
             tx: &transaction,
@@ -175,6 +182,22 @@ fn publish(
         slots,
         layout,
     }
+}
+
+/// The record kinds of a delivered transfer, the exit's fixed by the layout.
+fn transfer_records(built: &Built) -> Vec<OutputRecord> {
+    built
+        .outputs
+        .iter()
+        .map(|output| match output {
+            Output::Exit(utxo) => OutputRecord::Exit(ExitRecord {
+                asset: utxo.asset(),
+                amount: utxo.amount,
+                nullifier_pk: Some(utxo.nullifier_pk),
+            }),
+            Output::Ring { .. } | Output::Dummy => OutputRecord::Delivered,
+        })
+        .collect()
 }
 
 fn delivered_outputs() -> Vec<Output> {
@@ -195,7 +218,7 @@ fn delivered_outputs() -> Vec<Output> {
 
 fn audit(
     transaction: &ShieldedTransaction,
-    layout: DisclosureLayout,
+    layout: AuditStreamLayout,
 ) -> Result<AuditedTransaction, AuditError> {
     TransactionAudit::new(transaction, layout).run(&auditor(), &assets())
 }
@@ -374,6 +397,10 @@ impl KnownUtxos for Misfiled {
             true => self.answer.clone(),
             false => self.index.with_prefix(owner_key, prefix),
         }
+    }
+
+    fn with_prefix_of_anyone(&self, prefix: InputPrefix) -> Vec<[u8; 32]> {
+        self.index.with_prefix_of_anyone(prefix)
     }
 }
 
@@ -654,7 +681,61 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
     ));
 }
 
-/// A ring slot framed as an exit misreads its disclosure, that slot alone is reported.
+/// The in-proof and authority rails name each input by its prefix, a note no earlier audit opened
+/// leaves the outputs readable.
+#[test]
+fn an_in_proof_input_opens_by_its_prefix_or_stays_unseen_beside_readable_outputs() {
+    let mut transfer = Transfer::fixture();
+    transfer.nullifiers.push(field(0x1e));
+    let spend = Spend {
+        utxo: UtxoFields {
+            owner_key: [0xa1; 32],
+            nullifier_pk: field(0x5a),
+            asset_address: MINT,
+            amount: 900,
+            ..UtxoFields::default()
+        },
+        blinding: field(0x60),
+    };
+    let unseen = field(0x61);
+    let hash = spend.commitment(&transfer, Some(transfer.ring));
+    let outputs = vec![
+        Output::Ring {
+            utxo: utxo(0xb5, SOL, 50),
+            recipient_u: x25519_u(0x50),
+            tag: None,
+        },
+        Output::Dummy,
+    ];
+    let slots = transfer.slots(Rail::Delivered, &outputs);
+    let disclosure = transfer.in_proof_disclosure(
+        &outputs,
+        prefix_evidence(&[Some(hash), Some(unseen)]).unwrap(),
+    );
+    let built = publish(&transfer, slots, outputs, &disclosure);
+    let known: KnownUtxoIndex = [(hash, spend.known(&transfer))].into_iter().collect();
+    let audited = TransactionAudit::new(&built.transaction, built.layout)
+        .with_known_utxos(&known)
+        .run(&auditor(), &assets())
+        .unwrap();
+    assert_eq!(opened_slots(&audited), [0, 1]);
+    assert_eq!(audited.sender, None);
+    assert!(matches!(
+        audited.inputs[0].opening,
+        InputOpening::Opened(AuditedInputOpening { amount: 900, .. })
+    ));
+    assert_eq!(
+        audited.inputs[1].opening,
+        InputOpening::Unseen {
+            prefix: InputPrefix::of(&unseen).unwrap().get()
+        }
+    );
+    let audited = audit(&built.transaction, built.layout).unwrap();
+    assert_eq!(opened_slots(&audited), [0, 1]);
+    assert_eq!(audited.inputs.len(), 2);
+}
+
+/// A record outside the field opens nothing, that slot alone is reported.
 #[test]
 fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
     let (transfer, _, spent) = anonymous_spend();
@@ -666,8 +747,23 @@ fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
         },
         Output::Exit(utxo(0xe5, SOL, 20)),
     ];
-    let mut built = build_anonymous(&transfer, outputs, &spent, Spending::Entry);
-    built.transaction.output_slots[0].payload = built.transaction.output_slots[1].payload.clone();
+    let slots = transfer.slots(Rail::Anonymous, &outputs);
+    let mut disclosure = transfer.anonymous_disclosure(
+        &outputs,
+        AuditEvidence::Entry {
+            sender_key: spent[0].utxo.owner_key,
+            sender_nullifier_pk: spent[0].utxo.nullifier_pk,
+            inputs: spent
+                .iter()
+                .map(|spend| input_opening(&spend.utxo, spend.blinding))
+                .collect(),
+        },
+    );
+    let OutputRecord::Anonymous(record) = &mut disclosure.records[0] else {
+        panic!("slot 0 is a ring output");
+    };
+    record.asset = [0xff; 32];
+    let built = publish(&transfer, slots, outputs, &disclosure);
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(
         audited.payload_errors,
@@ -783,11 +879,15 @@ fn a_body_sealed_to_another_recipient_is_flagged_on_its_slot() {
     let Output::Ring { utxo, .. } = built.outputs[2] else {
         panic!("slot 2 is a ring output");
     };
-    let foreign = RingDeliveredBody {
-        blinding: built.slots[2].blinding,
-        amount: utxo.amount,
-    }
-    .seal(&transfer.delivered_secret(&x25519_u(0x7f), 2))
+    let foreign = seal_delivered_body(
+        &DeliveredBody {
+            blinding: built.slots[2].blinding,
+            amount: utxo.amount,
+            owner_key: utxo.owner_key,
+            nullifier_pk: Some(utxo.nullifier_pk),
+        },
+        &transfer.delivered_secret(&x25519_u(0x7f), 2),
+    )
     .unwrap();
     built.transaction.output_slots[2].payload =
         custom_ring_interface::encode_ring_confidential_delivered_output(&foreign).unwrap();
@@ -990,10 +1090,16 @@ fn an_anonymous_ring_slot_opens_under_any_published_tag() {
 fn the_envelope_must_seal_the_published_transaction_key() {
     let built = build(&Transfer::fixture(), Rail::Delivered, delivered_outputs());
     let mut forged = built.transaction.clone();
-    let envelope = AuditEnvelope::seal(&ViewingKey::new(), &auditor().pubkey())
-        .unwrap()
-        .envelope;
-    forged.messages[0].data[1..65].copy_from_slice(&[envelope.eph_u, envelope.sealed].concat());
+    let other_key = ViewingKey::new();
+    let sealed = AuditStreamSeal {
+        layout: built.layout,
+        tx_viewing_key: &other_key,
+        evidence: AuditEvidence::None,
+        records: transfer_records(&built),
+    }
+    .seal(&auditor().pubkey())
+    .unwrap();
+    forged.messages[0].data[1..65].copy_from_slice(&[&sealed.eph_u[..], &sealed.envelope].concat());
     assert!(matches!(
         audit(&forged, built.layout),
         Err(AuditError::TxViewingKeyMismatch)
@@ -1061,26 +1167,23 @@ fn the_layout_comes_from_the_ring_frame() {
     };
     assert_eq!(
         origin(Some(built.frame.clone()))
-            .disclosure_layout(RingMode::Confidential)
+            .audit_stream(RingMode::Confidential)
             .unwrap(),
         built.layout
     );
     assert!(matches!(
-        origin(None).disclosure_layout(RingMode::Confidential),
+        origin(None).audit_stream(RingMode::Confidential),
         Err(AuditError::MissingRingTransact)
     ));
     // An anonymous ring parses a `Transact` frame under its own rail.
     assert!(matches!(
-        origin(Some(built.frame.clone())).disclosure_layout(RingMode::Anonymous),
+        origin(Some(built.frame.clone())).audit_stream(RingMode::Anonymous),
         Err(AuditError::InvalidTransactData(_))
     ));
-    let DisclosureLayout::Delivered(delivered) = built.layout else {
-        unreachable!("eight outputs take the delivered layout");
-    };
-    let escrowed = DisclosureLayout::Delivered(DeliveredLayout {
+    let escrowed = AuditStreamLayout {
         key_escrow: true,
-        ..delivered
-    });
+        ..built.layout
+    };
     assert!(matches!(
         audit(&built.transaction, escrowed),
         Err(AuditError::AuditorMessageLength(_))

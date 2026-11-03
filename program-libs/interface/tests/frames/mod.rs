@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     storage::Revision, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, SenderBundle, CONFIDENTIAL_DATA_FREE_BODY_LEN, RING_POLICY,
+    RingTransactData, SenderBundle, CONFIDENTIAL_DATA_FREE_BODY_LEN, EXIT_RECORD_LEN, RING_POLICY,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -18,7 +18,10 @@ pub struct Fixture {
     pub spp_proof: PlainGroth16Proof,
     pub fields: Vec<[u8; 32]>,
     pub bytes: [[u8; 32]; 64],
-    pub bodies: [[u8; 40]; 16],
+    /// One slot's ciphertext, cut to the stream layout's length.
+    pub ciphertexts: [[u8; 104]; 16],
+    /// Cut to the stream layout's envelope length.
+    pub envelope: Vec<u8>,
     pub tags: [[u8; 32]; 8],
     pub recipient_body: Vec<u8>,
     pub sender_body: Vec<u8>,
@@ -46,7 +49,8 @@ impl Fixture {
             },
             fields: (0..=u8::MAX).map(field).collect(),
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
-            bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
+            ciphertexts: core::array::from_fn(|i| [0x80 + i as u8; 104]),
+            envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
             recipient_body: (0..120u8).map(|byte| byte ^ 0x5a).collect(),
             sender_body: (0..90u8).map(|byte| byte ^ 0x2d).collect(),
@@ -76,8 +80,7 @@ impl Fixture {
             outputs: Vec::new(),
             sender: None,
             eph_u: &self.bytes[1],
-            sealed: &self.bytes[2],
-            disclosure: &[],
+            envelope: &[],
             private_tx_hash: &self.fields[0],
             anonymous: None,
             in_proof_owner: None,
@@ -95,12 +98,23 @@ impl Fixture {
             hash: &self.fields[10 + slot],
             owner_tag: &self.bytes[12 + slot],
             payload,
+            record: &self.ciphertexts[slot][..EXIT_RECORD_LEN],
         }
     }
 
-    pub fn with_disclosure<'a>(&'a self, mut data: RingTransactData<'a>) -> RingTransactData<'a> {
-        let count = data.disclosure_layout().unwrap().field_count();
-        data.disclosure = &self.fields[30..30 + count];
+    /// Cuts the envelope and every slot's ciphertext to the frame's stream layout.
+    pub fn with_audit_stream<'a>(&'a self, mut data: RingTransactData<'a>) -> RingTransactData<'a> {
+        let stream = data.audit_stream().unwrap();
+        data.envelope = &self.envelope[..stream.envelope().len];
+        for (slot, output) in data.outputs.iter_mut().enumerate() {
+            let ciphertext = &self.ciphertexts[slot][..stream.ciphertext_len(slot)];
+            match output {
+                RingOutput::Delivered { body, .. } => *body = ciphertext,
+                RingOutput::Anonymous { record, .. } | RingOutput::Exit { record, .. } => {
+                    *record = ciphertext;
+                }
+            }
+        }
         data
     }
 
@@ -133,7 +147,7 @@ impl Fixture {
             },
             second_inputs: 0b10,
         };
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     /// No owner signs, SPP's anonymous rail hides the owner the delivered audit publishes.
@@ -157,7 +171,7 @@ impl Fixture {
             commitment: &self.bytes[20],
             commitment_pok: &self.bytes[21],
         });
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     pub fn confidential_delivered(&self) -> RingTransactData<'_> {
@@ -168,7 +182,7 @@ impl Fixture {
                 _ => self.delivered(slot),
             })
             .collect();
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     pub fn confidential_exempt(&self) -> RingTransactData<'_> {
@@ -200,7 +214,7 @@ impl Fixture {
             commitment_pok: &self.bytes[21],
             default_owner_tag: Some(&self.bytes[22]),
         });
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     pub fn anonymous_entry(&self) -> RingTransactData<'_> {
@@ -213,7 +227,7 @@ impl Fixture {
             commitment_pok: &self.bytes[21],
             default_owner_tag: None,
         });
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     pub fn delegate(&self) -> RingTransactData<'_> {
@@ -222,7 +236,7 @@ impl Fixture {
         data.own_revision = Some(Revision::from(0));
         data.policy = Some(self.delegate_policy(2));
         data.outputs = vec![self.delivered(0), self.delivered(1)];
-        self.with_disclosure(data)
+        self.with_audit_stream(data)
     }
 
     pub fn delegate_policy(&self, outputs: usize) -> PolicyProof<'_> {
@@ -237,7 +251,7 @@ impl Fixture {
         RingOutput::Delivered {
             hash: &self.fields[10 + slot],
             u: &self.bytes[3 + slot],
-            body: &self.bodies[slot],
+            body: &self.ciphertexts[slot],
         }
     }
 
@@ -247,6 +261,7 @@ impl Fixture {
             hash: &self.fields[10 + slot],
             tag: &self.tags[slot],
             body: (slot != 0).then_some(&self.recipient_body[..]),
+            record: &self.ciphertexts[slot],
         }
     }
 

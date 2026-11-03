@@ -18,7 +18,7 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
-    tag as ring_tag, CustomRingError, DisclosureLayout, InstructionTag, ParsedTransact, RingMode,
+    tag as ring_tag, AuditStreamLayout, CustomRingError, InstructionTag, ParsedTransact, RingMode,
     RingRail, RingTransactData,
 };
 
@@ -45,7 +45,7 @@ pub struct RingOrigin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedMergeDisclosure {
     pub eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; custom_ring_interface::AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: [u8; custom_ring_interface::MERGE_KEY_CIPHERTEXT_LEN],
     pub fields: Vec<[u8; 32]>,
 }
 
@@ -151,12 +151,12 @@ impl RingOrigin {
     }
 
     /// The layout the program bound into the audit statement, read from the forwarding frame.
-    pub fn disclosure_layout(&self, mode: RingMode) -> Result<DisclosureLayout, AuditError> {
+    pub fn audit_stream(&self, mode: RingMode) -> Result<AuditStreamLayout, AuditError> {
         let frame = self
             .transact
             .as_deref()
             .ok_or(AuditError::MissingRingTransact)?;
-        parse_frame(mode, frame).map(|parsed| parsed.layout())
+        parse_frame(mode, frame).map(|parsed| parsed.audit_stream())
     }
 
     /// The input owners a confidential transfer binds, a legacy frame names none.

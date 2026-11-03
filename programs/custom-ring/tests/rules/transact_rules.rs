@@ -36,7 +36,10 @@ pub struct Fixture {
     spp_proof: PlainGroth16Proof,
     fields: Vec<[u8; 32]>,
     keys: [[u8; 32]; 16],
-    bodies: [[u8; 40]; 16],
+    /// One slot's ciphertext, cut to the stream layout's length.
+    ciphertexts: [[u8; 104]; 16],
+    /// Cut to the stream layout's envelope length.
+    envelope: Vec<u8>,
     tags: [[u8; 32]; 16],
     salt: [u8; 16],
 }
@@ -61,7 +64,8 @@ impl Fixture {
             },
             fields: (1..=120u8).map(field).collect(),
             keys: core::array::from_fn(|i| [0x40 + i as u8; 32]),
-            bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
+            ciphertexts: core::array::from_fn(|i| [0x80 + i as u8; 104]),
+            envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
             salt: [0x5c; 16],
         }
@@ -100,11 +104,10 @@ impl Fixture {
             outputs: Vec::new(),
             sender: (rail == RingRail::Anonymous).then(|| SenderBundle {
                 tag: &self.tags[15],
-                body: &self.bodies[15],
+                body: &self.ciphertexts[15][..40],
             }),
             eph_u: &self.keys[1],
-            sealed: &self.keys[2],
-            disclosure: &[],
+            envelope: &[],
             private_tx_hash: &self.fields[0],
             anonymous: (rail == RingRail::Anonymous).then(|| AnonymousProofData {
                 commitment: &self.keys[3],
@@ -125,18 +128,19 @@ impl Fixture {
                 .map(|slot| RingOutput::Anonymous {
                     hash: &self.fields[10 + slot],
                     tag: &self.tags[slot],
-                    body: (slot != 0).then_some(&self.bodies[slot][..]),
+                    body: (slot != 0).then_some(&self.ciphertexts[slot][..40]),
+                    record: &self.ciphertexts[slot],
                 })
                 .collect(),
             RingRail::Confidential | RingRail::Delegate => slots
                 .map(|slot| RingOutput::Delivered {
                     hash: &self.fields[10 + slot],
                     u: &self.keys[5 + slot % 10],
-                    body: &self.bodies[slot],
+                    body: &self.ciphertexts[slot],
                 })
                 .collect(),
         };
-        self.disclose(&mut data);
+        self.fit_stream(&mut data);
         data
     }
 
@@ -154,14 +158,23 @@ impl Fixture {
             commitment: &self.keys[3],
             commitment_pok: &self.keys[4],
         });
-        self.disclose(&mut data);
+        self.fit_stream(&mut data);
         data
     }
 
-    /// Publishes the field count the data's layout takes.
-    pub fn disclose<'a>(&'a self, data: &mut RingTransactData<'a>) {
-        let count = data.disclosure_layout().unwrap().field_count();
-        data.disclosure = &self.fields[40..40 + count];
+    /// Cuts the envelope and every slot's ciphertext to the data's stream layout.
+    pub fn fit_stream<'a>(&'a self, data: &mut RingTransactData<'a>) {
+        let stream = data.audit_stream().unwrap();
+        data.envelope = &self.envelope[..stream.envelope().len];
+        for (slot, output) in data.outputs.iter_mut().enumerate() {
+            let ciphertext = &self.ciphertexts[slot][..stream.ciphertext_len(slot)];
+            match output {
+                RingOutput::Delivered { body, .. } => *body = ciphertext,
+                RingOutput::Anonymous { record, .. } | RingOutput::Exit { record, .. } => {
+                    *record = ciphertext;
+                }
+            }
+        }
     }
 }
 
@@ -415,18 +428,53 @@ fn an_off_curve_spp_point_is_refused_before_either_pairing() {
     );
 }
 
+/// An all-zero ciphertext reaches the proof, its digest and length tag bind it.
 #[test]
-fn a_published_zero_disclosure_field_is_refused() {
+fn a_zero_ciphertext_reaches_verification() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AuditOnly);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    let mut fields = data.disclosure.to_vec();
-    fields[3] = [0; 32];
-    data.disclosure = &fields;
-    refused(
-        confidential(&mut ring, Vec::new(), &data),
-        CustomRingError::ZeroDisclosureField,
-    );
+    let stream = data.audit_stream().unwrap();
+    let zeros = [0; 256];
+    data.envelope = &zeros[..stream.envelope().len];
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
+}
+
+/// Family, layout and counts fix each length, the program refuses any other before a pairing.
+#[test]
+fn a_truncated_or_appended_ciphertext_is_refused() {
+    let fixture = Fixture::new();
+    for (setup, rail) in [
+        (Setup::AuditOnly, RingRail::Confidential),
+        (Setup::Anonymous, RingRail::Anonymous),
+    ] {
+        let mut ring = Ring::new(setup);
+        let data = fixture.transfer(rail, 2, 2, false);
+        let stream = data.audit_stream().unwrap();
+        let compact = data.encode().unwrap();
+        let end = compact
+            .windows(32)
+            .position(|window| window == data.eph_u)
+            .unwrap()
+            + 32
+            + stream.envelope().len
+            + stream.records_len();
+        let mut truncated = compact.clone();
+        truncated.remove(end - 1);
+        let mut appended = compact;
+        appended.insert(end, 0x7a);
+        for bytes in [truncated, appended] {
+            let owners = match rail {
+                RingRail::Anonymous => Vec::new(),
+                _ => payer_owner(&ring),
+            };
+            let spp = spp_list(&ring.payer.pubkey(), &data, &owners);
+            refused(
+                send(&mut ring, tag::TRANSFER, Vec::new(), bytes, spp, &[]),
+                CustomRingError::RingTransactLength,
+            );
+        }
+    }
 }
 
 #[test]
@@ -435,7 +483,7 @@ fn a_key_escrow_bit_off_the_ring_mode_is_refused() {
     let mut ring = Ring::new(Setup::Policy);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.key_escrow = true;
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     refused(
         confidential(&mut ring, Vec::new(), &data),
         CustomRingError::FlagNotAllowed,
@@ -444,7 +492,7 @@ fn a_key_escrow_bit_off_the_ring_mode_is_refused() {
     let mut registry_ring = delegate_ring(&Keypair::new());
     reaches_verification(confidential(&mut registry_ring, Vec::new(), &data));
     data.key_escrow = false;
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     refused(
         confidential(&mut registry_ring, Vec::new(), &data),
         CustomRingError::FlagNotAllowed,
@@ -457,7 +505,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
     let mut ring = Ring::new(Setup::Anonymous);
     let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
     data.full_openings = true;
-    fixture.disclose(&mut data);
+    fixture.fit_stream(&mut data);
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     reaches_verification(send(
         &mut ring,
@@ -1112,6 +1160,7 @@ fn every_ring_authority_shape_reaches_the_delegate_key_lookup() {
         let n_out = u8::try_from(shape.n_outputs()).unwrap();
         let mut data = fixture.transfer(RingRail::Delegate, n_in, n_out, true);
         data.nullifiers = &fixture.fields[1..2];
+        fixture.fit_stream(&mut data);
         let bytes = data.encode().unwrap();
         reaches_verification(delegate_move(&mut ring, &delegate, &data, bytes));
     }

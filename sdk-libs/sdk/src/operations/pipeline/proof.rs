@@ -1,6 +1,8 @@
 //! The one ring proof of a transfer, one request over the audit and policy sections.
 
-use custom_ring_interface::{key_catalog::RingCircuit, CustomRingProof, RingRail};
+use custom_ring_interface::{
+    delivered_body_len, key_catalog::RingCircuit, CustomRingProof, RingRail,
+};
 use serde::Serialize;
 use spr_client::AsyncRpc;
 use spr_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
@@ -41,12 +43,19 @@ impl Assembled {
             inputs: &frame.proof_inputs,
             sender: &frame.sender,
             auditor: &self.auditor,
+            body_len: delivered_body_len(parts.key_escrow),
         };
+        let input_count =
+            u8::try_from(frame.published_inputs).map_err(|_| TransactionError::TooManyInputs {
+                got: frame.published_inputs,
+                max: usize::from(u8::MAX),
+            })?;
         let transfer = TransferParams {
             public_input_hash: self.public_input_hash,
             audit: audit.params()?,
             exempt: frame.policy.exempt,
             approval_required: frame.policy.approval_required,
+            input_count,
             private_tx_hash: parts.private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             policy: frame.policy.params(&PolicyProving {
@@ -83,17 +92,10 @@ impl Assembled {
             RingCircuit::TransferAnonymous { class, .. }
             | RingCircuit::TransferAnonymousEntry { class, .. } => {
                 let entry = matches!(circuit, RingCircuit::TransferAnonymousEntry { .. });
-                let count = frame.published_inputs;
                 TransferBody::Anonymous(Box::new(AnonymousTransfer {
                     transfer,
                     outputs: audit.anonymous_outputs()?,
                     sender_key: entry.then(|| audit.sender_key()).transpose()?,
-                    input_count: u8::try_from(count).map_err(|_| {
-                        TransactionError::TooManyInputs {
-                            got: count,
-                            max: usize::from(u8::MAX),
-                        }
-                    })?,
                     inputs: audit.input_openings(usize::from(class))?,
                     party_identities: self.party_identities,
                 }))

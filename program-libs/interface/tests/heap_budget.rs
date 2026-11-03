@@ -284,7 +284,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
             commitment_pok: &fixture.bytes[21],
         });
     }
-    fixture.with_disclosure(data)
+    fixture.with_audit_stream(data)
 }
 
 struct Phases {

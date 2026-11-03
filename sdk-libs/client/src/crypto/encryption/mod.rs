@@ -1,9 +1,10 @@
 //! Mirrors `custom_rings/circuits/base`, streams keyed by `Poseidon(CR_S, dh, eph_pk, auditor_pk)`.
 
 use custom_ring_interface::{
-    RingDepositAuditCapsule, AUDIT_CIPHERTEXT_LEN, AUDIT_STREAM_INFO, MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_INFO,
-    RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET,
+    domain::{self, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL},
+    RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS, REGISTER_KEY_CIPHERTEXT_LEN,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET, STREAM_BLOCK_LEN,
+    STREAM_FIRST_COUNTER,
 };
 use spr_hasher::{
     primitives::{pack_be, right_align},
@@ -11,15 +12,11 @@ use spr_hasher::{
 };
 use spr_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
 use zeroize::Zeroizing;
-use zolana_ring_keys::symmetric_apply_audit;
+use zolana_ring_keys::{symmetric_apply_audit, RingStream};
 
 use crate::AuditError;
 
 type Result<T> = core::result::Result<T, AuditError>;
-
-const NF_KEY_ENC_INFO: &[u8; 10] = b"CRING/nfk1";
-/// ASCII "CR_S", the Go `DomSepCRShared`.
-const DOM_SEP_CR_SHARED: u32 = 0x4352_5f53;
 
 mod merge_disclosure;
 #[cfg(test)]
@@ -31,10 +28,10 @@ pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {
     pk.u()
 }
 
-/// The key schedule of a sealed stream, the envelope and every delivered body share `Audit`.
+/// The key schedule of a sealed stream, `Labelled` is zolana's `TMS*` and serves merge alone.
 #[derive(Clone, Copy)]
 pub(crate) enum StreamSchedule {
-    Audit,
+    Ring(&'static [u8; 10]),
     Labelled(&'static [u8; 10]),
 }
 
@@ -48,7 +45,7 @@ pub(crate) fn shared_secret(
     let [eph0, eph1] = pack_be(ephemeral.as_bytes());
     let [aud0, aud1] = pack_be(auditor.as_bytes());
     Ok(Zeroizing::new(Poseidon::hashv(&[
-        &right_align(&DOM_SEP_CR_SHARED.to_be_bytes()),
+        &domain::field(domain::AUDIT_SHARED_SECRET),
         &dh0,
         &dh1,
         &eph0,
@@ -65,8 +62,7 @@ pub(crate) fn seal_stream(
     schedule: StreamSchedule,
     data: &mut [u8],
 ) -> Result<()> {
-    let secret = shared_secret(&*ephemeral.ecdh(auditor)?, &ephemeral.pubkey(), auditor)?;
-    apply_stream(&secret, schedule, data)
+    apply_stream(&*sealing_secret(ephemeral, auditor)?, schedule, data)
 }
 
 pub(crate) fn open_stream(
@@ -75,14 +71,50 @@ pub(crate) fn open_stream(
     schedule: StreamSchedule,
     data: &mut [u8],
 ) -> Result<()> {
-    let secret = shared_secret(&*auditor.ecdh(ephemeral)?, ephemeral, &auditor.pubkey())?;
-    apply_stream(&secret, schedule, data)
+    apply_stream(&*opening_secret(auditor, ephemeral)?, schedule, data)
+}
+
+pub(crate) fn sealing_ring_stream(
+    ephemeral: &X25519Keypair,
+    auditor: &X25519Pubkey,
+    label: &[u8; 10],
+) -> Result<RingStream> {
+    Ok(RingStream::new(
+        &*sealing_secret(ephemeral, auditor)?,
+        label,
+    )?)
+}
+
+/// Reads each region of a sealed stream at its own counter.
+pub(crate) fn opening_ring_stream(
+    auditor: &X25519Keypair,
+    ephemeral: &X25519Pubkey,
+    label: &[u8; 10],
+) -> Result<RingStream> {
+    Ok(RingStream::new(
+        &*opening_secret(auditor, ephemeral)?,
+        label,
+    )?)
+}
+
+fn sealing_secret(
+    ephemeral: &X25519Keypair,
+    auditor: &X25519Pubkey,
+) -> Result<Zeroizing<[u8; 32]>> {
+    shared_secret(&*ephemeral.ecdh(auditor)?, &ephemeral.pubkey(), auditor)
+}
+
+fn opening_secret(
+    auditor: &X25519Keypair,
+    ephemeral: &X25519Pubkey,
+) -> Result<Zeroizing<[u8; 32]>> {
+    shared_secret(&*auditor.ecdh(ephemeral)?, ephemeral, &auditor.pubkey())
 }
 
 fn apply_stream(secret: &[u8; 32], schedule: StreamSchedule, data: &mut [u8]) -> Result<()> {
     match schedule {
-        StreamSchedule::Audit => symmetric_apply_audit(secret, AUDIT_STREAM_INFO, data)?,
-        StreamSchedule::Labelled(info) => symmetric_apply(secret, info, data)?,
+        StreamSchedule::Ring(label) => symmetric_apply_audit(secret, label, data)?,
+        StreamSchedule::Labelled(label) => symmetric_apply(secret, label, data)?,
     }
     Ok(())
 }
@@ -97,7 +129,7 @@ pub struct NullifierKeyEnvelope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SealedNullifierKey {
     pub eph_pk: X25519Pubkey,
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 impl NullifierKeyEnvelope {
@@ -114,7 +146,7 @@ impl NullifierKeyEnvelope {
         seal_stream(
             &ephemeral,
             auditor_pk,
-            StreamSchedule::Labelled(NF_KEY_ENC_INFO),
+            StreamSchedule::Ring(REGISTER_KEY_LABEL),
             &mut *ciphertext,
         )?;
         Ok(Self {
@@ -135,7 +167,7 @@ impl SealedNullifierKey {
         open_stream(
             auditor,
             &self.eph_pk,
-            StreamSchedule::Labelled(NF_KEY_ENC_INFO),
+            StreamSchedule::Ring(REGISTER_KEY_LABEL),
             &mut *plaintext,
         )?;
         let [pad, secret @ ..] = &*plaintext;
@@ -162,7 +194,10 @@ pub struct DepositEncryption {
 }
 
 const DEPOSIT_STREAM_LEN: usize = RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN * MAX_RING_DEPOSIT_AUDIT_SLOTS;
-const DEPOSIT_SCHEDULE: StreamSchedule = StreamSchedule::Labelled(RING_DEPOSIT_AUDIT_INFO);
+const DEPOSIT_SCHEDULE: StreamSchedule = StreamSchedule::Ring(DEPOSIT_AUDIT_LABEL);
+/// AES blocks per slot, slot i starts at `2 + 6i`.
+const DEPOSIT_SLOT_BLOCKS: u32 = (RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN / STREAM_BLOCK_LEN) as u32;
+const _: () = assert!(RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 
 /// Seals deposit openings to the ring's pinned auditor key.
 pub fn seal_deposits(
@@ -209,31 +244,29 @@ pub fn open_deposit(
     if slot >= MAX_RING_DEPOSIT_AUDIT_SLOTS {
         return Err(AuditError::DepositSlot(slot));
     }
-    let mut plaintext = Zeroizing::new([0u8; DEPOSIT_STREAM_LEN]);
-    let offset = slot * RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN;
-    let opened = offset..offset + RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN;
-    plaintext[opened.clone()].copy_from_slice(capsule.ciphertext);
-    open_stream(
+    let mut plaintext = Zeroizing::new([0u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN]);
+    plaintext.copy_from_slice(capsule.ciphertext);
+    opening_ring_stream(
         auditor,
         &X25519Pubkey::from_bytes(*capsule.eph_pk)?,
-        DEPOSIT_SCHEDULE,
+        DEPOSIT_AUDIT_LABEL,
+    )?
+    .apply_at(
+        STREAM_FIRST_COUNTER + slot as u32 * DEPOSIT_SLOT_BLOCKS,
         &mut *plaintext,
-    )?;
+    );
     let mut opening = DepositOpening {
         owner_hash: [0; 32],
         blinding: Zeroizing::new([0; 32]),
         owner_key: [0; 32],
     };
-    let key_offset = offset + RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET;
-    opening
-        .owner_hash
-        .copy_from_slice(&plaintext[offset..offset + 32]);
+    opening.owner_hash.copy_from_slice(&plaintext[..32]);
     opening
         .blinding
-        .copy_from_slice(&plaintext[offset + 32..key_offset]);
+        .copy_from_slice(&plaintext[32..RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET]);
     opening
         .owner_key
-        .copy_from_slice(&plaintext[key_offset..opened.end]);
+        .copy_from_slice(&plaintext[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET..]);
     if Poseidon::hashv(&[&opening.owner_hash, opening.blinding.as_slice()])? != *owner_utxo_hash {
         return Err(AuditError::DepositOpeningMismatch);
     }
@@ -338,8 +371,8 @@ mod tests {
     const NULLIFIER_SECRET: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const NULLIFIER_PK: &str = "2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5";
     const EPH_PK: &str = "043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63";
-    const CIPHERTEXT: &str = "2c2a1650e3a2a0d012a0d438341ff610ad99bd3c1cde0dd169179174880e755d";
-    const KEY_HASH: &str = "1c73c14786dd7354525c98368bca8dbc5f836e957c45f552f377c84e266546c4";
+    const CIPHERTEXT: &str = "44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba";
+    const KEY_HASH: &str = "218eb37ea6d2bc62b2f9231a6ed3eca5ba4225f0844ff06ac3bd7ad2b04adf40";
 
     #[test]
     fn the_sealed_key_and_its_escrow_key_match_the_pinned_vector() {
@@ -399,8 +432,8 @@ mod tests {
             hex::encode(sealed.ephemeral_pk.as_bytes()),
             "040faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20"
         );
-        assert_eq!(hex::encode(sealed.ciphertexts[0]), "006d5d4d188464de0e852c806b11ef3850cd683b977fea9bd1b9278b6461669f631350fa47a91f10cceb37738a4fefe7f88ded2f36b08fa08cb0ebba0268414424ab3ee9887da5fa32d2074fbd7155bc72723a28dacb3fd92f045649bba3cdf6");
-        assert_eq!(hex::encode(sealed.ciphertexts[1]), "588ca73e11d9094a68cc5e7c26aadac08f1bc0f41c3580bf9ddc70518b26a826aaeab0368c456598c7641706ce6de7dcdbafa8c64f3eba9526b5012da75c1a4c4fb93b88049bc84e8589460c06610c931447f57d2d4a9955f6ec638727886729");
+        assert_eq!(hex::encode(sealed.ciphertexts[0]), "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c");
+        assert_eq!(hex::encode(sealed.ciphertexts[1]), "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b");
         let context_hash = custom_ring_interface::DepositContext {
             program_id: &[0x33; 32],
             tree: &[0x44; 32],
@@ -438,7 +471,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             hex::encode(public_hash),
-            "29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078"
+            "0da1732e6a3d2bb9db9e4fdb3a4d4979aa74be80e96a5f1916016e9b58167d04"
         );
     }
 

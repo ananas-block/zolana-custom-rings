@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     cosign::CoSignDemand, key_catalog::RingCircuit, merge_disclosure_field_count,
     CustomRingMergeIxData, MergeDisclosure, MergePublicInput, RingMode, RootRead,
-    AUDIT_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
+    MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -318,7 +318,7 @@ impl RingMergeOperation {
         let disclosure = MergeDisclosure {
             proof: bytemuck::Zeroable::zeroed(),
             eph_pk: [0; TAGGED_X25519_KEY_LEN],
-            ciphertext: [0; AUDIT_CIPHERTEXT_LEN],
+            ciphertext: [0; MERGE_KEY_CIPHERTEXT_LEN],
             fields: vec![[0; 32]; merge_disclosure_field_count(merge.merge_width()?)],
         };
         CustomRingMergeInstruction {

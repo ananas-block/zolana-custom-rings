@@ -7,7 +7,7 @@ use spr_hasher::{
 };
 use zolana_ring_policy::{ListId, MintPolicy};
 
-use crate::{domain, error::CustomRingError, AUDIT_CIPHERTEXT_LEN};
+use crate::{domain, error::CustomRingError, REGISTER_KEY_CIPHERTEXT_LEN};
 
 pub const QUAD_ARITY: usize = 4;
 pub const QUAD_HEIGHT: usize = 10;
@@ -42,7 +42,7 @@ pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscrowKey<'a> {
     pub nullifier_pk: &'a [u8; 32],
-    pub ciphertext: &'a [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: &'a [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 impl EscrowKey<'_> {
@@ -142,7 +142,7 @@ mod tests {
     fn an_escrow_entry_sets_the_escrow_bit_and_the_key() {
         let key = EscrowKey {
             nullifier_pk: &member(4),
-            ciphertext: &[5; AUDIT_CIPHERTEXT_LEN],
+            ciphertext: &[5; REGISTER_KEY_CIPHERTEXT_LEN],
         };
         let entry = QueueEntry::escrow(member(3), &key).unwrap();
         let bit = ListId::Escrow.record_bit();

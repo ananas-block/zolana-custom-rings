@@ -25,8 +25,8 @@ pub mod transfer;
 use custom_ring_interface::{
     encode_ring_confidential_delivered_output,
     storage_instruction::{EscrowWriteData, StorageWriteData},
-    tagged_x25519, QueueEntry, RingMode, DELIVERED_AUDIT_CAPACITIES,
-    RING_TRANSACT_ACCOUNT_PREFIX_LEN,
+    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, QueueEntry, RingMode,
+    DELIVERED_AUDIT_CAPACITIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
@@ -52,7 +52,7 @@ use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::ViewingKey;
 use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
-    auditor_view_tag, ring_event_origin_in,
+    auditor_view_tag, commitment_evidence, ring_event_origin_in,
     rpc::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError, DecryptedSender,
@@ -66,9 +66,8 @@ use zolana_ring_client::{
         AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
         GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
     },
-    seal_deposits, AnonymousInputs, AuditDisclosure, AuditError, ConfirmedDeposit, DepositOpening,
-    MergeAuditPage, MergeAuditResult, OutputPayloadErrorKind, ReaderKey, RingOrigin,
-    RingWithdrawal,
+    seal_deposits, AuditError, ConfirmedDeposit, DepositOpening, MergeAuditPage, MergeAuditResult,
+    OutputPayloadErrorKind, ReaderKey, RingOrigin, RingWithdrawal,
 };
 use zolana_ring_client::{P256ReaderKey, RingIndexerError, StorageTip};
 use zolana_ring_indexer::rpc::{
@@ -82,10 +81,11 @@ use zolana_ring_rpc::{
     RingConfiguration, RingHistoryPage, RingRpcError, RootSecret, ServiceIdentity, Store,
     TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
-use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
+use zolana_ring_transaction::{seal_delivered_body, RingAssets};
 
 use transfer::{
-    field, input_opening, x25519_u, Frame, Output, Placement, Publish, Rail, Transfer, UtxoFields,
+    field, input_opening, x25519_u, Disclosure, Frame, Output, Placement, Publish, Rail, Transfer,
+    UtxoFields,
 };
 
 /// Raw id of the tree these fixtures publish into. A slot names the id, not the
@@ -794,18 +794,26 @@ impl Indexed<'_> {
         let disclosure = self
             .transfer
             .disclosure(Rail::Delivered, &outputs, key_escrow);
-        self.publish(Rail::Delivered, &outputs, &disclosure)
+        let rail = match key_escrow {
+            true => Rail::Escrowed,
+            false => Rail::Delivered,
+        };
+        self.publish(rail, &outputs, &disclosure)
     }
 
     /// The entry key's disclosure, the first spent UTXO's owner the sender.
     fn anonymous(self, spent: &[Option<Spend>]) -> ShieldedTransaction {
         let sender = spent.iter().flatten().next().expect("a spent UTXO").utxo;
-        let inputs = AnonymousInputs::Openings {
+        let inputs = AuditEvidence::Entry {
             sender_key: sender.owner_key,
             sender_nullifier_pk: sender.nullifier_pk,
             inputs: spent
                 .iter()
-                .map(|spend| spend.map(|spend| input_opening(&spend.utxo, spend.blinding)))
+                .map(|spend| {
+                    spend.map_or_else(EntryInput::default, |spend| {
+                        input_opening(&spend.utxo, spend.blinding)
+                    })
+                })
                 .collect(),
         };
         self.anonymous_with(inputs)
@@ -813,10 +821,10 @@ impl Indexed<'_> {
 
     /// The commitment key's disclosure, spent UTXO 0 named by its hash and every later one by its prefix.
     fn anonymous_commitments(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
-        self.anonymous_with(AnonymousInputs::commitments(spent).expect("spent UTXO 0"))
+        self.anonymous_with(commitment_evidence(spent).expect("spent UTXO 0"))
     }
 
-    fn anonymous_with(self, inputs: AnonymousInputs) -> ShieldedTransaction {
+    fn anonymous_with(self, inputs: AuditEvidence) -> ShieldedTransaction {
         let disclosure = self.transfer.anonymous_disclosure(self.outputs, inputs);
         self.publish(Rail::Anonymous, self.outputs, &disclosure)
     }
@@ -825,7 +833,7 @@ impl Indexed<'_> {
         &self,
         rail: Rail,
         outputs: &[Output],
-        disclosure: &AuditDisclosure,
+        disclosure: &Disclosure,
     ) -> ShieldedTransaction {
         let mut transaction = self.transfer.publish(Publish {
             slots: self
@@ -841,7 +849,7 @@ impl Indexed<'_> {
         transaction.tx_signature = Signature::from([self.signature; 64]);
         let frame = self.transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout(),
+            layout: disclosure.layout,
         });
         self.frames
             .lock()

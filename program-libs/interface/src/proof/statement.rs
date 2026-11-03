@@ -3,16 +3,19 @@
 use spr_hasher::{
     hash_chain::{create_hash_chain_4, create_hash_chain_4_from_slice},
     primitives::{hash_bytes, pack_be, right_align},
-    HasherError,
+    Hasher, HasherError, Poseidon,
 };
 use spr_interface::N_PUBLIC_SLOTS;
 
 use crate::{
-    disclosure::AuditLayout, domain, tagged_x25519, transact::RingOutput, AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    audit_stream::{ANONYMOUS_RECORD_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN},
+    disclosure::{pack_disclosure, AuditLayout},
+    domain, tagged_x25519,
+    transact::{exits_bitmap, RingOutput},
+    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
-/// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout]`.
+/// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, envelope_digest, salt, layout]`.
 pub const AUDIT_HEAD_ELEMENTS: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +26,7 @@ pub struct AuditHead<'a> {
     pub tx_viewing_u: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_u: &'a [u8; 32],
-    pub sealed: &'a [u8; AUDIT_CIPHERTEXT_LEN],
+    pub envelope: &'a [u8],
     pub salt: &'a [u8; 16],
     pub layout: AuditLayout,
 }
@@ -46,7 +49,7 @@ impl AuditHead<'_> {
             aud1,
             eph0,
             eph1,
-            hash_bytes(self.sealed)?,
+            ciphertext_digest(self.envelope)?,
             right_align(self.salt),
             right_align(&[self.layout.value()]),
         ])
@@ -57,12 +60,36 @@ fn output_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
     create_hash_chain_4(outputs.iter().map(RingOutput::hash))
 }
 
-fn body_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
-    let mut bodies = Vec::with_capacity(outputs.len());
+/// `Poseidon(u32 len(ct), HashChain4(pack_left31(ct)))`, without the tag trailing zeros collide.
+pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
+    let chain = create_hash_chain_4_from_slice(&pack_disclosure(ciphertext))?;
+    Poseidon::hashv(&[
+        &right_align(&(ciphertext.len() as u32).to_be_bytes()),
+        &chain,
+    ])
+}
+
+/// `HashChain4(hash_bytes(ct_i))`, untagged since the layout fixes every slot's length.
+pub fn output_ciphertext_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
+    let mut hashes = Vec::with_capacity(outputs.len());
     for output in outputs {
-        bodies.push(output.body_hash()?);
+        hashes.push(slot_ciphertext_hash(output.ciphertext())?);
     }
-    create_hash_chain_4_from_slice(&bodies)
+    create_hash_chain_4_from_slice(&hashes)
+}
+
+/// `hash_bytes` at the three lengths a slot ciphertext has, any other is refused.
+pub fn slot_ciphertext_hash(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
+    fn fixed<const N: usize>(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
+        let exact = <&[u8; N]>::try_from(ciphertext)
+            .map_err(|_| HasherError::InvalidInputLength(N, ciphertext.len()))?;
+        hash_bytes(exact)
+    }
+    match ciphertext.len() {
+        ESCROWED_EXIT_RECORD_LEN => fixed::<ESCROWED_EXIT_RECORD_LEN>(ciphertext),
+        EXIT_RECORD_LEN => fixed::<EXIT_RECORD_LEN>(ciphertext),
+        _ => fixed::<ANONYMOUS_RECORD_LEN>(ciphertext),
+    }
 }
 
 fn recipient_key_chain(outputs: &[RingOutput<'_>]) -> Result<[u8; 32], HasherError> {
@@ -100,7 +127,8 @@ pub struct TransferStatement<'a> {
     pub exempt: bool,
     pub approval_required: bool,
     pub outputs: &'a [RingOutput<'a>],
-    pub disclosure: &'a [[u8; 32]],
+    /// `n`, the frame's nullifier count.
+    pub input_count: usize,
     pub private_tx_hash: &'a [u8; 32],
     /// Zero on an audit-only ring.
     pub policy_hash: &'a [u8; 32],
@@ -117,13 +145,13 @@ pub struct TransferStatement<'a> {
 }
 
 impl TransferStatement<'_> {
-    /// `elements().len()`, fixed by the family and the output count.
+    /// `elements().len()`, 38 + n_out on the confidential family and 37 on the anonymous family.
     pub fn element_count(&self) -> usize {
         let family = match self.family {
-            TransferFamily::Confidential { recipients, .. } => 5 + recipients.len(),
+            TransferFamily::Confidential { recipients, .. } => 4 + recipients.len(),
             TransferFamily::Anonymous { .. } => 3,
         };
-        AUDIT_HEAD_ELEMENTS + 3 + 2 + family + 3 + 3 * N_PUBLIC_SLOTS + 1 + 2
+        AUDIT_HEAD_ELEMENTS + 3 + 1 + 3 + family + 3 + 3 * N_PUBLIC_SLOTS + 1 + 2
     }
 
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
@@ -139,15 +167,14 @@ impl TransferStatement<'_> {
             bit(self.exempt),
             bit(self.approval_required),
             output_chain(self.outputs)?,
+            output_ciphertext_chain(self.outputs)?,
         ]);
         if matches!(self.family, TransferFamily::Confidential { .. }) {
-            elements.extend([
-                body_chain(self.outputs)?,
-                recipient_key_chain(self.outputs)?,
-            ]);
+            elements.push(recipient_key_chain(self.outputs)?);
         }
         elements.extend([
-            create_hash_chain_4_from_slice(self.disclosure)?,
+            right_align(&(self.input_count as u64).to_be_bytes()),
+            right_align(&exits_bitmap(self.outputs).to_be_bytes()),
             *self.private_tx_hash,
         ]);
         match self.family {
@@ -219,7 +246,7 @@ pub struct RegisterKeyStatement<'a> {
     pub nullifier_pk: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_u: &'a [u8; 32],
-    pub ciphertext: &'a [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: &'a [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 impl RegisterKeyStatement<'_> {

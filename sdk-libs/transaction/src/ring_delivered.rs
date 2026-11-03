@@ -1,49 +1,41 @@
-//! Delivered ring output bodies of scheme 10, `be32(blinding) ‖ u64be(amount)` under the
-//! audit stream of a CRDS slot secret, mirrored by Go `prover/circuits/audit`.
+//! Delivered ring output bodies of scheme 10 under the stream of a CRDS slot secret, mirrored by
+//! Go `prover/circuits/audit`.
 
-use custom_ring_interface::{stream::SlotSecret, AUDIT_STREAM_INFO, RING_DELIVERED_BODY_LEN};
+use custom_ring_interface::{
+    domain::DELIVERED_BODY_LABEL, stream::SlotSecret, DeliveredBody, ESCROWED_DELIVERED_BODY_LEN,
+};
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::{Blinding, Data, Mint, Utxo};
+use spr_transaction::{Data, Mint, Utxo};
+use zeroize::Zeroizing;
 use zolana_ring_keys::symmetric_apply_audit;
 
 use crate::{RingAssets, RingRailError};
 
-/// The opening a delivered body carries, the commitment picks its asset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RingDeliveredBody {
-    pub blinding: Blinding,
-    pub amount: u64,
+/// One slot secret keys one body, the secret binds the slot and the first nullifier.
+pub fn seal_delivered_body(
+    body: &DeliveredBody,
+    slot_secret: &SlotSecret,
+) -> Result<Vec<u8>, RingRailError> {
+    let mut ciphertext = body.encode();
+    symmetric_apply_audit(
+        slot_secret.as_bytes(),
+        DELIVERED_BODY_LABEL,
+        &mut ciphertext,
+    )?;
+    Ok(ciphertext)
 }
 
-impl RingDeliveredBody {
-    /// One slot secret keys one body, the secret binds the slot and the first nullifier.
-    pub fn seal(
-        &self,
-        slot_secret: &SlotSecret,
-    ) -> Result<[u8; RING_DELIVERED_BODY_LEN], RingRailError> {
-        let mut body = [0u8; RING_DELIVERED_BODY_LEN];
-        let (blinding, amount) = body.split_at_mut(32);
-        blinding.copy_from_slice(&self.blinding);
-        amount.copy_from_slice(&self.amount.to_be_bytes());
-        symmetric_apply_audit(slot_secret.as_bytes(), AUDIT_STREAM_INFO, &mut body)?;
-        Ok(body)
-    }
-
-    /// The cipher is unauthenticated, only the rebuilt commitment tells a body of another key.
-    pub fn open(
-        body: &[u8; RING_DELIVERED_BODY_LEN],
-        slot_secret: &SlotSecret,
-    ) -> Result<Self, RingRailError> {
-        let mut plaintext = *body;
-        symmetric_apply_audit(slot_secret.as_bytes(), AUDIT_STREAM_INFO, &mut plaintext)?;
-        let (blinding, amount) = plaintext.split_at(32);
-        Ok(Self {
-            blinding: core::array::from_fn(|i| blinding[i]),
-            amount: u64::from_be_bytes(core::array::from_fn(|i| amount[i])),
-        })
-    }
+/// The cipher is unauthenticated, the caller compares the opened keys and rebuilds the commitment.
+pub fn open_delivered_body(
+    ciphertext: &[u8],
+    slot_secret: &SlotSecret,
+) -> Result<DeliveredBody, RingRailError> {
+    let mut plaintext = Zeroizing::new(ciphertext.to_vec());
+    symmetric_apply_audit(slot_secret.as_bytes(), DELIVERED_BODY_LABEL, &mut plaintext)?;
+    let key_escrow = plaintext.len() == ESCROWED_DELIVERED_BODY_LEN;
+    Ok(DeliveredBody::decode(&plaintext, key_escrow)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +48,7 @@ pub struct RingUtxoOwner<'a> {
 #[derive(Clone, Copy)]
 pub struct RingDeliveryOpening<'a> {
     pub ring: Address,
-    pub body: &'a [u8; RING_DELIVERED_BODY_LEN],
+    pub body: &'a [u8],
     pub slot_secret: &'a SlotSecret,
     pub owner: RingUtxoOwner<'a>,
     /// The published commitment and the tree it was appended to.
@@ -70,7 +62,7 @@ pub struct RingDeliveredNote {
     pub owner: PublicKey,
     pub nullifier_pubkey: [u8; 32],
     pub ring: Address,
-    pub body: RingDeliveredBody,
+    pub body: DeliveredBody,
     pub utxo_hash: [u8; 32],
     pub tree_id: u16,
 }
@@ -83,10 +75,15 @@ pub struct RingDelivered {
 }
 
 impl RingDeliveryOpening<'_> {
-    /// `None` for a blinding outside the field or a zero amount in no held asset.
+    /// `None` for keys other than the owner's, a blinding outside the field or a zero amount in no
+    /// held asset, a commitment rebuilt under a sender's choice of keys proves no ownership.
     pub fn open(self, assets: &RingAssets) -> Result<Option<RingDelivered>, RingRailError> {
-        let body = RingDeliveredBody::open(self.body, self.slot_secret)?;
-        if !is_canonical_bn254_scalar_be(&body.blinding) {
+        let body = open_delivered_body(self.body, self.slot_secret)?;
+        let foreign = body.owner_key != self.owner.signing_pubkey.confidential_view_tag()?
+            || body
+                .nullifier_pk
+                .is_some_and(|nullifier_pk| nullifier_pk != *self.owner.nullifier_pubkey);
+        if foreign || !is_canonical_bn254_scalar_be(&body.blinding) {
             return Ok(None);
         }
         let note = RingDeliveredNote {

@@ -1,16 +1,17 @@
 //! Ring transfers as the ring program publishes them, under the keys of the Go `ringaudit` fixture.
 
 use custom_ring_interface::{
-    anonymous_recipient_output_body, anonymous_sender_output_body, encode_anonymous_sender_output,
-    ring_confidential_delivered_output_body,
+    anonymous_recipient_output_body, anonymous_sender_output_body, delivered_body_len,
+    encode_anonymous_sender_output, ring_confidential_delivered_output_body,
 };
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
+    key_catalog::{TransferShape, CONFIDENTIAL_TRANSFER_SHAPES},
     stream::{DeliveredSlot, SlotSecret},
-    tag as ring_tag, tagged_x25519, AnonymousAuditKey, AnonymousLayout, AnonymousProofData,
-    AnonymousSpend, AuditorMessage, CustomRingProof, DeliveredLayout, DisclosureLayout, InputTrees,
-    PlainGroth16Proof, RingOutput, RingRail, RingTransactData, SenderBundle,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN, RING_DELIVERED_BODY_LEN,
+    tag as ring_tag, tagged_x25519, AnonymousAuditKey, AnonymousProofData, AnonymousRecord,
+    AnonymousSpend, AuditEvidence, AuditKey, AuditStreamLayout, AuditorMessage, CustomRingProof,
+    DeliveredBody, EntryInput, ExitRecord, InProofOwner, InputTrees, PlainGroth16Proof, RingOutput,
+    RingRail, RingTransactData, SenderBundle, CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -35,11 +36,10 @@ use spr_transaction::{
     OutputContext, OutputSlot, ShieldedTransaction,
 };
 use zolana_ring_client::{
-    AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-    AuditDisclosure, AuditEnvelope, AuditedUtxo, DeliveredOutputOpening, DisclosurePad, KnownUtxo,
-    OutputOpening, RingOwnerTag, UtxoOwner,
+    AuditStreamSeal, AuditedUtxo, KnownUtxo, OutputOpening, OutputRecord, RingOwnerTag,
+    SealedAuditStream, UtxoOwner,
 };
-use zolana_ring_transaction::RingDeliveredBody;
+use zolana_ring_transaction::seal_delivered_body;
 
 /// Byte `i` is `seed ^ i` under a `0x01` lead byte, the Go `ringaudit.Scalar`.
 pub fn scalar(seed: u8) -> [u8; 32] {
@@ -129,7 +129,17 @@ pub enum Output {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rail {
     Delivered,
+    /// A delivered transfer under key escrow, its bodies leave out the nullifier key.
+    Escrowed,
     Anonymous,
+}
+
+/// The auditor stream's plaintext of one transfer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Disclosure {
+    pub layout: AuditStreamLayout,
+    pub evidence: AuditEvidence,
+    pub records: Vec<OutputRecord>,
 }
 
 pub struct Slot {
@@ -138,7 +148,7 @@ pub struct Slot {
     pub ring_data_hash: [u8; 32],
     pub blinding: [u8; 32],
     /// The delivered body, an anonymous body is unproven and never opened.
-    pub body: Option<[u8; RING_DELIVERED_BODY_LEN]>,
+    pub body: Option<Vec<u8>>,
 }
 
 /// Bytes as long as a scheme 1 body with no data.
@@ -157,13 +167,18 @@ pub struct Transfer {
 
 pub struct Publish<'a> {
     pub slots: Vec<OutputSlot>,
-    pub disclosure: &'a AuditDisclosure,
+    pub disclosure: &'a Disclosure,
     pub auditor: &'a X25519Pubkey,
 }
 
 pub struct Frame<'a> {
     pub tx: &'a ShieldedTransaction,
-    pub layout: DisclosureLayout,
+    pub layout: AuditStreamLayout,
+}
+
+/// The ephemeral key every fixture seals under, the vectors pin its stream.
+pub fn ephemeral() -> X25519Keypair {
+    X25519Keypair::from_bytes(&scalar(0x22))
 }
 
 impl Transfer {
@@ -226,13 +241,17 @@ impl Transfer {
                 });
                 let tag = tag.unwrap_or_default();
                 let (published, secret, body) = match rail {
-                    Rail::Delivered => {
+                    Rail::Delivered | Rail::Escrowed => {
                         let secret = self.delivered_secret(&recipient_u, index);
-                        let body = RingDeliveredBody {
-                            blinding,
-                            amount: utxo.amount,
-                        }
-                        .seal(&secret)
+                        let body = seal_delivered_body(
+                            &DeliveredBody {
+                                blinding,
+                                amount: utxo.amount,
+                                owner_key: utxo.owner_key,
+                                nullifier_pk: (rail != Rail::Escrowed).then_some(utxo.nullifier_pk),
+                            },
+                            &secret,
+                        )
                         .unwrap();
                         (
                             indexed(
@@ -254,6 +273,7 @@ impl Transfer {
                                 hash: &hash,
                                 tag: &tag,
                                 body: Some(&ANONYMOUS_BODY),
+                                record: &[],
                             },
                             self.tree_id,
                             leaf_index,
@@ -281,6 +301,7 @@ impl Transfer {
                     hash: &hash,
                     owner_tag: &utxo.owner_key,
                     payload: &[0xe0; CONFIDENTIAL_DATA_FREE_BODY_LEN],
+                    record: &[],
                 };
                 Slot {
                     output: indexed(published, self.tree_id, leaf_index),
@@ -303,21 +324,24 @@ impl Transfer {
                 // A dummy publishes random bytes in its rail's encoding.
                 let u = [0xd1 + index as u8; 32];
                 let tag = field(0xd1 + index as u8);
-                let body = core::array::from_fn(|j| 0xd0 + j as u8);
+                let body: Vec<u8> = (0..delivered_body_len(rail == Rail::Escrowed))
+                    .map(|j| 0xd0u8.wrapping_add(j as u8))
+                    .collect();
                 let (published, body) = match rail {
-                    Rail::Delivered => (
+                    Rail::Delivered | Rail::Escrowed => (
                         RingOutput::Delivered {
                             hash: &hash,
                             u: &u,
                             body: &body,
                         },
-                        Some(body),
+                        Some(body.clone()),
                     ),
                     Rail::Anonymous => (
                         RingOutput::Anonymous {
                             hash: &hash,
                             tag: &tag,
                             body: Some(&ANONYMOUS_BODY),
+                            record: &[],
                         },
                         None,
                     ),
@@ -340,16 +364,21 @@ impl Transfer {
             .collect()
     }
 
-    /// The indexed transaction, the disclosure masked under a fresh envelope to the auditor.
+    /// The stream of `disclosure` under the fixture's ephemeral key.
+    pub fn seal(&self, disclosure: &Disclosure, auditor: &X25519Pubkey) -> SealedAuditStream {
+        AuditStreamSeal {
+            layout: disclosure.layout,
+            tx_viewing_key: &self.tx_key,
+            evidence: disclosure.evidence.clone(),
+            records: disclosure.records.clone(),
+        }
+        .seal_with(ephemeral(), auditor)
+        .unwrap()
+    }
+
+    /// The indexed transaction, its auditor stream sealed to `publish.auditor`.
     pub fn publish(&self, publish: Publish<'_>) -> ShieldedTransaction {
-        let plaintext = publish.disclosure.fields().unwrap();
-        let disclosure = DisclosurePad::new(&self.tx_key, &self.salt)
-            .unwrap()
-            .encrypt(&plaintext)
-            .unwrap();
-        let envelope = AuditEnvelope::seal(&self.tx_key, publish.auditor)
-            .unwrap()
-            .envelope;
+        let sealed = self.seal(publish.disclosure, publish.auditor);
         ShieldedTransaction {
             slot: 1,
             tx_signature: Signature::default(),
@@ -357,7 +386,7 @@ impl Transfer {
             tx_viewing_pk: Some(self.tx_key.pubkey()),
             salt: Some(self.salt),
             output_slots: publish.slots,
-            messages: matches!(publish.disclosure, AuditDisclosure::Anonymous(_))
+            messages: matches!(publish.disclosure.layout.key, AuditKey::Anonymous(_))
                 .then(|| MessageData {
                     view_tag: SENDER_TAG,
                     data: encode_anonymous_sender_output(&SENDER_BUNDLE).unwrap(),
@@ -365,7 +394,11 @@ impl Transfer {
                 .into_iter()
                 .chain([MessageData {
                     view_tag: publish.auditor.u(),
-                    data: AuditorMessage::data(&envelope.eph_u, &envelope.sealed, &disclosure),
+                    data: AuditorMessage::data(
+                        &sealed.eph_u,
+                        core::iter::once(sealed.envelope.as_slice())
+                            .chain(sealed.records.iter().map(Vec::as_slice)),
+                    ),
                 }])
                 .collect(),
             nullifiers: self.nullifiers.clone(),
@@ -376,105 +409,138 @@ impl Transfer {
     }
 }
 
+fn exit_bits(outputs: &[Output]) -> u64 {
+    outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, output)| matches!(output, Output::Exit(_)))
+        .fold(0, |bits, (slot, _)| bits | 1 << slot)
+}
+
 impl Transfer {
-    fn published_seed_out(&self, outputs: &[Output]) -> Option<[u8; 32]> {
-        outputs
-            .iter()
-            .any(|output| matches!(output, Output::Exit(_)))
-            .then(|| self.seed_out())
+    /// The delivered disclosure of the signer rail, no input named.
+    pub fn disclosure(&self, rail: Rail, outputs: &[Output], key_escrow: bool) -> Disclosure {
+        assert_ne!(
+            rail,
+            Rail::Anonymous,
+            "an anonymous disclosure names its spent notes"
+        );
+        let class = TransferShape::of(&CONFIDENTIAL_TRANSFER_SHAPES, outputs.len())
+            .expect("a confidential key serves the output count")
+            .inputs;
+        self.delivered_disclosure(DeliveredEvidence {
+            outputs,
+            key_escrow,
+            key: AuditKey::Confidential {
+                class: usize::from(class),
+                input_prefixes: false,
+            },
+            evidence: AuditEvidence::None,
+        })
     }
 
-    pub fn disclosure(&self, rail: Rail, outputs: &[Output], key_escrow: bool) -> AuditDisclosure {
-        let seed_out = self.published_seed_out(outputs);
-        let exits = seed_out.is_some();
-        let escrowed = |nullifier_pk: Option<[u8; 32]>| nullifier_pk.filter(|_| !key_escrow);
-        match rail {
-            Rail::Delivered => AuditDisclosure::Delivered {
-                layout: DeliveredLayout {
-                    outputs: outputs.len(),
-                    exits,
-                    key_escrow,
-                },
-                seed_out,
-                outputs: outputs
-                    .iter()
-                    .map(|output| match delivered_opening(output) {
-                        DeliveredOutputOpening::Ring {
-                            owner_key,
-                            nullifier_pk,
-                        } => DeliveredOutputOpening::Ring {
-                            owner_key,
-                            nullifier_pk: escrowed(nullifier_pk),
-                        },
-                        DeliveredOutputOpening::Exit {
-                            nullifier_pk,
-                            asset,
-                            amount,
-                        } => DeliveredOutputOpening::Exit {
-                            nullifier_pk: escrowed(nullifier_pk),
-                            asset,
-                            amount,
-                        },
-                        DeliveredOutputOpening::Dummy => DeliveredOutputOpening::Dummy,
-                    })
-                    .collect(),
+    /// The in-proof rail's disclosure, each published input named by its prefix.
+    pub fn in_proof_disclosure(&self, outputs: &[Output], evidence: AuditEvidence) -> Disclosure {
+        let class = TransferShape::of(&CONFIDENTIAL_TRANSFER_SHAPES, outputs.len())
+            .expect("a confidential key serves the output count")
+            .inputs;
+        self.delivered_disclosure(DeliveredEvidence {
+            outputs,
+            key_escrow: false,
+            key: AuditKey::Confidential {
+                class: usize::from(class),
+                input_prefixes: true,
             },
-            Rail::Anonymous => panic!("an anonymous disclosure names its spent notes"),
+            evidence,
+        })
+    }
+
+    fn delivered_disclosure(&self, delivered: DeliveredEvidence<'_>) -> Disclosure {
+        let DeliveredEvidence {
+            outputs,
+            key_escrow,
+            key,
+            evidence,
+        } = delivered;
+        Disclosure {
+            layout: AuditStreamLayout {
+                key,
+                key_escrow,
+                inputs: self.nullifiers.len(),
+                outputs: outputs.len(),
+                exits: exit_bits(outputs),
+            },
+            evidence,
+            records: outputs
+                .iter()
+                .map(|output| match output {
+                    Output::Exit(utxo) => OutputRecord::Exit(ExitRecord {
+                        asset: utxo.asset(),
+                        amount: utxo.amount,
+                        nullifier_pk: (!key_escrow).then_some(utxo.nullifier_pk),
+                    }),
+                    Output::Ring { .. } | Output::Dummy => OutputRecord::Delivered,
+                })
+                .collect(),
         }
     }
 
-    /// The anonymous disclosure, the entry key when `inputs` open in full.
-    pub fn anonymous_disclosure(
-        &self,
-        outputs: &[Output],
-        inputs: AnonymousInputs,
-    ) -> AuditDisclosure {
-        let (count, spends_default_ring) = match &inputs {
-            AnonymousInputs::Commitments { prefixes, .. } => (prefixes.len() + 1, false),
-            AnonymousInputs::Openings { inputs, .. } => (inputs.len(), true),
+    /// The anonymous disclosure, the entry key when the evidence opens in full.
+    pub fn anonymous_disclosure(&self, outputs: &[Output], evidence: AuditEvidence) -> Disclosure {
+        let (count, spends_default_ring) = match &evidence {
+            AuditEvidence::Commitment { later_prefixes, .. } => (later_prefixes.len() + 1, false),
+            AuditEvidence::Entry { inputs, .. } => (inputs.len(), true),
+            AuditEvidence::None | AuditEvidence::InputPrefixes(_) => {
+                panic!("the anonymous keys carry their own evidence")
+            }
         };
-        let seed_out = self.published_seed_out(outputs);
-        AuditDisclosure::Anonymous(AnonymousDisclosure {
-            layout: AnonymousLayout {
-                key: AnonymousSpend {
-                    inputs: count,
-                    outputs: outputs.len(),
-                    spends_default_ring,
-                }
-                .audit_key()
-                .expect("an anonymous audit key serves the spend"),
+        let key = AnonymousSpend {
+            inputs: count,
+            outputs: outputs.len(),
+            spends_default_ring,
+        }
+        .audit_key()
+        .expect("an anonymous audit key serves the spend");
+        Disclosure {
+            layout: AuditStreamLayout {
+                key: AuditKey::Anonymous(key),
+                key_escrow: false,
                 inputs: count,
                 outputs: outputs.len(),
-                exits: seed_out.is_some(),
+                exits: exit_bits(outputs),
             },
-            seed_out,
-            outputs: outputs.iter().map(anonymous_opening).collect(),
-            inputs,
-        })
+            evidence,
+            records: outputs.iter().map(anonymous_record).collect(),
+        }
     }
+}
+
+struct DeliveredEvidence<'a> {
+    outputs: &'a [Output],
+    key_escrow: bool,
+    key: AuditKey,
+    evidence: AuditEvidence,
 }
 
 impl Transfer {
     /// `tag || RingTransactData` the ring program received for `frame.tx`, every proof zero.
     pub fn frame(&self, frame: Frame<'_>) -> Vec<u8> {
         let Frame { tx, layout } = frame;
-        let (rail, n_out, key_escrow, full_openings) = match layout {
-            DisclosureLayout::Delivered(delivered) => (
-                RingRail::Confidential,
-                delivered.outputs,
-                delivered.key_escrow,
-                false,
-            ),
-            DisclosureLayout::Anonymous(anonymous) => (
+        let (rail, in_proof, full_openings) = match layout.key {
+            AuditKey::Confidential { input_prefixes, .. } => {
+                (RingRail::Confidential, input_prefixes, false)
+            }
+            AuditKey::Anonymous(key) => (
                 RingRail::Anonymous,
-                anonymous.outputs,
                 false,
-                matches!(anonymous.key, AnonymousAuditKey::Entry { .. }),
+                matches!(key, AnonymousAuditKey::Entry { .. }),
             ),
         };
         let shape = SPP_SUPPORTED_SHAPES
             .into_iter()
-            .find(|shape| shape.n_inputs() >= tx.nullifiers.len() && shape.n_outputs() == n_out)
+            .find(|shape| {
+                shape.n_inputs() >= tx.nullifiers.len() && shape.n_outputs() == layout.outputs
+            })
             .unwrap();
         let message = AuditorMessage::parse(&tx.messages.last().unwrap().data, layout).unwrap();
         let eph_u = X25519Pubkey::from_bytes(*message.eph_pk).unwrap().u();
@@ -503,9 +569,14 @@ impl Transfer {
             tx_viewing_u: &tx_viewing_u,
             salt: &self.salt,
             interface_transfers: Vec::new(),
-            key_escrow,
+            key_escrow: layout.key_escrow,
             full_openings,
-            outputs: tx.output_slots.iter().map(wire).collect(),
+            outputs: tx
+                .output_slots
+                .iter()
+                .enumerate()
+                .map(|(slot, output)| wire(output, message.record(layout, slot).unwrap()))
+                .collect(),
             sender: (rail == RingRail::Anonymous).then(|| {
                 let message = tx.messages.first().unwrap();
                 SenderBundle {
@@ -514,15 +585,18 @@ impl Transfer {
                 }
             }),
             eph_u: &eph_u,
-            sealed: message.sealed,
-            disclosure: message.disclosure,
+            envelope: message.envelope,
             private_tx_hash: &zero,
             anonymous: (rail == RingRail::Anonymous).then_some(AnonymousProofData {
                 commitment: &zero,
                 commitment_pok: &zero,
                 default_owner_tag: None,
             }),
-            in_proof_owner: None,
+            in_proof_owner: in_proof.then_some(InProofOwner {
+                owner: &zero,
+                commitment: &zero,
+                commitment_pok: &zero,
+            }),
             spp_proof: &groth16,
             nullifiers: &tx.nullifiers,
             input_trees: InputTrees::One(TreeContext {
@@ -534,8 +608,8 @@ impl Transfer {
     }
 }
 
-/// The inverse of `RingOutput::transact_output`.
-fn wire(slot: &OutputSlot) -> RingOutput<'_> {
+/// The inverse of `RingOutput::transact_output`, the record from the auditor message.
+fn wire<'a>(slot: &'a OutputSlot, record: &'a [u8]) -> RingOutput<'a> {
     let hash = &slot.output_context.hash;
     let payload = &slot.payload;
     if let Some(payload) = confidential_encrypted_output_body(payload) {
@@ -543,6 +617,7 @@ fn wire(slot: &OutputSlot) -> RingOutput<'_> {
             hash,
             owner_tag: &slot.view_tag,
             payload,
+            record,
         };
     }
     if let Some(body) = ring_confidential_delivered_output_body(payload) {
@@ -556,38 +631,24 @@ fn wire(slot: &OutputSlot) -> RingOutput<'_> {
         hash,
         tag: &slot.view_tag,
         body: (!payload.is_empty()).then(|| anonymous_recipient_output_body(payload).unwrap()),
+        record,
     }
 }
 
-pub fn delivered_opening(output: &Output) -> DeliveredOutputOpening {
+pub fn anonymous_record(output: &Output) -> OutputRecord {
     match output {
-        Output::Ring { utxo, .. } => DeliveredOutputOpening::Ring {
+        Output::Ring { utxo, .. } => OutputRecord::Anonymous(AnonymousRecord {
             owner_key: utxo.owner_key,
-            nullifier_pk: Some(utxo.nullifier_pk),
-        },
-        Output::Exit(utxo) => DeliveredOutputOpening::Exit {
-            nullifier_pk: Some(utxo.nullifier_pk),
             asset: utxo.asset(),
             amount: utxo.amount,
-        },
-        Output::Dummy => DeliveredOutputOpening::Dummy,
-    }
-}
-
-pub fn anonymous_opening(output: &Output) -> AnonymousOutputOpening {
-    match output {
-        Output::Ring { utxo, .. } => AnonymousOutputOpening::Ring {
-            owner_key: utxo.owner_key,
             nullifier_pk: utxo.nullifier_pk,
+        }),
+        Output::Exit(utxo) => OutputRecord::Exit(ExitRecord {
             asset: utxo.asset(),
             amount: utxo.amount,
-        },
-        Output::Exit(utxo) => AnonymousOutputOpening::Exit {
-            nullifier_pk: utxo.nullifier_pk,
-            asset: utxo.asset(),
-            amount: utxo.amount,
-        },
-        Output::Dummy => AnonymousOutputOpening::Dummy,
+            nullifier_pk: Some(utxo.nullifier_pk),
+        }),
+        Output::Dummy => OutputRecord::Anonymous(AnonymousRecord::default()),
     }
 }
 
@@ -636,8 +697,8 @@ pub fn known_utxo(utxo: &UtxoFields, placement: Placement) -> KnownUtxo {
     }
 }
 
-pub fn input_opening(utxo: &UtxoFields, blinding: [u8; 32]) -> AnonymousInputOpening {
-    AnonymousInputOpening {
+pub fn input_opening(utxo: &UtxoFields, blinding: [u8; 32]) -> EntryInput {
+    EntryInput {
         asset: utxo.asset(),
         amount: utxo.amount,
         blinding,

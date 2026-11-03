@@ -206,17 +206,17 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         ring_program_id: Some(ring_program),
     };
 
-    // 6. Before the real spend, a flipped byte of the sealed transaction key fails the audit
+    // 6. Before the real spend, a flipped byte of the sealed transaction key fails the ring
     //    proof and leaves the tree unchanged.
     let instruction = proven.instruction()?;
     let tampered = {
         let original = frame(&instruction, RingRail::Confidential)?;
-        let mut sealed = *original.sealed;
-        sealed[0] ^= 1;
+        let mut envelope = original.envelope.to_vec();
+        envelope[0] ^= 1;
         reframed(
             &instruction,
             &RingTransactData {
-                sealed: &sealed,
+                envelope: &envelope,
                 ..original
             },
         )?

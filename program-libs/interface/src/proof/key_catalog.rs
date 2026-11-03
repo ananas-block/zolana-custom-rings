@@ -50,7 +50,7 @@ pub struct TransferShape {
 pub const CONFIDENTIAL_TRANSFER_SHAPES: [TransferShape; 4] = [
     TransferShape {
         outputs: 2,
-        inputs: 40,
+        inputs: 32,
         withdrawals: [4, 32],
     },
     TransferShape {
@@ -65,7 +65,7 @@ pub const CONFIDENTIAL_TRANSFER_SHAPES: [TransferShape; 4] = [
     },
     TransferShape {
         outputs: 16,
-        inputs: 8,
+        inputs: 5,
         withdrawals: [8, 0],
     },
 ];
@@ -322,7 +322,7 @@ mod tests {
             spend(RingRail::Confidential, 3, 2, false, 0),
             Some(RingCircuit::TransferConfidential {
                 outputs: 2,
-                inputs: 40,
+                inputs: 32,
                 withdrawals: 4
             })
         );
@@ -330,11 +330,20 @@ mod tests {
             spend(RingRail::Delegate, 2, 2, false, 5),
             Some(RingCircuit::TransferConfidential {
                 outputs: 2,
-                inputs: 40,
+                inputs: 32,
                 withdrawals: 32
             })
         );
-        assert_eq!(spend(RingRail::Confidential, 9, 16, false, 0), None);
+        assert_eq!(spend(RingRail::Confidential, 33, 2, false, 0), None);
+        assert_eq!(
+            spend(RingRail::Confidential, 5, 16, false, 8),
+            Some(RingCircuit::TransferConfidential {
+                outputs: 16,
+                inputs: 5,
+                withdrawals: 8
+            })
+        );
+        assert_eq!(spend(RingRail::Confidential, 6, 16, false, 0), None);
         assert_eq!(spend(RingRail::Confidential, 1, 16, false, 9), None);
         assert_eq!(spend(RingRail::Confidential, 0, 2, false, 0), None);
         assert_eq!(spend(RingRail::Confidential, 1, 2, true, 0), None);

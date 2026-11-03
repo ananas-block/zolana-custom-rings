@@ -4,7 +4,8 @@ use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
     CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData, MergeDisclosure,
     PolicyBindingIxData, PolicySourceIxData, RingRole, RingRoles, SetCoSignerRecordIxData,
-    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData, AUDIT_CIPHERTEXT_LEN,
+    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
+    MERGE_KEY_CIPHERTEXT_LEN,
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
@@ -566,7 +567,7 @@ fn zero_disclosure() -> MergeDisclosure {
     MergeDisclosure {
         proof: bytemuck::Zeroable::zeroed(),
         eph_pk: [0; 33],
-        ciphertext: [0; AUDIT_CIPHERTEXT_LEN],
+        ciphertext: [0; MERGE_KEY_CIPHERTEXT_LEN],
         fields: vec![[0; 32]],
     }
 }

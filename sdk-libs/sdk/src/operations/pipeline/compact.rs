@@ -3,8 +3,7 @@
 use custom_ring_interface::{
     storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SenderBundle, AUDIT_CIPHERTEXT_LEN, MAX_SPP_CPI_ACCOUNTS,
-    RING_DELIVERED_BODY_LEN,
+    RingTransactData, RootRead, SenderBundle, MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -20,17 +19,19 @@ pub(crate) enum OwnedOutput {
     Delivered {
         hash: [u8; 32],
         u: [u8; 32],
-        body: [u8; RING_DELIVERED_BODY_LEN],
+        body: Vec<u8>,
     },
     Anonymous {
         hash: [u8; 32],
         tag: [u8; 32],
         body: Option<Vec<u8>>,
+        record: Vec<u8>,
     },
     Exit {
         hash: [u8; 32],
         owner_tag: [u8; 32],
         payload: Vec<u8>,
+        record: Vec<u8>,
     },
 }
 
@@ -62,21 +63,29 @@ impl OwnedOutput {
             RingOutput::Delivered { hash, u, body } => Self::Delivered {
                 hash: *hash,
                 u: *u,
-                body: *body,
+                body: body.to_vec(),
             },
-            RingOutput::Anonymous { hash, tag, body } => Self::Anonymous {
+            RingOutput::Anonymous {
+                hash,
+                tag,
+                body,
+                record,
+            } => Self::Anonymous {
                 hash: *hash,
                 tag: *tag,
                 body: body.map(<[u8]>::to_vec),
+                record: record.to_vec(),
             },
             RingOutput::Exit {
                 hash,
                 owner_tag,
                 payload,
+                record,
             } => Self::Exit {
                 hash: *hash,
                 owner_tag: *owner_tag,
                 payload: payload.to_vec(),
+                record: record.to_vec(),
             },
         }
     }
@@ -84,20 +93,35 @@ impl OwnedOutput {
     pub fn view(&self) -> RingOutput<'_> {
         match self {
             Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
-            Self::Anonymous { hash, tag, body } => RingOutput::Anonymous {
+            Self::Anonymous {
+                hash,
+                tag,
+                body,
+                record,
+            } => RingOutput::Anonymous {
                 hash,
                 tag,
                 body: body.as_deref(),
+                record,
             },
             Self::Exit {
                 hash,
                 owner_tag,
                 payload,
+                record,
             } => RingOutput::Exit {
                 hash,
                 owner_tag,
                 payload,
+                record,
             },
+        }
+    }
+
+    /// A delivered slot publishes its body in the slot and no record.
+    fn set_record(&mut self, bytes: &[u8]) {
+        if let Self::Anonymous { record, .. } | Self::Exit { record, .. } = self {
+            *record = bytes.to_vec();
         }
     }
 }
@@ -158,8 +182,7 @@ pub(crate) struct TransactParts {
     pub outputs: Vec<OwnedOutput>,
     pub sender: Option<OwnedSenderBundle>,
     pub eph_u: [u8; 32],
-    pub sealed: [u8; AUDIT_CIPHERTEXT_LEN],
-    pub disclosure: Vec<[u8; 32]>,
+    pub envelope: Vec<u8>,
     pub private_tx_hash: [u8; 32],
     pub anonymous: Option<OwnedAnonymousProofData>,
     pub in_proof_owner: Option<OwnedInProofOwner>,
@@ -169,6 +192,15 @@ pub(crate) struct TransactParts {
 }
 
 impl TransactParts {
+    /// The sealed stream joins the frame, each record beside its slot.
+    pub fn seal_audit(&mut self, eph_u: [u8; 32], envelope: Vec<u8>, records: &[Vec<u8>]) {
+        self.eph_u = eph_u;
+        self.envelope = envelope;
+        for (output, record) in self.outputs.iter_mut().zip(records) {
+            output.set_record(record);
+        }
+    }
+
     pub fn data(&self) -> RingTransactData<'_> {
         RingTransactData {
             rail: self.rail,
@@ -192,8 +224,7 @@ impl TransactParts {
             outputs: self.outputs.iter().map(OwnedOutput::view).collect(),
             sender: self.sender.as_ref().map(OwnedSenderBundle::view),
             eph_u: &self.eph_u,
-            sealed: &self.sealed,
-            disclosure: &self.disclosure,
+            envelope: &self.envelope,
             private_tx_hash: &self.private_tx_hash,
             anonymous: self.anonymous.as_ref().map(|anonymous| AnonymousProofData {
                 commitment: &anonymous.commitment,

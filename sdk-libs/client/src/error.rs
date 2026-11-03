@@ -42,8 +42,6 @@ pub enum AuditError {
     DisclosureField,
     #[error("disclosure does not fit its layout")]
     DisclosureLayout,
-    #[error("the disclosed output seed is not the one the transaction key derives")]
-    SeedOutMismatch,
     #[error("disclosure padding is not zero")]
     DisclosurePadding,
     #[error("{trees} input trees do not match {inputs} published inputs")]

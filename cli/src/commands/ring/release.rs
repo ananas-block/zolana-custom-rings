@@ -133,7 +133,7 @@ mod tests {
     const FULL_LOCK: &str = r#"{
         "release_tag": "v1",
         "ring_program": {"asset": "custom-ring-program-v1.so", "size": 1, "sha256": "x"},
-        "transfer_confidential_2_in40_w4_key": {"asset": "custom-ring-transfer-confidential-2-in40-w4-key-v1.key", "size": 1, "sha256": "x"},
+        "transfer_confidential_2_in32_w4_key": {"asset": "custom-ring-transfer-confidential-2-in32-w4-key-v1.key", "size": 1, "sha256": "x"},
         "register_key": {"asset": "custom-ring-register-key-v1.key", "size": 1, "sha256": "x"}
     }"#;
 
@@ -165,7 +165,7 @@ mod tests {
         );
         let key = release.key(RING_KEYS[0]).expect_err("no key").to_string();
         assert!(
-            key.contains("ships no key for custom-ring-transfer-confidential-2-in40-w4"),
+            key.contains("ships no key for custom-ring-transfer-confidential-2-in32-w4"),
             "{key}"
         );
         assert_eq!(
@@ -197,7 +197,7 @@ mod tests {
         for missing in RING_KEYS.into_iter().filter(|key| {
             !matches!(
                 key.section().as_str(),
-                "transfer_confidential_2_in40_w4_key" | "register_key"
+                "transfer_confidential_2_in32_w4_key" | "register_key"
             )
         }) {
             let error = partial.key(missing).expect_err("missing").to_string();

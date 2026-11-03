@@ -96,7 +96,6 @@ ring_errors! {
     PolicyNotSet = 8217 => "the policy ring has no policy yet",
     InvalidSppProofPoint = 8218 => "the compressed SPP proof point does not decompress",
     // 8219 retired.
-    ZeroDisclosureField = 8220 => "a published disclosure field is zero",
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
     // 8222 and 8223 retired.
     DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",

@@ -25,7 +25,7 @@ use spr_transaction::{
     ShieldedTransaction, SppProofOutputUtxo, Utxo, WalletUtxo, SOL_MINT,
 };
 use zolana_ring_client::{
-    seal_deposits, AnonymousInputs, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
+    commitment_evidence, seal_deposits, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
     RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
 use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
@@ -170,7 +170,11 @@ impl Fixture {
             recipient_u: self.address.viewing_pubkey.u(),
             tag: None,
         };
-        let slot = transfer.slot(Rail::Delivered, 0, &ring_output);
+        let rail = match matches!(beside, Beside::EscrowedMember(_)) {
+            true => Rail::Escrowed,
+            false => Rail::Delivered,
+        };
+        let slot = transfer.slot(rail, 0, &ring_output);
         output.blinding = slot.blinding;
         let mut held = self.held(&output, tree_id);
         held.tx_signature = signature;
@@ -178,7 +182,7 @@ impl Fixture {
         published.output_context = output_context(&held);
         let (outputs, slots, key_escrow) = match beside {
             Beside::Alone => {
-                let mut dummy = transfer.slot(Rail::Delivered, 1, &Output::Dummy).output;
+                let mut dummy = transfer.slot(rail, 1, &Output::Dummy).output;
                 dummy.output_context.leaf_index = held.leaf_index + 1;
                 (
                     vec![ring_output, Output::Dummy],
@@ -196,12 +200,12 @@ impl Fixture {
                     recipient_u: x25519_u(0x77),
                     tag: None,
                 };
-                let mut paid = transfer.slot(Rail::Delivered, 1, &other).output;
+                let mut paid = transfer.slot(rail, 1, &other).output;
                 paid.output_context.leaf_index = held.leaf_index + 1;
                 (vec![ring_output, other], vec![published, paid], true)
             }
         };
-        let disclosure = transfer.disclosure(Rail::Delivered, &outputs, key_escrow);
+        let disclosure = transfer.disclosure(rail, &outputs, key_escrow);
         let mut transaction = transfer.publish(Publish {
             slots,
             disclosure: &disclosure,
@@ -211,7 +215,7 @@ impl Fixture {
         transaction.tx_signature = signature;
         let frame = transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout(),
+            layout: disclosure.layout,
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -363,7 +367,7 @@ impl Fixture {
         let commitments: Vec<_> = spent.iter().map(|held| Some(held.utxo_hash)).collect();
         let disclosure = transfer.anonymous_disclosure(
             &outputs,
-            AnonymousInputs::commitments(&commitments).expect("ring notes"),
+            commitment_evidence(&commitments).expect("ring notes"),
         );
         let mut transaction = transfer.publish(Publish {
             slots: published,
@@ -374,7 +378,7 @@ impl Fixture {
         transaction.tx_signature = signature;
         let frame = transfer.frame(Frame {
             tx: &transaction,
-            layout: disclosure.layout(),
+            layout: disclosure.layout,
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -618,8 +622,8 @@ async fn missing_or_invalid_mandatory_disclosure_never_returns_a_partial_balance
         if missing {
             tx.messages.clear();
         } else {
-            // The last byte of slot 0's published asset field.
-            tx.messages[0].data[65 + 63] ^= 1;
+            // The cipher is a stream, a flipped body byte rebuilds no commitment.
+            *tx.output_slots[0].payload.last_mut().expect("body") ^= 1;
         }
         let history = History {
             transactions: vec![tx],

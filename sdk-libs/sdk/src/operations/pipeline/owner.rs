@@ -10,7 +10,7 @@ use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    canonical_shape, delivered, pad_under_rail, sealed, shape_keyed, transaction_key, Rail,
+    canonical_shape, pad_under_rail, sealed, shape_keyed, transaction_key, DeliveredRail, Rail,
     RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
@@ -154,7 +154,12 @@ impl Owner<'_> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
-        let delivery = delivered(shape.n_outputs(), RingRail::Confidential)?;
+        let delivery = DeliveredRail {
+            outputs: shape.n_outputs(),
+            rail: RingRail::Confidential,
+            mode: config.mode,
+        }
+        .delivery()?;
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;

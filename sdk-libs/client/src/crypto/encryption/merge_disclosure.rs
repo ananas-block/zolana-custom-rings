@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     merge_disclosure_field_count, merge_disclosure_len, pack_disclosure, unpack_disclosure,
-    AUDIT_CIPHERTEXT_LEN, MERGE_DISCLOSURE_HEADER_LEN, MERGE_DISCLOSURE_INFO, MERGE_WIDTHS,
+    MERGE_DISCLOSURE_HEADER_LEN, MERGE_DISCLOSURE_INFO, MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS,
 };
 use spr_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
 use spr_keypair::{random_salt, X25519Keypair, X25519Pubkey};
@@ -53,7 +53,7 @@ pub struct MergeDisclosureEncryption {
     pub ephemeral_sk: Zeroizing<[u8; 32]>,
     pub disclosure_key: Zeroizing<[u8; 32]>,
     pub eph_pk: X25519Pubkey,
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: [u8; MERGE_KEY_CIPHERTEXT_LEN],
     pub fields: Vec<[u8; 32]>,
 }
 
@@ -139,7 +139,7 @@ impl MergeDisclosureEncryption {
 pub fn open_merge_disclosure(
     auditor: &X25519Keypair,
     eph_pk: &X25519Pubkey,
-    ciphertext: &[u8; AUDIT_CIPHERTEXT_LEN],
+    ciphertext: &[u8; MERGE_KEY_CIPHERTEXT_LEN],
     salt: [u8; 16],
     fields: &[[u8; 32]],
 ) -> Result<MergeOpening> {

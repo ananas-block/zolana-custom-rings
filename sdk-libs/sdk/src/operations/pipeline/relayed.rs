@@ -10,7 +10,8 @@ use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 use super::{
     anonymous::{check_anonymous_inputs, AnonymousExits, AnonymousSpend, HiddenOwner},
     audit::PresealedAudit,
-    delivered, sealed, shape_keyed, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
+    sealed, shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
+    TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -148,7 +149,12 @@ impl Relayed<'_> {
                         rail: RingRail::Confidential,
                     });
                 }
-                let delivery = delivered(n_outputs, RingRail::Confidential)?;
+                let delivery = DeliveredRail {
+                    outputs: n_outputs,
+                    rail: RingRail::Confidential,
+                    mode: config.mode,
+                }
+                .delivery()?;
                 let signature = self
                     .owner_signature
                     .ok_or(RingError::MissingInProofOwnerSignature)?;
@@ -178,7 +184,14 @@ impl Relayed<'_> {
                     });
                 }
                 (
-                    rail(delivered(n_outputs, RingRail::Delegate)?),
+                    rail(
+                        DeliveredRail {
+                            outputs: n_outputs,
+                            rail: RingRail::Delegate,
+                            mode: config.mode,
+                        }
+                        .delivery()?,
+                    ),
                     Vec::new(),
                     Spend::Delegate {
                         delegate: *delegate,

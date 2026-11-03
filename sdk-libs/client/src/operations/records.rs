@@ -1,8 +1,8 @@
 //! Member record views as record tree types, every opening checked against its root.
 
 use custom_ring_interface::{
-    storage::StorageRegistry, EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT,
-    TAGGED_X25519_KEY_LEN,
+    storage::StorageRegistry, EscrowKey, QueueEntry, QUAD_ARITY, QUAD_HEIGHT,
+    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use spr_hasher::{primitives::hash_bytes, HasherError};
@@ -369,7 +369,7 @@ pub(crate) fn sealed_key(
             <[u8; TAGGED_X25519_KEY_LEN]>::try_from(eph_pk.0.as_slice())
                 .map_err(|_| AuditError::InvalidMemberRegistry)?,
         )?,
-        ciphertext: <[u8; AUDIT_CIPHERTEXT_LEN]>::try_from(ciphertext.0.as_slice())
+        ciphertext: <[u8; REGISTER_KEY_CIPHERTEXT_LEN]>::try_from(ciphertext.0.as_slice())
             .map_err(|_| AuditError::InvalidMemberRegistry)?,
     }))
 }

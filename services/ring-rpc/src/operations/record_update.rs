@@ -3,7 +3,7 @@ use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
     storage_instruction::{StorageWriteData, UpdateMode},
     verifying_key, CustomRingProof, ListRegistry, QueueEntry, RegisterKeyStatement, RingMode,
-    RingPolicy, RingProof, APPLY_BATCH, AUDIT_CIPHERTEXT_LEN, ROOT_HISTORY,
+    RingPolicy, RingProof, APPLY_BATCH, REGISTER_KEY_CIPHERTEXT_LEN, ROOT_HISTORY,
 };
 use solana_address::Address;
 use spr_indexer_api::Hash;
@@ -545,7 +545,7 @@ impl EscrowProof<'_> {
             .map_err(invalid_entry)
             .and_then(|bytes| X25519Pubkey::from_bytes(bytes).map_err(invalid_entry))?;
         let ciphertext =
-            <&[u8; AUDIT_CIPHERTEXT_LEN]>::try_from(registration.ciphertext.0.as_slice())
+            <&[u8; REGISTER_KEY_CIPHERTEXT_LEN]>::try_from(registration.ciphertext.0.as_slice())
                 .map_err(invalid_entry)?;
         let proof: CustomRingProof =
             bytemuck::try_pod_read_unaligned(&registration.proof.0).map_err(invalid_entry)?;

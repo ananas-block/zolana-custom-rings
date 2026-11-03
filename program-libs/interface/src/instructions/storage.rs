@@ -8,7 +8,7 @@ use crate::{
     instruction::{list_and_mint_entry, mint_policy_write, write_count},
     member_registry::{EscrowKey, QueueEntry},
     storage::{RegistryId, Revision, StorageError},
-    ApplyRecordsIxData, RecordWriteData, AUDIT_CIPHERTEXT_LEN,
+    ApplyRecordsIxData, RecordWriteData, REGISTER_KEY_CIPHERTEXT_LEN,
 };
 
 pub mod tag {
@@ -58,7 +58,7 @@ pub struct EscrowWriteData {
     pub owner: Address,
     pub nullifier_pk: [u8; 32],
     pub eph_u: [u8; 32],
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
 /// Tags 1 and 2, `revision || count u8 || count writes || ApplyRecordsIxData`.

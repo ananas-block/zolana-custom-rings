@@ -7,9 +7,11 @@ use spr_interface::instruction::instruction_data::merge_transact::MergeTransactI
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, TAGGED_X25519_KEY_LEN,
 };
+
+/// AES-256-CTR ciphertext of the 32-byte disclosure key.
+pub const MERGE_KEY_CIPHERTEXT_LEN: usize = 32;
 
 /// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.
 pub const MERGE_DISCLOSURE_HEADER_LEN: usize = 32 + 32 + 32 + 8 + 32;
@@ -46,7 +48,7 @@ pub struct CustomRingMergeIxData {
 pub struct MergeDisclosure {
     pub proof: CustomRingProof,
     pub eph_pk: [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: [u8; MERGE_KEY_CIPHERTEXT_LEN],
     #[wincode(with = "containers::Vec<[u8; 32], FixIntLen<u8>>")]
     pub fields: Vec<[u8; 32]>,
 }
@@ -95,7 +97,7 @@ pub struct CustomRingMergeIxDataRef<'a> {
 pub struct MergeDisclosureRef<'a> {
     pub proof: &'a CustomRingProof,
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: &'a [u8; MERGE_KEY_CIPHERTEXT_LEN],
     pub fields: &'a [[u8; 32]],
 }
 
@@ -151,7 +153,7 @@ pub struct MergePublicInput<'a> {
     pub ring_id: &'a [u8; 32],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; AUDIT_CIPHERTEXT_LEN],
+    pub ciphertext: &'a [u8; MERGE_KEY_CIPHERTEXT_LEN],
     /// The SPP output ciphertext salt, the merge pad reuses it.
     pub salt: &'a [u8; 16],
     pub fields: &'a [[u8; 32]],

@@ -3,8 +3,8 @@
 
 #[path = "instructions/anonymous_exit.rs"]
 pub mod anonymous_exit;
-#[path = "codec/anonymous_output.rs"]
-pub mod anonymous_output;
+#[path = "proof/audit_stream.rs"]
+pub mod audit_stream;
 #[path = "proof/blinding.rs"]
 pub mod blinding;
 #[path = "codec/bytes.rs"]
@@ -64,7 +64,7 @@ pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {
 }
 
 pub use anonymous_exit::*;
-pub use anonymous_output::*;
+pub use audit_stream::*;
 pub use deposit::*;
 pub use deposit_audit::*;
 pub use disclosure::*;
@@ -86,10 +86,8 @@ pub const STORAGE_PROGRAM_ID: solana_address::Address =
 /// One-byte `0x04` scheme tag followed by a canonical X25519 u-coordinate.
 pub use output::RECIPIENT_KEY_LEN as TAGGED_X25519_KEY_LEN;
 pub const VIEWING_PUBKEY_TAG: u8 = 4;
-/// AES-256-CTR ciphertext of the 32-byte transaction viewing secret key.
-pub const AUDIT_CIPHERTEXT_LEN: usize = 32;
-/// The auditor message before its disclosure fields.
-pub const AUDITOR_MESSAGE_PREFIX_LEN: usize = TAGGED_X25519_KEY_LEN + AUDIT_CIPHERTEXT_LEN;
+/// AES-256-CTR ciphertext of `0x00 || nullifier_secret`.
+pub const REGISTER_KEY_CIPHERTEXT_LEN: usize = 32;
 
 pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {
     let mut key = [VIEWING_PUBKEY_TAG; TAGGED_X25519_KEY_LEN];
@@ -97,35 +95,43 @@ pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {
     key
 }
 
-/// `0x04 || eph_u || sealed || disclosure`, published under the auditor's view tag.
+/// `0x04 || eph_u || envelope_ct || record_ct...`, published under the auditor's view tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditorMessage<'a> {
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub sealed: &'a [u8; AUDIT_CIPHERTEXT_LEN],
-    pub disclosure: &'a [[u8; 32]],
+    pub envelope: &'a [u8],
+    /// The records of the slots that have one, in slot order.
+    pub records: &'a [u8],
 }
 
 impl<'a> AuditorMessage<'a> {
-    /// `None` unless the key is tagged and the disclosure has the field count of `layout`.
-    pub fn parse(data: &'a [u8], layout: DisclosureLayout) -> Option<Self> {
+    /// `None` unless the key is tagged and every length is `layout`'s.
+    pub fn parse(data: &'a [u8], layout: AuditStreamLayout) -> Option<Self> {
         let (eph_pk, rest) = data.split_first_chunk::<TAGGED_X25519_KEY_LEN>()?;
-        let (sealed, disclosure) = rest.split_first_chunk::<AUDIT_CIPHERTEXT_LEN>()?;
-        if eph_pk[0] != VIEWING_PUBKEY_TAG || disclosure.len() != 32 * layout.field_count() {
-            return None;
-        }
-        Some(Self {
+        let (envelope, records) = rest.split_at_checked(layout.envelope().len)?;
+        (eph_pk[0] == VIEWING_PUBKEY_TAG && records.len() == layout.records_len()).then_some(Self {
             eph_pk,
-            sealed,
-            disclosure: disclosure.as_chunks::<32>().0,
+            envelope,
+            records,
         })
     }
 
-    pub fn data(
+    /// The record of `slot`, empty on a delivered slot.
+    pub fn record(&self, layout: AuditStreamLayout, slot: usize) -> Option<&'a [u8]> {
+        let start = (0..slot).map(|before| layout.record_len(before)).sum();
+        self.records.get(start..start + layout.record_len(slot))
+    }
+
+    /// `ciphertexts` is the envelope then the records in slot order.
+    pub fn data<'c>(
         eph_u: &[u8; 32],
-        sealed: &[u8; AUDIT_CIPHERTEXT_LEN],
-        disclosure: &[[u8; 32]],
+        ciphertexts: impl Iterator<Item = &'c [u8]> + Clone,
     ) -> Vec<u8> {
-        [&tagged_x25519(eph_u)[..], sealed, disclosure.as_flattened()].concat()
+        let len = ciphertexts.clone().map(<[u8]>::len).sum::<usize>();
+        let mut data = Vec::with_capacity(TAGGED_X25519_KEY_LEN + len);
+        data.extend_from_slice(&tagged_x25519(eph_u));
+        ciphertexts.for_each(|ciphertext| data.extend_from_slice(ciphertext));
+        data
     }
 }
 

@@ -10,9 +10,9 @@ use spr_transaction::{
 use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    canonical_shape, delivered, pad_under_rail, sealed,
+    canonical_shape, pad_under_rail, sealed,
     selection::{payment_total, widest, Funding},
-    shape_keyed, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
+    shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{CustomRing, CustomRingConfig, RingError};
@@ -245,7 +245,12 @@ impl Delegated<'_> {
                     })?
             }
         };
-        let delivery = delivered(shape.n_outputs(), RingRail::Delegate)?;
+        let delivery = DeliveredRail {
+            outputs: shape.n_outputs(),
+            rail: RingRail::Delegate,
+            mode: config.mode,
+        }
+        .delivery()?;
         // The delegate holds no viewing key of the member, a fresh transaction key seals the move.
         let rail = RingOutputRail::new(ViewingKey::new(), delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &self.source)?;

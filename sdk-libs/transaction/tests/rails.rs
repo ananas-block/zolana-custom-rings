@@ -1,7 +1,8 @@
 //! The ring output rails, read back as a recipient and the ring program read them.
 
 use custom_ring_interface::{
-    blinding::ring_blinding_seed, stream::DeliveredSlot, stream::SlotSecret, RingOutput,
+    blinding::ring_blinding_seed, stream::DeliveredSlot, stream::SlotSecret, DeliveredBody,
+    RingOutput, DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -12,9 +13,9 @@ use spr_transaction::{
     Data, Mint, Utxo, WalletUtxo,
 };
 use zolana_ring_transaction::{
-    listed_recipients, AnonymousOutput, AnonymousPlan, AnonymousSlot,
-    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, OutputBlindings,
-    PublishedSlot, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
+    listed_recipients, open_delivered_body, seal_delivered_body, AnonymousOutput, AnonymousPlan,
+    AnonymousSlot, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
+    OutputBlindings, PublishedSlot, RingAssets, RingDelivery, RingDeliveryOpening, RingOutputRail,
     RingRailError as E, RingUtxoOwner, TaggedPayment, UnverifiedRecipientPlaintext,
     VerifiedRecipientPlaintext, DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN,
 };
@@ -211,7 +212,10 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     let recipient = address(&receiver);
     let (mut tx, tx_key) = ring_transfer(&sender, false);
     tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(tx_key.clone(), RingDelivery::Delivered);
+    let rail = RingOutputRail::new(
+        tx_key.clone(),
+        RingDelivery::Delivered { key_escrow: false },
+    );
     let proof = rail.encrypt(tx, &address(&sender)).unwrap();
     assert_eq!(proof.external_data.salt, rail.salt());
     assert_eq!(
@@ -219,7 +223,7 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
         ring_blinding_seed(&tx_key.secret_bytes(), &rail.salt()).unwrap()
     );
     assert_ne!(
-        RingOutputRail::new(tx_key, RingDelivery::Delivered).salt(),
+        RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false }).salt(),
         rail.salt(),
         "a resent attempt draws a fresh salt"
     );
@@ -579,7 +583,7 @@ fn a_delivered_rail_refuses_output_data_and_compact_padding() {
             None => output,
         })
         .unwrap();
-        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
+        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
         assert!(matches!(
             rail.encrypt(tx, &address(&sender)),
             Err(E::DeliveredOutputData { slot_index: 0 })
@@ -587,7 +591,7 @@ fn a_delivered_rail_refuses_output_data_and_compact_padding() {
     }
 
     let (tx, tx_key) = ring_transfer(&sender, true);
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
     let mut tx = tx
         .with_blinding_seed(rail.blinding_seed().unwrap())
         .unwrap();
@@ -597,4 +601,61 @@ fn a_delivered_rail_refuses_output_data_and_compact_padding() {
         rail.encrypt(tx, &address(&sender)),
         Err(E::DeliveredCompactPadding { .. })
     ));
+}
+
+/// The commitment rebuilds under any keys a sender names, the recipient compares them with its own.
+#[test]
+fn a_recipient_refuses_a_body_that_names_other_keys() {
+    let sender = keypair(1);
+    let receiver = keypair(2);
+    let recipient = address(&receiver);
+    let (mut tx, tx_key) = ring_transfer(&sender, false);
+    tx.transfer_sol(&recipient, 3).unwrap();
+    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow: false });
+    let proof = rail.encrypt(tx, &address(&sender)).unwrap();
+    let published = rail.published_slots(&proof, &address(&sender)).unwrap();
+    let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 0);
+    let RingOutput::Delivered { hash, u, body } = published[0].wire else {
+        panic!("delivered slot expected")
+    };
+    let sealed = open_delivered_body(body, &secret).unwrap();
+    let forged = |forged: DeliveredBody| seal_delivered_body(&forged, &secret).unwrap();
+    let opens = |body: &[u8]| {
+        let wire = RingOutput::Delivered { hash, u, body };
+        open(wire, &recipient, &secret).is_some()
+    };
+    assert!(opens(&forged(sealed)));
+    assert!(!opens(&forged(DeliveredBody {
+        owner_key: [0x77; 32],
+        ..sealed
+    })));
+    assert!(!opens(&forged(DeliveredBody {
+        nullifier_pk: Some([0x77; 32]),
+        ..sealed
+    })));
+}
+
+/// A dummy publishes a random body of the length a real one has, the escrow flag fixes both.
+#[test]
+fn every_delivered_slot_takes_the_length_of_its_layout() {
+    let sender = keypair(1);
+    let recipient = address(&keypair(2));
+    for (key_escrow, len) in [
+        (false, DELIVERED_BODY_LEN),
+        (true, ESCROWED_DELIVERED_BODY_LEN),
+    ] {
+        let (tx, tx_key) = ring_transfer(&sender, false);
+        let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered { key_escrow });
+        let mut tx = tx
+            .with_blinding_seed(rail.blinding_seed().unwrap())
+            .unwrap();
+        tx.transfer_sol(&recipient, 3).unwrap();
+        tx.pad_utxos(Shape::IN1_OUT4, &address(&sender)).unwrap();
+        let proof = rail.encrypt(tx, &address(&sender)).unwrap();
+        let published = rail.published_slots(&proof, &address(&sender)).unwrap();
+        assert!(published.iter().any(|slot| slot.output.is_dummy()));
+        for slot in &published {
+            assert_eq!(slot.wire.ciphertext().len(), len);
+        }
+    }
 }

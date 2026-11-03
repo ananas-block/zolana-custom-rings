@@ -71,9 +71,8 @@ pub use crate::{
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
     disclosure::{
-        AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
-        SealedAuditEnvelope,
+        commitment_evidence, prefix_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad,
+        OpenedAudit, OutputRecord, SealedAuditStream,
     },
     encryption::{
         auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
