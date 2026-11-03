@@ -20,7 +20,7 @@ async fn granted_reader_opens_audited_transfers_and_reports_the_rest() {
         .expect("read");
 
     assert_eq!(response.context.slot, 99);
-    assert_eq!(response.value.cursor, Some(Base64String(vec![7, 7])));
+    assert!(response.value.cursor.is_some());
     let [item] = response.value.items.as_slice() else {
         panic!("expected one audited transaction");
     };
@@ -211,11 +211,11 @@ async fn an_input_spending_a_utxo_the_page_opened_resolves_its_ring() {
         ),
         opened
     );
-    // The entry key opens the input itself, only its ring stays open.
-    assert!(matches!(
+    // The entry opening names its hash, the rebuilt candidate tells its ring with no page.
+    assert_eq!(
         input_ring(&fixture.read_anonymous(vec![utxos.entry.clone()]).await),
-        Some(DecryptedInputRing::Unresolved { .. })
-    ));
+        opened
+    );
 }
 
 #[tokio::test]
@@ -245,7 +245,8 @@ async fn a_transfer_read_before_its_input_note_returns_every_slot_then_resolves(
     // Nothing yet binds the spent note to an owner.
     assert_eq!(unseen.sender, None);
     assert_eq!(unseen.inputs[0].opening, None);
-    assert_eq!(unseen.inputs[0].unseen_hash, Some(utxos.commitment.into()));
+    assert!(unseen.inputs[0].unseen);
+    assert_eq!(unseen.inputs[0].hash, Some(utxos.commitment.into()));
     // The outputs enter the store at once, a later spend of them resolves.
     let exit = utxos.spent.output_slots[0].output_context.hash;
     let stored = service
@@ -259,7 +260,7 @@ async fn a_transfer_read_before_its_input_note_returns_every_slot_then_resolves(
         panic!("the same spend");
     };
     assert_eq!(resolved.outputs, unseen.outputs);
-    assert_eq!(resolved.inputs[0].unseen_hash, None);
+    assert!(!resolved.inputs[0].unseen);
     assert_eq!(
         input_ring(&after),
         Some(DecryptedInputRing::Ring {
@@ -321,13 +322,11 @@ async fn an_in_proof_input_the_service_never_opened_reads_as_unseen_with_its_pre
     };
     assert_eq!(spent.nullifier, spent_nullifier.into());
     assert_eq!(spent.opening, None);
-    assert_eq!(
-        spent.unseen_prefix.map(|prefix| prefix.0),
-        InputPrefix::of(&unseen)
-    );
+    assert!(spent.unseen);
+    assert_eq!(spent.hash, Some(unseen.into()));
     assert_eq!(dummy.nullifier, dummy_nullifier.into());
     assert_eq!(dummy.opening, None);
-    assert_eq!(dummy.unseen_prefix, None);
+    assert!(!dummy.unseen);
 }
 
 #[tokio::test]
@@ -375,7 +374,7 @@ async fn rows_outside_the_ring_are_dropped() {
         .expect("read");
     assert!(response.value.items.is_empty());
     assert_eq!(response.value.skipped.len(), 2);
-    assert_eq!(response.value.cursor, Some(Base64String(vec![7, 7])));
+    assert!(response.value.cursor.is_some());
 }
 
 #[tokio::test]
@@ -512,47 +511,10 @@ async fn indexer_pages_must_match_the_attested_bounds() {
         Err(RingRpcError::InvalidIndexerResponse)
     ));
 
-    for cursor in [Vec::new(), vec![1; 257]] {
-        let mut source = fixture.source();
-        source.next_cursor = Some(cursor);
-        let service = fixture.hub(source).service(None).expect("service");
-        let request = auth(&signer);
-        assert!(matches!(
-            service
-                .read(AuditRead {
-                    read: PagedRead::DecryptedTransactions,
-                    auth: &request,
-                    page: &page(),
-                    wallet: None,
-                })
-                .await,
-            Err(RingRpcError::InvalidIndexerResponse)
-        ));
-    }
-
-    for (transactions, scanned_through) in [
-        (vec![fixture.audited.clone()], Vec::new()),
-        (vec![fixture.audited.clone(); 100], vec![9]),
-    ] {
-        let mut source = fixture.source().with_transactions(transactions);
-        source.scanned_through = Some(scanned_through);
-        let service = fixture.hub(source).service(None).expect("service");
-        let request = auth(&signer);
-        assert!(matches!(
-            service
-                .read(AuditRead {
-                    read: PagedRead::DecryptedTransactions,
-                    auth: &request,
-                    page: &page(),
-                    wallet: None,
-                })
-                .await,
-            Err(RingRpcError::InvalidIndexerResponse)
-        ));
-    }
-
-    let mut source = fixture.source();
-    source.next_cursor = None;
+    // A page over its limit in Solana transactions.
+    let source = fixture
+        .source()
+        .with_transactions(vec![fixture.audited.clone(); 101]);
     let service = fixture.hub(source).service(None).expect("service");
     let request = auth(&signer);
     assert!(matches!(
@@ -567,12 +529,13 @@ async fn indexer_pages_must_match_the_attested_bounds() {
         Err(RingRpcError::InvalidIndexerResponse)
     ));
 
+    // A token that does not advance past the one requested.
     let mut source = fixture.source();
-    source.next_cursor = Some(vec![8]);
+    source.forged_token = Some(PaginationToken::new(0, Signature::from([8; 64])));
     let service = fixture.hub(source).service(None).expect("service");
-    let repeated_page = Page::new(Some(vec![8].into()), None).expect("page");
+    let repeated_page = Page::new(Some(audit_cursor(8)), None).expect("page");
     let request = GetDecryptedTransactionsRequest::read(target(RING))
-        .with_cursor(vec![8].into())
+        .with_cursor(audit_cursor(8))
         .expect("cursor")
         .sign(&signer)
         .expect("request")
@@ -830,4 +793,52 @@ async fn an_outsider_row_never_reaches_the_origin_read() {
     };
     assert_eq!(item.tx_signature.0, fixture.audited.tx_signature);
     service.backfill_utxos().await.expect("backfill");
+}
+
+#[tokio::test]
+async fn a_cursor_outside_its_query_is_refused() {
+    assert!(matches!(
+        Page::new(Some(vec![2; 75].into()), None),
+        Err(RingRpcError::InvalidPage)
+    ));
+    let fixture = Fixture::new();
+    let service = fixture
+        .hub(fixture.source())
+        .service(None)
+        .expect("service");
+    let queries = [
+        HistoryQuery {
+            ring: RING,
+            stream: HistoryStream::Ring,
+        },
+        HistoryQuery {
+            ring: Address::new_from_array([0xdd; 32]),
+            stream: HistoryStream::Tags,
+        },
+    ];
+    for query in queries {
+        let cursor: Base64String = HistoryCursor {
+            query,
+            token: PaginationToken::new(0, Signature::from([8; 64])),
+        }
+        .into();
+        let page = Page::new(Some(cursor.clone()), None).expect("page");
+        let request = GetDecryptedTransactionsRequest::read(target(RING))
+            .with_cursor(cursor)
+            .expect("cursor")
+            .sign(&delegate())
+            .expect("request")
+            .auth;
+        assert!(matches!(
+            service
+                .read(AuditRead {
+                    read: PagedRead::DecryptedTransactions,
+                    auth: &request,
+                    page: &page,
+                    wallet: None,
+                })
+                .await,
+            Err(RingRpcError::InvalidPage)
+        ));
+    }
 }

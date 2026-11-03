@@ -6,43 +6,54 @@ use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::instructions::transact::canonical_shape;
+use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
-    auditor_view_tag,
+    auditor_view_tag, confirmed_merge, historical_evidence,
+    history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
     records::{MemberOpeningRead, StorageTip},
     rpc::{
-        cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation,
+        cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation, AuditedMergesPage,
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
         ConfirmedAudit, DecryptedTransaction, DecryptedTransactionsPage, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsResponse,
-        GetWalletActivityResponse, PagedRead, ReadAttestation, ReadAuth, ReadTarget,
-        ReaderGrantAction, ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest,
-        SkippedReason, SkippedTransaction, AUDIT_PAGE_LIMIT,
+        GetUnspentUtxosRequest, GetUnspentUtxosResponse, GetWalletActivityResponse, PagedRead,
+        ReadAttestation, ReadAuth, ReadTarget, ReaderGrantAction, ReaderGrantAttestation,
+        RingChainStatus, SetReaderGrantRequest, SkippedReason, SkippedTransaction,
+        UnresolvedMergeRecord, UnresolvedReason, UnspentUtxosAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedTransaction, CreatedUtxos, DepositNote, MergeAuditPage, ReaderKey,
-    RingOrigin, RowDisposition, TransactionAudit,
+    AuditError, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos, DepositNote,
+    HistoricalEvidence, ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_policy::Member;
-use zolana_ring_transaction::RingAssets;
+use zolana_ring_transaction::{
+    historical::{assign_prefixed_inputs, InputPrefix, PrefixAssignment},
+    RingAssets,
+};
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
+    database::Store,
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
     grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
+    spent_index::{SpentCommitment, SpentIndex, SpentSource},
     upstream::{
         MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
         TransactionSource,
     },
-    utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, HeldNote, MAX_BACKFILL_PAGES},
+    utxos::{
+        AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, HeldNote, UnnamedSpend, UnspentQuery,
+        MAX_BACKFILL_PAGES,
+    },
 };
 
+const UNSPENT_PAGE_LIMIT: usize = 100;
 pub(crate) const ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// A delivered output of a mint no registration names misses on every read, the floor bounds the registry reads it causes.
 pub(crate) const ASSET_MISS_INTERVAL: Duration = Duration::from_secs(5);
@@ -51,6 +62,7 @@ pub(crate) const ASSET_MISS_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     cursor: Option<Base64String>,
+    history: Option<HistoryCursor>,
     limit: NonZeroU32,
     attested_limit: Option<Limit>,
 }
@@ -124,8 +136,14 @@ impl Page {
             return Err(RingRpcError::InvalidPage);
         }
         let count = limit.as_ref().map_or(AUDIT_PAGE_LIMIT, Limit::value);
+        let history = cursor
+            .as_ref()
+            .map(|cursor| HistoryCursor::try_from(cursor.0.as_slice()))
+            .transpose()
+            .map_err(|_| RingRpcError::InvalidPage)?;
         Ok(Self {
             cursor,
+            history,
             limit: u32::try_from(count)
                 .ok()
                 .and_then(NonZeroU32::new)
@@ -134,8 +152,14 @@ impl Page {
         })
     }
 
-    pub fn cursor(&self) -> Option<&[u8]> {
-        self.cursor.as_ref().map(|cursor| cursor.0.as_slice())
+    pub fn history_cursor(&self) -> Option<HistoryCursor> {
+        self.history
+    }
+
+    fn position(&self, query: HistoryQuery) -> Result<HistoryPosition, RingRpcError> {
+        query
+            .position(self.history)
+            .map_err(|_| RingRpcError::InvalidPage)
     }
 
     pub fn limit(&self) -> NonZeroU32 {
@@ -216,6 +240,47 @@ impl<S: TransactionSource> AuditService<S> {
             .await?
             .execute_wallet_activity()
             .await
+    }
+
+    pub async fn unspent_utxos(
+        &self,
+        request: &GetUnspentUtxosRequest,
+    ) -> Result<GetUnspentUtxosResponse, RingRpcError> {
+        let cursor = request
+            .cursor
+            .as_ref()
+            .map(|cursor| <[u8; 32]>::try_from(cursor.0.as_slice()))
+            .transpose()
+            .map_err(|_| RingRpcError::InvalidCursor)?;
+        let wallet = request.wallet.map(|wallet| wallet.0);
+        let attestation = UnspentUtxosAttestation {
+            target: self.read_target(),
+            owner: request.owner.0,
+            cursor: request.cursor.clone(),
+            wallet,
+        };
+        let grant = self.grant(&request.auth, &attestation, wallet).await?;
+        if !grant.scope.covers_member(&request.owner.0) {
+            return Err(GrantRefusal::WalletScope.into());
+        }
+        grant.spend().await?;
+        let store = self.shared.store(self.ring);
+        let page = grant.scope.unspent(store.unspent(UnspentQuery {
+            owner: &request.owner.0,
+            after: cursor,
+            limit: UNSPENT_PAGE_LIMIT,
+        }));
+        Ok(GetUnspentUtxosResponse {
+            utxos: page.utxos,
+            coverage: page.coverage,
+            unresolved: page.unresolved,
+            cursor: page.cursor.map(|cursor| cursor.to_vec().into()),
+        })
+    }
+
+    /// A limited co-signer opens the frame it signs under the served ring's key.
+    pub(crate) const fn auditor_keypair(&self) -> &X25519Keypair {
+        &self.auditor
     }
 
     pub async fn audited_utxos(
@@ -417,19 +482,47 @@ impl<S: TransactionSource> AuditService<S> {
             return Err(Unauthorized::AuditorKeyMismatch.into());
         }
         let store = self.shared.store(self.ring);
-        let mut cursor = store.backfill.lock().await;
+        let outcome = self.read_history(&store, config.mode).await;
+        if outcome.is_err() {
+            store.pass_unfinished();
+        }
+        outcome
+    }
+
+    /// Moves the position only past a page whose every row applied, a retry reads it again.
+    async fn read_history(&self, store: &AuditStore, mode: RingMode) -> Result<(), RingRpcError> {
+        let source = &self.shared.source;
+        let limit = Page::new(None, None)?.limit();
+        let mut position = store.backfill.lock().await;
+        if let Some(database) = self
+            .shared
+            .database
+            .as_ref()
+            .filter(|_| store.seeds_spent())
+        {
+            let rows = SpentIndex {
+                conn: database.connection(),
+            }
+            .rows()
+            .await?;
+            store.spend_commitments(rows);
+        }
         for _ in 0..MAX_BACKFILL_PAGES {
-            let page = Page::new(cursor.clone().map(Base64String), None)?;
             let response = source
                 .ring_history(RingHistoryPage {
                     ring: self.ring,
-                    page: &page,
+                    position: *position,
+                    limit,
                 })
                 .await?;
-            self.validate_indexer_response(&response, &page)?;
+            let mut next = *position;
+            let end = next
+                .advance(&response, limit.get())
+                .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+            self.validate_indexer_response(&response)?;
             // Read after the page, the root every transfer on it proves under is already on chain.
-            if config.mode == RingMode::ConfidentialEscrow {
-                if let Err(error) = self.refresh_escrow(&store).await {
+            if mode == RingMode::ConfidentialEscrow {
+                if let Err(error) = self.refresh_escrow(store).await {
                     log::warn!(
                         "escrow refresh of ring {} failed because {}",
                         self.ring,
@@ -437,29 +530,17 @@ impl<S: TransactionSource> AuditService<S> {
                     );
                 }
             }
-            let (next, frontier) = (
-                response.next_cursor.clone(),
-                response.scanned_through.clone(),
-            );
-            let context = spr_indexer_api::Context {
-                block_time: response.context.block_time,
-                slot: response.context.slot,
-            };
-            let rows = self.audit_rows(response, config.mode, &store).await?;
+            let rows = self.audit_rows(response, mode, store).await?;
             if let Some(error) = rows.unfinished {
                 return Err(error.into());
             }
-            match (frontier, next) {
-                (Some(frontier), _) => {
-                    store.absorbed(context);
-                    *cursor = Some(frontier);
-                    return Ok(());
-                }
-                // An empty stream has no position to resume from.
-                (None, None) => return Ok(()),
-                (None, next) => *cursor = next,
+            *position = next;
+            if let PageEnd::Terminal(context) = end {
+                store.absorbed(context);
+                return Ok(());
             }
         }
+        store.pass_unfinished();
         Ok(())
     }
 
@@ -524,10 +605,9 @@ impl<S: TransactionSource> AuditService<S> {
         assets: &RingAssets,
     ) -> Result<AuditedTransaction, AuditError> {
         let trees = bound.origin.event.input_tree_ids(bound.transaction);
-        let known = bound.store.known();
         TransactionAudit::new(bound.transaction, bound.origin.audit_stream(bound.mode)?)
             .with_input_trees(&trees)?
-            .with_known_utxos(&*known)
+            .with_known_utxos(bound.store)
             .with_escrowed_keys(bound.store)
             .run(&self.auditor, assets)
     }
@@ -537,24 +617,27 @@ impl<S: TransactionSource> AuditService<S> {
         page: &Page,
         mode: RingMode,
     ) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
-        let source = &self.shared.source;
-        let response = source
+        let query = HistoryQuery {
+            ring: self.ring,
+            stream: HistoryStream::Tags,
+        };
+        let mut position = page.position(query)?;
+        let limit = page.limit();
+        let response = self
+            .shared
+            .source
             .transactions_by_tag(TransactionPage {
                 tag: self.view_tag,
-                page,
+                position,
+                limit,
             })
             .await?;
-        self.validate_indexer_response(&response, page)?;
-        let context = spr_indexer_api::Context {
-            block_time: response.context.block_time,
-            slot: response.context.slot,
-        };
-        // A frontier ends the read, Photon names the last matched row even on a terminal page.
-        let cursor = response
-            .next_cursor
-            .clone()
-            .filter(|_| response.scanned_through.is_none())
-            .map(Into::into);
+        let _ = position
+            .advance(&response, limit.get())
+            .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+        self.validate_indexer_response(&response)?;
+        let context = response.context;
+        let cursor = query.next_cursor(&position).map(Into::into);
         let rows = self
             .audit_rows(response, mode, &self.shared.store(self.ring))
             .await?;
@@ -572,36 +655,66 @@ impl<S: TransactionSource> AuditService<S> {
     fn validate_indexer_response(
         &self,
         response: &GetShieldedTransactionsByTagsResponse,
-        page: &Page,
     ) -> Result<(), RingRpcError> {
-        let next = response.next_cursor.as_deref();
-        let frontier = response.scanned_through.as_deref();
-        if response.transactions.len() > page.limit.get() as usize
-            || (next.or(frontier).is_none() && !response.transactions.is_empty())
-            || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
-            || frontier.is_some_and(|cursor| {
-                !cursor_in_bounds(cursor)
-                    || response.transactions.len() >= page.limit.get() as usize
-            })
-        {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        }
         // Compact padding leaves trailing slots out, a transaction publishes at most its shape.
-        let unsupported = response.transactions.iter().any(|transaction| {
-            transaction.ring_program_id == Some(self.ring)
-                && transaction
-                    .messages
-                    .iter()
-                    .any(|message| message.view_tag == self.view_tag)
-                && (transaction.nullifiers.is_empty()
-                    || canonical_shape(
-                        transaction.nullifiers.len(),
-                        transaction.output_slots.len(),
-                    )
-                    .is_err())
-        });
+        let unsupported = response
+            .data
+            .iter()
+            .flat_map(|item| &item.events)
+            .any(|transaction| {
+                transaction.ring_program_id == Some(self.ring)
+                    && transaction
+                        .messages
+                        .iter()
+                        .any(|message| message.view_tag == self.view_tag)
+                    && (transaction.nullifiers.is_empty()
+                        || canonical_shape(
+                            transaction.nullifiers.len(),
+                            transaction.output_slots.len(),
+                        )
+                        .is_err())
+            });
         if unsupported {
             return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        Ok(())
+    }
+
+    /// Exact inputs join the index, an ambiguous or unnamed one holds the row unresolved.
+    async fn read_historical(&self, row: HistoricalRow<'_>) -> Result<(), RingRpcError> {
+        let HistoricalRow {
+            tx,
+            origin,
+            mode,
+            created_in,
+            store,
+        } = row;
+        let evidence = origin
+            .transact
+            .as_deref()
+            .filter(|_| origin.event.kind() == ConfirmedEventKind::Transfer)
+            .map(|transact| historical_evidence(tx, transact, mode, &self.auditor));
+        let (commitments, complete) = match evidence {
+            Some(Ok(evidence)) => historical_inputs(store, evidence),
+            // A historical merge's list stays unread, its row holds the claim false.
+            Some(Err(_)) | None => (Vec::new(), false),
+        };
+        record_spent(
+            self.shared.database.as_ref(),
+            store,
+            spent_rows(SpentEvent {
+                created_in,
+                first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
+                source: SpentSource::Historical,
+                commitments,
+            }),
+        )
+        .await?;
+        if !complete {
+            store.hold_unnamed(
+                created_in,
+                UnnamedSpend::of(UnresolvedReason::HistoricalPrefix),
+            );
         }
         Ok(())
     }
@@ -620,7 +733,7 @@ impl<S: TransactionSource> AuditService<S> {
         let mut skipped = Vec::new();
         let mut unfinished = None;
         let mut origins: HashMap<(Signature, u16), RingOrigin> = HashMap::new();
-        for mut tx in response.transactions {
+        for mut tx in response.data.into_iter().flat_map(|item| item.events) {
             if tx.ring_program_id != Some(self.ring) {
                 continue;
             }
@@ -646,6 +759,14 @@ impl<S: TransactionSource> AuditService<S> {
                                 tx.tx_signature,
                                 redacted(&error)
                             );
+                            store.hold_unnamed(
+                                CreatedIn {
+                                    slot: tx.slot,
+                                    tx_signature: tx.tx_signature,
+                                    event_index,
+                                },
+                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
+                            );
                             skipped.push(SkippedTransaction {
                                 slot: tx.slot,
                                 tx_signature: tx.tx_signature.into(),
@@ -661,15 +782,53 @@ impl<S: TransactionSource> AuditService<S> {
                 continue;
             }
             let bound = origin.bind_transaction(&mut tx, self.ring);
-            // A confirmed spend holds even when its outputs cannot open yet.
-            if bound.is_ok() {
-                store.spend(tx.nullifiers.iter().copied());
-            }
             let created_in = CreatedIn {
                 slot: tx.slot,
                 tx_signature: tx.tx_signature,
                 event_index,
             };
+            // A confirmed spend holds even when its outputs cannot open yet.
+            if bound.is_ok() {
+                store.spend(tx.nullifiers.iter().copied());
+                store.saw_row(tx.slot, origin.is_historical());
+                if origin.is_historical() {
+                    self.read_historical(HistoricalRow {
+                        tx: &tx,
+                        origin: &origin,
+                        mode,
+                        created_in,
+                        store,
+                    })
+                    .await?;
+                    continue;
+                }
+                if origin.event.kind() == ConfirmedEventKind::Merge {
+                    match confirmed_merge(&tx, event_index, &origin, &self.auditor) {
+                        Ok(merge) => {
+                            if let Some(merge) = merge {
+                                apply_confirmed_merge(self.shared.database.as_ref(), store, merge)
+                                    .await?;
+                            }
+                        }
+                        Err(error) if error.disposition() == RowDisposition::Retry => {
+                            unfinished.get_or_insert(error);
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "ring {} merge {}:{event_index} is unreadable because {}",
+                                self.ring,
+                                tx.tx_signature,
+                                redacted(&error)
+                            );
+                            store.hold_unnamed(
+                                created_in,
+                                UnnamedSpend::of(UnresolvedReason::UnreadableRow),
+                            );
+                        }
+                    }
+                    continue;
+                }
+            }
             if !origin.requires_audit() {
                 // A later commitment layout spends a deposited or merged UTXO by hash or prefix.
                 let created = bound.and_then(|()| {
@@ -737,6 +896,37 @@ impl<S: TransactionSource> AuditService<S> {
                     created_in,
                     opened.unresolved.iter().cloned().map(HeldNote::Output),
                 );
+                let unseen: Vec<[u8; 32]> = opened
+                    .inputs
+                    .iter()
+                    .filter(|input| input.opening.is_unseen())
+                    .map(|input| input.hash)
+                    .collect();
+                if !unseen.is_empty() {
+                    store.hold_unnamed(
+                        created_in,
+                        UnnamedSpend {
+                            reason: UnresolvedReason::UnknownSpend,
+                            inputs: unseen,
+                        },
+                    );
+                }
+                record_spent(
+                    self.shared.database.as_ref(),
+                    store,
+                    spent_rows(SpentEvent {
+                        created_in,
+                        first_nullifier: tx.nullifiers.first().copied().unwrap_or_default(),
+                        source: SpentSource::Transfer,
+                        commitments: opened
+                            .inputs
+                            .iter()
+                            .map(|input| input.hash)
+                            .filter(|hash| *hash != [0; 32])
+                            .collect(),
+                    }),
+                )
+                .await?;
             }
             let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
@@ -752,6 +942,12 @@ impl<S: TransactionSource> AuditService<S> {
                     .into(),
                 ),
                 Err(error) => {
+                    if error.disposition() != RowDisposition::Retry {
+                        store.hold_unnamed(
+                            created_in,
+                            UnnamedSpend::of(UnresolvedReason::UnreadableRow),
+                        );
+                    }
                     skipped.push(SkippedTransaction {
                         slot: tx.slot,
                         tx_signature: tx.tx_signature.into(),
@@ -833,15 +1029,30 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
             })
             .await
             .map_err(|error| match error {
-                AuditError::ScanFrontierMissing | AuditError::PageOverflow => {
-                    RingRpcError::InvalidIndexerResponse
-                }
+                AuditError::InvalidHistoryPage => RingRpcError::InvalidIndexerResponse,
+                AuditError::HistoryCursor(_) => RingRpcError::InvalidPage,
                 error => error.into(),
             })?;
-        validate_merge_page(&page, self.page)?;
-        let mut response = GetAuditedMergesResponse::from(page);
-        self.grant.scope.merges(&mut response.value);
-        Ok(response)
+        let store = service.shared.store(service.ring);
+        let mut value = AuditedMergesPage {
+            opened: Vec::new(),
+            unresolved: Vec::new(),
+            cursor: page.next_cursor.map(Into::into),
+        };
+        for merge in page.merges {
+            let output_commitment = merge.output_commitment;
+            let record = UnresolvedMergeRecord::from(&merge);
+            apply_confirmed_merge(service.shared.database.as_ref(), &store, merge).await?;
+            match store.merged(&output_commitment) {
+                Some(output) => value.opened.push((&output).into()),
+                None => value.unresolved.push(record),
+            }
+        }
+        self.grant.scope.merges(&mut value);
+        Ok(GetAuditedMergesResponse {
+            context: page.context,
+            value,
+        })
     }
 }
 
@@ -895,25 +1106,114 @@ fn escrowed_owner(
     }))
 }
 
-fn validate_merge_page(page: &MergeAuditPage, request: &Page) -> Result<(), RingRpcError> {
-    let rows = page.result.opened.len() + page.result.unresolved.len();
-    if rows > request.limit.get() as usize
-        || page
-            .next_cursor
-            .as_deref()
-            .is_some_and(|cursor| !cursor_in_bounds(cursor) || request.cursor() == Some(cursor))
-    {
-        return Err(RingRpcError::InvalidIndexerResponse);
+/// A confirmed row of a frame the v3 path never decodes.
+struct HistoricalRow<'a> {
+    tx: &'a ShieldedTransaction,
+    origin: &'a RingOrigin,
+    mode: RingMode,
+    created_in: CreatedIn,
+    store: &'a AuditStore,
+}
+
+/// The row's exact inputs, and whether it named every input it spent.
+fn historical_inputs(store: &AuditStore, evidence: HistoricalEvidence) -> (Vec<[u8; 32]>, bool) {
+    let assigned = |prefixes: &[Option<InputPrefix>], owner: Option<[u8; 32]>| {
+        assign_prefixed_inputs(prefixes, |prefix| store.prefixed(prefix, owner))
+    };
+    let (mut exact, assignments) = match evidence {
+        HistoricalEvidence::Unnamed => return (Vec::new(), false),
+        HistoricalEvidence::Prefixes(prefixes) => (Vec::new(), assigned(&prefixes, None)),
+        HistoricalEvidence::Commitments { first, prefixes } => {
+            let owner = store.note_owner(&first);
+            (vec![first], assigned(&prefixes, owner))
+        }
+    };
+    let mut complete = true;
+    for assignment in assignments {
+        match assignment {
+            PrefixAssignment::Dummy => {}
+            PrefixAssignment::Exact(commitment) => exact.push(commitment),
+            PrefixAssignment::Ambiguous { .. } | PrefixAssignment::Unseen { .. } => {
+                complete = false;
+            }
+        }
     }
+    (exact, complete)
+}
+
+/// The row commits before the mirror, a failed write leaves the page to run again.
+async fn record_spent(
+    database: Option<&Store>,
+    store: &AuditStore,
+    rows: Vec<SpentCommitment>,
+) -> Result<(), RingRpcError> {
+    if let Some(database) = database {
+        SpentIndex {
+            conn: database.connection(),
+        }
+        .record(&rows)
+        .await?;
+    }
+    store.spend_commitments(rows);
     Ok(())
+}
+
+/// The inputs commit before the ledger applies the merge, a replay of an applied merge does nothing.
+async fn apply_confirmed_merge(
+    database: Option<&Store>,
+    store: &AuditStore,
+    merge: ConfirmedMerge,
+) -> Result<(), RingRpcError> {
+    record_spent(
+        database,
+        store,
+        spent_rows(SpentEvent {
+            created_in: CreatedIn {
+                slot: merge.slot,
+                tx_signature: merge.tx_signature,
+                event_index: merge.event_index,
+            },
+            first_nullifier: merge.first_nullifier,
+            source: SpentSource::Merge,
+            commitments: merge.inputs.clone(),
+        }),
+    )
+    .await?;
+    store.apply_merge(merge);
+    Ok(())
+}
+
+struct SpentEvent {
+    created_in: CreatedIn,
+    first_nullifier: [u8; 32],
+    source: SpentSource,
+    commitments: Vec<[u8; 32]>,
+}
+
+fn spent_rows(event: SpentEvent) -> Vec<SpentCommitment> {
+    let SpentEvent {
+        created_in,
+        first_nullifier,
+        source,
+        commitments,
+    } = event;
+    commitments
+        .into_iter()
+        .map(|utxo_hash| SpentCommitment {
+            utxo_hash,
+            slot: created_in.slot,
+            tx_signature: created_in.tx_signature,
+            event_index: created_in.event_index,
+            first_nullifier,
+            source,
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use spr_indexer_api::Context;
     use spr_keypair::ViewingKey;
-    use spr_transaction::ShieldedTransaction;
-    use zolana_ring_client::{MergeAuditResult, UnresolvedMerge};
+    use zolana_ring_client::ConfirmedMerge;
 
     use super::*;
     use crate::{
@@ -972,9 +1272,15 @@ mod tests {
                         slot: 1,
                         block_time: 1,
                     },
-                    transactions: vec![forged, foreign, confirmed],
-                    next_cursor: None,
-                    scanned_through: None,
+                    data: [forged, foreign, confirmed]
+                        .into_iter()
+                        .map(|row| spr_client::rpc::TransactionEvents {
+                            slot: row.slot,
+                            signature: row.tx_signature,
+                            events: vec![row],
+                        })
+                        .collect(),
+                    pagination_token: None,
                     output_tree_id: None,
                 },
                 RingMode::ConfidentialEscrow,
@@ -995,37 +1301,154 @@ mod tests {
         assert!(rows.unfinished.is_none());
     }
 
+    fn two_input_merge() -> ConfirmedMerge {
+        ConfirmedMerge {
+            slot: 7,
+            tx_signature: Signature::from([7; 64]),
+            event_index: 0,
+            output_commitment: [0x20; 32],
+            tree_id: 1,
+            leaf_index: 3,
+            first_nullifier: [9; 32],
+            inputs: vec![[1; 32], [2; 32]],
+        }
+    }
+
+    async fn rename_spent_table(database: &Store, from: &str, to: &str) {
+        use sea_orm::ConnectionTrait;
+        database
+            .connection()
+            .execute_unprepared(&format!("ALTER TABLE {from} RENAME TO {to}"))
+            .await
+            .expect("rename");
+    }
+
+    #[tokio::test]
+    async fn a_failed_spent_write_leaves_a_merge_to_a_retry_that_repairs_every_input() {
+        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let store = AuditStore::default();
+        let merge = two_input_merge();
+        rename_spent_table(&database, "spent_commitments", "parked").await;
+        assert!(
+            apply_confirmed_merge(Some(&database), &store, merge.clone())
+                .await
+                .is_err()
+        );
+        assert!(store.spent_commitment(&[1; 32]).is_none());
+        rename_spent_table(&database, "parked", "spent_commitments").await;
+        apply_confirmed_merge(Some(&database), &store, merge.clone())
+            .await
+            .expect("retry");
+        for input in &merge.inputs {
+            assert!(store.spent_commitment(input).is_some());
+        }
+        let rows = SpentIndex {
+            conn: database.connection(),
+        }
+        .rows()
+        .await
+        .expect("rows");
+        assert_eq!(rows.len(), merge.inputs.len());
+
+        // A restart seeds the mirror and replays into a fresh ledger, the first event keeps its rows.
+        let restarted = AuditStore::default();
+        restarted.spend_commitments(rows.clone());
+        for input in &merge.inputs {
+            assert!(restarted.spent_commitment(input).is_some());
+        }
+        apply_confirmed_merge(Some(&database), &restarted, merge)
+            .await
+            .expect("replay");
+        let replayed = SpentIndex {
+            conn: database.connection(),
+        }
+        .rows()
+        .await
+        .expect("rows");
+        assert_eq!(replayed.len(), rows.len());
+    }
+
+    #[tokio::test]
+    async fn a_merge_lost_to_a_restart_before_its_write_replays_every_input() {
+        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let merge = two_input_merge();
+        rename_spent_table(&database, "spent_commitments", "parked").await;
+        assert!(
+            apply_confirmed_merge(Some(&database), &AuditStore::default(), merge.clone())
+                .await
+                .is_err()
+        );
+        rename_spent_table(&database, "parked", "spent_commitments").await;
+        let restarted = AuditStore::default();
+        apply_confirmed_merge(Some(&database), &restarted, merge.clone())
+            .await
+            .expect("replay");
+        for input in &merge.inputs {
+            assert!(restarted.spent_commitment(input).is_some());
+        }
+    }
+
     #[test]
-    fn merge_page_rejects_an_unchanged_cursor_and_extra_rows() {
-        let request = Page::new(Some(Base64String(vec![7])), Some(Limit::new(1).unwrap())).unwrap();
-        let mut response = MergeAuditPage {
-            context: Context {
-                slot: 1,
-                block_time: 1,
-            },
-            result: MergeAuditResult::default(),
-            next_cursor: Some(vec![7]),
-        };
-        assert!(matches!(
-            validate_merge_page(&response, &request),
-            Err(RingRpcError::InvalidIndexerResponse)
-        ));
-        response.next_cursor = Some(vec![8]);
-        let unresolved = UnresolvedMerge {
-            tx_signature: Signature::from([3; 64]),
-            event_index: 0,
-            output_commitment: [1; 32],
-        };
-        response.result.unresolved.push(unresolved);
-        assert!(validate_merge_page(&response, &request).is_ok());
-        response.result.unresolved.push(UnresolvedMerge {
-            tx_signature: Signature::from([4; 64]),
-            event_index: 0,
-            output_commitment: [2; 32],
-        });
-        assert!(matches!(
-            validate_merge_page(&response, &request),
-            Err(RingRpcError::InvalidIndexerResponse)
-        ));
+    fn a_historical_row_names_only_exact_inputs_and_holds_the_rest() {
+        let store = AuditStore::default();
+        let (known, other) = ([0x11; 32], [0x12; 32]);
+        for commitment in [known, other] {
+            store.record(
+                CreatedIn {
+                    slot: 1,
+                    tx_signature: Signature::from([1; 64]),
+                    event_index: 0,
+                },
+                [zolana_ring_client::CreatedUtxo {
+                    commitment,
+                    slot_index: 0,
+                    leaf_index: 0,
+                    utxo: zolana_ring_client::KnownUtxo {
+                        owner_key: [2; 32],
+                        owner: zolana_ring_client::UtxoOwner::Keyed {
+                            nullifier_pk: [3; 32],
+                        },
+                        asset: [4; 32],
+                        mint: None,
+                        amount: 1,
+                        blinding: [5; 32],
+                        data_hash: [0; 32],
+                        ring_data_hash: [0; 32],
+                        tree_id: 1,
+                    },
+                    ring_note: true,
+                }],
+            );
+        }
+        let prefix = |commitment: &[u8; 32]| InputPrefix::of(commitment);
+        assert_eq!(
+            historical_inputs(
+                &store,
+                HistoricalEvidence::Prefixes(vec![prefix(&known), None])
+            ),
+            (vec![known], true)
+        );
+        // One note, two inputs of the prefix, no input is exact.
+        assert_eq!(
+            historical_inputs(
+                &store,
+                HistoricalEvidence::Prefixes(vec![prefix(&known), prefix(&known)])
+            ),
+            (Vec::new(), false)
+        );
+        assert_eq!(
+            historical_inputs(
+                &store,
+                HistoricalEvidence::Commitments {
+                    first: known,
+                    prefixes: vec![prefix(&other)],
+                }
+            ),
+            (vec![known, other], true)
+        );
+        assert_eq!(
+            historical_inputs(&store, HistoricalEvidence::Unnamed),
+            (Vec::new(), false)
+        );
     }
 }

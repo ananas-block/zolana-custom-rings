@@ -2,8 +2,11 @@
 
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
-    sync::{PoisonError, RwLock, RwLockReadGuard},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        PoisonError, RwLock, RwLockReadGuard,
+    },
     time::Duration,
 };
 
@@ -14,17 +17,23 @@ use spr_keypair::{NullifierKey, PublicKey};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
-    rpc::AuditedUtxoView, AuditedOutput, CreatedUtxo, DepositNote, DepositOwner, DepositOwners,
-    EscrowedKeys, KnownUtxo, KnownUtxoIndex, OutputResolution, SealedNullifierKey,
-    UnresolvedOutput, UtxoOwner,
+    history::HistoryPosition,
+    rpc::{
+        AuditedUtxoView, Coverage, UnresolvedHistory, UnresolvedReason, UnspentUtxoKind,
+        UnspentUtxoView,
+    },
+    AuditedMergeOutput, AuditedOutput, ConfirmedMerge, CreatedUtxo, DepositNote, DepositOwner,
+    DepositOwners, EscrowedKeys, KnownUtxo, KnownUtxoIndex, KnownUtxos, MergeInput, MergeLedger,
+    OutputResolution, SealedNullifierKey, UnresolvedOutput, UtxoOwner,
 };
-use zolana_ring_transaction::RingAssets;
+use zolana_ring_policy::Member;
+use zolana_ring_transaction::{historical::InputPrefix, RingAssets};
 
-use crate::error::RingRpcError;
+use crate::{error::RingRpcError, spent_index::SpentCommitment};
 
 pub const UTXO_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Pages one backfill run reads, the next run resumes from its cursor.
+/// Pages one backfill run reads, the next run resumes from its position.
 pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 
 /// The guards are never held across an await, the audit reads them synchronously.
@@ -38,10 +47,20 @@ pub(crate) struct AuditStore {
     assets: RwLock<Option<RingAssets>>,
     /// Every nullifier a confirmed event of the ring history published.
     spent: RwLock<HashSet<[u8; 32]>>,
-    /// The indexer context when the backfill last reached the scan frontier.
+    /// Commitments a confirmed event named, mirroring `spent_commitments`.
+    spent_commitments: RwLock<HashMap<[u8; 32], SpentCommitment>>,
+    merges: RwLock<MergeLedger>,
+    /// Rows whose evidence the auditor could not name, kept until each input opens.
+    history: RwLock<BTreeMap<EventKey, UnnamedSpend>>,
+    /// Notes of one record member, ordered by commitment for the unspent cursor.
+    owned: RwLock<HashMap<[u8; 32], BTreeSet<[u8; 32]>>>,
+    coverage: RwLock<CoverageStart>,
+    /// The context of the backfill's newest terminal page.
     context: RwLock<Context>,
-    /// The next backfill's position, one backfill and escrow refresh at a time, a restart loses it with the held notes and replays the history.
-    pub(crate) backfill: AsyncMutex<Option<Vec<u8>>>,
+    /// Set once the spent mirror holds the table's rows.
+    spent_seeded: AtomicBool,
+    /// One backfill and escrow refresh at a time, a restart loses the position with the held notes and replays the history.
+    pub(crate) backfill: AsyncMutex<HistoryPosition>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +68,48 @@ pub(crate) struct CreatedIn {
     pub slot: u64,
     pub tx_signature: Signature,
     pub event_index: u16,
+}
+
+type EventKey = (u64, Signature, u16);
+
+/// One row with inputs the auditor has not named, permanent on a reason with no input list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnnamedSpend {
+    pub reason: UnresolvedReason,
+    pub inputs: Vec<[u8; 32]>,
+}
+
+impl UnnamedSpend {
+    pub(crate) const fn of(reason: UnresolvedReason) -> Self {
+        Self {
+            reason,
+            inputs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CoverageStart {
+    oldest_row: Option<u64>,
+    newest_historical: Option<u64>,
+    /// The newest backfill pass failed or hit its page cap, cleared at the next terminal page.
+    pass_unfinished: bool,
+}
+
+/// One page of `getUnspentUtxos`, every note listed only as not seen spent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnspentPage {
+    pub utxos: Vec<UnspentUtxoView>,
+    pub coverage: Coverage,
+    pub unresolved: Vec<UnresolvedHistory>,
+    pub cursor: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnspentQuery<'a> {
+    pub owner: &'a [u8; 32],
+    pub after: Option<[u8; 32]>,
+    pub limit: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +198,12 @@ impl AuditStore {
                     leaf_index: created.leaf_index,
                 },
             );
+            if created.ring_note {
+                self.own(&created.utxo.owner_key, created.commitment);
+            }
         }
+        drop(stored);
+        self.resolve_merges();
     }
 
     /// Tries each note under the current keys and registry, a read's snapshot can be older.
@@ -202,6 +268,233 @@ impl AuditStore {
             .contains(nullifier)
     }
 
+    /// The first event that names a commitment holds its row.
+    pub(crate) fn spend_commitments(&self, rows: impl IntoIterator<Item = SpentCommitment>) {
+        let mut spent = self
+            .spent_commitments
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for row in rows {
+            spent.entry(row.utxo_hash).or_insert(row);
+        }
+    }
+
+    /// `true` once per store, the caller reads the table into the mirror.
+    pub(crate) fn seeds_spent(&self) -> bool {
+        !self.spent_seeded.swap(true, Ordering::AcqRel)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spent_commitment(&self, commitment: &[u8; 32]) -> Option<SpentCommitment> {
+        self.spent_commitments
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(commitment)
+            .copied()
+    }
+
+    /// Applied once per confirmed merge, its inputs already sit in the spend index.
+    pub(crate) fn apply_merge(&self, merge: ConfirmedMerge) {
+        let known = self.known();
+        let mut merges = self.merges.write().unwrap_or_else(PoisonError::into_inner);
+        let transition = merges.apply(merge, |commitment| {
+            known
+                .get(commitment)
+                .map(|stored| MergeInput::from(&stored.utxo))
+        });
+        drop(known);
+        drop(merges);
+        self.own_merge_outputs(&transition.resolved);
+    }
+
+    /// A new opening can complete a held merge and each of its descendants.
+    fn resolve_merges(&self) {
+        let known = self.known();
+        let mut merges = self.merges.write().unwrap_or_else(PoisonError::into_inner);
+        let resolved = merges.resolve(|commitment| {
+            known
+                .get(commitment)
+                .map(|stored| MergeInput::from(&stored.utxo))
+        });
+        drop(known);
+        drop(merges);
+        self.own_merge_outputs(&resolved);
+    }
+
+    fn own_merge_outputs(&self, outputs: &[AuditedMergeOutput]) {
+        for output in outputs {
+            self.own(&output.owner_key, output.commitment);
+        }
+    }
+
+    /// The notes a version 2 prefix can name, under `owner` when the row binds one.
+    pub(crate) fn prefixed(&self, prefix: InputPrefix, owner: Option<[u8; 32]>) -> Vec<[u8; 32]> {
+        self.known()
+            .iter()
+            .filter(|(commitment, stored)| {
+                InputPrefix::of(commitment) == Some(prefix)
+                    && owner.is_none_or(|owner| stored.utxo.owner_key == owner)
+            })
+            .map(|(commitment, _)| *commitment)
+            .collect()
+    }
+
+    pub(crate) fn note_owner(&self, commitment: &[u8; 32]) -> Option<[u8; 32]> {
+        self.known()
+            .get(commitment)
+            .map(|stored| stored.utxo.owner_key)
+    }
+
+    fn own(&self, owner_key: &[u8; 32], commitment: [u8; 32]) {
+        // A key no identity hash takes owns no listed note.
+        let Ok(member) = Member::owner_tag(owner_key) else {
+            return;
+        };
+        self.owned
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(*member.as_bytes())
+            .or_default()
+            .insert(commitment);
+    }
+
+    /// An audit record of a merge output, `None` until every input opened.
+    pub(crate) fn merged(&self, commitment: &[u8; 32]) -> Option<AuditedMergeOutput> {
+        self.merges
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .output(commitment)
+            .cloned()
+    }
+
+    /// Coverage opens past the newest row the historical reader decoded.
+    pub(crate) fn saw_row(&self, slot: u64, historical: bool) {
+        let mut coverage = self
+            .coverage
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        coverage.oldest_row = Some(coverage.oldest_row.map_or(slot, |oldest| oldest.min(slot)));
+        if historical {
+            coverage.newest_historical = Some(
+                coverage
+                    .newest_historical
+                    .map_or(slot, |newest| newest.max(slot)),
+            );
+        }
+    }
+
+    /// Keeps the first reason of a row, its inputs narrow as openings land.
+    pub(crate) fn hold_unnamed(&self, key: CreatedIn, spend: UnnamedSpend) {
+        self.history
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry((key.slot, key.tx_signature, key.event_index))
+            .or_insert(spend);
+    }
+
+    /// Absence from the index stays "not seen spent", a covered row names its through slot.
+    pub(crate) fn unspent(&self, query: UnspentQuery<'_>) -> UnspentPage {
+        let coverage = self.coverage();
+        let unresolved = self.unresolved_history();
+        let window = coverage.from_slot..=coverage.through_slot;
+        // The note store comes first, `record` writes it before the owner index.
+        let known = self.known();
+        let owned = self.owned.read().unwrap_or_else(PoisonError::into_inner);
+        let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
+        let spent = self
+            .spent_commitments
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let listed = owned
+            .get(query.owner)
+            .into_iter()
+            .flatten()
+            .filter(|commitment| query.after.is_none_or(|after| **commitment > after))
+            .filter(|commitment| !spent.contains_key(*commitment))
+            .filter_map(|commitment| {
+                let view = match known.get(commitment) {
+                    Some(stored) => stored.unspent_view(commitment),
+                    None => merge_output_view(merges.output(commitment)?),
+                };
+                window.contains(&view.slot).then_some((*commitment, view))
+            });
+        let mut utxos = Vec::new();
+        let mut cursor = None;
+        for (commitment, view) in listed {
+            if utxos.len() == query.limit {
+                cursor = utxos.last().map(|view: &UnspentUtxoView| view.utxo_hash.0);
+                debug_assert!(cursor.is_some_and(|last| last < commitment));
+                break;
+            }
+            utxos.push(view);
+        }
+        UnspentPage {
+            utxos,
+            coverage,
+            unresolved,
+            cursor,
+        }
+    }
+
+    fn coverage(&self) -> Coverage {
+        let start = *self.coverage.read().unwrap_or_else(PoisonError::into_inner);
+        let through_slot = self.context().slot;
+        let unresolved = !self.unresolved_history().is_empty();
+        Coverage {
+            from_slot: start
+                .newest_historical
+                .map_or(start.oldest_row.unwrap_or(through_slot), |newest| {
+                    newest.saturating_add(1)
+                }),
+            through_slot,
+            // No terminal page reached means nothing in the window has been looked at.
+            complete: through_slot != 0 && !start.pass_unfinished && !unresolved,
+        }
+    }
+
+    fn unresolved_history(&self) -> Vec<UnresolvedHistory> {
+        let known = self.known();
+        let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
+        let history = self.history.read().unwrap_or_else(PoisonError::into_inner);
+        let named = |commitment: &[u8; 32]| {
+            known.get(commitment).is_some() || merges.output(commitment).is_some()
+        };
+        let spends = history
+            .iter()
+            .filter_map(|((slot, signature, event), spend)| {
+                let inputs: Vec<Hash> = spend
+                    .inputs
+                    .iter()
+                    .filter(|input| !named(input))
+                    .map(|input| Hash(*input))
+                    .collect();
+                // A row with no input list stays until a reset.
+                (spend.inputs.is_empty() || !inputs.is_empty()).then_some(UnresolvedHistory {
+                    slot: *slot,
+                    tx_signature: (*signature).into(),
+                    event_index: *event,
+                    reason: spend.reason,
+                    inputs,
+                })
+            });
+        let held = merges.unresolved().map(|merge| UnresolvedHistory {
+            slot: merge.slot,
+            tx_signature: merge.tx_signature.into(),
+            event_index: merge.event_index,
+            reason: UnresolvedReason::UnknownMergeInput,
+            inputs: merge
+                .inputs
+                .iter()
+                .filter(|input| !named(input))
+                .map(|input| Hash(*input))
+                .collect(),
+        });
+        let mut rows: Vec<_> = spends.chain(held).collect();
+        rows.sort_by_key(|row| (row.slot, row.event_index));
+        rows
+    }
+
+    /// A stale row hides funds from merge selection and authority transfers, no limit reads it.
     pub(crate) fn spendable(
         &self,
         notes: SpendableNotes<'_>,
@@ -210,12 +503,17 @@ impl AuditStore {
             nullifier_pk: notes.nullifier_key.pubkey()?,
         };
         let spent = self.spent.read().unwrap_or_else(PoisonError::into_inner);
+        let spent_commitments = self
+            .spent_commitments
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
         let known = self.known();
         known
             .iter()
-            .filter(|(_, stored)| {
+            .filter(|(commitment, stored)| {
                 let utxo = &stored.utxo;
-                utxo.owner_key == notes.owner_key
+                !spent_commitments.contains_key(*commitment)
+                    && utxo.owner_key == notes.owner_key
                     && utxo.owner == owner
                     && utxo.mint == Some(notes.mint.asset)
                     && utxo.data_hash == [0; 32]
@@ -234,7 +532,19 @@ impl AuditStore {
             .copied()
     }
 
+    pub(crate) fn pass_unfinished(&self) {
+        self.coverage
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pass_unfinished = true;
+    }
+
+    /// Only the backfill's terminal page moves the claim.
     pub(crate) fn absorbed(&self, context: Context) {
+        self.coverage
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pass_unfinished = false;
         let mut newest = self.context.write().unwrap_or_else(PoisonError::into_inner);
         if context.slot >= newest.slot {
             *newest = context;
@@ -242,10 +552,7 @@ impl AuditStore {
     }
 
     pub(crate) fn context(&self) -> Context {
-        self.context
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        *self.context.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn view(&self, utxo_hash: &Hash) -> Option<AuditedUtxoView> {
@@ -373,7 +680,38 @@ impl HeldNote {
     }
 }
 
+fn merge_output_view(output: &AuditedMergeOutput) -> UnspentUtxoView {
+    UnspentUtxoView {
+        utxo_hash: Hash(output.commitment),
+        asset: Hash(output.asset),
+        mint: output.mint.map(Into::into),
+        amount: output.amount,
+        kind: UnspentUtxoKind::MergeOutput,
+        slot: output.slot,
+        tx_signature: output.tx_signature.into(),
+        event_index: output.event_index,
+        slot_index: 0,
+    }
+}
+
 impl StoredUtxo {
+    fn unspent_view(&self, commitment: &[u8; 32]) -> UnspentUtxoView {
+        UnspentUtxoView {
+            utxo_hash: Hash(*commitment),
+            asset: Hash(self.utxo.asset),
+            mint: self.utxo.mint.map(Into::into),
+            amount: self.utxo.amount,
+            kind: UnspentUtxoKind::Opened {
+                blinding: Hash(self.utxo.blinding),
+                tree_id: self.utxo.tree_id,
+            },
+            slot: self.created_in.slot,
+            tx_signature: self.created_in.tx_signature.into(),
+            event_index: self.created_in.event_index,
+            slot_index: self.slot_index,
+        }
+    }
+
     fn wallet_utxo(
         &self,
         commitment: &[u8; 32],
@@ -408,6 +746,16 @@ impl StoredUtxo {
 impl Borrow<KnownUtxo> for StoredUtxo {
     fn borrow(&self) -> &KnownUtxo {
         &self.utxo
+    }
+}
+
+impl KnownUtxos for AuditStore {
+    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
+        self.stored(commitment).map(|stored| stored.utxo)
+    }
+
+    fn merged(&self, commitment: &[u8; 32]) -> Option<MergeInput> {
+        self.merged(commitment).as_ref().map(MergeInput::from)
     }
 }
 
@@ -459,6 +807,7 @@ mod tests {
                 ring_data_hash: [0; 32],
                 tree_id: 1,
             },
+            ring_note: true,
         }
     }
 
@@ -604,5 +953,177 @@ mod tests {
                 nullifier_pk: owner.nullifier_pk
             }
         );
+    }
+
+    fn created_in(slot: u64) -> CreatedIn {
+        CreatedIn {
+            slot,
+            tx_signature: Signature::from([slot as u8; 64]),
+            event_index: 0,
+        }
+    }
+
+    fn owner_member() -> [u8; 32] {
+        *Member::owner_tag(&[2; 32]).unwrap().as_bytes()
+    }
+
+    fn spent(commitment: [u8; 32]) -> SpentCommitment {
+        SpentCommitment {
+            utxo_hash: commitment,
+            slot: 12,
+            tx_signature: Signature::from([12; 64]),
+            event_index: 0,
+            first_nullifier: [9; 32],
+            source: crate::spent_index::SpentSource::Transfer,
+        }
+    }
+
+    fn frontier(slot: u64) -> Context {
+        Context {
+            slot,
+            block_time: 0,
+        }
+    }
+
+    #[test]
+    fn absence_from_the_spend_index_never_reads_as_unspent() {
+        let store = AuditStore::default();
+        let owner = owner_member();
+        let query = UnspentQuery {
+            owner: &owner,
+            after: None,
+            limit: 10,
+        };
+        store.saw_row(10, false);
+        store.record(created_in(10), [created(None)]);
+        // No frontier reached, nothing is claimed about the note.
+        let before = store.unspent(query);
+        assert!(before.utxos.is_empty());
+        assert!(!before.coverage.complete);
+        store.absorbed(frontier(20));
+        let covered = store.unspent(query);
+        assert_eq!(covered.utxos.len(), 1);
+        assert_eq!(
+            covered.coverage,
+            Coverage {
+                from_slot: 10,
+                through_slot: 20,
+                complete: true,
+            }
+        );
+        // A spend the auditor cannot name leaves the note listed and takes the claim away.
+        let unnamed = [7; 32];
+        store.hold_unnamed(
+            created_in(11),
+            UnnamedSpend {
+                reason: UnresolvedReason::UnknownSpend,
+                inputs: vec![unnamed],
+            },
+        );
+        let held = store.unspent(query);
+        assert_eq!(held.utxos.len(), 1);
+        assert!(!held.coverage.complete);
+        assert_eq!(held.unresolved[0].inputs, [Hash(unnamed)]);
+        // Its opening names the input, the claim returns.
+        store.record(
+            created_in(11),
+            [CreatedUtxo {
+                commitment: unnamed,
+                ..created(None)
+            }],
+        );
+        assert!(store.unspent(query).coverage.complete);
+        store.spend_commitments([spent([1; 32]), spent(unnamed)]);
+        assert!(store.unspent(query).utxos.is_empty());
+    }
+
+    #[test]
+    fn a_row_with_no_input_list_keeps_the_claim_false_for_good() {
+        let store = AuditStore::default();
+        store.saw_row(10, false);
+        store.absorbed(frontier(20));
+        store.hold_unnamed(
+            created_in(10),
+            UnnamedSpend::of(UnresolvedReason::UnreadableRow),
+        );
+        store.record(created_in(11), [created(None)]);
+        let owner = owner_member();
+        let page = store.unspent(UnspentQuery {
+            owner: &owner,
+            after: None,
+            limit: 10,
+        });
+        assert!(!page.coverage.complete);
+        assert_eq!(page.unresolved[0].reason, UnresolvedReason::UnreadableRow);
+    }
+
+    #[test]
+    fn a_note_at_or_below_the_newest_historical_row_stays_outside_coverage() {
+        let store = AuditStore::default();
+        store.saw_row(15, true);
+        store.record(created_in(15), [created(None)]);
+        store.record(
+            created_in(16),
+            [CreatedUtxo {
+                commitment: [8; 32],
+                ..created(None)
+            }],
+        );
+        store.absorbed(frontier(20));
+        let owner = owner_member();
+        let page = store.unspent(UnspentQuery {
+            owner: &owner,
+            after: None,
+            limit: 10,
+        });
+        assert_eq!(page.coverage.from_slot, 16);
+        let listed: Vec<_> = page.utxos.iter().map(|view| view.utxo_hash.0).collect();
+        assert_eq!(listed, [[8; 32]]);
+    }
+
+    #[test]
+    fn a_merge_spends_its_inputs_once_and_its_output_lists_after_every_input_opens() {
+        let store = AuditStore::default();
+        store.saw_row(10, false);
+        store.absorbed(frontier(20));
+        store.record(created_in(10), [created(None)]);
+        let merge = ConfirmedMerge {
+            slot: 11,
+            tx_signature: Signature::from([11; 64]),
+            event_index: 0,
+            output_commitment: [0x20; 32],
+            tree_id: 1,
+            leaf_index: 4,
+            first_nullifier: [9; 32],
+            inputs: vec![[1; 32], [0x10; 32]],
+        };
+        store.apply_merge(merge.clone());
+        store.apply_merge(merge.clone());
+        let owner = owner_member();
+        let query = UnspentQuery {
+            owner: &owner,
+            after: None,
+            limit: 10,
+        };
+        let held = store.unspent(query);
+        assert!(!held.coverage.complete);
+        assert_eq!(held.unresolved[0].inputs, [Hash([0x10; 32])]);
+        assert!(store.merged(&[0x20; 32]).is_none());
+        store.record(
+            created_in(10),
+            [CreatedUtxo {
+                commitment: [0x10; 32],
+                ..created(None)
+            }],
+        );
+        let output = store.merged(&[0x20; 32]).expect("every input opened");
+        assert_eq!(output.amount, 20);
+        store.spend_commitments(merge.inputs.iter().copied().map(spent));
+        let page = store.unspent(query);
+        assert!(page.coverage.complete);
+        let [view] = page.utxos.as_slice() else {
+            panic!("the output alone stays listed");
+        };
+        assert_eq!(view.kind, UnspentUtxoKind::MergeOutput);
     }
 }

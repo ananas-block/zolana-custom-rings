@@ -2,7 +2,7 @@ use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::RingMode;
-use custom_ring_sdk::{select_merge_where, RingError, MAX_RING_MERGE_INPUTS};
+use custom_ring_sdk::{select_merge_where, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use spr_keypair::NullifierKey;
@@ -11,13 +11,12 @@ use zolana_ring_client::rpc::{
     MergeSettings, MergeSettingsAttestation, RelayId, SetMergeSettingsRequest,
     SetMergeSettingsResponse,
 };
-use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
     audit::AuditService,
     authorize::WalletCheck,
-    cosign::{CoSignDecision, CoSignRequest},
+    cosign::{CoSignDecision, CoSignFlows, CoSignRequest},
     error::{redacted, RingRpcError},
     hub::Hub,
     merge_inputs::HeldInput,
@@ -258,9 +257,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 .decide(&CoSignRequest {
                     ring,
                     message: built.message.clone(),
-                    sender: Member::owner_tag(&owner_key)
-                        .map_err(|error| RingRpcError::MergeBuild(RingError::from(error).into()))?,
-                    flows: Vec::new(),
+                    flows: CoSignFlows::Published(Vec::new()),
                 })
                 .await?;
             match decision {
@@ -399,14 +396,14 @@ pub(crate) mod tests {
     impl TransactionSource for EscrowRingSource {
         async fn transactions_by_tag(
             &self,
-            _request: TransactionPage<'_>,
+            _request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
             unused()
         }
 
         async fn ring_history(
             &self,
-            _request: RingHistoryPage<'_>,
+            _request: RingHistoryPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
             unused()
         }
@@ -484,6 +481,10 @@ pub(crate) mod tests {
 
         async fn genesis_hash(&self) -> Result<[u8; 32], ClientError> {
             Ok(GENESIS)
+        }
+
+        async fn tree_id(&self, _tree: Address) -> Result<u16, custom_ring_sdk::RingError> {
+            Ok(1)
         }
 
         async fn ring_assets(&self) -> Result<RingAssets, ClientError> {
@@ -709,6 +710,7 @@ pub(crate) mod tests {
                         ring_data_hash: [0; 32],
                         tree_id: 1,
                     },
+                    ring_note: true,
                 }),
             );
             key

@@ -71,7 +71,8 @@ async fn a_backfill_opens_a_deposited_utxo_a_later_spend_names() {
         panic!("the spend opens before its deposit");
     };
     assert_eq!(unresolved.sender, None);
-    assert_eq!(unresolved.inputs[0].unseen_hash, Some(commitment.into()));
+    assert!(unresolved.inputs[0].unseen);
+    assert_eq!(unresolved.inputs[0].hash, Some(commitment.into()));
     assert_eq!(amounts(unresolved), [64]);
     service.backfill_utxos().await.expect("backfill");
     let found = service
@@ -527,11 +528,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
 async fn a_backfill_stops_at_its_page_budget() {
     let fixture = Fixture::new();
     let mut source = fixture.source();
-    source.pages = HashMap::from([
-        (None, paged(Vec::new(), Some(1), None)),
-        (Some(vec![1]), paged(Vec::new(), Some(2), None)),
-        (Some(vec![2]), paged(Vec::new(), Some(1), None)),
-    ]);
+    source.pages = long_history(&fixture, None, 1);
     let reads = source.history_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("bounded backfill");
@@ -544,7 +541,10 @@ async fn the_utxo_context_moves_only_at_the_scan_frontier() {
     let mut source = fixture.source();
     source.pages = HashMap::from([
         (None, paged(vec![fixture.audited.clone()], Some(1), None)),
-        (Some(vec![1]), paged(Vec::new(), Some(1), None)),
+        (
+            Some(vec![1]),
+            paged(vec![outside_row(&fixture)], Some(1), None),
+        ),
     ]);
     let service = fixture.hub(source).service(None).expect("service");
     assert!(matches!(
@@ -848,4 +848,165 @@ async fn a_replaced_registry_replaces_the_escrowed_keys() {
         panic!("registry A's owner lost its key, {pending:?}");
     };
     assert_eq!(pending.owner_key, owner_a.owner_key.into());
+}
+
+/// A row of no served ring, each pass reads it and applies nothing.
+fn outside_row(fixture: &Fixture) -> ShieldedTransaction {
+    let mut row = fixture.audited.clone();
+    row.ring_program_id = None;
+    row
+}
+
+/// More non terminal pages than one pass reads, from `start`, keyed from `first`.
+fn long_history(
+    fixture: &Fixture,
+    start: Option<Vec<u8>>,
+    first: u8,
+) -> HashMap<Option<Vec<u8>>, Paged> {
+    let mut pages = HashMap::new();
+    let mut key = start;
+    for index in first..first + 70 {
+        pages.insert(
+            key.clone(),
+            paged(vec![outside_row(fixture)], Some(index), None),
+        );
+        key = Some(vec![index]);
+    }
+    pages.insert(key, paged(Vec::new(), None, Some(200)));
+    pages
+}
+
+async fn coverage(service: &AuditService<StaticSource>) -> Coverage {
+    let request = UnspentUtxosRequest::new(target(RING), [1; 32])
+        .sign(&delegate())
+        .expect("signed unspent read");
+    service
+        .unspent_utxos(&request)
+        .await
+        .expect("unspent read")
+        .coverage
+}
+
+#[tokio::test]
+async fn an_empty_history_covers_only_its_terminal_slot() {
+    let fixture = Fixture::new();
+    let mut source = fixture.source();
+    source.pages = HashMap::from([(None, paged(Vec::new(), None, Some(1)))]);
+    let service = fixture.hub(source).service(None).expect("service");
+    assert!(!coverage(&service).await.complete, "no pass reached a page");
+    service.backfill_utxos().await.expect("backfill");
+    let covered = coverage(&service).await;
+    assert_eq!(
+        (covered.from_slot, covered.through_slot, covered.complete),
+        (99, 99, true)
+    );
+}
+
+#[tokio::test]
+async fn a_partial_pass_drops_complete_until_a_later_terminal_page() {
+    let fixture = Fixture::new();
+    let mut source = fixture.source();
+    source.pages = long_history(&fixture, Some(vec![1]), 2);
+    source.pages.insert(None, paged(Vec::new(), None, Some(1)));
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("first pass");
+    let first = coverage(&service).await;
+    assert!(first.complete);
+
+    service.backfill_utxos().await.expect("capped pass");
+    let capped = coverage(&service).await;
+    assert!(!capped.complete, "the cap stopped the pass");
+    assert_eq!(capped.through_slot, first.through_slot);
+
+    service.backfill_utxos().await.expect("last pass");
+    let last = coverage(&service).await;
+    assert!(last.complete);
+    assert!(last.through_slot > first.through_slot);
+}
+
+#[tokio::test]
+async fn a_failure_after_a_successful_scan_drops_complete_until_a_retry_passes() {
+    let fixture = Fixture::new();
+    let mut source = fixture.source();
+    source.pages = HashMap::from([(None, paged(Vec::new(), None, Some(1)))]);
+    let down = source.history_down.clone();
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("first pass");
+    let through = coverage(&service).await.through_slot;
+
+    down.store(true, Ordering::Relaxed);
+    assert!(service.backfill_utxos().await.is_err());
+    let failed = coverage(&service).await;
+    assert_eq!((failed.complete, failed.through_slot), (false, through));
+
+    down.store(false, Ordering::Relaxed);
+    service.backfill_utxos().await.expect("retry");
+    assert!(coverage(&service).await.complete);
+    assert_eq!(cursors(&probe), [None, Some(vec![1]), Some(vec![1])]);
+}
+
+#[tokio::test]
+async fn a_snapshot_behind_the_floor_refuses_the_page_and_keeps_the_position() {
+    let fixture = Fixture::new();
+    let mut source = fixture.source();
+    source.pages = HashMap::from([(None, paged(Vec::new(), None, Some(1)))]);
+    let context = source.forced_context.clone();
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("first pass");
+    let through = coverage(&service).await.through_slot;
+
+    *context.lock().unwrap() = Some(through - 1);
+    assert!(matches!(
+        service.backfill_utxos().await,
+        Err(RingRpcError::InvalidIndexerResponse)
+    ));
+    let behind = coverage(&service).await;
+    assert_eq!((behind.complete, behind.through_slot), (false, through));
+
+    *context.lock().unwrap() = None;
+    service.backfill_utxos().await.expect("caught up");
+    assert!(coverage(&service).await.complete);
+    assert_eq!(cursors(&probe), [None, Some(vec![1]), Some(vec![1])]);
+}
+
+#[tokio::test]
+async fn a_retryable_row_keeps_the_position_and_complete_false() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.missing_message.clone(), fixture.audited.clone()];
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([(None, paged(rows, None, Some(1)))]);
+    let probe = source.clone();
+    let service = fixture.hub(source).service(None).expect("service");
+    assert!(service.backfill_utxos().await.is_err());
+    assert!(service.backfill_utxos().await.is_err());
+    assert_eq!(cursors(&probe), [None, None]);
+    assert!(!coverage(&service).await.complete);
+}
+
+#[tokio::test]
+async fn a_restart_replays_from_the_start_and_claims_nothing_until_it_ends() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.audited.clone()];
+    let hash = Hash(fixture.audited.output_slots[0].output_context.hash);
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([(None, paged(rows, None, Some(1)))]);
+    let probe = source.clone();
+    let before = fixture.hub(source.clone()).service(None).expect("service");
+    before.backfill_utxos().await.expect("first run");
+    assert!(coverage(&before).await.complete);
+
+    let restarted = fixture.hub(source).service(None).expect("service");
+    assert!(
+        !coverage(&restarted).await.complete,
+        "the replay has not run"
+    );
+    restarted.backfill_utxos().await.expect("replay");
+    assert!(coverage(&restarted).await.complete);
+    assert_eq!(
+        stored_amount(&restarted, &hash).await,
+        stored_amount(&before, &hash).await
+    );
+    assert_eq!(cursors(&probe), [None, None]);
 }

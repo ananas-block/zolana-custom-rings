@@ -2,7 +2,12 @@
 
 use super::*;
 use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
-use zolana_ring_client::prefix_evidence;
+use zolana_ring_client::{
+    input_hash_evidence,
+    rpc::{
+        GetUnspentUtxosRequest, GetUnspentUtxosResponse, UnspentUtxosRequest, GET_UNSPENT_UTXOS,
+    },
+};
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -344,7 +349,7 @@ fn owned_in_proof(fixture: &Fixture, owner: Address) -> StaticSource {
     ];
     let disclosure = transfer.in_proof_disclosure(
         &outputs,
-        prefix_evidence(&[Some(field(0x70))]).expect("input hash"),
+        input_hash_evidence(&[Some(field(0x70))]).expect("input hash"),
     );
     let audited = Indexed {
         transfer: &transfer,
@@ -434,4 +439,112 @@ async fn each_co_spender_of_an_audit_only_ring_sees_no_input_opening() {
         let source = owner_signed(&fixture, &[OWNER, CO_OWNER]);
         assert_spent_in_full(wallet_activity(source, &fixture, owner).await);
     }
+}
+
+/// One spend of an unseen note, paying `paid` beside a stranger.
+fn unseen_spend(fixture: &Fixture, signature: u8, paid: u8) -> ShieldedTransaction {
+    let mut transfer = ring_transfer(signature);
+    transfer.nullifiers.push(field(0x71));
+    let outputs = [
+        Output::Ring {
+            utxo: sol(paid, 500),
+            recipient_u: x25519_u(0x50),
+            tag: Some(field(0x51)),
+        },
+        Output::Ring {
+            utxo: sol(0xb6, 501),
+            recipient_u: x25519_u(0x52),
+            tag: Some(field(0x53)),
+        },
+    ];
+    Indexed {
+        transfer: &transfer,
+        outputs: &outputs,
+        auditor: &fixture.auditor.pubkey(),
+        signature,
+        frames: &fixture.frames,
+    }
+    .anonymous_commitments(&[Some(field(signature)), None])
+}
+
+#[tokio::test]
+async fn the_unspent_route_gives_a_wallet_the_flag_and_no_row_of_another_owners_spend() {
+    let fixture = Fixture::new();
+    let (others, own) = (0x70, 0x73);
+    let mut source = fixture.source().with_transactions(vec![
+        unseen_spend(&fixture, others, 0xb7),
+        unseen_spend(&fixture, own, 0xb5),
+    ]);
+    source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
+    // The history ends at these rows, the default cursor names its own page.
+    source.next_cursor = None;
+    let wallet = Address::new_from_array([0xb5; 32]);
+    let reader = wallet_reader(&source, wallet);
+    let hub = Arc::new(fixture.hub(source));
+    let module = rpc_module(hub.clone()).expect("module");
+    hub.service(None)
+        .expect("service")
+        .backfill_utxos()
+        .await
+        .expect("backfill");
+    let owner = *Member::owner_tag(wallet.as_array())
+        .expect("member")
+        .as_bytes();
+    let read = |request: GetUnspentUtxosRequest| {
+        let module = module.clone();
+        async move {
+            module
+                .call::<_, GetUnspentUtxosResponse>(GET_UNSPENT_UTXOS, as_object(request))
+                .await
+        }
+    };
+    let ring_view = read(
+        UnspentUtxosRequest::new(target(RING), owner)
+            .sign(&delegate())
+            .expect("signed"),
+    )
+    .await
+    .expect("ring read");
+    let row = ring_view
+        .unresolved
+        .iter()
+        .find(|row| row.inputs == [Hash(field(others))])
+        .expect("a ring grant names another owner's row");
+
+    let wallet_view = read(
+        UnspentUtxosRequest::new(target(RING), owner)
+            .with_wallet(wallet)
+            .sign(&reader)
+            .expect("signed"),
+    )
+    .await
+    .expect("wallet read");
+    assert!(wallet_view.unresolved.is_empty());
+    assert!(!wallet_view.coverage.complete);
+    let [paid] = wallet_view.utxos.as_slice() else {
+        panic!(
+            "the wallet's own note stays listed, {:?}",
+            wallet_view.utxos
+        );
+    };
+    assert_eq!(paid.amount, 500);
+    let wire = serde_json::to_string(&wallet_view).expect("json");
+    assert!(!wire.contains(&Hash(field(others)).to_base58()));
+    assert!(!wire.contains(&Hash(field(own)).to_base58()));
+    assert!(!wire.contains(&row.tx_signature.to_string()));
+
+    // A wallet grant reads no other owner's notes.
+    let stranger = *Member::owner_tag(&[0xb6; 32]).expect("member").as_bytes();
+    assert_eq!(
+        refusal(
+            read(
+                UnspentUtxosRequest::new(target(RING), stranger)
+                    .with_wallet(wallet)
+                    .sign(&reader)
+                    .expect("signed"),
+            )
+            .await
+        ),
+        zolana_ring_rpc::GrantRefusal::WalletScope.code()
+    );
 }
