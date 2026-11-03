@@ -12,13 +12,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
+import {
+  MAX_MERGE_INPUTS,
+  type Bytes32,
+  type Bytes33,
+  type Bytes64,
+} from "@heliuslabs/zolana/interface";
 import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import { knownUtxoHash, type KnownUtxo } from "../../../src/operations/audit/audit.js";
 import { passkeyReader } from "../../../src/crypto/keys/passkey.js";
-import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import {
   P256ReaderKey,
   checkedReaderKey,
@@ -142,6 +146,35 @@ function rustPage(name: string): Record<string, unknown> {
 function rustItem(name: string): Record<string, unknown> {
   const value = rustPage(name)["value"] as { items: Record<string, unknown>[] };
   return structuredClone(value.items[0]!);
+}
+
+/** Rust `DecryptedInput` of a fixture row, named by commitment and the last row unseen. */
+function anonymousItem(): Record<string, unknown> {
+  return rustItem("decrypted_anonymous_page.json");
+}
+
+/** An unseen input beside a dummy, under the nullifiers they publish. */
+function unseenItem(): Record<string, unknown> {
+  return decryptedItem({
+    inputs: [
+      { nullifier: addressOf(12), hash: addressOf(0x2a), unseen: true },
+      { nullifier: addressOf(11), unseen: false },
+    ],
+    nullifiers: [addressOf(12), addressOf(11)],
+    spenders: [addressOf(13)],
+  });
+}
+
+/** Two unseen inputs and a view tag, no sender names the note. */
+function unseenFirstItem(): Record<string, unknown> {
+  return decryptedItem({
+    outputs: [{ ...outputAt(anonymousItem(), 0), tag: addressOf(9) }],
+    inputs: [
+      { nullifier: addressOf(12), hash: addressOf(0x2b), unseen: true },
+      { nullifier: addressOf(11), hash: addressOf(0x2a), unseen: true },
+    ],
+    nullifiers: [addressOf(12), addressOf(11)],
+  });
 }
 
 describe("ring status", () => {
@@ -638,28 +671,25 @@ describe("signed ring request validation", () => {
 describe("ring audited merges", () => {
   it("reads signed audited merge pages and rejects malformed field values", async () => {
     await initializePoseidon();
-    const ownerMember = getBase58Decoder().decode(memberOfTag(addressBytes(RING)));
-    const value = {
-      opened: [
-        {
-          txSignature: signatureOf(1),
-          eventIndex: 2,
-          outputCommitment: addressOf(3),
-          ownerMember,
-          ownerPubkey: RING,
-          mint: SOL_MINT,
-          amount: 7,
-          blinding: addressOf(5),
-          ringDataHash: addressOf(6),
-          inputNullifiers: [addressOf(7), addressOf(8)],
-          nullifier: addressOf(9),
-        },
-      ],
-      unresolved: [
-        { txSignature: signatureOf(10), eventIndex: 3, outputCommitment: addressOf(11) },
-      ],
-      cursor: "AQIE",
+    const opened = {
+      slot: 8,
+      txSignature: signatureOf(1),
+      eventIndex: 2,
+      outputCommitment: addressOf(3),
+      ownerKey: RING,
+      asset: getAddressDecoder().decode(assetField(SOL_MINT)),
+      mint: SOL_MINT,
+      amount: 7,
+      inputCommitments: [addressOf(7), addressOf(8)],
     };
+    const unresolved = {
+      slot: 9,
+      txSignature: signatureOf(10),
+      eventIndex: 3,
+      outputCommitment: addressOf(11),
+      inputCommitments: [addressOf(12)],
+    };
+    const value = { opened: [opened], unresolved: [unresolved], cursor: "AQIE" };
     const merges = (body: unknown) => rpcWith({ context: { slot: 9, blockTime: 10 }, value: body });
     const reader = messageSignerReader(await generateKeyPairSigner());
     const page = await merges(value).getAuditedMerges({
@@ -670,16 +700,28 @@ describe("ring audited merges", () => {
       timestamp: 1_700_000_000n,
     });
     expect(page.cursor).toEqual(Uint8Array.of(1, 2, 4));
-    expect(page.opened[0]).toMatchObject({
-      signature: signatureOf(1),
-      eventIndex: 2,
-      amount: 7n,
-      mint: SOL_MINT,
-      ownerPublicKey: RING,
-      inputNullifiers: [filled(7, 32), filled(8, 32)],
-      keys: { kind: "escrowed", nullifier: filled(9, 32) },
-    });
-    expect(page.unresolved[0]).toMatchObject({ signature: signatureOf(10), eventIndex: 3 });
+    expect(page.opened).toEqual([
+      {
+        slot: 8n,
+        signature: signatureOf(1),
+        eventIndex: 2,
+        outputCommitment: filled(3, 32),
+        ownerKey: addressBytes(RING),
+        asset: assetField(SOL_MINT),
+        mint: SOL_MINT,
+        amount: 7n,
+        inputCommitments: [filled(7, 32), filled(8, 32)],
+      },
+    ]);
+    expect(page.unresolved).toEqual([
+      {
+        slot: 9n,
+        signature: signatureOf(10),
+        eventIndex: 3,
+        outputCommitment: filled(11, 32),
+        inputCommitments: [filled(12, 32)],
+      },
+    ]);
     await expect(
       merges({ ...value, cursor: "AQID" }).getAuditedMerges({
         target: RING_TARGET,
@@ -690,32 +732,39 @@ describe("ring audited merges", () => {
     await expect(
       merges(value).getAuditedMerges({ target: RING_TARGET, signer: reader, limit: 1n }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
-    // An anonymous merge discloses one spent commitment per circuit slot and no nullifier.
-    const { nullifier: _escrowed, ...disclosed } = value.opened[0]!;
-    const commitments = Array.from({ length: 8 }, (_, index) =>
-      addressOf(index < 2 ? 20 + index : 0),
-    );
-    const anonymous = await merges({
-      ...value,
-      opened: [{ ...disclosed, inputCommitments: commitments }],
-    }).getAuditedMerges({ target: RING_TARGET, signer: reader });
-    const keys = anonymous.opened[0]?.keys;
-    expect(keys?.kind).toBe("disclosed");
-    expect(keys?.kind === "disclosed" && keys.inputCommitments).toHaveLength(8);
+    const { mint: _mint, ...unnamed } = opened;
+    const unknownAsset = await merges({ ...value, opened: [unnamed] }).getAuditedMerges({
+      target: RING_TARGET,
+      signer: reader,
+    });
+    expect(unknownAsset.opened[0]?.mint).toBeUndefined();
     // The program accepts a one-input merge.
     const single = await merges({
       ...value,
-      opened: [{ ...value.opened[0]!, inputNullifiers: [addressOf(7)] }],
+      opened: [{ ...opened, inputCommitments: [addressOf(7)] }],
     }).getAuditedMerges({ target: RING_TARGET, signer: reader });
-    expect(single.opened[0]?.inputNullifiers).toEqual([filled(7, 32)]);
+    expect(single.opened[0]?.inputCommitments).toEqual([filled(7, 32)]);
+    const { inputCommitments: _inputCommitments, ...uncommitted } = opened;
+    const { inputCommitments: _unresolvedCommitments, ...unresolvedUncommitted } = unresolved;
     for (const bad of [
-      { ...value, opened: [disclosed] },
-      { ...value, opened: [{ ...value.opened[0]!, inputCommitments: commitments }] },
-      { ...value, opened: [{ ...disclosed, inputCommitments: commitments.slice(0, 2) }] },
-      { ...value, opened: [{ ...value.opened[0]!, inputNullifiers: [] }] },
-      { ...value, opened: [{ ...value.opened[0]!, eventIndex: 65536 }] },
-      { ...value, opened: [{ ...value.opened[0]!, ownerMember: addressOf(255) }] },
-      { ...value, opened: [{ ...value.opened[0]!, ownerPubkey: addressOf(12) }] },
+      { ...value, opened: [uncommitted] },
+      { ...value, unresolved: [unresolvedUncommitted] },
+      { ...value, opened: [{ ...opened, inputCommitments: [] }] },
+      {
+        ...value,
+        opened: [
+          {
+            ...opened,
+            inputCommitments: Array.from({ length: MAX_MERGE_INPUTS + 1 }, () => addressOf(7)),
+          },
+        ],
+      },
+      { ...value, opened: [{ ...opened, inputCommitments: [addressOf(255)] }] },
+      { ...value, opened: [{ ...opened, eventIndex: 65536 }] },
+      { ...value, opened: [{ ...opened, asset: addressOf(255) }] },
+      { ...value, opened: [{ ...opened, mint: addressOf(12) }] },
+      { ...value, opened: [{ ...opened, blinding: addressOf(5) }] },
+      { ...value, opened: [{ ...opened, nullifier: addressOf(9) }] },
     ])
       await expect(
         merges(bad).getAuditedMerges({ target: RING_TARGET, signer: reader }),
@@ -1223,7 +1272,8 @@ describe("ring read request", () => {
   });
 
   it("reads the wallet activity the Rust ring rpc serializes for its sender and a recipient", async () => {
-    const { fetch, bodies } = capturingFetch(rustPage("wallet_activity_page.json"));
+    const activityPage = rustPage("wallet_activity_page.json");
+    const { fetch, bodies } = capturingFetch(activityPage);
     const page = await new RingRpc("http://ring.example", {
       fetch,
       allowInsecureHttp: true,
@@ -1238,6 +1288,7 @@ describe("ring read request", () => {
     const [sent, received] = page.items;
     if (sent?.view.role !== "sender") throw new Error("a sender view");
     expect(sent.view.inputs).toHaveLength(6);
+    expect(sent.view.inputs[5]?.opening).toEqual({ kind: "unseenHash", hash: filled(0xa0, 32) });
     expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
     expect(received?.view).toEqual({
       role: "recipient",
@@ -1247,7 +1298,7 @@ describe("ring read request", () => {
   });
 
   it("reads the anonymous page with its sender, tags and every input ring kind", async () => {
-    const item = await readItem(rustItem("decrypted_anonymous_page.json"));
+    const item = await readItem(anonymousItem());
     expect(item.sender).toEqual({ ownerKey: filled(0x50, 32), nullifierPk: filled(0x51, 32) });
     const ring = item.outputs[0]!.opening;
     expect(ring.kind === "ring" && ring.ownerTag).toEqual({ kind: "view", tag: filled(0x31, 32) });
@@ -1260,32 +1311,33 @@ describe("ring read request", () => {
       { kind: "default", commitment: filled(0x82, 32) },
       undefined,
       "dummy",
-      "ambiguous",
+      "unseenHash",
+    ]);
+    expect(item.inputs.map((input) => input.hash)).toEqual([
+      filled(0x62, 32),
+      filled(0x74, 32),
+      filled(0x82, 32),
+      filled(0x92, 32),
+      undefined,
+      filled(0xa0, 32),
     ]);
     expect(item.inputs[3]?.opening).toMatchObject({ amount: 0x90n, mint: addressOf(4) });
-    expect(item.inputs[5]?.opening).toEqual({
-      kind: "ambiguous",
-      candidates: [filled(0xa0, 32), filled(0xa1, 32)],
-    });
+    expect(item.inputs[5]?.opening).toEqual({ kind: "unseenHash", hash: filled(0xa0, 32) });
   });
 
-  it("keeps an unseen input with its prefix and apart from a dummy, on the page and in the sender's view", async () => {
-    const wire = rustItem("decrypted_in_proof_page.json");
-    const prefix = BigInt(`0x${"2a".repeat(16)}`);
-    const openings = [{ kind: "unseen", prefix }, { kind: "dummy" }];
+  it("keeps an unseen input with its hash and apart from a dummy, on the page and in the sender's view", async () => {
+    const wire = unseenItem();
+    const openings = [{ kind: "unseenHash", hash: filled(0x2a, 32) }, { kind: "dummy" }];
     const item = await readItem(wire);
     expect(item.sender).toBeUndefined();
     expect(item.inputs.map((input) => input.opening)).toEqual(openings);
+    expect(item.inputs.map((input) => input.hash)).toEqual([filled(0x2a, 32), undefined]);
     expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
     const { slot, txSignature, eventIndex, inputs, outputs, payloadErrors, withdrawals } = wire;
     const view = { role: "sender", inputs, outputs, payloadErrors, withdrawals };
-    const { fetch } = capturingFetch({
-      ...rustPage("decrypted_in_proof_page.json"),
+    const activity = await rpcWith({
+      context: { blockTime: 1_700_000_000, slot: 9 },
       value: { items: [{ slot, txSignature, eventIndex, view }], cursor: null },
-    });
-    const activity = await new RingRpc("http://ring.example", {
-      fetch,
-      allowInsecureHttp: true,
     }).getWalletActivity({
       target: RING_TARGET,
       signer: await anyReader(),
@@ -1296,30 +1348,29 @@ describe("ring read request", () => {
     expect(sent.inputs.map((input) => input.opening)).toEqual(openings);
   });
 
-  it.each<readonly [string, (input: Record<string, unknown>) => void]>([
-    ["a prefix off its length", (input) => (input["unseenPrefix"] = "Kioq")],
-    ["a zero prefix", (input) => (input["unseenPrefix"] = Buffer.alloc(16).toString("base64"))],
+  it.each<readonly [string, (input: Record<string, unknown>) => void, string]>([
+    ["a hash off its length", (input) => (input["hash"] = "Kioq"), "inputs[0].hash"],
+    ["no hash", (input) => delete input["hash"], "inputs[0].hash"],
+    ["a flag of another type", (input) => (input["unseen"] = "true"), "inputs[0].unseen"],
+    ["an opening", (input) => (input["opening"] = { amount: 1 }), "inputs[0]"],
     [
-      "a prefix no canonical hash has",
-      (input) => (input["unseenPrefix"] = Buffer.alloc(16, 0xff).toString("base64")),
+      "a merge record",
+      (input) => (input["merged"] = { ownerKey: addressOf(1), asset: addressOf(2), amount: 1 }),
+      "inputs[0]",
     ],
-    ["an unseen input with an opening", (input) => (input["opening"] = { amount: 1 })],
-    ["an unseen input with candidates", (input) => (input["candidates"] = [addressOf(1)])],
-  ])("refuses %s", async (_name, edit) => {
-    const item = rustItem("decrypted_in_proof_page.json");
+    ["a field the wire lacks", (input) => (input["candidates"] = []), "inputs[0].shape"],
+  ])("refuses an unseen input with %s", async (_name, edit, path) => {
+    const item = unseenItem();
     edit((item["inputs"] as Record<string, unknown>[])[0]!);
-    await expect(readItem(item)).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { path: "inputs[0].unseenPrefix" },
-    });
+    await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
   });
 
   it("reads an unseen first note by its hash with no sender", async () => {
-    const item = await readItem(rustItem("decrypted_unseen_hash_page.json"));
+    const item = await readItem(unseenFirstItem());
     expect(item.sender).toBeUndefined();
     expect(item.inputs.map((input) => input.opening)).toEqual([
       { kind: "unseenHash", hash: filled(0x2b, 32) },
-      { kind: "unseen", prefix: BigInt(`0x${"2a".repeat(16)}`) },
+      { kind: "unseenHash", hash: filled(0x2a, 32) },
     ]);
     expect(item.outputs[0]?.opening).toMatchObject({
       kind: "ring",
@@ -1327,30 +1378,13 @@ describe("ring read request", () => {
     });
   });
 
-  it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
-    [
-      "an unseen hash past the first input",
-      (item) => {
-        const inputs = item["inputs"] as Record<string, unknown>[];
-        delete inputs[1]!["unseenPrefix"];
-        inputs[1]!["unseenHash"] = addressOf(1);
-      },
-      "inputs",
-    ],
-    [
-      "an unseen hash beside a sender",
-      (item) => (item["sender"] = { ownerKey: addressOf(2) }),
-      "inputs",
-    ],
-    [
-      "an unseen hash with an opening",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["opening"] = { amount: 1 }),
-      "inputs[0].unseenHash",
-    ],
-  ])("refuses %s", async (_name, edit, path) => {
-    const item = rustItem("decrypted_unseen_hash_page.json");
-    edit(item);
-    await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
+  it("refuses an unseen hash beside a sender", async () => {
+    const item = unseenFirstItem();
+    item["sender"] = { ownerKey: addressOf(2) };
+    await expect(readItem(item)).rejects.toMatchObject({
+      code: "RING_RPC",
+      details: { path: "inputs" },
+    });
   });
 
   it("reads an escrow pending slot with its proven fields", async () => {
@@ -1391,7 +1425,7 @@ describe("ring read request", () => {
   });
 
   it("refuses a page that discloses inputs for only some published nullifiers", async () => {
-    const item = rustItem("decrypted_in_proof_page.json");
+    const item = unseenItem();
     item["inputs"] = (item["inputs"] as unknown[]).slice(1);
     await expect(readItem(item)).rejects.toMatchObject({
       code: "RING_RPC",
@@ -1400,10 +1434,10 @@ describe("ring read request", () => {
   });
 
   it("reads a sender whose spent UTXO 0 is a deposit and refuses an output UTXO without its key", async () => {
-    const deposited = rustItem("decrypted_anonymous_page.json");
+    const deposited = anonymousItem();
     delete (deposited["sender"] as Record<string, unknown>)["nullifierPk"];
     expect((await readItem(deposited)).sender).toEqual({ ownerKey: filled(0x50, 32) });
-    const keyless = rustItem("decrypted_anonymous_page.json");
+    const keyless = anonymousItem();
     delete (outputAt(keyless, 0)["utxo"] as Record<string, unknown>)["nullifierPk"];
     await expect(readItem(keyless)).rejects.toMatchObject({ code: "RING_RPC" });
   });
@@ -1465,17 +1499,9 @@ describe("ring read request", () => {
       "outputs.tag",
     ],
     [
-      "an ambiguous input with an opening",
-      (item) => {
-        const inputs = item["inputs"] as Record<string, unknown>[];
-        inputs[5]!["opening"] = inputs[0]!["opening"];
-      },
-      "inputs[5].candidates",
-    ],
-    [
-      "an empty candidate list",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[5]!["candidates"] = []),
-      "inputs[5].candidates",
+      "a dummy input with a hash",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[4]!["hash"] = addressOf(1)),
+      "inputs[4].hash",
     ],
     [
       "an unknown input ring kind",
@@ -1487,7 +1513,7 @@ describe("ring read request", () => {
     ],
     ["an event index past u16", (item) => (item["eventIndex"] = 65536), "eventIndex"],
   ])("refuses %s", async (_name, edit, path) => {
-    const item = rustItem("decrypted_anonymous_page.json");
+    const item = anonymousItem();
     edit(item);
     await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
   });

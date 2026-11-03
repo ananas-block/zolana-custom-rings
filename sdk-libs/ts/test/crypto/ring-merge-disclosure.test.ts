@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import vector from "../../../../test-vectors/merge/ring-merge.json" with { type: "json" };
+import vector from "../../../../test-vectors/merge/merge_v2.json" with { type: "json" };
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
   Reader,
   Writer,
-  addressBytes,
-  encodeBase58,
+  ZERO_32,
+  bigIntToBytes,
+  bytesToBigInt,
+  fieldAdd,
   solanaOwnerIdentity,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
@@ -17,6 +19,7 @@ import { ringProofRequestBody } from "../../src/rpc/prover/ring.js";
 import {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
+  sealRingMergeDisclosure,
   sealRingMergeDisclosureWith,
   readRingMergeDisclosure,
   ringMergePublicInputHash,
@@ -24,6 +27,8 @@ import {
   type RingMergeDisclosure,
   type RingMergeOpening,
 } from "../../src/crypto/audit/merge-disclosure.js";
+
+const request = vector.request;
 
 function bytes<T extends Uint8Array>(value: string, length: number): T {
   const decoded = Uint8Array.from(Buffer.from(value.replace(/^0x/, ""), "hex"));
@@ -41,58 +46,135 @@ function disclosure(): RingMergeDisclosure {
 }
 
 function opening(): RingMergeOpening {
-  return {
-    ownerKey: encodeBase58(bytes(vector.request.ownerKey, 32)),
-    nullifierPublicKey: bytes(vector.nullifier_pk, 32),
-    mint: encodeBase58(bytes(vector.mint, 32)),
-    amount: BigInt(vector.amount),
-    outputBlinding: bytes(vector.output_blinding, 32),
-    inputCommitments: vector.input_commitments.map((value) => bytes<Bytes32>(value, 32)),
-  };
+  return vector.input_commitments.map((value) => bytes<Bytes32>(value, 32));
 }
 
-describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
+/** A disclosure sealed under fresh keys, slot `dummy` zero. */
+function sealed(width: number, dummy: number) {
+  const auditor = X25519Keypair.generate();
+  const salt = new Uint8Array(16).fill(5) as Bytes16;
+  const hashes = Array.from({ length: width }, (_, slot) =>
+    slot === dummy ? ZERO_32 : (new Uint8Array(32).fill(slot + 1) as Bytes32),
+  );
+  const {
+    disclosure: body,
+    ephemeralSecret,
+    disclosureKey,
+  } = sealRingMergeDisclosure(hashes, salt, auditor.publicKey());
+  ephemeralSecret.fill(0);
+  disclosureKey.fill(0);
+  return { auditor, salt, hashes, disclosure: { ...body, proof: new Uint8Array(192) } };
+}
+
+describe("ring merge disclosure (test-vectors/merge/merge_v2.json)", () => {
   it("opens the Go disclosure and hashes the Go statement", async () => {
     await initializePoseidon();
     const auditor = X25519Keypair.fromBytes(bytes(vector.auditor_sk, 32));
     const salt = bytes<Bytes16>(vector.salt, 16);
-    const opening = openRingMergeDisclosure(auditor, disclosure(), salt);
-    expect(Buffer.from(addressBytes(opening.ownerKey)).toString("hex")).toBe(
-      vector.request.ownerKey.slice(2),
-    );
-    expect(Buffer.from(opening.nullifierPublicKey).toString("hex")).toBe(
-      vector.nullifier_pk.slice(2),
-    );
-    expect(Buffer.from(addressBytes(opening.mint)).toString("hex")).toBe(vector.mint.slice(2));
-    expect(opening.amount).toBe(BigInt(vector.amount));
-    expect(Buffer.from(opening.outputBlinding).toString("hex")).toBe(
-      vector.output_blinding.slice(2),
-    );
-    expect(
-      opening.inputCommitments.map((value) => `0x${Buffer.from(value).toString("hex")}`),
-    ).toEqual(vector.input_commitments);
+    expect(openRingMergeDisclosure(auditor, disclosure(), salt)).toEqual(opening());
     const otherSalt = salt.slice() as Bytes16;
     otherSalt[0] = (otherSalt[0] ?? 0) ^ 1;
     expect(() => openRingMergeDisclosure(auditor, disclosure(), otherSalt)).toThrow();
 
+    expect(vector.elements).toHaveLength(18);
     const hash = ringMergePublicInputHash({
-      partyIdentities: vector.request.partyIdentities.map((value) => bytes<Bytes32>(value, 32)) as [
+      partyIdentities: request.partyIdentities.map((value) => bytes<Bytes32>(value, 32)) as [
         Bytes32,
         Bytes32,
         Bytes32,
       ],
-      privateTxHash: bytes(vector.request.privateTxHash, 32),
-      outputUtxoHash: bytes(vector.request.outputUtxoHash, 32),
-      firstNullifier: bytes(vector.request.firstNullifier, 32),
-      ringId: bytes(vector.request.ringProgramId, 32),
+      privateTxHash: bytes(request.privateTxHash, 32),
+      outputUtxoHash: bytes(request.outputUtxoHash, 32),
+      firstNullifier: bytes(request.firstNullifier, 32),
+      ringId: bytes(request.ringProgramId, 32),
       auditorPublicKey: X25519PublicKey.fromBytes(bytes(vector.auditor_pk, 33)),
       disclosure: disclosure(),
       salt,
-      ...(vector.request.keyEscrow
-        ? { memberRegistryRoot: bytes<Bytes32>(vector.request.memberRegistryRoot, 32) }
+      inputCount: request.inputCount,
+      ...(request.keyEscrow
+        ? { memberRegistryRoot: bytes<Bytes32>(request.memberRegistryRoot, 32) }
         : {}),
     });
     expect(`0x${Buffer.from(hash).toString("hex")}`).toBe(vector.public_input_hash);
+  });
+
+  it("opens every slot in order, a dummy reads zero", async () => {
+    await initializePoseidon();
+    for (const width of [8, 24]) {
+      const { auditor, salt, hashes, disclosure: body } = sealed(width, width - 1);
+      expect(body.fields).toHaveLength(mergeDisclosureFieldCount(width));
+      expect(openRingMergeDisclosure(auditor, body, salt)).toEqual(hashes);
+      auditor.destroy();
+    }
+  });
+
+  it("refuses nonzero padding, a field count off the keys and a width off the keys", async () => {
+    await initializePoseidon();
+    const { auditor, salt, disclosure: body } = sealed(8, 7);
+    const refused = (fields: readonly Bytes32[]) => () =>
+      openRingMergeDisclosure(auditor, { ...body, fields }, salt);
+    const reason = (name: string) =>
+      expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason: name } });
+    expect(
+      refused(
+        body.fields.with(
+          -1,
+          bigIntToBytes(fieldAdd(bytesToBigInt(body.fields.at(-1) ?? ZERO_32), 1n)) as Bytes32,
+        ),
+      ),
+    ).toThrow(reason("disclosure padding"));
+    expect(refused(body.fields.slice(1))).toThrow(reason("disclosure width"));
+    for (const width of [2, 9, 52])
+      expect(() =>
+        sealRingMergeDisclosure(
+          Array.from({ length: width }, () => ZERO_32),
+          salt,
+          auditor.publicKey(),
+        ),
+      ).toThrow(expect.objectContaining({ code: "RING_MERGE_TOO_WIDE" }));
+    auditor.destroy();
+  });
+
+  it("refuses an opened hash past the field", async () => {
+    await initializePoseidon();
+    const auditor = X25519Keypair.generate();
+    const salt = new Uint8Array(16).fill(6) as Bytes16;
+    const hashes = Array.from({ length: 8 }, () => new Uint8Array(32).fill(0xff) as Bytes32);
+    const { disclosure: body } = sealRingMergeDisclosure(hashes, salt, auditor.publicKey());
+    expect(() =>
+      openRingMergeDisclosure(auditor, { ...body, proof: new Uint8Array(192) }, salt),
+    ).toThrow(
+      expect.objectContaining({
+        code: "RING_AUDIT_MESSAGE",
+        details: { reason: "disclosure input" },
+      }),
+    );
+    auditor.destroy();
+  });
+
+  it("binds the input count, the escrow flag and its root in the statement", async () => {
+    await initializePoseidon();
+    const { auditor, salt, disclosure: body } = sealed(8, 7);
+    const statement = {
+      partyIdentities: [ZERO_32, ZERO_32, ZERO_32] as const,
+      privateTxHash: new Uint8Array(32).fill(1) as Bytes32,
+      outputUtxoHash: new Uint8Array(32).fill(2) as Bytes32,
+      firstNullifier: new Uint8Array(32).fill(3) as Bytes32,
+      ringId: new Uint8Array(32).fill(4) as Bytes32,
+      auditorPublicKey: auditor.publicKey(),
+      disclosure: body,
+      salt,
+      inputCount: 2,
+    };
+    const root = new Uint8Array(32).fill(7) as Bytes32;
+    const hashes = [
+      statement,
+      { ...statement, inputCount: 3 },
+      { ...statement, memberRegistryRoot: root },
+      { ...statement, memberRegistryRoot: ZERO_32 },
+    ].map((input) => Buffer.from(ringMergePublicInputHash(input)).toString("hex"));
+    expect(new Set(hashes).size).toBe(hashes.length);
+    auditor.destroy();
   });
 
   it("seals the Go disclosure under the vector keys", async () => {
@@ -173,7 +255,6 @@ describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
   });
 
   it("writes the Go prover body of custom-ring-merge-v3-8", () => {
-    const request = vector.request;
     const field = (value: string) => bytes<Bytes32>(value, 32);
     const siblings = request.member.path.map(field);
     const body = ringProofRequestBody({
@@ -190,7 +271,8 @@ describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
       disclosureKey: field(request.disclosureKey),
       ownerKey: field(request.ownerKey),
       nullifierSecret: field(request.nullifierSecret),
-      mintChunks: request.mintChunks.map(field),
+      asset: field(request.asset),
+      inputCount: request.inputCount,
       inputs: request.inputs.map((slot) => ({
         domain: field(slot.domain),
         treeId: field(slot.treeId),
@@ -211,6 +293,7 @@ describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
           lists: BigInt(request.member.lists),
           escrowKey: field(request.member.escrowKey),
           mintPolicy: EMPTY_MINT_POLICY,
+          addressHash: field(request.member.addressHash),
         },
         path: {
           index: request.member.index,
@@ -224,7 +307,7 @@ describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
   });
 
   it("writes the disclosure ahead of the SPP body and reads back its own layout", () => {
-    expect([8, 24, 52].map(mergeDisclosureFieldCount)).toEqual([13, 30, 59]);
+    expect([8, 24, 52].map(mergeDisclosureFieldCount)).toEqual([9, 25, 54]);
     const present = writeRingMergeDisclosure(new Writer(), disclosure()).finish();
     expect(present.length).toBe(192 + 33 + 32 + 1 + 32 * vector.fields.length);
     expect(readRingMergeDisclosure(new Reader(present))).toEqual(disclosure());

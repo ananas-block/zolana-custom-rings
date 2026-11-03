@@ -90,7 +90,8 @@ export function storageRegistryAccount(
     .u8(STORAGE_REGISTRY_DISCRIMINATOR, "discriminator")
     .bytes(addressBytes(authority))
     .u64(0n, "graceSlots")
-    .u32(1, "nextIndex");
+    .u32(1, "nextIndex")
+    .bytes(new Uint8Array(32), 32, "ringId");
   for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
     const root = roots[slot];
     writer

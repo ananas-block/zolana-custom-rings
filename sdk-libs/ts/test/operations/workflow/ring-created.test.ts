@@ -33,6 +33,8 @@ import {
   confirmedDepositTransaction,
   ringDepositPayload,
 } from "../../helpers/confirmed-deposits.js";
+import { transactionItems } from "../../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
+import { historyCursor } from "../../../src/rpc/history.js";
 
 await initializePoseidon();
 
@@ -140,7 +142,11 @@ describe("createdRingUtxos", () => {
         createdRingUtxos({
           confirmed: {
             kind: "deposit",
-            transaction: transaction({ outputSlots, nullifiers: [], proofless: true }),
+            transaction: transaction({
+              outputSlots,
+              nullifiers: [],
+              proofless: true,
+            }),
             deposits: deposit.bindings,
           },
           ringProgramId: RING,
@@ -148,7 +154,12 @@ describe("createdRingUtxos", () => {
         });
       expect(created(deposit.outputSlots)).toEqual(deposit.created);
       const moved = deposit.outputSlots.map((slot, index) =>
-        index === 0 ? { ...slot, outputContext: outputContext(deposit.commitments[1]!, 0n) } : slot,
+        index === 0
+          ? {
+              ...slot,
+              outputContext: outputContext(deposit.commitments[1]!, 0n),
+            }
+          : slot,
       );
       expect(() => created(moved)).toThrow(expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }));
     } finally {
@@ -170,17 +181,23 @@ describe("createdRingUtxos", () => {
       const origin: TransactionOrigin = {
         confirmedTransaction: async (event) =>
           event.txSignature === SIGNATURE
-            ? { kind: "deposit", transaction: event, deposits: deposit.bindings }
+            ? {
+                kind: "deposit",
+                transaction: event,
+                deposits: deposit.bindings,
+              }
             : {
                 kind: "transfer",
                 transaction: event,
                 inputTreeIds: [],
                 layout: {
-                  key: { kind: "confidential", class: 32, inputPrefixes: false },
+                  key: { kind: "confidential", class: 24 },
                   keyEscrow: false,
                   inputs: 1,
+                  capacity: 2,
                   outputs: 2,
                   exits: 0n,
+                  change: 0n,
                 },
               },
       };
@@ -195,8 +212,7 @@ describe("createdRingUtxos", () => {
           ...(maxPages === undefined ? {} : { maxPages }),
         });
       const scanned = await scan({
-        transactions: [indexed, transfer],
-        scannedThrough: Uint8Array.of(1),
+        data: transactionItems([indexed, transfer]),
       });
       expect(scanned).toEqual({
         utxos: deposit.created,
@@ -207,8 +223,7 @@ describe("createdRingUtxos", () => {
           client: ringAuditReader({
             getShieldedTransactionsByTags: async () =>
               transactionsPage({
-                transactions: [transfer, indexed],
-                scannedThrough: Uint8Array.of(1),
+                data: transactionItems([transfer, indexed]),
               }),
           }),
           ringProgramId: RING,
@@ -235,15 +250,21 @@ describe("createdRingUtxos", () => {
         code: "RING_ORIGIN_UNAVAILABLE",
       });
       const foreign = await scan({
-        transactions: [{ ...indexed, ringProgramId: address("11111111111111111111111111111111") }],
-        scannedThrough: Uint8Array.of(1),
+        data: transactionItems([
+          {
+            ...indexed,
+            ringProgramId: address("11111111111111111111111111111111"),
+          },
+        ]),
       });
       expect(foreign).toEqual({ utxos: [], skipped: [] });
-      const capped = await scan({ transactions: [transfer], nextCursor: Uint8Array.of(7) }, 1);
-      expect(capped).toEqual({ utxos: [], skipped: [], nextCursor: Uint8Array.of(7) });
-      await expect(
-        scan({ transactions: [], scannedThrough: Uint8Array.of(1) }, 0),
-      ).rejects.toMatchObject({
+      const capped = await scan({ data: transactionItems([transfer]), paginationToken: "t7" }, 1);
+      expect(capped).toEqual({
+        utxos: [],
+        skipped: [],
+        nextCursor: historyCursor(RING, "ring", "t7"),
+      });
+      await expect(scan({}, 0)).rejects.toMatchObject({
         code: "RING_RPC",
         details: { reason: "invalid scan limit", name: "maxPages" },
       });
@@ -253,33 +274,25 @@ describe("createdRingUtxos", () => {
     }
   });
 
-  it("opens the anonymous merge's settled UTXO with its nullifier key and nothing of a confidential one", () => {
+  it("opens no note of a merge with or without its disclosure and none of a historical row", () => {
     const auditor = X25519Keypair.generate();
     const owner = ShieldedKeypair.generate();
     const nullifiers = [field(7n), field(8n)];
     const salt = new Uint8Array(16).fill(3) as Bytes16;
     const ringDataHash = field(0xd0n);
-    const outputBlinding = field(11n);
     const commitment = ownerUtxoHash({
       owner: owner.ownerHash(),
       asset: SOL_MINT,
       amount: 12n,
-      blinding: outputBlinding,
+      blinding: field(11n),
       treeId: TREE_ID,
       ringDataHash,
       ringProgramId: RING,
     });
     const sealed = sealRingMergeDisclosure(
-      {
-        ownerKey: owner.shieldedAddress().solanaAddress(),
-        nullifierPublicKey: owner.nullifierPublicKey(),
-        mint: SOL_MINT,
-        amount: 12n,
-        outputBlinding,
-        inputCommitments: Array.from({ length: 8 }, (_, index) =>
-          index < nullifiers.length ? field(20n + BigInt(index)) : ZERO,
-        ),
-      },
+      Array.from({ length: 8 }, (_, index) =>
+        index < nullifiers.length ? field(20n + BigInt(index)) : ZERO,
+      ),
       salt,
       auditor.publicKey(),
     );
@@ -303,37 +316,27 @@ describe("createdRingUtxos", () => {
         nullifiers,
         proofless: false,
       });
-      const disclosure = { ...sealed.disclosure, proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH) };
-      expect(
-        createdRingUtxos({
-          confirmed: { kind: "merge", transaction: merge, disclosure },
-          ringProgramId: RING,
-          auditor,
-        }),
-      ).toEqual([
+      const disclosure = {
+        ...sealed.disclosure,
+        proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+      };
+      for (const confirmed of [
+        { kind: "merge", transaction: merge, disclosure },
+        { kind: "merge", transaction: merge },
         {
-          commitment,
-          slotIndex: 0,
-          utxo: {
-            ownerKey: owner.signingPublicKey().ed25519(),
-            owner: { kind: "keyed", nullifierPk: owner.nullifierPublicKey() },
-            asset: SOL_ASSET,
-            mint: SOL_MINT,
-            amount: 12n,
-            blinding: outputBlinding,
-            dataHash: ZERO,
-            ringDataHash,
-            treeId: TREE_ID,
-          },
+          kind: "historicalMerge",
+          transaction: merge,
+          instruction: Uint8Array.of(20),
         },
-      ]);
-      expect(
-        createdRingUtxos({
-          confirmed: { kind: "merge", transaction: merge },
-          ringProgramId: RING,
-          auditor,
-        }),
-      ).toEqual([]);
+        {
+          kind: "historicalTransfer",
+          transaction: merge,
+          inputTreeIds: [undefined, undefined],
+          instruction: Uint8Array.of(43),
+          sppAnonymous: false,
+        },
+      ] as const)
+        expect(createdRingUtxos({ confirmed, ringProgramId: RING, auditor })).toEqual([]);
     } finally {
       sealed.ephemeralSecret.fill(0);
       sealed.disclosureKey.fill(0);

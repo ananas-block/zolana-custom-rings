@@ -31,7 +31,7 @@ describe("relayer-free wallet surface", () => {
       "createCustomRingClient",
       "syncRingWallet",
       "AnonymousSync",
-      "applyAnonymousScan",
+      "AnonymousWallet",
       "readMemberRecords",
       "buildRingDepositTransaction",
       "createRingDepositSubmission",
@@ -56,6 +56,16 @@ describe("relayer-free wallet surface", () => {
       "reconcileRingSubmissions",
     ] as const satisfies readonly (keyof typeof entry)[];
     for (const name of direct) expect(typeof entry[name], name).toBe("function");
+  });
+
+  it("leaves no caller tag surface on a transfer", () => {
+    for (const name of [
+      "TransferTagging",
+      "applyAnonymousScan",
+      "recoverAnonymousNotes",
+      "confirmReplyClaim",
+    ])
+      expect(entry, name).not.toHaveProperty(name);
   });
 });
 
@@ -142,6 +152,8 @@ describe("public package surface", () => {
       "createCustomRingClient",
       "decryptRingDepositUtxo",
       "customRingDepositPayload",
+      "enrollAddressInstruction",
+      "decodeAddressAuthorization",
     ] as const) {
       expect(root[name]).toBeTypeOf("function");
     }
@@ -149,5 +161,6 @@ describe("public package surface", () => {
     expect(client.ringInputOpening).toBeTypeOf("function");
     expect(keypair.RingAddress).toBeTypeOf("function");
     expect(advanced.sealRingDisclosure).toBeTypeOf("function");
+    expect(advanced.sealRecipientBody).toBeTypeOf("function");
   });
 });

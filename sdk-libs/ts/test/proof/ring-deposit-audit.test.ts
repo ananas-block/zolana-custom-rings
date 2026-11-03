@@ -82,12 +82,8 @@ import {
   storageRegistryAccount,
 } from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
-import {
-  TransferTagging,
-  ViewingHistory,
-  type FirstContact,
-} from "../../src/state/viewing-history.js";
-import { RingAddress } from "../../src/crypto/keys/ring-address.js";
+import { ViewingHistory } from "../../src/state/viewing-history.js";
+import { RingAddress, RingPaymentRequest } from "../../src/crypto/keys/ring-address.js";
 import { RingProgramError, createRingDepositSubmission } from "../../src/index.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
@@ -554,7 +550,7 @@ describe("ring deposit builder", () => {
     return {
       address: () => local.address(),
       viewTags: (requests) => local.viewTags(requests),
-      sharedViewTags: (requests) => local.sharedViewTags(requests),
+      ringTagMatches: refused,
       viewingPublicKeys: refused,
       decrypt: refused,
       derive: refused,
@@ -803,49 +799,21 @@ describe("ring deposit builder", () => {
     const { client } = await fixture({ mode: "anonymous" });
     const to = new RingAddress({ recipient: recipient.shieldedAddress(), ringProgramId: RING });
     const recipientKey = recipient.shieldedAddress().viewingPublicKey;
-    const request = recipient.viewingKey().recipientRequestViewTag(0n);
-    const history = ViewingHistory.create(member.shieldedAddress().viewingPublicKey, 0n);
-    const paid = (held: ViewingHistory, firstContact: FirstContact) =>
-      PreparedRingDeposit.prepare(
-        params(client, {
-          kind: "anonymousPayment",
-          keys: remoteKeys(local),
-          history: held,
-          to,
-          firstContact,
-        }),
-      );
+    const depositTag = recipient.viewingKey().recipientRequestViewTag(0n);
+    const paid = (target: RingAddress | RingPaymentRequest) =>
+      PreparedRingDeposit.prepare(params(client, { kind: "anonymousPayment", to: target }));
     const prepared: PreparedRingDeposit[] = [];
     try {
-      const bootstrap = await paid(history, { kind: "bootstrap" });
+      const bootstrap = await paid(to);
       prepared.push(bootstrap);
       expect(await publishes(bootstrap, client, recipientKey.u())).toBe(true);
-      const requested = await paid(history, { kind: "request", tag: request });
+      const requested = await paid(new RingPaymentRequest({ address: to, depositTag }));
       prepared.push(requested);
-      expect(await publishes(requested, client, request)).toBe(true);
-      const unpaired = bootstrap.viewingHistory;
-      if (unpaired === undefined) throw new Error("no history");
-      // A deposit body names no sender, its recipient never learns the pair.
-      expect(unpaired.current().txCount).toBe(0n);
-      expect(unpaired.current().knownRecipients()).toEqual([]);
-      const paired = (
-        await new TransferTagging({
-          keys: local,
-          history: unpaired,
-          recipients: [{ viewingPublicKey: recipientKey, firstContact: { kind: "bootstrap" } }],
-        }).plan()
-      ).history;
-      const shared = await paid(paired, { kind: "request", tag: request });
-      prepared.push(shared);
-      const viewing = member.viewingKey();
-      const sharedTag = viewing.sendSharedViewTags(recipientKey).tag(0n);
-      expect(await publishes(shared, client, sharedTag)).toBe(true);
-      viewing.destroy();
-      expect(
-        shared.viewingHistory
-          ?.current()
-          .counter({ kind: "toRecipient", counterparty: recipientKey })?.next,
-      ).toBe(1n);
+      expect(await publishes(requested, client, depositTag)).toBe(true);
+      const untagged = await paid(new RingPaymentRequest({ address: to }));
+      prepared.push(untagged);
+      expect(await publishes(untagged, client, recipientKey.u())).toBe(true);
+      expect(bootstrap.viewingHistory).toBeUndefined();
     } finally {
       for (const deposit of prepared) deposit.destroy();
       local.destroy();
@@ -865,10 +833,7 @@ describe("ring deposit builder", () => {
         PreparedRingDeposit.prepare(
           params(client, {
             kind: "anonymousPayment",
-            keys: remoteKeys(local),
-            history: ViewingHistory.create(owner.shieldedAddress().viewingPublicKey, 0n),
             to: new RingAddress({ recipient: recipient.shieldedAddress(), ringProgramId: other }),
-            firstContact: { kind: "bootstrap" },
           }),
         ),
       ).rejects.toMatchObject({ code: "RING_BUILD_DEPOSIT", causeCode: "RING_FOREIGN_RING" });

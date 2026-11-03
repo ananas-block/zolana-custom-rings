@@ -16,7 +16,10 @@ import {
   type RingRail,
 } from "../../src/protocol/transaction/transact.js";
 import { RING_AUTHORITY_SHAPES } from "../../src/protocol/transaction/spp.js";
-import { RECIPIENT_BODY_LEN } from "../../src/protocol/codec/anonymous-body.js";
+import {
+  RECIPIENT_BODY_LEN,
+  senderBundleLen,
+} from "../../src/protocol/codec/anonymous-delivery.js";
 
 function field(byte: number): Bytes32 {
   const value = new Uint8Array(32);
@@ -45,15 +48,18 @@ export function ringFrame(
     keyEscrow: flags.keyEscrow,
     fullOpenings: flags.fullOpenings,
     exits: 0n,
+    change: rail === "anonymous" ? 1n : 0n,
   });
   const slot = (index: number): RingOutput =>
     rail === "anonymous"
-      ? {
-          kind: "anonymous",
-          hash: field(10 + index),
-          tag: field(index + 1),
-          ...(index === 0 ? {} : { body: new Uint8Array(RECIPIENT_BODY_LEN) }),
-        }
+      ? index === 0
+        ? { kind: "change", hash: field(10), tag: new Uint8Array(32) as Bytes32 }
+        : {
+            kind: "anonymous",
+            hash: field(10 + index),
+            tag: field(index + 1),
+            body: new Uint8Array(RECIPIENT_BODY_LEN),
+          }
       : {
           kind: "delivered",
           hash: field(10 + index),
@@ -65,6 +71,7 @@ export function ringFrame(
     nIn: shape.inputs,
     nOut: shape.outputs,
     proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+    ...(rail === "anonymous" ? { ownRevision: 1n } : {}),
     exempt: false,
     approvalRequired: false,
     expiryUnixTs: 0,
@@ -74,7 +81,9 @@ export function ringFrame(
     keyEscrow: flags.keyEscrow,
     fullOpenings: flags.fullOpenings,
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),
-    ...(rail === "anonymous" ? { sender: { tag: field(1), body: new Uint8Array(150) } } : {}),
+    ...(rail === "anonymous"
+      ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen(outputs)) } }
+      : {}),
     ephU: field(2),
     envelope: new Uint8Array(envelopeRegion(layout).length).fill(3),
     records: recordSlots(layout).map((slot) =>

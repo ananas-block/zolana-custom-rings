@@ -41,6 +41,7 @@ describe("ring member registry wire", () => {
     next: TAG,
     lists: 3,
     escrowKey: TAG,
+    addressHash: TAG,
     ownerPubkey: null,
     nullifierPk: null,
     ephPk: null,

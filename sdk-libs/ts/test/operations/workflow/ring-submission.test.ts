@@ -11,13 +11,13 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../../src/rpc/ports.js";
 import { RingProgramError } from "../../../src/protocol/error.js";
-import { ViewingHistory } from "../../../src/state/viewing-history.js";
 import {
   createKitRingSubmissionTransport,
   RingTransactionSubmission,
   type RingSubmissionAttempt,
 } from "../../../src/operations/workflow/submission.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
+import { ViewingHistory } from "../../../src/state/viewing-history.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import type { RpcAccount } from "@heliuslabs/zolana/client";
 import {

@@ -5,7 +5,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { RuleTable } from "../../src/ring/advanced.js";
 import {
   AnonymousSync,
-  applyAnonymousScan,
   createRingTransferSubmission,
   prepareRingTransferRelay,
   messageSignerSpendSigner,
@@ -26,6 +25,7 @@ import {
   type ReadableRing,
 } from "./ring-live-helpers.js";
 import type { RingKeys } from "../../src/state/ring-keys.js";
+import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { submittedRelay } from "../../src/rpc/relay.js";
@@ -59,7 +59,9 @@ async function member(ring: AnonymousRing): Promise<Member> {
   return {
     ...actor,
     keys: ringKeys(actor),
-    history: ViewingHistory.create(actor.keypair.shieldedAddress().viewingPublicKey, 0n),
+    history: ViewingHistory.create(actor.keypair.shieldedAddress().viewingPublicKey, 0n).withRing(
+      ring.ringProgramId,
+    ),
   };
 }
 
@@ -79,8 +81,9 @@ async function syncRing(ring: AnonymousRing, actor: Member): Promise<void> {
     })
     .withHeldNotes(actor.wallet.utxos())
     .fetch(ring.client, actor.history);
-  await applyAnonymousScan(actor.wallet, scan);
-  actor.history = scan.history;
+  const document = AnonymousWallet.create(actor.wallet, actor.history);
+  await document.absorb(scan);
+  actor.history = document.history();
 }
 
 /** A member whose own deposit funds its hidden identity on the ring. */
@@ -122,8 +125,6 @@ function spendRequest(ring: AnonymousRing, sender: Member, to: RingAddress) {
     },
     anonymous: {
       signer: messageSignerSpendSigner(sender.signer),
-      history: sender.history,
-      firstContact: { kind: "bootstrap" },
     },
   } as const;
 }
@@ -139,7 +140,6 @@ const relayed: Payment = async (ring, sender, to) => {
     ...request,
     anonymous: { ...anonymous, quote, nullifierKey: sender.keypair.nullifierKey() },
   });
-  sender.history = prepared.viewingHistory;
   return confirmedRelay(ring, submittedRelay(await prepared.relay.send(ring.ringRpc)));
 };
 
@@ -151,7 +151,6 @@ const direct: Payment = async (ring, sender, to) => {
     feePayer: ring.funder.address,
     anonymous,
   });
-  sender.history = returnedHistory(submission.viewingHistory);
   return (await settle(submission, ring.client, [ring.funder])).signature;
 };
 

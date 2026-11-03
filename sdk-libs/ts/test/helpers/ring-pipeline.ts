@@ -110,6 +110,7 @@ export const TREE = treeAddress(TREE_ID);
 /** Distinct, a swapped own and curator revision fails the asserts. */
 export const OWN_REVISION = 7n;
 export const CURATOR_REVISION = 11n;
+export const ADDRESS_REVISION = 3n;
 const addressDecoder = getAddressDecoder();
 
 export function randomAddress(): Address {
@@ -152,7 +153,10 @@ export interface RingFixtureOptions {
   readonly coSigner?: RingCoSigner;
   readonly delegate?: Address;
   /** The lists a second ring's registry serves. */
-  readonly curator?: Readonly<{ lists: readonly ListId[]; records: readonly FixtureRecord[] }>;
+  readonly curator?: Readonly<{
+    lists: readonly ListId[];
+    records: readonly FixtureRecord[];
+  }>;
   readonly slot?: bigint;
   readonly registration?: Readonly<{ activated: boolean; paused: boolean }>;
 }
@@ -160,7 +164,11 @@ export interface RingFixtureOptions {
 /** The pinned rails beside SPP's anonymous one, where an in-proof owner also proves. */
 export type SppCircuit =
   | NonNullable<Parameters<typeof prepareTransfer>[1]>
-  | Readonly<{ kind: "ringAnonymous"; ring: Address; owner: PreparedOwnerSignature }>;
+  | Readonly<{
+      kind: "ringAnonymous";
+      ring: Address;
+      owner: PreparedOwnerSignature;
+    }>;
 
 export interface SppCall {
   readonly proofInputs: SppProofInputs;
@@ -187,7 +195,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const auditor = X25519Keypair.generate();
   const authority = randomAddress();
   const accounts = new Map<Address, RpcAccount>();
-  const ownTree = recordTree(options.records ?? []);
+  const ownRecords = new Map(
+    (options.records ?? []).map((record) => [hex(record.member), record] as const),
+  );
+  let ownTree = recordTree([...ownRecords.values()]);
   const [ringAuth, registration] = await sppRingRegistration({
     authority,
     ringProgramId,
@@ -207,7 +218,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   if (options.curator !== undefined) {
     curatorRegistry = randomAddress();
     curatorTree = recordTree(options.curator.records);
-    trees.set(curatorRegistry, { tree: curatorTree, revision: CURATOR_REVISION });
+    trees.set(curatorRegistry, {
+      tree: curatorTree,
+      revision: CURATOR_REVISION,
+    });
   }
   const config = {
     roles: { admin: authority },
@@ -217,7 +231,12 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
   } as const;
   const [ringAddress, ringBump] = await ringPolicyPda(ringProgramId);
-  if (options.table !== undefined || options.records !== undefined) {
+  // Every anonymous transfer opens the sender in the ring's records.
+  if (
+    options.table !== undefined ||
+    options.records !== undefined ||
+    options.mode === "anonymous"
+  ) {
     const table = options.table ?? buildRuleTable({ rules: [] });
     const referenced = referencedLists(table.rules);
     const shared = options.curator?.lists ?? [];
@@ -268,6 +287,26 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ownedAccount(ringProgramId, ringPolicyData({ bump: ringBump, ...config })),
     );
   }
+  /** Applies the owner's enrollment, a repeat replaces the record's address. */
+  const enroll = (owner: ShieldedAddress): void => {
+    const member = owner.signingPublicKey.ownerProofInputHash();
+    const key = hex(member);
+    ownRecords.set(key, {
+      ...(ownRecords.get(key) ?? { member, lists: 0n }),
+      address: {
+        ringId: ringIdField(ringProgramId),
+        nullifierPk: owner.nullifierPublicKey,
+        viewingU: owner.viewingPublicKey.u(),
+        addressRevision: ADDRESS_REVISION,
+      },
+    });
+    ownTree = recordTree([...ownRecords.values()]);
+    trees.set(ownRegistry, { tree: ownTree, revision: OWN_REVISION });
+    accounts.set(
+      ownRegistry,
+      storageRegistryAccount([{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }]),
+    );
+  };
   const slot = options.slot ?? 1n;
   const context = Object.freeze({ slot, blockTime: 0n });
   const ringRequests: RingProofRequest[] = [];
@@ -311,7 +350,11 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     const complete = prepared.finish(
       proofInputs.inputTreeIds().map((treeId, index) => ({
         treeId,
-        slot: { id: treeId, utxoRoot: small(0x31 + index), nullifierRoot: small(0x41 + index) },
+        slot: {
+          id: treeId,
+          utxoRoot: small(0x31 + index),
+          nullifierRoot: small(0x41 + index),
+        },
         utxoRootIndex: 7 + index,
         nullifierRootIndex: 9 + index,
       })),
@@ -327,7 +370,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
               outputs: pinned.circuit.outputs,
               publicAssetSlots: pinned.circuit.publicAssetSlots,
               proofData: {
-                bsb22Commitment: { commitment: filled(0x51), commitmentPok: filled(0x52) },
+                bsb22Commitment: {
+                  commitment: filled(0x51),
+                  commitmentPok: filled(0x52),
+                },
                 // The hidden owner's key opens a default-ring spend.
                 ...(proofInputs.inputUtxos.some(
                   (spent) => !spent.isDummy() && spent.utxo.ringProgramId === undefined,
@@ -370,7 +416,11 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       if ("sign" in input.owner) throw new Error("the rail signs before the proof request");
       const proven = spp(
         input.proofInputs,
-        { kind: "ringAnonymous", ring: input.ringProgramId, owner: input.owner },
+        {
+          kind: "ringAnonymous",
+          ring: input.ringProgramId,
+          owner: input.owner,
+        },
         input.keys,
       );
       const { circuit } = proven.data;
@@ -391,7 +441,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     client,
     ringRequests,
     sppCalls,
-    ownTree,
+    enroll,
+    get ownTree() {
+      return ownTree;
+    },
     ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner.signer }),
     ownRegistry,
     ...(curatorRegistry === undefined ? {} : { curatorRegistry }),
@@ -503,13 +556,22 @@ export async function checkAccounts(
   }>,
 ): Promise<void> {
   const { fixture } = expected;
-  const readonly = (address: Address): AccountEntry => ({ address, role: AccountRole.READONLY });
-  const writable = (address: Address): AccountEntry => ({ address, role: AccountRole.WRITABLE });
+  const readonly = (address: Address): AccountEntry => ({
+    address,
+    role: AccountRole.READONLY,
+  });
+  const writable = (address: Address): AccountEntry => ({
+    address,
+    role: AccountRole.WRITABLE,
+  });
   const nullifiers = await Promise.all(
     expected.data.nullifiers.map((nullifier) => nullifierPdaAddress(TREE, nullifier)),
   );
   expect(
-    instruction.accounts?.map((account) => ({ address: account.address, role: account.role })),
+    instruction.accounts?.map((account) => ({
+      address: account.address,
+      role: account.role,
+    })),
   ).toEqual([
     readonly(await ringPolicyAddress(fixture.ringProgramId)),
     ...(expected.registries ?? []).map(readonly),
@@ -544,6 +606,17 @@ export function checkRingBlindings(call: SppCall, data: RingTransactData): void 
   });
 }
 
+/** The owner run the statement binds, the request pads it to the key's `S`. */
+export function bindingSigners(request: TransferProofRequest): readonly Bytes32[] {
+  return request.signers.slice(0, request.signerCount);
+}
+
+export function screenedMembers(request: TransferProofRequest, count: number): readonly Bytes32[] {
+  return request.senderEntries
+    .slice(0, count)
+    .map((entry) => itemAt(request.ownPool.subjects, entry.own).member);
+}
+
 /** The one ring request, its statement the program rebuilds from the parsed data and the values the request binds. */
 export function checkTransferProof(
   fixture: Fixture,
@@ -564,6 +637,7 @@ export function checkTransferProof(
         sender: request.kind === "transferConfidential" ? request.sender : zero,
         partyIdentities:
           request.kind === "transferAnonymous" ? request.partyIdentities : [zero, zero, zero],
+        signers: bindingSigners(request),
         roots: {
           policyHash: request.policyHash,
           ownRoot: request.ownRoot,
@@ -607,7 +681,7 @@ export function checkDisclosure(
     message,
   });
   const escrowed = disclosure.layout.keyEscrow;
-  const published = call.proofInputs.outputs;
+  const published = call.proofInputs.outputs.filter((output) => !output.isCompact());
   expect(disclosure.outputs).toHaveLength(published.length);
   disclosure.outputs.forEach((opened, index) => {
     const output = itemAt(published, index);
@@ -624,9 +698,21 @@ export function checkDisclosure(
     const nullifierPk = escrowed ? undefined : owner.nullifierPublicKey;
     const ownerKey = owner.signingPublicKey.confidentialViewTag();
     const asset = assetField(output.asset);
-    if (exit) expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
+    if (exit)
+      expect(opened).toEqual({
+        kind: "exit",
+        nullifierPk,
+        asset,
+        amount: output.amount,
+      });
     else
-      expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey, asset, amount: output.amount });
+      expect(opened).toEqual({
+        kind: "ring",
+        nullifierPk,
+        ownerKey,
+        asset,
+        amount: output.amount,
+      });
   });
   if (disclosure.kind === "anonymous") {
     const spent = call.proofInputs.inputUtxos.filter((input) => !input.isCompact());
@@ -640,6 +726,7 @@ export function checkDisclosure(
               input.isDummy()
                 ? undefined
                 : {
+                    hash: input.hash(),
                     asset: assetField(input.utxo.asset),
                     amount: input.utxo.amount,
                     blinding: input.utxo.blinding,
@@ -648,14 +735,7 @@ export function checkDisclosure(
           }
         : {
             kind: "commitments",
-            first: spent[0]?.hash(),
-            prefixes: spent
-              .slice(1)
-              .map((input) =>
-                input.isDummy()
-                  ? undefined
-                  : BigInt(`0x${Buffer.from(input.hash().subarray(0, 16)).toString("hex")}`),
-              ),
+            hashes: spent.map((input) => (input.isDummy() ? undefined : input.hash())),
           },
     );
   }

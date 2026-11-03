@@ -10,10 +10,15 @@ import {
   QUAD_ARITY,
   QUAD_HEIGHT,
   canopyLevels,
+  type AuthorizedAddress,
   type MemberRecord,
   type QuadPath,
 } from "../../src/protocol/membership/member-registry.js";
-import { FIELD_MAX, memberRecordHash } from "../../src/protocol/membership/member-opening.js";
+import {
+  FIELD_MAX,
+  addressRecordHash,
+  memberRecordHash,
+} from "../../src/protocol/membership/member-opening.js";
 
 /** One record the fixture holds, its key escrow served beside it when `sealed` is set. */
 export interface FixtureRecord {
@@ -22,6 +27,8 @@ export interface FixtureRecord {
   readonly mintPolicy?: MintPolicy;
   readonly escrowKey?: Bytes32;
   readonly sealed?: RingSealedKey;
+  /** Sets the record's address hash, served beside the record. */
+  readonly address?: AuthorizedAddress;
 }
 
 /** An independent sparse 4-ary record tree, leaf 0 the sentinel and the members in key order after it. */
@@ -36,6 +43,7 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       lists: 0n,
       escrowKey: ZERO_32,
       next: sorted[0]?.member ?? FIELD_MAX,
+      addressHash: ZERO_32,
     },
     ...sorted.map((record, index) => ({
       member: record.member,
@@ -43,6 +51,10 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       mintPolicy: record.mintPolicy ?? EMPTY_MINT_POLICY,
       escrowKey: record.escrowKey ?? ZERO_32,
       next: sorted[index + 1]?.member ?? FIELD_MAX,
+      addressHash:
+        record.address === undefined
+          ? ZERO_32
+          : addressRecordHash({ member: record.member, ...record.address }),
     })),
   ];
   const zeros = [ZERO_32];
@@ -84,12 +96,13 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
     );
     const record = rows[index];
     if (index > 0 && record !== undefined) {
-      const sealed = sorted[index - 1]?.sealed;
+      const { sealed, address } = sorted[index - 1] ?? {};
       return {
         kind: "present",
         record,
         path: path(index),
         ...(sealed === undefined ? {} : { sealedKey: sealed }),
+        ...(address === undefined ? {} : { address }),
       };
     }
     const value = bytesToBigInt(member);
@@ -112,11 +125,12 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       const record = rows[index];
       if (record === undefined) throw new Error("leaf outside the fixture registry");
       // The seal belongs to the leaf, whichever subject reaches it first.
-      const sealed = index > 0 ? sorted[index - 1]?.sealed : undefined;
+      const { sealed, address } = (index > 0 ? sorted[index - 1] : undefined) ?? {};
       records.push({
         record,
         path: { index, siblings: siblings.slice(0, height) },
         ...(sealed === undefined ? {} : { sealedKey: sealed }),
+        ...(address === undefined ? {} : { address }),
       });
       return records.length - 1;
     });

@@ -424,9 +424,14 @@ describe("policy writes", () => {
       ).rejects.toMatchObject({ code: "RING_POLICY_SOURCE_INVALID", details: { reason } });
   });
 
-  it.each([ListId.ringViewing, ListId.recovery, ListId.escrow])(
-    "refuses a rule over list %i its members write, like Rust `EncodedRuleTable::validate`",
-    async (listId) => {
+  it.each([
+    [ListId.ringViewing, "MemberWrittenList"],
+    [ListId.escrow, "MemberWrittenList"],
+    [ListId.recovery, "ListNotPolicyReadable"],
+    [ListId.reader, "ListNotPolicyReadable"],
+  ] as const)(
+    "refuses a rule over list %i outside the policy lists, like Rust `EncodedRuleTable::validate`",
+    async (listId, reason) => {
       const required: Rule = {
         subject: "outputOwner",
         source: { kind: "lists", present: [listId], absent: [] },
@@ -441,7 +446,7 @@ describe("policy writes", () => {
         for (const write of tableWrites)
           await expect(write({ table: buildRuleTable({ rules: [rule] }) })).rejects.toMatchObject({
             code: "RING_RULE_TABLE_INVALID",
-            details: { reason: "MemberWrittenList" },
+            details: { reason },
           });
     },
   );

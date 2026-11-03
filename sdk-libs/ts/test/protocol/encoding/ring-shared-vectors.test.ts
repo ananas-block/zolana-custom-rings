@@ -15,7 +15,6 @@ import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/c
 import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
-  anonymousAuditKey,
   auditorMessageLen,
   ciphertextLen,
   envelopeRegion,
@@ -25,6 +24,7 @@ import {
   recordBlocks,
   recordLen,
   recordRegion,
+  transferAuditKey,
   type AuditKey,
   type AuditLayout,
   type AuditStreamLayout,
@@ -36,6 +36,11 @@ import {
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
 import { decodeDisclosure } from "../../../src/crypto/audit/ring-disclosure.js";
+import {
+  MIN_REPLY_LEN,
+  RECIPIENT_BODY_LEN,
+  senderBundleLen,
+} from "../../../src/protocol/codec/anonymous-delivery.js";
 import {
   APPLY_BATCH,
   QUAD_HEIGHT,
@@ -146,6 +151,7 @@ describe("ring-records.json", () => {
     readonly nullifier_pk: string | null;
     readonly ciphertext: string | null;
     readonly escrow_key: string;
+    readonly address_hash: string;
   }
 
   const path = (vector: VectorPath): QuadPath => ({
@@ -158,6 +164,7 @@ describe("ring-records.json", () => {
     next: field(vector.next),
     lists: BigInt(vector.lists),
     escrowKey: field(vector.escrow_key),
+    addressHash: field(vector.address_hash),
   });
   const entry = (queued: QueuedWrite): QueueEntry => {
     if (queued.kind === "register_key") {
@@ -178,6 +185,7 @@ describe("ring-records.json", () => {
       mask: BigInt(queued.mask),
       value: BigInt(queued.value),
       escrowKey: field(queued.escrow_key),
+      addressHash: field(queued.address_hash),
     };
   };
 
@@ -204,11 +212,13 @@ describe("ring-records.json", () => {
           mask: BigInt(write.mask),
           value: BigInt(write.value),
           escrowKey: field(write.escrow_key),
+          addressHash: field(write.address_hash),
         },
         exists: write.exists,
         oldNext: field(write.old_next),
         oldLists: BigInt(write.old_lists),
         oldEscrow: field(write.old_escrow),
+        oldAddressHash: field(write.old_address_hash),
         slot: path(write.slot),
         low: record(write.low),
         lowPath: path(write.low_path),
@@ -282,11 +292,13 @@ describe("ring-records.json", () => {
               mask: BigInt(write.mask),
               value: BigInt(write.value) | (1n << 7n),
               escrowKey: field(write.escrow_key),
+              addressHash: field(write.address_hash),
             },
             exists: write.exists,
             oldNext: field(write.old_next),
             oldLists: BigInt(write.old_lists),
             oldEscrow: field(write.old_escrow),
+            oldAddressHash: field(write.old_address_hash),
             slot: path(write.slot),
             low: record(write.low),
             lowPath: path(write.low_path),
@@ -371,8 +383,13 @@ describe("ring-policy-table.json", () => {
 describe("ring-statements.json", () => {
   type TransferCase = (typeof statements.transfer)[number];
 
-  const output = (vector: TransferCase["outputs"][number]): RingOutput => {
+  const output = (
+    vector: TransferCase["outputs"][number],
+    slot: number,
+    change: number,
+  ): RingOutput => {
     const hash = field(vector.hash);
+    const zero = new Uint8Array(32) as Bytes32;
     switch (vector.kind) {
       case "delivered":
         return {
@@ -381,21 +398,17 @@ describe("ring-statements.json", () => {
           u: field(vector.u ?? ""),
           body: bytes(vector.body ?? ""),
         };
-      // The anonymous statement binds no tag and no body.
       case "anonymous":
-        return {
-          kind: "anonymous",
-          hash,
-          tag: new Uint8Array(32) as Bytes32,
-          body: Uint8Array.of(1),
-        };
+        return ((change >> slot) & 1) === 1
+          ? { kind: "change", hash, tag: zero }
+          : {
+              kind: "anonymous",
+              hash,
+              tag: field(vector.tag ?? ""),
+              body: bytes(vector.recipient_body ?? ""),
+            };
       default:
-        return {
-          kind: "exit",
-          hash,
-          ownerTag: new Uint8Array(32) as Bytes32,
-          payload: new Uint8Array(),
-        };
+        return { kind: "exit", hash, ownerTag: zero, payload: new Uint8Array() };
     }
   };
   /** `key_escrow << 1 | full_openings << 3`. */
@@ -413,6 +426,9 @@ describe("ring-statements.json", () => {
             Bytes32,
             Bytes32,
           ],
+          senderBundle: bytes(vector.sender_bundle ?? ""),
+          senderBundleTag: field(vector.sender_bundle_tag ?? ""),
+          ...(vector.replies === null ? {} : { replies: bytes(vector.replies) }),
         }
       : {
           kind: "confidential",
@@ -430,9 +446,10 @@ describe("ring-statements.json", () => {
       expect(hex(ciphertextDigest(bytes(vector.envelope))), vector.rail).toBe(
         vector.envelope_digest,
       );
-      expect(hex(outputCiphertextChain(outputCiphertexts)), vector.rail).toBe(
-        vector.output_ciphertext_chain,
-      );
+      expect(
+        hex(outputCiphertextChain(outputCiphertexts, vector.output_capacity)),
+        vector.rail,
+      ).toBe(vector.output_ciphertext_chain);
       const statement = {
         head: {
           firstNullifier: field(vector.first_nullifier),
@@ -447,8 +464,12 @@ describe("ring-statements.json", () => {
         family: family(vector),
         exempt: vector.exempt,
         approvalRequired: vector.approval_required,
-        outputs: vector.outputs.map(output),
+        capacity: vector.output_capacity,
+        outputs: vector.outputs.map((slot, index) =>
+          output(slot, index, vector.change_bitmap ?? 0),
+        ),
         outputCiphertexts,
+        signers: { count: vector.signer_count, chain: field(vector.signer_chain) },
         inputCount: vector.input_count,
         privateTxHash: field(vector.private_tx_hash),
         roots: {
@@ -543,7 +564,7 @@ describe("ring-transact-expansion.json", () => {
         : [
             {
               viewTag: data.sender.tag,
-              data: encodeRingOutput(RingScheme.anonymousSender, data.sender.body),
+              data: encodeRingOutput(RingScheme.ringSenderBundle, data.sender.body),
             },
           ],
     );
@@ -638,84 +659,72 @@ describe("ring-transact-expansion.json", () => {
     expect(() => RingTransactData.encode(withoutRevision)).toThrow(ringError("RingTransactLength"));
   });
 
-  /** The anonymous policy frame, its first recipient slot and the offset of that slot's tag. */
+  /** The anonymous policy frame and its first recipient slot. */
   const anonymousFrame = () => {
     const vector = expansion.cases.find((entry) => entry.name === "anonymous_policy");
     if (vector === undefined) throw new Error("vector has no anonymous policy transfer");
     const compact = bytes(vector.compact);
     const data = RingTransactData.parse(compact, "anonymous");
-    const at = data.outputs.findIndex(
-      (output) => output.kind === "anonymous" && output.body !== undefined,
-    );
+    const at = data.outputs.findIndex((output) => output.kind === "anonymous");
     const first = data.outputs[at];
-    if (first?.kind !== "anonymous" || first.body === undefined || data.sender === undefined)
+    if (first?.kind !== "anonymous" || data.sender === undefined)
       throw new Error("anonymous transfer without a recipient body or a sender bundle");
-    const offset = (tag: Bytes32, from = 0) =>
-      Array.from(compact.keys()).find(
-        (start) => start >= from && tag.every((byte, index) => compact[start + index] === byte),
-      );
-    const tag = offset(first.tag);
-    if (tag === undefined) throw new Error("the frame carries no tag");
-    const sender = offset(data.sender.tag, tag + 32 + 2 + first.body.length);
-    if (sender === undefined) throw new Error("the frame carries no sender bundle");
-    return { compact, data, at, first, body: first.body, tag, sender, bundle: data.sender };
+    return { compact, data, at, first, bundle: data.sender };
   };
 
-  it("frames a recipient body under scheme 1 and a change output with no data", () => {
+  it("frames a recipient body under scheme 11 and a change output with no data", () => {
     const { data } = anonymousFrame();
-    expect(data.outputs[0]).toMatchObject({ kind: "anonymous" });
-    expect(data.outputs[0]).not.toHaveProperty("body");
+    expect(data.outputs[0]).toMatchObject({ kind: "change" });
     for (const output of data.outputs) {
-      if (output.kind !== "anonymous") continue;
+      if (output.kind === "exit" || output.kind === "delivered") continue;
       const published = ringTransactOutput(output);
       expect(published.data).toEqual(
-        output.body === undefined
+        output.kind === "change"
           ? undefined
-          : encodeRingOutput(RingScheme.anonymousRecipient, output.body),
+          : encodeRingOutput(RingScheme.ringRecipientBody, output.body),
       );
       expect(published.ownerTag).toEqual({ kind: "inline", value: output.tag });
     }
   });
 
-  it("refuses an anonymous body length past the data", () => {
-    const { compact, body, tag } = anonymousFrame();
-    expect([compact[tag + 32], compact[tag + 33]]).toEqual([body.length & 0xff, body.length >> 8]);
-    const refused = compact.slice();
-    refused[tag + 32] = 0xff;
-    refused[tag + 33] = 0xff;
-    expect(() => RingTransactData.parse(refused, "anonymous")).toThrow(
-      ringError("RingTransactLength"),
-    );
+  it("carries no body length, the frame fixes each body and the bundle", () => {
+    const { data, first, bundle } = anonymousFrame();
+    expect(first.body).toHaveLength(RECIPIENT_BODY_LEN);
+    expect(bundle.body).toHaveLength(senderBundleLen(data.outputs.length));
   });
 
-  it("refuses an empty sender bundle", () => {
-    const { compact, sender, bundle } = anonymousFrame();
-    const length = sender + 32;
-    expect([compact[length], compact[length + 1]]).toEqual([
-      bundle.body.length & 0xff,
-      bundle.body.length >> 8,
-    ]);
-    const refused = Uint8Array.of(
-      ...compact.subarray(0, length),
-      0,
-      0,
-      ...compact.subarray(length + 2 + bundle.body.length),
-    );
-    expect(() => RingTransactData.parse(refused, "anonymous")).toThrow(
-      ringError("AnonymousBodyLength"),
-    );
-  });
-
-  it("refuses an anonymous body the frame cannot carry at encoding", () => {
+  it("refuses an anonymous body or a sender bundle off its length at encoding", () => {
     const { data, at, first, bundle } = anonymousFrame();
-    for (const body of [new Uint8Array(), new Uint8Array(0x10000)]) {
+    for (const body of [new Uint8Array(), new Uint8Array(RECIPIENT_BODY_LEN + 1)])
       expect(() =>
         RingTransactData.encode({ ...data, outputs: data.outputs.with(at, { ...first, body }) }),
-      ).toThrow(ringError("AnonymousBodyLength"));
+      ).toThrow(ringError("RingTransactLength"));
+    for (const body of [new Uint8Array(), new Uint8Array(bundle.body.length + 1)])
       expect(() => RingTransactData.encode({ ...data, sender: { ...bundle, body } })).toThrow(
-        ringError("AnonymousBodyLength"),
+        ringError("RingTransactLength"),
       );
-    }
+  });
+
+  it("frames one reply length per recipient body and refuses any other", () => {
+    const vector = expansion.cases.find((entry) => entry.name === "anonymous_reply_metadata");
+    if (vector === undefined) throw new Error("vector has no reply metadata transfer");
+    const data = RingTransactData.parse(bytes(vector.compact), "anonymous");
+    const { replies } = data;
+    if (replies === undefined || replies.length === 0) throw new Error("frame without replies");
+    expect(replies).toHaveLength(data.outputs.filter((slot) => slot.kind === "anonymous").length);
+    expect(hex(RingTransactData.encode(data))).toBe(vector.compact);
+    const short = new Uint8Array(MIN_REPLY_LEN - 1);
+    const mixed = replies.map((reply, index) =>
+      index === 0 ? new Uint8Array(reply.length + 1) : reply,
+    );
+    for (const refused of [
+      replies.map(() => short),
+      replies.slice(1),
+      ...(replies.length > 1 ? [mixed] : []),
+    ])
+      expect(() => RingTransactData.encode({ ...data, replies: refused })).toThrow(
+        ringError("ReplyLength"),
+      );
   });
 
   it("carries the sender bundle exactly on the anonymous rail", () => {
@@ -822,9 +831,10 @@ describe("ring_keyed_shapes.json", () => {
     expect(
       SPP_SUPPORTED_SHAPES.filter(
         (shape) =>
-          anonymousAuditKey({
+          transferAuditKey({
+            rail: "anonymous",
             inputs: shape.inputs,
-            outputs: shape.outputs,
+            capacity: shape.outputs,
             spendsDefaultRing: false,
           }) !== undefined,
       ).map((shape) => [shape.inputs, shape.outputs]),
@@ -870,48 +880,44 @@ describe("disclosure packing", () => {
         evidence: new Uint8Array(0),
         records: [],
       });
-    const anonymousLayout = (
-      kind: "commitment" | "entry",
+    const layoutOf = (
+      kind: AuditKey["kind"],
       inputClass: number,
       inputs: number,
       outputs: number,
-    ) => decode({ key: { kind, class: inputClass }, keyEscrow: false, inputs, outputs, exits: 0n });
-    expect(anonymousLayout("commitment", 24, 2, 8)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("commitment", 28, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("commitment", 4, 5, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("commitment", 1, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("entry", 8, 9, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("entry", 8, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(anonymousLayout("entry", 2, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(
+    ) =>
       decode({
-        key: { kind: "confidential", class: 32, inputPrefixes: false },
+        key: { kind, class: inputClass },
         keyEscrow: false,
-        inputs: 1,
-        outputs: 3,
+        inputs,
+        capacity: outputs,
+        outputs,
         exits: 0n,
-      }),
-    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+        change: 0n,
+      });
+    expect(layoutOf("commitment", 24, 2, 8)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("commitment", 28, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("commitment", 4, 5, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("commitment", 1, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("entry", 8, 9, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("entry", 8, 2, 16)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("entry", 2, 2, 2)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(layoutOf("confidential", 32, 1, 3)).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
   });
 });
 
 describe("ring-disclosure-ranges.json", () => {
   type KeyRanges = (typeof ranges.keys)[number];
 
-  const keyOf = (vector: KeyRanges): AuditKey => {
-    switch (vector.rail) {
-      case "entry":
-        return { kind: "entry", class: vector.class };
-      case "commitment":
-        return { kind: "commitment", class: vector.class };
-      default:
-        return {
-          kind: "confidential",
-          class: vector.class,
-          inputPrefixes: vector.rail === "in_proof_or_authority",
-        };
-    }
-  };
+  const keyOf = (vector: KeyRanges): AuditKey => ({
+    kind:
+      vector.family === "confidential"
+        ? "confidential"
+        : vector.rail === "entry"
+          ? "entry"
+          : "commitment",
+    class: vector.class,
+  });
 
   it.each(ranges.keys)(
     "fixes every range of the $rail key of $outputs outputs and class $class, key escrow $key_escrow",
@@ -925,8 +931,10 @@ describe("ring-disclosure-ranges.json", () => {
         key,
         keyEscrow: vector.key_escrow,
         inputs,
+        capacity: vector.outputs,
         outputs: vector.outputs,
         exits,
+        change: 0n,
       });
       const everyExit = (1n << BigInt(vector.outputs)) - 1n;
       const free = layoutAt(1, 0n);

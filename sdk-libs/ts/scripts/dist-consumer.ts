@@ -114,10 +114,4 @@ export type {
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export { RING_RULE_SLOTS } from "@heliuslabs/zolana-custom-rings/client";
 export { CustomRingClient, createCustomRingClient } from "@heliuslabs/zolana-custom-rings";
-export {
-  AnonymousSync,
-  TransferTagging,
-  ViewingHistory,
-  type AnonymousScan,
-  type FirstContact,
-} from "@heliuslabs/zolana-custom-rings";
+export { AnonymousSync, ViewingHistory, type AnonymousScan } from "@heliuslabs/zolana-custom-rings";

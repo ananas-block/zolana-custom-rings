@@ -506,7 +506,7 @@ describe("list authorization", () => {
       "authority",
       "authority",
       "member",
-      "member",
+      "reserved",
       "authority",
       "authority",
       "member",

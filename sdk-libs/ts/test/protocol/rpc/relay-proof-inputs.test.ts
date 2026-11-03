@@ -75,9 +75,8 @@ describe("relay proof inputs", () => {
     const encoded = encodeRelayProofInputs({
       rail: {
         kind: "anonymous",
-        plan: AnonymousPlan.fromTags(
-          filled(23) as Bytes32,
-          [{ recipient: owner.viewingPublicKey(), tag: filled(24) as Bytes32 }],
+        plan: AnonymousPlan.fromDummyPreimages(
+          [{ recipient: owner.viewingPublicKey(), reply: null }],
           Array.from({ length: 16 }, () => filled(25) as Bytes32),
         ),
       },
@@ -99,7 +98,12 @@ describe("relay proof inputs", () => {
       ],
       externalData: createExternalData({
         interfaceTransfers: [
-          { kind: "sol", isDeposit: false, amount: 100n, userSolAccount: recipient },
+          {
+            kind: "sol",
+            isDeposit: false,
+            amount: 100n,
+            userSolAccount: recipient,
+          },
         ],
         txViewingPublicKey: txViewingKey.publicKey(),
         salt: filled(15, 16) as never,

@@ -21,7 +21,7 @@ const FAILURES: Readonly<Record<AuditFailureKind, unknown>> = {
   originUnavailable: ring("RING_ORIGIN_UNAVAILABLE"),
   invalidStackHeight: ring("RING_ORIGIN_STACK"),
   missingAuditorMessage: ring("RING_AUDIT_MESSAGE", { reason: "missing" }),
-  indexerResponse: ring("RING_SCAN_FRONTIER_MISSING"),
+  indexerResponse: ring("RING_HISTORY_PAGE_INVALID"),
   originDecode: ring("RING_ORIGIN_DECODE", { path: "eventIndex" }),
   transactData: ring("RING_TRANSACT_DATA_INVALID"),
   eventMismatch: ring("RING_ORIGIN_DECODE", { path: "indexedTransfer.output" }),
