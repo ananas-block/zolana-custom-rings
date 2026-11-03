@@ -6,6 +6,7 @@ use crate::MAX_SOURCES;
 pub enum Writer {
     Authority,
     Member,
+    Reserved,
 }
 
 impl Writer {
@@ -13,6 +14,7 @@ impl Writer {
         match self {
             Self::Authority => ListSet::AUTHORITY_WRITES,
             Self::Member => ListSet::MEMBER_WRITES,
+            Self::Reserved => ListSet::EMPTY,
         }
     }
 }
@@ -51,7 +53,8 @@ lists! {
     Block = 2, "block" => Authority,
     Frozen = 3, "frozen" => Authority,
     RingViewing = 4, "ring-viewing" => Member,
-    Recovery = 5, "recovery" => Member,
+    // Unused, holds slot 5 of the circuit's `NSources`.
+    Recovery = 5, "recovery" => Reserved,
     Reader = 6, "reader" => Authority,
     Approval = 7, "approval" => Authority,
     Escrow = 8, "escrow" => Member,
@@ -78,10 +81,12 @@ pub struct ListSet(u8);
 
 impl ListSet {
     pub const EMPTY: Self = Self(0);
+    pub const MEMBER_LISTS: Self = Self::written_by(Writer::Member);
     /// A member's own record write, its escrow bit comes only from a registered key.
-    pub const MEMBER_WRITES: Self =
-        Self::written_by(Writer::Member).difference(Self::single(ListId::Escrow));
+    pub const MEMBER_WRITES: Self = Self::MEMBER_LISTS.difference(Self::single(ListId::Escrow));
     pub const AUTHORITY_WRITES: Self = Self::written_by(Writer::Authority);
+    /// The lists a rule reads, a reader grant moves no funds.
+    pub const POLICY_LISTS: Self = Self::AUTHORITY_WRITES.difference(Self::single(ListId::Reader));
     /// Every list but escrow, an escrow write carries its key instead.
     pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
 
@@ -247,10 +252,7 @@ mod tests {
 
     #[test]
     fn record_writes_split_the_lists_between_the_member_and_the_authority() {
-        assert_eq!(
-            ListSet::MEMBER_WRITES,
-            ListSet::of(&[ListId::RingViewing, ListId::Recovery])
-        );
+        assert_eq!(ListSet::MEMBER_WRITES, ListSet::single(ListId::RingViewing));
         assert_eq!(
             ListSet::AUTHORITY_WRITES,
             ListSet::of(&[
@@ -268,6 +270,27 @@ mod tests {
     }
 
     #[test]
+    fn no_writer_and_no_rule_reach_the_reserved_slot() {
+        assert_eq!(Writer::Reserved.writable(), ListSet::EMPTY);
+        assert_eq!(ListId::Recovery.writer(), Writer::Reserved);
+        assert!(!ListSet::STORAGE_WRITES.contains(ListId::Recovery));
+        assert!(!ListSet::POLICY_LISTS.contains(ListId::Recovery));
+    }
+
+    #[test]
+    fn a_rule_reads_the_authority_lists_but_the_reader_list() {
+        assert_eq!(
+            ListSet::POLICY_LISTS,
+            ListSet::of(&[
+                ListId::Allow,
+                ListId::Block,
+                ListId::Frozen,
+                ListId::Approval,
+            ])
+        );
+    }
+
+    #[test]
     fn a_list_write_masks_both_sets_and_values_only_the_set() {
         let write = ListChange {
             set: ListSet::single(ListId::Allow),
@@ -278,11 +301,11 @@ mod tests {
         assert_eq!((write.mask(), write.value()), (0b11, 0b01));
         let member = ListChange {
             set: ListSet::EMPTY,
-            clear: ListSet::single(ListId::Recovery),
+            clear: ListSet::single(ListId::RingViewing),
         }
         .check()
         .unwrap();
-        assert_eq!((member.mask(), member.value()), (0b1_0000, 0));
+        assert_eq!((member.mask(), member.value()), (0b1000, 0));
     }
 
     #[test]

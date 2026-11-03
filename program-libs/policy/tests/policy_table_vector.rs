@@ -280,7 +280,7 @@ fn full_width_table() -> (RuleTable, SourceMap) {
             )
             .above_by_asset(),
         )
-        .rule(Rule::forbid(Subject::OutputOwner, ListId::Reader).above(1 << 63))
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::Approval).above(1 << 63))
         .build();
     let curator = registry_field(&[0x15; 32]).expect("registry field");
     let entries: Vec<(ListId, [u8; 32])> = ListId::ALL

@@ -102,6 +102,7 @@ rule_errors! {
     DuplicateLimitAsset => "outflow limit mints must be unique",
     LimitWithoutBound => "an outflow limit needs a cap or a cosign threshold",
     MemberWrittenList => "a rule reads a list its members write",
+    ListNotPolicyReadable => "a rule reads a list outside the policy lists",
 }
 
 impl SourceMap {
@@ -628,8 +629,11 @@ impl EncodedRuleTable {
     pub fn validate(&self, sources: &SourceMap) -> Result<RuleTable, PolicyTableError> {
         let table = self.decode()?;
         let referenced = self.referenced();
-        if !referenced.is_subset(ListSet::AUTHORITY_WRITES) {
+        if referenced.intersects(ListSet::MEMBER_LISTS) {
             return Err(RuleTableError::MemberWrittenList.into());
+        }
+        if !referenced.is_subset(ListSet::POLICY_LISTS) {
+            return Err(RuleTableError::ListNotPolicyReadable.into());
         }
         match referenced
             .iter()

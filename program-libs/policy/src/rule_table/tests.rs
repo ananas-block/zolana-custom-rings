@@ -369,8 +369,13 @@ fn validation_refuses_an_overlong_count_and_a_rule_without_a_source() {
 }
 
 #[test]
-fn validation_refuses_a_rule_over_a_list_its_members_write() {
-    for list_id in [ListId::RingViewing, ListId::Recovery, ListId::Escrow] {
+fn validation_refuses_a_rule_over_a_list_outside_the_policy_lists() {
+    for (list_id, refusal) in [
+        (ListId::RingViewing, RuleTableError::MemberWrittenList),
+        (ListId::Escrow, RuleTableError::MemberWrittenList),
+        (ListId::Recovery, RuleTableError::ListNotPolicyReadable),
+        (ListId::Reader, RuleTableError::ListNotPolicyReadable),
+    ] {
         let map = sources(&[(ListId::Allow, [0u8; 32]), (list_id, [0u8; 32])]);
         let required = RuleTable::builder()
             .rule(Rule::require(Subject::OutputOwner, list_id))
@@ -385,7 +390,7 @@ fn validation_refuses_a_rule_over_a_list_its_members_write() {
         for table in [required, alternative] {
             assert_eq!(
                 table.encode().validate(&map),
-                Err(PolicyTableError::Table(RuleTableError::MemberWrittenList)),
+                Err(PolicyTableError::Table(refusal)),
                 "{list_id:?}"
             );
         }
