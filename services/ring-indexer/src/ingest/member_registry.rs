@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use custom_ring_interface::{QueueEntry, MEMBER_REGISTRY_CAPACITY};
+use custom_ring_interface::{
+    member_registry::AuthorizedAddress, QueueEntry, MEMBER_REGISTRY_CAPACITY,
+};
 use sea_orm::ConnectionTrait;
 use zolana_ring_indexer::{
     records::{QueuedWrite, SealedKey},
-    tree::{node_keys, Canopy, LoadedTree, MemberRead, MemberRecord, ReadRows, WrittenRows},
+    tree::{
+        node_keys, Canopy, IndexedRecord, LoadedTree, MemberRead, MemberRecord, ReadRows,
+        WrittenRows,
+    },
 };
 
 use crate::{
@@ -12,7 +17,7 @@ use crate::{
     storage::{RegistryStore, StoredRecord, TreeVersion},
 };
 
-/// `stored` keeps the sealed keys the tree does not hold.
+/// `stored` keeps the sealed keys and addresses the tree does not hold.
 pub(crate) struct LoadedRegistry {
     pub tree: LoadedTree,
     pub stored: BTreeMap<[u8; 32], StoredRecord>,
@@ -105,20 +110,36 @@ pub(crate) async fn plant_tree<C: ConnectionTrait>(
         .map(|record| StoredRecord {
             record: *record,
             seal: None,
+            address: None,
         })
         .collect::<Vec<_>>();
     store.save_records(&records, 0).await?;
     store.save_nodes(&rows.nodes, 0).await
 }
 
-pub(crate) struct Sealing<'a> {
-    pub base: &'a BTreeMap<[u8; 32], StoredRecord>,
-    pub pending: &'a [QueuedWrite],
+/// `address` is the enrolled preimage of an address write's hash.
+pub(crate) struct ProjectedWrite {
+    pub queued: QueuedWrite,
+    pub address: Option<AuthorizedAddress>,
 }
 
-impl Sealing<'_> {
+/// The fields a leaf hides, carried across relinks and unrelated writes.
+pub(crate) struct HiddenFields<'a> {
+    pub base: &'a BTreeMap<[u8; 32], StoredRecord>,
+    pub pending: &'a [ProjectedWrite],
+}
+
+impl HiddenFields<'_> {
+    pub fn stored(&self, record: IndexedRecord) -> Result<StoredRecord, ApplyError> {
+        Ok(StoredRecord {
+            record,
+            seal: self.seal(&record.record)?,
+            address: self.address(&record.record)?,
+        })
+    }
+
     /// A record keeps its sealed key, an escrow key the batch filled takes the seal of its entry.
-    pub fn seal(&self, record: &MemberRecord) -> Result<Option<SealedKey>, ApplyError> {
+    fn seal(&self, record: &MemberRecord) -> Result<Option<SealedKey>, ApplyError> {
         if record.escrow_key == [0; 32] {
             return Ok(None);
         }
@@ -131,11 +152,35 @@ impl Sealing<'_> {
         }
         self.pending
             .iter()
+            .map(|write| &write.queued)
             .find(|write| {
                 write.entry.member == record.member && write.entry.escrow_key == record.escrow_key
             })
             .and_then(|write| write.seal)
             .map(Some)
             .ok_or_else(|| fault("an escrow key has no registration in its batch"))
+    }
+
+    /// A record keeps its address, an address hash the batch wrote takes the entry's enrollment.
+    fn address(&self, record: &MemberRecord) -> Result<Option<AuthorizedAddress>, ApplyError> {
+        if record.address_hash == [0; 32] {
+            return Ok(None);
+        }
+        if let Some(kept) = self
+            .base
+            .get(&record.member)
+            .filter(|stored| stored.record.record.address_hash == record.address_hash)
+        {
+            return Ok(kept.address);
+        }
+        self.pending
+            .iter()
+            .find(|write| {
+                write.queued.entry.member == record.member
+                    && write.queued.entry.address_hash == record.address_hash
+            })
+            .and_then(|write| write.address)
+            .map(Some)
+            .ok_or_else(|| fault("an address hash has no enrollment in its batch"))
     }
 }

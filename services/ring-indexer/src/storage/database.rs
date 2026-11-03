@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use custom_ring_interface::storage::StorageRegistry;
+use custom_ring_interface::{member_registry::AuthorizedAddress, storage::StorageRegistry};
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
     IsolationLevel, QueryResult, Statement, TransactionTrait, Value,
@@ -29,6 +29,7 @@ pub(crate) struct TreeVersion {
 pub(crate) struct StoredRecord {
     pub record: IndexedRecord,
     pub seal: Option<SealedKey>,
+    pub address: Option<AuthorizedAddress>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,8 +126,9 @@ pub(crate) struct StorageUndo {
     pub before: Option<StorageState>,
 }
 
-const RECORD_COLUMNS: &str =
-    "leaf_index, member, next_member, lists, escrow_key, seal, mint_policy";
+const RECORD_COLUMNS: &str = "leaf_index, member, next_member, lists, escrow_key, seal, \
+     mint_policy, address_hash, address_ring_id, address_nullifier_pk, address_viewing_u, \
+     address_revision";
 
 /// Lookups read every table from one Postgres snapshot.
 pub(crate) async fn begin_read(
@@ -192,6 +194,8 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
         StorageStore::new(tx, undo.registry).restore(undo).await?;
     }
     let slot = vec![int(journal.metadata.slot)?];
+    let enrollments = "DELETE FROM storage_address_enrollments WHERE slot=$1";
+    exec(tx, enrollments, slot.clone()).await?;
     exec(tx, "DELETE FROM ring_blocks WHERE slot=$1", slot).await?;
     cursor.tip = journal.previous_tip;
     cursor.scanned_slot = cursor.tip_slot();
@@ -250,7 +254,10 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         for stored in records {
             let record = &stored.record.record;
             let sql = "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,\
-                       lists,escrow_key,seal,mint_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
+                       lists,escrow_key,seal,mint_policy,address_hash,address_ring_id,\
+                       address_nullifier_pk,address_viewing_u,address_revision) \
+                       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)";
+            let address = stored.address.as_ref();
             let values = vec![
                 int(stored.record.index)?,
                 int(applied)?,
@@ -260,6 +267,14 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
                 bytes(&record.escrow_key),
                 seal_value(stored.seal.as_ref())?,
                 serde_json::to_string(&record.mint_policy)?.into(),
+                bytes(&record.address_hash),
+                optional_bytes(address.map(|address| &address.ring_id)),
+                optional_bytes(address.map(|address| &address.nullifier_pk)),
+                optional_bytes(address.map(|address| &address.viewing_u)),
+                address
+                    .map(|address| i64::try_from(address.address_revision))
+                    .transpose()?
+                    .into(),
             ];
             self.exec(sql, values).await?;
         }
@@ -378,6 +393,43 @@ impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
         self.tree.exec(sql, vec![json(value)?]).await
     }
 
+    /// The member's newest enrollment, the only address its authorization account holds.
+    pub async fn newest_enrollment(&self, member: &[u8; 32]) -> Result<Option<AuthorizedAddress>> {
+        let sql = "SELECT ring_id, nullifier_pk, viewing_u, address_revision \
+                   FROM storage_address_enrollments WHERE registry=$1 AND member=$2 \
+                   ORDER BY address_revision DESC LIMIT 1";
+        let row = self.tree.query_one(sql, vec![bytes(member)]).await?;
+        row.as_ref()
+            .map(|row| {
+                Ok(AuthorizedAddress {
+                    ring_id: field(row, "ring_id")?,
+                    nullifier_pk: field(row, "nullifier_pk")?,
+                    viewing_u: field(row, "viewing_u")?,
+                    address_revision: uint(row, "address_revision")?,
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn save_enrollment(
+        &self,
+        member: &[u8; 32],
+        address: &AuthorizedAddress,
+        slot: u64,
+    ) -> Result<()> {
+        let sql = "INSERT INTO storage_address_enrollments(registry,member,address_revision,\
+                   ring_id,nullifier_pk,viewing_u,slot) VALUES($1,$2,$3,$4,$5,$6,$7)";
+        let values = vec![
+            bytes(member),
+            int(address.address_revision)?,
+            bytes(&address.ring_id),
+            bytes(&address.nullifier_pk),
+            bytes(&address.viewing_u),
+            int(slot)?,
+        ];
+        self.tree.exec(sql, values).await
+    }
+
     pub async fn root(&self, revision: u64) -> Result<Option<StorageRoot>> {
         let sql = "SELECT root, revision, next_index FROM storage_roots \
                    WHERE registry=$1 AND revision=$2";
@@ -410,6 +462,7 @@ impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
                 "DELETE FROM ring_records WHERE program=$1",
                 "DELETE FROM ring_record_nodes WHERE program=$1",
                 "DELETE FROM storage_roots WHERE registry=$1",
+                "DELETE FROM storage_address_enrollments WHERE registry=$1",
                 "DELETE FROM storage_registries WHERE registry=$1",
             ] {
                 self.tree.exec(sql, vec![]).await?;
@@ -464,10 +517,26 @@ fn stored_record(row: &QueryResult) -> Result<StoredRecord> {
                 lists: uint(row, "lists")?,
                 escrow_key: field(row, "escrow_key")?,
                 mint_policy: read_mint_policy(row)?.unwrap_or_default(),
+                address_hash: field(row, "address_hash")?,
             },
         },
         seal: seal(row)?,
+        address: address(row)?,
     })
+}
+
+fn address(row: &QueryResult) -> Result<Option<AuthorizedAddress>> {
+    let revision = row.try_get::<Option<i64>>("", "address_revision")?;
+    revision
+        .map(|revision| {
+            Ok(AuthorizedAddress {
+                ring_id: field(row, "address_ring_id")?,
+                nullifier_pk: field(row, "address_nullifier_pk")?,
+                viewing_u: field(row, "address_viewing_u")?,
+                address_revision: u64::try_from(revision)?,
+            })
+        })
+        .transpose()
 }
 
 fn seal(row: &QueryResult) -> Result<Option<SealedKey>> {
@@ -496,6 +565,10 @@ async fn exec<C: ConnectionTrait>(conn: &C, sql: &str, values: Vec<Value>) -> Re
 
 fn bytes(value: &[u8; 32]) -> Value {
     value.to_vec().into()
+}
+
+fn optional_bytes(value: Option<&[u8; 32]>) -> Value {
+    value.map(|value| value.to_vec()).into()
 }
 
 fn json<T: Serialize>(value: &T) -> Result<Value> {

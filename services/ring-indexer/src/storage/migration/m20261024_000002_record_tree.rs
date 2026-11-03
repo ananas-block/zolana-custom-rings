@@ -109,6 +109,11 @@ async fn reset_index(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         conn.execute_unprepared(&format!("DELETE FROM {table}"))
             .await?;
     }
+    rewind_cursor(manager).await
+}
+
+pub(super) async fn rewind_cursor(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    let conn = manager.get_connection();
     let backend = manager.get_database_backend();
     let read = Statement::from_string(backend, "SELECT state FROM ring_cursor WHERE id=1");
     let Some(row) = conn.query_one(read).await? else {

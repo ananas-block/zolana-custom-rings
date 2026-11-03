@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt::Display,
     future::Future,
     ops::Range,
@@ -8,11 +8,13 @@ use std::{
 };
 
 use custom_ring_interface::{
-    check_member, mint_policy_write,
+    check_member,
+    member_registry::{AuthorizedAddress, EscrowKey},
+    mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
     storage_instruction::StorageWriteData,
     tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
-    QUAD_ARITY, STORAGE_PROGRAM_ID,
+    QUAD_ARITY, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
@@ -25,7 +27,8 @@ use zolana_ring_indexer::{
         GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
         GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
         GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
-        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingAddressEscrowPairView,
+        RingAuthorizedAddressView, RingEscrowPreimageView, RingIndexedMemberRecordView,
         RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
         StorageRootView, StorageWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
@@ -81,7 +84,7 @@ struct Cached<T> {
 impl<T> Clone for Confirmation<T> {
     fn clone(&self) -> Self {
         Self {
-            context: self.context.clone(),
+            context: self.context,
             chain: Arc::clone(&self.chain),
         }
     }
@@ -285,18 +288,23 @@ pub(crate) async fn storage_apply_proof_inputs(
     let snapshot = Snapshot::storage(db, &request.registry).await?;
     let root = StorageRoot::current(&snapshot.state.account);
     let chain_start = chain_start(&request.registry.0, root.revision.into()).map_err(internal)?;
-    let loaded = TreeRead::batch(root.tree(), &entries)
+    let LoadedRegistry { tree, stored } = TreeRead::batch(root.tree(), &entries)
         .load(snapshot.store().tree())
         .await
         .map_err(internal)?;
-    let inputs = loaded
-        .tree
+    let mut inputs = tree
         .apply_batch(chain_start, &entries)
         .map_err(internal)?
         .inputs;
     if inputs.old_root != root.root {
         return Err(internal("the loaded tree does not reach the current root"));
     }
+    PairWitnesses {
+        store: &snapshot.store(),
+        stored: &stored,
+    }
+    .fill(&mut inputs.writes, &request.writes)
+    .await?;
     let context = snapshot
         .confirm(chain, StorageServed::Current(&root))
         .await?;
@@ -311,6 +319,118 @@ pub(crate) async fn storage_apply_proof_inputs(
         chain_end: Hash(inputs.chain_end),
         writes: inputs.writes.iter().map(write_view).collect(),
     })
+}
+
+/// The hidden fields of one member's record as a batch's writes change them.
+#[derive(Clone, Copy, Default)]
+struct HiddenSides {
+    address: Option<AuthorizedAddress>,
+    escrow: Option<EscrowPreimage>,
+}
+
+#[derive(Clone, Copy)]
+struct EscrowPreimage {
+    nullifier_pk: [u8; 32],
+    ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
+}
+
+impl EscrowPreimage {
+    fn key(&self) -> EscrowKey<'_> {
+        EscrowKey {
+            nullifier_pk: &self.nullifier_pk,
+            ciphertext: &self.ciphertext,
+        }
+    }
+
+    /// Only a preimage of the entry's key reaches the prover.
+    fn requested(
+        view: &RingEscrowPreimageView,
+        escrow_key: &[u8; 32],
+    ) -> Result<Self, RingApiError> {
+        let preimage = Self {
+            nullifier_pk: view.nullifier_pk.0,
+            ciphertext: view
+                .ciphertext
+                .0
+                .as_slice()
+                .try_into()
+                .map_err(|_| validation("invalid escrow ciphertext length"))?,
+        };
+        if preimage.key().hash().map_err(internal)? != *escrow_key {
+            return Err(validation("the escrow preimage does not hash to its key"));
+        }
+        Ok(preimage)
+    }
+}
+
+impl From<&StoredRecord> for HiddenSides {
+    fn from(stored: &StoredRecord) -> Self {
+        Self {
+            address: stored.address,
+            escrow: stored.seal.map(|seal| EscrowPreimage {
+                nullifier_pk: seal.nullifier_pk,
+                ciphertext: seal.ciphertext,
+            }),
+        }
+    }
+}
+
+/// Resolves the preimages each write proves, from the record, its enrollment or the request.
+struct PairWitnesses<'a, C> {
+    store: &'a StorageStore<'a, C>,
+    stored: &'a BTreeMap<[u8; 32], StoredRecord>,
+}
+
+impl<C: ConnectionTrait> PairWitnesses<'_, C> {
+    async fn fill(
+        &self,
+        writes: &mut [RecordWriteProofInput],
+        requested: &[StorageWriteView],
+    ) -> Result<(), RingApiError> {
+        let mut running = BTreeMap::<[u8; 32], HiddenSides>::new();
+        for (input, request) in writes.iter_mut().zip(requested) {
+            let entry = input.entry;
+            let sides = running.entry(entry.member).or_insert_with(|| {
+                self.stored
+                    .get(&entry.member)
+                    .map(Into::into)
+                    .unwrap_or_default()
+            });
+            if entry.address_hash != [0; 32] {
+                sides.address = Some(self.enrolled(&entry.member, &entry.address_hash).await?);
+            }
+            if input.old_escrow == [0; 32] && entry.escrow_key != [0; 32] {
+                sides.escrow = request
+                    .escrow_preimage
+                    .as_ref()
+                    .map(|view| EscrowPreimage::requested(view, &entry.escrow_key))
+                    .transpose()?;
+            }
+            let escrow = sides.escrow.as_ref().map(EscrowPreimage::key);
+            input.pair = input
+                .pair_witness(sides.address.as_ref(), escrow.as_ref())
+                .map_err(validation)?;
+        }
+        Ok(())
+    }
+
+    /// An address write proves only the newest enrollment.
+    async fn enrolled(
+        &self,
+        member: &[u8; 32],
+        address_hash: &[u8; 32],
+    ) -> Result<AuthorizedAddress, RingApiError> {
+        let enrolled = self
+            .store
+            .newest_enrollment(member)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| validation("an address write has no enrollment"))?;
+        if enrolled.hash(member).map_err(internal)? != *address_hash {
+            return Err(validation("an address write names no newest enrollment"));
+        }
+        Ok(enrolled)
+    }
 }
 
 fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
@@ -546,7 +666,7 @@ impl LoadedRegistry {
                     .get(&record.member)
                     .ok_or_else(|| internal("pooled record was not loaded"))?;
                 Ok(RingIndexedMemberRecordView {
-                    record: record_view(stored),
+                    record: record_view(stored)?,
                     path: path_view(path.index, &path.siblings),
                 })
             })
@@ -585,20 +705,36 @@ impl LoadedRegistry {
             .ok_or_else(|| internal("opened record was not loaded"))?;
         Ok(RingMemberOpening {
             present,
-            record: record_view(stored),
+            record: record_view(stored)?,
             path: path_view(path.index, &path.siblings),
         })
     }
 }
 
-fn record_view(stored: &StoredRecord) -> RingMemberRecordView {
+/// Serves an address only under the leaf hash it opens.
+fn record_view(stored: &StoredRecord) -> Result<RingMemberRecordView, RingApiError> {
+    stored
+        .record
+        .record
+        .check_address(stored.address.as_ref())
+        .map_err(|error| internal(format!("stored address disagrees ({error})")))?;
     let seal = stored.seal;
-    RingMemberRecordView {
+    Ok(RingMemberRecordView {
         owner_pubkey: seal.map(|seal| Address::new_from_array(seal.owner_pubkey).into()),
         nullifier_pk: seal.map(|seal| Hash(seal.nullifier_pk)),
         eph_pk: seal.map(|seal| Base64String(tagged_x25519(&seal.eph_u).to_vec())),
         ciphertext: seal.map(|seal| Base64String(seal.ciphertext.to_vec())),
+        address: stored.address.as_ref().map(address_view),
         ..member_view(&stored.record.record)
+    })
+}
+
+fn address_view(address: &AuthorizedAddress) -> RingAuthorizedAddressView {
+    RingAuthorizedAddressView {
+        ring_id: Hash(address.ring_id),
+        nullifier_pk: Hash(address.nullifier_pk),
+        viewing_u: Hash(address.viewing_u),
+        address_revision: address.address_revision,
     }
 }
 
@@ -613,6 +749,8 @@ fn member_view(record: &MemberRecord) -> RingMemberRecordView {
         nullifier_pk: None,
         eph_pk: None,
         ciphertext: None,
+        address_hash: Hash(record.address_hash),
+        address: None,
     }
 }
 
@@ -628,6 +766,12 @@ fn write_view(write: &RecordWriteProofInput) -> RingRecordWriteView {
         old_lists: write.old_lists,
         old_escrow: Hash(write.old_escrow),
         old_mint_policy: write.old_mint_policy,
+        address_hash: Hash(write.entry.address_hash),
+        old_address_hash: Hash(write.old_address_hash),
+        pair: write.pair.as_ref().map(|pair| RingAddressEscrowPairView {
+            address: address_view(&pair.address),
+            escrow_ciphertext_hash: Hash(pair.escrow_ciphertext_hash),
+        }),
         slot: path_view(write.slot.index, &write.slot.siblings),
         low: member_view(&write.low),
         low_path: path_view(write.low_path.index, &write.low_path.siblings),
@@ -649,8 +793,21 @@ fn storage_root_view(root: &StorageRoot) -> StorageRootView {
     }
 }
 
-/// An escrow write names its leaf by the key hash, never by its envelope.
+/// An escrow write names its leaf by the key hash, an address write by the address hash.
 fn storage_entry(write: &StorageWriteView) -> Result<QueueEntry, CustomRingError> {
+    if write.address_hash.0 != [0; 32] {
+        let entry = QueueEntry::address(write.member.0, write.address_hash.0)?;
+        let others = (
+            write.mask,
+            write.value,
+            write.escrow_key.0,
+            write.mint_policy,
+        );
+        if others != (entry.mask, entry.value, entry.escrow_key, None) {
+            return Err(CustomRingError::InvalidInstructionData);
+        }
+        return Ok(entry);
+    }
     if write.escrow_key.0 == [0; 32] {
         return StorageWriteData::Record(RecordWriteData {
             member: write.member.0,

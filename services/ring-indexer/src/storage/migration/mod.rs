@@ -6,6 +6,7 @@ mod m20261024_000002_record_tree;
 mod m20261025_000001_mint_policy;
 mod m20261029_000001_storage_registries;
 mod m20261029_000002_retire_record_queue;
+mod m20261103_000001_authorized_address;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261025_000001_mint_policy::Migration),
             Box::new(m20261029_000001_storage_registries::Migration),
             Box::new(m20261029_000002_retire_record_queue::Migration),
+            Box::new(m20261103_000001_authorized_address::Migration),
         ]
     }
 }
