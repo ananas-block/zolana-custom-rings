@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in32-w4"
+	confidentialKey     common.CircuitType = "custom-ring-transfer-confidential-2-in24-w4"
 	wideConfidentialKey common.CircuitType = "custom-ring-transfer-confidential-16-in5-w8"
 	anonymousKey        common.CircuitType = "custom-ring-transfer-anonymous-2-in24-w4"
 	wideAnonymousKey    common.CircuitType = "custom-ring-transfer-anonymous-8-in5-w24"
@@ -133,12 +133,17 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	for i, e := range entries {
 		w := members.Apply(t, e)
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
+		pair := ringregistry.Preimages{}
+		if e.Pair != nil {
+			pair = *e.Pair
+		}
 		p.Writes[i] = &RecordWrite{
-			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
-			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits),
+			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits), AddressHash: fz(e.AddressHash)},
+			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits), OldAddressHash: fz(w.OldAddressHash),
 			Index: w.Slot.Index, Path: flatPath(w.Slot),
-			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fz(w.Low.MintPolicy), LowWithdrawalThreshold: fz(w.Low.WithdrawalThreshold), LowAssetLimits: limitFields(w.Low.AssetLimits),
+			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fz(w.Low.MintPolicy), LowWithdrawalThreshold: fz(w.Low.WithdrawalThreshold), LowAssetLimits: limitFields(w.Low.AssetLimits), LowAddressHash: fz(w.Low.AddressHash),
 			LowIndex: w.LowPath.Index, LowPath: flatPath(w.LowPath),
+			NullifierPk: fz(pair.NullifierPk), AddressRing: fz(pair.AddressRing), View0: fz(pair.View0), View1: fz(pair.View1), AddressRevision: pair.AddressRevision, EscrowCtHash: fz(pair.EscrowCtHash),
 		}
 	}
 	p.NewRoot, p.NewNextIndex, p.ChainEnd = fb(members.Root()), uint32(members.NextIndex()), fb(chain)

@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	confidentialShape = transfer.ConfidentialShape{Inputs: 32, Outputs: 2, Withdrawals: 4}
+	confidentialShape = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4}
 	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
 	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
 )
@@ -59,7 +59,7 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 	payload := transferPayload(t)
 	record := func(m map[string]any) map[string]any { return m["ownRecords"].([]any)[0].(map[string]any) }
 	subject := func(m map[string]any) map[string]any { return m["ownSubjects"].([]any)[0].(map[string]any) }
-	entry := func(m map[string]any) map[string]any { return m["senderEntry"].(map[string]any) }
+	entry := func(m map[string]any) map[string]any { return m["senderEntries"].([]any)[0].(map[string]any) }
 	proof := func(m map[string]any) map[string]any { return m["ownProof"].(map[string]any) }
 	path := func(m map[string]any) map[string]any { return proof(m)["paths"].([]any)[0].(map[string]any) }
 	for _, tc := range []struct {

@@ -122,9 +122,9 @@ func newQuadPath(index uint64, flat []Field) quadPath {
 
 // bodyView mirrors registry.RecordBody field for field.
 type bodyView struct {
-	Next, EscrowKey, MintPolicy, WithdrawalThreshold Field
-	AssetLimits                                      []Field
-	Lists                                            uint64
+	Next, EscrowKey, MintPolicy, WithdrawalThreshold, AddressHash Field
+	AssetLimits                                                   []Field
+	Lists                                                         uint64
 }
 
 // lowView mirrors registry.Record field for field.
@@ -144,7 +144,7 @@ func (r RecordOpening) view() any {
 }
 
 func (r RecordOpening) body() bodyView {
-	return bodyView{Next: r.Next, EscrowKey: r.EscrowKey, MintPolicy: r.MintPolicy, WithdrawalThreshold: r.WithdrawalThreshold, AssetLimits: r.AssetLimits, Lists: r.Lists}
+	return bodyView{Next: r.Next, EscrowKey: r.EscrowKey, MintPolicy: r.MintPolicy, WithdrawalThreshold: r.WithdrawalThreshold, AddressHash: r.AddressHash, AssetLimits: r.AssetLimits, Lists: r.Lists}
 }
 
 // memberView mirrors registry.QuadOpening field for field.
@@ -160,7 +160,7 @@ func (m MemberOpening) view() any {
 		Present:  m.Present,
 		bodyView: m.body(),
 		Low: lowView{Member: m.LowMember, bodyView: bodyView{
-			Next: m.LowNext, EscrowKey: m.LowEscrow, MintPolicy: m.LowMintPolicy, WithdrawalThreshold: m.LowWithdrawalThreshold, AssetLimits: m.LowAssetLimits, Lists: m.LowLists,
+			Next: m.LowNext, EscrowKey: m.LowEscrow, MintPolicy: m.LowMintPolicy, WithdrawalThreshold: m.LowWithdrawalThreshold, AddressHash: m.LowAddressHash, AssetLimits: m.LowAssetLimits, Lists: m.LowLists,
 		}},
 		Path: newQuadPath(m.Index, m.Path),
 	}
@@ -189,17 +189,21 @@ type writeView struct {
 	Slot    quadPath
 	Low     lowView
 	LowSlot quadPath
+	// The address and escrow preimages, mirrored field for field.
+	NullifierPk, AddressRing, View0, View1, EscrowCtHash Field
+	AddressRevision                                      uint64
 }
 
 func (w RecordWrite) view() any {
 	return writeView{
 		Entry:  w.Entry,
 		Exists: w.Exists,
-		Old:    bodyView{Next: w.OldNext, EscrowKey: w.OldEscrow, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold, AssetLimits: w.OldAssetLimits, Lists: w.OldLists},
+		Old:    bodyView{Next: w.OldNext, EscrowKey: w.OldEscrow, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold, AddressHash: w.OldAddressHash, AssetLimits: w.OldAssetLimits, Lists: w.OldLists},
 		Slot:   newQuadPath(w.Index, w.Path),
 		Low: lowView{Member: w.LowMember, bodyView: bodyView{
-			Next: w.LowNext, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold, AssetLimits: w.LowAssetLimits, Lists: w.LowLists,
+			Next: w.LowNext, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold, AddressHash: w.LowAddressHash, AssetLimits: w.LowAssetLimits, Lists: w.LowLists,
 		}},
-		LowSlot: newQuadPath(w.LowIndex, w.LowPath),
+		LowSlot:     newQuadPath(w.LowIndex, w.LowPath),
+		NullifierPk: w.NullifierPk, AddressRing: w.AddressRing, View0: w.View0, View1: w.View1, EscrowCtHash: w.EscrowCtHash, AddressRevision: w.AddressRevision,
 	}
 }

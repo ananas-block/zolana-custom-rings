@@ -2,7 +2,6 @@ package ring
 
 import (
 	"encoding/json"
-	"math/big"
 	"os"
 	"slices"
 	"testing"
@@ -35,16 +34,16 @@ func TestMergeCatalogShipsSppWidths(t *testing.T) {
 }
 
 // Rust and TypeScript pin the same file.
-const mergeVectorPath = "../../test-vectors/merge/ring-merge.json"
+const mergeVectorPath = "../../test-vectors/merge/merge_v2.json"
 
 const mergeVectorDescription = "Known-answer vector for the ring merge disclosure and statement, width 8, under key escrow. " +
-	"plaintext = owner_key(32) || nullifier_pk(32) || mint(32) || amount u64 big-endian || output_blinding(32) || input_commitments(8 x 32), " +
-	"zero padded to 31-byte chunks, chunk i a big-endian field. seed = Poseidon(0x4352_5f4d44, key_lo, key_hi, salt_field) with key_lo and key_hi " +
-	"PackBytesBE(disclosure_key) and salt_field the 16 salt bytes right aligned, fields[i] = (chunk[i] + Poseidon(seed, i)) mod r. " +
-	"envelope_ciphertext seals disclosure_key from eph to auditor under info CRING/mrg1 as the base Envelope does. " +
+	"plaintext = be32(input_commitment) per slot in SPP slot order, 32 zero bytes at a dummy, zero padded to 31-byte chunks, chunk i a big-endian field. " +
+	"seed = Poseidon(0x4352_5f4d44, key_lo, key_hi, salt_field) with key_lo and key_hi PackBytesBE(disclosure_key) and salt_field the 16 salt bytes right aligned, " +
+	"fields[i] = (chunk[i] + Poseidon(seed, i)) mod r. envelope_ciphertext seals disclosure_key from eph to auditor under info CRING/mrg1 as the base Envelope does. " +
 	"elements = CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, " +
-	"hash_bytes(envelope_ciphertext), salt_field, hash_chain_4(fields), the three party identities, key_escrow, member_registry_root, " +
-	"public_input_hash = hash_chain(elements). Under key_escrow the owner's record under member_registry_root escrows Poseidon(nullifier_pk, ct_hash). " +
+	"hash_bytes(envelope_ciphertext), salt_field, hash_chain_4(fields), input_count, the three party identities, key_escrow, member_registry_root, " +
+	"public_input_hash = hash_chain(elements). input_count is the published nullifier count, a hidden dummy inside it is valid. " +
+	"Under key_escrow an owner off ZERO_NULLIFIER_PUBKEY has a record under member_registry_root that escrows Poseidon(nullifier_pk, ct_hash). " +
 	"request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1."
 
 type mergeVector struct {
@@ -54,10 +53,7 @@ type mergeVector struct {
 	AuditorPk          Bytes        `json:"auditor_pk"`
 	EphPk              Bytes        `json:"eph_pk"`
 	Salt               Bytes        `json:"salt"`
-	Mint               Bytes        `json:"mint"`
-	NullifierPk        Field        `json:"nullifier_pk"`
-	Amount             uint64       `json:"amount"`
-	OutputBlinding     Field        `json:"output_blinding"`
+	InputCount         uint8        `json:"input_count"`
 	InputCommitments   []Field      `json:"input_commitments"`
 	Plaintext          Bytes        `json:"plaintext"`
 	Fields             []Field      `json:"fields"`
@@ -80,10 +76,7 @@ func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
 		AuditorPk:          auditorPk[:],
 		EphPk:              ephPk[:],
 		Salt:               s.Salt[:],
-		Mint:               s.Mint[:],
-		NullifierPk:        Field{s.NullifierPk},
-		Amount:             new(big.Int).Add(s.Amounts[0], s.Amounts[1]).Uint64(),
-		OutputBlinding:     Field{s.OutputBlinding},
+		InputCount:         uint8(ringtest.AsBigInt(s.Circuit.InputCount).Uint64()),
 		InputCommitments:   fieldsOf(s.InputHashes),
 		Plaintext:          s.Plaintext,
 		Fields:             fieldsOf(s.Fields),
@@ -107,7 +100,7 @@ func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != string(encoded) {
-		t.Fatal("the host mirror disagrees with test-vectors/merge/ring-merge.json, rewrite it with WRITE_AUDIT_VECTORS=1")
+		t.Fatal("the host mirror disagrees with test-vectors/merge/merge_v2.json, rewrite it with WRITE_AUDIT_VECTORS=1")
 	}
 	var pinned mergeVector
 	if err := json.Unmarshal(raw, &pinned); err != nil {

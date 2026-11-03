@@ -58,8 +58,16 @@ type DeliveredOutput struct {
 }
 
 type AnonymousOutput struct {
-	Output   Opening `json:"output"`
-	OwnerKey Bytes   `json:"ownerKey"`
+	Output          Opening `json:"output"`
+	OwnerKey        Bytes   `json:"ownerKey"`
+	RecipientKey    Bytes   `json:"recipientKey"`
+	AddressRevision uint64  `json:"addressRevision"`
+	MintChunks      []Field `json:"mintChunks"`
+	// Body is hashed as sent on a published dummy, unread on change, an exit and an omitted slot.
+	Body Bytes `json:"body"`
+	// Tag is zero on change, an exit and an omitted slot, TagPreimage opens a published dummy's tag.
+	Tag         Field `json:"tag"`
+	TagPreimage Field `json:"tagPreimage"`
 }
 
 // TransferParams is what every transfer key reads, the rail's own values follow in its family's params.
@@ -68,7 +76,9 @@ type TransferParams struct {
 	AuditParams
 	Exempt            bool  `json:"exempt"`
 	ApprovalRequired  bool  `json:"approvalRequired"`
+	OutputCount       uint8 `json:"outputCount"`
 	InputCount        uint8 `json:"inputCount"`
+	SignerCount       uint8 `json:"signerCount"`
 	PrivateTxHash     Field `json:"privateTxHash"`
 	PrivateTxBlinding Field `json:"privateTxBlinding"`
 	PolicyParams
@@ -79,12 +89,13 @@ type ConfidentialTransferParams struct {
 	InProof  bool              `json:"inProof"`
 	Delegate bool              `json:"delegate"`
 	Outputs  []DeliveredOutput `json:"outputs"`
-	// Inputs fill the input class, every slot a dummy on the signer rail and past the spent notes.
-	Inputs     []Opening `json:"inputs"`
-	InputChain Field     `json:"inputChain"`
-	// Sender is the statement's sender, zero on the authority rail where SenderPkHash names the member.
+	// Inputs fill the input class, the slots past the spent notes carry no UTXO.
+	Inputs []Opening `json:"inputs"`
+	// Sender is the in-proof owner, zero on the signer and authority rails, SenderPkHash the member an authority move spends.
 	Sender       Field `json:"sender"`
 	SenderPkHash Field `json:"senderPkHash"`
+	// Signers fill the input class, the owner run in its order and zero past SignerCount.
+	Signers []Field `json:"signers"`
 }
 
 type AnonymousTransferParams struct {
@@ -95,6 +106,14 @@ type AnonymousTransferParams struct {
 	// Inputs fill the input class, the slots past InputCount carry no UTXO.
 	Inputs          []Opening `json:"inputs"`
 	PartyIdentities []Field   `json:"partyIdentities"`
+	// Signers are the public co-owners in run order, zero past SignerCount, empty on an entry key.
+	Signers               []Field `json:"signers"`
+	SenderNullifierPk     Field   `json:"senderNullifierPk"`
+	SenderViewingKey      Bytes   `json:"senderViewingKey"`
+	SenderAddressRevision uint64  `json:"senderAddressRevision"`
+	SenderBundleTag       Field   `json:"senderBundleTag"`
+	// ReplyDigest is the digest the program computes over the reply region, zero without one.
+	ReplyDigest Field `json:"replyDigest"`
 }
 
 type Source struct {
@@ -117,6 +136,7 @@ type RecordOpening struct {
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
+	AddressHash         Field   `json:"addressHash"`
 	Index               uint64  `json:"index"`
 	Path                []Field `json:"path"`
 }
@@ -132,6 +152,7 @@ type MemberOpening struct {
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
 	LowAssetLimits         []Field `json:"lowAssetLimits"`
+	LowAddressHash         Field   `json:"lowAddressHash"`
 }
 
 type Withdrawal struct {
@@ -165,6 +186,7 @@ type PooledRecord struct {
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
+	AddressHash         Field   `json:"addressHash"`
 }
 
 type PooledSubject struct {
@@ -195,7 +217,7 @@ type PolicyParams struct {
 	CuratorProof    SharedRegistryProof `json:"curatorProof"`
 	OwnSubjects     []PooledSubject     `json:"ownSubjects"`
 	CuratorSubjects []PooledSubject     `json:"curatorSubjects"`
-	SenderEntry     PooledEntry         `json:"senderEntry"`
+	SenderEntries   []PooledEntry       `json:"senderEntries"`
 	// OwnerEntries[o] and AssetEntries[o] index payment o's owner and asset subjects.
 	OwnerEntries       []PooledEntry `json:"ownerEntries"`
 	AssetEntries       []PooledEntry `json:"assetEntries"`
@@ -210,6 +232,7 @@ type QueueEntry struct {
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
 	AssetLimits         []Field `json:"assetLimits"`
+	AddressHash         Field   `json:"addressHash"`
 }
 
 type RecordWrite struct {
@@ -221,6 +244,7 @@ type RecordWrite struct {
 	OldMintPolicy          Field      `json:"oldMintPolicy"`
 	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
 	OldAssetLimits         []Field    `json:"oldAssetLimits"`
+	OldAddressHash         Field      `json:"oldAddressHash"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
 	Index                  uint64  `json:"index"`
 	Path                   []Field `json:"path"`
@@ -231,9 +255,17 @@ type RecordWrite struct {
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
 	LowAssetLimits         []Field `json:"lowAssetLimits"`
+	LowAddressHash         Field   `json:"lowAddressHash"`
 	// LowIndex and LowPath open the low record.
 	LowIndex uint64  `json:"lowIndex"`
 	LowPath  []Field `json:"lowPath"`
+	// The address and escrow preimages of the written record, read while a write pairs them.
+	NullifierPk     Field  `json:"nullifierPk"`
+	AddressRing     Field  `json:"addressRing"`
+	View0           Field  `json:"view0"`
+	View1           Field  `json:"view1"`
+	AddressRevision uint64 `json:"addressRevision"`
+	EscrowCtHash    Field  `json:"escrowCtHash"`
 }
 
 type ApplyRecordsParams struct {
@@ -305,7 +337,8 @@ type MergeParams struct {
 	DisclosureKey      Bytes          `json:"disclosureKey"`
 	OwnerKey           Bytes          `json:"ownerKey"`
 	NullifierSecret    Field          `json:"nullifierSecret"`
-	MintChunks         []Field        `json:"mintChunks"`
+	Asset              Field          `json:"asset"`
+	InputCount         uint8          `json:"inputCount"`
 	Inputs             []MergeInput   `json:"inputs"`
 	OutputTreeID       Field          `json:"outputTreeId"`
 	OutputRingDataHash Field          `json:"outputRingDataHash"`

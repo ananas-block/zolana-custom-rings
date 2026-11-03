@@ -124,7 +124,7 @@ func (v quadPath) flat() []Field {
 }
 
 func (v bodyView) opening(path quadPath) RecordOpening {
-	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: path.Index, Path: path.flat()}
+	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, AddressHash: v.AddressHash, Index: path.Index, Path: path.flat()}
 }
 
 func (v recordView) request() any {
@@ -136,7 +136,7 @@ func (v memberView) request() any {
 	return MemberOpening{
 		Present:       v.Present,
 		RecordOpening: v.opening(v.Path),
-		LowMember:     low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
+		LowMember:     low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits, LowAddressHash: low.AddressHash,
 	}
 }
 
@@ -147,10 +147,11 @@ func (v deliveredView) request() any {
 func (v writeView) request() any {
 	old, low := v.Old, v.Low
 	return RecordWrite{
-		Entry: v.Entry, Exists: v.Exists, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: old.MintPolicy, OldWithdrawalThreshold: old.WithdrawalThreshold, OldAssetLimits: old.AssetLimits,
+		Entry: v.Entry, Exists: v.Exists, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: old.MintPolicy, OldWithdrawalThreshold: old.WithdrawalThreshold, OldAssetLimits: old.AssetLimits, OldAddressHash: old.AddressHash,
 		Index: v.Slot.Index, Path: v.Slot.flat(),
-		LowMember: low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
+		LowMember: low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits, LowAddressHash: low.AddressHash,
 		LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
+		NullifierPk: v.NullifierPk, AddressRing: v.AddressRing, View0: v.View0, View1: v.View1, AddressRevision: v.AddressRevision, EscrowCtHash: v.EscrowCtHash,
 	}
 }
 
