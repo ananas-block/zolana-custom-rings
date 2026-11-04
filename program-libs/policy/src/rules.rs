@@ -16,6 +16,8 @@ pub struct RecordLists {
     pub own: u64,
     /// Read only for a list a curator serves.
     pub curator: u64,
+    /// Read only for an owner row's list a private source serves.
+    pub private: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +69,7 @@ impl RuleTable {
         transfer: &TransferSubjects<'_>,
     ) -> Result<(), RuleRefusal> {
         let foreign = foreign_lists(sources);
+        let private = sources.private().owner_lists;
         let payments: Vec<DebitOutput> = transfer
             .outputs
             .iter()
@@ -83,6 +86,7 @@ impl RuleTable {
                 ring_inputs: transfer.ring_inputs,
                 payments: &payments,
                 foreign,
+                private,
                 index,
                 rule,
             };
@@ -111,9 +115,10 @@ impl fmt::Display for TransferSubject {
 
 impl RecordLists {
     /// List `i + 1` reads the curator record when a curator serves it, else the own record.
-    fn on(self, foreign: ListSet) -> ListSet {
-        let foreign = foreign.record_bits();
-        ListSet::from_bits(((self.own & !foreign) | (self.curator & foreign)) as u8)
+    fn on(self, foreign: ListSet, private: ListSet) -> ListSet {
+        let (foreign, private) = (foreign.record_bits(), private.record_bits());
+        let public = (self.own & !foreign) | (self.curator & foreign);
+        ListSet::from_bits(((public & !private) | (self.private & private)) as u8)
     }
 }
 
@@ -122,6 +127,7 @@ struct RuleCheck<'a> {
     ring_inputs: &'a [DebitInput],
     payments: &'a [DebitOutput],
     foreign: ListSet,
+    private: ListSet,
     index: usize,
     rule: &'a Rule,
 }
@@ -163,7 +169,11 @@ impl RuleCheck<'_> {
     }
 
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
-        if holds(self.rule, records.on(self.foreign)) {
+        let private = match subject {
+            TransferSubject::Asset(_) => ListSet::EMPTY,
+            TransferSubject::Sender | TransferSubject::Owner(_) => self.private,
+        };
+        if holds(self.rule, records.on(self.foreign, private)) {
             return Ok(());
         }
         Err(RuleRefusal::Lists {
@@ -187,4 +197,58 @@ fn foreign_lists(sources: &SourceMap) -> ListSet {
         .filter(|(_, slot)| slot.registry != [0; 32])
         .fold(0u8, |bits, (slot, _)| bits | 1 << slot);
     ListSet::from_bits(bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DebitInput, ListId, MintPolicy, PrivateSource, RuleTableBuilder};
+
+    const OWNER: [u8; 32] = [1; 32];
+    const ASSET: [u8; 32] = [2; 32];
+    const BLOCK: u64 = ListId::Block.record_bit();
+
+    fn admit(table: RuleTableBuilder, lists: RecordLists) -> Result<(), RuleRefusal> {
+        let private = PrivateSource::new(ListSet::single(ListId::Block), [7; 32]).unwrap();
+        let sources = SourceMap::new(&[(ListId::Block, [0; 32])])
+            .unwrap()
+            .with_private(private)
+            .unwrap();
+        let outputs = [OutputSubjects {
+            ring: true,
+            owner: OWNER,
+            asset: ASSET,
+            amount: 1,
+            owner_lists: lists,
+            asset_lists: lists,
+            mint_policy: MintPolicy::EMPTY,
+        }];
+        let ring_inputs: [DebitInput; 0] = [];
+        table.build().admit(
+            &sources,
+            &TransferSubjects {
+                sender: RecordLists::default(),
+                ring_inputs: &ring_inputs,
+                outputs: &outputs,
+            },
+        )
+    }
+
+    #[test]
+    fn an_owner_row_reads_the_private_bit_and_an_asset_row_the_public_one() {
+        let owner = RuleTable::builder().rule(Rule::forbid(Subject::OutputOwner, ListId::Block));
+        let asset = RuleTable::builder().rule(Rule::forbid(Subject::Asset, ListId::Block));
+        let private_only = RecordLists {
+            private: BLOCK,
+            ..RecordLists::default()
+        };
+        let public_only = RecordLists {
+            own: BLOCK,
+            ..RecordLists::default()
+        };
+        assert!(admit(owner, private_only).is_err());
+        assert!(admit(owner, public_only).is_ok());
+        assert!(admit(asset, private_only).is_ok());
+        assert!(admit(asset, public_only).is_err());
+    }
 }

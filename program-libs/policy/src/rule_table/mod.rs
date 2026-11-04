@@ -3,20 +3,21 @@ use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
 use wincode::{SchemaRead, SchemaWrite};
 
-use crate::{field_u8, ListId, ListSet, Member};
+use crate::{field_u8, ListId, ListSet, Member, PrivateSource, PrivateSourceError};
 
 /// Rule slots compiled into the circuit, a new value rotates the proving key.
 pub const MAX_RULES: usize = 16;
 /// Source slots, one per list the enum can name.
 pub const MAX_SOURCES: usize = 8;
-/// Curator registries one policy may read lists from, a circuit width.
-pub const N_FOREIGN: usize = 1;
+/// Foreign registries one policy may read, a public curator beside a private source, a circuit width.
+pub const N_FOREIGN: usize = 2;
 /// Enters `policy_hash`, bump it with any change of the encoding below.
-pub const POLICY_TABLE_VERSION: u8 = 12;
+pub const POLICY_TABLE_VERSION: u8 = 13;
 /// `"CRTB"`, the first field of the table hash, `domain::POLICY_TABLE` of the interface.
 pub const POLICY_TABLE_DOMAIN: u32 = 0x4352_5442;
-pub const POLICY_TABLE_FIELDS: usize =
-    (3 + 2 * MAX_SOURCES + MAX_RULES).div_ceil(POLICY_TABLE_RATE) * POLICY_TABLE_RATE;
+pub const POLICY_TABLE_FIELDS: usize = (3 + 2 * MAX_SOURCES + PrivateSource::FIELDS + MAX_RULES)
+    .div_ceil(POLICY_TABLE_RATE)
+    * POLICY_TABLE_RATE;
 /// Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum.
 pub(crate) const POLICY_TABLE_RATE: usize = 11;
 
@@ -35,6 +36,7 @@ pub struct PolicySource {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceMap {
     slots: [PolicySource; MAX_SOURCES],
+    private: PrivateSource,
 }
 
 /// A slot violates the positional layout.
@@ -44,8 +46,10 @@ pub enum SourceMapError {
     NotPositional,
     #[error("list is already mapped")]
     Duplicate,
-    #[error("the curator slots name more than {N_FOREIGN} registry")]
+    #[error("the curator slots name more than one registry")]
     SeveralCurators,
+    #[error(transparent)]
+    Private(#[from] PrivateSourceError),
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -132,14 +136,16 @@ impl SourceMap {
                 return Err(SourceMapError::NotPositional);
             }
         }
-        let map = Self { slots };
+        let map = Self {
+            slots,
+            private: PrivateSource::default(),
+        };
         map.check_curators()?;
         Ok(map)
     }
 
-    /// Every curator slot names the one foreign registry the circuit opens.
+    /// Every curator slot names the one public registry the circuit opens beside a private source.
     fn check_curators(&self) -> Result<(), SourceMapError> {
-        const _: () = assert!(N_FOREIGN == 1);
         let mut curators = self
             .slots
             .iter()
@@ -150,6 +156,22 @@ impl SourceMap {
             return Err(SourceMapError::SeveralCurators);
         }
         Ok(())
+    }
+
+    /// Owner rows read these lists from a private source, asset rows keep the public slots.
+    pub fn with_private(self, private: PrivateSource) -> Result<Self, SourceMapError> {
+        let private = PrivateSource::new(private.owner_lists, private.registry)?;
+        Ok(Self { private, ..self })
+    }
+
+    pub const fn private(&self) -> &PrivateSource {
+        &self.private
+    }
+
+    /// An asset is never a private entry.
+    fn serves(&self, subject: Subject, list_id: ListId) -> bool {
+        self.registry(list_id).is_some()
+            || (!matches!(subject, Subject::Asset) && self.private.owner_lists.contains(list_id))
     }
 
     /// The registry serving a list, zero for the ring's own, `None` when unmapped.
@@ -648,10 +670,12 @@ impl EncodedRuleTable {
         if table.rules().iter().any(|rule| !rule.has_sound_polarity()) {
             return Err(RuleTableError::ListPolarity.into());
         }
-        match referenced
-            .iter()
-            .find(|list_id| sources.registry(*list_id).is_none())
-        {
+        let missing = table.rules().iter().find_map(|rule| {
+            rule.referenced()
+                .iter()
+                .find(|list_id| !sources.serves(rule.subject, *list_id))
+        });
+        match missing {
             Some(list_id) => Err(PolicyTableError::MissingSource(list_id)),
             None => Ok(table),
         }
@@ -671,6 +695,7 @@ impl EncodedRuleTable {
                     .iter()
                     .flat_map(|slot| [field_u8(slot.list_id), slot.registry]),
             )
+            .chain(sources.private().fields())
             .chain([field_u8(self.rule_count)])
             .chain(self.rules.iter().copied());
         let mut fields = [[0u8; 32]; POLICY_TABLE_FIELDS];
