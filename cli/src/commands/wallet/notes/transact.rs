@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation, CoSignRequirement},
-    key_catalog::TransferShape,
+    key_catalog::FrameKey,
     RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
@@ -1283,9 +1283,14 @@ impl Spendable {
     fn widest_anonymous(self, outputs: usize) -> Option<usize> {
         let keyed = |shape: Shape| match self {
             Self::RingOnly => shape_keyed(RingRail::Anonymous, shape),
-            Self::DefaultRingOnly => TransferShape::family(RingRail::Anonymous, true)
-                .and_then(|family| TransferShape::of(family, shape.n_outputs()))
-                .is_some_and(|keyed| shape.n_inputs() <= usize::from(keyed.inputs)),
+            Self::DefaultRingOnly => FrameKey {
+                rail: RingRail::Anonymous,
+                outputs: shape.n_outputs(),
+                spends_default_ring: true,
+                wide: false,
+            }
+            .shape()
+            .is_some_and(|keyed| shape.n_inputs() <= usize::from(keyed.inputs)),
             Self::WithDefaultRing => false,
         };
         // Ordinary padding publishes every input of the SPP shape, the shape itself must carry a key.

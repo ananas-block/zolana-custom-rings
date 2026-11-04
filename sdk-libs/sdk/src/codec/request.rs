@@ -150,7 +150,7 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputOpening {
     pub output: Opening,
@@ -587,34 +587,19 @@ pub(crate) struct TransferParams<'a> {
     /// SPP's chain of address slot nullifiers, zero without one.
     #[serde(with = "fe")]
     pub address_chain: [u8; 32],
+    pub in_proof: bool,
+    pub hidden: bool,
+    pub delegate: bool,
+    /// The in-proof owner, zero on every other rail.
+    #[serde(with = "fe")]
+    pub sender: [u8; 32],
+    /// Payer, co-signer and exit destination of an anonymous frame, zero when absent.
+    #[serde(serialize_with = "fe::seq")]
+    pub party_identities: Vec<[u8; 32]>,
     #[serde(flatten)]
     pub tracking: TrackingParams,
     #[serde(flatten)]
     pub policy: PolicyParams<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ConfidentialTransfer<'a> {
-    #[serde(flatten)]
-    pub transfer: TransferParams<'a>,
-    pub in_proof: bool,
-    pub delegate: bool,
-    /// The in-proof owner, zero on the signer and authority rails.
-    #[serde(with = "fe")]
-    pub sender: [u8; 32],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AnonymousTransfer<'a> {
-    #[serde(flatten)]
-    pub transfer: TransferParams<'a>,
-    pub public_owners: bool,
-    pub delegate: bool,
-    /// Payer, five co-signers and exit destination, zero when absent.
-    #[serde(serialize_with = "fe::seq")]
-    pub party_identities: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

@@ -555,9 +555,9 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     ));
 }
 
-/// Five payments and the change pad to 8 outputs, the anonymous key there holds 5 inputs and not 6.
+/// Five payments and the change pad to 8 outputs, six inputs take the next SPP shape there.
 #[tokio::test]
-async fn an_anonymous_move_past_the_eight_output_key_is_refused_before_proving() {
+async fn an_anonymous_move_of_eight_outputs_takes_more_than_five_inputs() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let recipients: Vec<ShieldedKeypair> = (10..15).map(keypair).collect();
@@ -592,14 +592,17 @@ async fn an_anonymous_move_past_the_eight_output_key_is_refused_before_proving()
             .unwrap(),
         spr_client::Shape::IN5_OUT8
     );
-    assert!(matches!(
-        pay(2).select(&client).await,
-        Err(RingError::Unfunded {
-            amount: 6,
-            max_inputs: 5,
-            ..
-        })
-    ));
+    let wider = pay(2).select(&client).await.unwrap();
+    let shape = wider
+        .assemble(&client)
+        .await
+        .unwrap()
+        .frame
+        .proof_inputs
+        .check_shape()
+        .unwrap();
+    assert_eq!(shape.n_outputs(), 8);
+    assert!(shape.n_inputs() > 5);
 }
 
 /// An entry spend publishes the hidden owner's key, ring UTXOs fund the move first.
@@ -1241,13 +1244,12 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     let request = assembled.request().unwrap();
     assert_eq!(
         request.circuit,
-        custom_ring_interface::key_catalog::RingCircuit::TransferAnonymous {
+        custom_ring_interface::key_catalog::RingCircuit::Transfer {
             outputs: 4,
-            class: 16,
+            inputs: 24,
             withdrawals: 4,
             owners: 4,
-            data: false,
-            private: 0
+            entry: false,
         }
     );
     let built = serde_json::to_value(
@@ -1260,7 +1262,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
         ["change", "exit", "payment", "padding"]
     );
     assert_eq!(built["inputCount"], 1);
-    assert_eq!(built["inputs"].as_array().unwrap().len(), 16);
+    assert_eq!(built["inputs"].as_array().unwrap().len(), 24);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/custom-ring-transfer-anonymous-exit.json");
     if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
@@ -1297,13 +1299,12 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
     let request = assembled.request().unwrap();
     assert_eq!(
         request.circuit,
-        custom_ring_interface::key_catalog::RingCircuit::TransferConfidential {
+        custom_ring_interface::key_catalog::RingCircuit::Transfer {
             outputs: 2,
             inputs: 24,
             withdrawals: 4,
             owners: 4,
-            data: false,
-            private: 0
+            entry: false,
         }
     );
     let built = serde_json::to_value(
@@ -1574,7 +1575,15 @@ async fn the_owner_count_selects_the_key_and_opens_ascending_rows() {
         .enumerate()
         .map(|(leaf, owner)| ring_utxo(owner, Mint::SOL, 1, leaf as u64))
         .collect();
-    let wide = owner_transfer(&many[0], ring_transaction(utxos));
+    let wide = many[1..].iter().fold(
+        owner_transfer(&many[0], ring_transaction(utxos)),
+        |transfer, owner| {
+            transfer.with_co_owner(CoOwner {
+                owner: owner.shielded_address().unwrap().solana_address().unwrap(),
+                nullifier_key: &owner.nullifier_key,
+            })
+        },
+    );
     let Ok(framed) = wide.frame(&client).await else {
         panic!("five owners select the key with full rows");
     };
@@ -1589,6 +1598,23 @@ async fn the_owner_count_selects_the_key_and_opens_ascending_rows() {
             .count(),
         5
     );
+    let assembled = match wide.assemble(&client).await {
+        Ok(assembled) => assembled,
+        Err(error) => panic!("{error:?}"),
+    };
+    let request = assembled.request().unwrap();
+    let built = serde_json::to_value(
+        crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+    )
+    .unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/custom-ring-transfer-wide-owners.json");
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    let pinned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(request_layout(&built), request_layout(&pinned));
 }
 
 /// The refusal of a recipient off the allow list names its rule and output.
@@ -2330,8 +2356,7 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                                 spends_default_ring: rail.entry(),
                                 legs,
                                 owners: 0,
-                                has_data: false,
-                                private_source: false,
+                                wide: false,
                             },
                         );
                         if served.is_none() {
@@ -2395,7 +2420,10 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 /// Each confidential input class is the widest shape both rails fit without a policy, relayed.
 #[tokio::test]
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
-    for family in custom_ring_interface::key_catalog::CONFIDENTIAL_TRANSFER_SHAPES {
+    let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
+        .into_iter()
+        .filter(|shape| !shape.entry && shape.withdrawals != 32);
+    for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
             // The in-proof rail stops one input short of the signer rail at 16 outputs.

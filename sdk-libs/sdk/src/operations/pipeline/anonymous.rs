@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     anonymous_exit::{AnonymousExitDestination, TokenAccountControl, TokenAccountState},
-    key_catalog::TransferShape,
+    key_catalog::FrameKey,
     CustomRingError, RingMode, RingRail,
 };
 use solana_account::Account;
@@ -486,9 +486,14 @@ fn check_audit_key(inputs: &SppProofInputs) -> Result<(), RingError> {
         .iter()
         .filter(|input| !input.is_compact())
         .count();
-    let keyed = TransferShape::family(RingRail::Anonymous, default_ring)
-        .and_then(|family| TransferShape::of(family, inputs.output_utxos.len()))
-        .is_some_and(|shape| published <= usize::from(shape.inputs));
+    let keyed = FrameKey {
+        rail: RingRail::Anonymous,
+        outputs: inputs.output_utxos.len(),
+        spends_default_ring: default_ring,
+        wide: false,
+    }
+    .shape()
+    .is_some_and(|shape| published <= usize::from(shape.inputs));
     match (keyed, default_ring) {
         (true, _) => Ok(()),
         (false, true) => Err(RingError::DefaultRingSpendTooWide { inputs: published }),

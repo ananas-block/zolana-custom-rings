@@ -581,7 +581,6 @@ impl<'a> Sealed<'a> {
             inputs: &proof_inputs,
             published_inputs,
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
-            has_data: proof_inputs.output_utxos.iter().any(carries_data),
             n_out,
             public: &public,
         }
@@ -928,8 +927,7 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
             spends_default_ring,
             legs: 0,
             owners: 0,
-            has_data: false,
-            private_source: false,
+            wide: false,
         })
         .is_some()
 }

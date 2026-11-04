@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask,
-    key_catalog::{RecordPools as PoolWidths, RingCircuit, TransferShape, TransferSpend},
+    key_catalog::{RecordPools as PoolWidths, RingCircuit, TransferSpend},
     CustomRingError, PolicyWithdrawal, PublicSlots, RingRail, RootRead, TransferRoots,
 };
 use solana_address::Address;
@@ -31,6 +31,8 @@ use crate::{
 pub(super) struct PolicyInputs {
     circuit: RingCircuit,
     widths: PoolWidths,
+    /// The key's `N`, a frame on a wider key leaves the rest empty.
+    slots: usize,
     pub read: RootRead,
     /// The key opens its full owner rows.
     pub wide_owners: bool,
@@ -67,7 +69,6 @@ pub(super) struct PolicyRead<'a> {
     /// The spent notes, every input but the compact ones.
     pub published_inputs: usize,
     pub spends_default_ring: bool,
-    pub has_data: bool,
     pub n_out: u8,
     pub public: &'a PublicSlots,
 }
@@ -99,14 +100,15 @@ impl PolicyRead<'_> {
             spends_default_ring: self.spends_default_ring,
             legs: withdrawals.len(),
             owners: live_rows.len(),
-            has_data: self.has_data,
-            private_source: read == RootRead::Policy && !policy.salted().is_empty(),
-        };
+            wide: false,
+        }
+        .fitted();
         let unkeyed = || RingError::ShapeUnkeyed { rail: self.rail };
         let circuit = RingCircuit::transfer(spend).ok_or_else(unkeyed)?;
-        let shape = TransferShape::family(self.rail, self.spends_default_ring)
-            .and_then(|family| TransferShape::of(family, n_out))
-            .ok_or_else(unkeyed)?;
+        let RingCircuit::Transfer { outputs, .. } = circuit else {
+            return Err(RingError::UncataloguedCircuit(circuit));
+        };
+        let slots = usize::from(outputs);
         let widths = circuit
             .record_pools()
             .ok_or(RingError::UnpinnedProvingKey(circuit))?;
@@ -114,13 +116,15 @@ impl PolicyRead<'_> {
         let mut rows = live_rows;
         rows.resize(capacity, [0; 32]);
         let tracking = BoundRoot::tracking(policy, client).await?;
-        let (tracking_pool, row_entries, output_entries) =
-            self.read_tracking(client, tracking, &rows, widths).await?;
+        let (tracking_pool, row_entries, output_entries) = self
+            .read_tracking(client, tracking, &rows, widths, slots)
+            .await?;
         let mut inputs = PolicyInputs {
             circuit,
             widths,
+            slots,
             read,
-            wide_owners: circuit.owners() == Some(shape.owners[1]),
+            wide_owners: spend.wide,
             rows,
             spl_withdrawal_owners,
             withdrawals,
@@ -170,6 +174,7 @@ impl PolicyRead<'_> {
         root: BoundRoot,
         rows: &[[u8; 32]],
         widths: PoolWidths,
+        slots: usize,
     ) -> Result<(TrackingPoolRead, Vec<u32>, Vec<u32>), RingError> {
         let mut subjects = PoolSubjects::default();
         let row_entries = rows
@@ -188,10 +193,11 @@ impl PolicyRead<'_> {
                     .transpose()
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let output_entries = ring_owners
+        let mut output_entries: Vec<u32> = ring_owners
             .iter()
             .map(|owner| subjects.index(*owner))
             .collect();
+        output_entries.resize(slots, 0);
         let pool = TrackingRead {
             root,
             members: subjects.opened(),
@@ -287,6 +293,10 @@ impl PolicyRead<'_> {
             .iter()
             .zip(&assets)
             .map(|(owner, asset)| (*owner, *asset))
+            .chain(core::iter::repeat_n(
+                (None, None),
+                inputs.slots.saturating_sub(owners.len()),
+            ))
             .chain(
                 inputs
                     .withdrawals
@@ -511,7 +521,7 @@ impl PolicyInputs {
                 .withdrawals()
                 .ok_or(RingError::UncataloguedCircuit(self.circuit))?,
         );
-        let outputs = self.output_entries.len();
+        let outputs = self.slots;
         let roots = self.roots();
         let mut withdrawals = self.withdrawals.clone();
         withdrawals.resize(capacity, PolicyWithdrawal::default());
