@@ -1,5 +1,7 @@
 use custom_ring_interface::{
-    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, RingKind, RingMode, RingPolicy,
+    storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
+    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, RingKind, RingMode,
+    RingPolicy, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     error::ProgramError,
@@ -8,6 +10,7 @@ use pinocchio::{
 };
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
+use zolana_ring_policy::ring_id_field;
 
 use crate::{
     instructions::{
@@ -36,6 +39,9 @@ pub fn process_initialize_ix(
     let protocol_config = iter.next_account("protocol_config")?;
     let ring_auth = iter.next_mut("ring_auth")?;
     let spp_program = iter.next_account("spp_program")?;
+    let tracking = iter.next_mut("tracking_registry")?;
+    // Only the runtime reads it, the CPI names the storage program by id.
+    iter.next_account("storage_program")?;
 
     // 1. The signer holds the upgrade authority of the deployed binary.
     check_system_program(system_program)?;
@@ -58,7 +64,7 @@ pub fn process_initialize_ix(
         seeds: &[RingPolicy::SEED],
     }
     .create::<RingPolicy>(payer, ring)?;
-    // 4. A policy ring pins its table, an audit-only ring may bind records alone for its withdrawal exemptions.
+    // 4. A policy ring pins its table, any other ring may bind records alone for its thresholds.
     let records = match &ix.policy {
         Some(binding) => PolicyCreation {
             program_id,
@@ -67,9 +73,6 @@ pub fn process_initialize_ix(
         }
         .records(&mut iter)?,
         None if ix.kind.has_policy() => return Err(CustomRingError::PolicyNotSet.into()),
-        None if ix.kind.anonymous() => {
-            return Err(CustomRingError::AnonymousRingNeedsRecords.into())
-        }
         None => Address::default(),
     };
     let slot = Clock::get()?.slot;
@@ -84,6 +87,7 @@ pub fn process_initialize_ix(
         auditor_pubkey: ix.auditor_pubkey,
         created_slot: slot,
         records,
+        tracking: *tracking.address(),
     }
     .account();
     if let Some(binding) = ix.policy.as_ref().filter(|_| ix.kind.has_policy()) {
@@ -97,8 +101,23 @@ pub fn process_initialize_ix(
         account.set_policy(bound.sources, bound.rules, slot)?;
     }
     Init(&*account).init(ring)?;
-    // 5. SPP's `RingConfig` sits at the ring PDA, the one point where SPP checks the ring's identity.
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;
+    // 5. Storage creates the registry at the address these seeds fix, the ring PDA's signature admits only this ring.
+    let tracking_data = [
+        &[storage_tag::INITIALIZE_TRACKING][..],
+        bytemuck::bytes_of(&InitializeTrackingIxData {
+            ring_id: ring_id_field(program_id.as_array()).map_err(CustomRingError::from)?,
+            auditor_pubkey: ix.auditor_pubkey,
+        }),
+    ]
+    .concat();
+    let tracking_accounts = [&*payer, &*ring_auth, &*tracking, &*system_program];
+    placed.invoke_program(
+        &STORAGE_PROGRAM_ID,
+        tracking_accounts.as_slice(),
+        &tracking_data,
+    )?;
+    // 6. SPP's `RingConfig` sits at the ring PDA, the one point where SPP checks the ring's identity.
     let data = encode_instruction(
         tag::CREATE_RING_CONFIG,
         // Rail off and config inert until governance runs `set_ring_activation`.

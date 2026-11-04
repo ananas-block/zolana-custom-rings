@@ -204,11 +204,3 @@ func comparisonHint(_ *big.Int, inputs, outputs []*big.Int) error {
 	outputs[1].Rsh(inputs[0], width)
 	return nil
 }
-
-// assertRecipients holds each statement recipient to its slot's owner identity while screened and published, zero otherwise.
-func (p *PolicyInputs) assertRecipients(api frontend.API, screened, published frontend.Variable, outputs []shared.Output) {
-	for o, out := range outputs {
-		// The owner rules screen the same OwnerPkHash.
-		api.AssertIsEqual(p.Recipients[o], api.Mul(screened, published, out.Utxo, out.OwnerPkHash))
-	}
-}

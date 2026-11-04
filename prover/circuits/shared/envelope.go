@@ -14,10 +14,8 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/aes"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/x25519"
-	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -38,23 +36,8 @@ func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
 	return append(slices.Concat(s.Auditor, s.Eph), gadget.HashBoundedBytes(api, s.Ciphertext))
 }
 
-type keySchedule func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable)
-
-// Seal is the merge envelope under ve.KeySchedule of Info, every other ring line takes SealStream.
-func (e Envelope) Seal(api frontend.API) Sealed {
-	return e.seal(api, func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable) {
-		return ve.KeySchedule(api, secret, ringgadget.ConstBytes(e.Info), len(e.Info))
-	})
-}
-
 // SealStream starts at counter 2, the readers start there.
 func (e Envelope) SealStream(api frontend.API) Sealed {
-	return e.seal(api, func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable) {
-		return AuditStreamKeySchedule(api, secret, e.Info)
-	})
-}
-
-func (e Envelope) seal(api frontend.API, schedule keySchedule) Sealed {
 	// 1. One encoding per auditor key, the program packs the configured key bytes as they are.
 	agreement := AgreeCanonical(api, e.EphSk, e.AuditorPk)
 	// 2. The X25519 gadgets bound every key byte and return canonical bytes, the packings below need no byte check.
@@ -65,7 +48,7 @@ func (e Envelope) seal(api frontend.API, schedule keySchedule) Sealed {
 		[]frontend.Variable{uint64(DomSepCRShared)}, PackBounded(api, agreement[:]), sealed.Eph, sealed.Auditor,
 	))
 	// 4. The cipher's byte tables bound every plaintext byte.
-	key, nonce := schedule(secret)
+	key, nonce := AuditStreamKeySchedule(api, secret, e.Info)
 	sealed.Ciphertext = aes.NewCipher(api, key).CTREncrypt(nonce, e.Plaintext)
 	return sealed
 }

@@ -1,4 +1,4 @@
-use custom_ring_interface::{CustomRingError, RingMode, RingRole};
+use custom_ring_interface::{CustomRingError, RingRole};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 
@@ -26,16 +26,8 @@ pub fn process_set_delegate_ix(
     if ring.delegate().is_some() {
         return Err(CustomRingError::DelegateAlreadySet.into());
     }
-    // 2. An anonymous ring hides the owner a delegate would sign for.
-    if ring.mode()? == RingMode::Anonymous {
-        return Err(CustomRingError::AnonymousRingRefused.into());
-    }
-    if !ring.has_policy() {
-        return Err(CustomRingError::DelegateRequiresPolicy.into());
-    }
-    // 3. The delegate holds no role, and `ConfidentialEscrow` mode escrows every output nullifier key in the records.
+    // 2. The delegate holds no role, tracking on every ring serves it the victim's key.
     ring.roles.check(Some(delegate.address()))?;
     ring.delegate = *delegate.address();
-    ring.mode = RingMode::ConfidentialEscrow as u8;
     Ok(())
 }

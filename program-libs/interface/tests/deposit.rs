@@ -49,13 +49,13 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
         assets: &assets,
         auditor_pk: &[6; 33],
         eph_pk: &[7; 33],
+        tracking_root: &[14; 32],
         registry: None,
     };
-    let registry = |own_root, key_escrow, policy_hash| {
+    let registry = |own_root, policy_hash| {
         Some(DepositRegistry {
             own_root,
             curator_root: None,
-            key_escrow,
             policy_hash,
         })
     };
@@ -94,18 +94,21 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
             ..input
         },
         DepositPublicInput {
-            registry: registry(&[9; 32], false, None),
+            tracking_root: &[15; 32],
             ..input
         },
         DepositPublicInput {
-            registry: registry(&[0; 32], false, Some(&[9; 32])),
+            registry: registry(&[9; 32], None),
+            ..input
+        },
+        DepositPublicInput {
+            registry: registry(&[0; 32], Some(&[9; 32])),
             ..input
         },
         DepositPublicInput {
             registry: Some(DepositRegistry {
                 own_root: &[0; 32],
                 curator_root: Some(&[9; 32]),
-                key_escrow: false,
                 policy_hash: None,
             }),
             ..input
@@ -119,19 +122,6 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     ] {
         assert_ne!(expected, changed.hash().unwrap());
     }
-    let escrowed = DepositPublicInput {
-        registry: registry(&[9; 32], true, None),
-        ..input
-    };
-    assert_ne!(
-        escrowed.hash().unwrap(),
-        DepositPublicInput {
-            registry: registry(&[9; 32], false, None),
-            ..input
-        }
-        .hash()
-        .unwrap()
-    );
 }
 
 fn asset(asset: u8, amount: u64) -> DepositedAsset {
@@ -151,6 +141,7 @@ fn statement_rejects_empty_oversized_and_mismatched_batches() {
         assets: &[],
         auditor_pk: &[0; 33],
         eph_pk: &[0; 33],
+        tracking_root: &[14; 32],
         registry: None,
     };
     assert_eq!(input.hash(), Err(HasherError::InvalidNumFields));
