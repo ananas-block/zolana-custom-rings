@@ -11,13 +11,16 @@ use super::{
     *,
 };
 use custom_ring_interface::{
-    storage::StorageRegistry, tag, tracking::TrackingRegistry, PolicyWithdrawal,
-    FRAME_BUFFER_HEADER_LEN,
+    cosign::ApprovalMask, storage::StorageRegistry, tag, tracking::TrackingRegistry,
+    PolicyWithdrawal, FRAME_BUFFER_HEADER_LEN,
 };
-use custom_ring_sdk::{ClearCoSigner, RelaySent, RingSubmission, SetCoSigner, SettledSubmission};
+use custom_ring_sdk::{
+    ApprovalLimit, CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval,
+    MessageMismatch, RelaySent, RingRelay, RingSubmission, SetCoSigner, SettledSubmission,
+};
 use custom_ring_test_validator::{
     policy::{CuratedRings, RELEASED},
-    ring_rpc::{RELAY_BUDGET_LAMPORTS, RELAY_SIGNER_BUDGET_LAMPORTS},
+    ring_rpc::{RelayedRingRpc, RELAY_BUDGET_LAMPORTS, RELAY_SIGNER_BUDGET_LAMPORTS},
     ring_wallet::RingWallet,
     shared::restart_prover,
 };
@@ -39,7 +42,11 @@ use spr_indexer_api::{
 use spr_interface::{shape::Shape, SOL_INTERFACE};
 use spr_program::instruction::TransactSolTransferAccounts;
 use spr_transaction::Mint;
-use zolana_ring_client::{ring_event_origin_in, rpc::RelayOperation, RingIndexer};
+use zolana_ring_client::{
+    ring_event_origin_in,
+    rpc::{GetRelayStatusRequest, RelayOperation, RelayStatus},
+    RingIndexer,
+};
 use zolana_ring_indexer::{
     rpc::{method::GetStorageRecordPool, GetStorageRecordPoolRequest},
     tracking::{method::GetTrackingRecordPool, GetTrackingRecordPoolRequest},
@@ -50,11 +57,12 @@ const STORAGE_POOL: &str = GetStorageRecordPool::NAME;
 const TRACKING_POOL: &str = GetTrackingRecordPool::NAME;
 const NOTE: u64 = 1_000_000_000;
 const SPENT_NOTES: usize = 5;
+const SPENT_TOTAL: u64 = SPENT_NOTES as u64 * NOTE;
 const PAYMENTS: usize = 15;
 const LEGS: usize = 4;
 const PAID: u64 = 300_000_000;
 const LEG: u64 = 10_000_000;
-const EXIT: u64 = SPENT_NOTES as u64 * NOTE - PAYMENTS as u64 * PAID - LEGS as u64 * LEG;
+const EXIT: u64 = SPENT_TOTAL - PAYMENTS as u64 * PAID - LEGS as u64 * LEG;
 const PRIORITY_FEE: u64 = 1_000;
 const DESTINATION_FUNDING: u64 = 1_000_000;
 const RING_DATA_HASH: [u8; 32] = field_value(0x42);
@@ -258,9 +266,16 @@ impl<'a> FullLoad<'a> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApprovalRead {
+    ProvenMask,
+    Opening,
+}
+
 struct Settlement<'a> {
     env: &'a TestEnv,
     label: &'a str,
+    approval: ApprovalRead,
     ring: CustomRing,
     policy: &'a RingPolicy,
     auditor: &'a X25519Keypair,
@@ -292,6 +307,15 @@ impl Settlement<'_> {
         let (_, body) = frame.split_first().context("a tagged frame")?;
         let data = RingTransactData::parse(body, RingRail::Anonymous)?.into_data();
         ensure!(data.has_data, "{} carries no data tail", self.label);
+        let digest = data.extensions.approval_totals.copied();
+        ensure!(
+            match self.approval {
+                ApprovalRead::ProvenMask => digest.is_none(),
+                ApprovalRead::Opening => digest.is_some_and(|digest| digest != [0; 32]),
+            },
+            "{} carries approval digest {digest:?}",
+            self.label
+        );
         let mut history = env
             .client
             .rpc()
@@ -337,7 +361,7 @@ impl Settlement<'_> {
         let opened = opened(&audited);
         ensure!(
             opened.iter().map(|output| output.amount).sum::<u64>()
-                == SPENT_NOTES as u64 * NOTE - LEGS as u64 * LEG,
+                == SPENT_TOTAL - LEGS as u64 * LEG,
             "{} audits another value",
             self.label
         );
@@ -354,6 +378,167 @@ impl Settlement<'_> {
             self.label
         );
         Ok(frame.len())
+    }
+}
+
+struct RelayLeg<'a> {
+    env: &'a TestEnv,
+    label: &'a str,
+    approval: ApprovalRead,
+    ring: CustomRing,
+    policy: &'a RingPolicy,
+    config: &'a CustomRingConfig,
+    auditor: &'a X25519Keypair,
+    ring_rpc: &'a RelayedRingRpc,
+    co_signer: &'a Keypair,
+    sender: &'a ShieldedKeypair,
+    recipients: &'a [ShieldedKeypair],
+    notes: &'a [WalletUtxo],
+    destination: Address,
+}
+
+impl RelayLeg<'_> {
+    fn run(self) -> Result<()> {
+        let (env, ring_rpc) = (self.env, self.ring_rpc);
+        let before = fetch_account(env.client.rpc(), &env.tree)?;
+        let transfer = FullLoad {
+            ring: self.ring,
+            sender: self.sender,
+            recipients: self.recipients,
+            payer: ring_rpc.fee_payer,
+            notes: self.notes,
+            destination: self.destination,
+        }
+        .transfer()?
+        .with_co_signer(self.co_signer.pubkey());
+        let transfer = match self.approval {
+            ApprovalRead::ProvenMask => transfer,
+            ApprovalRead::Opening => transfer.with_exact_approval(),
+        };
+        let quote = ring_rpc.quote(env, RelayOperation::Anonymous)?;
+        let prepared = env.run(transfer.prepare_relay(env.client.as_async(), quote))?;
+        let RelaySent::SignMessage(pending) = env.run(prepared.send(&ring_rpc.relay))? else {
+            bail!("{} asked no co-signature", self.label);
+        };
+        let relay_id = pending.relay_id().clone();
+        let holding = |rule| {
+            CoSignerApproval {
+                relay_id: relay_id.clone(),
+                message: pending.message().to_vec(),
+                ring: self.ring.program_id(),
+                fee_payer: ring_rpc.fee_payer,
+                signer: self.co_signer.pubkey(),
+                config: self.config,
+                setup: Vec::new(),
+                rule,
+            }
+            .pending()
+        };
+        let rule = match self.approval {
+            ApprovalRead::ProvenMask => CoSignerRule::Threshold {
+                accepts: ApprovalMask::new(
+                    ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits(),
+                )
+                .context("the proven approval bits")?,
+            },
+            ApprovalRead::Opening => {
+                let exact = |opening| {
+                    CoSignerRule::Exact(ExactApproval {
+                        opening,
+                        limits: vec![ApprovalLimit {
+                            mint: SOL_MINT,
+                            peak: u128::from(SPENT_TOTAL),
+                            outflow: u128::from(SPENT_TOTAL),
+                        }],
+                        seen_blinders: Vec::new(),
+                    })
+                };
+                let opening = pending
+                    .approval_opening()
+                    .context("the wallet's approval opening")?
+                    .clone();
+                let mut false_opening = opening.clone();
+                let first = false_opening
+                    .outputs
+                    .first_mut()
+                    .context("an output total")?;
+                first.outflow = "1".to_owned();
+                let refused = env.run(holding(exact(false_opening)).sign_on_chain(
+                    &ring_rpc.relay,
+                    env.client.as_async(),
+                    self.co_signer,
+                ));
+                ensure!(
+                    matches!(
+                        refused,
+                        Err(RingError::RelayMessage(
+                            MessageMismatch::FalseApprovalOpening
+                        ))
+                    ),
+                    "a false opening reached {:?}",
+                    refused.map(|_| ())
+                );
+                let status = env.run(ring_rpc.relay.get_relay_status(GetRelayStatusRequest {
+                    relay_id: relay_id.clone(),
+                }))?;
+                ensure!(
+                    matches!(status, RelayStatus::AwaitingSignature),
+                    "a false opening moved the relay to {status:?}"
+                );
+                ensure!(
+                    fetch_account(env.client.rpc(), &env.tree)? == before,
+                    "a false opening moved the tree"
+                );
+                println!(
+                    "{}: false opening refused by the co-signer, state unchanged",
+                    self.label
+                );
+                exact(opening)
+            }
+        };
+        env.run(holding(rule).sign_on_chain(
+            &ring_rpc.relay,
+            env.client.as_async(),
+            self.co_signer,
+        ))?;
+        let signature = ring_rpc.confirmed(env, &relay_id)?;
+        let frame_len = Settlement {
+            env,
+            label: self.label,
+            approval: self.approval,
+            ring: self.ring,
+            policy: self.policy,
+            auditor: self.auditor,
+            writer: ring_rpc.fee_payer,
+            signature,
+            before: &before,
+        }
+        .check()?;
+        let rent = env
+            .client
+            .rpc()
+            .client()
+            .get_minimum_balance_for_rent_exemption(FRAME_BUFFER_HEADER_LEN + frame_len)?;
+        let budget = wait_for("the relay to release its reservation", || {
+            let budget = ring_rpc.budget_use()?;
+            Ok(match budget.reservations {
+                0 => Probe::Ready(budget),
+                _ => Probe::NotYet,
+            })
+        })?;
+        ensure!(
+            budget.signer_scopes == 0,
+            "{budget:?} keeps a signer's share"
+        );
+        ensure!(
+            (1..rent).contains(&u64::try_from(budget.spent_lamports)?),
+            "{budget:?} against {rent} lamports of buffer rent"
+        );
+        println!(
+            "{}: reservation released, {} lamports spent of {RELAY_BUDGET_LAMPORTS}, {rent} of rent returned, signer share {RELAY_SIGNER_BUDGET_LAMPORTS}",
+            self.label, budget.spent_lamports
+        );
+        Ok(())
     }
 }
 
@@ -383,7 +568,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     env.fund(destination, DESTINATION_FUNDING)?;
     env.fund(
         Address::new_from_array(SOL_INTERFACE),
-        2 * LEGS as u64 * LEG,
+        3 * LEGS as u64 * LEG,
     )?;
     let rows = std::iter::once(&sender)
         .chain(&recipients)
@@ -416,10 +601,10 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         env: &env,
         ring,
         owner: &sender,
-        amounts: &[NOTE; 2 * SPENT_NOTES],
+        amounts: &[NOTE; 3 * SPENT_NOTES],
     }
     .write()?;
-    println!("seeded: own, curator and tracking roots, ten unbacked ring notes, a funded SOL interface, throwaway key setup");
+    println!("seeded: own, curator and tracking roots, fifteen unbacked ring notes, a funded SOL interface, throwaway key setup");
 
     let indexer = SeededHttp::serve(SeededService {
         seeded: SeededIndexer {
@@ -439,12 +624,12 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
 
     let cosign_admin = RingRoleKeys::of(&env.payer).cosign_admin;
     let co_signer = env.funded_keypair()?;
-    let as_admin = || SendAs {
+    SendAs {
         rpc: env.client.rpc(),
         payer: &env.payer,
         holder: &cosign_admin,
-    };
-    as_admin().send(&[SetCoSigner {
+    }
+    .send(&[SetCoSigner {
         ring,
         payer: env.payer.pubkey(),
         authority: cosign_admin.pubkey(),
@@ -476,6 +661,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     Settlement {
         env: &env,
         label: "submission",
+        approval: ApprovalRead::ProvenMask,
         ring,
         policy: &policy,
         auditor: &auditor,
@@ -485,73 +671,40 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
     }
     .check()?;
 
-    // `PendingSignature::verify` refuses an anonymous relay, its leg settles with no co-signer.
-    as_admin().send(&[ClearCoSigner {
-        ring,
-        authority: cosign_admin.pubkey(),
-        signer: co_signer.pubkey(),
-        rent_recipient: env.payer.pubkey(),
-    }
-    .instruction()])?;
     let ring_rpc = RingRpcSpec {
         env: &env,
         ring: ring.program_id(),
         auditor: auditor.clone(),
     }
     .serve_relayed()?;
-    let before = fetch_account(env.client.rpc(), &env.tree)?;
-    let transfer = FullLoad {
-        ring,
-        sender: &sender,
-        recipients: &recipients,
-        payer: ring_rpc.fee_payer,
-        notes: &notes[SPENT_NOTES..],
-        destination,
-    }
-    .transfer()?;
-    let quote = ring_rpc.quote(&env, RelayOperation::Anonymous)?;
-    let prepared = env.run(transfer.prepare_relay(env.client.as_async(), quote))?;
-    let relay_id = match env.run(prepared.send(&ring_rpc.relay))? {
-        RelaySent::Submitted(relay_id) => relay_id,
-        RelaySent::SignMessage(_) => bail!("the relay awaits a signature"),
-    };
-    let signature = ring_rpc.confirmed(&env, &relay_id)?;
-    let frame_len = Settlement {
+    let config = env.run(ring.require_config(env.client.as_async()))?;
+    let relay_leg = |label, approval, notes| RelayLeg {
         env: &env,
-        label: "relay",
+        label,
+        approval,
         ring,
         policy: &policy,
+        config: &config,
         auditor: &auditor,
-        writer: ring_rpc.fee_payer,
-        signature,
-        before: &before,
-    }
-    .check()?;
-
-    let rent = env
-        .client
-        .rpc()
-        .client()
-        .get_minimum_balance_for_rent_exemption(FRAME_BUFFER_HEADER_LEN + frame_len)?;
-    let budget = wait_for("the relay to release its reservation", || {
-        let budget = ring_rpc.budget_use()?;
-        Ok(match budget.reservations {
-            0 => Probe::Ready(budget),
-            _ => Probe::NotYet,
-        })
-    })?;
-    ensure!(
-        budget.signer_scopes == 0,
-        "{budget:?} keeps a signer's share"
-    );
-    ensure!(
-        (1..rent).contains(&u64::try_from(budget.spent_lamports)?),
-        "{budget:?} against {rent} lamports of buffer rent"
-    );
-    println!(
-        "relay budget: released, {} lamports spent of {RELAY_BUDGET_LAMPORTS}, {rent} of rent returned, signer share {RELAY_SIGNER_BUDGET_LAMPORTS}",
-        budget.spent_lamports
-    );
+        ring_rpc: &ring_rpc,
+        co_signer: &co_signer,
+        sender: &sender,
+        recipients: &recipients,
+        notes,
+        destination,
+    };
+    relay_leg(
+        "relay threshold",
+        ApprovalRead::ProvenMask,
+        &notes[SPENT_NOTES..2 * SPENT_NOTES],
+    )
+    .run()?;
+    relay_leg(
+        "relay exact",
+        ApprovalRead::Opening,
+        &notes[2 * SPENT_NOTES..],
+    )
+    .run()?;
 
     let mut wallet = RingWallet::new(&recipients[0], env.ring_assets()?, ring.program_id());
     wallet.sync(&env)?;
@@ -560,9 +713,9 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
             .unspent()
             .filter(|held| held.utxo.amount == PAID && held.ring_data_hash == Some(RING_DATA_HASH))
             .count()
-            == 2,
+            == 3,
         "the recipient rebuilt another note count"
     );
-    println!("recipient: reconstructed both paid notes");
+    println!("recipient: reconstructed every paid note");
     Ok(())
 }
