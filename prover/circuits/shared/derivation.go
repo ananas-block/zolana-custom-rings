@@ -49,6 +49,16 @@ const (
 	RecipientTagDomain = 0x43525254
 	// SenderTagDomain = "CRST"
 	SenderTagDomain = 0x43525354
+	// TrackingLeafDomain = "CRTK"
+	TrackingLeafDomain = 0x4352544b
+	// TrackingEntryDomain = "CRTQ"
+	TrackingEntryDomain = 0x43525451
+	// ApplyEnrollmentsDomain = "CRTA"
+	ApplyEnrollmentsDomain = 0x43525441
+	// ListSaltDomain = "CRPS"
+	ListSaltDomain = 0x43525053
+	// ListTagDomain = "CRPT"
+	ListTagDomain = 0x43525054
 )
 
 // TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
@@ -130,6 +140,16 @@ func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt front
 // DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
+}
+
+// ListSalt is Poseidon(CRPS, nullifierSecret), one way, a holder learns the owner's private list position and never the secret.
+func ListSalt(api frontend.API, nullifierSecret frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret})
+}
+
+// ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.
+func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
+	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }
 
 // AssertAnonymousParties separates the hidden owner from the public identities
