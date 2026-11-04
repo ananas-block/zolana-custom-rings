@@ -1,5 +1,3 @@
-//! The transfer layout element, mirror `prover/circuits/audit`.
-
 use spr_hasher::primitives::{pack_be_chunks, PACK_BE_CHUNK_BYTES};
 
 pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];

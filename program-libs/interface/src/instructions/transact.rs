@@ -247,7 +247,7 @@ pub struct AppMessage<'a> {
     pub data: &'a [u8],
 }
 
-/// SPP's optional fields a frame carries through, each absent by default.
+/// SPP's optional fields a frame carries through.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameExtensions<'a> {
     /// The transaction's application digest, distinct from a note's `data_hash`.
@@ -369,7 +369,6 @@ impl<'a> FrameExtensions<'a> {
     }
 }
 
-/// The extension section's first byte, one bit per optional field.
 pub mod extension_flag {
     pub const DATA_HASH: u8 = 1 << 0;
     pub const RING_DATA_HASH: u8 = 1 << 1;
@@ -486,12 +485,10 @@ impl<'a> RingOutput<'a> {
         matches!(self.body, SlotBody::Exit(_))
     }
 
-    /// The slots a reply serves.
     const fn bears_recipient_body(&self) -> bool {
         matches!(self.body, SlotBody::Recipient(_))
     }
 
-    /// The SPP output, the scheme framing rebuilt from the slot, `reply` after a recipient body.
     pub fn transact_output(&self, reply: &[u8]) -> Result<TransactOutput, CustomRingError> {
         let data = match self.body {
             SlotBody::None => None,
@@ -522,12 +519,12 @@ impl<'a> RingOutput<'a> {
     }
 }
 
-/// Bit `i` set when slot `i` carries a scheme 3 body, frame parsing alone reads it.
+/// Frame parsing alone reads it.
 pub fn exits_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(RingOutput::is_exit))
 }
 
-/// Bit `i` set when slot `i` carries no body, frame parsing alone reads it.
+/// Frame parsing alone reads it.
 pub fn bodiless_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(|output| output.body == SlotBody::None))
 }
@@ -596,7 +593,6 @@ impl<'a> ParsedTransact<'a> {
         self.stream
     }
 
-    /// The statement the transfer proof is verified against.
     pub fn transfer_statement<'s>(
         &'s self,
         binding: TransferBinding<'s>,
@@ -684,7 +680,6 @@ pub struct RingTransactData<'a> {
     pub spl_withdrawal_owners: &'a [[u8; 32]],
     /// The proven approval mask and the co-signers the transaction carries.
     pub co_sign: CoSignHeader,
-    /// The sealed `R` is zero.
     pub no_spend: bool,
     /// The anonymous rail with every live owner a published signer, SPP's confidential rail settles it.
     pub public_owners: bool,
@@ -694,9 +689,7 @@ pub struct RingTransactData<'a> {
     pub salt: &'a [u8; 16],
     pub extensions: FrameExtensions<'a>,
     pub interface_transfers: Vec<InterfaceTransfer>,
-    /// One tail per published slot, every data hash is zero while clear.
     pub has_data: bool,
-    /// The key with entry capacity.
     pub entry: bool,
     /// The key with its full owner rows, a hidden owner count needs the frame to name the key.
     pub wide_owners: bool,
@@ -1269,7 +1262,6 @@ impl<'a> RingTransactData<'a> {
         )
     }
 
-    /// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`.
     pub fn auditor_message(&self) -> Vec<u8> {
         let records = self.outputs.iter().map(|output| &output.record[..]);
         let tails = self

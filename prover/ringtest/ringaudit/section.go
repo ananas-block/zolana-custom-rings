@@ -21,7 +21,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// SectionCircuit proves the audit section alone, no key proves it.
+// Test only, no proving key serves the section alone.
 type SectionCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	Shape           audit.StreamShape `gnark:"-"`
@@ -67,7 +67,6 @@ var (
 	FixtureMint     = ringtest.Repeat(0x0a)
 )
 
-// EnrolledNullifierPk is the fixture ring key.
 func EnrolledNullifierPk(t testing.TB) *big.Int {
 	t.Helper()
 	return spptest.MustNullifierPk(t, big.NewInt(21))
@@ -79,7 +78,7 @@ func ZeroKey(t testing.TB) *big.Int {
 	return spptest.MustNullifierPk(t, big.NewInt(0))
 }
 
-// NewSection lays out an enrolled ring note in slot 0, a zero-key ring note in slot 1 of a wider key, an exit next and dummies after, spending one ring note and on an entry key one default-ring note.
+// NewSection is the honest fixture each refusal edits.
 func NewSection(t testing.TB, shape audit.StreamShape) Audit {
 	t.Helper()
 	s := NewAudit(t, shape).AllDummies(t)
@@ -110,7 +109,6 @@ func (a Audit) RingNote(t testing.TB, i int, owner [32]byte, nullifierPk *big.In
 	}}
 }
 
-// Spending replaces the inputs with n live ring notes of the payer.
 func (a Audit) Spending(t testing.TB, n int) Audit {
 	t.Helper()
 	a.Inputs = slices.Clone(a.Inputs)
@@ -123,7 +121,6 @@ func (a Audit) Spending(t testing.TB, n int) Audit {
 	return a
 }
 
-// DefaultBits mirrors the sealed default bits.
 func (a Audit) DefaultBits() uint64 {
 	return a.defaultBits()
 }
@@ -154,7 +151,6 @@ func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	return p
 }
 
-// Seal runs the key's cipher over plaintexts, every region at its counters.
 func (a Audit) Seal(t testing.TB, p Plaintexts) Stream {
 	t.Helper()
 	ranges := a.Shape.Ranges()
@@ -175,7 +171,6 @@ func (k Keys) Open(t testing.TB, stream Stream) []byte {
 	return plaintext
 }
 
-// PublishedHashes are the output hashes SPP publishes.
 func (a Audit) PublishedHashes(t testing.TB) []*big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, a.OutputCount())
@@ -211,7 +206,6 @@ func (a Audit) Statement(t testing.TB) []*big.Int {
 	return a.StatementOf(t, a.Seal(t, a.Plaintexts(t)), a.Claim())
 }
 
-// Circuit assigns the section honestly under its own statement.
 func (a Audit) Circuit(t testing.TB) *SectionCircuit {
 	t.Helper()
 	c := NewSectionCircuit(a.Shape)
@@ -231,7 +225,6 @@ func (a Audit) Circuit(t testing.TB) *SectionCircuit {
 	return c
 }
 
-// Note is what a reader rebuilt, its Hash the published commitment it matched.
 type Note struct {
 	Kind        byte
 	OwnerKey    [32]byte
@@ -242,7 +235,7 @@ type Note struct {
 	Hash        *big.Int
 }
 
-// AuditReader rebuilds a slot from the stream and the frame, holding no mint registry and no other slot.
+// AuditReader rebuilds a slot with no mint registry and no other slot.
 type AuditReader struct {
 	Transfer
 	Shape      audit.StreamShape
@@ -255,7 +248,6 @@ func (a Audit) Reader() AuditReader {
 	return AuditReader{Transfer: a.Transfer, Shape: a.Shape, HasData: a.HasData, InputCount: a.InputCount, TreeID: OutputTreeID}
 }
 
-// Envelope reads R and the default bits.
 func (r AuditReader) Envelope(t testing.TB, stream Stream) (realInputs int, defaultBits uint64) {
 	t.Helper()
 	plaintext := r.Keys.Open(t, stream)
@@ -288,7 +280,7 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 		tail := plaintext[tailOffset : tailOffset+audit.TailLen]
 		dataHash, ringDataHash = new(big.Int).SetBytes(tail[:32]), new(big.Int).SetBytes(tail[32:])
 	}
-	// The sealed key alone fixes the blinding, no fixture value reaches the reader.
+	// The sealed key, salt and first nullifier fix the blinding.
 	seedOut, err := protocol.OutputBlindingSeed(r.FirstNullifier, ringprotocol.BlindingSeed(t, [32]byte(plaintext[:audit.EnvelopeKeyLen]), r.Salt))
 	blinding := ringprotocol.OutputBlinding(t, r.FirstNullifier, spptest.MustHash(t, seedOut, err), i)
 	note := Note{Kind: kind, OwnerKey: [32]byte(record[16:48]), Mint: [32]byte(record[48:80]), Amount: binary.BigEndian.Uint64(record[8:16]), NullifierPk: new(big.Int).SetBytes(record[80:]), Blinding: blinding}
