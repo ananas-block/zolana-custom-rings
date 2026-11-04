@@ -740,3 +740,45 @@ func TestNarrowKeysFitTheWideKey(t *testing.T) {
 		}
 	}
 }
+
+// The digest binds the proved totals on the key, with one owner a peak and a total of the same debit.
+func TestApprovalTotalsReachTheStatement(t *testing.T) {
+	w := onRail(confidential2, ringtransfer.Signer)
+	w.Policy = ringtransfer.Policy{OwnRegistry: true}
+	layout := func(b ringtransfer.Built) []*big.Int {
+		held, returned := new(big.Int), new(big.Int)
+		for _, input := range b.Circuit.Inputs {
+			if ringtest.AsBigInt(input.Domain).Int64() == transaction.UtxoDomain {
+				held.Add(held, ringtest.AsBigInt(input.Amount))
+			}
+		}
+		fields := []*big.Int{}
+		for _, slot := range b.Circuit.Outputs {
+			if ringtest.AsBigInt(slot.Output.Domain).Int64() == transaction.UtxoDomain && ringtest.AsBigInt(slot.Output.OwnerPkHash).Cmp(ringtest.AsBigInt(b.Circuit.Rows[0])) == 0 {
+				returned.Add(returned, ringtest.AsBigInt(slot.Output.Amount))
+			}
+		}
+		debit := new(big.Int).Sub(held, returned)
+		for _, slot := range b.Circuit.Outputs {
+			fields = append(fields, ringtest.AsBigInt(slot.Output.Asset), debit, debit)
+		}
+		for range transaction.NPublicSlots {
+			fields = append(fields, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0))
+		}
+		return fields
+	}
+	disclose := func(b ringtransfer.Built, fields []*big.Int) {
+		blinder := big.NewInt(0x51)
+		b.Circuit.ApprovalBlinder = blinder
+		b.Circuit.ApprovalTotals = spptest.MustHashChain4(t, append([]*big.Int{big.NewInt(shared.ApprovalTotalsDomain), blinder}, fields...))
+		b.Rebind(t)
+	}
+	honest := w.Build(t)
+	disclose(honest, layout(honest))
+	requireSolved(t, honest.Circuit)
+	forged := w.Build(t)
+	fields := layout(forged)
+	fields[1] = new(big.Int).Sub(fields[1], big.NewInt(1))
+	disclose(forged, fields)
+	refused(t, forged.Circuit, "policy.Screening.AssertApprovalTotals")
+}

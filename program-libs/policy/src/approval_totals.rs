@@ -1,6 +1,8 @@
 //! The totals a transfer proof binds for a co-signer, mirror `Screening.AssertApprovalTotals` in `prover/circuits/policy/screen.go`.
 
-use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align, HasherError};
+use spr_hasher::{
+    hash_chain::create_hash_chain_4_from_slice, primitives::right_align, HasherError,
+};
 
 use crate::quantities::{asset_flows, ordered_owners, DebitTransfer, PublicGross};
 
@@ -82,15 +84,14 @@ impl ApprovalTotals {
         }
     }
 
-    /// The largest peak the layout holds for `asset`, zero when absent.
+    /// The largest owner outflow of `asset`, zero when no slot names it.
     pub fn peak_of(&self, asset: &[u8; 32]) -> u128 {
-        let outputs = self.outputs.iter().filter(|slot| slot.asset == *asset);
-        let public = self.public.iter().filter(|slot| slot.asset == *asset);
-        outputs
-            .map(|slot| slot.peak)
-            .chain(public.map(|slot| slot.peak))
-            .max()
-            .unwrap_or(0)
+        self.largest(asset, |peak, _| peak)
+    }
+
+    /// The outflow of `asset` over all owners, zero when no slot names it.
+    pub fn outflow_of(&self, asset: &[u8; 32]) -> u128 {
+        self.largest(asset, |_, outflow| outflow)
     }
 
     /// The frame's `approval_totals` extension, `HashChain4(CRAO, blinder, layout)`, the blinder fresh per transaction.
@@ -112,6 +113,22 @@ impl ApprovalTotals {
             ]);
         }
         create_hash_chain_4_from_slice(&fields)
+    }
+}
+
+impl ApprovalTotals {
+    fn largest(&self, asset: &[u8; 32], read: fn(u128, u128) -> u128) -> u128 {
+        let outputs = self
+            .outputs
+            .iter()
+            .filter(|slot| slot.asset == *asset)
+            .map(|slot| read(slot.peak, slot.outflow));
+        let public = self
+            .public
+            .iter()
+            .filter(|slot| slot.asset == *asset)
+            .map(|slot| read(slot.peak, slot.outflow));
+        outputs.chain(public).max().unwrap_or(0)
     }
 }
 
