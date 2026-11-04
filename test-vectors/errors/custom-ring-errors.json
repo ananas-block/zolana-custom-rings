@@ -100,5 +100,22 @@
   "DuplicateRoleKey": 8472,
   "UnboundRegistry": 8480,
   "RootNotServed": 8481,
-  "MissingRegistry": 8482
+  "MissingRegistry": 8482,
+  "InvalidFrameBuffer": 8500,
+  "FrameBufferExists": 8501,
+  "FrameBufferAddress": 8502,
+  "FrameLength": 8503,
+  "UnauthorizedFrameWriter": 8504,
+  "FrameBufferSealed": 8505,
+  "FrameBufferNotSealed": 8506,
+  "FrameDigestMismatch": 8507,
+  "FrameBufferExpired": 8508,
+  "UnauthorizedFrameCloser": 8509,
+  "FrameRentPayer": 8510,
+  "FrameBufferMismatch": 8511,
+  "UnsupportedBufferedTag": 8512,
+  "FrameTagMismatch": 8513,
+  "FrameWriteOutOfRange": 8514,
+  "InvalidFrameEvent": 8515,
+  "FramePartyNotPayer": 8516
 }

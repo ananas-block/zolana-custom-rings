@@ -45,5 +45,14 @@ pub fn process_instruction(
         InstructionTag::SetCoSigner => process_set_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::ClearCoSigner => process_clear_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::SetDelegate => process_set_delegate_ix(program_id, accounts, ix_data),
+        InstructionTag::CreateFrameBuffer => {
+            process_create_frame_buffer_ix(program_id, accounts, ix_data)
+        }
+        InstructionTag::WriteFrame => process_write_frame_ix(program_id, accounts, ix_data),
+        InstructionTag::CloseFrameBuffer => {
+            process_close_frame_buffer_ix(program_id, accounts, ix_data)
+        }
+        InstructionTag::SettleBuffered => process_settle_buffered_ix(program_id, accounts, ix_data),
+        InstructionTag::FrameEvent => process_frame_event_ix(program_id, accounts),
     }
 }

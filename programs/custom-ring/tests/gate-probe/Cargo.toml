@@ -1,0 +1,15 @@
+# Test only.
+[package]
+name = "ring-gate-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = { version = "0.11", features = ["cpi"] }
+pinocchio-system = "0.6"
+
+[workspace]
