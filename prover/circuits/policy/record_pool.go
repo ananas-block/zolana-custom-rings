@@ -28,12 +28,17 @@ type RecordPoolShape struct {
 type PoolEntry struct {
 	Own     frontend.Variable
 	Curator []frontend.Variable
+	// Private indexes the owner's private row, an asset and a key with no rows hold none.
+	Private []frontend.Variable
 }
 
-func newPoolEntry(ownOnly bool) PoolEntry {
+func newPoolEntry(ownOnly, private bool) PoolEntry {
 	entry := PoolEntry{}
 	if !ownOnly {
 		entry.Curator = make([]frontend.Variable, 1)
+	}
+	if private {
+		entry.Private = make([]frontend.Variable, 1)
 	}
 	return entry
 }
@@ -60,13 +65,20 @@ func validatePoolCapacity(records, subjects, maximum int) error {
 	return nil
 }
 
-func (e PoolEntry) validate(ownOnly bool) error {
+func (e PoolEntry) validate(ownOnly, private bool) error {
 	expected := 1
 	if ownOnly {
 		expected = 0
 	}
 	if len(e.Curator) != expected {
 		return fmt.Errorf("policy curator reference shape is invalid")
+	}
+	expected = 0
+	if private {
+		expected = 1
+	}
+	if len(e.Private) != expected {
+		return fmt.Errorf("policy private reference shape is invalid")
 	}
 	return nil
 }

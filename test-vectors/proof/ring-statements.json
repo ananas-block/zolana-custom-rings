@@ -1,5 +1,5 @@
 {
-  "description": "Every ring statement and its public input HashChain4(elements). The transfer head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), digest(envelope), salt, layout] with the frame's random salt and layout = has_data | entry << 1. digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each envelope has the length of its stream layout. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the tracking root, the registry root, the curator root, the policy hash and each asset hash with its amount zero padded to 8 slots. The transfer statements are version 4, HashChain4 over the audit head under CRTX, two rail bits, in_proof and delegate on the confidential family and public_owners and delegate on the anonymous family, approval_mask, no_spend, output_count, output_chain, record_chain HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or zero while has_data is clear, input_count, private_tx_hash, the sender or the seven party identities, signer_count, signer_chain, policy_hash, own_root, curator_root, tracking_root, private_root, asset, net and gross per public slot, withdrawal_hash, the element count and the version. No body, tag, bundle or reply digest and no slot class enters it. Every per-slot chain is zero filled to the capacity. signer_chain is HashChain4 over the deduplicated owner identities zero filled to the key's S, and zero when signer_count is zero on every rail. Produced by program-libs/interface/tests/statements.rs.",
+  "description": "Every ring statement and its public input HashChain4(elements). The transfer head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), digest(envelope), salt, layout] with the frame's random salt and layout = has_data | entry << 1. digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each envelope has the length of its stream layout. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the tracking root, the registry root, the curator root, the policy hash, each asset hash with its amount zero padded to 8 slots and the version. The transfer statements are version 4, HashChain4 over the audit head under CRTX, two rail bits, in_proof and delegate on the confidential family and public_owners and delegate on the anonymous family, approval_mask, no_spend, output_count, output_chain, record_chain HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or zero while has_data is clear, input_count, private_tx_hash, the sender or the seven party identities, signer_count, signer_chain, policy_hash, own_root, curator_root, tracking_root, private_root, asset, net and gross per public slot, withdrawal_hash, the element count and the version. No body, tag, bundle or reply digest and no slot class enters it. Every per-slot chain is zero filled to the capacity. signer_chain is HashChain4 over the deduplicated owner identities zero filled to the key's S, and zero when signer_count is zero on every rail. Produced by program-libs/interface/tests/statements.rs.",
   "transfer": [
     {
       "family": "confidential",
@@ -1682,8 +1682,8 @@
       "1e0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
     ],
     "ciphertexts": [
-      "212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121",
-      "222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+      "212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121",
+      "222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
     ],
     "auditor_pubkey": "04a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "eph_pk": "04a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
@@ -1705,9 +1705,9 @@
       "0000000000000000000000000000000000000000000000000000000000000002",
       "0000000000000000000000000000000000000000000000000000000000000000",
       "1e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
-      "1c1a0975c15784124b0f2557656302c05086a40926aacfb0c50a25f525b6d48f",
+      "04b3c6694644815d792bf6d2b11baf03bba2060ae745c6e7ce2da03422c8a0a6",
       "1e0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
-      "227bc3be6fa15f8a1d318a17e16f4d2d3411af76a7854c60a2724c1c3d452145",
+      "11378d845e88c3e894ef58509f853846af3294f90ddedb4c0206a2241a0c1573",
       "0000000000000000000000000000000000000000000000000000000000000000",
       "0000000000000000000000000000000000000000000000000000000000000000",
       "0000000000000000000000000000000000000000000000000000000000000000",
@@ -1743,8 +1743,9 @@
       "0000000000000000000000000000000000000000000000000000000000000000",
       "0000000000000000000000000000000000000000000000000000000000000000",
       "0000000000000000000000000000000000000000000000000000000000000000",
-      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000004"
     ],
-    "public_input_hash": "17ef2a6eef6492a9db3031f0df311b18dcfd67f0123c1fd96ce4ff386408087a"
+    "public_input_hash": "2deb267e9937b57c4b0f24492be93b186517012711475331cd64abc295be08eb"
   }
 }

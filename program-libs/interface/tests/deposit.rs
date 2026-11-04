@@ -1,8 +1,13 @@
 use custom_ring_interface::{
     CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
-    PlainGroth16Proof, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
+    OpeningRecord, PlainGroth16Proof, RecordKind, DEPOSIT_STATEMENT_VERSION,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
 };
-use spr_hasher::HasherError;
+use serde::Deserialize;
+use spr_hasher::{
+    primitives::{hash_bytes, solana_owner_identity},
+    Hasher, HasherError, Poseidon,
+};
 
 #[test]
 fn context_binds_ring_tree_wire_and_wire_length() {
@@ -189,4 +194,111 @@ fn proof_prefix_size_matches_the_instruction_serializer() {
     assert_eq!(bytes.len(), CustomRingProof::SIZE);
     assert_eq!(&bytes[..32], &[1; 32]);
     assert_eq!(&bytes[160..], &[5; 32]);
+}
+
+#[derive(Deserialize)]
+struct VectorCase {
+    context_hash: String,
+    anonymous: bool,
+    records: Vec<String>,
+    ciphertexts: Vec<String>,
+    owner_utxo_hashes: Vec<String>,
+    assets: Vec<String>,
+    amounts: Vec<u64>,
+    auditor_pubkey: String,
+    eph_pk: String,
+    tracking_root: String,
+    own_root: String,
+    curator_root: String,
+    policy_hash: String,
+    elements: Vec<String>,
+    public_input_hash: String,
+}
+
+#[derive(Deserialize)]
+struct Vectors {
+    cases: Vec<VectorCase>,
+}
+
+fn array<const N: usize>(value: &str) -> [u8; N] {
+    hex::decode(value).unwrap().try_into().unwrap()
+}
+
+/// The Go witnesses solve under these statements, and each record alone rebuilds its published note.
+#[test]
+fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-vectors/deposit/deposit-v4.json"
+    );
+    let vectors: Vectors = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for case in &vectors.cases {
+        let owners: Vec<[u8; 32]> = case.owner_utxo_hashes.iter().map(|v| array(v)).collect();
+        let ciphertexts: Vec<[u8; CT]> = case.ciphertexts.iter().map(|v| array(v)).collect();
+        let assets: Vec<DepositedAsset> = case
+            .assets
+            .iter()
+            .zip(&case.amounts)
+            .map(|(asset, amount)| DepositedAsset {
+                asset: array(asset),
+                amount: *amount,
+            })
+            .collect();
+        for (slot, plaintext) in case.records.iter().enumerate() {
+            let opened = OpeningRecord::decode(&hex::decode(plaintext).unwrap()).unwrap();
+            assert_eq!(opened.record.kind, RecordKind::Ring);
+            assert_eq!(opened.record.amount, assets[slot].amount);
+            assert_eq!(hash_bytes(&opened.record.mint).unwrap(), assets[slot].asset);
+            let owner = Poseidon::hashv(&[
+                &solana_owner_identity(&opened.record.owner_key).unwrap(),
+                &opened.record.nullifier_pk,
+            ])
+            .unwrap();
+            assert_eq!(
+                Poseidon::hashv(&[&owner, &opened.secret]).unwrap(),
+                owners[slot]
+            );
+        }
+        let (own_root, curator_root, policy_hash) = (
+            array(&case.own_root),
+            array(&case.curator_root),
+            array(&case.policy_hash),
+        );
+        let input = DepositPublicInput {
+            context_hash: &array(&case.context_hash),
+            anonymous: case.anonymous,
+            owner_utxo_hashes: &owners,
+            ciphertexts: &ciphertexts,
+            assets: &assets,
+            auditor_pk: &array(&case.auditor_pubkey),
+            eph_pk: &array(&case.eph_pk),
+            tracking_root: &array(&case.tracking_root),
+            registry: (policy_hash != [0; 32]).then_some(DepositRegistry {
+                own_root: &own_root,
+                curator_root: (curator_root != [0; 32]).then_some(&curator_root),
+                policy_hash: Some(&policy_hash),
+            }),
+        };
+        let elements: Vec<String> = input.elements().unwrap().iter().map(hex::encode).collect();
+        assert_eq!(elements, case.elements);
+        assert_eq!(input.hash().unwrap(), array::<32>(&case.public_input_hash));
+    }
+}
+
+#[test]
+fn the_statement_closes_on_its_version() {
+    let input = DepositPublicInput {
+        context_hash: &[5; 32],
+        anonymous: false,
+        owner_utxo_hashes: &[[1; 32]],
+        ciphertexts: &[[3; CT]],
+        assets: &[asset(10, 11)],
+        auditor_pk: &[6; 33],
+        eph_pk: &[7; 33],
+        tracking_root: &[14; 32],
+        registry: None,
+    };
+    let elements = input.elements().unwrap();
+    assert_eq!(elements.last().unwrap()[31], DEPOSIT_STATEMENT_VERSION);
+    assert_eq!(CT, 144);
 }

@@ -125,6 +125,7 @@ impl PolicyRead<'_> {
             legs: withdrawals.len(),
             owners: self.owner_identities()?.len(),
             has_data: false,
+            private_source: false,
         })
         .ok_or(RingError::ShapeUnkeyed { rail: self.rail })?;
         let widths = circuit

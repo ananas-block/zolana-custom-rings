@@ -7,7 +7,8 @@ use custom_ring_interface::{
     AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
     DepositRegistry, DepositedAsset, RegisterKeyStatement, RingOutput, SignerSet, SlotBody,
     TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS, RECIPIENT_BODY_LEN,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS, OPENING_RECORD_LEN,
+    RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -570,7 +571,7 @@ fn compute_vectors() -> StatementVectors {
     .hash()
     .unwrap();
     let owners = [values.fields[14], values.fields[15]];
-    let ciphertexts = [[0x21; 96], [0x22; 96]];
+    let ciphertexts = [[0x21; OPENING_RECORD_LEN], [0x22; OPENING_RECORD_LEN]];
     let eph_pk = tagged(0xa2);
     let deposited = [
         DepositedAsset {
@@ -607,8 +608,8 @@ fn compute_vectors() -> StatementVectors {
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the tracking root, the \
-                      registry root, the curator root, the policy hash and each asset hash with its amount zero \
-                      padded to 8 slots. The transfer statements are version 4, HashChain4 over the \
+                      registry root, the curator root, the policy hash, each asset hash with its amount zero \
+                      padded to 8 slots and the version. The transfer statements are version 4, HashChain4 over the \
                       audit head under CRTX, two rail bits, in_proof and delegate on the \
                       confidential family and public_owners and delegate on the anonymous family, \
                       approval_mask, no_spend, output_count, output_chain, record_chain \

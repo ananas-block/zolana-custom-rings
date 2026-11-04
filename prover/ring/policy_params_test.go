@@ -15,9 +15,9 @@ import (
 )
 
 var (
-	confidentialShape = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4}
-	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4}
-	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, FullOpenings: true}
+	confidentialShape = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	anonymousShape    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	entryShape        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
 )
 
 // A request of every rail decodes strictly and solves on its key.
@@ -83,6 +83,13 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 		{"curator index outside pool", func(m map[string]any) { entry(m)["curator"] = []any{len(m["curatorSubjects"].([]any))} }, "subject index"},
 		{"public asset index outside pool", func(m map[string]any) { m["publicAssetEntries"].([]any)[0] = len(m["ownSubjects"].([]any)) }, "subject index"},
 		{"path index outside tree", func(m map[string]any) { path(m)["index"] = registry.Capacity }, "path index"},
+		{"tracking record outside pool", func(m map[string]any) {
+			m["trackingSubjects"].([]any)[0].(map[string]any)["recordIndex"] = len(m["trackingRecords"].([]any))
+		}, "tracking record"},
+		{"tracking path outside tree", func(m map[string]any) {
+			m["trackingProof"].(map[string]any)["paths"].([]any)[0].(map[string]any)["index"] = registry.TrackingCapacity
+		}, "tracking path"},
+		{"row entry outside pool", func(m map[string]any) { m["rowEntries"].([]any)[0] = len(m["trackingSubjects"].([]any)) }, "tracking subject"},
 		{"short canopy", func(m map[string]any) { proof(m)["canopy"] = proof(m)["canopy"].([]any)[1:] }, "expected"},
 		{"short path", func(m map[string]any) { path(m)["siblings"] = path(m)["siblings"].([]any)[1:] }, "expected"},
 		{"short sibling row", func(m map[string]any) { rows := path(m)["siblings"].([]any); rows[0] = rows[0].([]any)[1:] }, "expected"},

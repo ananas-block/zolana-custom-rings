@@ -14,7 +14,7 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-// Payment is an output slot or a withdrawal leg as the policy screens it, inactive on a dummy or past the count. Ring is set on a same-ring output, the one payment an input of its owner nets.
+// Payment is an output slot or a withdrawal leg as the policy screens it, inactive on a dummy or past the count, Ring set on a same-ring output.
 type Payment struct{ Owner, Asset, Amount, Active, Ring frontend.Variable }
 
 func slotPayments(slots []shared.Output) []Payment {
@@ -50,7 +50,6 @@ func assertPaymentRules(api frontend.API, cmp comparator, active []frontend.Vari
 	}
 }
 
-// paymentGuard is guard(owner, asset) of a payment and the sum of guard over its asset.
 type paymentGuard struct{ owner, asset frontend.Variable }
 
 type paymentScreen struct {
@@ -76,7 +75,6 @@ func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, payme
 	return paymentScreen{cmp: cmp, resolved: resolved, payments: payments, liveOwner: liveOwner, assetExempt: assetExempt, guards: guards}
 }
 
-// assert holds one rule for every live payment while onPayment is set.
 func (s paymentScreen) assert(api frontend.API, rule ruleFields, onPayment frontend.Variable) {
 	for o := range s.payments {
 		enabled := api.Mul(onPayment, api.Select(rule.onAsset, s.payments[o].Active, s.liveOwner[o]))
@@ -125,8 +123,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 			held := api.Mul(input.Ring, api.IsZero(api.Sub(input.OwnerPkHash, pay.Owner)), api.IsZero(api.Sub(input.Asset, pay.Asset)))
 			spent = api.Add(spent, api.Mul(held, input.Amount))
 		}
-		receipt := api.Select(cmp.atMost(api, received[p], spent), 0, api.Sub(received[p], spent))
-		guards[p].owner = api.Add(receipt, passing[p])
+		guards[p].owner = api.Add(cmp.saturatingSub(api, received[p], spent), passing[p])
 	}
 	// 4. Only the first payment of an owner and asset counts toward the asset's sum.
 	for p := range payments {
@@ -186,9 +183,17 @@ func (c comparator) atMost(api frontend.API, total, threshold frontend.Variable)
 	return top
 }
 
-// min returns the smaller of a and b, the caller bounds their difference as atMost needs.
+// The callers of min, above and saturatingSub bound the difference as atMost needs.
 func (c comparator) min(api frontend.API, a, b frontend.Variable) frontend.Variable {
 	return api.Select(c.atMost(api, a, b), a, b)
+}
+
+func (c comparator) above(api frontend.API, total, threshold frontend.Variable) frontend.Variable {
+	return api.Sub(1, c.atMost(api, total, threshold))
+}
+
+func (c comparator) saturatingSub(api frontend.API, a, b frontend.Variable) frontend.Variable {
+	return api.Select(c.atMost(api, a, b), 0, api.Sub(a, b))
 }
 
 func init() { solver.RegisterHint(comparisonHint) }

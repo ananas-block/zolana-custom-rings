@@ -15,7 +15,7 @@ pub use member::{Member, MemberError, WALLET_GRANT_DOMAIN};
 pub use mint::MintPolicy;
 pub use private_source::{PrivateSource, PrivateSourceError};
 pub use quantities::{
-    asset_guard, owner_debits, owner_guard, ApprovalMask, DebitInput, DebitOutput, DebitTransfer,
+    owner_debits, ApprovalInputs, ApprovalMask, DebitInput, DebitOutput, DebitTransfer, GuardScope,
     OwnerDebit, PublicGross,
 };
 pub use rule_table::{
