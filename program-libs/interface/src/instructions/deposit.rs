@@ -48,8 +48,6 @@ pub struct DepositRegistry<'a> {
     pub own_root: &'a [u8; 32],
     /// `None` without a curator source.
     pub curator_root: Option<&'a [u8; 32]>,
-    /// Every deposited owner's record escrows the deposited nullifier key.
-    pub key_escrow: bool,
     /// Its table's asset rules screen every deposited asset, `None` before the first policy write.
     pub policy_hash: Option<&'a [u8; 32]>,
 }
@@ -63,7 +61,9 @@ pub struct DepositPublicInput<'a> {
     pub assets: &'a [DepositedAsset],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    /// `None` off an escrow or policy ring.
+    /// Holds each output key to its tracking row or its absence.
+    pub tracking_root: &'a [u8; 32],
+    /// `None` off a policy ring.
     pub registry: Option<DepositRegistry<'a>>,
 }
 
@@ -107,9 +107,7 @@ impl DepositPublicInput<'_> {
             ephemeral_hi,
         ]);
         let registry = self.registry.as_ref();
-        chain[keys + 4] = right_align(&[u8::from(
-            registry.is_some_and(|registry| registry.key_escrow),
-        )]);
+        chain[keys + 4] = *self.tracking_root;
         chain[keys + 5] = registry.map_or([0; 32], |registry| *registry.own_root);
         chain[keys + 6] = registry
             .and_then(|registry| registry.curator_root)

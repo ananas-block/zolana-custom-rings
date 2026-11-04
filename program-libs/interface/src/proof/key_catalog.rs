@@ -143,11 +143,13 @@ impl RingCircuit {
             (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
                 &ANONYMOUS_TRANSFER_SHAPES[..]
             }
-            (RingRail::Anonymous | RingRail::AnonymousDelegate, true) => &ENTRY_TRANSFER_SHAPES[..],
+            (RingRail::Anonymous, true) => &ENTRY_TRANSFER_SHAPES[..],
             (RingRail::Confidential | RingRail::Delegate, false) => {
                 &CONFIDENTIAL_TRANSFER_SHAPES[..]
             }
-            (RingRail::Confidential | RingRail::Delegate, true) => return None,
+            (RingRail::Confidential | RingRail::Delegate | RingRail::AnonymousDelegate, true) => {
+                return None
+            }
         };
         let shape = TransferShape::of(shapes, spend.outputs)?;
         if spend.inputs == 0 || spend.inputs > usize::from(shape.inputs) {
@@ -160,7 +162,7 @@ impl RingCircuit {
                 class: shape.inputs,
                 withdrawals,
             },
-            (RingRail::Anonymous | RingRail::AnonymousDelegate, true) => Self::TransferAnonymousEntry {
+            (RingRail::Anonymous, true) => Self::TransferAnonymousEntry {
                 outputs: shape.outputs,
                 class: shape.inputs,
                 withdrawals,

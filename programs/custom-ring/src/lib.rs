@@ -31,7 +31,10 @@ pub fn process_instruction(
         InstructionTag::LegacyTransact
         | InstructionTag::LegacyDelegateTransact
         | InstructionTag::HistoricalTransfer
+        | InstructionTag::HistoricalTransferV3
         | InstructionTag::HistoricalAuthorityTransfer
+        | InstructionTag::HistoricalAuthorityTransferV3
+        | InstructionTag::HistoricalDeposit
         | InstructionTag::HistoricalMerge => Err(CustomRingError::InvalidInstructionData.into()),
         // The deposit prefix layout starts at the tag byte.
         InstructionTag::Deposit => process_deposit_ix(program_id, accounts, instruction_data),

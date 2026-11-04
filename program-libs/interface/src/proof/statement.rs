@@ -9,11 +9,12 @@ use spr_interface::N_PUBLIC_SLOTS;
 
 use crate::{
     anonymous_exit::ANONYMOUS_PARTIES,
+    cosign::ApprovalMask,
     disclosure::{pack_disclosure, AuditLayout},
     domain,
     error::CustomRingError,
     tagged_x25519,
-    transact::{ApprovalMask, RingOutput},
+    transact::RingOutput,
     REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
