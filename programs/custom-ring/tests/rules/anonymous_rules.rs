@@ -1,6 +1,7 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
 use custom_ring_interface::{
+    SlotBody,
     tag, CustomRingError, FramedSenderBundle, RingOutput, RingRail, RingTransactData,
     RECIPIENT_BODY_LEN,
 };
@@ -58,7 +59,7 @@ fn an_anonymous_policy_transfer_takes_public_co_owners_in_the_run() {
     ));
 }
 
-/// Only the proof judges a canonical tag, the program holds the range and the change rule.
+/// Only the proof judges a tag.
 #[test]
 fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     let fixture = Fixture::new();
@@ -67,20 +68,12 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     for (setup, policy) in [(Setup::AnonymousPolicy, true), (Setup::Anonymous, false)] {
         let mut ring = Ring::new(setup);
         let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, policy);
-        for (output, (tag, body)) in data
-            .outputs
-            .iter_mut()
-            .zip([(&tags[0], None), (&tags[1], Some(&body))])
-        {
-            let RingOutput::Anonymous { hash, record, .. } = *output else {
-                panic!("an anonymous transfer publishes anonymous slots");
-            };
-            *output = RingOutput::Anonymous {
-                hash,
-                tag,
-                body,
-                record,
-            };
+        for (output, (tag, body)) in data.outputs.iter_mut().zip([
+            (&tags[0], SlotBody::None),
+            (&tags[1], SlotBody::Recipient(&body)),
+        ]) {
+            output.owner_tag = tag;
+            output.body = body;
         }
         data.sender = data.sender.map(|sender| FramedSenderBundle {
             tag: &tags[1],
