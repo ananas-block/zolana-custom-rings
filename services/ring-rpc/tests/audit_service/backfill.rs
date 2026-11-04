@@ -102,9 +102,13 @@ async fn a_backfill_opens_a_deposited_utxo_a_later_spend_names() {
 #[tokio::test]
 async fn audited_utxos_answer_in_request_order_with_null_for_an_unseen_hash() {
     let fixture = Fixture::new();
-    let hub = Arc::new(fixture.hub(fixture.source()));
+    let mut source = fixture
+        .source()
+        .with_transactions(vec![fixture.audited.clone()]);
+    source.next_cursor = None;
+    let hub = Arc::new(fixture.hub(source));
     let service = hub.service(None).expect("service");
-    read_at(&service, None).await;
+    service.backfill_utxos().await.expect("backfill");
     let outputs: Vec<[u8; 32]> = fixture
         .audited
         .output_slots
@@ -125,8 +129,8 @@ async fn audited_utxos_answer_in_request_order_with_null_for_an_unseen_hash() {
         .map(|view| view.as_ref().map(|view| view.utxo.amount))
         .collect();
     assert_eq!(amounts, [Some(7), None, Some(500)]);
-    // A page read opens UTXOs, only the backfill vouches for the history before its context.
-    assert_eq!(response.context.slot, 0);
+    // Only the backfill's terminal page vouches for the history before its context.
+    assert_eq!(response.context.slot, 99);
     let wire = as_object(response.value.utxos[0].as_ref().expect("opened UTXO"));
     let keys: HashSet<&str> = wire.keys().map(String::as_str).collect();
     assert_eq!(
@@ -694,7 +698,11 @@ async fn an_escrow_refresh_failure_then_recovery_stores_the_output_with_no_resca
     down.store(false, Ordering::Relaxed);
     service.backfill_utxos().await.expect("backfill");
     assert_eq!(stored_amount(&service, &hash).await, Some(30));
-    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+    assert_eq!(
+        cursors(&probe),
+        [None, None, Some(vec![1])],
+        "one frame retried"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -737,7 +745,11 @@ async fn an_unknown_mint_then_registration_stores_the_output_with_no_rescan() {
         .expect("UTXO read");
     let view = found.value.utxos[0].as_ref().expect("stored output");
     assert_eq!(view.utxo.mint.as_ref().map(|mint| mint.0), Some(fresh));
-    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+    assert_eq!(
+        cursors(&probe),
+        [None, None, Some(vec![1])],
+        "one frame retried"
+    );
 }
 
 #[tokio::test]
@@ -758,7 +770,7 @@ async fn a_restart_keeps_a_row_its_dependency_left_open() {
     down.store(false, Ordering::Relaxed);
     restarted.backfill_utxos().await.expect("backfill");
     assert_eq!(stored_amount(&restarted, &hash).await, Some(30));
-    assert_eq!(cursors(&probe), [None, None, Some(vec![1])]);
+    assert_eq!(cursors(&probe), [None, None, None, Some(vec![1])]);
 }
 
 #[tokio::test]
@@ -776,7 +788,11 @@ async fn a_permanently_invalid_row_passes_the_cursor() {
     service.backfill_utxos().await.expect("backfill");
     assert_eq!(stored_amount(&service, &hash).await, Some(500));
     service.backfill_utxos().await.expect("backfill");
-    assert_eq!(cursors(&probe), [None, Some(vec![1])]);
+    assert_eq!(
+        cursors(&probe),
+        [None, None, Some(vec![1])],
+        "the row retries"
+    );
 }
 
 #[tokio::test]
@@ -876,56 +892,49 @@ fn long_history(
     pages
 }
 
-async fn coverage(service: &AuditService<StaticSource>) -> Coverage {
-    let request = UnspentUtxosRequest::new(target(RING), [1; 32])
+async fn history_through(service: &AuditService<StaticSource>) -> u64 {
+    let request = WalletStatusRequest::new(target(RING), Address::new_from_array([1; 32]))
         .sign(&delegate())
-        .expect("signed unspent read");
+        .expect("signed status read");
     service
-        .unspent_utxos(&request)
+        .wallet_status(&request)
         .await
-        .expect("unspent read")
-        .coverage
+        .expect("status read")
+        .history_through
 }
 
 #[tokio::test]
-async fn an_empty_history_covers_only_its_terminal_slot() {
+async fn an_empty_history_claims_only_its_terminal_slot() {
     let fixture = Fixture::new();
     let mut source = fixture.source();
     source.pages = HashMap::from([(None, paged(Vec::new(), None, Some(1)))]);
     let service = fixture.hub(source).service(None).expect("service");
-    assert!(!coverage(&service).await.complete, "no pass reached a page");
+    assert_eq!(history_through(&service).await, 0, "no pass reached a page");
     service.backfill_utxos().await.expect("backfill");
-    let covered = coverage(&service).await;
-    assert_eq!(
-        (covered.from_slot, covered.through_slot, covered.complete),
-        (99, 99, true)
-    );
+    assert_eq!(history_through(&service).await, 99);
 }
 
 #[tokio::test]
-async fn a_partial_pass_drops_complete_until_a_later_terminal_page() {
+async fn a_capped_pass_keeps_the_history_slot_until_a_later_terminal_page() {
     let fixture = Fixture::new();
     let mut source = fixture.source();
     source.pages = long_history(&fixture, Some(vec![1]), 2);
     source.pages.insert(None, paged(Vec::new(), None, Some(1)));
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("first pass");
-    let first = coverage(&service).await;
-    assert!(first.complete);
-
+    let first = history_through(&service).await;
     service.backfill_utxos().await.expect("capped pass");
-    let capped = coverage(&service).await;
-    assert!(!capped.complete, "the cap stopped the pass");
-    assert_eq!(capped.through_slot, first.through_slot);
-
+    assert_eq!(
+        history_through(&service).await,
+        first,
+        "the cap stopped the pass"
+    );
     service.backfill_utxos().await.expect("last pass");
-    let last = coverage(&service).await;
-    assert!(last.complete);
-    assert!(last.through_slot > first.through_slot);
+    assert!(history_through(&service).await > first);
 }
 
 #[tokio::test]
-async fn a_failure_after_a_successful_scan_drops_complete_until_a_retry_passes() {
+async fn a_failed_pass_keeps_the_history_slot_and_the_position() {
     let fixture = Fixture::new();
     let mut source = fixture.source();
     source.pages = HashMap::from([(None, paged(Vec::new(), None, Some(1)))]);
@@ -933,16 +942,14 @@ async fn a_failure_after_a_successful_scan_drops_complete_until_a_retry_passes()
     let probe = source.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("first pass");
-    let through = coverage(&service).await.through_slot;
+    let through = history_through(&service).await;
 
     down.store(true, Ordering::Relaxed);
     assert!(service.backfill_utxos().await.is_err());
-    let failed = coverage(&service).await;
-    assert_eq!((failed.complete, failed.through_slot), (false, through));
+    assert_eq!(history_through(&service).await, through);
 
     down.store(false, Ordering::Relaxed);
     service.backfill_utxos().await.expect("retry");
-    assert!(coverage(&service).await.complete);
     assert_eq!(cursors(&probe), [None, Some(vec![1]), Some(vec![1])]);
 }
 
@@ -955,24 +962,22 @@ async fn a_snapshot_behind_the_floor_refuses_the_page_and_keeps_the_position() {
     let probe = source.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("first pass");
-    let through = coverage(&service).await.through_slot;
+    let through = history_through(&service).await;
 
     *context.lock().unwrap() = Some(through - 1);
     assert!(matches!(
         service.backfill_utxos().await,
         Err(RingRpcError::InvalidIndexerResponse)
     ));
-    let behind = coverage(&service).await;
-    assert_eq!((behind.complete, behind.through_slot), (false, through));
+    assert_eq!(history_through(&service).await, through);
 
     *context.lock().unwrap() = None;
     service.backfill_utxos().await.expect("caught up");
-    assert!(coverage(&service).await.complete);
     assert_eq!(cursors(&probe), [None, Some(vec![1]), Some(vec![1])]);
 }
 
 #[tokio::test]
-async fn a_retryable_row_keeps_the_position_and_complete_false() {
+async fn a_retryable_row_keeps_the_position_and_claims_nothing() {
     let fixture = Fixture::new();
     let rows = vec![fixture.missing_message.clone(), fixture.audited.clone()];
     let mut source = fixture.source().with_transactions(rows.clone());
@@ -982,11 +987,11 @@ async fn a_retryable_row_keeps_the_position_and_complete_false() {
     assert!(service.backfill_utxos().await.is_err());
     assert!(service.backfill_utxos().await.is_err());
     assert_eq!(cursors(&probe), [None, None]);
-    assert!(!coverage(&service).await.complete);
+    assert_eq!(history_through(&service).await, 0);
 }
 
 #[tokio::test]
-async fn a_restart_replays_from_the_start_and_claims_nothing_until_it_ends() {
+async fn a_restart_without_a_store_replays_from_the_start() {
     let fixture = Fixture::new();
     let rows = vec![fixture.audited.clone()];
     let hash = Hash(fixture.audited.output_slots[0].output_context.hash);
@@ -995,18 +1000,56 @@ async fn a_restart_replays_from_the_start_and_claims_nothing_until_it_ends() {
     let probe = source.clone();
     let before = fixture.hub(source.clone()).service(None).expect("service");
     before.backfill_utxos().await.expect("first run");
-    assert!(coverage(&before).await.complete);
+    assert!(history_through(&before).await > 0);
 
     let restarted = fixture.hub(source).service(None).expect("service");
-    assert!(
-        !coverage(&restarted).await.complete,
+    assert_eq!(
+        history_through(&restarted).await,
+        0,
         "the replay has not run"
     );
     restarted.backfill_utxos().await.expect("replay");
-    assert!(coverage(&restarted).await.complete);
+    assert!(history_through(&restarted).await > 0);
     assert_eq!(
         stored_amount(&restarted, &hash).await,
         stored_amount(&before, &hash).await
     );
     assert_eq!(cursors(&probe), [None, None]);
+}
+
+#[tokio::test]
+async fn a_restart_over_a_store_resumes_at_the_durable_position_with_its_notes() {
+    let fixture = Fixture::new();
+    let rows = vec![fixture.audited.clone()];
+    let hash = Hash(fixture.audited.output_slots[0].output_context.hash);
+    let mut source = fixture.source().with_transactions(rows.clone());
+    source.pages = HashMap::from([
+        (None, paged(rows, None, Some(1))),
+        (Some(vec![1]), paged(Vec::new(), None, Some(1))),
+    ]);
+    let probe = source.clone();
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let hub = |source: StaticSource, store: Store| {
+        Hub::builder(source, identity(GENESIS))
+            .with_origins(origins())
+            .with_store(store)
+            .local(RING, fixture.auditor.clone())
+            .expect("hub")
+    };
+    let before = hub(source.clone(), store.clone())
+        .service(None)
+        .expect("service");
+    before.backfill_utxos().await.expect("first run");
+    let through = history_through(&before).await;
+    assert_eq!(stored_amount(&before, &hash).await, Some(500));
+
+    let restarted = hub(source, store).service(None).expect("service");
+    restarted.backfill_utxos().await.expect("resume");
+    assert_eq!(stored_amount(&restarted, &hash).await, Some(500));
+    assert!(history_through(&restarted).await >= through);
+    assert_ne!(
+        cursors(&probe).last(),
+        Some(&None),
+        "the first page is not read again"
+    );
 }

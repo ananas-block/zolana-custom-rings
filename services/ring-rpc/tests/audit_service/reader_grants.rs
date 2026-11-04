@@ -4,9 +4,7 @@ use super::*;
 use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
 use zolana_ring_client::{
     input_hash_evidence,
-    rpc::{
-        GetUnspentUtxosRequest, GetUnspentUtxosResponse, UnspentUtxosRequest, GET_UNSPENT_UTXOS,
-    },
+    rpc::{GetWalletStatusResponse, GET_WALLET_STATUS},
 };
 
 async fn wallet_read(
@@ -302,13 +300,16 @@ async fn a_recipient_sees_only_its_own_output_of_an_anonymous_transfer() {
     assert!(withdrawals.is_empty());
 }
 
+/// A note the index cannot name reads as another party's, the view fails closed.
 #[tokio::test]
-async fn a_sender_sees_its_own_anonymous_transfer() {
+async fn a_sender_with_an_unopened_input_reads_its_own_notes_alone() {
     let fixture = Fixture::new();
-    let source = anonymous_transfer(&fixture);
+    let mut source = anonymous_transfer(&fixture);
+    source.next_cursor = None;
     let wallet = Address::new_from_array([0xa1; 32]);
     let reader = wallet_reader(&source, wallet);
     let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
     let [item] = activity(wallet_read(&service, &reader, wallet).await)
         .try_into()
         .expect("the sender's transfer");
@@ -321,8 +322,8 @@ async fn a_sender_sees_its_own_anonymous_transfer() {
     else {
         panic!("a sender view")
     };
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(inputs.len(), 2);
+    assert!(outputs.is_empty());
+    assert!(inputs.is_empty());
     assert_eq!(withdrawals.len(), 2);
 }
 
@@ -416,10 +417,23 @@ async fn a_confidential_owner_signer_sees_its_full_transfer() {
 }
 
 #[tokio::test]
-async fn a_confidential_in_proof_owner_sees_its_full_transfer() {
+async fn a_confidential_in_proof_owner_with_an_unopened_input_reads_its_own_notes_alone() {
     let fixture = Fixture::new();
     let source = owned_in_proof(&fixture, OWNER);
-    assert_spent_in_full(wallet_activity(source, &fixture, OWNER).await);
+    let [item] = wallet_activity(source, &fixture, OWNER)
+        .await
+        .try_into()
+        .expect("the spender's transfer");
+    let WalletView::Sender {
+        inputs, outputs, ..
+    } = item.view
+    else {
+        panic!("a sender view")
+    };
+    assert!(
+        outputs.is_empty() && inputs.is_empty(),
+        "an input the service never opened names no sole owner"
+    );
 }
 
 #[tokio::test]
@@ -468,83 +482,80 @@ fn unseen_spend(fixture: &Fixture, signature: u8, paid: u8) -> ShieldedTransacti
 }
 
 #[tokio::test]
-async fn the_unspent_route_gives_a_wallet_the_flag_and_no_row_of_another_owners_spend() {
+async fn a_wallet_read_is_byte_equal_with_another_owners_unresolved_spend_present() {
     let fixture = Fixture::new();
     let (others, own) = (0x70, 0x73);
-    let mut source = fixture.source().with_transactions(vec![
-        unseen_spend(&fixture, others, 0xb7),
-        unseen_spend(&fixture, own, 0xb5),
-    ]);
-    source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
-    // The history ends at these rows, the default cursor names its own page.
-    source.next_cursor = None;
     let wallet = Address::new_from_array([0xb5; 32]);
-    let reader = wallet_reader(&source, wallet);
-    let hub = Arc::new(fixture.hub(source));
-    let module = rpc_module(hub.clone()).expect("module");
-    hub.service(None)
-        .expect("service")
-        .backfill_utxos()
-        .await
-        .expect("backfill");
-    let owner = *Member::owner_tag(wallet.as_array())
-        .expect("member")
-        .as_bytes();
-    let read = |request: GetUnspentUtxosRequest| {
-        let module = module.clone();
+    let read_with = |rows: Vec<ShieldedTransaction>| {
+        let fixture = &fixture;
         async move {
-            module
-                .call::<_, GetUnspentUtxosResponse>(GET_UNSPENT_UTXOS, as_object(request))
+            let mut source = fixture.source().with_transactions(rows);
+            source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
+            // The history ends at these rows, the default cursor names its own page.
+            source.next_cursor = None;
+            let reader = wallet_reader(&source, wallet);
+            let hub = Arc::new(fixture.hub(source));
+            let service = hub.service(None).expect("service");
+            service.backfill_utxos().await.expect("backfill");
+            let request = WalletStatusRequest::new(target(RING), wallet)
+                .sign(&reader)
+                .expect("signed");
+            let read: GetWalletStatusResponse = rpc_module(hub.clone())
+                .expect("module")
+                .call(GET_WALLET_STATUS, as_object(request))
                 .await
+                .expect("wallet read");
+            let refused = rpc_module(hub.clone())
+                .expect("module")
+                .call::<_, GetWalletStatusResponse>(
+                    GET_WALLET_STATUS,
+                    as_object(
+                        WalletStatusRequest::new(target(RING), Address::new_from_array([0xb6; 32]))
+                            .sign(&reader)
+                            .expect("signed"),
+                    ),
+                )
+                .await;
+            assert!(refused.is_err(), "a wallet grant reads no other wallet");
+            read
         }
     };
-    let ring_view = read(
-        UnspentUtxosRequest::new(target(RING), owner)
-            .sign(&delegate())
-            .expect("signed"),
-    )
-    .await
-    .expect("ring read");
-    let row = ring_view
-        .unresolved
-        .iter()
-        .find(|row| row.inputs == [Hash(field(others))])
-        .expect("a ring grant names another owner's row");
-
-    let wallet_view = read(
-        UnspentUtxosRequest::new(target(RING), owner)
-            .with_wallet(wallet)
-            .sign(&reader)
-            .expect("signed"),
-    )
-    .await
-    .expect("wallet read");
-    assert!(wallet_view.unresolved.is_empty());
-    assert!(!wallet_view.coverage.complete);
-    let [paid] = wallet_view.utxos.as_slice() else {
-        panic!(
-            "the wallet's own note stays listed, {:?}",
-            wallet_view.utxos
-        );
+    // The stranger's row comes last, the fixture numbers slots by position.
+    let with_row = read_with(vec![
+        unseen_spend(&fixture, own, 0xb5),
+        unseen_spend(&fixture, others, 0xb7),
+    ])
+    .await;
+    let without_row = read_with(vec![unseen_spend(&fixture, own, 0xb5)]).await;
+    assert_eq!(
+        serde_json::to_vec(&with_row).expect("json"),
+        serde_json::to_vec(&without_row).expect("json")
+    );
+    let [paid] = with_row.notes.as_slice() else {
+        panic!("the wallet's own note stays listed, {:?}", with_row.notes);
     };
     assert_eq!(paid.amount, 500);
-    let wire = serde_json::to_string(&wallet_view).expect("json");
+    let wire = serde_json::to_string(&with_row).expect("json");
     assert!(!wire.contains(&Hash(field(others)).to_base58()));
     assert!(!wire.contains(&Hash(field(own)).to_base58()));
-    assert!(!wire.contains(&row.tx_signature.to_string()));
+    for key in ["unresolved", "coverage", "complete"] {
+        assert!(!wire.contains(key), "no {key} marker reaches a wallet");
+    }
+}
 
-    // A wallet grant reads no other owner's notes.
-    let stranger = *Member::owner_tag(&[0xb6; 32]).expect("member").as_bytes();
-    assert_eq!(
-        refusal(
-            read(
-                UnspentUtxosRequest::new(target(RING), stranger)
-                    .with_wallet(wallet)
-                    .sign(&reader)
-                    .expect("signed"),
-            )
-            .await
-        ),
-        zolana_ring_rpc::GrantRefusal::WalletScope.code()
-    );
+/// A wallet signs for itself, no list holds its key.
+#[tokio::test]
+async fn a_wallet_reads_its_own_notes_with_its_own_signature() {
+    let fixture = Fixture::new();
+    let source = fixture.source().with_transactions(Vec::new());
+    let service = fixture.hub(source).service(None).expect("service");
+    let owner = Keypair::new_from_array([0x61; 32]);
+    let own = WalletStatusRequest::new(target(RING), owner.pubkey())
+        .sign(&owner)
+        .expect("signed");
+    service.wallet_status(&own).await.expect("its own read");
+    let other = WalletStatusRequest::new(target(RING), Address::new_from_array([0xb6; 32]))
+        .sign(&owner)
+        .expect("signed");
+    assert!(service.wallet_status(&other).await.is_err());
 }

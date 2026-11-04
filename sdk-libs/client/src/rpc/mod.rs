@@ -32,7 +32,6 @@ mod relay;
 mod relay_deposit;
 mod relay_proof;
 mod spend_coverage;
-mod unspent;
 mod wallet_activity;
 mod wallet_status;
 
@@ -45,7 +44,6 @@ pub use relay::*;
 pub use relay_deposit::*;
 pub use relay_proof::*;
 pub use spend_coverage::*;
-pub use unspent::*;
 pub use wallet_activity::*;
 pub use wallet_status::*;
 
