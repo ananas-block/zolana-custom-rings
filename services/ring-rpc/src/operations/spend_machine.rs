@@ -14,10 +14,7 @@ pub(crate) enum SpendState {
     Resolved {
         note: [u8; 32],
     },
-    /// `evidence` is the commitment a hash-bearing frame names.
-    UnresolvedReal {
-        evidence: Option<[u8; 32]>,
-    },
+    UnresolvedReal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +31,7 @@ pub(crate) enum InputRead {
     Unreadable,
     Padding,
     External,
-    Real { evidence: Option<[u8; 32]> },
+    Real,
 }
 
 /// One nullifier as a frame publishes it, `hit` is the note index's answer.
@@ -62,8 +59,8 @@ impl Observation {
             (InputRead::Unreadable, _) => SpendState::Observed,
             (InputRead::Padding, _) => SpendState::Padding,
             (InputRead::External, _) => SpendState::External,
-            (InputRead::Real { .. }, Some(note)) => SpendState::Resolved { note },
-            (InputRead::Real { evidence }, None) => SpendState::UnresolvedReal { evidence },
+            (InputRead::Real, Some(note)) => SpendState::Resolved { note },
+            (InputRead::Real, None) => SpendState::UnresolvedReal,
         }
     }
 
@@ -83,7 +80,7 @@ impl Observation {
         }
         let moves = match existing.state {
             SpendState::Observed => row.state != SpendState::Observed,
-            SpendState::UnresolvedReal { .. } => matches!(row.state, SpendState::Resolved { .. }),
+            SpendState::UnresolvedReal => matches!(row.state, SpendState::Resolved { .. }),
             SpendState::Padding | SpendState::External | SpendState::Resolved { .. } => false,
         };
         match moves {
@@ -97,7 +94,7 @@ impl SpendRow {
     /// A newly opened note or a late secret moves an unresolved row only.
     pub(crate) fn opened(self, note: [u8; 32]) -> Transition {
         match self.state {
-            SpendState::UnresolvedReal { .. } => Transition::Write(Self {
+            SpendState::UnresolvedReal => Transition::Write(Self {
                 state: SpendState::Resolved { note },
                 ..self
             }),
@@ -114,7 +111,7 @@ impl SpendRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NoteRead {
     pub nullifier_known: bool,
-    /// The published row of the note's nullifier, or a historical row's slot.
+    /// The published row of the note's nullifier.
     pub spent_at: Option<u64>,
     pub zero_key_wallet: bool,
     pub history_through: u64,
@@ -168,11 +165,11 @@ mod tests {
 
     #[test]
     fn each_read_enters_its_state() {
-        let real = InputRead::Real { evidence: None };
+        let real = InputRead::Real;
         for (read, hit, state) in [
             (InputRead::Padding, None, SpendState::Padding),
             (InputRead::External, None, SpendState::External),
-            (real, None, SpendState::UnresolvedReal { evidence: None }),
+            (real, None, SpendState::UnresolvedReal),
             (real, Some([2; 32]), SpendState::Resolved { note: [2; 32] }),
             (InputRead::Unreadable, None, SpendState::Observed),
             (InputRead::Unreadable, Some([2; 32]), SpendState::Observed),
@@ -226,7 +223,7 @@ mod tests {
                 InputRead::Padding,
                 InputRead::External,
                 InputRead::Unreadable,
-                InputRead::Real { evidence: None },
+                InputRead::Real,
             ] {
                 assert_eq!(
                     observed(read, Some([3; 32])).apply(Some(&row)),
@@ -246,7 +243,7 @@ mod tests {
         };
         let second = Observation {
             frame: frame(2),
-            ..observed(InputRead::Real { evidence: None }, Some([3; 32]))
+            ..observed(InputRead::Real, Some([3; 32]))
         };
         assert!(matches!(
             second.apply(Some(&row)),
@@ -263,7 +260,7 @@ mod tests {
             state,
         };
         assert_eq!(
-            written(row(SpendState::UnresolvedReal { evidence: None }).opened([2; 32])),
+            written(row(SpendState::UnresolvedReal).opened([2; 32])),
             SpendState::Resolved { note: [2; 32] }
         );
         for state in [

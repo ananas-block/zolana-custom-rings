@@ -6,9 +6,8 @@ use std::ops::Range;
 
 use custom_ring_interface::{
     domain::MERGE_RECORD_LABEL, storage::Revision, AuditRecord, CustomRingError,
-    CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof, HistoricalMergeIxDataRef,
-    MergePublicInput, OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord,
-    OPENING_RECORD_LEN,
+    CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof, MergePublicInput,
+    OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord, OPENING_RECORD_LEN,
 };
 use serde::Deserialize;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -27,10 +26,6 @@ const FRAME_VECTOR: &str = concat!(
 const MERGE_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../test-vectors/merge/merge_v4.json"
-);
-const HISTORICAL_FRAME_VECTOR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/merge/merge_frame_v2.hex"
 );
 
 fn merge_body() -> MergeTransactIxData {
@@ -151,20 +146,6 @@ fn the_merge_record_is_an_opening_record_of_a_ring_note() {
     assert_eq!(encoded.len(), 144);
     assert_eq!(OpeningRecord::decode(&encoded).unwrap(), opening);
     assert_eq!(MERGE_RECORD_LABEL, b"CRING/mrg2");
-}
-
-/// A frame of the replaced layout stays readable.
-#[test]
-fn the_tag_47_frame_still_decodes() {
-    let committed = std::fs::read_to_string(HISTORICAL_FRAME_VECTOR).expect("vector file");
-    let bytes = hex::decode(committed.trim()).unwrap();
-    let view = HistoricalMergeIxDataRef::from_bytes(&bytes).unwrap();
-    assert_eq!(view.own_revision, Revision::from(3));
-    assert_eq!(view.disclosure.fields, [[15; 32]; 9]);
-    assert_eq!(
-        view.spp_merge_body().unwrap(),
-        merge_body().serialize().unwrap()
-    );
 }
 
 fn compressed_b(bytes: &[u8]) -> Range<usize> {

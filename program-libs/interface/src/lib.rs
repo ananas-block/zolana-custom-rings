@@ -20,8 +20,6 @@ pub mod disclosure;
 #[path = "proof/domain.rs"]
 pub mod domain;
 pub mod error;
-#[path = "instructions/historical_merge.rs"]
-pub mod historical_merge;
 #[path = "instructions/instruction.rs"]
 pub mod instruction;
 #[path = "proof/key_catalog.rs"]
@@ -73,7 +71,6 @@ pub use deposit::*;
 pub use deposit_audit::*;
 pub use disclosure::*;
 pub use error::CustomRingError;
-pub use historical_merge::*;
 pub use instruction::*;
 pub use member_registry::*;
 pub use merge::*;

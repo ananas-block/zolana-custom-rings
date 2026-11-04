@@ -184,9 +184,7 @@ The merge needs the fee payer, the co-signer signature when a co-signer scope co
 
 ## Audit result
 
-`outputs` lists every slot whose opening rebuilds its published UTXO hash, and every key escrow slot that awaits its owner's record. Each carries its tree context and, unless its `kind` is `dummy` or `escrowPending`, the UTXO. A confidential or delegate ring output also carries the recipient key, and an anonymous ring output carries its view tag instead. `payloadErrors` names every other slot and why. `frame` is a delivered slot without a body of its layout. `disclosure` is a slot whose disclosure bytes do not parse under the layout. `recipientKey` is a delivered recipient key with no X25519 agreement. `commitment` is an opening that hashes to another UTXO hash. `unknownAsset` is a delivered body no registered asset rebuilds. The service reads the registry again on such a miss, at most once in 5 seconds, and a later read opens the slot once the registry names the mint. An asset the registry does not know keeps its opening without a mint.
-
-An `escrowPending` output has an owner whose escrowed nullifier key the background backfill has not read from the registry. It carries `escrowPending` with the owner key, the amount and the blinding the audit proof binds. An exit also names its asset and mint. A ring output carries `recipientU` and no asset, because a delivered body omits the asset and only the nullifier key finds it. A read after the backfill returns the slot as `ring` or `exit`.
+`outputs` lists every slot whose opening rebuilds its published UTXO hash. Each carries its tree context and, unless its `kind` is `dummy`, the UTXO. A confidential or delegate ring output also carries the recipient key, and an anonymous ring output carries its view tag instead. `payloadErrors` names every other slot and why. `frame` is a delivered slot without a body of its layout. `disclosure` is a slot whose disclosure bytes do not parse under the layout. `recipientKey` is a delivered recipient key with no X25519 agreement. `commitment` is an opening that hashes to another UTXO hash. `unknownAsset` is a delivered body no registered asset rebuilds. The service reads the registry again on such a miss, at most once in 5 seconds, and a later read opens the slot once the registry names the mint. An asset the registry does not know keeps its opening without a mint.
 
 The audit proof binds every disclosure field to the settled notes. The recipient ciphertext of a 2 or 4 output transfer stays outside it. An anonymous disclosure also reveals the sender, the spent notes and the recipients to the auditor. A malformed disclosure is reported as a skipped transaction with a reason. It cannot be presented as a successfully opened payment.
 
@@ -202,7 +200,7 @@ Ring RPC enumerates finalized ring signatures from an archival Solana RPC. It re
 
 Clients trust the configured service and archival RPC for complete chain history. Rebuilding returned UTXO commitments alone does not authenticate that history. Initial signature discovery reads and stores the requested history range. The service reuses the snapshot during pagination and appends newer finalized signatures on the next scan.
 
-Disclosure errors leave unresolved history. An output waits for a missing escrow key or mint, and new registry data can complete its opening. Only a finalized event marks a note spent.
+Disclosure errors leave unresolved history. Only a finalized event marks a note spent.
 
 `getAuditedMerges` opens the proved input list of each finalized merge. Known inputs supply the output's owner, asset and total. The result is an audit record. A nullifier secret also permits a wallet opening after its full commitment verifies. Missing inputs hold the merge and its descendants unresolved until the inputs become known.
 
@@ -212,9 +210,7 @@ Disclosure errors leave unresolved history. An output waits for a missing escrow
 
 `getSpendCoverage` is the one read that lists unresolved spends by nullifier. Only the ring authority signs it, and a reader grant never reaches it. It lists the unresolved rows, the unreadable frames and each repeated nullifier as an `integrityFaults` row.
 
-`finalized_spent_commitments` records inputs before a merge transition applies. Repeated events do not change the first spend. The projection does not read the separate `spent_commitments` table. Historical frames with incomplete input evidence leave their unmatched nullifiers unresolved.
-
-A deployment uses fresh registries, indexer records and RPC operation state. Finality initialization refuses populated relay, reservation, record update or record batch tables. Relay completion, record application and blockhash expiry require finalized state.
+A deployment uses fresh registries, indexer records and RPC operation state. Relay completion, record application and blockhash expiry require finalized state.
 
 ## Operation
 

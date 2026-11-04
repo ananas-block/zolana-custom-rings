@@ -4,9 +4,7 @@
     "frame",
     "disclosure",
     "recipientKey",
-    "commitment",
-    "unknownAsset",
-    "escrowPending"
+    "commitment"
   ],
   "foreign_body_and_low_order_key": [
     {

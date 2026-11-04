@@ -1157,66 +1157,16 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
     assert_eq!(origin.event.kind(), ConfirmedEventKind::Merge);
     assert_eq!(
         origin.merge_disclosure,
-        Some(ConfirmedMergeDisclosure::Record {
+        Some(ConfirmedMergeDisclosure {
             eph_pk: request.sealed.eph_pk,
             ciphertext: request.sealed.ciphertext,
         })
     );
-    assert!(!origin.is_historical());
     let mut other = request;
     other.merge.expiry_unix_ts ^= 1;
     group.outer.data = [vec![ring_tag::MERGE], other.serialize().unwrap()].concat();
     let rewritten = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
     assert_eq!(rewritten.merge_disclosure, None);
-}
-
-/// `own_revision || hash || proof || eph_pk || ct || count || fields || body`.
-fn tag_47_frame(
-    request: &custom_ring_interface::CustomRingMergeIxData,
-    fields: &[[u8; 32]],
-) -> Vec<u8> {
-    let v4 = request.serialize().unwrap();
-    let body_at = 8
-        + 32
-        + 1
-        + core::mem::size_of::<custom_ring_interface::CustomRingProof>()
-        + 33
-        + custom_ring_interface::OPENING_RECORD_LEN;
-    [
-        &[ring_tag::HISTORICAL_MERGE_V3][..],
-        &[0; 8],
-        &request.output_ring_data_hash,
-        bytemuck::bytes_of(&request.sealed.proof),
-        &[4; 33],
-        &[5; 32],
-        &[fields.len() as u8],
-        fields.as_flattened(),
-        &v4[body_at..],
-    ]
-    .concat()
-}
-
-#[test]
-fn a_tag_47_merge_binds_the_disclosure_its_ring_forwarded() {
-    let (mut group, _) = confirmed_merge_fixture();
-    let (_, request) = v2_merge_group();
-    let fields = vec![[6; 32]; 9];
-    group.outer.data = tag_47_frame(&request, &fields);
-    let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
-    assert_eq!(
-        origin.merge_disclosure,
-        Some(ConfirmedMergeDisclosure::Historical {
-            eph_pk: [4; 33],
-            ciphertext: [5; 32],
-            fields: fields.clone(),
-        })
-    );
-    let mut other = request;
-    other.merge.expiry_unix_ts ^= 1;
-    group.outer.data = tag_47_frame(&other, &fields);
-    let rewritten = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
-    assert_eq!(rewritten.merge_disclosure, None);
-    assert!(rewritten.is_historical());
 }
 
 #[test]
@@ -1245,7 +1195,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 }
 
 #[test]
-fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts() {
+fn policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../test-vectors/proof/ring-transact-expansion-v4.json"
@@ -1404,16 +1354,10 @@ fn an_in_proof_withdrawal_reads_under_the_confidential_rail() {
     let signer = origin_of_frame(false, leg.clone()).expect("signer rail reads");
     assert_eq!(signer.withdrawals.len(), 1);
     let no_leg = origin_of_frame(true, Vec::new()).expect("in-proof without a leg reads");
-    assert!(matches!(
-        no_leg.audit_frame(RingMode::Confidential),
-        Ok(AuditFrame::Records(_))
-    ));
+    assert!(no_leg.audit_frame(RingMode::Confidential).is_ok());
     let in_proof = origin_of_frame(true, leg).expect("in-proof with a leg reads");
     assert_eq!(in_proof.withdrawals.len(), 1);
-    assert!(matches!(
-        in_proof.audit_frame(RingMode::Confidential),
-        Ok(AuditFrame::Records(_))
-    ));
+    assert!(in_proof.audit_frame(RingMode::Confidential).is_ok());
 }
 
 fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
@@ -1424,94 +1368,13 @@ fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
 }
 
 #[test]
-fn a_statement_version_4_frame_never_reaches_the_historical_reader() {
+fn a_frame_reads_under_its_tag_alone() {
     let current = include_str!("../../../../../test-vectors/settlement/frame_v4.hex");
-    for tag_byte in [ring_tag::TRANSFER, ring_tag::AUTHORITY_TRANSFER] {
-        let frames = tagged_frames(current, tag_byte);
-        assert!(!frames.is_empty());
-        for frame in &frames {
-            for mode in [RingMode::Confidential, RingMode::Anonymous] {
-                assert!(!matches!(
-                    audit_frame_of(frame, mode),
-                    Ok(AuditFrame::Historical(_))
-                ));
-            }
-        }
-    }
     let [first, ..] = &tagged_frames(current, ring_tag::TRANSFER)[..] else {
         panic!("a vector frame")
     };
-    assert!(matches!(
-        audit_frame_of(first, RingMode::Confidential),
-        Ok(AuditFrame::Records(_))
-    ));
-    for tag_byte in 0..=u8::MAX {
-        let is_v3 = matches!(
-            tag_byte,
-            ring_tag::HISTORICAL_TRANSFER_V3 | ring_tag::HISTORICAL_AUTHORITY_TRANSFER_V3
-        );
-        assert_eq!(is_version_3(&[tag_byte]), is_v3);
+    assert!(audit_frame_of(first, RingMode::Confidential).is_ok());
+    for removed in [31, 43, 44, 45, 46, 47] {
+        assert!(audit_frame_of(&[removed], RingMode::Confidential).is_err());
     }
-    assert_eq!(ring_tag::HISTORICAL_TRANSFER_V3, 45);
-    assert_eq!(ring_tag::HISTORICAL_AUTHORITY_TRANSFER_V3, 46);
-    assert_eq!(ring_tag::TRANSFER, 55);
-    assert_eq!(ring_tag::AUTHORITY_TRANSFER, 56);
-}
-
-#[test]
-fn a_version_3_frame_stays_on_the_historical_reader_under_its_tag() {
-    let frames = tagged_frames(
-        include_str!("../../../../../test-vectors/settlement/frame_v3.hex"),
-        ring_tag::HISTORICAL_TRANSFER_V3,
-    );
-    assert!(matches!(
-        audit_frame_of(&frames[0], RingMode::Confidential),
-        Ok(AuditFrame::Historical(_))
-    ));
-    assert!(matches!(
-        audit_frame_of(&[ring_tag::HISTORICAL_TRANSFER], RingMode::Confidential),
-        Err(AuditError::HistoricalFrame)
-    ));
-}
-
-/// The instruction group of the base commit's tag 47 and its disclosure.
-#[test]
-fn a_base_commit_merge_binds_its_disclosure() {
-    let vector: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../test-vectors/historical/old_merge.json"
-    ))
-    .unwrap();
-    let bytes = |value: &serde_json::Value| hex::decode(value.as_str().unwrap()).unwrap();
-    let address =
-        |value: &serde_json::Value| Address::new_from_array(bytes(value).try_into().unwrap());
-    let group = InstructionGroup {
-        outer: ParsedInstruction::new(
-            address(&vector["outer_program"]),
-            Vec::new(),
-            bytes(&vector["outer"]),
-            1,
-        ),
-        inner: vector["inner"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|inner| {
-                ParsedInstruction::new(
-                    address(&inner["program"]),
-                    Vec::new(),
-                    bytes(&inner["data"]),
-                    inner["height"].as_u64().unwrap() as _,
-                )
-            })
-            .collect(),
-    };
-    let origin = ring_event_origin_in(&[group], 0, address(&vector["ring"])).unwrap();
-    assert_eq!(
-        origin.merge_disclosure,
-        Some(ConfirmedMergeDisclosure::Historical {
-            eph_pk: [4; 33],
-            ciphertext: [5; 32],
-            fields: vec![[6; 32]; 13],
-        })
-    );
 }

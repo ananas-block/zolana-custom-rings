@@ -5,9 +5,7 @@ use spr_transaction::OutputContext;
 use super::*;
 use crate::{
     AuditedDefaultInput, InputOpening, OutputPayloadError,
-    OutputPayloadErrorKind::{
-        self, Commitment, Disclosure, EscrowPending, Frame, RecipientKey, UnknownAsset,
-    },
+    OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey},
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -608,17 +606,9 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     .expect("vector");
     // A new kind fails to compile here, `kinds` and the vector must then name it.
     let named = |kind: OutputPayloadErrorKind| match kind {
-        Frame | Disclosure | RecipientKey | Commitment | UnknownAsset | EscrowPending => kind,
+        Frame | Disclosure | RecipientKey | Commitment => kind,
     };
-    let kinds = [
-        Frame,
-        Disclosure,
-        RecipientKey,
-        Commitment,
-        UnknownAsset,
-        EscrowPending,
-    ]
-    .map(named);
+    let kinds = [Frame, Disclosure, RecipientKey, Commitment].map(named);
     assert_eq!(serde_json::to_value(kinds).unwrap(), vector.kinds);
     let slots = [(2, Commitment), (5, RecipientKey)]
         .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });

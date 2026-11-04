@@ -175,7 +175,7 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     let held: HashMap<[u8; 32], X25519Pubkey> = shielded_keys
         .viewing_public_keys()
         .into_iter()
-        .flat_map(|pubkey| [(pubkey.u(), pubkey), (slot_tag(pubkey.u()), pubkey)])
+        .map(|pubkey| (slot_tag(pubkey.u()), pubkey))
         .collect();
     let mut sites = Vec::new();
     let mut requests = Vec::new();

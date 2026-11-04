@@ -27,12 +27,12 @@ use zolana_ring_client::{
     SealedNullifierKey, UtxoOwner,
 };
 use zolana_ring_policy::Member;
-use zolana_ring_transaction::{historical::InputPrefix, RingAssets};
+use zolana_ring_transaction::RingAssets;
 
 use crate::{
     error::RingRpcError,
     spend_machine::{NoteRead, Observation, SpendRow, SpendState, Transition},
-    spent_index::{Checkpoint, LoadedSpends, SpentCommitment},
+    spent_index::{Checkpoint, LoadedSpends},
 };
 
 pub const UTXO_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
@@ -60,13 +60,10 @@ struct SpendBook {
     notes: HashMap<[u8; 32], StoredUtxo>,
     /// The note index, a late secret fills it for that owner's notes.
     by_nullifier: HashMap<[u8; 32], [u8; 32]>,
-    /// An unresolved row whose frame names a commitment, by that commitment.
-    awaiting: HashMap<[u8; 32], [u8; 32]>,
     owned: HashMap<[u8; 32], BTreeSet<[u8; 32]>>,
     rows: HashMap<[u8; 32], SpendRow>,
     unread: BTreeSet<CreatedIn>,
     faults: Vec<SpendRow>,
-    historical: HashMap<[u8; 32], SpentCommitment>,
     context: Context,
     position_slot: Option<u64>,
 }
@@ -80,7 +77,6 @@ pub(crate) struct PageDelta {
     unread: BTreeSet<CreatedIn>,
     read: BTreeSet<CreatedIn>,
     faults: Vec<SpendRow>,
-    historical: Vec<SpentCommitment>,
     checkpoint: Option<Checkpoint>,
     late_owners: Vec<[u8; 32]>,
 }
@@ -149,7 +145,7 @@ pub(crate) struct StoredUtxo {
     pub leaf_index: u64,
     /// False on an exit, its note leaves the ring.
     pub ring_note: bool,
-    /// `None` until the owner's secret or a frame's evidence names it.
+    /// `None` until the owner's secret names it.
     pub nullifier: Option<[u8; 32]>,
 }
 
@@ -176,17 +172,6 @@ impl SpendBook {
         }
         self.by_nullifier.extend(delta.by_nullifier);
         for (nullifier, row) in delta.rows {
-            match row.state {
-                SpendState::UnresolvedReal {
-                    evidence: Some(commitment),
-                } => {
-                    self.awaiting.insert(commitment, nullifier);
-                }
-                SpendState::Resolved { note } => {
-                    self.awaiting.remove(&note);
-                }
-                _ => {}
-            }
             self.rows.insert(nullifier, row);
         }
         for frame in delta.read {
@@ -197,9 +182,6 @@ impl SpendBook {
             if !self.faults.contains(&fault) {
                 self.faults.push(fault);
             }
-        }
-        for row in delta.historical {
-            self.historical.entry(row.utxo_hash).or_insert(row);
         }
         if let Some(checkpoint) = delta.checkpoint {
             self.position_slot = checkpoint.position.checkpoint();
@@ -216,19 +198,18 @@ impl SpendBook {
         })
     }
 
-    fn spent_at(&self, commitment: &[u8; 32], note: &StoredUtxo) -> Option<u64> {
+    fn spent_at(&self, note: &StoredUtxo) -> Option<u64> {
         let row = note
             .nullifier
             .and_then(|nullifier| self.rows.get(&nullifier));
         row.map(|row| row.frame.slot)
-            .or_else(|| self.historical.get(commitment).map(|row| row.slot))
     }
 
     /// Reads one note's own nullifier and no other row.
-    fn status(&self, commitment: &[u8; 32], note: &StoredUtxo, through: u64) -> WalletNoteStatus {
+    fn status(&self, note: &StoredUtxo, through: u64) -> WalletNoteStatus {
         NoteRead {
             nullifier_known: note.nullifier.is_some(),
-            spent_at: self.spent_at(commitment, note),
+            spent_at: self.spent_at(note),
             zero_key_wallet: note.utxo.owner.nullifier_pk() == Some(ZERO_NULLIFIER_PUBKEY)
                 && Address::new_from_array(note.utxo.owner_key).is_on_curve(),
             history_through: through,
@@ -256,10 +237,6 @@ impl PageDelta {
 
     pub(crate) fn unread_frames(&self) -> impl Iterator<Item = &CreatedIn> {
         self.unread.iter()
-    }
-
-    pub(crate) fn historical(&self) -> &[SpentCommitment] {
-        &self.historical
     }
 
     pub(crate) const fn checkpoint(&self) -> Option<&Checkpoint> {
@@ -385,34 +362,7 @@ impl<'a> PageWork<'a> {
         if let Some(nullifier) = note.nullifier {
             self.delta.by_nullifier.insert(nullifier, *commitment);
             self.settle(&nullifier, commitment);
-            return;
         }
-        let awaiting = self
-            .delta
-            .rows
-            .values()
-            .find(|row| {
-                row.state
-                    == SpendState::UnresolvedReal {
-                        evidence: Some(*commitment),
-                    }
-            })
-            .map(|row| row.nullifier)
-            .or_else(|| self.store.read_book().awaiting.get(commitment).copied());
-        if let Some(nullifier) = awaiting {
-            self.link(commitment, nullifier);
-            self.settle(&nullifier, commitment);
-        }
-    }
-
-    fn link(&mut self, commitment: &[u8; 32], nullifier: [u8; 32]) {
-        if let Some(mut note) = self.note(commitment) {
-            if note.nullifier.is_none() {
-                note.nullifier = Some(nullifier);
-                self.delta.notes.insert(*commitment, note);
-            }
-        }
-        self.delta.by_nullifier.insert(nullifier, *commitment);
     }
 
     fn settle(&mut self, nullifier: &[u8; 32], commitment: &[u8; 32]) {
@@ -440,20 +390,10 @@ impl<'a> PageWork<'a> {
         }
     }
 
-    /// A frame's evidence wins over the index, which it also fills.
     pub(crate) fn observe(&mut self, observation: Observation) {
         use crate::spend_machine::InputRead;
         let hit = match observation.read {
-            InputRead::Real {
-                evidence: Some(commitment),
-            } => match self.note(&commitment) {
-                Some(_) => {
-                    self.link(&commitment, observation.nullifier);
-                    Some(commitment)
-                }
-                None => self.note_of_nullifier(&observation.nullifier),
-            },
-            InputRead::Real { evidence: None } => self.note_of_nullifier(&observation.nullifier),
+            InputRead::Real => self.note_of_nullifier(&observation.nullifier),
             InputRead::Unreadable | InputRead::Padding | InputRead::External => None,
         };
         let existing = self.row(&observation.nullifier);
@@ -470,10 +410,6 @@ impl<'a> PageWork<'a> {
         if !self.delta.unread.contains(&frame) {
             self.delta.read.insert(frame);
         }
-    }
-
-    pub(crate) fn record_historical(&mut self, rows: Vec<SpentCommitment>) {
-        self.delta.historical.extend(rows);
     }
 
     /// A late key recomputes that owner's notes, a failed page leaves the owner to the next.
@@ -505,35 +441,6 @@ impl<'a> PageWork<'a> {
             self.derive(&commitment);
         }
         self.delta.late_owners = owners;
-    }
-
-    /// The owner's tracked key, dropped with the page.
-    pub(crate) fn open_key(&self, owner_key: &[u8; 32]) -> Option<NullifierKey> {
-        (self.opener)(owner_key)
-    }
-
-    /// The notes a version 2 prefix can name, under `owner` when the row binds one.
-    pub(crate) fn prefixed(&self, prefix: InputPrefix, owner: Option<[u8; 32]>) -> Vec<[u8; 32]> {
-        let named = |commitment: &[u8; 32], stored: &StoredUtxo| {
-            InputPrefix::of(commitment) == Some(prefix)
-                && owner.is_none_or(|owner| stored.utxo.owner_key == owner)
-        };
-        let mut found: BTreeSet<[u8; 32]> = self
-            .delta
-            .notes
-            .iter()
-            .filter(|(commitment, stored)| named(commitment, stored))
-            .map(|(commitment, _)| *commitment)
-            .collect();
-        found.extend(
-            self.store
-                .read_book()
-                .notes
-                .iter()
-                .filter(|(commitment, stored)| named(commitment, stored))
-                .map(|(commitment, _)| *commitment),
-        );
-        found.into_iter().collect()
     }
 
     /// Reads the next position with the terminal page's context, when the page ended the read.
@@ -583,16 +490,6 @@ impl AuditStore {
             .absorb(delta);
     }
 
-    pub(crate) fn seed_historical(&self, rows: Vec<SpentCommitment>) {
-        self.book
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .absorb(PageDelta {
-                historical: rows,
-                ..PageDelta::default()
-            });
-    }
-
     /// Runs after the page's transaction commits, a crash before it replays the page.
     pub(crate) fn commit(&self, delta: PageDelta) {
         let mut late = self
@@ -607,23 +504,6 @@ impl AuditStore {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .absorb(delta);
-    }
-
-    /// A different registry names the notes stored without a mint.
-    pub(crate) fn name_assets(&self, assets: &RingAssets) {
-        {
-            let mut current = self.assets.write().unwrap_or_else(PoisonError::into_inner);
-            if current.as_ref() == Some(assets) {
-                return;
-            }
-            *current = Some(assets.clone());
-        }
-        let mut book = self.book.write().unwrap_or_else(PoisonError::into_inner);
-        for note in book.notes.values_mut() {
-            if note.utxo.mint.is_none() {
-                note.utxo.mint = assets.by_field(&note.utxo.asset).map(|mint| mint.asset);
-            }
-        }
     }
 
     /// Any published row of this nullifier, reads no slot bound.
@@ -661,7 +541,7 @@ impl AuditStore {
             if note.created_in.slot > through {
                 continue;
             }
-            let status = book.status(commitment, note, through);
+            let status = book.status(note, through);
             if status == WalletNoteStatus::Unspent {
                 let balance = balances
                     .entry(note.utxo.asset)
@@ -709,7 +589,7 @@ impl AuditStore {
         let mut unresolved_real: Vec<_> = book
             .rows
             .values()
-            .filter(|row| matches!(row.state, SpendState::UnresolvedReal { .. }))
+            .filter(|row| matches!(row.state, SpendState::UnresolvedReal))
             .map(row)
             .collect();
         unresolved_real.sort_by_key(|row| (row.frame.slot, row.frame.event_index));
@@ -741,10 +621,9 @@ impl AuditStore {
         let book = self.read_book();
         book.notes
             .iter()
-            .filter(|(commitment, stored)| {
+            .filter(|(_, stored)| {
                 let utxo = &stored.utxo;
                 stored.ring_note
-                    && !book.historical.contains_key(*commitment)
                     && utxo.owner_key == notes.owner_key
                     && utxo.owner == owner
                     && utxo.mint == Some(notes.mint.asset)
@@ -830,11 +709,10 @@ impl AuditStore {
             owner_key: note.utxo.owner_key,
             owner: note.utxo.owner,
             asset: note.utxo.asset,
-            mint: note.utxo.mint,
+            mint: merge.disclosed.mint,
             amount: note.utxo.amount,
-            inputs: merge.inputs().to_vec(),
-            real_nullifiers: Vec::new(),
-            seed: None,
+            real_nullifiers: merge.disclosed.real_nullifiers.clone(),
+            seed: merge.disclosed.seed,
         })
     }
 
@@ -970,7 +848,7 @@ impl AuditStore {
                     event_index: 0,
                 },
                 position: 0,
-                read: InputRead::Real { evidence: None },
+                read: InputRead::Real,
                 hit: None,
             });
         }

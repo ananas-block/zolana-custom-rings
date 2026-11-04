@@ -280,7 +280,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
             &auditor,
             client.indexer(),
             client.rpc(),
-            &env.ring_assets()?,
         ))?
         .transactions;
     assert_eq!(
