@@ -30,7 +30,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { slotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
   openRecipientBody,
@@ -421,15 +421,16 @@ class Scan {
     const entry = this.#entry(index);
     const { viewingPublicKey } = entry;
     const streams: readonly EntryStream[] = ["tx", "request"];
-    let active = streams.map((stream): ActiveStream => ({
-      stream,
-      scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
-    }));
-    let bootstrap: ViewTag | undefined = viewingPublicKey.u();
+    let active = streams.map(
+      (stream): ActiveStream => ({
+        stream,
+        scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
+      }),
+    );
+    let bootstrap: readonly ViewTag[] = [viewingPublicKey.u(), slotTag(viewingPublicKey.u())];
     while (active.length > 0) {
-      const tagged: (readonly [RoundTag, ViewTag])[] =
-        bootstrap === undefined ? [] : [[BOOTSTRAP, bootstrap]];
-      bootstrap = undefined;
+      const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);
+      bootstrap = [];
       for (const { stream, scan } of active) {
         const indices = scan.round();
         const tags = await streamTags(

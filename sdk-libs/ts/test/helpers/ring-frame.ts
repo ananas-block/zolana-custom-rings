@@ -80,7 +80,7 @@ export function ringFrame(
     trackingRevision: 7n,
     ...(delegate ? {} : { ownRevision: 1n }),
     splWithdrawalOwners: [],
-    coSign: { approval: 0, coSigners: 0 },
+    approval: 0,
     noSpend: false,
     publicOwners,
     expiryUnixTs: 0,
@@ -95,7 +95,6 @@ export function ringFrame(
     ...(anonymous
       ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen(outputs)) } }
       : {}),
-    ephU: field(2),
     envelope: new Uint8Array(envelopeRegion(layout).length).fill(3),
     privateTxHash: field(4),
     ...(rail === "anonymous" && !publicOwners

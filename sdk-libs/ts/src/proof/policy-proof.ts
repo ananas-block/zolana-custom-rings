@@ -431,6 +431,8 @@ export async function readPolicy(
   };
   const policyOf = (asset: Bytes32): MintPolicy =>
     ownReads.get(bytesKey(asset))?.read.record()?.mintPolicy ?? EMPTY_MINT_POLICY;
+  const padding = <T>(zero: T): readonly T[] =>
+    Array.from({ length: circuit.outputs - owners.length }, () => zero);
   const spent = spentNotes(proofInputs);
   if (pinned !== undefined) {
     const sources = { slots: pinned.sources, salted: pinned.salted };
@@ -492,10 +494,12 @@ export async function readPolicy(
     ),
     ownerEntries: Object.freeze([
       ...owners.map(ownerEntry),
+      ...padding(ABSENT_OWNER),
       ...withdrawals.map((leg) => ownerEntry(leg.owner)),
     ]),
     assetEntries: Object.freeze([
       ...assets.map((asset) => entry(asset)),
+      ...padding(ABSENT_ENTRY),
       ...withdrawals.map((leg) => entry(leg.asset)),
     ]),
     publicAssetEntries: Object.freeze(
@@ -581,7 +585,10 @@ async function readTracking(
         subjects: pool.subjects,
       }),
       rowEntries: Object.freeze(input.rows.map(trackingEntry)),
-      outputEntries: Object.freeze(outputOwners.map(trackingEntry)),
+      outputEntries: Object.freeze([
+        ...outputOwners.map(trackingEntry),
+        ...Array.from({ length: circuit.outputs - outputOwners.length }, () => 0),
+      ]),
     }),
     rowOf,
     trackingEntry,
@@ -669,7 +676,7 @@ export async function readDepositSection(
     publicAmounts: zeroSlots,
     publicGross: zeroSlots,
     senderEntries: Object.freeze([]),
-    publicAssetEntries: Object.freeze(Array.from({ length: N_PUBLIC_SLOTS }, () => 0)),
+    publicAssetEntries: Object.freeze([]),
   };
   if (pinned === undefined)
     return Object.freeze({

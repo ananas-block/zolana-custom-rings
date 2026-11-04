@@ -61,19 +61,20 @@ async function checkSource(
   const policy = await fetchRingPolicy(params.client, params.ringProgramId, context);
   if (policy.sources[update.listId - 1]?.listId !== update.listId)
     throw sourceInvalid("UnreferencedList", { listId: update.listId });
-  const address = update.source.kind === "own" ? policy.records : update.source.registry;
-  const source = await fetchStorageRegistry(params.client, address, context);
+  const curator = update.source.kind === "curator" ? update.source.registry : undefined;
+  if (curator !== undefined) {
+    const others = policy.sources.filter((slot) => slot.listId !== update.listId);
+    const current = registryCurator({ sources: others });
+    if (current !== undefined && current !== curator) throw sourceInvalid("MultipleCurators");
+  }
+  const source = await fetchStorageRegistry(params.client, curator ?? policy.records, context);
   // Rust `check_source_pair`.
   if (
     source.trackingRegistry !== policy.tracking &&
     (update.salted === true || isPrivateSource(source))
   )
     throw sourceInvalid("SaltedSourceOtherTracking");
-  if (update.source.kind !== "curator") return;
-  const curator = update.source.registry;
-  const others = policy.sources.filter((slot) => slot.listId !== update.listId);
-  const current = registryCurator({ sources: others });
-  if (current !== undefined && current !== curator) throw sourceInvalid("MultipleCurators");
+  if (curator === undefined) return;
   await checkCurators(
     params,
     [{ listId: update.listId, curatorRegistry: curator }],

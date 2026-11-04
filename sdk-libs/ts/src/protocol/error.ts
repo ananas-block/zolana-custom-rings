@@ -153,7 +153,6 @@ export const RING_ERROR_CODES = [
   "RING_PROVING_KEYS_MISSING",
   "RING_SCAN_WORKER_FAILED",
   "RING_ENROLLMENT_KEY_MISMATCH",
-  "RING_LIST_SALT_MISSING",
   "RING_ENROLLMENT_ZERO_KEY",
   "RING_ENROLLMENT_NONE_NAMED",
   "RING_TRACKING_INVALID",
@@ -169,6 +168,7 @@ export const RING_ERROR_CODES = [
   "RING_COSIGNER_OUT_OF_SCOPE",
   "RING_DELEGATE_DEPOSIT_LEG",
   "RING_MERGE_OWNER_MISMATCH",
+  "RING_LIST_SALT_MISSING",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

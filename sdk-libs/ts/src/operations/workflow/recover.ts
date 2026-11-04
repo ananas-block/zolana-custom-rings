@@ -103,10 +103,10 @@ export async function recoverRingMemberNotes(
   });
   refuseSkipped(history.rows.skipped);
   const sourceOwner = input.source.ownerHash();
-  const unseenInputs: { hash: Bytes32; nullifier: Bytes32 }[] = [];
+  const unresolvedReal: Bytes32[] = [];
   for (const transaction of audited) {
     for (const { nullifier, opening } of transaction.inputs)
-      if (opening.kind === "unseenHash") unseenInputs.push({ hash: opening.hash, nullifier });
+      if (opening.kind === "unresolvedReal") unresolvedReal.push(nullifier);
     for (const error of transaction.payloadErrors) {
       // Any other unopened slot could hide a source UTXO.
       if (error.kind !== "unknownAsset")
@@ -160,12 +160,10 @@ export async function recoverRingMemberNotes(
     unsupportedDeposits: Object.freeze(unsupportedDeposits),
     unknownMints: Object.freeze([...found.unknownMints]),
     unseenInputs: Object.freeze(
-      unseenInputs
-        .filter(
-          ({ hash }) =>
-            found.created.utxo(hash) === undefined && found.created.merged(hash) === undefined,
-        )
-        .map(({ nullifier }) => nullifier),
+      unresolvedReal.filter(
+        (nullifier) =>
+          !found.candidates.some((candidate) => equalBytes(candidate.nullifier, nullifier)),
+      ),
     ),
   });
 }

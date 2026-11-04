@@ -372,7 +372,6 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
-      restrictive: apply.restrictive,
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
     expect(hex(applyRecordsStatementHash(applyStatement))).toBe(apply.public_input_hash);

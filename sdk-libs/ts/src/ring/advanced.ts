@@ -10,6 +10,7 @@ export {
   packDisclosure,
   parseAuditorMessage,
   sealAuditorStream,
+  sealSaltedAuditorStream,
   symmetricAuditApply,
   unpackDisclosure,
 } from "../crypto/audit/audit.js";

@@ -70,7 +70,7 @@ async function member(ring: AnonymousRing): Promise<Member> {
 /** The ring rpc names the hidden sender and opens the payment and its change. */
 async function expectAudited(ring: AnonymousRing, sender: Actor, signature: string): Promise<void> {
   const item = await waitForAudited(ring.ringRpc, ring.target, ring.authority, signature);
-  expect(item.sender?.ownerKey).toEqual(sender.keypair.signingPublicKey().ed25519());
+  expect(item.spenders).toContain(sender.keypair.shieldedAddress().solanaAddress());
   expect(item.payloadErrors).toEqual([]);
   expect(auditedRingAmounts(item)).toEqual([PAYMENT, DEPOSIT - PAYMENT]);
 }

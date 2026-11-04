@@ -9,6 +9,7 @@ import {
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import { SHIELDED_POOL_PROGRAM_ID, type Bytes16, type Bytes32 } from "@heliuslabs/zolana";
 import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../src/protocol/transaction/deposit-instruction.js";
+import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
 import {
   encodeRingDepositCapsule,
   type RingDepositCapsule,
@@ -70,7 +71,11 @@ export function confirmedDepositTransaction(
     }),
   );
   const encode = getBase58Decoder();
-  const wrapper = Uint8Array.of(31, ...new Uint8Array(AUDITED_DEPOSIT_PREFIX_LENGTH - 1), ...wire);
+  const wrapper = Uint8Array.of(
+    RingInstructionTag.deposit,
+    ...new Uint8Array(AUDITED_DEPOSIT_PREFIX_LENGTH - 1),
+    ...wire,
+  );
   return {
     transaction: {
       signatures: [signature],

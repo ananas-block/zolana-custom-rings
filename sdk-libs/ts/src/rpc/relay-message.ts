@@ -13,6 +13,7 @@ import {
 } from "@solana/kit";
 
 import type { RequestContext, RingAssetDeposit, Signature } from "@heliuslabs/zolana/interface";
+import { slotTag } from "../crypto/derivation/ring-stream.js";
 import { equalBytes, LOADED_ACCOUNTS_DATA_SIZE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
@@ -212,14 +213,14 @@ export function checkDelegateMessage(
   });
   if (isAnonymousFrame(expected.rail)) throw mismatch("Recipients");
   const tags = parsed.outputs.map((output) => output.ownerTag);
-  const change = equalBytes.bind(undefined, expected.source.u());
+  const change = equalBytes.bind(undefined, slotTag(expected.source.u()));
   // Change leads, each payee follows in payment order.
   const firstPayee = tags.findIndex((tag) => !change(tag));
   const paysEachPayee =
     firstPayee >= 0 &&
     expected.payees.every((payee, slot) => {
       const tag = tags[firstPayee + slot];
-      return tag !== undefined && equalBytes(tag, payee.u());
+      return tag !== undefined && equalBytes(tag, slotTag(payee.u()));
     });
   if (!paysEachPayee) throw mismatch("Recipients");
   const named = accounts.filter((meta) => meta.address === expected.delegate);

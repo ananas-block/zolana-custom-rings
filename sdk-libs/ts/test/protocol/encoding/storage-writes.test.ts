@@ -20,14 +20,6 @@ import {
   walletGrantMember,
 } from "../../../src/protocol/membership/policy.js";
 
-/** The vector's record writes, each behind the one-byte kind `RecordWriteData` no longer carries. */
-function recordWrites(): string {
-  const length = 2 * (1 + 145);
-  const rows = [vector.writes.slice(0, length), vector.writes.slice(length, 2 * length)];
-  rows.forEach((row) => expect(row.slice(0, 2)).toBe("00"));
-  return rows.map((row) => row.slice(2)).join("");
-}
-
 describe("RecordWriteData", () => {
   it("writes and reads a wallet update byte for byte as the Rust vector", async () => {
     const wallet = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
@@ -67,7 +59,7 @@ describe("RecordWriteData", () => {
         value: reader,
       },
     ];
-    const expected = recordWrites();
+    const expected = vector.writes;
     expect(Buffer.from(encodeStorageWrites(writes)).toString("hex")).toBe(expected);
     expect(decodeStorageWrites(Uint8Array.from(Buffer.from(expected, "hex")))).toEqual(writes);
     expect(() => decodeStorageWrites(Uint8Array.of(2))).toThrow(

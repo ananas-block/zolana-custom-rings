@@ -33,7 +33,7 @@ import { readFileSync } from "node:fs";
 
 import {
   auditSharedSecret,
-  auditorSchedule,
+  saltedAuditorSchedule,
   DEPOSIT_ENC_INFO,
   symmetricAuditApply,
 } from "../../../src/crypto/audit/audit.js";
@@ -90,6 +90,7 @@ const field = (value: string): Bytes32 => hex(value) as Bytes32;
 const ring = encodeBase58(new Uint8Array(32).fill(0x90));
 const auditor = (): X25519Keypair => X25519Keypair.fromBytes(field(auditVector.auditor_sk));
 const SIGNATURE = "5".repeat(87) as Signature;
+const SALT = hex(auditVector.salt) as Bytes16;
 const TREE_ID = auditVector.output_tree_id;
 const SECOND_NULLIFIER = field(`${"00".repeat(31)}77`);
 
@@ -118,8 +119,8 @@ interface StreamEdits {
 
 function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<TransactionAuditInput> = {}) {
   const layout = layoutOf(entry);
-  const ephemeral = X25519Keypair.fromBytes(field(auditVector.eph_sk)).publicKey();
-  const schedule = auditorSchedule(auditor(), ephemeral);
+  const txViewingKey = ViewingKey.fromBytes(field(auditVector.tx_viewing_sk)).publicKey();
+  const schedule = saltedAuditorSchedule(auditor(), txViewingKey, SALT);
   const envelope =
     edits.envelope === undefined
       ? hex(entry.envelope_ciphertext)
@@ -132,7 +133,7 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
   });
   const tails = (entry.tail_ciphertexts ?? []).map(hex);
   const message = Uint8Array.from([
-    ...ephemeral.toBytes(),
+    ...txViewingKey.toBytes(),
     ...envelope,
     ...records.flatMap((record) => [...record]),
     ...tails.flatMap((tail) => [...tail]),
@@ -143,8 +144,8 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     eventIndex: 0,
     proofless: false,
     ringProgramId: ring,
-    txViewingPublicKey: ViewingKey.fromBytes(field(auditVector.tx_viewing_sk)).publicKey(),
-    salt: hex(auditVector.salt) as Bytes16,
+    txViewingPublicKey: txViewingKey,
+    salt: SALT,
     nullifiers: [field(auditVector.first_nullifier), SECOND_NULLIFIER].slice(0, entry.input_count),
     messages: [{ viewTag: auditor().publicKey().u(), data: message }],
     outputSlots: entry.output_hashes.map((hash, index) => ({
@@ -191,7 +192,7 @@ describe("the v4 transfer reader", () => {
         const expected = ["dummy", "ring", "exit"][record[0] as number];
         expect(output.opening.kind).toBe(expected);
         if (output.opening.kind === "ring" || output.opening.kind === "exit")
-          expect(output.opening.utxo.mint).toBe(encodeBase58(record.subarray(48, 80)));
+          expect(output.opening.utxo.mint).toBe(encodeBase58(record.subarray(41, 73)));
       });
     }
   });
@@ -209,7 +210,7 @@ describe("the v4 transfer reader", () => {
     const badKind = hex(entry.records[0] as string);
     badKind[0] = 3;
     const noncanonical = hex(entry.records[1] as string);
-    noncanonical.fill(0xff, 80, 112);
+    noncanonical.fill(0xff, 73, 105);
     const { audited: row } = audited(entry, {
       records: new Map([
         [0, badKind],
@@ -224,7 +225,7 @@ describe("the v4 transfer reader", () => {
 
   it("refuses a dummy record on a live slot by its commitment", () => {
     const entry = caseNamed("plain_with_exit_and_dummy");
-    const { audited: row } = audited(entry, { records: new Map([[0, new Uint8Array(112)]]) });
+    const { audited: row } = audited(entry, { records: new Map([[0, new Uint8Array(105)]]) });
     expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
   });
 
@@ -544,7 +545,7 @@ describe("the deposit reader", () => {
   it("opens a tag 58 record, its secret the blinding, against the owner hash and commitment", () => {
     const owner = field(deposit.owner_utxo_hashes[0] as string);
     const record = hex(deposit.records[0] as string);
-    const mint = encodeBase58(record.subarray(48, 80));
+    const mint = encodeBase58(record.subarray(41, 73));
     const capsule = encodeRingDepositCapsule({
       slotIndex: 0,
       ephemeralPublicKey: hex(deposit.eph_pk) as Bytes33,

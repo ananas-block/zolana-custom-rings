@@ -122,6 +122,7 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
       },
     } as unknown as PrepareAuthorityTransferRequest,
     { feePayer: request.feePayer, validUntilSlot: 0n },
+    "confidential",
   );
 }
 

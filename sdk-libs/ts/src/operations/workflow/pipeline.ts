@@ -698,7 +698,6 @@ function previewData(
           }),
         }),
     ...(input.sender === undefined ? {} : { sender: input.sender }),
-    ephU: sealed.ephemeralPublicKey.u(),
     envelope: sealed.envelope,
     privateTxHash: input.privateTxHash,
     ...(input.rail === "anonymous" && !input.publicOwners
@@ -874,9 +873,8 @@ function transactTag(rail: RingRail): RingInstructionTag {
   return isDelegateRail(rail) ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 
-function wipeAuditRequest(request: Readonly<{ txViewingSk: Bytes32; ephSk: Bytes32 }>): void {
+function wipeAuditRequest(request: Readonly<{ txViewingSk: Bytes32 }>): void {
   request.txViewingSk.fill(0);
-  request.ephSk.fill(0);
 }
 
 function zeroField(): Bytes32 {

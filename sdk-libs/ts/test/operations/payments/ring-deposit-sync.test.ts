@@ -5,7 +5,6 @@ import {
   ViewingKey,
   type Bytes16,
   type Bytes32,
-  type Bytes96,
   Data,
   LocalShieldedKeys,
   SOL_MINT,
@@ -15,7 +14,10 @@ import {
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
 import { AssetRegistry, EncryptedScheme } from "@heliuslabs/zolana/transaction";
 import { encodeOutputData } from "@heliuslabs/zolana/internal";
-import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
+import {
+  encodeRingDepositCapsule,
+  RING_DEPOSIT_OPENING_LENGTH,
+} from "../../../src/protocol/codec/deposit-capsule.js";
 import { encodeRingDepositPlaintext } from "../../../src/protocol/codec/ring-deposit-plaintext.js";
 import { openRingNotes } from "../../../src/state/ring-sync.js";
 
@@ -81,7 +83,7 @@ describe("audited ring deposit sync", () => {
       const capsule = encodeRingDepositCapsule({
         slotIndex: 3,
         ephemeralPublicKey: ViewingKey.generate().publicKey().toBytes(),
-        ciphertext: new Uint8Array(96).fill(9) as Bytes96,
+        ciphertext: new Uint8Array(RING_DEPOSIT_OPENING_LENGTH).fill(9),
         recipientCiphertext: envelope.encryptRingDeposit(
           recipient.viewingPublicKey(),
           encodeRingDepositPlaintext({ blinding, ringData: new Uint8Array() }),
@@ -140,7 +142,7 @@ describe("audited ring deposit sync", () => {
       }
       // The holder never sees the auditor slot, only the recipient ciphertext.
       expect(seen.flat().map((request) => request.ciphertext.length)).toEqual([
-        capsule.length - 138,
+        capsule.length - 42 - RING_DEPOSIT_OPENING_LENGTH,
       ]);
       expect(notes.utxos.map((entry) => entry.utxo)).toEqual([utxo]);
     },

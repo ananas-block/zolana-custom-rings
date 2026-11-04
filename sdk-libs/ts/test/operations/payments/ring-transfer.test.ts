@@ -1497,7 +1497,7 @@ describe("audit seal", () => {
     }
   });
 
-  it("draws a new salt and a new ephemeral key for every build of one transfer", () => {
+  it("draws a new salt and a new keystream for every build of one transfer", () => {
     const sender = ShieldedKeypair.generate();
     const proofInputs = signed(sender);
     const txViewingKey = ViewingKey.generate();
@@ -1529,9 +1529,7 @@ describe("audit seal", () => {
     const second = build();
     try {
       expect(first.salt).not.toEqual(second.salt);
-      expect(first.sealed.ephemeralSecret).not.toEqual(second.sealed.ephemeralSecret);
-      expect(first.sealed.ephemeralPublicKey.u()).not.toEqual(second.sealed.ephemeralPublicKey.u());
-      // One plaintext under two keys, a repeated key and nonce would repeat these bytes.
+      // One plaintext under one key and two salts, a repeated salt would repeat these bytes.
       expect(first.sealed.envelope).not.toEqual(second.sealed.envelope);
     } finally {
       first.sealed.ephemeralSecret.fill(0);

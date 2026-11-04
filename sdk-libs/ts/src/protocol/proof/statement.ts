@@ -246,7 +246,7 @@ export function ringTransferStatement(
       ringId: binding.ringId,
       txViewingU: data.txViewingU,
       auditorPubkey: binding.auditorPubkey,
-      ephU: data.ephU,
+      ephU: data.txViewingU,
       envelope: data.envelope,
       salt: data.salt,
       layout: RingTransactData.auditLayout(data),
