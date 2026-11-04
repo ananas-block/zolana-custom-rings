@@ -87,13 +87,20 @@ const NARROW_SHAPES: [TransferShape; 4] = [
     narrow(16, 5, 8, 5),
 ];
 /// The wide flag takes the first row holding the frame, the last only past 24 inputs.
-const WIDE_SHAPES: [TransferShape; 3] =
-    [wide(8, 24, 32, 24), wide(16, 5, 8, 5), wide(2, 49, 4, 12)];
-const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 4, 8), entry(8, 2, 4, 2)];
+const WIDE_SHAPES: [TransferShape; 4] = [
+    wide(8, 24, 32, 24),
+    wide(16, 5, 8, 5),
+    // Sized by the 8x16 rows of `ring-frame-fit.md`, those frames settle buffered. Wide alone, a
+    // narrow row would leave a salted read of the same frame with no key.
+    wide(16, 8, 8, 8),
+    wide(2, 49, 4, 12),
+];
+/// A frame takes the first row holding its width, the last sized by the 4x8 rows of `ring-frame-fit.md`.
+const ENTRY_SHAPES: [TransferShape; 3] = [entry(4, 8, 4, 8), entry(8, 2, 4, 2), entry(8, 4, 4, 4)];
 /// Sized by the entry table of `ring-frame-fit.md`.
 const WIDE_ENTRY_SHAPE: TransferShape = entry(2, 24, 32, 12);
 
-pub const TRANSFER_SHAPES: [TransferShape; 10] = [
+pub const TRANSFER_SHAPES: [TransferShape; 12] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
@@ -101,8 +108,10 @@ pub const TRANSFER_SHAPES: [TransferShape; 10] = [
     WIDE_SHAPES[0],
     WIDE_SHAPES[1],
     WIDE_SHAPES[2],
+    WIDE_SHAPES[3],
     ENTRY_SHAPES[0],
     ENTRY_SHAPES[1],
+    ENTRY_SHAPES[2],
     WIDE_ENTRY_SHAPE,
 ];
 
@@ -181,6 +190,13 @@ impl TransferShape {
         }
     }
 
+    /// A stream sealed under one row opens under the other, its records and tails keep their counters.
+    /// The first record counter moves with an entry key's class, the first tail counter with `N`.
+    const fn seals_like(self, other: Self, has_data: bool) -> bool {
+        self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
+            && (!has_data || self.outputs == other.outputs)
+    }
+
     const fn circuit(self) -> RingCircuit {
         RingCircuit::Transfer {
             outputs: self.outputs,
@@ -246,6 +262,44 @@ impl TransferSpend {
             wide: !narrow.is_some_and(|shape| shape.holds(self)),
             ..self
         }
+    }
+
+    /// The wide flag a wallet seals under ahead of every record read, `pools` from [`UnreadSubjects`].
+    ///
+    /// The wallet knows its rail, shape, live owners, legs and the ring's source map. It reads no
+    /// tracking row, so it cannot tell who holds a salted record, and a leg's destination may not
+    /// exist yet. On a table with no salted list its counts decide alone, an unsalted read always
+    /// fits the row holding those counts, so the reader's [`Self::fitted`] reaches the same key.
+    ///
+    /// A bound past the narrow row is a possibility, never a need. Where both rows seal one stream
+    /// the flag stays clear and the reader raises it from the records it reads. Where the streams
+    /// differ a reader cannot move a sealed frame, the wallet takes the wide row and the reader holds
+    /// it as a floor. A spend whose real read fits the narrow row then proves wide, the one case the
+    /// wallet and a direct submission part.
+    #[must_use]
+    pub fn sealed_wide(self, has_data: bool) -> bool {
+        let counted = Self {
+            pools: RecordPools::default(),
+            ..self
+        }
+        .fitted();
+        if counted.wide {
+            return true;
+        }
+        let frame = self.frame_key();
+        let rows = FrameKey {
+            wide: false,
+            ..frame
+        }
+        .shape()
+        .zip(
+            FrameKey {
+                wide: true,
+                ..frame
+            }
+            .shape(),
+        );
+        self.fitted().wide && rows.is_some_and(|(narrow, wide)| !narrow.seals_like(wide, has_data))
     }
 
     const fn frame_key(self) -> FrameKey {
@@ -319,6 +373,27 @@ impl RecordPools {
     }
 }
 
+/// What a wallet counts ahead of its reads on a table with a salted list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnreadSubjects {
+    /// Distinct live input and output owners, plus one per leg since a destination stays unread.
+    pub owners: usize,
+    /// Distinct live input, output and public assets.
+    pub assets: usize,
+}
+
+impl UnreadSubjects {
+    /// The widest read of these subjects, every owner enrolled with a public and a salted record.
+    pub const fn pools(self) -> RecordPools {
+        let records = 2 * self.owners + self.assets;
+        RecordPools {
+            own: records,
+            curator: records,
+            tracking: self.owners,
+        }
+    }
+}
+
 impl RingCircuit {
     /// The withdrawal slots of a transfer key, `None` outside the transfer keys.
     pub fn withdrawals(self) -> Option<u8> {
@@ -357,14 +432,16 @@ impl RingCircuit {
             entry,
             wide,
         };
-        let (outputs, withdrawals, owners) = (
+        let (outputs, withdrawals, owners, inputs) = (
             usize::from(outputs),
             usize::from(withdrawals),
             usize::from(owners),
+            usize::from(inputs),
         );
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = withdrawals.min(N_PUBLIC_SLOTS);
-        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys();
+        // A zero value input can name any asset, every input slot takes its own row.
+        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys() + inputs;
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
@@ -496,8 +573,8 @@ mod tests {
         assert_eq!(
             forty_nine.and_then(RingCircuit::record_pools),
             Some(RecordPools {
-                own: 41,
-                curator: 41,
+                own: 90,
+                curator: 90,
                 tracking: 18
             })
         );
@@ -550,8 +627,8 @@ mod tests {
         assert_eq!(
             wide_entry.and_then(RingCircuit::record_pools),
             Some(RecordPools {
-                own: 95,
-                curator: 95,
+                own: 119,
+                curator: 119,
                 tracking: 45
             })
         );
@@ -612,7 +689,10 @@ mod tests {
             entered(RingRail::Anonymous, 8, 2, 2),
             Some(entry(8, 2, 4, 2).circuit())
         );
-        assert_eq!(entered(RingRail::Anonymous, 8, 3, 1), None);
+        let four_inputs = Some(entry(8, 4, 4, 4).circuit());
+        assert_eq!(entered(RingRail::Anonymous, 8, 3, 1), four_inputs);
+        assert_eq!(entered(RingRail::Confidential, 8, 4, 4), four_inputs);
+        assert_eq!(entered(RingRail::Anonymous, 8, 5, 1), None);
         assert_eq!(entered(RingRail::Delegate, 2, 1, 1), None);
         assert_eq!(entered(RingRail::AnonymousDelegate, 2, 1, 1), None);
     }
@@ -643,12 +723,14 @@ mod tests {
             let pools = circuit.record_pools().unwrap();
             (pools.own, pools.curator, pools.tracking)
         };
-        assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (113, 113, 51));
-        assert_eq!(pools(transfer(16, 5, 8, 5)), (48, 48, 21));
-        assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (77, 77, 29));
-        assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (39, 39, 16));
-        assert_eq!(pools(entry(8, 2, 4, 2).circuit()), (39, 39, 14));
+        assert_eq!(pools(transfer(2, 24, 4, 4)), (39, 39, 6));
+        assert_eq!(pools(wide(8, 24, 32, 24).circuit()), (137, 137, 51));
+        assert_eq!(pools(transfer(16, 5, 8, 5)), (53, 53, 21));
+        assert_eq!(pools(wide(16, 5, 8, 5).circuit()), (82, 82, 29));
+        assert_eq!(pools(entry(4, 8, 4, 8).circuit()), (47, 47, 16));
+        assert_eq!(pools(entry(8, 2, 4, 2).circuit()), (41, 41, 14));
+        assert_eq!(pools(wide(16, 8, 8, 8).circuit()), (91, 91, 32));
+        assert_eq!(pools(entry(8, 4, 4, 4).circuit()), (47, 47, 16));
     }
 
     #[test]
@@ -668,7 +750,7 @@ mod tests {
         };
         assert_eq!(fitted(2, tracked), Some(wide(8, 24, 32, 24).circuit()));
         let own = RecordPools {
-            own: 16,
+            own: 40,
             ..RecordPools::default()
         };
         assert_eq!(fitted(2, own), Some(wide(8, 24, 32, 24).circuit()));
@@ -677,7 +759,7 @@ mod tests {
             Some(transfer(2, 24, 4, 4))
         );
         let past_sixteen = RecordPools {
-            own: 78,
+            own: 83,
             ..RecordPools::default()
         };
         assert_eq!(fitted(16, past_sixteen), None);
@@ -694,5 +776,107 @@ mod tests {
             tracking: 21,
         };
         assert_eq!(fitted(16, public), Some(transfer(16, 5, 8, 5)));
+    }
+
+    #[test]
+    fn sixteen_outputs_past_five_inputs_take_the_eight_input_key() {
+        let fitted = |inputs, legs, owners| {
+            let spend = TransferSpend {
+                inputs,
+                legs,
+                owners,
+                ..spend(RingRail::Confidential, 16, false, false)
+            }
+            .fitted();
+            (spend.wide, RingCircuit::transfer(spend))
+        };
+        let eight = Some(wide(16, 8, 8, 8).circuit());
+        assert_eq!(fitted(5, 8, 5), (false, Some(transfer(16, 5, 8, 5))));
+        assert_eq!(fitted(6, 0, 1), (true, eight));
+        assert_eq!(fitted(8, 8, 8), (true, eight));
+        assert_eq!(fitted(9, 0, 1), (true, None));
+        assert_eq!(fitted(8, 9, 1), (true, None));
+        assert_eq!(fitted(8, 0, 9), (true, None));
+    }
+
+    fn loaded(shape: TransferShape, pools: RecordPools) -> TransferSpend {
+        TransferSpend {
+            inputs: usize::from(shape.inputs),
+            legs: usize::from(shape.withdrawals),
+            owners: usize::from(shape.owners),
+            pools,
+            ..spend(
+                RingRail::Confidential,
+                usize::from(shape.outputs),
+                shape.entry,
+                false,
+            )
+        }
+    }
+
+    /// With every subject public the wallet's counts are all a reader's selection reads.
+    #[test]
+    fn a_table_with_no_salted_list_seals_the_key_its_reader_selects() {
+        for shape in TRANSFER_SHAPES {
+            let spend = loaded(shape, RecordPools::default());
+            let read = spend.fitted();
+            for has_data in [false, true] {
+                assert_eq!(spend.sealed_wide(has_data), read.wide, "{shape:?}");
+            }
+            assert!(RingCircuit::transfer(read).is_some(), "{shape:?}");
+        }
+    }
+
+    #[test]
+    fn a_salted_bound_leaves_the_flag_open_while_both_rows_seal_one_stream() {
+        let sixteen = narrow(16, 5, 8, 5);
+        let bound = UnreadSubjects {
+            owners: 5 + 16 + 8,
+            assets: 3,
+        }
+        .pools();
+        let spend = loaded(sixteen, bound);
+        assert!(spend.fitted().wide);
+        assert!(!spend.sealed_wide(false));
+        assert!(!spend.sealed_wide(true));
+    }
+
+    #[test]
+    fn a_salted_bound_commits_a_data_tail_whose_counter_moves_with_the_row() {
+        let bound = UnreadSubjects {
+            owners: 4 + 2 + 4,
+            assets: 3,
+        }
+        .pools();
+        let spend = loaded(narrow(2, 24, 4, 4), bound);
+        assert!(spend.fitted().wide);
+        assert!(!spend.sealed_wide(false));
+        assert!(spend.sealed_wide(true));
+    }
+
+    #[test]
+    fn counts_past_the_narrow_row_seal_wide_whatever_the_stream() {
+        let spend = TransferSpend {
+            inputs: 25,
+            ..spend(RingRail::Confidential, 2, false, false)
+        };
+        assert!(spend.sealed_wide(false));
+        assert!(spend.sealed_wide(true));
+    }
+
+    /// Every entry key holds its salted bound, no entry seal needs a key its outputs cannot take.
+    #[test]
+    fn an_entry_takes_its_capacity_from_its_outputs_under_a_salted_bound() {
+        for shape in ENTRY_SHAPES {
+            let bound = UnreadSubjects {
+                owners: usize::from(shape.owners + shape.outputs + shape.withdrawals),
+                assets: usize::from(shape.inputs + shape.outputs) + N_PUBLIC_SLOTS,
+            }
+            .pools();
+            let spend = loaded(shape, bound);
+            assert!(!spend.fitted().wide, "{shape:?}");
+            assert!(!spend.sealed_wide(true), "{shape:?}");
+            assert_eq!(RingCircuit::transfer(spend.fitted()), Some(shape.circuit()));
+        }
     }
 }

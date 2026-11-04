@@ -47,6 +47,10 @@ impl Assembled {
             audit: audit.params()?,
             approval_mask: frame.policy.approval.bits(),
             approval_totals: parts.extensions.approval_totals,
+            signer_data_counts: parts
+                .extensions
+                .signer_data_counts
+                .map(|counts| counts.packed()),
             approval_blinder: frame
                 .approval_opening
                 .as_ref()

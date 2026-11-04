@@ -19,11 +19,11 @@ mod tests;
 
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
-    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend},
+    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend, UnreadSubjects},
     AnonymousParties, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
-    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg, PublicSlots,
-    RingPolicy, RingRail, RootRead, Settlement, SignerSet, TransferBinding, ANONYMOUS_PARTIES,
-    AUDIT_RECORD_LEN, DELIVERED_AUDIT_CAPACITIES,
+    InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg,
+    PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts, SignerSet,
+    TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, DELIVERED_AUDIT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -44,7 +44,7 @@ use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
 use zolana_ring_policy::{ApprovalTotals, Member};
 use zolana_ring_transaction::random_field_element;
-use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
     anonymous::{
@@ -353,7 +353,7 @@ impl<R: Rail> RingTransfer<R> {
         client: &C,
     ) -> Result<Sealed<'_, ()>, RingError> {
         let prepared = boxed(|| self.prepare(client)).await?;
-        let wide = prepared.unread_wide();
+        let wide = prepared.sealing_wide()?;
         prepared.seal(wide, ())
     }
 
@@ -466,6 +466,7 @@ struct Preview {
     /// The key the spend selects fixes every stream counter.
     wide_owners: bool,
     discloses_approval: bool,
+    signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl Preview {
@@ -573,6 +574,7 @@ impl<'a> Pipeline<'a> {
                 .collect(),
             wide_owners: false,
             discloses_approval: self.approval_blinder.is_some(),
+            signer_data_counts: signer_data_counts(&owner_signers, &proof_inputs.output_utxos)?,
         };
 
         Ok(Prepared {
@@ -608,8 +610,14 @@ impl<'a> Prepared<'a> {
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
         let staged = &self.pipeline.staged;
+        let public = public_slots(&staged.proof_inputs.external_data.interface_transfers)?;
+        let salts = KnownSalts::new(staged.list_salts.clone());
+        self.policy_read(&public, &salts).read(client).await
+    }
+
+    fn policy_read<'r>(&'r self, public: &'r PublicSlots, salts: &'r KnownSalts) -> PolicyRead<'r> {
+        let staged = &self.pipeline.staged;
         let proof_inputs = &staged.proof_inputs;
-        let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
         PolicyRead {
             token_owner_hint: match &staged.spend {
                 Spend::Anonymous(a) => a.token_owner,
@@ -621,45 +629,80 @@ impl<'a> Prepared<'a> {
             published_inputs: self.published_inputs,
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
             n_out: self.preview.n_out,
-            public: &public,
-            salts: &KnownSalts::new(staged.list_salts.clone()),
+            public,
+            salts,
             wide_floor: staged
                 .presealed
                 .as_ref()
                 .is_some_and(|presealed| presealed.wide_owners),
         }
-        .read(client)
-        .await
     }
 
-    /// Sealed before its destinations exist, a recorded tail or entry takes the wide key.
-    fn unread_wide(&self) -> bool {
-        let inputs = &self.pipeline.staged.proof_inputs;
-        let ring_rail = self.preview.rail;
-        let mut owners = Vec::new();
-        for input in &inputs.input_utxos {
-            if !input.is_dummy() && !input.is_compact() && !owners.contains(&input.utxo.owner) {
-                owners.push(input.utxo.owner);
+    /// The flag of a seal ahead of every record read, `TransferSpend::sealed_wide` weighs what stays unknown.
+    fn sealing_wide(&self) -> Result<bool, RingError> {
+        let proof_inputs = &self.pipeline.staged.proof_inputs;
+        let transfers = &proof_inputs.external_data.interface_transfers;
+        let public = public_slots(transfers)?;
+        let salts = KnownSalts::default();
+        let read = self.policy_read(&public, &salts);
+        let policy = self.pipeline.config.account();
+        let root_read = RootRead::transfer(policy, read.rail.is_delegate());
+        // 1. The program names the key from the legs its read screens, a ring reading no root
+        // screens none and a deposit never counts, so the wallet counts the same legs.
+        let legs = match root_read {
+            RootRead::None => 0,
+            RootRead::Own | RootRead::Policy => {
+                transfers.iter().filter(|leg| !leg.is_deposit()).count()
             }
-        }
-        let spends_default = spends_default_ring(&inputs.input_utxos);
-        let fitted = TransferSpend {
-            rail: ring_rail,
+        };
+        let rows = read.owner_rows()?;
+        // 2. Only a salted list opens more records than the row holding these counts provides,
+        // every other read fits it by the catalog's pool widths.
+        let salted =
+            root_read == RootRead::Policy && SourceGates::of(&policy.source_map()?).any_salted();
+        let pools = match salted {
+            true => {
+                let mut owners = rows.clone();
+                owners.extend(read.output_owners()?.into_iter().flatten());
+                owners.sort_unstable();
+                owners.dedup();
+                let mut assets: Vec<[u8; 32]> =
+                    read.output_assets()?.into_iter().flatten().collect();
+                for input in proof_inputs
+                    .input_utxos
+                    .iter()
+                    .filter(|input| !input.is_dummy())
+                {
+                    assets.push(*Member::asset(&input.utxo.asset.asset)?.as_bytes());
+                }
+                assets.extend(
+                    public
+                        .asset_fields()?
+                        .into_iter()
+                        .filter(|asset| *asset != [0; 32]),
+                );
+                assets.sort_unstable();
+                assets.dedup();
+                UnreadSubjects {
+                    owners: owners.len() + legs,
+                    assets: assets.len(),
+                }
+                .pools()
+            }
+            false => RecordPools::default(),
+        };
+        // 3. One selection on both sides, only the bound stands in for the reads.
+        Ok(TransferSpend {
+            rail: read.rail,
             inputs: self.published_inputs,
             outputs: usize::from(self.preview.n_out),
-            spends_default_ring: spends_default,
-            legs: inputs.external_data.interface_transfers.len(),
-            owners: owners.len(),
-            pools: RecordPools::default(),
+            spends_default_ring: read.spends_default_ring,
+            legs,
+            owners: rows.len(),
+            pools,
             wide: false,
         }
-        .fitted()
-        .wide;
-        let reads_records =
-            RootRead::transfer(self.pipeline.config.account(), ring_rail.is_delegate())
-                != RootRead::None;
-        let has_data = inputs.output_utxos.iter().any(carries_data);
-        fitted || (reads_records && (has_data || spends_default))
+        .sealed_wide(proof_inputs.output_utxos.iter().any(carries_data)))
     }
 
     /// The external data is final after the seal, the owner signs its message hash.
@@ -1258,7 +1301,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             cache: None,
             // Sized here, `frame` writes the digest of the totals.
             approval_totals: preview.discloses_approval.then_some([0; 32]),
-            signer_data_counts: None,
+            signer_data_counts: preview.signer_data_counts,
         },
         interface_transfers: external
             .interface_transfers
@@ -1320,6 +1363,35 @@ fn carries_data(output: &SppProofOutputUtxo) -> bool {
             .iter()
             .flatten()
             .any(|hash| *hash != [0; 32])
+}
+
+/// The frame's counts over the owner signer run, absent at zero since one statement value keeps one encoding.
+/// SPP takes one owner signature for all its data-bearing slots, the circuit proves these counts so a
+/// signer's check can notice a slot the sender left out of its terms. A wrong value fails the proof.
+fn signer_data_counts(
+    owner_signers: &[Address],
+    outputs: &[SppProofOutputUtxo],
+) -> Result<Option<SignerDataCounts>, RingError> {
+    let run = owner_signers
+        .iter()
+        .map(|signer| Ok(solana_owner_identity(signer.as_array())?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    let slots = published_outputs(outputs)
+        .iter()
+        .filter(|output| !output.is_dummy())
+        .filter_map(|output| Some((output.owner_address?, output.data_hash.unwrap_or_default())))
+        .map(|(owner, data_hash)| Ok((owner.signing_pubkey.owner_proof_input_hash()?, data_hash)))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    let counts = SignerDataCounts::of_run(
+        &run,
+        slots
+            .iter()
+            .map(|(owner_identity, data_hash)| LiveSlot {
+                owner_identity,
+                data_hash,
+            }),
+    )?;
+    Ok((counts != SignerDataCounts::default()).then_some(counts))
 }
 
 /// One length per frame, `None` without reply metadata.
