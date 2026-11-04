@@ -269,6 +269,23 @@ pub(crate) fn check_output_key(
     }
 }
 
+/// The row names the current viewing key, a body sealed to any other stays unread.
+pub(crate) fn check_recipient_viewing_key(
+    row: Option<&TrackingRecord>,
+    viewing_u: &[u8; 32],
+    slot_index: usize,
+) -> Result<(), RingError> {
+    match row {
+        Some(record) if record.viewing_u != *viewing_u => {
+            Err(RingError::RecipientViewingKeyStale {
+                slot_index,
+                row_revision: record.revision,
+            })
+        }
+        Some(_) | None => Ok(()),
+    }
+}
+
 /// The writer refuses the update after `valid_until_slot`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordUpdateTarget {

@@ -1794,6 +1794,36 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
     );
 }
 
+/// A payment a recipient cannot open is refused before proving, a rotated row names the current key.
+#[tokio::test]
+async fn a_payment_names_the_viewing_key_of_its_owners_row() {
+    use crate::tests::support::{keypair, payer};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let client = enrolled(&[&sender, &recipient]).client();
+    let utxos = vec![ring_utxo(&sender, Mint::SOL, 10, 0)];
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let current = ring_address(&recipient);
+    let pay = |to| owner.anonymous_move(&utxos, vec![RingPayment::new(to, 5)]);
+    let paid = pay(current.clone()).select(&client).await.unwrap();
+    assert!(paid.assemble(&client).await.is_ok());
+
+    let stale = RingAddress {
+        recipient: spr_keypair::ShieldedAddress {
+            viewing_pubkey: spr_keypair::ViewingKey::new().pubkey(),
+            ..current.recipient
+        },
+        ..current
+    };
+    assert!(matches!(
+        pay(stale).select(&client).await,
+        Err(RingError::RecipientViewingKeyStale { .. })
+    ));
+}
+
 include!("size_pins.rs");
 
 impl Measured {
