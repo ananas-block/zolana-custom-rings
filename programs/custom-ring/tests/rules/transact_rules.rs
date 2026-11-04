@@ -772,7 +772,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let parsed = RingTransactData::parse(&bytes, RingRail::Anonymous).unwrap();
     let data = parsed.data();
     assert_eq!(
-        data.transfer_circuit(0, 0),
+        data.transfer_circuit(0),
         Ok(RingCircuit::TransferAnonymousEntry {
             outputs: data.n_out,
             class: 8,

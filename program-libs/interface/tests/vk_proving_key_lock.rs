@@ -70,6 +70,7 @@ fn selectable_circuits() -> BTreeSet<String> {
                             spends_default_ring,
                             legs,
                             owners: 0,
+                            has_data: false,
                         }));
                     }
                 }

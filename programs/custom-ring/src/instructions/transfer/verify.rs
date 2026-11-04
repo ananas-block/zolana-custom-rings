@@ -44,7 +44,7 @@ impl RingStatements<'_> {
         RingProof {
             proof: data.proof,
             statement,
-            key: ring_key(data.transfer_circuit(self.accounts.withdrawals.len(), 0)?)?,
+            key: ring_key(data.transfer_circuit(self.accounts.withdrawals.len())?)?,
         }
         .verify()
     }

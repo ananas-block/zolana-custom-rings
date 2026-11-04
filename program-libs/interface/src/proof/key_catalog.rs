@@ -13,6 +13,7 @@ pub enum RingCircuit {
         inputs: u8,
         withdrawals: u8,
         owners: u8,
+        data: bool,
     },
     /// The signer and in-proof rails spending a default-ring note.
     TransferConfidentialEntry {
@@ -20,6 +21,7 @@ pub enum RingCircuit {
         class: u8,
         withdrawals: u8,
         owners: u8,
+        data: bool,
     },
     /// The hidden sender, public owner and authority rails over ring notes.
     TransferAnonymous {
@@ -27,6 +29,7 @@ pub enum RingCircuit {
         class: u8,
         withdrawals: u8,
         owners: u8,
+        data: bool,
     },
     /// The hidden sender and public owner rails spending a default-ring note.
     TransferAnonymousEntry {
@@ -34,6 +37,7 @@ pub enum RingCircuit {
         class: u8,
         withdrawals: u8,
         owners: u8,
+        data: bool,
     },
     ApplyRecords {
         writes: u8,
@@ -129,6 +133,20 @@ pub const ENTRY_TRANSFER_SHAPES: [TransferShape; 3] = [
 ];
 
 impl TransferShape {
+    /// `None` on the delegate rails spending a default-ring note, SPP's authority rail holds every input to the ring.
+    pub fn family(rail: RingRail, entry: bool) -> Option<&'static [Self]> {
+        match (rail, entry) {
+            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
+                Some(&ANONYMOUS_TRANSFER_SHAPES)
+            }
+            (RingRail::Anonymous | RingRail::Confidential, true) => Some(&ENTRY_TRANSFER_SHAPES),
+            (RingRail::Confidential | RingRail::Delegate, false) => {
+                Some(&CONFIDENTIAL_TRANSFER_SHAPES)
+            }
+            (RingRail::Delegate | RingRail::AnonymousDelegate, true) => None,
+        }
+    }
+
     /// The family's shape at `outputs`, `None` off the catalog.
     pub fn of(family: &[Self], outputs: usize) -> Option<Self> {
         family
@@ -193,54 +211,49 @@ pub struct TransferSpend {
     pub legs: usize,
     /// Distinct live input owners, rows the key opens.
     pub owners: usize,
+    /// The frame carries data tails.
+    pub has_data: bool,
 }
 
 impl RingCircuit {
     /// The one transfer key serving the spend, `None` when the catalog keys none.
     pub fn transfer(spend: TransferSpend) -> Option<Self> {
-        let shapes = match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
-                &ANONYMOUS_TRANSFER_SHAPES[..]
-            }
-            (RingRail::Anonymous, true) => &ENTRY_TRANSFER_SHAPES[..],
-            (RingRail::Confidential | RingRail::Delegate, false) => {
-                &CONFIDENTIAL_TRANSFER_SHAPES[..]
-            }
-            (RingRail::Confidential, true) => &ENTRY_TRANSFER_SHAPES[..],
-            // SPP's authority rail holds every input to the ring.
-            (RingRail::Delegate | RingRail::AnonymousDelegate, true) => return None,
-        };
+        let shapes = TransferShape::family(spend.rail, spend.spends_default_ring)?;
         let shape = TransferShape::of(shapes, spend.outputs)?;
         if spend.inputs == 0 || spend.inputs > usize::from(shape.inputs) {
             return None;
         }
         let withdrawals = shape.withdrawal_capacity(spend.legs)?;
         let owners = shape.owner_capacity(spend.owners)?;
-        let (outputs, class) = (shape.outputs, shape.inputs);
+        let (outputs, class, data) = (shape.outputs, shape.inputs, spend.has_data);
         Some(match (spend.rail, spend.spends_default_ring) {
             (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => Self::TransferAnonymous {
                 outputs,
                 class,
                 withdrawals,
                 owners,
+                data,
             },
             (RingRail::Anonymous, true) => Self::TransferAnonymousEntry {
                 outputs,
                 class,
                 withdrawals,
                 owners,
+                data,
             },
             (_, true) => Self::TransferConfidentialEntry {
                 outputs,
                 class,
                 withdrawals,
                 owners,
+                data,
             },
             (_, false) => Self::TransferConfidential {
                 outputs,
                 inputs: class,
                 withdrawals,
                 owners,
+                data,
             },
         })
     }
@@ -408,6 +421,7 @@ mod tests {
                 spends_default_ring,
                 legs,
                 owners,
+                has_data: false,
             })
         };
         let confidential = |outputs, inputs, withdrawals, owners| {
@@ -416,6 +430,7 @@ mod tests {
                 inputs,
                 withdrawals,
                 owners,
+                data: false,
             })
         };
         let anonymous = |outputs, class, withdrawals, owners| {
@@ -424,6 +439,7 @@ mod tests {
                 class,
                 withdrawals,
                 owners,
+                data: false,
             })
         };
         let entry = |outputs, class, withdrawals, owners| {
@@ -432,6 +448,7 @@ mod tests {
                 class,
                 withdrawals,
                 owners,
+                data: false,
             })
         };
         use RingRail::{Anonymous, Confidential, Delegate};
@@ -457,7 +474,8 @@ mod tests {
                 outputs: 2,
                 class: 8,
                 withdrawals: 4,
-                owners: 4
+                owners: 4,
+                data: false
             })
         );
         assert_eq!(spend(Delegate, 1, 2, true, 0, 1), None);
@@ -478,6 +496,7 @@ mod tests {
                 spends_default_ring: false,
                 legs: 0,
                 owners,
+                has_data: false,
             })
             .and_then(RingCircuit::owners)
         };
@@ -488,6 +507,29 @@ mod tests {
         assert_eq!(owners(8, 16, 16), Some(16));
         assert_eq!(owners(16, 5, 5), Some(5));
         assert_eq!(owners(16, 5, 6), None);
+    }
+
+    #[test]
+    fn a_frame_with_tails_takes_the_data_key() {
+        let circuit = RingCircuit::transfer(TransferSpend {
+            rail: RingRail::Confidential,
+            inputs: 2,
+            outputs: 2,
+            spends_default_ring: false,
+            legs: 0,
+            owners: 1,
+            has_data: true,
+        });
+        assert_eq!(
+            circuit,
+            Some(RingCircuit::TransferConfidential {
+                outputs: 2,
+                inputs: 24,
+                withdrawals: 4,
+                owners: 4,
+                data: true
+            })
+        );
     }
 
     #[test]
@@ -530,18 +572,21 @@ mod tests {
                 inputs,
                 withdrawals,
                 owners,
+                data: false,
             };
         let commitment = |outputs, class, withdrawals, owners| RingCircuit::TransferAnonymous {
             outputs,
             class,
             withdrawals,
             owners,
+            data: false,
         };
         let entry = |outputs, class, withdrawals, owners| RingCircuit::TransferAnonymousEntry {
             outputs,
             class,
             withdrawals,
             owners,
+            data: false,
         };
         assert_eq!(pools(confidential(2, 24, 4, 4)), (15, 15, 6));
         assert_eq!(pools(confidential(2, 24, 32, 4)), (43, 43, 6));
