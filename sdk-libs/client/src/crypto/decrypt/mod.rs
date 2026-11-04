@@ -45,10 +45,22 @@ impl From<AuditStreamLayout> for AuditFrame {
 
 /// Only [`crate::RingScan::audit`] binds the transaction to its confirmed event.
 #[must_use = "run the audit explicitly"]
+/// The owner keys a key-escrow frame leaves out, each source implements it.
+pub trait EscrowedKeys {
+    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]>;
+}
+
+impl EscrowedKeys for std::collections::HashMap<[u8; 32], [u8; 32]> {
+    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
+        self.get(owner_key).copied()
+    }
+}
+
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
     frame: AuditFrame,
     input_trees: Option<&'a [Option<u16>]>,
+    escrowed_keys: Option<&'a dyn EscrowedKeys>,
 }
 
 /// The row a frame's event publishes, the co-signer audits its own message before it lands.
@@ -110,7 +122,14 @@ impl<'a> TransactionAudit<'a> {
             transaction,
             frame: frame.into(),
             input_trees: None,
+            escrowed_keys: None,
         }
+    }
+
+    /// Read only on a historical key-escrow frame.
+    pub fn with_escrowed_keys(mut self, keys: &'a dyn EscrowedKeys) -> Self {
+        self.escrowed_keys = Some(keys);
+        self
     }
 
     /// Every input commitment binds its tree id.
@@ -134,9 +153,15 @@ impl<'a> TransactionAudit<'a> {
     ) -> Result<AuditedTransaction, AuditError> {
         match self.frame {
             AuditFrame::Records(layout) => self.records(layout, auditor),
-            AuditFrame::Historical(layout) => {
-                historical::audit(self.transaction, layout, self.input_trees, auditor, assets)
+            AuditFrame::Historical(layout) => historical::HistoricalAudit {
+                tx: self.transaction,
+                layout,
+                input_trees: self.input_trees,
+                auditor,
+                assets,
+                escrowed: self.escrowed_keys,
             }
+            .run(),
         }
     }
 
@@ -168,6 +193,7 @@ impl<'a> TransactionAudit<'a> {
         }
         let transfer = Transfer::new(ring, first_nullifier, tx_key, &salt)?;
         let mut audited = AuditedTransaction {
+            awaiting_key: Vec::new(),
             tx_signature: tx.tx_signature,
             slot: tx.slot,
             tx_viewing_pk,

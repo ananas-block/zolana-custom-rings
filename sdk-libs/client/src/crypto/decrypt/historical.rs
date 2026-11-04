@@ -1,5 +1,7 @@
 //! Statement version 3 frames, tags 45 and 46.
 
+use std::cell::RefCell;
+
 use custom_ring_interface::{
     domain::AUDIT_STREAM_LABEL, ring_confidential_delivered_output_body, stream::DeliveredSlot,
     InstructionTag, RingMode, RingRail, STREAM_BLOCK_LEN, STREAM_FIRST_COUNTER,
@@ -13,13 +15,13 @@ use spr_transaction::ShieldedTransaction;
 use zeroize::Zeroizing;
 use zolana_ring_transaction::{open_delivered_body, RingAssets};
 
-use super::{auditor_message, Slot, SlotOpening, Transfer};
+use super::{auditor_message, EscrowedKeys, Slot, SlotOpening, Transfer};
 use crate::{
     disclosure::canonical,
     encryption::opening_ring_stream,
     types::{
-        AuditedDefaultInput, AuditedInput, AuditedTransaction, AuditedUtxo, InputOpening,
-        OutputOpening, OutputPayloadErrorKind, RingOwnerTag,
+        AuditedDefaultInput, AuditedInput, AuditedTransaction, AuditedUtxo, AwaitingKeyOutput,
+        InputOpening, OutputOpening, OutputPayloadErrorKind, RingOwnerTag,
     },
     AuditError,
 };
@@ -286,131 +288,157 @@ impl RecordRead {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NoteAsset {
+    asset: [u8; 32],
+    mint: Option<Address>,
+}
+
 struct V3Note {
     owner_key: [u8; 32],
     amount: u64,
     blinding: [u8; 32],
     disclosed: Option<[u8; 32]>,
+    /// `None` on an exit, no ring binds it.
+    ring: Option<Address>,
 }
 
 impl V3Note {
-    /// Under key escrow the zero key is the one key known with no registry.
-    fn candidate(&self) -> [u8; 32] {
-        self.disclosed.unwrap_or(ZERO_NULLIFIER_PUBKEY)
+    /// Under key escrow the source's key then the zero key, the commitment accepts one or none.
+    fn candidates(&self, escrowed: Option<&dyn EscrowedKeys>) -> Vec<[u8; 32]> {
+        match self.disclosed {
+            Some(disclosed) => vec![disclosed],
+            None => escrowed
+                .and_then(|keys| keys.nullifier_pk(&self.owner_key))
+                .into_iter()
+                .chain([ZERO_NULLIFIER_PUBKEY])
+                .collect(),
+        }
     }
 
-    fn utxo(&self, asset: [u8; 32], mint: Option<Address>) -> AuditedUtxo {
+    fn utxo(&self, nullifier_pk: [u8; 32], asset: NoteAsset) -> AuditedUtxo {
         AuditedUtxo {
             owner_key: self.owner_key,
-            nullifier_pk: self.candidate(),
-            asset,
-            mint,
+            nullifier_pk,
+            asset: asset.asset,
+            mint: asset.mint,
             amount: self.amount,
             blinding: self.blinding,
             data_hash: [0; 32],
             ring_data_hash: [0; 32],
         }
     }
-
-    fn missed(&self, without_key: OutputPayloadErrorKind) -> OutputPayloadErrorKind {
-        match self.disclosed {
-            Some(_) => without_key,
-            None => OutputPayloadErrorKind::EscrowPending,
-        }
-    }
 }
 
-/// Old hash evidence reads as spent notes.
-pub(super) fn audit(
-    tx: &ShieldedTransaction,
-    layout: HistoricalLayout,
-    input_trees: Option<&[Option<u16>]>,
-    auditor: &X25519Keypair,
-    assets: &RingAssets,
-) -> Result<AuditedTransaction, AuditError> {
-    if layout.outputs != tx.output_slots.len() || layout.inputs != tx.nullifiers.len() {
-        return Err(AuditError::DisclosureLayout);
-    }
-    let tx_viewing_pk = tx.tx_viewing_pk.ok_or(AuditError::MissingTxViewingPk)?;
-    let salt = tx.salt.ok_or(AuditError::MissingSalt)?;
-    let ring = tx.ring_program_id.ok_or(AuditError::MissingRingProgram)?;
-    let first_nullifier = *tx.nullifiers.first().ok_or(AuditError::MissingNullifier)?;
-    let data = auditor_message(tx, &auditor.pubkey())?;
-    let wrong_length = || AuditError::AuditorMessageLength(data.len());
-    let (eph_pk, rest) = data
-        .split_first_chunk::<TAGGED_X25519_KEY_LEN>()
-        .filter(|(key, _)| key[0] == VIEWING_PUBKEY_TAG)
-        .ok_or_else(wrong_length)?;
-    let envelope_len = ENVELOPE_KEY_LEN + layout.key.evidence_len(layout.inputs);
-    let (envelope, mut records) = rest
-        .split_at_checked(envelope_len)
-        .ok_or_else(wrong_length)?;
-    let stream = opening_ring_stream(
-        auditor,
-        &X25519Pubkey::from_bytes(*eph_pk)?,
-        AUDIT_STREAM_LABEL,
-    )?;
-    let mut plaintext = Zeroizing::new(envelope.to_vec());
-    stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
-    let (secret, evidence) = plaintext
-        .split_first_chunk::<ENVELOPE_KEY_LEN>()
-        .ok_or_else(wrong_length)?;
-    let tx_key =
-        ViewingKey::from_canonical_bytes(secret).map_err(|_| AuditError::NonCanonicalViewingKey)?;
-    let evidence = Evidence::decode(evidence, layout)?;
-    if tx_key.pubkey() != tx_viewing_pk {
-        return Err(AuditError::TxViewingKeyMismatch);
-    }
-    let transfer = Transfer::new(ring, first_nullifier, &tx_key, &salt)?;
-    let reader = V3Slots {
-        transfer: &transfer,
-        layout,
-        tx_key: &tx_key,
-        tx_viewing_pk: &tx_viewing_pk,
-        salt: &salt,
-        assets,
-    };
-    let mut audited = AuditedTransaction {
-        tx_signature: tx.tx_signature,
-        slot: tx.slot,
-        tx_viewing_pk,
-        real_inputs: 0,
-        outputs: Vec::new(),
-        payload_errors: Vec::new(),
-        inputs: Vec::new(),
-    };
-    for (index, output) in (0u32..).zip(&tx.output_slots) {
-        let slot = Slot { index, output };
-        let exit = confidential_encrypted_output_body(&output.payload).is_some();
-        let (ciphertext, rest) = records
-            .split_at_checked(layout.record_len(exit))
+#[must_use]
+pub(super) struct HistoricalAudit<'a> {
+    pub tx: &'a ShieldedTransaction,
+    pub layout: HistoricalLayout,
+    pub input_trees: Option<&'a [Option<u16>]>,
+    pub auditor: &'a X25519Keypair,
+    pub assets: &'a RingAssets,
+    pub escrowed: Option<&'a dyn EscrowedKeys>,
+}
+
+impl HistoricalAudit<'_> {
+    /// Old hash evidence reads as spent notes.
+    pub(super) fn run(self) -> Result<AuditedTransaction, AuditError> {
+        let Self {
+            tx,
+            layout,
+            input_trees,
+            auditor,
+            assets,
+            escrowed,
+        } = self;
+        if layout.outputs != tx.output_slots.len() || layout.inputs != tx.nullifiers.len() {
+            return Err(AuditError::DisclosureLayout);
+        }
+        let tx_viewing_pk = tx.tx_viewing_pk.ok_or(AuditError::MissingTxViewingPk)?;
+        let salt = tx.salt.ok_or(AuditError::MissingSalt)?;
+        let ring = tx.ring_program_id.ok_or(AuditError::MissingRingProgram)?;
+        let first_nullifier = *tx.nullifiers.first().ok_or(AuditError::MissingNullifier)?;
+        let data = auditor_message(tx, &auditor.pubkey())?;
+        let wrong_length = || AuditError::AuditorMessageLength(data.len());
+        let (eph_pk, rest) = data
+            .split_first_chunk::<TAGGED_X25519_KEY_LEN>()
+            .filter(|(key, _)| key[0] == VIEWING_PUBKEY_TAG)
             .ok_or_else(wrong_length)?;
-        records = rest;
-        let mut record = Zeroizing::new(ciphertext.to_vec());
-        stream.apply_at(
-            layout.key.first_record_counter() + index * layout.key.record_blocks() as u32,
-            &mut record,
-        );
-        let opened = match (exit, layout.key.is_anonymous()) {
-            (true, _) => reader.exit(slot, &record)?,
-            (false, true) => reader.anonymous(slot, &record)?,
-            (false, false) => reader.delivered(slot)?,
+        let envelope_len = ENVELOPE_KEY_LEN + layout.key.evidence_len(layout.inputs);
+        let (envelope, mut records) = rest
+            .split_at_checked(envelope_len)
+            .ok_or_else(wrong_length)?;
+        let stream = opening_ring_stream(
+            auditor,
+            &X25519Pubkey::from_bytes(*eph_pk)?,
+            AUDIT_STREAM_LABEL,
+        )?;
+        let mut plaintext = Zeroizing::new(envelope.to_vec());
+        stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
+        let (secret, evidence) = plaintext
+            .split_first_chunk::<ENVELOPE_KEY_LEN>()
+            .ok_or_else(wrong_length)?;
+        let tx_key = ViewingKey::from_canonical_bytes(secret)
+            .map_err(|_| AuditError::NonCanonicalViewingKey)?;
+        let evidence = Evidence::decode(evidence, layout)?;
+        if tx_key.pubkey() != tx_viewing_pk {
+            return Err(AuditError::TxViewingKeyMismatch);
+        }
+        let transfer = Transfer::new(ring, first_nullifier, &tx_key, &salt)?;
+        let reader = V3Slots {
+            transfer: &transfer,
+            layout,
+            tx_key: &tx_key,
+            tx_viewing_pk: &tx_viewing_pk,
+            salt: &salt,
+            assets,
+            escrowed,
+            awaiting: RefCell::default(),
         };
-        audited.place(index, output.output_context.clone(), opened);
+        let mut audited = AuditedTransaction {
+            tx_signature: tx.tx_signature,
+            slot: tx.slot,
+            tx_viewing_pk,
+            real_inputs: 0,
+            outputs: Vec::new(),
+            payload_errors: Vec::new(),
+            awaiting_key: Vec::new(),
+            inputs: Vec::new(),
+        };
+        for (index, output) in (0u32..).zip(&tx.output_slots) {
+            let slot = Slot { index, output };
+            let exit = confidential_encrypted_output_body(&output.payload).is_some();
+            let (ciphertext, rest) = records
+                .split_at_checked(layout.record_len(exit))
+                .ok_or_else(wrong_length)?;
+            records = rest;
+            let mut record = Zeroizing::new(ciphertext.to_vec());
+            stream.apply_at(
+                layout.key.first_record_counter() + index * layout.key.record_blocks() as u32,
+                &mut record,
+            );
+            let opened = match (exit, layout.key.is_anonymous()) {
+                (true, _) => reader.exit(slot, &record)?,
+                (false, true) => reader.anonymous(slot, &record)?,
+                (false, false) => reader.delivered(slot)?,
+            };
+            audited.place(index, output.output_context.clone(), opened);
+        }
+        if !records.is_empty() {
+            return Err(wrong_length());
+        }
+        audited.inputs = reader.inputs(&evidence, &tx.nullifiers, input_trees)?;
+        audited.real_inputs = u8::try_from(
+            audited
+                .inputs
+                .iter()
+                .filter(|input| input.opening.is_real())
+                .count(),
+        )
+        .map_err(|_| AuditError::DisclosureLayout)?;
+        audited.awaiting_key = reader.awaiting.into_inner();
+        Ok(audited)
     }
-    if !records.is_empty() {
-        return Err(wrong_length());
-    }
-    audited.inputs = reader.inputs(&evidence, &tx.nullifiers, input_trees)?;
-    audited.real_inputs = u8::try_from(
-        audited
-            .inputs
-            .iter()
-            .filter(|input| input.opening.is_real())
-            .count(),
-    )
-    .map_err(|_| AuditError::DisclosureLayout)?;
-    Ok(audited)
 }
 
 struct V3Slots<'a> {
@@ -420,11 +448,46 @@ struct V3Slots<'a> {
     tx_viewing_pk: &'a X25519Pubkey,
     salt: &'a [u8; 16],
     assets: &'a RingAssets,
+    escrowed: Option<&'a dyn EscrowedKeys>,
+    awaiting: RefCell<Vec<AwaitingKeyOutput>>,
 }
 
 impl V3Slots<'_> {
     fn mint(&self, asset: &[u8; 32]) -> Option<Address> {
         self.assets.by_field(asset).map(|mint| mint.asset)
+    }
+
+    /// The note under the first key its commitment accepts, no other key names a note.
+    fn rebuilt(
+        &self,
+        note: &V3Note,
+        slot: Slot<'_>,
+        asset: NoteAsset,
+    ) -> Result<Option<AuditedUtxo>, AuditError> {
+        for nullifier_pk in note.candidates(self.escrowed) {
+            let utxo = note.utxo(nullifier_pk, asset);
+            if utxo.commitment(slot.tree_id(), note.ring)? == slot.output.output_context.hash {
+                return Ok(Some(utxo));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A slot with no disclosed key waits for its owner's key, whatever key failed.
+    fn missed(
+        &self,
+        note: &V3Note,
+        slot: Slot<'_>,
+        without_key: OutputPayloadErrorKind,
+    ) -> OutputPayloadErrorKind {
+        if note.disclosed.is_some() {
+            return without_key;
+        }
+        self.awaiting.borrow_mut().push(AwaitingKeyOutput {
+            owner_key: note.owner_key,
+            commitment: slot.output.output_context.hash,
+        });
+        OutputPayloadErrorKind::EscrowPending
     }
 
     fn anonymous(&self, slot: Slot<'_>, plaintext: &[u8]) -> Result<SlotOpening, AuditError> {
@@ -440,16 +503,19 @@ impl V3Slots<'_> {
             amount: record.amount,
             blinding: self.transfer.blinding(slot)?,
             disclosed: record.nullifier_pk,
+            ring: Some(self.transfer.ring),
         };
-        let utxo = note.utxo(record.asset, self.mint(&record.asset));
-        let commitment = utxo.commitment(slot.tree_id(), Some(self.transfer.ring))?;
-        Ok(slot.rebuilt(
-            commitment,
-            OutputOpening::Ring {
+        let asset = NoteAsset {
+            asset: record.asset,
+            mint: self.mint(&record.asset),
+        };
+        Ok(match self.rebuilt(&note, slot, asset)? {
+            Some(utxo) => Ok(OutputOpening::Ring {
                 utxo,
                 owner_tag: RingOwnerTag(slot.owner_tag()),
-            },
-        ))
+            }),
+            None => Err(self.missed(&note, slot, OutputPayloadErrorKind::Commitment)),
+        })
     }
 
     fn exit(&self, slot: Slot<'_>, plaintext: &[u8]) -> Result<SlotOpening, AuditError> {
@@ -462,12 +528,15 @@ impl V3Slots<'_> {
             amount: record.amount,
             blinding: self.transfer.blinding(slot)?,
             disclosed: record.nullifier_pk,
+            ring: None,
         };
-        let utxo = note.utxo(record.asset, self.mint(&record.asset));
-        let commitment = utxo.commitment(slot.tree_id(), None)?;
-        Ok(match commitment == slot.output.output_context.hash {
-            true => Ok(OutputOpening::Exit(utxo)),
-            false => Err(note.missed(OutputPayloadErrorKind::Commitment)),
+        let asset = NoteAsset {
+            asset: record.asset,
+            mint: self.mint(&record.asset),
+        };
+        Ok(match self.rebuilt(&note, slot, asset)? {
+            Some(utxo) => Ok(OutputOpening::Exit(utxo)),
+            None => Err(self.missed(&note, slot, OutputPayloadErrorKind::Commitment)),
         })
     }
 
@@ -511,20 +580,26 @@ impl V3Slots<'_> {
             amount: body.amount,
             blinding,
             disclosed: body.nullifier_pk,
+            ring: Some(self.transfer.ring),
         };
         // A delivered body names no asset.
         for (asset, mint) in self.assets.fields() {
-            let utxo = note.utxo(*asset, Some(mint.asset));
-            if utxo.commitment(slot.tree_id(), Some(self.transfer.ring))?
-                == slot.output.output_context.hash
-            {
+            let asset = NoteAsset {
+                asset: *asset,
+                mint: Some(mint.asset),
+            };
+            if let Some(utxo) = self.rebuilt(&note, slot, asset)? {
                 return Ok(Ok(OutputOpening::Ring {
                     utxo,
                     owner_tag: RingOwnerTag(recipient_u),
                 }));
             }
         }
-        Ok(Err(note.missed(OutputPayloadErrorKind::UnknownAsset)))
+        Ok(Err(self.missed(
+            &note,
+            slot,
+            OutputPayloadErrorKind::UnknownAsset,
+        )))
     }
 
     fn inputs(
