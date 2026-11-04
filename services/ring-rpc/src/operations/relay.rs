@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use custom_ring_interface::STORAGE_PROGRAM_ID;
 use custom_ring_sdk::RingError;
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -10,18 +11,19 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::compile_message;
+use spr_client::{compile_message, ComputeBudgetConfig};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs, RelayId,
-    RelayIntent, RelayMergeInputs, RelayProofInputs, RelayProofInputsError, RelayQuote,
-    RelayStatus, RelayStep, SubmitRelayRequest, TokenAccountSetupError,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs,
+    RelayEnrollInputs, RelayId, RelayIntent, RelayMergeInputs, RelayProofInputs,
+    RelayProofInputsError, RelayQuote, RelayStatus, RelayStep, SubmitRelayRequest,
+    TokenAccountSetupError,
 };
 use zolana_ring_policy::Member;
 
@@ -45,6 +47,10 @@ pub const RELAY_TRACK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
+/// Storage's `Enroll`, the relay forwards no other instruction of it.
+const ENROLL_TAG: u8 = 6;
+/// Modelled, the first enrollment verifies a proof in its instruction.
+const ENROLL_COMPUTE_UNITS: u32 = 400_000;
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -80,12 +86,15 @@ pub enum RelayError {
     TokenAccountSetup(#[from] TokenAccountSetupError),
     #[error("the depositor is the relay fee payer")]
     DepositorIsFeePayer,
+    #[error("the enrollment is no tag 6 of a ring's tracking registry under its own owner")]
+    InvalidEnrollment,
 }
 
 pub enum RelayPayload {
     Transfer(RelayProofInputs),
     Deposit(RelayDepositInputs),
     Merge(RelayMergeInputs),
+    Enroll(RelayEnrollInputs),
 }
 
 /// Admits a ring only while its config names an auditor key the service holds.
@@ -187,6 +196,7 @@ impl RelayError {
             Self::SendRefused { .. } => -32113,
             Self::TokenAccountSetup(_) => -32200,
             Self::DepositorIsFeePayer => -32201,
+            Self::InvalidEnrollment => -32202,
         }
     }
 
@@ -281,19 +291,23 @@ impl Relay {
             slot: self.chain.slot().await?,
         }
         .check()?;
-        let proven = {
-            let _proof = self
-                .proofs
-                .try_acquire()
-                .map_err(|_| RingRpcError::RelayProverBusy)?;
-            self.prover
-                .prove(RelayProofRequest {
-                    ring,
-                    parties,
-                    payload: &payload,
-                    owner_signature,
-                })
-                .await?
+        let proven = match &payload {
+            // The wallet proved its seal, the relay only pays.
+            RelayPayload::Enroll(enrollment) => enrollment_step(enrollment, parties.fee_payer),
+            _ => {
+                let _proof = self
+                    .proofs
+                    .try_acquire()
+                    .map_err(|_| RingRpcError::RelayProverBusy)?;
+                self.prover
+                    .prove(RelayProofRequest {
+                        ring,
+                        parties,
+                        payload: &payload,
+                        owner_signature,
+                    })
+                    .await?
+            }
         };
         self.stage(ProvenStep {
             relay_id,
@@ -833,6 +847,10 @@ impl PrepareCheck<'_> {
                 return Err(RelayError::DepositorIsFeePayer.into())
             }
             RelayPayload::Deposit(_) | RelayPayload::Merge(_) => return Ok(unsigned),
+            RelayPayload::Enroll(enrollment) => {
+                check_enrollment(enrollment, fee_payer)?;
+                return Ok(unsigned);
+            }
         };
         if proof_inputs.rail.operation() != request.intent.operation() {
             return Err(RelayError::RailMismatch.into());
@@ -852,7 +870,8 @@ impl PrepareCheck<'_> {
             } => <[u8; 64]>::from(owner_signature.0),
             RelayIntent::Delegate { .. }
             | RelayIntent::Deposit { .. }
-            | RelayIntent::Merge { .. } => return Ok(Checked { setup, ..unsigned }),
+            | RelayIntent::Merge { .. }
+            | RelayIntent::Enroll { .. } => return Ok(Checked { setup, ..unsigned }),
         };
         let digest = proof_inputs
             .spp_proof_inputs(fee_payer)
@@ -879,6 +898,7 @@ impl RelayPayload {
         Ok(match intent {
             RelayIntent::Deposit { .. } => Self::Deposit(RelayDepositInputs::decode(bytes)?),
             RelayIntent::Merge { .. } => Self::Merge(RelayMergeInputs::decode(bytes)?),
+            RelayIntent::Enroll { .. } => Self::Enroll(RelayEnrollInputs::decode(bytes)?),
             RelayIntent::Anonymous { .. }
             | RelayIntent::Confidential { .. }
             | RelayIntent::Delegate { .. } => Self::Transfer(RelayProofInputs::decode(bytes)?),
@@ -890,6 +910,7 @@ impl RelayPayload {
             Self::Transfer(inputs) => inputs.ring_program_id,
             Self::Deposit(inputs) => inputs.ring_program_id,
             Self::Merge(inputs) => inputs.ring_program_id,
+            Self::Enroll(inputs) => inputs.ring_program_id,
         }
     }
 
@@ -914,8 +935,47 @@ impl RelayPayload {
                     },
                 }])
             }
-            Self::Merge(_) => CoSignFlows::Published(Vec::new()),
+            Self::Merge(_) | Self::Enroll(_) => CoSignFlows::Published(Vec::new()),
         })
+    }
+}
+
+/// The relay pays for no owner's account but the owner's own, and for no other storage instruction.
+fn check_enrollment(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Result<(), RelayError> {
+    let refused = enrollment.owner == fee_payer
+        || enrollment.instruction_data.first() != Some(&ENROLL_TAG)
+        || enrollment.instruction_data.len() > solana_message::v1::MAX_TRANSACTION_SIZE;
+    match refused {
+        true => Err(RelayError::InvalidEnrollment),
+        false => Ok(()),
+    }
+}
+
+/// `payer, owner, tracking_registry, authorization, system_program`.
+fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> ProvenRelay {
+    let (authorization, _) = Address::find_program_address(
+        &[
+            b"tracking",
+            enrollment.tracking_registry.as_ref(),
+            enrollment.owner.as_ref(),
+        ],
+        &STORAGE_PROGRAM_ID,
+    );
+    ProvenRelay {
+        instruction: Instruction {
+            program_id: STORAGE_PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(fee_payer, true),
+                AccountMeta::new_readonly(enrollment.owner, true),
+                AccountMeta::new(enrollment.tracking_registry, false),
+                AccountMeta::new(authorization, false),
+                AccountMeta::new_readonly(Address::default(), false),
+            ],
+            data: enrollment.instruction_data.clone(),
+        },
+        budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
+        co_signer: None,
+        signers: vec![enrollment.owner],
     }
 }
 

@@ -14,6 +14,7 @@ pub enum RelayOperation {
     Delegate,
     Deposit,
     Merge,
+    Enroll,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +70,8 @@ pub enum RelayIntent {
     Deposit { proof_inputs: ProofInputBytes },
     /// `proof_inputs` is a `RelayMergeInputs`.
     Merge { proof_inputs: ProofInputBytes },
+    /// `proof_inputs` is a `RelayEnrollInputs`, the owner signs the returned message.
+    Enroll { proof_inputs: ProofInputBytes },
 }
 
 /// The fee payer creates the associated token account a withdrawal of `mint` pays.
@@ -148,6 +151,7 @@ impl RelayIntent {
             Self::Delegate { .. } => RelayOperation::Delegate,
             Self::Deposit { .. } => RelayOperation::Deposit,
             Self::Merge { .. } => RelayOperation::Merge,
+            Self::Enroll { .. } => RelayOperation::Enroll,
         }
     }
 
@@ -165,7 +169,7 @@ impl RelayIntent {
                 token_account_setup,
                 ..
             } => token_account_setup,
-            Self::Deposit { .. } | Self::Merge { .. } => &[],
+            Self::Deposit { .. } | Self::Merge { .. } | Self::Enroll { .. } => &[],
         }
     }
 
@@ -175,7 +179,8 @@ impl RelayIntent {
             | Self::Confidential { proof_inputs, .. }
             | Self::Delegate { proof_inputs, .. }
             | Self::Deposit { proof_inputs }
-            | Self::Merge { proof_inputs } => proof_inputs,
+            | Self::Merge { proof_inputs }
+            | Self::Enroll { proof_inputs } => proof_inputs,
         }
     }
 }

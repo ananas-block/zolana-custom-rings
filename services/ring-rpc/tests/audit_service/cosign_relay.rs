@@ -124,7 +124,7 @@ impl RelayProver for FramedProver {
         let (ring, fee_payer) = (request.ring, request.parties.fee_payer);
         let framed = match &request.payload {
             RelayPayload::Transfer(inputs) => Some(self.frame(inputs)),
-            RelayPayload::Deposit(_) | RelayPayload::Merge(_) => None,
+            RelayPayload::Deposit(_) | RelayPayload::Merge(_) | RelayPayload::Enroll(_) => None,
         };
         let mut proven = self.inner.prove(request).await?;
         if let Some(data) = framed {
