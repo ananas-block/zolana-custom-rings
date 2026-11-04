@@ -1,6 +1,10 @@
 import { getBase58Decoder, type Signature } from "@solana/kit";
 
-import type { GetByNullifiersRequest, GetByTagsRequest } from "@heliuslabs/zolana/client";
+import {
+  ClientError,
+  type GetByNullifiersRequest,
+  type GetByTagsRequest,
+} from "@heliuslabs/zolana/client";
 import { addressBytes, concatBytes, encodeOutputData } from "@heliuslabs/zolana/internal";
 import { InstructionTag, type Bytes32, type Bytes33 } from "@heliuslabs/zolana/interface";
 import type { Bytes96 } from "@heliuslabs/zolana";
@@ -86,6 +90,7 @@ export class ScanIndexer {
   readonly contexts: bigint[] = [];
   /** Answers the next by-ring read with the refusal. */
   refuseAt: Readonly<{ read: number; error: Error }> | undefined;
+  responseLimit: number | undefined;
   #nextLeaf = 0n;
 
   publish(transaction: IndexedShieldedTransaction): void {
@@ -112,6 +117,10 @@ export class ScanIndexer {
         }
         this.ringReads.push(request);
         if (this.refuseAt?.read === this.ringReads.length) throw this.refuseAt.error;
+        if (this.responseLimit !== undefined && (request.limit ?? 1000) > this.responseLimit)
+          throw new ClientError("CLIENT_INDEXER_RESPONSE_TOO_LARGE", {
+            details: { method: "getShieldedTransactionsByTags" },
+          });
         return this.#ringPage(request);
       },
       getEncryptedUtxosByTags: async (request: GetByTagsRequest) => ({

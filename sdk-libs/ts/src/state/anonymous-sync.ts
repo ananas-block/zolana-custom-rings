@@ -51,7 +51,7 @@ import {
 } from "../protocol/historical/anonymous-body.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { recipientOutputBody, senderBundleOutputBody } from "../protocol/transaction/output.js";
-import { readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
+import { HalvingPageLimit, readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
 import { answered, unseen } from "./batch.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
@@ -139,13 +139,13 @@ export interface AnonymousScan extends AnonymousRecovery {
 }
 
 /** A scan a sync issued and no absorb took, no copy carries a position past its notes. */
-const issuedScans = new WeakMap<AnonymousScan, string>();
+const issuedScans = new WeakMap<AnonymousScan, ViewingHistory>();
 
 /** @internal `AnonymousWallet.absorb` alone. */
 export function consumeScan(scan: AnonymousScan, history: ViewingHistory): void {
   const original = issuedScans.get(scan);
   if (original === undefined) throw new RingError("RING_SCAN_CONSUMED");
-  if (original !== history.toJson()) throw new RingError("RING_SCAN_HISTORY_CHANGED");
+  if (!history._progressMatches(original)) throw new RingError("RING_SCAN_HISTORY_CHANGED");
   issuedScans.delete(scan);
 }
 
@@ -378,7 +378,8 @@ class Scan {
   readonly #context: RequestContext | undefined;
   readonly #address: ShieldedAddress;
   readonly #ledger: NoteLedger;
-  readonly #originalHistory: string;
+  readonly #originalHistory: ViewingHistory;
+  readonly #pageLimit = new HalvingPageLimit(TAGS_PER_REQUEST);
   #history: ViewingHistory;
 
   constructor(
@@ -392,7 +393,7 @@ class Scan {
     this.#context = context;
     this.#address = sync.keys.address();
     this.#ledger = new NoteLedger(sync.keys, sync.held);
-    this.#originalHistory = history.toJson();
+    this.#originalHistory = history;
     this.#history = history;
   }
 
@@ -470,10 +471,10 @@ class Scan {
   /** The spends of every found or held ring note, round after round, open the ring merges among them. */
   merges(): Promise<void> {
     return openMerges(this.#mergeReads(), (frontier) =>
-      this.#paged(frontier, (nullifiers, token) =>
+      this.#paged(frontier, (nullifiers, token, limit) =>
         this.#client
           .getShieldedTransactionsByNullifiers(
-            { nullifiers, ...token, limit: TAGS_PER_REQUEST },
+            { nullifiers, ...token, limit },
             this.#sync.config,
             this.#context,
           )
@@ -698,13 +699,9 @@ class Scan {
 
   /** The deposits published under one of `tags`, one per deposited output. */
   #deposits(tags: readonly ViewTag[]): Promise<readonly Deposit[]> {
-    return this.#paged(tags, (chunk, token) =>
+    return this.#paged(tags, (chunk, token, limit) =>
       this.#client
-        .getEncryptedUtxosByTags(
-          { tags: chunk, ...token, limit: TAGS_PER_REQUEST },
-          this.#sync.config,
-          this.#context,
-        )
+        .getEncryptedUtxosByTags({ tags: chunk, ...token, limit }, this.#sync.config, this.#context)
         .then((page) => ({
           ...page,
           items: page.data.flatMap((item) => item.outputs),
@@ -718,6 +715,7 @@ class Scan {
     fetch: (
       chunk: Bytes32[],
       token: Readonly<{ paginationToken?: string }>,
+      limit: number,
     ) => Promise<Readonly<{ items: readonly T[]; paginationToken: string | null }>>,
   ): Promise<readonly T[]> {
     const items: T[] = [];
@@ -726,7 +724,8 @@ class Scan {
       const followed = new Set<string>();
       let token: string | undefined;
       for (;;) {
-        const page = await fetch(chunk, token === undefined ? {} : { paginationToken: token });
+        const asked = token === undefined ? {} : { paginationToken: token };
+        const page = await this.#pageLimit.read((limit) => fetch(chunk, asked, limit));
         items.push(...page.items);
         token = page.paginationToken ?? undefined;
         if (token === undefined) break;
