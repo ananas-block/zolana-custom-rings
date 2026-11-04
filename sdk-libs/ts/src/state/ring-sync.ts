@@ -428,6 +428,13 @@ class RingSyncPages {
       config?.requireSlot ?? client.indexerConfig?.requireSlot,
     );
     const limit = config?.pageLimit ?? 1_000;
+    const held = input.keys.viewingPublicKeys();
+    // The core sync names a held key whole, a delivered slot publishes its slot tag.
+    const withSlotTags = (tags: readonly Bytes32[]): readonly Bytes32[] =>
+      tags.flatMap((tag) => {
+        const key = held.find((candidate) => equalBytes(candidate.u(), tag));
+        return key === undefined ? [tag] : [tag, slotTag(key.u())];
+      });
     this.client = {
       ...(client.solanaRpc === undefined ? {} : { solanaRpc: client.solanaRpc }),
       ...(client.commitment === undefined ? {} : { commitment: client.commitment }),
@@ -448,7 +455,11 @@ class RingSyncPages {
         return page;
       },
       getShieldedTransactionsByTags: async (request, rpcConfig, context) => {
-        const page = await client.getShieldedTransactionsByTags(request, rpcConfig, context);
+        const page = await client.getShieldedTransactionsByTags(
+          { ...request, tags: withSlotTags(request.tags) },
+          rpcConfig,
+          context,
+        );
         this.transactions.push(...page.data.flatMap((item) => item.events));
         return page;
       },

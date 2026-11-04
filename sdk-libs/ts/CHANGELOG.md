@@ -2,6 +2,10 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `PendingRelaySignature.verify` takes the signer, `transferTerms` returns the `RelayTransferTerms` `prepareRelay` sealed, and `forTransferTerms` lets each named public signer check the frame slot by slot before it signs. `encodeRelayTransferTerms` and `decodeRelayTransferTerms` carry the terms as JSON.
+- `RelayProofInputs` requires `coOwners`, a spend of a held co-owner crosses the wire with its key, and the `delegate` rail takes an optional `plan`.
+- `prepareRelay` forwards `coSigners`.
+- A confidential scan also reads the slot tag of each held viewing key, a delivered payment published under it reaches the wallet.
 - `RingRpc.getListSalt` and `RingListSaltRequest` read an owner's salt for a writer of the ring's salted lists, and the Ring RPC refusals add `txViewingKey` -32225 and `notListWriter` -32226.
 - A two-output default-ring spend of 9 to 24 published inputs proves on `custom-ring-transfer-entry-2-in24-w32-s12` and `encodeRelayProofInputs` takes `wideOwners`.
 - `PrepareAuthorityTransferRequest` requires `txViewingKey`, `RingAuthorityTransferRequest.withTxViewingKey` names it and `sign` picks a fresh one without it, `PreparedAuthorityTransfer` and `expectedDelegate` take the ring account's `mode` and `auditorPublicKey` in place of a mode, and `checkRelayMessage` refuses a delegate message with an output the request does not name, with the `TransactionKey` mismatch for a frame under another key → pass `{ mode, auditorPublicKey }` from the ring account, a request built by hand adds `txViewingKey`.

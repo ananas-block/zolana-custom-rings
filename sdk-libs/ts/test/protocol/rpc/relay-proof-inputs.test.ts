@@ -27,6 +27,8 @@ import {
   encodeRelayMergeInputs,
   encodeRelayProofInputs,
   writeRelayListSalts,
+  type RelayProofInputs,
+  type RelayRail,
 } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { encodeRelayDepositInputs } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
 
@@ -91,7 +93,7 @@ describe("relay proof inputs", () => {
     const { owner, sender, ring, spend } = ownerSpend();
     const txViewingKey = ViewingKey.fromBytes(filled(13) as Bytes32);
     const recipient = address(14);
-    const encoded = encodeRelayProofInputs({
+    const proofInputs: RelayProofInputs = {
       rail: {
         kind: "anonymous",
         plan: AnonymousPlan.fromDummyPreimages(
@@ -141,12 +143,33 @@ describe("relay proof inputs", () => {
       wideOwners: false,
       assets: new AssetRegistry(),
       listSalts: [],
-    });
+      coOwners: [],
+    };
     const wire = new Uint8Array(getBase64Encoder().encode(vector.proofInputs));
-    expect(encoded).toEqual(wire);
+    expect(encodeRelayProofInputs(proofInputs)).toEqual(wire);
     const read = await decodeRelayProofInputs(wire, new AssetRegistry());
     expect(read.inputs[0]?.nullifier()).toEqual(spend.nullifier());
     expect(encodeRelayProofInputs(read)).toEqual(wire);
+
+    const { plan } = proofInputs.rail as Extract<RelayRail, { kind: "anonymous" }>;
+    const delegated = await decodeRelayProofInputs(
+      encodeRelayProofInputs({
+        ...proofInputs,
+        rail: { kind: "delegate", delegate: recipient, plan },
+      }),
+      new AssetRegistry(),
+    );
+    expect(delegated.rail).toMatchObject({ kind: "delegate", delegate: recipient });
+    const plainPlan = (delegated.rail as Extract<RelayRail, { kind: "delegate" }>).plan;
+    expect(plainPlan?.dummyPreimages()).toEqual(plan.dummyPreimages());
+    expect(plainPlan?.payments.map((payment) => payment.recipient.toBytes())).toEqual(
+      plan.payments.map((payment) => payment.recipient.toBytes()),
+    );
+    const planless = await decodeRelayProofInputs(
+      encodeRelayProofInputs({ ...proofInputs, rail: { kind: "delegate", delegate: recipient } }),
+      new AssetRegistry(),
+    );
+    expect(planless.rail).toEqual({ kind: "delegate", delegate: recipient });
   });
 
   it("encodes the merge payload byte for byte as the Rust vector", () => {

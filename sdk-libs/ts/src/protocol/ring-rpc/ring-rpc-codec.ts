@@ -98,6 +98,13 @@ export function encodePrepareRelayRequest(value: PrepareRelayRequest): WireObjec
       validUntilSlot: toU64(value.quote.validUntilSlot, "quote.validUntilSlot"),
     },
     intent: encodeRelayIntent(value.intent),
+    ...(value.coSigners === undefined || value.coSigners.length === 0
+      ? {}
+      : {
+          coSigners: value.coSigners.map((signer, index) =>
+            checkedAddress(signer, `coSigners[${index}]`),
+          ),
+        }),
   };
 }
 

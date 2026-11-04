@@ -259,7 +259,13 @@ export {
   submittedRelay,
 } from "../rpc/relay.js";
 export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
-export { VerifiedRelayMessage } from "../rpc/relay-message.js";
+export {
+  VerifiedRelayMessage,
+  decodeRelayTransferTerms,
+  encodeRelayTransferTerms,
+  type RelayTransferTerms,
+  type TokenAccountCreate,
+} from "../rpc/relay-message.js";
 export type { RelayMessageMismatch } from "../rpc/relay-message.js";
 export type {
   AuthorityPayment,

@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
@@ -229,6 +229,7 @@ describe("prepareAuthorityTransfer", () => {
     });
     const signed = await RingAuthorityTransferRequest.forTransfer(target, transfer)
       .at(1_700_000_000n)
+      .withTxViewingKey(ViewingKey.fromBytes(new Uint8Array(32).fill(6) as Bytes32).secretBytes())
       .sign(delegate)
       .finally(() => nonce.mockRestore());
     expect(JSON.stringify(encodePrepareAuthorityTransferRequest(signed))).toBe(vector.wire);

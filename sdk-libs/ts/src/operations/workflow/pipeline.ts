@@ -26,7 +26,13 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { encodeAuditRecord, encodeDataTail } from "../../protocol/codec/audit-stream.js";
+import {
+  interfaceTransferBytes,
+  type RelayTransferTerms,
+  type TokenAccountCreate,
+} from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
@@ -41,6 +47,8 @@ import {
   sealAudit,
   sealedAuditMessage,
   type SealedAudit,
+  outputRecord,
+  outputTail,
 } from "../../proof/audit-proof.js";
 import { type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import {
@@ -268,6 +276,38 @@ export interface SealedTransfer {
   readonly shape: Shape;
   /** The owner signs its `messageHash`. */
   readonly proofInputs: SppProofInputs;
+}
+
+export function sealedTransferTerms(
+  input: Readonly<{
+    ringProgramId: Address;
+    feePayer: Address;
+    sealed: SealedTransfer;
+    ownerSigners: readonly Address[];
+    coSigners: readonly Address[];
+    txViewingKey: ViewingKey;
+    setup: readonly TokenAccountCreate[];
+  }>,
+): RelayTransferTerms {
+  const { sealed } = input;
+  const outputs = sealed.published.map((slot) => slot.output);
+  return Object.freeze({
+    ring: input.ringProgramId,
+    feePayer: input.feePayer,
+    txViewingKey: input.txViewingKey.secretBytes(),
+    signers: Object.freeze([...input.ownerSigners, ...input.coSigners]),
+    records: Object.freeze(outputs.map((output) => encodeAuditRecord(outputRecord(output)))),
+    tails: Object.freeze(
+      framesData(outputs) ? outputs.map((output) => encodeDataTail(outputTail(output))) : [],
+    ),
+    nullifiers: Object.freeze(sealed.inputs.map((spent) => spent.nullifier())),
+    legs: Object.freeze(
+      sealed.proofInputs.externalData.interfaceTransfers.map((leg) =>
+        interfaceTransferBytes(interfaceTransferOf(leg)),
+      ),
+    ),
+    setup: input.setup,
+  });
 }
 
 /** The key a staged transfer selects, every stream counter follows it. */

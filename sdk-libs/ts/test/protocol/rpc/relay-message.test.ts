@@ -39,7 +39,7 @@ import { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import {
   checkRelayMessage,
-  checkSettledDelegateMessage,
+  checkSettledMessage,
   settledBufferOf,
   type ExpectedDelegate,
   expectedDelegate,
@@ -156,7 +156,11 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
 
 function verdict(expected: ExpectedRelayMessage, message: string): string {
   try {
-    checkRelayMessage(expected, new Uint8Array(base64.encode(message)));
+    checkRelayMessage(
+      expected,
+      new Uint8Array(base64.encode(message)),
+      expected.kind === "delegate" ? expected.delegate : ("" as Address),
+    );
     return "Accepted";
   } catch (error) {
     return String((error as { details?: { mismatch?: unknown } }).details?.mismatch);
@@ -194,6 +198,7 @@ function relay(): RingRelayClient & { submitRelay: ReturnType<typeof vi.fn> } {
 const RELAY_ID = "11111111111111111111111111111111" as indexerTypes.Hash;
 const deposits = vector<DepositRequest>("relay_deposit_messages.json");
 const delegates = vector<DelegateRequest>("relay_delegate_messages.json");
+const DELEGATE = delegates.request.prepare.delegate;
 
 describe("relay message check", () => {
   it.each(deposits.cases)("reaches the Rust verdict on deposit message $name", async (entry) => {
@@ -372,9 +377,11 @@ describe("relay message check", () => {
       const honest = inlineOf("honest");
       const settle = await settling(honest);
       const { buffer } = await BufferedFrame.forWriter(honest, delegates.request.feePayer);
-      expect(settledBufferOf(expected, settle)).toBe(buffer);
-      expect(settledBufferOf(expected, message(delegates.cases, "honest"))).toBeUndefined();
-      expect(checkSettledDelegateMessage(expected, settle, held(data(honest))).signer).toBe(
+      expect(settledBufferOf(expected, settle, DELEGATE)).toBe(buffer);
+      expect(
+        settledBufferOf(expected, message(delegates.cases, "honest"), DELEGATE),
+      ).toBeUndefined();
+      expect(checkSettledMessage(expected, settle, held(data(honest)), DELEGATE).signer).toBe(
         delegates.request.prepare.delegate,
       );
     });
@@ -391,19 +398,19 @@ describe("relay message check", () => {
         }
         return "Accepted";
       };
-      expect(reason(() => checkRelayMessage(expected, settle))).toBe("SettlesBuffer");
+      expect(reason(() => checkRelayMessage(expected, settle, DELEGATE))).toBe("SettlesBuffer");
       const rewritten = data(honest);
       rewritten[rewritten.length - 1] = (rewritten[rewritten.length - 1] ?? 0) ^ 1;
-      expect(reason(() => checkSettledDelegateMessage(expected, settle, held(rewritten)))).toBe(
+      expect(reason(() => checkSettledMessage(expected, settle, held(rewritten), DELEGATE))).toBe(
         "Data",
       );
       const swapped = inlineOf("swappedRecipient");
-      expect(reason(() => checkSettledDelegateMessage(expected, settle, held(data(swapped))))).toBe(
-        "Data",
-      );
+      expect(
+        reason(() => checkSettledMessage(expected, settle, held(data(swapped)), DELEGATE)),
+      ).toBe("Data");
       const swappedSettle = await settling(swapped);
       expect(
-        reason(() => checkSettledDelegateMessage(expected, swappedSettle, held(data(swapped)))),
+        reason(() => checkSettledMessage(expected, swappedSettle, held(data(swapped)), DELEGATE)),
       ).toBe("Recipients");
     });
 

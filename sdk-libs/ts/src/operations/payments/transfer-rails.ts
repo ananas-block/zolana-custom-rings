@@ -21,7 +21,9 @@ import type {
   RequestContext,
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
+import { associatedTokenAddress } from "@heliuslabs/zolana/internal";
 import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { expectedTransfer, type TokenAccountCreate } from "../../rpc/relay-message.js";
 import { ShieldedPublicKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import type {
   AssetRegistry,
@@ -69,6 +71,7 @@ import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
   sealRelayedTransfer,
+  sealedTransferTerms,
   type AnonymousSpendValues,
   type ProvenRingTransfer,
   type RailSpend,
@@ -276,19 +279,34 @@ export class CustomRingTransfer {
           wideOwners: sealed.wideOwners,
           assets: this.#input.assets,
           listSalts: relayListSalts(config, this.#input.listSalts ?? []),
+          coOwners: relayCoOwners(staged.ownerSigners, this.#coOwners),
         });
-        return new PreparedRelay({
-          ring: ringProgramId,
-          quote,
-          intent: {
-            operation: "confidential",
-            proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
-            ownerSignature: base58.decode(ownerSignature) as Signature,
-            ...(input.tokenAccountSetup === undefined
-              ? {}
-              : { tokenAccountSetup: input.tokenAccountSetup }),
+        const coSigners = this.#input.coSigners ?? [];
+        const terms = sealedTransferTerms({
+          ringProgramId,
+          feePayer: quote.feePayer,
+          sealed,
+          ownerSigners: staged.ownerSigners,
+          coSigners,
+          txViewingKey: staged.rail.txViewingKey,
+          setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
+        });
+        return new PreparedRelay(
+          {
+            ring: ringProgramId,
+            quote,
+            ...(coSigners.length === 0 ? {} : { coSigners }),
+            intent: {
+              operation: "confidential",
+              proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+              ownerSignature: base58.decode(ownerSignature) as Signature,
+              ...(input.tokenAccountSetup === undefined
+                ? {}
+                : { tokenAccountSetup: input.tokenAccountSetup }),
+            },
           },
-        });
+          await expectedTransfer(terms, config),
+        );
       } finally {
         payload?.fill(0);
         sealed.sealed.ephemeralSecret.fill(0);
@@ -687,20 +705,35 @@ export class AnonymousTransfer {
           wideOwners: sealed.wideOwners,
           assets: this.#owner.assets,
           listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
+          coOwners: relayCoOwners(staged.ownerSigners, this.#coOwners),
+        });
+        const coSigners = this.#owner.coSigners ?? [];
+        const terms = sealedTransferTerms({
+          ringProgramId,
+          feePayer: quote.feePayer,
+          sealed,
+          ownerSigners: staged.ownerSigners,
+          coSigners,
+          txViewingKey: staged.rail.txViewingKey,
+          setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
         });
         return Object.freeze({
-          relay: new PreparedRelay({
-            ring: ringProgramId,
-            quote,
-            intent: {
-              operation: "anonymous",
-              proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
-              ownerSignature: base58.decode(ownerSignature) as Signature,
-              ...(input.tokenAccountSetup === undefined
-                ? {}
-                : { tokenAccountSetup: input.tokenAccountSetup }),
+          relay: new PreparedRelay(
+            {
+              ring: ringProgramId,
+              quote,
+              ...(coSigners.length === 0 ? {} : { coSigners }),
+              intent: {
+                operation: "anonymous",
+                proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+                ownerSignature: base58.decode(ownerSignature) as Signature,
+                ...(input.tokenAccountSetup === undefined
+                  ? {}
+                  : { tokenAccountSetup: input.tokenAccountSetup }),
+              },
             },
-          }),
+            await expectedTransfer(terms, config),
+          ),
         });
       } finally {
         payload?.fill(0);
@@ -1234,6 +1267,36 @@ function suppliedCoSigners(
   coSigners: readonly Address[] | undefined,
 ): Pick<StagedTransferInput, "coSigners"> {
   return coSigners === undefined ? {} : { coSigners };
+}
+
+/** Rust `RelayProofInputs::token_account_setup`, each account the withdrawal pays. */
+async function tokenAccountCreates(
+  setup: readonly TokenAccountSetup[] | undefined,
+  withdrawal: TransactWithdrawal | undefined,
+): Promise<readonly TokenAccountCreate[]> {
+  const created = new Set<Address>();
+  return Promise.all(
+    (setup ?? []).map(async (entry, index) => {
+      const refused = (): RingError =>
+        new RingError("RING_RELAY_PROOF_INPUTS", {
+          details: { reason: "tokenAccountSetup", index },
+        });
+      if (withdrawal?.kind !== "spl" || withdrawal.mint !== entry.mint) throw refused();
+      const { tokenProgram } = withdrawal;
+      const account = await associatedTokenAddress(entry.owner, entry.mint, tokenProgram);
+      if (account !== withdrawal.recipientTokenAccount || created.has(account)) throw refused();
+      created.add(account);
+      return Object.freeze({ owner: entry.owner, mint: entry.mint, tokenProgram });
+    }),
+  );
+}
+
+/** A signer whose key the seal holds spends beside the sender, any other owns no input. */
+function relayCoOwners(
+  ownerSigners: readonly Address[],
+  coOwners: readonly CoOwner[],
+): readonly CoOwner[] {
+  return coOwners.filter((coOwner) => ownerSigners.includes(coOwner.owner));
 }
 
 /** The approval a pipeline runs, bound to the prepared transfer the rail proves. */
