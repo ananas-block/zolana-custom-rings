@@ -19,7 +19,6 @@ pub(crate) struct Enrollment {
     pub viewing_u: [u8; 32],
     pub revision: u64,
     pub applied_revision: u64,
-    pub last_enroll_slot: u64,
 }
 
 impl Enrollment {
@@ -27,7 +26,6 @@ impl Enrollment {
     pub fn account(&self, registry: [u8; 32]) -> TrackingAuthorization {
         TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
-            bump: 0,
             registry: Address::new_from_array(registry),
             owner: Address::new_from_array(self.owner),
             nullifier_pk: self.nullifier_pk,
@@ -37,14 +35,12 @@ impl Enrollment {
             ciphertext: self.ciphertext,
             revision: self.revision.to_le_bytes(),
             applied_revision: self.applied_revision.to_le_bytes(),
-            last_enroll_slot: self.last_enroll_slot.to_le_bytes(),
         }
     }
 }
 
 const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization_account, a.member, a.nullifier_pk, \
      a.ct_hash, a.list_tag, a.eph_u, a.ciphertext, e.viewing_u, e.revision, \
-     e.slot AS last_enroll_slot, \
      (SELECT COALESCE(MAX(d.revision),0) FROM tracking_enrollments AS d \
       WHERE d.registry=a.registry AND d.owner=a.owner AND d.applied_slot IS NOT NULL) \
      AS applied_revision \
@@ -176,7 +172,6 @@ fn enrollment(row: &QueryResult) -> Result<Enrollment> {
         viewing_u: field(row, "viewing_u")?,
         revision: uint(row, "revision")?,
         applied_revision: uint(row, "applied_revision")?,
-        last_enroll_slot: uint(row, "last_enroll_slot")?,
     })
 }
 
@@ -200,7 +195,6 @@ mod tests {
             viewing_u: [6; 32],
             revision: 1,
             applied_revision: 0,
-            last_enroll_slot: 10,
         }
     }
 
@@ -233,7 +227,6 @@ mod tests {
             viewing_u: [8; 32],
             revision: 2,
             applied_revision: 1,
-            last_enroll_slot: 12,
             ..owner
         };
         assert_eq!(store.pending(None, 8).await.unwrap(), [rotated]);
