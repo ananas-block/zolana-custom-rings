@@ -3,6 +3,7 @@
 
 mod memory;
 mod path;
+mod private_tree;
 mod record;
 mod record_pool;
 mod tree;
@@ -13,6 +14,7 @@ use thiserror::Error;
 pub use custom_ring_interface::member_registry::AuthorizedAddress;
 pub use memory::MemberRegistryTree;
 pub use path::{quad_node, NodePosition, QuadPath, ZERO_SUBTREES};
+pub use private_tree::PrivateListTree;
 pub use record::{AddressEscrowPair, MemberRecord};
 pub use record_pool::{Canopy, PoolSubject, RecordPool, SharedPath, SharedProof};
 pub use tree::{
