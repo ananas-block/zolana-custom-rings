@@ -86,7 +86,9 @@ describe("openRecipientNote", () => {
   it("refuses a body off the commitment by amount, mint or blinding", () => {
     const published = commitment(plain(), ENROLLED_KEY);
     expect(openRecipientNote(reader(published), { ...plain(), amount: 43n })).toBeUndefined();
-    expect(openRecipientNote(reader(published), { ...plain(), blinding: field(12) })).toBeUndefined();
+    expect(
+      openRecipientNote(reader(published), { ...plain(), blinding: field(12) }),
+    ).toBeUndefined();
     expect(openRecipientNote(reader(published), plain(UNREGISTERED))).toBeUndefined();
   });
 

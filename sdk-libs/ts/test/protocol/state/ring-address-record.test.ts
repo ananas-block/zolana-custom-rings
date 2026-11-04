@@ -99,13 +99,16 @@ describe("empty_root.json", () => {
 
 describe("tracking_enroll.json", () => {
   it("builds the enrollment byte for byte with the program's account order", async () => {
-    const instruction = await enrollInstruction({
-      payer: PAYER,
-      owner: OWNER,
-      trackingRegistry: REGISTRY,
-      seal: SEAL,
-      viewingU: ACCOUNT.viewingU,
-    }, UNENROLLED);
+    const instruction = await enrollInstruction(
+      {
+        payer: PAYER,
+        owner: OWNER,
+        trackingRegistry: REGISTRY,
+        seal: SEAL,
+        viewingU: ACCOUNT.viewingU,
+      },
+      UNENROLLED,
+    );
     expect(hex(instruction.data)).toBe(`06${enroll.enroll_data}`);
     expect(instruction.programAddress).toBe(STORAGE_PROGRAM_ID);
     expect(instruction.accounts?.map(({ address: account }) => account)).toEqual([
@@ -128,7 +131,9 @@ describe("tracking_enroll.json", () => {
     };
     const first = await enrollInstruction({ ...input, proof }, UNENROLLED);
     expect(hex(first.data)).toBe(`06${enroll.enroll_data}${hex(proof)}`);
-    await expect(enrollInstruction({ ...input, proof: proof.subarray(1) }, UNENROLLED)).rejects.toMatchObject({
+    await expect(
+      enrollInstruction({ ...input, proof: proof.subarray(1) }, UNENROLLED),
+    ).rejects.toMatchObject({
       code: "RING_PROOF_LENGTH",
     });
   });

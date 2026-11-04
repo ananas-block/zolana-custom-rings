@@ -273,7 +273,9 @@ describe("enrollment instructions", () => {
         enrolled,
       );
     await expect(enroll(SEAL)).resolves.toBeDefined();
-    await expect(enroll({ ...SEAL, ciphertext: new Uint8Array(64).fill(0x16) as Bytes64 })).rejects.toMatchObject({
+    await expect(
+      enroll({ ...SEAL, ciphertext: new Uint8Array(64).fill(0x16) as Bytes64 }),
+    ).rejects.toMatchObject({
       code: "RING_ENROLLMENT_KEY_MISMATCH",
     });
     await expect(

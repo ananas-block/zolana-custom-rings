@@ -61,20 +61,18 @@ async function fixture(outcomes: readonly (RingSubmissionStatus | undefined)[] =
     ),
     getLatestBlockhash: vi.fn(async () => BLOCKHASH),
   };
-  const build = vi.fn(
-    async (): Promise<RingSubmissionAttempt> => ({
-      transaction: compileUnsignedTransaction({
-        feePayer: payer.address,
-        lifetime: BLOCKHASH,
-        instructions: [frame.settle()],
-        computeUnitLimit: 1_000_000,
-      }),
-      lastValidBlockHeight: 100n,
-      intentHash: HASH,
-      ringInstructionIndex: 0,
-      upload: { frame, writer: payer.address, chain },
+  const build = vi.fn(async (): Promise<RingSubmissionAttempt> => ({
+    transaction: compileUnsignedTransaction({
+      feePayer: payer.address,
+      lifetime: BLOCKHASH,
+      instructions: [frame.settle()],
+      computeUnitLimit: 1_000_000,
     }),
-  );
+    lastValidBlockHeight: 100n,
+    intentHash: HASH,
+    ringInstructionIndex: 0,
+    upload: { frame, writer: payer.address, chain },
+  }));
   const sent: Transaction[] = [];
   const queue = [...outcomes];
   const send = vi.fn(async (transaction: Transaction) => {

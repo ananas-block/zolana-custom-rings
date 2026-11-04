@@ -51,10 +51,7 @@ import {
 } from "../../../src/protocol/proof/statement.js";
 import { ringDepositContextHash } from "../../../src/proof/deposit-audit.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
-import {
-  ringRail,
-  ringRailOf,
-} from "../../../src/protocol/transaction/transact.js";
+import { ringRail, ringRailOf } from "../../../src/protocol/transaction/transact.js";
 
 function bytes<T extends Uint8Array>(value: string, length?: number): T {
   const decoded = Uint8Array.from(Buffer.from(value, "hex"));
@@ -435,9 +432,7 @@ describe("ring rails", () => {
     expect(ringRail(transfer, { mode: "confidential" })).toBe("confidential");
     expect(ringRail(transfer, { mode: "anonymous" })).toBe("anonymous");
     expect(ringRail(authorityTransfer, { mode: "confidential", delegate })).toBe("delegate");
-    expect(ringRail(authorityTransfer, { mode: "anonymous", delegate })).toBe(
-      "anonymousDelegate",
-    );
+    expect(ringRail(authorityTransfer, { mode: "anonymous", delegate })).toBe("anonymousDelegate");
     expect(() => ringRail(authorityTransfer, { mode: "anonymous" })).toThrow(
       ringError("DelegateDisabled"),
     );

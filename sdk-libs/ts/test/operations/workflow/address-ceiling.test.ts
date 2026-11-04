@@ -161,7 +161,11 @@ describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`"
   it("reads a frame that parses under neither rail as unparsed, whatever its length", async () => {
     const data = new Uint8Array(1000);
     data[0] = RingInstructionTag.transfer;
-    const instruction = { programAddress: address(2), accounts: [], data } as unknown as Instruction;
+    const instruction = {
+      programAddress: address(2),
+      accounts: [],
+      data,
+    } as unknown as Instruction;
     await expect(
       decideAddressCeiling({
         payer: address(1),
