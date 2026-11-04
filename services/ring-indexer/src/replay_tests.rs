@@ -464,6 +464,7 @@ fn tracking_initialized() -> (Address, Value) {
     let creator = PinnedSource::CREATOR;
     let (tracking, _) = TrackingRegistry::find_address(&creator, &ring_id);
     let data = InitializeTrackingIxData {
+        list_scope: [0x0c; 32],
         ring_id,
         auditor_pubkey: [9; 33],
     };

@@ -158,6 +158,7 @@ fn update_policy_rebinds_the_records_to_a_registry_of_any_authority() {
 /// Valid but for its address.
 fn forged_tracking() -> Vec<u8> {
     let registry = TrackingRegistry::new(&InitializeTrackingIxData {
+        list_scope: [0x0c; 32],
         ring_id: ring_id_field(PROGRAM.as_array()).unwrap(),
         auditor_pubkey: auditor_pubkey(),
     });

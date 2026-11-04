@@ -131,6 +131,8 @@ export interface RegisterKeyStatement {
   readonly member: Bytes32;
   readonly nullifierPk: Bytes32;
   readonly listTag: Bytes32;
+  /** The tracking registry's. */
+  readonly listScope: Bytes32;
   readonly auditorPubkey: Bytes33;
   readonly ephU: Bytes32;
   readonly ciphertext: Bytes32;
@@ -320,7 +322,7 @@ export function applyRecordsStatementHash(statement: ApplyRecordsStatement): Byt
   return chain(applyRecordsStatementElements(statement));
 }
 
-/** `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
+/** `[CRRG, ring_id, member, nullifier_pk, list_tag, list_scope, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
 export function registerKeyStatementElements(statement: RegisterKeyStatement): readonly Bytes32[] {
   return [
     domainField(RingDomain.registerKey),
@@ -328,6 +330,7 @@ export function registerKeyStatementElements(statement: RegisterKeyStatement): r
     checkedBytes<Bytes32>(statement.member, 32, "member"),
     checkedBytes<Bytes32>(statement.nullifierPk, 32, "nullifier pk"),
     checkedBytes<Bytes32>(statement.listTag, 32, "list tag"),
+    checkedBytes<Bytes32>(statement.listScope, 32, "list scope"),
     ...packedKey(checkedBytes<Bytes33>(statement.auditorPubkey, 33, "auditor pubkey")),
     ...packedKey(taggedX25519(statement.ephU)),
     hashBytes(checkedBytes<Bytes32>(statement.ciphertext, 32, "ciphertext")) as Bytes32,

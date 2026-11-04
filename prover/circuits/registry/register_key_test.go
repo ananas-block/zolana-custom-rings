@@ -18,6 +18,7 @@ import (
 
 var (
 	keyRing   = big.NewInt(0x5a0f)
+	keyScope  = big.NewInt(0x5a0e)
 	keyMember = big.NewInt(0x0a)
 )
 
@@ -27,7 +28,7 @@ func keyEnvelope(t *testing.T) *registry.RegisterKeyCircuit {
 	secret := ringtest.Scalar(0x07)
 	secret[0] = 0
 	keys := ringaudit.DefaultKeys(t)
-	c := &registry.RegisterKeyCircuit{RingID: keyRing, Member: keyMember}
+	c := &registry.RegisterKeyCircuit{RingID: keyRing, ListScope: keyScope, Member: keyMember}
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	ringtest.SetBytes(c.NullifierSecret[:], secret[:])
 	ringtest.SetBytes(c.EphSk[:], eph[:])
@@ -42,14 +43,14 @@ type keyFields struct {
 
 func listTagOf(t *testing.T, secret []byte) *big.Int {
 	t.Helper()
-	return ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret)))
+	return ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret), keyScope))
 }
 
 // keyStatement is the CRRG statement of an honest witness, the honest solve holds it to the circuit's order.
 func keyStatement(t *testing.T, f keyFields, sealed ringaudit.Sealed) *big.Int {
 	t.Helper()
 	return spptest.MustHashChain4(t, []*big.Int{
-		big.NewInt(shared.RegisterKeyDomain), f.ringID, f.member, f.nullifierPk, f.listTag,
+		big.NewInt(shared.RegisterKeyDomain), f.ringID, f.member, f.nullifierPk, f.listTag, keyScope,
 		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
 	})
 }
@@ -96,6 +97,13 @@ func TestRegisterKeyRefusals(t *testing.T) {
 		{"a list tag from another secret", func(t *testing.T, c *registry.RegisterKeyCircuit) {
 			other := ringtest.Scalar(0x09)
 			c.PublicInputHash = keyStatement(t, keyFields{keyRing, keyMember, nullifierPk(t), listTagOf(t, other[1:])}, sealedHonest(t))
+		}, statement},
+		{"a list tag from another scope", func(t *testing.T, c *registry.RegisterKeyCircuit) {
+			other := ringregistry.ListTag(t, ringregistry.ListSalt(t, new(big.Int).SetBytes(secret[1:]), big.NewInt(0x5a0d)))
+			c.PublicInputHash = keyStatement(t, keyFields{keyRing, keyMember, nullifierPk(t), other}, sealedHonest(t))
+		}, statement},
+		{"a witness scope the program did not supply", func(_ *testing.T, c *registry.RegisterKeyCircuit) {
+			c.ListScope = big.NewInt(0x5a0d)
 		}, statement},
 		{"another member's statement", func(t *testing.T, c *registry.RegisterKeyCircuit) {
 			c.PublicInputHash = keyStatement(t, keyFields{keyRing, big.NewInt(0x0b), nullifierPk(t), listTagOf(t, secret[1:])}, sealedHonest(t))

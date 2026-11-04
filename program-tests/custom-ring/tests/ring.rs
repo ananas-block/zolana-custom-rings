@@ -891,7 +891,7 @@ impl PaymentLanding<'_> {
 
 /// The wallet's spec identity on `ring`, its own viewing key the recipient key.
 fn ring_address(owner: &ShieldedKeypair, ring: Address) -> Result<RingAddress> {
-    Ok(RingAddress::enrolled(owner, ring)?)
+    Ok(RingAddress::enrolled(owner, ring, &zolana_ring_policy::ring_id_field(ring.as_array())?)?)
 }
 
 fn unspent_utxo(wallet: &Wallet, amount: u64) -> Result<Utxo> {

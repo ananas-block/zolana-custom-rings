@@ -57,9 +57,10 @@ impl RingAddress {
     pub fn enrolled<H: ShieldedKeypairTrait + ?Sized>(
         holder: &H,
         ring_program_id: Address,
+        list_scope: &[u8; 32],
     ) -> Result<Self, RingKeyError> {
         let recipient = holder.shielded_address()?;
-        let list_salt = list_salt(&holder.nullifier_key())?;
+        let list_salt = list_salt(&holder.nullifier_key(), list_scope)?;
         Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {
             recipient,

@@ -14,6 +14,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 
+import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
 import type { CustomRingClient } from "../../src/rpc/client.js";
 import {
   compileUnsignedTransaction,
@@ -146,6 +147,7 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
       payer: authority,
       authority,
       auditorPublicKey,
+      listScope: ringIdField(ringProgramId),
       kind: ring.kind,
       // The upgrade authority keeps the policy role, Ring RPC takes its ring-wide grants.
       roles: {

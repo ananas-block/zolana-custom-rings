@@ -21,6 +21,7 @@ describe("ring prover contracts", () => {
     kind: "registerKey",
     publicInputHash: bytes(1),
     ringId: bytes(5),
+    listScope: bytes(6),
     member: bytes(2),
     nullifierSecret: new Uint8Array(32) as Bytes32,
     ephSk: bytes(3),

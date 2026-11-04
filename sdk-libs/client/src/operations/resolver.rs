@@ -172,7 +172,7 @@ mod tests {
     }
 
     fn enrolled(owner: &ShieldedKeypair) -> RingAddress {
-        RingAddress::enrolled(owner, RING).unwrap()
+        RingAddress::enrolled(owner, RING, &[0x0c; 32]).unwrap()
     }
 
     fn zero_key(owner: &ShieldedKeypair) -> RingAddress {
@@ -197,7 +197,7 @@ mod tests {
             ct_hash: [7; 32],
             viewing_u: viewing.u(),
             revision: 3,
-            list_tag: list_tag(&owner.nullifier_key).unwrap(),
+            list_tag: list_tag(&owner.nullifier_key, &[0x0c; 32]).unwrap(),
         }
     }
 

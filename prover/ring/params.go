@@ -296,6 +296,7 @@ type ApplyEnrollmentsParams struct {
 type RegisterKeyParams struct {
 	RequestHead
 	RingID          Field `json:"ringId"`
+	ListScope       Field `json:"listScope"`
 	Member          Field `json:"member"`
 	NullifierSecret Bytes `json:"nullifierSecret"`
 	EphSk           Bytes `json:"ephSk"`

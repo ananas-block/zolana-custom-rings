@@ -7,9 +7,12 @@ use zolana_ring_keys::{list_salt, list_tag, RingAddress, RingKeyError, RotatingR
 struct ListVector {
     signing_secret: String,
     nullifier_secret: String,
+    list_scope: String,
     list_salt: String,
     list_tag: String,
 }
+
+const SCOPE: [u8; 32] = [0x0c; 32];
 
 fn array<const N: usize>(value: &str) -> [u8; N] {
     hex::decode(value).unwrap().try_into().unwrap()
@@ -25,16 +28,17 @@ fn the_wallet_secret_gives_the_list_salt_and_tag_the_go_host_pins() {
         &vector.signing_secret,
     )))
     .unwrap();
+    let scope = array::<32>(&vector.list_scope);
     assert_eq!(
         hex::encode(owner.nullifier_key.secret().as_slice()),
         vector.nullifier_secret[2..]
     );
     assert_eq!(
-        list_salt(&owner.nullifier_key).unwrap(),
+        list_salt(&owner.nullifier_key, &scope).unwrap(),
         array::<32>(&vector.list_salt)
     );
     assert_eq!(
-        list_tag(&owner.nullifier_key).unwrap(),
+        list_tag(&owner.nullifier_key, &scope).unwrap(),
         array::<32>(&vector.list_tag)
     );
 }
@@ -43,7 +47,24 @@ fn the_wallet_secret_gives_the_list_salt_and_tag_the_go_host_pins() {
 fn another_secret_has_another_salt() {
     let first = NullifierKey::from_secret([1; 31]);
     let second = NullifierKey::from_secret([2; 31]);
-    assert_ne!(list_salt(&first).unwrap(), list_salt(&second).unwrap());
+    assert_ne!(
+        list_salt(&first, &SCOPE).unwrap(),
+        list_salt(&second, &SCOPE).unwrap()
+    );
+}
+
+#[test]
+fn another_scope_has_another_salt_and_tag() {
+    let key = NullifierKey::from_secret([1; 31]);
+    let other = [0x0d; 32];
+    assert_ne!(
+        list_salt(&key, &SCOPE).unwrap(),
+        list_salt(&key, &other).unwrap()
+    );
+    assert_ne!(
+        list_tag(&key, &SCOPE).unwrap(),
+        list_tag(&key, &other).unwrap()
+    );
 }
 
 #[test]
@@ -60,12 +81,15 @@ fn an_enrolled_address_carries_the_wallet_salt_and_a_zero_secret_has_none() {
     let ring = Address::new_from_array([4; 32]);
     let mut owner =
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();
-    let address = RingAddress::enrolled(&owner, ring).unwrap();
+    let address = RingAddress::enrolled(&owner, ring, &SCOPE).unwrap();
     assert_eq!(address.recipient, owner.shielded_address().unwrap());
-    assert_eq!(address.list_salt, list_salt(&owner.nullifier_key).unwrap());
+    assert_eq!(
+        address.list_salt,
+        list_salt(&owner.nullifier_key, &SCOPE).unwrap()
+    );
     owner.nullifier_key = NullifierKey::from_secret([0; 31]);
     assert_eq!(
-        RingAddress::enrolled(&owner, ring).err(),
+        RingAddress::enrolled(&owner, ring, &SCOPE).err(),
         Some(RingKeyError::InvalidRingAddressListSalt)
     );
 }

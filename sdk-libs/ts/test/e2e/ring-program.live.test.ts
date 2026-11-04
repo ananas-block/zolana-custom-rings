@@ -1,3 +1,4 @@
+import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { createCustomRingClient } from "../../src/rpc/client.js";
 // Deploys a fresh ring program from the built binaries, upgrades it in place
@@ -80,6 +81,7 @@ describe("ring program", () => {
         payer: operator,
         authority: operator,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
+        listScope: ringIdField(program.address),
         kind: "auditOnly",
         roles,
       }),
