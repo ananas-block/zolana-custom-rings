@@ -1,17 +1,17 @@
 use custom_ring_interface::{
-    CustomRingError, PolicySourceIxData, PolicyTableIxData, RingPolicy, RingRole, SourceSlot,
-    UpdatePolicyIxData,
+    CustomRingError, PolicySourceIxData, PolicyTableIxData, PrivateSourceWrite, RingPolicy,
+    RingRole, SourceSlot, UpdatePolicyIxData,
 };
 use pinocchio::{
     sysvars::{clock::Clock, Sysvar},
     AccountView, Address, ProgramResult,
 };
 use spr_account_checks::AccountIterator;
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, ListSet};
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_records_registry, RoleHolder},
+    loader::{load_records_registry, load_storage_registry, RoleHolder},
     policy_binding::{curator_source, TableBinding},
 };
 
@@ -45,6 +45,7 @@ pub fn process_update_policy_ix(
         UpdatePolicyIxData::Rules(table) => write.replace_rules(&table),
         UpdatePolicyIxData::Source(source) => write.move_source(source),
         UpdatePolicyIxData::Records => write.rebind_records(),
+        UpdatePolicyIxData::PrivateSource { owner_lists } => write.private_source(owner_lists),
     }
 }
 
@@ -93,6 +94,34 @@ impl PolicyWrite<'_> {
         // The rehashed source map refuses a second distinct curator.
         let rules = self.policy.rules;
         self.policy.set_policy(sources, rules, self.slot)?;
+        Ok(())
+    }
+
+    /// A policy ring alone, a table needs to read the lists.
+    #[inline(never)]
+    fn private_source(self, owner_lists: u8) -> ProgramResult {
+        self.policy.policy_hash()?;
+        let owner_lists = ListSet::from_bits(owner_lists);
+        match self.trailing {
+            [] => self.policy.set_private_source(
+                PrivateSourceWrite {
+                    owner_lists,
+                    source: None,
+                },
+                self.slot,
+            )?,
+            [registry] => {
+                let source = load_storage_registry(registry)?;
+                self.policy.set_private_source(
+                    PrivateSourceWrite {
+                        owner_lists,
+                        source: Some((*registry.address(), &source)),
+                    },
+                    self.slot,
+                )?
+            }
+            _ => return Err(CustomRingError::InvalidSource.into()),
+        }
         Ok(())
     }
 
