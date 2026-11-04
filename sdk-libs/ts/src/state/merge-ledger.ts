@@ -121,6 +121,14 @@ export class MergeLedger {
     return Object.freeze({ spent: inputs, resolved });
   }
 
+  /** A tag 57 record names the output, no input opening resolves it. */
+  applyRecord(output: AuditedMergeOutput): void {
+    const id = mergeId(output);
+    if (this.#applied.has(id)) return;
+    this.#applied.add(id);
+    this.#outputs.set(bytesKey(output.commitment), Object.freeze(output));
+  }
+
   /** Runs after every new opening, a resolved output can complete its descendant. */
   resolve(known: KnownMergeInput): readonly AuditedMergeOutput[] {
     const resolved = this.#resolve(this.unresolved(), known);

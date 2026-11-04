@@ -32,10 +32,18 @@ import {
 } from "../../../src/operations/workflow/submission.js";
 import { ringTransferClient } from "../../helpers/clients.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { ownedAccount, ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
+import { trackingTree } from "../../helpers/member-registry.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  sppRingRegistration,
+  trackingRegistryAccount,
+} from "../../helpers/ring-accounts.js";
+import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const TRACKING = address("Cura111111111111111111111111111111111111111");
 function field(value: number): Bytes32 {
   const bytes = new Uint8Array(32);
   bytes[31] = value;
@@ -72,16 +80,31 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
   const [ring, bump] = await ringPolicyPda(RING);
   const authority = f.owner.shieldedAddress().solanaAddress();
   const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
+  const recipient = ShieldedKeypair.generate().shieldedAddress();
+  const tracked = trackingTree(
+    [f.owner.shieldedAddress(), recipient].map((owner) => trackingEntry(owner)),
+  );
   let outputTreeId: number | undefined;
   const client = ringTransferClient({
     tree: treeAddress(7),
     treeId: 7,
     getAccount: async (key) =>
       key === ring
-        ? ownedAccount(RING, ringPolicyData({ bump, roles: { admin: authority } }))
+        ? ownedAccount(
+            RING,
+            ringPolicyData({ bump, roles: { admin: authority }, tracking: TRACKING }),
+          )
         : key === ringAuth
           ? registration
-          : undefined,
+          : key === TRACKING
+            ? trackingRegistryAccount({
+                root: tracked.root,
+                revision: TRACKING_REVISION,
+                nextIndex: tracked.nextIndex,
+                auditorPubkey: new Uint8Array(33),
+              })
+            : undefined,
+    getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     proveRingTransact: async (inputs) => {
       outputTreeId = inputs.outputTreeId;
       throw new Error("prover boundary reached");
@@ -102,7 +125,7 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
       wallet: f.wallet,
       keys,
       feePayer: f.owner.shieldedAddress().solanaAddress(),
-      recipient: ShieldedKeypair.generate().shieldedAddress(),
+      recipient,
       amount: 1n,
     }),
   ).rejects.toMatchObject({ code: "RING_BUILD_TRANSFER" });

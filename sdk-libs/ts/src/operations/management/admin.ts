@@ -63,8 +63,11 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.merge:
     case RingInstructionTag.authorityTransfer:
     case RingInstructionTag.historicalTransfer:
+    case RingInstructionTag.historicalTransferV3:
     case RingInstructionTag.historicalAuthorityTransfer:
+    case RingInstructionTag.historicalAuthorityTransferV3:
     case RingInstructionTag.historicalMerge:
+    case RingInstructionTag.historicalMergeV3:
     case RingInstructionTag.historicalDeposit:
     case RingInstructionTag.deposit:
       return PROOF_UNITS;

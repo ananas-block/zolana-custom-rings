@@ -999,7 +999,7 @@ async function resolveSendRecipient(
 
 /** The caller names the choice on every anonymous payment. */
 function replyChoice(params: SendParams): ReplyMetadata | null {
-  const reply = params.anonymous?.reply ?? params.spendPublic?.reply;
+  const reply = params.anonymous === undefined ? params.spendPublic?.reply : params.anonymous.reply;
   if (reply === undefined)
     throw new RingError("RING_REPLY_INVALID", { details: { reason: "unnamed" } });
   return reply;

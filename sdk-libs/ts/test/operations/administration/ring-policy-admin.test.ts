@@ -1,3 +1,4 @@
+import { storageRegistryAccount } from "../../helpers/ring-accounts.js";
 import { address, blockhash, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -61,7 +62,13 @@ async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
       }),
     ),
   );
-  accounts.set(CURATOR_A, ownedAccount(STORAGE, new Uint8Array(1)));
+  for (const registry of [RECORDS, CURATOR_A])
+    accounts.set(
+      registry,
+      storageRegistryAccount([
+        { hash: new Uint8Array(32).fill(1) as Bytes32, revision: 1n, expiresAt: 0n },
+      ]),
+    );
   return {
     getAccount: vi.fn(async (account: Address) => accounts.get(account)),
     getLatestBlockhash: vi.fn(async () => LIFETIME),

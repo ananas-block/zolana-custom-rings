@@ -64,7 +64,6 @@ export interface AuditorRegion {
   readonly bytes: Uint8Array;
 }
 
-/** The sealed stream of one transfer, `ephemeralSecret` the proof's input. */
 export interface AuditorEnvelope {
   readonly ephemeralSecret: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
@@ -177,30 +176,91 @@ export function sealAuditorStream(
     tails?: readonly AuditorRegion[];
   }>,
 ): AuditorEnvelope {
-  const { auditorPublicKey } = input;
   const ephemeral = X25519Keypair.generate();
-  let shared: Bytes32 | undefined;
+  try {
+    return sealRegions(ephemeral, input, (shared) => shared);
+  } finally {
+    ephemeral.destroy();
+  }
+}
+
+/** A resend repeats the transfer's key, the salt keeps its keystream apart. */
+export function sealSaltedAuditorStream(
+  input: Readonly<{
+    txViewingSecret: Bytes32;
+    salt: Bytes16;
+    auditorPublicKey: X25519PublicKey;
+    envelope: Uint8Array;
+    records: readonly AuditorRegion[];
+    tails?: readonly AuditorRegion[];
+  }>,
+): AuditorEnvelope {
+  const key = X25519Keypair.fromBytes(input.txViewingSecret);
+  try {
+    return sealRegions(key, input, (shared) => saltedSecret(shared, input.salt));
+  } finally {
+    key.destroy();
+  }
+}
+
+function sealRegions(
+  key: X25519Keypair,
+  input: Readonly<{
+    auditorPublicKey: X25519PublicKey;
+    envelope: Uint8Array;
+    records: readonly AuditorRegion[];
+    tails?: readonly AuditorRegion[];
+  }>,
+  keyed: (shared: Bytes32) => Bytes32,
+): AuditorEnvelope {
+  const { auditorPublicKey } = input;
+  const publicKey = key.publicKey();
+  const secret = envelopeSecret(key, auditorPublicKey, publicKey, auditorPublicKey);
   let schedule: AuditSchedule | undefined;
   try {
-    const ephemeralPublicKey = ephemeral.publicKey();
-    shared = envelopeSecret(ephemeral, auditorPublicKey, ephemeralPublicKey, auditorPublicKey);
-    const stream = (schedule = AuditSchedule.derive(shared, AUDIT_ENC_INFO));
+    const stream = (schedule = AuditSchedule.derive(keyed(secret), AUDIT_ENC_INFO));
     const envelope = stream.apply(STREAM_FIRST_COUNTER, input.envelope);
     const records = Object.freeze(
       input.records.map(({ counter, bytes }) => stream.apply(counter, bytes)),
     );
     const tails = input.tails?.map(({ counter, bytes }) => stream.apply(counter, bytes));
     return Object.freeze({
-      ephemeralSecret: ephemeral.secretBytes(),
-      ephemeralPublicKey,
+      ephemeralSecret: key.secretBytes(),
+      ephemeralPublicKey: publicKey,
       envelope,
       records,
       ...(tails === undefined ? {} : { tails: Object.freeze(tails) }),
     });
   } finally {
-    ephemeral.destroy();
-    shared?.fill(0);
+    secret.fill(0);
     schedule?.destroy();
+  }
+}
+
+/** Rust `salted`. */
+function saltedSecret(secret: Bytes32, salt: Bytes16): Bytes32 {
+  const aligned = rightAlign(checkedBytes<Bytes16>(salt, 16, "salt"));
+  return poseidon([secret, aligned]) as Bytes32;
+}
+
+/** The schedule `sealSaltedAuditorStream` encrypted under, the caller destroys it. */
+export function saltedAuditorSchedule(
+  auditor: X25519Keypair,
+  txViewingPublicKey: X25519PublicKey,
+  salt: Bytes16,
+): AuditSchedule {
+  const shared = envelopeSecret(
+    auditor,
+    txViewingPublicKey,
+    txViewingPublicKey,
+    auditor.publicKey(),
+  );
+  const salted = saltedSecret(shared, salt);
+  try {
+    return AuditSchedule.derive(salted, AUDIT_ENC_INFO);
+  } finally {
+    shared.fill(0);
+    salted.fill(0);
   }
 }
 
@@ -240,14 +300,21 @@ export function openAuditorRegions(
 export function openTransactionViewingSecret(
   auditor: X25519Keypair,
   message: Pick<AuditorMessage, "ephemeralPublicKey" | "envelope">,
+  /** Absent on a frame before the salted stream. */
+  salt?: Bytes16,
 ): Bytes32 {
   const bytes = message.envelope.subarray(0, ENVELOPE_KEY_LEN);
   if (bytes.length !== ENVELOPE_KEY_LEN)
     throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "envelope" });
-  const [secret] = openAuditorRegions(auditor, message.ephemeralPublicKey, [
-    { counter: STREAM_FIRST_COUNTER, bytes },
-  ]);
-  return secret as Bytes32;
+  const schedule =
+    salt === undefined
+      ? auditorSchedule(auditor, message.ephemeralPublicKey)
+      : saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
+  try {
+    return schedule.apply(STREAM_FIRST_COUNTER, bytes) as Bytes32;
+  } finally {
+    schedule.destroy();
+  }
 }
 
 export function auditorViewTag(auditorPublicKey: X25519PublicKey): Bytes32 {

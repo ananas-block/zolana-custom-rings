@@ -542,7 +542,6 @@ describe("prover/ring/params.go", () => {
       publicInputHash: zero,
       firstNullifier: zero,
       txViewingSk: zero,
-      ephSk: zero,
       auditorPk: zero,
       salt: new Uint8Array(16) as TransferProofRequest["salt"],
       layout: { hasData: false, entry: false },

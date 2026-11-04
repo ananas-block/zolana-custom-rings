@@ -9,7 +9,7 @@ import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 
 import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges-v4.json" with { type: "json" };
 import vector from "../../../../../test-vectors/audit/audit-stream-v4.json" with { type: "json" };
-import { parseAuditorMessage } from "../../../src/crypto/audit/audit.js";
+import { parseAuditorMessage, sealSaltedAuditorStream } from "../../../src/crypto/audit/audit.js";
 import {
   openRingDisclosure,
   sealRingDisclosure,
@@ -109,17 +109,39 @@ describe("the v4 stream vector", () => {
       capacity: testCase.outputs,
       hasData: (testCase.layout & 1) !== 0,
     };
-    const ephemeral = (): X25519Keypair => X25519Keypair.fromBytes(hex(vector.eph_sk) as Bytes32);
+    const salt = hex(vector.salt) as Bytes16;
+    const txKey = (): X25519Keypair =>
+      X25519Keypair.fromBytes(hex(vector.tx_viewing_sk) as Bytes32);
     const message = () => ({
-      ephemeralPublicKey: ephemeral().publicKey(),
+      ephemeralPublicKey: txKey().publicKey(),
       envelope: hex(testCase.envelope_ciphertext),
       records: testCase.record_ciphertexts.map(hex),
       ...(testCase.tail_ciphertexts === null ? {} : { tails: testCase.tail_ciphertexts.map(hex) }),
     });
 
+    it(`${testCase.name} seals byte for byte as Rust and refuses another salt`, async () => {
+      await initializePoseidon();
+      const sealed = sealSaltedAuditorStream({
+        txViewingSecret: hex(vector.tx_viewing_sk) as Bytes32,
+        salt,
+        auditorPublicKey: auditor().publicKey(),
+        envelope: hex(testCase.envelope_plaintext),
+        records: testCase.records.map((bytes, slot) => ({
+          counter: recordRegion(layout, slot).startCounter,
+          bytes: hex(bytes),
+        })),
+      });
+      expect(bytesToHex(sealed.envelope)).toBe(testCase.envelope_ciphertext);
+      expect(sealed.records.map((bytes) => bytesToHex(bytes))).toEqual(testCase.record_ciphertexts);
+      const other = Uint8Array.from(salt, (byte) => byte ^ 1) as Bytes16;
+      expect(() =>
+        openRingDisclosure(auditor(), { layout, message: message(), salt: other }),
+      ).toThrow(RingError);
+    });
+
     it(`${testCase.name} opens under the auditor to its plaintexts`, async () => {
       await initializePoseidon();
-      const opened = openRingDisclosure(auditor(), { layout, message: message() });
+      const opened = openRingDisclosure(auditor(), { layout, message: message(), salt });
       expect(bytesToHex(encodeAuditEnvelope(opened.envelope))).toBe(testCase.envelope_plaintext);
       expect(opened.records.map((record) => bytesToHex(encodeAuditRecord(record)))).toEqual(
         testCase.records,
@@ -148,8 +170,7 @@ describe("the v4 stream vector", () => {
 
     it(`${testCase.name} rebuilds every published hash from its record alone`, async () => {
       await initializePoseidon();
-      const opened = openRingDisclosure(auditor(), { layout, message: message() });
-      const salt = hex(vector.salt) as Bytes16;
+      const opened = openRingDisclosure(auditor(), { layout, message: message(), salt });
       const firstNullifier = hex(vector.first_nullifier) as Bytes32;
       const seed = ringBlindingSeed(opened.envelope.txViewingSecret, salt);
       opened.records.forEach((record, slot) => {
@@ -192,7 +213,7 @@ describe("the v4 stream vector", () => {
       const crossed = { ...swapped, records: [second, first, ...swapped.records.slice(2)] };
       let same: boolean;
       try {
-        const opened = openRingDisclosure(auditor(), { layout, message: crossed });
+        const opened = openRingDisclosure(auditor(), { layout, message: crossed, salt });
         same = bytesToHex(encodeAuditRecord(opened.records[0] as never)) === testCase.records[0];
       } catch {
         same = false;
@@ -227,6 +248,7 @@ describe("the v4 stream vector", () => {
     const sealed = sealRingDisclosure({
       layout,
       auditorPublicKey: keypair.publicKey(),
+      salt: hex(vector.salt) as Bytes16,
       disclosure,
     });
     const message = parseAuditorMessage(
@@ -238,13 +260,18 @@ describe("the v4 stream vector", () => {
       ),
       layout,
     );
-    const opened = openRingDisclosure(keypair, { layout, message });
+    const opened = openRingDisclosure(keypair, {
+      layout,
+      message,
+      salt: hex(vector.salt) as Bytes16,
+    });
     expect(opened.records).toEqual(disclosure.records);
     expect(opened.tails).toEqual(disclosure.tails);
     expect(() =>
       sealRingDisclosure({
         layout: { ...layout, hasData: false },
         auditorPublicKey: keypair.publicKey(),
+        salt: hex(vector.salt) as Bytes16,
         disclosure,
       }),
     ).toThrow();

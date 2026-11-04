@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { MAX_CACHE_WRITES } from "@heliuslabs/zolana/interface";
 import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { hashChain4 } from "@heliuslabs/zolana/internal";
 
+import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
 import { TRANSFER_STATEMENT_VERSION } from "../../../src/crypto/derivation/ring-domain.js";
 import { RingError } from "../../../src/protocol/error.js";
@@ -13,7 +15,9 @@ import {
   transferStatementHash,
   type TransferBinding,
 } from "../../../src/protocol/proof/statement.js";
+import { RECIPIENT_BODY_LEN } from "../../../src/protocol/codec/anonymous-delivery.js";
 import {
+  CONFIDENTIAL_DATA_FREE_BODY_LEN,
   encodeRingBodyOutput,
   ringBodyOutput,
   RingScheme,
@@ -22,6 +26,7 @@ import {
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import {
   ANONYMOUS_PARTIES,
+  ApprovalMask,
   landedRingRail,
   RingTransactData,
   ringRailOf,
@@ -44,7 +49,6 @@ function binding(signers: readonly Bytes32[] = [], slots = 24): TransferBinding 
       ownRoot: field(24),
       curatorRoot: field(25),
       trackingRoot: field(26),
-      privateRoot: field(27),
     },
     publicAssets: [ZERO, ZERO, ZERO],
     publicAmounts: [ZERO, ZERO, ZERO],
@@ -94,27 +98,58 @@ describe("the v4 ring frame", () => {
     expect(RingTransactData.parse(bytes, frame.rail)).toEqual(frame);
   });
 
-  it("puts the wide owner flag at bit 7 of the output count and the co-sign byte past the header", () => {
+  it("puts the wide owner flag at bit 7 of the output count and the approval mask past the header", () => {
     const frame: Frame = {
       ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2, wideOwners: true }),
-      coSign: { approval: 3, coSigners: 5 },
+      approval: ApprovalMask.outflow | ApprovalMask.withdrawal,
     };
     const bytes = RingTransactData.encode(frame);
     expect(bytes[3]).toBe(2 | (1 << 7));
-    expect(bytes[4]).toBe(3 | (5 << 2));
-    expect(RingTransactData.parse(bytes, "confidential").coSign).toEqual(frame.coSign);
+    expect(bytes[4]).toBe(3);
+    expect(RingTransactData.parse(bytes, "confidential").approval).toBe(frame.approval);
   });
 
-  it("refuses six co-signers and unknown co-sign bits", () => {
+  it("refuses an approval mask past its two bits", () => {
     const frame = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
-    expect(
-      reason(() => RingTransactData.encode({ ...frame, coSign: { approval: 0, coSigners: 6 } })),
-    ).toBe("TooManyCoSigners");
+    for (const approval of [4, -1, 1.5])
+      expect(reason(() => RingTransactData.encode({ ...frame, approval }))).toBe("FlagNotAllowed");
     const bytes = RingTransactData.encode(frame);
-    bytes[4] = 6 << 2;
-    expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("TooManyCoSigners");
-    bytes[4] = 1 << 5;
-    expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
+    for (const mask of [1 << 2, 6 << 2, 1 << 5, 1 << 7]) {
+      bytes[4] = mask;
+      expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
+    }
+  });
+
+  it("publishes a live slot's tag in eight bytes, an exit's whole, and refuses leading tag bytes", () => {
+    const frame = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
+    const whole = new Uint8Array(32).fill(7) as Bytes32;
+    const tagged = (output: Frame["outputs"][number]) => ({ ...output, ownerTag: whole });
+    expect(
+      reason(() => RingTransactData.encode({ ...frame, outputs: frame.outputs.map(tagged) })),
+    ).toBe("RingTransactLength");
+    const exit: Frame = {
+      ...frame,
+      outputs: frame.outputs.map((output, slot) =>
+        slot === 1
+          ? {
+              ...tagged(output),
+              body: {
+                kind: "exit" as const,
+                payload: new Uint8Array(CONFIDENTIAL_DATA_FREE_BODY_LEN),
+              },
+            }
+          : output,
+      ),
+    };
+    const bytes = RingTransactData.encode(exit);
+    expect(RingTransactData.parse(bytes, "confidential")).toEqual(exit);
+    expect(bytes.length).toBe(
+      RingTransactData.encode(frame).length +
+        32 -
+        8 +
+        CONFIDENTIAL_DATA_FREE_BODY_LEN -
+        RECIPIENT_BODY_LEN,
+    );
   });
 
   it("refuses an appended byte and a truncation", () => {
@@ -195,11 +230,25 @@ describe("the v4 ring frame", () => {
       extensions: {
         dataHash: field(81),
         ringDataHash: field(82),
-        privateRevision: 9n,
         messages: [{ viewTag: field(83), data: Uint8Array.of(1, 2, 3) }],
+        cache: {
+          readBitmap: 0n,
+          writeSlots: Array.from({ length: MAX_CACHE_WRITES }, () => ({
+            output: 0xff,
+            slot: 0xff,
+          })),
+        },
       },
     };
-    expect(RingTransactData.parse(RingTransactData.encode(frame), "confidential")).toEqual(frame);
+    const bytes = RingTransactData.encode(frame);
+    expect(RingTransactData.parse(bytes, "confidential")).toEqual(frame);
+    // The extension byte follows the salt.
+    const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
+    expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
+    bytes[extensions] = 1 | 2 | 4 | 8 | 16;
+    expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
+    const { messages } = RingTransactData.expand(frame, { auditorPubkey: AUDITOR });
+    expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);
   });
 
   it("keeps a bodiless slot out of SPP's data and frames a recipient under scheme 13", () => {
@@ -251,22 +300,23 @@ describe("the v4 ring frame", () => {
 });
 
 describe("the v4 transfer statement", () => {
-  const expectedLength = (cells: number): number => 12 + 2 + 2 + 4 + 2 + cells + 2 + 5 + 9 + 1 + 2;
+  const STATEMENT_LENGTH = 49;
 
   it("orders the confidential elements and closes on the length and version", () => {
     const frame: Frame = {
       ...ringFrame({ rail: "confidential", inputs: 2, outputs: 2 }),
-      coSign: { approval: 3, coSigners: 0 },
+      approval: ApprovalMask.outflow | ApprovalMask.withdrawal,
       noSpend: true,
     };
     const elements = transferStatementElements(ringTransferStatement(frame, binding([field(31)])));
-    expect(elements).toHaveLength(expectedLength(1));
+    expect(elements).toHaveLength(STATEMENT_LENGTH);
     const bigint = (bytes: Bytes32 | undefined): bigint =>
       bytes === undefined ? -1n : BigInt(`0x${Buffer.from(bytes).toString("hex")}`);
-    expect(bigint(elements[14])).toBe(3n);
-    expect(bigint(elements[15])).toBe(1n);
-    expect(bigint(elements[16])).toBe(2n);
-    expect(bigint(elements[20])).toBe(2n);
+    expect(bigint(elements[15])).toBe(3n);
+    expect(bigint(elements[16])).toBe(1n);
+    expect(bigint(elements[17])).toBe(2n);
+    expect(bigint(elements[21])).toBe(2n);
+    expect(bigint(elements[31])).toBe(1n);
     expect(bigint(elements.at(-2))).toBe(BigInt(elements.length));
     expect(bigint(elements.at(-1))).toBe(TRANSFER_STATEMENT_VERSION);
     expect(TRANSFER_STATEMENT_VERSION).toBe(4n);
@@ -275,11 +325,11 @@ describe("the v4 transfer statement", () => {
   it("zero fills the output chains to the capacity and leaves the tail chain zero off has_data", () => {
     const frame = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
     const elements = transferStatementElements(ringTransferStatement(frame, binding()));
-    expect(elements[19]).toEqual(ZERO);
+    expect(elements[20]).toEqual(ZERO);
     const withData = ringFrame({ rail: "confidential", inputs: 1, outputs: 2, hasData: true });
     const data = transferStatementElements(ringTransferStatement(withData, binding()));
-    expect(data[19]).not.toEqual(ZERO);
-    expect(elements[17]).toEqual(hashChain4(frame.outputs.map((output) => output.hash)) as Bytes32);
+    expect(data[20]).not.toEqual(ZERO);
+    expect(elements[18]).toEqual(hashChain4(frame.outputs.map((output) => output.hash)) as Bytes32);
   });
 
   it("carries the seven parties and both rail bits on the anonymous frame", () => {
@@ -290,7 +340,8 @@ describe("the v4 transfer statement", () => {
       publicOwners: true,
       delegate: false,
     });
-    expect(transferStatementElements(statement)).toHaveLength(expectedLength(ANONYMOUS_PARTIES));
+    expect(transferStatementElements(statement)).toHaveLength(STATEMENT_LENGTH);
+    expect(ANONYMOUS_PARTIES).toBe(7);
     const delegate = ringFrame({ rail: "anonymousDelegate", inputs: 2, outputs: 2 });
     expect(ringTransferStatement(delegate, binding()).family).toMatchObject({ delegate: true });
   });
@@ -305,7 +356,7 @@ describe("the v4 transfer statement", () => {
     expect(transferStatementHash(ringTransferStatement(frame, moved))).not.toEqual(base);
     expect(
       transferStatementHash(
-        ringTransferStatement({ ...frame, coSign: { approval: 1, coSigners: 0 } }, binding()),
+        ringTransferStatement({ ...frame, approval: ApprovalMask.outflow }, binding()),
       ),
     ).not.toEqual(base);
   });

@@ -9,11 +9,7 @@ import {
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { InterfaceError } from "@heliuslabs/zolana/interface";
-import {
-  bigIntBytes,
-  bytesField,
-  type ExpectedProvingKey,
-} from "@heliuslabs/zolana/internal";
+import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { ClientError } from "@heliuslabs/zolana/client";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
@@ -71,9 +67,8 @@ export interface RingSlotOpening {
 /** Go `AuditParams`, the envelope inputs every transfer proof opens with. */
 export interface AuditEnvelopeProofInputs {
   readonly firstNullifier: Bytes32;
-  /** The clamped secret the envelope seals. */
+  /** The clamped secret the envelope seals and the stream's key. */
   readonly txViewingSk: Bytes32;
-  readonly ephSk: Bytes32;
   /** The auditor's X25519 u without the tag byte. */
   readonly auditorPk: Bytes32;
   readonly salt: Bytes16;
@@ -354,8 +349,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       return {
         ...head,
         ...applyHeadJson(request),
-        oldNextIndex: integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
-        newNextIndex: integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, writeJson),
       };
@@ -365,8 +358,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       return {
         ...head,
         ...applyHeadJson(request),
-        oldNextIndex: integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
-        newNextIndex: integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, trackingWriteJson),
       };
@@ -386,6 +377,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         rows: 0,
         outputs: capacity,
         withdrawals: 0,
+        publicAssets: 0,
         pools: {
           own: depositPoolWidth(capacity),
           curator: depositPoolWidth(capacity),
@@ -471,6 +463,7 @@ type PolicySectionShape = Readonly<{
   rows: number;
   outputs: number;
   withdrawals: number;
+  publicAssets: number;
   pools: PolicyPoolCapacity;
 }>;
 
@@ -481,6 +474,7 @@ function transferJson(request: TransferProofRequest): Json {
     rows: circuit.owners,
     outputs: circuit.outputs,
     withdrawals: circuit.withdrawals,
+    publicAssets: N_PUBLIC_SLOTS,
     pools: transferPoolCapacity(circuit),
   };
   return {
@@ -519,7 +513,6 @@ function envelopeJson(envelope: AuditEnvelopeProofInputs): Json {
   return {
     firstNullifier: field(envelope.firstNullifier, "firstNullifier"),
     txViewingSk: hexBytes(envelope.txViewingSk, 32, "txViewingSk"),
-    ephSk: hexBytes(envelope.ephSk, 32, "ephSk"),
     auditorPk: hexBytes(envelope.auditorPk, 32, "auditorPk"),
     salt: hexBytes(envelope.salt, 16, "salt"),
     layout: proofInput(() => auditLayoutValue(envelope.layout)),
@@ -680,7 +673,7 @@ function policyJson(policy: PolicyProofInputs, shape: PolicySectionShape): Json 
     assetEntries: sized(policy.assetEntries, slots, "assetEntries").map((entry, i) =>
       entryJson(entry, capacity, `assetEntries[${i}]`),
     ),
-    publicAssetEntries: sized(policy.publicAssetEntries, N_PUBLIC_SLOTS, "publicAssetEntries").map(
+    publicAssetEntries: sized(policy.publicAssetEntries, shape.publicAssets, "publicAssetEntries").map(
       (index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1),
     ),
   };
@@ -765,6 +758,8 @@ function applyHeadJson(
   request: Readonly<{
     oldRoot: Bytes32;
     newRoot: Bytes32;
+    oldNextIndex: number;
+    newNextIndex: number;
     chainStart: Bytes32;
     chainEnd: Bytes32;
   }>,
@@ -772,6 +767,8 @@ function applyHeadJson(
   return {
     oldRoot: field(request.oldRoot, "oldRoot"),
     newRoot: field(request.newRoot, "newRoot"),
+    oldNextIndex: integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
+    newNextIndex: integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
     chainStart: field(request.chainStart, "chainStart"),
     chainEnd: field(request.chainEnd, "chainEnd"),
   };

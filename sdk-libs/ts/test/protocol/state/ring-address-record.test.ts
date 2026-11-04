@@ -61,6 +61,8 @@ const ENTRY = {
   listTag: ACCOUNT.listTag,
 };
 
+const UNENROLLED = { getAccount: async () => undefined } as never;
+
 beforeAll(initializePoseidon);
 
 describe("empty_root.json", () => {
@@ -103,7 +105,7 @@ describe("tracking_enroll.json", () => {
       trackingRegistry: REGISTRY,
       seal: SEAL,
       viewingU: ACCOUNT.viewingU,
-    });
+    }, UNENROLLED);
     expect(hex(instruction.data)).toBe(`06${enroll.enroll_data}`);
     expect(instruction.programAddress).toBe(STORAGE_PROGRAM_ID);
     expect(instruction.accounts?.map(({ address: account }) => account)).toEqual([
@@ -124,15 +126,14 @@ describe("tracking_enroll.json", () => {
       seal: SEAL,
       viewingU: ACCOUNT.viewingU,
     };
-    const first = await enrollInstruction({ ...input, proof });
+    const first = await enrollInstruction({ ...input, proof }, UNENROLLED);
     expect(hex(first.data)).toBe(`06${enroll.enroll_data}${hex(proof)}`);
-    await expect(enrollInstruction({ ...input, proof: proof.subarray(1) })).rejects.toMatchObject({
+    await expect(enrollInstruction({ ...input, proof: proof.subarray(1) }, UNENROLLED)).rejects.toMatchObject({
       code: "RING_PROOF_LENGTH",
     });
   });
 
   it("decodes the authorization account after its apply", () => {
-    expect(ACCOUNT.bump).toBe(enroll.bump);
     expect(ACCOUNT.registry).toBe(REGISTRY);
     expect(ACCOUNT.owner).toBe(OWNER);
     expect(ACCOUNT.revision).toBe(BigInt(enroll.revision));

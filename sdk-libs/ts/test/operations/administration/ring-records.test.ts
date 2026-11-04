@@ -5,7 +5,7 @@ import { checkWriter, listWrite } from "../../../src/operations/management/recor
 
 describe("list writes", () => {
   it("refuses a list the writer does not write and a write that changes nothing or both ways", () => {
-    for (const listId of [ListId.allow, ListId.escrow])
+    for (const listId of [ListId.allow, ListId.privateAllow])
       expect(() => checkWriter(listWrite({ set: [listId] }), "member")).toThrow(
         expect.objectContaining({
           code: "RING_LIST_WRITER_UNAUTHORIZED",

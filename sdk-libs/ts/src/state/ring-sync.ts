@@ -10,6 +10,7 @@ import {
   PAGE_LIMIT,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
+import { slotTag } from "../crypto/derivation/ring-stream.js";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -159,7 +160,7 @@ export async function syncRingWallet(
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const chunkSize = input.config?.queryChunk ?? 64;
-    for (let frontier = fresh; frontier.length > 0;) {
+    for (let frontier = fresh; frontier.length > 0; ) {
       const spends: IndexedShieldedTransaction[] = [];
       for (let offset = 0; offset < frontier.length; offset += chunkSize)
         spends.push(
@@ -308,7 +309,7 @@ async function ringDeposits(
   const seen = new Set<string>();
   for (const tx of input.transactions)
     for (const slot of tx.outputSlots) {
-      const viewingPublicKey = held.find((key) => equalBytes(key.u(), slot.viewTag));
+      const viewingPublicKey = held.find((key) => viewTagOf(key, slot.viewTag));
       if (viewingPublicKey === undefined || seen.has(bytesKey(slot.outputContext.hash))) continue;
       const opened = await openRingDeposit(
         {
@@ -418,6 +419,11 @@ async function deliveredNote(
   }
 }
 
+/** A deposit and a historical frame publish the whole key. */
+function viewTagOf(key: X25519PublicKey, tag: Bytes32): boolean {
+  return equalBytes(key.u(), tag) || equalBytes(slotTag(key.u()), tag);
+}
+
 /** Malformed published bytes skip the slot, a holder failure refuses the sync. */
 async function heldSlotSecret(
   keys: RingKeys,
@@ -426,7 +432,7 @@ async function heldSlotSecret(
 ): Promise<Bytes32 | undefined> {
   const viewingPublicKey = keys
     .viewingPublicKeys()
-    .find((key) => equalBytes(key.u(), site.slot.viewTag));
+    .find((key) => viewTagOf(key, site.slot.viewTag));
   const firstNullifier = site.tx.nullifiers[0];
   if (
     viewingPublicKey === undefined ||

@@ -28,6 +28,7 @@ import {
   bundleTag,
   deliveredSlotSecret,
   txKeySlotSecret,
+  slotTag,
 } from "../../../src/crypto/derivation/ring-stream.js";
 import { anonymousSlotTag } from "../../../src/operations/payments/output-rail.js";
 import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
@@ -362,12 +363,12 @@ describe("anonymous_bodies.json", () => {
       { kind: "payment", payment: { recipient, reply: null } },
       (key) => slotSecret(hex(key.u()), bodies.body_index),
     );
-    expect(hex(payment ?? ZERO_32)).toBe(bodies.body_tag);
+    expect(hex(payment ?? ZERO_32)).toBe(hex(slotTag(field(bodies.body_tag))));
     const dummy = anonymousSlotTag(
       { kind: "dummy", preimage: field(bodies.dummy_tag_preimage) },
       unreached,
     );
-    expect(hex(dummy ?? ZERO_32)).toBe(bodies.dummy_tag);
+    expect(hex(dummy ?? ZERO_32)).toBe(hex(slotTag(field(bodies.dummy_tag))));
     expect(anonymousSlotTag({ kind: "change" }, unreached)).toEqual(ZERO_32);
     expect(anonymousSlotTag({ kind: "exit" }, unreached)).toBeUndefined();
     expect(hex(bundleTag(slotSecret(bodies.sender_viewing_key, bodies.output_count)))).toBe(

@@ -12,7 +12,13 @@ import {
   poseidon,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/zolana/interface";
+import type {
+  Address,
+  Bytes16,
+  Bytes32,
+  RequestContext,
+  Signature,
+} from "@heliuslabs/zolana/interface";
 import {
   ownerHash,
   type ViewingKey,
@@ -38,7 +44,7 @@ import {
   type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import {
-  auditorSchedule,
+  saltedAuditorSchedule,
   auditorViewTag,
   openTransactionViewingSecret,
   parseAuditorMessage,
@@ -308,6 +314,10 @@ export class KnownUtxoIndex implements KnownUtxos {
     return this.#merges.output(commitment) ?? this.#fallback?.merged?.(commitment);
   }
 
+  mergeRecord(output: AuditedMergeOutput): void {
+    this.#merges.applyRecord(output);
+  }
+
   mergeOutput(commitment: Bytes32): AuditedMergeOutput | undefined {
     return this.#merges.output(commitment);
   }
@@ -372,8 +382,9 @@ export function auditorMessage(
 export function recoverTransactionViewingKey(
   auditor: X25519Keypair,
   message: AuditorMessage,
+  salt: Bytes16,
 ): ViewingKey {
-  return canonicalViewingKey(openTransactionViewingSecret(auditor, message));
+  return canonicalViewingKey(openTransactionViewingSecret(auditor, message, salt));
 }
 
 export interface TransactionAuditInput {
@@ -433,7 +444,7 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
   )
     throw auditRefusal("layout");
   const message = parsedMessage(auditorMessage(transaction, auditor.publicKey()), layout);
-  const schedule = auditorSchedule(auditor, message.ephemeralPublicKey);
+  const schedule = saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
   const envelopePlain = schedule.apply(STREAM_FIRST_COUNTER, message.envelope);
   let envelope: AuditEnvelope | undefined;
   let txKey: ViewingKey | undefined;
@@ -651,6 +662,23 @@ export function auditConfirmedRingHistory(
           merge.outputContext.hash,
           openedUtxo(merge.utxo, outputTreeId(merge.outputContext)),
         );
+        const { utxo, outputContext } = merge;
+        known.mergeRecord({
+          commitment: outputContext.hash,
+          slot: merge.slot,
+          signature: merge.signature,
+          eventIndex: merge.eventIndex,
+          treeId: outputTreeId(outputContext),
+          leafIndex: outputContext.leafIndex,
+          inputs: [],
+          firstNullifier: confirmed.transaction.nullifiers[0] as Bytes32,
+          ringDataHash: utxo.ringDataHash,
+          ownerKey: utxo.ownerKey,
+          owner: Object.freeze({ kind: "keyed", nullifierPk: utxo.nullifierPk }),
+          asset: utxo.asset,
+          ...(utxo.mint === undefined ? {} : { mint: utxo.mint }),
+          amount: utxo.amount,
+        });
       }
     });
   }

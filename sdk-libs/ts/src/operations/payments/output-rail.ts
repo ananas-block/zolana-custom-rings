@@ -39,7 +39,12 @@ import {
   sealSenderBundle,
   type ReplyMetadata,
 } from "../../protocol/codec/anonymous-delivery.js";
-import { bundleTag, recipientTag, txKeySlotSecret } from "../../crypto/derivation/ring-stream.js";
+import {
+  bundleTag,
+  recipientTag,
+  slotTag,
+  txKeySlotSecret,
+} from "../../crypto/derivation/ring-stream.js";
 import { randomTagPreimage } from "../../crypto/derivation/dummy-tag.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
 import {
@@ -165,11 +170,11 @@ export function anonymousSlotTag(
     case "change":
       return ZERO_32;
     case "dummy":
-      return recipientTag(slot.preimage);
+      return slotTag(recipientTag(slot.preimage));
     case "payment": {
       const secret = slotSecret(slot.payment.recipient);
       try {
-        return recipientTag(secret);
+        return slotTag(recipientTag(secret));
       } finally {
         secret.fill(0);
       }
@@ -561,7 +566,7 @@ export class RingOutputRail {
         const secret = this.slotSecret(slot.owner.viewingPublicKey, slotIndex);
         try {
           const body = sealRecipientBody(secret, recipientBody(output));
-          return framed(slot.owner.viewingPublicKey.u(), { kind: "recipient", body });
+          return framed(slotTag(slot.owner.viewingPublicKey.u()), { kind: "recipient", body });
         } finally {
           secret.fill(0);
         }
@@ -570,7 +575,7 @@ export class RingOutputRail {
         // A random key publishes as a real recipient's would.
         const key = ViewingKey.generate();
         try {
-          return framed(key.publicKey().u(), {
+          return framed(slotTag(key.publicKey().u()), {
             kind: "recipient",
             body: randomBytes(RECIPIENT_BODY_LEN),
           });

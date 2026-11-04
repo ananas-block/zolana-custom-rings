@@ -163,6 +163,17 @@ export interface RingFixtureOptions {
   readonly registration?: Readonly<{ activated: boolean; paused: boolean }>;
 }
 
+export function trackingEntry(owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): TrackingEntry {
+  return {
+    member: owner.signingPublicKey.ownerProofInputHash(),
+    nullifierPk: owner.nullifierPublicKey,
+    ctHash: filled(0x11),
+    viewingU: owner.viewingPublicKey.u(),
+    revision: ADDRESS_REVISION,
+    listTag,
+  };
+}
+
 /** The pinned rails beside SPP's anonymous one, where an in-proof owner also proves. */
 export type SppCircuit =
   | NonNullable<Parameters<typeof prepareTransfer>[1]>
@@ -308,15 +319,8 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   }
   /** Applies the owner's enrollment, a repeat replaces its row. */
   const enroll = (owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): void => {
-    const member = owner.signingPublicKey.ownerProofInputHash();
-    enrolled.set(hex(member), {
-      member,
-      nullifierPk: owner.nullifierPublicKey,
-      ctHash: filled(0x11),
-      viewingU: owner.viewingPublicKey.u(),
-      revision: ADDRESS_REVISION,
-      listTag,
-    });
+    const entry = trackingEntry(owner, listTag);
+    enrolled.set(hex(entry.member), entry);
     publishTracking();
   };
   const slot = options.slot ?? 1n;
@@ -692,10 +696,11 @@ export function checkDisclosure(
   const disclosure = openRingDisclosure(fixture.auditor, {
     layout: RingTransactData.streamLayout(data),
     message: {
-      ephemeralPublicKey: x25519FromU(data.ephU),
+      ephemeralPublicKey: x25519FromU(data.txViewingU),
       envelope: data.envelope,
       records: data.outputs.map((output) => output.record),
     },
+    salt: data.salt,
   });
   const txKey = ViewingKey.fromBytes(disclosure.envelope.txViewingSecret);
   expect(txKey.publicKey().u()).toEqual(data.txViewingU);

@@ -1,4 +1,4 @@
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { LocalKeys, type ProofService } from "@heliuslabs/zolana/client";
 import { treeAddress } from "@heliuslabs/zolana/internal";
 import { type Bytes32 } from "@heliuslabs/zolana/interface";
@@ -19,7 +19,13 @@ import {
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../../helpers/clients.js";
-import { ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
+import { trackingTree } from "../../helpers/member-registry.js";
+import {
+  ringPolicyData,
+  sppRingRegistration,
+  trackingRegistryAccount,
+} from "../../helpers/ring-accounts.js";
+import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
@@ -29,6 +35,7 @@ const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
 const RECIPIENT = address("8qbHbw2BbbTHBW1sbeqakYXV9q2RZ1R6MUi6nEZa6wJk");
 const RING = address("9EwHno8C1T1vVGjasGnDH1GubiEu8qbgLX9qDjBshFhz");
+const TRACKING = address("Cura111111111111111111111111111111111111111");
 
 function filled(value: number): Bytes32 {
   return new Uint8Array(32).fill(value) as Bytes32;
@@ -303,8 +310,12 @@ describe("selectRingInputs", () => {
 });
 
 describe("ring approval summary", () => {
-  /** An active ring, every build reaches its approval and stops at the prover. */
-  async function approvalClient(_keypair: ShieldedKeypair, mode: RingMode = "confidential") {
+  /** An active ring holding `enrolled`, a build past its approval stops at the prover. */
+  async function approvalClient(
+    enrolled: readonly ShieldedAddress[],
+    mode: RingMode = "confidential",
+  ) {
+    const tracked = trackingTree(enrolled.map((owner) => trackingEntry(owner)));
     const [ring, bump] = await ringPolicyPda(RING);
     const [ringAuth, registration] = await sppRingRegistration({
       authority: PAYER,
@@ -314,10 +325,18 @@ describe("ring approval summary", () => {
       tree: TREE,
       getAccount: async (address: Address) =>
         address === ring
-          ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode }) }
+          ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode, tracking: TRACKING }) }
           : address === ringAuth
             ? registration
-            : undefined,
+            : address === TRACKING
+              ? trackingRegistryAccount({
+                  root: tracked.root,
+                  revision: TRACKING_REVISION,
+                  nextIndex: tracked.nextIndex,
+                  auditorPubkey: new Uint8Array(33),
+                })
+              : undefined,
+      getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     });
   }
   it("approves the exact amount moved into the ring", async () => {
@@ -327,7 +346,7 @@ describe("ring approval summary", () => {
 
     await expect(
       buildRingEntryTransaction({
-        client: await approvalClient(keypair),
+        client: await approvalClient([keypair.shieldedAddress()]),
         ringProgramId: RING,
         wallet,
         keys: localKeys(keypair),
@@ -350,15 +369,16 @@ describe("ring approval summary", () => {
     const keypair = spendingKeypair();
     const wallet = ringUtxoWallet(keypair, utxos);
     const { approve, requests } = recordingApproval();
+    const recipient = ShieldedKeypair.generate().shieldedAddress();
     await expect(
       buildRingTransferTransaction({
-        client: await approvalClient(keypair),
+        client: await approvalClient([keypair.shieldedAddress(), recipient]),
         ringProgramId: RING,
         wallet,
         keys: localKeys(keypair),
         approve,
         feePayer: keypair.shieldedAddress().solanaAddress(),
-        recipient: ShieldedKeypair.generate().shieldedAddress(),
+        recipient,
         amount,
         inputs,
       }),
@@ -377,7 +397,7 @@ describe("ring approval summary", () => {
     );
     const { approve, requests } = recordingApproval();
     const error: unknown = await prepareRingEntryRelay({
-      client: await approvalClient(keypair, "anonymous"),
+      client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
       ringProgramId: RING,
       wallet,
       keys: localKeys(keypair),

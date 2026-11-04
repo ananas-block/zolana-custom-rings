@@ -17,7 +17,10 @@ import {
   CustomRingTransfer,
   type PublicOwnerTransferClient,
 } from "../../../src/operations/payments/transfer-rails.js";
-import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
+import {
+  RingTransactData,
+  type RingTransactData as Frame,
+} from "../../../src/protocol/transaction/transact.js";
 import { ringFrame } from "../../helpers/ring-frame.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");

@@ -415,12 +415,12 @@ describe("the tag 57 reader", () => {
     const firstNullifier = hex(request.firstNullifier) as Bytes32;
     const ringDataHash = hex(request.outputRingDataHash) as Bytes32;
     const record = hex(entry.record);
-    const mint = encodeBase58(record.subarray(48, 80));
+    const mint = encodeBase58(record.subarray(41, 73));
     const hash =
       overrides.hash ??
       knownUtxoHash(
         {
-          ownerKey: record.slice(16, 48) as Bytes32,
+          ownerKey: record.slice(9, 41) as Bytes32,
           owner: { kind: "keyed", nullifierPk: hex(request.nullifierPk) as Bytes32 },
           asset: hashBytes(addressBytes(mint)) as Bytes32,
           amount: BigInt(request.amount),
@@ -481,9 +481,9 @@ describe("the tag 57 reader", () => {
         record: {
           kind: RecordKind.ring,
           amount: 12n,
-          ownerKey: record.slice(16, 48) as Bytes32,
-          mint: encodeBase58(record.subarray(48, 80)),
-          nullifierPk: record.slice(80, 112) as Bytes32,
+          ownerKey: record.slice(9, 41) as Bytes32,
+          mint: encodeBase58(record.subarray(41, 73)),
+          nullifierPk: record.slice(73, 105) as Bytes32,
           ...edit,
         },
         secret: seed as Bytes32,
@@ -499,10 +499,10 @@ describe("the tag 57 reader", () => {
     });
     const record = hex(entry.record);
     expect(opened.utxo).toEqual({
-      ownerKey: record.slice(16, 48),
+      ownerKey: record.slice(9, 41),
       nullifierPk: hex(entry.request.nullifierPk),
-      asset: hashBytes(record.subarray(48, 80)),
-      mint: encodeBase58(record.subarray(48, 80)),
+      asset: hashBytes(record.subarray(41, 73)),
+      mint: encodeBase58(record.subarray(41, 73)),
       amount: 12n,
       blinding: hex(entry.output_blinding),
       dataHash: ZERO_32,
