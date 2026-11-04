@@ -68,7 +68,9 @@ pub struct DepositPublicInput<'a> {
 }
 
 /// Every deposit slot padded to the maximum.
-pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8;
+pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8 + 1;
+/// Closes the statement, a layout change raises it.
+pub const DEPOSIT_STATEMENT_VERSION: u8 = 4;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
@@ -122,6 +124,7 @@ impl DepositPublicInput<'_> {
             chain[assets + slot * 2] = deposited.asset;
             chain[assets + slot * 2 + 1] = right_align(&deposited.amount.to_be_bytes());
         }
+        chain[DEPOSIT_PUBLIC_INPUT_ELEMENTS - 1] = right_align(&[DEPOSIT_STATEMENT_VERSION]);
         Ok(chain)
     }
 }

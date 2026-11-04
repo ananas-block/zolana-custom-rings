@@ -118,6 +118,7 @@ pinned_codes! {
     TrackingRootBelowFloor = 8503,
     PrivateSourceOtherTracking = 8504,
     PublicRegistryAsPrivateSource = 8505,
+    RuleListPolarity = 8506,
     InvalidFrameBuffer = 8520,
     FrameBufferExists = 8521,
     FrameBufferAddress = 8522,

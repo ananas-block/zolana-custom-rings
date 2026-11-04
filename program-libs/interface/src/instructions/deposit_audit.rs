@@ -1,15 +1,14 @@
 use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 
-use crate::TAGGED_X25519_KEY_LEN;
+use crate::{OPENING_RECORD_LEN, TAGGED_X25519_KEY_LEN};
 
 pub const MAX_RING_DEPOSIT_AUDIT_SLOTS: usize = 8;
-/// One opening is `owner_hash || blinding || owner_key`.
-pub const RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN: usize = 96;
-pub const RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET: usize = 64;
+/// One `OpeningRecord` of kind `Ring`, its secret is the blinding.
+pub const RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN: usize = OPENING_RECORD_LEN;
 pub const RING_DEPOSIT_AUDIT_PREFIX_LEN: usize = core::mem::size_of::<CapsuleHeader>();
 
-const MAGIC: &[u8; 8] = b"CRDEP001";
+const MAGIC: &[u8; 8] = b"CRDEP002";
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -68,7 +67,7 @@ impl<'a> RingDepositAuditCapsule<'a> {
     }
 }
 
-const _: () = assert!(RING_DEPOSIT_AUDIT_PREFIX_LEN == 138);
+const _: () = assert!(RING_DEPOSIT_AUDIT_PREFIX_LEN == 186);
 
 #[cfg(test)]
 mod tests {

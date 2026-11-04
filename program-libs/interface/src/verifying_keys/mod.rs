@@ -18,10 +18,6 @@ pub mod deposit_2_verifying_key;
 pub mod deposit_4_verifying_key;
 #[path = "deposit/deposit_8_verifying_key.rs"]
 pub mod deposit_8_verifying_key;
-#[path = "merge/merge_v3_24_verifying_key.rs"]
-pub mod merge_v3_24_verifying_key;
-#[path = "merge/merge_v3_8_verifying_key.rs"]
-pub mod merge_v3_8_verifying_key;
 #[path = "records/register_key_verifying_key.rs"]
 pub mod register_key_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
@@ -64,14 +60,6 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_deposit_8.key",
         deposit_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_merge_v3_8.key",
-        merge_v3_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_merge_v3_24.key",
-        merge_v3_24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
 ];
 pub fn verifying_key(

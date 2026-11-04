@@ -2,8 +2,9 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, domain, key_catalog::RING_KEYS, AuditHead, AuditLayout,
-    ConfidentialSender, RingOutput, SignerSet, SlotBody, TransferFamily, TransferRoots,
-    TransferStatement, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
+    ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerSet,
+    SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN,
 };
 use serde::Deserialize;
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
