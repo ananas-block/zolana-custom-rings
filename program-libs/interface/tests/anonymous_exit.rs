@@ -219,6 +219,7 @@ fn an_absent_party_is_a_zero_identity() {
     let parties = AnonymousParties {
         payer: &payer,
         co_signers: &[co_signer],
+        funders: &[],
         exit_destination: Some(&OWNER),
     };
     assert_eq!(
@@ -241,6 +242,7 @@ fn a_co_signer_past_the_fifth_is_refused() {
     let parties = AnonymousParties {
         payer: &[7; 32],
         co_signers: &co_signers,
+        funders: &[],
         exit_destination: None,
     };
     assert!(parties.identities().is_err());

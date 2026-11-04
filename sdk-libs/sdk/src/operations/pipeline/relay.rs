@@ -6,17 +6,21 @@ use spr_client::AsyncRpc;
 use spr_indexer_api::{Hash, SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, PublicKey, SigningKey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
+use spr_transaction::instructions::transact::SettlementTransfer;
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
     RelayRail,
 };
 use zolana_ring_transaction::{published_outputs, RingDelivery};
 
-use super::{approval_totals_of, Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
+use super::{
+    approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Rail, RingTransfer,
+    Sealed,
+};
 use crate::{
     relay_message::{
-        ApprovalOpening, ExpectedMessage, RelayTransferTerms, SealedTerms, SlotOpening,
-        TokenAccountCreate,
+        ApprovalOpening, ExpectedMessage, FundedLeg, RelayFunderTerms, RelayTransferTerms,
+        SealedTerms, SlotOpening, TokenAccountCreate,
     },
     PreparedRelay, RingError,
 };
@@ -100,11 +104,12 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .token_account_setup(payer, &token_account_setup)?,
         };
         let terms = sealed.transfer_terms(payer, &setup)?;
+        let funders = sealed.funder_terms(payer, &setup)?;
         let approval = sealed
             .pipeline
             .approval_blinder
             .map(|blinder| {
-                let totals = approval_totals_of(inputs, sealed.preview.n_out)?;
+                let totals = approval_totals_of(inputs, sealed.key_capacity()?)?;
                 Ok::<_, RingError>(ApprovalOpening::of(&totals, &blinder))
             })
             .transpose()?;
@@ -144,6 +149,7 @@ impl<R: Rail> WalletRelay<'_, R> {
         })
         .expecting(ExpectedMessage::Sealed(SealedTerms {
             owners: terms,
+            funders,
             approval,
         })))
     }
@@ -171,6 +177,55 @@ impl RingTransfer<Delegated<'_>> {
 }
 
 impl<P> Sealed<'_, P> {
+    /// `N` of the key the seal selected, ahead of any proof.
+    fn key_capacity(&self) -> Result<usize, RingError> {
+        let staged = &self.pipeline.staged;
+        let parts = self
+            .preview
+            .parts(&staged.proof_inputs, &staged.rail, &staged.sender)?;
+        Ok(parts.data().audit_stream()?.capacity)
+    }
+
+    /// One per key funding a deposit leg, the payer and an owner of the run left out. The payer pays
+    /// the message it builds, and an owner's check refuses a key named beside its run entry.
+    fn funder_terms(
+        &self,
+        fee_payer: Address,
+        setup: &[CreateAssociatedTokenAccount],
+    ) -> Result<Vec<RelayFunderTerms>, RingError> {
+        let staged = &self.pipeline.staged;
+        let transfers = &staged.proof_inputs.external_data.interface_transfers;
+        let ring = self.pipeline.ring.program_id();
+        let setup = token_account_creates(setup);
+        let mut terms: Vec<RelayFunderTerms> = Vec::new();
+        for (transfer, accounts) in transfers.iter().zip(&staged.interface_transfer_accounts) {
+            let Some(funder) = deposit_funder(&transfer.interface_transfer(), accounts) else {
+                continue;
+            };
+            if funder == fee_payer || staged.owner_signers.contains(&funder) {
+                continue;
+            }
+            let leg = FundedLeg {
+                mint: match transfer {
+                    SettlementTransfer::Spl { mint, .. } => Some(SerializablePubkey(*mint)),
+                    SettlementTransfer::Sol { .. } => None,
+                },
+                amount: transfer.interface_transfer().amount(),
+            };
+            match terms.iter_mut().find(|held| held.signer.0 == funder) {
+                Some(held) => held.legs.push(leg),
+                None => terms.push(RelayFunderTerms {
+                    ring: SerializablePubkey(ring),
+                    fee_payer: SerializablePubkey(fee_payer),
+                    signer: SerializablePubkey(funder),
+                    legs: vec![leg],
+                    setup: setup.clone(),
+                }),
+            }
+        }
+        Ok(terms)
+    }
+
     /// One per public owner, its own slots and notes alone.
     fn transfer_terms(
         &self,
@@ -180,14 +235,7 @@ impl<P> Sealed<'_, P> {
         let staged = &self.pipeline.staged;
         let inputs = &staged.proof_inputs;
         let ring = self.pipeline.ring.program_id();
-        let setup: Vec<TokenAccountCreate> = setup
-            .iter()
-            .map(|create| TokenAccountCreate {
-                owner: SerializablePubkey(create.owner),
-                mint: SerializablePubkey(create.mint),
-                token_program: SerializablePubkey(create.token_program),
-            })
-            .collect();
+        let setup = token_account_creates(setup);
         Ok(staged
             .owner_signers
             .iter()
@@ -261,6 +309,17 @@ impl<P> Sealed<'_, P> {
             approval_blinder: self.pipeline.approval_blinder,
         }
     }
+}
+
+fn token_account_creates(setup: &[CreateAssociatedTokenAccount]) -> Vec<TokenAccountCreate> {
+    setup
+        .iter()
+        .map(|create| TokenAccountCreate {
+            owner: SerializablePubkey(create.owner),
+            mint: SerializablePubkey(create.mint),
+            token_program: SerializablePubkey(create.token_program),
+        })
+        .collect()
 }
 
 #[cfg(test)]

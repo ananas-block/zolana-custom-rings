@@ -84,6 +84,28 @@ impl TransactCheck<'_> {
             RingAuth::derive(self.program_id)?.check_slot(spp, RING_TRANSACT_RING_CONFIG_INDEX)?;
         let payer = check_funding_signer(spp, TRANSACT_PAYER_INDEX)?;
         let slots = self.transfer.audit_stream().key.signer_slots();
+        // A deposit leg would bring an unlisted asset in on the delegate rail.
+        if matches!(self.signer, RailSigner::Delegate { .. })
+            && data
+                .interface_transfers
+                .iter()
+                .any(|transfer| transfer.is_deposit())
+        {
+            return Err(CustomRingError::DelegatePublicLeg.into());
+        }
+        // A funder signs for its own deposit leg, and SPP moves only that leg's amount under the
+        // signature. The walk comes first since the anonymous rail classifies every signer by it.
+        let mut funders = Vec::new();
+        let mut groups = window;
+        for transfer in &data.interface_transfers {
+            let (group, rest) = groups
+                .split_at_checked(transfer.settlement_account_count())
+                .ok_or(CustomRingError::InvalidSettlementAccounts)?;
+            groups = rest;
+            if let Some(funder) = funder_account_position(transfer) {
+                funders.push(*check_funding_signer(group, funder)?.address().as_array());
+            }
+        }
         let (sender, signers) = match self.signer {
             RailSigner::Payer => {
                 let owners = data.owner_signers(spp, window.len())?;
@@ -95,6 +117,7 @@ impl TransactCheck<'_> {
                     account.is_signer()
                         && account.address() != payer.address()
                         && !co_signers.contains(account.address())
+                        && !funders.contains(account.address().as_array())
                         && !owners
                             .iter()
                             .any(|owner| owner.address() == account.address())
@@ -122,14 +145,6 @@ impl TransactCheck<'_> {
                 (sender, signer_set(owners, slots)?)
             }
             RailSigner::Delegate { delegate, .. } => {
-                // A deposit leg would bring an unlisted asset in.
-                if data
-                    .interface_transfers
-                    .iter()
-                    .any(|transfer| transfer.is_deposit())
-                {
-                    return Err(CustomRingError::DelegatePublicLeg.into());
-                }
                 let signer = account_at(accounts, delegate_slot)?;
                 if !signer.is_signer() || signer.address() != &delegate {
                     return Err(CustomRingError::UnauthorizedDelegate.into());
@@ -138,16 +153,6 @@ impl TransactCheck<'_> {
             }
         };
 
-        let mut groups = window;
-        for transfer in &data.interface_transfers {
-            let (group, rest) = groups
-                .split_at_checked(transfer.settlement_account_count())
-                .ok_or(CustomRingError::InvalidSettlementAccounts)?;
-            groups = rest;
-            if let Some(funder) = funder_account_position(transfer) {
-                check_funding_signer(group, funder)?;
-            }
-        }
         let withdrawals = match read {
             RootRead::None => Vec::new(),
             RootRead::Own | RootRead::Policy => custom_ring_interface::policy_withdrawals(
@@ -169,10 +174,10 @@ impl TransactCheck<'_> {
                 AnonymousParties {
                     payer: payer.address().as_array(),
                     co_signers: co_signers.as_slice(),
+                    funders: &funders,
                     exit_destination: exit.as_ref(),
                 }
-                .identities()
-                .map_err(CustomRingError::from)?
+                .identities()?
             }
             false => [[0; 32]; ANONYMOUS_PARTIES],
         };

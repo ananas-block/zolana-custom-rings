@@ -185,6 +185,20 @@ pub struct Anonymous<'a> {
     payments: Vec<AnonymousPayment>,
     pub(super) exit_token_owner: Option<Address>,
     co_owners: Vec<CoOwner<'a>>,
+    read_cache: Option<ReadCache>,
+}
+
+/// Notes SPP reads from a cache account instead of proving their inclusion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadCache {
+    pub cache: Address,
+    pub notes: Vec<CachedNote>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CachedNote {
+    pub nullifier: [u8; 32],
+    pub slot: u8,
 }
 
 pub type AnonymousTransfer<'a> = RingTransfer<Anonymous<'a>>;
@@ -211,6 +225,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 payments: Vec::new(),
                 exit_token_owner: None,
                 co_owners: Vec::new(),
+                read_cache: None,
             },
             list_salts: self.list_salts,
             approval: self.approval,
@@ -223,6 +238,13 @@ impl<'a> RingTransfer<Anonymous<'a>> {
     #[must_use = "use the updated transfer"]
     pub fn with_co_owner(mut self, co_owner: CoOwner<'a>) -> Self {
         self.rail.co_owners.push(co_owner);
+        self
+    }
+
+    /// Named notes spend from `cache`, SPP checks each slot against the frame's selector.
+    #[must_use = "use the updated transfer"]
+    pub fn with_read_cache(mut self, read_cache: ReadCache) -> Self {
+        self.rail.read_cache = Some(read_cache);
         self
     }
 
@@ -441,7 +463,7 @@ impl Anonymous<'_> {
             RingDelivery::Anonymous(Box::new(anonymous_plan(&self.payments))),
         );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
-        let proof_inputs = rail.encrypt(transaction, &sender)?;
+        let proof_inputs = self.cached(rail.encrypt(transaction, &sender)?)?;
         check_anonymous_inputs(&proof_inputs, &sender)?;
         let owner_signers = public_co_owners(&proof_inputs, &sender)?;
         // A signer owning no input authorizes its data output alone, it spends with no key, and an address slot spends nothing.
@@ -482,6 +504,24 @@ impl Anonymous<'_> {
             presealed: None,
             list_salts: payment_salts(&self.payments)?,
         })
+    }
+}
+
+impl Anonymous<'_> {
+    /// After sealing, a slot's cache source changes no blinding and no output.
+    fn cached(&self, mut inputs: SppProofInputs) -> Result<SppProofInputs, RingError> {
+        let Some(read_cache) = &self.read_cache else {
+            return Ok(inputs);
+        };
+        for note in &read_cache.notes {
+            let input = inputs
+                .input_utxos
+                .iter_mut()
+                .find(|input| input.nullifier() == note.nullifier)
+                .ok_or(RingError::CachedInputUnknown)?;
+            *input = input.clone().with_cache_slot(note.slot)?;
+        }
+        Ok(inputs.with_read_cache(read_cache.cache))
     }
 }
 
@@ -539,18 +579,13 @@ pub(super) fn check_anonymous_inputs(
     if !hidden_leads {
         return Err(RingError::HiddenOwnerMissing);
     }
-    // A cached selector moves SPP's list, its cache accounts follow the settlement groups, and the
-    // ring frame neither carries the selector nor reads the owner run past those accounts. A cached
-    // slot here could reach no settlement. An address slot needs none of it, the statement binds its
-    // chain through the private transaction hash and SPP alone reads the slot.
+    // A cached write needs a public writer signing beside the hidden owner, and no party cell or
+    // signer class names one. A cached read and an address slot name no signer. The statement binds
+    // an address through the private transaction hash, and SPP reads a cached note under the selector.
     if inputs
-        .input_utxos
+        .output_utxos
         .iter()
-        .any(|input| input.cache_slot.is_some())
-        || inputs
-            .output_utxos
-            .iter()
-            .any(|output| output.cache_slot.is_some())
+        .any(|output| output.cache_slot.is_some())
     {
         return Err(RingError::InvalidAnonymousSlot);
     }

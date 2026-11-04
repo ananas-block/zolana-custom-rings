@@ -278,8 +278,10 @@ pub enum RingError {
     },
     #[error("an exit token owner names no SPL withdrawal")]
     AnonymousExitTokenOwnerWithoutSplExit,
-    #[error("anonymous transfers require uncached noncompact Ed25519 notes and no address slot")]
+    #[error("an anonymous transfer writes no cache and names no compact slot")]
     InvalidAnonymousSlot,
+    #[error("the read cache names a note the transfer does not spend")]
+    CachedInputUnknown,
     #[error("an anonymous ring requires an Ed25519 recipient")]
     AnonymousRecipient,
     #[error("ring address {address} pays into ring {ring}, the transfer runs in another")]

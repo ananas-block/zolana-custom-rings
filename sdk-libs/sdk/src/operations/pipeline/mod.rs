@@ -30,6 +30,7 @@ use solana_instruction::Instruction;
 use spr_client::{AsyncRpc, ClientError, OwnerAuthorization, ProofAuthority, Shape, TransferInput};
 use spr_event::is_confidential_encrypted_output;
 use spr_hasher::{hash_chain::create_hash_chain_from_slice, primitives::solana_owner_identity};
+use spr_interface::instruction::instruction_data::transact::CacheAccess;
 use spr_interface::{instruction::TreeContext, N_PUBLIC_SLOTS};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
@@ -48,8 +49,8 @@ use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, Ri
 
 pub use self::{
     anonymous::{
-        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CoOwner,
-        EntrySpend, NoteData, RingPayment, WideFrames,
+        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CachedNote,
+        CoOwner, EntrySpend, NoteData, ReadCache, RingPayment, WideFrames,
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
@@ -702,7 +703,12 @@ impl<'a> Prepared<'a> {
             pools,
             wide: false,
         }
-        .sealed_wide(proof_inputs.output_utxos.iter().any(carries_data)))
+        // A disclosed opening spans every slot of the key like a data tail, a reader that raised the
+        // key to another output count would leave the opening's rows short of the digest it proves.
+        .sealed_wide(
+            proof_inputs.output_utxos.iter().any(carries_data)
+                || self.pipeline.approval_blinder.is_some(),
+        ))
     }
 
     /// The external data is final after the seal, the owner signs its message hash.
@@ -900,6 +906,7 @@ impl<'a> Sealed<'a> {
             output_tree: trees.output,
             owner_signers,
             interface_transfer_accounts,
+            read_cache: proof_inputs.cache_accounts.read,
             co_signers,
             delegate,
         };
@@ -908,7 +915,8 @@ impl<'a> Sealed<'a> {
         parts.approval = policy.approval;
         let approval_opening = match approval_blinder {
             Some(blinder) => {
-                let totals = approval_totals_of(&proof_inputs, parts.n_out)?;
+                let totals =
+                    approval_totals_of(&proof_inputs, parts.data().audit_stream()?.capacity)?;
                 parts.extensions.approval_totals = Some(totals.commitment(&blinder)?);
                 Some(ApprovalOpening::of(&totals, &blinder))
             }
@@ -1055,6 +1063,7 @@ impl Unwitnessed<'_> {
             true => AnonymousParties {
                 payer: frame.proof_inputs.payer.as_array(),
                 co_signers: &frame.accounts.co_signers,
+                funders: &frame.accounts.deposit_funders(&frame.parts),
                 exit_destination: exit_destination.as_ref().map(Address::as_array),
             }
             .identities()?,
@@ -1208,6 +1217,15 @@ impl ProvenRingTransfer {
     pub fn owner_signers(&self) -> &[Address] {
         &self.accounts.owner_signers
     }
+
+    /// The keys that sign for a deposit leg, in leg order, the payer among them where it funds one.
+    pub fn deposit_funders(&self) -> Vec<Address> {
+        self.accounts
+            .deposit_funders(&self.parts)
+            .into_iter()
+            .map(Address::new_from_array)
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1298,7 +1316,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             data_hash: external.data_hash,
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
-            cache: None,
+            cache: cache_access(parts.inputs),
             // Sized here, `frame` writes the digest of the totals.
             approval_totals: preview.discloses_approval.then_some([0; 32]),
             signer_data_counts: preview.signer_data_counts,
@@ -1356,6 +1374,19 @@ fn address_chain(inputs: &[SppProofInputUtxo]) -> Result<[u8; 32], RingError> {
     }
 }
 
+/// The cached selector of the slots a rail marked. Reads alone, a cached write refuses at staging.
+fn cache_access(inputs: &SppProofInputs) -> Option<CacheAccess> {
+    let read_bitmap = inputs
+        .input_utxos
+        .iter()
+        .filter_map(|input| input.cache_slot)
+        .fold(0u64, |bits, slot| bits | 1 << slot);
+    (read_bitmap != 0).then_some(CacheAccess {
+        read_bitmap,
+        write_slots: CacheAccess::NO_WRITES,
+    })
+}
+
 /// A key without data capacity holds every slot's data hashes to zero.
 fn carries_data(output: &SppProofOutputUtxo) -> bool {
     !output.is_dummy()
@@ -1384,12 +1415,10 @@ fn signer_data_counts(
         .collect::<Result<Vec<_>, RingError>>()?;
     let counts = SignerDataCounts::of_run(
         &run,
-        slots
-            .iter()
-            .map(|(owner_identity, data_hash)| LiveSlot {
-                owner_identity,
-                data_hash,
-            }),
+        slots.iter().map(|(owner_identity, data_hash)| LiveSlot {
+            owner_identity,
+            data_hash,
+        }),
     )?;
     Ok((counts != SignerDataCounts::default()).then_some(counts))
 }
@@ -1523,9 +1552,10 @@ pub(crate) fn public_leg(transfer: &SettlementTransfer) -> PublicLeg {
 }
 
 /// The wallet and the relay read one layout, rows are the inputs' owners whatever their padding.
+/// `capacity` is the selected key's `N`, the circuit commits every slot of it.
 pub(crate) fn approval_totals_of(
     inputs: &SppProofInputs,
-    n_out: u8,
+    capacity: usize,
 ) -> Result<ApprovalTotals, RingError> {
     let public = public_slots(&inputs.external_data.interface_transfers)?;
     let senders = inputs
@@ -1541,7 +1571,7 @@ pub(crate) fn approval_totals_of(
         public_assets: &public.asset_fields()?,
         public_gross: &public.gross(),
     }
-    .approval_totals(usize::from(n_out))
+    .approval_totals(capacity)
 }
 
 pub(crate) fn public_slots(transfers: &[SettlementTransfer]) -> Result<PublicSlots, RingError> {
