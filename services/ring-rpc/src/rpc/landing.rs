@@ -19,7 +19,7 @@ pub trait ChainSubmit: Send + Sync {
     /// Finalized height, pending signatures cannot expire against a newer fork.
     async fn block_height(&self) -> Result<u64, RingRpcError>;
 
-    async fn account_exists(&self, address: Address) -> Result<bool, RingRpcError>;
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError>;
 
     async fn rent_exempt_lamports(&self, data_len: usize) -> Result<u64, RingRpcError>;
 
@@ -96,8 +96,12 @@ impl SolanaChain {
 
 #[async_trait]
 impl ChainSubmit for SolanaChain {
-    async fn account_exists(&self, address: Address) -> Result<bool, RingRpcError> {
-        Ok(self.rpc.get_account(address).await?.is_some())
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(self
+            .rpc
+            .get_account(address)
+            .await?
+            .map(|account| account.data))
     }
 
     async fn rent_exempt_lamports(&self, data_len: usize) -> Result<u64, RingRpcError> {
@@ -190,11 +194,11 @@ mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedLanding {
-        async fn account_exists(
+        async fn account_data(
             &self,
             _address: solana_address::Address,
-        ) -> Result<bool, RingRpcError> {
-            Ok(false)
+        ) -> Result<Option<Vec<u8>>, RingRpcError> {
+            Ok(None)
         }
 
         async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {

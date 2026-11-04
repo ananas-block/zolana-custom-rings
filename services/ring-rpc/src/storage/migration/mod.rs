@@ -51,11 +51,11 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE records_updates (seq {serial}, id {blob} NOT NULL UNIQUE, registry {blob} NOT NULL, ring {blob} NOT NULL, request TEXT NOT NULL, writes {blob} NOT NULL, queued_slot BIGINT NOT NULL, valid_until_slot BIGINT NOT NULL, status TEXT NOT NULL, batch BIGINT REFERENCES records_batches(id), reason TEXT, attempts BIGINT NOT NULL DEFAULT 0, awaited BIGINT NOT NULL DEFAULT 0, joined {blob}, member {blob}, signer {blob}, role TEXT)"),
             format!(
                 "CREATE TABLE relay_reservations (key {blob} NOT NULL PRIMARY KEY, relay_id {blob} NOT NULL, \
-                 signer {blob} NOT NULL, lamports BIGINT NOT NULL, ring {blob}, buffer {blob}, \
-                 uploaded BIGINT NOT NULL, proven TEXT, touched_slot BIGINT NOT NULL)"
+                 signer {blob} NOT NULL, lamports BIGINT NOT NULL, landing_rent BIGINT NOT NULL, ring {blob}, buffer {blob}, \
+                 uploaded BIGINT NOT NULL, spent BIGINT NOT NULL, proven TEXT, touched_slot BIGINT NOT NULL)"
             ),
             format!(
-                "CREATE TABLE relay_reserved (scope {blob} NOT NULL PRIMARY KEY, outstanding BIGINT NOT NULL)"
+                "CREATE TABLE relay_reserved (scope {blob} NOT NULL PRIMARY KEY, committed BIGINT NOT NULL)"
             ),
             "CREATE INDEX relay_reservations_relay ON relay_reservations(relay_id)".to_owned(),
             "CREATE INDEX relay_reservations_touched ON relay_reservations(touched_slot)".to_owned(),

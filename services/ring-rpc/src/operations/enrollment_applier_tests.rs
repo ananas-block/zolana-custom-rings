@@ -118,11 +118,11 @@ impl StubChain {
 
 #[async_trait]
 impl ChainSubmit for StubChain {
-    async fn account_exists(
+    async fn account_data(
         &self,
         _address: solana_address::Address,
-    ) -> Result<bool, RingRpcError> {
-        Ok(false)
+    ) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(None)
     }
 
     async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {

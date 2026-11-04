@@ -257,6 +257,15 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
             .map(|root| root.registry)
             .ok_or_else(|| RelayError::RingNotServed.into())
     }
+
+    async fn delegate(&self, ring: Address) -> Result<Option<Address>, RingRpcError> {
+        Ok(self
+            .0
+            .source
+            .ring_config(ring)
+            .await?
+            .and_then(|config| config.delegate))
+    }
 }
 
 impl<S: TransactionSource> Shared<S> {

@@ -66,6 +66,8 @@ pub enum RelayIntent {
     },
     Delegate {
         proof_inputs: ProofInputBytes,
+        /// The ring delegate's Ed25519 over `SppProofInputs::message_hash`.
+        delegate_signature: SerializableSignature,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         token_account_setup: Vec<TokenAccountSetup>,
     },

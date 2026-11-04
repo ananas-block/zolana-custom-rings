@@ -480,9 +480,9 @@ pub(crate) mod tests {
     /// No outcome until a test sets one, a send fails while `down`.
     pub(crate) struct ScriptedChain {
         height: Mutex<u64>,
-        outcome: Mutex<Option<ChainOutcome>>,
+        pub(crate) outcome: Mutex<Option<ChainOutcome>>,
         sent: Mutex<usize>,
-        down: Mutex<bool>,
+        pub(crate) down: Mutex<bool>,
     }
 
     impl Default for ScriptedChain {
@@ -498,11 +498,11 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedChain {
-        async fn account_exists(
+        async fn account_data(
             &self,
             _address: solana_address::Address,
-        ) -> Result<bool, RingRpcError> {
-            Ok(false)
+        ) -> Result<Option<Vec<u8>>, RingRpcError> {
+            Ok(None)
         }
 
         async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
@@ -623,7 +623,12 @@ pub(crate) mod tests {
                     crate::cosign::ApproveClass::Transfers,
                 ]));
             if let Some(relay) = relay {
-                builder = builder.with_relay(relay);
+                builder = builder.with_relay(relay).with_relay_budget(
+                    crate::relay_reservations::RelayBudget {
+                        total_lamports: 1_000_000,
+                        signer_lamports: 1_000_000,
+                    },
+                );
             }
             let hub = builder.local(RING, auditor).expect("hub");
             Self {

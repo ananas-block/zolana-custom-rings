@@ -144,8 +144,13 @@ impl ChainSubmit for RecordingChain {
         Ok(self.slot.load(Ordering::Relaxed))
     }
 
-    async fn account_exists(&self, address: Address) -> Result<bool, RingRpcError> {
-        Ok(self.accounts.lock().expect("accounts").contains(&address))
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(self
+            .accounts
+            .lock()
+            .expect("accounts")
+            .contains(&address)
+            .then(Vec::new))
     }
 
     async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {

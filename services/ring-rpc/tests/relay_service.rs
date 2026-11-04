@@ -13,13 +13,19 @@ use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
+use spr_instruction::instruction::{
+    CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts,
+};
+use spr_interface::SPL_TOKEN_PROGRAM_ID;
 use spr_keypair::NullifierKey;
-use spr_transaction::{utxo::SppProofInputUtxo, WalletUtxo};
+use spr_transaction::{
+    instructions::transact::SettlementTransfer, utxo::SppProofInputUtxo, WalletUtxo,
+};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes,
-    RelayEnrollInputs, RelayIntent, RelayMergeInputs, RelayOperation, RelayQuote, RelayRail,
-    RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
-    SUBMIT_RELAY,
+    RelayEnrollInputs, RelayIntent, RelayMergeInputs, RelayOperation, RelayProofInputs, RelayQuote,
+    RelayRail, RelayStatus, RelayStep, SubmitRelayRequest, TokenAccountSetup, GET_RELAY_QUOTE,
+    GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
     relay_module, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings, Store,
@@ -28,7 +34,7 @@ use zolana_ring_rpc::{
 
 use relay_fixture::{
     anonymous_rail, deposit_request, proof_inputs, signed_request, signers_verify, RecordingChain,
-    RecordingProver, RENT_LAMPORTS, SLOT,
+    RecordingProver, LAST_VALID_BLOCK_HEIGHT, RENT_LAMPORTS, SLOT,
 };
 
 const RING: Address = Address::new_from_array([6; 32]);
@@ -47,9 +53,18 @@ impl ServedRings for OneRing {
     async fn tracking_registry(&self, _ring: Address) -> Result<Address, RingRpcError> {
         Ok(TRACKING_REGISTRY)
     }
+
+    async fn delegate(&self, _ring: Address) -> Result<Option<Address>, RingRpcError> {
+        Ok(Some(ring_delegate().pubkey()))
+    }
+}
+
+fn ring_delegate() -> Keypair {
+    Keypair::new_from_array([51; 32])
 }
 
 struct Fixture {
+    relay: Arc<Relay>,
     module: RpcModule<Arc<Relay>>,
     prover: Arc<RecordingProver>,
     chain: Arc<RecordingChain>,
@@ -79,8 +94,10 @@ impl Fixture {
             total_lamports: budget,
             signer_lamports: budget,
         });
+        let relay = Arc::new(relay);
         Self {
-            module: relay_module(Arc::new(relay)).expect("module"),
+            relay: relay.clone(),
+            module: relay_module(relay).expect("module"),
             prover,
             chain,
             fee_payer: fee_payer_address,
@@ -95,6 +112,22 @@ impl Fixture {
             .query_one(Statement::from_string(
                 connection.get_database_backend(),
                 "SELECT COALESCE(SUM(lamports), 0) AS total FROM relay_reservations".to_owned(),
+            ))
+            .await
+            .expect("sum")
+            .expect("row")
+            .try_get("", "total")
+            .expect("total")
+    }
+
+    /// Lamports the total counts, reserved and spent for good.
+    async fn committed(&self) -> i64 {
+        let connection = self.store.connection();
+        connection
+            .query_one(Statement::from_sql_and_values(
+                connection.get_database_backend(),
+                "SELECT COALESCE(SUM(committed), 0) AS total FROM relay_reserved WHERE scope=$1",
+                vec![vec![0u8; 32].into()],
             ))
             .await
             .expect("sum")
@@ -625,6 +658,25 @@ async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
         .map(|write| write.message.instructions()[0].data.clone())
         .collect();
     assert_eq!(offsets.len(), writes.len(), "no write went out twice");
+
+    // The rent returned with the settlement, the fees stay, the refused send among them.
+    let RelayStep::Submitted { relay_id } = step else {
+        unreachable!();
+    };
+    let _: RelayStatus = fixture
+        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+        .await;
+    let signatures = writes.len() as i64
+        + 1
+        + i64::from(
+            sent.last()
+                .expect("settlement")
+                .message
+                .header()
+                .num_required_signatures,
+        );
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(fixture.committed().await, signatures * 5_000);
 }
 
 /// A restart reads the reservation from the store, past the window its buffer closes and its charge returns.
@@ -673,6 +725,9 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
             .store(SLOT + ABANDONED_AFTER_SLOTS + 1, Ordering::Relaxed);
         restarted.sweep_abandoned().await.expect("past the window");
         assert_eq!(fixture.outstanding().await, 0);
+        // The rent returned, the charged sends stay, the close beside a landed write and a refused one.
+        let signatures = if buffer_landed { 3 } else { 1 };
+        assert_eq!(fixture.committed().await, signatures * 5_000);
         let sent = fixture.sent();
         match buffer_landed {
             true => {
@@ -684,5 +739,226 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
             }
             false => assert_eq!(sent.len(), sent_before, "no buffer to close"),
         }
+    }
+}
+
+/// Landed rent and fees never return, only the operator's budget ends a repeated enrollment.
+#[tokio::test]
+async fn repeated_landed_enrollments_stop_at_the_budget() {
+    let fixture = Fixture::with_budget(2 * ENROLLMENT_LAMPORTS).await;
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    for seed in [41, 42] {
+        let owner = Keypair::new_from_array([seed; 32]);
+        let step = fixture
+            .prepare(&enrollment(&owner, vec![6, seed], quote.clone()))
+            .await
+            .expect("within the budget");
+        let RelayStep::SignMessage { relay_id, message } = step else {
+            panic!("the owner signs its enrollment, got {step:?}");
+        };
+        let _: RelayStatus = fixture
+            .call(
+                SUBMIT_RELAY,
+                SubmitRelayRequest {
+                    relay_id: relay_id.clone(),
+                    signer: owner.pubkey().into(),
+                    signature: owner.sign_message(&message.0).into(),
+                },
+            )
+            .await;
+        let status: RelayStatus = fixture
+            .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+            .await;
+        assert!(
+            matches!(status, RelayStatus::Confirmed { .. }),
+            "{status:?}"
+        );
+    }
+    assert_eq!(fixture.outstanding().await, 0);
+    assert_eq!(fixture.committed().await, (2 * ENROLLMENT_LAMPORTS) as i64);
+    let next = Keypair::new_from_array([43; 32]);
+    let refused = fixture
+        .prepare(&enrollment(&next, vec![6, 43], quote))
+        .await;
+    assert!(refused_with(&refused, RelayError::Budget), "{refused:?}");
+}
+
+#[tokio::test]
+async fn an_enrollment_never_signed_returns_its_whole_charge_past_the_window() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    fixture
+        .prepare(&enrollment(&owner, vec![6, 1], quote))
+        .await
+        .expect("within the budget");
+    assert_eq!(fixture.committed().await, ENROLLMENT_LAMPORTS as i64);
+
+    fixture
+        .chain
+        .height
+        .store(LAST_VALID_BLOCK_HEIGHT + 1, Ordering::Relaxed);
+    fixture
+        .chain
+        .slot
+        .store(SLOT + ABANDONED_AFTER_SLOTS + 1, Ordering::Relaxed);
+    fixture.relay.sweep_abandoned().await.expect("sweep");
+    assert_eq!(fixture.committed().await, 0);
+}
+
+/// The named key signs what an owner signs on the other rails.
+fn delegate_request(
+    quote: RelayQuote,
+    proof_inputs: &RelayProofInputs,
+    signer: &Keypair,
+) -> PrepareRelayRequest {
+    let digest = proof_inputs
+        .spp_proof_inputs(quote.fee_payer.0)
+        .message_hash()
+        .expect("message hash");
+    PrepareRelayRequest {
+        ring: proof_inputs.ring_program_id.into(),
+        quote,
+        intent: RelayIntent::Delegate {
+            proof_inputs: ProofInputBytes::new(proof_inputs.encode().expect("encode")),
+            delegate_signature: signer.sign_message(&digest).into(),
+            token_account_setup: Vec::new(),
+        },
+        co_signers: Vec::new(),
+    }
+}
+
+fn delegate_inputs(delegate: Address) -> RelayProofInputs {
+    proof_inputs(RING, RelayRail::Delegate { delegate })
+}
+
+#[tokio::test]
+async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() {
+    let fixture = Fixture::with_budget(FRAME_BUDGET).await;
+    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+    let delegate = ring_delegate();
+    let quote = fixture.quote(RelayOperation::Delegate).await;
+    let request = delegate_request(quote, &delegate_inputs(delegate.pubkey()), &delegate);
+
+    let step = fixture.prepare(&request).await.expect("the delegate relay");
+
+    assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
+    assert!(!fixture.sent().is_empty());
+    assert!(fixture.outstanding().await > 0);
+    let connection = fixture.store.connection();
+    let signer: Vec<u8> = connection
+        .query_one(Statement::from_string(
+            connection.get_database_backend(),
+            "SELECT signer FROM relay_reservations".to_owned(),
+        ))
+        .await
+        .expect("read")
+        .expect("reservation")
+        .try_get("", "signer")
+        .expect("signer");
+    assert_eq!(signer, delegate.pubkey().to_bytes());
+}
+
+#[tokio::test]
+async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
+    let fixture = Fixture::with_budget(FRAME_BUDGET).await;
+    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame());
+    let delegate = ring_delegate();
+    let stranger = Keypair::new_from_array([52; 32]);
+    let quote = fixture.quote(RelayOperation::Delegate).await;
+    for (named, signer) in [
+        (delegate.pubkey(), &stranger),
+        (stranger.pubkey(), &stranger),
+    ] {
+        let request = delegate_request(quote.clone(), &delegate_inputs(named), signer);
+        let refused = fixture.prepare(&request).await;
+        assert!(
+            refused_with(&refused, RelayError::DelegateSignature),
+            "{refused:?}"
+        );
+    }
+    assert!(fixture.prover.requests.lock().expect("requests").is_empty());
+    assert!(fixture.sent().is_empty());
+    assert_eq!(fixture.committed().await, 0);
+}
+
+/// The relay's fee payer funds the create, only a missing account costs rent.
+#[tokio::test]
+async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
+    let mint = Address::new_from_array([0x61; 32]);
+    let token_owner = Address::new_from_array([0x62; 32]);
+    for (budget, exists) in [(0, false), (0, true), (FRAME_BUDGET, false)] {
+        let fixture = Fixture::with_budget(budget).await;
+        let token_program = Address::new_from_array(SPL_TOKEN_PROGRAM_ID);
+        let token_account = CreateAssociatedTokenAccount {
+            payer: fixture.fee_payer,
+            owner: token_owner,
+            mint,
+            token_program,
+        }
+        .address();
+        if exists {
+            fixture
+                .chain
+                .accounts
+                .lock()
+                .expect("accounts")
+                .push(token_account);
+        }
+        let mut inputs = proof_inputs(RING, RelayRail::Confidential);
+        inputs
+            .external_data
+            .interface_transfers
+            .push(SettlementTransfer::Spl {
+                mint,
+                is_deposit: false,
+                amount: 15,
+                user_spl_token: token_account,
+            });
+        inputs
+            .interface_transfer_accounts
+            .push(TransactInterfaceTransferAccounts::SplWithdrawal(
+                TransactSplWithdrawalAccounts {
+                    mint,
+                    spl_interface: spr_interface::pda::spl_interface(&mint),
+                    user_token_account: token_account,
+                    token_program,
+                },
+            ));
+        let quote = fixture.quote(RelayOperation::Confidential).await;
+        let mut request = signed_request(quote, &inputs);
+        let RelayIntent::Confidential {
+            token_account_setup,
+            ..
+        } = &mut request.intent
+        else {
+            panic!("a confidential request");
+        };
+        token_account_setup.push(TokenAccountSetup {
+            mint: mint.into(),
+            owner: token_owner.into(),
+        });
+
+        let prepared = fixture.prepare(&request).await;
+
+        if budget == 0 && !exists {
+            assert!(refused_with(&prepared, RelayError::Budget), "{prepared:?}");
+            assert!(fixture.sent().is_empty());
+            continue;
+        }
+        let RelayStep::Submitted { relay_id } = prepared.expect("relayed") else {
+            panic!("the owner signed");
+        };
+        let _: RelayStatus = fixture
+            .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+            .await;
+        assert_eq!(fixture.outstanding().await, 0);
+        let fee = i64::from(fixture.sent()[0].message.header().num_required_signatures) * 5_000;
+        let kept = if exists {
+            0
+        } else {
+            RENT_LAMPORTS as i64 + fee
+        };
+        assert_eq!(fixture.committed().await, kept);
     }
 }

@@ -11,8 +11,9 @@ const TOTAL_SCOPE: [u8; 32] = [0; 32];
 /// Zero funds nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RelayBudget {
-    /// Rent and fees outstanding at once, over every signer.
+    /// Reserved and spent over the store's life, only the operator raises it.
     pub total_lamports: u64,
+    /// Outstanding at once under one key.
     pub signer_lamports: u64,
 }
 
@@ -29,6 +30,8 @@ pub(crate) struct Reserve<'a> {
     pub relay_id: &'a RelayId,
     pub signer: Address,
     pub lamports: u64,
+    /// Rent the relay never recovers once its transaction lands.
+    pub landing_rent: u64,
     pub buffer: Option<ReservedBuffer>,
     /// The proven frame, a retry of the request proves nothing again.
     pub proven: Option<String>,
@@ -42,6 +45,7 @@ pub(crate) struct Reservation {
     pub relay_id: RelayId,
     pub signer: Address,
     pub lamports: u64,
+    pub landing_rent: u64,
     pub buffer: Option<ReservedBuffer>,
     /// Frame writes landed, a retry resumes past them.
     pub uploaded: usize,
@@ -96,6 +100,7 @@ fn read_reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
         relay_id: RelayId(spr_indexer_api::Hash(bytes32("relay_id")?)),
         signer: Address::new_from_array(bytes32("signer")?),
         lamports: number("lamports")?,
+        landing_rent: number("landing_rent")?,
         buffer,
         uploaded: usize::try_from(number("uploaded")?)
             .map_err(|_| DbErr::Custom("uploaded out of range".into()))?,
@@ -103,7 +108,7 @@ fn read_reservation(row: &QueryResult) -> Result<Reservation, DbErr> {
     })
 }
 
-const COLUMNS: &str = "key,relay_id,signer,lamports,ring,buffer,uploaded,proven";
+const COLUMNS: &str = "key,relay_id,signer,lamports,landing_rent,ring,buffer,uploaded,proven";
 
 impl<'a> RelayReservations<'a> {
     pub fn new(db: &'a DatabaseConnection) -> Self {
@@ -120,6 +125,7 @@ impl<'a> RelayReservations<'a> {
             relay_id,
             signer,
             lamports,
+            landing_rent,
             buffer,
             proven,
             slot,
@@ -130,9 +136,9 @@ impl<'a> RelayReservations<'a> {
         let raise = |scope: &[u8; 32], bound: u64| -> Result<Statement, DbErr> {
             Ok(Statement::from_sql_and_values(
                 backend,
-                "INSERT INTO relay_reserved(scope,outstanding) SELECT $1,$2 WHERE $2 <= $3 \
-                 ON CONFLICT(scope) DO UPDATE SET outstanding = relay_reserved.outstanding + $2 \
-                 WHERE relay_reserved.outstanding + $2 <= $3",
+                "INSERT INTO relay_reserved(scope,committed) SELECT $1,$2 WHERE $2 <= $3 \
+                 ON CONFLICT(scope) DO UPDATE SET committed = relay_reserved.committed + $2 \
+                 WHERE relay_reserved.committed + $2 <= $3",
                 vec![
                     value(scope),
                     lamports_value(*lamports)?,
@@ -161,14 +167,15 @@ impl<'a> RelayReservations<'a> {
         let inserted = transaction
             .execute(Statement::from_sql_and_values(
                 backend,
-                "INSERT INTO relay_reservations(key,relay_id,signer,lamports,ring,buffer,uploaded,\
-                 proven,touched_slot) VALUES($1,$2,$3,$4,$5,$6,0,$7,$8) \
-                 ON CONFLICT(key) DO NOTHING",
+                "INSERT INTO relay_reservations(key,relay_id,signer,lamports,landing_rent,ring,\
+                 buffer,uploaded,spent,proven,touched_slot) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,0,0,$8,$9) ON CONFLICT(key) DO NOTHING",
                 vec![
                     value(key),
                     value(&relay_id.0 .0),
                     value(signer.as_ref()),
                     lamports_value(*lamports)?,
+                    lamports_value(*landing_rent)?,
                     Value::Bytes(buffer.map(|held| Box::new(held.ring.as_ref().to_vec()))),
                     Value::Bytes(buffer.map(|held| Box::new(held.buffer.as_ref().to_vec()))),
                     Value::String(proven.clone().map(Box::new)),
@@ -218,6 +225,18 @@ impl<'a> RelayReservations<'a> {
         Ok(())
     }
 
+    /// Counted ahead of its send, a crash never hides a landed fee.
+    pub async fn charge(&self, key: &[u8; 32], lamports: u64) -> Result<(), DbErr> {
+        self.db
+            .execute(Statement::from_sql_and_values(
+                self.db.get_database_backend(),
+                "UPDATE relay_reservations SET spent = spent + $2 WHERE key=$1",
+                vec![value(key), lamports_value(lamports)?],
+            ))
+            .await?;
+        Ok(())
+    }
+
     /// Oldest first, untouched since `before_slot`.
     pub async fn abandoned(&self, before_slot: u64, limit: u64) -> Result<Vec<Reservation>, DbErr> {
         self.db
@@ -235,10 +254,17 @@ impl<'a> RelayReservations<'a> {
             .collect()
     }
 
-    /// A released key returns its charge once.
-    pub async fn release(&self, held: &Reservation) -> Result<(), DbErr> {
+    /// The signer's share returns whole, the total keeps the charged fees and `landed` for good.
+    pub async fn release(&self, held: &Reservation, landed: u64) -> Result<(), DbErr> {
         let backend = self.db.get_database_backend();
         let transaction = self.db.begin().await?;
+        let spent = transaction
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT spent FROM relay_reservations WHERE key=$1",
+                vec![value(&held.key)],
+            ))
+            .await?;
         let deleted = transaction
             .execute(Statement::from_sql_and_values(
                 backend,
@@ -247,25 +273,34 @@ impl<'a> RelayReservations<'a> {
             ))
             .await?
             .rows_affected();
-        if deleted != 0 {
-            for scope in [&TOTAL_SCOPE, held.signer.as_array()] {
-                transaction
-                    .execute(Statement::from_sql_and_values(
-                        backend,
-                        "UPDATE relay_reserved SET outstanding = outstanding - $2 WHERE scope=$1",
-                        vec![value(scope), lamports_value(held.lamports)?],
-                    ))
-                    .await?;
-            }
-            // Fresh keys leave no counter row behind.
-            transaction
-                .execute(Statement::from_sql_and_values(
-                    backend,
-                    "DELETE FROM relay_reserved WHERE scope=$1 AND outstanding=0",
-                    vec![value(held.signer.as_array())],
-                ))
-                .await?;
-        }
+        let Some(spent) = spent.filter(|_| deleted != 0) else {
+            return transaction.commit().await;
+        };
+        let spent: i64 = spent.try_get("", "spent")?;
+        let returned = i128::from(held.lamports) - i128::from(spent) - i128::from(landed);
+        let returned = i64::try_from(returned)
+            .map_err(|_| DbErr::Custom("returned lamports out of range".into()))?;
+        let lower = |scope: &[u8; 32], lamports: i64| {
+            Statement::from_sql_and_values(
+                backend,
+                "UPDATE relay_reserved SET committed = committed - $2 WHERE scope=$1",
+                vec![value(scope), lamports.into()],
+            )
+        };
+        transaction.execute(lower(&TOTAL_SCOPE, returned)).await?;
+        let share = i64::try_from(held.lamports)
+            .map_err(|_| DbErr::Custom("lamports out of range".into()))?;
+        transaction
+            .execute(lower(held.signer.as_array(), share))
+            .await?;
+        // Fresh keys leave no counter row behind.
+        transaction
+            .execute(Statement::from_sql_and_values(
+                backend,
+                "DELETE FROM relay_reserved WHERE scope=$1 AND committed=0",
+                vec![value(held.signer.as_array())],
+            ))
+            .await?;
         transaction.commit().await
     }
 
@@ -329,6 +364,7 @@ mod tests {
                 relay_id: &id,
                 signer: who,
                 lamports,
+                landing_rent: 0,
                 buffer: None,
                 proven: None,
                 slot: u64::from(key),
@@ -358,8 +394,8 @@ mod tests {
             reserve(&store, 4, signer(3), 1).await,
             ReserveOutcome::OverTotal
         );
-        store.release(&first).await.expect("release");
-        store.release(&first).await.expect("repeat");
+        store.release(&first, 0).await.expect("release");
+        store.release(&first, 0).await.expect("repeat");
         assert!(matches!(
             reserve(&store, 6, signer(3), 60).await,
             ReserveOutcome::Held(_)
@@ -385,6 +421,7 @@ mod tests {
                 relay_id: &again,
                 signer: signer(1),
                 lamports: 60,
+                landing_rent: 0,
                 buffer: None,
                 proven: None,
                 slot: 10,
@@ -399,5 +436,29 @@ mod tests {
         assert_eq!(retried.relay_id, again);
         assert!(store.abandoned(10, 8).await.expect("read").is_empty());
         assert_eq!(store.abandoned(11, 8).await.expect("read").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_total_keeps_charged_fees_and_landed_rent_and_the_signer_share_returns() {
+        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let store = RelayReservations::new(database.connection());
+        let ReserveOutcome::Held(first) = reserve(&store, 1, signer(1), 60).await else {
+            panic!("within both bounds");
+        };
+        store.charge(&first.key, 5).await.expect("charge");
+        store.release(&first, 15).await.expect("release");
+        // The total holds 20 of 100 and the signer holds none of 60.
+        assert!(matches!(
+            reserve(&store, 2, signer(1), 60).await,
+            ReserveOutcome::Held(_)
+        ));
+        assert_eq!(
+            reserve(&store, 3, signer(2), 21).await,
+            ReserveOutcome::OverTotal
+        );
+        assert!(matches!(
+            reserve(&store, 4, signer(2), 20).await,
+            ReserveOutcome::Held(_)
+        ));
     }
 }
