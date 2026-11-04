@@ -30,5 +30,6 @@
   "InvalidReaderKey": 9032,
   "InvalidAuditorKey": 9033,
   "TrackingRootBelowFloor": 9034,
-  "SourceKindMismatch": 9035
+  "SourceKindMismatch": 9035,
+  "WriteCounterNotIncreasing": 9036
 }
