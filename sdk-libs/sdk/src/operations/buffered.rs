@@ -108,31 +108,11 @@ impl BufferedFrame {
         close_frame_buffer(self.ring_program, self.writer, self.buffer)
     }
 
-    /// Writes every chunk, then settles, a failed settlement leaves the buffer to [`Self::close`].
-    pub async fn send<R: AsyncRpc + ?Sized>(
-        &self,
-        client: &R,
-        writer: &(dyn Signer + Sync),
-        signers: &[&(dyn Signer + Sync)],
-    ) -> Result<SettledSubmission, RingError> {
-        for write in self.writes()? {
-            match land(client, writer, &[], write, InstructionTag::WriteFrame).await? {
-                settled @ SettledSubmission::Failed { .. } => return Ok(settled),
-                SettledSubmission::Confirmed { .. } => {}
-            }
-        }
-        let settle = self.settle();
-        land(
-            client,
-            writer,
-            signers,
-            settle,
-            InstructionTag::SettleBuffered,
-        )
-        .await
-    }
-
     /// Returns the rent of a buffer whose settlement failed, a buffer never created stays a miss.
+    ///
+    /// Only a final failure or an expired blockhash on the held transaction may lead here, a close
+    /// ahead of that turns a settlement still able to land into a failure. Repeating the call is
+    /// safe, the lookup ends it once a close landed.
     pub async fn abandon<R: AsyncRpc + ?Sized>(
         &self,
         client: &R,
@@ -141,8 +121,15 @@ impl BufferedFrame {
         if client.get_account(self.buffer).await?.is_none() {
             return Ok(());
         }
-        let close = self.close();
-        match land(client, writer, &[], close, InstructionTag::CloseFrameBuffer).await? {
+        let (blockhash, last_valid_block_height) = client.get_latest_blockhash().await?;
+        let message = compile_message(
+            &writer.pubkey(),
+            &[self.close()],
+            blockhash,
+            send_budget(InstructionTag::CloseFrameBuffer, None),
+        )?;
+        let transaction = sign_transaction(message, &[writer as &dyn Signer])?;
+        match send_and_settle(client, &transaction, last_valid_block_height).await? {
             SettledSubmission::Confirmed { .. } => Ok(()),
             SettledSubmission::Failed { signature, error } => {
                 Err(RingError::Rejected { signature, error })
@@ -182,28 +169,6 @@ pub fn close_frame_buffer(ring_program: Address, writer: Address, buffer: Addres
     }
 }
 
-fn write_budget() -> spr_client::ComputeBudgetConfig {
+pub(crate) fn write_budget() -> spr_client::ComputeBudgetConfig {
     send_budget(InstructionTag::WriteFrame, None)
-}
-
-async fn land<R: AsyncRpc + ?Sized>(
-    client: &R,
-    writer: &(dyn Signer + Sync),
-    signers: &[&(dyn Signer + Sync)],
-    instruction: Instruction,
-    tag: InstructionTag,
-) -> Result<SettledSubmission, RingError> {
-    let (blockhash, last_valid_block_height) = client.get_latest_blockhash().await?;
-    let message = compile_message(
-        &writer.pubkey(),
-        &[instruction],
-        blockhash,
-        send_budget(tag, None),
-    )?;
-    let transaction = {
-        let mut all: Vec<&dyn Signer> = vec![writer];
-        all.extend(signers.iter().map(|signer| *signer as &dyn Signer));
-        sign_transaction(message, &all)?
-    };
-    send_and_settle(client, &transaction, last_valid_block_height).await
 }

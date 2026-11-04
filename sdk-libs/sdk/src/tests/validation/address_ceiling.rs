@@ -1,7 +1,14 @@
+use custom_ring_interface::{
+    cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
+    AnonymousProofData, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
+    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MAX_FRAME_LEN,
+    MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::v1;
 use spr_client::ComputeBudgetConfig;
+use spr_interface::instruction::TreeContext;
 use spr_transaction::Mint;
 
 use super::*;
@@ -297,17 +304,101 @@ async fn a_zero_key_group_splits_at_the_zero_key_capacity() {
 /// Inputs a zero-key merge carries in one v1 transaction, measured here.
 const WIDEST_ZERO_KEY_MERGE: usize = 44;
 
-fn decide_frame(frame_len: usize) -> Result<CeilingDecision, AddressCeilingError> {
-    let mut data = vec![0; frame_len];
-    data[0] = custom_ring_interface::tag::TRANSFER;
+/// An anonymous transfer of `inputs` x `outputs`, slot 0 change, each other slot a body and a reply.
+fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -> Instruction {
+    let proof = CustomRingProof::zeroed();
+    let spp_proof = PlainGroth16Proof::zeroed();
+    let field = [1; 32];
+    let salt = [2; 16];
+    let record = [3; AUDIT_RECORD_LEN];
+    let body = [4; RECIPIENT_BODY_LEN];
+    let bundle = vec![5; sender_bundle_len(outputs)];
+    let nullifiers = vec![field; inputs];
+    let region = vec![6; reply_len.unwrap_or(0) * (outputs - 1)];
+    let envelope_room = vec![7; 8192];
+    let mut data = RingTransactData {
+        rail: RingRail::Anonymous,
+        n_in: inputs as u8,
+        n_out: outputs as u8,
+        proof: &proof,
+        tracking_revision: Revision::from(9),
+        own_revision: None,
+        policy: None,
+        spl_withdrawal_owners: &[],
+        approval: ApprovalMask::default(),
+        no_spend: false,
+        public_owners: false,
+        expiry_unix_ts: u32::MAX,
+        tx_viewing_u: &field,
+        salt: &salt,
+        extensions: FrameExtensions::default(),
+        interface_transfers: Vec::new(),
+        has_data: false,
+        entry: false,
+        wide_owners: false,
+        outputs: (0..outputs)
+            .map(|slot| RingOutput {
+                hash: &field,
+                owner_tag: match slot {
+                    0 => [0; 32],
+                    _ => slot_tag(field),
+                },
+                body: match slot {
+                    0 => SlotBody::None,
+                    _ => SlotBody::Recipient(&body),
+                },
+                record: &record,
+                tail: None,
+            })
+            .collect(),
+        replies: reply_len.map(|len| Replies {
+            len: len as u16,
+            region: &region,
+        }),
+        sender: Some(FramedSenderBundle {
+            tag: &field,
+            body: &bundle,
+        }),
+        envelope: &[],
+        private_tx_hash: &field,
+        anonymous: Some(AnonymousProofData {
+            commitment: &field,
+            commitment_pok: &field,
+            default_owner_tag: None,
+        }),
+        in_proof_owner: None,
+        spp_proof: &spp_proof,
+        nullifiers: &nullifiers,
+        input_trees: InputTrees::One(TreeContext {
+            utxo_tree_root_index: 1,
+            nullifier_tree_root_index: 2,
+        }),
+    };
+    data.envelope = &envelope_room[..data.audit_stream().unwrap().envelope().len];
+    Instruction {
+        program_id: address(2),
+        accounts: vec![AccountMeta::new(address(1), true)],
+        data: [
+            vec![custom_ring_interface::tag::TRANSFER],
+            data.encode().unwrap(),
+        ]
+        .concat(),
+    }
+}
+
+fn budget() -> ComputeBudgetConfig {
+    ComputeBudgetConfig::new(1_000_000)
+}
+
+fn fit(instruction: &Instruction) -> Result<Fit, FitError> {
+    TransactionFit::of(instruction, FitSigners::new(address(1)), budget())
+}
+
+fn decide_transfer(instruction: &Instruction) -> Result<CeilingDecision, AddressCeilingError> {
     AddressCeiling {
         payer: address(1),
-        instruction: &Instruction {
-            program_id: address(2),
-            accounts: vec![AccountMeta::new(address(1), true)],
-            data,
-        },
-        budget: ComputeBudgetConfig::new(1_000_000),
+        instruction,
+        budget: budget(),
         inputs: &[],
         merge_capacity: MergeCapacity {
             keyed: 45,
@@ -317,24 +408,185 @@ fn decide_frame(frame_len: usize) -> Result<CeilingDecision, AddressCeilingError
     .decide()
 }
 
+/// Past the payer, `signers` more required signatures.
+fn with_signers(mut instruction: Instruction, signers: u32) -> Instruction {
+    instruction
+        .accounts
+        .extend((0..signers).map(|seed| AccountMeta::new_readonly(address(7000 + seed), true)));
+    instruction
+}
+
+fn carrying(signers: u32) -> Instruction {
+    with_signers(
+        Instruction {
+            program_id: address(2),
+            accounts: Vec::new(),
+            data: Vec::new(),
+        },
+        signers,
+    )
+}
+
 #[test]
-fn past_the_byte_ceiling_a_frame_goes_buffered_and_past_the_cpi_limit_it_is_refused() {
-    use custom_ring_interface::MAX_FRAME_LEN;
+fn past_the_byte_ceiling_a_transfer_settles_from_a_buffer_and_the_fit_names_the_settlement() {
+    let small = anonymous_transfer(2, 2, None);
+    let inline = fit(&small).unwrap();
+    assert_eq!(inline.transport, FitTransport::Inline);
+    assert!(inline.bytes > small.data.len());
     assert!(matches!(
-        decide_frame(1000),
-        Ok(CeilingDecision::Inline(size)) if size.bytes < v1::MAX_TRANSACTION_SIZE
+        decide_transfer(&small),
+        Ok(CeilingDecision::Inline(size)) if size.bytes == inline.bytes
+    ));
+
+    let wide = anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
+    assert!(wide.data.len() > v1::MAX_TRANSACTION_SIZE);
+    let settled = fit(&wide).unwrap();
+    assert_eq!(settled.transport, FitTransport::Buffered);
+    assert!(settled.bytes < v1::MAX_TRANSACTION_SIZE);
+    assert_eq!(settled.signatures, 1);
+    // The payer, the program, the buffer.
+    assert_eq!(settled.addresses, 3);
+    assert!(settled
+        .cpi_bytes
+        .is_some_and(|bytes| bytes > wide.data.len()));
+    assert_eq!(settled.setup, SetupEffect::default());
+    assert!(matches!(
+        decide_transfer(&wide),
+        Ok(CeilingDecision::Buffered(size)) if size.bytes == settled.bytes
+    ));
+}
+
+#[test]
+fn signatures_past_the_limit_refuse_on_each_transport_and_at_each_preproof_check() {
+    let limit = usize::from(v1::MAX_SIGNATURES);
+    let payer_signs = |signature_count: usize| signature_count as u32 - 1;
+
+    let at_limit = fit(&carrying(payer_signs(limit))).unwrap();
+    assert_eq!(
+        (at_limit.signatures, at_limit.transport),
+        (limit, FitTransport::Inline)
+    );
+    let past = carrying(payer_signs(limit + 1));
+    assert!(matches!(
+        fit(&past),
+        Err(FitError::Signatures { signatures, limit: 12 }) if signatures == limit + 1
     ));
     assert!(matches!(
-        decide_frame(v1::MAX_TRANSACTION_SIZE),
-        Ok(CeilingDecision::Buffered(size)) if size.bytes < v1::MAX_TRANSACTION_SIZE
+        decide_transfer(&past),
+        Err(AddressCeilingError::Fit(FitError::Signatures { .. }))
     ));
     assert!(matches!(
-        decide_frame(MAX_FRAME_LEN),
-        Ok(CeilingDecision::Buffered(_))
+        crate::submission::check_transaction_size(&address(1), &past, budget()),
+        Err(RingError::AddressCeiling(AddressCeilingError::Fit(
+            FitError::Signatures { .. }
+        )))
     ));
+
+    let wide = || anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
+    let settled = fit(&with_signers(wide(), payer_signs(limit))).unwrap();
+    assert_eq!(
+        (settled.signatures, settled.transport),
+        (limit, FitTransport::Buffered)
+    );
     assert!(matches!(
-        decide_frame(MAX_FRAME_LEN + 1),
-        Err(AddressCeilingError::Fit(FitError::FrameTooLarge { bytes, limit: MAX_FRAME_LEN }))
-            if bytes == MAX_FRAME_LEN + 1
+        fit(&with_signers(wide(), payer_signs(limit + 1))),
+        Err(FitError::Signatures { .. })
+    ));
+
+    let repeated = with_signers(with_signers(carrying(0), 3), 3);
+    assert_eq!(fit(&repeated).unwrap().signatures, 4);
+}
+
+/// The compact frame clears the buffer limit, only the expansion passes the CPI limit.
+#[test]
+fn an_expansion_past_the_cpi_limit_refuses_with_the_compact_frame_under_its_own_limit() {
+    let refused_at = (MIN_REPLY_LEN..)
+        .find(|len| {
+            matches!(
+                fit(&anonymous_transfer(5, 16, Some(*len))),
+                Err(FitError::CpiBytes { .. })
+            )
+        })
+        .unwrap();
+    let refused = anonymous_transfer(5, 16, Some(refused_at));
+    assert!(refused.data.len() <= MAX_FRAME_LEN);
+    assert!(matches!(
+        decide_transfer(&refused),
+        Err(AddressCeilingError::Fit(FitError::CpiBytes { bytes, limit: MAX_CPI_DATA_LEN }))
+            if bytes > MAX_CPI_DATA_LEN
+    ));
+    let last_fit = fit(&anonymous_transfer(5, 16, Some(refused_at - 1))).unwrap();
+    assert_eq!(last_fit.transport, FitTransport::Buffered);
+    assert!(last_fit
+        .cpi_bytes
+        .is_some_and(|bytes| bytes <= MAX_CPI_DATA_LEN));
+}
+
+#[test]
+fn the_expansion_counts_the_exact_bytes_the_program_forwards() {
+    let wide = anonymous_transfer(5, 16, Some(MIN_REPLY_LEN));
+    let parsed = RingTransactData::parse(&wide.data[1..], RingRail::Anonymous).unwrap();
+    let forwarded = parsed
+        .data()
+        .spp_instruction_data_under(&RingPolicy::zeroed(), TransactProof::zeroed())
+        .unwrap();
+    assert_eq!(fit(&wide).unwrap().cpi_bytes, Some(forwarded.len()));
+
+    let garbled = Instruction {
+        data: vec![custom_ring_interface::tag::TRANSFER, 0],
+        ..wide
+    };
+    assert!(matches!(fit(&garbled), Err(FitError::UnparsedFrame)));
+}
+
+#[test]
+fn setup_joins_the_count_and_can_change_the_transport_or_refuse() {
+    let signers = |setup| FitSigners::new(address(1)).with_setup(setup);
+    let create = Instruction {
+        program_id: address(3),
+        accounts: vec![
+            AccountMeta::new(address(1), true),
+            AccountMeta::new(address(4), false),
+            AccountMeta::new_readonly(address(5), true),
+        ],
+        data: vec![1],
+    };
+    let small = anonymous_transfer(2, 2, None);
+    let alone = fit(&small).unwrap();
+    let setup = core::slice::from_ref(&create);
+    let joined = TransactionFit::of(&small, signers(setup), budget()).unwrap();
+    assert_eq!(joined.setup.instructions, 1);
+    assert_eq!(joined.setup.signatures, 1);
+    assert_eq!(joined.setup.addresses, 3);
+    assert_eq!(joined.bytes, alone.bytes + joined.setup.bytes);
+    assert_eq!(joined.addresses, alone.addresses + 3);
+
+    let filler = Instruction {
+        data: vec![0; v1::MAX_TRANSACTION_SIZE - alone.bytes],
+        ..create.clone()
+    };
+    let setup = core::slice::from_ref(&filler);
+    let widened = TransactionFit::of(&small, signers(setup), budget()).unwrap();
+    assert_eq!(widened.transport, FitTransport::Buffered);
+    assert!(matches!(
+        TransactionFit::inline(&small, signers(setup), budget()),
+        Err(FitError::Bytes { .. })
+    ));
+
+    let at_ceiling = Instruction {
+        program_id: address(2),
+        accounts: (0..u32::from(v1::MAX_ADDRESSES) - 2)
+            .map(|seed| AccountMeta::new(address(5000 + seed), false))
+            .collect(),
+        data: Vec::new(),
+    };
+    assert_eq!(
+        fit(&at_ceiling).unwrap().addresses,
+        usize::from(v1::MAX_ADDRESSES)
+    );
+    assert!(matches!(
+        TransactionFit::of(&at_ceiling, signers(core::slice::from_ref(&create)), budget()),
+        Err(FitError::Addresses { addresses, limit: 64 })
+            if addresses == usize::from(v1::MAX_ADDRESSES) + 3
     ));
 }

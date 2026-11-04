@@ -22,11 +22,11 @@ use crate::{buffered::BufferedFrame, RingError};
 #[path = "../tests/validation/address_ceiling.rs"]
 mod tests;
 
-/// The one acceptance rule of a final transaction, every preproof check and every send reads it.
+/// The one acceptance rule of a final transaction.
 ///
 /// Each figure comes from the message the compiler builds, so the payer, owners, co-signers,
 /// delegate, deposit authorities, cache writers and setup signers count once however many metas
-/// name them. A role count would miss a signer two roles share or a signer only setup adds.
+/// name them. A role count would double a signer two roles share and miss one only setup adds.
 pub struct TransactionFit<'a> {
     instruction: &'a Instruction,
     payer: Address,
@@ -120,7 +120,7 @@ impl<'a> TransactionFit<'a> {
         }
     }
 
-    /// The operation refuses a buffer, a deposit, a merge or a transfer sent in one transaction.
+    /// For an operation sent in one transaction, a deposit, a merge or an unbuffered transfer.
     pub fn inline(
         instruction: &'a Instruction,
         signers: FitSigners<'a>,
