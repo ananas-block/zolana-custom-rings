@@ -1,4 +1,5 @@
 /** The policy section of a ring transfer, every record read under a root the statement binds. */
+import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../protocol/membership/mint-policy.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import {
@@ -571,7 +572,11 @@ async function readTracking(
     publicOwners: input.publicOwners,
     rowOf,
   });
-  checkOutputKeys(ringOutputs, rowOf);
+  checkOutputKeys({
+    outputs: ringOutputs,
+    rowOf,
+    spenders: publishedNotes(proofInputs).map((note) => note.utxo.owner),
+  });
   const trackingEntry = (member: Bytes32 | undefined): number =>
     member === undefined || isZero(member) ? 0 : (position.get(bytesKey(member)) ?? 0);
   return {
@@ -604,6 +609,7 @@ export async function readDepositSection(
     config: RingPolicy;
     owner: Bytes32;
     nullifierPk: Bytes32;
+    viewingU: Bytes32;
     asset: Bytes32;
     listSalts: readonly RingListSalt[];
   }>,
@@ -649,6 +655,8 @@ export async function readDepositSection(
   });
   const row = pool.rows[0];
   checkOutputKey(owner, input.nullifierPk, row);
+  if (row !== undefined && !equalBytes(row.viewingU, input.viewingU))
+    throw staleViewingKey(owner, row);
   const pad = <T>(values: readonly T[], zero: T): readonly T[] =>
     Object.freeze([...values, ...Array.from({ length: capacity - values.length }, () => zero)]);
   const tracking: TrackingProofInputs = {
@@ -788,14 +796,25 @@ export function checkInputKeys(
 
 /** Contract Output 3, a nonzero key needs its row, a zero key needs none under the frame's root. */
 export function checkOutputKeys(
-  outputs: readonly (ProofOutputUtxo | undefined)[],
-  rowOf: (member: Bytes32) => TrackingRecord | undefined,
+  input: Readonly<{
+    outputs: readonly (ProofOutputUtxo | undefined)[];
+    rowOf: (member: Bytes32) => TrackingRecord | undefined;
+    /** A spending owner holds every key it ever enrolled. */
+    spenders: readonly ShieldedPublicKey[];
+  }>,
 ): void {
-  for (const output of outputs) {
+  for (const output of input.outputs) {
     const owner = output?.ownerAddress;
     if (owner === undefined) continue;
     const member = owner.signingPublicKey.ownerProofInputHash();
-    checkOutputKey(member, owner.nullifierPublicKey, rowOf(member));
+    const row = input.rowOf(member);
+    checkOutputKey(member, owner.nullifierPublicKey, row);
+    if (
+      row !== undefined &&
+      !input.spenders.some((spender) => owner.signingPublicKey.equals(spender)) &&
+      !equalBytes(row.viewingU, owner.viewingPublicKey.u())
+    )
+      throw staleViewingKey(member, row);
   }
 }
 
@@ -813,6 +832,12 @@ function checkOutputKey(
     throw new RingError("RING_ADDRESS_MISMATCH", {
       details: { field: "nullifierPk", member: bytesKey(member) },
     });
+}
+
+function staleViewingKey(member: Bytes32, row: TrackingRecord): RingError {
+  return new RingError("RING_RECIPIENT_VIEWING_KEY_STALE", {
+    details: { member: bytesKey(member), rowRevision: row.revision.toString() },
+  });
 }
 
 /** The roots the statement binds, zero where the program reads none, Rust `PolicyInputs::roots`. */

@@ -27,14 +27,11 @@ import {
   type Bytes16,
   type Bytes32,
   type Bytes33,
-  type Bytes96,
 } from "@heliuslabs/zolana/interface";
 import {
-  ownerHash,
   ShieldedKeypair,
   ViewingKey,
   X25519Keypair,
-  X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import depositVector from "../../../../test-vectors/deposit/deposit-v4.json" with { type: "json" };
@@ -44,11 +41,6 @@ import {
   RecordKind,
   type AuditRecord,
 } from "../../src/protocol/codec/audit-stream.js";
-import {
-  HISTORICAL_DEPOSIT_PREFIX_LENGTH,
-  encodeHistoricalDepositCapsule,
-} from "../../src/protocol/historical/v3/deposit-capsule.js";
-import { openHistoricalDepositOpening } from "../../src/protocol/historical/v3/deposit-opening.js";
 import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { StorageRecordPool, StorageRecordPoolRequest } from "../../src/rpc/ports.js";
@@ -254,47 +246,6 @@ describe("deposit disclosure", () => {
       auditor.destroy();
     },
   );
-
-  it("keeps opening a sealed CRDEP001 capsule and refuses another commitment", () => {
-    const auditor = X25519Keypair.fromBytes(new Uint8Array(32).fill(0x11) as Bytes32);
-    const ephemeral = X25519Keypair.fromBytes(new Uint8Array(32).fill(0x22) as Bytes32);
-    const ephemeralPublicKey = ephemeral.publicKey().toBytes();
-    ephemeral.destroy();
-    const capsules = [
-      "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c",
-      "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b",
-    ].map((ciphertext, slotIndex) => ({
-      slotIndex,
-      ephemeralPublicKey,
-      ciphertext: vectorBytes(ciphertext) as Bytes96,
-      recipientCiphertext: Uint8Array.of(slotIndex + 1),
-    }));
-    const owners = [ownerUtxoHash(field(1n), field(3n)), ownerUtxoHash(field(2n), field(4n))];
-    const confirmed = confirmedAudited({
-      tag: RingInstructionTag.historicalDeposit,
-      prefixLength: HISTORICAL_DEPOSIT_PREFIX_LENGTH,
-      ciphertexts: capsules.map(encodeHistoricalDepositCapsule),
-      ephemeralPublicKey,
-      owners,
-    });
-    capsules.forEach((capsule, slot) => {
-      const binding = confirmed[slot] as ConfirmedDeposit;
-      expect(binding.version).toBe("historicalV3");
-      const opened = openHistoricalDepositOpening(
-        capsule,
-        auditor,
-        owners[slot] as Bytes32,
-        binding,
-      );
-      expect(opened.ownerHash).toEqual(field(BigInt(slot + 1)));
-      expect(opened.blinding).toEqual(field(BigInt(slot + 3)));
-      expect(opened.ownerKey).toEqual(field(0n));
-      expect(() => openHistoricalDepositOpening(capsule, auditor, field(9n), binding)).toThrow(
-        expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }),
-      );
-    });
-    auditor.destroy();
-  });
 
   it("opens every slot of one shared stream and preserves recipient ciphertext", () => {
     const auditor = X25519Keypair.generate();

@@ -586,11 +586,9 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
 
   it.each(CIRCUIT_TYPES)("encodes %s byte for byte", (circuitType) => {
     const item = golden(circuitType);
-    expectReencoded(item, goldenWire);
+    expectReencoded(item);
     // Go goldens fix the key order, the strict decoder takes any.
-    expect(goldenWire(JSON.stringify(ringProofRequestBody(request(item))))).toBe(
-      goldenWire(JSON.stringify(item)),
-    );
+    expect(JSON.stringify(ringProofRequestBody(request(item)))).toBe(JSON.stringify(item));
   });
 
   it("names the deposit key the prover loads and refuses a shape no ring key serves", () => {
@@ -1027,15 +1025,10 @@ function checkTransferStatement(typed: TransferProofRequest): void {
   expect(hex(transferStatementHash(statement))).toBe(hex(typed.publicInputHash));
 }
 
-/** Go's rows fix view0 and view1 at field values no 32 byte key packs to, a Rust row packs. */
-function goldenWire(text: string): string {
-  return text.replace(/"view[01]":"0x[0-9a-f]+"/gu, '"view":""');
-}
-
-function expectReencoded(item: Json, wire: (text: string) => string = (text) => text): void {
+function expectReencoded(item: Json): void {
   const typed = request(item);
   const body = ringProofRequestBody(typed);
-  expect(JSON.parse(wire(JSON.stringify(body)))).toEqual(JSON.parse(wire(JSON.stringify(item))));
+  expect(body).toEqual(item);
   expect(ringCircuitType(ringProofCircuit(typed))).toBe(text(item["circuitType"]));
 }
 

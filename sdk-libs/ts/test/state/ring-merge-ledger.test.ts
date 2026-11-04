@@ -4,39 +4,19 @@ import { describe, expect, it } from "vitest";
 
 import ledgerVector from "../../../../test-vectors/audit/merge_ledger.json" with { type: "json" };
 
-import {
-  encodeMergeOutputData,
-  encryptMergeOutput,
-  mergeOutputKey,
-  treeAddress,
-  BN254_SCALAR_ORDER,
-  bigIntToBytes,
-} from "@heliuslabs/zolana/internal";
+import { BN254_SCALAR_ORDER, bigIntToBytes, isZero } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes31, Bytes32, Signature } from "@heliuslabs/zolana/interface";
-import { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { Bytes32, Signature } from "@heliuslabs/zolana/interface";
+import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 
-import {
-  kitReads,
-  solanaRpcReads,
-  transactionsPage,
-} from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { auditRingMerges } from "../../src/operations/audit/audit-merge.js";
-import { auditRingMergesV3 } from "../../src/protocol/historical/v3/audit.js";
-import { sealRingMergeDisclosure } from "../../src/protocol/historical/v3/merge-disclosure.js";
-import { knownUtxoOwnerHash, type KnownUtxo } from "../../src/operations/audit/audit.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
-import type { TransactionOrigin } from "../../src/protocol/transaction/origin.js";
+import { knownUtxoOwnerHash } from "../../src/operations/audit/audit.js";
 import {
   MergeLedger,
-  realMergeInputs,
   type ConfirmedMerge,
   type KnownMergeInput,
   type MergeInput,
   type MergeTransition,
 } from "../../src/state/merge-ledger.js";
-import { transactionItems } from "../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 
 await initializePoseidon();
 
@@ -90,7 +70,7 @@ function confirmedMerge(merge: LedgerMerge): ConfirmedMerge {
     leafIndex: BigInt(merge.leafIndex),
     firstNullifier: field(merge.firstNullifier),
     ringDataHash: new Uint8Array(32) as Bytes32,
-    inputs: realMergeInputs(merge.list.map(field), merge.list.length),
+    inputs: merge.list.map(field).filter((entry) => !isZero(entry)),
   };
 }
 
@@ -235,15 +215,6 @@ describe("MergeLedger", () => {
     expect(ledger.unresolved()).toEqual([]);
   });
 
-  it("reads a zero list entry as a dummy, never an input and never spent", () => {
-    const inputs = realMergeInputs([filled(10), ZERO, filled(11), ZERO], 8);
-    expect(inputs).toEqual([filled(10), filled(11)]);
-    const ledger = new MergeLedger();
-    const transition = ledger.apply({ ...merge(1, [], 20), inputs }, knownOnly({ 10: 4n, 11: 4n }));
-    expect(transition.spent).toEqual(inputs);
-    expect(transition.resolved[0]?.amount).toBe(8n);
-  });
-
   it.each(["apply", "resolve"] as const)(
     "keeps the ledger unchanged when %s fails in a descendant owner check",
     (operation) => {
@@ -347,168 +318,5 @@ describe("MergeLedger", () => {
       ).toEqual(pinnedOutputs);
       for (const output of resolved) expect(output).toMatchObject(inherited);
     }
-  });
-});
-
-describe("auditRingMergesV3", () => {
-  const auditor = X25519Keypair.generate();
-  const key = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
-  const ring = getBase58Decoder().decode(filled(23)) as Address;
-
-  /** Four published nullifiers pad to width 8, the list has `real.length` nonzero slots. */
-  function disclosedMerge(real: readonly number[], listLength = 8, output = 40) {
-    const firstNullifier = filled(0x11);
-    const salt = new Uint8Array(16).fill(3) as Bytes16;
-    const sealed = sealRingMergeDisclosure(
-      Array.from({ length: listLength }, (_, index) => filled(real[index] ?? 0)),
-      salt,
-      auditor.publicKey(),
-    );
-    const transaction: IndexedShieldedTransaction = {
-      slot: BigInt(output),
-      txSignature: signatureOf(output),
-      eventIndex: 0,
-      proofless: false,
-      ringProgramId: ring,
-      nullifiers: [firstNullifier, filled(0x12), filled(0x13), filled(0x14)],
-      messages: [],
-      outputSlots: [
-        {
-          viewTag: firstNullifier,
-          payload: encodeMergeOutputData({
-            salt,
-            ciphertext: encryptMergeOutput(
-              { amount: 9n, mint: SOL_MINT },
-              mergeOutputKey(key, firstNullifier),
-              salt,
-            ),
-            ringDataHash: filled(0x15),
-          }),
-          outputContext: {
-            hash: filled(output),
-            tree: treeAddress(1),
-            treeId: 1,
-            leafIndex: 3n,
-          },
-        },
-      ],
-    };
-    return {
-      transaction,
-      disclosure: {
-        ...sealed.disclosure,
-        proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-      },
-    };
-  }
-
-  it("names a merge's inputs again when a page retries over a carried ledger", async () => {
-    const ledger = new MergeLedger();
-    const row = disclosedMerge([10, 11]);
-    const first = await audit([row], { ledger });
-    const retried = await audit([row], { ledger });
-    expect(first.spent).toHaveLength(2);
-    expect(retried.spent).toEqual(first.spent);
-    expect(ledger.unresolved()).toHaveLength(1);
-  });
-
-  function audit(
-    rows: readonly ReturnType<typeof disclosedMerge>[],
-    extra: Readonly<{
-      knownUtxos?: { utxo(commitment: Bytes32): KnownUtxo | undefined };
-      ledger?: MergeLedger;
-    }> = {},
-  ) {
-    const origin: TransactionOrigin = {
-      confirmedTransaction: async (transaction) => {
-        const row = rows.find((entry) => entry.transaction === transaction);
-        if (row === undefined) throw new Error("no row");
-        return { kind: "historicalMergeV3", transaction, disclosure: row.disclosure };
-      },
-    };
-    return auditRingMergesV3({
-      client: readerOf([...rows.map((row) => row.transaction)]),
-      ringProgramId: ring,
-      auditor,
-      origin,
-      ...extra,
-    });
-  }
-
-  function readerOf(transactions: readonly IndexedShieldedTransaction[]) {
-    return {
-      ...kitReads({ solanaRpc: solanaRpcReads({}) }),
-      getShieldedTransactionsByTags: async () =>
-        transactionsPage({ data: transactionItems(transactions) }),
-    };
-  }
-
-  function knownNote(amount: bigint): KnownUtxo {
-    return {
-      ...note(amount),
-      blinding: filled(3),
-      dataHash: ZERO,
-      ringDataHash: ZERO,
-      treeId: 1,
-    };
-  }
-
-  it("spends every nonzero slot and never reads the published count as real inputs", async () => {
-    const page = await audit([disclosedMerge([10, 11])], {
-      knownUtxos: { utxo: () => knownNote(4n) },
-    });
-    expect(page.spent).toEqual([filled(10), filled(11)]);
-    expect(page.outputs.map(({ amount, inputs }) => ({ amount, inputs }))).toEqual([
-      { amount: 8n, inputs: [filled(10), filled(11)] },
-    ]);
-    expect(page.unresolved).toEqual([]);
-    expect(page.skipped).toEqual([]);
-  });
-
-  it("holds a merge of an unknown input and resolves it on a later page of one ledger", async () => {
-    const ledger = new MergeLedger();
-    const row = disclosedMerge([10]);
-    const held = await audit([row], { ledger });
-    expect(held.spent).toEqual([filled(10)]);
-    expect(held.outputs).toEqual([]);
-    expect(held.unresolved.map(({ outputCommitment }) => outputCommitment)).toEqual([filled(40)]);
-
-    const later = await audit([], {
-      ledger,
-      knownUtxos: { utxo: () => knownNote(6n) },
-    });
-    expect(later.spent).toEqual([]);
-    expect(later.outputs.map(({ amount }) => amount)).toEqual([6n]);
-    expect(later.unresolved).toEqual([]);
-  });
-
-  it("lists a disclosure of another width among the skipped rows", async () => {
-    const page = await audit([disclosedMerge([10], 24)]);
-    expect(page.spent).toEqual([]);
-    expect(page.skipped.map(({ reason }) => reason)).toEqual(["invalidAuditData"]);
-  });
-
-  it("leaves a row without a v3 disclosure to the historical reader", async () => {
-    const { transaction } = disclosedMerge([10]);
-    const page = await auditRingMerges({
-      client: readerOf([transaction]),
-      ringProgramId: ring,
-      auditor,
-      origin: {
-        confirmedTransaction: async (row) => ({
-          kind: "historicalMerge",
-          transaction: row,
-          instruction: Uint8Array.of(20),
-        }),
-      },
-    });
-    expect(page.merges).toEqual([]);
-    expect(page.historical).toEqual([
-      {
-        slot: transaction.slot,
-        signature: transaction.txSignature,
-        eventIndex: 0,
-      },
-    ]);
   });
 });

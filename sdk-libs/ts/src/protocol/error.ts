@@ -73,7 +73,6 @@ export const RING_ERROR_CODES = [
   "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
   "RING_HISTORY_PAGE_INVALID",
   "RING_HISTORY_CURSOR_INVALID",
-  "RING_MERGE_TOO_WIDE",
   "RING_ANONYMOUS_EXIT_LINKS_OWNER",
   "RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED",
   "RING_ANONYMOUS_EXIT_ACCOUNT_HAS_DATA",
@@ -169,6 +168,8 @@ export const RING_ERROR_CODES = [
   "RING_DELEGATE_DEPOSIT_LEG",
   "RING_MERGE_OWNER_MISMATCH",
   "RING_LIST_SALT_MISSING",
+  "RING_RECIPIENT_VIEWING_KEY_STALE",
+  "RING_ADDRESS_CEILING",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

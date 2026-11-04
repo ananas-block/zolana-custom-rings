@@ -913,8 +913,6 @@ export type {
   InputRing,
   KnownUtxo,
   OutputOpening,
-  EscrowPendingOutput,
-  EscrowPendingSlot,
   OutputPayloadError,
   OutputPayloadErrorKind,
 } from "../operations/audit/audit.js";
@@ -2263,7 +2261,6 @@ export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Objec
   "recipientKey",
   "commitment",
   "unknownAsset",
-  "escrowPending",
 ]);
 
 function payloadErrorKind(value: unknown, path: string): OutputPayloadErrorKind {

@@ -1,19 +1,8 @@
-import { InstructionTag } from "@heliuslabs/zolana/interface";
-
 /** Rust `tag`, the first byte of the ring program's instruction data. */
 export const RingInstructionTag = Object.freeze({
-  // Tags 1 and 2 are retired, never reuse them.
-  legacyTransact: 3,
-  /** Decoding only, the program refuses it. */
-  historicalTransfer: 43,
-  /** Decoding only, the program refuses it. */
-  historicalTransferV3: 45,
+  // Tags 1 to 3 are retired, never reuse them.
   transfer: 55,
-  // Tag 18 is retired, never reuse it.
-  /** Decoding only, the program refuses it. */
-  historicalMerge: InstructionTag.ringMergeTransact,
-  /** Decoding only, the program refuses it. */
-  historicalMergeV3: 47,
+  // Tags 18, 20 and 43 to 47 are retired, never reuse them.
   merge: 57,
   // Tags 4 and 5 are retired, never reuse them.
   updateAuthority: 6,
@@ -23,15 +12,9 @@ export const RingInstructionTag = Object.freeze({
   clearCoSigner: 21,
   // Tags 22, 23 and 26 are retired, never reuse them.
   setDelegate: 24,
-  legacyDelegateTransact: 25,
-  /** Decoding only, the program refuses it. */
-  historicalAuthorityTransfer: 44,
-  /** Decoding only, the program refuses it. */
-  historicalAuthorityTransferV3: 46,
+  // Tag 25 is retired, never reuse it.
   authorityTransfer: 56,
-  // Tags 28 to 30 are retired, never reuse them.
-  /** Decoding only, the program refuses it. */
-  historicalDeposit: 31,
+  // Tags 28 to 31 are retired, never reuse them.
   deposit: 58,
   // Tags 32 to 42 and 48 are retired, never reuse them.
   initialize: 53,

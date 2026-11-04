@@ -137,6 +137,7 @@ const read = (leaf: TrackingRecord, listSalts: readonly { owner: Bytes32; salt: 
     config: saltedRing(),
     owner: OWNER,
     nullifierPk: NULLIFIER_PK,
+    viewingU: enrolled.viewingU,
     asset: memberOfAsset(MINT as never),
     listSalts,
   });
@@ -164,6 +165,19 @@ describe("readDepositSection", () => {
     });
   });
 
+  it("refuses a recipient viewing key off the row, naming the row's revision", async () => {
+    const leaf = {
+      ...enrolled,
+      listTag: listTagOf(SALT),
+      viewingU: new Uint8Array(32).fill(0xee) as Bytes32,
+      revision: 5n,
+    };
+    await expect(read(leaf, [{ owner: OWNER, salt: SALT }])).rejects.toMatchObject({
+      code: "RING_RECIPIENT_VIEWING_KEY_STALE",
+      details: { rowRevision: "5" },
+    });
+  });
+
   it("refuses a zero-key recipient holding a row", async () => {
     await expect(
       readDepositSection({
@@ -173,6 +187,7 @@ describe("readDepositSection", () => {
         config: saltedRing(),
         owner: OWNER,
         nullifierPk: ZERO_NULLIFIER_PK as Bytes32,
+        viewingU: enrolled.viewingU,
         asset: memberOfAsset(MINT as never),
         listSalts: [],
       }),

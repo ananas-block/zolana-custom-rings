@@ -158,7 +158,8 @@ func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) 
 	tree := ringregistry.NewTracking(t)
 	entry := func(i int, revision int64) ringregistry.TrackingEntry {
 		owner := big.NewInt(0x100 + int64(i))
-		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: big.NewInt(revision), View1: big.NewInt(1), Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
+		view0, view1 := ringregistry.PackedView(big.NewInt(0x100 + revision))
+		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: view0, View1: view1, Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
 	}
 	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
 	if err != nil {

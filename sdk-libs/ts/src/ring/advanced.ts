@@ -1,7 +1,6 @@
 /** Circuit-facing codecs, registry proofs, and policy primitives. */
 export {
   AUDIT_ENC_INFO,
-  DELIVERED_BODY_ENC_INFO,
   DEPOSIT_ENC_INFO,
   auditSharedSecret,
   auditorMessageData,
@@ -9,7 +8,6 @@ export {
   openAuditorRegions,
   packDisclosure,
   parseAuditorMessage,
-  sealAuditorStream,
   sealSaltedAuditorStream,
   symmetricAuditApply,
   unpackDisclosure,
@@ -90,7 +88,6 @@ export { deliveredSlotSecret, ringIdField } from "../crypto/derivation/ring-stre
 export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
   encodeRingBodyOutput,
-  historicalRecipientOutputBody,
   ringBodyOutput,
   senderBundleOutputBody,
   RingScheme,
@@ -118,16 +115,6 @@ export {
   type DebitOutput,
   type OwnerDebit,
 } from "../protocol/membership/owner-debits.js";
-export {
-  decodeAnonymousRecipient,
-  decodeAnonymousSender,
-  type AnonymousRecipientPlaintext,
-  type AnonymousSenderPlaintext,
-  type CommittedRecipientPlaintext,
-  type CommittedSenderPlaintext,
-  type UncommittedRecipientPlaintext,
-  type UncommittedSenderPlaintext,
-} from "../protocol/historical/anonymous-plaintext.js";
 export {
   OutputBlindings,
   openRecipientNote,
@@ -301,26 +288,3 @@ export {
   type AssetLimits,
   type MintPolicy,
 } from "../protocol/membership/mint-policy.js";
-export {
-  RingTransactDataV3,
-  auditHistoryV3,
-  auditRingMergesV3,
-  auditRingTransactionV3,
-  historicalCoverageRow,
-  landedRingRailV3,
-  openHistoricalDepositOpening,
-  openHistoricalMerge,
-  openHistoricalRingTransfer,
-  openRingMergeDisclosureV3,
-  openRingTransferV3,
-  readHistoricalDepositCapsule,
-  type AuditStreamLayoutV3,
-  type HistoricalDepositCapsule,
-  type HistoricalDepositOpening,
-  type RingMergeDisclosureV3,
-  type RingRailV3,
-  type HistoricalCoverageRow,
-  type HistoricalInputOpening,
-  type HistoricalTransfer,
-  type HistoricalTransferInput,
-} from "../protocol/historical/index.js";

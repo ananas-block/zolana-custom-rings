@@ -1,12 +1,9 @@
-import { bn254 } from "@noble/curves/bn254.js";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { address, getBase58Decoder, type Address, type Signature } from "@solana/kit";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 
 import {
-  bigintToBytes,
-  compressG2,
   encodeMergeOutputData,
   encodeRingDepositInstructionData,
   wireDecoder,
@@ -46,12 +43,6 @@ import {
 } from "../../../src/protocol/transaction/origin.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
 import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
-import { RingTransactData as RingTransactDataV3 } from "../../../src/protocol/historical/v3/frame.js";
-import {
-  openRingMergeDisclosure,
-  sealRingMergeDisclosure,
-  writeRingMergeDisclosure,
-} from "../../../src/protocol/historical/v3/merge-disclosure.js";
 import {
   MergeRingAuthority,
   decodeRingMergeRequest,
@@ -59,19 +50,8 @@ import {
   forwardedMergeData,
   sppMergeBody,
 } from "../../../src/crypto/audit/merge-disclosure.js";
-import { auditRing } from "../../../src/operations/audit/audit.js";
-import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
-import { ringAuditReader } from "../../helpers/clients.js";
-import {
-  solanaRpcReads,
-  transactionsPage,
-} from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { solanaRpcReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
-import {
-  ringFrame as ringFrameV3,
-  ringInstructionData as ringInstructionDataV3,
-} from "../../helpers/ring-frame-v3.js";
-import { transactionItems } from "../../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 
 // Mirrors sdk-libs/client/tests/origin.rs.
 const RING = address("zYYvj4LTBF4Lz2FBhDaAbJ7CsVWvHjyanxQJPmN2dSU");
@@ -937,7 +917,7 @@ function rustFixture(name: string) {
 }
 
 describe("RpcTransactionOrigin", () => {
-  it.each(["confirmed-event", "confirmed-deposit-event", "confirmed-merge-event"])(
+  it.each(["confirmed-event", "confirmed-deposit-event"])(
     "matches Rust's %s codec and rejects substituted recovery data",
     async (name) => {
       const { ring, accounts, sourceBytes, eventBytes, indexed, hasViewingKey, saltHex } =
@@ -960,13 +940,7 @@ describe("RpcTransactionOrigin", () => {
       );
       const origin = new RpcTransactionOrigin(rpcWith(confirmed));
       const bound = await origin.confirmedTransaction(indexed, ring);
-      expect(bound?.kind).toBe(
-        name === "confirmed-merge-event"
-          ? "historicalMerge"
-          : name === "confirmed-deposit-event"
-            ? "deposit"
-            : "transfer",
-      );
+      expect(bound?.kind).toBe(name === "confirmed-deposit-event" ? "deposit" : "transfer");
       expect(bound?.transaction).toEqual({
         ...indexed,
         ...(hasViewingKey ? { salt: saltHex } : {}),
@@ -993,39 +967,8 @@ describe("RpcTransactionOrigin", () => {
         await expect(origin.confirmedTransaction(forged, ring)).rejects.toMatchObject({
           code: "RING_ORIGIN_DECODE",
         });
-      if (name === "confirmed-merge-event") {
-        // Every framing, ring hash, salt and ciphertext byte comes from settlement.
-        for (const [offset, byte] of output.payload.entries()) {
-          const payload = new Uint8Array(output.payload);
-          payload[offset] = byte ^ 1;
-          await expect(
-            origin.confirmedTransaction(
-              { ...indexed, outputSlots: [{ ...output, payload }] },
-              ring,
-            ),
-          ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
-        }
-      }
     },
   );
-
-  it.each([
-    [45, InstructionTag.ringTransact, "confidential"],
-    [46, InstructionTag.ringAuthorityTransact, "delegate"],
-  ] as const)("binds a transfer under the ring's outer tag %i", async (outer, tag, rail) => {
-    const { indexed, confirmed } = transferFixture(1, tag);
-    const frame = ringFrameV3({ rail, inputs: 2, outputs: 2 });
-    const ringData = ringInstructionDataV3(frame);
-    expect(ringData[0]).toBe(outer);
-    confirmed.transaction.message.instructions[0]!.data = getBase58Decoder().decode(ringData);
-    await expect(
-      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-    ).resolves.toMatchObject({
-      kind: "historicalTransferV3",
-      transaction: indexed,
-      layout: RingTransactDataV3.streamLayout(frame),
-    });
-  });
 
   it.each([
     [55, InstructionTag.ringTransact, false, "confidential"],
@@ -1042,150 +985,6 @@ describe("RpcTransactionOrigin", () => {
       transaction: indexed,
       rail,
       layout: RingTransactData.streamLayout(frame),
-    });
-  });
-
-  describe.each([
-    [43, InstructionTag.ringTransact],
-    [44, InstructionTag.ringAuthorityTransact],
-    [3, InstructionTag.ringTransact],
-    [25, InstructionTag.ringAuthorityTransact],
-  ])("a historical transfer under the ring's outer tag %i", (outer, inner) => {
-    /** The v3 parser refuses these bytes. */
-    const historicalFixture = () => {
-      const { indexed, confirmed } = transferFixture(1, inner);
-      const instruction = Uint8Array.of(outer, 1, 2, 3);
-      confirmed.transaction.message.instructions[0]!.data = getBase58Decoder().decode(instruction);
-      return { indexed, confirmed, instruction };
-    };
-
-    it("surfaces for the historical path with its instruction", async () => {
-      const { indexed, confirmed, instruction } = historicalFixture();
-      await expect(
-        new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-      ).resolves.toEqual({
-        kind: "historicalTransfer",
-        transaction: indexed,
-        inputTreeIds: [4, 4],
-        instruction,
-        sppAnonymous: false,
-      });
-    });
-
-    it("stays out of the v3 scanner", async () => {
-      const { indexed, confirmed } = historicalFixture();
-      const page = await auditRing({
-        client: ringAuditReader({
-          getShieldedTransactionsByTags: async () =>
-            transactionsPage({
-              data: transactionItems([indexed]),
-            }),
-        }),
-        auditor: X25519Keypair.generate(),
-        ringProgramId: RING,
-        origin: new RpcTransactionOrigin(rpcWith(confirmed)),
-      });
-      expect(page.transactions).toEqual([]);
-      expect(page.skipped).toEqual([]);
-    });
-  });
-
-  it("names SPP's anonymous rail on a historical transfer", async () => {
-    const { indexed, confirmed } = transferFixture(1, InstructionTag.ringTransact, {
-      anonymous: true,
-    });
-    confirmed.transaction.message.instructions[0]!.data = getBase58Decoder().decode(
-      Uint8Array.of(RingInstructionTag.historicalTransfer),
-    );
-    await expect(
-      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-    ).resolves.toMatchObject({
-      kind: "historicalTransfer",
-      sppAnonymous: true,
-    });
-  });
-
-  describe("a ring merge", () => {
-    const point = bn254.G2.Point.BASE.toAffine();
-    const proofB = Uint8Array.from(
-      [point.x.c1, point.x.c0, point.y.c1, point.y.c0].flatMap((value) => [
-        ...bigintToBytes(value, "g2"),
-      ]),
-    ) as Bytes128;
-    const fixture = rustFixture("confirmed-merge-event");
-    const ringDataHash = fixture.sourceBytes.subarray(1, 33);
-    const body = fixture.sourceBytes.slice(33);
-    body.set(proofB, 40);
-    const compact = Uint8Array.of(
-      ...body.subarray(0, 40),
-      ...compressG2(proofB),
-      ...body.subarray(168),
-    );
-    const salt = new Uint8Array(16).fill(4) as Bytes16;
-
-    function tag47(auditor: X25519PublicKey, inputs: readonly Bytes32[], settled = compact) {
-      const sealed = sealRingMergeDisclosure(inputs, salt, auditor);
-      sealed.ephemeralSecret.fill(0);
-      sealed.disclosureKey.fill(0);
-      const disclosure = {
-        ...sealed.disclosure,
-        proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-      };
-      const writer = new Writer()
-        .u8(RingInstructionTag.historicalMergeV3, "tag")
-        .u64(9n, "ownRevision")
-        .bytes(ringDataHash, 32, "ringDataHash");
-      writeRingMergeDisclosure(writer, disclosure);
-      return {
-        disclosure,
-        data: Uint8Array.of(...writer.finish(), ...settled),
-      };
-    }
-
-    const bind = (wrapper: Uint8Array) =>
-      new RpcTransactionOrigin(
-        rpcWith(
-          confirmedEvent(
-            fixture.ring,
-            fixture.accounts,
-            Uint8Array.of(...fixture.sourceBytes.subarray(0, 33), ...body),
-            fixture.eventBytes,
-            wrapper,
-          ),
-        ),
-      ).confirmedTransaction(fixture.indexed, fixture.ring);
-
-    it("surfaces under tag 47 with the disclosure the auditor opens", async () => {
-      const auditor = X25519Keypair.generate();
-      const inputs = Array.from(
-        { length: 8 },
-        (_, index) => new Uint8Array(32).fill(index < 2 ? index + 1 : 0) as Bytes32,
-      );
-      const { disclosure, data } = tag47(auditor.publicKey(), inputs);
-      const bound = await bind(data);
-      expect(bound).toMatchObject({ kind: "historicalMergeV3", disclosure });
-      if (bound?.kind !== "historicalMergeV3") throw new Error("expected a disclosed merge");
-      expect(openRingMergeDisclosure(auditor, bound.disclosure, salt)).toEqual(inputs);
-    });
-
-    it("refuses a tag 47 disclosure over another SPP body", async () => {
-      const auditor = X25519Keypair.generate().publicKey();
-      const inputs = Array.from({ length: 8 }, () => new Uint8Array(32).fill(1) as Bytes32);
-      const moved = compact.slice();
-      moved[moved.length - 1] = (moved[moved.length - 1] ?? 0) ^ 1;
-      await expect(bind(tag47(auditor, inputs, moved).data)).rejects.toMatchObject({
-        code: "RING_ORIGIN_DECODE",
-        details: { path: "merge.disclosure" },
-      });
-    });
-
-    it("surfaces under tag 20 for the historical path and never parses its frame", async () => {
-      const instruction = Uint8Array.of(RingInstructionTag.historicalMerge, 1, 2, 3);
-      await expect(bind(instruction)).resolves.toEqual({
-        kind: "historicalMerge",
-        transaction: fixture.indexed,
-        instruction,
-      });
     });
   });
 
@@ -1310,7 +1109,7 @@ describe("RpcTransactionOrigin", () => {
       );
 
     it("binds a CRDEP002 capsule and refuses another forwarded byte", () => {
-      expect(bound(source).map(({ version }) => version)).toEqual(["v4"]);
+      expect(bound(source)).toHaveLength(1);
       const tampered = source.slice();
       tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;
       expect(() => bound(tampered)).toThrow(

@@ -945,6 +945,32 @@ describe("anonymous ring exits and entries", () => {
     noProofs(fixture);
   });
 
+  it("refuses a recipient viewing key off its record", async () => {
+    const fixture = await anonymousRing();
+    const sender = anonymousSender();
+    const bob = ShieldedKeypair.generate();
+    const to = await addressOf(fixture, bob);
+    const enrolledElsewhere = bob.shieldedAddress();
+    fixture.enroll(
+      ShieldedAddress.fromPublicKeys(
+        enrolledElsewhere.signingPublicKey,
+        enrolledElsewhere.nullifierPublicKey,
+        ShieldedKeypair.generate().viewingPublicKey(),
+      ),
+    );
+    await expect(
+      rail({ fixture, sender, transfer: spend(fixture, sender) })
+        .withPayment({
+          to,
+          asset: SOL_MINT,
+          amount: 400n,
+          reply: null,
+        })
+        .prove(fixture.client),
+    ).rejects.toThrow(ringError("RING_RECIPIENT_VIEWING_KEY_STALE"));
+    noProofs(fixture);
+  });
+
   it("refuses a sender and a recipient without an enrolled address", async () => {
     const fixture = await anonymousRing();
     const sender = anonymousSender();

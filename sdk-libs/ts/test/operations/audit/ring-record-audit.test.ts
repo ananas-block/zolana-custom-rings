@@ -21,21 +21,17 @@ import {
   poseidon,
   seededMergeDummyNullifier,
   seededMergeOutputBlinding,
-  solanaOwnerIdentity,
   treeAddress,
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
-import { ViewingKey, X25519Keypair, ownerHash } from "@heliuslabs/zolana/keypair";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { ownerUtxoHash, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 
 import { readFileSync } from "node:fs";
 
 import {
-  auditSharedSecret,
   saltedAuditorSchedule,
-  DEPOSIT_ENC_INFO,
-  symmetricAuditApply,
 } from "../../../src/crypto/audit/audit.js";
 import {
   MergeRingAuthority,
@@ -71,10 +67,6 @@ import {
   recordRegion,
   type AuditStreamLayout,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
-import {
-  HISTORICAL_DEPOSIT_PREFIX_LENGTH,
-  encodeHistoricalDepositCapsule,
-} from "../../../src/protocol/historical/v3/deposit-capsule.js";
 import {
   ConfirmedDeposit,
   RpcTransactionOrigin,
@@ -560,10 +552,8 @@ describe("the deposit reader", () => {
       hex(deposit.eph_pk) as Bytes33,
     );
     if (binding === undefined) throw new Error("binding");
-    expect(binding.version).toBe("v4");
     const published = output(capsule, owner, mint, BigInt(deposit.amounts[0] as number));
     const opening = openConfirmedDeposit({ output: published, auditor: auditor(), binding });
-    if (opening.version !== "v4") throw new Error("version");
     expect(opening.blinding).toEqual(record.slice(112));
     expect(ownerUtxoHash(opening.ownerHash, opening.blinding)).toEqual(owner);
     const expected = knownUtxoHash(
@@ -606,46 +596,6 @@ describe("the deposit reader", () => {
     ).toThrow(expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }));
   });
 
-  it("opens a tag 31 capsule at its own length and names it", () => {
-    const ownerKey = new Uint8Array(32).fill(7) as Bytes32;
-    const owner = ownerHash(solanaOwnerIdentity(ownerKey), ZERO_NULLIFIER_PK as Bytes32) as Bytes32;
-    const blinding = field(`${"00".repeat(31)}0b`);
-    const ephemeral = X25519Keypair.generate();
-    const shared = auditSharedSecret(
-      ephemeral.ecdh(auditor().publicKey()),
-      ephemeral.publicKey(),
-      auditor().publicKey(),
-    );
-    const ciphertext = symmetricAuditApply(
-      shared,
-      { label: DEPOSIT_ENC_INFO, counter: 2 },
-      Uint8Array.from([...owner, ...blinding, ...ownerKey]),
-    );
-    const capsule = encodeHistoricalDepositCapsule({
-      slotIndex: 0,
-      ephemeralPublicKey: ephemeral.publicKey().toBytes(),
-      ciphertext: ciphertext as Bytes96,
-      recipientCiphertext: new Uint8Array(3),
-    });
-    const commitment = ownerUtxoHash(owner, blinding);
-    const [binding] = confirmedOver(
-      RingInstructionTag.historicalDeposit,
-      HISTORICAL_DEPOSIT_PREFIX_LENGTH,
-      capsule,
-      commitment,
-      ephemeral.publicKey().toBytes(),
-    );
-    if (binding === undefined) throw new Error("binding");
-    expect(binding.version).toBe("historicalV3");
-    const mint = encodeBase58(new Uint8Array(32).fill(4));
-    const opening = openConfirmedDeposit({
-      output: output(capsule, commitment, mint, 100n),
-      auditor: auditor(),
-      binding,
-    });
-    expect(opening.version).toBe("historicalV3");
-    expect(opening.ownerKey).toEqual(ownerKey);
-  });
 });
 
 describe("the v4 origin", () => {

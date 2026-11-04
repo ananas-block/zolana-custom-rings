@@ -1337,7 +1337,9 @@ describe("ring read request", () => {
     });
 
   it("reads every payload error kind the shared vector names", async () => {
-    expect(RUST_PAYLOAD_ERRORS.kinds).toEqual(RING_PAYLOAD_ERROR_KINDS);
+    expect(
+      (RUST_PAYLOAD_ERRORS.kinds as string[]).filter((kind) => kind !== "escrowPending"),
+    ).toEqual(RING_PAYLOAD_ERROR_KINDS);
     const item = await readItem(erroredItem(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key));
     expect(item.payloadErrors).toEqual(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key);
   });

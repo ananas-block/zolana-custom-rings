@@ -36,11 +36,16 @@ import {
   sealSenderBundle,
   senderBundleLen,
 } from "../../src/protocol/codec/anonymous-delivery.js";
-import { deliveredSlotSecret, recipientTag } from "../../src/crypto/derivation/ring-stream.js";
+import {
+  deliveredSlotSecret,
+  recipientTag,
+  slotTag,
+} from "../../src/crypto/derivation/ring-stream.js";
 import {
   encodeRingOutput,
   RingScheme,
   senderBundleOutputBody,
+  encodeRingBodyOutput,
 } from "../../src/protocol/transaction/output.js";
 import { TREE, TREE_ID } from "../helpers/ring-pipeline.js";
 import {
@@ -270,8 +275,8 @@ describe("anonymous sync", () => {
     });
     const payloads = [
       new Uint8Array(),
-      encodeRingOutput(RingScheme.ringRecipientBody, noise),
-      encodeRingOutput(RingScheme.ringRecipientBody, named),
+      encodeRingBodyOutput(noise, new Uint8Array()),
+      encodeRingBodyOutput(named, new Uint8Array()),
     ];
     const leaf = indexer.leaves(payloads.length);
     const unmatched = new Uint8Array(32).fill(0x0c) as Bytes32;
@@ -282,7 +287,7 @@ describe("anonymous sync", () => {
       txViewingPublicKey: txKey.publicKey(),
       salt,
       outputSlots: payloads.map((payload, position) => ({
-        viewTag: recipientTag(secret(position)),
+        viewTag: slotTag(recipientTag(secret(position))),
         outputContext: {
           hash: unmatched,
           tree: TREE,
