@@ -19,8 +19,9 @@ use spr_client::{
     GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig, PaginationToken,
 };
 use spr_event::{
-    encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositOutput,
-    MergeCiphertextBinding, MergeOutputDataRef,
+    encode_encrypted_ring_deposit_output, encode_merge_output_data,
+    merge_output::MERGE_OUTPUT_CIPHERTEXT_LEN, EncryptedRingDepositOutput, MergeCiphertextBinding,
+    MergeOutputDataRef,
 };
 use spr_hasher::primitives::right_align;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
@@ -1335,6 +1336,25 @@ async fn complete_history_recovers_proved_merge_chains_with_invalid_native_ciphe
         assert!(recovered.unopened.is_empty());
         assert!(history.queried.lock().unwrap().is_empty());
     }
+}
+
+#[tokio::test]
+async fn a_noncanonical_native_merge_ciphertext_does_not_block_checked_recovery() {
+    let fixture = Fixture::anonymous();
+    let (first, first_tx) = fixture.deposit(fixture.output(4), 2);
+    let (second, second_tx) = fixture.deposit(fixture.output(5), 2);
+    let (merged, mut merge_tx) = fixture.audited_merge(&[first, second], 7);
+    let payload = &mut merge_tx.output_slots[0].payload;
+    let ciphertext = payload.len() - MERGE_OUTPUT_CIPHERTEXT_LEN;
+    payload[ciphertext..].fill(0xff);
+    let history = History {
+        transactions: vec![first_tx, second_tx, merge_tx],
+        discovery_unavailable: true,
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert_eq!(recovered.utxos, [merged]);
+    assert!(recovered.unopened.is_empty());
 }
 
 #[tokio::test]
