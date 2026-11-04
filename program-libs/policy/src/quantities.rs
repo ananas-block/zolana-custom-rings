@@ -50,15 +50,7 @@ pub struct DebitTransfer<'a> {
 /// Nonzero outflow rows by ascending owner then assets order, no caller input selects a share.
 #[must_use]
 pub fn owner_debits(transfer: &DebitTransfer<'_>) -> Vec<OwnerDebit> {
-    let mut owners: Vec<[u8; 32]> = transfer
-        .senders
-        .iter()
-        .filter(|owner| **owner != [0; 32])
-        .copied()
-        .collect();
-    // Big-endian bytes order as the field integers the circuit's rows ascend by.
-    owners.sort_unstable();
-    owners.dedup();
+    let owners = ordered_owners(transfer);
     let mut flows: Vec<OwnerDebit> = Vec::new();
     for (position, asset) in transfer.assets.iter().enumerate() {
         if !transfer.assets[..position].contains(asset) {
@@ -70,7 +62,20 @@ pub fn owner_debits(transfer: &DebitTransfer<'_>) -> Vec<OwnerDebit> {
     flows
 }
 
-fn asset_flows(
+pub(crate) fn ordered_owners(transfer: &DebitTransfer<'_>) -> Vec<[u8; 32]> {
+    let mut owners: Vec<[u8; 32]> = transfer
+        .senders
+        .iter()
+        .filter(|owner| **owner != [0; 32])
+        .copied()
+        .collect();
+    // Big-endian bytes order as the field integers the circuit's rows ascend by.
+    owners.sort_unstable();
+    owners.dedup();
+    owners
+}
+
+pub(crate) fn asset_flows(
     transfer: &DebitTransfer<'_>,
     owners: &[[u8; 32]],
     asset: &[u8; 32],

@@ -86,12 +86,15 @@ type TrackingParams struct {
 type TransferParams struct {
 	RequestHead
 	AuditParams
-	InProof           bool            `json:"inProof"`
-	Hidden            bool            `json:"hidden"`
-	Delegate          bool            `json:"delegate"`
-	Sender            Field           `json:"sender"`
-	PartyIdentities   []Field         `json:"partyIdentities"`
-	ApprovalMask      uint8           `json:"approvalMask"`
+	InProof         bool    `json:"inProof"`
+	Hidden          bool    `json:"hidden"`
+	Delegate        bool    `json:"delegate"`
+	Sender          Field   `json:"sender"`
+	PartyIdentities []Field `json:"partyIdentities"`
+	ApprovalMask    uint8   `json:"approvalMask"`
+	// Both absent read zero, a frame that discloses nothing.
+	ApprovalTotals    *Field          `json:"approvalTotals,omitempty"`
+	ApprovalBlinder   *Field          `json:"approvalBlinder,omitempty"`
 	OutputCount       uint8           `json:"outputCount"`
 	Outputs           []OutputOpening `json:"outputs"`
 	InputCount        uint8           `json:"inputCount"`

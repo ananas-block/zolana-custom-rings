@@ -1210,6 +1210,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
             cache: None,
+            approval_totals: None,
         },
         interface_transfers: external
             .interface_transfers
