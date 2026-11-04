@@ -164,7 +164,6 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			world := poolWorld(ringpolicy.SectionShape{Outputs: 2, Withdrawals: 1}, false, false)
-			world.KeyEscrow = false
 			world.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
 			witness := world.Build(t)
 			if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
@@ -188,7 +187,6 @@ func TestPooledPolicyRejectsCapacityOverflow(t *testing.T) {
 
 func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
 	world := poolWorld(ringpolicy.SectionShape{Outputs: 2}, true, false)
-	world.KeyEscrow = false
 	world.Own, world.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
 	world.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
 	world.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}

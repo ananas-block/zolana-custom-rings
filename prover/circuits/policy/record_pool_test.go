@@ -33,7 +33,6 @@ func (c *recordPoolCircuit) Define(api frontend.API) error {
 	for _, query := range c.Queries {
 		resolved := pooledRecordAt(pool.resolve(api, recordQuery{active: query.Active, member: query.Member, index: query.Index}))
 		api.AssertIsEqual(api.FromBinary(resolved.onList[:]...), query.Lists)
-		api.AssertIsEqual(resolved.escrowKey, query.EscrowKey)
 		api.AssertIsEqual(api.Add(api.Mul(resolved.mintPolicy.threshold, new(big.Int).Lsh(big.NewInt(1), 128)), api.Mul(resolved.mintPolicy.cap, new(big.Int).Lsh(big.NewInt(1), 64)), resolved.mintPolicy.cosignAbove), query.MintPolicy)
 	}
 	return nil
@@ -42,8 +41,8 @@ func (c *recordPoolCircuit) Define(api frontend.API) error {
 func poolFixture(t testing.TB) *recordPoolCircuit {
 	t.Helper()
 	tree := ringregistry.New(t)
-	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), EscrowKey: big.NewInt(29), MintPolicy: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 192), big.NewInt(31))})
-	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(37)})
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), MintPolicy: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 192), big.NewInt(31))})
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1)})
 	circuit := &recordPoolCircuit{Root: tree.Root(), Active: 1}
 	for _, member := range []int64{11, 17} {
 		circuit.Records = append(circuit.Records, tree.Opening(big.NewInt(member)).Record.Wires())
@@ -54,11 +53,11 @@ func poolFixture(t testing.TB) *recordPoolCircuit {
 		t.Fatal(err)
 	}
 	circuit.Queries = []poolQueryWires{
-		{Member: 11, Index: 0, Active: 1, Lists: 3, EscrowKey: 29, MintPolicy: 31},
-		{Member: 11, Index: 0, Active: 1, Lists: 3, EscrowKey: 29, MintPolicy: 31},
-		{Member: 17, Index: 1, Active: 1, Lists: 1, EscrowKey: 37, MintPolicy: 0},
-		{Member: 13, Index: 0, Active: 1, Lists: 0, EscrowKey: 0, MintPolicy: 0},
-		{Member: 41, Index: 0, Active: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0},
+		{Member: 11, Index: 0, Active: 1, Lists: 3, MintPolicy: 31},
+		{Member: 11, Index: 0, Active: 1, Lists: 3, MintPolicy: 31},
+		{Member: 17, Index: 1, Active: 1, Lists: 1, MintPolicy: 0},
+		{Member: 13, Index: 0, Active: 1, Lists: 0, MintPolicy: 0},
+		{Member: 41, Index: 0, Active: 0, Lists: 0, MintPolicy: 0},
 	}
 	return circuit
 }
@@ -201,8 +200,8 @@ func undecodableMintPolicy() *big.Int {
 func curatorPoolFixture(t testing.TB) *curatorPoolCircuit {
 	t.Helper()
 	tree := ringregistry.New(t)
-	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), EscrowKey: big.NewInt(29), MintPolicy: undecodableMintPolicy(), WithdrawalThreshold: big.NewInt(43), AssetLimits: ringregistry.Limits{big.NewInt(47), big.NewInt(53), big.NewInt(59)}})
-	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(37)})
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), MintPolicy: undecodableMintPolicy(), WithdrawalThreshold: big.NewInt(43), AssetLimits: ringregistry.Limits{big.NewInt(47), big.NewInt(53), big.NewInt(59)}})
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1)})
 	circuit := &curatorPoolCircuit{Root: tree.Root(), Active: 1}
 	for _, member := range []int64{11, 17} {
 		circuit.Records = append(circuit.Records, tree.Opening(big.NewInt(member)).Record.Wires())
@@ -254,7 +253,6 @@ func TestCuratorPoolKeepsFieldsThePolicyDoesNotRead(t *testing.T) {
 	}
 	unread := []func(*registry.Record){
 		func(r *registry.Record) { r.Next = 12 },
-		func(r *registry.Record) { r.EscrowKey = 30 },
 		func(r *registry.Record) { r.MintPolicy = 0 },
 		func(r *registry.Record) { r.WithdrawalThreshold = 44 },
 		func(r *registry.Record) { r.AssetLimits[2] = 60 },
@@ -267,7 +265,7 @@ func TestCuratorPoolKeepsFieldsThePolicyDoesNotRead(t *testing.T) {
 		}
 	}
 	// The own pool decodes the same record and refuses it.
-	own := &recordPoolCircuit{Root: fixture.Root, Active: 1, Records: fixture.Records, Proof: fixture.Proof, Queries: []poolQueryWires{{Member: 41, Index: 0, Active: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0}}}
+	own := &recordPoolCircuit{Root: fixture.Root, Active: 1, Records: fixture.Records, Proof: fixture.Proof, Queries: []poolQueryWires{{Member: 41, Index: 0, Active: 0, Lists: 0, MintPolicy: 0}}}
 	if test.IsSolved(own, own, ecc.BN254.ScalarField()) == nil {
 		t.Fatal("own pool decoded a mint policy past its limbs")
 	}

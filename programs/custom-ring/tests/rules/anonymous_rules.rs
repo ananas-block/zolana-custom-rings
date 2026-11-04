@@ -9,7 +9,7 @@ use solana_keypair::{Keypair, Signer};
 
 use crate::{
     common::{reaches_verification, refused, Ring, Sent, Setup},
-    forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
+    forward_rules::{deposit_instruction, ring_deposit},
     transact_rules::{send, spp_list, Fixture},
 };
 
@@ -117,38 +117,6 @@ fn a_short_sender_bundle_is_refused() {
         send(&mut ring, tag::TRANSFER, Vec::new(), compact, spp, &[]),
         CustomRingError::RingTransactLength,
     );
-}
-
-#[test]
-fn an_anonymous_policy_merge_discloses_its_owner_to_the_auditor_alone() {
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut merge = |data| {
-        let instruction = merge_instruction_with(&ring, &data);
-        ring.send(instruction, &[])
-    };
-    let disclosed = |registry, inputs| {
-        let mut data = merge_data(registry, inputs);
-        data.output_ring_data_hash = [0; 32];
-        data
-    };
-    refused(
-        merge(disclosed(Some(1), 8)),
-        CustomRingError::UnexpectedMemberRegistryRoot,
-    );
-    let mut narrow = disclosed(None, 8);
-    narrow.disclosure.fields.pop();
-    refused(merge(narrow), CustomRingError::MergeDisclosureWidth);
-    let mut untagged = disclosed(None, 8);
-    untagged.disclosure.eph_pk[0] = 0;
-    refused(merge(untagged), CustomRingError::InvalidMergeDisclosure);
-    refused(
-        merge(disclosed(None, 25)),
-        CustomRingError::UnsupportedCircuit,
-    );
-    let mut ring_data = disclosed(None, 8);
-    ring_data.output_ring_data_hash = [8; 32];
-    refused(merge(ring_data), CustomRingError::AnonymousRingDataNotZero);
-    reaches_verification(merge(disclosed(None, 8)));
 }
 
 /// A salted commitment is the SDK's duty, the proof cannot read it.

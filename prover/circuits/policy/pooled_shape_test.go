@@ -12,7 +12,7 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		mutate func(*Policy)
 	}{
 		{"missing outputs", func(p *Policy) {
-			p.CtHashes = nil
+			p.Outputs = 0
 			p.OwnerEntries = nil
 			p.AssetEntries = nil
 			p.OwnRecords = p.OwnRecords[:1]

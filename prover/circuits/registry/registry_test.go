@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -24,10 +25,18 @@ func (c *rootCircuit) Define(api frontend.API) error {
 	return nil
 }
 
+// MEMBER_REGISTRY_EMPTY_ROOT in program-libs/interface/src/accounts/member_registry.rs, the sentinel leaf of eight inputs.
+func TestEmptyRootMatchesRust(t *testing.T) {
+	const rust = "053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d"
+	if got := fmt.Sprintf("%064x", ringregistry.New(t).Root()); got != rust {
+		t.Fatalf("empty root %s, Rust %s", got, rust)
+	}
+}
+
 func TestQuadPathFoldsTheHostTree(t *testing.T) {
 	members := ringregistry.New(t)
 	for m := int64(1); m <= 20; m++ {
-		members.Apply(t, ringregistry.Entry{Member: big.NewInt(m * 10), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(0)})
+		members.Apply(t, ringregistry.Entry{Member: big.NewInt(m * 10), Mask: big.NewInt(1), Value: big.NewInt(1)})
 	}
 	root := members.Root()
 	for _, member := range []int64{10, 20, 30, 40, 50, 160, 170, 200} {
@@ -48,7 +57,7 @@ func TestQuadPathFoldsTheHostTree(t *testing.T) {
 
 func TestQuadPathRejectsAnotherIndex(t *testing.T) {
 	members := ringregistry.New(t)
-	members.Apply(t, ringregistry.Entry{Member: big.NewInt(10), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(0)})
+	members.Apply(t, ringregistry.Entry{Member: big.NewInt(10), Mask: big.NewInt(1), Value: big.NewInt(1)})
 	opening := members.Opening(big.NewInt(10))
 	for _, tc := range []struct {
 		name   string
@@ -94,8 +103,8 @@ func TestOpeningConstraintCounts(t *testing.T) {
 		circuit frontend.Circuit
 		pinned  int
 	}{
-		{"present", &presentCount{}, 3561},
-		{"member", &memberCount{}, 3857},
+		{"present", &presentCount{}, 3504},
+		{"member", &memberCount{}, 3794},
 	} {
 		if got := ringkey.Compile(t, tc.circuit).GetNbConstraints(); got != tc.pinned {
 			t.Errorf("%s opening constraints=%d, pinned %d", tc.name, got, tc.pinned)
