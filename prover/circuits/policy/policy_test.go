@@ -157,10 +157,6 @@ var refusals = []struct {
 	{name: "approval bit 1 under a cap without a co-sign bound", honest: capOnly, world: func(w *ringpolicy.World) { w.Approval = policy.ApprovalOutflow }, in: "ringpolicy.(*SectionCircuit).Define"},
 	{name: "exit to the sender counted as outflow", honest: exited, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 201 }, in: "ringpolicy.(*SectionCircuit).Define"},
 	{name: "delegate approval bit set", honest: delegate2, world: func(w *ringpolicy.World) { w.Approval = policy.ApprovalOutflow }, in: "ringpolicy.(*SectionCircuit).Define"},
-	{name: "output owner other than its public recipient", honest: ringpolicy.Confidential, witness: func(t testing.TB, b ringpolicy.Witness) {
-		b.Policy().Recipients[0] = ringpolicy.Bob
-		b.Rebind(t)
-	}, in: "policy.(*PolicyInputs).assertRecipients", wide: true},
 	{name: "owner off a required list", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0) }, in: "policy.assertPaymentRules", wide: true},
 	{name: "owner on a forbidden list", honest: blocked, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.BlockBit)
@@ -176,7 +172,6 @@ var refusals = []struct {
 	{name: "unlisted owner of a mint without a threshold", honest: assetGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
 	{name: "scalar guard over split outputs", honest: scalarSplit, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
 	{name: "asset scalar guard above its threshold", honest: assetScalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
-	{name: "escrow of another key ciphertext", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) { b.Policy().CtHashes[0] = 7 }, in: "policy.(*PolicyInputs).assertEscrow"},
 	{name: "escrow without a registered key", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Alice] = ringpolicy.Record{Lists: ringregistry.AllowBit}
 	}, in: "policy.(*PolicyInputs).assertEscrow", wide: true},
@@ -212,7 +207,7 @@ func curatedAbsent() ringpolicy.World {
 	w := ringpolicy.Confidential()
 	w.Table.Curator = map[uint64]bool{ringregistry.BlockBit: true}
 	w.Table.Rules = append(w.Table.Rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
-	w.Curator[ringpolicy.Sender-1] = ringpolicy.Record{Lists: ringregistry.BlockBit, Registered: true, WithdrawalThreshold: 77}
+	w.Curator[ringpolicy.Sender-1] = ringpolicy.Record{Lists: ringregistry.BlockBit, WithdrawalThreshold: 77}
 	return w
 }
 

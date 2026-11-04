@@ -15,10 +15,9 @@ use spr_interface::instruction::instruction_data::{
 
 use crate::{
     common::{
-        auditor_pubkey, delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification,
-        refused, ring_auth, set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
+        auditor_pubkey, delegate_ring, policy_pda, reaches_verification, refused, ring_auth,
+        set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
     },
-    transact_rules::SPP,
 };
 
 fn deposit_entry(slot_index: u8, eph_pk: &[u8; 33]) -> RingDepositEntry {

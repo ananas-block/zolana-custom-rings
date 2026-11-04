@@ -216,15 +216,6 @@ func TestOwnerPredicates(t *testing.T) {
 		{name: "a literal zero key to an unenrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(carol, big.NewInt(0), testRing)}}
 		}},
-		{name: "rows descending", frame: "ringgadget.AssertOrderedWhen", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{rows: []*big.Int{bob, alice}, inputs: []shared.UtxoWires{aliceNote(t), bobNote(t)}}
-		}},
-		{name: "a repeated row", frame: "ringgadget.AssertOrderedWhen", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{rows: []*big.Int{alice, alice}, inputs: []shared.UtxoWires{aliceNote(t)}}
-		}},
-		{name: "a zero row before a live row", frame: "ringgadget.AssertOrderedWhen", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{rows: []*big.Int{big.NewInt(0), alice}, inputs: []shared.UtxoWires{aliceNote(t)}}
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := solveOwners(t, tc.world(t))

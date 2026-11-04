@@ -17,7 +17,7 @@ var (
 )
 
 // refuseSealed moves one sealed byte, the statement over the edited stream names bytes the proof never sealed.
-func refuseSealed(t *testing.T, s ringaudit.Section, edit func(*ringaudit.Plaintexts)) {
+func refuseSealed(t *testing.T, s ringaudit.Audit, edit func(*ringaudit.Plaintexts)) {
 	t.Helper()
 	p := s.Plaintexts(t)
 	edit(&p)
@@ -61,15 +61,15 @@ func TestKindFollowsTheSlot(t *testing.T) {
 
 func TestSlotPredicatesRefuseBeforeTheBinding(t *testing.T) {
 	c := compileSection(t, plainShape)
-	for name, mutate := range map[string]func(*ringaudit.Section){
-		"owner key off the slot's owner":      func(s *ringaudit.Section) { s.Outputs[0].OwnerKey[0] ^= 1 },
-		"exit owner key off the slot's owner": func(s *ringaudit.Section) { s.Outputs[2].OwnerKey[0] ^= 1 },
-		"mint off the slot's asset":           func(s *ringaudit.Section) { s.Outputs[0].Mint[0] ^= 1 },
-		"exit mint off the slot's asset":      func(s *ringaudit.Section) { s.Outputs[2].Mint[0] ^= 1 },
-		"blinding of another slot":            func(s *ringaudit.Section) { s.Outputs[0].Utxo.Blinding = s.Blinding(t, 1) },
-		"exit blinding off the sealed key":    func(s *ringaudit.Section) { s.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) },
-		"dummy blinding off the sealed key":   func(s *ringaudit.Section) { s.Outputs[3].Utxo.Blinding = big.NewInt(0x5ec) },
-		"asset no mint names":                 func(s *ringaudit.Section) { s.Outputs[0].Utxo.Asset = big.NewInt(0xdead) },
+	for name, mutate := range map[string]func(*ringaudit.Audit){
+		"owner key off the slot's owner":      func(s *ringaudit.Audit) { s.Outputs[0].OwnerKey[0] ^= 1 },
+		"exit owner key off the slot's owner": func(s *ringaudit.Audit) { s.Outputs[2].OwnerKey[0] ^= 1 },
+		"mint off the slot's asset":           func(s *ringaudit.Audit) { s.Outputs[0].Mint[0] ^= 1 },
+		"exit mint off the slot's asset":      func(s *ringaudit.Audit) { s.Outputs[2].Mint[0] ^= 1 },
+		"blinding of another slot":            func(s *ringaudit.Audit) { s.Outputs[0].Utxo.Blinding = s.Blinding(t, 1) },
+		"exit blinding off the sealed key":    func(s *ringaudit.Audit) { s.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) },
+		"dummy blinding off the sealed key":   func(s *ringaudit.Audit) { s.Outputs[3].Utxo.Blinding = big.NewInt(0x5ec) },
+		"asset no mint names":                 func(s *ringaudit.Audit) { s.Outputs[0].Utxo.Asset = big.NewInt(0xdead) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := ringaudit.NewSection(t, plainShape)
@@ -82,7 +82,7 @@ func TestSlotPredicatesRefuseBeforeTheBinding(t *testing.T) {
 // An omitted slot holds no note and drops out of the frame with its counters kept.
 func TestCompactFrames(t *testing.T) {
 	c := compileSection(t, plainShape)
-	s := ringaudit.NewSection(t, plainShape).Omit(1)
+	s := ringaudit.NewSection(t, plainShape).Omit(t, 1)
 	c.RequireSolved(t, s.Circuit(t))
 	full := ringaudit.NewSection(t, plainShape)
 	if got, want := s.Stream(t).Record(1), full.Stream(t).Record(1); string(got) != string(want) {
@@ -90,7 +90,7 @@ func TestCompactFrames(t *testing.T) {
 	}
 	t.Run("a note past the published count", func(t *testing.T) {
 		live := ringaudit.NewSection(t, plainShape)
-		live.Outputs[3] = live.RingOutput(t, 3, ringaudit.RingOwnerKey, ringaudit.EnrolledNullifierPk(t), 5)
+		live.Outputs[3] = live.RingNote(t, 3, ringaudit.RingOwnerKey, ringaudit.EnrolledNullifierPk(t), 5)
 		live.Omitted = 1
 		c.Refuse(t, live.Circuit(t))
 	})
