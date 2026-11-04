@@ -2,11 +2,11 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},
     tracking::TrackingRegistry,
-    CustomRingError, LiveRoots, NewRing, PrivateSourceWrite, RingMode, RingPolicy, RingRoles,
-    RootRead,
+    CustomRingError, LiveRoots, NewRing, PolicyUpdate, RingMode, RingPolicy, RingRoles, RootRead,
+    SourceSlot, N_SOURCE_SLOTS,
 };
 use solana_address::Address;
-use zolana_ring_policy::{ListId, ListSet};
+use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, Subject};
 
 fn key(byte: u8) -> Address {
     Address::new_from_array([byte; 32])
@@ -58,14 +58,13 @@ fn read(
         own: Some(own),
         curator: None,
         tracking,
-        private_source: None,
         slot: 1,
     }
     .tracking(Revision::from(revision))
 }
 
 #[test]
-fn a_served_root_below_a_private_floor_is_refused() {
+fn a_served_root_below_a_salted_floor_is_refused() {
     let tracking = tracking_at(&[5, 4]);
     let private = source(key(9), 5);
     assert_eq!(read(&tracking, &private, 5), Ok([6; 32]));
@@ -92,7 +91,6 @@ fn a_floor_above_the_named_root_refuses_a_curator_source_too() {
         own: None,
         curator: Some(&private),
         tracking: &tracking,
-        private_source: None,
         slot: 1,
     };
     assert_eq!(
@@ -101,80 +99,81 @@ fn a_floor_above_the_named_root_refuses_a_curator_source_too() {
     );
 }
 
-#[test]
-fn a_private_source_pairs_with_the_pinned_registry_alone() {
-    let ring = ring();
-    assert_eq!(ring.check_source_pair(&source(key(9), 0)), Ok(()));
-    assert_eq!(
-        ring.check_source_pair(&source(key(8), 0)),
-        Err(CustomRingError::PrivateSourceOtherTracking)
-    );
-    assert_eq!(
-        ring.check_source_pair(&source(Address::default(), 0)),
-        Ok(())
-    );
-}
-
-#[test]
-fn a_private_source_needs_a_policy_list_and_its_pair() {
-    let block = ListSet::single(ListId::Block);
-    let write = |owner_lists, source| PrivateSourceWrite {
-        owner_lists,
-        source,
-    };
-    let paired = source(key(9), 0);
-    let mut ring = *ring();
-    let unwritten_hash = ring.policy_hash;
-    assert_eq!(
-        ring.set_private_source(write(block, Some((key(7), &paired))), 5),
-        Ok(())
-    );
-    assert_eq!(ring.private_source, key(7));
-    assert_eq!(ring.private_lists, block.bits());
-    assert_ne!(ring.policy_hash, unwritten_hash);
-    assert_eq!(ring.generation(), 1);
-    let refused = |owner_lists, source, error| {
-        let mut untouched = ring;
-        assert_eq!(
-            untouched.set_private_source(write(owner_lists, source), 6),
-            Err(error)
-        );
-        assert_eq!(untouched, ring);
-    };
-    let (public, foreign) = (source(Address::default(), 0), source(key(8), 0));
-    refused(
-        block,
-        Some((key(7), &public)),
-        CustomRingError::PublicRegistryAsPrivateSource,
-    );
-    refused(
-        block,
-        Some((key(7), &foreign)),
-        CustomRingError::PrivateSourceOtherTracking,
-    );
-    refused(
-        ListSet::single(ListId::Reader),
-        Some((key(7), &paired)),
-        CustomRingError::ListNotPolicyReadable,
-    );
-    refused(block, None, CustomRingError::InvalidSource);
-    refused(
-        ListSet::EMPTY,
-        Some((key(7), &paired)),
-        CustomRingError::InvalidSource,
-    );
-    assert_eq!(
-        ring.set_private_source(write(ListSet::EMPTY, None), 7),
-        Ok(())
-    );
-    assert_eq!(ring.private_source, Address::default());
-}
-
-#[test]
-fn a_transfer_reads_the_private_source_before_the_pinned_tracking_registry() {
+fn salted_ring(curator: Address) -> RingPolicy {
     let mut ring = *ring();
     ring.records = key(5);
-    ring.private_source = key(7);
+    let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+    sources[ListId::Block.slot()] = SourceSlot {
+        list_id: ListId::Block as u8,
+        registry: curator,
+    };
+    ring.set_policy(PolicyUpdate {
+        sources,
+        salted_lists: ListSet::single(ListId::Block),
+        rules: RuleTable::builder()
+            .rule(Rule::forbid(Subject::Sender, ListId::Block))
+            .build()
+            .encode(),
+        slot: 5,
+    })
+    .unwrap();
+    ring
+}
+
+#[test]
+fn a_source_serving_a_salted_list_pins_the_tracking_registry() {
+    let other = CustomRingError::SaltedSourceOtherTracking;
+    for (ring, serving) in [
+        (salted_ring(Address::default()), key(5)),
+        (salted_ring(key(7)), key(7)),
+    ] {
+        assert_eq!(ring.check_source_pair(&serving, &source(key(9), 0)), Ok(()));
+        for unpaired in [key(8), Address::default()] {
+            assert_eq!(
+                ring.check_source_pair(&serving, &source(unpaired, 0)),
+                Err(other)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_source_serving_no_salted_list_needs_no_pin_and_no_foreign_one() {
+    let ring = salted_ring(key(7));
+    assert_eq!(
+        ring.check_source_pair(&key(5), &source(Address::default(), 0)),
+        Ok(())
+    );
+    assert_eq!(
+        ring.check_source_pair(&key(5), &source(key(8), 0)),
+        Err(CustomRingError::SaltedSourceOtherTracking)
+    );
+}
+
+#[test]
+fn a_salted_bit_survives_only_on_a_list_a_rule_reads() {
+    let mut ring = salted_ring(Address::default());
+    assert_eq!(ring.salted(), ListSet::single(ListId::Block));
+    let salted_hash = ring.policy_hash;
+    let unsalted = PolicyUpdate {
+        sources: ring.sources,
+        salted_lists: ListSet::EMPTY,
+        rules: ring.rules,
+        slot: 6,
+    };
+    ring.set_policy(unsalted).unwrap();
+    assert_ne!(ring.policy_hash, salted_hash);
+    ring.set_policy(PolicyUpdate {
+        salted_lists: ListSet::single(ListId::Frozen),
+        ..unsalted
+    })
+    .unwrap();
+    assert_eq!(ring.salted(), ListSet::EMPTY);
+}
+
+#[test]
+fn a_transfer_reads_the_own_and_curator_roots_before_the_pinned_tracking_registry() {
+    let ring = salted_ring(key(7));
     assert_eq!(
         ring.root_registries(RootRead::Policy).collect::<Vec<_>>(),
         vec![key(5), key(7), key(9)]

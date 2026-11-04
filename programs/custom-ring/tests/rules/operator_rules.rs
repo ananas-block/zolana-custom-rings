@@ -111,7 +111,7 @@ fn initialize_creates_the_ring_and_spp_registration_under_the_upgrade_authority(
     assert_eq!(account.roles, ring.roles.addresses());
     assert_eq!(
         (account.co_signers.covered(), account.delegate()),
-        (CoSignScope::NONE, None)
+        (None, None)
     );
     assert_eq!(account.records, RECORDS);
     assert_eq!(account.tracking, tracking_registry());
@@ -236,7 +236,7 @@ fn each_co_signer_lives_in_its_own_record() {
     let record: CoSigner = ring.read(&co_signer_record(&signer));
     assert_eq!((record.signer, record.scope), (signer, 5));
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), CoSignScope::new(5).unwrap());
+    assert_eq!(account.co_signers.covered(), CoSignScope::new(5));
     within_budget(
         InstructionTag::ClearCoSigner,
         send(
@@ -250,7 +250,7 @@ fn each_co_signer_lives_in_its_own_record() {
         ),
     );
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.co_signers.covered(), CoSignScope::NONE);
+    assert_eq!(account.co_signers.covered(), None);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
@@ -339,28 +339,18 @@ fn a_rotated_admin_appoints_the_delegate_and_the_old_one_cannot() {
 }
 
 #[test]
-fn both_policy_writes_refuse_a_rule_against_its_list_polarity() {
+fn both_policy_writes_take_a_rule_reading_a_list_by_presence_or_absence() {
     let mut ring = uninitialized(Setup::Policy);
-    let inverted = list_table(ListId::Block, Vec::new());
+    let block_required = list_table(ListId::Block, Vec::new());
     let mut data = policy_config(&ring);
     data.policy = Some(PolicyBindingIxData {
-        table: inverted.clone(),
+        table: block_required.clone(),
     });
-    refused(
-        upgrade_initialize(&mut ring, data),
-        CustomRingError::RuleListPolarity,
-    );
+    upgrade_initialize(&mut ring, data).expect("a deny list read by presence");
     let mut ring = Ring::new(Setup::Policy);
     let policy = ring.roles.policy.pubkey();
-    refused(
-        ring.role_send(RingRole::Policy, rules_write(&policy, inverted)),
-        CustomRingError::RuleListPolarity,
-    );
-    ring.role_send(
-        RingRole::Policy,
-        rules_write(&policy, allow_list_table(Vec::new())),
-    )
-    .expect("a grant list read by presence");
+    ring.role_send(RingRole::Policy, rules_write(&policy, block_required))
+        .expect("a deny list read by presence");
 }
 
 #[test]
@@ -616,6 +606,7 @@ const ROLE_WRITES: [RoleWrite; 8] = [
                 update: UpdatePolicyIxData::Source(PolicySourceIxData {
                     list_id: ListId::Allow as u8,
                     source: 0,
+                    salted: false,
                 }),
                 trailing: &[],
             }
@@ -873,7 +864,11 @@ fn a_source_write_names_a_known_list() {
     for list_id in [0, u8::MAX] {
         let instruction = UpdatePolicyIx {
             authority: policy,
-            update: UpdatePolicyIxData::Source(PolicySourceIxData { list_id, source: 0 }),
+            update: UpdatePolicyIxData::Source(PolicySourceIxData {
+                list_id,
+                source: 0,
+                salted: false,
+            }),
             trailing: &[],
         }
         .instruction();

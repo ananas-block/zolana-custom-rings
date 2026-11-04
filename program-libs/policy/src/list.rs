@@ -87,10 +87,6 @@ impl ListSet {
     pub const AUTHORITY_WRITES: Self = Self::written_by(Writer::Authority);
     /// The lists a rule reads, a reader grant moves no funds.
     pub const POLICY_LISTS: Self = Self::AUTHORITY_WRITES.difference(Self::single(ListId::Reader));
-    /// A rule reads these by presence, a set bit grants.
-    pub const GRANT_LISTS: Self = Self::of(&[ListId::Allow, ListId::Approval]);
-    /// A rule reads these by absence, a set bit denies.
-    pub const DENY_LISTS: Self = Self::of(&[ListId::Block, ListId::Frozen]);
     /// Every list but escrow, an escrow write carries its key instead.
     pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
 
@@ -176,12 +172,6 @@ impl ListSet {
             .filter(move |list_id| self.contains(*list_id))
     }
 }
-
-/// Every list a rule can read has one polarity.
-const _: () = assert!(
-    ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits()
-        && !ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS)
-);
 
 /// Every bit of a `ListSet` names a list.
 const _: () = {

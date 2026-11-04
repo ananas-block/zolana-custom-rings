@@ -156,8 +156,8 @@ func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListTagDomain, listSalt})
 }
 
-// AnonymousParties counts payer, five co-signers and exit destination, mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 7
+// AnonymousParties is mirrored by ANONYMOUS_PARTIES.
+const AnonymousParties = 3
 
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.
