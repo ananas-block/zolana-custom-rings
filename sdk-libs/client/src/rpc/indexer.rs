@@ -6,12 +6,18 @@ use spr_client::{
 };
 use spr_indexer_api::RpcMethod;
 use thiserror::Error;
-use zolana_ring_indexer::rpc::{
-    method::{
-        GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
-        GetStorageRecordPool,
+use zolana_ring_indexer::{
+    rpc::{
+        method::{
+            GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
+            GetStorageRecordPool,
+        },
+        RingRpcError,
     },
-    RingRpcError,
+    tracking::method::{
+        GetPendingEnrollments, GetTrackingApplyProofInputs, GetTrackingOpenings,
+        GetTrackingRecordPool, GetTrackingRecords,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -109,6 +115,11 @@ ring_indexer! {
     get_storage_member_records => GetStorageMemberRecords,
     get_storage_record_pool => GetStorageRecordPool,
     get_storage_apply_proof_inputs => GetStorageApplyProofInputs,
+    get_tracking_openings => GetTrackingOpenings,
+    get_tracking_records => GetTrackingRecords,
+    get_tracking_record_pool => GetTrackingRecordPool,
+    get_pending_enrollments => GetPendingEnrollments,
+    get_tracking_apply_proof_inputs => GetTrackingApplyProofInputs,
 }
 
 async fn call<M: RpcMethod>(

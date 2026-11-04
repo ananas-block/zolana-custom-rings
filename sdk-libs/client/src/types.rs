@@ -27,12 +27,10 @@ pub struct AuditedTransaction {
     /// Published order, a slot that did not open sits in `payload_errors` instead.
     pub outputs: Vec<AuditedOutput>,
     pub payload_errors: Vec<OutputPayloadError>,
-    /// `None` outside the anonymous rail and while `hash_0` names a note the auditor lacks.
-    pub sender: Option<AuditedSender>,
-    /// One per published nullifier, every rail's evidence names its hash.
+    /// `R`, spent notes among the published inputs.
+    pub real_inputs: u8,
+    /// One per published nullifier.
     pub inputs: Vec<AuditedInput>,
-    /// Slots a nullifier key or a mint can still open, each also in `outputs` or `payload_errors`.
-    pub unresolved: Vec<UnresolvedOutput>,
 }
 
 /// One opened slot, its note rebuilt to the published commitment.
@@ -52,54 +50,11 @@ pub enum OutputOpening {
     /// A default-ring note, its owner the published owner tag.
     Exit(AuditedUtxo),
     Dummy,
-    /// A key escrow slot before its owner's record is read, its proof fixes the fields and no hash rebuilds.
-    EscrowPending(EscrowPendingOutput),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct EscrowPendingOutput {
-    pub owner_key: [u8; 32],
-    pub amount: u64,
-    pub blinding: [u8; 32],
-    pub slot: EscrowPendingSlot,
-}
-
+/// The published tag of a ring slot, its proof leaves it free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscrowPendingSlot {
-    /// A delivered body omits the asset, only the nullifier key finds it.
-    Ring { recipient_u: [u8; 32] },
-    Exit {
-        asset: [u8; 32],
-        mint: Option<Address>,
-    },
-}
-
-/// A slot's decrypted fields, unverified until a nullifier key and a delivered slot's mint rebuild its commitment.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnresolvedOutput {
-    pub slot_index: u32,
-    pub context: OutputContext,
-    pub ring: Address,
-    /// The key the opening discloses, `None` leaves it to the owner's escrow record.
-    pub nullifier_pk: Option<[u8; 32]>,
-    pub fields: EscrowPendingOutput,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OutputResolution {
-    AwaitsKey,
-    AwaitsAsset,
-    Opened(Box<OutputOpening>),
-    Refused(OutputPayloadErrorKind),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RingOwnerTag {
-    /// The recipient key's u on the delivered rails.
-    Recipient([u8; 32]),
-    /// A view tag the anonymous proof leaves free.
-    View([u8; 32]),
-}
+pub struct RingOwnerTag(pub [u8; 32]);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AuditedUtxo {
@@ -108,7 +63,7 @@ pub struct AuditedUtxo {
     pub nullifier_pk: [u8; 32],
     /// `hash_bytes(mint)`.
     pub asset: [u8; 32],
-    /// `None` until the asset registry knows the asset.
+    /// `None` on a historical frame until the asset registry knows the asset.
     pub mint: Option<Address>,
     pub amount: u64,
     pub blinding: [u8; 32],
@@ -152,77 +107,41 @@ pub struct CreatedUtxo {
     pub ring_note: bool,
 }
 
-/// The sender every spent UTXO of an anonymous transfer belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuditedSender {
-    pub owner_key: [u8; 32],
-    /// Spent UTXO 0's key, every input's under the entry key, `None` when UTXO 0 was deposited.
-    pub nullifier_pk: Option<[u8; 32]>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditedInput {
     pub nullifier: [u8; 32],
-    /// The commitment the evidence names, zero at a dummy.
-    pub hash: [u8; 32],
     pub opening: InputOpening,
 }
 
+/// What the proven count and default bits say of one published nullifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputOpening {
+    /// At or past `R`.
     Dummy,
-    Opened(AuditedInputOpening),
-    /// A merge output's audit record, a wallet cannot spend from it.
-    Merged(MergedInput),
-    /// The evidence names a note the auditor lacks, the outputs still open.
-    UnseenHash {
-        hash: [u8; 32],
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MergedInput {
-    pub commitment: [u8; 32],
-    pub input: crate::MergeInput,
+    /// A spent note, the nullifier index names which, never padding or unspent.
+    Real,
+    /// A default-ring note whose opening the frame carries.
+    External(AuditedDefaultInput),
 }
 
 impl InputOpening {
-    pub fn opened(&self) -> Option<&AuditedInputOpening> {
+    pub fn is_real(&self) -> bool {
+        !matches!(self, Self::Dummy)
+    }
+
+    pub fn default_input(&self) -> Option<&AuditedDefaultInput> {
         match self {
-            Self::Opened(opening) => Some(opening),
-            Self::Dummy | Self::Merged(_) | Self::UnseenHash { .. } => None,
+            Self::External(input) => Some(input),
+            Self::Dummy | Self::Real => None,
         }
     }
-
-    pub fn is_unseen(&self) -> bool {
-        matches!(self, Self::UnseenHash { .. })
-    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct AuditedInputOpening {
-    pub asset: [u8; 32],
-    pub mint: Option<Address>,
-    pub amount: u64,
-    pub blinding: [u8; 32],
-    /// `None` without the input's tree id, every commitment binds it.
-    pub ring: Option<InputRing>,
-}
-
-/// SPP spends a UTXO of the ring or of the default ring, the entry evidence names neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputRing {
-    Ring {
-        commitment: [u8; 32],
-    },
-    Default {
-        commitment: [u8; 32],
-    },
-    /// No known commitment told the candidates apart.
-    Unresolved {
-        ring: [u8; 32],
-        default: [u8; 32],
-    },
+pub struct AuditedDefaultInput {
+    pub utxo: AuditedUtxo,
+    /// `None` without the input's tree id, the commitment binds it.
+    pub commitment: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,25 +154,27 @@ pub struct OutputPayloadError {
 #[cfg_attr(feature = "rpc", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "rpc", serde(rename_all = "camelCase"))]
 pub enum OutputPayloadErrorKind {
-    /// No body of the layout's scheme and length, or no tag in the owner tag.
+    /// No body of the layout's scheme and length.
     Frame,
-    /// The slot's record names an asset outside the field.
+    /// The slot's record holds a value outside the field.
     Disclosure,
     /// The recipient key admits no X25519 agreement.
     RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// No held asset rebuilds a delivered body's commitment, a registry refresh may name it.
+    /// No held asset rebuilds a version 3 delivered body, a registry refresh may name it.
     UnknownAsset,
+    /// A version 3 key escrow slot, the reader holds no key to rebuild it.
+    EscrowPending,
 }
 
 impl AuditedTransaction {
-    /// The ring and exit notes its outputs opened, the index a [`crate::KnownUtxos`] keeps.
+    /// The ring and exit notes its outputs opened.
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
         self.outputs.iter().filter_map(AuditedOutput::created)
     }
 
-    /// A registry refresh may name the mint, a delivered slot opens only after it.
+    /// A registry refresh may name a historical frame's mint.
     pub fn has_unknown_assets(&self) -> bool {
         let outputs = self
             .outputs
@@ -263,14 +184,15 @@ impl AuditedTransaction {
         let inputs = self
             .inputs
             .iter()
-            .filter_map(|input| input.opening.opened())
-            .map(|opening| opening.mint);
+            .filter_map(|input| input.opening.default_input())
+            .map(|input| input.utxo.mint);
         outputs.chain(inputs).any(|mint| mint.is_none())
             || self
                 .payload_errors
                 .iter()
                 .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
     }
+
 }
 
 impl AuditedOutput {
@@ -289,7 +211,7 @@ impl OutputOpening {
     pub fn utxo(&self) -> Option<&AuditedUtxo> {
         match self {
             Self::Ring { utxo, .. } | Self::Exit(utxo) => Some(utxo),
-            Self::Dummy | Self::EscrowPending(_) => None,
+            Self::Dummy => None,
         }
     }
 }
@@ -395,23 +317,6 @@ impl fmt::Debug for AuditedUtxo {
     }
 }
 
-impl fmt::Debug for EscrowPendingOutput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            owner_key,
-            amount,
-            blinding: _,
-            slot,
-        } = self;
-        f.debug_struct("EscrowPendingOutput")
-            .field("owner_key", owner_key)
-            .field("amount", amount)
-            .field("blinding", &REDACTED)
-            .field("slot", slot)
-            .finish()
-    }
-}
-
 impl fmt::Debug for KnownUtxo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self {
@@ -435,25 +340,6 @@ impl fmt::Debug for KnownUtxo {
             .field("data_hash", data_hash)
             .field("ring_data_hash", ring_data_hash)
             .field("tree_id", tree_id)
-            .finish()
-    }
-}
-
-impl fmt::Debug for AuditedInputOpening {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            asset,
-            mint,
-            amount,
-            blinding: _,
-            ring,
-        } = self;
-        f.debug_struct("AuditedInputOpening")
-            .field("asset", asset)
-            .field("mint", mint)
-            .field("amount", amount)
-            .field("blinding", &REDACTED)
-            .field("ring", ring)
             .finish()
     }
 }

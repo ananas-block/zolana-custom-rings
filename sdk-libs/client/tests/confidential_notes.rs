@@ -87,7 +87,7 @@ fn transfer(
                 ref other => panic!("inline owner tag expected, got {other:?}"),
             },
             output_context: OutputContext {
-                hash: *slot.wire.hash(),
+                hash: *slot.wire(&[0; custom_ring_interface::AUDIT_RECORD_LEN], None).hash,
                 tree_id: TREE,
                 leaf_index: leaf as u64,
             },
@@ -134,7 +134,7 @@ fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
     let tx = transfer(
         &sender,
         &recipient,
-        RingDelivery::Delivered { key_escrow: false },
+        RingDelivery::Delivered,
     );
     assert_eq!(held(&recipient, std::slice::from_ref(&tx)), [(SENT, false)]);
     assert_eq!(
@@ -150,7 +150,7 @@ fn a_note_reads_spent_once_a_scanned_transaction_spends_it() {
     let received = transfer(
         &sender,
         &recipient,
-        RingDelivery::Delivered { key_escrow: false },
+        RingDelivery::Delivered,
     );
     let notes = open_ring_confidential(
         &recipient,

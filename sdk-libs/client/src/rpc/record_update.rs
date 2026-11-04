@@ -1,8 +1,6 @@
 use custom_ring_interface::{
-    domain, mint_policy_write, queue_chain,
-    storage_instruction::{AddressWriteData, EscrowWriteData, StorageWriteData},
-    AuthorizedAddress, CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
-    GRACE_SLOTS, REGISTER_KEY_CIPHERTEXT_LEN,
+    domain, mint_policy_write, queue_chain, CustomRingError, QueueEntry, RecordWriteData,
+    WriteRecordsIxData, GRACE_SLOTS,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -11,8 +9,7 @@ use spr_hasher::{
     primitives::{hash_bytes, right_align},
     Hasher, Poseidon,
 };
-use spr_indexer_api::{Base64String, Hash, RpcMethod, SerializablePubkey, SerializableSignature};
-use spr_keypair::X25519Pubkey;
+use spr_indexer_api::{Hash, RpcMethod, SerializablePubkey, SerializableSignature};
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingListWriteView;
 use zolana_ring_policy::{registry_field, ring_id_field, ListId, ListSet, Member, MemberError};
@@ -32,23 +29,8 @@ pub const ENROLMENT_LISTS: ListSet =
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RecordUpdateEntry {
     Write(RingListWriteView),
-    /// The service checks `proof` against the escrow key before it queues the entry.
-    Escrow(EscrowRegistration),
     /// The writer takes it only on the signature of `wallet`.
     WalletGrant(WalletGrant),
-    /// The service checks it against the owner's authorization account before it queues the entry.
-    Address(AddressEnrollment),
-}
-
-/// The newest address the owner signed on chain, an authority can delay it and never change it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AddressEnrollment {
-    pub owner: SerializablePubkey,
-    pub ring_id: Hash,
-    pub nullifier_pk: Hash,
-    pub viewing_u: Hash,
-    pub address_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,19 +46,6 @@ pub struct WalletGrant {
 pub enum ReaderAccess {
     Granted,
     Revoked,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct EscrowRegistration {
-    pub member: Hash,
-    pub nullifier_pk: Hash,
-    /// Tagged X25519 ephemeral key, 33 bytes.
-    pub eph_pk: Base64String,
-    /// AES-256-CTR ciphertext of the nullifier secret, 32 bytes.
-    pub ciphertext: Base64String,
-    /// The register key `CustomRingProof`, 192 bytes.
-    pub proof: Base64String,
 }
 
 /// The signed content, the request names the registry beside it.
@@ -160,12 +129,6 @@ pub struct RecordUpdateStatement {
 pub enum RecordUpdateError {
     #[error(transparent)]
     Entry(#[from] CustomRingError),
-    #[error("escrow ciphertext is not {REGISTER_KEY_CIPHERTEXT_LEN} bytes")]
-    CiphertextLength,
-    #[error("escrow ephemeral key is not a tagged X25519 key")]
-    EphemeralKey,
-    #[error("escrow member is not the owner identity of the signer")]
-    EscrowOwner,
     #[error(transparent)]
     Member(#[from] MemberError),
     #[error("record update signing failed")]
@@ -196,80 +159,14 @@ pub mod method {
 impl RecordUpdateEntry {
     /// The leaf write the apply proof hashes for the entry.
     pub fn entry(&self) -> Result<QueueEntry, RecordUpdateError> {
-        let record = match self {
-            Self::Write(write) => list_write(write),
-            Self::Escrow(registration) => {
-                return Ok(QueueEntry::escrow(
-                    registration.member.0,
-                    &registration.key()?,
-                )?);
-            }
-            Self::WalletGrant(grant) => grant.record()?,
-            Self::Address(enrollment) => {
-                return Ok(enrollment.write().entry(&enrollment.address())?);
-            }
-        };
-        Ok(StorageWriteData::Record(record).entry()?)
+        Ok(self.write()?.storage_entry()?)
     }
 
-    /// An escrow entry publishes `signer` as its owner.
-    pub fn write(&self, signer: &Address) -> Result<StorageWriteData, RecordUpdateError> {
-        Ok(match self {
-            Self::Write(write) => StorageWriteData::Record(list_write(write)),
-            Self::Escrow(registration) => StorageWriteData::Escrow(registration.write(signer)?),
-            Self::WalletGrant(grant) => StorageWriteData::Record(grant.record()?),
-            Self::Address(enrollment) => StorageWriteData::Address(enrollment.write()),
-        })
-    }
-}
-
-impl AddressEnrollment {
-    pub const fn address(&self) -> AuthorizedAddress {
-        AuthorizedAddress {
-            ring_id: self.ring_id.0,
-            nullifier_pk: self.nullifier_pk.0,
-            viewing_u: self.viewing_u.0,
-            address_revision: self.address_revision,
+    pub fn write(&self) -> Result<RecordWriteData, RecordUpdateError> {
+        match self {
+            Self::Write(write) => Ok(list_write(write)),
+            Self::WalletGrant(grant) => grant.record(),
         }
-    }
-
-    fn write(&self) -> AddressWriteData {
-        AddressWriteData {
-            owner: self.owner.0,
-            address_revision: self.address_revision.to_le_bytes(),
-        }
-    }
-}
-
-impl EscrowRegistration {
-    pub fn key(&self) -> Result<EscrowKey<'_>, RecordUpdateError> {
-        Ok(EscrowKey {
-            nullifier_pk: &self.nullifier_pk.0,
-            ciphertext: self
-                .ciphertext
-                .0
-                .as_slice()
-                .try_into()
-                .map_err(|_| RecordUpdateError::CiphertextLength)?,
-        })
-    }
-
-    fn write(&self, owner: &Address) -> Result<EscrowWriteData, RecordUpdateError> {
-        let eph_pk = <[u8; 33]>::try_from(self.eph_pk.0.as_slice())
-            .ok()
-            .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
-            .ok_or(RecordUpdateError::EphemeralKey)?;
-        let key = self.key()?;
-        let write = EscrowWriteData {
-            owner: *owner,
-            nullifier_pk: *key.nullifier_pk,
-            eph_u: eph_pk.u(),
-            ciphertext: *key.ciphertext,
-        };
-        if write.member()? != self.member.0 {
-            return Err(RecordUpdateError::EscrowOwner);
-        }
-        Ok(write)
     }
 }
 

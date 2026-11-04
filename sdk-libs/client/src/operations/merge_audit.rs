@@ -1,4 +1,4 @@
-//! Reads every confirmed ring merge into the ledger's input list, keys the disclosure alone opens.
+//! Reads every confirmed ring merge into the ledger, from its sealed record or its tag 47 list.
 
 use std::{
     collections::HashSet,
@@ -15,17 +15,21 @@ use spr_event::{
     merge_output::MERGE_OUTPUT_SALT_LEN, split_merge_output_body, OutputDataEncoding,
     MERGE_OUTPUT_BODY_LEN, MERGE_OUTPUT_SCHEME,
 };
-use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_hasher::primitives::{hash_bytes, is_canonical_bn254_scalar_be};
 use spr_indexer_api::Context;
 use spr_interface::instruction::instruction_data::merge_transact::merge_circuit_width;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_transaction::OutputSlot;
+use custom_ring_interface::{OpeningRecord, RecordKind};
+use zolana_ring_keys::RingMergeSeed;
 
 use crate::{
-    encryption::open_merge_disclosure,
+    encryption::{open_merge_disclosure, open_merge_record},
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
-    merge_ledger::ConfirmedMerge,
+    merge_ledger::{ConfirmedMerge, MergeDisclosed, MergeRecordOutput},
     origin::{ConfirmedEventKind, ConfirmedMergeDisclosure, RingOrigin, TransactionOrigin},
     scan::{RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
+    types::{KnownUtxo, UtxoOwner},
     AuditError,
 };
 
@@ -33,7 +37,7 @@ use crate::{
 pub struct MergeAuditPage {
     pub context: Context,
     pub merges: Vec<ConfirmedMerge>,
-    /// Merge rows whose disclosure no v3 frame carries, the historical reader owns them.
+    /// Merge rows carrying neither disclosure, the historical reader owns them.
     pub historical: Vec<(u64, Signature, u16)>,
     pub next_cursor: Option<HistoryCursor>,
 }
@@ -210,7 +214,7 @@ fn rows(response: GetShieldedTransactionsByTagsResponse) -> Vec<ShieldedTransact
         .collect()
 }
 
-/// The merge a bound row settled, `None` on a frame with no v3 disclosure.
+/// The merge a bound row settled, `None` on a frame with no disclosure this reader opens.
 pub fn confirmed_merge(
     transaction: &ShieldedTransaction,
     event_index: u16,
@@ -221,7 +225,7 @@ pub fn confirmed_merge(
         return Ok(None);
     };
     let output = MergeOutput::of(transaction)?;
-    let list = output.disclose(auditor, disclosure)?;
+    let disclosed = output.disclose(auditor, disclosure, transaction)?;
     Ok(Some(ConfirmedMerge {
         slot: transaction.slot,
         tx_signature: transaction.tx_signature,
@@ -231,8 +235,34 @@ pub fn confirmed_merge(
         leaf_index: output.leaf_index,
         first_nullifier: output.first_nullifier,
         ring_data_hash: output.ring_data_hash,
-        inputs: ConfirmedMerge::real_inputs(&list),
+        disclosed,
     }))
+}
+
+/// A ring merge's published body, under either encoding its proof binds or leaves free.
+pub(crate) struct RingMergeBody {
+    pub(crate) ring_data_hash: [u8; 32],
+    pub(crate) encrypted: Vec<u8>,
+}
+
+impl RingMergeBody {
+    pub(crate) fn of(slot: &OutputSlot) -> Option<Self> {
+        let (OutputDataEncoding::Encrypted(blob) | OutputDataEncoding::VerifiablyEncrypted(blob)) =
+            slot.output_data()?
+        else {
+            return None;
+        };
+        let (&MERGE_OUTPUT_SCHEME, body) = blob.split_first()? else {
+            return None;
+        };
+        let (Some(ring_data_hash), encrypted) = split_merge_output_body(body)? else {
+            return None;
+        };
+        Some(Self {
+            ring_data_hash: *ring_data_hash,
+            encrypted: encrypted.to_vec(),
+        })
+    }
 }
 
 impl MergeOutput {
@@ -243,21 +273,14 @@ impl MergeOutput {
         };
         let first_nullifier = *tx.nullifiers.first().ok_or_else(invalid_merge)?;
         let width = merge_circuit_width(tx.nullifiers.len()).ok_or_else(invalid_merge)?;
-        let Some(OutputDataEncoding::Encrypted(blob)) = slot.output_data() else {
-            return Err(invalid_merge());
-        };
-        let Some((&MERGE_OUTPUT_SCHEME, body)) = blob.split_first() else {
-            return Err(invalid_merge());
-        };
-        let Some((Some(ring_data_hash), encrypted)) = split_merge_output_body(body) else {
-            return Err(invalid_merge());
-        };
+        let body = RingMergeBody::of(slot).ok_or_else(invalid_merge)?;
         let commitment = slot.output_context.hash;
-        let (salt, _) = encrypted
+        let (salt, _) = body
+            .encrypted
             .split_first_chunk::<MERGE_OUTPUT_SALT_LEN>()
-            .filter(|_| encrypted.len() == MERGE_OUTPUT_BODY_LEN)
+            .filter(|_| body.encrypted.len() == MERGE_OUTPUT_BODY_LEN)
             .ok_or_else(invalid_merge)?;
-        if ![first_nullifier, commitment, *ring_data_hash]
+        if ![first_nullifier, commitment, body.ring_data_hash]
             .iter()
             .all(is_canonical_bn254_scalar_be)
         {
@@ -268,29 +291,92 @@ impl MergeOutput {
             tree_id: slot.output_context.tree_id,
             leaf_index: slot.output_context.leaf_index,
             first_nullifier,
-            ring_data_hash: *ring_data_hash,
+            ring_data_hash: body.ring_data_hash,
             width,
             salt: *salt,
         })
     }
 
-    /// The list in circuit slot order, its proof binds length, order and dummies.
-    pub(crate) fn disclose(
+    fn disclose(
         &self,
         auditor: &X25519Keypair,
         disclosure: &ConfirmedMergeDisclosure,
-    ) -> Result<Vec<[u8; 32]>, AuditError> {
-        let opening = open_merge_disclosure(
-            auditor,
-            &X25519Pubkey::from_bytes(disclosure.eph_pk)?,
-            &disclosure.ciphertext,
-            self.salt,
-            &disclosure.fields,
-        )?;
-        if opening.input_commitments.len() != self.width {
+        transaction: &ShieldedTransaction,
+    ) -> Result<MergeDisclosed, AuditError> {
+        match disclosure {
+            ConfirmedMergeDisclosure::Record { eph_pk, ciphertext } => {
+                let record =
+                    open_merge_record(auditor, &X25519Pubkey::from_bytes(*eph_pk)?, ciphertext)?;
+                let ring = transaction
+                    .ring_program_id
+                    .ok_or(AuditError::MissingRingProgram)?;
+                self.rebuild(record, ring, &transaction.nullifiers)
+                    .map(MergeDisclosed::Record)
+            }
+            ConfirmedMergeDisclosure::Historical {
+                eph_pk,
+                ciphertext,
+                fields,
+            } => {
+                let opening = open_merge_disclosure(
+                    auditor,
+                    &X25519Pubkey::from_bytes(*eph_pk)?,
+                    ciphertext,
+                    self.salt,
+                    fields,
+                )?;
+                if opening.input_commitments.len() != self.width {
+                    return Err(AuditError::MergeDisclosureMismatch);
+                }
+                Ok(MergeDisclosed::Inputs(ConfirmedMerge::real_inputs(
+                    &opening.input_commitments,
+                )))
+            }
+        }
+    }
+
+    /// Accepted only when the record and its seed's blinding hash to the published output.
+    fn rebuild(
+        &self,
+        opened: OpeningRecord,
+        ring: Address,
+        nullifiers: &[[u8; 32]],
+    ) -> Result<MergeRecordOutput, AuditError> {
+        let OpeningRecord { record, secret } = opened;
+        if record.kind != RecordKind::Ring || !is_canonical_bn254_scalar_be(&record.nullifier_pk) {
+            return Err(AuditError::DisclosureField);
+        }
+        let seed = RingMergeSeed::from_bytes(secret).map_err(|_| AuditError::DisclosureField)?;
+        let rebuilt = KnownUtxo {
+            owner_key: record.owner_key,
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: record.nullifier_pk,
+            },
+            asset: hash_bytes(&record.mint)?,
+            mint: Some(Address::new_from_array(record.mint)),
+            amount: record.amount,
+            blinding: seed.output_blinding(&self.first_nullifier)?,
+            data_hash: [0; 32],
+            ring_data_hash: self.ring_data_hash,
+            tree_id: self.tree_id,
+        };
+        if rebuilt.commitment(Some(ring))? != self.commitment {
             return Err(AuditError::MergeDisclosureMismatch);
         }
-        Ok(opening.input_commitments)
+        let mut real_nullifiers = Vec::with_capacity(nullifiers.len());
+        for (slot_index, nullifier) in (0u32..).zip(nullifiers) {
+            if *nullifier != seed.dummy_nullifier(&self.first_nullifier, slot_index)? {
+                real_nullifiers.push(*nullifier);
+            }
+        }
+        Ok(MergeRecordOutput {
+            owner_key: record.owner_key,
+            nullifier_pk: record.nullifier_pk,
+            mint: Address::new_from_array(record.mint),
+            amount: record.amount,
+            seed: *seed.as_bytes(),
+            real_nullifiers,
+        })
     }
 }
 
@@ -313,14 +399,198 @@ fn remember_merge(
 
 #[cfg(test)]
 mod tests {
+    use custom_ring_interface::AuditRecord;
     use spr_client::rpc::PaginationToken;
-    use spr_event::{encode_merge_output_data, MergeOutputDataRef};
+    use spr_event::{encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef};
     use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
+    use spr_interface::ZERO_NULLIFIER_PUBKEY;
     use spr_transaction::{OutputContext, OutputSlot};
 
     use super::*;
-    use crate::origin::RingOrigin;
-    use crate::{MergeDisclosureEncryption, MergeOpening};
+    use crate::{
+        encryption::{MergeDisclosureEncryption, MergeOpening, MergeRecordSeal},
+        origin::RingOrigin,
+    };
+
+    const RING: Address = Address::new_from_array([9; 32]);
+    const FIRST: [u8; 32] = [4; 32];
+    const OWNER: [u8; 32] = [0xb1; 32];
+    const MINT: [u8; 32] = [0xc1; 32];
+    const RING_DATA: [u8; 32] = [0; 32];
+
+    fn merge_row(
+        hash: [u8; 32],
+        nullifiers: Vec<[u8; 32]>,
+        binding: MergeCiphertextBinding,
+    ) -> ShieldedTransaction {
+        ShieldedTransaction {
+            slot: 1,
+            tx_signature: Signature::default(),
+            event_index: Some(0),
+            tx_viewing_pk: None,
+            salt: None,
+            output_slots: vec![OutputSlot {
+                view_tag: [4; 32],
+                output_context: OutputContext {
+                    hash,
+                    tree_id: 1,
+                    leaf_index: 0,
+                },
+                payload: encode_merge_output_data(MergeOutputDataRef {
+                    salt: &[5; 16],
+                    ciphertext: &[[0; 32]; 3],
+                    prefix: &[RING_DATA],
+                    binding,
+                }),
+            }],
+            messages: Vec::new(),
+            nullifiers,
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(RING),
+        }
+    }
+
+    /// The record, its seed and the commitment the record rebuilds.
+    fn merged_note(nullifier_pk: [u8; 32], seed: [u8; 32]) -> (OpeningRecord, [u8; 32]) {
+        let blinding = RingMergeSeed::from_bytes(seed)
+            .unwrap()
+            .output_blinding(&FIRST)
+            .unwrap();
+        let commitment = KnownUtxo {
+            owner_key: OWNER,
+            owner: UtxoOwner::Keyed { nullifier_pk },
+            asset: hash_bytes(&MINT).unwrap(),
+            mint: None,
+            amount: 12,
+            blinding,
+            data_hash: [0; 32],
+            ring_data_hash: RING_DATA,
+            tree_id: 1,
+        }
+        .commitment(Some(RING))
+        .unwrap();
+        let record = OpeningRecord {
+            record: AuditRecord {
+                kind: RecordKind::Ring,
+                amount: 12,
+                owner_key: OWNER,
+                mint: MINT,
+                nullifier_pk,
+            },
+            secret: seed,
+        };
+        (record, commitment)
+    }
+
+    fn sealed(auditor: &X25519Keypair, record: OpeningRecord) -> RingOrigin {
+        let opening = MergeRecordSeal { record }.seal(&auditor.pubkey()).unwrap();
+        origin_with(ConfirmedMergeDisclosure::Record {
+            eph_pk: *opening.eph_pk.as_bytes(),
+            ciphertext: opening.ciphertext,
+        })
+    }
+
+    fn origin_with(disclosure: ConfirmedMergeDisclosure) -> RingOrigin {
+        RingOrigin {
+            merge_disclosure: Some(disclosure),
+            ..empty_origin()
+        }
+    }
+
+    fn empty_origin() -> RingOrigin {
+        RingOrigin {
+            ring_invoked: true,
+            event: crate::ConfirmedEvent::new(
+                ConfirmedEventKind::Merge,
+                spr_event::GeneralEvent {
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                    messages: Vec::new(),
+                    tx_viewing_pk: [0; 33],
+                    salt: [0; 16],
+                    first_output_leaf_index: 0,
+                    output_tree: [0; 32],
+                    spl_transfers: Vec::new(),
+                },
+            ),
+            signers: Vec::new(),
+            withdrawals: Vec::new(),
+            deposits: Vec::new(),
+            merge_disclosure: None,
+            transact: None,
+            pool_accounts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_record_rebuilds_its_output_and_its_seed_classifies_the_padding_in_both_modes() {
+        let auditor = X25519Keypair::new();
+        let seed = [0x13; 32].map(|byte: u8| byte & 0x1f);
+        for nullifier_pk in [[0x07; 32], ZERO_NULLIFIER_PUBKEY] {
+            let (record, commitment) = merged_note(nullifier_pk, seed);
+            let derived = RingMergeSeed::from_bytes(seed).unwrap();
+            let nullifiers = vec![
+                FIRST,
+                [6; 32],
+                derived.dummy_nullifier(&FIRST, 2).unwrap(),
+                derived.dummy_nullifier(&FIRST, 3).unwrap(),
+                [0; 32],
+                [0; 32],
+                [0; 32],
+                [0; 32],
+            ];
+            let row = merge_row(commitment, nullifiers, MergeCiphertextBinding::Proven);
+            let merge = confirmed_merge(&row, 0, &sealed(&auditor, record), &auditor)
+                .unwrap()
+                .unwrap();
+            assert!(merge.inputs().is_empty());
+            let MergeDisclosed::Record(output) = merge.disclosed else {
+                panic!("a record merge");
+            };
+            assert_eq!(output.nullifier_pk, nullifier_pk);
+            assert_eq!(output.owner_key, OWNER);
+            assert_eq!(output.mint, Address::new_from_array(MINT));
+            assert_eq!(output.amount, 12);
+            assert_eq!(output.real_nullifiers[..2], [FIRST, [6; 32]]);
+            assert!(!output
+                .real_nullifiers
+                .contains(&derived.dummy_nullifier(&FIRST, 2).unwrap()));
+        }
+    }
+
+    #[test]
+    fn each_record_field_changed_fails_the_rebuild() {
+        let auditor = X25519Keypair::new();
+        let (record, commitment) = merged_note([0x07; 32], [0x13; 32].map(|byte: u8| byte & 0x1f));
+        let row = merge_row(commitment, vec![FIRST; 8], MergeCiphertextBinding::Proven);
+        let opens = |spoiled: OpeningRecord| {
+            confirmed_merge(&row, 0, &sealed(&auditor, spoiled), &auditor)
+        };
+        assert!(opens(record).is_ok());
+        type Spoil = fn(&mut OpeningRecord);
+        let spoils: [Spoil; 5] = [
+            |opened| opened.record.amount += 1,
+            |opened| opened.record.owner_key[0] ^= 1,
+            |opened| opened.record.mint[0] ^= 1,
+            |opened| opened.record.nullifier_pk[31] ^= 1,
+            |opened| opened.secret[31] ^= 1,
+        ];
+        for spoil in spoils {
+            let mut spoiled = record;
+            spoil(&mut spoiled);
+            assert!(matches!(
+                opens(spoiled),
+                Err(AuditError::MergeDisclosureMismatch)
+            ));
+        }
+        let mut exit = record;
+        exit.record.kind = RecordKind::Exit;
+        assert!(matches!(opens(exit), Err(AuditError::DisclosureField)));
+        let mut unseeded = record;
+        unseeded.secret = [0; 32];
+        assert!(matches!(opens(unseeded), Err(AuditError::DisclosureField)));
+    }
 
     #[test]
     fn native_ciphertext_fields_do_not_restrict_the_proved_merge_list() {
@@ -336,45 +606,36 @@ mod tests {
             &auditor.pubkey(),
         )
         .unwrap();
-        let mut disclosure = ConfirmedMergeDisclosure {
+        let mut disclosure = ConfirmedMergeDisclosure::Historical {
             eph_pk: *sealed.eph_pk.as_bytes(),
             ciphertext: sealed.ciphertext,
             fields: sealed.fields,
         };
-        let mut transaction = ShieldedTransaction {
-            slot: 1,
-            tx_signature: Signature::default(),
-            event_index: Some(0),
-            tx_viewing_pk: None,
-            salt: None,
-            output_slots: vec![OutputSlot {
-                view_tag: [4; 32],
-                output_context: OutputContext {
-                    hash: [3; 32],
-                    tree_id: 1,
-                    leaf_index: 0,
-                },
-                payload: Vec::new(),
-            }],
-            messages: Vec::new(),
-            nullifiers: vec![[4; 32], [6; 32]],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: Some(Address::new_from_array([9; 32])),
-        };
+        let mut transaction = merge_row(
+            [3; 32],
+            vec![[4; 32], [6; 32]],
+            MergeCiphertextBinding::Unverified,
+        );
+        let real = MergeDisclosed::Inputs(vec![[1; 32], [2; 32]]);
         for field in [[0; 32], BN254_SCALAR_MODULUS_BE] {
             transaction.output_slots[0].payload = encode_merge_output_data(MergeOutputDataRef {
                 salt: &salt,
                 ciphertext: &[field, [0; 32], [0; 32]],
                 prefix: &[[0; 32]],
+                binding: MergeCiphertextBinding::Unverified,
             });
             let output = MergeOutput::of(&transaction).unwrap();
-            assert_eq!(output.disclose(&auditor, &disclosure).unwrap(), list);
+            assert_eq!(
+                output.disclose(&auditor, &disclosure, &transaction).unwrap(),
+                real
+            );
         }
-        disclosure.fields[0] = BN254_SCALAR_MODULUS_BE;
+        if let ConfirmedMergeDisclosure::Historical { fields, .. } = &mut disclosure {
+            fields[0] = BN254_SCALAR_MODULUS_BE;
+        }
         assert!(MergeOutput::of(&transaction)
             .unwrap()
-            .disclose(&auditor, &disclosure)
+            .disclose(&auditor, &disclosure, &transaction)
             .is_err());
     }
 
@@ -404,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn a_terminal_history_page_ends_the_merge_scan() {
         let auditor = X25519Keypair::new();
-        let audit = MergeAudit::new(Address::new_from_array([9; 32]), &auditor);
+        let audit = MergeAudit::new(RING, &auditor);
         let indexer = History {
             pagination_token: None,
         };
@@ -419,7 +680,7 @@ mod tests {
     #[tokio::test]
     async fn a_token_with_no_row_behind_it_fails_the_merge_scan() {
         let auditor = X25519Keypair::new();
-        let audit = MergeAudit::new(Address::new_from_array([9; 32]), &auditor);
+        let audit = MergeAudit::new(RING, &auditor);
         let indexer = History {
             pagination_token: Some(PaginationToken::new(1, Signature::default())),
         };
@@ -434,7 +695,7 @@ mod tests {
     #[tokio::test]
     async fn a_cursor_of_another_stream_is_refused_before_any_read() {
         let auditor = X25519Keypair::new();
-        let ring = Address::new_from_array([9; 32]);
+        let ring = RING;
         let cursor = HistoryCursor {
             query: HistoryQuery {
                 ring,
@@ -484,7 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_row_of_another_ring_never_reaches_the_origin_read() {
-        let ring = Address::new_from_array([9; 32]);
+        let ring = RING;
         let auditor = X25519Keypair::new();
         let outsider = ShieldedTransaction {
             slot: 0,

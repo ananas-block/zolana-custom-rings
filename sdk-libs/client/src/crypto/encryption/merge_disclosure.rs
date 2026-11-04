@@ -1,15 +1,18 @@
-//! Host mirror of the anonymous merge disclosure (`prover/server/custom_rings/circuits/merge`).
+//! The commitment list a tag 47 merge sealed to its auditor, read and never written.
 
 use custom_ring_interface::{
-    merge_disclosure_field_count, merge_disclosure_len, pack_disclosure, unpack_disclosure,
-    MERGE_DISCLOSURE_INFO, MERGE_KEY_CIPHERTEXT_LEN, MERGE_WIDTHS,
+    merge_disclosure_field_count, merge_disclosure_len, unpack_disclosure, MERGE_DISCLOSURE_INFO,
+    MERGE_KEY_CIPHERTEXT_LEN,
 };
 use spr_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
-use spr_keypair::{random_salt, X25519Keypair, X25519Pubkey};
+use spr_keypair::{X25519Keypair, X25519Pubkey};
 use zeroize::Zeroizing;
 
-use super::{open_stream, seal_stream, Result, StreamSchedule};
+use super::{open_stream, Result, StreamSchedule};
 use crate::{AuditError, DisclosurePad};
+
+/// The widths a tag 47 merge ran at, frozen with its frame.
+const HISTORICAL_MERGE_WIDTHS: [usize; 2] = [8, 24];
 
 /// ASCII "CR_MD", the Go `MergeDisclosureDomain`, a merge pad never repeats an output pad.
 const MERGE_DISCLOSURE_DOMAIN: u64 = 0x4352_5f4d44;
@@ -22,29 +25,7 @@ pub struct MergeOpening {
     pub input_commitments: Vec<[u8; 32]>,
 }
 
-/// The sealed disclosure key and masked fields of one merge, with the secrets its proof witnesses.
-pub struct MergeDisclosureEncryption {
-    pub ephemeral_sk: Zeroizing<[u8; 32]>,
-    pub disclosure_key: Zeroizing<[u8; 32]>,
-    pub eph_pk: X25519Pubkey,
-    pub ciphertext: [u8; MERGE_KEY_CIPHERTEXT_LEN],
-    pub fields: Vec<[u8; 32]>,
-}
-
 impl MergeOpening {
-    /// The circuit packs whole 31-byte chunks, so the plaintext is zero padded to a chunk boundary.
-    fn encode(&self) -> Zeroizing<Vec<u8>> {
-        let width = self.input_commitments.len();
-        let mut plaintext = Zeroizing::new(Vec::with_capacity(
-            merge_disclosure_field_count(width) * PACK_BE_CHUNK_BYTES,
-        ));
-        for commitment in &self.input_commitments {
-            plaintext.extend_from_slice(commitment);
-        }
-        plaintext.resize(merge_disclosure_field_count(width) * PACK_BE_CHUNK_BYTES, 0);
-        plaintext
-    }
-
     fn decode(plaintext: &[u8], width: usize) -> Result<Self> {
         let (opening, padding) = plaintext
             .split_at_checked(merge_disclosure_len(width))
@@ -58,39 +39,6 @@ impl MergeOpening {
     }
 }
 
-impl MergeDisclosureEncryption {
-    /// `salt` is the SPP merge output salt, the statement binds the pad to it.
-    pub fn new(opening: &MergeOpening, salt: [u8; 16], auditor_pk: &X25519Pubkey) -> Result<Self> {
-        let mut key = Zeroizing::new([0u8; 32]);
-        key[..16].copy_from_slice(&random_salt());
-        key[16..].copy_from_slice(&random_salt());
-        Self::seal(opening, salt, auditor_pk, X25519Keypair::new(), key)
-    }
-
-    fn seal(
-        opening: &MergeOpening,
-        salt: [u8; 16],
-        auditor_pk: &X25519Pubkey,
-        ephemeral: X25519Keypair,
-        disclosure_key: Zeroizing<[u8; 32]>,
-    ) -> Result<Self> {
-        if !MERGE_WIDTHS.contains(&opening.input_commitments.len()) {
-            return Err(AuditError::DisclosureLayout);
-        }
-        let mut ciphertext = *disclosure_key;
-        seal_stream(&ephemeral, auditor_pk, MERGE_SCHEDULE, &mut ciphertext)?;
-        let fields =
-            merge_pad(&disclosure_key, &salt)?.encrypt(&pack_disclosure(&opening.encode()))?;
-        Ok(Self {
-            ephemeral_sk: ephemeral.secret_bytes(),
-            disclosure_key,
-            eph_pk: ephemeral.pubkey(),
-            ciphertext,
-            fields,
-        })
-    }
-}
-
 /// Opens a disclosure the ring program verified, its proof binds the list to the merge's commitments.
 pub fn open_merge_disclosure(
     auditor: &X25519Keypair,
@@ -99,7 +47,7 @@ pub fn open_merge_disclosure(
     salt: [u8; 16],
     fields: &[[u8; 32]],
 ) -> Result<MergeOpening> {
-    let width = MERGE_WIDTHS
+    let width = HISTORICAL_MERGE_WIDTHS
         .into_iter()
         .find(|width| merge_disclosure_field_count(*width) == fields.len())
         .ok_or(AuditError::DisclosureLayout)?;
@@ -123,7 +71,44 @@ fn merge_pad(disclosure_key: &[u8; 32], salt: &[u8; 16]) -> Result<DisclosurePad
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use custom_ring_interface::pack_disclosure;
+    use spr_keypair::random_salt;
+
     use super::*;
+    use crate::encryption::seal_stream;
+
+    /// A frame's seal in the tag 47 layout, the reader's positive case.
+    pub(crate) struct MergeDisclosureEncryption {
+        pub(crate) eph_pk: X25519Pubkey,
+        pub(crate) ciphertext: [u8; MERGE_KEY_CIPHERTEXT_LEN],
+        pub(crate) fields: Vec<[u8; 32]>,
+    }
+
+    impl MergeDisclosureEncryption {
+        pub(crate) fn new(
+            opening: &MergeOpening,
+            salt: [u8; 16],
+            auditor_pk: &X25519Pubkey,
+        ) -> Result<Self> {
+            let width = opening.input_commitments.len();
+            if !HISTORICAL_MERGE_WIDTHS.contains(&width) {
+                return Err(AuditError::DisclosureLayout);
+            }
+            let ephemeral = X25519Keypair::new();
+            let mut key = Zeroizing::new([0u8; 32]);
+            key[..16].copy_from_slice(&random_salt());
+            key[16..].copy_from_slice(&random_salt());
+            let mut ciphertext = *key;
+            seal_stream(&ephemeral, auditor_pk, MERGE_SCHEDULE, &mut ciphertext)?;
+            let mut plaintext = opening.input_commitments.concat();
+            plaintext.resize(merge_disclosure_field_count(width) * PACK_BE_CHUNK_BYTES, 0);
+            Ok(Self {
+                eph_pk: ephemeral.pubkey(),
+                ciphertext,
+                fields: merge_pad(&key, &salt)?.encrypt(&pack_disclosure(&plaintext))?,
+            })
+        }
+    }
 
     fn opening() -> MergeOpening {
         let mut input_commitments = vec![[0; 32]; 8];

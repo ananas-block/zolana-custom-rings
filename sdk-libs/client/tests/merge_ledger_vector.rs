@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_ring_client::{ConfirmedMerge, MergeInput, MergeLedger, UtxoOwner};
+use zolana_ring_client::{ConfirmedMerge, MergeDisclosed, MergeInput, MergeLedger, UtxoOwner};
 
 const VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -37,9 +37,9 @@ fn confirmed(id: u8, inputs: &[u8], output: u8) -> ConfirmedMerge {
         leaf_index: u64::from(id),
         first_nullifier: [id; 32],
         ring_data_hash: [0; 32],
-        inputs: ConfirmedMerge::real_inputs(
+        disclosed: MergeDisclosed::Inputs(ConfirmedMerge::real_inputs(
             &inputs.iter().map(|byte| [*byte; 32]).collect::<Vec<_>>(),
-        ),
+        )),
     }
 }
 
