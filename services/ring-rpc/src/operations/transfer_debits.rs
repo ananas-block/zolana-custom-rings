@@ -134,7 +134,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             assets: &assets,
             ring: self.ring,
         }
-        .read(parsed.data().co_sign.approval.bits())
+        .read(parsed.data().approval.bits())
         .map(FrameRead::Transfer)
     }
 }
