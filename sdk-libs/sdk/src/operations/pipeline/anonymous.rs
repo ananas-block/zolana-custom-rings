@@ -459,10 +459,7 @@ impl Anonymous<'_> {
                     .iter()
                     .find(|co_owner| co_owner.owner == *owner)
                     .ok_or(RingError::MissingCoOwnerKey { owner: *owner })?;
-                Ok(CoOwnerKey {
-                    owner_pk_hash: spr_hasher::primitives::solana_owner_identity(owner.as_array())?,
-                    key: held.nullifier_key.clone(),
-                })
+                CoOwnerKey::of(held)
             })
             .collect::<Result<_, RingError>>()?;
         Ok(Staged {

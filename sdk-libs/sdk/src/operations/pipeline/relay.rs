@@ -3,7 +3,6 @@
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::AsyncRpc;
-use spr_hasher::primitives::solana_owner_identity;
 use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, SigningKey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
@@ -94,7 +93,7 @@ impl<R: Rail> WalletRelay<'_, R> {
         ));
         let token_account_setup = self.owner.token_account_setup.clone();
         let setup = sealed
-            .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())?
+            .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())
             .token_account_setup(payer, &token_account_setup)
             .map_err(|_| RingError::RelayAuditorMessage)?;
         let terms = sealed.transfer_terms(payer, &self.transfer.co_signers, &setup)?;
@@ -102,7 +101,7 @@ impl<R: Rail> WalletRelay<'_, R> {
         let expected = ExpectedTransfer::new(terms, &config)?;
         let encode = |rail| {
             sealed
-                .relay_proof_inputs(rail, nullifier_key)?
+                .relay_proof_inputs(rail, nullifier_key)
                 .encode()
                 .map(ProofInputBytes::new)
                 .map_err(RingError::from)
@@ -149,38 +148,17 @@ impl RingTransfer<Delegated<'_>> {
             RingDelivery::Anonymous(plan) => Some(plan.clone()),
             RingDelivery::Delivered => None,
         };
-        sealed.relay_proof_inputs(
+        Ok(sealed.relay_proof_inputs(
             RelayRail::Delegate {
                 delegate: self.rail.delegate,
                 plan,
             },
             self.rail.source_key.clone(),
-        )
+        ))
     }
 }
 
 impl<P> Sealed<'_, P> {
-    /// A signer whose key the seal holds spends beside the sender, any other owns no input.
-    fn relay_co_owners(&self) -> Result<Vec<RelayCoOwner>, RingError> {
-        let staged = &self.pipeline.staged;
-        let mut co_owners = Vec::new();
-        for owner in &staged.owner_signers {
-            let identity = solana_owner_identity(owner.as_array())?;
-            if let Some(held) = staged
-                .authority
-                .co_owners
-                .iter()
-                .find(|held| held.owner_pk_hash == identity)
-            {
-                co_owners.push(RelayCoOwner {
-                    owner: *owner,
-                    nullifier_key: held.key.clone(),
-                });
-            }
-        }
-        Ok(co_owners)
-    }
-
     fn transfer_terms(
         &self,
         fee_payer: Address,
@@ -237,19 +215,23 @@ impl<P> Sealed<'_, P> {
         })
     }
 
-    fn relay_proof_inputs(
-        &self,
-        rail: RelayRail,
-        nullifier_key: NullifierKey,
-    ) -> Result<RelayProofInputs, RingError> {
+    fn relay_proof_inputs(&self, rail: RelayRail, nullifier_key: NullifierKey) -> RelayProofInputs {
         let staged = &self.pipeline.staged;
         let inputs = &staged.proof_inputs;
-        Ok(RelayProofInputs {
+        RelayProofInputs {
             rail,
             ring_program_id: self.pipeline.ring.program_id(),
             sender: staged.sender,
             nullifier_key,
-            co_owners: self.relay_co_owners()?,
+            co_owners: staged
+                .authority
+                .co_owners
+                .iter()
+                .map(|held| RelayCoOwner {
+                    owner: held.owner,
+                    nullifier_key: held.key.clone(),
+                })
+                .collect(),
             tx_viewing_key: staged.rail.tx_viewing_key().clone(),
             inputs: inputs.input_utxos.clone(),
             outputs: inputs.output_utxos.clone(),
@@ -259,7 +241,7 @@ impl<P> Sealed<'_, P> {
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
             wide_owners: self.preview.wide_owners,
-        })
+        }
     }
 }
 

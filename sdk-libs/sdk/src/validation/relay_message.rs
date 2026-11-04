@@ -127,7 +127,8 @@ pub(crate) struct ExpectedDelegate {
     pub rail: RingRail,
     pub auditor: X25519Pubkey,
     pub tx_viewing_key: TxViewingSecret,
-    pub source: ExpectedOwner,
+    /// Change returns to an input's owner.
+    pub sources: Vec<ExpectedOwner>,
     pub mint: Address,
     pub payments: Vec<ExpectedPayment>,
 }
@@ -386,7 +387,11 @@ impl ExpectedDelegate {
             rail: delegate_rail(config.mode),
             auditor: config.auditor_pubkey,
             tx_viewing_key: request.tx_viewing_key.clone(),
-            source: ExpectedOwner::of(&transfer.source.0)?,
+            sources: transfer
+                .sources
+                .iter()
+                .map(|source| ExpectedOwner::of(&source.0))
+                .collect::<Result<_, RingError>>()?,
             mint: transfer.mint.0,
             payments: transfer
                 .payments
@@ -450,7 +455,7 @@ impl ExpectedDelegate {
                                 return Err(MessageMismatch::Recipients);
                             }
                         }
-                        None if self.source.owns(&record) => {}
+                        None if self.sources.iter().any(|source| source.owns(&record)) => {}
                         None => return Err(MessageMismatch::Recipients),
                     }
                 }

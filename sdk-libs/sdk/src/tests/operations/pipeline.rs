@@ -935,9 +935,11 @@ impl<'a> MoveFixture<'a> {
             ring: ring(),
             delegate: self.delegate,
             payer: case.payer,
-            source: self.member.shielded_address().unwrap(),
-            source_nullifier_key: &self.member.nullifier_key,
-            utxos: case.utxos,
+            sources: vec![crate::DelegateSource {
+                address: self.member.shielded_address().unwrap(),
+                nullifier_key: &self.member.nullifier_key,
+                utxos: case.utxos,
+            }],
             mint: Mint::SOL.asset,
             payments: case
                 .amounts

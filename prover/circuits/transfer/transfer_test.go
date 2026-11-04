@@ -231,6 +231,49 @@ func TestZeroKeyInputs(t *testing.T) {
 	})
 }
 
+// No wire names the delegate's identity, its own note and another's solve alike.
+func TestDelegateInputOwners(t *testing.T) {
+	ring := ringID(t)
+	owner := big.NewInt(0x0a11ce)
+	other := big.NewInt(0x0b0b)
+	key := big.NewInt(0x77)
+	keyed := func(t testing.TB, holder *big.Int, blinding int64) ringaudit.Input {
+		t.Helper()
+		return ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, holder, key, ring, 100, blinding)}
+	}
+	rails := map[string]func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit{
+		"confidential": func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit {
+			w := onRail(confidential2, ringtransfer.Delegate)
+			w.Inputs = inputs
+			return w.Build(t).Circuit
+		},
+		"anonymous": func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit {
+			w := onAnonymous(anonymous2, ringtransfer.AnonymousDelegate)
+			w.Inputs = inputs
+			return w.Build(t).Circuit
+		},
+	}
+	for name, build := range rails {
+		t.Run(name, func(t *testing.T) {
+			t.Run("one owner", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51)}))
+			})
+			t.Run("two owners", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51), keyed(t, other, 52)}))
+			})
+			t.Run("a keyed owner beside a zero key note", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51), zeroKeyNote(t, other, ring, 100, 52)}))
+			})
+		})
+	}
+	t.Run("a note off its tracking key", func(t *testing.T) {
+		w := onRail(confidential2, ringtransfer.Delegate)
+		w.Inputs = []ringaudit.Input{keyed(t, owner, 51), keyed(t, other, 52)}
+		w.Enrolled = map[string]*big.Int{other.String(): big.NewInt(0x78)}
+		refused(t, w.Build(t).Circuit, "transfer.OwnerRows.AssertInputOwners")
+	})
+}
+
 // The authority rail reads no policy and keeps every auditor check.
 func TestDelegateBypass(t *testing.T) {
 	frozen := func(w ringtransfer.World) ringtransfer.World {

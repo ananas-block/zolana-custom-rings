@@ -22,11 +22,11 @@ pub struct AuthorityPayment {
     pub amount: u64,
 }
 
-/// The change returns to `source`.
+/// A delegate moves the notes of any member, its own among them, change returns to an input's owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityTransfer {
-    pub source: SerializableShieldedAddress,
+    pub sources: Vec<SerializableShieldedAddress>,
     pub mint: SerializablePubkey,
     pub payments: Vec<AuthorityPayment>,
 }
@@ -125,11 +125,17 @@ impl Attestation for AuthorityTransferAttestation {
                 );
                 lines
             });
+        let sources = transfer
+            .sources
+            .iter()
+            .fold(String::new(), |mut lines, source| {
+                let _ = write!(lines, "\nsource: {}", source.0);
+                lines
+            });
         format!(
-            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}\nsource: {}\nmint: {}{payments}\ntimestamp: {timestamp}\nnonce: {}",
+            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}\nmint: {}{payments}\ntimestamp: {timestamp}\nnonce: {}",
             self.target.lines(),
             self.delegate,
-            transfer.source.0,
             transfer.mint.0,
             base64(nonce),
         )

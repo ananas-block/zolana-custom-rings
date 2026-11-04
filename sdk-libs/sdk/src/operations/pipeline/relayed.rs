@@ -3,7 +3,6 @@
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
 use solana_address::Address;
 use spr_client::{prover::transact::OwnerAuthorization, AsyncRpc, SettlementAccountValidation};
-use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::shape::Shape;
 use zolana_ring_client::rpc::{RelayProofInputs, RelayRail};
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
@@ -15,8 +14,8 @@ use super::{
     audit::PresealedAudit,
     delegate::delegate_rail,
     public_owners::check_zero_key_inputs,
-    sealed, shape_keyed, CoOwnerKey, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
-    TransferAuthority,
+    sealed, shape_keyed, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind, RingTransfer, Spend,
+    Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -213,9 +212,9 @@ impl Relayed<'_> {
                     .co_owners
                     .iter()
                     .map(|co_owner| {
-                        Ok(CoOwnerKey {
-                            owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
-                            key: co_owner.nullifier_key.clone(),
+                        CoOwnerKey::of(&CoOwner {
+                            owner: co_owner.owner,
+                            nullifier_key: &co_owner.nullifier_key,
                         })
                     })
                     .collect::<Result<_, RingError>>()?,

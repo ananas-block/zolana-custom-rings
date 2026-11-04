@@ -51,8 +51,8 @@ pub use self::{
         EntrySpend, NoteData, RingPayment, WideFrames,
     },
     delegate::{
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
-        DelegateWithdrawal, Delegated,
+        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
+        DelegateTransferInput, DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     public_owners::{PublicOwnerTransfer, PublicOwners},
@@ -191,9 +191,22 @@ impl Spend<'_> {
 
 /// One public co-owner's nullifier key, one prover holds every owner's secret.
 pub(crate) struct CoOwnerKey {
+    pub owner: Address,
     /// `owner_proof_input_hash`, the field a proof input carries.
     pub owner_pk_hash: [u8; 32],
     pub key: NullifierKey,
+}
+
+impl CoOwnerKey {
+    fn of(co_owner: &CoOwner<'_>) -> Result<Self, RingError> {
+        Ok(Self {
+            owner: co_owner.owner,
+            owner_pk_hash: spr_hasher::primitives::solana_owner_identity(
+                co_owner.owner.as_array(),
+            )?,
+            key: co_owner.nullifier_key.clone(),
+        })
+    }
 }
 
 /// `owner` is `None` only when every input is padding.

@@ -654,14 +654,42 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
-            let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
+            self.escrow_wallets(&[(wallet, notes)]).remove(0)
+        }
+
+        /// One replace of the tracked owners holds them all.
+        pub(crate) fn escrow_wallets(&self, wallets: &[(&Keypair, u8)]) -> Vec<NullifierKey> {
+            let keys: Vec<NullifierKey> = wallets
+                .iter()
+                .map(|(wallet, _)| NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]))
+                .collect();
+            let store = self.hub.shared().store(RING);
+            let tracked = wallets
+                .iter()
+                .zip(&keys)
+                .map(|((wallet, _), key)| self.tracked_owner(wallet, key))
+                .collect();
+            store.replace_tracked(
+                TrackingRoot {
+                    registry: Address::new_from_array([1; 32]),
+                    root: [1; 32],
+                    revision: 0,
+                },
+                tracked,
+            );
+            for ((wallet, notes), key) in wallets.iter().zip(&keys) {
+                self.record_notes(wallet, key, *notes);
+            }
+            keys
+        }
+
+        fn tracked_owner(&self, wallet: &Keypair, key: &NullifierKey) -> ([u8; 32], TrackedOwner) {
             let nullifier_pk = key.pubkey().expect("nullifier pk");
             let auditor = self
                 .hub
                 .service(Some(RING))
                 .expect("service")
                 .auditor_pubkey();
-            let store = self.hub.shared().store(RING);
             let owner_key = wallet.pubkey().to_bytes();
             let owner = TrackedOwner {
                 owner_key,
@@ -672,18 +700,17 @@ pub(crate) mod tests {
                 )
                 .expect("owner hash"),
                 list_tag: custom_ring_interface::domain::list_tag(&LIST_SALT).expect("tag"),
-                sealed: NullifierKeyEnvelope::new(&key, &LIST_SALT, &auditor)
+                sealed: NullifierKeyEnvelope::new(key, &LIST_SALT, &auditor)
                     .expect("envelope")
                     .sealed,
             };
-            store.replace_tracked(
-                TrackingRoot {
-                    registry: Address::new_from_array([1; 32]),
-                    root: [1; 32],
-                    revision: 0,
-                },
-                HashMap::from([(owner_key, owner)]),
-            );
+            (owner_key, owner)
+        }
+
+        fn record_notes(&self, wallet: &Keypair, key: &NullifierKey, notes: u8) {
+            let store = self.hub.shared().store(RING);
+            let owner_key = wallet.pubkey().to_bytes();
+            let nullifier_pk = key.pubkey().expect("nullifier pk");
             let asset = *assets().fields().next().expect("field");
             store.record(
                 CreatedIn {
@@ -709,7 +736,6 @@ pub(crate) mod tests {
                     ring_note: true,
                 }),
             );
-            key
         }
 
         async fn settle(&self, wallet: &Keypair, target_note_count: u32) {

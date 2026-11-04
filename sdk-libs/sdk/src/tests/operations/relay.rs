@@ -375,8 +375,8 @@ mod delegate_message {
     use crate::{
         relay_message::ExpectedDelegate,
         tests::support::{pinned_vector, relay_message, verdict, MessageCase, MessageVector},
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateWithdrawal, MessageMismatch,
-        PreparedAuthorityTransfer, RelaySent, RelayedTransferInput, RingTransfer,
+        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateWithdrawal,
+        MessageMismatch, PreparedAuthorityTransfer, RelaySent, RelayedTransferInput, RingTransfer,
     };
 
     const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
@@ -486,9 +486,9 @@ mod delegate_message {
     /// Ring RPC's authority transfer path without its proof, answering with one `Answer`.
     struct DelegateRelay {
         client: crate::RingClient<Chain, Chain>,
-        member: ShieldedKeypair,
+        /// Every member with the notes the service opened for it.
+        members: Vec<(ShieldedKeypair, Vec<WalletUtxo>)>,
         delegate: Address,
-        notes: Vec<WalletUtxo>,
         answer: Answer,
         honest: Mutex<Option<Instruction>>,
         submitted: Mutex<Vec<SubmitRelayRequest>>,
@@ -501,19 +501,24 @@ mod delegate_message {
 
         fn on_mode(answer: Answer, delegate: Address, mode: RingMode) -> Self {
             let member = keypair(1);
+            let own = keypair(7);
+            let other = keypair(3);
             let chain = Chain::ring(RingSettings {
                 has_policy: true,
                 delegate: Some(delegate),
                 ..RingSettings::new(mode)
             })
             .with_registry(
-                Registry::new(&[(&member, 1), (&keypair(2), 1), (&keypair(3), 1)]),
+                Registry::new(&[(&member, 1), (&keypair(2), 1), (&other, 1), (&own, 1)]),
                 &pipeline_rules(),
             );
             Self {
                 client: chain.client(),
-                notes: vec![ring_utxo(&member, Mint::SOL, 10, 0)],
-                member,
+                members: vec![
+                    (member.clone(), vec![ring_utxo(&member, Mint::SOL, 10, 0)]),
+                    (other.clone(), vec![ring_utxo(&other, Mint::SOL, 10, 1)]),
+                    (own.clone(), vec![ring_utxo(&own, Mint::SOL, 10, 2)]),
+                ],
                 delegate,
                 answer,
                 honest: Mutex::new(None),
@@ -532,9 +537,22 @@ mod delegate_message {
                 ring: ring(),
                 delegate: self.delegate,
                 payer: FEE_PAYER,
-                source: transfer.source.0,
-                source_nullifier_key: &self.member.nullifier_key,
-                utxos: &self.notes,
+                sources: transfer
+                    .sources
+                    .iter()
+                    .map(|source| {
+                        let (member, notes) = self
+                            .members
+                            .iter()
+                            .find(|(member, _)| member.shielded_address().unwrap() == source.0)
+                            .unwrap();
+                        DelegateSource {
+                            address: source.0,
+                            nullifier_key: &member.nullifier_key,
+                            utxos: notes,
+                        }
+                    })
+                    .collect(),
                 mint: transfer.mint.0,
                 payments: transfer
                     .payments
@@ -573,15 +591,16 @@ mod delegate_message {
             change: impl FnOnce(crate::DelegateTransfer<'_>) -> crate::DelegateTransfer<'_>,
         ) -> Instruction {
             let assets = AssetRegistry::default();
-            let source = self.member.shielded_address().unwrap();
+            let (member, notes) = &self.members[0];
+            let source = member.shielded_address().unwrap();
             let transfer = change(
                 crate::DelegateTransfer::new(crate::DelegateTransferInput {
                     ring: ring(),
                     delegate: self.delegate,
                     payer: FEE_PAYER,
                     source,
-                    source_nullifier_key: &self.member.nullifier_key,
-                    inputs: self.notes.clone(),
+                    source_nullifier_key: &member.nullifier_key,
+                    inputs: notes.clone(),
                     outputs: Vec::new(),
                 })
                 .with_assets(&assets)
@@ -660,7 +679,9 @@ mod delegate_message {
             ring: SerializablePubkey(ring().program_id()),
             delegate: SerializablePubkey(delegate),
             transfer: AuthorityTransfer {
-                source: SerializableShieldedAddress(keypair(1).shielded_address().unwrap()),
+                sources: vec![SerializableShieldedAddress(
+                    keypair(1).shielded_address().unwrap(),
+                )],
                 mint: SerializablePubkey(Mint::SOL.asset),
                 payments: vec![AuthorityPayment {
                     recipient: SerializableShieldedAddress(keypair(2).shielded_address().unwrap()),
@@ -891,6 +912,100 @@ mod delegate_message {
                 "{mode:?}"
             );
         }
+    }
+
+    /// Owner against delegate is no rule, change returns to an input's owner.
+    #[tokio::test]
+    async fn a_delegate_moves_its_own_another_and_several_members_notes_on_both_rails() {
+        let delegate = keypair(7);
+        let member = keypair(1);
+        let other = keypair(3);
+        for mode in [RingMode::Confidential, RingMode::Anonymous] {
+            for (sources, moved) in [
+                (vec![&delegate], MOVED),
+                (vec![&member], MOVED),
+                (vec![&member, &other], 15),
+            ] {
+                let relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
+                let mut asked = request(delegate.pubkey());
+                asked.transfer.sources = sources
+                    .iter()
+                    .map(|source| SerializableShieldedAddress(source.shielded_address().unwrap()))
+                    .collect();
+                asked.transfer.payments[0].amount = moved;
+                let frame = relay
+                    .build(&asked.transfer, &asked.tx_viewing_key)
+                    .await
+                    .unwrap();
+                let config = ring().require_config(relay.client.zolana()).await.unwrap();
+                let expected = ExpectedDelegate::new(&asked, &quote(), &config).unwrap();
+                expected
+                    .check(&relay_message(&FEE_PAYER, std::slice::from_ref(&frame), UNITS).0)
+                    .map(drop)
+                    .unwrap();
+
+                // The auditor's own key opens every published slot.
+                let parsed = RingTransactData::parse(&frame.data[1..], expected.rail).unwrap();
+                let data = parsed.data();
+                let opened = zolana_ring_client::AuditEnvelope {
+                    eph_u: *data.tx_viewing_u,
+                    salt: data.salt,
+                    ciphertext: data.envelope,
+                }
+                .open(&crate::tests::support::auditor(), parsed.audit_stream())
+                .unwrap();
+                let records: Vec<_> = data
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, output)| opened.record(slot, output.record).unwrap())
+                    .collect();
+                let spent = u64::try_from(sources.len()).unwrap() * 10;
+                let total: u64 = records.iter().map(|record| record.amount).sum();
+                assert_eq!(total, spent, "{mode:?} {}", sources.len());
+                let owner_key = |owner: &ShieldedKeypair| {
+                    owner
+                        .shielded_address()
+                        .unwrap()
+                        .signing_pubkey
+                        .confidential_view_tag()
+                        .unwrap()
+                };
+                let payee_key = owner_key(&keypair(2));
+                assert!(records
+                    .iter()
+                    .filter(|record| record.kind == custom_ring_interface::RecordKind::Ring)
+                    .all(|record| record.owner_key == payee_key
+                        || sources
+                            .iter()
+                            .any(|source| owner_key(source) == record.owner_key)));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_move_past_its_sources_value_is_refused() {
+        let delegate = keypair(7);
+        let relay = DelegateRelay::new(Answer::Honest, delegate.pubkey());
+        let mut asked = request(delegate.pubkey());
+        asked.transfer.payments[0].amount = 11;
+        assert!(relay
+            .build(&asked.transfer, &asked.tx_viewing_key)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_source_named_twice_is_refused() {
+        let delegate = keypair(7);
+        let relay = DelegateRelay::new(Answer::Honest, delegate.pubkey());
+        let mut asked = request(delegate.pubkey());
+        let source = asked.transfer.sources[0];
+        asked.transfer.sources.push(source);
+        assert!(matches!(
+            relay.build(&asked.transfer, &asked.tx_viewing_key).await,
+            Err(RingError::RepeatedDelegateSource)
+        ));
     }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
