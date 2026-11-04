@@ -141,6 +141,31 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
             .collect())
     }
 
+    /// The transfers publishing a slot under one of `tags`.
+    pub async fn tagged(
+        &mut self,
+        tags: &[ViewTag],
+    ) -> Result<Vec<ShieldedTransaction>, ClientError> {
+        let (indexer, config) = (self.indexer, self.config);
+        let transactions = self
+            .paged(tags, |tags, token, filters| async move {
+                indexer
+                    .get_shielded_transactions_by_tags(
+                        tags,
+                        token,
+                        Some(PAGE_LIMIT),
+                        filters,
+                        config,
+                    )
+                    .await
+            })
+            .await?;
+        Ok(transactions
+            .into_iter()
+            .flat_map(|item| item.events)
+            .collect())
+    }
+
     pub async fn spends(
         &mut self,
         nullifiers: &[[u8; 32]],
