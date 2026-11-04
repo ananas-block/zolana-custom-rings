@@ -1,5 +1,5 @@
 // Read after shared/envelope.go, shared/derivation.go, shared/utxo.go. Read
-// before audit/layout.go, audit/delivered.go, audit/anonymous.go, transfer/transfer.go.
+// before audit/layout.go, audit/record.go, transfer/transfer.go.
 
 // Package audit proves what a ring auditor reads from a ring transfer.
 package audit
@@ -16,20 +16,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
-
-// AnonymousAuditShape sizes the anonymous section, FullOpenings the entry layout of a spend of default-ring notes.
-type AnonymousAuditShape struct {
-	InputClass   int
-	Outputs      int
-	FullOpenings bool
-}
-
-func (s AnonymousAuditShape) Ranges() StreamRanges {
-	if s.FullOpenings {
-		return EntryRanges(s.InputClass, s.Outputs)
-	}
-	return CommitmentRanges(s.InputClass, s.Outputs)
-}
 
 type AuditWires struct {
 	FirstNullifier frontend.Variable
@@ -68,9 +54,7 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 
 // StreamRanges mirrors AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
 type StreamRanges struct {
-	EvidenceHead, Entry int
-	InputClass, Outputs int
-	RecordBlocks        int
+	StreamShape
 }
 
 const (
@@ -78,102 +62,136 @@ const (
 	// StreamFirstCounter is aes.Cipher.CTREncrypt's first counter, mirrored by STREAM_FIRST_COUNTER.
 	StreamFirstCounter = 2
 	EnvelopeKeyLen     = 32
-	// InputHashLen mirrors INPUT_HASH_LEN.
-	InputHashLen = fieldLen
-	fieldLen     = 32
-	amountLen    = 8
-	// EntryEvidenceHeadLen mirrors ENTRY_EVIDENCE_HEAD_LEN.
-	EntryEvidenceHeadLen = 2 * fieldLen
+	// RealInputCountLen mirrors REAL_INPUT_COUNT_LEN.
+	RealInputCountLen = 1
+	// DefaultInputBitsLen mirrors DEFAULT_INPUT_BITS_LEN.
+	DefaultInputBitsLen = 8
+	fieldLen            = 32
+	amountLen           = 8
+	recordHeadLen       = 8
+	// RecordLen mirrors AUDIT_RECORD_LEN.
+	RecordLen = recordHeadLen + amountLen + 3*fieldLen
+	// TailLen mirrors DATA_TAIL_LEN.
+	TailLen = 2 * fieldLen
 	// EntryInputLen mirrors ENTRY_INPUT_LEN.
-	EntryInputLen = InputHashLen + amountLen + 2*fieldLen
-	// AnonymousRecordLen mirrors ANONYMOUS_RECORD_LEN.
-	AnonymousRecordLen = fieldLen + amountLen + 2*fieldLen
-	// ExitRecordLen mirrors EXIT_RECORD_LEN.
-	ExitRecordLen = 2*fieldLen + amountLen
-	// EscrowExitRecordLen mirrors ESCROWED_EXIT_RECORD_LEN.
-	EscrowExitRecordLen      = fieldLen + amountLen
-	AnonymousRecordBlocks    = (AnonymousRecordLen + streamBlockLen - 1) / streamBlockLen
-	ConfidentialRecordBlocks = (ExitRecordLen + streamBlockLen - 1) / streamBlockLen
+	EntryInputLen = amountLen + 6*fieldLen
+	RecordBlocks  = RecordLen / streamBlockLen
+	TailBlocks    = TailLen / streamBlockLen
 )
 
-func ConfidentialRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{Entry: InputHashLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: ConfidentialRecordBlocks}
+func (s StreamShape) Ranges() StreamRanges {
+	return StreamRanges{StreamShape: s}
 }
 
-func CommitmentRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{Entry: InputHashLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
+// EnvelopeHeadLen is the envelope ahead of the evidence entries.
+func (r StreamRanges) EnvelopeHeadLen() int {
+	if r.Entry {
+		return EnvelopeKeyLen + RealInputCountLen + DefaultInputBitsLen
+	}
+	return EnvelopeKeyLen + RealInputCountLen
 }
 
-func EntryRanges(inputClass, outputs int) StreamRanges {
-	return StreamRanges{EvidenceHead: EntryEvidenceHeadLen, Entry: EntryInputLen, InputClass: inputClass, Outputs: outputs, RecordBlocks: AnonymousRecordBlocks}
-}
-
-func (r StreamRanges) EvidenceLen(count int) int {
-	return r.EvidenceHead + count*r.Entry
+func (r StreamRanges) entryLen() int {
+	if r.Entry {
+		return EntryInputLen
+	}
+	return 0
 }
 
 // EnvelopeLen is what the frame carries, with no padding.
 func (r StreamRanges) EnvelopeLen(count int) int {
-	return EnvelopeKeyLen + r.EvidenceLen(count)
+	return r.EnvelopeHeadLen() + count*r.entryLen()
 }
 
-// MaxEvidenceBlocks is one value per key, every rail of a key shares one circuit.
-func (r StreamRanges) MaxEvidenceBlocks() int {
-	return (r.EvidenceLen(r.InputClass) + streamBlockLen - 1) / streamBlockLen
-}
-
+// EnvelopeBlocks is one value per key, every rail of a key shares one circuit.
 func (r StreamRanges) EnvelopeBlocks() int {
-	return EnvelopeKeyLen/streamBlockLen + r.MaxEvidenceBlocks()
+	return (r.EnvelopeLen(r.InputClass) + streamBlockLen - 1) / streamBlockLen
 }
 
 // RecordCounter must match the readers, another counter decrypts noise.
 func (r StreamRanges) RecordCounter(i int) int {
-	return StreamFirstCounter + r.EnvelopeBlocks() + i*r.RecordBlocks
+	return StreamFirstCounter + r.EnvelopeBlocks() + i*RecordBlocks
 }
 
-// CapacityBlocks covers every delivered slot's unused record.
+// TailCounter must match the readers, a tail shares no counter with a record.
+func (r StreamRanges) TailCounter(i int) int {
+	return r.RecordCounter(r.Outputs) + i*TailBlocks
+}
+
+// CapacityBlocks covers every slot the key serves, a dataless key has no tail region.
 func (r StreamRanges) CapacityBlocks() int {
-	return r.EnvelopeBlocks() + r.Outputs*r.RecordBlocks
+	blocks := r.EnvelopeBlocks() + r.Outputs*RecordBlocks
+	if r.Data {
+		blocks += r.Outputs * TailBlocks
+	}
+	return blocks
 }
 
 func (r StreamRanges) RecordOffset(i int) int {
 	return (r.RecordCounter(i) - StreamFirstCounter) * streamBlockLen
 }
 
-// Evidence entry i is absent at or past Count.
-type Evidence struct {
-	Head    []frontend.Variable
-	Entries [][]frontend.Variable
-	Count   ringgadget.Count
+func (r StreamRanges) TailOffset(i int) int {
+	return (r.TailCounter(i) - StreamFirstCounter) * streamBlockLen
 }
 
+// Stream is the sealed auditor stream of one transfer, the statement reads every value.
 type Stream struct {
 	ranges StreamRanges
 	sealed shared.Sealed
 	digest frontend.Variable
+	// RecordChain hashes every published record's ciphertext, zero past m.
+	RecordChain frontend.Variable
+	// TailChain hashes every published tail's ciphertext, zero while has_data is clear.
+	TailChain frontend.Variable
+	// RealInputs is the sealed R, the count of spent notes.
+	RealInputs frontend.Variable
+	// NoSpend is set exactly when R is zero.
+	NoSpend frontend.Variable
 }
 
-// SealStream mirrors AuditEnvelope::encode in program-libs/interface/src/proof/audit_stream.rs.
-func (w AuditWires) SealStream(api frontend.API, ranges StreamRanges, evidence Evidence, records [][]frontend.Variable) Stream {
+// SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
+func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape StreamShape, opened Opened, spent SpentInputs) Stream {
+	ranges := shape.Ranges()
+	evidence := spent.evidence(api, rc, ranges)
+	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
 	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.
-	plaintext := slices.Concat(w.TxViewingSk[:], evidence.Head, slices.Concat(evidence.Entries...))
 	plaintext = append(plaintext, shared.Zeros(ranges.EnvelopeBlocks()*streamBlockLen-len(plaintext))...)
-	// Each record fills exactly R blocks, a counter serving two regions reveals the XOR of their plaintexts.
-	for _, record := range records {
-		plaintext = slices.Concat(plaintext, record, shared.Zeros(ranges.RecordBlocks*streamBlockLen-len(record)))
-	}
+	// A record fills exactly its blocks, a counter serving two regions reveals the XOR of their plaintexts.
+	plaintext = slices.Concat(plaintext, slices.Concat(opened.records...), slices.Concat(opened.tails...))
 	// A plaintext off its ranges moves every record off the counters the readers use.
 	if len(plaintext) != ranges.CapacityBlocks()*streamBlockLen {
 		panic("audit: the stream plaintext differs from its ranges")
 	}
 	// One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: w.EphSk, AuditorPk: w.AuditorPk, Info: shared.AuditEncInfo}.SealStream(api)
-	return Stream{ranges: ranges, sealed: sealed, digest: envelopeDigest(api, ranges, evidence, sealed.Ciphertext)}
+	return Stream{
+		ranges:      ranges,
+		sealed:      sealed,
+		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(evidence.head), ranges.entryLen(), spent.Count),
+		RecordChain: regionChain(api, sealed.Ciphertext, ranges.RecordOffset(0), RecordLen, opened.Count),
+		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
+		RealInputs:  evidence.realInputs,
+		NoSpend:     api.IsZero(evidence.realInputs),
+	}
 }
 
-// envelopeDigest covers the class's envelope bytes alone, a record region and the padding past it reach no digest.
-func envelopeDigest(api frontend.API, ranges StreamRanges, evidence Evidence, ciphertext []frontend.Variable) frontend.Variable {
-	return countedDigest(api, ciphertext, EnvelopeKeyLen+len(evidence.Head), ranges.Entry, evidence.Count)
+// regionChain is HashChain4(hash_bytes(region_i)), zero past the published count.
+func regionChain(api frontend.API, ciphertext []frontend.Variable, start, length int, count ringgadget.Count) frontend.Variable {
+	hashes := make([]frontend.Variable, len(count.Active))
+	for i, active := range count.Active {
+		offset := start + i*length
+		hashes[i] = api.Mul(active, gadget.HashBoundedBytes(api, ciphertext[offset:offset+length]))
+	}
+	return gadget.HashChain4(api, hashes)
+}
+
+func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRanges, opened Opened) frontend.Variable {
+	if !ranges.Data {
+		return 0
+	}
+	// A clear has_data transmits no tail, the program binds zero.
+	return api.Mul(opened.hasData, regionChain(api, ciphertext, ranges.TailOffset(0), TailLen, opened.Count))
 }
 
 // countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.
@@ -198,22 +216,6 @@ func countedDigest(api frontend.API, ciphertext []frontend.Variable, head, entry
 	return gadget.PoseidonHash(api, []frontend.Variable{length, ringgadget.HashPrefix4(api, fields, ends)})
 }
 
-func (s Stream) record(i int) []frontend.Variable {
-	return s.sealed.Ciphertext[s.ranges.RecordOffset(i):s.ranges.RecordOffset(i+1)]
-}
-
-// slotBytes hold the one encoding below q, zero off a UTXO.
-type slotBytes struct {
-	asset, nullifierPk [fieldLen]frontend.Variable
-	amount             []frontend.Variable
-	blinding           [fieldLen]frontend.Variable
-}
-
-// exitRecord mirrors ExitRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
-func (b slotBytes) exitRecord() []frontend.Variable {
-	return slices.Concat(b.asset[:], b.amount, b.nullifierPk[:])
-}
-
 // Opened holds every output slot once, every section reads these wires.
 type Opened struct {
 	Slots []shared.Output
@@ -222,63 +224,32 @@ type Opened struct {
 	Count       ringgadget.Count
 	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
 	OutputChain frontend.Variable
-	ExitsBitmap frontend.Variable
-	bytes       []slotBytes
+	hasData     frontend.Variable
+	records     [][]frontend.Variable
+	tails       [][]frontend.Variable
 }
 
-type outputWires interface {
-	utxoWires() shared.UtxoWires
-}
-
-func OpenSlots[O outputWires](api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, outputs []O, outputCount frontend.Variable) Opened {
+// OpenSlots opens every output and its plaintext regions, tails only on a data key.
+func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, shape StreamShape, layout Layout, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
-	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, bytes: make([]slotBytes, len(outputs))}
+	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, hasData: layout.HasData, records: make([][]frontend.Variable, len(outputs))}
 	hashes := make([]frontend.Variable, len(outputs))
 	for i, output := range outputs {
-		slot := OpenOutput(api, output.utxoWires())
+		slot := output.Output.Open(api)
 		active := count.Active[i]
 		// An omitted slot holds no note, SPP's padded chain would miss it.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
-		// The auditor rebuilds every commitment from the sealed key's blinding with no ring data, another value leaves the slot unopened.
+		// The auditor rebuilds every commitment from the sealed key's blinding, another value leaves the slot unopened.
 		w.AssertBlinding(api, e, slot, active, i)
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: slot.RingDataHash})
-		// FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
-		opened.bytes[i] = slotBytes{
-			asset:       ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Asset)),
-			nullifierPk: ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.NullifierPk)),
-			amount:      ringgadget.UintBytesBE(api, api.Mul(slot.Utxo, slot.Amount), amountLen),
-			blinding:    ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.Utxo, slot.Blinding)),
+		assertNoData(api, layout.HasData, slot)
+		opened.records[i] = output.record(api, rc, slot)
+		if shape.Data {
+			opened.tails = append(opened.tails, dataTail(api, rc, slot))
 		}
 		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
 	opened.OutputChain = gadget.HashChain4(api, hashes)
-	// The program cuts every ciphertext length from the same positions.
-	exits := make([]frontend.Variable, len(opened.Slots))
-	for i, slot := range opened.Slots {
-		exits[i] = slot.Exit
-	}
-	opened.ExitsBitmap = weightedBits(api, exits)
 	return opened
-}
-
-// weightedBits mirrors exits_bitmap in program-libs/interface/src/instructions/transact.rs.
-func weightedBits(api frontend.API, bits []frontend.Variable) frontend.Variable {
-	bitmap := frontend.Variable(0)
-	for i, bit := range bits {
-		bitmap = api.Add(bitmap, api.Mul(bit, uint64(1)<<i))
-	}
-	return bitmap
-}
-
-// OpenOutput opens an output slot the auditor reads, no UTXO carries a data hash the recipient never learns.
-func OpenOutput(api frontend.API, o shared.UtxoWires) shared.Output {
-	opened := o.Open(api)
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: o.DataHash})
-	return opened
-}
-
-func assertOwnerKey(api frontend.API, slot shared.Output, key [32]frontend.Variable) {
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Ring, A: slot.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, key)})
 }
 
 // AssertBlinding holds a published dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
@@ -293,17 +264,6 @@ func (e Envelope) Head(w AuditWires, s Stream, domain frontend.Variable) []front
 		s.sealed.Auditor, s.sealed.Eph,
 		[]frontend.Variable{s.digest, e.salt, w.Layout},
 	)
-}
-
-// InputEvidence transmits be32(hash_i) per slot, the list private_tx_hash chains.
-func InputEvidence(api frontend.API, rc frontend.Rangechecker, hashes []frontend.Variable, count ringgadget.Count) Evidence {
-	entries := make([][]frontend.Variable, len(hashes))
-	for i, hash := range hashes {
-		// The be32 below q is one encoding, hash + q would name no note.
-		bytes := ringgadget.FieldToBytesBEWith(api, rc, hash)
-		entries[i] = bytes[:]
-	}
-	return Evidence{Entries: entries, Count: count}
 }
 
 // AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.
