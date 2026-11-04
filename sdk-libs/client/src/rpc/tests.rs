@@ -362,16 +362,101 @@ fn an_unseen_input_keeps_its_hash_and_stays_apart_from_a_dummy() {
     let [transaction] = page.value.items.as_slice() else {
         panic!("one transaction")
     };
-    let activity = WalletActivity::of(Address::new_from_array([13; 32]), transaction.clone())
-        .expect("a spender");
+    let activity = WalletActivity::of(
+        Address::new_from_array([13; 32]),
+        transaction.clone(),
+        |_| true,
+    )
+    .expect("a spender");
     let read: WalletActivity =
         serde_json::from_str(&serde_json::to_string(&activity).expect("json")).expect("parses");
     assert_eq!(read, activity);
     let WalletView::Sender { inputs, .. } = read.view else {
         panic!("the spender's view")
     };
-    assert_eq!(inputs[0].hash, Some(hash.into()));
-    assert!(inputs[0].unseen);
+    assert!(
+        inputs.iter().all(|input| !input.unseen),
+        "an unseen marker never reaches a wallet"
+    );
+}
+
+/// A public co-owner beside a hidden sender reads its own notes and no marker.
+#[test]
+fn a_sender_view_holds_the_wallets_own_notes_alone() {
+    let co_owner = Address::new_from_array([0x10; 32]);
+    let own = |seed: u8| {
+        DecryptedInput::from(AuditedInput {
+            nullifier: [seed; 32],
+            hash: [seed; 32],
+            opening: InputOpening::UnseenHash { hash: [seed; 32] },
+        })
+    };
+    let mut transaction = page(
+        AuditedTransaction {
+            outputs: vec![
+                output(
+                    0,
+                    OutputOpening::Ring {
+                        utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
+                        owner_tag: RingOwnerTag::View([9; 32]),
+                    },
+                ),
+                output(
+                    1,
+                    OutputOpening::Ring {
+                        utxo: utxo(0x50, Some(Address::new_from_array([4; 32]))),
+                        owner_tag: RingOwnerTag::View([8; 32]),
+                    },
+                ),
+            ],
+            payload_errors: vec![OutputPayloadError {
+                slot_index: 2,
+                kind: OutputPayloadErrorKind::Commitment,
+            }],
+            sender: Some(AuditedSender {
+                owner_key: [0x50; 32],
+                nullifier_pk: None,
+            }),
+            inputs: Vec::new(),
+            ..delivered_audited()
+        },
+        Vec::new(),
+    )
+    .value
+    .items
+    .remove(0);
+    transaction.spenders = vec![co_owner.to_bytes().into()];
+    transaction.inputs = vec![
+        DecryptedInput {
+            unseen: false,
+            ..own(1)
+        },
+        DecryptedInput {
+            unseen: false,
+            ..own(2)
+        },
+        own(3),
+    ];
+    let activity = WalletActivity::of(co_owner, transaction, |input| {
+        input.nullifier != [2; 32].into()
+    })
+    .expect("a spender");
+    let WalletView::Sender {
+        inputs, outputs, ..
+    } = activity.view
+    else {
+        panic!("the spender's view")
+    };
+    let read: Vec<&Hash> = inputs.iter().map(|input| &input.nullifier).collect();
+    assert_eq!(read, [&Hash::from([1; 32])], "no other note and no marker");
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.slot_index)
+            .collect::<Vec<_>>(),
+        [0],
+        "no hidden sender's output"
+    );
 }
 
 /// The TypeScript decoder reads the same page.
@@ -410,8 +495,13 @@ fn an_unseen_first_note_keeps_its_hash_and_names_no_sender() {
     assert!(transaction.inputs[0].unseen);
     assert_eq!(transaction.inputs[0].opening, None);
     // No key binds the unseen note to a sender, only the output's owner reads the transfer.
-    let of =
-        |wallet: [u8; 32]| WalletActivity::of(Address::new_from_array(wallet), transaction.clone());
+    let of = |wallet: [u8; 32]| {
+        WalletActivity::of(
+            Address::new_from_array(wallet),
+            transaction.clone(),
+            |_| true,
+        )
+    };
     assert!(matches!(
         of([0x10; 32]).expect("the output's owner").view,
         WalletView::Recipient { .. }
@@ -496,8 +586,9 @@ fn an_escrow_pending_slot_keeps_its_fields_and_reaches_its_owner() {
     assert_eq!(transaction.outputs[0].utxo, None);
     assert_eq!(transaction.outputs[0].recipient_u, Some([0x21; 32].into()));
     let owner = Address::new_from_array([0x30; 32]);
-    let WalletView::Recipient { outputs, .. } = WalletActivity::of(owner, transaction.clone())
-        .expect("the slot's owner")
+    let WalletView::Recipient { outputs, .. } =
+        WalletActivity::of(owner, transaction.clone(), |_| true)
+            .expect("the slot's owner")
         .view
     else {
         panic!("the recipient's view")
@@ -619,8 +710,12 @@ fn a_wallet_activity_page_keeps_its_wire_json() {
         panic!("one transaction")
     };
     let view = |wallet: u8| {
-        WalletActivity::of(Address::new_from_array([wallet; 32]), transaction.clone())
-            .expect("a party")
+        WalletActivity::of(
+            Address::new_from_array([wallet; 32]),
+            transaction.clone(),
+            |_| true,
+        )
+        .expect("a party")
     };
     // 0x50 is the anonymous sender, 0x10 owns output 0 alone.
     let activity = GetWalletActivityResponse {

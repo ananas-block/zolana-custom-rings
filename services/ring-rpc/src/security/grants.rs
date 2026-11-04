@@ -75,7 +75,7 @@ impl WalletScope {
                     .value
                     .items
                     .into_iter()
-                    .filter_map(|item| WalletActivity::of(self.wallet, item))
+                    .filter_map(|item| WalletActivity::of(self.wallet, item, |_| false))
                     .collect(),
                 cursor: response.value.cursor,
             },

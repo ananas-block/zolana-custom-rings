@@ -3,8 +3,8 @@ use solana_address::Address;
 use spr_indexer_api::{Base64String, Context, SerializablePubkey, SerializableSignature};
 
 use super::{
-    DecryptedInput, DecryptedOutput, DecryptedPayloadError, DecryptedTransaction,
-    DecryptedWithdrawal, PagedRead, ReadRequest, ReadTarget,
+    DecryptedInput, DecryptedOutput, DecryptedTransaction, DecryptedWithdrawal, PagedRead,
+    ReadRequest, ReadTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,11 +38,10 @@ pub struct WalletActivity {
     deny_unknown_fields
 )]
 pub enum WalletView {
-    /// The anonymous sender or a confidential spender.
+    /// The anonymous sender or a named spender, its own notes alone beside the public legs.
     Sender {
         inputs: Vec<DecryptedInput>,
         outputs: Vec<DecryptedOutput>,
-        payload_errors: Vec<DecryptedPayloadError>,
         withdrawals: Vec<DecryptedWithdrawal>,
     },
     Recipient {
@@ -58,13 +57,17 @@ impl WalletActivity {
             .with_wallet(wallet)
     }
 
-    pub fn of(wallet: Address, transaction: DecryptedTransaction) -> Option<Self> {
+    /// `own_input` names the wallet's spent notes, a public co-owner never reads a hidden sender's.
+    pub fn of(
+        wallet: Address,
+        transaction: DecryptedTransaction,
+        own_input: impl Fn(&DecryptedInput) -> bool,
+    ) -> Option<Self> {
         let DecryptedTransaction {
             slot,
             tx_signature,
             event_index,
             outputs,
-            payload_errors,
             sender,
             inputs,
             spenders,
@@ -73,18 +76,20 @@ impl WalletActivity {
         } = transaction;
         let names = |key: SerializablePubkey| key.0 == wallet;
         let anonymous = sender.is_some_and(|sender| names(sender.owner_key));
+        let outputs: Vec<_> = outputs
+            .into_iter()
+            .filter(|output| output.owner_key().is_some_and(names))
+            .collect();
         let view = match anonymous || spenders.into_iter().any(names) {
             true => WalletView::Sender {
-                inputs,
+                inputs: inputs
+                    .into_iter()
+                    .filter(|input| !input.unseen && own_input(input))
+                    .collect(),
                 outputs,
-                payload_errors,
                 withdrawals,
             },
             false => {
-                let outputs: Vec<_> = outputs
-                    .into_iter()
-                    .filter(|output| output.owner_key().is_some_and(names))
-                    .collect();
                 if outputs.is_empty() {
                     return None;
                 }
