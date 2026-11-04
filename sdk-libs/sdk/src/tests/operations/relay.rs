@@ -199,7 +199,7 @@ mod delegate_message {
     use std::sync::Mutex;
 
     use custom_ring_interface::{
-        compute_unit_limit, tag, InstructionTag, RingRail, RingTransactData,
+        compute_unit_limit, tag, FrameBufferHeader, InstructionTag, RingRail, RingTransactData,
     };
     use solana_instruction::Instruction;
     use solana_signer::Signer;
@@ -359,6 +359,7 @@ mod delegate_message {
                     })
                     .collect(),
                 assets: &assets,
+                wide_frames: crate::WideFrames::Refuse,
             }
             .select(&self.client)
             .await?
@@ -525,6 +526,16 @@ mod delegate_message {
                 })
                 .into(),
         };
+        let buffered = crate::BufferedFrame::for_writer(&honest, FEE_PAYER).unwrap();
+        let settle = relay_message(
+            &FEE_PAYER,
+            &[buffered.settle()],
+            compute_unit_limit(InstructionTag::SettleBuffered),
+        );
+        let held = |frame: &[u8]| {
+            let header = FrameBufferHeader::new(FEE_PAYER);
+            [bytemuck::bytes_of(&header), frame].concat()
+        };
         let vector = pinned_vector("relay_delegate_messages.json", fresh);
         let quote = RelayQuote {
             fee_payer: vector.request.fee_payer,
@@ -540,5 +551,39 @@ mod delegate_message {
                 case.name
             );
         }
+        assert_eq!(
+            expected.check(&settle.0).unwrap_err(),
+            MessageMismatch::SettlesBuffer
+        );
+        assert_eq!(
+            expected.settled_buffer(&settle.0).unwrap(),
+            Some(buffered.buffer())
+        );
+        assert!(expected
+            .check_settled(&settle.0, &held(&honest.data))
+            .is_ok());
+        let mut rewritten = honest.data.clone();
+        *rewritten.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            expected
+                .check_settled(&settle.0, &held(&rewritten))
+                .unwrap_err(),
+            MessageMismatch::Data
+        );
+        let stranger_frame =
+            crate::BufferedFrame::for_writer(&paying(&honest, 0, stranger()), FEE_PAYER)
+                .unwrap()
+                .settle();
+        let swapped = relay_message(
+            &FEE_PAYER,
+            &[stranger_frame],
+            compute_unit_limit(InstructionTag::SettleBuffered),
+        );
+        assert_eq!(
+            expected
+                .check_settled(&swapped.0, &held(&paying(&honest, 0, stranger()).data))
+                .unwrap_err(),
+            MessageMismatch::Recipients
+        );
     }
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use custom_ring_interface::{compute_unit_limit, InstructionTag};
 use custom_ring_sdk::{
     CustomRing, DelegateMove, DelegatePayment, RelayedDeposit, RelayedTransferInput, RingClient,
-    RingIndexerBackend, RingTransfer,
+    RingIndexerBackend, RingTransfer, WideFrames,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -104,6 +104,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
+            wide_frames: WideFrames::Buffer,
         }
         .select(&self.client)
         .await
@@ -126,10 +127,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             proof_inputs,
             fee_payer: request.parties.fee_payer,
         });
-        // The relay writes the buffer of a frame past one transaction, a delegate settles inline.
-        if !matches!(proof_inputs.rail, RelayRail::Delegate { .. }) {
-            transfer = transfer.with_buffered_settlement();
-        }
+        // The relay writes the buffer of a frame past one transaction.
+        transfer = transfer.with_buffered_settlement();
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
         }

@@ -499,7 +499,10 @@ impl Relay {
     /// The record and its held inputs commit together before the send.
     /// A frame past one transaction settles from a buffer the relay writes and pays for.
     async fn buffer_wide_frame(&self, proven: &mut ProvenRelay) -> Result<(), RingRpcError> {
-        if proven.instruction.data.first() != Some(&ring_tag::TRANSFER) {
+        if !matches!(
+            proven.instruction.data.first(),
+            Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
+        ) {
             return Ok(());
         }
         let writer = self.fee_payer();

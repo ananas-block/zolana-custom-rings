@@ -938,6 +938,7 @@ impl<'a> MoveFixture<'a> {
                 })
                 .collect(),
             assets: self.assets,
+            wide_frames: WideFrames::Refuse,
         }
     }
 }
