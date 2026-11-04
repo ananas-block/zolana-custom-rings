@@ -306,8 +306,8 @@ async function ringMergeParams({
   keys,
   proofDataSource,
   anonymous = true,
-  mode = anonymous ? "anonymous" : "confidentialEscrow",
-  escrow = mode === "confidentialEscrow" ? "own" : "none",
+  mode = anonymous ? "anonymous" : "confidential",
+  escrow = anonymous ? "none" : "own",
   coSigner,
 }: Readonly<{
   proveMerge: MergeAssembler["proveMerge"];

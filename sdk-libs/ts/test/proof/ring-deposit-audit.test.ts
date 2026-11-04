@@ -622,7 +622,7 @@ describe("ring deposit builder", () => {
   it("binds a registry ring deposit to the recipient's escrowed key under the newest root", async () => {
     const recipient = ShieldedKeypair.generate();
     const { client, requests } = await fixture({
-      mode: "confidentialEscrow",
+      mode: "confidential",
       members: [escrowedMember(recipient)],
     });
     const prepared = await PreparedRingDeposit.prepare(
@@ -707,7 +707,7 @@ describe("ring deposit builder", () => {
   it("refuses a recipient whose record escrows another key before any proof", async () => {
     const recipient = ShieldedKeypair.generate();
     const { client, proveRing } = await fixture({
-      mode: "confidentialEscrow",
+      mode: "confidential",
       members: [escrowedMember(recipient, field(77n))],
     });
     const prepared = await PreparedRingDeposit.prepare(
@@ -951,7 +951,7 @@ describe("ring deposit builder", () => {
           params(anonymous.client, { kind: "confidential", address: owner.shieldedAddress() }),
         ),
       ).rejects.toMatchObject({ causeCode: "RING_ANONYMOUS_REFUSED" });
-      const registry = await fixture({ mode: "confidentialEscrow" });
+      const registry = await fixture({ mode: "confidential" });
       await expect(
         PreparedRingDeposit.prepare(
           params(registry.client, {

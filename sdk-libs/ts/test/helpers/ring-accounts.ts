@@ -32,7 +32,7 @@ import {
 
 export const ZERO_ADDRESS = getAddressDecoder().decode(new Uint8Array(32));
 
-const MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
+const MODE_BYTES: Readonly<Record<RingMode, number>> = { confidential: 0, anonymous: 2 };
 
 export function ownedAccount(owner: Address, data: Uint8Array): RpcAccount {
   return { owner, lamports: 1n, data };
@@ -82,6 +82,28 @@ export async function ringCoSignerAccount(
 }
 
 /** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */
+/** Rust `TrackingRegistry`, the newest root in slot 0. */
+export function trackingRegistryAccount(
+  input: Readonly<{
+    root: Bytes32;
+    revision: bigint;
+    nextIndex: number;
+    auditorPubkey: Uint8Array;
+  }>,
+): RpcAccount {
+  const writer = new Writer()
+    .u8(3, "discriminator")
+    .bytes(new Uint8Array(32), 32, "ringId")
+    .bytes(input.auditorPubkey, 33, "auditorPubkey")
+    .u32(input.nextIndex, "nextIndex");
+  for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
+    writer
+      .bytes(slot === 0 ? input.root : new Uint8Array(32), 32, "hash")
+      .u64(slot === 0 ? input.revision : 0n, "revision")
+      .u64(0n, "expiresAt");
+  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
+}
+
 export function storageRegistryAccount(
   roots: readonly StorageRegistryRoot[],
   authority: Address = ZERO_ADDRESS,
@@ -141,7 +163,7 @@ export function ringPolicyData(
   const writer = new Writer()
     .u8(RING_POLICY_DISCRIMINATOR, "discriminator")
     .u8(input.bump, "bump")
-    .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
+    .u8(MODE_BYTES[input.mode ?? "confidential"], "mode")
     .bytes(
       Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
       3,

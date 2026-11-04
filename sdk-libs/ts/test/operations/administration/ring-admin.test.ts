@@ -240,13 +240,15 @@ describe("ring account", () => {
         expect.objectContaining({ code: "RING_POLICY_INVALID" }),
       );
     }
-    data[MODE_OFFSET] = 3;
-    expect(() => decodeRingPolicy(data)).toThrow(
-      expect.objectContaining({
-        code: "RING_POLICY_INVALID",
-        details: expect.objectContaining({ mode: 3 }),
-      }),
-    );
+    for (const mode of [1, 3]) {
+      data[MODE_OFFSET] = mode;
+      expect(() => decodeRingPolicy(data)).toThrow(
+        expect.objectContaining({
+          code: "RING_POLICY_INVALID",
+          details: expect.objectContaining({ mode }),
+        }),
+      );
+    }
   });
 });
 

@@ -8,7 +8,7 @@ import { MEMBER_REGISTRY_CAPACITY, ROOT_HISTORY } from "../membership/member-reg
 import { RingError } from "../error.js";
 
 /** Mirrors Rust `RingMode`, set once at creation and never cleared. */
-export type RingMode = "confidential" | "confidentialEscrow" | "anonymous";
+export type RingMode = "confidential" | "anonymous";
 
 /** Rust `RingRoles`, nonzero keys pairwise distinct with the delegate. */
 export interface RingRoles {
@@ -93,8 +93,6 @@ export interface StorageRegistry {
 export interface RingPolicy {
   readonly bump: number;
   readonly mode: RingMode;
-  /** True only on the retired mode byte 1, Rust `RingMode` refuses it. */
-  readonly keyEscrow: boolean;
   /** `RING_COSIGN_*` bits some `CoSigner` record covers, absent without a record. */
   readonly coSignerClasses?: number;
   readonly roles: RingRoles;
@@ -124,7 +122,8 @@ export type RootReader = "transfer" | "delegateTransfer" | "deposit" | "merge";
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
 
-const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
+/** Byte 1 is retired, never reuse it. */
+const RING_MODES: Readonly<Record<number, RingMode>> = { 0: "confidential", 2: "anonymous" };
 export const RING_CO_SIGNER_DISCRIMINATOR = 14;
 export const RING_CO_SIGNER_SIZE = 35;
 /** Rust `CoSignerCounts::CLASSES`. */
@@ -181,7 +180,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   return Object.freeze({
     bump,
     mode,
-    keyEscrow: mode === "confidentialEscrow",
     ...(classes === 0 ? {} : { coSignerClasses: classes }),
     roles: Object.freeze(roles),
     ...(equalBytes(delegate, ZERO_32) ? {} : { delegate: encodeBase58(delegate) }),

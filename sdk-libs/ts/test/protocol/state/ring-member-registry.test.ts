@@ -115,7 +115,7 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | undef
           bump: policyBump,
           roles: { policy: AUTHORITY },
           auditorPublicKey: AUDITOR.publicKey().toBytes(),
-          mode: "confidentialEscrow",
+          mode: "confidential",
           policyHash: new Uint8Array(32).fill(1) as Bytes32,
           tracking: TRACKING,
         }),

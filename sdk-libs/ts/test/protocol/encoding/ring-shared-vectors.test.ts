@@ -718,7 +718,7 @@ describe("ring rails", () => {
       RingInstructionTag;
     expect(ringRail(historicalTransferV3, { mode: "confidential" })).toBe("confidential");
     expect(ringRail(historicalTransferV3, { mode: "anonymous" })).toBe("anonymous");
-    expect(ringRail(historicalAuthorityTransferV3, { mode: "confidentialEscrow", delegate })).toBe(
+    expect(ringRail(historicalAuthorityTransferV3, { mode: "confidential", delegate })).toBe(
       "delegate",
     );
     expect(() => ringRail(historicalAuthorityTransferV3, { mode: "anonymous", delegate })).toThrow(
