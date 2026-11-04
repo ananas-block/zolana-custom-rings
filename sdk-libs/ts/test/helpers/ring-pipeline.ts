@@ -6,6 +6,7 @@ import {
   type RingRecordReader,
   type StorageMemberOpenings,
   type StorageRecordPool,
+  type TrackingReader,
 } from "../../src/rpc/ports.js";
 import type {
   AnonymousRingTransactInput,
@@ -28,6 +29,7 @@ import {
   nullifierPdaAddress,
   treeAddress,
   checkedBytes,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import { LocalKeys } from "@heliuslabs/zolana/client";
 import {
@@ -46,15 +48,15 @@ import type { ShieldedAddress, ShieldedKeypair } from "@heliuslabs/zolana/keypai
 import {
   AssetRegistry,
   SOL_MINT,
-  assetField,
   type SppProofInputs,
   ProofInputUtxo,
   Utxo,
 } from "@heliuslabs/zolana/transaction";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
 import { ringAuthAddress, ringPolicyAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
-import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
+import { DUMMY_RECORD, RecordKind } from "../../src/protocol/codec/audit-stream.js";
+import { openRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
 import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
 import type {
@@ -78,6 +80,7 @@ import {
 } from "../../src/protocol/membership/policy.js";
 import {
   ringTransferStatement,
+  signerBinding,
   transferStatementHash,
 } from "../../src/protocol/proof/statement.js";
 import type { TransferProofRequest } from "../../src/proof/transfer-proof.js";
@@ -87,21 +90,19 @@ import {
   matchesPage,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { recordTree, type FixtureRecord } from "./member-registry.js";
+import type { TrackingEntry } from "../../src/protocol/membership/tracking.js";
+import { recordTree, trackingTree, type FixtureRecord } from "./member-registry.js";
 import {
   ownedAccount,
   ringCoSignerAccount,
   ringPolicyData,
   sppRingRegistration,
   storageRegistryAccount,
+  trackingRegistryAccount,
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
-import {
-  openRingDelivery,
-  RING_DELIVERY_UNRESOLVED,
-  ringOutputBlinding,
-} from "../../src/crypto/derivation/blinding.js";
+import { openRecipientNote, ringOutputBlinding } from "../../src/crypto/derivation/blinding.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
@@ -111,6 +112,7 @@ export const TREE = treeAddress(TREE_ID);
 export const OWN_REVISION = 7n;
 export const CURATOR_REVISION = 11n;
 export const ADDRESS_REVISION = 3n;
+export const TRACKING_REVISION = 9n;
 const addressDecoder = getAddressDecoder();
 
 export function randomAddress(): Address {
@@ -208,6 +210,22 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   if (options.coSigner !== undefined)
     accounts.set(...(await ringCoSignerAccount(ringProgramId, options.coSigner)));
   const ownRegistry = randomAddress();
+  const trackingRegistry = randomAddress();
+  const enrolled = new Map<string, TrackingEntry>();
+  let tracked = trackingTree();
+  const publishTracking = (): void => {
+    tracked = trackingTree([...enrolled.values()]);
+    accounts.set(
+      trackingRegistry,
+      trackingRegistryAccount({
+        root: tracked.root,
+        revision: TRACKING_REVISION,
+        nextIndex: tracked.nextIndex,
+        auditorPubkey: auditor.publicKey().toBytes(),
+      }),
+    );
+  };
+  publishTracking();
   const trees = new Map<
     Address,
     Readonly<{ tree: ReturnType<typeof recordTree>; revision: bigint }>
@@ -227,6 +245,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     roles: { admin: authority },
     auditorPublicKey: auditor.publicKey().toBytes(),
     mode: options.mode ?? "confidential",
+    tracking: trackingRegistry,
     ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner }),
     ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
   } as const;
@@ -287,25 +306,18 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ownedAccount(ringProgramId, ringPolicyData({ bump: ringBump, ...config })),
     );
   }
-  /** Applies the owner's enrollment, a repeat replaces the record's address. */
-  const enroll = (owner: ShieldedAddress): void => {
+  /** Applies the owner's enrollment, a repeat replaces its row. */
+  const enroll = (owner: ShieldedAddress, listTag: Bytes32 = ZERO_32): void => {
     const member = owner.signingPublicKey.ownerProofInputHash();
-    const key = hex(member);
-    ownRecords.set(key, {
-      ...(ownRecords.get(key) ?? { member, lists: 0n }),
-      address: {
-        ringId: ringIdField(ringProgramId),
-        nullifierPk: owner.nullifierPublicKey,
-        viewingU: owner.viewingPublicKey.u(),
-        addressRevision: ADDRESS_REVISION,
-      },
+    enrolled.set(hex(member), {
+      member,
+      nullifierPk: owner.nullifierPublicKey,
+      ctHash: filled(0x11),
+      viewingU: owner.viewingPublicKey.u(),
+      revision: ADDRESS_REVISION,
+      listTag,
     });
-    ownTree = recordTree([...ownRecords.values()]);
-    trees.set(ownRegistry, { tree: ownTree, revision: OWN_REVISION });
-    accounts.set(
-      ownRegistry,
-      storageRegistryAccount([{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }]),
-    );
+    publishTracking();
   };
   const slot = options.slot ?? 1n;
   const context = Object.freeze({ slot, blockTime: 0n });
@@ -319,7 +331,8 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     return served;
   };
   const reader: Pick<ChainReader, "getAccount"> &
-    Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> = {
+    Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> &
+    Pick<TrackingReader, "getTrackingOpenings" | "getTrackingRecordPool"> = {
     getAccount: async (address) => accounts.get(address),
     getStorageMemberOpenings: async (request): Promise<StorageMemberOpenings> => {
       const { tree, revision } = treeAt(request.registry, request.expectedRoot);
@@ -336,6 +349,21 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         root: { root: tree.root, revision, nextIndex: tree.nextIndex },
         ...tree.pool(request.members, request.openings),
       };
+    },
+    getTrackingOpenings: async (request) => {
+      if (hex(request.expectedRoot) !== hex(tracked.root))
+        throw new Error("tracking openings under an unknown root");
+      return {
+        slot,
+        root: tracked.root,
+        revision: TRACKING_REVISION,
+        openings: request.members.map((member) => tracked.opening(member)),
+      };
+    },
+    getTrackingRecordPool: async (request) => {
+      if (hex(request.expectedRoot) !== hex(tracked.root))
+        throw new Error("tracking pool under an unknown root");
+      return tracked.pool(request.members, request.openings);
     },
   };
   const spp = (
@@ -410,6 +438,11 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       ring: Address,
       keys: ProofAuthority,
     ) => pinnedRail(spp(proofInputs, { kind: "ringAuthority", ring }, keys)),
+    proveRingAuthorityExitTransact: async (
+      proofInputs: SppProofInputs,
+      ring: Address,
+      keys: ProofAuthority,
+    ) => pinnedRail(spp(proofInputs, { kind: "ringAuthority", ring }, keys)),
     proveAnonymousRingTransact: async (
       input: AnonymousRingTransactInput,
     ): Promise<ProvenAnonymousRingTransact> => {
@@ -435,8 +468,10 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ringProgramId,
     auditor,
     authority,
-    /** `ConfidentialEscrow` mode escrows every output nullifier key. */
-    keyEscrow: options.mode === "confidentialEscrow",
+    trackingRegistry,
+    get trackingTree() {
+      return tracked;
+    },
     accounts,
     client,
     ringRequests,
@@ -546,7 +581,7 @@ export async function checkAccounts(
   expected: Readonly<{
     fixture: Fixture;
     data: RingTransactData;
-    /** The live registries right after the ring account, `ringRootRegistries` order. */
+    /** The live registries before the tracking registry, `ringRegistrySlots` order. */
     registries?: readonly Address[];
     /** After the registries, the co-signer, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
@@ -575,6 +610,7 @@ export async function checkAccounts(
   ).toEqual([
     readonly(await ringPolicyAddress(fixture.ringProgramId)),
     ...(expected.registries ?? []).map(readonly),
+    readonly(fixture.trackingRegistry),
     ...expected.prefix,
     { address: expected.payer, role: AccountRole.WRITABLE_SIGNER },
     writable(TREE),
@@ -618,30 +654,22 @@ export function screenedMembers(request: TransferProofRequest, count: number): r
 }
 
 /** The one ring request, its statement the program rebuilds from the parsed data and the values the request binds. */
-export function checkTransferProof(
-  fixture: Fixture,
-  data: RingTransactData,
-  expected: Readonly<{ kind: TransferProofRequest["kind"] }>,
-): TransferProofRequest {
-  const request = fixture.ringRequests.find((request) => request.kind.startsWith("transfer"));
-  if (request?.kind !== "transferConfidential" && request?.kind !== "transferAnonymous")
-    throw new Error("no transfer request");
-  expect(request.kind).toBe(expected.kind);
-  const zero = new Uint8Array(32) as Bytes32;
+export function checkTransferProof(fixture: Fixture, data: RingTransactData): TransferProofRequest {
+  const request = fixture.ringRequests.find((candidate) => candidate.kind === "transfer");
+  if (request?.kind !== "transfer") throw new Error("no transfer request");
   expect(request.publicInputHash).toEqual(
     transferStatementHash(
       ringTransferStatement(data, {
         ringId: ringIdField(fixture.ringProgramId),
         auditorPubkey: fixture.auditor.publicKey().toBytes(),
-        keyEscrow: fixture.keyEscrow,
-        sender: request.kind === "transferConfidential" ? request.sender : zero,
-        partyIdentities:
-          request.kind === "transferAnonymous" ? request.partyIdentities : [zero, zero, zero],
-        signers: bindingSigners(request),
+        sender: request.sender,
+        partyIdentities: request.partyIdentities,
+        signers: signerBinding(bindingSigners(request), request.inputs.length),
         roots: {
           policyHash: request.policyHash,
           ownRoot: request.ownRoot,
           curatorRoot: request.curatorRoot,
+          trackingRoot: request.trackingRoot,
         },
         publicAssets: request.publicAssets,
         publicAmounts: request.publicAmounts,
@@ -651,101 +679,48 @@ export function checkTransferProof(
     ),
   );
   expect(request.layout).toEqual(RingTransactData.auditLayout(data));
-  expect([request.exempt, request.approvalRequired]).toEqual([data.exempt, data.approvalRequired]);
+  expect(request.approvalMask).toBe(data.approval);
   return request;
 }
 
-/**
- * The auditor recovers the transaction key from the envelope and opens every published slot to the
- * output SPP proves. A change slot's key is the sender's ring change key, the caller checks it.
- */
+/** The auditor recovers the transaction key from the envelope and reads each published slot's note from its record. */
 export function checkDisclosure(
   fixture: Fixture,
   call: SppCall,
   data: RingTransactData,
-  sender: ShieldedAddress,
 ): RingDisclosure {
-  const message = {
-    ephemeralPublicKey: x25519FromU(data.ephU),
-    envelope: data.envelope,
-    records: data.records,
-  };
-  const txViewingSecret = openTransactionViewingSecret(fixture.auditor, message);
-  const txKey = ViewingKey.fromBytes(txViewingSecret);
-  expect(txKey.publicKey().u()).toEqual(data.txViewingU);
-  txKey.destroy();
-  txViewingSecret.fill(0);
-  const exits = data.outputs.map((output) => output.kind === "exit");
   const disclosure = openRingDisclosure(fixture.auditor, {
     layout: RingTransactData.streamLayout(data),
-    message,
+    message: {
+      ephemeralPublicKey: x25519FromU(data.ephU),
+      envelope: data.envelope,
+      records: data.outputs.map((output) => output.record),
+    },
   });
-  const escrowed = disclosure.layout.keyEscrow;
+  const txKey = ViewingKey.fromBytes(disclosure.envelope.txViewingSecret);
+  expect(txKey.publicKey().u()).toEqual(data.txViewingU);
+  txKey.destroy();
   const published = call.proofInputs.outputs.filter((output) => !output.isCompact());
-  expect(disclosure.outputs).toHaveLength(published.length);
-  disclosure.outputs.forEach((opened, index) => {
+  expect(disclosure.records).toHaveLength(published.length);
+  disclosure.records.forEach((record, index) => {
     const output = itemAt(published, index);
     const owner = output.ownerAddress;
-    const exit = exits[index] === true;
-    if (disclosure.kind === "delivered" && !exit) {
-      expect(opened).toEqual({ kind: "body" });
-      return;
-    }
     if (owner === undefined) {
-      expect(opened).toEqual({ kind: "dummy" });
+      expect(record).toEqual(DUMMY_RECORD);
       return;
     }
-    const nullifierPk = escrowed ? undefined : owner.nullifierPublicKey;
-    const ownerKey = owner.signingPublicKey.confidentialViewTag();
-    const asset = assetField(output.asset);
-    if (exit)
-      expect(opened).toEqual({
-        kind: "exit",
-        nullifierPk,
-        asset,
-        amount: output.amount,
-      });
-    else
-      expect(opened).toEqual({
-        kind: "ring",
-        nullifierPk,
-        ownerKey,
-        asset,
-        amount: output.amount,
-      });
+    expect(record).toEqual({
+      kind: output.ringProgramId === undefined ? RecordKind.exit : RecordKind.ring,
+      amount: output.amount,
+      ownerKey: owner.signingPublicKey.confidentialViewTag(),
+      mint: output.asset,
+      nullifierPk: owner.nullifierPublicKey,
+    });
   });
-  if (disclosure.kind === "anonymous") {
-    const spent = call.proofInputs.inputUtxos.filter((input) => !input.isCompact());
-    expect(disclosure.inputs).toEqual(
-      disclosure.layout.key.kind === "entry"
-        ? {
-            kind: "openings",
-            senderKey: sender.signingPublicKey.confidentialViewTag(),
-            senderNullifierPk: sender.nullifierPublicKey,
-            inputs: spent.map((input) =>
-              input.isDummy()
-                ? undefined
-                : {
-                    hash: input.hash(),
-                    asset: assetField(input.utxo.asset),
-                    amount: input.utxo.amount,
-                    blinding: input.utxo.blinding,
-                  },
-            ),
-          }
-        : {
-            kind: "commitments",
-            hashes: spent.map((input) => (input.isDummy() ? undefined : input.hash())),
-          },
-    );
-  }
   return disclosure;
 }
 
-/**
- * A delivered slot opens to the committed note under the slot secret the recipient's keys answer,
- * `undefined` for another recipient's slot.
- */
+/** A recipient slot opens to the committed note under the slot secret the recipient's keys answer, `undefined` for another recipient's slot. */
 export async function openDelivered(
   input: Readonly<{
     fixture: Fixture;
@@ -757,35 +732,32 @@ export async function openDelivered(
   }>,
 ) {
   const { call, data, slotIndex } = input;
-  const firstNullifier = RingTransactData.firstNullifier(data);
   const [slotSecret] = await input.keys.ringDeliverySecrets([
     {
       viewingPublicKey: input.recipient,
       txViewingPublicKey: X25519PublicKey.fromBytes(call.data.txViewingPk),
       salt: data.salt,
       outputIndex: slotIndex,
-      firstNullifier,
+      firstNullifier: RingTransactData.firstNullifier(data),
     },
   ]);
   const wire = data.outputs[slotIndex];
-  if (slotSecret === undefined || wire?.kind !== "delivered") throw new Error("no delivered slot");
+  if (slotSecret === undefined || wire?.body.kind !== "recipient")
+    throw new Error("no recipient slot");
   const owner = input.keys.address();
-  const note = openRingDelivery(
-    { ring: input.fixture.ringProgramId },
+  return openRecipientNote(
     {
-      body: wire.body,
-      slotSecret,
       owner: {
         signingPublicKey: owner.signingPublicKey,
         nullifierPublicKey: owner.nullifierPublicKey,
       },
-      commitment: wire.hash,
+      ring: input.fixture.ringProgramId,
       treeId: call.proofInputs.outputTreeId,
+      commitment: wire.hash,
+      assets: new AssetRegistry(),
     },
-    new AssetRegistry(),
+    openRecipientBody(slotSecret, wire.body.body),
   );
-  if (note === RING_DELIVERY_UNRESOLVED) throw new Error("no registered mint rebuilds the slot");
-  return note;
 }
 
 /** A setup instruction of `length` data bytes ahead of the ring instruction. */

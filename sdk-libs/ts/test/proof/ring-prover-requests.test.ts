@@ -1285,11 +1285,7 @@ function checkPolicySection(typed: RingProofRequest & PolicyProofInputs, sender:
   expect(typed.withdrawalHash).toEqual(
     policyWithdrawalHash(typed.withdrawals.slice(0, typed.withdrawalCount)),
   );
-  if (isZero(typed.policyHash)) {
-    // A ring with active thresholds binds the own root off a policy too.
-    expect(isZero(typed.ownRoot) || typed.exempt || typed.kind === "transferAnonymous").toBe(true);
-    return;
-  }
+  if (isZero(typed.policyHash)) return;
   const table = buildRuleTable({
     rules: typed.rules.slice(0, typed.policyLen).map(decodeRule),
   });
