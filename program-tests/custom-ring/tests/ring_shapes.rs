@@ -7,7 +7,7 @@ use custom_ring_interface::{
         RingCircuit, TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES, RING_KEYS,
     },
-    ParsedTransact, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS,
+    ParsedTransact, DELIVERED_AUDIT_CAPACITIES,
 };
 use custom_ring_test_validator::{
     policy::{EnrollAddresses, RingNotes},
@@ -16,6 +16,8 @@ use custom_ring_test_validator::{
 use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
 use spr_test_utils::wallet::create_associated_token_account;
 
+/// Merge widths whose full nullifier list fits one v1 transaction.
+const MERGE_WIDTHS: [usize; 2] = [8, 24];
 const UTXO_AMOUNT: u64 = 1_000_000;
 /// Rent-exempt before the first leg lands on it.
 const DESTINATION_FUNDING: u64 = 1_000_000;
@@ -208,7 +210,7 @@ fn key_owner(circuit: RingCircuit) -> Option<Column> {
             true => Column::AnonymousPolicy,
             false => Column::Anonymous,
         },
-        RingCircuit::TransferAnonymousEntry { .. } | RingCircuit::Merge { .. } => Column::Anonymous,
+        RingCircuit::TransferAnonymousEntry { .. } | RingCircuit::Merge => Column::Anonymous,
         RingCircuit::Deposit { capacity: 1 } => Column::Confidential,
         RingCircuit::ApplyRecords { writes: 1 } => Column::ConfidentialPolicy,
         RingCircuit::ApplyRecords { writes: 2 } => Column::Delegate,
@@ -660,9 +662,8 @@ impl ShapeRing<'_> {
             let prepared = CustomRingMerge::new(self.ring, self.utxos(count, coverage)?, None)?
                 .with_output_tree_id(tree_id)
                 .encrypt(&env.sender.keypair)?;
-            let proved = u8::try_from(prepared.inputs().len())?;
             assert_eq!(
-                usize::from(proved),
+                prepared.inputs().len(),
                 width,
                 "{count} notes merge at width {width}"
             );
@@ -680,8 +681,7 @@ impl ShapeRing<'_> {
             let view = custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(
                 &instruction.data[1..],
             )?;
-            let offset =
-                view.disclosure.ciphertext.as_ptr() as usize - instruction.data.as_ptr() as usize;
+            let offset = view.ciphertext.as_ptr() as usize - instruction.data.as_ptr() as usize;
             let mut altered = instruction.clone();
             altered.data[offset] ^= 1;
             let before = fetch_account(env.client.rpc(), &env.tree)?;
@@ -692,7 +692,7 @@ impl ShapeRing<'_> {
             assert_account_unchanged(env.client.rpc(), &env.tree, &before)?;
             land(env, instruction, &env.payer, &[])?;
             println!("RING_MERGE_KEY width={width} mutation_refused=true settled=true");
-            coverage.cover(RingCircuit::Merge { width: proved });
+            coverage.cover(RingCircuit::Merge);
             count = width + 1;
         }
         Ok(())

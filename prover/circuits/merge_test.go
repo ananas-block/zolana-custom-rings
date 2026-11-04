@@ -214,7 +214,7 @@ func TestMergePayer(t *testing.T) {
 	})
 }
 
-// The auditor's seed rebuilds the output and every padding nullifier, an observer holding the opening and secret zero reads neither.
+// The record alone rebuilds the output, a zero key blinding never follows from secret zero.
 func TestMergeRecordRebuildsTheOutput(t *testing.T) {
 	for name, build := range map[string]func(testing.TB) *ringmerge.Statement{"nonzero": ringmerge.Build, "zero": ringmerge.BuildZeroKey} {
 		t.Run(name, func(t *testing.T) {
