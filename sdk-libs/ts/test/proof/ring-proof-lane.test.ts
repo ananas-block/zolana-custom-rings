@@ -99,6 +99,32 @@ describe("selectTransferKey", () => {
     expect(wide.wideOwners).toBe(true);
   });
 
+  it("routes by the published inputs, only past 24 reaches the 49 input key", () => {
+    const select = (inputs: number, legs = 0, owners = 2) =>
+      selectTransferKey({
+        spend: { ...SPEND, inputs, legs, owners },
+        addresses: { ...ADDRESSES, nInputs: inputs },
+        ownerSigners: 0,
+      });
+    const narrow = select(24);
+    expect([narrow.circuit.class, narrow.wideOwners]).toEqual([24, false]);
+    expect(select(24, 0, 5).circuit).toMatchObject({ class: 24, outputs: 8, wide: true });
+    const widest = select(25);
+    expect(widest.circuit).toMatchObject({
+      class: 49,
+      outputs: 2,
+      withdrawals: 4,
+      owners: 12,
+      wide: true,
+    });
+    expect(widest.wideOwners).toBe(true);
+    expect(transferPoolCapacity(widest.circuit)).toEqual({ own: 41, curator: 41, tracking: 18 });
+    expect(select(49, 4, 12).circuit).toEqual(widest.circuit);
+    expect(refusal(() => select(25, 5)).code).toBe("RING_CATALOG_KEY_MISSING");
+    expect(refusal(() => select(25, 0, 13)).code).toBe("RING_TOO_MANY_OWNERS");
+    expect(refusal(() => select(50)).code).toBe("RING_CATALOG_KEY_MISSING");
+  });
+
   it("refuses past the account bound with the counts", () => {
     const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
     const capacity = ownerSignerCapacity(addresses);
@@ -128,8 +154,8 @@ describe("selectTransferKey", () => {
           addresses: ADDRESSES,
           ownerSigners: 0,
         }),
-      ).details,
-    ).toMatchObject({ reason: "RingShapeUnkeyed" });
+      ).code,
+    ).toBe("RING_CATALOG_KEY_MISSING");
   });
 });
 
@@ -264,7 +290,7 @@ describe("co-sign", () => {
   });
 });
 
-describe("deposit-v4.json", () => {
+describe("deposit.json", () => {
   type Case = Readonly<{
     name: string;
     context_hash: string;
@@ -282,7 +308,7 @@ describe("deposit-v4.json", () => {
     elements: readonly string[];
     public_input_hash: string;
   }>;
-  const { cases } = vector("deposit/deposit-v4.json") as Readonly<{ cases: readonly Case[] }>;
+  const { cases } = vector("deposit/deposit.json") as Readonly<{ cases: readonly Case[] }>;
 
   it.each(cases.map((entry) => [entry.name, entry] as const))("%s", (_, entry) => {
     const elements = depositStatementElements({
@@ -308,7 +334,7 @@ describe("deposit-v4.json", () => {
   });
 });
 
-describe("merge_v4.json", () => {
+describe("merge.json", () => {
   type Request = Readonly<Record<string, unknown>> &
     Readonly<{
       tracking: Readonly<{
@@ -317,7 +343,7 @@ describe("merge_v4.json", () => {
         path: Readonly<{ index: number; siblings: readonly (readonly string[])[] }>;
       }> | null;
     }>;
-  const { cases } = vector("merge/merge_v4.json") as Readonly<{
+  const { cases } = vector("merge/merge.json") as Readonly<{
     cases: readonly Readonly<{ name: string; request: Request }>[];
   }>;
 

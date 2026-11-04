@@ -39,6 +39,11 @@ export const RingRpcRefusal = Object.freeze({
   // -32193, -32243 and -32275 never reach clients as codes, only as refused status text.
   tokenAccountSetup: -32200,
   depositorIsFeePayer: -32201,
+  invalidEnrollment: -32202,
+  budget: -32203,
+  signerBudget: -32204,
+  enrollmentSignature: -32205,
+  delegateSignature: -32206,
   notDelegate: -32220,
   escrowUnserved: -32221,
   sourceUnescrowed: -32222,

@@ -104,6 +104,14 @@ impl LiveStorageChain {
 
 #[async_trait]
 impl ChainSubmit for LiveStorageChain {
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError> {
+        self.submit.account_data(address).await
+    }
+
+    async fn rent_exempt_lamports(&self, data_len: usize) -> Result<u64, RingRpcError> {
+        self.submit.rent_exempt_lamports(data_len).await
+    }
+
     async fn slot(&self) -> Result<u64, RingRpcError> {
         self.submit.slot().await
     }

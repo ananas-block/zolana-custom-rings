@@ -1055,7 +1055,7 @@ describe("RpcTransactionOrigin", () => {
     const vectorFrame = decodeRingMergeRequest(
       Buffer.from(
         readFileSync(
-          new URL("../../../../../test-vectors/merge/merge_frame_v4.hex", import.meta.url),
+          new URL("../../../../../test-vectors/merge/merge_frame.hex", import.meta.url),
           "utf8",
         ).trim(),
         "hex",

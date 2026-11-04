@@ -113,7 +113,7 @@ operations! {
     Transfer(CustomRingTransfer<'a>) => |transfer: CustomRingTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
     Anonymous(AnonymousTransfer<'a>) => |transfer: AnonymousTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
     PublicOwners(PublicOwnerTransfer<'a>) => |transfer: PublicOwnerTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
-    Delegate(DelegateTransfer<'a>) => Box::new,
+    Delegate(DelegateTransfer<'a>) => |transfer: DelegateTransfer<'a>| Box::new(transfer.with_buffered_settlement()),
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
     Instruction(Instruction) => core::convert::identity,
@@ -517,11 +517,10 @@ impl<'a> RingSubmission<'a> {
 }
 
 impl RingOperation<'_> {
-    /// The delegate rails settle inline, the program refuses their tag from a buffer.
     const fn settles_from_buffer(&self) -> bool {
         matches!(
             self,
-            Self::Transfer(_) | Self::Anonymous(_) | Self::PublicOwners(_)
+            Self::Transfer(_) | Self::Anonymous(_) | Self::PublicOwners(_) | Self::Delegate(_)
         )
     }
 

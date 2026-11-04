@@ -78,10 +78,10 @@ describe("anonymous sync", () => {
     const bob = new ScanWallet(2);
     const paid = await alice.pay(indexer, [{ to: bob.address, amount: 30n }]);
     const received = await bob.sync(indexer, bob.fresh());
-    expect(stream(received, output(paid, 1))).toEqual({ kind: "provenTag" });
+    expect(stream(received, output(paid, 1))).toEqual({ kind: "tagHint" });
     expect(received.utxos.map((note) => note.utxo.amount)).toEqual([30n]);
     const change = await alice.sync(indexer, alice.fresh());
-    expect(stream(change, output(paid, 0))).toEqual({ kind: "provenTag" });
+    expect(stream(change, output(paid, 0))).toEqual({ kind: "tagHint" });
     expect(change.utxos.map((note) => note.utxo.amount)).toEqual([70n]);
     expect(indexer.transactionTagReads).toBe(0);
   });
@@ -223,7 +223,7 @@ describe("anonymous sync", () => {
     };
     indexer.publish(relayed);
     const scan = await AnonymousSync.create(keys, ASSETS).fetch(indexer.client(), alice.fresh());
-    expect(stream(scan, output(relayed, 0))).toEqual({ kind: "provenTag" });
+    expect(stream(scan, output(relayed, 0))).toEqual({ kind: "tagHint" });
     expect(scan.sent).toEqual([]);
   });
 
@@ -239,7 +239,7 @@ describe("anonymous sync", () => {
     indexer.publish({ ...paid, outputSlots: paid.outputSlots.with(1, { ...slot, payload }) });
     const scan = await alice.sync(indexer, alice.fresh());
     expect(scan.sent).toEqual([]);
-    expect(stream(scan, output(paid, 0))).toEqual({ kind: "provenTag" });
+    expect(stream(scan, output(paid, 0))).toEqual({ kind: "tagHint" });
   });
 
   it("never fails on sender-chosen garbage under a matching tag", async () => {

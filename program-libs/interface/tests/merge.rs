@@ -21,11 +21,11 @@ use spr_interface::instruction::{
 
 const FRAME_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/merge/merge_frame_v4.hex"
+    "/../../test-vectors/merge/merge_frame.hex"
 );
 const MERGE_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/merge/merge_v4.json"
+    "/../../test-vectors/merge/merge.json"
 );
 
 fn merge_body() -> MergeTransactIxData {
@@ -81,7 +81,7 @@ fn the_frame_is_the_shared_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/merge/merge_frame_v4.hex"]
+#[ignore = "rewrites test-vectors/merge/merge_frame.hex"]
 fn write_merge_frame_vector() {
     let line = hex::encode(request(MergeRingAuthority::Ring).serialize().unwrap()) + "\n";
     std::fs::write(FRAME_VECTOR, line).expect("write vector file");

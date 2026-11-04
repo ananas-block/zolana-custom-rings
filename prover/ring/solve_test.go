@@ -27,6 +27,7 @@ const (
 	transfer8Key  common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
 	transfer16Key common.CircuitType = "custom-ring-transfer-16-in5-w8-s5"
 	wideKey       common.CircuitType = "custom-ring-transfer-wide-8-in24-w32-s24"
+	wide49Key     common.CircuitType = "custom-ring-transfer-wide-2-in49-w4-s12"
 	wide16Key     common.CircuitType = "custom-ring-transfer-wide-16-in5-w8-s5"
 	entryKey      common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
 	entry8Key     common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
@@ -39,7 +40,7 @@ const (
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, entryKey, entry8Key, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, wide49Key, entryKey, entry8Key, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit

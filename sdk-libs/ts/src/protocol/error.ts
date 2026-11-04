@@ -171,9 +171,11 @@ export const RING_ERROR_CODES = [
   "RING_RECIPIENT_VIEWING_KEY_STALE",
   "RING_MERGE_TOO_WIDE",
   "RING_ADDRESS_CEILING",
+  "RING_CATALOG_KEY_MISSING",
   "RING_FRAME_EVENT_INVALID",
   "RING_FRAME_TOO_LARGE",
   "RING_BUFFERED_TAG",
+  "RING_NOTE_DATA_UNBOUND",
   "RING_BUFFERED_NONCE",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";

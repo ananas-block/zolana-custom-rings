@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use solana_address::Address;
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_hash::Hash;
 use solana_signature::Signature;
@@ -17,6 +18,10 @@ pub trait ChainSubmit: Send + Sync {
 
     /// Finalized height, pending signatures cannot expire against a newer fork.
     async fn block_height(&self) -> Result<u64, RingRpcError>;
+
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError>;
+
+    async fn rent_exempt_lamports(&self, data_len: usize) -> Result<u64, RingRpcError>;
 
     /// A transaction the cluster already processed counts as sent, one its preflight refuses fails.
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError>;
@@ -91,6 +96,21 @@ impl SolanaChain {
 
 #[async_trait]
 impl ChainSubmit for SolanaChain {
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(self
+            .rpc
+            .get_account(address)
+            .await?
+            .map(|account| account.data))
+    }
+
+    async fn rent_exempt_lamports(&self, data_len: usize) -> Result<u64, RingRpcError> {
+        Ok(self
+            .rpc
+            .get_minimum_balance_for_rent_exemption(data_len)
+            .await?)
+    }
+
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.rpc.get_slot().await?)
     }
@@ -174,6 +194,17 @@ mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedLanding {
+        async fn account_data(
+            &self,
+            _address: solana_address::Address,
+        ) -> Result<Option<Vec<u8>>, RingRpcError> {
+            Ok(None)
+        }
+
+        async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
+            Ok(0)
+        }
+
         async fn slot(&self) -> Result<u64, RingRpcError> {
             unreachable!()
         }

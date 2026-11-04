@@ -626,6 +626,25 @@ func TestSaltedList(t *testing.T) {
 	})
 }
 
+// A count below the live notes leaves one past it.
+func Test49InputsOnTheWideKey(t *testing.T) {
+	shape := transfer.Shape{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true}
+	w := ringtransfer.Signed(shape)
+	sender, key, ring := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t), ringID(t)
+	w.Inputs = make([]ringaudit.Input, 49)
+	for i := range w.Inputs {
+		amount := uint64(4)
+		if i == 48 {
+			amount = 8
+		}
+		w.Inputs[i] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, key, ring, amount, int64(51+i)), OwnerKey: ringtransfer.SenderKey()}
+	}
+	built := w.Build(t)
+	requireSolved(t, built.Circuit)
+	built.Circuit.InputCount = 48
+	refused(t, built.Circuit, "transfer.OpenInputs")
+}
+
 // A statement cell moves the public input alone.
 func TestStatementBindsEveryElement(t *testing.T) {
 	if testing.Short() {
@@ -654,7 +673,7 @@ func TestNarrowKeysFitTheWideKey(t *testing.T) {
 		}
 	}
 	for _, shape := range transfer.Shapes {
-		if !shape.Entry && shape.Withdrawals == 4 && (shape.Inputs > wide.Inputs || shape.Outputs > wide.Outputs || shape.Owners > wide.Owners) {
+		if !shape.Wide && shape.Withdrawals == 4 && (shape.Inputs > wide.Inputs || shape.Outputs > wide.Outputs || shape.Owners > wide.Owners) {
 			t.Errorf("%s does not fit the wide key %s", shape, wide)
 		}
 	}
