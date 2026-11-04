@@ -18,16 +18,18 @@ var fieldMax = new(big.Int).Sub(poseidon.Modulus, big.NewInt(1))
 
 // Record list bits mirror ListId::record_bit in program-libs/policy/src/list.rs.
 const (
-	AllowBit  = 1 << 0
-	BlockBit  = 1 << 1
-	FrozenBit = 1 << 2
-	EscrowBit = 1 << 7
+	AllowBit    = 1 << 0
+	BlockBit    = 1 << 1
+	FrozenBit   = 1 << 2
+	ReaderBit   = 1 << 5
+	ApprovalBit = 1 << 6
+	EscrowBit   = 1 << 7
 )
 
 // Record mirrors registry.Record.
 type Record struct {
-	Member, Next, Lists, EscrowKey, MintPolicy, WithdrawalThreshold, AddressHash *big.Int
-	AssetLimits                                                                  Limits
+	Member, Next, Lists, MintPolicy, WithdrawalThreshold *big.Int
+	AssetLimits                                          Limits
 }
 
 // Limits mirrors registry.Record.AssetLimits, a nil field reads as zero.
@@ -35,11 +37,11 @@ type Limits [registry.LimitFields]*big.Int
 
 func (r Record) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	fields := []*big.Int{r.Member, r.Next, r.Lists, r.EscrowKey, copied(r.MintPolicy), copied(r.WithdrawalThreshold)}
+	fields := []*big.Int{r.Member, r.Next, r.Lists, copied(r.MintPolicy), copied(r.WithdrawalThreshold)}
 	for _, field := range r.AssetLimits {
 		fields = append(fields, copied(field))
 	}
-	return ringtest.MustPoseidonHash(t, append(fields, copied(r.AddressHash))...)
+	return ringtest.MustPoseidonHash(t, fields...)
 }
 
 func (r Record) Wires() registry.Record {
@@ -47,7 +49,7 @@ func (r Record) Wires() registry.Record {
 }
 
 func (r Record) BodyWires() registry.RecordBody {
-	return registry.RecordBody{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires(), AddressHash: copied(r.AddressHash)}
+	return registry.RecordBody{Next: copied(r.Next), Lists: copied(r.Lists), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires()}
 }
 
 func VectorLimits(t testing.TB, fields []ringtest.Hex) Limits {
@@ -149,72 +151,57 @@ func (o Opening) RecordWires() registry.QuadRecordOpening {
 // UnreadRecordWires is the zero opening a proof assigns where it reads no record.
 func UnreadRecordWires() registry.QuadRecordOpening {
 	zero := big.NewInt(0)
-	return Opening{Record: Record{Next: zero, Lists: zero, EscrowKey: zero}, Path: zeroPath()}.RecordWires()
+	return Opening{Record: Record{Next: zero, Lists: zero}, Path: zeroPath()}.RecordWires()
 }
 
 // Value lies inside Mask, as the program queues an entry.
 type Entry struct {
-	Member, Mask, Value, EscrowKey, MintPolicy, WithdrawalThreshold, AddressHash *big.Int
-	AssetLimits                                                                  Limits
-	// Pair opens the record's address and escrow key on a write that pairs them, nil otherwise.
-	Pair *Preimages
+	Member, Mask, Value, MintPolicy, WithdrawalThreshold *big.Int
+	AssetLimits                                          Limits
 }
 
 // Hash mirrors registry.QueueEntry.Hash.
 func (e Entry) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	fields := []*big.Int{big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
+	fields := []*big.Int{big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
 	for _, field := range e.AssetLimits {
 		fields = append(fields, copied(field))
 	}
-	return ringtest.MustPoseidonHash(t, append(fields, copied(e.AddressHash))...)
+	return ringtest.MustPoseidonHash(t, fields...)
 }
 
-type Preimages struct {
-	NullifierPk, AddressRing, View0, View1, EscrowCtHash *big.Int
-	AddressRevision                                      uint64
-}
-
-// PairOf opens address and an escrow key over ctHash, one nullifier key under both.
-func PairOf(address Address, ctHash *big.Int) *Preimages {
-	view0, view1 := address.View()
-	return &Preimages{NullifierPk: address.NullifierPk, AddressRing: address.RingID, View0: view0, View1: view1, EscrowCtHash: ctHash, AddressRevision: address.Revision}
+// Restrictive mirrors registry.Restrictive.
+func (e Entry) Restrictive() bool {
+	clearsGrant := new(big.Int).AndNot(new(big.Int).And(e.Mask, big.NewInt(AllowBit|ApprovalBit)), e.Value).Sign() != 0
+	setsDeny := new(big.Int).And(e.Value, big.NewInt(BlockBit|FrozenBit)).Sign() != 0
+	return clearsGrant || setsDeny || (e.MintPolicy != nil && e.MintPolicy.Sign() != 0)
 }
 
 type Write struct {
-	Entry                                                                               Entry
-	Exists                                                                              bool
-	OldNext, OldLists, OldEscrow, OldMintPolicy, OldWithdrawalThreshold, OldAddressHash *big.Int
-	OldAssetLimits                                                                      Limits
-	Slot                                                                                Path // the member's leaf or the next empty leaf, after the relink for an insert
-	Low                                                                                 Record
-	LowPath                                                                             Path
+	Entry                                                    Entry
+	Exists                                                   bool
+	OldNext, OldLists, OldMintPolicy, OldWithdrawalThreshold *big.Int
+	OldAssetLimits                                           Limits
+	Slot                                                     Path // the member's leaf or the next empty leaf, after the relink for an insert
+	Low                                                      Record
+	LowPath                                                  Path
 }
 
 // Registry keeps the sentinel at index 0 and appends every insert.
 type Registry struct {
 	records []Record
-	nodes   [registry.Height + 1]map[uint64]*big.Int
-	empty   [registry.Height + 1]*big.Int
+	tree    quadTree
 }
 
 func New(t testing.TB) *Registry {
 	t.Helper()
-	r := &Registry{}
-	r.empty[0] = big.NewInt(0)
-	for level := 1; level <= registry.Height; level++ {
-		e := r.empty[level-1]
-		r.empty[level] = ringtest.MustPoseidonHash(t, e, e, e, e)
-	}
-	for level := range r.nodes {
-		r.nodes[level] = map[uint64]*big.Int{}
-	}
-	r.set(t, 0, Record{Member: big.NewInt(0), Next: fieldMax, Lists: big.NewInt(0), EscrowKey: big.NewInt(0)})
+	r := &Registry{tree: newQuadTree(t, registry.Height)}
+	r.set(t, 0, Record{Member: big.NewInt(0), Next: fieldMax, Lists: big.NewInt(0)})
 	return r
 }
 
 func (r *Registry) Root() *big.Int {
-	return new(big.Int).Set(r.node(registry.Height, 0))
+	return r.tree.root()
 }
 
 func (r *Registry) NextIndex() uint64 {
@@ -237,14 +224,14 @@ func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	index, present := r.find(e.Member)
 	if present {
 		old := r.records[index]
-		w := Write{Entry: e, Exists: true, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: copied(old.MintPolicy), OldWithdrawalThreshold: copied(old.WithdrawalThreshold), OldAddressHash: copied(old.AddressHash), OldAssetLimits: old.AssetLimits,
-			Slot: r.Path(index), Low: Record{Member: zero, Next: zero, Lists: zero, EscrowKey: zero, MintPolicy: zero, WithdrawalThreshold: zero}, LowPath: zeroPath()}
-		r.set(t, index, Record{Member: e.Member, Next: old.Next, Lists: masked(old.Lists, e), EscrowKey: fillOnce(old.EscrowKey, e.EscrowKey), MintPolicy: writtenPolicy(old.MintPolicy, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(old.WithdrawalThreshold, e), AssetLimits: writtenLimits(old.AssetLimits, e), AddressHash: writtenAddress(old.AddressHash, e)})
+		w := Write{Entry: e, Exists: true, OldNext: old.Next, OldLists: old.Lists, OldMintPolicy: copied(old.MintPolicy), OldWithdrawalThreshold: copied(old.WithdrawalThreshold), OldAssetLimits: old.AssetLimits,
+			Slot: r.Path(index), Low: Record{Member: zero, Next: zero, Lists: zero, MintPolicy: zero, WithdrawalThreshold: zero}, LowPath: zeroPath()}
+		r.set(t, index, Record{Member: e.Member, Next: old.Next, Lists: masked(old.Lists, e), MintPolicy: writtenPolicy(old.MintPolicy, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(old.WithdrawalThreshold, e), AssetLimits: writtenLimits(old.AssetLimits, e)})
 		return w
 	}
 	low, next := r.records[index], r.NextIndex()
-	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldEscrow: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, OldAddressHash: zero, Slot: r.Path(next), Low: low, LowPath: r.Path(index)}
-	if masked(zero, e).Sign() == 0 && e.EscrowKey.Sign() == 0 && writtenPolicy(zero, e.MintPolicy).Sign() == 0 && writtenWithdrawal(zero, e).Sign() == 0 && writtenLimits(Limits{}, e).IsZero() && writtenAddress(zero, e).Sign() == 0 {
+	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, Slot: r.Path(next), Low: low, LowPath: r.Path(index)}
+	if masked(zero, e).Sign() == 0 && writtenPolicy(zero, e.MintPolicy).Sign() == 0 && writtenWithdrawal(zero, e).Sign() == 0 && writtenLimits(Limits{}, e).IsZero() {
 		return w
 	}
 	return r.Insert(t, e)
@@ -256,12 +243,12 @@ func (r *Registry) Insert(t testing.TB, e Entry) Write {
 	zero := big.NewInt(0)
 	index, _ := r.find(e.Member)
 	low, next := r.records[index], r.NextIndex()
-	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldEscrow: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, OldAddressHash: zero, Low: low, LowPath: r.Path(index)}
+	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, Low: low, LowPath: r.Path(index)}
 	relinked := low
 	relinked.Next = e.Member
 	r.set(t, index, relinked)
 	w.Slot = r.Path(next)
-	r.set(t, next, Record{Member: e.Member, Next: low.Next, Lists: masked(zero, e), EscrowKey: e.EscrowKey, MintPolicy: writtenPolicy(zero, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(zero, e), AssetLimits: writtenLimits(Limits{}, e), AddressHash: writtenAddress(zero, e)})
+	r.set(t, next, Record{Member: e.Member, Next: low.Next, Lists: masked(zero, e), MintPolicy: writtenPolicy(zero, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(zero, e), AssetLimits: writtenLimits(Limits{}, e)})
 	return w
 }
 
@@ -284,16 +271,7 @@ func (r *Registry) find(member *big.Int) (uint64, bool) {
 // Path opens the leaf at index, an empty leaf past the next index included.
 func (r *Registry) Path(index uint64) Path {
 	p := Path{Index: index}
-	for level := range p.Siblings {
-		node := index >> (2 * level)
-		k := 0
-		for child := node &^ (registry.Arity - 1); k < registry.Arity-1; child++ {
-			if child != node {
-				p.Siblings[level][k] = new(big.Int).Set(r.node(level, child))
-				k++
-			}
-		}
-	}
+	copy(p.Siblings[:], r.tree.siblings(index))
 	return p
 }
 
@@ -308,10 +286,7 @@ func zeroPath() Path {
 }
 
 func (r *Registry) node(level int, index uint64) *big.Int {
-	if node, ok := r.nodes[level][index]; ok {
-		return node
-	}
-	return r.empty[level]
+	return r.tree.node(level, index)
 }
 
 func (r *Registry) set(t testing.TB, index uint64, record Record) {
@@ -321,23 +296,11 @@ func (r *Registry) set(t testing.TB, index uint64, record Record) {
 	} else {
 		r.records[index] = record
 	}
-	r.nodes[0][index] = record.Hash(t)
-	for level := 0; level < registry.Height; level++ {
-		parent := index >> (2 * (level + 1))
-		first := parent * registry.Arity
-		r.nodes[level+1][parent] = ringtest.MustPoseidonHash(t, r.node(level, first), r.node(level, first+1), r.node(level, first+2), r.node(level, first+3))
-	}
+	r.tree.setLeaf(t, index, record.Hash(t))
 }
 
 func masked(lists *big.Int, e Entry) *big.Int {
 	return new(big.Int).Or(new(big.Int).AndNot(lists, e.Mask), e.Value)
-}
-
-func fillOnce(old, key *big.Int) *big.Int {
-	if old.Sign() != 0 {
-		return old
-	}
-	return key
 }
 
 func copied(v *big.Int) *big.Int {
@@ -359,13 +322,6 @@ func writtenWithdrawal(old *big.Int, e Entry) *big.Int {
 		return copied(old)
 	}
 	return copied(e.WithdrawalThreshold)
-}
-
-func writtenAddress(old *big.Int, e Entry) *big.Int {
-	if e.AddressHash == nil || e.AddressHash.Sign() == 0 {
-		return copied(old)
-	}
-	return copied(e.AddressHash)
 }
 
 func writtenLimits(old Limits, e Entry) Limits {
