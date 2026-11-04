@@ -1,10 +1,17 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
     ops::Range,
 };
 
 use anyhow::{Context, Result};
-use custom_ring_interface::{member_registry::AuthorizedAddress, storage::StorageRegistry};
+use bytemuck::Pod;
+use custom_ring_interface::{
+    member_registry::AuthorizedAddress,
+    state::ROOT_HISTORY,
+    storage::{Revision, Root, StorageError, StorageRegistry},
+    tracking::TrackingRegistry,
+};
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
     IsolationLevel, QueryResult, Statement, TransactionTrait, Value,
@@ -20,7 +27,7 @@ use crate::{block::BlockMetadata, indexer::Quarantine};
 
 mod tracking;
 
-pub(crate) use tracking::{Enrollment, EnrollmentStore};
+pub(crate) use tracking::Enrollment;
 
 /// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +84,8 @@ impl RingCursor {
 pub(crate) struct BlockUndo {
     #[serde(default)]
     pub storage: Vec<StorageUndo>,
+    #[serde(default)]
+    pub tracking: Vec<TrackingUndo>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,17 +95,78 @@ pub(crate) struct BlockJournal {
     pub undo: BlockUndo,
 }
 
+/// A registry account the projection mirrors, one state table and one leaf table per kind.
+pub(crate) trait ProjectedAccount: Pod + Eq + Send + Sync {
+    const STATES: &'static str;
+    const LEAVES: &'static str;
+    /// The column of `LEAVES` holding the registry address.
+    const LEAF_REGISTRY: &'static str;
+
+    fn from_image(data: &[u8]) -> Option<&Self>;
+    fn roots(&self) -> &[Root; ROOT_HISTORY];
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError>;
+    fn leaves(&self) -> u32;
+}
+
+impl ProjectedAccount for StorageRegistry {
+    const STATES: &'static str = "storage_registries";
+    const LEAVES: &'static str = "ring_records";
+    const LEAF_REGISTRY: &'static str = "program";
+
+    fn from_image(data: &[u8]) -> Option<&Self> {
+        Self::from_data(data)
+    }
+
+    fn roots(&self) -> &[Root; ROOT_HISTORY] {
+        &self.roots
+    }
+
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
+        self.root(revision, slot)
+    }
+
+    fn leaves(&self) -> u32 {
+        self.next_index()
+    }
+}
+
+impl ProjectedAccount for TrackingRegistry {
+    const STATES: &'static str = "tracking_registries";
+    const LEAVES: &'static str = "tracking_records";
+    const LEAF_REGISTRY: &'static str = "registry";
+
+    fn from_image(data: &[u8]) -> Option<&Self> {
+        Self::from_data(data)
+    }
+
+    fn roots(&self) -> &[Root; ROOT_HISTORY] {
+        &self.roots
+    }
+
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
+        self.root(revision, slot)
+    }
+
+    fn leaves(&self) -> u32 {
+        self.next_index()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct StorageState {
+#[serde(bound(serialize = "A: ProjectedAccount", deserialize = "A: ProjectedAccount"))]
+pub(crate) struct RegistryState<A> {
     pub registry: [u8; 32],
     #[serde(
         serialize_with = "account_image::serialize",
-        deserialize_with = "account_image::storage"
+        deserialize_with = "account_image::deserialize"
     )]
-    pub account: Box<StorageRegistry>,
+    pub account: Box<A>,
     /// Cleared only by a rollback.
     pub fault: Option<String>,
 }
+
+pub(crate) type StorageState = RegistryState<StorageRegistry>;
+pub(crate) type TrackingState = RegistryState<TrackingRegistry>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StorageRoot {
@@ -106,12 +176,12 @@ pub(crate) struct StorageRoot {
 }
 
 impl StorageRoot {
-    pub fn current(account: &StorageRegistry) -> Self {
-        let current = account.roots[0];
+    pub fn current<A: ProjectedAccount>(account: &A) -> Self {
+        let current = account.roots()[0];
         Self {
             root: current.hash,
             revision: current.revision.value(),
-            next_index: account.next_index().into(),
+            next_index: account.leaves().into(),
         }
     }
 
@@ -123,12 +193,16 @@ impl StorageRoot {
     }
 }
 
-/// Rows of one storage registry newer than `before`, `None` for a registry the block created.
+/// Rows of one registry newer than `before`, `None` for a registry the block created.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct StorageUndo {
+#[serde(bound(serialize = "A: ProjectedAccount", deserialize = "A: ProjectedAccount"))]
+pub(crate) struct RegistryUndo<A> {
     pub registry: [u8; 32],
-    pub before: Option<StorageState>,
+    pub before: Option<RegistryState<A>>,
 }
+
+pub(crate) type StorageUndo = RegistryUndo<StorageRegistry>;
+pub(crate) type TrackingUndo = RegistryUndo<TrackingRegistry>;
 
 const RECORD_COLUMNS: &str = "leaf_index, member, next_member, lists, escrow_key, seal, \
      mint_policy, address_hash, address_ring_id, address_nullifier_pk, address_viewing_u, \
@@ -196,6 +270,9 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
     let journal = journal(tx, tip.slot).await?.context("ring journal gap")?;
     for undo in journal.undo.storage.iter().rev() {
         StorageStore::new(tx, undo.registry).restore(undo).await?;
+    }
+    for undo in journal.undo.tracking.iter().rev() {
+        TrackingStore::new(tx, undo.registry).restore(undo).await?;
     }
     let slot = vec![int(journal.metadata.slot)?];
     let enrollments = "DELETE FROM storage_address_enrollments WHERE slot=$1";
@@ -370,34 +447,16 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
     }
 }
 
-/// Tree rows share the ring record tables under the registry address, versioned by revision.
-pub(crate) struct StorageStore<'c, C> {
+/// Tree rows share the node and root tables under the registry address, versioned by revision.
+pub(crate) struct ProjectedStore<'c, C, A> {
     tree: RegistryStore<'c, C>,
+    account: PhantomData<A>,
 }
 
+pub(crate) type StorageStore<'c, C> = ProjectedStore<'c, C, StorageRegistry>;
+pub(crate) type TrackingStore<'c, C> = ProjectedStore<'c, C, TrackingRegistry>;
+
 impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
-    pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
-        Self {
-            tree: RegistryStore::new(conn, registry),
-        }
-    }
-
-    pub fn tree(&self) -> &RegistryStore<'c, C> {
-        &self.tree
-    }
-
-    pub async fn state(&self) -> Result<Option<StorageState>> {
-        let sql = "SELECT state FROM storage_registries WHERE registry=$1";
-        let row = self.tree.query_one(sql, vec![]).await?;
-        row.as_ref().map(stored_state).transpose()
-    }
-
-    pub async fn save_state(&self, value: &StorageState) -> Result<()> {
-        let sql = "INSERT INTO storage_registries(registry,state) VALUES($1,$2) \
-                   ON CONFLICT(registry) DO UPDATE SET state=excluded.state";
-        self.tree.exec(sql, vec![json(value)?]).await
-    }
-
     /// The member's newest enrollment, the only address its authorization account holds.
     pub async fn newest_enrollment(&self, member: &[u8; 32]) -> Result<Option<AuthorizedAddress>> {
         let sql = "SELECT ring_id, nullifier_pk, viewing_u, address_revision \
@@ -434,6 +493,34 @@ impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
         ];
         self.tree.exec(sql, values).await
     }
+}
+
+impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
+    pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
+        Self {
+            tree: RegistryStore::new(conn, registry),
+            account: PhantomData,
+        }
+    }
+
+    pub fn tree(&self) -> &RegistryStore<'c, C> {
+        &self.tree
+    }
+
+    pub async fn state(&self) -> Result<Option<RegistryState<A>>> {
+        let sql = format!("SELECT state FROM {} WHERE registry=$1", A::STATES);
+        let row = self.tree.query_one(&sql, vec![]).await?;
+        row.as_ref().map(stored_state).transpose()
+    }
+
+    pub async fn save_state(&self, value: &RegistryState<A>) -> Result<()> {
+        let sql = format!(
+            "INSERT INTO {}(registry,state) VALUES($1,$2) \
+             ON CONFLICT(registry) DO UPDATE SET state=excluded.state",
+            A::STATES
+        );
+        self.tree.exec(&sql, vec![json(value)?]).await
+    }
 
     pub async fn root(&self, revision: u64) -> Result<Option<StorageRoot>> {
         let sql = "SELECT root, revision, next_index FROM storage_roots \
@@ -461,49 +548,54 @@ impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
         self.tree.exec(sql, values).await
     }
 
-    async fn restore(&self, undo: &StorageUndo) -> Result<()> {
+    async fn restore(&self, undo: &RegistryUndo<A>) -> Result<()> {
+        let leaves = format!("{} WHERE {}=$1", A::LEAVES, A::LEAF_REGISTRY);
         let Some(before) = &undo.before else {
             for sql in [
-                "DELETE FROM ring_records WHERE program=$1",
-                "DELETE FROM ring_record_nodes WHERE program=$1",
-                "DELETE FROM storage_roots WHERE registry=$1",
-                "DELETE FROM storage_address_enrollments WHERE registry=$1",
-                "DELETE FROM storage_registries WHERE registry=$1",
+                format!("DELETE FROM {leaves}"),
+                "DELETE FROM ring_record_nodes WHERE program=$1".into(),
+                "DELETE FROM storage_roots WHERE registry=$1".into(),
+                "DELETE FROM storage_address_enrollments WHERE registry=$1".into(),
+                format!("DELETE FROM {} WHERE registry=$1", A::STATES),
             ] {
-                self.tree.exec(sql, vec![]).await?;
+                self.tree.exec(&sql, vec![]).await?;
             }
             return Ok(());
         };
-        let revision = vec![int(StorageRoot::current(&before.account).revision)?];
+        let revision = vec![int(StorageRoot::current(&*before.account).revision)?];
         for sql in [
-            "DELETE FROM ring_records WHERE program=$1 AND applied>$2",
-            "DELETE FROM ring_record_nodes WHERE program=$1 AND applied>$2",
-            "DELETE FROM storage_roots WHERE registry=$1 AND revision>$2",
+            format!("DELETE FROM {leaves} AND applied>$2"),
+            "DELETE FROM ring_record_nodes WHERE program=$1 AND applied>$2".into(),
+            "DELETE FROM storage_roots WHERE registry=$1 AND revision>$2".into(),
         ] {
-            self.tree.exec(sql, revision.clone()).await?;
+            self.tree.exec(&sql, revision.clone()).await?;
         }
         self.save_state(before).await
     }
 }
 
-impl<C: ConnectionTrait> Quarantine for StorageStore<'_, C> {
-    type State = StorageState;
-    type Undo = StorageUndo;
+impl<C: ConnectionTrait, A: ProjectedAccount> Quarantine for ProjectedStore<'_, C, A> {
+    type State = RegistryState<A>;
+    type Undo = RegistryUndo<A>;
 
-    fn undo(&self, before: Option<StorageState>) -> StorageUndo {
-        StorageUndo {
+    fn undo(&self, before: Option<RegistryState<A>>) -> RegistryUndo<A> {
+        RegistryUndo {
             registry: self.tree.program,
             before,
         }
     }
 
     /// Stops the registry's projection, a rollback of the block resumes it.
-    async fn quarantine(&self, before: StorageState, reason: String) -> Result<StorageUndo> {
+    async fn quarantine(
+        &self,
+        before: RegistryState<A>,
+        reason: String,
+    ) -> Result<RegistryUndo<A>> {
         log::error!(
-            "storage registry {} stopped projecting ({reason})",
+            "registry {} stopped projecting ({reason})",
             Address::new_from_array(self.tree.program)
         );
-        self.save_state(&StorageState {
+        self.save_state(&RegistryState {
             fault: Some(reason),
             ..before.clone()
         })
@@ -606,7 +698,6 @@ mod account_image {
     use std::ops::Deref;
 
     use bytemuck::Pod;
-    use custom_ring_interface::storage::StorageRegistry;
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
     use spr_indexer_api::Base64String;
 
@@ -617,18 +708,11 @@ mod account_image {
         Base64String(bytemuck::bytes_of(&**value).to_vec()).serialize(serializer)
     }
 
-    pub fn storage<'de, D: Deserializer<'de>>(
+    pub fn deserialize<'de, D: Deserializer<'de>, A: super::ProjectedAccount>(
         deserializer: D,
-    ) -> Result<Box<StorageRegistry>, D::Error> {
-        decode(deserializer, StorageRegistry::from_data)
-    }
-
-    fn decode<'de, D: Deserializer<'de>, T: Pod>(
-        deserializer: D,
-        checked: fn(&[u8]) -> Option<&T>,
-    ) -> Result<Box<T>, D::Error> {
+    ) -> Result<Box<A>, D::Error> {
         let Base64String(bytes) = Base64String::deserialize(deserializer)?;
-        checked(&bytes)
+        A::from_image(&bytes)
             .map(|account| Box::new(*account))
             .ok_or_else(|| D::Error::custom("invalid account image"))
     }

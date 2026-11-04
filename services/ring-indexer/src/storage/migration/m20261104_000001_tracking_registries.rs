@@ -36,11 +36,15 @@ impl MigrationTrait for Migration {
             "CREATE INDEX tracking_records_applied ON tracking_records(registry, applied)".into(),
             format!(
                 "CREATE TABLE tracking_authorizations (registry {blob} NOT NULL, \
-                 owner {blob} NOT NULL, member {blob} NOT NULL, nullifier_pk {blob} NOT NULL, \
+                 owner {blob} NOT NULL, authorization {blob} NOT NULL, member {blob} NOT NULL, \
+                 nullifier_pk {blob} NOT NULL, \
                  ct_hash {blob} NOT NULL, list_tag {blob} NOT NULL, eph_u {blob} NOT NULL, \
                  ciphertext {blob} NOT NULL, slot BIGINT NOT NULL, \
                  PRIMARY KEY(registry, owner))"
             ),
+            "CREATE INDEX tracking_authorizations_account \
+             ON tracking_authorizations(registry, authorization)"
+                .into(),
             "CREATE INDEX tracking_authorizations_member \
              ON tracking_authorizations(registry, member)"
                 .into(),

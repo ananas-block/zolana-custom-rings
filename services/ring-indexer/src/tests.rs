@@ -94,7 +94,7 @@ async fn member_page_reports_a_missing_leaf_instead_of_skipping_it() {
     let store = StorageStore::new(&db, state.registry);
     store.save_state(&state).await.unwrap();
     store
-        .save_root(&StorageRoot::current(&state.account))
+        .save_root(&StorageRoot::current(&*state.account))
         .await
         .unwrap();
     cursor.resume(&db).await.unwrap();

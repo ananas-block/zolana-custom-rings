@@ -1,12 +1,15 @@
 use anyhow::Result;
+use custom_ring_interface::tracking::TrackingAuthorization;
 use sea_orm::{ConnectionTrait, QueryResult};
+use solana_address::Address;
 
-use super::{bytes, field, int, uint, RegistryStore};
+use super::{bytes, field, int, uint, TrackingStore};
 
 /// The owner's authorization as the chain holds it after its newest `Enroll`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Enrollment {
     pub owner: [u8; 32],
+    pub authorization: [u8; 32],
     pub member: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub ct_hash: [u8; 32],
@@ -16,10 +19,32 @@ pub(crate) struct Enrollment {
     pub viewing_u: [u8; 32],
     pub revision: u64,
     pub applied_revision: u64,
+    pub last_enroll_slot: u64,
 }
 
-const ENROLLMENT_READ: &str = "SELECT a.owner, a.member, a.nullifier_pk, a.ct_hash, a.list_tag, \
-     a.eph_u, a.ciphertext, e.viewing_u, e.revision, \
+impl Enrollment {
+    /// The account the program holds, its canonical checks run on this image.
+    pub fn account(&self, registry: [u8; 32]) -> TrackingAuthorization {
+        TrackingAuthorization {
+            discriminator: TrackingAuthorization::DISCRIMINATOR,
+            bump: 0,
+            registry: Address::new_from_array(registry),
+            owner: Address::new_from_array(self.owner),
+            nullifier_pk: self.nullifier_pk,
+            list_tag: self.list_tag,
+            viewing_u: self.viewing_u,
+            eph_u: self.eph_u,
+            ciphertext: self.ciphertext,
+            revision: self.revision.to_le_bytes(),
+            applied_revision: self.applied_revision.to_le_bytes(),
+            last_enroll_slot: self.last_enroll_slot.to_le_bytes(),
+        }
+    }
+}
+
+const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization, a.member, a.nullifier_pk, \
+     a.ct_hash, a.list_tag, a.eph_u, a.ciphertext, e.viewing_u, e.revision, \
+     e.slot AS last_enroll_slot, \
      (SELECT COALESCE(MAX(d.revision),0) FROM tracking_enrollments AS d \
       WHERE d.registry=a.registry AND d.owner=a.owner AND d.applied_slot IS NOT NULL) \
      AS applied_revision \
@@ -28,22 +53,25 @@ const ENROLLMENT_READ: &str = "SELECT a.owner, a.member, a.nullifier_pk, a.ct_ha
      AND e.revision=(SELECT MAX(m.revision) FROM tracking_enrollments AS m \
      WHERE m.registry=a.registry AND m.owner=a.owner)";
 
-/// One tracking registry's enrollments, `$1` the registry as in [`RegistryStore`].
-pub(crate) struct EnrollmentStore<'s, 'c, C> {
-    pub tree: &'s RegistryStore<'c, C>,
-}
-
-impl<C: ConnectionTrait> EnrollmentStore<'_, '_, C> {
+impl<C: ConnectionTrait> TrackingStore<'_, C> {
     pub async fn enrollment(&self, owner: &[u8; 32]) -> Result<Option<Enrollment>> {
-        let sql = format!("{ENROLLMENT_READ} WHERE a.registry=$1 AND a.owner=$2");
-        let row = self.tree.query_one(&sql, vec![bytes(owner)]).await?;
-        row.as_ref().map(enrollment).transpose()
+        self.enrollment_where("a.owner", owner).await
+    }
+
+    /// The account an apply names.
+    pub async fn enrollment_at(&self, authorization: &[u8; 32]) -> Result<Option<Enrollment>> {
+        self.enrollment_where("a.authorization", authorization)
+            .await
     }
 
     /// The final fields of a member's authorization, the source of a leaf's seal.
-    pub async fn by_member(&self, member: &[u8; 32]) -> Result<Option<Enrollment>> {
-        let sql = format!("{ENROLLMENT_READ} WHERE a.registry=$1 AND a.member=$2");
-        let row = self.tree.query_one(&sql, vec![bytes(member)]).await?;
+    pub async fn enrollment_of(&self, member: &[u8; 32]) -> Result<Option<Enrollment>> {
+        self.enrollment_where("a.member", member).await
+    }
+
+    async fn enrollment_where(&self, column: &str, key: &[u8; 32]) -> Result<Option<Enrollment>> {
+        let sql = format!("{ENROLLMENT_READ} WHERE a.registry=$1 AND {column}=$2");
+        let row = self.tree.query_one(&sql, vec![bytes(key)]).await?;
         row.as_ref().map(enrollment).transpose()
     }
 
@@ -59,10 +87,12 @@ impl<C: ConnectionTrait> EnrollmentStore<'_, '_, C> {
     }
 
     pub async fn save_first(&self, first: &Enrollment, slot: u64) -> Result<()> {
-        let sql = "INSERT INTO tracking_authorizations(registry,owner,member,nullifier_pk,\
-                   ct_hash,list_tag,eph_u,ciphertext,slot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
+        let sql = "INSERT INTO tracking_authorizations(registry,owner,authorization,member,\
+                   nullifier_pk,ct_hash,list_tag,eph_u,ciphertext,slot) \
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
         let values = vec![
             bytes(&first.owner),
+            bytes(&first.authorization),
             bytes(&first.member),
             bytes(&first.nullifier_pk),
             bytes(&first.ct_hash),
@@ -112,6 +142,7 @@ pub(super) async fn rollback_slot<C: ConnectionTrait>(conn: &C, slot: u64) -> Re
 fn enrollment(row: &QueryResult) -> Result<Enrollment> {
     Ok(Enrollment {
         owner: field(row, "owner")?,
+        authorization: field(row, "authorization")?,
         member: field(row, "member")?,
         nullifier_pk: field(row, "nullifier_pk")?,
         ct_hash: field(row, "ct_hash")?,
@@ -121,6 +152,7 @@ fn enrollment(row: &QueryResult) -> Result<Enrollment> {
         viewing_u: field(row, "viewing_u")?,
         revision: uint(row, "revision")?,
         applied_revision: uint(row, "applied_revision")?,
+        last_enroll_slot: uint(row, "last_enroll_slot")?,
     })
 }
 
@@ -134,6 +166,7 @@ mod tests {
     fn first(owner: u8) -> Enrollment {
         Enrollment {
             owner: [owner; 32],
+            authorization: [owner + 50; 32],
             member: [owner + 100; 32],
             nullifier_pk: [1; 32],
             ct_hash: [2; 32],
@@ -143,14 +176,14 @@ mod tests {
             viewing_u: [6; 32],
             revision: 1,
             applied_revision: 0,
+            last_enroll_slot: 10,
         }
     }
 
     #[tokio::test]
     async fn an_applied_enrollment_leaves_pending_and_a_rotation_returns_it() {
         let db = database().await;
-        let tree = RegistryStore::new(&db, REGISTRY);
-        let store = EnrollmentStore { tree: &tree };
+        let store = TrackingStore::new(&db, REGISTRY);
         let owner = first(9);
         store.save_first(&owner, 10).await.unwrap();
         assert_eq!(store.pending(None, 8).await.unwrap(), [owner]);
@@ -164,22 +197,24 @@ mod tests {
             viewing_u: [8; 32],
             revision: 2,
             applied_revision: 1,
+            last_enroll_slot: 12,
             ..owner
         };
         assert_eq!(store.pending(None, 8).await.unwrap(), [rotated]);
-        assert_eq!(store.by_member(&owner.member).await.unwrap(), Some(rotated));
+        assert_eq!(
+            store.enrollment_of(&owner.member).await.unwrap(),
+            Some(rotated)
+        );
     }
 
     #[tokio::test]
     async fn pending_pages_ascend_by_owner_within_one_registry() {
         let db = database().await;
-        let tree = RegistryStore::new(&db, REGISTRY);
-        let store = EnrollmentStore { tree: &tree };
+        let store = TrackingStore::new(&db, REGISTRY);
         for owner in [3, 1, 2] {
             store.save_first(&first(owner), 10).await.unwrap();
         }
-        let other = RegistryStore::new(&db, [8; 32]);
-        EnrollmentStore { tree: &other }
+        TrackingStore::new(&db, [8; 32])
             .save_first(&first(4), 10)
             .await
             .unwrap();
@@ -193,8 +228,7 @@ mod tests {
     #[tokio::test]
     async fn a_rolled_back_block_restores_the_enrollment_it_moved() {
         let db = database().await;
-        let tree = RegistryStore::new(&db, REGISTRY);
-        let store = EnrollmentStore { tree: &tree };
+        let store = TrackingStore::new(&db, REGISTRY);
         let owner = first(9);
         store.save_first(&owner, 10).await.unwrap();
         store.mark_applied(&owner.owner, 1, 11).await.unwrap();

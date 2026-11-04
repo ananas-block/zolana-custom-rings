@@ -50,6 +50,8 @@ use crate::{
 
 #[path = "address_response_tests.rs"]
 mod address_response;
+#[path = "tracking_replay_tests.rs"]
+mod tracking_replay;
 
 /// Mutable confirmed RPC history, including failures between replay commits.
 #[derive(Default)]
