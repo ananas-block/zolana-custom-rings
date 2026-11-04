@@ -546,9 +546,9 @@ mod tests {
     async fn a_wide_delegate_frame_reserves_under_the_delegate_and_a_retry_resumes() {
         let delegate = Keypair::new_from_array([21; 32]);
         let prover = Arc::new(SealingProver::default());
-        let mut frame = vec![9; 6000];
-        frame[0] = custom_ring_interface::tag::AUTHORITY_TRANSFER;
-        *prover.frame.lock().expect("frame") = Some(frame);
+        *prover.frame.lock().expect("frame") = Some(crate::relay::wide_frame::wide_frame(
+            custom_ring_interface::tag::AUTHORITY_TRANSFER,
+        ));
         let chain = Arc::new(ScriptedChain::default());
         *chain.outcome.lock().expect("outcome") =
             Some(crate::landing::ChainOutcome::Confirmed { slot: 1 });

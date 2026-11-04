@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
@@ -32,6 +32,7 @@ use spr_instruction::instruction::CreateAssociatedTokenAccount;
 use spr_interface::{SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_PROGRAM_ID};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
+use zeroize::Zeroizing;
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs,
     RelayEnrollInputs, RelayId, RelayIntent, RelayMergeInputs, RelayProofInputs,
@@ -51,7 +52,9 @@ use crate::{
     merge_inputs::{HoldInputs, MergeInputs},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_reservations::{
-        RelayBudget, RelayReservations, Reservation, Reserve, ReserveOutcome, ReservedBuffer,
+        Admission, Admit, BeginSend, Bind, Claim, ClaimCleanup, Fund, FundOutcome, Lease,
+        PendingSend, RelayBudget, RelayReservations, Reservation, ReservedBuffer, SendEnd,
+        SendKind, SpendCheck,
     },
     relay_submit::{presigned_transaction, CollectedSignature},
     relays::{PendingCoSign, RelayRecord, RelayState, RelayStore},
@@ -65,14 +68,12 @@ const EXPIRED: &str = "the relay message expired before it landed";
 
 const LANDING_POLL: Duration = Duration::from_millis(500);
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge";
-/// Modelled, the first enrollment verifies a proof in its instruction.
 /// One blockhash lifetime for the last write to land and one for the wallet to sign.
 pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
 const SWEEP_PAGE: u64 = 16;
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
-const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame";
-const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll";
-const SETUP_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-setup";
+const ATTEMPT_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-attempt";
+const DELEGATE_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-attempt-delegate";
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -118,6 +119,10 @@ pub enum RelayError {
     EnrollmentSignature,
     #[error("the request does not carry the ring delegate's signature")]
     DelegateSignature,
+    #[error("the relay spent the allowance the request holds")]
+    Allowance,
+    #[error("an earlier relay of the request can still land")]
+    LiveAttempt,
 }
 
 pub enum RelayPayload {
@@ -238,6 +243,8 @@ impl RelayError {
             Self::SignerBudget => -32204,
             Self::EnrollmentSignature => -32205,
             Self::DelegateSignature => -32206,
+            Self::Allowance => -32207,
+            Self::LiveAttempt => -32208,
         }
     }
 
@@ -366,46 +373,183 @@ impl Relay {
             slot: self.chain.slot().await?,
         }
         .check()?;
-        let proven = match (&payload, self.stored_proof(&relay_id).await?) {
-            (_, Some(stored)) => stored,
-            // The wallet proved its seal, the relay only pays.
-            (RelayPayload::Enroll(enrollment), None) => {
-                self.reserve_enrollment(enrollment, &relay_id).await?;
-                enrollment_step(enrollment, parties.fee_payer)
-            }
-            (_, None) => {
-                let _proof = self
-                    .proofs
-                    .try_acquire()
-                    .map_err(|_| RingRpcError::RelayProverBusy)?;
-                self.prover
-                    .prove(RelayProofRequest {
-                        ring,
-                        parties: parties.clone(),
-                        payload: &payload,
-                        owner_signature,
-                    })
-                    .await?
-            }
+        // 1. Only a verified signature reaches the store, a stranger leaves no row and no lease.
+        let claim = match signer {
+            Some(signer) => Some(
+                self.admit(Admit {
+                    key: attempt_key(request)?,
+                    relay_id: &relay_id,
+                    signer,
+                    slot: self.chain.slot().await?,
+                })
+                .await?,
+            ),
+            None => None,
         };
-        self.stage(ProvenStep {
-            relay_id,
-            payload,
-            setup,
-            proven,
-            parties,
-            signer,
-        })
-        .await
+        let lease = claim.as_ref().map(|claim| claim.lease);
+        // 2. The row's proof wins over a new one, the buffer it names holds that frame's bytes.
+        let staged = async {
+            let stored = claim
+                .as_ref()
+                .and_then(|claim| claim.held.proven.as_deref());
+            let proven = match (&payload, stored) {
+                (_, Some(stored)) => StoredProof::read(stored)?,
+                // The wallet proved its seal, the relay only pays.
+                (RelayPayload::Enroll(enrollment), None) => {
+                    let lease = lease.ok_or(RelayError::EnrollmentSignature)?;
+                    self.fund_enrollment(lease).await?;
+                    enrollment_step(enrollment, parties.fee_payer)
+                }
+                (_, None) => {
+                    let _proof = self
+                        .proofs
+                        .try_acquire()
+                        .map_err(|_| RingRpcError::RelayProverBusy)?;
+                    self.prover
+                        .prove(RelayProofRequest {
+                            ring,
+                            parties: parties.clone(),
+                            payload: &payload,
+                            owner_signature,
+                        })
+                        .await?
+                }
+            };
+            self.stage(ProvenStep {
+                relay_id,
+                payload,
+                setup,
+                proven,
+                parties,
+                lease,
+            })
+            .await
+        };
+        self.under_lease(lease, staged).await
     }
 
-    async fn stored_proof(&self, relay_id: &RelayId) -> Result<Option<ProvenRelay>, RingRpcError> {
-        self.reservations()
-            .by_relay(relay_id)
+    /// The durable admission of a signed request, ahead of any proof or payment. One caller holds the
+    /// lease, a concurrent duplicate proves and pays for nothing.
+    async fn admit(&self, admit: Admit<'_>) -> Result<Claim, RingRpcError> {
+        let Admit {
+            key,
+            relay_id,
+            signer,
+            slot,
+        } = admit;
+        for _ in 0..2 {
+            let admission = self
+                .reservations()
+                .admit(Admit {
+                    key,
+                    relay_id,
+                    signer,
+                    slot,
+                })
+                .await?;
+            match admission {
+                // 1. A claimed row may carry a send of an earlier holder. It reconciles first, the cursor
+                // then counts every write the chain took, and a send that can still land refuses here.
+                Admission::Claimed(claim) => {
+                    let lease = claim.lease;
+                    let reconciled = self.reconcile(*claim).await;
+                    return self
+                        .under_lease(Some(lease), async {
+                            reconciled?.ok_or(RingRpcError::RelayProverBusy)
+                        })
+                        .await;
+                }
+                Admission::Busy => return Err(RingRpcError::RelayProverBusy),
+                // 2. A row bound to another relay holds a message that may land. A retry under a fresh
+                // quote would build a second message over one charge, so the row stays and the retry
+                // refuses until settlement or proven expiry frees the key. A freed key takes the second
+                // round of the loop, the old attempt's costs are settled by then.
+                Admission::Bound(held) => self.settle_earlier_attempt(&held).await?,
+            }
+        }
+        Err(RingRpcError::RelayProverBusy)
+    }
+
+    /// Ok only once the message cannot land and its row is settled or left to the sweep.
+    async fn settle_earlier_attempt(&self, held: &Reservation) -> Result<(), RingRpcError> {
+        let _transition = self.transitions.lock().await;
+        let mut record = self.record(&held.relay_id).await?;
+        self.advance(&held.relay_id, &mut record).await?;
+        match record.state {
+            RelayState::AwaitingSignature | RelayState::Sent { .. } => {
+                Err(RelayError::LiveAttempt.into())
+            }
+            RelayState::Confirmed { .. } => self.release_landed(held, &record.message).await,
+            RelayState::Failed { .. } => self.release(held).await,
+        }
+    }
+
+    /// A failure yields at once, a retry resumes without waiting for the lease to lapse. A lost yield
+    /// only delays the retry until the lapse.
+    async fn under_lease<T>(
+        &self,
+        lease: Option<Lease>,
+        work: impl Future<Output = Result<T, RingRpcError>>,
+    ) -> Result<T, RingRpcError> {
+        let result = work.await;
+        if result.is_err() {
+            if let Some(lease) = lease {
+                if let Err(error) = self.reservations().yield_lease(&lease).await {
+                    warn!("relay lease did not yield {}", redacted(&error));
+                }
+            }
+        }
+        result
+    }
+
+    /// `None` while the chain can still take the pending send. Past that the row holds no unknown. A
+    /// landed write raised the cursor, a landed failure kept its fee, and an expired send returned its
+    /// fee. Only the block height proves expiry, and a stale holder sending the persisted transaction
+    /// late cannot land it past that height.
+    async fn reconcile(&self, claim: Claim) -> Result<Option<Claim>, RingRpcError> {
+        let Claim { lease, held } = claim;
+        let Some(PendingSend {
+            signature,
+            last_valid_block_height,
+        }) = held.pending
+        else {
+            return Ok(Some(Claim { lease, held }));
+        };
+        let attempt = Attempt {
+            signature,
+            last_valid_block_height,
+        };
+        let end = match attempt.landing(self.chain.as_ref()).await? {
+            Landing::Pending => return Ok(None),
+            Landing::Landed(ChainOutcome::Confirmed { .. }) => SendEnd::Landed,
+            Landing::Landed(ChainOutcome::Failed { .. }) => SendEnd::Paid,
+            Landing::Expired => SendEnd::Unsent,
+        };
+        self.conclude(&lease, &signature, end).await?;
+        let held = self
+            .reservations()
+            .get(&lease.key)
             .await?
-            .and_then(|held| held.proven)
-            .map(|stored| StoredProof::read(&stored))
-            .transpose()
+            .ok_or(RingRpcError::RelayProverBusy)?;
+        Ok(Some(Claim { lease, held }))
+    }
+
+    async fn conclude(
+        &self,
+        lease: &Lease,
+        signature: &Signature,
+        end: SendEnd,
+    ) -> Result<(), RingRpcError> {
+        let slot = self.chain.slot().await?;
+        match self
+            .reservations()
+            .conclude_send(lease, signature, end, slot)
+            .await?
+        {
+            true => Ok(()),
+            // The newer holder reconciles the same signature.
+            false => Err(RingRpcError::RelayProverBusy),
+        }
     }
 
     /// A held reservation resumes the same request, its nonce already passed.
@@ -414,44 +558,36 @@ impl Relay {
     }
 
     /// The owner's signature over the digest was checked, a retry finds the held charge.
-    async fn reserve_enrollment(
-        &self,
-        enrollment: &RelayEnrollInputs,
-        relay_id: &RelayId,
-    ) -> Result<(), RingRpcError> {
+    async fn fund_enrollment(&self, lease: Lease) -> Result<(), RingRpcError> {
         let rent = self
             .chain
             .rent_exempt_lamports(TrackingAuthorization::SIZE)
             .await?;
-        let key = Sha256::new()
-            .chain_update(ENROLL_KEY_DOMAIN)
-            .chain_update(enrollment.request_digest())
-            .finalize()
-            .into();
-        self.reserve(Reserve {
-            key,
-            relay_id,
-            signer: enrollment.owner,
-            lamports: rent.saturating_add(2 * LAMPORTS_PER_SIGNATURE),
+        let fees = 2 * LAMPORTS_PER_SIGNATURE;
+        self.fund(Fund {
+            lease,
+            lamports: rent.saturating_add(fees),
+            fee_allowance: fees,
+            closing_fees: fees,
             landing_rent: rent,
             buffer: None,
             proven: None,
-            slot: self.chain.slot().await?,
             budget: self.budget,
         })
         .await
         .map(|_| ())
     }
 
-    async fn reserve(&self, reserve: Reserve<'_>) -> Result<Reservation, RingRpcError> {
-        match self.reservations().reserve(reserve).await? {
-            ReserveOutcome::Held(held) => Ok(*held),
-            ReserveOutcome::OverTotal => Err(RelayError::Budget.into()),
-            ReserveOutcome::OverSigner => Err(RelayError::SignerBudget.into()),
+    async fn fund(&self, fund: Fund) -> Result<Reservation, RingRpcError> {
+        match self.reservations().fund(fund).await? {
+            FundOutcome::Held(held) => Ok(*held),
+            FundOutcome::OverTotal => Err(RelayError::Budget.into()),
+            FundOutcome::OverSigner => Err(RelayError::SignerBudget.into()),
+            FundOutcome::LeaseLost => Err(RingRpcError::RelayProverBusy),
         }
     }
 
-    fn reservations(&self) -> RelayReservations<'_> {
+    fn reservations(&self) -> RelayReservations<'_, DatabaseConnection> {
         RelayReservations::new(self.store.connection())
     }
 
@@ -476,38 +612,49 @@ impl Relay {
         let delegate = seal.delegate;
         self.rings.check(ring).await?;
         let parties = self.parties(&[]);
-        let stored = self.stored_proof(&relay_id).await?;
-        let (payload, proven) = {
-            let _proof = self
-                .proofs
-                .try_acquire()
-                .map_err(|_| RingRpcError::RelayProverBusy)?;
-            let payload =
-                RelayPayload::Transfer(self.prover.seal_delegate(seal, parties.clone()).await?);
-            let proven = match stored {
-                Some(stored) => stored,
-                None => {
-                    self.prover
-                        .prove(RelayProofRequest {
-                            ring,
-                            parties: parties.clone(),
-                            payload: &payload,
-                            owner_signature: None,
-                        })
-                        .await?
-                }
+        let claim = self
+            .admit(Admit {
+                key: delegate_key(&relay_id),
+                relay_id: &relay_id,
+                signer: delegate,
+                slot: self.chain.slot().await?,
+            })
+            .await?;
+        let lease = claim.lease;
+        let staged = async {
+            let (payload, proven) = {
+                let _proof = self
+                    .proofs
+                    .try_acquire()
+                    .map_err(|_| RingRpcError::RelayProverBusy)?;
+                let payload =
+                    RelayPayload::Transfer(self.prover.seal_delegate(seal, parties.clone()).await?);
+                let proven = match claim.held.proven.as_deref() {
+                    Some(stored) => StoredProof::read(stored)?,
+                    None => {
+                        self.prover
+                            .prove(RelayProofRequest {
+                                ring,
+                                parties: parties.clone(),
+                                payload: &payload,
+                                owner_signature: None,
+                            })
+                            .await?
+                    }
+                };
+                (payload, proven)
             };
-            (payload, proven)
+            self.stage(ProvenStep {
+                relay_id,
+                payload,
+                setup: Vec::new(),
+                proven,
+                parties,
+                lease: Some(lease),
+            })
+            .await
         };
-        self.stage(ProvenStep {
-            relay_id,
-            payload,
-            setup: Vec::new(),
-            proven,
-            parties,
-            signer: Some(delegate),
-        })
-        .await
+        self.under_lease(Some(lease), staged).await
     }
 
     /// A relay awaiting no signer is co-signed before the record lands.
@@ -518,17 +665,18 @@ impl Relay {
             setup,
             proven,
             parties,
-            signer,
+            lease,
         } = proven;
         let mut proven = proven;
+        // 1. Every lamport the message and its upload can cost is held before the first send.
         let setup_rent = self.setup_rent(&setup).await?;
         self.reserve_and_upload(RelaySpend {
             proven: &mut proven,
-            signer,
-            relay_id: &relay_id,
+            lease,
             setup_rent,
         })
         .await?;
+        // 2. The final message reads the settlement, the writes above hold what it digests.
         let fee_payer = self.fee_payer();
         let LatestBlockhash {
             blockhash,
@@ -556,36 +704,104 @@ impl Relay {
         };
         self.sign_when_complete(&mut record).await?;
         let _transition = self.transitions.lock().await;
-        let inserted = self
-            .relays()
-            .insert(&relay_id, &record)
-            .await
-            .map_err(WriteError::Committing);
-        let write = match &inserted {
-            Ok(true) => None,
-            Ok(false) => Some(UnstoredWrite::Existing),
+        // 3. The record and the row's binding commit before any send, the sweep and a retry read the live
+        // message from here on.
+        let stored = self
+            .store_attempt(StagedAttempt {
+                lease,
+                relay_id: &relay_id,
+                record: &record,
+                slot: self.chain.slot().await?,
+            })
+            .await;
+        let write = match &stored {
+            Ok(AttemptWrite::Stored) => None,
+            Ok(AttemptWrite::Existing | AttemptWrite::Refused(_)) => Some(UnstoredWrite::Existing),
             Err(error) => Some(UnstoredWrite::Failed(error)),
         };
         // A kept reservation resumes on a retry, the sweep closes its buffer otherwise.
         if let Some(write) = write {
-            let stored = self.relays().get(&relay_id).await;
+            let read = self.relays().get(&relay_id).await;
             self.free_unless_stored(FailedWrite {
                 write,
                 co_signature: record.co_signature,
-                stored: stored.as_ref().map(Option::as_ref),
+                stored: read.as_ref().map(Option::as_ref),
             })
             .await?;
-            inserted?;
+            if let AttemptWrite::Refused(refused) = stored? {
+                return Err(refused);
+            }
             return Ok(step(
                 relay_id,
-                &stored?.ok_or(RingRpcError::StateUnavailable)?,
+                &read?.ok_or(RingRpcError::StateUnavailable)?,
             ));
         }
+        // 4. A crash past the commit leaves `Sent` for the tracker, the same signature resends.
         self.first_send(&relay_id, &mut record).await?;
         Ok(step(relay_id, &record))
     }
 
-    /// The record and its held inputs commit together before the send.
+    /// The record and the row's binding commit together before the send. A lost lease stores no message,
+    /// the row can never lose track of a transaction the chain could take.
+    async fn store_attempt(&self, staged: StagedAttempt<'_>) -> Result<AttemptWrite, WriteError> {
+        let StagedAttempt {
+            lease,
+            relay_id,
+            record,
+            slot,
+        } = staged;
+        let Some(lease) = lease else {
+            return Ok(
+                match self
+                    .relays()
+                    .insert(relay_id, record)
+                    .await
+                    .map_err(WriteError::Committing)?
+                {
+                    true => AttemptWrite::Stored,
+                    false => AttemptWrite::Existing,
+                },
+            );
+        };
+        let transaction = self
+            .store
+            .connection()
+            .begin()
+            .await
+            .map_err(WriteError::Uncommitted)?;
+        let staged = async {
+            if !RelayStore::new(&transaction)
+                .insert(relay_id, record)
+                .await?
+            {
+                return Ok(AttemptWrite::Existing);
+            }
+            let bound = RelayReservations::new(&transaction)
+                .bind(Bind {
+                    lease,
+                    relay_id,
+                    fee: message_fee(&record.message),
+                    slot,
+                })
+                .await?;
+            Ok(match bound {
+                SpendCheck::Accepted => AttemptWrite::Stored,
+                SpendCheck::OverAllowance => AttemptWrite::Refused(RelayError::Allowance.into()),
+                SpendCheck::LeaseLost => AttemptWrite::Refused(RingRpcError::RelayProverBusy),
+            })
+        }
+        .await
+        .map_err(WriteError::Uncommitted)?;
+        match staged {
+            AttemptWrite::Stored => transaction.commit().await.map_err(WriteError::Committing)?,
+            _ => transaction
+                .rollback()
+                .await
+                .map_err(WriteError::Uncommitted)?,
+        }
+        Ok(staged)
+    }
+
     /// A frame past one transaction settles from a buffer the relay writes and pays for.
     fn wide_frame(&self, proven: &ProvenRelay) -> Result<Option<BufferedFrame>, RingRpcError> {
         if !matches!(
@@ -619,59 +835,63 @@ impl Relay {
     async fn reserve_and_upload(&self, spend: RelaySpend<'_>) -> Result<(), RingRpcError> {
         let RelaySpend {
             proven,
-            signer,
-            relay_id,
+            lease,
             setup_rent,
         } = spend;
+        // 1. The transport is decided, a frame the relay cannot carry costs nothing.
         let Some(frame) = self.wide_frame(proven)? else {
             if setup_rent > 0 {
-                self.reserve(Reserve {
-                    key: setup_key(relay_id),
-                    relay_id,
-                    signer: signer.ok_or(RelayError::OwnerSignature)?,
-                    lamports: setup_rent.saturating_add(message_fee_of(&proven.instruction)),
+                let fee = message_fee_of(&proven.instruction);
+                self.fund(Fund {
+                    lease: lease.ok_or(RelayError::OwnerSignature)?,
+                    lamports: setup_rent.saturating_add(fee),
+                    fee_allowance: fee,
+                    closing_fees: fee,
                     landing_rent: setup_rent,
                     buffer: None,
                     proven: None,
-                    slot: self.chain.slot().await?,
                     budget: self.budget,
                 })
                 .await?;
             }
             return Ok(());
         };
-        let signer = signer.ok_or(RelayError::OwnerSignature)?;
+        let lease = lease.ok_or(RelayError::OwnerSignature)?;
         let writes = frame.writes().map_err(RelayError::proof)?;
         let settle = frame.settle();
+        // 2. The row funds under the lease, the stored proof and buffer identity commit with the charge. A
+        // crash from here on leaves a row that names the buffer to close.
+        let cost = self.frame_cost(proven, &settle, writes.len()).await?;
         let held = self
-            .reserve(Reserve {
-                key: frame_key(&proven.instruction.data),
-                relay_id,
-                signer,
-                lamports: self
-                    .frame_cost(proven, &settle, writes.len())
-                    .await?
-                    .saturating_add(setup_rent),
+            .fund(Fund {
+                lease,
+                lamports: cost.lamports.saturating_add(setup_rent),
+                fee_allowance: cost.fee_allowance,
+                closing_fees: cost.closing_fees,
                 landing_rent: setup_rent,
                 buffer: Some(ReservedBuffer {
                     ring: proven.instruction.program_id,
                     buffer: frame.buffer(),
                 }),
                 proven: Some(StoredProof::of(proven)?),
-                slot: self.chain.slot().await?,
                 budget: self.budget,
             })
             .await?;
+        // 3. Writes run past the cursor the row holds, reconciliation already advanced it over every write
+        // the chain took. No landed write goes out twice.
         let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::WriteFrame));
         for (index, write) in writes.into_iter().enumerate().skip(held.uploaded) {
-            self.reservations()
-                .charge(&held.key, LAMPORTS_PER_SIGNATURE)
-                .await?;
-            self.land(write, budget).await?;
-            self.reservations()
-                .uploaded(&held.key, index + 1, self.chain.slot().await?)
-                .await?;
+            self.land(TrackedSend {
+                lease,
+                instruction: write,
+                budget,
+                kind: SendKind::Write {
+                    uploaded: index + 1,
+                },
+            })
+            .await?;
         }
+        // 4. The settlement replaces the frame, the writes hold what it reads.
         proven.instruction = settle;
         proven.budget =
             ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
@@ -704,12 +924,14 @@ impl Relay {
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
+    /// The allowance is exact, a retry costs only when the chain took and failed a send, and a send past
+    /// the allowance refuses instead of spending the rent the row must return.
     async fn frame_cost(
         &self,
         proven: &ProvenRelay,
         settle: &Instruction,
         writes: usize,
-    ) -> Result<u64, RingRpcError> {
+    ) -> Result<FrameCost, RingRpcError> {
         let rent = self
             .chain
             .rent_exempt_lamports(FRAME_BUFFER_HEADER_LEN + proven.instruction.data.len())
@@ -719,59 +941,137 @@ impl Relay {
             .iter()
             .filter(|account| account.is_signer)
             .count();
-        // One signature per write and for the close, the fee payer's beside the settlement's own.
-        let signatures = u64::try_from(writes + settle_signers + 2).unwrap_or(u64::MAX);
-        Ok(rent.saturating_add(signatures.saturating_mul(LAMPORTS_PER_SIGNATURE)))
+        let fees_of = |signatures: usize| {
+            u64::try_from(signatures)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(LAMPORTS_PER_SIGNATURE)
+        };
+        // One signature for the close, the fee payer's beside the settlement's own.
+        let closing_fees = fees_of(settle_signers + 2);
+        let fee_allowance = fees_of(writes).saturating_add(closing_fees);
+        Ok(FrameCost {
+            lamports: rent.saturating_add(fee_allowance),
+            fee_allowance,
+            closing_fees,
+        })
     }
 
     /// One transaction the relay alone signs, carried to its finalized outcome.
-    async fn land(
-        &self,
-        instruction: Instruction,
-        budget: ComputeBudgetConfig,
-    ) -> Result<(), RingRpcError> {
+    async fn land(&self, send: TrackedSend) -> Result<(), RingRpcError> {
+        let TrackedSend {
+            lease,
+            instruction,
+            budget,
+            kind,
+        } = send;
+        // 1. The transaction is signed first, its signature and height are what a restart reconciles.
         let LatestBlockhash {
             blockhash,
             last_valid_block_height,
         } = self.chain.latest_blockhash().await?;
         let message = compile_message(&self.fee_payer(), &[instruction], blockhash, budget)?;
+        let fee = message_fee(&message);
         let transaction = sign_transaction(message, &[&self.fee_payer])?;
-        self.chain.send(&transaction).await?;
+        let signature = transaction.signatures[0];
+        // 2. The row takes both and the fee in one statement. Past the allowance or past the lease nothing
+        // has left, and a crash from here on leaves the row reading a send that may be on the wire.
+        let begun = self
+            .reservations()
+            .begin_send(BeginSend {
+                lease,
+                pending: PendingSend {
+                    signature,
+                    last_valid_block_height,
+                },
+                fee,
+                kind,
+                slot: self.chain.slot().await?,
+            })
+            .await?;
+        match begun {
+            SpendCheck::Accepted => {}
+            SpendCheck::OverAllowance => return Err(RelayError::Allowance.into()),
+            SpendCheck::LeaseLost => return Err(RingRpcError::RelayProverBusy),
+        }
+        // 3. A preflight refusal forwards nothing and no other send carries the signature, the fee returns.
+        // Any other failure leaves the outcome unknown, the next holder reconciles the pending send.
+        if let Err(error) = self.chain.send(&transaction).await {
+            if matches!(error, RingRpcError::Relay(RelayError::SendRefused { .. })) {
+                self.conclude(&lease, &signature, SendEnd::Unsent).await?;
+            }
+            return Err(error);
+        }
+        // 4. Only a finalized outcome or a passed height ends the send.
         let attempt = Attempt {
-            signature: transaction.signatures[0],
+            signature,
             last_valid_block_height,
         };
         loop {
             match attempt.landing(self.chain.as_ref()).await? {
                 Landing::Pending => tokio::time::sleep(LANDING_POLL).await,
-                Landing::Landed(ChainOutcome::Confirmed { .. }) => return Ok(()),
+                Landing::Landed(ChainOutcome::Confirmed { .. }) => {
+                    return self.conclude(&lease, &signature, SendEnd::Landed).await;
+                }
                 Landing::Landed(ChainOutcome::Failed { reason }) => {
-                    return Err(RelayError::SendRefused { reason }.into())
+                    self.conclude(&lease, &signature, SendEnd::Paid).await?;
+                    return Err(RelayError::SendRefused { reason }.into());
                 }
                 Landing::Expired => {
+                    self.conclude(&lease, &signature, SendEnd::Unsent).await?;
                     return Err(RelayError::SendRefused {
                         reason: EXPIRED.to_owned(),
                     }
-                    .into())
+                    .into());
                 }
             }
         }
     }
 
-    /// The rent returns before the charge does, a refused close stays for the next sweep.
+    /// Ends a row whose attempt can no longer land, or an open row nobody resumed. The claim excludes
+    /// uploads and retries, a selection a retry overtook loses here and changes nothing, and so does a
+    /// claim another closer holds. A failure leaves the row closing for the next sweep.
     async fn release(&self, held: &Reservation) -> Result<(), RingRpcError> {
+        let slot = self.chain.slot().await?;
+        let Some(claim) = self
+            .reservations()
+            .claim_cleanup(ClaimCleanup {
+                held,
+                slot,
+                abandoned_before: slot.saturating_sub(ABANDONED_AFTER_SLOTS),
+            })
+            .await?
+        else {
+            return Ok(());
+        };
+        let lease = claim.lease;
+        self.under_lease(Some(lease), self.close_claimed(claim))
+            .await
+    }
+
+    async fn close_claimed(&self, claim: Claim) -> Result<(), RingRpcError> {
+        let lease = claim.lease;
+        // 1. A send that can still land keeps the row. Closing or refunding around it would forget a
+        // transaction able to create the funded buffer again.
+        let Some(Claim { held, .. }) = self.reconcile(claim).await? else {
+            return Ok(self.reservations().yield_lease(&lease).await?);
+        };
+        // 2. With no send left the buffer read is final. The rent returns before the charge does, a refused
+        // close stays for the next sweep.
         if let Some(ReservedBuffer { ring, buffer }) = held.buffer {
             if self.chain.account_data(buffer).await?.is_some() {
-                let close = close_frame_buffer(ring, self.fee_payer(), buffer);
-                let budget =
-                    ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::CloseFrameBuffer));
-                self.reservations()
-                    .charge(&held.key, LAMPORTS_PER_SIGNATURE)
-                    .await?;
-                self.land(close, budget).await?;
+                self.land(TrackedSend {
+                    lease,
+                    instruction: close_frame_buffer(ring, self.fee_payer(), buffer),
+                    budget: ComputeBudgetConfig::new(compute_unit_limit(
+                        InstructionTag::CloseFrameBuffer,
+                    )),
+                    kind: SendKind::Close,
+                })
+                .await?;
             }
         }
-        Ok(self.reservations().release(held, 0).await?)
+        // 3. The charge returns, every fee the chain took stays in the total.
+        Ok(self.reservations().release(&lease.key, 0).await?)
     }
 
     /// The settlement closed the buffer into the writer, only its fee and setup rent stay spent.
@@ -781,14 +1081,18 @@ impl Relay {
         message: &VersionedMessage,
     ) -> Result<(), RingRpcError> {
         let landed = held.landing_rent.saturating_add(message_fee(message));
-        Ok(self.reservations().release(held, landed).await?)
+        Ok(self.reservations().release(&held.key, landed).await?)
     }
 
     /// Past the window nothing of a live relay is left, a wallet that never signed let the blockhash lapse.
     pub async fn sweep_abandoned(&self) -> Result<(), RingRpcError> {
         let slot = self.chain.slot().await?;
         let before = slot.saturating_sub(ABANDONED_AFTER_SLOTS);
-        for held in self.reservations().abandoned(before, SWEEP_PAGE).await? {
+        let abandoned = self
+            .reservations()
+            .abandoned(before, slot, SWEEP_PAGE)
+            .await?;
+        for held in abandoned {
             let _transition = self.transitions.lock().await;
             let swept = async {
                 let Some(mut record) = self.relays().get(&held.relay_id).await? else {
@@ -1087,13 +1391,8 @@ impl Relay {
                         RelayState::Confirmed { signature, slot }
                     }
                     Landing::Landed(ChainOutcome::Failed { reason }) => {
-                        // A failed transaction still paid, its rent rolled back.
-                        if let Some(held) = self.reservations().by_relay(relay_id).await? {
-                            self.reservations()
-                                .charge(&held.key, message_fee(&record.message))
-                                .await?;
-                        }
-                        RelayState::Failed { reason }
+                        record.state = RelayState::Failed { reason };
+                        return self.store_paid_failure(relay_id, record).await;
                     }
                     Landing::Expired => RelayState::Failed {
                         reason: EXPIRED.to_owned(),
@@ -1124,15 +1423,41 @@ impl Relay {
             }
             _ => {
                 self.relays().update(relay_id, record).await?;
-                if let Some(held) = self.reservations().by_relay(relay_id).await? {
-                    if let Err(error) = self.release(&held).await {
-                        warn!("relay buffer did not close {}", redacted(&error));
-                    }
-                }
-                self.settle(record.co_signature, CoSignSettlement::Failed)
-                    .await
+                self.end_failed(relay_id, record).await
             }
         }
+    }
+
+    /// A failed transaction still paid, its rent rolled back. The fee and the failure commit together, a
+    /// crash between them would count the fee again or lose it.
+    async fn store_paid_failure(
+        &self,
+        relay_id: &RelayId,
+        record: &RelayRecord,
+    ) -> Result<(), RingRpcError> {
+        let transaction = self.store.connection().begin().await?;
+        RelayStore::new(&transaction)
+            .update(relay_id, record)
+            .await?;
+        RelayReservations::new(&transaction)
+            .charge_landed(relay_id, message_fee(&record.message))
+            .await?;
+        transaction.commit().await?;
+        self.end_failed(relay_id, record).await
+    }
+
+    async fn end_failed(
+        &self,
+        relay_id: &RelayId,
+        record: &RelayRecord,
+    ) -> Result<(), RingRpcError> {
+        if let Some(held) = self.reservations().by_relay(relay_id).await? {
+            if let Err(error) = self.release(&held).await {
+                warn!("relay buffer did not close {}", redacted(&error));
+            }
+        }
+        self.settle(record.co_signature, CoSignSettlement::Failed)
+            .await
     }
 
     async fn free_unless_stored(&self, failed: FailedWrite<'_>) -> Result<(), RingRpcError> {
@@ -1164,15 +1489,41 @@ struct ProvenStep {
     setup: Vec<CreateAssociatedTokenAccount>,
     proven: ProvenRelay,
     parties: RelayParties,
-    /// The wallet party whose signature the check verified, it answers for a reservation.
-    signer: Option<Address>,
+    /// Held when a wallet party's signature was verified, that party answers for the reservation.
+    lease: Option<Lease>,
 }
 
 struct RelaySpend<'a> {
     proven: &'a mut ProvenRelay,
-    signer: Option<Address>,
-    relay_id: &'a RelayId,
+    lease: Option<Lease>,
     setup_rent: u64,
+}
+
+struct StagedAttempt<'a> {
+    lease: Option<Lease>,
+    relay_id: &'a RelayId,
+    record: &'a RelayRecord,
+    slot: u64,
+}
+
+enum AttemptWrite {
+    Stored,
+    /// Another record holds the relay id.
+    Existing,
+    Refused(RingRpcError),
+}
+
+struct TrackedSend {
+    lease: Lease,
+    instruction: Instruction,
+    budget: ComputeBudgetConfig,
+    kind: SendKind,
+}
+
+struct FrameCost {
+    lamports: u64,
+    fee_allowance: u64,
+    closing_fees: u64,
 }
 
 struct CoSignStep<'a> {
@@ -1446,18 +1797,24 @@ fn token_2022_account_len(mint: &[u8]) -> Result<usize, RingRpcError> {
         .map_err(|_| RingRpcError::StateUnavailable)
 }
 
-fn setup_key(relay_id: &RelayId) -> [u8; 32] {
-    Sha256::new()
-        .chain_update(SETUP_KEY_DOMAIN)
-        .chain_update(relay_id.0 .0)
+/// Every part of the request but the quote, one attempt per signed request. A fresh quote names a new
+/// relay id for the same spend, the key still finds the row its old message still answers to.
+fn attempt_key(request: &PrepareRelayRequest) -> Result<[u8; 32], RingRpcError> {
+    let unquoted = serde_json::to_vec(&(&request.ring, &request.intent, &request.co_signers))
+        .map(Zeroizing::new)
+        .map_err(|_| RingRpcError::StateUnavailable)?;
+    Ok(Sha256::new()
+        .chain_update(ATTEMPT_KEY_DOMAIN)
+        .chain_update(&*unquoted)
         .finalize()
-        .into()
+        .into())
 }
 
-fn frame_key(frame: &[u8]) -> [u8; 32] {
+/// The delegate signed a nonce and a timestamp, its relay id already names one signed request.
+fn delegate_key(relay_id: &RelayId) -> [u8; 32] {
     Sha256::new()
-        .chain_update(FRAME_KEY_DOMAIN)
-        .chain_update(frame)
+        .chain_update(DELEGATE_KEY_DOMAIN)
+        .chain_update(relay_id.0 .0)
         .finalize()
         .into()
 }
@@ -1579,6 +1936,10 @@ fn relay_status(state: &RelayState) -> RelayStatus {
         },
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/common/wide_frame.rs"]
+pub(crate) mod wide_frame;
 
 #[cfg(test)]
 mod tests {
