@@ -94,6 +94,7 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
         asset: Mint::SOL,
         amount: 4,
         reply: None,
+        data: crate::NoteData::default(),
     })
     .unwrap();
     let quote = RelayQuote {

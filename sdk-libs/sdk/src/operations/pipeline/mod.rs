@@ -47,8 +47,8 @@ use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
     anonymous::{
-        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner, EntrySpend,
-        RingPayment, WideFrames,
+        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CoOwner,
+        EntrySpend, NoteData, RingPayment, WideFrames,
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
