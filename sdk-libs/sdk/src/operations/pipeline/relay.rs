@@ -81,7 +81,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 fee_payer: quote.fee_payer.0,
             });
         }
-        let sealed = self.transfer.seal(client).await?;
+        let sealed = self.transfer.seal_unread(client).await?;
         let staged = &sealed.pipeline.staged;
         let inputs = &staged.proof_inputs;
         let nullifier_key = staged
@@ -144,7 +144,7 @@ impl RingTransfer<Delegated<'_>> {
         &self,
         client: &C,
     ) -> Result<RelayProofInputs, RingError> {
-        let sealed = self.seal(client).await?;
+        let sealed = self.seal_unread(client).await?;
         let plan = match sealed.pipeline.staged.rail.delivery() {
             RingDelivery::Anonymous(plan) => Some(plan.clone()),
             RingDelivery::Delivered => None,
@@ -159,7 +159,7 @@ impl RingTransfer<Delegated<'_>> {
     }
 }
 
-impl Sealed<'_> {
+impl<P> Sealed<'_, P> {
     /// A signer whose key the seal holds spends beside the sender, any other owns no input.
     fn relay_co_owners(&self) -> Result<Vec<RelayCoOwner>, RingError> {
         let staged = &self.pipeline.staged;
@@ -258,6 +258,7 @@ impl Sealed<'_> {
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
+            wide_owners: self.preview.wide_owners,
         })
     }
 }

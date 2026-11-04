@@ -225,6 +225,130 @@ async fn a_confidential_relay_carries_its_token_account_setup() {
     assert_eq!(token_account_setup, &setup);
 }
 
+/// The Go golden test solves the relayed tail.
+#[tokio::test]
+async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
+    use custom_ring_interface::key_catalog::RingCircuit;
+    use spr_transaction::SppProofOutputUtxo;
+
+    use crate::{RelayedTransferInput, RingTransfer};
+
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let fee_payer = Address::new_from_array([0x44; 32]);
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(
+        Registry::new(&[(&sender, 1), (&recipient, 1)]),
+        &pipeline_rules(),
+    )
+    .client();
+    let relayed = |notes: u64, data: Option<[u8; 32]>| {
+        let client = &client;
+        let (sender, recipient) = (&sender, &recipient);
+        async move {
+            let utxos = (0..notes)
+                .map(|leaf| ring_utxo(sender, Mint::SOL, 1, leaf))
+                .collect();
+            let mut transaction =
+                ConfidentialTransaction::new_with_ring(utxos, fee_payer, ring().program_id())
+                    .unwrap();
+            transaction
+                .add_output_utxo(SppProofOutputUtxo {
+                    owner_address: Some(recipient.shielded_address().unwrap()),
+                    asset: Mint::SOL,
+                    amount: notes,
+                    ring_program_id: Some(ring().program_id()),
+                    ring_data_hash: data,
+                    ..Default::default()
+                })
+                .unwrap();
+            let relay = StubRelay::default();
+            CustomRingTransfer::new(CustomRingTransferInput {
+                ring: ring(),
+                sender,
+                nullifier_key: Some(&sender.nullifier_key),
+                transaction,
+            })
+            .with_in_proof_owner(&sender.signing_key)
+            .prepare_relay(
+                client.zolana(),
+                RelayQuote {
+                    fee_payer: SerializablePubkey(fee_payer),
+                    valid_until_slot: u64::MAX,
+                },
+            )
+            .await
+            .unwrap()
+            .send(&relay)
+            .await
+            .unwrap()
+            .submitted()
+            .unwrap();
+            let (inputs, signature) = {
+                let prepared = relay.prepared.lock().unwrap();
+                let [PrepareRelayRequest {
+                    intent:
+                        RelayIntent::Confidential {
+                            proof_inputs,
+                            owner_signature,
+                            ..
+                        },
+                    ..
+                }] = prepared.as_slice()
+                else {
+                    panic!("one confidential prepareRelay call");
+                };
+                (
+                    RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap(),
+                    owner_signature.0,
+                )
+            };
+            let assembled = RingTransfer::relayed(RelayedTransferInput {
+                ring: ring(),
+                proof_inputs: &inputs,
+                fee_payer,
+            })
+            .with_owner_signature(signature.into())
+            .assemble(client)
+            .await
+            .unwrap();
+            assert_eq!(assembled.frame.parts.wide_owners, inputs.wide_owners);
+            let request = assembled.request().unwrap();
+            let body = serde_json::to_value(
+                crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+            )
+            .unwrap();
+            (inputs.wide_owners, request.circuit, body)
+        }
+    };
+    let shape = |circuit| match circuit {
+        RingCircuit::Transfer {
+            outputs,
+            inputs,
+            wide,
+            ..
+        } => (outputs, inputs, wide),
+        _ => panic!("a transfer key"),
+    };
+
+    let (wide, circuit, _) = relayed(2, None).await;
+    assert_eq!((wide, shape(circuit)), (false, (2, 24, false)));
+    let (wide, circuit, _) = relayed(25, None).await;
+    assert_eq!((wide, shape(circuit)), (true, (2, 49, true)));
+    let (wide, circuit, built) = relayed(2, Some([3; 32])).await;
+    assert_eq!((wide, shape(circuit)), (true, (8, 24, true)));
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/custom-ring-transfer-relayed-wide-data.json");
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    assert!(path.exists());
+}
+
 mod delegate_message {
     //! The transfer a delegate signs, refused when it pays an unnamed owner or charges the delegate.
 

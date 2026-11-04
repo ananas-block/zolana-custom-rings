@@ -261,19 +261,18 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
     let anonymous = case.rail == RingRail::Anonymous;
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
-    data.wide_owners = !case.entry
-        && TransferSpend {
-            rail: case.rail,
-            inputs: case.inputs,
-            outputs: case.outputs,
-            spends_default_ring: false,
-            legs: case.legs,
-            owners: 0,
-            pools: RecordPools::default(),
-            wide: false,
-        }
-        .fitted()
-        .wide;
+    data.wide_owners = TransferSpend {
+        rail: case.rail,
+        inputs: case.inputs,
+        outputs: case.outputs,
+        spends_default_ring: case.entry,
+        legs: case.legs,
+        owners: 0,
+        pools: RecordPools::default(),
+        wide: false,
+    }
+    .fitted()
+    .wide;
     if case.policy || case.thresholds {
         data.approval = ApprovalMask::OUTFLOW;
         data.own_revision = Some(Revision::from(7));

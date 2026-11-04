@@ -37,6 +37,7 @@ var Shapes = [...]Shape{
 	{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true},
 	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true},
 	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true},
+	{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true},
 }
 
 func (s Shape) String() string {

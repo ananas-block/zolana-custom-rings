@@ -225,6 +225,7 @@ impl Relayed<'_> {
             spend,
             presealed: Some(PresealedAudit {
                 message: auditor_message,
+                wide_owners: relayed.wide_owners,
             }),
             list_salts: relayed.list_salts.clone(),
         })

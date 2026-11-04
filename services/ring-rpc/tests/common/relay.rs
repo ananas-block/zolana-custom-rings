@@ -289,6 +289,7 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
         output_tree_id: 4,
         list_salts: Vec::new(),
         co_owners: Vec::new(),
+        wide_owners: false,
     }
 }
 

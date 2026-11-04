@@ -54,6 +54,12 @@
       "own": 39,
       "curator": 39,
       "tracking": 14
+    },
+    {
+      "key": "custom_ring_transfer_entry_2_in24_w32_s12",
+      "own": 95,
+      "curator": 95,
+      "tracking": 45
     }
   ]
 }
