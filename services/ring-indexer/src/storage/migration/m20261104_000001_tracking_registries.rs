@@ -57,12 +57,6 @@ impl MigrationTrait for Migration {
                  PRIMARY KEY(registry, owner, revision))"
             ),
             "CREATE INDEX tracking_enrollments_slot ON tracking_enrollments(slot)".into(),
-            format!(
-                "CREATE TABLE private_list_writes (registry {blob} NOT NULL, \
-                 ordinal BIGINT NOT NULL, revision BIGINT NOT NULL, position {blob} NOT NULL, \
-                 leaf {blob} NOT NULL, write_counter BIGINT NOT NULL, \
-                 PRIMARY KEY(registry, ordinal))"
-            ),
             "CREATE INDEX tracking_enrollments_applied_slot \
              ON tracking_enrollments(applied_slot)"
                 .into(),
@@ -94,7 +88,6 @@ impl MigrationTrait for Migration {
         );
         statements.extend(
             [
-                "private_list_writes",
                 "tracking_enrollments",
                 "tracking_authorizations",
                 "tracking_records",
