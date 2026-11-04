@@ -312,7 +312,7 @@ describe("role writes", () => {
       signer: NEXT,
       rentRecipient: PAYER,
     });
-    expect(clear.data).toEqual(Uint8Array.of(21));
+    expect(clear.data).toEqual(Uint8Array.of(62));
     expect(metas(clear)).toEqual([
       [AUTHORITY, SIGN],
       [ring, WRITE],
@@ -349,7 +349,7 @@ describe("role writes", () => {
       authority: AUTHORITY,
       delegate: NEXT,
     });
-    expect(instruction.data).toEqual(Uint8Array.of(24));
+    expect(instruction.data).toEqual(Uint8Array.of(64));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
       [await ringPolicyAddress(RING), WRITE],

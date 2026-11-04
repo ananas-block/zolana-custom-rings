@@ -453,7 +453,7 @@ mod tests {
     const NULLIFIER_SECRET: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const NULLIFIER_PK: &str = "2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5";
     const EPH_PK: &str = "043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63";
-    const CIPHERTEXT: &str = "44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba1288554456faebe97fdaf6a409ddb5c5830df78ba0529a3ddf3075c429643612";
+    const CIPHERTEXT: &str = "4be6ab2544799bd0c018ff495f59e8205d6fe9d007f74e44ec739529c0b27f25d23f6f5b30bde013afd5a02f1913cb4c354c8529e12a01ad583bb6f72692d99c";
 
     #[test]
     fn the_sealed_key_matches_the_pinned_vector() {
