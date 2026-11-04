@@ -9,20 +9,19 @@ use std::{
 };
 
 use custom_ring_interface::{
-    cosign::CoSignDemand,
+    cosign::{ApprovalMask, CoSignHeader, CoSignOperation},
     key_catalog::{
         TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES,
     },
     storage::Revision,
-    AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PolicyRecipients, PublicLeg,
-    PublicSlots, Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
+    AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
+    Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
 };
-use frames::{config, field, Fixture};
+use frames::{config, Fixture};
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
 
-/// The codec phases of one invocation, parse, the public legs, the SPP expansion and the
-/// recipients, modeled as Pinocchio's bump that reclaims nothing.
+/// The codec phases of one invocation, parse, the public legs and the SPP expansion, modeled as Pinocchio's bump that reclaims nothing.
 const BUDGET: usize = 12 * 1024;
 
 const MINT: [u8; 32] = [0x11; 32];
@@ -98,7 +97,7 @@ struct Widest {
     legs: usize,
     kind: Legs,
     policy: bool,
-    exempt: bool,
+    thresholds: bool,
     entry: bool,
     in_proof: bool,
     replies: bool,
@@ -117,7 +116,7 @@ impl Widest {
                 Legs::Spl => " spl",
             },
             if self.policy { "policy" } else { "audit-only" },
-            if self.exempt { " exempt" } else { "" },
+            if self.thresholds { " thresholds" } else { "" },
             if self.entry {
                 " entry"
             } else if self.in_proof {
@@ -131,10 +130,9 @@ impl Widest {
     }
 }
 
-/// The owners and recipients the widest frames reference.
+/// The owners the widest frames reference.
 struct Pool {
     owners: Vec<[u8; 32]>,
-    recipients: Vec<[u8; 32]>,
 }
 
 fn widest_legs(shape: &TransferShape) -> usize {
@@ -156,7 +154,7 @@ fn cases() -> Vec<Widest> {
             legs: widest_legs(shape),
             kind: Legs::Sol,
             policy: true,
-            exempt: false,
+            thresholds: false,
             entry: false,
             in_proof: false,
             replies: false,
@@ -172,7 +170,7 @@ fn cases() -> Vec<Widest> {
         });
         cases.push(Widest {
             policy: false,
-            exempt: true,
+            thresholds: true,
             ..base
         });
     }
@@ -184,7 +182,7 @@ fn cases() -> Vec<Widest> {
             legs: widest_legs(shape),
             kind: Legs::Sol,
             policy: true,
-            exempt: false,
+            thresholds: false,
             entry: false,
             in_proof: false,
             replies: false,
@@ -196,7 +194,7 @@ fn cases() -> Vec<Widest> {
         });
         cases.push(Widest {
             policy: false,
-            exempt: true,
+            thresholds: true,
             ..base
         });
         cases.push(Widest {
@@ -212,7 +210,7 @@ fn cases() -> Vec<Widest> {
             legs: widest_legs(shape),
             kind: Legs::Sol,
             policy: true,
-            exempt: false,
+            thresholds: false,
             entry: true,
             in_proof: false,
             replies: false,
@@ -220,7 +218,7 @@ fn cases() -> Vec<Widest> {
         cases.push(base);
         cases.push(Widest {
             policy: false,
-            exempt: true,
+            thresholds: true,
             ..base
         });
     }
@@ -230,8 +228,8 @@ fn cases() -> Vec<Widest> {
         outputs: 4,
         legs: 0,
         kind: Legs::Sol,
-        policy: true,
-        exempt: false,
+        policy: false,
+        thresholds: false,
         entry: false,
         in_proof: false,
         replies: false,
@@ -242,11 +240,14 @@ fn cases() -> Vec<Widest> {
 fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransactData<'a> {
     let anonymous = case.rail == RingRail::Anonymous;
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
-    data.key_escrow = case.policy && !anonymous;
-    data.full_openings = case.entry;
-    data.exempt = case.exempt;
-    data.approval_required = case.policy && case.rail != RingRail::Delegate;
-    data.own_revision = (case.policy || case.exempt || anonymous).then(|| Revision::from(7));
+    data.entry = case.entry;
+    if case.policy || case.thresholds {
+        data.co_sign = CoSignHeader {
+            approval: ApprovalMask::OUTFLOW,
+            co_signers: 5,
+        };
+        data.own_revision = Some(Revision::from(7));
+    }
     data.interface_transfers = (0..case.legs)
         .map(|leg| {
             let amount = 1_000 + leg as u64;
@@ -259,17 +260,15 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
             }
         })
         .collect();
+    if data.own_revision.is_some() {
+        data.spl_withdrawal_owners = match case.kind {
+            Legs::Sol => &[],
+            Legs::Spl => &pool.owners[..case.legs],
+        };
+    }
     if case.policy {
         data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: match case.kind {
-                Legs::Sol => &[],
-                Legs::Spl => &pool.owners[..case.legs],
-            },
             curator_revision: (!anonymous).then(|| Revision::from(3)),
-            recipients: match anonymous {
-                true => PolicyRecipients::Hidden,
-                false => PolicyRecipients::Framed(&pool.recipients[..case.outputs]),
-            },
         });
     }
     let exit_slot = (case.rail != RingRail::Delegate).then_some(case.outputs - 1);
@@ -277,7 +276,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
         .map(|slot| match (anonymous, Some(slot) == exit_slot) {
             (_, true) => fixture.exit(slot, &fixture.payload),
             (true, false) => fixture.tagged(slot),
-            (false, false) => fixture.delivered(slot),
+            (false, false) => fixture.recipient(slot),
         })
         .collect();
     if anonymous {
@@ -309,7 +308,6 @@ struct Phases {
     parse: usize,
     legs: usize,
     spp: usize,
-    recipients: usize,
 }
 
 /// The codec phases in the program's order, the public legs built as the program builds them.
@@ -326,27 +324,24 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
         })
     }))
     .unwrap();
-    let demand = CoSignDemand::transact(data.approval_required, &slots);
+    let demand = CoSignOperation {
+        spends_note: !data.no_spend,
+        public_legs: slots.classes(),
+        approval: data.co_sign.approval,
+    }
+    .demand();
     let legs = Arena::used();
     let spp_data = data
         .spp_instruction_data_under(&config, TransactProof::zeroed())
         .unwrap();
     let spp = Arena::used();
-    let recipients = data.recipients();
-    let used = Arena::used();
     Arena::stop();
     assert!(
         demand.classes.bits() != 0
             && slots.len() <= spr_interface::N_PUBLIC_SLOTS
             && spp_data.len() > 1
-            && recipients.len() == data.outputs.len()
     );
-    Phases {
-        parse,
-        legs,
-        spp,
-        recipients: used,
-    }
+    Phases { parse, legs, spp }
 }
 
 #[test]
@@ -354,7 +349,6 @@ fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
     let fixture = Fixture::new();
     let pool = Pool {
         owners: vec![[0x70; 32]; spr_interface::MAX_INTERFACE_TRANSFERS],
-        recipients: (0..16).map(|slot| field(0xc0 + slot)).collect(),
     };
     let mut report = Vec::new();
     let committed = fixture.cases();
@@ -373,14 +367,14 @@ fn the_codec_phases_of_every_widest_frame_stay_within_the_budget() {
     }
     for (name, bytes, phases) in &report {
         println!(
-            "{name:<48} frame {bytes:>5} parse {:>5} legs {:>5} spp {:>5} recipients {:>5}",
-            phases.parse, phases.legs, phases.spp, phases.recipients
+            "{name:<48} frame {bytes:>5} parse {:>5} legs {:>5} spp {:>5}",
+            phases.parse, phases.legs, phases.spp
         );
     }
     let over: Vec<_> = report
         .iter()
-        .filter(|(_, _, phases)| phases.recipients > BUDGET)
-        .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.recipients))
+        .filter(|(_, _, phases)| phases.spp > BUDGET)
+        .map(|(name, _, phases)| format!("{name} takes {} of {BUDGET}", phases.spp))
         .collect();
     assert!(over.is_empty(), "{over:#?}");
 }
