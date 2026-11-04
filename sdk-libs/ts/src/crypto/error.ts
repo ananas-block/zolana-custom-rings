@@ -9,6 +9,7 @@ export const RING_KEY_ERROR_RUST_VARIANT = Object.freeze({
   KEYPAIR_UNKNOWN_RING_ADDRESS_VERSION: "UnknownRingAddressVersion",
   KEYPAIR_INVALID_RING_ADDRESS_CHECKSUM: "InvalidRingAddressChecksum",
   KEYPAIR_INVALID_RING_ADDRESS_LIST_SALT: "InvalidRingAddressListSalt",
+  KEYPAIR_INVALID_MERGE_SEED: "InvalidMergeSeed",
   KEYPAIR_UNKNOWN_RING_PAYMENT_KEY: "UnknownRingPaymentKey",
   KEYPAIR_DUPLICATE_RING_PAYMENT_KEY: "DuplicateRingPaymentKey",
   KEYPAIR_INVALID_RING_PAYMENT_TAG: "InvalidRingPaymentTag",

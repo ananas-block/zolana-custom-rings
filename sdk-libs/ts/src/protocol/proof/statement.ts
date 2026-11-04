@@ -6,7 +6,7 @@ import {
   bytesKey,
   rightAlign,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import { poseidon } from "@heliuslabs/zolana/keypair";
 import { packDisclosure } from "../../crypto/audit/audit.js";
 import { u32Field } from "../../crypto/error.js";
@@ -133,7 +133,7 @@ export interface RegisterKeyStatement {
   readonly listTag: Bytes32;
   readonly auditorPubkey: Bytes33;
   readonly ephU: Bytes32;
-  readonly ciphertext: Bytes32;
+  readonly ciphertext: Bytes64;
 }
 
 export function transferStatementElements(statement: TransferStatement): readonly Bytes32[] {
@@ -330,7 +330,7 @@ export function registerKeyStatementElements(statement: RegisterKeyStatement): r
     checkedBytes<Bytes32>(statement.listTag, 32, "list tag"),
     ...packedKey(checkedBytes<Bytes33>(statement.auditorPubkey, 33, "auditor pubkey")),
     ...packedKey(taggedX25519(statement.ephU)),
-    hashBytes(checkedBytes<Bytes32>(statement.ciphertext, 32, "ciphertext")) as Bytes32,
+    hashBytes(checkedBytes<Bytes64>(statement.ciphertext, 64, "ciphertext")) as Bytes32,
   ];
 }
 

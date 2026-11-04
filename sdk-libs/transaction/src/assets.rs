@@ -23,10 +23,6 @@ impl RingAssets {
         &self.registry
     }
 
-    pub fn mints(&self) -> impl Iterator<Item = &Mint> {
-        self.fields.iter().map(|(_, mint)| mint)
-    }
-
     pub fn by_mint(&self, mint: &solana_address::Address) -> Option<Mint> {
         self.fields
             .iter()

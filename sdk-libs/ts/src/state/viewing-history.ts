@@ -12,9 +12,6 @@ import type { RingKeys, ViewTagStream } from "./ring-keys.js";
 
 export const VIEWING_HISTORY_VERSION = 8;
 
-/** The one earlier version a read migrates. */
-const MIGRATED_VERSION = 7n;
-
 /** How far below its watermark a sync still reads an unobserved index. */
 export const PENDING_RETENTION = 256n;
 
@@ -419,7 +416,7 @@ export class ViewingHistory {
     return `{"version":${VIEWING_HISTORY_VERSION},"viewingHistory":[${entries.join(",")}]}`;
   }
 
-  /** Version 7 migrates, its counters and known senders kept, any other fails with `RING_VIEWING_HISTORY_VERSION`. */
+  /** Another version fails with `RING_VIEWING_HISTORY_VERSION`. */
   static fromJson(text: string): ViewingHistory {
     return ViewingHistory._fromValue(parseExact(text));
   }
@@ -430,15 +427,14 @@ export class ViewingHistory {
     const version = stored["version"];
     if (typeof version !== "bigint" || version < 0n || version > 0xffff_ffffn)
       throw invalid("version is not a u32");
-    if (version !== BigInt(VIEWING_HISTORY_VERSION) && version !== MIGRATED_VERSION)
+    if (version !== BigInt(VIEWING_HISTORY_VERSION))
       throw new RingError("RING_VIEWING_HISTORY_VERSION", {
         details: { version: version.toString() },
       });
     known(stored, "history", ["version", "viewingHistory"]);
-    const read = version === MIGRATED_VERSION ? migratedEntry : storedEntry;
     const entries: ViewingKeyEntry[] = [];
     for (const value of list(stored["viewingHistory"], "viewingHistory")) {
-      const entry = read(value);
+      const entry = storedEntry(value);
       const last = entries.at(-1);
       if (
         (last !== undefined && last.createdAt >= entry.createdAt) ||
@@ -516,32 +512,6 @@ function storedEntry(value: unknown): ViewingKeyEntry {
       pubkey(key, "knownSenders"),
     ),
     ringPositions: list(stored["ringPositions"], "ringPositions").map(storedPosition),
-  });
-}
-
-/** Version 7's sender counters and recipient pairs feed no tag a transfer reads. */
-function migratedEntry(value: unknown): ViewingKeyEntry {
-  const stored = record(value, "entry");
-  known(stored, "entry", [
-    "viewingPubkey",
-    "createdAt",
-    "tx",
-    "request",
-    "knownSenders",
-    "knownRecipients",
-  ]);
-  list(stored["knownRecipients"], "knownRecipients").forEach((row) =>
-    pubkey(record(row, "knownRecipients")["pubkey"], "knownRecipients"),
-  );
-  return ViewingKeyEntry.restore({
-    viewingPublicKey: pubkey(stored["viewingPubkey"], "viewingPubkey"),
-    createdAt: integer(stored["createdAt"], "createdAt"),
-    tx: storedCounter(stored["tx"], "tx"),
-    request: storedCounter(stored["request"], "request"),
-    knownSenders: list(stored["knownSenders"], "knownSenders").map((row) =>
-      pubkey(record(row, "knownSenders")["pubkey"], "knownSenders"),
-    ),
-    ringPositions: [],
   });
 }
 

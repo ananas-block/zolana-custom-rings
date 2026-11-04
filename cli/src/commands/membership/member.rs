@@ -5,6 +5,7 @@ use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::RingIndexer;
+use zolana_ring_keys::ListSaltHolder;
 
 use crate::{line, Context, KeyCommand, Zolana};
 
@@ -80,6 +81,7 @@ fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
             owner: member.pubkey(),
             nullifier_key: &member.nullifier_key,
             viewing_key: &member.viewing_key,
+            list_salt: member.list_salt(&ctx.ring.program_id())?,
         }
         .prove(ctx.ring_client()),
     )?;

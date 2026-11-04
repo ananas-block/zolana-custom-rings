@@ -1,15 +1,29 @@
-use custom_ring_interface::domain;
-use spr_hasher::primitives::right_align;
-use spr_keypair::{KeypairError, NullifierKey};
-use zeroize::Zeroizing;
+use solana_address::Address;
+use spr_keypair::{shielded::ShieldedKeypair, ViewingKey};
 
-use crate::RingKeyError;
+use crate::{RingKeyError, RotatingRingKeys};
 
-pub fn list_salt(key: &NullifierKey, ring_id: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
-    let secret = Zeroizing::new(right_align(&key.secret()));
-    Ok(domain::list_salt(&secret, ring_id).map_err(KeypairError::from)?)
+/// Above the field modulus, so no merge of a real nullifier derives a salt.
+pub const LIST_SALT_LABEL: [u8; 32] = *b"CRING/list_salt/v1\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+/// No root the auditor holds reaches another ring's salt.
+pub trait ListSaltHolder {
+    fn list_salt(&self, ring_program_id: &Address) -> Result<[u8; 32], RingKeyError>;
 }
 
-pub fn list_tag(key: &NullifierKey, ring_id: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
-    Ok(domain::list_tag(&list_salt(key, ring_id)?).map_err(KeypairError::from)?)
+impl ListSaltHolder for ShieldedKeypair {
+    fn list_salt(&self, ring_program_id: &Address) -> Result<[u8; 32], RingKeyError> {
+        derive(&self.viewing_key, ring_program_id)
+    }
+}
+
+impl ListSaltHolder for RotatingRingKeys {
+    fn list_salt(&self, ring_program_id: &Address) -> Result<[u8; 32], RingKeyError> {
+        derive(self.list_root(), ring_program_id)
+    }
+}
+
+fn derive(root: &ViewingKey, ring_program_id: &Address) -> Result<[u8; 32], RingKeyError> {
+    root.merge_seed(ring_program_id.as_array(), &LIST_SALT_LABEL)
+        .map_err(|_| RingKeyError::InvalidListSalt)
 }

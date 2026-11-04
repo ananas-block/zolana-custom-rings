@@ -50,7 +50,7 @@ fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
         list_tag: [4; 32],
         viewing_u,
         eph_u: [5; 32],
-        ciphertext: [6; 32],
+        ciphertext: [6; 64],
     }
 }
 
@@ -722,7 +722,7 @@ fn a_rotation_moves_the_viewing_key_with_no_proof() {
             ..rotated
         },
         EnrollIxData {
-            ciphertext: [1; 32],
+            ciphertext: [1; 64],
             ..rotated
         },
         EnrollIxData {

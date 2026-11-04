@@ -32,7 +32,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 - The program builds `TransferStatement::elements` in `program-libs/interface/src/proof/statement.rs`.
 - The circuit ends each `Define` with one `HashChain4` equality. `closeStatement` in `transfer/transfer.go` appends the element count and the nonzero version.
-- `TestTransferStatementVectorV3` pins the Go elements to the vector `go_vectors.rs` reads, and `TestTransferStatementsMatchRustVectors` compares the Rust elements. `TestStatementBindsEveryElement` moves one element against an unchanged witness.
+- `TestTransferStatementVector` pins the Go elements to the vector `go_vectors.rs` reads, and `TestTransferStatementsMatchRustVectors` compares the Rust elements. `TestStatementBindsEveryElement` moves one element against an unchanged witness.
 
 ### A rail is one fixed combination of bits
 

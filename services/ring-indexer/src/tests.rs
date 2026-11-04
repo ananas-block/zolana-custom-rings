@@ -324,7 +324,7 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         ct_hash: field(6),
         list_tag: field(7),
         eph_u: [8; 32],
-        ciphertext: [9; 32],
+        ciphertext: [9; 64],
         viewing_u: [10; 32],
         revision: 1,
         applied_revision: 0,

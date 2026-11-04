@@ -1,5 +1,5 @@
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana";
+import type { Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana";
 import type { Transaction } from "@heliuslabs/zolana/interface";
 import type {
   BlockhashProvider,
@@ -35,7 +35,7 @@ export interface RingSealedKey {
   readonly owner: Address;
   readonly nullifierPk: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
-  readonly ciphertext: Bytes32;
+  readonly ciphertext: Bytes64;
 }
 
 /** An opening the indexer served, unverified until checked against the bound root. */
@@ -167,7 +167,7 @@ export type RingMergeClient = TreeContext &
 /** A nullifier key encrypted to the ring auditor. */
 export interface RingSealedNullifierKey {
   readonly ephemeralPublicKey: X25519PublicKey;
-  readonly ciphertext: Bytes32;
+  readonly ciphertext: Bytes64;
 }
 
 export type ProvenAnonymousRingTransact = Omit<ProvenRingTransact, "data"> &

@@ -27,7 +27,8 @@ use spr_transaction::{
 };
 use zolana_ring_client::{mint_balances, rpc::DecryptedOutputKind, AnonymousWallet, ReaderKey};
 use zolana_ring_keys::{
-    ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest, RotatingRingKeys,
+    ring_address::RING_PAYMENT_SCHEME, ListSaltHolder, RingAddress, RingPaymentRequest,
+    RotatingRingKeys,
 };
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::{ReplyMetadata, RingAssets};
@@ -206,6 +207,11 @@ enum Spendable {
 struct Sent {
     deposits: Vec<Signature>,
     transact: Signature,
+}
+
+fn sender_list_salt(sender: &ShieldedKeypair, ring: Address) -> Result<(Member, [u8; 32])> {
+    let member = Member::from_bytes(sender.signing_pubkey().owner_proof_input_hash()?)?;
+    Ok((member, sender.list_salt(&ring)?))
 }
 
 pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
@@ -1001,10 +1007,7 @@ impl Deposit<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: self.cosigner,
-            list_salt: Some(zolana_ring_keys::list_salt(
-                &self.sender.nullifier_key,
-                &ctx.ring.ring_id()?,
-            )?),
+            list_salt: Some(self.sender.list_salt(&ctx.ring.program_id())?),
         };
         // Stored before it is sent, a sync reads every sender tag the deposit may take.
         if let (Some(history), Some(advanced)) = (history, deposit.viewing_history()?) {
@@ -1151,12 +1154,14 @@ impl Transfer<'_> {
                         transaction.transfer(&payment.to, self.payments.mint, payment.amount)?;
                     }
                 }
+                let (sender, sender_salt) = sender_list_salt(self.sender, ctx.ring.program_id())?;
                 let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
                     ring: ctx.ring,
                     sender: self.held,
                     nullifier_key: Some(&self.sender.nullifier_key),
                     transaction,
-                });
+                })
+                .with_list_salt(sender, sender_salt);
                 for (owner, list_salt) in &self.payments.list_salts {
                     transfer = transfer.with_list_salt(*owner, *list_salt);
                 }
@@ -1195,12 +1200,15 @@ impl Transfer<'_> {
                     for payment in default_ring {
                         transaction.transfer_with_ring(&payment.to, mint, payment.amount, None)?;
                     }
+                    let (sender, sender_salt) =
+                        sender_list_salt(self.sender, ctx.ring.program_id())?;
                     let transfer = CustomRingTransfer::new(CustomRingTransferInput {
                         ring: ctx.ring,
                         sender: self.held,
                         nullifier_key: Some(&self.sender.nullifier_key),
                         transaction,
                     })
+                    .with_list_salt(sender, sender_salt)
                     .spend_public(wallet);
                     let mut transfer = self.named_wallet(ctx, transfer)?;
                     for payment in payees {
@@ -1253,12 +1261,15 @@ impl Transfer<'_> {
                                 None,
                             )?;
                         }
+                        let (sender, sender_salt) =
+                            sender_list_salt(self.sender, ctx.ring.program_id())?;
                         let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
                             ring: ctx.ring,
                             sender: self.held,
                             nullifier_key: Some(&self.sender.nullifier_key),
                             transaction,
                         })
+                        .with_list_salt(sender, sender_salt)
                         .with_anonymous_signer(&self.sender.signing_key);
                         for payment in payees {
                             transfer = transfer.with_payment(AnonymousPayment {

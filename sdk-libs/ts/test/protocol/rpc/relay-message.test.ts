@@ -1,6 +1,17 @@
 /** Refuses a relay message that moves more than the request, against the Rust check's vectors. */
 import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
 import type { Instruction } from "@heliuslabs/zolana/interface";
+import { encodeBase58, equalBytes } from "@heliuslabs/zolana/internal";
+import { sealedAuditorSchedule } from "../../../src/crypto/audit/audit.js";
+import {
+  decodeAuditRecord,
+  encodeAuditRecord,
+  RecordKind,
+  type AuditRecord,
+} from "../../../src/protocol/codec/audit-stream.js";
+import { DATA_TAIL_LEN, recordRegion } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
+import { ringInstructionData } from "../../helpers/ring-frame.js";
 import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
@@ -24,7 +35,7 @@ import {
   type Bytes33,
 } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import {
   checkRelayMessage,
@@ -72,9 +83,11 @@ interface DepositRequest {
 }
 
 interface DelegateRequest {
+  readonly auditor: string;
   readonly prepare: {
     readonly ring: Address;
     readonly delegate: Address;
+    readonly txViewingKey: string;
     readonly transfer: {
       readonly source: string;
       readonly mint: Address;
@@ -115,6 +128,10 @@ function deposit(request: DepositRequest): Promise<ExpectedRelayMessage> {
   });
 }
 
+function auditorOf(request: DelegateRequest): X25519PublicKey {
+  return X25519PublicKey.fromBytes(new Uint8Array(base64.encode(request.auditor)) as Bytes33);
+}
+
 function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
   const shielded = (text: string) => ShieldedAddress.fromBytes(new Uint8Array(base58.encode(text)));
   const { prepare } = request;
@@ -122,6 +139,7 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
     {
       ring: prepare.ring,
       delegate: prepare.delegate,
+      txViewingKey: new Uint8Array(base64.encode(prepare.txViewingKey)),
       transfer: {
         source: shielded(prepare.transfer.source),
         mint: prepare.transfer.mint,
@@ -132,7 +150,7 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
       },
     } as unknown as PrepareAuthorityTransferRequest,
     { feePayer: request.feePayer, validUntilSlot: 0n },
-    "confidential",
+    { mode: "confidential", auditorPublicKey: auditorOf(request) },
   );
 }
 
@@ -216,6 +234,111 @@ describe("relay message check", () => {
       details: { mismatch: "Recipients" },
     });
     expect(delegateSigner.calls).toBe(0);
+  });
+
+  describe("the records a delegate frame proves", () => {
+    const honestInstruction = (): Instruction => {
+      const compiled = getCompiledTransactionMessageDecoder().decode(
+        message(delegates.cases, "honest"),
+      );
+      const [instruction] = decompileTransactionMessage(
+        compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
+      ).instructions;
+      if (instruction === undefined) throw new Error("no instruction");
+      return instruction as Instruction;
+    };
+    const honestFrame = (): RingTransactData =>
+      RingTransactData.parse(
+        Uint8Array.from(honestInstruction().data ?? []).subarray(1),
+        "delegate",
+      );
+    const verdictOf = async (frame: RingTransactData): Promise<string> => {
+      const { messageBytes } = compileUnsignedTransaction({
+        feePayer: delegates.request.feePayer,
+        lifetime: SIZE_PROBE_LIFETIME,
+        instructions: [{ ...honestInstruction(), data: ringInstructionData(frame) }],
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.authorityTransfer),
+      });
+      return verdict(
+        await delegate(delegates.request),
+        Buffer.from(new Uint8Array(messageBytes)).toString("base64"),
+      );
+    };
+    /** Rewrites the payment's record under the frame's own stream. */
+    const rewritten = (change: (record: AuditRecord) => AuditRecord): RingTransactData => {
+      const frame = honestFrame();
+      const layout = RingTransactData.streamLayout(frame);
+      const schedule = sealedAuditorSchedule(
+        Uint8Array.from(Buffer.from(delegates.request.prepare.txViewingKey, "base64")) as Bytes32,
+        auditorOf(delegates.request),
+        frame.salt,
+      );
+      const payee = new Uint8Array(
+        base58.encode(delegates.request.prepare.transfer.payments[0]!.recipient),
+      );
+      const paid = ShieldedAddress.fromBytes(payee).signingPublicKey.confidentialViewTag();
+      const outputs = frame.outputs.map((output, slot) => {
+        const counter = recordRegion(layout, slot).startCounter;
+        const record = decodeAuditRecord(schedule.apply(counter, output.record));
+        return equalBytes(record.ownerKey, paid)
+          ? { ...output, record: schedule.apply(counter, encodeAuditRecord(change(record))) }
+          : output;
+      });
+      schedule.destroy();
+      return { ...frame, outputs };
+    };
+
+    it("passes the honest frame rebuilt from its parts", async () => {
+      expect(await verdictOf(rewritten((record) => record))).toBe("Accepted");
+    });
+
+    it("refuses a frame under another transaction key and a key off its clamp", async () => {
+      for (const key of [new Uint8Array(32).fill(0x48), new Uint8Array(32).fill(0xff)]) {
+        const expected = await delegate({
+          ...delegates.request,
+          prepare: {
+            ...delegates.request.prepare,
+            txViewingKey: Buffer.from(key).toString("base64"),
+          },
+        });
+        expect(
+          verdict(expected, Buffer.from(message(delegates.cases, "honest")).toString("base64")),
+        ).toBe("TransactionKey");
+      }
+    });
+
+    it("refuses a record of another mint", async () => {
+      const mint = encodeBase58(new Uint8Array(32).fill(9));
+      expect(await verdictOf(rewritten((record) => ({ ...record, mint })))).toBe("Recipients");
+    });
+
+    it("refuses an exit in place of a payment", async () => {
+      expect(await verdictOf(rewritten((record) => ({ ...record, kind: RecordKind.exit })))).toBe(
+        "Recipients",
+      );
+    });
+
+    it("refuses an interface transfer the request does not name", async () => {
+      const leg = {
+        kind: "solWithdrawal" as const,
+        amount: 1n,
+      };
+      expect(await verdictOf({ ...honestFrame(), interfaceTransfers: [leg] })).toBe("Data");
+    });
+
+    it("refuses a data commitment the request does not name", async () => {
+      const frame = honestFrame();
+      expect(
+        await verdictOf({
+          ...frame,
+          hasData: true,
+          outputs: frame.outputs.map((output) => ({
+            ...output,
+            tail: new Uint8Array(DATA_TAIL_LEN),
+          })),
+        }),
+      ).toBe("Data");
+    });
   });
 
   describe("a delegate frame settled from a buffer", () => {

@@ -39,8 +39,6 @@ pub const WITHDRAWALS: u32 = 0x4352_5057;
 pub const RECORD_UPDATE: u32 = 0x4352_5255;
 /// `"CRWG"`
 pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
-/// `"CRPS"`
-pub const LIST_SALT: u32 = 0x4352_5053;
 /// `"CRPT"`
 pub const LIST_TAG: u32 = 0x4352_5054;
 
@@ -50,7 +48,6 @@ pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
 pub const TRANSFER_STATEMENT_VERSION: u8 = 4;
 
 pub const AUDIT_STREAM_LABEL: &[u8; 10] = b"CRING/adt1";
-pub const DELIVERED_BODY_LABEL: &[u8; 10] = b"CRING/bdy1";
 pub const RECIPIENT_BODY_LABEL: &[u8; 10] = b"CRING/rcp1";
 pub const REPLY_LABEL: &[u8; 10] = b"CRING/rpl1";
 pub const SENDER_BUNDLE_LABEL: &[u8; 10] = b"CRING/snd1";
@@ -60,11 +57,6 @@ pub const MERGE_RECORD_LABEL: &[u8; 10] = b"CRING/mrg2";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
-}
-
-/// `Poseidon(CRPS, nullifier_secret, ring_id)`, a holder reads the owner's salted record key in one ring and never the secret.
-pub fn list_salt(nullifier_secret: &[u8; 32], ring_id: &[u8; 32]) -> Result<[u8; 32], HasherError> {
-    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret, ring_id])
 }
 
 /// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.

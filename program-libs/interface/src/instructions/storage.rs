@@ -221,7 +221,7 @@ const _: () = assert!(InitializeIxData::SIZE == 104);
 const _: () = assert!(core::mem::align_of::<InitializeTrackingIxData>() == 1);
 const _: () = assert!(InitializeTrackingIxData::SIZE == 65);
 const _: () = assert!(core::mem::align_of::<EnrollIxData>() == 1);
-const _: () = assert!(EnrollIxData::SIZE == 160);
+const _: () = assert!(EnrollIxData::SIZE == 192);
 const _: () = assert!(core::mem::align_of::<ApplyEnrollmentsIxData>() == 1);
 const _: () = assert!(ApplyEnrollmentsIxData::SIZE == 236);
 const _: () = assert!(core::mem::align_of::<OwnerGrantIxData>() == 1);

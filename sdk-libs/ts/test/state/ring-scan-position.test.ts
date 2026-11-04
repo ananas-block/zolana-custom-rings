@@ -86,10 +86,6 @@ function anonymousWallet(owner: ScanWallet, history: ViewingHistory): AnonymousW
   return AnonymousWallet.create(new Wallet({ identity: owner.address, registry: ASSETS }), history);
 }
 
-function restored(owner: ScanWallet, stored: string): AnonymousWallet {
-  return AnonymousWallet.fromJson(stored, { identity: owner.address, registry: ASSETS });
-}
-
 function position(history: ViewingHistory): bigint | null | undefined {
   return history.current().ringPosition(RING);
 }
@@ -210,7 +206,7 @@ describe("ring scan position", () => {
     const [, , last] = await slotSplit(indexer, bob, alice);
     const wallet = anonymousWallet(bob, bob.fresh());
     await wallet.absorb(await bob.sync(indexer, bob.fresh()));
-    const back = restored(bob, wallet.toJson());
+    const back = AnonymousWallet.fromJson(wallet.toJson());
     expect(back.notes()).toHaveLength(3);
     expect(position(back.history())).toBe(last.slot);
     const again = await bob.sync(indexer, back.history());
@@ -323,7 +319,7 @@ describe("atomic progress", () => {
     });
     const wallet = anonymousWallet(bob, bob.fresh());
     await wallet.absorb(await bob.sync(indexer, bob.fresh()));
-    const back = restored(bob, wallet.toJson());
+    const back = AnonymousWallet.fromJson(wallet.toJson());
     expect(back.notes().map((note) => note.utxo.amount)).toEqual([7n]);
     expect(position(back.history())).toBe(9n);
     expect(back.pendingClaims()).toHaveLength(1);
@@ -362,7 +358,7 @@ describe("atomic progress", () => {
     expect(() => wallet.updateHistory(scan.history)).toThrow("RING_SCAN_PROGRESS_MOVED");
     expect(position(wallet.history())).toBeNull();
     // A position written alone reads as no document, the wallet keeps its stored one.
-    expect(() => restored(bob, scan.history.toJson())).toThrow("RING_WALLET_DOCUMENT");
+    expect(() => AnonymousWallet.fromJson(scan.history.toJson())).toThrow("RING_WALLET_DOCUMENT");
     await wallet.absorb(await bob.sync(indexer, wallet.history()));
     expect(wallet.notes().map((note) => note.utxo.amount)).toEqual([7n]);
   });
@@ -403,7 +399,7 @@ describe("atomic progress", () => {
     expect(wallet.notes()).toEqual([]);
     expect(wallet.pendingOpenings().map((note) => hex(note.outputContext.hash))).toEqual([hash]);
     expect(await wallet.promotePending()).toEqual([]);
-    const back = AnonymousWallet.fromJson(wallet.toJson(), { identity: bob.address });
+    const back = AnonymousWallet.fromJson(wallet.toJson());
     expect(back.pendingOpenings()).toHaveLength(1);
     expect(position(back.history())).toBe(4n);
     back.wallet.ensureAsset(99n, mint);
@@ -414,27 +410,15 @@ describe("atomic progress", () => {
     expect(indexer.ringReads).toHaveLength(reads);
   });
 
-  it("migrates a bare version 7 history with no notes and no positions", () => {
-    const bob = new ScanWallet(2);
-    const stored =
-      `{"version":7,"viewingHistory":[{"viewingPubkey":"${hex(bob.viewingKey.toBytes())}","createdAt":3,` +
-      `"tx":{"next":9,"scanned":7,"pending":[1,5]},"request":{"next":2,"scanned":2,"pending":[]},` +
-      `"knownSenders":[],"knownRecipients":[]}]}`;
-    const wallet = restored(bob, stored);
-    expect(wallet.notes()).toEqual([]);
-    expect(wallet.history().current().txCount).toBe(9n);
-    expect(wallet.history().current().ringPositions()).toEqual([]);
-  });
-
   it("refuses an unknown wallet version and a malformed claim", async () => {
     const bob = new ScanWallet(2);
     const wallet = anonymousWallet(bob, bob.fresh());
     const text = wallet.toJson();
-    expect(() => restored(bob, text.replace('"walletVersion":1', '"walletVersion":2'))).toThrow(
+    expect(() => AnonymousWallet.fromJson(text.replace('"walletVersion":1', '"walletVersion":2'))).toThrow(
       "RING_WALLET_DOCUMENT",
     );
     expect(() =>
-      restored(bob, text.replace('"claims":[]', '"claims":[{"utxoHash":"zz"}]')),
+      AnonymousWallet.fromJson(text.replace('"claims":[]', '"claims":[{"utxoHash":"zz"}]')),
     ).toThrow("RING_WALLET_DOCUMENT");
   });
 });
@@ -548,7 +532,7 @@ describe("viewing keys", () => {
     const sync = AnonymousSync.create(holder, ASSETS);
     await wallet.absorb(await sync.fetch(indexer.client(), wallet.history()));
     expect(wallet.notes().map((note) => note.utxo.amount)).toEqual([1n, 2n]);
-    const restarted = restored(bob, wallet.toJson());
+    const restarted = AnonymousWallet.fromJson(wallet.toJson());
     expect(restarted.notes().map((note) => note.utxo.amount)).toEqual([1n, 2n]);
     const recovered = await sync.fullScan(
       indexer.client(),

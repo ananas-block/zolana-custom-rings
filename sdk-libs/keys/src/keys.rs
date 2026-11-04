@@ -84,6 +84,8 @@ pub struct RotatingRingKeys {
     local: LocalShieldedKeys,
     /// The current key first.
     viewing: Vec<ViewingKey>,
+    /// The identity key, `list_tag` is final so a rotation keeps the salt.
+    list_root: ViewingKey,
     address: ShieldedAddress,
     nullifier: NullifierKey,
 }
@@ -93,6 +95,7 @@ impl RotatingRingKeys {
         Self::holding(
             identity.shielded_address()?,
             vec![identity.viewing_key.clone()],
+            identity.viewing_key.clone(),
             identity.nullifier_key.clone(),
         )
     }
@@ -101,7 +104,7 @@ impl RotatingRingKeys {
     pub fn with_retired(self, retired: Vec<ViewingKey>) -> Result<Self, RingKeyError> {
         let mut viewing = self.viewing;
         viewing.extend(retired);
-        Self::holding(self.address, viewing, self.nullifier)
+        Self::holding(self.address, viewing, self.list_root, self.nullifier)
     }
 
     /// `next` becomes current and the earlier keys stay held.
@@ -112,12 +115,13 @@ impl RotatingRingKeys {
         };
         let mut viewing = vec![next];
         viewing.extend(self.viewing);
-        Self::holding(address, viewing, self.nullifier)
+        Self::holding(address, viewing, self.list_root, self.nullifier)
     }
 
     fn holding(
         address: ShieldedAddress,
         viewing: Vec<ViewingKey>,
+        list_root: ViewingKey,
         nullifier: NullifierKey,
     ) -> Result<Self, RingKeyError> {
         let local = LocalShieldedKeys::new(address, viewing.clone(), nullifier.clone())
@@ -125,9 +129,14 @@ impl RotatingRingKeys {
         Ok(Self {
             local,
             viewing,
+            list_root,
             address,
             nullifier,
         })
+    }
+
+    pub(crate) const fn list_root(&self) -> &ViewingKey {
+        &self.list_root
     }
 }
 

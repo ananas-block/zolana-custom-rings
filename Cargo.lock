@@ -9204,7 +9204,6 @@ dependencies = [
  "spr-transaction",
  "thiserror 2.0.20",
  "zeroize",
- "zolana-ring-policy",
 ]
 
 [[package]]

@@ -31,13 +31,14 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
     GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
-    GetDecryptedTransactionsResponse, GetDelegateNotesRequest, GetPendingEnrolmentsRequest,
-    GetRecordUpdateStatusRequest, GetRelayQuoteRequest, GetRelayStatusRequest,
-    GetSpendCoverageRequest, GetWalletActivityResponse, GetWalletStatusRequest, HealthResponse,
-    PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
-    RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
-    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
-    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES,
+    GetDecryptedTransactionsResponse, GetDelegateNotesRequest, GetListSaltRequest,
+    GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
+    GetRelayStatusRequest, GetSpendCoverageRequest, GetWalletActivityResponse,
+    GetWalletStatusRequest, HealthResponse, PagedRead, PrepareAuthorityTransferRequest,
+    PrepareRelayRequest, RefuseEnrolmentRequest, RingDepositsRequest, RingDepositsResponse,
+    RingState, RingStatusRequest, RingStatusResponse, SetMergeSettingsRequest,
+    SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY,
+    CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_DELEGATE_NOTES, GET_LIST_SALT,
     GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
     GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY,
     REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
@@ -284,6 +285,14 @@ pub fn rpc_module<S: TransactionSource + 'static>(
         |hub, request: GetDelegateNotesRequest| async move {
             let _authentication = hub.admit(Lane::Authentication)?;
             hub.delegate_notes(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_LIST_SALT,
+        |hub, request: GetListSaltRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.list_salt(&request).await
         },
     )?;
     method(

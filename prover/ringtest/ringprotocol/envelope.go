@@ -14,22 +14,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-type Body struct {
-	Blinding    *big.Int
-	Amount      uint64
-	OwnerKey    [32]byte
-	NullifierPk *big.Int
-}
-
-func (b Body) Seal(t testing.TB, slotSecret *big.Int) [shared.BodyLen]byte {
-	t.Helper()
-	blinding, nullifierPk := spptest.MustFieldBytes(t, b.Blinding), spptest.MustFieldBytes(t, b.NullifierPk)
-	plaintext := slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.OwnerKey[:], nullifierPk[:])
-	key, nonce := AuditStreamKeys(t, slotSecret, shared.BodyEncInfo)
-	return [shared.BodyLen]byte(CTREncrypt(t, key, nonce, plaintext))
-}
-
-// RecipientBody is the scheme 11 plaintext, the host twin of audit.AuditWires.assertRecipientBody.
+// RecipientBody is the scheme 13 plaintext, the host twin of audit.AuditWires.assertRecipientBody.
 type RecipientBody struct {
 	Blinding *big.Int
 	Amount   uint64

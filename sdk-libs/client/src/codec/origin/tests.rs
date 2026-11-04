@@ -1170,6 +1170,20 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
 }
 
 #[test]
+fn a_ring_tag_equal_to_spp_merge_names_no_record_and_no_source() {
+    let (mut group, _) = v2_merge_group();
+    group.outer.data[0] = tag::RING_MERGE_V2;
+    let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
+    assert_eq!(origin.merge_disclosure, None);
+    let (mut group, _) = v2_merge_group();
+    group.inner[0].program_id = RING;
+    assert!(matches!(
+        ring_event_origin_in(std::slice::from_ref(&group), 0, RING),
+        Err(AuditError::InvalidEventIndex(0))
+    ));
+}
+
+#[test]
 fn rpc_origin_binds_the_confirmed_slot() {
     let origin =
         confirmed_origin(withdrawing_transaction(Vec::new(), Vec::new()), 0, RING).unwrap();

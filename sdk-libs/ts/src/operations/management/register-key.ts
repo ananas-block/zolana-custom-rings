@@ -7,12 +7,13 @@ import {
 import type { ChainReader } from "@heliuslabs/zolana/client";
 import {
   addressBytes,
+  concatBytes,
   equalBytes,
   hashBytes,
   rightAlign,
   waitForProjection,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
+import type { Bytes31, Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
 import { NullifierKey, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { QuadPath } from "../../protocol/membership/member-registry.js";
 import {
@@ -103,31 +104,35 @@ export function openRingSealedKey(entry: RingSealedKeyEntry, auditor: X25519Keyp
 /** `(ephemeral, auditor)` fixes the keystream, the ephemeral scalar is never taken from a caller. */
 export function sealNullifierKey(
   nullifierKey: NullifierKey,
+  listSalt: Bytes32,
   auditorPublicKey: X25519PublicKey,
 ): NullifierKeyEnvelope {
   const ephemeral = X25519Keypair.generate();
   try {
-    return sealNullifierKeyWith(ephemeral, nullifierKey, auditorPublicKey);
+    return sealNullifierKeyWith(ephemeral, nullifierKey, listSalt, auditorPublicKey);
   } finally {
     ephemeral.destroy();
   }
 }
 
-/** @internal Byte zero of the plaintext is the pad the circuit pins. */
+/** @internal Bytes 0 and 32 of the plaintext are the pads the circuit pins. */
 export function sealNullifierKeyWith(
   ephemeral: X25519Keypair,
   nullifierKey: NullifierKey,
+  listSalt: Bytes32,
   auditorPublicKey: X25519PublicKey,
 ): NullifierKeyEnvelope {
   const secret = nullifierKey.secretBytes();
-  const plaintext = rightAlign(secret);
+  const aligned = rightAlign(secret);
+  const plaintext = concatBytes(aligned, listSalt);
+  aligned.fill(0);
   let dh: Bytes32 | undefined;
   let shared: Bytes32 | undefined;
   try {
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditorPublicKey);
     shared = auditSharedSecret(dh, ephemeralPublicKey, auditorPublicKey);
-    const ciphertext = symmetricAuditApply(shared, KEY_STREAM, plaintext) as Bytes32;
+    const ciphertext = symmetricAuditApply(shared, KEY_STREAM, plaintext) as Bytes64;
     return Object.freeze({
       ephemeralSecret: ephemeral.secretBytes(),
       sealed: Object.freeze({ ephemeralPublicKey, ciphertext }),
@@ -143,26 +148,45 @@ export function sealNullifierKeyWith(
 
 /** The pad alone does not authenticate the key against its tracking row. */
 export function openNullifierKey(sealed: SealedNullifierKey, auditor: X25519Keypair): NullifierKey {
+  const plaintext = openedPlaintext(sealed, auditor);
+  try {
+    return NullifierKey.fromSecret(plaintext.slice(1, 32) as Bytes31);
+  } finally {
+    plaintext.fill(0);
+  }
+}
+
+export function openListSalt(sealed: SealedNullifierKey, auditor: X25519Keypair): Bytes32 {
+  const plaintext = openedPlaintext(sealed, auditor);
+  try {
+    return plaintext.slice(32) as Bytes32;
+  } finally {
+    plaintext.fill(0);
+  }
+}
+
+function openedPlaintext(sealed: SealedNullifierKey, auditor: X25519Keypair): Uint8Array {
   let dh: Bytes32 | undefined;
   let shared: Bytes32 | undefined;
-  let plaintext: Uint8Array | undefined;
   try {
     dh = auditor.ecdh(sealed.ephemeralPublicKey);
     shared = auditSharedSecret(dh, sealed.ephemeralPublicKey, auditor.publicKey());
-    plaintext = symmetricAuditApply(shared, KEY_STREAM, sealed.ciphertext);
-    if (plaintext[0] !== 0) throw new RingError("RING_KEY_ENVELOPE_INVALID");
-    return NullifierKey.fromSecret(plaintext.subarray(1) as Bytes31);
+    const plaintext = symmetricAuditApply(shared, KEY_STREAM, sealed.ciphertext);
+    if (plaintext[0] !== 0 || plaintext[32] !== 0) {
+      plaintext.fill(0);
+      throw new RingError("RING_KEY_ENVELOPE_INVALID");
+    }
+    return plaintext;
   } finally {
     dh?.fill(0);
     shared?.fill(0);
-    plaintext?.fill(0);
   }
 }
 
 /** The row binds the ciphertext by hash and the owner by member, the ephemeral key by neither. */
 function boundSeal(seal: TrackingSeal, record: TrackingRecord): RingSealedKey {
   if (
-    seal.ciphertext.length !== 32 ||
+    seal.ciphertext.length !== 64 ||
     !equalBytes(hashBytes(seal.ciphertext), record.ctHash) ||
     !equalBytes(memberOfTag(addressBytes(seal.owner, "owner")), record.member)
   )
@@ -171,7 +195,7 @@ function boundSeal(seal: TrackingSeal, record: TrackingRecord): RingSealedKey {
     owner: seal.owner,
     nullifierPk: record.nullifierPk,
     ephemeralPublicKey: ephemeralKey(seal.ephPk),
-    ciphertext: seal.ciphertext as Bytes32,
+    ciphertext: seal.ciphertext as Bytes64,
   });
 }
 

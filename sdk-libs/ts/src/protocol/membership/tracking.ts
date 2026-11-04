@@ -11,7 +11,7 @@ import {
   Reader,
   ZERO_32,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { domainField, RingDomain } from "../../crypto/derivation/ring-domain.js";
@@ -37,7 +37,7 @@ const REGISTRY_DISCRIMINATOR = 3;
 const AUTHORIZATION_DISCRIMINATOR = 4;
 const OWNER_GRANT_DISCRIMINATOR = 5;
 const REGISTRY_SIZE = 1606;
-const AUTHORIZATION_SIZE = 241;
+const AUTHORIZATION_SIZE = 273;
 const OWNER_GRANT_SIZE = 2;
 
 export interface TrackingRegistry {
@@ -55,7 +55,7 @@ export interface TrackingAuthorization {
   readonly listTag: Bytes32;
   readonly viewingU: Bytes32;
   readonly ephU: Bytes32;
-  readonly ciphertext: Bytes32;
+  readonly ciphertext: Bytes64;
   readonly revision: bigint;
   readonly appliedRevision: bigint;
 }
@@ -130,7 +130,7 @@ export function decodeTrackingAuthorization(data: Uint8Array): TrackingAuthoriza
     listTag: reader.bytes(32, "listTag") as Bytes32,
     viewingU: reader.bytes(32, "viewingU") as Bytes32,
     ephU: reader.bytes(32, "ephU") as Bytes32,
-    ciphertext: reader.bytes(32, "ciphertext") as Bytes32,
+    ciphertext: reader.bytes(64, "ciphertext") as Bytes64,
     revision: reader.u64("revision"),
     appliedRevision: reader.u64("appliedRevision"),
   });

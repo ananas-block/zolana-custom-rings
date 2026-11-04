@@ -237,6 +237,8 @@ export interface RegisterKeyProofRequest {
   readonly member: Bytes32;
   /** A zero lead byte then the 31 secret bytes. */
   readonly nullifierSecret: Bytes32;
+  /** A zero lead byte then the 31 salt bytes. */
+  readonly listSalt: Bytes32;
   readonly ephSk: Bytes32;
   readonly auditorPk: Bytes32;
 }
@@ -368,6 +370,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ringId: field(request.ringId, "ringId"),
         member: field(request.member, "member"),
         nullifierSecret: hexBytes(request.nullifierSecret, 32, "nullifierSecret"),
+        listSalt: hexBytes(request.listSalt, 32, "listSalt"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
       };

@@ -144,7 +144,7 @@ fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
         list_tag: [0x15; 32],
         viewing_u,
         eph_u: [0x16; 32],
-        ciphertext: [0x17; 32],
+        ciphertext: [0x17; 64],
     }
 }
 
@@ -256,7 +256,7 @@ fn a_rotation_refuses_every_final_field_and_moves_the_viewing_key_alone() {
             ..rotated
         },
         EnrollIxData {
-            ciphertext: [9; 32],
+            ciphertext: [9; 64],
             ..rotated
         },
     ] {
@@ -720,7 +720,7 @@ fn enrollment_vector() -> Value {
         list_tag: [0x24; 32],
         viewing_u: [0x34; 32],
         eph_u: [0x35; 32],
-        ciphertext: [0x36; 32],
+        ciphertext: [0x36; 64],
     };
     let (authorization, bump) = TrackingAuthorization::find_address(&registry, &owner);
     let mut account = FirstEnrollment {
