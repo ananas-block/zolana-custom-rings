@@ -106,15 +106,7 @@ impl BufferedFrame {
 
     /// Abandons an unsettled buffer, its rent returns to the writer.
     pub fn close(&self) -> Instruction {
-        Instruction {
-            program_id: self.ring_program,
-            accounts: vec![
-                AccountMeta::new(self.writer, true),
-                AccountMeta::new(self.buffer, false),
-                AccountMeta::new(self.writer, true),
-            ],
-            data: vec![tag::CLOSE_FRAME_BUFFER],
-        }
+        close_frame_buffer(self.ring_program, self.writer, self.buffer)
     }
 
     /// Writes every chunk, then settles, a failed settlement leaves the buffer to [`Self::close`].
@@ -176,6 +168,18 @@ impl BufferedFrame {
             }
             .encode(),
         })
+    }
+}
+
+pub fn close_frame_buffer(ring_program: Address, writer: Address, buffer: Address) -> Instruction {
+    Instruction {
+        program_id: ring_program,
+        accounts: vec![
+            AccountMeta::new(writer, true),
+            AccountMeta::new(buffer, false),
+            AccountMeta::new(writer, true),
+        ],
+        data: vec![tag::CLOSE_FRAME_BUFFER],
     }
 }
 

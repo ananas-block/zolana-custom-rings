@@ -70,7 +70,7 @@ pub use crate::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
-    buffered::BufferedFrame,
+    buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     deposit::{
         fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
