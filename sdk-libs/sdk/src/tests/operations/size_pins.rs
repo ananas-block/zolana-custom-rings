@@ -76,8 +76,8 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin { n_in: 16, n_out: 8, bytes: [Some(3658), Some(3658), Some(3658), Some(3753), Some(3753), Some(3753), Some(4017), Some(4017), None, None, None] },
     SizePin { n_in: 24, n_out: 2, bytes: [Some(2876), Some(2876), Some(2876), Some(2971), Some(2971), Some(2971), Some(3043), Some(3043), None, None, None] },
     SizePin { n_in: 24, n_out: 4, bytes: [Some(3310), Some(3310), Some(3310), Some(3405), Some(3405), Some(3405), Some(3541), Some(3541), None, None, None] },
-    SizePin { n_in: 32, n_out: 2, bytes: [None, None, None, None, None, None, None, None, None, None, None] },
-    SizePin { n_in: 40, n_out: 2, bytes: [None, None, None, None, None, None, None, None, None, None, None] },
-    SizePin { n_in: 48, n_out: 2, bytes: [None, None, None, None, None, None, None, None, None, None, None] },
-    SizePin { n_in: 49, n_out: 2, bytes: [None, None, None, None, None, None, None, None, None, None, None] },
+    SizePin { n_in: 32, n_out: 2, bytes: [Some(3396), Some(3396), Some(3396), Some(3491), Some(3491), Some(3491), Some(3563), Some(3563), None, None, None] },
+    SizePin { n_in: 40, n_out: 2, bytes: [Some(3916), Some(3916), Some(3916), Some(4011), Some(4011), Some(4011), Some(4083), Some(4083), None, None, None] },
+    SizePin { n_in: 48, n_out: 2, bytes: [Some(4436), Some(4436), Some(4436), Some(4531), Some(4531), Some(4531), Some(4603), Some(4603), None, None, None] },
+    SizePin { n_in: 49, n_out: 2, bytes: [Some(4501), Some(4501), Some(4501), Some(4596), Some(4596), Some(4596), Some(4668), Some(4668), None, None, None] },
 ];

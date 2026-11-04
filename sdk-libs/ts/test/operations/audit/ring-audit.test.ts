@@ -175,6 +175,7 @@ const otherRecords: readonly AuditRecord[] = [
 function streamLayout(inputs: number, outputs: number): StreamLayout {
   const shape = frameKeyShape({
     rail: "confidential",
+    inputs,
     outputs,
     spendsDefaultRing: false,
     wide: false,

@@ -34,6 +34,7 @@ var Shapes = [...]Shape{
 	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5},
 	{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24, Wide: true},
 	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5, Wide: true},
+	{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true},
 	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true},
 	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true},
 }

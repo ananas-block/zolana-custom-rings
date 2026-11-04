@@ -54,16 +54,14 @@ export function selectTransferKey(
   return Object.freeze({ circuit, wideOwners: fitted.wide });
 }
 
-/** A subject past every keyed row names the rows, any other miss names the shape. */
 function unkeyed(spend: TransferSpend): RingError {
   const maximum = frameKeyShape(spend)?.owners;
   if (maximum !== undefined && spend.owners > maximum)
     return new RingError("RING_TOO_MANY_OWNERS", {
       details: { owners: spend.owners, maximum },
     });
-  return new RingError("RING_TRANSACT_DATA_INVALID", {
+  return new RingError("RING_CATALOG_KEY_MISSING", {
     details: {
-      reason: "RingShapeUnkeyed",
       rail: spend.rail,
       inputs: spend.inputs,
       outputs: spend.outputs,
