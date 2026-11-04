@@ -1,6 +1,12 @@
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32, Instruction } from "@heliuslabs/zolana/interface";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
+import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
+import { StateDiscriminator } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Instruction } from "@heliuslabs/zolana/interface";
+import {
+  addressBytes,
+  compileUnsignedTransaction,
+  encodeBase58,
+} from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
@@ -20,7 +26,11 @@ import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
-import { ringRailOf, RingTransactData } from "../../../src/protocol/transaction/transact.js";
+import {
+  ringRailOf,
+  RingTransactData,
+  type RingRail,
+} from "../../../src/protocol/transaction/transact.js";
 import { checkRelayMessage, expectedDelegate } from "../../../src/rpc/relay-message.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
@@ -40,6 +50,25 @@ const TX_VIEWING_KEY = (() => {
   key[31] = 0x46;
   return key as Bytes32;
 })();
+
+const USDC = address32(0x31);
+const EURC = address32(0x32);
+const SPL_MINTS = [
+  { mint: USDC, assetId: 2n },
+  { mint: EURC, assetId: 3n },
+];
+
+function address32(byte: number): Address {
+  return encodeBase58(new Uint8Array(32).fill(byte)) as Address;
+}
+
+function registryAccount(mint: Address, assetId: bigint): string {
+  const data = new Uint8Array(48);
+  data[0] = StateDiscriminator.splAssetRegistry;
+  data.set(addressBytes(mint), 8);
+  new DataView(data.buffer).setBigUint64(40, assetId, true);
+  return Buffer.from(data).toString("base64");
+}
 
 async function moveRing(mode: RingMode, owners: readonly ShieldedKeypair[]) {
   const delegate = randomAddress();
@@ -91,26 +120,49 @@ function messageOf(fixture: Fixture, instruction: Instruction): Uint8Array {
   return new Uint8Array(messageBytes);
 }
 
-const requestFor = (
+const requestOf = (
   fixture: Fixture,
   delegate: string,
   sources: readonly ShieldedKeypair[],
-  payee: ShieldedKeypair,
-  amount: bigint,
+  payments: readonly Readonly<{ recipient: ShieldedKeypair; mint: Address; amount: bigint }>[],
 ) =>
   ({
     ring: fixture.ringProgramId,
     delegate,
     transfer: {
       sources: sources.map((source) => source.shieldedAddress()),
-      mint: SOL_MINT,
-      payments: [{ recipient: payee.shieldedAddress(), amount }],
+      payments: payments.map((payment) => ({
+        ...payment,
+        recipient: payment.recipient.shieldedAddress(),
+      })),
     },
     txViewingKey: TX_VIEWING_KEY,
     timestamp: 0n,
     nonce: "",
     signature: "",
   }) as never;
+
+const requestFor = (
+  fixture: Fixture,
+  delegate: string,
+  sources: readonly ShieldedKeypair[],
+  payee: ShieldedKeypair,
+  amount: bigint,
+) => requestOf(fixture, delegate, sources, [{ recipient: payee, mint: SOL_MINT, amount }]);
+
+function liveRecords(fixture: Fixture, instruction: Instruction, rail: RingRail) {
+  const frame = RingTransactData.parse(Uint8Array.from(instruction.data ?? []).subarray(1), rail);
+  const { records } = openSealedDisclosure(TX_VIEWING_KEY, fixture.auditor.publicKey(), {
+    layout: RingTransactData.streamLayout(frame),
+    salt: frame.salt,
+    message: {
+      ephemeralPublicKey: x25519FromU(frame.txViewingU),
+      envelope: frame.envelope,
+      records: frame.outputs.map((output) => output.record),
+    },
+  });
+  return records.filter((record) => record.kind !== RecordKind.dummy);
+}
 
 describe("delegate sources", () => {
   beforeAll(async () => {
@@ -139,20 +191,11 @@ describe("delegate sources", () => {
       const message = messageOf(fixture, instruction);
       expect(checkRelayMessage(expected, message, delegate as never).signer).toBe(delegate);
 
-      const frame = RingTransactData.parse(
-        Uint8Array.from(instruction.data ?? []).subarray(1),
+      const live = liveRecords(
+        fixture,
+        instruction,
         ringRailOf(RingInstructionTag.authorityTransfer, mode),
       );
-      const { records } = openSealedDisclosure(TX_VIEWING_KEY, fixture.auditor.publicKey(), {
-        layout: RingTransactData.streamLayout(frame),
-        salt: frame.salt,
-        message: {
-          ephemeralPublicKey: x25519FromU(frame.txViewingU),
-          envelope: frame.envelope,
-          records: frame.outputs.map((output) => output.record),
-        },
-      });
-      const live = records.filter((record) => record.kind !== RecordKind.dummy);
       expect(live.reduce((total, record) => total + record.amount, 0n)).toBe(
         BigInt(sources.length) * 10n,
       );
@@ -183,8 +226,13 @@ describe("delegate sources", () => {
   });
 
   describe("recovered move", () => {
-    const noteOf = (fixture: Fixture, owner: ShieldedKeypair, leaf: number): WalletUtxo => {
-      const input = noteInput(owner, 10n, fixture.ringProgramId);
+    const noteOf = (
+      fixture: Fixture,
+      owner: ShieldedKeypair,
+      leaf: number,
+      asset: Address = SOL_MINT,
+    ): WalletUtxo => {
+      const input = noteInput(owner, 10n, fixture.ringProgramId, asset);
       return {
         utxo: input.utxo,
         outputContext: {
@@ -200,12 +248,29 @@ describe("delegate sources", () => {
       ...fixture.client,
       proofService: PROOF_SERVICE,
       getLatestBlockhash: async () => BLOCKHASH,
-      ...kitReads({ solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) } }),
+      ...kitReads({
+        solanaRpc: {
+          getProgramAccounts: () => ({
+            send: async () =>
+              SPL_MINTS.map(({ mint, assetId }) => ({
+                account: {
+                  owner: SHIELDED_POOL_PROGRAM_ID,
+                  data: [registryAccount(mint, assetId), "base64"],
+                },
+              })),
+          }),
+        },
+      }),
     });
-    const sourceOf = (fixture: Fixture, owner: ShieldedKeypair, leaf: number) => ({
+    const sourceOf = (
+      fixture: Fixture,
+      owner: ShieldedKeypair,
+      leaf: number,
+      assets: readonly Address[] = [SOL_MINT],
+    ) => ({
       address: owner.shieldedAddress(),
       nullifierKey: owner.nullifierKey(),
-      notes: [noteOf(fixture, owner, leaf)],
+      notes: assets.map((asset, at) => noteOf(fixture, owner, leaf + at, asset)),
     });
 
     it("spends several owners' notes and pays the change to the last note's owner", async () => {
@@ -236,6 +301,91 @@ describe("delegate sources", () => {
       expect(change?.ownerAddress?.signingPublicKey.equals(spent.at(-1)?.utxo.owner as never)).toBe(
         true,
       );
+    });
+
+    it.each(["confidential", "anonymous"] as const)(
+      "returns each mint's change to its owner on the %s rail",
+      async (mode) => {
+        const [member, other, payee] = [
+          ShieldedKeypair.generate(),
+          ShieldedKeypair.generate(),
+          ShieldedKeypair.generate(),
+        ];
+        const { fixture, delegate } = await moveRing(mode, [member, other, payee]);
+        const { messageBytes } = await buildRingDelegateRecoveredTransaction({
+          client: clientOf(fixture),
+          ringProgramId: fixture.ringProgramId,
+          delegate: delegate as never,
+          feePayer: fixture.authority,
+          outputs: [
+            { recipient: payee.shieldedAddress(), asset: SOL_MINT, amount: 4n },
+            { recipient: payee.shieldedAddress(), asset: USDC, amount: 3n },
+          ],
+          sources: [sourceOf(fixture, member, 0), sourceOf(fixture, other, 1, [USDC])],
+          txViewingKey: TX_VIEWING_KEY,
+        });
+        const message = new Uint8Array(messageBytes);
+        const expected = await expectedDelegate(
+          requestOf(
+            fixture,
+            delegate,
+            [member, other],
+            [
+              { recipient: payee, mint: SOL_MINT, amount: 4n },
+              { recipient: payee, mint: USDC, amount: 3n },
+            ],
+          ),
+          { feePayer: fixture.authority, validUntilSlot: 100n },
+          { mode, auditorPublicKey: fixture.auditor.publicKey() },
+        );
+        expect(checkRelayMessage(expected, message, delegate as never).signer).toBe(delegate);
+
+        const [instruction] = decompileTransactionMessage(
+          getCompiledTransactionMessageDecoder().decode(message) as Parameters<
+            typeof decompileTransactionMessage
+          >[0] & { version: 1 },
+        ).instructions;
+        const key = (owner: ShieldedKeypair) =>
+          Array.from(owner.shieldedAddress().signingPublicKey.confidentialViewTag()).join();
+        const moved = liveRecords(
+          fixture,
+          instruction as Instruction,
+          ringRailOf(RingInstructionTag.authorityTransfer, mode),
+        ).map((record) => [Array.from(record.ownerKey).join(), record.mint, record.amount]);
+        expect(moved).toHaveLength(4);
+        expect(moved).toEqual(
+          expect.arrayContaining([
+            [key(payee), SOL_MINT, 4n],
+            [key(payee), USDC, 3n],
+            [key(member), SOL_MINT, 6n],
+            [key(other), USDC, 7n],
+          ]),
+        );
+      },
+    );
+
+    it("refuses one owner's change on two SPL mints on the anonymous rail alone", async () => {
+      const [member, payee] = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+      const build = async (mode: RingMode) => {
+        const { fixture, delegate } = await moveRing(mode, [member, payee]);
+        return buildRingDelegateRecoveredTransaction({
+          client: clientOf(fixture),
+          ringProgramId: fixture.ringProgramId,
+          delegate: delegate as never,
+          feePayer: fixture.authority,
+          outputs: [
+            { recipient: payee.shieldedAddress(), asset: USDC, amount: 3n },
+            { recipient: payee.shieldedAddress(), asset: EURC, amount: 3n },
+          ],
+          sources: [sourceOf(fixture, member, 0, [USDC, EURC])],
+          txViewingKey: TX_VIEWING_KEY,
+        });
+      };
+      await expect(build("confidential")).resolves.toBeDefined();
+      await expect(build("anonymous")).rejects.toMatchObject({
+        code: "RING_BUILD_TRANSFER",
+        causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
+      });
     });
 
     it("refuses a source named twice and no source", async () => {

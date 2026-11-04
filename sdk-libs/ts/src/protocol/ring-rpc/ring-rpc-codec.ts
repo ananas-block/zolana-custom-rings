@@ -453,9 +453,9 @@ function checkedTxKey(key: Bytes32): Bytes32 {
 function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {
   return {
     sources: value.sources.map(shieldedAddressText),
-    mint: checkedAddress(value.mint, "transfer.mint"),
     payments: value.payments.map((payment, index) => ({
       recipient: shieldedAddressText(payment.recipient),
+      mint: checkedAddress(payment.mint, `transfer.payments[${index}].mint`),
       amount: toU64(payment.amount, `transfer.payments[${index}].amount`),
     })),
   };

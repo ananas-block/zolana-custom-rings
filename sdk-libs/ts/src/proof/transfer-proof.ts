@@ -113,6 +113,8 @@ export function transferProofRequest(
       auditor: input.auditor,
     }),
     approvalMask: policy.approvalMask,
+    approvalTotals: ZERO_32,
+    approvalBlinder: ZERO_32,
     outputCount: input.outputCount,
     // Every slot of the key's capacity, an omitted suffix runs its gadgets over its own proof output.
     outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId, circuit.outputs),

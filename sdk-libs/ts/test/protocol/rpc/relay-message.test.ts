@@ -41,10 +41,14 @@ import {
   checkRelayMessage,
   checkSettledMessage,
   settledBufferOf,
+  decodeRelayTransferTerms,
   type ExpectedDelegate,
   expectedDelegate,
   expectedDeposit,
+  expectedEnroll,
+  expectedPublicOwner,
   type ExpectedRelayMessage,
+  type DelegateRingConfig,
 } from "../../../src/rpc/relay-message.js";
 import { PendingRelaySignature, type RingRelayClient } from "../../../src/rpc/relay.js";
 import type {
@@ -90,17 +94,37 @@ interface DelegateRequest {
     readonly txViewingKey: string;
     readonly transfer: {
       readonly sources: readonly string[];
-      readonly mint: Address;
-      readonly payments: readonly { readonly recipient: string; readonly amount: number }[];
+      readonly payments: readonly {
+        readonly recipient: string;
+        readonly mint: Address;
+        readonly amount: number;
+      }[];
     };
   };
   readonly feePayer: Address;
 }
 
-function vector<R>(name: string): Vector<R> {
+interface EnrollRequest {
+  readonly ringProgramId: Address;
+  readonly owner: Address;
+  readonly trackingRegistry: Address;
+  readonly instructionData: string;
+  readonly feePayer: Address;
+}
+
+interface OwnerCase extends MessageCase {
+  readonly terms: { readonly signer: Address };
+  readonly knownNullifiers: readonly string[];
+}
+
+function fixture<V>(name: string): V {
   return JSON.parse(
     readFileSync(new URL(`../../../../../test-vectors/rpc/${name}`, import.meta.url), "utf8"),
-  ) as Vector<R>;
+  ) as V;
+}
+
+function vector<R>(name: string): Vector<R> {
+  return fixture<Vector<R>>(name);
 }
 
 function hex(text: string): Uint8Array {
@@ -142,9 +166,9 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
       txViewingKey: new Uint8Array(base64.encode(prepare.txViewingKey)),
       transfer: {
         sources: prepare.transfer.sources.map(shielded),
-        mint: prepare.transfer.mint,
         payments: prepare.transfer.payments.map((payment) => ({
           recipient: shielded(payment.recipient),
+          mint: payment.mint,
           amount: BigInt(payment.amount),
         })),
       },
@@ -154,13 +178,13 @@ function delegate(request: DelegateRequest): Promise<ExpectedRelayMessage> {
   );
 }
 
-function verdict(expected: ExpectedRelayMessage, message: string): string {
+function verdict(
+  expected: ExpectedRelayMessage,
+  message: string,
+  by: Address = expected.kind === "delegate" ? expected.delegate : ("" as Address),
+): string {
   try {
-    checkRelayMessage(
-      expected,
-      new Uint8Array(base64.encode(message)),
-      expected.kind === "delegate" ? expected.delegate : ("" as Address),
-    );
+    checkRelayMessage(expected, new Uint8Array(base64.encode(message)), by);
     return "Accepted";
   } catch (error) {
     return String((error as { details?: { mismatch?: unknown } }).details?.mismatch);
@@ -199,6 +223,8 @@ const RELAY_ID = "11111111111111111111111111111111" as indexerTypes.Hash;
 const deposits = vector<DepositRequest>("relay_deposit_messages.json");
 const delegates = vector<DelegateRequest>("relay_delegate_messages.json");
 const DELEGATE = delegates.request.prepare.delegate;
+const owners = fixture<{ readonly cases: readonly OwnerCase[] }>("relay_transfer_messages.json");
+const enrolls = vector<EnrollRequest>("relay_enroll_messages.json");
 
 describe("relay message check", () => {
   it.each(deposits.cases)("reaches the Rust verdict on deposit message $name", async (entry) => {
@@ -207,6 +233,26 @@ describe("relay message check", () => {
 
   it.each(delegates.cases)("reaches the Rust verdict on delegate message $name", async (entry) => {
     expect(verdict(await delegate(delegates.request), entry.message)).toBe(entry.verdict);
+  });
+
+  it.each(owners.cases)("reaches the Rust verdict on owner message $name", async (entry) => {
+    const expected = await expectedPublicOwner({
+      terms: decodeRelayTransferTerms(JSON.stringify(entry.terms)),
+      config: { mode: "anonymous" } as DelegateRingConfig,
+      knownNotes: entry.knownNullifiers.map((nullifier) => ({
+        nullifier: new Uint8Array(base58.encode(nullifier)) as Bytes32,
+      })),
+    });
+    expect(verdict(expected, entry.message, entry.terms.signer)).toBe(entry.verdict);
+  });
+
+  it.each(enrolls.cases)("reaches the Rust verdict on enroll message $name", async (entry) => {
+    const { feePayer, instructionData, ...named } = enrolls.request;
+    const expected = await expectedEnroll(
+      { ...named, instructionData: new Uint8Array(base64.encode(instructionData)) },
+      feePayer,
+    );
+    expect(verdict(expected, entry.message)).toBe(entry.verdict);
   });
 
   it("refuses a deposit message with an extra SPL transfer from the depositor before signing", async () => {
