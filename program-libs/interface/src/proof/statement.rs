@@ -20,8 +20,8 @@ use crate::{
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
 
-/// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, envelope_digest, salt, layout]`.
-pub const AUDIT_HEAD_ELEMENTS: usize = 12;
+/// `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, envelope_digest, salt, layout]`.
+pub const AUDIT_HEAD_ELEMENTS: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditHead<'a> {
@@ -30,7 +30,6 @@ pub struct AuditHead<'a> {
     pub ring_id: &'a [u8; 32],
     pub tx_viewing_u: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub eph_u: &'a [u8; 32],
     pub envelope: &'a [u8],
     pub salt: &'a [u8; 16],
     pub layout: AuditLayout,
@@ -43,7 +42,6 @@ impl AuditHead<'_> {
     ) -> Result<[[u8; 32]; AUDIT_HEAD_ELEMENTS], HasherError> {
         let [tx0, tx1] = pack_be(&tagged_x25519(self.tx_viewing_u));
         let [aud0, aud1] = pack_be(self.auditor_pubkey);
-        let [eph0, eph1] = pack_be(&tagged_x25519(self.eph_u));
         Ok([
             domain::field(statement),
             *self.first_nullifier,
@@ -52,8 +50,6 @@ impl AuditHead<'_> {
             tx1,
             aud0,
             aud1,
-            eph0,
-            eph1,
             ciphertext_digest(self.envelope)?,
             right_align(self.salt),
             right_align(&[self.layout.value()]),
@@ -140,6 +136,68 @@ impl SignerSet {
     }
 }
 
+/// Per entry of the owner signer run, in the order [`SignerSet::chain`] binds, the live output slots
+/// that signer owns with a nonzero `data_hash`. SPP accepts one signature for any number of such
+/// slots, the proved count lets a signer's check notice a slot the sender left out of its terms.
+/// Entry `k` holds bits `5k..5k + 5`, zero past the run, and no bit above the last entry is set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SignerDataCounts(u64);
+
+/// One live output slot as the count reads it, its owner identity is `solana_owner_identity`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveSlot<'a> {
+    pub owner_identity: &'a [u8; 32],
+    pub data_hash: &'a [u8; 32],
+}
+
+impl SignerDataCounts {
+    /// `solana_message::v1::MAX_SIGNATURES`. A CPI caller's PDAs can sign past it, a member past the
+    /// last entry must own no data-bearing slot, the circuit holds the same.
+    pub const ENTRIES: usize = 12;
+    pub const ENTRY_BITS: usize = 5;
+    const ENTRY_MASK: u64 = (1 << Self::ENTRY_BITS) - 1;
+    const USED_BITS: u64 = (1 << (Self::ENTRIES * Self::ENTRY_BITS)) - 1;
+
+    pub const fn new(packed: u64) -> Result<Self, CustomRingError> {
+        match packed & !Self::USED_BITS {
+            0 => Ok(Self(packed)),
+            _ => Err(CustomRingError::InvalidSignerDataCounts),
+        }
+    }
+
+    /// `run` holds the signers' identities in run order, a slot with a zero `data_hash` never counts.
+    pub fn of_run<'a>(
+        run: &[[u8; 32]],
+        live_slots: impl Iterator<Item = LiveSlot<'a>> + Clone,
+    ) -> Result<Self, CustomRingError> {
+        let mut packed = 0;
+        for (entry, signer) in run.iter().enumerate() {
+            let count = live_slots
+                .clone()
+                .filter(|slot| slot.owner_identity == signer && *slot.data_hash != ZERO_FIELD)
+                .count() as u64;
+            match (entry < Self::ENTRIES, count) {
+                (_, 0) => {}
+                (true, 1..=Self::ENTRY_MASK) => packed |= count << (entry * Self::ENTRY_BITS),
+                _ => return Err(CustomRingError::InvalidSignerDataCounts),
+            }
+        }
+        Ok(Self(packed))
+    }
+
+    pub const fn packed(self) -> u64 {
+        self.0
+    }
+
+    /// Zero past the run.
+    pub const fn count(self, entry: usize) -> u8 {
+        match entry < Self::ENTRIES {
+            true => ((self.0 >> (entry * Self::ENTRY_BITS)) & Self::ENTRY_MASK) as u8,
+            false => 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfidentialSender<'a> {
     Signer,
@@ -180,6 +238,8 @@ pub struct TransferStatement<'a> {
     pub approval_mask: ApprovalMask,
     /// Zero unless the frame discloses totals to a co-signer.
     pub approval_totals: &'a [u8; 32],
+    /// Zero unless a public signer owns a data-bearing output.
+    pub signer_data_counts: SignerDataCounts,
     /// `R` is zero, the frame takes public funds alone.
     pub no_spend: bool,
     /// The `m` published slots.
@@ -210,7 +270,7 @@ pub struct TransferRoots {
 }
 
 /// Everything but the party cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 3 + 4 + 2 + 1 + 2 + 4 + 1;
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 2 + 1 + 2 + 4 + 1;
 
 impl TransferFamily<'_> {
     /// `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
@@ -259,6 +319,7 @@ impl TransferStatement<'_> {
         elements.extend([
             right_align(&[self.approval_mask.bits()]),
             *self.approval_totals,
+            right_align(&self.signer_data_counts.packed().to_be_bytes()),
             bit(self.no_spend),
             count(self.outputs.len()),
             output_chain(self.outputs, capacity)?,
@@ -404,4 +465,96 @@ fn bit(value: bool) -> [u8; 32] {
 
 fn count(value: usize) -> [u8; 32] {
     right_align(&(value as u64).to_be_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use spr_interface::shape::SPP_SUPPORTED_SHAPES;
+
+    use super::*;
+    use crate::key_catalog::TRANSFER_SHAPES;
+
+    /// A later signature or output limit past the encoding fails here, not in a proof.
+    #[test]
+    fn every_supported_limit_fits_the_encoding() {
+        assert!(usize::from(solana_message::v1::MAX_SIGNATURES) <= SignerDataCounts::ENTRIES);
+        assert!(SignerDataCounts::ENTRIES * SignerDataCounts::ENTRY_BITS <= u64::BITS as usize);
+        let widest = 1 << SignerDataCounts::ENTRY_BITS;
+        for shape in SPP_SUPPORTED_SHAPES {
+            assert!(shape.n_outputs() < widest, "{shape:?}");
+        }
+        for shape in TRANSFER_SHAPES {
+            assert!(usize::from(shape.outputs) < widest, "{shape:?}");
+        }
+    }
+
+    const ALICE: [u8; 32] = [1; 32];
+    const BOB: [u8; 32] = [2; 32];
+    const DATA: [u8; 32] = [7; 32];
+
+    fn slot<'a>(owner_identity: &'a [u8; 32], data_hash: &'a [u8; 32]) -> LiveSlot<'a> {
+        LiveSlot {
+            owner_identity,
+            data_hash,
+        }
+    }
+
+    #[test]
+    fn each_run_entry_counts_its_own_data_bearing_slots() {
+        let slots = [
+            slot(&BOB, &DATA),
+            slot(&ALICE, &ZERO_FIELD),
+            slot(&BOB, &DATA),
+            slot(&ALICE, &DATA),
+            slot(&[3; 32], &DATA),
+        ];
+        let counts = SignerDataCounts::of_run(&[ALICE, BOB], slots.iter().copied()).unwrap();
+        assert_eq!(counts.packed(), 1 | 2 << SignerDataCounts::ENTRY_BITS);
+        assert_eq!(counts.count(0), 1);
+        assert_eq!(counts.count(1), 2);
+        assert_eq!(counts.count(2), 0);
+        assert_eq!(counts.count(SignerDataCounts::ENTRIES), 0);
+    }
+
+    #[test]
+    fn an_empty_run_counts_nothing() {
+        let slots = [slot(&ALICE, &DATA)];
+        assert_eq!(
+            SignerDataCounts::of_run(&[], slots.iter().copied()),
+            Ok(SignerDataCounts::default())
+        );
+    }
+
+    #[test]
+    fn bits_past_the_last_entry_are_refused() {
+        let used = (1u64 << 60) - 1;
+        assert_eq!(
+            SignerDataCounts::new(used).map(SignerDataCounts::packed),
+            Ok(used)
+        );
+        assert_eq!(
+            SignerDataCounts::new(1 << 60),
+            Err(CustomRingError::InvalidSignerDataCounts)
+        );
+    }
+
+    #[test]
+    fn a_data_slot_past_the_entries_and_a_count_past_its_bits_are_refused() {
+        let mut wide = [ALICE; SignerDataCounts::ENTRIES + 1];
+        wide[SignerDataCounts::ENTRIES] = BOB;
+        let bob_data = [slot(&BOB, &DATA)];
+        assert_eq!(
+            SignerDataCounts::of_run(&wide, core::iter::empty()),
+            Ok(SignerDataCounts::default())
+        );
+        assert_eq!(
+            SignerDataCounts::of_run(&wide, bob_data.iter().copied()),
+            Err(CustomRingError::InvalidSignerDataCounts)
+        );
+        let slots = [slot(&ALICE, &DATA); 32];
+        assert_eq!(
+            SignerDataCounts::of_run(&[ALICE], slots.iter().copied()),
+            Err(CustomRingError::InvalidSignerDataCounts)
+        );
+    }
 }

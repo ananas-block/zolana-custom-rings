@@ -11,6 +11,7 @@ import (
 	"github.com/consensys/gnark/test"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
@@ -61,6 +62,27 @@ func TestMergeRefusals(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A witness off the record's opening refuses inside the encoder deposits share.
+func TestMergeRecordOffItsOpening(t *testing.T) {
+	for name, tamper := range map[string]func(*ringmerge.Statement){
+		"another owner key": func(s *ringmerge.Statement) { s.Circuit.OwnerKey[0] = 0 },
+		"another mint":      func(s *ringmerge.Statement) { s.Circuit.MintChunks[1] = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := ringmerge.Build(t)
+			tamper(s)
+			ringtest.RequireRefused(t, solved(t, s), "audit.OpeningRecord.Encode")
+		})
+	}
+	t.Run("a sealed seed off the opening", func(t *testing.T) {
+		s := ringmerge.Build(t)
+		s.Record = slices.Clone(s.Record)
+		s.Record[audit.RecordStride] ^= 1
+		s.Rebind(t)
+		ringtest.RequireRefused(t, solved(t, s), "circuits.(*MergeCircuit).Define")
+	})
 }
 
 // A byte outside 0..255 packing to the same identity would open another record.

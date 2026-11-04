@@ -1,4 +1,12 @@
 // Package circuits proves a ring deposit and an anonymous ring merge.
+//
+// The deposit statement proves the following per occupied slot of the Count it publishes.
+//  1. The owner commitment SPP receives is Poseidon(Poseidon(owner, key), CRDB blinding), and the slot's
+//     ciphertext seals the opening record that rebuilds it, under one CRING/dep stream.
+//  2. A nonzero key is the owner's enrolled row's under the tracking root, a zero key leaves the owner absent.
+//  3. On a policy ring the recipient and the deposited asset meet the rules under the bound roots.
+//
+// A padding slot carries nothing, its statement cells read zero.
 package circuits
 
 import (
@@ -20,7 +28,7 @@ import (
 const (
 	MaxDeposits = 8
 	// DepositRecordLen is the canonical record then the blinding, mirrored by RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN.
-	DepositRecordLen = MergeRecordLen
+	DepositRecordLen = audit.OpeningRecordLen
 )
 
 // DepositCircuit binds every deposited owner commitment to a record sealed for the auditor, it spends nothing and reads no nullifier tree.
@@ -109,12 +117,10 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		blinding := shared.DepositBlinding(api, c.BlindingSecrets[i])
 		commitments[i] = gadget.PoseidonHash(api, []frontend.Variable{owner, blinding})
 		// 4. The record seals the blinding the reader rebuilds the commitment with, and bounds a live amount below 2^64 as the comparator needs.
-		record := audit.RecordOpening{
+		plaintext = slices.Concat(plaintext, audit.OpeningRecord{RecordOpening: audit.RecordOpening{
 			Live: active, Kind: api.Mul(active, audit.KindRing), Amount: c.Amounts[i], OwnerPkHash: c.OwnerPkHashes[i], NullifierPk: c.NullifierPks[i], Asset: c.Assets[i],
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],
-		}.Encode(api, rc)
-		blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(active, blinding))
-		plaintext = slices.Concat(plaintext, record, blindingBytes[:])
+		}, Secret: blinding}.Encode(api, rc))
 	}
 	// 5. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root.
 	tracking := c.OpenTracking(api)
@@ -130,9 +136,9 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 // statement mirrors DepositPublicInput::elements in program-libs/interface/src/instructions/deposit.rs.
 func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, commitments []frontend.Variable, sealed shared.Sealed) []frontend.Variable {
 	chain := []frontend.Variable{shared.DepositStatementDomain, c.ContextHash, c.Count, c.Anonymous}
+	ciphertexts := audit.SlotRegions{Stride: DepositRecordLen, Length: DepositRecordLen}.Hashes(api, sealed.Ciphertext, count.Active)
 	for i, commitment := range commitments {
-		ciphertext := gadget.HashBoundedBytes(api, sealed.Ciphertext[i*DepositRecordLen:(i+1)*DepositRecordLen])
-		chain = append(chain, api.Mul(count.Active[i], commitment), api.Mul(count.Active[i], ciphertext))
+		chain = append(chain, api.Mul(count.Active[i], commitment), ciphertexts[i])
 	}
 	// The public statement keeps all eight pairs. Missing slots are constants.
 	for i := len(commitments); i < MaxDeposits; i++ {

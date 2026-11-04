@@ -16,8 +16,6 @@ import (
 const (
 	// AuditStatementDomain = "CRAU"
 	AuditStatementDomain = 0x43524155
-	// DeliveredSlotSecretDomain = "CRDS"
-	DeliveredSlotSecretDomain = 0x43524453
 	// BlindingSeedDomain = "CRBS"
 	BlindingSeedDomain = 0x43524253
 	// PolicyTableDomain = "CRTB"
@@ -40,10 +38,6 @@ const (
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
 	TransferStatementDomain = 0x43525458
-	// RecipientTagDomain = "CRRT"
-	RecipientTagDomain = 0x43525254
-	// SenderTagDomain = "CRST"
-	SenderTagDomain = 0x43525354
 	// TrackingLeafDomain = "CRTK"
 	TrackingLeafDomain = 0x4352544b
 	// TrackingEntryDomain = "CRTQ"
@@ -72,17 +66,6 @@ const (
 	DepositEncInfo = "CRING/dep"
 	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
 	MergeEncInfo = "CRING/mrg"
-	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
-	RecipientBodyEncInfo = "CRING/rcp"
-	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
-	SenderBundleEncInfo = "CRING/snd"
-)
-
-const (
-	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
-	RecipientBodyLen = 72
-	// SenderBundleHeadLen mirrors SENDER_BUNDLE_HEAD_LEN, mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed.
-	SenderBundleHeadLen = 80
 )
 
 // ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a ring output under it holds its owner to no tracking row.
@@ -90,24 +73,6 @@ var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f0
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
 var SolAssetField, _ = new(big.Int).SetString("2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864", 16)
-
-// DeliveredSlot is a delivered slot secret preimage, Agreement = pack_be(X25519(tx_viewing_sk, u)) and each key pack_be(0x04 ‖ u).
-type DeliveredSlot struct {
-	Agreement      [2]frontend.Variable
-	TxPk           [2]frontend.Variable
-	Recipient      [2]frontend.Variable
-	Salt           frontend.Variable
-	OutputIndex    frontend.Variable
-	FirstNullifier frontend.Variable
-}
-
-// Secret is Poseidon(CRDS, dh0, dh1, txpk0, txpk1, r0, r1, salt, i, n0), the recipient rebuilds it from X25519(u_sk, tx_u).
-func (s DeliveredSlot) Secret(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{
-		DeliveredSlotSecretDomain, s.Agreement[0], s.Agreement[1], s.TxPk[0], s.TxPk[1],
-		s.Recipient[0], s.Recipient[1], s.Salt, s.OutputIndex, s.FirstNullifier,
-	})
-}
 
 // BlindingSeed is SPP's blinding_seed Poseidon(CRBS, sk0, sk1, salt), every output blinding rebuilds from tx_viewing_sk.
 func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt frontend.Variable) frontend.Variable {

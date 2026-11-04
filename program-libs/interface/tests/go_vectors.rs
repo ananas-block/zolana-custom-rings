@@ -2,8 +2,8 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, domain, key_catalog::RING_KEYS, AuditHead, AuditLayout,
-    ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerSet,
-    SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
+    ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerDataCounts,
+    SignerSet, SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
     AUDIT_RECORD_LEN, DATA_TAIL_LEN,
 };
 use serde::Deserialize;
@@ -60,12 +60,12 @@ struct TransferCase {
     delegate: bool,
     approval_mask: u8,
     approval_totals: String,
+    signer_data_counts: u64,
     no_spend: bool,
     first_nullifier: String,
     ring_id: String,
     tx_viewing_u: String,
     auditor_pubkey: String,
-    eph_u: String,
     envelope: String,
     salt: String,
     layout: u8,
@@ -185,7 +185,6 @@ fn transfer_statements_reach_the_go_public_inputs() {
                 ring_id: &array(&case.ring_id),
                 tx_viewing_u: &array(&case.tx_viewing_u),
                 auditor_pubkey: &array(&case.auditor_pubkey),
-                eph_u: &array(&case.eph_u),
                 envelope: &envelope,
                 salt: &array(&case.salt),
                 layout: AuditLayout {
@@ -196,6 +195,7 @@ fn transfer_statements_reach_the_go_public_inputs() {
             family,
             approval_mask: ApprovalMask::new(case.approval_mask).unwrap(),
             approval_totals: &array(&case.approval_totals),
+            signer_data_counts: SignerDataCounts::new(case.signer_data_counts).unwrap(),
             no_spend: case.no_spend,
             outputs: &outputs,
             output_capacity: case.output_capacity,

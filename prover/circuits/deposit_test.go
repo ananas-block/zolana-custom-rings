@@ -164,6 +164,21 @@ func TestDepositAbsenceReadsTheFrameRoot(t *testing.T) {
 	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "gadget.AssertEqualWhen", treeRoot)
 }
 
+// A witness off the record's opening refuses inside the encoder merges share.
+func TestDepositRecordOffItsOpening(t *testing.T) {
+	for name, tamper := range map[string]func(*ringdeposit.Deposit){
+		"another owner key": func(d *ringdeposit.Deposit) { d.Circuit.OwnerKeys[0][1] = 0 },
+		"another mint":      func(d *ringdeposit.Deposit) { d.Circuit.MintChunks[0][1] = 0 },
+		"an amount at 2^64": func(d *ringdeposit.Deposit) { d.Circuit.Amounts[0] = new(big.Int).Lsh(big.NewInt(1), 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := ringdeposit.Spec{Count: 2}.Build(t)
+			tamper(d)
+			ringtest.RequireRefused(t, solveDeposit(d.Circuit), "audit.OpeningRecord.Encode")
+		})
+	}
+}
+
 // The frame's bytes differ from the sealed record at one field, the statement over them names bytes the proof never sealed.
 func TestEveryDepositRecordFieldIsSealed(t *testing.T) {
 	for name, offset := range map[string]int{"kind": 0, "padding": 108, "amount": 8, "owner key": 9, "mint": 41, "nullifier key": 104, "blinding": 143} {

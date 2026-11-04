@@ -1,3 +1,15 @@
+// The merge statement proves the following for one SPP merge output named by its hash and first nullifier.
+//  1. The ciphertext is the output's opening record under the ring's auditor key, the auditor rebuilds
+//     the published hash from the record and the first nullifier alone.
+//  2. A hidden owner's nullifier key is its enrolled row's under the tracking root and the public payer
+//     is another account. A zero key reads no row, and the statement names that owner for SPP's signature.
+//
+// SPP's proof ties every input to that owner, asset and sum. No list, guard, cap or co-signer rule is proven.
+//
+// SPP's merge publishes no auditor message and no external data hash covers the record. The auditor
+// reads the ciphertext from the ring instruction that called SPP in the confirmed transaction, and
+// the statement alone binds those bytes.
+
 package circuits
 
 import (
@@ -9,15 +21,13 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-// MergeRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
-const MergeRecordLen = audit.RecordStride + 32
+const MergeRecordLen = audit.OpeningRecordLen
 
 // MergeCircuit binds a ring's SPP merge output to a record only its auditor opens, SPP's proof ties every input to that owner, asset and sum.
 type MergeCircuit struct {
@@ -64,12 +74,10 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	}, c.OutputTreeID))
 
 	// 4. One encoding per record, a transfer's record followed by the seed.
-	rc := rangecheck.New(api)
-	seedBytes := ringgadget.FieldToBytesBEWith(api, rc, c.Seed)
-	plaintext := slices.Concat(audit.RecordOpening{
+	plaintext := audit.OpeningRecord{RecordOpening: audit.RecordOpening{
 		Live: 1, Kind: audit.KindRing, Amount: c.Amount, OwnerPkHash: c.OwnerPkHash, NullifierPk: c.NullifierPk, Asset: c.Asset,
 		OwnerKey: c.OwnerKey, MintChunks: c.MintChunks,
-	}.Encode(api, rc), seedBytes[:])
+	}, Secret: c.Seed}.Encode(api, rangecheck.New(api))
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.MergeEncInfo}.SealStream(api)
 
 	// 5. The statement names the SPP merge, the ring, the record and the owner SPP makes sign, mirrored by MergePublicInput::elements in program-libs/interface/src/instructions/merge.rs.

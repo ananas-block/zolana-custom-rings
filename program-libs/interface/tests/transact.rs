@@ -8,8 +8,8 @@ use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
     stream::slot_tag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
     ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
-    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
-    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
+    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerDataCounts, SignerSet,
+    SlotBody, TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -796,6 +796,49 @@ fn approval_totals_cost_a_digest_and_at_most_the_extension_flags() {
         assert_eq!(
             parsed.into_data().extensions.approval_totals,
             Some(&fixture.fields[73])
+        );
+    }
+}
+
+#[test]
+fn signer_data_counts_cost_a_u64_and_at_most_the_extension_flags() {
+    let fixture = Fixture::new();
+    let counts = SignerDataCounts::new(1 | 3 << SignerDataCounts::ENTRY_BITS).unwrap();
+    for (mut data, delta) in [
+        (fixture.confidential_thresholds(), 9),
+        (fixture.confidential_extensions(), 8),
+    ] {
+        let before = data.encode().unwrap().len();
+        assert_eq!(data.signer_data_counts(), SignerDataCounts::default());
+        data.extensions.signer_data_counts = Some(counts);
+        let encoded = data.encode().unwrap();
+        assert_eq!(encoded.len() - before, delta);
+        let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
+        assert_eq!(parsed.data().signer_data_counts(), counts);
+    }
+}
+
+#[test]
+fn the_frame_refuses_a_zero_count_and_a_bit_past_the_last_entry() {
+    let fixture = Fixture::new();
+    let mut data = fixture.confidential_extensions();
+    data.extensions.signer_data_counts = Some(SignerDataCounts::default());
+    assert_eq!(data.encode(), Err(CustomRingError::InvalidSignerDataCounts));
+    let counts = SignerDataCounts::new(0x0123_4567_89ab_cdef & ((1 << 60) - 1)).unwrap();
+    data.extensions.signer_data_counts = Some(counts);
+    let encoded = data.encode().unwrap();
+    let bytes = counts.packed().to_le_bytes();
+    let at = encoded
+        .windows(bytes.len())
+        .position(|window| window == bytes)
+        .unwrap();
+    for (name, packed) in [("zero", 0u64), ("high bit", 1 << 60)] {
+        let mut forged = encoded.clone();
+        forged[at..at + bytes.len()].copy_from_slice(&packed.to_le_bytes());
+        assert_eq!(
+            RingTransactData::parse(&forged, RingRail::Confidential).err(),
+            Some(CustomRingError::InvalidSignerDataCounts),
+            "{name}"
         );
     }
 }

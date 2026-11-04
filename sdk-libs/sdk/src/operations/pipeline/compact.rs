@@ -1,10 +1,10 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    cosign::ApprovalMask, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingProof,
-    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
-    Replies, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
+    cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
+    AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
+    RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -112,6 +112,7 @@ pub(crate) struct OwnedExtensions {
     pub messages: Vec<OwnedAppMessage>,
     pub cache: Option<CacheAccess>,
     pub approval_totals: Option<[u8; 32]>,
+    pub signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl OwnedExtensions {
@@ -129,6 +130,7 @@ impl OwnedExtensions {
                 .collect(),
             cache: self.cache,
             approval_totals: self.approval_totals.as_ref(),
+            signer_data_counts: self.signer_data_counts,
         }
     }
 }
