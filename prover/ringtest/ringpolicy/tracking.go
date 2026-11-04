@@ -19,7 +19,7 @@ func Enroll(t testing.TB, tree *ringregistry.Tracking, owner, nullifierPk *big.I
 	tree.Apply(t, ringregistry.TrackingEntry{Member: owner, NullifierPk: nullifierPk, CtHash: derived(1), View0: derived(2), View1: derived(3), Revision: big.NewInt(1), ListTag: derived(4)})
 }
 
-// FillTracking opens each live member once and fills the pool cyclically, a zero member reads the sentinel.
+// FillTracking opens each live member once and fills the pool cyclically.
 func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Tracking, rows, outputs []frontend.Variable) {
 	t.Helper()
 	var (
@@ -46,10 +46,9 @@ func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Trac
 		subjects = append(subjects, policy.PoolSubject{Member: member, RecordIndex: record})
 		return len(subjects) - 1
 	}
-	sentinel := add(big.NewInt(0))
 	entry := func(member frontend.Variable) frontend.Variable {
 		if ringtest.AsBigInt(member).Sign() == 0 {
-			return sentinel
+			return 0
 		}
 		return add(member)
 	}
@@ -58,6 +57,10 @@ func FillTracking(t testing.TB, target *policy.Tracking, tree *ringregistry.Trac
 	}
 	for o, member := range outputs {
 		target.OutputEntries[o] = entry(member)
+	}
+	// The sentinel fills a pool nothing live opened.
+	if len(subjects) == 0 {
+		add(big.NewInt(0))
 	}
 	if len(subjects) > len(target.TrackingSubjects) {
 		t.Fatalf("tracking needs %d subjects with capacity %d", len(subjects), len(target.TrackingSubjects))

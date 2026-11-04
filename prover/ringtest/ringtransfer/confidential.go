@@ -61,6 +61,13 @@ func (w Confidential) Build(t testing.TB) Built {
 	return b
 }
 
+// Refill reopens the policy and tracking pools after a test edits the rows.
+func (b Built) Refill(t testing.TB) {
+	t.Helper()
+	b.World.World.reopen(t, &b.Circuit.Sections, b.Assembled)
+	b.Rehash(t)
+}
+
 // Rehash recomputes private_tx_hash from the fixture slots and inputs, then the public input.
 func (b Built) Rehash(t testing.TB) {
 	t.Helper()
