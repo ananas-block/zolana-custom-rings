@@ -18,6 +18,7 @@ export const RingRpcMethod = Object.freeze({
   getRecordUpdateStatus: "getRecordUpdateStatus",
   setMergeSettings: "setMergeSettings",
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
+  getListSalt: "getListSalt",
   getPendingEnrolments: "getPendingEnrolments",
   refuseEnrolment: "refuseEnrolment",
   createRecordsRegistry: "createRecordsRegistry",
@@ -239,6 +240,16 @@ export interface AuthorityTransfer {
   readonly source: ShieldedAddress;
   readonly mint: Address;
   readonly payments: readonly AuthorityPayment[];
+}
+
+/** Rust `GetListSaltRequest`. */
+export interface GetListSaltRequest {
+  readonly ring: Address;
+  readonly writer: Address;
+  readonly owner: Address;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
 }
 
 /** Rust `PrepareAuthorityTransferRequest`, answered with a `signMessage` step until the delegate signs. */

@@ -16,6 +16,7 @@ import type {
   MergeSettings,
   PendingEnrolment,
   PendingEnrolmentsPage,
+  GetListSaltRequest,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordsRegistry,
@@ -419,6 +420,18 @@ export function encodePrepareAuthorityTransferRequest(
     delegate: checkedAddress(value.delegate, "delegate"),
     transfer: encodeAuthorityTransfer(value.transfer),
     txViewingKey: getBase64Decoder().decode(checkedTxKey(value.txViewingKey)),
+    timestamp: toU64(value.timestamp, "timestamp"),
+    nonce: checkedBase64(value.nonce, "nonce"),
+    signature: checkedSignature(value.signature, "signature"),
+  };
+}
+
+/** Rust `GetListSaltRequest`, its serialization byte for byte. */
+export function encodeGetListSaltRequest(value: GetListSaltRequest): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    writer: checkedAddress(value.writer, "writer"),
+    owner: checkedAddress(value.owner, "owner"),
     timestamp: toU64(value.timestamp, "timestamp"),
     nonce: checkedBase64(value.nonce, "nonce"),
     signature: checkedSignature(value.signature, "signature"),

@@ -66,6 +66,7 @@ import {
   decodeSubmitRecordUpdate,
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
+  encodeGetListSaltRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
@@ -84,6 +85,7 @@ import {
   type CreateRecordsRegistryRequest,
   type GetPendingEnrolmentsRequest,
   type PendingEnrolmentsPage,
+  type GetListSaltRequest,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type ReaderGrantAction,
@@ -128,6 +130,7 @@ const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
+const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt/v1";
 const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
 const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
 const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status/v1";
@@ -393,6 +396,73 @@ function freshTxViewingKey(): Bytes32 {
   const secret = key.secretBytes();
   key.destroy();
   return secret;
+}
+
+/** Mirrors Rust `ListSaltAttestation::message`. */
+export function listSaltAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    writer: Address;
+    owner: Address;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      LIST_SALT_DOMAIN,
+      ...targetLines(input.target),
+      `writer: ${input.writer}`,
+      `owner: ${input.owner}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `ListSaltRequest`, a writer of the ring's salted lists signs it. */
+export class RingListSaltRequest {
+  readonly #target: RingReadTarget;
+  readonly #owner: Address;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, owner: Address) {
+    this.#target = checkedReadTarget(target);
+    this.#owner = owner;
+  }
+
+  static forOwner(target: RingReadTarget, owner: Address): RingListSaltRequest {
+    return new RingListSaltRequest(target, owner);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(writer: MessagePartialSigner): Promise<GetListSaltRequest> {
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      writer,
+      listSaltAttestation({
+        target: this.#target,
+        writer: writer.address,
+        owner: this.#owner,
+        timestamp,
+        nonce,
+      }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      writer: writer.address,
+      owner: this.#owner,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
 }
 
 /** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the policy authority signs. */
@@ -1682,6 +1752,20 @@ export class RingRpc {
     );
   }
 
+  /** `undefined` while the owner has no tracking row. */
+  async getListSalt(
+    request: GetListSaltRequest,
+    context?: RequestContext,
+  ): Promise<Bytes32 | undefined> {
+    const wire = exactRecord(
+      await this.#call(RingRpcMethod.getListSalt, encodeGetListSaltRequest(request), context),
+      LIST_SALT_FIELDS,
+      NO_FIELDS,
+      "result",
+    );
+    return absent(wire["listSalt"]) ? undefined : hash(wire["listSalt"], "result.listSalt");
+  }
+
   async prepareAuthorityTransfer(
     request: PrepareAuthorityTransferRequest,
     context?: RequestContext,
@@ -2428,6 +2512,8 @@ const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"])
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
+const LIST_SALT_FIELDS = new Set(["listSalt"]);
+const NO_FIELDS = new Set<string>();
 const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "cursor"]);
 const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
   "slot",

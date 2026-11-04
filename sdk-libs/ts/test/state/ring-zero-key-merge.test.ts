@@ -105,6 +105,7 @@ describe("openZeroKeyMerges", () => {
     const keys = LocalRingKeys.fromKeys({
       address: owner.address,
       viewingKeys: [owner.keypair.viewingKey(), retired],
+      listRoot: owner.keypair.viewingKey(),
       nullifierKey: owner.keypair.nullifierKey(),
     });
     const { row } = zeroKeyMergeRow({ owner, seed: seedOf(retired) });

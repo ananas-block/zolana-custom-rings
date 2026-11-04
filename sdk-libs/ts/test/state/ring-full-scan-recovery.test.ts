@@ -128,6 +128,7 @@ describe("full scan recovery", () => {
     const holder = LocalRingKeys.fromKeys({
       address: bob.shieldedAddress(),
       viewingKeys: [bob.viewingKey(), retired.viewingKey()],
+      listRoot: bob.viewingKey(),
       nullifierKey: bob.nullifierKey(),
     });
     const recipient = await AnonymousSync.create(holder, ASSETS).fullScan(

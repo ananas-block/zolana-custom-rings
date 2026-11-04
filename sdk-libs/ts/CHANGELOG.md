@@ -2,6 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `RingRpc.getListSalt` and `RingListSaltRequest` read an owner's salt for a writer of the ring's salted lists, and the Ring RPC refusals add `txViewingKey` -32225 and `notListWriter` -32226.
 - A two-output default-ring spend of 9 to 24 published inputs proves on `custom-ring-transfer-entry-2-in24-w32-s12` and `encodeRelayProofInputs` takes `wideOwners`.
 - `PrepareAuthorityTransferRequest` requires `txViewingKey`, `RingAuthorityTransferRequest.withTxViewingKey` names it and `sign` picks a fresh one without it, `PreparedAuthorityTransfer` and `expectedDelegate` take the ring account's `mode` and `auditorPublicKey` in place of a mode, and `checkRelayMessage` refuses a delegate message with an output the request does not name, with the `TransactionKey` mismatch for a frame under another key → pass `{ mode, auditorPublicKey }` from the ring account, a request built by hand adds `txViewingKey`.
 - `RelayIntent` adds `enroll` with an `ownerSignature` over `enrollRequestDigest`, `encodeRelayEnrollInputs` encodes its `proofInputs`, the `delegate` intent requires a `delegateSignature`, and `RingRpcRefusal` adds -32202 to -32206 → sign `SppProofInputs.messageHash` with the ring delegate key and pass it as `delegateSignature`.
