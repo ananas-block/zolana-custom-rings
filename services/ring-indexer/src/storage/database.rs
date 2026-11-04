@@ -18,6 +18,10 @@ use zolana_ring_indexer::{
 
 use crate::{block::BlockMetadata, indexer::Quarantine};
 
+mod tracking;
+
+pub(crate) use tracking::{Enrollment, EnrollmentStore};
+
 /// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TreeVersion {
@@ -196,6 +200,7 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
     let slot = vec![int(journal.metadata.slot)?];
     let enrollments = "DELETE FROM storage_address_enrollments WHERE slot=$1";
     exec(tx, enrollments, slot.clone()).await?;
+    tracking::rollback_slot(tx, journal.metadata.slot).await?;
     exec(tx, "DELETE FROM ring_blocks WHERE slot=$1", slot).await?;
     cursor.tip = journal.previous_tip;
     cursor.scanned_slot = cursor.tip_slot();
