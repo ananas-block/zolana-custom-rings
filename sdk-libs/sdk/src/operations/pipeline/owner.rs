@@ -11,9 +11,9 @@ use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    anonymous::CoOwner, canonical_shape, pad_under_rail, sealed, shape_keyed, transaction_key,
-    CoOwnerKey, DeliveredRail, Rail, RailKind, RingSender, RingTransfer, Spend, Staged,
-    TransferAuthority,
+    anonymous::CoOwner, canonical_shape, pad_under_rail, public_owners::check_zero_key_inputs,
+    sealed, shape_keyed, transaction_key, CoOwnerKey, DeliveredRail, Rail, RailKind, RingSender,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -163,6 +163,12 @@ impl Owner<'_> {
         if config.mode == RingMode::Anonymous {
             return Err(RingError::MissingAnonymousSigner);
         }
+        check_zero_key_inputs(self.transaction.inputs(), &self.sender.address()?.signing_pubkey)?;
+        self.stage_signers(config)
+    }
+
+    /// The signer rail, zero-key notes admitted by the caller.
+    pub(super) fn stage_signers(&self, config: &CustomRingConfig) -> Result<Staged<'_>, RingError> {
         let sender = self.sender.address()?;
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
@@ -197,19 +203,7 @@ impl Owner<'_> {
             return Err(CustomRingError::OwnerSignerCount.into());
         }
         Ok(Staged {
-            authority: TransferAuthority {
-                owner: self.nullifier_key.cloned(),
-                co_owners: self
-                    .co_owners
-                    .iter()
-                    .map(|co_owner| {
-                        Ok(CoOwnerKey {
-                            owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
-                            key: co_owner.nullifier_key.clone(),
-                        })
-                    })
-                    .collect::<Result<_, RingError>>()?,
-            },
+            authority: self.authority()?,
             owner_signers,
             proof_inputs,
             rail,
@@ -217,6 +211,22 @@ impl Owner<'_> {
             interface_transfer_accounts: self.interface_transfer_accounts.clone(),
             spend,
             presealed: None,
+        })
+    }
+
+    pub(super) fn authority(&self) -> Result<TransferAuthority, RingError> {
+        Ok(TransferAuthority {
+            owner: self.nullifier_key.cloned(),
+            co_owners: self
+                .co_owners
+                .iter()
+                .map(|co_owner| {
+                    Ok(CoOwnerKey {
+                        owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
+                        key: co_owner.nullifier_key.clone(),
+                    })
+                })
+                .collect::<Result<_, RingError>>()?,
         })
     }
 }

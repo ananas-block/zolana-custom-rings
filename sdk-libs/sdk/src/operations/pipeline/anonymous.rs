@@ -21,7 +21,9 @@ use zolana_ring_transaction::{AnonymousPlan, ReplyMetadata, RingDelivery, RingOu
 use super::{
     canonical_shape,
     owner::{CustomRingTransferInput, Owner},
-    pad_under_rail, sealed,
+    pad_under_rail,
+    public_owners::check_zero_key_inputs,
+    sealed,
     selection::{payment_total, widest, Candidate, Funding},
     spends_default_ring, transaction_key, CoOwnerKey, Rail, RailKind, RingSender, RingTransfer,
     Spend, Staged, TransferAuthority,
@@ -160,12 +162,7 @@ impl<'a> RingTransfer<Anonymous<'a>> {
 
     /// Every ring output owner other than the sender is paid here, before the transaction is padded.
     pub fn with_payment(mut self, payment: AnonymousPayment) -> Result<Self, RingError> {
-        if payment.to.ring_program_id != self.ring.program_id() {
-            return Err(RingError::ForeignRingAddress {
-                address: payment.to.ring_program_id,
-                ring: self.ring.program_id(),
-            });
-        }
+        check_payment_ring(&payment, self.ring)?;
         self.rail.owner.transaction.transfer_with_ring(
             &payment.to.recipient,
             payment.asset,
@@ -392,18 +389,10 @@ impl Anonymous<'_> {
         };
         let first_nullifier = *transaction.first_nullifier();
         let tx_viewing_key = transaction_key(keys, first_nullifier)?;
-        // The send call alone attaches a reply, no default path does.
-        let plan = self
-            .payments
-            .iter()
-            .fold(AnonymousPlan::new(), |plan, payment| {
-                let plan = plan.with_payment(payment.to.recipient.viewing_pubkey);
-                match &payment.reply {
-                    Some(reply) => plan.with_reply(reply.clone()),
-                    None => plan,
-                }
-            });
-        let rail = RingOutputRail::new(tx_viewing_key, RingDelivery::Anonymous(Box::new(plan)));
+        let rail = RingOutputRail::new(
+            tx_viewing_key,
+            RingDelivery::Anonymous(Box::new(anonymous_plan(&self.payments))),
+        );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         check_anonymous_inputs(&proof_inputs, &sender)?;
@@ -443,6 +432,30 @@ impl Anonymous<'_> {
     }
 }
 
+pub(super) fn check_payment_ring(
+    payment: &AnonymousPayment,
+    ring: CustomRing,
+) -> Result<(), RingError> {
+    match payment.to.ring_program_id == ring.program_id() {
+        true => Ok(()),
+        false => Err(RingError::ForeignRingAddress {
+            address: payment.to.ring_program_id,
+            ring: ring.program_id(),
+        }),
+    }
+}
+
+/// The send call alone attaches a reply, no default path does.
+pub(super) fn anonymous_plan(payments: &[AnonymousPayment]) -> AnonymousPlan {
+    payments.iter().fold(AnonymousPlan::new(), |plan, payment| {
+        let plan = plan.with_payment(payment.to.recipient.viewing_pubkey);
+        match &payment.reply {
+            Some(reply) => plan.with_reply(reply.clone()),
+            None => plan,
+        }
+    })
+}
+
 /// The hidden owner's note leads, a frame of only public owners takes the confidential family.
 pub(super) fn check_anonymous_inputs(
     inputs: &SppProofInputs,
@@ -455,6 +468,7 @@ pub(super) fn check_anonymous_inputs(
     if !hidden_leads {
         return Err(RingError::HiddenOwnerMissing);
     }
+    check_zero_key_inputs(&inputs.input_utxos, &sender.signing_pubkey)?;
     if inputs
         .input_utxos
         .iter()
@@ -739,14 +753,14 @@ fn exit_refused(refusal: CustomRingError, destination: Address) -> RingError {
 }
 
 /// A zero SOL change fills a spare slot of a transfer that returns nothing, a change slot costs less than a dummy with a body.
-struct SenderChange<'a> {
-    shape: Option<Shape>,
-    sender: &'a ShieldedAddress,
-    ring: Address,
+pub(super) struct SenderChange<'a> {
+    pub shape: Option<Shape>,
+    pub sender: &'a ShieldedAddress,
+    pub ring: Address,
 }
 
 impl SenderChange<'_> {
-    fn ensure(
+    pub(super) fn ensure(
         self,
         mut transaction: ConfidentialTransaction,
     ) -> Result<ConfidentialTransaction, RingError> {

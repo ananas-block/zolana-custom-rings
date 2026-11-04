@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use solana_address::Address;
 use spr_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_transaction::{TransactionError, WalletUtxo};
 
 use super::{Rail, RingTransfer};
@@ -93,11 +94,30 @@ impl Funding<'_> {
                 error => return Err(error),
             }
         }
-        Err(first_refusal.unwrap_or(RingError::Unfunded {
-            mint: self.asset,
-            amount: self.amount,
-            max_inputs: self.max_inputs,
-        }))
+        Err(first_refusal.unwrap_or_else(|| self.unfunded()))
+    }
+
+    /// Names the zero-key funds only a public spend reaches.
+    fn unfunded(&self) -> RingError {
+        let exposed_if_spent = self
+            .utxos
+            .iter()
+            .filter(|utxo| {
+                utxo.utxo.asset.asset == self.asset && utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
+            })
+            .fold(0u64, |sum, utxo| sum.saturating_add(utxo.utxo.amount));
+        match exposed_if_spent {
+            0 => RingError::Unfunded {
+                mint: self.asset,
+                amount: self.amount,
+                max_inputs: self.max_inputs,
+            },
+            exposed_if_spent => RingError::UnfundedPastExposure {
+                mint: self.asset,
+                amount: self.amount,
+                exposed_if_spent,
+            },
+        }
     }
 }
 

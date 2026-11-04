@@ -10,7 +10,7 @@ use spr_client::ClientError;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::{
     instruction::instruction_data::transact::OwnerTag, pda, SPL_TOKEN_ACCOUNT_INITIALIZED,
-    SPL_TOKEN_PROGRAM_ID,
+    SPL_TOKEN_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
 use spr_keypair::ShieldedKeypair;
 use spr_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
@@ -58,6 +58,7 @@ fn ring_address(owner: &ShieldedKeypair) -> RingAddress {
     RingAddress {
         recipient: owner.shielded_address().unwrap(),
         ring_program_id: ring().program_id(),
+        list_salt: [7; 32],
     }
 }
 
@@ -99,7 +100,7 @@ async fn exit_owner(
     };
     match stage_anonymous(&transfer, &chain).await?.spend {
         Spend::Anonymous(_) => Ok(()),
-        Spend::Owner | Spend::InProofOwner(_) | Spend::Delegate { .. } => {
+        Spend::Owner | Spend::InProofOwner(_) | Spend::PublicOwners | Spend::Delegate { .. } => {
             unreachable!("an anonymous ring stages its rail")
         }
     }
@@ -3039,4 +3040,158 @@ async fn an_audit_only_withdrawal_is_exempt_within_its_threshold_and_co_signed_p
         !missing.parts.exempt,
         "a mint without a record keeps the co-signer"
     );
+}
+
+fn zero_key(mut note: WalletUtxo) -> WalletUtxo {
+    let key = NullifierKey::from_secret([0; 31]);
+    note.nullifier_pubkey = ZERO_NULLIFIER_PUBKEY;
+    note.utxo_hash = note
+        .utxo
+        .hash(&ZERO_NULLIFIER_PUBKEY, &[0; 32], &[0; 32], note.tree_id)
+        .unwrap();
+    note.nullifier = key.nullifier(&note.utxo_hash, &note.utxo.blinding).unwrap();
+    note
+}
+
+#[tokio::test]
+async fn automatic_selection_skips_a_zero_key_note_and_names_the_exposure() {
+    use crate::tests::support::{keypair, payer};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)]).client();
+    let utxos = vec![
+        ring_utxo(&sender, Mint::SOL, 10, 0),
+        zero_key(ring_utxo(&sender, Mint::SOL, 90, 1)),
+    ];
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
+    let selected = pay(10).select(&client).await.unwrap();
+    assert!(selected
+        .rail
+        .owner
+        .transaction
+        .inputs()
+        .iter()
+        .all(|input| input.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY));
+    assert!(matches!(
+        pay(50).select(&client).await,
+        Err(RingError::UnfundedPastExposure {
+            amount: 50,
+            exposed_if_spent: 90,
+            ..
+        })
+    ));
+    let merged = crate::select_merge_where(&utxos, Mint::SOL.asset, 8, &Default::default(), |_| true);
+    assert!(matches!(
+        merged,
+        Err(spr_transaction::TransactionError::NothingToMerge { .. })
+    ));
+}
+
+/// The hidden rail and the signer rail refuse the wallet's zero-key note unless it was named.
+#[tokio::test]
+async fn only_a_named_public_spend_takes_the_wallets_zero_key_note() {
+    use crate::tests::support::keypair;
+    let sender = keypair(1);
+    let note = zero_key(ring_utxo(&sender, Mint::SOL, 10, 0));
+    let chain = enrolled(&[&sender]);
+    let hidden = owner_transfer(&sender, ring_transaction(vec![note.clone()]))
+        .with_anonymous_signer(&sender.signing_key);
+    assert!(matches!(
+        stage_anonymous(&hidden, &chain).await,
+        Err(RingError::ZeroKeyInputUnnamed { index: 0 })
+    ));
+
+    let config = ring().require_config(&chain).await.unwrap();
+    let wallet = sender.shielded_address().unwrap().solana_address().unwrap();
+    let public = owner_transfer(&sender, ring_transaction(vec![note.clone()])).spend_public(wallet);
+    let staged = public.rail.stage(ring(), &config).await.unwrap();
+    assert!(matches!(staged.spend, Spend::PublicOwners));
+    assert_eq!(staged.owner_signers, [wallet]);
+
+    let other = Address::new_from_array([9; 32]);
+    let misnamed = owner_transfer(&sender, ring_transaction(vec![note.clone()])).spend_public(other);
+    assert!(matches!(
+        misnamed.rail.stage(ring(), &config).await,
+        Err(RingError::PublicSpendWalletMismatch { named, .. }) if named == other
+    ));
+
+    let confidential = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let config = ring().require_config(&confidential).await.unwrap();
+    let signer = owner_transfer(&sender, ring_transaction(vec![note.clone()]));
+    assert!(matches!(
+        signer.rail.stage(ring(), &confidential, &config).await,
+        Err(RingError::ZeroKeyInputUnnamed { index: 0 })
+    ));
+    let named = owner_transfer(&sender, ring_transaction(vec![note])).spend_public(wallet);
+    assert!(matches!(
+        named.rail.stage(ring(), &config).await.unwrap().spend,
+        Spend::Owner
+    ));
+}
+
+/// A public co-owner may bring a zero-key note beside the hidden sender's own keyed note.
+#[tokio::test]
+async fn a_public_co_owners_zero_key_note_stands_beside_a_hidden_sender() {
+    use crate::tests::support::keypair;
+    let sender = keypair(1);
+    let co_owner = keypair(3);
+    let chain = enrolled(&[&sender, &co_owner]);
+    let notes = vec![
+        ring_utxo(&sender, Mint::SOL, 10, 0),
+        zero_key(ring_utxo(&co_owner, Mint::SOL, 10, 1)),
+    ];
+    let owner = co_owner.shielded_address().unwrap().solana_address().unwrap();
+    let transfer = owner_transfer(&sender, ring_transaction(notes))
+        .with_anonymous_signer(&sender.signing_key)
+        .with_co_owner(CoOwner {
+            owner,
+            nullifier_key: &co_owner.nullifier_key,
+        });
+    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
+    assert_eq!(staged.owner_signers, [owner]);
+}
+
+/// The hidden owner's secret must not complete a zero-key input, its nullifier would mismatch.
+#[test]
+fn each_input_takes_the_secret_its_own_nullifier_names() {
+    use crate::tests::support::keypair;
+    use num_bigint::BigUint;
+    let owner = keypair(1);
+    let keyed = ring_utxo(&owner, Mint::SOL, 10, 0);
+    let zero = zero_key(ring_utxo(&owner, Mint::SOL, 10, 1));
+    let input_of = |note: &WalletUtxo| TransferInput {
+        utxo: spr_transaction::utxo::ProofInputUtxo::try_from(
+            &spr_transaction::utxo::SppProofInputUtxo::try_from(note.clone()).unwrap(),
+        )
+        .unwrap(),
+        is_dummy: BigUint::default(),
+        state_path_elements: Vec::new(),
+        state_path_index: BigUint::default(),
+        nullifier_low_value: BigUint::default(),
+        nullifier_next_value: BigUint::default(),
+        nullifier_low_path_elements: Vec::new(),
+        nullifier_low_path_index: BigUint::default(),
+        tree_slot: BigUint::default(),
+        nullifier: BigUint::from_bytes_be(&note.nullifier),
+        owner_pk_hash: BigUint::from_bytes_be(
+            &owner.signing_pubkey().owner_proof_input_hash().unwrap(),
+        ),
+        nullifier_secret: None,
+    };
+    let mut inputs = [input_of(&keyed), input_of(&zero)];
+    TransferAuthority {
+        owner: Some(owner.nullifier_key.clone()),
+        co_owners: Vec::new(),
+    }
+    .complete_inputs(&mut inputs)
+    .unwrap();
+    assert_eq!(
+        inputs[0].nullifier_secret,
+        Some(BigUint::from_bytes_be(&*owner.nullifier_key.secret()))
+    );
+    assert_eq!(inputs[1].nullifier_secret, Some(BigUint::default()));
 }

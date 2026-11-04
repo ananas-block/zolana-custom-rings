@@ -47,6 +47,7 @@ spr-transaction = { workspace = true }
 spr-tree = { workspace = true }
 
 [dev-dependencies]
+num-bigint = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 spr-client = { workspace = true, features = ["solana-rpc"] }
 http = { workspace = true }

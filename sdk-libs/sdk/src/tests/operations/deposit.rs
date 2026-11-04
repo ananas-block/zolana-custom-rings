@@ -203,6 +203,7 @@ async fn a_deposit_to_another_member_takes_its_request_tag_or_its_viewing_key() 
     let to = RingAddress {
         recipient: recipient.shielded_address().unwrap(),
         ring_program_id: ring().program_id(),
+        list_salt: [7; 32],
     };
     let request = recipient.get_recipient_request_view_tag(0).unwrap();
     let paid = |deposit_tag| {
@@ -214,11 +215,52 @@ async fn a_deposit_to_another_member_takes_its_request_tag_or_its_viewing_key() 
             },
         )
     };
-    let bootstrap = paid(None).prepare(&chain).await.unwrap();
-    assert!(publishes(&bootstrap, &recipient.viewing_pubkey().u()));
-    assert!(bootstrap.viewing_history().is_none(), "no counter moves");
+    assert!(matches!(
+        paid(None).prepare(&chain).await,
+        Err(RingError::DepositBootstrapTag)
+    ));
     let requested = paid(Some(request)).prepare(&chain).await.unwrap();
     assert!(publishes(&requested, &request));
+}
+
+/// Identical deposit bytes yield one commitment, and the second note could never spend.
+#[tokio::test]
+async fn a_retry_draws_a_new_note_and_a_frame_proves_once() {
+    let registered = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
+    })
+    .with_registry(
+        crate::tests::support::Registry::new(&[]),
+        &crate::tests::pipeline_rules(),
+    );
+    let client = chain.client();
+    let prepared = deposit(
+        &payer,
+        DepositRecipient::Confidential(registered.shielded_address().unwrap()),
+    )
+    .prepare(client.zolana())
+    .await
+    .unwrap();
+    let retried = prepared.fresh_attempt().unwrap();
+    assert_ne!(retried.utxo().blinding, prepared.utxo().blinding);
+    assert_eq!(retried.utxo().amount, prepared.utxo().amount);
+    assert_ne!(retried.spp.data, prepared.spp.data);
+    assert_ne!(
+        retried.disclosure.context_hash,
+        prepared.disclosure.context_hash
+    );
+    let _first_attempt = prepared.prove(&client).await;
+    assert!(matches!(
+        prepared.prove(&client).await,
+        Err(RingError::DepositFrameReused)
+    ));
+    assert!(!matches!(
+        retried.prove(&client).await,
+        Err(RingError::DepositFrameReused)
+    ));
 }
 
 #[tokio::test]
@@ -229,6 +271,7 @@ async fn a_deposit_refuses_an_address_of_another_ring() {
     let to = RingAddress {
         recipient: keypair(2).shielded_address().unwrap(),
         ring_program_id: other,
+        list_salt: [7; 32],
     };
     let paid = DepositRecipient::AnonymousPayment {
         to: &to,

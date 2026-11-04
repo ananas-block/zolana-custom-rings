@@ -24,7 +24,7 @@ use spr_client::{
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     heap::boxed, AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer,
-    PreparedRingDeposit, RingError, RingMergeOperation,
+    PreparedRingDeposit, PublicOwnerTransfer, RingError, RingMergeOperation,
 };
 
 #[cfg(test)]
@@ -87,6 +87,7 @@ pub enum SettledSubmission {
 pub enum RingOperation<'a> {
     Transfer(Box<CustomRingTransfer<'a>>),
     Anonymous(Box<AnonymousTransfer<'a>>),
+    PublicOwners(Box<PublicOwnerTransfer<'a>>),
     Delegate(Box<DelegateTransfer<'a>>),
     Merge(Box<RingMergeOperation>),
     Deposit(Box<PreparedRingDeposit>),
@@ -107,6 +108,7 @@ macro_rules! operations {
 operations! {
     Transfer(CustomRingTransfer<'a>) => Box::new,
     Anonymous(AnonymousTransfer<'a>) => Box::new,
+    PublicOwners(PublicOwnerTransfer<'a>) => Box::new,
     Delegate(DelegateTransfer<'a>) => Box::new,
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
@@ -286,6 +288,14 @@ impl<'a> RingSubmission<'a> {
         self.attempts
     }
 
+    /// The note of the deposit's latest attempt, the one a confirmation settled.
+    pub fn deposit_utxo(&self) -> Option<&spr_transaction::Utxo> {
+        match &self.operation {
+            RingOperation::Deposit(deposit) => Some(deposit.utxo()),
+            _ => None,
+        }
+    }
+
     /// Inputs stay reserved while the sent signature is unresolved.
     pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
         &mut self,
@@ -300,6 +310,9 @@ impl<'a> RingSubmission<'a> {
             let (attempt, failure) = match self.pending.take() {
                 Some(attempt) => (attempt, None),
                 None => {
+                    if self.attempts > 0 {
+                        self.operation.refresh_for_retry()?;
+                    }
                     let public: Vec<Address> = core::iter::once(payer.pubkey())
                         .chain(signers.iter().map(|signer| signer.pubkey()))
                         .collect();
@@ -407,6 +420,13 @@ impl<'a> RingSubmission<'a> {
 }
 
 impl RingOperation<'_> {
+    fn refresh_for_retry(&mut self) -> Result<(), RingError> {
+        if let Self::Deposit(deposit) = self {
+            **deposit = deposit.fresh_attempt()?;
+        }
+        Ok(())
+    }
+
     async fn check_public_signers(
         &self,
         client: &(impl AsyncRpc + ?Sized),
@@ -422,7 +442,10 @@ impl RingOperation<'_> {
                     .check_public_signers(signers.chain(operation.input.co_signer), &config)
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
-            Self::Transfer(_) | Self::Delegate(_) | Self::Instruction(_) => Ok(()),
+            Self::Transfer(_)
+            | Self::PublicOwners(_)
+            | Self::Delegate(_)
+            | Self::Instruction(_) => Ok(()),
         }
     }
 
@@ -433,6 +456,9 @@ impl RingOperation<'_> {
             }
             Self::Anonymous(transfer) => {
                 Self::Anonymous(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::PublicOwners(transfer) => {
+                Self::PublicOwners(Box::new(transfer.with_priority_fee(lamports)))
             }
             Self::Delegate(transfer) => {
                 Self::Delegate(Box::new(transfer.with_priority_fee(lamports)))
@@ -467,6 +493,14 @@ impl RingOperation<'_> {
                 )
             }
             Self::Anonymous(transfer) => {
+                let proven = boxed(|| transfer.prove(client)).await?;
+                proved(
+                    proven.instruction()?,
+                    InstructionTag::Transfer,
+                    proven.bound(),
+                )
+            }
+            Self::PublicOwners(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
