@@ -157,7 +157,7 @@ fn a_relayed_user_merge_lands_one_note_of_the_merged_value() -> Result<()> {
 }
 
 #[test]
-fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> {
+fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> {
     const MOVED: u64 = TRANSFER_AMOUNT / 2;
 
     let relayed = RelayedRing::register(Tier::policy(&EMPTY))?;
@@ -180,8 +180,8 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
 
     let quote = ring_rpc.quote(env, RelayOperation::Delegate)?;
 
-    // The service opens the member's deposit under its escrowed key at its next backfill.
-    let pending = wait_for("the service to open the escrowed note", || {
+    // The service opens the member's deposit under its enrolled key at its next backfill.
+    let pending = wait_for("the service to open the enrolled note", || {
         let request = AuthorityTransferRequest::new(AuthorityTransferAttestation {
             target: ring_rpc.target,
             delegate: delegate.pubkey(),
@@ -227,7 +227,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
     .sign(member)?;
     env.run(ring_rpc.relay.set_merge_settings(request))?;
 
-    // A pass merges nothing until the backfill opens the deposits under the escrowed key.
+    // A pass merges nothing until the backfill opens the deposits under the enrolled key.
     let sent = wait_for("a managed merge", || {
         let sent = ring_rpc.managed_merge_pass()?;
         Ok(if sent.is_empty() {
