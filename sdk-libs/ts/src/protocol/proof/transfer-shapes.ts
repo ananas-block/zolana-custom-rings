@@ -178,16 +178,15 @@ export function transferKeys(): readonly TransferKeyCircuit[] {
     familyShapes(family).flatMap((entry) =>
       entry.withdrawals.flatMap((withdrawals) =>
         entry.owners.flatMap((owners) =>
-          [false, true].map(
-            (data): TransferKeyCircuit =>
-              Object.freeze({
-                family,
-                outputs: entry.outputs,
-                class: entry.inputs,
-                withdrawals,
-                owners,
-                data,
-              }),
+          [false, true].map((data): TransferKeyCircuit =>
+            Object.freeze({
+              family,
+              outputs: entry.outputs,
+              class: entry.inputs,
+              withdrawals,
+              owners,
+              data,
+            }),
           ),
         ),
       ),
@@ -199,8 +198,6 @@ export function transferKeys(): readonly TransferKeyCircuit[] {
 const SPP_ADDRESSES = 4;
 /** Ring program, ring, ring config, own, curator, tracking. */
 const RING_ADDRESSES = 6;
-/** A buffered settle's buffer and rent payer. */
-const BUFFER_ADDRESSES = 2;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 const MAX_TRANSACTION_ADDRESSES = 64;
 
@@ -210,18 +207,12 @@ export interface TransferAddresses {
   readonly nInputs: number;
   readonly coSigners: number;
   readonly legs: number;
-  readonly buffered: boolean;
 }
 
 /** Contract Output 5, the owner signers that fit, a co-signer takes its record too. */
 export function ownerSignerCapacity(addresses: TransferAddresses): number {
   const taken =
-    SPP_ADDRESSES +
-    RING_ADDRESSES +
-    (addresses.buffered ? BUFFER_ADDRESSES : 0) +
-    addresses.nInputs +
-    2 * addresses.coSigners +
-    addresses.legs;
+    SPP_ADDRESSES + RING_ADDRESSES + addresses.nInputs + 2 * addresses.coSigners + addresses.legs;
   return Math.max(0, MAX_TRANSACTION_ADDRESSES - taken);
 }
 

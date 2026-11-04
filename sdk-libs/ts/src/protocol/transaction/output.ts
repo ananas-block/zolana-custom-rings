@@ -106,4 +106,3 @@ function encryptedOutputBody(data: Uint8Array, scheme: RingScheme): Uint8Array |
   }
   return frame.encoding === "encrypted" && frame.scheme === scheme ? frame.body : undefined;
 }
-

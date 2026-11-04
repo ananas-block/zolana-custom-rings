@@ -129,7 +129,9 @@ export type OutputPayloadErrorKind =
   | "recipientKey"
   | "commitment"
   /** No registered asset rebuilds the commitment. */
-  | "unknownAsset";
+  | "unknownAsset"
+  /** A key escrow slot before its owner's record is read. */
+  | "escrowPending";
 
 export interface OutputPayloadError {
   readonly slotIndex: number;

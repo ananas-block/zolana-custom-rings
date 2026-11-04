@@ -15,11 +15,7 @@ import type { RingNoteOwner } from "../../../crypto/derivation/blinding.js";
 
 import { DELIVERED_BODY_ENC_INFO, symmetricAuditApply } from "../../../crypto/audit/audit.js";
 import { checkedCounter } from "../../../crypto/error.js";
-import {
-  DELIVERED_BODY_LEN,
-  ESCROWED_DELIVERED_BODY_LEN,
-  STREAM_FIRST_COUNTER,
-} from "./layout.js";
+import { DELIVERED_BODY_LEN, ESCROWED_DELIVERED_BODY_LEN, STREAM_FIRST_COUNTER } from "./layout.js";
 
 export interface DeliveredBodyOpening {
   readonly blinding: Bytes32;

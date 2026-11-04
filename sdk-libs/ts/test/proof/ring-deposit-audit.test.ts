@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
-
 import {
   AccountRole,
   address,
   generateKeyPairSigner,
   getAddressDecoder,
+  getBase58Decoder,
   signTransactionWithSigners,
   type Address,
   type Signature,
@@ -18,8 +17,9 @@ import {
   bigIntToBytes,
   checkedBytes,
   decodeRingDepositInstructionData,
+  encodeRingDepositInstructionData,
 } from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { SHIELDED_POOL_PROGRAM_ID, initializePoseidon } from "@heliuslabs/zolana";
 import {
   InstructionTag,
   DepositAsset,
@@ -36,6 +36,15 @@ import {
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
+import depositVector from "../../../../test-vectors/deposit/deposit-v4.json" with { type: "json" };
+import mergeVector from "../../../../test-vectors/merge/merge_v4.json" with { type: "json" };
+import { encodeOpeningRecord } from "../../src/protocol/codec/audit-stream.js";
+import {
+  HISTORICAL_DEPOSIT_PREFIX_LENGTH,
+  encodeHistoricalDepositCapsule,
+} from "../../src/protocol/historical/v3/deposit-capsule.js";
+import { openHistoricalDepositOpening } from "../../src/protocol/historical/v3/deposit-opening.js";
+import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { StorageMemberOpenings, StorageOpeningsRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
@@ -98,133 +107,166 @@ function field(value: bigint): Bytes32 {
 function hex(value: Uint8Array): string {
   return Buffer.from(value).toString("hex");
 }
+function vectorBytes(value: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(value, "hex"));
+}
+/** A confirmed wrapper of `tag` and its SPP self-CPI, each ciphertext one encoded capsule. */
+function confirmedAudited(
+  input: Readonly<{
+    tag: number;
+    prefixLength: number;
+    ciphertexts: readonly Uint8Array[];
+    ephemeralPublicKey: Bytes33;
+    owners: readonly Bytes32[];
+  }>,
+): readonly ConfirmedDeposit[] {
+  const signature = "1".repeat(87) as Signature;
+  const wire = Uint8Array.of(
+    InstructionTag.ringDeposit,
+    ...encodeRingDepositInstructionData({
+      assets: [{ kind: "sol" }],
+      deposits: input.ciphertexts.map((ciphertext, slot) => ({
+        assetIndex: 0,
+        viewTag: new Uint8Array(32) as Bytes32,
+        ownerUtxoHash: input.owners[slot] as Bytes32,
+        amount: 1n,
+        ringDataHash: new Uint8Array(32) as Bytes32,
+        encrypted: {
+          txViewingPublicKey: input.ephemeralPublicKey,
+          salt: new Uint8Array(16) as Bytes16,
+          ciphertext,
+        },
+      })),
+    }),
+  );
+  const encode = getBase58Decoder();
+  const wrapper = Uint8Array.of(input.tag, ...new Uint8Array(input.prefixLength - 1), ...wire);
+  return ConfirmedDeposit.fromTransaction(
+    {
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [RING, SHIELDED_POOL_PROGRAM_ID],
+          instructions: [{ programIdIndex: 0, accounts: [], data: encode.decode(wrapper) }],
+        },
+      },
+      meta: {
+        err: null,
+        innerInstructions: [
+          {
+            index: 0,
+            instructions: [
+              { programIdIndex: 1, accounts: [], data: encode.decode(wire), stackHeight: 2 },
+              {
+                programIdIndex: 1,
+                accounts: [],
+                data: encode.decode(Uint8Array.of(InstructionTag.emitEvent, 0)),
+                stackHeight: 3,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    signature,
+    0,
+    RING,
+  );
+}
 beforeAll(initializePoseidon);
 
 describe("deposit disclosure", () => {
-  it("pins the shared Rust and Go encryption and statement vector", () => {
-    const auditor = X25519Keypair.fromBytes(new Uint8Array(32).fill(0x11) as Bytes32);
-    const generate = vi
-      .spyOn(X25519Keypair, "generate")
-      .mockImplementation(() => X25519Keypair.fromBytes(new Uint8Array(32).fill(0x22) as Bytes32));
-    const sealed = sealRingDepositOpenings(
-      [
-        {
-          ownerHash: field(1n),
-          blinding: field(3n),
-          ownerKey: field(0n),
-          recipientCiphertext: Uint8Array.of(1),
-        },
-        {
-          ownerHash: field(2n),
-          blinding: field(4n),
-          ownerKey: field(0n),
-          recipientCiphertext: Uint8Array.of(2),
-        },
-      ],
-      auditor.publicKey(),
+  it("hashes the deposit context over the SPP wire", () => {
+    const contextHash = ringDepositContextHash(
+      getAddressDecoder().decode(new Uint8Array(32).fill(0x33)),
+      getAddressDecoder().decode(new Uint8Array(32).fill(0x44)),
+      Uint8Array.of(18, 1, 0, 2),
     );
-    try {
-      const contextHash = ringDepositContextHash(
-        getAddressDecoder().decode(new Uint8Array(32).fill(0x33)),
-        getAddressDecoder().decode(new Uint8Array(32).fill(0x44)),
-        Uint8Array.of(18, 1, 0, 2),
-      );
-      expect(hex(contextHash)).toBe(
-        "2cc6b9a5a2cb550702b5387ade744abee5e6eeb7c266415e59502e6f8acce56b",
-      );
-      expect(sealed.capsules.map((capsule) => hex(capsule.ciphertext))).toEqual([
-        "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c",
-        "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b",
-      ]);
-      const hash = ringDepositPublicInputHash({
-        contextHash,
-        anonymous: false,
-        ownerCommitments: [
-          ownerUtxoHash(field(1n), field(3n)),
-          ownerUtxoHash(field(2n), field(4n)),
-        ],
-        capsules: sealed.capsules,
-        assets: [
-          { asset: field(5n), amount: 7n },
-          { asset: field(6n), amount: 8n },
-        ],
-        auditorPublicKey: auditor.publicKey(),
-      });
-      expect(hex(hash)).toBe("0da1732e6a3d2bb9db9e4fdb3a4d4979aa74be80e96a5f1916016e9b58167d04");
-    } finally {
-      generate.mockRestore();
-      sealed.ephemeralSecret.fill(0);
-      auditor.destroy();
-    }
+    expect(hex(contextHash)).toBe(
+      "2cc6b9a5a2cb550702b5387ade744abee5e6eeb7c266415e59502e6f8acce56b",
+    );
   });
 
-  const golden = new URL(
-    "../../../../prover/ring/testdata/deposit/custom-ring-deposit-1.json",
-    import.meta.url,
-  );
-  // The Go ring prover goldens live outside the repository.
-  it.runIf(existsSync(golden))(
-    "reproduces the statement of the Go deposit golden from its proof inputs",
-    () => {
-      const fixture = JSON.parse(readFileSync(golden, "utf8")) as Record<string, unknown>;
-      const word = (value: unknown): Bytes32 => {
-        if (typeof value !== "string") throw new Error("golden field");
-        return Uint8Array.from(Buffer.from(value.slice(2).padStart(64, "0"), "hex")) as Bytes32;
-      };
-      const words = (value: unknown): Bytes32[] => {
-        if (!Array.isArray(value)) throw new Error("golden list");
-        return value.map(word);
-      };
-      const count = Number(fixture["count"]);
-      const amounts = (fixture["amounts"] as string[]).map((value) => BigInt(value));
-      const ownerPkHashes = words(fixture["ownerPkHashes"]);
-      const nullifierPks = words(fixture["nullifierPks"]);
-      const secrets = words(fixture["blindingSecrets"]);
-      const ownerKeys = words(fixture["ownerKeys"]);
-      const openings = Array.from({ length: count }, (_, slot) => {
-        const owner = ownerHash(ownerPkHashes[slot] ?? field(0n), nullifierPks[slot] ?? field(0n));
-        const blinding = depositBlinding(secrets[slot] ?? field(0n));
-        return {
-          ownerHash: owner as Bytes32,
-          blinding,
-          ownerKey: ownerKeys[slot] ?? field(0n),
-          recipientCiphertext: new Uint8Array(),
-        };
-      });
-      const ephemeral = word(fixture["ephSk"]);
-      const generate = vi
-        .spyOn(X25519Keypair, "generate")
-        .mockImplementation(() => X25519Keypair.fromBytes(ephemeral));
-      const auditor = X25519PublicKey.fromBytes(
-        Uint8Array.of(4, ...word(fixture["auditorPk"])) as Bytes33,
+  it.each(depositVector.cases.map((vector) => [vector.name, vector] as const))(
+    "opens the %s record of deposit-v4.json and refuses another commitment",
+    (_, vector) => {
+      const auditor = X25519Keypair.fromBytes(
+        Uint8Array.from(Buffer.from(mergeVector.auditor_sk.slice(2), "hex")) as Bytes32,
       );
-      const sealed = sealRingDepositOpenings(openings, auditor);
-      try {
-        const hash = ringDepositPublicInputHash({
-          contextHash: word(fixture["contextHash"]),
-          anonymous: fixture["anonymous"] === true,
-          ownerCommitments: openings.map((opening) =>
-            ownerUtxoHash(opening.ownerHash, opening.blinding),
-          ),
-          capsules: sealed.capsules,
-          assets: words(fixture["assets"])
-            .slice(0, count)
-            .map((asset, slot) => ({ asset, amount: amounts[slot] ?? 0n })),
-          auditorPublicKey: auditor,
-          registry: {
-            ownRoot: word(fixture["memberRegistryRoot"]),
-            curatorRoot: word(fixture["curatorRoot"]),
-            keyEscrow: fixture["keyEscrow"] === true,
-            policyHash: word(fixture["policyHash"]),
-          },
-        });
-        expect(hex(hash)).toBe(String(fixture["publicInputHash"]).slice(2));
-      } finally {
-        generate.mockRestore();
-        sealed.ephemeralSecret.fill(0);
-      }
+      expect(hex(auditor.publicKey().toBytes())).toBe(vector.auditor_pubkey);
+      const ephemeralPublicKey = vectorBytes(vector.eph_pk) as Bytes33;
+      const owners = vector.owner_utxo_hashes.map((owner) => vectorBytes(owner) as Bytes32);
+      const capsules = vector.ciphertexts.map((ciphertext, slotIndex) => ({
+        slotIndex,
+        ephemeralPublicKey,
+        ciphertext: vectorBytes(ciphertext),
+        recipientCiphertext: new Uint8Array(),
+      }));
+      const confirmed = confirmedAudited({
+        tag: RingInstructionTag.deposit,
+        prefixLength: AUDITED_DEPOSIT_PREFIX_LENGTH,
+        ciphertexts: capsules.map(encodeRingDepositCapsule),
+        ephemeralPublicKey,
+        owners,
+      });
+      capsules.forEach((capsule, slot) => {
+        const opened = openRingDepositOpening(
+          capsule,
+          auditor,
+          owners[slot] as Bytes32,
+          confirmed[slot] as ConfirmedDeposit,
+        );
+        expect(hex(encodeOpeningRecord({ record: opened.record, secret: opened.blinding }))).toBe(
+          vector.records[slot],
+        );
+        expect(() =>
+          openRingDepositOpening(capsule, auditor, field(1n), confirmed[slot] as ConfirmedDeposit),
+        ).toThrow(expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }));
+      });
+      auditor.destroy();
     },
   );
+
+  it("keeps opening a sealed CRDEP001 capsule and refuses another commitment", () => {
+    const auditor = X25519Keypair.fromBytes(new Uint8Array(32).fill(0x11) as Bytes32);
+    const ephemeral = X25519Keypair.fromBytes(new Uint8Array(32).fill(0x22) as Bytes32);
+    const ephemeralPublicKey = ephemeral.publicKey().toBytes();
+    ephemeral.destroy();
+    const capsules = [
+      "7c627b99edcff18b2b6fe60179d67177438d96028e3ce11b1127bcc2fcba09616101c03b4d2680e3c7dcfbff9ca085c35f0a2380d32722957c97fea865b7c22b04bf2e6dadfc1d7ec3eb2a84d575072dd3a1daa43b6210509729fd689b6b0c9c",
+      "0ab1daccc85338c624b6f5ed909948624625743dd052e665156ed1715cf4bc5de622ff05ac03507cd2ff799bd36a36897252128077d625ca40aad22fd7342ea929bfa570861f565df8dbe6bbcaf59a94ba952f1f7310c45abf68318049a5180b",
+    ].map((ciphertext, slotIndex) => ({
+      slotIndex,
+      ephemeralPublicKey,
+      ciphertext: vectorBytes(ciphertext) as Bytes96,
+      recipientCiphertext: Uint8Array.of(slotIndex + 1),
+    }));
+    const owners = [ownerUtxoHash(field(1n), field(3n)), ownerUtxoHash(field(2n), field(4n))];
+    const confirmed = confirmedAudited({
+      tag: RingInstructionTag.historicalDeposit,
+      prefixLength: HISTORICAL_DEPOSIT_PREFIX_LENGTH,
+      ciphertexts: capsules.map(encodeHistoricalDepositCapsule),
+      ephemeralPublicKey,
+      owners,
+    });
+    capsules.forEach((capsule, slot) => {
+      const binding = confirmed[slot] as ConfirmedDeposit;
+      expect(binding.version).toBe("historicalV3");
+      const opened = openHistoricalDepositOpening(
+        capsule,
+        auditor,
+        owners[slot] as Bytes32,
+        binding,
+      );
+      expect(opened.ownerHash).toEqual(field(BigInt(slot + 1)));
+      expect(opened.blinding).toEqual(field(BigInt(slot + 3)));
+      expect(opened.ownerKey).toEqual(field(0n));
+      expect(() => openHistoricalDepositOpening(capsule, auditor, field(9n), binding)).toThrow(
+        expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }),
+      );
+    });
+    auditor.destroy();
+  });
 
   it("opens every slot of one shared stream and preserves recipient ciphertext", () => {
     const auditor = X25519Keypair.generate();

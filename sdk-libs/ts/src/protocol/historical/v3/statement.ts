@@ -366,4 +366,3 @@ function chain(values: readonly Bytes32[]): Bytes32 {
 function bit(value: boolean): Bytes32 {
   return rightAlign(Uint8Array.of(value ? 1 : 0));
 }
-

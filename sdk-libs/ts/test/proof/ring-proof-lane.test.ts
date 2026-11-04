@@ -74,7 +74,7 @@ const SPEND = {
   owners: 2,
   hasData: false,
 } as const;
-const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0, buffered: false };
+const ADDRESSES = { nInputs: 2, coSigners: 0, legs: 0 };
 
 describe("selectTransferKey", () => {
   it("takes the narrowest rows and the wide key past them", () => {
@@ -91,9 +91,9 @@ describe("selectTransferKey", () => {
   });
 
   it("refuses past the account bound with the counts", () => {
-    const addresses = { nInputs: 24, coSigners: 5, legs: 2, buffered: true };
+    const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
     const capacity = ownerSignerCapacity(addresses);
-    expect(capacity).toBe(64 - 4 - 6 - 2 - 24 - 10 - 2);
+    expect(capacity).toBe(64 - 4 - 6 - 24 - 10 - 2);
     selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
     const refused = refusal(() =>
       selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),
@@ -495,6 +495,7 @@ describe("prover/ring/params.go", () => {
       rows: repeat(4, zero),
       privateTxHash: zero,
       privateTxBlinding: zero,
+      addressChain: zero,
       trackingRoot: zero,
       trackingPool: {
         records: repeat(capacity.tracking, row0()),
@@ -535,9 +536,9 @@ describe("prover/ring/params.go", () => {
     const keys = Object.keys(ringProofRequestBody(request));
     const go = tags("ConfidentialTransferParams");
     expect(go.required.filter((key) => !keys.includes(key))).toEqual([]);
-    expect(keys.filter((key) => !go.required.includes(key) && !go.optional.includes(key))).toEqual([
-      "source",
-    ]);
+    expect(keys.filter((key) => !go.required.includes(key) && !go.optional.includes(key))).toEqual(
+      [],
+    );
   });
 });
 

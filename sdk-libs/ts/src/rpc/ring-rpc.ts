@@ -38,13 +38,8 @@ import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
-  DUMMY_INPUT,
   knownUtxoHash,
-  type AuditedSender,
-  type AuditedInput,
-  type InputOpening,
   type AuditedUtxo,
-  type InputRing,
   type KnownUtxo,
   type OutputOpening,
   type OutputPayloadError,
@@ -975,11 +970,19 @@ export interface DecryptedRingWithdrawal {
   readonly amount: bigint;
 }
 
-/** Mirrors Rust `InputOpening` on the wire. */
-export type DecryptedRingInputOpening = InputOpening;
+export interface DecryptedRingDefaultInput {
+  readonly utxo: AuditedUtxo;
+  /** Absent without the input's tree id. */
+  readonly commitment?: Bytes32;
+}
 
-/** Mirrors Rust `DecryptedInput`. */
-export type DecryptedRingInput = AuditedInput;
+/** Nullifier index names the spent note. */
+export interface DecryptedRingInput {
+  readonly nullifier: Bytes32;
+  /** False on padding. */
+  readonly real: boolean;
+  readonly defaultInput?: DecryptedRingDefaultInput;
+}
 
 /** Mirrors Rust `DecryptedTransaction`. */
 export interface DecryptedRingTransaction {
@@ -991,9 +994,9 @@ export interface DecryptedRingTransaction {
   /** Published order, every slot sits here or in `payloadErrors` exactly once. */
   readonly outputs: readonly DecryptedRingOutput[];
   readonly payloadErrors: readonly OutputPayloadError[];
-  /** The hidden sender of an anonymous ring, absent while `hash_0` names an unseen note. */
-  readonly sender?: AuditedSender;
-  /** One per published nullifier, empty on the signer rail. */
+  /** `R`, spent notes among the published inputs. */
+  readonly realInputs: number;
+  /** One per published nullifier, empty when the service omits them. */
   readonly inputs: readonly DecryptedRingInput[];
   readonly nullifiers: readonly Bytes32[];
   /** The input owners of a confidential transfer, by owner signature or in proof. */
@@ -1145,10 +1148,11 @@ export interface AuditedRingMerge {
   readonly asset: Bytes32;
   /** Absent while the asset registry does not know the asset. */
   readonly mint?: Address;
-  /** The sum of its inputs. */
   readonly amount: bigint;
-  /** The real inputs in slot order. */
+  /** The real inputs of a tag 47 merge in slot order. */
   readonly inputCommitments: readonly Bytes32[];
+  /** Nullifiers of a tag 57 merge, never padding. */
+  readonly realNullifiers: readonly Bytes32[];
 }
 
 /** Mirrors Rust `UnresolvedMergeRecord`, a confirmed merge with an input the auditor cannot name. */
@@ -2100,35 +2104,21 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
   const nullifiers = list(wire["nullifiers"], "nullifiers").map((nullifier, index) =>
     hash(nullifier, `nullifiers[${index}]`),
   );
-  const sender = absent(wire["sender"])
-    ? undefined
-    : decodeSender(record(wire["sender"], "sender"));
   const inputs = absent(wire["inputs"])
     ? []
     : list(wire["inputs"], "inputs").map((entry, index) =>
         decodeInput(record(entry, `inputs[${index}]`), `inputs[${index}]`),
       );
-  // One input per published nullifier, the signer rail alone discloses none.
   if (
-    (sender !== undefined || inputs.length !== 0) &&
+    inputs.length !== 0 &&
     (inputs.length !== nullifiers.length ||
       inputs.some((input, index) => !equalBytes(input.nullifier, nullifiers[index]!)))
   )
     throw invalid("inputs");
-  // A sender is the owner of input 0, an unseen input 0 names none.
-  const firstUnseen = inputs[0]?.opening.kind === "unseenHash";
-  if (firstUnseen && sender !== undefined) throw invalid("inputs");
-  // A view tag marks an anonymous ring output, a confidential ring publishes the recipient's u.
-  if (
-    outputs.some(({ opening }) =>
-      opening.kind !== "ring"
-        ? false
-        : opening.ownerTag.kind === "view"
-          ? sender === undefined && !firstUnseen
-          : sender !== undefined,
-    )
-  )
-    throw invalid("outputs.tag");
+  const realInputs = wire["realInputs"];
+  if (typeof realInputs !== "number" || !Number.isInteger(realInputs) || realInputs < 0)
+    throw invalid("realInputs");
+  if (realInputs > nullifiers.length) throw invalid("realInputs");
   return Object.freeze({
     slot: integer(wire["slot"], "slot"),
     signature: signature(wire["txSignature"], "txSignature"),
@@ -2136,7 +2126,7 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     txViewingPublicKey: x25519Key(wire["txViewingPk"], "txViewingPk"),
     outputs,
     payloadErrors,
-    ...(sender === undefined ? {} : { sender }),
+    realInputs,
     inputs: Object.freeze(inputs),
     nullifiers: Object.freeze(nullifiers),
     spenders: Object.freeze(
@@ -2163,7 +2153,7 @@ function decodeWalletActivity(wire: Record<string, unknown>): RingWalletActivity
       role: "sender",
       inputs: Object.freeze(
         list(view["inputs"], "view.inputs").map((entry, index) =>
-          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`, true),
+          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`),
         ),
       ),
       outputs,
@@ -2334,30 +2324,20 @@ function decodeOutput(wire: Record<string, unknown>, path: string): DecryptedRin
   if (treeId > 0xffff) throw invalid(`${path}.outputContext.treeId`);
   const kind = wire["kind"];
   const utxo = wire["utxo"];
-  const recipientU = wire["recipientU"];
   const tag = wire["tag"];
-  const pending = wire["escrowPending"];
-  if (absent(pending) === (kind === "escrowPending")) throw invalid(`${path}.kind`);
   let opening: OutputOpening;
-  if (kind === "escrowPending") {
-    if (!absent(utxo) || !absent(tag)) throw invalid(`${path}.kind`);
-    opening = decodeEscrowPending(record(pending, `${path}.escrowPending`), recipientU, path);
-  } else if (kind === "ring" && !absent(utxo) && absent(recipientU) !== absent(tag)) {
+  if (kind === "ring" && !absent(utxo) && !absent(tag)) {
     opening = Object.freeze({
       kind,
       utxo: decodeDecryptedUtxo(record(utxo, `${path}.utxo`), `${path}.utxo`),
-      ownerTag: Object.freeze(
-        absent(tag)
-          ? { kind: "recipient", u: hash(recipientU, `${path}.recipientU`) }
-          : { kind: "view", tag: hash(tag, `${path}.tag`) },
-      ),
+      ownerTag: Object.freeze({ kind: "view", tag: hash(tag, `${path}.tag`) }),
     });
-  } else if (kind === "exit" && !absent(utxo) && absent(recipientU) && absent(tag)) {
+  } else if (kind === "exit" && !absent(utxo) && absent(tag)) {
     opening = Object.freeze({
       kind,
       utxo: decodeDecryptedUtxo(record(utxo, `${path}.utxo`), `${path}.utxo`),
     });
-  } else if (kind === "dummy" && absent(utxo) && absent(recipientU) && absent(tag)) {
+  } else if (kind === "dummy" && absent(utxo) && absent(tag)) {
     opening = Object.freeze({ kind });
   } else {
     throw invalid(`${path}.kind`);
@@ -2373,34 +2353,6 @@ function decodeOutput(wire: Record<string, unknown>, path: string): DecryptedRin
   });
 }
 
-/** Rust `DecryptedEscrowPending`, an exit names its asset and a ring output its recipient, never both. */
-function decodeEscrowPending(
-  wire: Record<string, unknown>,
-  recipientU: unknown,
-  path: string,
-): OutputOpening {
-  const asset = wire["asset"];
-  const mint = wire["mint"];
-  if (absent(asset) === absent(recipientU) || (absent(asset) && !absent(mint)))
-    throw invalid(`${path}.escrowPending`);
-  return Object.freeze({
-    kind: "escrowPending",
-    ownerKey: hash(wire["ownerKey"], `${path}.escrowPending.ownerKey`),
-    amount: u64(wire["amount"], `${path}.escrowPending.amount`),
-    blinding: hash(wire["blinding"], `${path}.escrowPending.blinding`),
-    slot: Object.freeze(
-      absent(asset)
-        ? { kind: "ring", recipientU: hash(recipientU, `${path}.recipientU`) }
-        : {
-            kind: "exit",
-            asset: hash(asset, `${path}.escrowPending.asset`),
-            ...(absent(mint) ? {} : { mint: address(mint, `${path}.escrowPending.mint`) }),
-          },
-    ),
-  });
-}
-
-/** Rust `DecryptedUtxo`, a transfer's output names its nullifier key. */
 function decodeDecryptedUtxo(wire: Record<string, unknown>, path: string): AuditedUtxo {
   return Object.freeze({
     ...utxoFields(wire, path, hash),
@@ -2456,78 +2408,57 @@ function canonicalHash(input: unknown, path: string): Bytes32 {
   return bytes;
 }
 
-function decodeSender(wire: Record<string, unknown>): AuditedSender {
-  const nullifierPk = wire["nullifierPk"];
-  return Object.freeze({
-    ownerKey: hash(wire["ownerKey"], "sender.ownerKey"),
-    ...(absent(nullifierPk) ? {} : { nullifierPk: hash(nullifierPk, "sender.nullifierPk") }),
-  });
-}
-
-/** One of an opening, a merge record or an unseen note, none at a dummy. */
-function decodeInput(
-  value: Record<string, unknown>,
-  path: string,
-  /** A wallet view strips the unseen marker, its hash alone names the note. */
-  markerStripped = false,
-): DecryptedRingInput {
+function decodeInput(value: Record<string, unknown>, path: string): DecryptedRingInput {
   const wire = exactRecord(value, INPUT_FIELDS, INPUT_REQUIRED_FIELDS, path);
+  const real = wire["real"];
+  if (typeof real !== "boolean") throw invalid(`${path}.real`);
   const nullifier = hash(wire["nullifier"], `${path}.nullifier`);
-  const named = absent(wire["hash"]) ? undefined : hash(wire["hash"], `${path}.hash`);
-  const marked = wire["unseen"] ?? false;
-  if (typeof marked !== "boolean") throw invalid(`${path}.unseen`);
-  const unseen =
-    marked ||
-    (markerStripped && named !== undefined && absent(wire["opening"]) && absent(wire["merged"]));
-  const kinds = [unseen, !absent(wire["merged"]), !absent(wire["opening"])].filter(Boolean);
-  if (kinds.length > 1) throw invalid(path);
-  if (unseen || !absent(wire["merged"])) {
-    if (named === undefined) throw invalid(`${path}.hash`);
-    return Object.freeze({
-      nullifier,
-      hash: named,
-      opening: unseen
-        ? Object.freeze({ kind: "unseenHash", hash: named })
-        : decodeMergedInput(wire["merged"], `${path}.merged`),
-    });
-  }
-  if (absent(wire["opening"])) {
-    if (named !== undefined) throw invalid(`${path}.hash`);
-    return Object.freeze({ nullifier, opening: DUMMY_INPUT });
-  }
-  const opening = record(wire["opening"], `${path}.opening`);
-  const mint = opening["mint"];
-  const ring = opening["ring"];
+  if (absent(wire["defaultInput"])) return Object.freeze({ nullifier, real });
+  // A default-ring note is a spent note, padding opens nothing.
+  if (!real) throw invalid(`${path}.defaultInput`);
+  const defaultInput = record(wire["defaultInput"], `${path}.defaultInput`);
   return Object.freeze({
     nullifier,
-    ...(named === undefined ? {} : { hash: named }),
-    opening: Object.freeze({
-      kind: "opened",
-      asset: hash(opening["asset"], `${path}.opening.asset`),
-      ...(absent(mint) ? {} : { mint: address(mint, `${path}.opening.mint`) }),
-      amount: u64(opening["amount"], `${path}.opening.amount`),
-      blinding: hash(opening["blinding"], `${path}.opening.blinding`),
-      ...(absent(ring)
+    real,
+    defaultInput: Object.freeze({
+      utxo: decodeDecryptedUtxo(
+        record(defaultInput["utxo"], `${path}.defaultInput.utxo`),
+        `${path}.defaultInput.utxo`,
+      ),
+      ...(absent(defaultInput["commitment"])
         ? {}
-        : {
-            ring: decodeInputRing(record(ring, `${path}.opening.ring`), path),
-          }),
+        : { commitment: hash(defaultInput["commitment"], `${path}.defaultInput.commitment`) }),
     }),
   });
 }
 
-function decodeMergedInput(
-  value: unknown,
-  path: string,
-): Extract<DecryptedRingInputOpening, { kind: "merged" }> {
-  const wire = exactRecord(value, MERGED_INPUT_FIELDS, MERGED_INPUT_REQUIRED_FIELDS, path);
+/** Rust `OutputPayloadErrorKind` as the ring rpc serializes it. */
+function decodeAuditedMerge(value: unknown, path: string): AuditedRingMerge {
+  const wire = exactRecord(value, AUDITED_MERGE_FIELDS, AUDITED_MERGE_REQUIRED_FIELDS, path);
   const asset = canonicalHash(wire["asset"], `${path}.asset`);
+  const inputCommitments = mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`);
+  const realNullifiers = absent(wire["realNullifiers"])
+    ? []
+    : mergeCommitments(wire["realNullifiers"], `${path}.realNullifiers`);
+  // A tag 47 merge names its inputs, a tag 57 merge its nullifiers.
+  if (inputCommitments.length === 0 && realNullifiers.length === 0)
+    throw invalid(`${path}.inputCommitments`);
   return Object.freeze({
-    kind: "merged",
+    ...mergeRow(wire, path),
     ownerKey: hash(wire["ownerKey"], `${path}.ownerKey`),
     asset,
     ...namedMint(wire, asset, path),
     amount: u64(wire["amount"], `${path}.amount`),
+    inputCommitments,
+    realNullifiers,
+  });
+}
+
+function decodeUnresolvedMerge(value: unknown, path: string): UnresolvedRingMerge {
+  const wire = exactRecord(value, UNRESOLVED_MERGE_FIELDS, UNRESOLVED_MERGE_FIELDS, path);
+  return Object.freeze({
+    ...mergeRow(wire, path),
+    inputCommitments: mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`),
   });
 }
 
@@ -2543,27 +2474,12 @@ function namedMint(
   return { mint };
 }
 
-function decodeAuditedMerge(value: unknown, path: string): AuditedRingMerge {
-  const wire = exactRecord(value, AUDITED_MERGE_FIELDS, AUDITED_MERGE_REQUIRED_FIELDS, path);
-  const asset = canonicalHash(wire["asset"], `${path}.asset`);
-  const inputCommitments = mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`);
-  if (inputCommitments.length === 0) throw invalid(`${path}.inputCommitments`);
-  return Object.freeze({
-    ...mergeRow(wire, path),
-    ownerKey: hash(wire["ownerKey"], `${path}.ownerKey`),
-    asset,
-    ...namedMint(wire, asset, path),
-    amount: u64(wire["amount"], `${path}.amount`),
-    inputCommitments,
-  });
-}
-
-function decodeUnresolvedMerge(value: unknown, path: string): UnresolvedRingMerge {
-  const wire = exactRecord(value, UNRESOLVED_MERGE_FIELDS, UNRESOLVED_MERGE_FIELDS, path);
-  return Object.freeze({
-    ...mergeRow(wire, path),
-    inputCommitments: mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`),
-  });
+function mergeCommitments(value: unknown, path: string): readonly Bytes32[] {
+  const commitments = list(value, path);
+  if (commitments.length > MAX_MERGE_INPUTS) throw invalid(path);
+  return Object.freeze(
+    commitments.map((commitment, index) => canonicalHash(commitment, `${path}[${index}]`)),
+  );
 }
 
 function mergeRow(
@@ -2578,41 +2494,13 @@ function mergeRow(
   };
 }
 
-function mergeCommitments(value: unknown, path: string): readonly Bytes32[] {
-  const commitments = list(value, path);
-  if (commitments.length > MAX_MERGE_INPUTS) throw invalid(path);
-  return Object.freeze(
-    commitments.map((commitment, index) => canonicalHash(commitment, `${path}[${index}]`)),
-  );
-}
-
-/** Rust `DecryptedInputRing`, tagged by `kind`. */
-function decodeInputRing(wire: Record<string, unknown>, path: string): InputRing {
-  switch (wire["kind"]) {
-    case "ring":
-    case "default":
-      return Object.freeze({
-        kind: wire["kind"],
-        commitment: hash(wire["commitment"], `${path}.opening.ring.commitment`),
-      });
-    case "unresolved":
-      return Object.freeze({
-        kind: "unresolved",
-        ring: hash(wire["ring"], `${path}.opening.ring.ring`),
-        default: hash(wire["default"], `${path}.opening.ring.default`),
-      });
-    default:
-      throw invalid(`${path}.opening.ring.kind`);
-  }
-}
-
-/** Rust `OutputPayloadErrorKind` as the ring rpc serializes it. */
 export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Object.freeze([
   "frame",
   "disclosure",
   "recipientKey",
   "commitment",
   "unknownAsset",
+  "escrowPending",
 ]);
 
 function payloadErrorKind(value: unknown, path: string): OutputPayloadErrorKind {
@@ -2870,10 +2758,8 @@ const SIGNED_UNSPENT_REQUIRED_FIELDS = new Set([
 ]);
 const SIGNED_UNSPENT_FIELDS = new Set([...SIGNED_UNSPENT_REQUIRED_FIELDS, "cursor", "wallet"]);
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
-const INPUT_REQUIRED_FIELDS = new Set(["nullifier"]);
-const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "hash", "opening", "merged", "unseen"]);
-const MERGED_INPUT_REQUIRED_FIELDS = new Set(["ownerKey", "asset", "amount"]);
-const MERGED_INPUT_FIELDS = new Set([...MERGED_INPUT_REQUIRED_FIELDS, "mint"]);
+const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
+const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
 const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "unresolved", "cursor"]);
 const UNRESOLVED_MERGE_FIELDS = new Set([
   "slot",
@@ -2888,7 +2774,7 @@ const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
   "asset",
   "amount",
 ]);
-const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "mint"]);
+const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "mint", "realNullifiers"]);
 const UNSPENT_PAGE_FIELDS = new Set(["utxos", "coverage", "unresolved", "cursor"]);
 const COVERAGE_FIELDS = new Set(["fromSlot", "throughSlot", "complete"]);
 const UNSPENT_UTXO_REQUIRED_FIELDS = new Set([

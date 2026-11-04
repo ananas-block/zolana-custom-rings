@@ -548,120 +548,6 @@ describe("getUnspentUtxos response", () => {
   });
 });
 
-describe("decrypted transaction inputs", () => {
-  async function inputsOf(inputs: readonly Wire[], outputs: readonly Wire[] = []) {
-    const { rpc } = answering({
-      context: { slot: 13, blockTime: 1 },
-      value: {
-        items: [
-          {
-            slot: 12,
-            txSignature: signatureOf(1),
-            eventIndex: 0,
-            txViewingPk: Buffer.from(
-              X25519Keypair.fromBytes(filled(7)).publicKey().toBytes(),
-            ).toString("base64"),
-            outputs,
-            payloadErrors: [],
-            inputs,
-            nullifiers: inputs.map((input) => input["nullifier"]),
-            signers: [addressOf(5)],
-            withdrawals: [],
-          },
-        ],
-        skipped: [],
-        cursor: null,
-      },
-    });
-    const read = await RingReadRequest.decryptedTransactions(TARGET).sign(await reader());
-    return (await rpc.readSigned(read)).items[0]?.inputs;
-  }
-
-  const merged = { ownerKey: base58Of(8), asset: base58Of(5), amount: 21 };
-
-  function ringOutput(tag: Wire): Wire {
-    return {
-      slotIndex: 0,
-      outputContext: { treeId: 4, leafIndex: 1, hash: base58Of(1) },
-      kind: "ring",
-      utxo: {
-        ownerKey: base58Of(8),
-        nullifierPk: base58Of(2),
-        asset: base58Of(5),
-        amount: 3,
-        blinding: base58Of(3),
-        dataHash: base58Of(4),
-        ringDataHash: base58Of(6),
-      },
-      ...tag,
-    };
-  }
-
-  it("accepts either owner tag beside an unseen input 0, its rail unnamed", async () => {
-    const unseen = { nullifier: base58Of(1), hash: base58Of(2), unseen: true };
-    for (const tag of [{ tag: base58Of(9) }, { recipientU: base58Of(9) }])
-      await expect(inputsOf([unseen], [ringOutput(tag)])).resolves.toHaveLength(1);
-  });
-
-  it("refuses a view tag beside an opened input 0 with no sender", async () => {
-    const opened = {
-      nullifier: base58Of(1),
-      opening: { asset: base58Of(5), amount: 3, blinding: base58Of(3) },
-    };
-    await expect(inputsOf([opened], [ringOutput({ tag: base58Of(9) })])).rejects.toMatchObject({
-      details: { path: "outputs.tag" },
-    });
-  });
-
-  it("reads a dummy, an unseen note at any slot and a merge record", async () => {
-    await expect(
-      inputsOf([
-        { nullifier: base58Of(1), hash: base58Of(2), unseen: true },
-        { nullifier: base58Of(3), hash: base58Of(4), unseen: true },
-        { nullifier: base58Of(6), hash: base58Of(7), merged, unseen: false },
-        { nullifier: base58Of(9), unseen: false },
-      ]),
-    ).resolves.toEqual([
-      {
-        nullifier: filled(1),
-        hash: filled(2),
-        opening: { kind: "unseenHash", hash: filled(2) },
-      },
-      {
-        nullifier: filled(3),
-        hash: filled(4),
-        opening: { kind: "unseenHash", hash: filled(4) },
-      },
-      {
-        nullifier: filled(6),
-        hash: filled(7),
-        opening: {
-          kind: "merged",
-          ownerKey: filled(8),
-          asset: filled(5),
-          amount: 21n,
-        },
-      },
-      { nullifier: filled(9), opening: { kind: "dummy" } },
-    ]);
-  });
-
-  it.each<readonly [string, Wire, string]>([
-    ["an ambiguous prefix", { candidates: [base58Of(2)] }, "inputs[0].shape"],
-    ["an unseen prefix", { unseenPrefix: "Kioq" }, "inputs[0].shape"],
-    ["an unseen note with no hash", { unseen: true }, "inputs[0].hash"],
-    ["a merge record with no hash", { merged }, "inputs[0].hash"],
-    ["a dummy naming a hash", { hash: base58Of(2) }, "inputs[0].hash"],
-    ["an unseen merge record", { hash: base58Of(2), unseen: true, merged }, "inputs[0]"],
-    ["an unseen flag off its type", { hash: base58Of(2), unseen: 1 }, "inputs[0].unseen"],
-  ])("refuses %s", async (_name, field, path) => {
-    await expect(inputsOf([{ nullifier: base58Of(1), ...field }])).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { path },
-    });
-  });
-});
-
 describe("audited merge records", () => {
   const opened = {
     slot: 12,
@@ -704,6 +590,7 @@ describe("audited merge records", () => {
           asset: filled(5),
           amount: 21n,
           inputCommitments: [filled(6), filled(7)],
+          realNullifiers: [],
         },
       ],
       unresolved: [

@@ -687,12 +687,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
 type FramedSlot = Omit<RingOutput, "record" | "tail">;
 
 /** A plain frame fixes each body's length, a data frame prefixes it. */
-function readSlot(
-  bytes: Reader,
-  hasData: boolean,
-  exit: boolean,
-  bodiless: boolean,
-): FramedSlot {
+function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: boolean): FramedSlot {
   const length = bodiless
     ? 0
     : hasData
@@ -970,7 +965,10 @@ function writeSlot(out: Writer, output: RingOutput, hasData: boolean): void {
     if (raw.length > 0xffff) throw invalid("OutputBodyLength");
     out.u16(raw.length, "output.bodyLen");
   }
-  out.bytes(output.hash, 32, "output.hash").bytes(output.ownerTag, 32, "output.ownerTag").bytes(raw);
+  out
+    .bytes(output.hash, 32, "output.hash")
+    .bytes(output.ownerTag, 32, "output.ownerTag")
+    .bytes(raw);
 }
 
 /** A frame with no data carries each body at its plain length. */
@@ -1027,7 +1025,8 @@ function compactFlags(data: RingTransactData): number {
 function checkFlags(flags: number, rail: RingRail): void {
   const foreignOwner = has(flags, Flag.ownerInProof) && rail !== "confidential";
   const foreignReply = has(flags, Flag.replyMetadata) && !isAnonymousFrame(rail);
-  const delegatePolicy = isDelegateRail(rail) && (has(flags, Flag.policy) || has(flags, Flag.ownRoot));
+  const delegatePolicy =
+    isDelegateRail(rail) && (has(flags, Flag.policy) || has(flags, Flag.ownRoot));
   if (foreignOwner || foreignReply || delegatePolicy) throw invalid("FlagNotAllowed");
   if (
     (has(flags, Flag.curator) && !has(flags, Flag.policy)) ||

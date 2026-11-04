@@ -122,7 +122,7 @@ export interface RingPolicy {
 }
 
 /** The instructions that bind roots, Rust `RootRead::transfer`, `deposit` and `merge`. */
-export type RootReader = "transfer" | "exemptTransfer" | "deposit" | "merge";
+export type RootReader = "transfer" | "delegateTransfer" | "deposit" | "merge";
 
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
@@ -213,9 +213,15 @@ export function registryCurator(registry: Pick<RingPolicy, "sources">): Address 
 /** Rust `RingPolicy::root_registries`, the live registries `reader` passes after the ring account, the records first. */
 export function ringRootRegistries(policy: RingPolicy, reader: RootReader): readonly Address[] {
   const read = rootRead(policy, reader);
-  const curator = read === "policy" ? registryCurator(policy) : undefined;
   if (read === "none") return Object.freeze([]);
-  return Object.freeze(curator === undefined ? [policy.records] : [policy.records, curator]);
+  const curator = read === "policy" ? registryCurator(policy) : undefined;
+  const privateSource =
+    read === "policy" && !isZeroAddress(policy.privateSource) ? policy.privateSource : undefined;
+  return Object.freeze([
+    policy.records,
+    ...(curator === undefined ? [] : [curator]),
+    ...(privateSource === undefined ? [] : [privateSource]),
+  ]);
 }
 
 /** Mirrors Rust `StorageRegistry::from_data`, a nonzero next index within the tree capacity. */
@@ -340,13 +346,12 @@ function rootRead(policy: RingPolicy, reader: RootReader): "none" | "own" | "pol
   switch (reader) {
     case "transfer":
       if (policy.hasPolicy) return "policy";
-      return policy.mode === "anonymous" ? "own" : "none";
-    case "exemptTransfer":
-      return policy.hasPolicy ? "policy" : "own";
+      return isZeroAddress(policy.records) ? "none" : "own";
     case "deposit":
-      return policy.hasPolicy || policy.keyEscrow ? "policy" : "none";
+      return policy.hasPolicy ? "policy" : "none";
+    case "delegateTransfer":
     case "merge":
-      return policy.keyEscrow ? "own" : "none";
+      return "none";
   }
 }
 

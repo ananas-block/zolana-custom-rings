@@ -46,7 +46,7 @@ export const RING_ADDRESS_PAYLOAD_LENGTH = BODY_LENGTH + CHECKSUM_LENGTH;
 export class RingAddress {
   readonly recipient: ShieldedAddress;
   readonly ringProgramId: Address;
-  /** Zero exactly under the zero key, gives every reader the owner's list status. */
+  /** Zero exactly under the zero key. */
   readonly listSalt: Bytes32;
 
   constructor(

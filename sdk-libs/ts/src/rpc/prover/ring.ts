@@ -209,6 +209,8 @@ export interface TransferProofInputs
   readonly privateTxHash: Bytes32;
   /** SPP's blinding of the hash, the proof reopens it with no address input. */
   readonly privateTxBlinding: Bytes32;
+  /** SPP's chain of address slot nullifiers, zero without one. */
+  readonly addressChain: Bytes32;
 }
 
 /** Go `ConfidentialTransferParams`. */
@@ -558,6 +560,7 @@ function transferJson(
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
+    addressChain: field(request.addressChain, "addressChain"),
     ...trackingJson(request, circuit),
     ...policyJson(request, circuit),
   };
@@ -771,7 +774,12 @@ function tableJson(table: PolicyTableProofInputs): Json {
       registry: field(source.registry, `sources[${i}].registry`),
     })),
     source: {
-      ownerLists: integer(table.source.ownerLists, "source.ownerLists", 0, U8_MAX),
+      ownerLists: field(
+        bigIntBytes(
+          BigInt(integer(table.source.ownerLists, "source.ownerLists", 0, U8_MAX)),
+        ) as Bytes32,
+        "source.ownerLists",
+      ),
       registry: field(table.source.registry, "source.registry"),
     },
     policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),

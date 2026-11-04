@@ -22,12 +22,7 @@ import {
 import { RingError } from "../error.js";
 import type { QueueEntry } from "../membership/member-registry.js";
 import { checkMember, queueChain } from "../membership/member-opening.js";
-import {
-  ListId,
-  recordBit,
-  walletGrantMember,
-  type Member,
-} from "../membership/policy.js";
+import { ListId, recordBit, walletGrantMember, type Member } from "../membership/policy.js";
 import type {
   RecordUpdate,
   RecordUpdateEntry,

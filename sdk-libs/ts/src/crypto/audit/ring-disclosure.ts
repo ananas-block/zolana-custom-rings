@@ -110,10 +110,7 @@ export function openRingDisclosure(
     return plaintext;
   };
   try {
-    const envelope = decodeAuditEnvelope(
-      plain(STREAM_FIRST_COUNTER, message.envelope),
-      layout,
-    );
+    const envelope = decodeAuditEnvelope(plain(STREAM_FIRST_COUNTER, message.envelope), layout);
     const records = message.records.map((record, slot) =>
       decodeAuditRecord(plain(recordRegion(layout, slot).startCounter, record)),
     );

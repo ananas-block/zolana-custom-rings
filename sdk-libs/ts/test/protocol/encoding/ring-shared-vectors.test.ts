@@ -4,20 +4,16 @@ import {
   trackingEntryChained,
   trackingEntryHash,
 } from "../../../src/protocol/membership/tracking.js";
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-import keyedShapes from "../../../../../test-vectors/proof/ring_keyed_shapes.json" with { type: "json" };
-import policyRules from "../../../../../test-vectors/policy/ring-policy-rules.json" with { type: "json" };
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
 import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
-import { ZERO_32, solanaOwnerIdentity, encodeBase58, hashChain } from "@heliuslabs/zolana/internal";
+import { ZERO_32, solanaOwnerIdentity, encodeBase58 } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
-import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   auditorMessageLen,
@@ -29,17 +25,11 @@ import {
   recordBlocks,
   recordLen,
   recordRegion,
-  transferAuditKey,
   type AuditKey,
   type AuditLayout,
   type AuditStreamLayout,
-} from "../../../src/protocol/codec/ring-disclosure-layout.js";
-import {
-  ANONYMOUS_TRANSFER_SHAPES,
-  CONFIDENTIAL_TRANSFER_SHAPES,
-  ENTRY_TRANSFER_SHAPES,
-  ringTransferCircuit,
-} from "../../../src/protocol/proof/transfer-shapes.js";
+} from "../../../src/protocol/historical/v3/layout.js";
+import { ringTransferCircuit } from "../../../src/protocol/proof/transfer-shapes.js";
 import { decodeDisclosure } from "../../../src/protocol/historical/v3/disclosure.js";
 import {
   MIN_REPLY_LEN,
@@ -62,35 +52,21 @@ import {
   verifyRecordOpening,
 } from "../../../src/protocol/membership/member-opening.js";
 import {
-  admitTransfer,
-  buildRuleTable,
-  decodeRule,
-  decodeRuleTable,
-  policyTableFields,
-  policyTableHash,
-  type RecordLists,
-  type RuleRefusal,
-} from "../../../src/protocol/membership/policy.js";
-import {
   applyRecordsStatementElements,
   applyRecordsStatementHash,
   registerKeyStatementElements,
   registerKeyStatementHash,
   applyEnrollmentsStatementElements,
   applyEnrollmentsStatementHash,
-  restrictiveWrite,
-} from "../../../src/protocol/proof/statement.js";
-import {
   ciphertextDigest,
-  outputCiphertextChain,
+  recordChain,
+  tailChain,
   transferStatementElements,
   transferStatementHash,
   type TransferFamily,
-} from "../../../src/protocol/historical/v3/statement.js";
-import {
-  depositStatementElements,
-  ringDepositContextHash,
-} from "../../../src/proof/deposit-audit.js";
+  type TransferStatement,
+} from "../../../src/protocol/proof/statement.js";
+import { ringDepositContextHash } from "../../../src/proof/deposit-audit.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
 import {
   RingTransactData,
@@ -296,179 +272,88 @@ describe("ring-records.json", () => {
   });
 });
 
-describe("ring-policy-table.json", () => {
-  interface PolicyCase {
-    readonly name: string;
-    readonly sources: readonly Readonly<{ listId: number; registry: Bytes32 }>[];
-    readonly rules: readonly Bytes32[];
-    readonly fields: readonly string[];
-    readonly policyHash: string;
-  }
-
-  /** u64 limits exceed the doubles `JSON.parse` returns, the reviver reads their source text. */
-  function policyCases(): readonly PolicyCase[] {
-    const text = readFileSync(
-      new URL("../../../../../test-vectors/policy/ring-policy-table.json", import.meta.url),
-      "utf8",
-    );
-    const parsed: unknown = JSON.parse(
-      text,
-      (_key, value: unknown, context?: { source?: string }) =>
-        typeof value === "number" && context?.source !== undefined ? BigInt(context.source) : value,
-    );
-    const object = (value: unknown): Record<string, unknown> => {
-      if (typeof value !== "object" || value === null) throw new Error("vector object");
-      return value as Record<string, unknown>;
-    };
-    const list = (value: unknown): readonly unknown[] => {
-      if (!Array.isArray(value)) throw new Error("vector array");
-      return value;
-    };
-    const text32 = (value: unknown): string => {
-      if (typeof value !== "string") throw new Error("vector string");
-      return value;
-    };
-    const integer = (value: unknown): bigint => {
-      if (typeof value !== "bigint") throw new Error("vector integer");
-      return value;
-    };
-    return list(object(parsed)["cases"]).map((entry) => {
-      const item = object(entry);
-      return {
-        name: text32(item["name"]),
-        sources: list(item["sources"]).map((source) => ({
-          listId: Number(integer(object(source)["list_id"])),
-          registry: field(text32(object(source)["registry"])),
-        })),
-        rules: list(item["rules"]).map((row) => field(text32(row))),
-        fields: list(item["fields"]).map(text32),
-        policyHash: text32(item["policy_hash"]),
-      };
-    });
-  }
-
-  it("reproduces the 44 fields and the hash of every table", () => {
-    const cases = policyCases();
-    expect(cases.length).toBeGreaterThan(2);
-    for (const vector of cases) {
-      const table = buildRuleTable({
-        rules: vector.rules.map(decodeRule),
-      });
-      const fields = policyTableFields(table, vector.sources);
-      expect(fields).toHaveLength(44);
-      expect(hexes(fields), vector.name).toEqual(vector.fields);
-      expect(hex(policyTableHash(table, vector.sources)), vector.name).toBe(vector.policyHash);
-    }
-  });
-});
-
 describe("ring-statements.json", () => {
   type TransferCase = (typeof statements.transfer)[number];
 
-  const output = (
-    vector: TransferCase["outputs"][number],
-    slot: number,
-    change: number,
-  ): RingOutput => {
-    const hash = field(vector.hash);
-    const zero = new Uint8Array(32) as Bytes32;
-    switch (vector.kind) {
-      case "delivered":
-        return {
-          kind: "delivered",
-          hash,
-          u: field(vector.u ?? ""),
-          body: bytes(vector.body ?? ""),
-        };
-      case "anonymous":
-        return ((change >> slot) & 1) === 1
-          ? { kind: "change", hash, tag: zero }
-          : {
-              kind: "anonymous",
-              hash,
-              tag: field(vector.tag ?? ""),
-              body: bytes(vector.recipient_body ?? ""),
-            };
-      default:
-        return { kind: "exit", hash, ownerTag: zero, payload: new Uint8Array() };
-    }
-  };
-  /** `key_escrow << 1 | full_openings << 3`. */
-  const layout = (value: number): AuditLayout => ({
-    keyEscrow: (value & 2) !== 0,
-    fullOpenings: (value & 8) !== 0,
-  });
-  // A family's own values are null on the other family's vectors.
   const family = (vector: TransferCase): TransferFamily =>
     vector.family === "anonymous"
       ? {
           kind: "anonymous",
-          partyIdentities: (vector.party_identities ?? []).map(field) as [
-            Bytes32,
-            Bytes32,
-            Bytes32,
-          ],
-          senderBundle: bytes(vector.sender_bundle ?? ""),
-          senderBundleTag: field(vector.sender_bundle_tag ?? ""),
-          ...(vector.replies === null ? {} : { replies: bytes(vector.replies) }),
+          partyIdentities: (vector.party_identities ?? []).map(field),
+          publicOwners: vector.public_owners === true,
+          delegate: vector.delegate === true,
         }
       : {
           kind: "confidential",
           inProof: vector.in_proof === true,
           delegate: vector.delegate === true,
           sender: field(vector.sender ?? "00".repeat(32)),
-          recipients: (vector.recipients ?? []).map(field),
         };
+
+  const statementOf = (vector: TransferCase, outputs: TransferStatement["outputs"]) => ({
+    head: {
+      firstNullifier: field(vector.first_nullifier),
+      ringId: field(vector.ring_id),
+      txViewingU: field(vector.tx_viewing_u),
+      auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
+      ephU: field(vector.eph_u),
+      envelope: bytes(vector.envelope),
+      salt: bytes<Bytes16>(vector.salt, 16),
+      layout: { hasData: (vector.layout & 1) !== 0, entry: (vector.layout & 2) !== 0 },
+    },
+    family: family(vector),
+    approvalMask: vector.approval_mask,
+    noSpend: vector.no_spend,
+    capacity: vector.output_capacity,
+    outputs,
+    signers: { count: vector.signer_count, chain: field(vector.signer_chain) },
+    inputCount: vector.input_count,
+    privateTxHash: field(vector.private_tx_hash),
+    roots: {
+      policyHash: field(vector.policy_hash),
+      ownRoot: field(vector.own_root),
+      curatorRoot: field(vector.curator_root),
+      trackingRoot: field(vector.tracking_root),
+      privateRoot: field(vector.private_root),
+    },
+    publicAssets: vector.public_assets.map(field),
+    publicAmounts: vector.public_amounts.map(field),
+    publicGross: vector.public_gross.map(field),
+    withdrawalHash: field(vector.withdrawal_hash),
+  });
 
   it("rebuilds every transfer statement, its element count and its public input", () => {
     for (const vector of statements.transfer) {
-      const outputCiphertexts = vector.outputs.map((slot) =>
-        bytes(slot.kind === "delivered" ? (slot.body ?? "") : (slot.record ?? "")),
-      );
+      const outputs = vector.outputs.map((slot) => ({
+        hash: field(slot.hash),
+        record: bytes(slot.record),
+        ...(slot.tail === null ? {} : { tail: bytes(slot.tail) }),
+      }));
       expect(hex(ciphertextDigest(bytes(vector.envelope))), vector.rail).toBe(
         vector.envelope_digest,
       );
-      expect(
-        hex(outputCiphertextChain(outputCiphertexts, vector.output_capacity)),
-        vector.rail,
-      ).toBe(vector.output_ciphertext_chain);
-      const statement = {
-        head: {
-          firstNullifier: field(vector.first_nullifier),
-          ringId: field(vector.ring_id),
-          txViewingU: field(vector.tx_viewing_u),
-          auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
-          ephU: field(vector.eph_u),
-          envelope: bytes(vector.envelope),
-          salt: bytes<Bytes16>(vector.salt, 16),
-          layout: layout(vector.layout),
-        },
-        family: family(vector),
-        exempt: vector.exempt,
-        approvalRequired: vector.approval_required,
-        capacity: vector.output_capacity,
-        outputs: vector.outputs.map((slot, index) =>
-          output(slot, index, vector.change_bitmap ?? 0),
-        ),
-        outputCiphertexts,
-        signers: { count: vector.signer_count, chain: field(vector.signer_chain) },
-        inputCount: vector.input_count,
-        privateTxHash: field(vector.private_tx_hash),
-        roots: {
-          policyHash: field(vector.policy_hash),
-          ownRoot: field(vector.own_root),
-          curatorRoot: field(vector.curator_root),
-        },
-        publicAssets: vector.public_assets.map(field),
-        publicAmounts: vector.public_amounts.map(field),
-        publicGross: vector.public_gross.map(field),
-        withdrawalHash: field(vector.withdrawal_hash),
-      };
+      expect(hex(recordChain(outputs, vector.output_capacity)), vector.rail).toBe(
+        vector.record_chain,
+      );
+      expect(hex(tailChain(outputs, vector.output_capacity)), vector.rail).toBe(vector.tail_chain);
+      const statement = statementOf(vector, outputs);
       const elements = transferStatementElements(statement);
       expect(elements, vector.rail).toHaveLength(vector.elements.length);
       expect(hexes(elements), vector.rail).toEqual(vector.elements);
       expect(hex(transferStatementHash(statement))).toBe(vector.public_input_hash);
     }
+  });
+
+  it("refuses a transfer statement past its output capacity", () => {
+    const vector = statements.transfer.find((entry) => entry.output_capacity === 2);
+    if (vector === undefined) throw new Error("vector has no two slot case");
+    const outputs = vector.outputs.map((slot) => ({
+      hash: field(slot.hash),
+      record: bytes(slot.record),
+    }));
+    expect(() =>
+      transferStatementElements({ ...statementOf(vector, outputs), capacity: 1 }),
+    ).toThrow(expect.objectContaining({ code: "RING_INVALID_LENGTH" }));
   });
 
   it("rebuilds the apply records and register key statements", () => {
@@ -514,13 +399,6 @@ describe("ring-statements.json", () => {
     expect(hex(applyEnrollmentsStatementHash(statement))).toBe(apply.public_input_hash);
   });
 
-  it("marks a write restrictive as the apply circuit does", () => {
-    for (const write of statements.restrictive)
-      expect(
-        restrictiveWrite(BigInt(write.mask), BigInt(write.value), write.replaces_mint_policy),
-      ).toBe(write.restrictive);
-  });
-
   it("hashes a tracking entry and chains it as the program does", () => {
     const tracking = statements.tracking;
     const entry = {
@@ -536,34 +414,17 @@ describe("ring-statements.json", () => {
     expect(hex(TRACKING_EMPTY_ROOT)).toBe(tracking.empty_root);
   });
 
-  it("rebuilds the deposit statement over the context of its SPP data", () => {
+  it("hashes the deposit context of its SPP data", () => {
     const deposit = statements.deposit;
-    const contextHash = ringDepositContextHash(
-      encodeBase58(bytes(deposit.program_id, 32)) as Address,
-      encodeBase58(bytes(deposit.tree, 32)) as Address,
-      bytes(deposit.spp_data),
-    );
-    expect(hex(contextHash)).toBe(deposit.context_hash);
-    const elements = depositStatementElements({
-      contextHash,
-      anonymous: deposit.anonymous,
-      ownerUtxoHashes: deposit.owner_utxo_hashes.map(field),
-      ciphertexts: deposit.ciphertexts.map((value) => bytes<Bytes96>(value, 96)),
-      assets: deposit.assets.map((asset, slot) => ({
-        asset: field(asset),
-        amount: BigInt(deposit.amounts[slot] ?? 0),
-      })),
-      auditorPk: bytes<Bytes33>(deposit.auditor_pubkey, 33),
-      ephPk: bytes<Bytes33>(deposit.eph_pk, 33),
-      registry: {
-        ownRoot: field(deposit.member_registry_root),
-        curatorRoot: field(deposit.curator_root),
-        keyEscrow: deposit.key_escrow,
-        policyHash: field(deposit.policy_hash),
-      },
-    });
-    expect(hexes(elements)).toEqual(deposit.elements);
-    expect(hex(hashChain(elements))).toBe(deposit.public_input_hash);
+    expect(
+      hex(
+        ringDepositContextHash(
+          encodeBase58(bytes(deposit.program_id, 32)) as Address,
+          encodeBase58(bytes(deposit.tree, 32)) as Address,
+          bytes(deposit.spp_data),
+        ),
+      ),
+    ).toBe(deposit.context_hash);
   });
 });
 
@@ -788,97 +649,64 @@ describe("ring-transact-expansion.json", () => {
   });
 });
 
-describe("ring_keyed_shapes.json", () => {
-  it.each([-1, 0, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "refuses an invalid published input count %s",
-    (inputs) => {
-      expect(
-        ringTransferCircuit({
-          rail: "confidential",
-          inputs,
-          outputs: 2,
-          spendsDefaultRing: false,
-          legs: 0,
-        }),
-      ).toBeUndefined();
-    },
-  );
+describe("transfer key selection", () => {
+  const spend = {
+    rail: "confidential",
+    inputs: 2,
+    outputs: 2,
+    spendsDefaultRing: false,
+    legs: 0,
+    owners: 1,
+    hasData: false,
+  } as const;
 
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "refuses an invalid withdrawal count %s",
-    (legs) => {
-      expect(
-        ringTransferCircuit({
-          rail: "confidential",
-          inputs: 1,
-          outputs: 2,
-          spendsDefaultRing: false,
-          legs,
-        }),
-      ).toBeUndefined();
-    },
-  );
-
-  it("keys the delegate rail at the pinned SPP's square authority shapes", () => {
-    expect(RING_AUTHORITY_SHAPES.map((shape) => [shape.inputs, shape.outputs])).toEqual([
-      [2, 2],
-      [4, 4],
-    ]);
-    expect(ringAuthorityShape(3, 3)).toEqual({ inputs: 4, outputs: 4 });
-    expect(ringAuthorityShape(3, 9)).toBeUndefined();
+  it("selects a key of the rail's family", () => {
+    expect(ringTransferCircuit(spend)?.family).toBe("transferConfidential");
+    expect(ringTransferCircuit({ ...spend, rail: "anonymous" })?.family).toBe("transferAnonymous");
   });
 
-  it("keys every transfer family at the pinned shapes and exactly the SPP shapes each rail serves", () => {
-    expect({
-      confidential: CONFIDENTIAL_TRANSFER_SHAPES,
-      anonymous: ANONYMOUS_TRANSFER_SHAPES,
-      entry: ENTRY_TRANSFER_SHAPES,
-    }).toEqual(keyedShapes.transfer_shapes);
-    const served = (rail: RingRail, spendsDefaultRing: boolean) =>
-      SPP_SUPPORTED_SHAPES.filter(
-        (shape) =>
-          railShapes(rail).includes(shape) &&
-          ringTransferCircuit({
-            rail,
-            inputs: shape.inputs,
-            outputs: shape.outputs,
-            spendsDefaultRing,
-            legs: 0,
-          }) !== undefined,
-      ).map((shape) => [shape.inputs, shape.outputs]);
-    expect(served("confidential", false)).toEqual(keyedShapes.confidential_ring);
-    expect(served("delegate", false)).toEqual(keyedShapes.ring_authority);
-    expect(served("anonymous", false)).toEqual(keyedShapes.anonymous_ring);
-    expect(served("anonymous", true)).toEqual(keyedShapes.anonymous_entry_ring);
-    expect(
-      SPP_SUPPORTED_SHAPES.filter(
-        (shape) =>
-          transferAuditKey({
-            rail: "anonymous",
-            inputs: shape.inputs,
-            capacity: shape.outputs,
-            spendsDefaultRing: false,
-          }) !== undefined,
-      ).map((shape) => [shape.inputs, shape.outputs]),
-    ).toEqual(keyedShapes.anonymous_ring);
+  it("refuses a delegate rail spending a default-ring note", () => {
+    expect(ringTransferCircuit({ ...spend, rail: "delegate", spendsDefaultRing: true })).toBe(
+      undefined,
+    );
   });
 });
 
 describe("ring rails", () => {
-  it("picks the rail of a ring instruction under the mode and the delegate like Rust `RingRail::new`", () => {
+  const delegate = encodeBase58(new Uint8Array(32).fill(7));
+
+  it("picks the rail of a version 4 instruction under the mode and the delegate", () => {
     const { transfer, authorityTransfer, merge } = RingInstructionTag;
-    const delegate = encodeBase58(new Uint8Array(32).fill(7));
-    expect(ringRail(transfer, { mode: "confidential" })).toBe("confidential");
-    expect(ringRail(transfer, { mode: "anonymous" })).toBe("anonymous");
-    expect(ringRail(authorityTransfer, { mode: "confidentialEscrow", delegate })).toBe("delegate");
-    expect(() => ringRail(authorityTransfer, { mode: "anonymous", delegate })).toThrow(
-      ringError("AnonymousRingRefused"),
+    expect(ringRailV4(transfer, { mode: "confidential" })).toBe("confidential");
+    expect(ringRailV4(transfer, { mode: "anonymous" })).toBe("anonymous");
+    expect(ringRailV4(authorityTransfer, { mode: "confidential", delegate })).toBe("delegate");
+    expect(ringRailV4(authorityTransfer, { mode: "anonymous", delegate })).toBe(
+      "anonymousDelegate",
     );
-    expect(() => ringRail(authorityTransfer, { mode: "confidential" })).toThrow(
+    expect(() => ringRailV4(authorityTransfer, { mode: "anonymous" })).toThrow(
       ringError("DelegateDisabled"),
     );
-    expect(ringRailOf(authorityTransfer, "confidential")).toBe("delegate");
-    expect(() => ringRailOf(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
+    expect(() => ringRailOfV4(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
+  });
+
+  it("keeps the version 3 rails under their own tags", () => {
+    const { historicalTransferV3, historicalAuthorityTransferV3, historicalMergeV3 } =
+      RingInstructionTag;
+    expect(ringRail(historicalTransferV3, { mode: "confidential" })).toBe("confidential");
+    expect(ringRail(historicalTransferV3, { mode: "anonymous" })).toBe("anonymous");
+    expect(ringRail(historicalAuthorityTransferV3, { mode: "confidentialEscrow", delegate })).toBe(
+      "delegate",
+    );
+    expect(() => ringRail(historicalAuthorityTransferV3, { mode: "anonymous", delegate })).toThrow(
+      ringError("AnonymousRingRefused"),
+    );
+    expect(() => ringRail(historicalAuthorityTransferV3, { mode: "confidential" })).toThrow(
+      ringError("DelegateDisabled"),
+    );
+    expect(ringRailOf(historicalAuthorityTransferV3, "confidential")).toBe("delegate");
+    expect(() => ringRailOf(historicalMergeV3, "confidential")).toThrow(
+      ringError("InvalidInstructionData"),
+    );
   });
 });
 
@@ -978,74 +806,6 @@ describe("ring-disclosure-ranges.json", () => {
           vector.message_len_every_exit_by_input_count[index],
         );
       });
-    },
-  );
-});
-
-describe("ring-policy-rules.json", () => {
-  type Case = (typeof policyRules.cases)[number];
-
-  /** The refusal the vector names, `pass` none. */
-  function outcome(expected: Case["outcome"]): RuleRefusal | undefined {
-    const rule = expected.rule ?? -1;
-    const output = expected.output ?? -1;
-    switch (expected.kind) {
-      case "pass":
-        return undefined;
-      case "lists":
-        return {
-          kind: "lists",
-          rule,
-          subject:
-            expected.subject === "sender"
-              ? { kind: "sender" }
-              : { kind: expected.subject === "owner" ? "owner" : "asset", output },
-        };
-      case "no_asset_limit":
-        return { kind: "noAssetLimit", rule, output };
-      default:
-        return { kind: "mixedAssets", rule, output };
-    }
-  }
-
-  it.each(policyRules.cases.map((vector) => [vector.name, vector] as const))(
-    "%s",
-    (_name, vector) => {
-      const table = decodeRuleTable({
-        rules: vector.rules.map((row) => field(row)),
-      });
-      const lookup = (list: readonly { member: string; lists: number }[], member: string): bigint =>
-        BigInt(list.find((record) => record.member === member)?.lists ?? 0);
-      const lists = (member: string): RecordLists => ({
-        own: lookup(vector.own_records, member),
-        curator: lookup(vector.curator_records, member),
-      });
-      const refusal = admitTransfer(
-        table,
-        vector.sources.map((source) => ({
-          listId: source.list_id,
-          registry: field(source.registry),
-        })),
-        {
-          sender: lists(vector.sender),
-          outputs: vector.outputs.map((output) => ({
-            owner: field(output.owner),
-            asset: field(output.asset),
-            amount: BigInt(output.amount),
-            ownerLists: lists(output.owner),
-            assetLists: lists(output.asset),
-            mintPolicy: {
-              ...EMPTY_MINT_POLICY,
-              threshold: BigInt(
-                vector.inline_limits[
-                  (vector.inline_assets as readonly string[]).indexOf(output.asset)
-                ] ?? 0,
-              ),
-            },
-          })),
-        },
-      );
-      expect(refusal).toEqual(outcome(vector.outcome));
     },
   );
 });

@@ -20,7 +20,6 @@ import {
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,

@@ -535,10 +535,6 @@ describe("confirmedRingWithdrawals", () => {
         ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
         interfaceTransfers: transfers,
         ownRevision: 0n,
-        policy: {
-          splWithdrawalOwners: [],
-          recipients: { kind: "framed", recipients: [zero, zero] },
-        },
         inProofOwner: { owner: zero, commitment: zero, commitmentPok: zero },
       }),
     );

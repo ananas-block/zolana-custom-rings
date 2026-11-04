@@ -135,6 +135,7 @@ export function transferProofRequest(
     rows: policy.rows,
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
+    addressChain: ZERO_32,
     ...policy.tracking,
     ...policyParams(policy, input.proving),
   };

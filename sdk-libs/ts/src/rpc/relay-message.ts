@@ -12,12 +12,7 @@ import {
   type TransactionPartialSigner,
 } from "@solana/kit";
 
-import type {
-  Bytes32,
-  RequestContext,
-  RingAssetDeposit,
-  Signature,
-} from "@heliuslabs/zolana/interface";
+import type { RequestContext, RingAssetDeposit, Signature } from "@heliuslabs/zolana/interface";
 import { equalBytes, LOADED_ACCOUNTS_DATA_SIZE_LIMIT } from "@heliuslabs/zolana/internal";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 

@@ -669,7 +669,9 @@ class Scan {
       if (context === undefined) return [];
       return sitesOf(tx).flatMap((site) => {
         const body = historicalBody(tx, site);
-        return body === undefined ? [] : [{ ...body, reply: new Uint8Array(), tx, site, context, found: HISTORICAL }];
+        return body === undefined
+          ? []
+          : [{ ...body, reply: new Uint8Array(), tx, site, context, found: HISTORICAL }];
       });
     });
     if (bodies.length === 0) return;

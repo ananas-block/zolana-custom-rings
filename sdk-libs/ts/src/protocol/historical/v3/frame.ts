@@ -46,7 +46,11 @@ import {
   type AuditLayout,
   type AuditStreamLayout,
 } from "./layout.js";
-import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../../codec/anonymous-delivery.js";
+import {
+  MIN_REPLY_LEN,
+  RECIPIENT_BODY_LEN,
+  senderBundleLen,
+} from "../../codec/anonymous-delivery.js";
 
 import { RingInstructionTag } from "../../transaction/instruction-tag.js";
 import type { RingMode } from "../../codec/ring-codecs.js";
@@ -58,7 +62,11 @@ import {
   readTreeContext,
   writeInterfaceTransfer,
 } from "../../codec/codecs.js";
-import { CONFIDENTIAL_DATA_FREE_BODY_LEN, encodeRingOutput, RingScheme } from "../../transaction/output.js";
+import {
+  CONFIDENTIAL_DATA_FREE_BODY_LEN,
+  encodeRingOutput,
+  RingScheme,
+} from "../../transaction/output.js";
 
 /** The program rail the data serves, fixed by the instruction and the ring mode. */
 export type RingRail = "confidential" | "anonymous" | "delegate";
@@ -178,7 +186,8 @@ export interface RingTransactConfig {
 export function ringRailOf(tag: number, mode: RingMode): RingRail {
   if (tag === RingInstructionTag.historicalTransferV3)
     return mode === "anonymous" ? "anonymous" : "confidential";
-  if (tag !== RingInstructionTag.historicalAuthorityTransferV3) throw invalid("InvalidInstructionData");
+  if (tag !== RingInstructionTag.historicalAuthorityTransferV3)
+    throw invalid("InvalidInstructionData");
   if (mode === "anonymous") throw invalid("AnonymousRingRefused");
   return "delegate";
 }

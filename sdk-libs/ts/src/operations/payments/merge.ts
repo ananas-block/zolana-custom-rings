@@ -84,7 +84,6 @@ import {
   type RingMergeSealer,
   type SealedMergeRecord,
 } from "../../crypto/audit/merge-disclosure.js";
-import { type BoundRoot } from "../../rpc/registered-record.js";
 import { newestTrackingRoot } from "../../rpc/tracking-resolver.js";
 import type { TrackingOpening } from "../../protocol/membership/tracking.js";
 import {

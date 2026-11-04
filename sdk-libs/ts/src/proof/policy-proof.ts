@@ -54,10 +54,7 @@ import {
   type RecordLists,
   type RuleRefusal,
 } from "../protocol/membership/policy.js";
-import {
-  verifyTrackingPool,
-  type TrackingRecord,
-} from "../protocol/membership/tracking.js";
+import { verifyTrackingPool, type TrackingRecord } from "../protocol/membership/tracking.js";
 import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
 import { newestTrackingRoot } from "../rpc/tracking-resolver.js";
 import type { TransferRoots } from "../protocol/proof/statement.js";

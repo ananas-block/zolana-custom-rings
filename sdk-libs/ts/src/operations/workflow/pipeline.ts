@@ -317,7 +317,7 @@ async function assembleStagedTransfer<T>(
   use: (assembled: AssembledTransfer) => Promise<T>,
 ): Promise<T> {
   const { client, ringProgramId, config, staged } = input;
-  const { rail, sender, spend } = staged;
+  const { rail, spend } = staged;
   const ringRail = spend.rail;
   const delegate = isDelegateRail(ringRail);
   const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
@@ -336,7 +336,7 @@ async function assembleStagedTransfer<T>(
       owners: ownerRows({ inputs, delegate }).length,
       hasData: layout.hasData,
     };
-    const addresses = { nInputs: shape.inputs, legs: transfers.length, buffered: false };
+    const addresses = { nInputs: shape.inputs, legs: transfers.length };
     const { circuit } = selectTransferKey({
       spend: keySpend,
       addresses: { ...addresses, coSigners: input.coSigners?.length ?? 0 },
