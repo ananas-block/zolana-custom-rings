@@ -62,7 +62,6 @@ impl PolicyWrite<'_> {
     fn replace_rules(self, table: &PolicyTableIxData) -> ProgramResult {
         self.policy.policy_hash()?;
         let bound = TableBinding {
-            records: &self.policy.records,
             table,
             curators: self.trailing,
         }
@@ -84,7 +83,7 @@ impl PolicyWrite<'_> {
             ListId::try_from(source.list_id).map_err(|_| CustomRingError::InvalidListId)?;
         let registry = match (source.source, self.trailing) {
             (0, []) => Address::default(),
-            (1, [curator]) => curator_source(&self.policy.records, curator)?,
+            (1, [curator]) => curator_source(curator)?,
             _ => return Err(CustomRingError::InvalidSource.into()),
         };
         let mut sources = self.policy.sources;

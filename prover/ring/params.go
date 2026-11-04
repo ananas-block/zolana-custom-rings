@@ -114,17 +114,12 @@ type Source struct {
 	Registry Field `json:"registry"`
 }
 
-// PrivateSourceParams serves OwnerLists from the private tree of Registry, zeros when none.
-type PrivateSourceParams struct {
-	OwnerLists Field `json:"ownerLists"`
-	Registry   Field `json:"registry"`
-}
-
 type PolicyTable struct {
-	Sources   []Source            `json:"sources"`
-	Source    PrivateSourceParams `json:"source"`
-	PolicyLen uint8               `json:"policyLen"`
-	Rules     []Field             `json:"rules"`
+	Sources []Source `json:"sources"`
+	// Bit i puts list i+1 at owners' salted keys.
+	Salted    uint8   `json:"salted"`
+	PolicyLen uint8   `json:"policyLen"`
+	Rules     []Field `json:"rules"`
 }
 
 // RecordOpening opens a member's record in a member registry, Path the three siblings of every level from the leaf up in child order.
@@ -164,7 +159,6 @@ type PolicyInputsParams struct {
 	RingProgramID   Field        `json:"ringId"`
 	OwnRoot         Field        `json:"ownRoot"`
 	CuratorRoot     Field        `json:"curatorRoot"`
-	PrivateRoot     Field        `json:"privateRoot"`
 	PublicAssets    []Field      `json:"publicAssets"`
 	PublicAmounts   []Field      `json:"publicAmounts"`
 	PublicGross     []Field      `json:"publicGross"`
@@ -188,47 +182,15 @@ type PooledSubject struct {
 type PooledEntry struct {
 	Own     uint32   `json:"own"`
 	Curator []uint32 `json:"curator"`
-	Private []uint32 `json:"private,omitempty"`
 }
 
-// PrivateOpening opens one position of a private row.
-type PrivateOpening struct {
-	Written  bool    `json:"written"`
-	Lists    uint64  `json:"lists"`
-	LeafSalt Field   `json:"leafSalt"`
-	Siblings []Field `json:"siblings"`
-}
-
-// PrivateRow is one owner's private row, a zero Live pads.
-type PrivateRow struct {
-	Live     bool           `json:"live"`
-	ListSalt Field          `json:"listSalt"`
-	Salted   PrivateOpening `json:"salted"`
-	Zero     PrivateOpening `json:"zero"`
-}
-
-// PrivateListWrite is one applied private list write.
-type PrivateListWrite struct {
-	Member       Field   `json:"member"`
-	ListSalt     Field   `json:"listSalt"`
-	WriteCounter uint64  `json:"writeCounter"`
-	Mask         uint64  `json:"mask"`
-	Value        uint64  `json:"value"`
-	OldWritten   bool    `json:"oldWritten"`
-	OldLists     uint64  `json:"oldLists"`
-	OldLeafSalt  Field   `json:"oldLeafSalt"`
-	Siblings     []Field `json:"siblings"`
-}
-
-type ApplyPrivateListParams struct {
-	RequestHead
-	OldRoot    Field `json:"oldRoot"`
-	NewRoot    Field `json:"newRoot"`
-	ChainStart Field `json:"chainStart"`
-	ChainEnd   Field `json:"chainEnd"`
-	Count      uint8 `json:"count"`
-	// A nil write past Count assigns zeros.
-	Writes []*PrivateListWrite `json:"writes"`
+// PooledOwnerEntry takes a zero salt with no tracking row.
+type PooledOwnerEntry struct {
+	PooledEntry
+	Tracking      uint32   `json:"tracking"`
+	ListSalt      Field    `json:"listSalt"`
+	OwnSalted     uint32   `json:"ownSalted"`
+	CuratorSalted []uint32 `json:"curatorSalted"`
 }
 
 type SharedRegistryPath struct {
@@ -249,15 +211,11 @@ type PolicyParams struct {
 	CuratorProof    SharedRegistryProof `json:"curatorProof"`
 	OwnSubjects     []PooledSubject     `json:"ownSubjects"`
 	CuratorSubjects []PooledSubject     `json:"curatorSubjects"`
-	SenderEntries   []PooledEntry       `json:"senderEntries"`
+	SenderEntries   []PooledOwnerEntry  `json:"senderEntries"`
 	// OwnerEntries[o] and AssetEntries[o] index payment o's owner and asset subjects.
-	OwnerEntries       []PooledEntry `json:"ownerEntries"`
-	AssetEntries       []PooledEntry `json:"assetEntries"`
-	PublicAssetEntries []uint32      `json:"publicAssetEntries"`
-	// One private row per subject on a key with private rows, none otherwise.
-	PrivateRows     []PrivateRow `json:"privateRows,omitempty"`
-	PrivateOwners   []Field      `json:"privateOwners,omitempty"`
-	PrivateTracking []uint32     `json:"privateTracking,omitempty"`
+	OwnerEntries       []PooledOwnerEntry `json:"ownerEntries"`
+	AssetEntries       []PooledEntry      `json:"assetEntries"`
+	PublicAssetEntries []uint32           `json:"publicAssetEntries"`
 }
 
 type QueueEntry struct {

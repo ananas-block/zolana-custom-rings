@@ -1,7 +1,7 @@
 //! Pins the transfer key catalog and the shapes it serves in `test-vectors/proof/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
 
 use custom_ring_interface::{
-    key_catalog::{RingCircuit, TransferSpend, TRANSFER_SHAPES},
+    key_catalog::{RecordPools, RingCircuit, TransferSpend, TRANSFER_SHAPES},
     RingRail,
 };
 use serde_json::{json, Value};
@@ -35,6 +35,7 @@ fn served(rail: RingRail, spends_default_ring: bool) -> Value {
                         spends_default_ring,
                         legs: 0,
                         owners: 0,
+                        pools: RecordPools::default(),
                         wide: false,
                     }
                     .fitted(),

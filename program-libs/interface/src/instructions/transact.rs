@@ -31,7 +31,7 @@ use crate::{
     cosign::ApprovalMask,
     disclosure::AuditLayout,
     error::CustomRingError,
-    key_catalog::{FrameKey, RingCircuit, TransferShape, TransferSpend},
+    key_catalog::{FrameKey, RecordPools, RingCircuit, TransferShape, TransferSpend},
     output::{
         encode_confidential_output, encode_ring_body_output, encode_ring_sender_bundle_output,
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -1117,6 +1117,7 @@ impl<'a> RingTransactData<'a> {
             spends_default_ring: self.entry,
             legs,
             owners: 0,
+            pools: RecordPools::default(),
             wide: self.wide_owners,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)

@@ -93,7 +93,6 @@ pub fn process_initialize_ix(
     if let Some(binding) = ix.policy.as_ref().filter(|_| ix.kind.has_policy()) {
         // Sources name exactly the lists the rules reference, the pinned hash binds every later policy proof.
         let bound = TableBinding {
-            records: &records,
             table: &binding.table,
             curators: iter.remaining_unchecked()?,
         }

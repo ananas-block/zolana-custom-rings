@@ -10,7 +10,7 @@ import (
 type Spend struct {
 	Senders []frontend.Variable
 	Inputs  []shared.Output
-	// Tracking binds each private row's salt, unread on a key with no rows.
+	// Tracking binds each owner's salt.
 	Tracking TrackingPool
 }
 

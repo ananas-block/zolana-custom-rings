@@ -92,6 +92,37 @@ type Sections struct {
 	policy.Policy
 }
 
+const (
+	// narrowWithdrawals is the leg capacity of the narrow keys, a transaction past their pools moves to the wide key.
+	narrowWithdrawals = 4
+	// ownerAddresses mirrors OWNER_ADDRESSES in key_catalog.rs, a v1 transaction's 64 addresses less SPP's 4 and the ring's 6.
+	ownerAddresses = 64 - 4 - 6
+)
+
+func (s Shape) narrow() bool {
+	return s.Withdrawals <= narrowWithdrawals && !s.Entry
+}
+
+// publicOwners is the distinct signers and legs one transaction can name, each signer also takes a nullifier PDA.
+func (s Shape) publicOwners() int {
+	return min(s.Owners, (ownerAddresses-s.Withdrawals)/2) + s.Withdrawals
+}
+
+func (s Shape) trackedWithdrawals() int {
+	if s.narrow() {
+		return 0
+	}
+	return s.publicOwners() - s.Owners
+}
+
+// saltedKeys fits a public and a salted record per distinct owner in one pool.
+func (s Shape) saltedKeys() int {
+	if s.narrow() {
+		return 0
+	}
+	return 2*s.publicOwners() + s.Outputs - s.Owners - s.Withdrawals
+}
+
 // Stream compiles the tails into every key, a clear has_data transmits none.
 func (s Shape) Stream() audit.StreamShape {
 	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry, Data: true}
@@ -105,11 +136,11 @@ func (s Shape) entries() int {
 }
 
 func NewSections(shape Shape) (Sections, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys()}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
-	tracking, err := policy.NewTracking(shape.Owners, shape.Outputs, 0)
+	tracking, err := policy.NewTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals())
 	if err != nil {
 		return Sections{}, err
 	}
@@ -133,7 +164,7 @@ func (c *Sections) validate(shape Shape) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.Inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.Owners),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.Withdrawals),
-		c.ValidateTracking(shape.Owners, shape.Outputs, 0),
+		c.ValidateTracking(shape.Owners, shape.Outputs, shape.trackedWithdrawals()),
 	)
 }
 
@@ -192,7 +223,7 @@ func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, si
 
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
 func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
-	for _, value := range []frontend.Variable{c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.PrivateRoot} {
+	for _, value := range []frontend.Variable{c.PolicyHash, c.OwnRoot, c.CuratorRoot} {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: delegate, V: value})
 	}
 }
@@ -205,7 +236,7 @@ func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audi
 		c.InputCount, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{
 		c.SignerCount, signers.Chain,
-		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot, c.PrivateRoot,
+		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,
 	}, publicSlots(c.PublicAssets[:], c.PublicAmounts[:], c.PublicGross[:]), []frontend.Variable{c.WithdrawalHash})
 	return closeStatement(fields)
 }

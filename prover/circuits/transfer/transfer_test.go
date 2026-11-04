@@ -15,8 +15,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -275,12 +273,6 @@ func TestDelegateBypass(t *testing.T) {
 				refused(t, b.Circuit, "transfer.(*Sections).assertBypass")
 			})
 		}
-	})
-	t.Run("a private root", func(t *testing.T) {
-		b := onRail(confidential2, ringtransfer.Delegate).Build(t)
-		b.Circuit.PrivateRoot = 7
-		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*Sections).assertBypass")
 	})
 	t.Run("a mask on the authority rail", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
@@ -603,11 +595,35 @@ func TestRailCells(t *testing.T) {
 	})
 }
 
-// No key has private rows, a source fails closed.
-func TestPrivateSourceRefused(t *testing.T) {
-	w := ringtransfer.Signed(confidential2)
-	w.Private = &ringtransfer.PrivateSource{Tree: ringprivatelist.New(t), OwnerLists: ringregistry.BlockBit, Registry: big.NewInt(0x77)}
-	refused(t, w.Build(t).Circuit, "policy.(*Policy).openPrivateRows")
+func TestSaltedList(t *testing.T) {
+	recipient := ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 0, 0, 1).OwnerKey)
+	world := func(blocked ...*big.Int) ringtransfer.Confidential {
+		w := ringtransfer.Signed(confidential2)
+		w.SaltedBlock = append([]*big.Int{}, blocked...)
+		return w
+	}
+	t.Run("an owner with no curator action passes by absence", func(t *testing.T) {
+		requireSolved(t, world().Build(t).Circuit)
+	})
+	t.Run("a privately blocked owner fails the rule", func(t *testing.T) {
+		refused(t, world(recipient).Build(t).Circuit, "policy.assertPaymentRules")
+	})
+	t.Run("an enrolled owner under another salt fails the tag", func(t *testing.T) {
+		b := world().Build(t)
+		b.Circuit.OwnerEntries[0].ListSalt = big.NewInt(0x1234)
+		refused(t, b.Circuit, "policy.(*Policy).resolveSubjects")
+	})
+	t.Run("an unenrolled owner reads no salted list", func(t *testing.T) {
+		w := world(recipient)
+		w.Unenrolled = []*big.Int{recipient}
+		w.Outputs = map[int]func(*ringaudit.Slot){0: func(slot *ringaudit.Slot) { slot.Utxo.NullifierPk = shared.ZeroNullifierPk }}
+		requireSolved(t, w.Build(t).Circuit)
+	})
+	t.Run("a delegate reads no salted list", func(t *testing.T) {
+		w := onRail(confidential2, ringtransfer.Delegate)
+		w.SaltedBlock = []*big.Int{recipient}
+		requireSolved(t, w.Build(t).Circuit)
+	})
 }
 
 // A statement cell moves the public input alone.
@@ -626,5 +642,20 @@ func TestStatementBindsEveryElement(t *testing.T) {
 		moved := append([]*big.Int{}, statement...)
 		moved[i] = new(big.Int).Add(moved[i], big.NewInt(1))
 		bound.RefuseStatement(t, b.Circuit, moved)
+	}
+}
+
+// A key with no tracking rows for its legs always has the wide key to move to.
+func TestNarrowKeysFitTheWideKey(t *testing.T) {
+	var wide transfer.Shape
+	for _, shape := range transfer.Shapes {
+		if shape.Withdrawals > wide.Withdrawals {
+			wide = shape
+		}
+	}
+	for _, shape := range transfer.Shapes {
+		if !shape.Entry && shape.Withdrawals == 4 && (shape.Inputs > wide.Inputs || shape.Outputs > wide.Outputs || shape.Owners > wide.Owners) {
+			t.Errorf("%s does not fit the wide key %s", shape, wide)
+		}
 	}
 }

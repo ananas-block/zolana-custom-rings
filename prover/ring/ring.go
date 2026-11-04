@@ -10,7 +10,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
@@ -35,8 +34,6 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
 	case ApplyEnrollments:
 		return bind[ApplyEnrollmentsParams](k, registry.NewApplyEnrollmentsCircuit, k.Inputs)
-	case ApplyPrivateList:
-		return bind[ApplyPrivateListParams](k, privatelist.NewApplyCircuit, k.Inputs)
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
@@ -115,7 +112,7 @@ type policyRequest[P pooledParams] struct {
 }
 
 func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
-	if err := r.params.pooled().validateIndices(r.pools); err != nil {
+	if err := r.params.pooled().validateIndices(r.pools, r.trackingPool); err != nil {
 		return nil, err
 	}
 	if err := r.params.tracking().validateIndices(r.trackingPool); err != nil {
@@ -128,14 +125,22 @@ func (p PolicyParams) pooled() PolicyParams { return p }
 
 func (p TransferParams) tracking() TrackingParams { return p.TrackingParams }
 
-func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
+func (p PolicyParams) validateIndices(pools policy.RecordPoolShape, trackingPool int) error {
 	if err := validatePoolIndices(p.OwnSubjects, p.OwnProof, pools.Own); err != nil {
 		return err
 	}
 	if err := validatePoolIndices(p.CuratorSubjects, p.CuratorProof, pools.Curator); err != nil {
 		return err
 	}
-	for _, entry := range slices.Concat(p.SenderEntries, p.OwnerEntries, p.AssetEntries) {
+	for _, entry := range slices.Concat(p.SenderEntries, p.OwnerEntries) {
+		if err := entry.validateOwnerIndices(pools); err != nil {
+			return err
+		}
+		if err := poolIndex("tracking subject", entry.Tracking, trackingPool); err != nil {
+			return err
+		}
+	}
+	for _, entry := range p.AssetEntries {
 		if err := entry.validateIndices(pools); err != nil {
 			return err
 		}
@@ -187,6 +192,21 @@ func (e PooledEntry) validateIndices(pools policy.RecordPoolShape) error {
 	}
 	for _, index := range e.Curator {
 		if err := poolIndex("curator subject", index, pools.CuratorSubjects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e PooledOwnerEntry) validateOwnerIndices(pools policy.RecordPoolShape) error {
+	if err := e.PooledEntry.validateIndices(pools); err != nil {
+		return err
+	}
+	if err := poolIndex("own salted subject", e.OwnSalted, pools.OwnSubjects); err != nil {
+		return err
+	}
+	for _, index := range e.CuratorSalted {
+		if err := poolIndex("curator salted subject", index, pools.CuratorSubjects); err != nil {
 			return err
 		}
 	}
