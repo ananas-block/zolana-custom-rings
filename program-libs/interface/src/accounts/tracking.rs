@@ -12,7 +12,7 @@ use spr_hasher::{
     },
     Hasher, HasherError, Poseidon,
 };
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
+pub use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_policy::registry_field;
 
 use crate::{

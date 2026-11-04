@@ -1,10 +1,12 @@
 //! Pins `test-vectors/registry/empty_root.json` for Go, TS and the indexer.
 
-use custom_ring_interface::{tracking::TRACKING_EMPTY_ROOT, MEMBER_REGISTRY_EMPTY_ROOT};
+use custom_ring_interface::{
+    storage::PRIVATE_SOURCE_EMPTY_ROOT, tracking::TRACKING_EMPTY_ROOT, MEMBER_REGISTRY_EMPTY_ROOT,
+};
 use serde_json::{json, Value};
 use zolana_ring_member_registry::{
-    quad_node, MemberRecord, MemberRegistryTree, RecordTree, TrackingRecord, TrackingTree,
-    ZERO_SUBTREES,
+    quad_node, MemberRecord, MemberRegistryTree, PrivateListTree, RecordTree, TrackingRecord,
+    TrackingTree, ZERO_SUBTREES,
 };
 
 const VECTOR: &str = concat!(
@@ -67,4 +69,12 @@ fn write_empty_root_vector() {
         serde_json::to_string_pretty(&vector()).unwrap() + "\n",
     )
     .unwrap();
+}
+
+#[test]
+fn a_new_private_source_starts_at_the_empty_sparse_root() {
+    assert_eq!(
+        PrivateListTree::new().unwrap().root(),
+        PRIVATE_SOURCE_EMPTY_ROOT
+    );
 }
