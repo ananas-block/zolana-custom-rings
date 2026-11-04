@@ -82,7 +82,7 @@ type OutflowLimit struct {
 
 // Record is one member's registry record.
 type Record struct {
-	Lists      uint64
+	Lists uint64
 	// WithdrawalThreshold is an asset record's approval bound, zero leaves it unwritten.
 	WithdrawalThreshold uint64
 }
@@ -106,8 +106,8 @@ type PublicSlot struct {
 
 func Confidential() World {
 	return World{
-		Outputs:   2,
-		Sender:    Sender,
+		Outputs: 2,
+		Sender:  Sender,
 		Table: Table{
 			Lists:  []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit},
 			Rules:  []Rule{Require(policy.SubjectOutputOwner, ringregistry.AllowBit), Forbid(policy.SubjectSender, ringregistry.FrozenBit)},
@@ -121,7 +121,7 @@ func Confidential() World {
 
 func Anonymous() World {
 	w := Confidential()
-	
+
 	return w
 }
 
