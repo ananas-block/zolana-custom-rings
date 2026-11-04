@@ -10,7 +10,11 @@ import {
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
-import { NullifierKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import {
+  NullifierKey,
+  type ShieldedAddress,
+  type ShieldedPublicKey,
+} from "@heliuslabs/zolana/keypair";
 import {
   ConfidentialTransfer,
   ProofInputUtxo,
@@ -93,6 +97,20 @@ export function checkCoOwnerKeys(
       ),
   );
   if (index >= 0) throw new RingError("RING_MISSING_CO_OWNER_KEY", { details: { index } });
+}
+
+/** Only a spend that named its wallet takes a zero-key note of that wallet, Rust `check_zero_key_inputs`. */
+export function checkZeroKeyInputs(
+  inputs: readonly ProofInputUtxo[],
+  owner: ShieldedPublicKey,
+): void {
+  const index = inputs.findIndex(
+    (spent) =>
+      !spent.isDummy() &&
+      equalBytes(spent.nullifierPublicKey, ZERO_NULLIFIER_PK) &&
+      spent.utxo.owner.equals(owner),
+  );
+  if (index >= 0) throw new RingError("RING_ZERO_KEY_INPUT_UNNAMED", { details: { index } });
 }
 
 type TransferSlot = Parameters<ProofAuthority["prove"]>[0]["payload"]["inputs"][number];

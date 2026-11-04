@@ -1,34 +1,21 @@
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../../src/protocol/membership/mint-policy.js";
-import {
-  type RingMemberOpening,
-  type RingSealedKey,
-  type RingServedRecord,
-} from "../../src/rpc/ports.js";
+import { type RingMemberOpening, type RingServedRecord } from "../../src/rpc/ports.js";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/zolana/internal";
 import {
   QUAD_ARITY,
   QUAD_HEIGHT,
   canopyLevels,
-  type AuthorizedAddress,
   type MemberRecord,
   type QuadPath,
 } from "../../src/protocol/membership/member-registry.js";
-import {
-  FIELD_MAX,
-  addressRecordHash,
-  memberRecordHash,
-} from "../../src/protocol/membership/member-opening.js";
+import { FIELD_MAX, memberRecordHash } from "../../src/protocol/membership/member-opening.js";
 
-/** One record the fixture holds, its key escrow served beside it when `sealed` is set. */
+/** One record the fixture holds. */
 export interface FixtureRecord {
   readonly member: Bytes32;
   readonly lists: bigint;
   readonly mintPolicy?: MintPolicy;
-  readonly escrowKey?: Bytes32;
-  readonly sealed?: RingSealedKey;
-  /** Sets the record's address hash, served beside the record. */
-  readonly address?: AuthorizedAddress;
 }
 
 /** An independent sparse 4-ary record tree, leaf 0 the sentinel and the members in key order after it. */
@@ -41,20 +28,13 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       mintPolicy: EMPTY_MINT_POLICY,
       member: ZERO_32,
       lists: 0n,
-      escrowKey: ZERO_32,
       next: sorted[0]?.member ?? FIELD_MAX,
-      addressHash: ZERO_32,
     },
     ...sorted.map((record, index) => ({
       member: record.member,
       lists: record.lists,
       mintPolicy: record.mintPolicy ?? EMPTY_MINT_POLICY,
-      escrowKey: record.escrowKey ?? ZERO_32,
       next: sorted[index + 1]?.member ?? FIELD_MAX,
-      addressHash:
-        record.address === undefined
-          ? ZERO_32
-          : addressRecordHash({ member: record.member, ...record.address }),
     })),
   ];
   const zeros = [ZERO_32];
@@ -95,16 +75,7 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       (row, at) => at > 0 && bytesToBigInt(row.member) === bytesToBigInt(member),
     );
     const record = rows[index];
-    if (index > 0 && record !== undefined) {
-      const { sealed, address } = sorted[index - 1] ?? {};
-      return {
-        kind: "present",
-        record,
-        path: path(index),
-        ...(sealed === undefined ? {} : { sealedKey: sealed }),
-        ...(address === undefined ? {} : { address }),
-      };
-    }
+    if (index > 0 && record !== undefined) return { kind: "present", record, path: path(index) };
     const value = bytesToBigInt(member);
     const lowIndex = rows.findIndex(
       (row) => bytesToBigInt(row.member) < value && value < bytesToBigInt(row.next),
@@ -124,14 +95,7 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
       if (at >= 0) return at;
       const record = rows[index];
       if (record === undefined) throw new Error("leaf outside the fixture registry");
-      // The seal belongs to the leaf, whichever subject reaches it first.
-      const { sealed, address } = (index > 0 ? sorted[index - 1] : undefined) ?? {};
-      records.push({
-        record,
-        path: { index, siblings: siblings.slice(0, height) },
-        ...(sealed === undefined ? {} : { sealedKey: sealed }),
-        ...(address === undefined ? {} : { address }),
-      });
+      records.push({ record, path: { index, siblings: siblings.slice(0, height) } });
       return records.length - 1;
     });
     const canopy = Array.from(

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ZERO_32 } from "@heliuslabs/zolana/internal";
 import vector from "../../../../../test-vectors/registry/mint-records.json" with { type: "json" };
 import {
   EMPTY_MINT_POLICY,
@@ -51,11 +50,9 @@ describe("mint records shared with Rust and Go", () => {
       expect(Buffer.from(mintPolicyWrite(record.mintPolicy).subarray(1)).toString("hex")).toBe(
         vector.rows[i]!.wire,
       );
-      expect(
-        Buffer.from(
-          queueEntryHash({ ...record, mask: 0n, value: 0n, escrowKey: ZERO_32 }),
-        ).toString("hex"),
-      ).toBe(vector.rows[i]!.entry_hash);
+      expect(Buffer.from(queueEntryHash({ ...record, mask: 0n, value: 0n })).toString("hex")).toBe(
+        vector.rows[i]!.entry_hash,
+      );
       expect(() =>
         verifyRecordOpening(tree.opening(record.member), tree.root, record.member),
       ).not.toThrow();

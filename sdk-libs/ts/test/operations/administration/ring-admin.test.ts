@@ -9,6 +9,8 @@ import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringPolicyAddress,
+  STORAGE_PROGRAM_ID,
+  trackingRegistryPda,
 } from "../../../src/protocol/pda/index.js";
 import {
   RingInstructionTag,
@@ -82,6 +84,8 @@ describe("initialize and policy update", () => {
       [await protocolConfigAddress(), READ],
       [await ringAuthAddress(RING), WRITE],
       [SHIELDED_POOL_PROGRAM_ID, READ],
+      [(await trackingRegistryPda(RING))[0], WRITE],
+      [STORAGE_PROGRAM_ID, READ],
     ];
     const policy = await initializeRingInstruction({
       ringProgramId: RING,
@@ -206,14 +210,14 @@ describe("ring setup", () => {
 
 describe("ring account", () => {
   const MODE_OFFSET = 2;
-  const CREATED_SLOT_OFFSET = 199;
+  const CREATED_SLOT_OFFSET = 201;
   const account = () => ringPolicyData({ bump: 254 });
 
   it("reads the roles and the created slot after the auditor key", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1060);
+    expect(data).toHaveLength(1127);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,
@@ -318,7 +322,7 @@ describe("role writes", () => {
   it.each([
     ["a zero signer", { signer: address("11111111111111111111111111111111") }, "InvalidCoSigner"],
     ["an empty scope", { scope: 0 }, "InvalidCoSignerScope"],
-    ["an unknown scope bit", { scope: 8 }, "InvalidCoSignerScope"],
+    ["an unknown scope bit", { scope: 32 }, "InvalidCoSignerScope"],
     [
       "a zero signer under an empty scope, the scope read first like Rust",
       { signer: address("11111111111111111111111111111111"), scope: 0 },
@@ -479,7 +483,7 @@ describe("policy writes", () => {
   });
 
   it("budgets each instruction like Rust `compute_unit_limit`", () => {
-    expect(ringComputeUnitLimit(RingInstructionTag.initialize)).toBe(250_000);
+    expect(ringComputeUnitLimit(RingInstructionTag.initialize)).toBe(300_000);
     expect(ringComputeUnitLimit(RingInstructionTag.updatePolicy)).toBe(150_000);
     expect(ringComputeUnitLimit(RingInstructionTag.deposit)).toBe(1_400_000);
   });

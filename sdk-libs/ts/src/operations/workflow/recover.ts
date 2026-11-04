@@ -32,9 +32,8 @@ import {
   type RingAuditReader,
 } from "../audit/audit.js";
 import { recoverMergeOpening } from "../audit/audit-merge.js";
-import { createdDepositUtxo } from "./created-utxos.js";
-import { openRingDepositOpening, ringDepositOutput } from "../../proof/deposit-audit.js";
-import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
+import { createdDepositUtxo, openConfirmedDeposit } from "./created-utxos.js";
+import { ringDepositOutput } from "../../proof/deposit-audit.js";
 import { RingError } from "../../protocol/error.js";
 import { rowDisposition, RowOrigins } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
@@ -95,23 +94,13 @@ export async function recoverRingMemberNotes(
   const found = new Found();
   // Deposits are found by ring, never by their recipient view tags.
   const unsupportedDeposits = await recoverDeposits(input, history, found, context);
-  const sourceKey = input.source.confidentialViewTag();
-  const audited = await auditConfirmedRingHistory(
-    {
-      client: input.client,
-      auditor: input.auditor,
-      ringProgramId: input.ringProgramId,
-      assets: input.assets,
-      history: history.transactions,
-      rows: history.rows,
-      known: found.created,
-      escrowedKeys: {
-        nullifierPk: (ownerKey) =>
-          equalBytes(ownerKey, sourceKey) ? input.source.nullifierPublicKey : undefined,
-      },
-    },
-    context,
-  );
+  const audited = auditConfirmedRingHistory({
+    auditor: input.auditor,
+    ringProgramId: input.ringProgramId,
+    history: history.transactions,
+    rows: history.rows,
+    known: found.created,
+  });
   refuseSkipped(history.rows.skipped);
   const sourceOwner = input.source.ownerHash();
   const unseenInputs: { hash: Bytes32; nullifier: Bytes32 }[] = [];
@@ -295,14 +284,13 @@ async function recoverDeposits(
         const binding = confirmed.deposits.find(
           (candidate: ConfirmedDeposit) => candidate.slotIndex === slotIndex,
         );
-        const capsule = readRingDepositCapsule(deposit.encrypted.ciphertext);
-        if (binding === undefined || capsule === undefined) {
+        if (binding === undefined) {
           unsupported.push(commitment);
           continue;
         }
         let opening;
         try {
-          opening = openRingDepositOpening(capsule, input.auditor, deposit.ownerUtxoHash, binding);
+          opening = openConfirmedDeposit({ output: deposit, auditor: input.auditor, binding });
         } catch (error) {
           if (rowDisposition(error) === "retry") throw error;
           unsupported.push(commitment);

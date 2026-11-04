@@ -3,30 +3,12 @@ import type { Address } from "@heliuslabs/zolana";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
 type Hash = indexerTypes.Hash;
-type Base64String = indexerTypes.Base64String;
 type IndexerContext = indexerTypes.IndexerContext;
-
-/** The preimage of a record's `addressHash`. */
-export interface RingAuthorizedAddressView {
-  readonly ringId: Hash;
-  readonly nullifierPk: Hash;
-  readonly viewingU: Hash;
-  readonly addressRevision: bigint;
-}
 
 export interface RingMemberRecordView {
   readonly member: Hash;
   readonly next: Hash;
   readonly lists: bigint;
-  readonly escrowKey: Hash;
-  readonly addressHash: Hash;
-  /** Absent before enrollment. */
-  readonly address?: RingAuthorizedAddressView;
-  readonly ownerPubkey?: Address | null;
-  /** `escrowKey` is `Poseidon(nullifierPk, hash_bytes(ciphertext))`. */
-  readonly nullifierPk?: Hash | null;
-  readonly ephPk: Base64String | null;
-  readonly ciphertext: Base64String | null;
   readonly mintPolicy: MintPolicy;
 }
 /** A leaf and the other three children of each level in child order, leaf level first. */
@@ -49,26 +31,15 @@ export interface RingListWriteView {
   readonly mintPolicy: MintPolicy | null;
 }
 
-export interface RingAddressEscrowPairView {
-  readonly address: RingAuthorizedAddressView;
-  readonly escrowCiphertextHash: Hash;
-}
-
 /** Paths are under the root the preceding writes reached. */
 export interface RingRecordWriteView {
   readonly member: Hash;
   readonly mask: bigint;
   readonly value: bigint;
-  readonly escrowKey: Hash;
-  readonly addressHash: Hash;
   readonly exists: boolean;
   readonly oldNext: Hash;
   readonly oldLists: bigint;
-  readonly oldEscrow: Hash;
   readonly oldMintPolicy: MintPolicy;
-  readonly oldAddressHash: Hash;
-  /** Omitted when no write pairs the preimages. */
-  readonly pair?: RingAddressEscrowPairView;
   readonly slot: RingRecordPathView;
   readonly low: RingMemberRecordView;
   readonly lowPath: RingRecordPathView;
@@ -126,14 +97,8 @@ export interface StorageRecordPoolResponse {
   readonly subjects: readonly number[];
 }
 
-/** Rust `StorageWriteView`, `escrowKey` zero except on an escrow write. */
-export interface StorageWriteView extends RingListWriteView {
-  readonly escrowKey: Hash;
-  /** Zero except on an address write. */
-  readonly addressHash: Hash;
-  /** Sent on an escrow write, the indexer refuses one beside an address without it. */
-  readonly escrowPreimage?: Readonly<{ nullifierPk: Hash; ciphertext: Base64String }>;
-}
+/** Rust `StorageWriteView`. */
+export type StorageWriteView = RingListWriteView;
 
 /** Rust `GetStorageApplyProofInputsRequest`. */
 export interface StorageApplyProofInputsRequest {

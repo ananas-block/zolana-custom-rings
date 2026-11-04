@@ -19,6 +19,7 @@ type ValidCase = Readonly<{
   uri: string;
   recipient: string;
   ring_program_id: string;
+  list_salt: string;
   deposit_tag: string | null;
   amount: string | null;
   mint: string | null;
@@ -102,6 +103,7 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
         viewing.publicKey(),
       ),
       ringProgramId: ring,
+      listSalt: bytes(vector.list_salt) as Bytes32,
     });
     const request = new RingPaymentRequest({
       address: ringAddress,

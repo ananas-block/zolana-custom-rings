@@ -40,7 +40,9 @@ import { wrapRingError } from "../../protocol/error.js";
 import { boundState } from "../workflow/pipeline.js";
 import {
   DelegateTransfer,
+  type DelegateOutput,
   type DelegateTransferClient,
+  type DelegateWithdrawal,
   type RingTransferApproval,
 } from "../payments/transfer-rails.js";
 import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
@@ -63,13 +65,10 @@ export interface RingDelegateTransferParams {
   readonly source: WalletKeys;
   readonly approve?: ApprovalHandler;
   readonly delegate: SignerAccount;
-  readonly cosigner?: SignerAccount;
   readonly feePayer: Address;
-  readonly outputs: readonly Readonly<{
-    recipient: ShieldedAddress;
-    asset: Address;
-    amount: bigint;
-  }>[];
+  readonly outputs: readonly DelegateOutput[];
+  /** A public withdrawal, a delegate takes no deposit leg. */
+  readonly withdrawal?: DelegateWithdrawal;
   readonly priorityFeeLamports?: bigint;
 }
 
@@ -209,9 +208,10 @@ async function buildDelegateTransaction(
       kind: "ringDelegate",
       ringProgramId: move.ringProgramId,
       delegate: signerAddress(move.delegate),
-      ...(move.cosigner === undefined ? {} : { cosigner: signerAddress(move.cosigner) }),
       source: owner,
-      outputs,
+      outputs: outputs.map(({ recipient, asset, amount }) =>
+        Object.freeze({ recipient, asset, amount }),
+      ),
     });
     checkTransactionIntent(intent, ringIntentMismatch);
     const planned = intentHash(intent);
@@ -226,6 +226,9 @@ async function buildDelegateTransaction(
       assets.assetId(output.asset);
       amounts.set(output.asset, (amounts.get(output.asset) ?? 0n) + output.amount);
     }
+    const { withdrawal } = move;
+    if (withdrawal !== undefined)
+      amounts.set(withdrawal.asset, (amounts.get(withdrawal.asset) ?? 0n) + withdrawal.amount);
     if (retry.entries !== undefined) checkRetainedEntries(wallet, retry.entries);
     const selected = retry.entries ?? selectSourceNotes(move, wallet, owner, amounts);
     reservation = retry.reservation ?? reserveEntries(wallet, selected, retry.lifetime);
@@ -241,7 +244,7 @@ async function buildDelegateTransaction(
       outputs,
       assets,
       outputTreeId: move.client.treeId,
-      ...(intent.cosigner === undefined ? {} : { coSigner: intent.cosigner }),
+      ...(withdrawal === undefined ? {} : { withdrawal }),
     });
     const approval: RingTransferApproval = {
       transaction:
@@ -253,11 +256,13 @@ async function buildDelegateTransaction(
           const approved = await source.approve({
             solanaPublicKey: ownerSolanaAccount(owner, move.feePayer),
             intent,
-            summary: `Delegate ${intent.delegate} moves ${String(outputs.length)} ring payment(s), change stays with the source.`,
+            summary: `Delegate ${intent.delegate} moves ${String(outputs.length)} payment(s)${withdrawal === undefined ? "" : " and a public withdrawal"}, change stays with the source.`,
           });
           checkIntentApproval(approved, intent, ringIntentMismatch);
         }
-        checkPreparedTransfer(prepared, intent, ringIntentMismatch);
+        // SPP's delegate intent names ring outputs alone.
+        if (withdrawal === undefined && outputs.every((output) => output.exit !== true))
+          checkPreparedTransfer(prepared, intent, ringIntentMismatch);
       },
     };
     const proven = await transfer.proveApproved(move.client, approval, context);
@@ -294,8 +299,8 @@ function selectSourceNotes(
   owner: ShieldedAddress,
   amounts: ReadonlyMap<Address, bigint>,
 ): readonly WalletUtxo[] {
-  // Every mint may return change.
-  const outputs = move.outputs.length + amounts.size;
+  // Every mint may return change, a withdrawal holds a slot of SPP's authority builder.
+  const outputs = move.outputs.length + amounts.size + (move.withdrawal === undefined ? 0 : 1);
   const maxInputs = Math.max(
     0,
     ...RING_AUTHORITY_SHAPES.filter((shape) => shape.outputs >= outputs).map(

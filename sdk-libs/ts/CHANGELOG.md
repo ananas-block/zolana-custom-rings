@@ -2,6 +2,13 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `AnonymousWallet.absorb` keeps a tag counter, key, confirmed sender or ring added during a scan, refuses a scan only once another scan moved the wallet's progress, `AnonymousWallet.updateHistory` refuses a counter that falls, and `takeSenderTag` and `takeRequestTag` give concurrent callers distinct tags.
+- A ring read halves its page limit and repeats the same page when the indexer reports a response too large, and fails only at limit one.
+- `syncRingWallet` fails when the key holder fails instead of skipping the slot, and a delivered body off its length no longer fails the sync.
+- A scan worker answers every message, `scanWorkerResponse` replies with an error code, and the `ask` of `scanWorkerMatcher` returns a `ScanWorkerResponse` while a reported failure raises `RING_SCAN_WORKER_FAILED`.
+- A wallet reads a note under its ring key and the zero key, `AnonymousWallet.noteState`, `exposedNotes` and `balances` report a zero-key note as `exposedIfSpent` apart from the spendable balance with `spent` first, no automatic selection or merge takes one, and a shortfall they could cover raises `RING_UNFUNDED_PAST_EXPOSURE` naming the amount.
+- `RingRpc.getWalletStatus` returns a wallet's notes and balance as of `historyThrough`, `RingRpc.getSpendCoverage` gives the ring authority its unresolved spends, and a sender's `RingWalletView` holds its own notes alone with no `payloadErrors`.
+
 - `AnonymousWallet.absorb` rejects a scan after its starting history changes, and new ring watches include retained viewing keys.
 - `fullScan` recovers from ring history without tag discovery, and merge recovery checks reconstructed output commitments against complete input history.
 - `auditRing` uses ring history cursors and resolves merge inputs before sender tracing, and saved tag cursors require a new scan.
@@ -25,6 +32,15 @@ reads one stream per transfer.
 
 Breaking
 
+- Ring transactions use tags 55 to 58 and transfer statement version 4, every live slot carries one proven 105 byte auditor record, a recipient body is scheme 13 holding its mint, and `PreparedAuthorityTransfer` takes a `mode` → deploy this release's ring program, prover and keys together, and expect frames of tags 45, 46, 47 and 31 to stay readable and never to be built.
+- A wallet's spend of its own zero-key note needs the `spendPublic` rail naming the wallet, and any other spend holding one raises `RING_ZERO_KEY_INPUT_UNNAMED` → pass `spendPublic` when the user accepts that the wallet becomes public.
+- `enrollInstruction` and `proveEnrollment` enroll the wallet's nonzero nullifier key in the ring's tracking registry with a proof that binds the ring, the owner and the list tag, `enrollInstruction` raises `RING_ENROLLMENT_KEY_MISMATCH` or `RING_ENROLLMENT_ZERO_KEY` before it returns an instruction, `applyEnrollmentsInstruction` applies named enrollments with no authority, and `enrollAddressInstruction`, `decodeAddressAuthorization`, `KeyRegistration`, `NullifierKeyEscrow`, `KeyEscrowAuthority` and the `address` and `escrow` record update entries are gone → pass the wallet as `holder` to `proveEnrollment` and send `enrollInstruction` signed by the owner with a client holding `getAccount`.
+- `RingAddress` is version 4, carries the one `listSalt` a wallet holds on every ring and refuses a zero salt on a keyed address or a nonzero salt on the zero key → build it with `RingAddress.enrolled(holder, ringProgramId)`, read a salt with `listSaltOf(key)`, and expect no version 3 address to parse.
+- `RingPolicyUpdate` drops `privateSource`, a `source` update takes `salted`, `ListId` gains `privateBlock` and `privateAllow` in place of `recovery` and `escrow`, a private list entry is an ordinary record at the owner's salted key, and a ring spend raises `RING_LIST_SALT_MISSING` for an enrolled owner with no salt → pass `listSalts` naming the sender and every enrolled owner a salted list reads, a paid `RingAddress` adds its own, and a relay on a ring reading a salted list receives the other owners' salts and derives the sender's.
+- A ring transaction carries one co-signer whose record holds every demanded class, `RingTransactData.coSign` becomes `approval`, and `RING_APPROVER_MISSING`, `MAX_CO_SIGNERS` and `CoSignHeader` are gone → replace `cosigners` with `cosigner` and write one record covering every class the operation demands.
+- Every rail shares one key catalog, `TransferProofRequest` replaces the confidential and anonymous requests, `RingTransactData.transferCircuit` is gone, and a spend the narrow key cannot hold takes the wide key → read `RING_KEYS` for the catalog.
+- A deposit proves under the narrowest key holding its recipient, asset and salted key, and `RingDepositClient` reads record pools → give the client `getStorageRecordPool` and `getTrackingRecordPool`, and pass `listSalt` for a confidential or own deposit on a ring reading a salted list.
+- `PreparedRingDeposit.prove` proves one frame once and raises `RING_DEPOSIT_FRAME_REUSED` on a second call, and a deposit to another member of an anonymous ring raises `RING_DEPOSIT_BOOTSTRAP_TAG` without a request tag → prepare a new deposit per attempt and pay from a `RingPaymentRequest` holding its `depositTag`.
 - `CustomRingClientConfig` excludes `provingKeys`, and ring clients reject runtime key sets → omit `provingKeys` from ring client configuration.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from

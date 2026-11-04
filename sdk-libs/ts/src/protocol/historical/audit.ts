@@ -5,9 +5,9 @@ import type { AssetRegistry, IndexedShieldedTransaction } from "@heliuslabs/zola
 
 import type { AuditorMessage } from "../../crypto/audit/audit.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
+import { auditTransferWith } from "./v3/audit.js";
 import {
   DUMMY_INPUT,
-  auditTransferWith,
   knownUtxoHash,
   openedUtxo,
   ringInput,

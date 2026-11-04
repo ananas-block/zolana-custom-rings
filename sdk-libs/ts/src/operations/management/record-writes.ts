@@ -7,9 +7,9 @@ export interface ListWrite {
   readonly clear: readonly ListId[];
 }
 
-/** Rust `ListSet::MEMBER_WRITES`, the escrow list fills only through an escrow write. */
+/** Rust `ListSet::MEMBER_WRITES`. */
 export const MEMBER_WRITABLE_LISTS: readonly ListId[] = Object.freeze(
-  LIST_IDS.filter((id) => listWriter(id) === "member" && id !== ListId.escrow),
+  LIST_IDS.filter((id) => listWriter(id) === "member"),
 );
 /** Rust `ListSet::AUTHORITY_WRITES`. */
 export const AUTHORITY_WRITABLE_LISTS: readonly ListId[] = Object.freeze(
