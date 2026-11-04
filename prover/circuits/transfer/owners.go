@@ -17,14 +17,11 @@ type OwnerRows struct {
 	Tracking []policy.TrackingView
 }
 
-// OpenOwnerRows holds live rows strictly ascending with zero rows last, a repeated owner would split its debit across rows.
+// OpenOwnerRows reads each live row's enrollment, the policy's outflow section holds the rows' order.
 func OpenOwnerRows(api frontend.API, members, entries []frontend.Variable, pool policy.TrackingPool) OwnerRows {
 	rows := OwnerRows{Members: members, Live: make([]frontend.Variable, len(members)), Tracking: make([]policy.TrackingView, len(members))}
 	for j, member := range members {
 		rows.Live[j] = ringgadget.IsNonZero(api, member)
-		if j > 0 {
-			ringgadget.AssertOrderedWhen(api, rows.Live[j], 0, members[j-1], member)
-		}
 		rows.Tracking[j] = pool.Row(api, rows.Live[j], member, entries[j])
 	}
 	return rows

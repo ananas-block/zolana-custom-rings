@@ -94,13 +94,6 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	for o := range c.Outputs {
 		s := pick(w.Slots, o)
 		c.Outputs[o] = s.wires(0xb100 + int64(o))
-		p.CtHashes[o], p.Recipients[o] = 0, 0
-		if !w.Anonymous && !w.Unscreened && !w.Delegate {
-			p.Recipients[o] = s.Owner
-		}
-		if s.Owner != 0 {
-			p.CtHashes[o] = ctHash(s.Owner)
-		}
 	}
 	p.WithdrawalCount = len(w.Withdrawals)
 	for i := range p.Withdrawals {
@@ -121,9 +114,8 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		}
 	}
 	c.InputChain = inputChain
-	c.Delivery = ringtest.Bit(w.Delivery)
-	c.ThresholdsActive, c.KeyEscrow, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
-	c.Published, c.ApprovalMask = ringtest.Bit(!w.Anonymous), w.Approval
+	c.ThresholdsActive, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.Delegate)
+	c.ApprovalMask = w.Approval
 	b.pool(t, own, curator)
 	b.Rehash(t)
 	return b
@@ -280,4 +272,3 @@ func pad[T any](rows []T, i int, zero T) T {
 
 func nullifierPk(member int64) *big.Int { return big.NewInt(member + 500_000) }
 
-func ctHash(member int64) *big.Int { return big.NewInt(member + 900_000) }

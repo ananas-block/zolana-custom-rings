@@ -13,25 +13,21 @@ import (
 
 type PolicyInputs struct {
 	OwnOnly bool `gnark:"-"`
-	// Senders counts the owners the key screens, the pool holds a row for each.
-	Senders         int `gnark:"-"`
-	WithdrawalCount frontend.Variable
-	WithdrawalHash  frontend.Variable
-	Withdrawals     []WithdrawalWires
-	PolicyHash      frontend.Variable
-	RingProgramID   frontend.Variable
-	OwnRoot         frontend.Variable
-	CuratorRoot     frontend.Variable
-	PublicAssets    [transaction.NPublicSlots]frontend.Variable
+	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
+	Senders, Outputs int `gnark:"-"`
+	WithdrawalCount  frontend.Variable
+	WithdrawalHash   frontend.Variable
+	Withdrawals      []WithdrawalWires
+	PolicyHash       frontend.Variable
+	RingProgramID    frontend.Variable
+	OwnRoot          frontend.Variable
+	CuratorRoot      frontend.Variable
+	PublicAssets     [transaction.NPublicSlots]frontend.Variable
 	// PublicAmounts are SPP's signed nets, the statement alone reads them.
 	PublicAmounts [transaction.NPublicSlots]frontend.Variable
 	// PublicGross are the gross withdrawals per slot, no deposit subtracted, read while Outflow is on.
 	PublicGross [transaction.NPublicSlots]frontend.Variable
 	Table
-
-	// CtHashes are each output owner's escrowed key ciphertext hashes, read only under key escrow.
-	CtHashes   []frontend.Variable
-	Recipients []frontend.Variable
 }
 
 type Policy struct {
@@ -54,12 +50,12 @@ type InputsShape struct {
 }
 
 func (s InputsShape) Inputs() PolicyInputs {
-	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, CtHashes: make([]frontend.Variable, s.Outputs), Recipients: make([]frontend.Variable, s.Outputs), Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
+	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
 }
 
 // NewPolicy sizes the record pools, capacity zero fields take the shape's limits.
 func NewPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) (Policy, error) {
-	payments := len(inputs.CtHashes) + len(inputs.Withdrawals)
+	payments := inputs.Outputs + len(inputs.Withdrawals)
 	limits := inputs.recordCapacity(publicAssets)
 	capacity = capacity.withDefaults(limits)
 	if err := capacity.validate(limits); err != nil {
@@ -100,12 +96,9 @@ func (p *Policy) RecordPools() RecordPoolShape {
 
 // Validate refuses a pool or reference list sized off the key's shape before any wire is read.
 func (p *Policy) Validate(publicAssets int) error {
-	payments := len(p.CtHashes) + len(p.Withdrawals)
-	if len(p.CtHashes) == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
+	payments := p.Outputs + len(p.Withdrawals)
+	if p.Outputs == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
 		return fmt.Errorf("policy requires owner and asset references for every payment")
-	}
-	if len(p.Recipients) != len(p.CtHashes) {
-		return fmt.Errorf("policy requires one recipient per output")
 	}
 	if p.Senders == 0 || len(p.SenderEntries) != p.Senders {
 		return fmt.Errorf("policy requires one reference per screened sender")
