@@ -135,6 +135,8 @@ const UNSPENT_UTXOS_DOMAIN = "zolana/ring-rpc-unspent-utxos/v1";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
 const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
 const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
+const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status/v1";
+const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage/v1";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -203,6 +205,48 @@ export function ringReadAttestation(
       `limit: ${input.limit ?? 0n}`,
       `cursor: ${cursor}`,
       ...walletLines(input.wallet),
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `WalletStatusAttestation::message`. */
+export function walletStatusAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    wallet: Address;
+    timestamp: bigint;
+    nonce: Bytes32;
+    cursor?: Uint8Array;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      WALLET_STATUS_DOMAIN,
+      ...targetLines(input.target),
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+      `wallet: ${input.wallet}`,
+      `cursor: ${input.cursor === undefined ? "" : base64Decoder.decode(input.cursor)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `SpendCoverageAttestation::message`. */
+export function spendCoverageAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    authority: Address;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      SPEND_COVERAGE_DOMAIN,
+      ...targetLines(input.target),
+      `authority: ${input.authority}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
     ].join("\n"),
   );
 }
@@ -1004,7 +1048,6 @@ export type RingWalletView =
       readonly role: "sender";
       readonly inputs: readonly DecryptedRingInput[];
       readonly outputs: readonly DecryptedRingOutput[];
-      readonly payloadErrors: readonly OutputPayloadError[];
       readonly withdrawals: readonly DecryptedRingWithdrawal[];
     }
   | {
@@ -1012,6 +1055,70 @@ export type RingWalletView =
       readonly outputs: readonly DecryptedRingOutput[];
       readonly withdrawals: readonly DecryptedRingWithdrawal[];
     };
+
+/** `spent` takes precedence over `exposedIfSpent`, `unknown` never counts as unspent. */
+export type RingWalletNoteStatus = "spent" | "unspent" | "unknown" | "exposedIfSpent";
+
+/** Mirrors Rust `WalletNote`, a full opening rebuilds a note whose body was unusable. */
+export interface RingWalletNote {
+  readonly utxoHash: Bytes32;
+  readonly status: RingWalletNoteStatus;
+  /** Absent on a deposit whose capsule discloses the owner hash alone. */
+  readonly nullifierPk?: Bytes32;
+  readonly asset: Bytes32;
+  readonly mint?: Address;
+  readonly amount: bigint;
+  readonly blinding: Bytes32;
+  readonly dataHash: Bytes32;
+  readonly ringDataHash: Bytes32;
+  readonly treeId: number;
+  readonly leafIndex: bigint;
+  readonly slot: bigint;
+  readonly signature: Signature;
+  readonly eventIndex: number;
+  readonly slotIndex: number;
+}
+
+export interface RingWalletBalance {
+  readonly asset: Bytes32;
+  readonly mint?: Address;
+  readonly amount: bigint;
+}
+
+/** Mirrors Rust `GetWalletStatusResponse`, it names nothing about any other transaction. */
+export interface RingWalletStatusPage {
+  /** Only an unreadable stream holds it back. */
+  readonly historyThrough: bigint;
+  /** `unspent` notes alone, over every page. */
+  readonly balances: readonly RingWalletBalance[];
+  readonly notes: readonly RingWalletNote[];
+  readonly cursor?: Uint8Array;
+}
+
+export interface RingSpendCoverageFrame {
+  readonly slot: bigint;
+  readonly signature: Signature;
+  readonly eventIndex: number;
+}
+
+export interface RingSpendCoverageRow {
+  readonly nullifier: Bytes32;
+  readonly frame: RingSpendCoverageFrame;
+}
+
+/** Mirrors Rust `GetSpendCoverageResponse`, the one surface that names an unresolved spend. */
+export interface RingSpendCoverage {
+  /** Absent inside a paged read. */
+  readonly positionSlot?: bigint;
+  readonly historyThrough: bigint;
+  readonly observed: bigint;
+  readonly padding: bigint;
+  readonly external: bigint;
+  readonly resolved: bigint;
+  readonly unresolvedReal: readonly RingSpendCoverageRow[];
+  readonly unreadable: readonly RingSpendCoverageFrame[];
+  readonly integrityFaults: readonly RingSpendCoverageRow[];
+}
 
 /** Mirrors Rust `WalletActivity`. */
 export interface RingWalletActivity {
@@ -1466,6 +1573,83 @@ export class RingRpc {
     if (input.limit !== undefined) request = request.withLimit(input.limit);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSignedWalletActivity(await request.sign(input.signer), context);
+  }
+
+  /** The wallet's notes and balance as of the slot the operator verified. */
+  async getWalletStatus(
+    input: Readonly<{
+      target: RingReadTarget;
+      signer: RingReadSigner;
+      wallet: Address;
+      cursor?: Uint8Array;
+      timestamp?: bigint;
+    }>,
+    context?: RequestContext,
+  ): Promise<RingWalletStatusPage> {
+    const target = checkedReadTarget(input.target);
+    addressBytes(input.wallet, "wallet");
+    const cursor = input.cursor === undefined ? undefined : checkedReadCursor(input.cursor);
+    const timestamp = timestampOrNow(input.timestamp);
+    const nonce = freshNonce();
+    const signature = await input.signer.sign(
+      walletStatusAttestation({
+        target,
+        wallet: input.wallet,
+        timestamp,
+        nonce,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
+    );
+    const wire = record(
+      await this.#call(
+        "getWalletStatus",
+        signedReadParams({
+          ringProgramId: target.ringProgramId,
+          wallet: input.wallet,
+          reader: input.signer.reader,
+          timestamp,
+          nonce,
+          signature,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+        context,
+      ),
+      "result",
+    );
+    return decodeWalletStatus(wire);
+  }
+
+  /** The ring authority's read of unresolved spends, no wallet read carries them. */
+  async getSpendCoverage(
+    input: Readonly<{
+      target: RingReadTarget;
+      authority: MessagePartialSigner;
+      timestamp?: bigint;
+    }>,
+    context?: RequestContext,
+  ): Promise<RingSpendCoverage> {
+    const target = checkedReadTarget(input.target);
+    const timestamp = timestampOrNow(input.timestamp);
+    const nonce = freshNonce();
+    const signed = await signMessage(
+      input.authority,
+      spendCoverageAttestation({ target, authority: input.authority.address, timestamp, nonce }),
+    );
+    const wire = record(
+      await this.#call(
+        "getSpendCoverage",
+        {
+          ring: target.ringProgramId,
+          authority: input.authority.address,
+          timestamp: Number(timestamp),
+          nonce: base64Decoder.decode(nonce),
+          signature: base58Decoder.decode(signed),
+        },
+        context,
+      ),
+      "result",
+    );
+    return decodeSpendCoverage(wire);
   }
 
   /** The UTXOs the service opened, signed over the requested hashes. */
@@ -1975,20 +2159,14 @@ function decodeWalletActivity(wire: Record<string, unknown>): RingWalletActivity
   const withdrawals = decodeWithdrawals(view["withdrawals"], "view.withdrawals");
   let decoded: RingWalletView;
   if (view["role"] === "sender") {
-    const payloadErrors = decodePayloadErrors(view["payloadErrors"], "view.payloadErrors");
-    checkSlotCoverage([
-      ...outputs.map((output) => output.slotIndex),
-      ...payloadErrors.map((error) => error.slotIndex),
-    ]);
     decoded = Object.freeze({
       role: "sender",
       inputs: Object.freeze(
         list(view["inputs"], "view.inputs").map((entry, index) =>
-          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`),
+          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`, true),
         ),
       ),
       outputs,
-      payloadErrors,
       withdrawals,
     });
   } else if (view["role"] === "recipient" && outputs.length > 0) {
@@ -2001,6 +2179,100 @@ function decodeWalletActivity(wire: Record<string, unknown>): RingWalletActivity
     signature: signature(wire["txSignature"], "txSignature"),
     eventIndex: u16(wire["eventIndex"], "eventIndex"),
     view: decoded,
+  });
+}
+
+const WALLET_NOTE_STATUSES: readonly RingWalletNoteStatus[] = [
+  "spent",
+  "unspent",
+  "unknown",
+  "exposedIfSpent",
+];
+
+function decodeWalletStatus(wire: Record<string, unknown>): RingWalletStatusPage {
+  const cursor = wire["cursor"];
+  return Object.freeze({
+    historyThrough: integer(wire["historyThrough"], "historyThrough"),
+    balances: Object.freeze(
+      list(wire["balances"], "balances").map((entry, index) => {
+        const path = `balances[${index}]`;
+        const row = record(entry, path);
+        return Object.freeze({
+          asset: hash(row["asset"], `${path}.asset`),
+          ...(row["mint"] == null ? {} : { mint: address(row["mint"], `${path}.mint`) }),
+          amount: integer(row["amount"], `${path}.amount`),
+        });
+      }),
+    ),
+    notes: Object.freeze(
+      list(wire["notes"], "notes").map((entry, index) =>
+        decodeWalletNote(record(entry, `notes[${index}]`), `notes[${index}]`),
+      ),
+    ),
+    ...(cursor == null ? {} : { cursor: checkedReadCursor(base64(cursor, "cursor")) }),
+  });
+}
+
+function decodeWalletNote(row: Record<string, unknown>, path: string): RingWalletNote {
+  const status = WALLET_NOTE_STATUSES.find((known) => known === row["status"]);
+  if (status === undefined) throw invalid(`${path}.status`);
+  return Object.freeze({
+    utxoHash: hash(row["utxoHash"], `${path}.utxoHash`),
+    status,
+    ...(row["nullifierPk"] == null
+      ? {}
+      : { nullifierPk: hash(row["nullifierPk"], `${path}.nullifierPk`) }),
+    asset: hash(row["asset"], `${path}.asset`),
+    ...(row["mint"] == null ? {} : { mint: address(row["mint"], `${path}.mint`) }),
+    amount: integer(row["amount"], `${path}.amount`),
+    blinding: hash(row["blinding"], `${path}.blinding`),
+    dataHash: hash(row["dataHash"], `${path}.dataHash`),
+    ringDataHash: hash(row["ringDataHash"], `${path}.ringDataHash`),
+    treeId: u16(row["treeId"], `${path}.treeId`),
+    leafIndex: integer(row["leafIndex"], `${path}.leafIndex`),
+    slot: integer(row["slot"], `${path}.slot`),
+    signature: signature(row["txSignature"], `${path}.txSignature`),
+    eventIndex: u16(row["eventIndex"], `${path}.eventIndex`),
+    slotIndex: u32(row["slotIndex"], `${path}.slotIndex`),
+  });
+}
+
+function decodeSpendCoverage(wire: Record<string, unknown>): RingSpendCoverage {
+  const frame = (value: unknown, path: string): RingSpendCoverageFrame => {
+    const row = record(value, path);
+    return Object.freeze({
+      slot: integer(row["slot"], `${path}.slot`),
+      signature: signature(row["txSignature"], `${path}.txSignature`),
+      eventIndex: u16(row["eventIndex"], `${path}.eventIndex`),
+    });
+  };
+  const rows = (name: string): readonly RingSpendCoverageRow[] =>
+    Object.freeze(
+      list(wire[name], name).map((entry, index) => {
+        const path = `${name}[${index}]`;
+        const row = record(entry, path);
+        return Object.freeze({
+          nullifier: hash(row["nullifier"], `${path}.nullifier`),
+          frame: frame(row["frame"], `${path}.frame`),
+        });
+      }),
+    );
+  return Object.freeze({
+    ...(wire["positionSlot"] == null
+      ? {}
+      : { positionSlot: integer(wire["positionSlot"], "positionSlot") }),
+    historyThrough: integer(wire["historyThrough"], "historyThrough"),
+    observed: integer(wire["observed"], "observed"),
+    padding: integer(wire["padding"], "padding"),
+    external: integer(wire["external"], "external"),
+    resolved: integer(wire["resolved"], "resolved"),
+    unresolvedReal: rows("unresolvedReal"),
+    unreadable: Object.freeze(
+      list(wire["unreadable"], "unreadable").map((entry, index) =>
+        frame(entry, `unreadable[${index}]`),
+      ),
+    ),
+    integrityFaults: rows("integrityFaults"),
   });
 }
 
@@ -2193,12 +2465,20 @@ function decodeSender(wire: Record<string, unknown>): AuditedSender {
 }
 
 /** One of an opening, a merge record or an unseen note, none at a dummy. */
-function decodeInput(value: Record<string, unknown>, path: string): DecryptedRingInput {
+function decodeInput(
+  value: Record<string, unknown>,
+  path: string,
+  /** A wallet view strips the unseen marker, its hash alone names the note. */
+  markerStripped = false,
+): DecryptedRingInput {
   const wire = exactRecord(value, INPUT_FIELDS, INPUT_REQUIRED_FIELDS, path);
   const nullifier = hash(wire["nullifier"], `${path}.nullifier`);
   const named = absent(wire["hash"]) ? undefined : hash(wire["hash"], `${path}.hash`);
-  const unseen = wire["unseen"] ?? false;
-  if (typeof unseen !== "boolean") throw invalid(`${path}.unseen`);
+  const marked = wire["unseen"] ?? false;
+  if (typeof marked !== "boolean") throw invalid(`${path}.unseen`);
+  const unseen =
+    marked ||
+    (markerStripped && named !== undefined && absent(wire["opening"]) && absent(wire["merged"]));
   const kinds = [unseen, !absent(wire["merged"]), !absent(wire["opening"])].filter(Boolean);
   if (kinds.length > 1) throw invalid(path);
   if (unseen || !absent(wire["merged"])) {

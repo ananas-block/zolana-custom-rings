@@ -1,17 +1,19 @@
+/** The deposit audit section, 144 B opening records in one stream and the statement, Rust `instructions::deposit`. */
 import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
   hashBytes,
   addressBytes,
-  copyBytes,
   isCanonicalField,
   bigIntBytes,
   equalBytes,
   hashChain,
+  poseidon,
   readOutputData,
+  solanaOwnerIdentity,
   U64_MAX,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { EncryptedScheme, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 import {
@@ -22,34 +24,42 @@ import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
   RING_DEPOSIT_AUDIT_SLOTS,
+  RING_DEPOSIT_OPENING_BLOCKS,
   RING_DEPOSIT_OPENING_LENGTH,
-  RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
   type RingDepositCapsule,
-} from "../protocol/codec/deposit-capsule.js";
+} from "../protocol/codec/ring-deposit-capsule.js";
+import {
+  decodeOpeningRecord,
+  encodeOpeningRecord,
+  type AuditRecord,
+} from "../protocol/codec/audit-stream.js";
 import { auditSharedSecret, DEPOSIT_ENC_INFO, symmetricAuditApply } from "../crypto/audit/audit.js";
 import { STREAM_FIRST_COUNTER } from "../protocol/codec/ring-disclosure-layout.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 
-const OPENING_LENGTH = RING_DEPOSIT_OPENING_LENGTH;
-/** One opening's blocks of the batch's contiguous stream. */
-const OPENING_BLOCKS = 6;
-const OWNER_KEY_OFFSET = RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET;
-const PAYLOAD_LENGTH = OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
+const PAYLOAD_LENGTH = RING_DEPOSIT_OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
 const ZERO = new Uint8Array(32) as Bytes32;
+const DEPOSIT_STATEMENT_VERSION = 4n;
 
-/** Carries the owner commitment preimage and unchanged recipient ciphertext. */
-export interface RingDepositOpening {
-  readonly ownerHash: Bytes32;
+/** One deposit the auditor opens, the record's `secret` is its blinding. */
+export interface RingDepositSealInput {
+  readonly record: AuditRecord;
   readonly blinding: Bytes32;
-  /** The proof binds its Solana owner identity into `ownerHash`. */
-  readonly ownerKey: Bytes32;
   readonly recipientCiphertext: Uint8Array;
 }
 
+/** An opened deposit, `ownerHash` the owner commitment preimage. */
+export interface RingDepositOpening extends RingDepositSealInput {
+  readonly ownerHash: Bytes32;
+  /** The proof binds its Solana owner identity into `ownerHash`. */
+  readonly ownerKey: Bytes32;
+}
+
+/** One ephemeral key per batch, slot `i` at counter `2 + 9i`. */
 export function sealRingDepositOpenings(
-  openings: readonly RingDepositOpening[],
+  openings: readonly RingDepositSealInput[],
   auditor: X25519PublicKey,
 ): Readonly<{
   capsules: readonly RingDepositCapsule[];
@@ -65,14 +75,10 @@ export function sealRingDepositOpenings(
   let ciphertext: Uint8Array | undefined;
   try {
     for (const [index, opening] of openings.entries()) {
-      if (!isCanonicalField(opening.ownerHash) || !isCanonicalField(opening.blinding))
-        throw new RingError("RING_BUILD_DEPOSIT");
-      plaintext.set(opening.ownerHash, index * OPENING_LENGTH);
-      plaintext.set(opening.blinding, index * OPENING_LENGTH + 32);
-      plaintext.set(
-        copyBytes(opening.ownerKey, 32, "deposit owner key"),
-        index * OPENING_LENGTH + OWNER_KEY_OFFSET,
-      );
+      if (!isCanonicalField(opening.blinding)) throw new RingError("RING_BUILD_DEPOSIT");
+      const record = encodeOpeningRecord({ record: opening.record, secret: opening.blinding });
+      plaintext.set(record, index * RING_DEPOSIT_OPENING_LENGTH);
+      record.fill(0);
     }
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditor);
@@ -88,9 +94,9 @@ export function sealRingDepositOpenings(
         slotIndex: index,
         ephemeralPublicKey: ephemeralPublicKey.toBytes(),
         ciphertext: encrypted.slice(
-          index * OPENING_LENGTH,
-          (index + 1) * OPENING_LENGTH,
-        ) as Bytes96,
+          index * RING_DEPOSIT_OPENING_LENGTH,
+          (index + 1) * RING_DEPOSIT_OPENING_LENGTH,
+        ),
         recipientCiphertext: new Uint8Array(opening.recipientCiphertext),
       }),
     );
@@ -124,12 +130,13 @@ export function ringDepositOutput(
   }
 }
 
+/** Refuses a record whose opening misses the commitment SPP received. */
 export function openRingDepositOpening(
   capsule: RingDepositCapsule,
   auditor: X25519Keypair,
   ownerCommitment: Bytes32,
   confirmed: ConfirmedDeposit,
-): Readonly<{ ownerHash: Bytes32; blinding: Bytes32; ownerKey: Bytes32 }> {
+): Omit<RingDepositOpening, "recipientCiphertext"> {
   if (!ConfirmedDeposit.is(confirmed)) throw new RingError("RING_AUDIT_MESSAGE");
   const snapshot = readRingDepositCapsule(encodeRingDepositCapsule(capsule));
   if (snapshot === undefined) throw new RingError("RING_AUDIT_MESSAGE");
@@ -146,27 +153,25 @@ export function openRingDepositOpening(
       shared,
       {
         label: DEPOSIT_ENC_INFO,
-        counter: STREAM_FIRST_COUNTER + capsule.slotIndex * OPENING_BLOCKS,
+        counter: STREAM_FIRST_COUNTER + capsule.slotIndex * RING_DEPOSIT_OPENING_BLOCKS,
       },
       capsule.ciphertext,
     );
-    const ownerHash = plaintext.slice(0, 32) as Bytes32;
-    const blinding = plaintext.slice(32, OWNER_KEY_OFFSET) as Bytes32;
-    const ownerKey = plaintext.slice(OWNER_KEY_OFFSET, OPENING_LENGTH) as Bytes32;
-    try {
-      if (
-        !isCanonicalField(ownerHash) ||
-        !isCanonicalField(blinding) ||
-        !isCanonicalField(ownerCommitment) ||
-        !equalBytes(ownerUtxoHash(ownerHash, blinding), ownerCommitment)
-      )
-        throw new RingError("RING_AUDIT_MESSAGE");
-    } catch (cause) {
-      ownerHash.fill(0);
+    const { record, secret: blinding } = decodeOpeningRecord(plaintext);
+    const { ownerKey, nullifierPk } = record;
+    const ownerHash = isCanonicalField(nullifierPk)
+      ? (poseidon([solanaOwnerIdentity(ownerKey), nullifierPk]) as Bytes32)
+      : undefined;
+    if (
+      ownerHash === undefined ||
+      !isCanonicalField(blinding) ||
+      !isCanonicalField(ownerCommitment) ||
+      !equalBytes(ownerUtxoHash(ownerHash, blinding), ownerCommitment)
+    ) {
       blinding.fill(0);
-      throw cause;
+      throw new RingError("RING_AUDIT_MESSAGE");
     }
-    return Object.freeze({ ownerHash, blinding, ownerKey });
+    return Object.freeze({ record, blinding, ownerHash, ownerKey });
   } finally {
     dh?.fill(0);
     shared?.fill(0);
@@ -189,14 +194,12 @@ export interface DepositedAsset {
   readonly amount: bigint;
 }
 
-/** Rust `DepositRegistry`. */
+/** Rust `DepositRegistry`, absent off a policy ring. */
 export interface DepositRegistry {
   readonly ownRoot: Bytes32;
   /** Absent without a curator source. */
   readonly curatorRoot?: Bytes32;
-  /** Every deposited owner's record escrows the deposited nullifier key. */
-  readonly keyEscrow: boolean;
-  /** Its table's asset rules screen every deposited asset, absent before the first policy write. */
+  /** Its table's asset rules screen every deposited asset. */
   readonly policyHash?: Bytes32;
 }
 
@@ -206,26 +209,29 @@ export interface DepositStatement {
   /** Set by the program from the ring's mode. */
   readonly anonymous: boolean;
   readonly ownerUtxoHashes: readonly Bytes32[];
-  readonly ciphertexts: readonly Bytes96[];
+  readonly ciphertexts: readonly Uint8Array[];
   readonly assets: readonly DepositedAsset[];
   readonly auditorPk: Bytes33;
   readonly ephPk: Bytes33;
-  /** Absent off an escrow or policy ring. */
+  /** Holds each output key to its tracking row or its absence. */
+  readonly trackingRoot: Bytes32;
   readonly registry?: DepositRegistry;
 }
 
-/** Rust `DepositPublicInput::elements`, every slot padded to the maximum. */
+/** Rust `DepositPublicInput::elements`, every slot padded to the maximum, the version closing. */
 export function depositStatementElements(input: DepositStatement): readonly Bytes32[] {
   const count = input.ownerUtxoHashes.length;
   if (
     count < 1 ||
     count > RING_DEPOSIT_AUDIT_SLOTS ||
     input.ciphertexts.length !== count ||
-    input.assets.length !== count
+    input.assets.length !== count ||
+    input.ciphertexts.some((ciphertext) => ciphertext.length !== RING_DEPOSIT_OPENING_LENGTH)
   )
     throw new RingError("RING_BUILD_DEPOSIT", { details: { reason: "deposit count" } });
   if (
     !isCanonicalField(input.contextHash) ||
+    !isCanonicalField(input.trackingRoot) ||
     typeof input.anonymous !== "boolean" ||
     !input.ownerUtxoHashes.every(isCanonicalField) ||
     !input.assets.every(
@@ -248,7 +254,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     }).flat(),
     ...pack33(input.auditorPk),
     ...pack33(input.ephPk),
-    bigIntBytes(registry?.keyEscrow === true ? 1n : 0n) as Bytes32,
+    input.trackingRoot,
     registry?.ownRoot ?? ZERO,
     registry?.curatorRoot ?? ZERO,
     registry?.policyHash ?? ZERO,
@@ -258,6 +264,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
         ? [ZERO, ZERO]
         : [deposited.asset, bigIntBytes(deposited.amount) as Bytes32];
     }).flat(),
+    bigIntBytes(DEPOSIT_STATEMENT_VERSION) as Bytes32,
   ]);
 }
 
@@ -270,6 +277,7 @@ export function ringDepositPublicInputHash(
     capsules: readonly RingDepositCapsule[];
     assets: readonly DepositedAsset[];
     auditorPublicKey: X25519PublicKey;
+    trackingRoot: Bytes32;
     registry?: DepositRegistry;
   }>,
 ): Bytes32 {
@@ -294,6 +302,7 @@ export function ringDepositPublicInputHash(
       assets: input.assets,
       auditorPk: input.auditorPublicKey.toBytes(),
       ephPk: first.ephemeralPublicKey,
+      trackingRoot: input.trackingRoot,
       ...(input.registry === undefined ? {} : { registry: input.registry }),
     }),
   );

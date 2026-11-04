@@ -17,7 +17,13 @@ import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { domainField, RingDomain } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import type { StorageRegistryRoot } from "../codec/ring-codecs.js";
-import { QUAD_ARITY, ROOT_HISTORY, type QuadPath } from "./member-registry.js";
+import {
+  QUAD_ARITY,
+  ROOT_HISTORY,
+  canopyLevels,
+  type PoolSubject,
+  type QuadPath,
+} from "./member-registry.js";
 import { FIELD_MAX } from "./member-opening.js";
 
 export const TRACKING_QUAD_HEIGHT = 13;
@@ -218,6 +224,111 @@ export function verifyTrackingOpening(
   if (!equalBytes(trackingPathRoot(opening.path, trackingRecordHash(leaf)), root))
     throw invalid("RootMismatch");
   return opening.kind === "present" ? opening.record : undefined;
+}
+
+/** A leaf the indexer served, its path cut at the canopy. */
+export interface ServedTrackingRecord {
+  readonly record: TrackingRecord;
+  readonly path: QuadPath;
+}
+
+/** Rust `GetTrackingRecordPoolResponse`, unverified until `verifyTrackingPool` checks it. */
+export interface ServedTrackingPool {
+  /** Distinct leaves in first use order. */
+  readonly records: readonly ServedTrackingRecord[];
+  readonly canopy: readonly Bytes32[];
+  /** `subjects[i]` indexes the record holding or bracketing member `i`. */
+  readonly subjects: readonly number[];
+}
+
+/** A tracking pool at its capacity, records and subjects repeating cyclically. */
+export interface VerifiedTrackingPool {
+  readonly records: readonly TrackingRecord[];
+  readonly canopy: readonly Bytes32[];
+  readonly paths: readonly QuadPath[];
+  readonly subjects: readonly PoolSubject[];
+  /** Each member's row in member order, `undefined` proves it unenrolled under the root. */
+  readonly rows: readonly (TrackingRecord | undefined)[];
+}
+
+/** Every member's read under `root`, each pool path folding through the canopy into `root`. */
+export function verifyTrackingPool(
+  input: Readonly<{
+    pool: ServedTrackingPool;
+    root: Bytes32;
+    members: readonly Bytes32[];
+    openings: number;
+  }>,
+): VerifiedTrackingPool {
+  const { pool, root, members, openings } = input;
+  const levels = canopyLevels(openings);
+  if (
+    pool.canopy.length !== QUAD_ARITY ** levels ||
+    pool.records.length < 1 ||
+    pool.records.length > openings ||
+    pool.subjects.length !== members.length ||
+    members.length > openings
+  )
+    throw invalid("PoolShape");
+  const canopy: Bytes32[][] = [
+    pool.canopy.map((node) => checkedBytes<Bytes32>(node, 32, "canopy")),
+  ];
+  for (let level = 0; level < levels; level += 1) {
+    const below = canopy[level] ?? [];
+    canopy.push(
+      Array.from(
+        { length: below.length / QUAD_ARITY },
+        (_, parent) =>
+          poseidon(below.slice(parent * QUAD_ARITY, (parent + 1) * QUAD_ARITY)) as Bytes32,
+      ),
+    );
+  }
+  const height = TRACKING_QUAD_HEIGHT - levels;
+  const fullPaths = pool.records.map(({ path }): QuadPath => {
+    if (path.siblings.length !== height) throw invalid("PathHeight");
+    return {
+      index: path.index,
+      siblings: [
+        ...path.siblings,
+        ...canopy.slice(0, levels).map((nodes, level) => {
+          const node = Math.floor(path.index / QUAD_ARITY ** (height + level));
+          const first = node - (node % QUAD_ARITY);
+          return nodes
+            .slice(first, first + QUAD_ARITY)
+            .filter((_, child) => first + child !== node);
+        }),
+      ],
+    };
+  });
+  const rows = members.map((member, subject) => {
+    const at = pool.subjects[subject];
+    const served = at === undefined ? undefined : pool.records[at];
+    const path = at === undefined ? undefined : fullPaths[at];
+    if (served === undefined || path === undefined) throw invalid("SubjectIndex");
+    const opening: TrackingOpening = equalBytes(served.record.member, member)
+      ? { kind: "present", record: served.record, path }
+      : { kind: "absent", low: served.record, path };
+    return verifyTrackingOpening(opening, root, member);
+  });
+  const records = cyclic(pool.records, openings);
+  return Object.freeze({
+    records: Object.freeze(records.map(({ record }) => record)),
+    canopy: Object.freeze([...pool.canopy]),
+    paths: Object.freeze(records.map(({ path }) => path)),
+    subjects: Object.freeze(
+      cyclic(
+        members.map((member, index) =>
+          Object.freeze({ member, recordIndex: pool.subjects[index] ?? 0 }),
+        ),
+        openings,
+      ),
+    ),
+    rows: Object.freeze(rows),
+  });
+}
+
+function cyclic<T>(values: readonly T[], length: number): readonly T[] {
+  return Array.from({ length }, (_, index) => values[index % values.length] as T);
 }
 
 function trackingPathRoot(path: QuadPath, leaf: Bytes32): Bytes32 {

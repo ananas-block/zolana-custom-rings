@@ -17,6 +17,8 @@ import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringPolicyAddress,
+  STORAGE_PROGRAM_ID,
+  trackingRegistryPda,
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
@@ -39,6 +41,7 @@ import {
   type RuleTable,
 } from "../../protocol/membership/policy.js";
 import { checkTransactionFits } from "../workflow/compile.js";
+import { listBits } from "./record-writes.js";
 
 export { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 
@@ -52,7 +55,7 @@ const PROOF_UNITS = 1_400_000;
 export function ringComputeUnitLimit(tag: RingInstructionTag): number {
   switch (tag) {
     case RingInstructionTag.initialize:
-      return 2 * ACCOUNT_UNITS + POLICY_UNITS;
+      return 3 * ACCOUNT_UNITS + POLICY_UNITS;
     case RingInstructionTag.updatePolicy:
       return POLICY_UNITS;
     case RingInstructionTag.legacyTransact:
@@ -63,6 +66,7 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.historicalTransfer:
     case RingInstructionTag.historicalAuthorityTransfer:
     case RingInstructionTag.historicalMerge:
+    case RingInstructionTag.historicalDeposit:
     case RingInstructionTag.deposit:
       return PROOF_UNITS;
     default:
@@ -86,7 +90,7 @@ function ringKindByte(kind: RingKind): number {
   return RING_KIND_BYTES[kind];
 }
 
-/** Rust `Initialize`, the upgrade authority signs and names the four roles, the pool registers the ring in the same instruction. */
+/** Rust `Initialize`, the upgrade authority signs and names the four roles, storage creates the tracking registry and the pool registers the ring in the same instruction. */
 export async function initializeRingInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -102,11 +106,12 @@ export async function initializeRingInstruction(
   if (isSmallOrder(input.auditorPublicKey))
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "InvalidAuditorPubkey" } });
   checkRoles(input.roles);
-  const [ring, programData, protocolConfig, ringAuth] = await Promise.all([
+  const [ring, programData, protocolConfig, ringAuth, [tracking]] = await Promise.all([
     ringPolicyAddress(input.ringProgramId),
     ringProgramDataAddress(input.ringProgramId),
     protocolConfigAddress(),
     ringAuthAddress(input.ringProgramId),
+    trackingRegistryPda(input.ringProgramId),
   ]);
   const writer = new Writer()
     .u8(RingInstructionTag.initialize, "tag")
@@ -123,6 +128,8 @@ export async function initializeRingInstruction(
     meta(protocolConfig, false, false),
     meta(ringAuth, false, true),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
+    meta(tracking, false, true),
+    meta(STORAGE_PROGRAM_ID, false, false),
   ];
   const { policy } = input;
   writer.bool(policy !== undefined, "policy");
@@ -274,9 +281,16 @@ export interface RingInitialPolicy extends RingPolicyTableInput {
 export type RingPolicyUpdate =
   | (Readonly<{ kind: "rules" }> & RingPolicyTableInput)
   | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner }>
-  | Readonly<{ kind: "records"; records: Address }>;
+  | Readonly<{ kind: "records"; records: Address }>
+  /** Owner rows read `ownerLists` from `registry`, no lists and no registry clear it. */
+  | Readonly<{ kind: "privateSource"; ownerLists: readonly ListId[]; registry?: Address }>;
 
-const POLICY_UPDATE_VARIANT = Object.freeze({ rules: 0, source: 1, records: 2 } as const);
+const POLICY_UPDATE_VARIANT = Object.freeze({
+  rules: 0,
+  source: 1,
+  records: 2,
+  privateSource: 3,
+} as const);
 
 /** Rust `UpdatePolicy`, the policy role signs. */
 export async function updateRingPolicyInstruction(
@@ -316,6 +330,9 @@ function policyUpdateBody(writer: Writer, update: RingPolicyUpdate): readonly Ad
     }
     case "records":
       return [update.records];
+    case "privateSource":
+      writer.u8(Number(listBits(update.ownerLists)), "ownerLists");
+      return update.registry === undefined ? [] : [update.registry];
   }
 }
 

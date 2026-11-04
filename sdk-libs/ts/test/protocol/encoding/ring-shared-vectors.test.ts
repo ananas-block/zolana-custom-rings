@@ -40,7 +40,7 @@ import {
   ENTRY_TRANSFER_SHAPES,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
-import { decodeDisclosure } from "../../../src/crypto/audit/ring-disclosure.js";
+import { decodeDisclosure } from "../../../src/protocol/historical/v3/disclosure.js";
 import {
   MIN_REPLY_LEN,
   RECIPIENT_BODY_LEN,
@@ -56,7 +56,6 @@ import {
 } from "../../../src/protocol/membership/member-registry.js";
 import {
   applyRecordsStatement,
-  escrowEntry,
   queueChain,
   queueEntryHash,
   replayRecordWrites,
@@ -80,12 +79,14 @@ import {
   applyEnrollmentsStatementElements,
   applyEnrollmentsStatementHash,
   restrictiveWrite,
+} from "../../../src/protocol/proof/statement.js";
+import {
   ciphertextDigest,
   outputCiphertextChain,
   transferStatementElements,
   transferStatementHash,
   type TransferFamily,
-} from "../../../src/protocol/proof/statement.js";
+} from "../../../src/protocol/historical/v3/statement.js";
 import {
   depositStatementElements,
   ringDepositContextHash,
@@ -98,7 +99,10 @@ import {
   ringTransactOutput,
   type RingOutput,
   type RingRail,
-  railShapes,
+} from "../../../src/protocol/historical/v3/frame.js";
+import {
+  ringRail as ringRailV4,
+  ringRailOf as ringRailOfV4,
 } from "../../../src/protocol/transaction/transact.js";
 import {
   CONFIDENTIAL_DATA_FREE_BODY_LEN,
@@ -151,15 +155,10 @@ describe("ring-records.json", () => {
   type VectorPath = (typeof records.openings)[number]["path"];
   type VectorRecord = (typeof records.openings)[number]["record"];
   interface QueuedWrite {
-    readonly kind: string;
     readonly signer: string | null;
     readonly member: string;
     readonly mask: number;
     readonly value: number;
-    readonly nullifier_pk: string | null;
-    readonly ciphertext: string | null;
-    readonly escrow_key: string;
-    readonly address_hash: string;
   }
 
   const path = (vector: VectorPath): QuadPath => ({
@@ -171,31 +170,15 @@ describe("ring-records.json", () => {
     member: field(vector.member),
     next: field(vector.next),
     lists: BigInt(vector.lists),
-    escrowKey: field(vector.escrow_key),
-    addressHash: field(vector.address_hash),
   });
-  const entry = (queued: QueuedWrite): QueueEntry => {
-    if (queued.kind === "register_key") {
-      const { signer, nullifier_pk: nullifierPk, ciphertext } = queued;
-      if (signer === null || nullifierPk === null || ciphertext === null)
-        throw new Error("register key write without its key");
-      return escrowEntry(solanaOwnerIdentity(field(signer)) as Bytes32, {
-        nullifierPk: field(nullifierPk),
-        ciphertext: field(ciphertext),
-      });
-    }
-    const member =
+  const entry = (queued: QueuedWrite): QueueEntry => ({
+    member:
       queued.signer === null
         ? field(queued.member)
-        : (solanaOwnerIdentity(field(queued.signer)) as Bytes32);
-    return {
-      member,
-      mask: BigInt(queued.mask),
-      value: BigInt(queued.value),
-      escrowKey: field(queued.escrow_key),
-      addressHash: field(queued.address_hash),
-    };
-  };
+        : (solanaOwnerIdentity(field(queued.signer)) as Bytes32),
+    mask: BigInt(queued.mask),
+    value: BigInt(queued.value),
+  });
 
   it("hashes every queued write and chains it from its position", () => {
     let chain = new Uint8Array(32) as Bytes32;
@@ -203,7 +186,6 @@ describe("ring-records.json", () => {
       for (const queued of [...application.pending, ...application.authority_writes]) {
         const queuedEntry = entry(queued);
         expect(hex(queuedEntry.member)).toBe(queued.member);
-        expect(hex(queuedEntry.escrowKey)).toBe(queued.escrow_key);
         expect(hex(queueEntryHash(queuedEntry))).toBe(queued.entry_hash);
         chain = queueChain(chain, queuedEntry);
         expect(hex(chain)).toBe(queued.chain);
@@ -219,14 +201,10 @@ describe("ring-records.json", () => {
           member: field(write.member),
           mask: BigInt(write.mask),
           value: BigInt(write.value),
-          escrowKey: field(write.escrow_key),
-          addressHash: field(write.address_hash),
         },
         exists: write.exists,
         oldNext: field(write.old_next),
         oldLists: BigInt(write.old_lists),
-        oldEscrow: field(write.old_escrow),
-        oldAddressHash: field(write.old_address_hash),
         slot: path(write.slot),
         low: record(write.low),
         lowPath: path(write.low_path),
@@ -299,14 +277,10 @@ describe("ring-records.json", () => {
               member: field(write.member),
               mask: BigInt(write.mask),
               value: BigInt(write.value) | (1n << 7n),
-              escrowKey: field(write.escrow_key),
-              addressHash: field(write.address_hash),
             },
             exists: write.exists,
             oldNext: field(write.old_next),
             oldLists: BigInt(write.old_lists),
-            oldEscrow: field(write.old_escrow),
-            oldAddressHash: field(write.old_address_hash),
             slot: path(write.slot),
             low: record(write.low),
             lowPath: path(write.low_path),

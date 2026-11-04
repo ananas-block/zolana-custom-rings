@@ -25,7 +25,6 @@ import {
   type EnrollmentSeal,
 } from "../../../src/operations/management/enrollment.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
-import { presentRead } from "../../../src/protocol/membership/private-list.js";
 import {
   decodeOwnerGrant,
   decodeTrackingAuthorization,
@@ -445,15 +444,5 @@ describe("list salt vector", () => {
       expect(Buffer.from(ring.listSalt()).toString("hex")).toBe(salt);
       expect(Buffer.from(ring.listTag()).toString("hex")).toBe(tag);
     });
-  });
-});
-
-describe("presentRead", () => {
-  it("reads a salt zero grant for a subject with no row and refuses it by name once enrolled", () => {
-    expect(presentRead({ saltZero: true }).kind).toBe("granted");
-    expect(presentRead({ saltZero: false }).kind).toBe("notListed");
-    expect(presentRead({ salted: true, saltZero: false }).kind).toBe("granted");
-    expect(presentRead({ salted: false, saltZero: false }).kind).toBe("notListed");
-    expect(presentRead({ salted: false, saltZero: true }).kind).toBe("saltedWriteMissing");
   });
 });

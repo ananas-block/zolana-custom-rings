@@ -12,6 +12,7 @@ import {
   withdrawalSetupInstructions,
   signerAddress,
   type SignerAccount,
+  type SpendSelectionErrors,
   MAX_TRANSACT_INPUTS,
   ownerSolanaAccount,
   withdrawalIntentRecipient,
@@ -43,7 +44,7 @@ import {
 } from "../../protocol/transaction/intent.js";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { ringSpendTransfer } from "./ring-spend.js";
-import { transferAuditKey } from "../../protocol/codec/ring-disclosure-layout.js";
+import { transferShapes } from "../../protocol/proof/transfer-shapes.js";
 import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 
@@ -62,6 +63,7 @@ import {
 } from "./transfer-rails.js";
 import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import type { PreparedRelay } from "../../rpc/relay.js";
+import { isZeroKeyNote } from "../../state/exposed-notes.js";
 import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
@@ -105,8 +107,8 @@ export interface RingSpendParams {
   readonly amount: bigint;
   /** Receives every private output, defaults to `client.tree`. */
   readonly outputTree?: Address;
-  /** Signs when the ring demands a co-signer, its record must cover the demand. */
-  readonly cosigner?: SignerAccount;
+  /** Each signs when the operation demands one, its record must cover a demanded class. */
+  readonly cosigners?: readonly SignerAccount[];
   readonly priorityFeeLamports?: bigint;
 }
 
@@ -114,6 +116,7 @@ export interface RingSpendParams {
 export type RingOwnerRail = Readonly<{
   inProofOwner?: AnonymousSpendSigner;
   anonymous?: never;
+  spendPublic?: never;
 }>;
 
 /** The fee payer and any co-signer must differ from the hidden owner. */
@@ -121,9 +124,23 @@ export type RingAnonymousRail = Readonly<{
   anonymous: AnonymousSpendOwner;
   client: AnonymousTransferClient & BlockhashProvider;
   inProofOwner?: never;
+  spendPublic?: never;
 }>;
 
-export type RingDirectRail = RingOwnerRail | RingAnonymousRail;
+/** `wallet` becomes public and may spend its zero-key notes, recipients stay hidden on an anonymous ring. */
+export interface RingPublicSpend {
+  readonly wallet: Address;
+  /** `null` sends no reply, named on every anonymous payment. */
+  readonly reply?: ReplyMetadata | null;
+}
+
+export type RingPublicOwnerRail = Readonly<{
+  spendPublic: RingPublicSpend;
+  inProofOwner?: never;
+  anonymous?: never;
+}>;
+
+export type RingDirectRail = RingOwnerRail | RingAnonymousRail | RingPublicOwnerRail;
 
 /** `anonymous` on an anonymous ring, `confidential` on any other. */
 export type RingRelayRail =
@@ -318,12 +335,40 @@ export function selectRingInputs(
     inputs: "ring" | "ring-or-default" | "default" | "entry";
     tree: Address;
     maxInputs: number;
+    /** A spend naming the wallet may take its zero-key notes. */
+    spendExposed?: boolean;
   }>,
 ): readonly WalletUtxo[] {
   const { wallet, ringProgramId, asset, amount, inputs } = input;
   // Zero selects a UTXO whose whole change would cross the ring boundary.
   if (amount <= 0n) throw new RingError("RING_ZERO_AMOUNT", { details: { asset } });
   const reserved = reservedUtxoKeys(wallet);
+  const exposed = (entry: WalletUtxo): boolean =>
+    entry.utxo.ringProgramId === ringProgramId && isZeroKeyNote(entry);
+  const errors: SpendSelectionErrors = {
+    ...ringSelectionErrors,
+    insufficient: (shortfall) => {
+      const exposedIfSpent = wallet
+        .utxos()
+        .filter(
+          (entry) =>
+            entry.utxo.asset === asset &&
+            !entry.spent &&
+            unreserved(reserved)(entry) &&
+            exposed(entry),
+        )
+        .reduce((sum, entry) => sum + entry.utxo.amount, 0n);
+      return exposedIfSpent === 0n || input.spendExposed === true
+        ? ringSelectionErrors.insufficient(shortfall)
+        : new RingError("RING_UNFUNDED_PAST_EXPOSURE", {
+            details: {
+              asset,
+              requested: amount.toString(),
+              exposedIfSpent: exposedIfSpent.toString(),
+            },
+          });
+    },
+  };
   return selectUtxos({
     wallet,
     asset,
@@ -331,6 +376,7 @@ export function selectRingInputs(
     policy: {
       eligible: (entry) => {
         if (!unreserved(reserved)(entry)) return false;
+        if (input.spendExposed !== true && exposed(entry)) return false;
         if (entry.utxo.ringProgramId === ringProgramId)
           return inputs === "ring" || inputs === "ring-or-default";
         return (
@@ -344,7 +390,7 @@ export function selectRingInputs(
       allowWideBalance: true,
       maxInputs: input.maxInputs,
       tree: { kind: "fixed", tree: input.tree },
-      errors: ringSelectionErrors,
+      errors,
     },
   }).entries;
 }
@@ -364,7 +410,11 @@ function buildRingSend(
   context: RequestContext | undefined,
 ): Promise<RingSubmissionAttempt> {
   const { params, rail, destination, retry } = input;
-  const send = rail.anonymous === undefined ? params : { ...params, anonymous: rail.anonymous };
+  const send = {
+    ...params,
+    ...(rail.anonymous === undefined ? {} : { anonymous: rail.anonymous }),
+    ...(rail.spendPublic === undefined ? {} : { spendPublic: rail.spendPublic }),
+  };
   return buildRingSpend(
     { params, rail, strategy: sendStrategy(send, destination), retry },
     context,
@@ -398,7 +448,7 @@ function buildRingWithdrawal(
 type SendParams = SpendBase &
   Pick<RingTransferTransactionParams, "recipient"> &
   Partial<Pick<RingTransferTransactionParams, "inputs">> &
-  Readonly<{ anonymous?: AnonymousSpendOwner }>;
+  Readonly<{ anonymous?: AnonymousSpendOwner; spendPublic?: RingPublicSpend }>;
 
 function sendStrategy(
   params: SendParams,
@@ -580,9 +630,16 @@ async function buildRingSpend<R>(
         feePayer: params.feePayer,
         strategy,
         retry,
-        route: rail.anonymous === undefined ? "confidential" : "anonymous",
+        route:
+          rail.spendPublic !== undefined
+            ? "public"
+            : rail.anonymous === undefined
+              ? "confidential"
+              : "anonymous",
         ownerInProof: rail.inProofOwner !== undefined,
-        ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
+        ...(params.cosigners === undefined
+          ? {}
+          : { coSigners: params.cosigners.map((cosigner) => signerAddress(cosigner)) }),
       },
       context,
     );
@@ -696,6 +753,12 @@ function proveDirect(
   context: RequestContext | undefined,
 ): Promise<ProvenRingTransfer> {
   const { staged, rail, approval } = input;
+  if (rail.spendPublic !== undefined) {
+    const named = staged.rail.spendPublic(rail.spendPublic.wallet);
+    const paying =
+      staged.anonymousPayment === undefined ? named : named.withPayment(staged.anonymousPayment);
+    return paying.proveApproved(input.client, approval, context);
+  }
   if (rail.anonymous !== undefined)
     return anonymousTransfer(staged, rail.anonymous).proveApproved(rail.client, approval, context);
   const owner =
@@ -712,7 +775,7 @@ function anonymousTransfer(staged: StagedSpend, owner: AnonymousSpendOwner): Ano
     : paying.withExitTokenOwner(owner.exitTokenOwner);
 }
 
-/** Each route's refusal on a ring whose mode it does not serve. */
+/** Each route's refusal on a ring whose mode it does not serve, public owners serve either. */
 const MODE_REFUSALS = Object.freeze({
   confidential: "RING_ANONYMOUS_SIGNER_REQUIRED",
   anonymous: "RING_NOT_ANONYMOUS",
@@ -725,15 +788,14 @@ async function stageRingSpend<R>(
     feePayer: Address;
     strategy: RingSpendStrategy<R>;
     retry: RingSubmissionBuildState;
-    route: keyof typeof MODE_REFUSALS;
+    route: keyof typeof MODE_REFUSALS | "public";
     /** Ring notes only, a default-ring input would publish the owner SPP hides. */
     ownerInProof: boolean;
-    coSigner?: Address;
+    coSigners?: readonly Address[];
   }>,
   context: RequestContext | undefined,
 ): Promise<StagedSpend> {
   const { params, strategy, retry, route } = input;
-  const anonymousRing = route === "anonymous";
   await initializePoseidon();
   const asset = params.asset ?? SOL_MINT;
   const owner = params.keys.address();
@@ -742,7 +804,8 @@ async function stageRingSpend<R>(
     fetchRingPolicy(params.client, params.ringProgramId, context),
     resolveRingOutputTree(params.client, params.outputTree, context),
   ]);
-  if (anonymousRing !== (config.mode === "anonymous"))
+  const anonymousRing = config.mode === "anonymous";
+  if (route !== "public" && (route === "anonymous") !== anonymousRing)
     throw new RingError(MODE_REFUSALS[route], { details: { ringProgramId: params.ringProgramId } });
   if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
   const pool = {
@@ -754,16 +817,23 @@ async function stageRingSpend<R>(
   };
   const selected =
     retry.entries ??
-    (anonymousRing
-      ? selectAnonymousInputs(pool, strategy.selection)
-      : selectRingInputs({
+    (route === "public"
+      ? selectRingInputs({
           ...pool,
-          inputs:
-            input.ownerInProof && strategy.selection === "ring-or-default"
-              ? "ring"
-              : strategy.selection,
+          inputs: strategy.selection,
           maxInputs: MAX_TRANSACT_INPUTS,
-        }));
+          spendExposed: true,
+        })
+      : anonymousRing
+        ? selectAnonymousInputs(pool, strategy.selection)
+        : selectRingInputs({
+            ...pool,
+            inputs:
+              input.ownerInProof && strategy.selection === "ring-or-default"
+                ? "ring"
+                : strategy.selection,
+            maxInputs: MAX_TRANSACT_INPUTS,
+          }));
   retry.reservation = retry.reservation ?? reserveEntries(params.wallet, selected, retry.lifetime);
   retry.entries = selected;
   const transfer = ringSpendTransfer({
@@ -795,7 +865,7 @@ async function stageRingSpend<R>(
     keys: params.keys,
     transfer,
     assets: params.wallet.registry,
-    ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
+    ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
   });
   return Object.freeze({
     selected,
@@ -854,25 +924,18 @@ function selectAnonymousInputs(
 function unfunded(cause: unknown): boolean {
   return (
     cause instanceof RingError &&
-    (cause.code === "RING_INSUFFICIENT_BALANCE" || cause.code === "RING_TOO_MANY_INPUTS")
+    (cause.code === "RING_INSUFFICIENT_BALANCE" ||
+      cause.code === "RING_UNFUNDED_PAST_EXPOSURE" ||
+      cause.code === "RING_TOO_MANY_INPUTS")
   );
 }
 
 /** Padded inputs are published, the widest two-output shape an anonymous key serves bounds a spend. */
 function anonymousInputCap(selection: "ring" | "entry"): number {
-  const spendsDefaultRing = selection === "entry";
-  return Math.max(
-    ...SPP_SUPPORTED_SHAPES.filter(
-      (shape) =>
-        shape.outputs === SPEND_OUTPUTS &&
-        transferAuditKey({
-          rail: "anonymous",
-          inputs: shape.inputs,
-          capacity: shape.outputs,
-          spendsDefaultRing,
-        }) !== undefined,
-    ).map((shape) => shape.inputs),
+  const keyed = transferShapes("anonymous", selection === "entry")?.find(
+    (shape) => shape.outputs === SPEND_OUTPUTS,
   );
+  return Math.min(keyed?.inputs ?? 0, MAX_TRANSACT_INPUTS);
 }
 
 type AnonymousRecipient = Readonly<{
@@ -908,7 +971,7 @@ async function resolveSendRecipient(
 
 /** The caller names the choice on every anonymous payment. */
 function replyChoice(params: SendParams): ReplyMetadata | null {
-  const reply = params.anonymous?.reply;
+  const reply = params.anonymous?.reply ?? params.spendPublic?.reply;
   if (reply === undefined)
     throw new RingError("RING_REPLY_INVALID", { details: { reason: "unnamed" } });
   return reply;

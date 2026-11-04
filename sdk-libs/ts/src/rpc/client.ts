@@ -18,7 +18,9 @@ import type {
   PendingEnrollmentsRequest,
   TrackingOpenings,
   TrackingOpeningsRequest,
+  TrackingRecordPoolRequest,
 } from "../protocol/indexer/tracking-codec.js";
+import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import { RingError } from "../protocol/error.js";
 import { RingIndexer } from "./indexer.js";
 import type {
@@ -107,6 +109,13 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     context?: RequestContext,
   ): Promise<TrackingOpenings> {
     return this.#ringIndexer.getTrackingOpenings(request, context);
+  }
+
+  getTrackingRecordPool(
+    request: TrackingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<ServedTrackingPool> {
+    return this.#ringIndexer.getTrackingRecordPool(request, context);
   }
 
   getPendingEnrollments(

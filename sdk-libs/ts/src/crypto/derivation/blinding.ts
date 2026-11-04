@@ -1,10 +1,13 @@
 /** The ring side of SPP's output blinding, Rust `custom_ring_interface::blinding`. */
 import type { Address, Bytes16, Bytes32 } from "@heliuslabs/zolana";
 import {
+  addressBytes,
   checkedBytes,
   equalBytes,
+  hashBytes,
   isCanonicalField,
   rightAlign,
+  ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
 import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -17,7 +20,7 @@ import {
   type TreeId,
 } from "@heliuslabs/zolana/transaction";
 
-import { openDeliveredBody } from "../../protocol/transaction/output.js";
+import type { RecipientBody } from "../../protocol/codec/anonymous-delivery.js";
 import { domainHash, RingDomain } from "./ring-domain.js";
 import { packedSecret } from "./ring-stream.js";
 import { withOutputFields } from "../../protocol/proof/proof-output.js";
@@ -90,62 +93,66 @@ export function ringBlindedOutputs(
   }
 }
 
-/** Where a delivered ring output sits, Rust `RingDeliverySlot`. */
-export interface RingDeliverySlot {
+/** Where a published ring output sits and who reads it, Rust `AnonymousOutput`. */
+export interface RingOutputReader {
+  readonly owner: RingNoteOwner;
   readonly ring: Address;
+  readonly treeId: TreeId;
+  readonly commitment: Bytes32;
+  readonly assets: AssetRegistry;
 }
 
-/** The keys of a delivered output's owner. */
+/** The keys of a ring output's owner. */
 export interface RingNoteOwner {
   readonly signingPublicKey: ShieldedPublicKey;
   readonly nullifierPublicKey: Bytes32;
 }
 
-/** One published delivered body and the secret its recipient agreed for it. */
-export interface RingDeliveryOpening {
-  readonly body: Uint8Array;
-  readonly slotSecret: Bytes32;
-  readonly owner: RingNoteOwner;
-  /** The published commitment and the tree it was appended to. */
-  readonly commitment: Bytes32;
-  readonly treeId: TreeId;
-}
-
-/** A delivered output opened to the note its published commitment binds. */
-export interface RingDeliveredNote {
+/** A body whose rebuilt commitment names the reader, a match establishes ownership, Rust `OpenedNote`. */
+export interface OpenedRingNote {
   readonly utxo: Utxo;
   readonly utxoHash: Bytes32;
+  /** The reader's key or zero, whichever rebuilt. */
+  readonly nullifierPublicKey: Bytes32;
+  readonly dataHash?: Bytes32;
+  readonly ringDataHash?: Bytes32;
+  /** Clear under a mint the registry does not name, the note stays spendable once it does. */
+  readonly registered: boolean;
 }
 
-/** Held back until a registered asset rebuilds the commitment. */
-export const RING_DELIVERY_UNRESOLVED = "unresolved";
-
-/**
- * `undefined` for keys other than the owner's, a blinding outside the field or a zero amount in no held asset, a commitment under a sender's choice of keys proves no ownership.
- */
-export function openRingDelivery(
-  slot: RingDeliverySlot,
-  opening: RingDeliveryOpening,
-  assets: AssetRegistry,
-): RingDeliveredNote | typeof RING_DELIVERY_UNRESOLVED | undefined {
-  const body = openDeliveredBody(opening.slotSecret, opening.body);
-  const { signingPublicKey, nullifierPublicKey } = opening.owner;
-  const foreign =
-    !equalBytes(body.ownerKey, signingPublicKey.confidentialViewTag()) ||
-    (body.nullifierPk !== undefined && !equalBytes(body.nullifierPk, nullifierPublicKey));
-  // be32 below q is the only blinding a commitment binds.
-  if (foreign || !isCanonicalField(body.blinding)) return undefined;
-  for (const [, asset] of assets.entries()) {
-    const utxo = new Utxo({
-      owner: signingPublicKey,
-      asset,
-      amount: body.amount,
-      blinding: body.blinding,
-      data: new Data(),
-      ringProgramId: slot.ring,
-    });
-    const utxoHash = utxo.hash(nullifierPublicKey, opening.treeId);
-    if (equalBytes(utxoHash, opening.commitment)) return Object.freeze({ utxo, utxoHash });
+/** Tries the reader's key then the zero key, `undefined` when neither rebuilds the commitment, Rust `AnonymousOutput::open_body`. */
+export function openRecipientNote(
+  reader: RingOutputReader,
+  body: RecipientBody,
+): OpenedRingNote | undefined {
+  const { data = new Uint8Array(), ringDataHash } = body;
+  // A nonempty data field leads with the hash the commitment reads.
+  if (data.length > 0 && data.length < 32) return undefined;
+  if (!isCanonicalField(body.blinding)) return undefined;
+  const dataHash = data.length === 0 ? undefined : (data.slice(0, 32) as Bytes32);
+  const appData = data.subarray(32);
+  const { signingPublicKey, nullifierPublicKey } = reader.owner;
+  const utxo = new Utxo({
+    owner: signingPublicKey,
+    asset: body.mint,
+    amount: body.amount,
+    blinding: body.blinding,
+    data: appData.length === 0 ? new Data() : new Data([{ kind: "utxoData", bytes: appData }]),
+    ringProgramId: reader.ring,
+  });
+  for (const candidate of [nullifierPublicKey, ZERO_NULLIFIER_PK as Bytes32]) {
+    const utxoHash = utxo.hash(candidate, reader.treeId, dataHash, ringDataHash);
+    if (equalBytes(utxoHash, reader.commitment))
+      return Object.freeze({
+        utxo,
+        utxoHash,
+        nullifierPublicKey: candidate,
+        ...(dataHash === undefined ? {} : { dataHash }),
+        ...(ringDataHash === undefined ? {} : { ringDataHash }),
+        registered:
+          reader.assets.addressForField(hashBytes(addressBytes(body.mint, "mint")) as Bytes32) !==
+          undefined,
+      });
   }
-  return body.amount === 0n ? undefined : RING_DELIVERY_UNRESOLVED;
+  return undefined;
 }

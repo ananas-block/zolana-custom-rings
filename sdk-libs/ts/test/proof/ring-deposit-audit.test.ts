@@ -556,6 +556,7 @@ describe("ring deposit builder", () => {
       derive: refused,
       transactionKeys: refused,
       ringDeliverySecrets: refused,
+      mergeSeeds: refused,
     };
   }
 
@@ -746,8 +747,9 @@ describe("ring deposit builder", () => {
       if (stored === undefined) throw new Error("no history");
       const next = await PreparedRingDeposit.prepare(deposit(stored));
       prepared.push(next);
-      expect(await publishes(next, client, second)).toBe(true);
-      expect(await publishes(next, client, first)).toBe(false);
+      const published = hex(Uint8Array.from((await next.prove(client)).instruction.data ?? []));
+      expect(published.includes(hex(second))).toBe(true);
+      expect(published.includes(hex(first))).toBe(false);
     } finally {
       for (const held of prepared) held.destroy();
       local.destroy();
@@ -792,7 +794,7 @@ describe("ring deposit builder", () => {
     }
   });
 
-  it("takes a first contact tag for another member until a transfer pairs", async () => {
+  it("pays another member under its request's tag and refuses the viewing key as a tag", async () => {
     const member = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const local = LocalRingKeys.fromKeypair(member);
@@ -802,26 +804,42 @@ describe("ring deposit builder", () => {
       ringProgramId: RING,
       listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
-    const recipientKey = recipient.shieldedAddress().viewingPublicKey;
     const depositTag = recipient.viewingKey().recipientRequestViewTag(0n);
     const paid = (target: RingAddress | RingPaymentRequest) =>
       PreparedRingDeposit.prepare(params(client, { kind: "anonymousPayment", to: target }));
-    const prepared: PreparedRingDeposit[] = [];
+    const refusal = { code: "RING_BUILD_DEPOSIT", causeCode: "RING_DEPOSIT_BOOTSTRAP_TAG" };
     try {
-      const bootstrap = await paid(to);
-      prepared.push(bootstrap);
-      expect(await publishes(bootstrap, client, recipientKey.u())).toBe(true);
       const requested = await paid(new RingPaymentRequest({ address: to, depositTag }));
-      prepared.push(requested);
       expect(await publishes(requested, client, depositTag)).toBe(true);
-      const untagged = await paid(new RingPaymentRequest({ address: to }));
-      prepared.push(untagged);
-      expect(await publishes(untagged, client, recipientKey.u())).toBe(true);
-      expect(bootstrap.viewingHistory).toBeUndefined();
+      expect(requested.viewingHistory).toBeUndefined();
+      requested.destroy();
+      await expect(paid(to)).rejects.toMatchObject(refusal);
+      await expect(paid(new RingPaymentRequest({ address: to }))).rejects.toMatchObject(refusal);
     } finally {
-      for (const deposit of prepared) deposit.destroy();
       local.destroy();
       member.destroy();
+      recipient.destroy();
+    }
+  });
+
+  it("proves one frame once, a retry prepares a new blinding", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const { client } = await fixture({ mode: "confidential" });
+    const recipientParams = params(client, {
+      kind: "confidential",
+      address: recipient.shieldedAddress(),
+    });
+    const first = await PreparedRingDeposit.prepare(recipientParams);
+    const second = await PreparedRingDeposit.prepare(recipientParams);
+    try {
+      await first.prove(client);
+      await expect(first.prove(client)).rejects.toMatchObject({
+        code: "RING_DEPOSIT_FRAME_REUSED",
+      });
+      expect(second.utxo.blinding).not.toEqual(first.utxo.blinding);
+    } finally {
+      first.destroy();
+      second.destroy();
       recipient.destroy();
     }
   });

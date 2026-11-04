@@ -7,6 +7,8 @@ import {
   fetchSplAssetRegistrations,
   createIndexerRpcConfig,
   isCanonicalField,
+  PAGE_LIMIT,
+  ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
@@ -19,16 +21,24 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
+import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
+import { openRecipientNote } from "../crypto/derivation/blinding.js";
+import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
-import { openRingDelivery } from "../crypto/derivation/blinding.js";
+import { openRingDelivery } from "../protocol/historical/v3/delivered-body.js";
 import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
 import { isSmallOrder } from "../crypto/keys/x25519.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
-import { exactlyOne, unseen } from "./batch.js";
-import { RING_DELIVERY_UNRESOLVED, type RingDeliveredNote } from "../crypto/derivation/blinding.js";
+import { answered, exactlyOne, unseen } from "./batch.js";
+import { zeroKeyNullifier } from "./exposed-notes.js";
+import { openZeroKeyMerges } from "./zero-key-merge.js";
+import { HalvingPageLimit, nextHistoryToken } from "../rpc/history.js";
+import {
+  RING_DELIVERY_UNRESOLVED,
+  type RingDeliveredNote,
+} from "../protocol/historical/v3/delivered-body.js";
 
 export interface RingNotes {
   readonly utxos: readonly WalletUtxo[];
@@ -65,32 +75,36 @@ export async function openRingNotes(
       else if (opened !== undefined) notes.push(opened);
     }
   }
-  const nullifiers =
-    notes.length === 0
+  const keyed = notes.filter(
+    ({ nullifierPublicKey }) => !equalBytes(nullifierPublicKey, ZERO_NULLIFIER_PK),
+  );
+  const derived =
+    keyed.length === 0
       ? []
       : await input.keys.derive(
-          notes.map(({ utxo, utxoHash }) => ({
+          keyed.map(({ utxo, utxoHash }) => ({
             kind: "nullifier",
             utxoHash,
             blinding: utxo.blinding,
           })),
           context,
         );
-  if (nullifiers.length !== notes.length) throw new WalletError("WALLET_KEYS_BATCH_MISMATCH");
+  const nullifiers = new Map(answered(keyed, derived));
   return Object.freeze({
     utxos: Object.freeze(
-      notes.map(({ utxoHash, slot, ...note }, index) =>
-        Object.freeze({
-          ...note,
+      notes.map((note) => {
+        const { utxoHash, slot, nullifierPublicKey: _key, ...fields } = note;
+        return Object.freeze({
+          ...fields,
           outputContext: Object.freeze({
             hash: utxoHash,
             tree: slot.outputContext.tree,
             leafIndex: slot.outputContext.leafIndex,
           }),
-          nullifier: nullifiers[index] as Bytes32,
+          nullifier: nullifiers.get(note) ?? zeroKeyNullifier(utxoHash, note.utxo.blinding),
           spent: false,
-        }),
-      ),
+        });
+      }),
     ),
     pending,
   });
@@ -128,6 +142,20 @@ export async function syncRingWallet(
     const held = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
     const unheld = (entry: WalletUtxo): boolean => unseen(held, bytesKey(entry.outputContext.hash));
     const fresh = notes.utxos.filter(unheld);
+    if (isRingKeys(keys))
+      fresh.push(
+        ...(
+          await zeroKeyMergeNotes(
+            {
+              keys,
+              client: pages.client,
+              owner: keys.address(),
+              pageLimit: input.config?.pageLimit ?? Number(PAGE_LIMIT),
+            },
+            context,
+          )
+        ).filter(unheld),
+      );
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const chunkSize = input.config?.queryChunk ?? 64;
@@ -194,6 +222,38 @@ interface Site {
 type Note = RingDeliveredNote & Omit<RingDepositNote, "utxo"> & Readonly<{ slot: Site["slot"] }>;
 
 const PENDING = Symbol("pending");
+
+/** Tagged by the owner's identity, the tag read covers every ring the wallet holds notes on. */
+async function zeroKeyMergeNotes(
+  input: Readonly<{
+    keys: RingKeys;
+    client: Pick<RingSyncClient, "getShieldedTransactionsByTags">;
+    owner: ShieldedAddress;
+    pageLimit: number;
+  }>,
+  context: RequestContext | undefined,
+): Promise<readonly WalletUtxo[]> {
+  const tag = input.owner.signingPublicKey.ownerProofInputHash();
+  const rows: IndexedShieldedTransaction[] = [];
+  const pageLimit = new HalvingPageLimit(input.pageLimit);
+  let token: string | undefined;
+  for (;;) {
+    const asked = token === undefined ? {} : { paginationToken: token };
+    const page = await pageLimit.read((limit) =>
+      input.client.getShieldedTransactionsByTags(
+        { tags: [tag], limit, ...asked },
+        undefined,
+        context,
+      ),
+    );
+    rows.push(...page.data.flatMap((item) => item.events));
+    const next = nextHistoryToken(token, page);
+    if (next === undefined) break;
+    token = next;
+  }
+  const opened = await openZeroKeyMerges({ keys: input.keys, owner: input.owner, rows }, context);
+  return opened.map(({ utxo }) => utxo);
+}
 
 /** The ring merges among `spends` and the notes they open to `owner`, Rust `RingMerges`. */
 /** A merge publishes no transaction key or salt, a deposit no proof. */
@@ -281,9 +341,45 @@ async function openSlot(
     return undefined;
   }
   if (frame.encoding !== "encrypted") return undefined;
-  if (frame.scheme === RingScheme.ringConfidentialDelivered && isRingKeys(input.keys))
-    return deliveredNote({ keys: input.keys, assets: input.assets }, site, frame.body, context);
+  if (!isRingKeys(input.keys)) return undefined;
+  const reads = { keys: input.keys, assets: input.assets };
+  if (frame.scheme === RingScheme.ringBody) return recipientNote(reads, site, context);
+  if (frame.scheme === RingScheme.ringConfidentialDelivered)
+    return deliveredNote(reads, site, frame.body, context);
   return undefined;
+}
+
+/** The body names its mint, a commitment under the wallet's key or zero proves the note. */
+async function recipientNote(
+  input: Readonly<{ keys: RingKeys; assets: AssetRegistry }>,
+  site: Site,
+  context: RequestContext | undefined,
+): Promise<Note | typeof PENDING | undefined> {
+  const parts = ringBodyOutput(site.slot.payload);
+  if (parts === undefined) return undefined;
+  const slotSecret = await heldSlotSecret(input.keys, site, context);
+  if (slotSecret === undefined) return undefined;
+  const owner = input.keys.address();
+  try {
+    const note = decoded(() =>
+      openRecipientNote(
+        {
+          owner,
+          ring: site.ring,
+          treeId: outputTreeId(site.slot.outputContext),
+          commitment: site.slot.outputContext.hash,
+          assets: input.assets,
+        },
+        openRecipientBody(slotSecret, parts.body),
+      ),
+    );
+    if (note === undefined) return undefined;
+    if (!note.registered) return PENDING;
+    const { registered: _registered, ...opened } = note;
+    return Object.freeze({ ...opened, slot: site.slot });
+  } finally {
+    slotSecret.fill(0);
+  }
 }
 
 /** The slot secret keys the body, the asset is the registered mint that rebuilds the commitment. */
@@ -293,32 +389,8 @@ async function deliveredNote(
   body: Uint8Array,
   context: RequestContext | undefined,
 ): Promise<Note | typeof PENDING | undefined> {
-  const viewingPublicKey = input.keys
-    .viewingPublicKeys()
-    .find((key) => equalBytes(key.u(), site.slot.viewTag));
-  const firstNullifier = site.tx.nullifiers[0];
-  // Malformed published bytes skip here, a holder failure refuses the sync.
-  if (
-    viewingPublicKey === undefined ||
-    firstNullifier === undefined ||
-    isSmallOrder(site.txViewingPublicKey) ||
-    !isCanonicalField(firstNullifier)
-  )
-    return undefined;
-  const slotSecret = exactlyOne(
-    await input.keys.ringDeliverySecrets(
-      [
-        {
-          viewingPublicKey,
-          txViewingPublicKey: site.txViewingPublicKey,
-          salt: site.salt,
-          outputIndex: site.slotIndex,
-          firstNullifier,
-        },
-      ],
-      context,
-    ),
-  );
+  const slotSecret = await heldSlotSecret(input.keys, site, context);
+  if (slotSecret === undefined) return undefined;
   const owner = input.keys.address();
   try {
     const note = decoded(() =>
@@ -344,6 +416,39 @@ async function deliveredNote(
   } finally {
     slotSecret.fill(0);
   }
+}
+
+/** Malformed published bytes skip the slot, a holder failure refuses the sync. */
+async function heldSlotSecret(
+  keys: RingKeys,
+  site: Site,
+  context: RequestContext | undefined,
+): Promise<Bytes32 | undefined> {
+  const viewingPublicKey = keys
+    .viewingPublicKeys()
+    .find((key) => equalBytes(key.u(), site.slot.viewTag));
+  const firstNullifier = site.tx.nullifiers[0];
+  if (
+    viewingPublicKey === undefined ||
+    firstNullifier === undefined ||
+    isSmallOrder(site.txViewingPublicKey) ||
+    !isCanonicalField(firstNullifier)
+  )
+    return undefined;
+  return exactlyOne(
+    await keys.ringDeliverySecrets(
+      [
+        {
+          viewingPublicKey,
+          txViewingPublicKey: site.txViewingPublicKey,
+          salt: site.salt,
+          outputIndex: site.slotIndex,
+          firstNullifier,
+        },
+      ],
+      context,
+    ),
+  );
 }
 
 function stageRingHistory(wallet: Wallet): Wallet {

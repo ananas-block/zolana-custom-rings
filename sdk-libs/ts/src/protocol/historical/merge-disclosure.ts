@@ -4,10 +4,7 @@ import type { Address, Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { symmetricApply, X25519PublicKey, type X25519Keypair } from "@heliuslabs/zolana/keypair";
 
 import { auditSharedSecret, openMergeDisclosureFields } from "../../crypto/audit/audit.js";
-import {
-  readRingMergeDisclosure,
-  type RingMergeDisclosure,
-} from "../../crypto/audit/merge-disclosure.js";
+import { readRingMergeDisclosure, type RingMergeDisclosure } from "./v3/merge-disclosure.js";
 import { RingError } from "../error.js";
 import { RingInstructionTag } from "../transaction/instruction-tag.js";
 import { MERGE_WIDTHS, packedChunks } from "./layout.js";

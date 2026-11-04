@@ -8,9 +8,15 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
-import { meta, signerAddress, type SignerAccount } from "@heliuslabs/zolana/internal";
+import {
+  hashBytes,
+  meta,
+  ringAuthAddress,
+  signerAddress,
+  type SignerAccount,
+} from "@heliuslabs/zolana/internal";
 
-export { ringAuthAddress } from "@heliuslabs/zolana/internal";
+export { ringAuthAddress };
 
 const encoder = new TextEncoder();
 
@@ -76,6 +82,20 @@ export function ringRecordsAddress(
   );
 }
 
+/** The ring's tracking registry, created through CPI with its ring auth PDA as creator. */
+export async function trackingRegistryPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
+  const ringAuth = await ringAuthAddress(ringProgramId);
+  const addresses = getAddressEncoder();
+  return getProgramDerivedAddress({
+    programAddress: STORAGE_PROGRAM_ID,
+    seeds: [
+      encoder.encode("tracking_registry"),
+      addresses.encode(ringAuth),
+      hashBytes(new Uint8Array(addresses.encode(ringProgramId))),
+    ],
+  });
+}
+
 /** One enrollment per owner per tracking registry. */
 export function trackingAuthorizationPda(
   registry: Address,
@@ -104,17 +124,5 @@ export function ownerGrantPda(
       reader.subarray(0, 2),
       reader.subarray(2),
     ],
-  });
-}
-
-/** The Storage program's enrollment account, canonical bump. */
-export function addressAuthorizationPda(
-  registry: Address,
-  owner: Address,
-): Promise<ProgramDerivedAddress> {
-  const addresses = getAddressEncoder();
-  return getProgramDerivedAddress({
-    programAddress: STORAGE_PROGRAM_ID,
-    seeds: [encoder.encode("address"), addresses.encode(registry), addresses.encode(owner)],
   });
 }

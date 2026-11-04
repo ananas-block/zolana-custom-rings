@@ -2,6 +2,13 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `AnonymousWallet.absorb` keeps a tag counter, key, confirmed sender or ring added during a scan, refuses a scan only once another scan moved the wallet's progress, `AnonymousWallet.updateHistory` refuses a counter that falls, and `takeSenderTag` and `takeRequestTag` give concurrent callers distinct tags.
+- A ring read halves its page limit and repeats the same page when the indexer reports a response too large, and fails only at limit one.
+- `syncRingWallet` fails when the key holder fails instead of skipping the slot, and a delivered body off its length no longer fails the sync.
+- A scan worker answers every message, `scanWorkerResponse` replies with an error code, and the `ask` of `scanWorkerMatcher` returns a `ScanWorkerResponse` while a reported failure raises `RING_SCAN_WORKER_FAILED`.
+- A wallet reads a note under its ring key and the zero key, `AnonymousWallet.noteState`, `exposedNotes` and `balances` report a zero-key note as `exposedIfSpent` apart from the spendable balance with `spent` first, no automatic selection or merge takes one, and a shortfall they could cover raises `RING_UNFUNDED_PAST_EXPOSURE` naming the amount.
+- `RingRpc.getWalletStatus` returns a wallet's notes and balance as of `historyThrough`, `RingRpc.getSpendCoverage` gives the ring authority its unresolved spends, and a sender's `RingWalletView` holds its own notes alone with no `payloadErrors`.
+
 - `AnonymousWallet.absorb` rejects a scan after its starting history changes, and new ring watches include retained viewing keys.
 - `fullScan` recovers from ring history without tag discovery, and merge recovery checks reconstructed output commitments against complete input history.
 - `auditRing` uses ring history cursors and resolves merge inputs before sender tracing, and saved tag cursors require a new scan.
@@ -25,6 +32,9 @@ reads one stream per transfer.
 
 Breaking
 
+- `enrollInstruction` and `proveEnrollment` enroll a nonzero ring key in the ring's tracking registry with a proof that binds the ring, the owner and the list tag, `applyEnrollmentsInstruction` applies named enrollments with no authority, and `enrollAddressInstruction`, `decodeAddressAuthorization`, `KeyRegistration`, `NullifierKeyEscrow`, `KeyEscrowAuthority` and the `address` and `escrow` record update entries are gone → derive the key with `RingNullifierKey.derive`, refuse what the program would refuse with `checkEnrollment`, and send `enrollInstruction` signed by the owner.
+- `RingAddress` is version 4, carries `listSalt` and refuses a zero salt on a keyed address or a nonzero salt on the zero key → build it with `RingNullifierKey.ringAddress` and expect no version 3 address to parse.
+- `PreparedRingDeposit.prove` proves one frame once and raises `RING_DEPOSIT_FRAME_REUSED` on a second call, and a deposit to another member of an anonymous ring raises `RING_DEPOSIT_BOOTSTRAP_TAG` without a request tag → prepare a new deposit per attempt and pay from a `RingPaymentRequest` holding its `depositTag`.
 - `CustomRingClientConfig` excludes `provingKeys`, and ring clients reject runtime key sets → omit `provingKeys` from ring client configuration.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from

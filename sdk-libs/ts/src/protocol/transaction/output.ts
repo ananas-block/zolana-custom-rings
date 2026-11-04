@@ -1,22 +1,16 @@
 /** Ring output bodies in SPP's output framing, Rust `custom_ring_interface::output`. */
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { bytesToBigInt, checkedBytes, concatBytes, u64be } from "@heliuslabs/zolana/internal";
 import { TransactionError } from "@heliuslabs/zolana/transaction";
 
-import { DELIVERED_BODY_ENC_INFO, symmetricAuditApply } from "../../crypto/audit/audit.js";
-import { checkedCounter } from "../../crypto/error.js";
-import {
-  DELIVERED_BODY_LEN,
-  ESCROWED_DELIVERED_BODY_LEN,
-  STREAM_FIRST_COUNTER,
-} from "../codec/ring-disclosure-layout.js";
-
-/** The schemes a ring output publishes, SPP stores the ring-owned scheme 10 unparsed. */
+/** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
 export const RingScheme = Object.freeze({
   confidential: 3,
+  /** Read-only, frames before statement version 4. */
   ringConfidentialDelivered: 10,
+  /** Read-only, frames before statement version 4. */
   ringRecipientBody: 11,
   ringSenderBundle: 12,
+  /** `u16le(body_len) ‖ body ‖ reply`, one form on every rail. */
+  ringBody: 13,
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
@@ -27,6 +21,9 @@ const CONFIDENTIAL_PLAINTEXT_HEAD_LEN = 8 + 8 + 32;
 /** Scheme 3 body of an output with no data and no ring id, each one zero byte. */
 export const CONFIDENTIAL_DATA_FREE_BODY_LEN =
   RECIPIENT_KEY_LEN + CONFIDENTIAL_PLAINTEXT_HEAD_LEN + 2;
+
+/** `be32(blinding) ‖ u64be(amount) ‖ mint`. */
+const RING_BODY_MIN_LEN = 72;
 
 const ENCODING_TAGS = ["plaintext", "encrypted", "verifiable"] as const;
 export type RingOutputEncoding = (typeof ENCODING_TAGS)[number];
@@ -47,6 +44,21 @@ export function encodeRingOutput(scheme: RingScheme, payload: Uint8Array): Uint8
   return out;
 }
 
+/** Scheme 13, Rust `encode_ring_body_output`. */
+export function encodeRingBodyOutput(body: Uint8Array, reply: Uint8Array): Uint8Array {
+  if (body.length > 0xffff)
+    throw new TransactionError("TRANSACTION_INVALID_LENGTH", {
+      field: "ringBody",
+      expected: 0xffff,
+      actual: body.length,
+    });
+  const payload = new Uint8Array(2 + body.length + reply.length);
+  new DataView(payload.buffer).setUint16(0, body.length, true);
+  payload.set(body, 2);
+  payload.set(reply, 2 + body.length);
+  return encodeRingOutput(RingScheme.ringBody, payload);
+}
+
 /** Any scheme byte, the caller checks the scheme and the encoding it expects. */
 export function readRingOutput(bytes: Uint8Array): RingOutputFrame {
   const encoding = ENCODING_TAGS[bytes[0] ?? -1];
@@ -64,8 +76,20 @@ export function readRingOutput(bytes: Uint8Array): RingOutputFrame {
   return Object.freeze({ encoding, scheme: bytes[5] ?? 0, body: bytes.slice(6) });
 }
 
-/** The scheme 11 payload, the body then its reply when the frame carries one. */
-export function recipientOutputBody(data: Uint8Array): Uint8Array | undefined {
+/** The body and reply of a scheme 13 output, `undefined` below the plain body's length, Rust `ring_body_output`. */
+export function ringBodyOutput(
+  data: Uint8Array,
+): Readonly<{ body: Uint8Array; reply: Uint8Array }> | undefined {
+  const payload = encryptedOutputBody(data, RingScheme.ringBody);
+  if (payload === undefined || payload.length < 2) return undefined;
+  const length = new DataView(payload.buffer, payload.byteOffset, 2).getUint16(0, true);
+  const rest = payload.subarray(2);
+  if (length < RING_BODY_MIN_LEN || length > rest.length) return undefined;
+  return Object.freeze({ body: rest.subarray(0, length), reply: rest.subarray(length) });
+}
+
+/** The scheme 11 payload of a frame before statement version 4. */
+export function historicalRecipientOutputBody(data: Uint8Array): Uint8Array | undefined {
   return encryptedOutputBody(data, RingScheme.ringRecipientBody);
 }
 
@@ -83,63 +107,3 @@ function encryptedOutputBody(data: Uint8Array, scheme: RingScheme): Uint8Array |
   return frame.encoding === "encrypted" && frame.scheme === scheme ? frame.body : undefined;
 }
 
-/** What a scheme 10 body opens to, its asset matched against the published commitment. */
-export interface DeliveredBodyOpening {
-  readonly blinding: Bytes32;
-  readonly amount: bigint;
-  readonly ownerKey: Bytes32;
-  /** `undefined` exactly under key escrow. */
-  readonly nullifierPk: Bytes32 | undefined;
-}
-
-/** AES-256-CTR of `be32(blinding) ‖ u64be(amount) ‖ owner_key ‖ [be32(nullifier_pk)]` under the slot secret. */
-export function sealDeliveredBody(slotSecret: Bytes32, opening: DeliveredBodyOpening): Uint8Array {
-  const plaintext = concatBytes(
-    checkedBytes<Bytes32>(opening.blinding, 32, "blinding"),
-    u64be(checkedCounter(opening.amount, "amount")),
-    checkedBytes<Bytes32>(opening.ownerKey, 32, "owner key"),
-    ...(opening.nullifierPk === undefined
-      ? []
-      : [checkedBytes<Bytes32>(opening.nullifierPk, 32, "nullifier pk")]),
-  );
-  try {
-    return symmetricAuditApply(
-      checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
-      BODY_STREAM,
-      plaintext,
-    );
-  } finally {
-    plaintext.fill(0);
-  }
-}
-
-/** The length names the layout, the caller compares the keys, a commitment alone proves no ownership. */
-export function openDeliveredBody(slotSecret: Bytes32, body: Uint8Array): DeliveredBodyOpening {
-  const escrowed = body.length === ESCROWED_DELIVERED_BODY_LEN;
-  const plaintext = symmetricAuditApply(
-    checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
-    BODY_STREAM,
-    checkedBytes(
-      body,
-      escrowed ? ESCROWED_DELIVERED_BODY_LEN : DELIVERED_BODY_LEN,
-      "delivered body",
-    ),
-  );
-  try {
-    return Object.freeze({
-      blinding: checkedBytes<Bytes32>(plaintext.subarray(0, 32), 32, "blinding"),
-      amount: bytesToBigInt(plaintext.subarray(32, 40)),
-      ownerKey: checkedBytes<Bytes32>(plaintext.subarray(40, 72), 32, "owner key"),
-      nullifierPk: escrowed
-        ? undefined
-        : checkedBytes<Bytes32>(plaintext.subarray(72), 32, "nullifier pk"),
-    });
-  } finally {
-    plaintext.fill(0);
-  }
-}
-
-const BODY_STREAM = Object.freeze({
-  label: DELIVERED_BODY_ENC_INFO,
-  counter: STREAM_FIRST_COUNTER,
-});

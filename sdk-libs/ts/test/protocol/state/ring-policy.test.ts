@@ -18,6 +18,7 @@ import {
   memberOfAsset,
   memberOfTag,
   pinnedPolicy,
+  policySourceLists,
   policySourceOwners,
   policyTableHash,
   referencedLists,
@@ -533,4 +534,25 @@ describe("list authorization", () => {
 
 it("refuses a member tag of the wrong length", () => {
   expect(reason(() => memberOfTag(new Uint8Array(31)))).toBe("tagLength");
+});
+
+describe("list directions", () => {
+  const lists = (present: readonly ListId[], absent: readonly ListId[]): Rule => ({
+    subject: "outputOwner",
+    source: { kind: "lists", present, absent },
+    guard: { kind: "always" },
+  });
+
+  it("reads a grant list by presence and a deny list by absence", () => {
+    expect(
+      policySourceLists([lists([ListId.allow, ListId.approval], [ListId.block, ListId.frozen])]),
+    ).toEqual([ListId.allow, ListId.block, ListId.frozen, ListId.approval]);
+  });
+
+  it("takes either direction on any readable list", () => {
+    expect(policySourceLists([lists([ListId.block], [ListId.allow])])).toEqual([
+      ListId.allow,
+      ListId.block,
+    ]);
+  });
 });

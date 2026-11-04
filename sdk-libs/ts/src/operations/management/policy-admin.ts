@@ -14,9 +14,10 @@ import {
   type RingPolicyUpdate,
   type RingSharedSource,
 } from "./admin.js";
-import { registryCurator } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy } from "../../protocol/membership/config.js";
+import { isPrivateSource, registryCurator } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
+import { POLICY_LISTS } from "../../protocol/membership/policy.js";
 
 export type RingPolicyAdminClient = BlockhashProvider & Pick<ChainReader, "getAccount">;
 
@@ -46,6 +47,7 @@ export async function buildRingUpdatePolicyTransaction(
       await checkCurators(params, update.sharedSources ?? [], records, context);
     }
     if (update.kind === "source") await checkSource(params, update, context);
+    if (update.kind === "privateSource") await checkPrivateSource(params, update, context);
     return await compile(params, await updateRingPolicyInstruction(params), context);
   } catch (cause) {
     throw wrapRingError("RING_BUILD_POLICY", cause);
@@ -72,6 +74,30 @@ async function checkSource(
     policy.records,
     context,
   );
+}
+
+/** Rust `set_private_source`, a floor read from another tracking registry guards nothing. */
+async function checkPrivateSource(
+  params: RingPolicyAdminParams,
+  update: Extract<RingPolicyUpdate, { kind: "privateSource" }>,
+  context: RequestContext | undefined,
+): Promise<void> {
+  await checkTier(params, context);
+  const { ownerLists, registry } = update;
+  if (ownerLists.some((listId) => !POLICY_LISTS.includes(listId)))
+    throw sourceInvalid("ListNotPolicyReadable");
+  if (registry === undefined) {
+    if (ownerLists.length !== 0) throw sourceInvalid("InvalidSource");
+    return;
+  }
+  if (ownerLists.length === 0) throw sourceInvalid("InvalidSource");
+  const policy = await fetchRingPolicy(params.client, params.ringProgramId, context);
+  const source = await fetchStorageRegistry(params.client, registry, context);
+  if (!isPrivateSource(source)) throw sourceInvalid("PublicRegistryAsPrivateSource");
+  if (source.trackingRegistry !== policy.tracking)
+    throw sourceInvalid("PrivateSourceOtherTracking");
+  if (registry === policy.records || registry === registryCurator(policy))
+    throw sourceInvalid("InvalidSource");
 }
 
 /** An audit-only ring takes no policy, Rust `PolicyOnAuditOnlyRing`. */

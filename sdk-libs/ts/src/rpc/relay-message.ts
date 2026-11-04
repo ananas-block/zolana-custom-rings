@@ -19,6 +19,7 @@ import type {
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { equalBytes, LOADED_ACCOUNTS_DATA_SIZE_LIMIT } from "@heliuslabs/zolana/internal";
+import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 
 import { ringComputeUnitLimit } from "../operations/management/admin.js";
 import { RingError } from "../protocol/error.js";
@@ -33,11 +34,16 @@ import {
   type RingDepositSpp,
 } from "../protocol/transaction/deposit-instruction.js";
 import { RingInstructionTag } from "../protocol/transaction/instruction-tag.js";
-import { RingTransactData } from "../protocol/transaction/transact.js";
+import {
+  isAnonymousFrame,
+  RingTransactData,
+  ringRailOf,
+  type RingRail,
+} from "../protocol/transaction/transact.js";
+import type { RingMode } from "../protocol/codec/ring-codecs.js";
 
 const base58 = getBase58Decoder();
 const VERIFIED = Symbol("verified relay message");
-const ZERO = new Uint8Array(32);
 const MAX_SIGNATURES = 12;
 const MAX_INSTRUCTIONS = 64;
 
@@ -66,15 +72,17 @@ export interface ExpectedDeposit {
   readonly spp: RingDepositSpp;
 }
 
-/** Rust `ExpectedDelegate`, owner identities in payment order. */
+/** Rust `ExpectedDelegate`, viewing keys in payment order, a confidential frame publishes each as its owner tag. */
 export interface ExpectedDelegate {
   readonly kind: "delegate";
   readonly ring: Address;
   readonly policy: Address;
   readonly feePayer: Address;
   readonly delegate: Address;
-  readonly source: Bytes32;
-  readonly payees: readonly Bytes32[];
+  /** The frame the ring's mode fixes. */
+  readonly rail: RingRail;
+  readonly source: X25519PublicKey;
+  readonly payees: readonly X25519PublicKey[];
 }
 
 export type ExpectedRelayMessage = ExpectedDeposit | ExpectedDelegate;
@@ -139,6 +147,7 @@ export async function expectedDeposit(
 export async function expectedDelegate(
   request: PrepareAuthorityTransferRequest,
   quote: RelayQuote,
+  mode: RingMode,
 ): Promise<ExpectedDelegate> {
   const { transfer } = request;
   return Object.freeze({
@@ -147,10 +156,9 @@ export async function expectedDelegate(
     policy: await ringPolicyAddress(request.ring),
     feePayer: quote.feePayer,
     delegate: request.delegate,
-    source: transfer.source.signingPublicKey.ownerProofInputHash(),
-    payees: Object.freeze(
-      transfer.payments.map((payment) => payment.recipient.signingPublicKey.ownerProofInputHash()),
-    ),
+    rail: ringRailOf(RingInstructionTag.authorityTransfer, mode),
+    source: transfer.source.viewingPublicKey,
+    payees: Object.freeze(transfer.payments.map((payment) => payment.recipient.viewingPublicKey)),
   });
 }
 
@@ -190,7 +198,7 @@ export function checkDepositMessage(
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
-/** Rust `ExpectedDelegate::check`, outputs are hidden and the check binds each published owner. */
+/** Owner tags alone, the message holds no blinding, so no commitment rebuilds and a hidden frame's tags bind nothing. */
 export function checkDelegateMessage(
   expected: ExpectedDelegate,
   message: Uint8Array,
@@ -202,22 +210,23 @@ export function checkDelegateMessage(
   };
   const { data, accounts } = open(envelope, message);
   if (data[0] !== RingInstructionTag.authorityTransfer) throw mismatch("Data");
-  // A delegate moves under a policy, the frame names every recipient.
-  const recipients = withMismatch("Data", () => {
-    const parsed = RingTransactData.parse(data.subarray(1), "delegate");
-    const framed = parsed.policy?.recipients;
-    if (parsed.interfaceTransfers.length !== 0 || framed?.kind !== "framed") throw mismatch("Data");
-    return framed.recipients;
+  const parsed = withMismatch("Data", () => {
+    const frame = RingTransactData.parse(data.subarray(1), expected.rail);
+    if (frame.interfaceTransfers.length !== 0) throw mismatch("Data");
+    return frame;
   });
-  if (recipients.length < expected.payees.length) throw mismatch("Recipients");
-  const paysEachPayee = expected.payees.every((payee, slot) =>
-    equalBytes(recipients[slot] as Uint8Array, payee),
-  );
-  // Change returns to the source, a zero slot is padding.
-  const returnsChange = recipients
-    .slice(expected.payees.length)
-    .every((slot) => equalBytes(slot, expected.source) || equalBytes(slot, ZERO));
-  if (!paysEachPayee || !returnsChange) throw mismatch("Recipients");
+  if (isAnonymousFrame(expected.rail)) throw mismatch("Recipients");
+  const tags = parsed.outputs.map((output) => output.ownerTag);
+  const change = equalBytes.bind(undefined, expected.source.u());
+  // Change leads, each payee follows in payment order.
+  const firstPayee = tags.findIndex((tag) => !change(tag));
+  const paysEachPayee =
+    firstPayee >= 0 &&
+    expected.payees.every((payee, slot) => {
+      const tag = tags[firstPayee + slot];
+      return tag !== undefined && equalBytes(tag, payee.u());
+    });
+  if (!paysEachPayee) throw mismatch("Recipients");
   const named = accounts.filter((meta) => meta.address === expected.delegate);
   const signsOnce =
     named.length === 1 &&

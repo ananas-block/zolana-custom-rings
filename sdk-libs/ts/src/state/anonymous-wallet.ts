@@ -1,7 +1,7 @@
 /** One document holds a wallet's scan progress and everything it covers, one write stores both. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { bytesKey } from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
 import {
   deserializeWallet,
@@ -13,6 +13,7 @@ import {
 
 import { RingError } from "../protocol/error.js";
 import { exactlyOne, unseen } from "./batch.js";
+import { mintBalances, noteState, type MintBalance, type NoteState } from "./exposed-notes.js";
 import { consumeScan, type AnonymousScan } from "./anonymous-sync.js";
 import { registeredMint } from "../operations/workflow/recover.js";
 import type { RingKeys } from "./ring-keys.js";
@@ -65,6 +66,19 @@ export class AnonymousWallet {
 
   notes(): readonly WalletUtxo[] {
     return this.wallet.utxos();
+  }
+
+  noteState(note: WalletUtxo): NoteState {
+    return noteState(note);
+  }
+
+  /** Unspent zero-key notes, only a public spend naming the wallet takes one. */
+  exposedNotes(): readonly WalletUtxo[] {
+    return this.wallet.utxos().filter((note) => noteState(note) === "exposedIfSpent");
+  }
+
+  balances(): ReadonlyMap<Address, MintBalance> {
+    return mintBalances(this.wallet.utxos());
   }
 
   /** Stored and unspendable, `promotePending` moves each once its mint registers, no rescan needed. */

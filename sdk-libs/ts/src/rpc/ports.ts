@@ -13,7 +13,6 @@ import type {
 import type { Address, Signature } from "@solana/kit";
 
 import type {
-  AuthorizedAddress,
   MemberRecord,
   QuadPath,
   RecordOpening,
@@ -25,12 +24,14 @@ import type {
   PendingEnrollmentsRequest,
   TrackingOpenings,
   TrackingOpeningsRequest,
+  TrackingRecordPoolRequest,
 } from "../protocol/indexer/tracking-codec.js";
+import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
-/** The nullifier key a member escrowed, sealed to the auditor. */
+/** The nullifier key an owner enrolled, sealed to the auditor. */
 export interface RingSealedKey {
-  /** The signer whose owner identity is the record's member. */
+  /** The signer whose owner identity is the tracking row's member. */
   readonly owner: Address;
   readonly nullifierPk: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
@@ -38,8 +39,7 @@ export interface RingSealedKey {
 }
 
 /** An opening the indexer served, unverified until checked against the bound root. */
-export type RingMemberOpening = RecordOpening &
-  Readonly<{ sealedKey?: RingSealedKey; address?: AuthorizedAddress }>;
+export type RingMemberOpening = RecordOpening;
 
 /** A root a `StorageRegistry` history holds, named by the revision the ring program reads. */
 export interface StorageRoot {
@@ -94,12 +94,10 @@ export interface StorageRecordPool {
   readonly subjects: readonly number[];
 }
 
-/** A leaf the indexer served, with the key its member escrowed. */
+/** A leaf the indexer served. */
 export type RingServedRecord = Readonly<{
   record: MemberRecord;
   path: QuadPath;
-  sealedKey?: RingSealedKey;
-  address?: AuthorizedAddress;
 }>;
 
 export interface RingRecordReader {
@@ -126,6 +124,10 @@ export interface TrackingReader {
     request: PendingEnrollmentsRequest,
     context?: RequestContext,
   ): Promise<PendingEnrollments>;
+  getTrackingRecordPool(
+    request: TrackingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<ServedTrackingPool>;
 }
 
 export type RingSubmissionStatus =

@@ -13,7 +13,8 @@ import {
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { bytesKey } from "@heliuslabs/zolana/internal";
+import { bytesKey, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
+import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
   Wallet,
@@ -21,11 +22,14 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import {
+  encodeRingBodyOutput,
   encodeRingOutput,
   RingScheme,
-  sealDeliveredBody,
 } from "../../src/protocol/transaction/output.js";
+import { sealDeliveredBody } from "../../src/protocol/historical/v3/delivered-body.js";
+import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
+import { isZeroKeyNote, noteState } from "../../src/state/exposed-notes.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { openRingNotes, syncRingWallet, type RingSyncClient } from "../../src/state/ring-sync.js";
 
@@ -135,6 +139,28 @@ describe("openRingNotes", () => {
     expect(stranger).toEqual({ utxos: [], pending: 0 });
   });
 
+  it.each([false, true])(
+    "opens a note under the zero key as exposed, key named in the body: %s",
+    async (keyEscrow) => {
+      const recipient = ShieldedKeypair.generate();
+      const address = recipient.shieldedAddress();
+      const zeroKeyed = ShieldedAddress.fromPublicKeys(
+        address.signingPublicKey,
+        ZERO_NULLIFIER_PK as Bytes32,
+        address.viewingPublicKey,
+      );
+      const hash = note(recipient).utxo.hash(ZERO_NULLIFIER_PK as Bytes32, DEFAULT_TREE_ID);
+      const keys = LocalRingKeys.fromKeypair(recipient);
+      const derive = vi.spyOn(keys, "derive");
+      const notes = await opened(keys, [delivered(recipient, hash, zeroKeyed, keyEscrow)]);
+      const [held] = notes.utxos;
+      if (held === undefined) throw new Error("no note");
+      expect(isZeroKeyNote(held)).toBe(true);
+      expect(noteState(held)).toBe("exposedIfSpent");
+      expect(derive).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses a body naming another owner though its commitment rebuilds", async () => {
     const recipient = ShieldedKeypair.generate();
     const other = ShieldedKeypair.generate().shieldedAddress();
@@ -193,6 +219,65 @@ function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
   };
 }
 
+/** Scheme 13 under the sender's agreement with the recipient key. */
+function ringBody(recipient: ShieldedKeypair, hash: Bytes32): IndexedShieldedTransaction {
+  const txKey = ViewingKey.generate();
+  const viewing = recipient.shieldedAddress().viewingPublicKey;
+  const slotSecret = deliveredSlotSecret({
+    agreement: txKey.ecdh(viewing),
+    txViewingKey: txKey.publicKey(),
+    recipientViewingKey: viewing,
+    salt: SALT,
+    outputIndex: 0,
+    firstNullifier: FIRST_NULLIFIER,
+  });
+  const body = sealRecipientBody(slotSecret, {
+    blinding: blinding(),
+    amount: AMOUNT,
+    mint: SOL_MINT,
+  });
+  return transaction(txKey, viewing.u(), hash, encodeRingBodyOutput(body, new Uint8Array()));
+}
+
+describe("scheme 13 bodies", () => {
+  it("opens a note under the ring key with its mint from the body", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
+      ringBody(recipient, note(recipient).hash),
+    ]);
+    expect(notes.utxos.map((entry) => [entry.utxo.amount, entry.utxo.asset])).toEqual([
+      [AMOUNT, SOL_MINT],
+    ]);
+    const [held] = notes.utxos;
+    if (held === undefined) throw new Error("no note");
+    expect(noteState(held)).toBe("spendable");
+  });
+
+  it("opens a note under the zero key as exposed", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const hash = note(recipient).utxo.hash(ZERO_NULLIFIER_PK as Bytes32, DEFAULT_TREE_ID);
+    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [ringBody(recipient, hash)]);
+    const [held] = notes.utxos;
+    if (held === undefined) throw new Error("no note");
+    expect(noteState(held)).toBe("exposedIfSpent");
+  });
+
+  it("skips a commitment neither candidate rebuilds", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const other = new Uint8Array(32).fill(1) as Bytes32;
+    expect(await opened(keys, [ringBody(recipient, other)])).toEqual({ utxos: [], pending: 0 });
+  });
+
+  it("refuses the sync when the holder fails on a scheme 13 slot", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const failure = new Error("holder offline");
+    vi.spyOn(keys, "ringDeliverySecrets").mockRejectedValue(failure);
+    await expect(opened(keys, [ringBody(recipient, note(recipient).hash)])).rejects.toBe(failure);
+  });
+});
+
 describe("syncRingWallet", () => {
   it("counts ring notes and reads stable tags once per sync", async () => {
     const recipient = ShieldedKeypair.generate();
@@ -212,7 +297,11 @@ describe("syncRingWallet", () => {
 
     expect(report.storedUtxos).toBe(1);
     expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
-    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(1);
+    // The stable tags once, then the owner identity a zero-key merge is tagged by.
+    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(2);
+    expect(client.getShieldedTransactionsByTags.mock.calls[1]?.[0].tags).toEqual([
+      recipient.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+    ]);
     expect(client.getEncryptedUtxosByTags).toHaveBeenCalledTimes(1);
     expect(client.getShieldedTransactionsByTags.mock.calls[0]).toEqual([
       expect.objectContaining({ limit: 5 }),
@@ -232,8 +321,8 @@ describe("syncRingWallet", () => {
 
     expect(second.storedUtxos).toBe(0);
     expect(wallet.utxos()).toHaveLength(1);
-    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(2);
-    expect(client.getShieldedTransactionsByTags.mock.calls[1]?.[0].filters).toBeUndefined();
+    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(4);
+    expect(client.getShieldedTransactionsByTags.mock.calls[2]?.[0].filters).toBeUndefined();
   });
 
   it("reads ring notes below an existing core checkpoint", async () => {

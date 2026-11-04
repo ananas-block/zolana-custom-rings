@@ -6,6 +6,7 @@ import { QUAD_ARITY, type QuadPath } from "../membership/member-registry.js";
 import {
   TRACKING_CAPACITY,
   TRACKING_QUAD_HEIGHT,
+  type ServedTrackingPool,
   type TrackingOpening,
   type TrackingRecord,
 } from "../membership/tracking.js";
@@ -94,6 +95,41 @@ export const getTrackingOpeningsMethod: MethodDescriptor<
   },
 };
 
+export interface TrackingRecordPoolRequest extends TrackingOpeningsRequest {
+  readonly openings: number;
+}
+
+export const getTrackingRecordPoolMethod: MethodDescriptor<
+  TrackingRecordPoolRequest,
+  ServedTrackingPool
+> = {
+  name: "getTrackingRecordPool",
+  encodeRequest: (request) => ({
+    ...getTrackingOpeningsMethod.encodeRequest(request),
+    openings: request.openings,
+  }),
+  decodeResponse: (value) => {
+    const row = object(value, "$", ["context", "root", "records", "canopy", "subjects"]);
+    return Object.freeze({
+      records: Object.freeze(
+        array(row["records"], "records", (entry, path) => {
+          const served = object(entry, path, ["record", "path"]);
+          return Object.freeze({
+            record: servedRecord(served["record"], `${path}.record`).record,
+            path: poolPath(served["path"], `${path}.path`),
+          });
+        }),
+      ),
+      canopy: Object.freeze(array(row["canopy"], "canopy", field)),
+      subjects: Object.freeze(
+        array(row["subjects"], "subjects", (entry, path) =>
+          Number(wireInteger(entry, path, 0n, 0xffff_ffffn)),
+        ),
+      ),
+    });
+  },
+};
+
 export const getPendingEnrollmentsMethod: MethodDescriptor<
   PendingEnrollmentsRequest,
   PendingEnrollments
@@ -168,6 +204,19 @@ function sealOf(value: unknown, path: string): TrackingSeal {
 }
 
 function quadPath(value: unknown, path: string): QuadPath {
+  const read = poolPath(value, path);
+  if (read.siblings.length !== TRACKING_QUAD_HEIGHT)
+    return schemaFailure(
+      "INDEXER_SCHEMA_INVALID_TYPE",
+      `${path}.siblings`,
+      `${String(TRACKING_QUAD_HEIGHT)} levels`,
+      read.siblings,
+    );
+  return read;
+}
+
+/** A pool path stops at the canopy, `verifyTrackingPool` checks its height. */
+function poolPath(value: unknown, path: string): QuadPath {
   const row = object(value, path, ["index", "siblings"]);
   const siblings = array(row["siblings"], `${path}.siblings`, (level, levelPath) => {
     const hashes = array(level, levelPath, field);
@@ -175,13 +224,6 @@ function quadPath(value: unknown, path: string): QuadPath {
       return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", levelPath, "3 siblings", level);
     return Object.freeze(hashes);
   });
-  if (siblings.length !== TRACKING_QUAD_HEIGHT)
-    return schemaFailure(
-      "INDEXER_SCHEMA_INVALID_TYPE",
-      `${path}.siblings`,
-      `${String(TRACKING_QUAD_HEIGHT)} levels`,
-      row["siblings"],
-    );
   return Object.freeze({
     index: Number(wireInteger(row["index"], `${path}.index`, 0n, TRACKING_CAPACITY - 1n)),
     siblings: Object.freeze(siblings),

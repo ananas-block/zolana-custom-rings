@@ -140,14 +140,15 @@ export async function anonymousExitTokenOwner(
   return tokenOwner;
 }
 
-/** The entry key rebuilds every spent UTXO from its opening, Rust `check_entry_inputs`. */
+/** A hidden owner cannot be both hidden and named by a default-ring input, a mixed spend takes the public owner rail, Rust `check_entry_inputs`. */
 export function checkEntryInputs(proofInputs: SppProofInputs, coOwners: readonly Address[]): void {
   if (!spendsDefaultRing(proofInputs)) return;
-  if (coOwners.length > 0) throw new RingError("RING_ENTRY_CO_OWNER");
+  if (coOwners.length > 0)
+    throw new RingError("RING_ENTRY_CO_OWNER", { details: { use: "spendPublic" } });
   proofInputs.inputUtxos.forEach((input, index) => {
     if (input.isDummy()) return;
     if (input.utxo.ringProgramId !== undefined)
-      throw new RingError("RING_ENTRY_RING_INPUT", { details: { index } });
+      throw new RingError("RING_ENTRY_RING_INPUT", { details: { index, use: "spendPublic" } });
     if (!carriesNoData([input.dataHash, input.ringDataHash]))
       throw new RingError("RING_ENTRY_INPUT_DATA", { details: { index } });
   });

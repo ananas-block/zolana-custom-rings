@@ -11,7 +11,7 @@ import {
   recordRegion,
   recordSlots,
   type AuditStreamLayout,
-} from "../../src/protocol/codec/ring-disclosure-layout.js";
+} from "../../src/protocol/historical/v3/layout.js";
 import type * as Audit from "../../src/crypto/audit/audit.js";
 import {
   AUDIT_ENC_INFO,
@@ -19,17 +19,17 @@ import {
   auditorMessageData,
   openAuditorRegions,
   openTransactionViewingSecret,
-  parseAuditorMessage,
   symmetricAuditApply,
 } from "../../src/crypto/audit/audit.js";
 import {
   decodeDisclosure,
   disclosurePlaintext,
   openRingDisclosure,
+  parseAuditorMessage,
   sealRingDisclosure,
   type RingDisclosure,
-} from "../../src/crypto/audit/ring-disclosure.js";
-import { openDeliveredBody, sealDeliveredBody } from "../../src/protocol/transaction/output.js";
+} from "../../src/protocol/historical/v3/disclosure.js";
+import { openDeliveredBody, sealDeliveredBody } from "../../src/protocol/historical/v3/delivered-body.js";
 
 const sealedPlaintexts = vi.hoisted((): Uint8Array[] => []);
 vi.mock("../../src/crypto/audit/audit.js", async (importOriginal) => {

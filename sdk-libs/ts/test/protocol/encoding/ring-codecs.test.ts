@@ -1333,8 +1333,8 @@ describe("ring read request", () => {
     expect(item.inputs.map((input) => input.opening)).toEqual(openings);
     expect(item.inputs.map((input) => input.hash)).toEqual([filled(0x2a, 32), undefined]);
     expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
-    const { slot, txSignature, eventIndex, inputs, outputs, payloadErrors, withdrawals } = wire;
-    const view = { role: "sender", inputs, outputs, payloadErrors, withdrawals };
+    const { slot, txSignature, eventIndex, inputs, outputs, withdrawals } = wire;
+    const view = { role: "sender", inputs, outputs, withdrawals };
     const activity = await rpcWith({
       context: { blockTime: 1_700_000_000, slot: 9 },
       value: { items: [{ slot, txSignature, eventIndex, view }], cursor: null },

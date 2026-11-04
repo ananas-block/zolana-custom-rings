@@ -7,14 +7,9 @@ import {
 } from "./mint-policy.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import {
-  type RingMemberOpening,
-  type RingSealedKey,
-  type RingServedRecord,
-} from "../../rpc/ports.js";
+import { type RingMemberOpening, type RingServedRecord } from "../../rpc/ports.js";
 import {
   BN254_SCALAR_ORDER,
-  hashBytes,
   checkedBytes,
   ZERO_32,
   bigIntBytes,
@@ -37,40 +32,30 @@ import {
   type RecordOpening,
   type RecordPool,
   type RecordWriteProofInput,
-  type AuthorizedAddress,
 } from "./member-registry.js";
-import { packBytesBe } from "../../crypto/derivation/hasher.js";
 
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import { ListId, recordBit } from "./policy.js";
-import { restrictiveWrite, type ApplyRecordsStatement } from "../proof/statement.js";
+import type { ApplyRecordsStatement } from "../proof/statement.js";
 
 /** `q - 1`, the sentinel's next, every member sorts strictly below it. */
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
 /** Rust `MEMBER_REGISTRY_EMPTY_ROOT`, the tree holding only the sentinel, a registry's first root. */
 export const MEMBER_REGISTRY_EMPTY_ROOT = hexToBytes(
-  "23e7f55dac8acecf4f3c2ee3ccea5bd3b42ed78e2381e67e0d756d0f8ce3cb71",
+  "053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d",
 ) as Bytes32;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const CURVE25519_FIELD = 2n ** 255n - 19n;
 const CAPACITY = Number(MEMBER_REGISTRY_CAPACITY);
 
-/** Rust `EscrowKey`, the record field a registered key sets. */
-export interface EscrowKey {
-  readonly nullifierPk: Bytes32;
-  readonly ciphertext: Bytes32;
-}
-
 /** Leaf 0, every member sorts strictly between it and `FIELD_MAX`. */
 export const SENTINEL_RECORD: MemberRecord = Object.freeze({
   member: ZERO_32,
   next: FIELD_MAX,
   lists: 0n,
-  escrowKey: ZERO_32,
   mintPolicy: EMPTY_MINT_POLICY,
-  addressHash: ZERO_32,
 });
 
 /** The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly. */
@@ -86,25 +71,9 @@ export function memberRecordHash(record: MemberRecord): Bytes32 {
     checkedBytes<Bytes32>(record.member, 32, "record member"),
     checkedBytes<Bytes32>(record.next, 32, "record next"),
     u64Field(record.lists, "lists"),
-    checkedBytes<Bytes32>(record.escrowKey, 32, "record escrow key"),
     mintPolicyField(record.mintPolicy),
     u64Field(record.mintPolicy.withdrawalThreshold, "withdrawal threshold"),
     ...assetLimitsFields(record.mintPolicy.limits),
-    checkedBytes<Bytes32>(record.addressHash, 32, "record address hash"),
-  ]);
-}
-
-/** Mirrors `address_hash` in `program-libs/member-registry/src/record.rs`. */
-export function addressRecordHash(
-  input: Readonly<{ member: Bytes32 } & AuthorizedAddress>,
-): Bytes32 {
-  return poseidon([
-    domainField(RingDomain.addressRecord),
-    checkedBytes<Bytes32>(input.ringId, 32, "ring id"),
-    checkedBytes<Bytes32>(input.member, 32, "member"),
-    checkedBytes<Bytes32>(input.nullifierPk, 32, "nullifier pk"),
-    ...packBytesBe(checkedViewingU(input.viewingU)),
-    u64Field(input.addressRevision, "address revision"),
   ]);
 }
 
@@ -129,9 +98,7 @@ export function unopenedRecordPool(openings: number): RecordPool {
     member: ZERO_32,
     next: ZERO_32,
     lists: 0n,
-    escrowKey: ZERO_32,
     mintPolicy: EMPTY_MINT_POLICY,
-    addressHash: ZERO_32,
   });
   // Index 0 is the first child at every level, the fold lands at canopy position 0.
   let node = memberRecordHash(record);
@@ -179,12 +146,9 @@ export function verifyRecordOpening(
   return opening.kind === "present" ? opening.record : undefined;
 }
 
-/** Rust `EscrowedRecord`. */
 export interface EscrowedRecord {
   readonly record: MemberRecord;
   readonly path: QuadPath;
-  readonly sealed: RingSealedKey;
-  /** What the escrow key binds beside the nullifier key. */
   readonly ctHash: Bytes32;
 }
 
@@ -211,39 +175,15 @@ export class MemberOpeningRead {
   listed(list: ListId): boolean {
     return ((this.record()?.lists ?? 0n) & recordBit(list)) !== 0n;
   }
-
-  /** `undefined` unless the record's escrow key binds `nullifierPk` to the sealed secret. */
-  escrowed(nullifierPk: Bytes32): EscrowedRecord | undefined {
-    const { opening } = this;
-    // An absent member's opening carries the low record, its key belongs to another member.
-    if (opening.kind !== "present" || opening.sealedKey === undefined) return undefined;
-    const sealed = opening.sealedKey;
-    if (
-      !equalBytes(
-        escrowKeyHash({ nullifierPk, ciphertext: sealed.ciphertext }),
-        opening.record.escrowKey,
-      )
-    )
-      return undefined;
-    return Object.freeze({
-      record: opening.record,
-      path: opening.path,
-      sealed,
-      ctHash: hashBytes(sealed.ciphertext) as Bytes32,
-    });
-  }
 }
 
-/** Refuses an owner whose record escrows no key for `nullifierPk`, Rust `OwnerRead::escrowed`. */
+/** Refuses every owner, the seal moved to the tracking row. */
 export function ownerEscrowed(
   owner: Bytes32,
-  read: MemberOpeningRead | undefined,
-  nullifierPk: Bytes32,
+  _read: MemberOpeningRead | undefined,
+  _nullifierPk: Bytes32,
 ): EscrowedRecord {
-  const escrowed = read?.escrowed(nullifierPk);
-  if (escrowed === undefined)
-    throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", { details: { owner: bytesKey(owner) } });
-  return escrowed;
+  throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", { details: { owner: bytesKey(owner) } });
 }
 
 /** Every member's read under `root`, each pool path folding through the canopy into `root`. */
@@ -300,34 +240,9 @@ export function verifyRecordPool(
     const path = at === undefined ? undefined : paths[at];
     if (served === undefined || path === undefined) invalid("SubjectIndex");
     const opening: RingMemberOpening = equalBytes(served.record.member, member)
-      ? {
-          kind: "present",
-          record: served.record,
-          path,
-          ...(served.sealedKey === undefined ? {} : { sealedKey: served.sealedKey }),
-          ...(served.address === undefined ? {} : { address: served.address }),
-        }
+      ? { kind: "present", record: served.record, path }
       : { kind: "absent", low: served.record, path };
     return MemberOpeningRead.verify(opening, root, member);
-  });
-}
-
-/** `Poseidon(nullifier_pk, hash_bytes(ciphertext))`. */
-export function escrowKeyHash(key: EscrowKey): Bytes32 {
-  return poseidon([
-    checkedBytes<Bytes32>(key.nullifierPk, 32, "nullifier pk"),
-    hashBytes(checkedBytes<Bytes32>(key.ciphertext, 32, "ciphertext")) as Bytes32,
-  ]);
-}
-
-/** The escrow write of a registered key, it sets the escrow bit and the key together. */
-export function escrowEntry(member: Bytes32, key: EscrowKey): QueueEntry {
-  const bit = recordBit(ListId.escrow);
-  return Object.freeze({
-    member: checkMember(member),
-    mask: bit,
-    value: bit,
-    escrowKey: escrowKeyHash(key),
   });
 }
 
@@ -337,11 +252,9 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
     checkedBytes<Bytes32>(entry.member, 32, "entry member"),
     u64Field(entry.mask, "mask"),
     u64Field(entry.value, "value"),
-    checkedBytes<Bytes32>(entry.escrowKey, 32, "entry escrow key"),
     mintPolicyWriteField(entry.mintPolicy),
     u64Field(entry.mintPolicy?.withdrawalThreshold ?? 0n, "withdrawal threshold"),
     ...assetLimitsFields((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits),
-    checkedBytes<Bytes32>(entry.addressHash ?? ZERO_32, 32, "entry address hash"),
   ]);
 }
 
@@ -391,23 +304,15 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     chainStart: inputs.chainStart,
     chainEnd: inputs.chainEnd,
     count: BigInt(inputs.writes.length),
-    restrictive: inputs.writes.some(({ entry }) =>
-      restrictiveWrite(entry.mask, entry.value, entry.mintPolicy !== undefined),
-    ),
   });
 }
 
-/** List bits outside the mask keep their value, a registered key is final, a zero address hash preserves. */
+/** List bits outside the mask keep their value. */
 function writtenRecord(record: MemberRecord, entry: QueueEntry): MemberRecord {
   return Object.freeze({
     ...record,
     lists: (record.lists & ~entry.mask & U64_MAX) | entry.value,
     mintPolicy: entry.mintPolicy ?? record.mintPolicy,
-    escrowKey: equalBytes(record.escrowKey, ZERO_32) ? entry.escrowKey : record.escrowKey,
-    addressHash:
-      entry.addressHash === undefined || equalBytes(entry.addressHash, ZERO_32)
-        ? record.addressHash
-        : entry.addressHash,
   });
 }
 
@@ -422,9 +327,7 @@ function replayWrite(
       member: entry.member,
       next: write.oldNext,
       lists: write.oldLists,
-      escrowKey: write.oldEscrow,
       mintPolicy: write.oldMintPolicy,
-      addressHash: write.oldAddressHash,
     };
     if (!equalBytes(quadPathRoot(write.slot, memberRecordHash(record)), root))
       invalid("RootMismatch");
@@ -435,9 +338,7 @@ function replayWrite(
     !brackets(low, entry.member) ||
     !equalBytes(write.oldNext, low.next) ||
     write.oldLists !== 0n ||
-    !equalBytes(write.oldEscrow, ZERO_32) ||
-    !isEmptyMintPolicy(write.oldMintPolicy) ||
-    !equalBytes(write.oldAddressHash, ZERO_32)
+    !isEmptyMintPolicy(write.oldMintPolicy)
   )
     invalid("NotBracketed");
   if (!equalBytes(quadPathRoot(write.lowPath, memberRecordHash(low)), root))
@@ -447,19 +348,12 @@ function replayWrite(
       member: entry.member,
       next: low.next,
       lists: 0n,
-      escrowKey: ZERO_32,
       mintPolicy: EMPTY_MINT_POLICY,
-      addressHash: ZERO_32,
     },
     entry,
   );
   // An empty record is never inserted, the write proves the absence and keeps the root.
-  if (
-    inserted.lists === 0n &&
-    equalBytes(inserted.escrowKey, ZERO_32) &&
-    isEmptyMintPolicy(inserted.mintPolicy) &&
-    equalBytes(inserted.addressHash, ZERO_32)
-  ) {
+  if (inserted.lists === 0n && isEmptyMintPolicy(inserted.mintPolicy)) {
     // The circuit range-checks a no-op's slot and nothing else.
     checkedIndex(write.slot.index);
     return [root, nextIndex];

@@ -1,6 +1,7 @@
 /** The ring derivations over a wallet's viewing key, Rust `zolana_ring_keys::RingKeys`. */
 import type { Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana";
-import { bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
+import type { Address } from "@solana/kit";
+import { addressBytes, bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
 import {
   NullifierKey,
   ViewingKey,
@@ -57,8 +58,20 @@ export interface RingTagFrame {
   readonly probes: readonly RingTagProbe[];
 }
 
+/** One zero-key merge under one viewing key. */
+export interface MergeSeedRequest {
+  readonly viewingPublicKey: X25519PublicKey;
+  readonly ringProgramId: Address;
+  readonly firstNullifier: Bytes32;
+}
+
 /** The ring derivations of a wallet's viewing keys, no viewing secret leaves the holder. */
 export interface RingKeys extends ShieldedKeys {
+  /** One seed per request, a keeper's merge under another seed does not open. */
+  mergeSeeds(
+    requests: readonly MergeSeedRequest[],
+    context?: RequestContext,
+  ): Promise<readonly Bytes32[]>;
   /** One CRDS slot secret per request, one agreement per transaction and key. */
   ringDeliverySecrets(
     requests: readonly RingDeliveryRequest[],
@@ -80,6 +93,7 @@ export interface RingKeys extends ShieldedKeys {
 export function isRingKeys(keys: ShieldedKeys): keys is RingKeys {
   const candidate: Partial<Record<keyof RingKeys, unknown>> = keys;
   return (
+    typeof candidate.mergeSeeds === "function" &&
     typeof candidate.ringDeliverySecrets === "function" &&
     typeof candidate.ringTagMatches === "function" &&
     typeof candidate.viewTags === "function"
@@ -91,6 +105,7 @@ export function ringWalletKeys<K extends ShieldedKeys>(keys: K, ring: RingKeys):
   if (!equalBytes(keys.address().toBytes(), ring.address().toBytes()))
     throw new TransactionError("TRANSACTION_KEYS_IDENTITY_MISMATCH");
   return extended(keys, {
+    mergeSeeds: ring.mergeSeeds.bind(ring),
     ringDeliverySecrets: ring.ringDeliverySecrets.bind(ring),
     ringTagMatches: ring.ringTagMatches.bind(ring),
     viewTags: ring.viewTags.bind(ring),
@@ -149,6 +164,17 @@ export class LocalRingKeys implements RingKeys {
 
   async ringDeliverySecrets(requests: readonly RingDeliveryRequest[]): Promise<readonly Bytes32[]> {
     return this.#tags.deliverySecrets(requests);
+  }
+
+  async mergeSeeds(requests: readonly MergeSeedRequest[]): Promise<readonly Bytes32[]> {
+    return requests.map((request) =>
+      this.#tags
+        .held(request.viewingPublicKey)
+        .mergeSeed(
+          addressBytes(request.ringProgramId, "ring program id") as Bytes32,
+          request.firstNullifier,
+        ),
+    );
   }
 
   ringTagMatches(

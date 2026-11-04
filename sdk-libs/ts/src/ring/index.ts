@@ -356,6 +356,7 @@ export {
   auditorMessage,
   hasUnknownAssets,
   knownUtxoHash,
+  openRingTransfer,
   openedUtxo,
   recoverTransactionViewingKey,
 } from "../operations/audit/audit.js";
@@ -370,8 +371,12 @@ export type {
   EscrowedKeys,
   InputOpening,
   InputRing,
+  KnownNote,
   KnownUtxo,
+  KnownUtxoIndexOptions,
   KnownUtxos,
+  NullifierSecrets,
+  OpenedRingAudit,
   OutputOpening,
   EscrowPendingOutput,
   EscrowPendingSlot,
@@ -380,13 +385,25 @@ export type {
   OutputPayloadErrorKind,
   RingAuditPage,
   RingAuditReader,
+  TransactionAuditInput,
   UtxoOwner,
 } from "../operations/audit/audit.js";
-export { auditRingMerges } from "../operations/audit/audit-merge.js";
-export { createdRingUtxos, scanCreatedRingUtxos } from "../operations/workflow/created-utxos.js";
-export type { CreatedRingUtxosPage } from "../operations/workflow/created-utxos.js";
+export {
+  auditRingMerges,
+  classifyMergeNullifier,
+  openRingMerge,
+} from "../operations/audit/audit-merge.js";
+export {
+  createdRingUtxos,
+  openConfirmedDeposit,
+  scanCreatedRingUtxos,
+} from "../operations/workflow/created-utxos.js";
+export type { CreatedRingUtxosPage, OpenedDeposit } from "../operations/workflow/created-utxos.js";
 export type {
   HistoricalMergeRow,
+  MergeNullifierClass,
+  MergeNullifierRow,
+  OpenedRingMerge,
   RingMergeAuditPage,
   RingMergeAuditReader,
 } from "../operations/audit/audit-merge.js";
@@ -399,11 +416,21 @@ export type {
   MergeTransition,
 } from "../state/merge-ledger.js";
 export {
-  mergeDisclosureFieldCount,
-  openRingMergeDisclosure,
-  ringMergePublicInputHash,
+  MergeRingAuthority,
+  decodeRingMergeRequest,
+  encodeRingMergeRequest,
+  forwardedMergeData,
+  mergePublicInputElements,
+  mergePublicInputHash,
+  openMergeRecord,
+  sealMergeRecord,
+  sppMergeBody,
 } from "../crypto/audit/merge-disclosure.js";
-export type { RingMergeDisclosure, RingMergeOpening } from "../crypto/audit/merge-disclosure.js";
+export type {
+  MergePublicInput,
+  RingMergeRequest,
+  SealedMergeRecord,
+} from "../crypto/audit/merge-disclosure.js";
 export { recoverRingMemberNotes } from "../operations/workflow/recover.js";
 export type {
   RecoveredRingNotes,
@@ -424,6 +451,7 @@ export {
 export type {
   ConfirmedEventKind,
   ConfirmedRingTransaction,
+  DepositCapsuleVersion,
   OriginInstruction,
   OriginInstructionGroup,
   RingWithdrawal,
@@ -488,8 +516,15 @@ export type {
   RingRpcOptions,
   RingState,
   RingStatus,
+  RingSpendCoverage,
+  RingSpendCoverageFrame,
+  RingSpendCoverageRow,
   RingWalletActivity,
   RingWalletActivityPage,
+  RingWalletBalance,
+  RingWalletNote,
+  RingWalletNoteStatus,
+  RingWalletStatusPage,
   RingWalletView,
   SignedAuditedUtxosRead,
   SignedAuditorKeyRequest,
@@ -545,16 +580,16 @@ export {
   type TrackingRecord,
   type TrackingRegistry,
 } from "../protocol/membership/tracking.js";
-export {
-  listLeaf,
-  listLeafSalt,
-  listPosition,
-  openListLeaf,
-  presentRead,
-  type PresentRead,
-  type PublishedListLeaf,
-} from "../protocol/membership/private-list.js";
+export { privateListKey } from "../protocol/membership/private-list.js";
 export { RingNullifierKey, listTagOf } from "../crypto/keys/ring-nullifier-key.js";
+export { openZeroKeyMerges, type OpenedZeroKeyMerge } from "../state/zero-key-merge.js";
+export {
+  isZeroKeyNote,
+  mintBalances,
+  noteState,
+  type MintBalance,
+  type NoteState,
+} from "../state/exposed-notes.js";
 export {
   fetchTrackingRegistry,
   newestTrackingRoot,
@@ -572,12 +607,7 @@ export type {
   TrackingOpeningsRequest,
   TrackingSeal,
 } from "../protocol/indexer/tracking-codec.js";
-export {
-  addressAuthorizationPda,
-  ownerGrantPda,
-  trackingAuthorizationPda,
-} from "../protocol/pda/index.js";
-export type { AuthorizedAddress } from "../protocol/membership/member-registry.js";
+export { ownerGrantPda, trackingAuthorizationPda } from "../protocol/pda/index.js";
 export type { ReplyMetadata } from "../protocol/codec/anonymous-delivery.js";
 export {
   checkCoOwnerKeys,

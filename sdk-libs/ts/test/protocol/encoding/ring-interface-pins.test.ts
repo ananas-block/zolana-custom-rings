@@ -19,6 +19,8 @@ import {
   RING_POLICY_DISCRIMINATOR,
   RING_POLICY_SIZE,
   RING_ROLE_BYTES,
+  STORAGE_REGISTRY_DISCRIMINATOR,
+  STORAGE_REGISTRY_SIZE,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import { MAX_SPP_CPI_ACCOUNTS } from "../../../src/protocol/transaction/spp.js";
 
@@ -106,6 +108,16 @@ describe("ring interface pins", () => {
       RING_CO_SIGNER_DISCRIMINATOR,
       RING_CO_SIGNER_SIZE,
     ]);
+  });
+
+  it("reads the storage registry at the discriminator and size Rust asserts", () => {
+    const source = rust("accounts/storage.rs");
+    expect(Number(/pub const DISCRIMINATOR: u8 = (\d+);/u.exec(source)?.[1])).toBe(
+      STORAGE_REGISTRY_DISCRIMINATOR,
+    );
+    expect(Number(/assert!\(StorageRegistry::SIZE == (\d+)\)/u.exec(source)?.[1])).toBe(
+      STORAGE_REGISTRY_SIZE,
+    );
   });
 
   it("encodes each role with the byte Rust `RingRole` decodes", () => {
