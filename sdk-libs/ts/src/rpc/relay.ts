@@ -29,6 +29,7 @@ import {
   checkRelayMessage,
   checkSettledMessage,
   expectedPublicOwner,
+  type RelayFunderTerms,
   type RelayTransferTerms,
   type DelegateRingConfig,
   settledBufferOf,
@@ -163,6 +164,15 @@ export class PendingRelaySignature {
     if (this.#expected?.kind === "sealed")
       return this.#expected.terms.find((terms) => terms.signer === signer);
     return this.#expected?.kind === "publicOwner" && this.#expected.terms.signer === signer
+      ? this.#expected.terms
+      : undefined;
+  }
+
+  /** What the wallet sealed for one public funder of a deposit leg. */
+  funderTerms(signer: Address): RelayFunderTerms | undefined {
+    if (this.#expected?.kind === "sealed")
+      return this.#expected.funders?.find((terms) => terms.signer === signer);
+    return this.#expected?.kind === "funder" && this.#expected.terms.signer === signer
       ? this.#expected.terms
       : undefined;
   }

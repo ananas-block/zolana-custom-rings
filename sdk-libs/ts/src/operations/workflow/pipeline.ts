@@ -71,7 +71,9 @@ import {
   type RingListSalt,
 } from "../../proof/policy-proof.js";
 import {
+  cacheAccessOf,
   selectTransferKey,
+  transferApprovalOf,
   transferProofRequest,
   type TransferApproval,
 } from "../../proof/transfer-proof.js";
@@ -158,8 +160,8 @@ export interface StagedTransfer {
   readonly withdrawal?: TransactWithdrawal;
   /** Empty unless the caller sets them. */
   readonly extensions?: FrameExtensions;
-  /** The digest `extensions` carries and what opens it, Rust `Frame::approval_opening`. */
-  readonly approval?: TransferApproval;
+  /** The frame discloses its totals under it, the digest waits for the selected key's `N`. */
+  readonly approvalBlinder?: Bytes32;
   readonly spend: RailSpend;
 }
 
@@ -249,6 +251,7 @@ interface AssembledTransfer {
   readonly accounts: RingTransactAccounts;
   readonly ringId: Bytes32;
   readonly preview: RingTransactData;
+  readonly approval?: TransferApproval;
 }
 
 export interface RingTransactionFrame {
@@ -400,7 +403,8 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
 function unreadWide(
   input: Readonly<{
     config: RingPolicy;
-    staged: Pick<StagedTransfer, "proofInputs"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
+    staged: Pick<StagedTransfer, "proofInputs" | "approvalBlinder"> &
+      Readonly<{ spend: Pick<RailSpend, "rail"> }>;
   }>,
 ): boolean {
   const { config, staged } = input;
@@ -450,7 +454,9 @@ function unreadWide(
       pools,
       wide: false,
     },
-    framesData(live),
+    // A disclosed opening spans every slot of the key like a data tail, a reader that raised the
+    // key to another output count would leave the opening's rows short of the digest it proves.
+    framesData(live) || staged.approvalBlinder !== undefined,
   );
 }
 
@@ -536,10 +542,11 @@ async function assembleStagedTransfer<T>(
   const delegate = isDelegateRail(ringRail);
   const selected = await selectStagedKey(input, context);
   const { demandInput, demand, keySpend, addresses, circuit, wideOwners } = selected;
-  const { sealed, published, inputs, senderBundle, shape, proofInputs } = sealStagedTransfer({
-    ...input,
-    wideOwners,
-  });
+  const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
+    sealStagedTransfer({
+      ...input,
+      wideOwners,
+    });
   const auditor = config.auditorPublicKey;
   try {
     const transfers = proofInputs.externalData.interfaceTransfers;
@@ -611,6 +618,16 @@ async function assembleStagedTransfer<T>(
         : { cache: TransactCacheAccounts.read(proofInputs.cacheAccounts.read) }),
     });
     const ringId = ringIdField(ringProgramId);
+    const approval =
+      staged.approvalBlinder === undefined
+        ? undefined
+        : transferApprovalOf(proofInputs, layout.capacity, staged.approvalBlinder);
+    const cache = cacheAccessOf(proofInputs);
+    const frameExtensions: FrameExtensions = Object.freeze({
+      ...staged.extensions,
+      ...(approval === undefined ? {} : { approvalTotals: approval.digest }),
+      ...(cache === undefined ? {} : { cache }),
+    });
     const preview = previewData({
       rail: ringRail,
       shape,
@@ -625,7 +642,7 @@ async function assembleStagedTransfer<T>(
       noSpend,
       wideOwners,
       publicOwners: spend.publicOwners === true,
-      extensions: staged.extensions ?? NO_EXTENSIONS,
+      extensions: frameExtensions,
       ...(spend.inProofOwner === undefined ? {} : { inProofOwner: spend.inProofOwner }),
     });
     const publicInputHash = transferStatementHash(
@@ -694,6 +711,7 @@ async function assembleStagedTransfer<T>(
         accounts,
         ringId,
         preview,
+        ...(approval === undefined ? {} : { approval }),
       }),
     );
   } finally {
@@ -726,7 +744,7 @@ async function proveAssembled(
     publicOwners: spend.publicOwners === true,
     partyIdentities: assembled.partyIdentities,
     signers: assembled.signers,
-    ...(staged.approval === undefined ? {} : { approval: staged.approval }),
+    ...(assembled.approval === undefined ? {} : { approval: assembled.approval }),
   });
   let proofs: readonly [ProvenRingTransact | ProvenAnonymousRingTransact, Uint8Array];
   try {
@@ -757,7 +775,7 @@ async function proveAssembled(
     ...(screened(policy)
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
-    ...(staged.approval === undefined ? {} : { approvalOpening: staged.approval.opening }),
+    ...(assembled.approval === undefined ? {} : { approvalOpening: assembled.approval.opening }),
   });
 }
 
