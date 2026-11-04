@@ -3,7 +3,6 @@ import type { Instruction } from "@solana/kit";
 
 import type { BlockhashProvider, WalletKeys } from "@heliuslabs/zolana/client";
 import {
-  compileUnsignedTransaction,
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
@@ -49,11 +48,10 @@ import { frameKeyShape } from "../../protocol/proof/transfer-shapes.js";
 import type { ReplyMetadata } from "../../protocol/codec/anonymous-delivery.js";
 import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 
-import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from "./anonymous.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
-import { boundState, type ProvenRingTransfer } from "../workflow/pipeline.js";
+import type { ProvenRingTransfer } from "../workflow/pipeline.js";
 import {
   CustomRingTransfer,
   type AnonymousTransfer,
@@ -69,6 +67,8 @@ import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../work
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
+  provenRingAttempt,
+  submissionBufferNonce,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
@@ -661,24 +661,18 @@ async function buildRingSpend<R>(
       },
     };
     const proven = await proveDirect({ staged, client: params.client, rail, approval }, context);
-    const [instruction, lifetime] = await Promise.all([
-      proven.instruction(),
-      params.client.getLatestBlockhash(context),
-    ]);
-    const transaction = compileUnsignedTransaction({
-      ...approval.transaction,
-      feePayer: params.feePayer,
-      lifetime,
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transfer),
-      instructions: [instruction],
-    });
-    return Object.freeze({
-      transaction,
-      lastValidBlockHeight: lifetime.lastValidBlockHeight,
-      intentHash: staged.planned,
-      ringInstructionIndex: plan.setupInstructions?.length ?? 0,
-      ...boundState(proven),
-    });
+    const submission = submitted(retry);
+    return await provenRingAttempt(
+      {
+        proven,
+        feePayer: params.feePayer,
+        chain: params.client,
+        transaction: approval.transaction,
+        intentHash: staged.planned,
+        ...(submission === undefined ? {} : { bufferNonce: submissionBufferNonce(submission) }),
+      },
+      context,
+    );
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError(strategy.errorCode, cause);
@@ -740,6 +734,11 @@ async function relayRingSpend<S, R extends RingRelayRail>(
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError(strategy.errorCode, cause);
   }
+}
+
+/** The submission id of a build a submission drives, the reservation's. */
+function submitted(retry: RingSubmissionBuildState): string | undefined {
+  return retry.lifetime === "submission" ? retry.reservation?.id : undefined;
 }
 
 function relaySpend(rail: RingRelayRail): RingRelaySpend {
@@ -870,6 +869,8 @@ async function stageRingSpend<R>(
     assets: params.wallet.registry,
     ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
     listSalts: spendListSalts(params),
+    // A plain build returns one transaction and a relay writes its own buffer.
+    ...(submitted(retry) === undefined ? {} : { bufferedSettlement: true }),
   });
   return Object.freeze({
     selected,

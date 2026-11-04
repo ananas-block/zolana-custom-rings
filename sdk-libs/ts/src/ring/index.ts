@@ -365,6 +365,8 @@ export {
 } from "../operations/workflow/submission.js";
 export type {
   ReservationHold,
+  RingBufferReclaim,
+  RingFrameUpload,
   RingSubmissionAttempt,
   RingSubmissionBuild,
   RingSubmissionResult,
