@@ -525,6 +525,12 @@ function request(item: Json): RingProofRequest {
       curatorAssetRecords: list(item["curatorAssetRecords"]).map((opening, i) =>
         memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
       ),
+      ownerRecords: list(item["ownerRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["ownerPkHashes"])[i] ?? ZERO),
+      ),
+      curatorOwnerRecords: list(item["curatorOwnerRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["ownerPkHashes"])[i] ?? ZERO),
+      ),
     };
   }
   if (circuitType.startsWith("custom-ring-merge-v3-")) {

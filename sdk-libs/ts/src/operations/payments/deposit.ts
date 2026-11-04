@@ -168,8 +168,9 @@ interface DepositRecords {
     policyHash: Bytes32;
     table: PolicyTableProofInputs;
     asset: RecordOpening;
+    owner: RecordOpening;
     /** Absent without a curator source. */
-    curator?: Readonly<{ root: BoundRoot; asset: RecordOpening }>;
+    curator?: Readonly<{ root: BoundRoot; asset: RecordOpening; owner: RecordOpening }>;
   }>;
 }
 
@@ -393,7 +394,9 @@ export class PreparedRingDeposit {
         amounts: first(bigIntBytes(this.#asset.amount, 32) as Bytes32, ZERO_32),
         ...(policy === undefined ? {} : { table: policy.table }),
         assetRecords: first(policy?.asset, undefined),
+        ownerRecords: first(policy?.owner, undefined),
         curatorAssetRecords: first(curator?.asset, undefined),
+        curatorOwnerRecords: first(curator?.owner, undefined),
       };
       const proof = await client.proveRing(request, context);
       return Object.freeze({
@@ -453,30 +456,32 @@ export class PreparedRingDeposit {
         // The zero nullifier key escrows nothing, no record backs it.
         const escrows = this.#keyEscrow && !equalBytes(this.#nullifierPk, ZERO_NULLIFIER_PK);
         const owners = escrows ? [this.#ownerPkHash] : [];
-        const assets = pinned === undefined ? [] : [this.#asset.asset];
+        const screened = pinned === undefined ? [] : [this.#asset.asset, this.#ownerPkHash];
         const reads = await readMemberOpenings(
-          { client, root, members: [...owners, ...assets] },
+          { client, root, members: [...owners, ...screened] },
           attempt,
         );
         const escrowed = escrows
           ? ownerEscrowed(this.#ownerPkHash, reads[0], this.#nullifierPk)
           : undefined;
         const asset = reads[owners.length];
+        const recipient = reads[owners.length + 1];
         const curator =
           pinned?.curator === undefined
             ? undefined
-            : await this.#curatorAsset(client, pinned.curator, attempt);
+            : await this.#curatorScreen(client, pinned.curator, attempt);
         return Object.freeze({
           registries: ringRootRegistries(policy, "deposit"),
           root,
           ...(escrowed === undefined ? {} : { escrowed }),
-          ...(pinned === undefined || asset === undefined
+          ...(pinned === undefined || asset === undefined || recipient === undefined
             ? {}
             : {
                 policy: Object.freeze({
                   policyHash: pinned.policyHash,
                   table: policyTableProofInputs(pinned.table, pinned.sources),
                   asset: asset.opening,
+                  owner: recipient.opening,
                   ...(curator === undefined ? {} : { curator }),
                 }),
               }),
@@ -487,21 +492,21 @@ export class PreparedRingDeposit {
     );
   }
 
-  async #curatorAsset(
+  async #curatorScreen(
     client: RingDepositClient,
     registry: Address,
     context: RequestContext | undefined,
-  ): Promise<Readonly<{ root: BoundRoot; asset: RecordOpening }>> {
+  ): Promise<Readonly<{ root: BoundRoot; asset: RecordOpening; owner: RecordOpening }>> {
     const root = await fetchBoundRoot(
       { client, ringProgramId: this.#ringProgramId, registry },
       context,
     );
-    const [read] = await readMemberOpenings(
-      { client, root, members: [this.#asset.asset] },
+    const [asset, owner] = await readMemberOpenings(
+      { client, root, members: [this.#asset.asset, this.#ownerPkHash] },
       context,
     );
-    if (read === undefined) throw new RingError("RING_BUILD_DEPOSIT");
-    return Object.freeze({ root, asset: read.opening });
+    if (asset === undefined || owner === undefined) throw new RingError("RING_BUILD_DEPOSIT");
+    return Object.freeze({ root, asset: asset.opening, owner: owner.opening });
   }
 
   /** The note, its recipient ciphertext and the auditor capsule, sealed under fresh secrets. */

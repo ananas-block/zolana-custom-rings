@@ -27,7 +27,7 @@ import (
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. Each occupied slot discloses the key whose Solana owner identity is its owner_pk_hash.
 // 4. Under key escrow every owner off ZeroNullifierPk has a record under MemberRegistryRoot that escrows the key the owner's nullifier key and ciphertext hash name.
-// 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset on the lists its records under MemberRegistryRoot and CuratorRoot carry.
+// 5. Under a nonzero PolicyHash every active owner and asset rule of its table holds for each deposit on the lists its records under MemberRegistryRoot and CuratorRoot carry.
 
 const (
 	MaxDeposits = 8
@@ -56,7 +56,7 @@ type DepositCircuit struct {
 	// Each asset is SPP's asset field of its deposit's group.
 	Assets  []frontend.Variable
 	Amounts []frontend.Variable
-	policy.DepositAssets
+	policy.DepositScreen
 }
 
 var DepositCapacities = []int{1, 2, 4, 8}
@@ -67,7 +67,7 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 	}
 	return &DepositCircuit{
 		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), CtHashes: make([]frontend.Variable, capacity), Members: make([]registry.QuadRecordOpening, capacity),
-		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), DepositAssets: policy.NewDepositAssets(capacity),
+		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), DepositScreen: policy.NewDepositScreen(capacity),
 	}, nil
 }
 
@@ -84,6 +84,8 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		shared.ValidateLength("deposit", "amount", len(c.Amounts), c.Capacity),
 		shared.ValidateLength("deposit", "asset record", len(c.AssetRecords), c.Capacity),
 		shared.ValidateLength("deposit", "curator asset record", len(c.CuratorAssetRecords), c.Capacity),
+		shared.ValidateLength("deposit", "owner record", len(c.OwnerRecords), c.Capacity),
+		shared.ValidateLength("deposit", "curator owner record", len(c.CuratorOwnerRecords), c.Capacity),
 	); err != nil {
 		return err
 	}
@@ -118,8 +120,8 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		plaintext = slices.Concat(plaintext, ownerBytes[:], blindingBytes[:], c.OwnerKeys[i][:])
 		deposits[i] = policy.Payment{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
 	}
-	// 7. On a policy ring every deposited asset meets the asset rules under the bound roots.
-	c.DepositAssets.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)
+	// 7. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
+	c.DepositScreen.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)
 	// The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep1 stream puts slot i at counter 2 + 6i.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))

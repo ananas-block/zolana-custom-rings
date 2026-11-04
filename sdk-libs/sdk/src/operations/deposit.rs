@@ -169,21 +169,23 @@ struct DepositDisclosure {
 struct DepositRecords {
     root: BoundRoot,
     escrowed: Option<EscrowOpening>,
-    policy: Option<AssetScreen>,
+    policy: Option<DepositScreen>,
 }
 
-struct AssetScreen {
+struct DepositScreen {
     policy: Box<RingPolicy>,
     sources: SourceMap,
     policy_hash: [u8; 32],
     asset: MemberOpening,
+    owner: MemberOpening,
     /// `None` without a curator source.
-    curator: Option<CuratorAsset>,
+    curator: Option<CuratorScreen>,
 }
 
-struct CuratorAsset {
+struct CuratorScreen {
     root: BoundRoot,
     asset: MemberOpening,
+    owner: MemberOpening,
 }
 
 impl RingDeposit<'_> {
@@ -505,7 +507,7 @@ impl DepositRecords {
         }
     }
 
-    fn curator(&self) -> Option<&CuratorAsset> {
+    fn curator(&self) -> Option<&CuratorScreen> {
         self.policy
             .as_ref()
             .and_then(|policy| policy.curator.as_ref())
@@ -746,18 +748,21 @@ impl DepositDisclosure {
         let screen = match policy.written_policy_hash() {
             Some(_) => {
                 let pinned = PinnedPolicy::of(&policy)?;
-                let asset = self.asset_opening(rpc, root).await?;
+                let asset = self.member_opening(rpc, root, self.asset.asset).await?;
+                let owner = self.member_opening(rpc, root, self.owner_pk_hash).await?;
                 let curator = match BoundRoot::curator(&policy, rpc).await? {
-                    Some(root) => Some(CuratorAsset {
+                    Some(root) => Some(CuratorScreen {
                         root,
-                        asset: self.asset_opening(rpc, root).await?,
+                        asset: self.member_opening(rpc, root, self.asset.asset).await?,
+                        owner: self.member_opening(rpc, root, self.owner_pk_hash).await?,
                     }),
                     None => None,
                 };
-                Some(AssetScreen {
+                Some(DepositScreen {
                     sources: pinned.sources,
                     policy_hash: pinned.policy_hash,
                     asset,
+                    owner,
                     curator,
                     policy,
                 })
@@ -771,17 +776,13 @@ impl DepositDisclosure {
         })
     }
 
-    async fn asset_opening(
+    async fn member_opening(
         &self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
         root: BoundRoot,
+        member: [u8; 32],
     ) -> Result<MemberOpening, RingError> {
-        let read = MemberRead {
-            root,
-            member: self.asset.asset,
-        }
-        .read(rpc)
-        .await?;
+        let read = MemberRead { root, member }.read(rpc).await?;
         Ok(MemberOpening::from(&read.opening))
     }
 
@@ -850,7 +851,9 @@ impl DepositDisclosure {
                 sources: &policy.sources,
             }),
             asset_records: [policy.map(|policy| policy.asset.clone())],
+            owner_records: [policy.map(|policy| policy.owner.clone())],
             curator_asset_records: [curator.map(|curator| curator.asset.clone())],
+            curator_owner_records: [curator.map(|curator| curator.owner.clone())],
         }))
     }
 }

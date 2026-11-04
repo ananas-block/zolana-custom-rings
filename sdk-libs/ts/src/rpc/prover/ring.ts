@@ -246,8 +246,10 @@ export interface DepositProofRequest {
   /** Absent without a written policy, `assetRecords` then opens nothing. */
   readonly table?: PolicyTableProofInputs;
   readonly assetRecords: readonly (RecordOpening | undefined)[];
+  readonly ownerRecords: readonly (RecordOpening | undefined)[];
   /** Undefined entries without a curator source. */
   readonly curatorAssetRecords: readonly (RecordOpening | undefined)[];
+  readonly curatorOwnerRecords: readonly (RecordOpening | undefined)[];
 }
 
 /** Go `MergeParams`. */
@@ -433,11 +435,21 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
           depositCapacity(request.count),
           "assetRecords",
         ).map((opening, i) => memberOpeningJson(opening, `assetRecords[${i}]`)),
+        ownerRecords: sized(
+          request.ownerRecords,
+          depositCapacity(request.count),
+          "ownerRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `ownerRecords[${i}]`)),
         curatorAssetRecords: sized(
           request.curatorAssetRecords,
           depositCapacity(request.count),
           "curatorAssetRecords",
         ).map((opening, i) => memberOpeningJson(opening, `curatorAssetRecords[${i}]`)),
+        curatorOwnerRecords: sized(
+          request.curatorOwnerRecords,
+          depositCapacity(request.count),
+          "curatorOwnerRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `curatorOwnerRecords[${i}]`)),
       };
     case "merge":
       return {

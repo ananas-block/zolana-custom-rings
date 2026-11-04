@@ -80,7 +80,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ### Every spending owner is screened
 
 - The circuit fixes `senders` per rail and never takes them as a witness. The signer rail reads the set. The in-proof and authority rails read their owner. The commitment key reads `sender` and the set. The entry key reads its one owner.
-- The circuit screens each sender under every sender rule in `assertRules`, whether or not it receives an output.
+- The circuit screens each sender under every sender rule in `assertSenderRules`, whether or not it receives an output.
 - The circuit holds the set to the key's sender rows under a policy. The confidential and commitment keys keep four rows, and the entry key keeps one. An audit-only ring takes the whole run.
 - `TestSignerRailSpends` holds `a policy refuses more owners than its sender rows` and `a co-owner off the policy is refused though it receives nothing`.
 - `sender on the frozen list` is a refusal, and `TestEveryCoOwnerIsScreened` sits in `prover/circuits/policy`.
@@ -254,7 +254,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 - The program builds `context_hash` over the forwarded SPP data and supplies each root and `policy_hash` from its accounts.
 - The circuit binds each occupied slot's commitment to its 96 byte opening, and that opening's key to `owner_pk_hash`. Blindings stay in the `CRDB` domain.
-- The circuit screens the asset rules only, and applies the escrow rule with the same `ZeroNullifierPk` waiver.
+- The circuit screens the owner and asset rules through the section a transfer uses, runs no sender rule, and applies the escrow rule with the same `ZeroNullifierPk` waiver.
 - The tests are `TestDepositRefusals`, `TestDepositScreensEachAssetOnItsRecord`, `TestDepositScreensEachAssetOnItsCuratorRecord` and `TestDepositEscrowHoldsTheZeroKeyException` in `prover/circuits`.
 
 ## Limits of the composition

@@ -877,8 +877,10 @@ pub(crate) struct DepositRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<PolicyTable<'a>>,
     pub asset_records: [Option<MemberOpening>; 1],
+    pub owner_records: [Option<MemberOpening>; 1],
     /// `None` without a curator source.
     pub curator_asset_records: [Option<MemberOpening>; 1],
+    pub curator_owner_records: [Option<MemberOpening>; 1],
 }
 
 /// The Solana key an owner identity hashes, the disclosure names it.

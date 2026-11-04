@@ -167,7 +167,9 @@ fn every_batch_deposit_capacity_settles_and_refuses_a_changed_amount() -> Result
                 "assets": assets.iter().map(|asset| field(asset.asset)).collect::<Vec<_>>(),
                 "amounts": assets.iter().map(|asset| field(right_align(&asset.amount.to_be_bytes()))).collect::<Vec<_>>(),
                 "assetRecords": vec![serde_json::Value::Null; capacity],
+                "ownerRecords": vec![serde_json::Value::Null; capacity],
                 "curatorAssetRecords": vec![serde_json::Value::Null; capacity],
+                "curatorOwnerRecords": vec![serde_json::Value::Null; capacity],
             }),
         };
         let proof = env.run(async { Ok(prover.prove(&request).await?) })?;

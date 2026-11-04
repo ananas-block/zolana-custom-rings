@@ -31,11 +31,11 @@ type Deposit struct {
 	Circuit *circuits.DepositCircuit
 }
 
-// Policy is a registry ring's table, the registry serving AllowBit lists every Listed asset.
 type Policy struct {
-	Rules   []ringpolicy.Rule
-	Listed  []int64
-	Curator bool
+	Rules      []ringpolicy.Rule
+	Listed     []int64
+	OwnerLists map[int]uint64
+	Curator    bool
 	// Asset is every slot's deposited asset.
 	Asset int64
 }
@@ -49,12 +49,12 @@ func Build(t testing.TB, count int, mode RingMode) *Deposit {
 // BuildBlinded is Build with blindingOf deriving the blinding every commitment and opening carries.
 func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *big.Int) *big.Int) *Deposit {
 	t.Helper()
-	return build(t, count, mode, blindingOf, Policy{Rules: nil, Listed: nil, Curator: false, Asset: ringpolicy.AssetA})
+	return build(t, count, mode, blindingOf, Policy{Asset: ringpolicy.AssetA})
 }
 
 // Allowlisted requires every deposited asset on AllowBit, where the registry lists only AssetA.
 func Allowlisted(asset int64) Policy {
-	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit)}, Listed: []int64{ringpolicy.AssetA}, Curator: false, Asset: asset}
+	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit)}, Listed: []int64{ringpolicy.AssetA}, Asset: asset}
 }
 
 // CuratorAllowlisted is Allowlisted with AllowBit served by the curator registry.
@@ -62,6 +62,22 @@ func CuratorAllowlisted(asset int64) Policy {
 	listed := Allowlisted(asset)
 	listed.Curator = true
 	return listed
+}
+
+func RecipientsListed(slots ...int) Policy {
+	lists := make(map[int]uint64, len(slots))
+	for _, slot := range slots {
+		lists[slot] = ringregistry.AllowBit
+	}
+	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Require(policy.SubjectOutputOwner, ringregistry.AllowBit)}, OwnerLists: lists, Asset: ringpolicy.AssetA}
+}
+
+func RecipientsBlocked(slots ...int) Policy {
+	lists := make(map[int]uint64, len(slots))
+	for _, slot := range slots {
+		lists[slot] = ringregistry.BlockBit
+	}
+	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit)}, OwnerLists: lists, Asset: ringpolicy.AssetA}
 }
 
 // BuildScreened deposits count owners into a registry ring whose policy screens every deposited asset.
@@ -73,7 +89,7 @@ func BuildScreened(t testing.TB, count int, policy Policy) *Deposit {
 // BuildZeroKey deposits count owners under ZeroNullifierPk into a registry ring, no owner holds a record.
 func BuildZeroKey(t testing.TB, count int) *Deposit {
 	t.Helper()
-	return build(t, count, ModeZeroKey, ringprotocol.DepositBlinding, Policy{Rules: nil, Listed: nil, Curator: false, Asset: ringpolicy.AssetA})
+	return build(t, count, ModeZeroKey, ringprotocol.DepositBlinding, Policy{Asset: ringpolicy.AssetA})
 }
 
 func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *big.Int) *big.Int, policy Policy) *Deposit {
@@ -88,7 +104,7 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot, c.CuratorRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow || zeroKey), 0, 0
 	c.Table, c.PolicyHash = ringpolicy.Table{}.Wires(), 0
 	if screened {
-		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit}, Curator: map[uint64]bool{ringregistry.AllowBit: policy.Curator}, Rules: policy.Rules}.Wires()
+		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit}, Curator: map[uint64]bool{ringregistry.AllowBit: policy.Curator, ringregistry.BlockBit: policy.Curator}, Rules: policy.Rules}.Wires()
 		c.PolicyHash = ringpolicy.TableHash(t, c.Table)
 		lists := registry
 		if policy.Curator {
@@ -116,6 +132,13 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 				nullifierPk = shared.ZeroNullifierPk
 			}
 			secret = big.NewInt(int64(91 + i))
+			if bits, listed := policy.OwnerLists[i]; listed {
+				lists := registry
+				if policy.Curator {
+					lists = curator
+				}
+				lists.Apply(t, ringregistry.Entry{Member: ownerPkHash, Mask: big.NewInt(int64(bits)), Value: big.NewInt(int64(bits)), EscrowKey: big.NewInt(0)})
+			}
 			if escrow {
 				ctHash = big.NewInt(int64(0xc0 + i))
 				registry.Apply(t, ringregistry.Entry{
@@ -145,6 +168,8 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 		}
 		c.AssetRecords[i] = registry.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
 		c.CuratorAssetRecords[i] = curator.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
+		c.OwnerRecords[i] = registry.Opening(ringtest.AsBigInt(c.OwnerPkHashes[i])).Wires()
+		c.CuratorOwnerRecords[i] = curator.Opening(ringtest.AsBigInt(c.OwnerPkHashes[i])).Wires()
 	}
 	if escrow || screened || zeroKey {
 		c.MemberRegistryRoot = registry.Root()
@@ -195,5 +220,7 @@ func (d *Deposit) Narrow(t testing.TB, capacity int) *Deposit {
 	c.Amounts = c.Amounts[:capacity]
 	c.AssetRecords = c.AssetRecords[:capacity]
 	c.CuratorAssetRecords = c.CuratorAssetRecords[:capacity]
+	c.OwnerRecords = c.OwnerRecords[:capacity]
+	c.CuratorOwnerRecords = c.CuratorOwnerRecords[:capacity]
 	return d
 }

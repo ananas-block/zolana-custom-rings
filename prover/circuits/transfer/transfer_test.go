@@ -110,7 +110,7 @@ var confidentialRefusals = []confidentialRefusal{
 		b.Circuit.PublicGross[0] = new(big.Int).Lsh(big.NewInt(1), 64)
 		b.Rebind(t)
 	}, in: "transfer.(*ConfidentialTransferCircuit).Define"},
-	{name: "sender on the frozen list", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, world: func(w *ringtransfer.Confidential) { w.Policy.Frozen = true }, in: "policy.(*PolicyInputs).assertRules"},
+	{name: "sender on the frozen list", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, world: func(w *ringtransfer.Confidential) { w.Policy.Frozen = true }, in: "policy.assertSenderRules"},
 	{name: "screened under another own root", honest: func(testing.TB) ringtransfer.Confidential { return ringtransfer.Signed(confidential2) }, witness: func(t testing.TB, b ringtransfer.Built) {
 		b.Circuit.OwnRoot = 5
 		b.Rebind(t)
@@ -255,7 +255,7 @@ var anonymousRefusals = []anonymousRefusal{
 	{name: "exempt gross above the threshold", honest: func(t testing.TB) ringtransfer.Anonymous { return hiddenExempt(t, 100) }, world: func(w *ringtransfer.Anonymous) {
 		w.Withdrawals[0].Amount, w.Public[0].Net, w.Public[0].Gross = 101, -101, 101
 	}, in: "policy.(*PolicyInputs).assertExemption"},
-	{name: "hidden sender on the frozen list", honest: func(testing.TB) ringtransfer.Anonymous { return ringtransfer.Hidden(anonymous2) }, world: func(w *ringtransfer.Anonymous) { w.Policy.Frozen = true }, in: "policy.(*PolicyInputs).assertRules"},
+	{name: "hidden sender on the frozen list", honest: func(testing.TB) ringtransfer.Anonymous { return ringtransfer.Hidden(anonymous2) }, world: func(w *ringtransfer.Anonymous) { w.Policy.Frozen = true }, in: "policy.assertSenderRules"},
 	{name: "approval bit set within every co-sign bound", honest: func(testing.TB) ringtransfer.Anonymous { return ringtransfer.Hidden(anonymous2) }, world: func(w *ringtransfer.Anonymous) { w.ApprovalRequired = true }, in: "transfer.(*AnonymousTransferCircuit).Define"},
 }
 

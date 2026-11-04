@@ -45,7 +45,7 @@ The frozen list is a second authority list, kept apart from the blocklist. A sen
 
 ### 1.4. Asset allowlist
 
-An asset rule over the allowlist admits only listed assets to deposits and transfers. A guard on that rule can admit small amounts of other assets. A deposit runs the asset rules and no owner rule.
+An asset rule over the allowlist admits only listed assets to deposits and transfers. A guard on that rule can admit small amounts of other assets. A deposit runs the owner and asset rules on each recipient and asset, and no sender rule, because a depositor spends no note.
 
 ### 1.5. Outflow limits per transfer
 
@@ -258,7 +258,7 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    3. Sends the deposit request with its proof inputs to **Ring RPC**.
 2. **Ring RPC:**
    1. Checks that the ring is active.
-   2. Generates the deposit proof. It shows the asset rules hold and, on a ring with a delegate, that each recipient escrows its key.
+   2. Generates the deposit proof. It shows the owner and asset rules hold for each recipient and asset and, on a ring with a delegate, that each recipient escrows its key.
    3. Returns the transaction to the **Wallet** for signing.
 3. **Wallet:** signs to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**

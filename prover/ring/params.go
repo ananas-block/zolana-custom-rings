@@ -308,10 +308,12 @@ type DepositParams struct {
 	PolicyHash         Field            `json:"policyHash"`
 	Assets             []Field          `json:"assets"`
 	Amounts            []Field          `json:"amounts"`
-	// Table and AssetRecords are absent without a written policy, CuratorAssetRecords also without a curator source.
+	// Table and the records are absent without a written policy, the curator records also without a curator source.
 	Table               *PolicyTable     `json:"table,omitempty"`
 	AssetRecords        []*MemberOpening `json:"assetRecords"`
+	OwnerRecords        []*MemberOpening `json:"ownerRecords"`
 	CuratorAssetRecords []*MemberOpening `json:"curatorAssetRecords"`
+	CuratorOwnerRecords []*MemberOpening `json:"curatorOwnerRecords"`
 }
 
 // MergeInput is one SPP merge slot as the merge circuit opens it.

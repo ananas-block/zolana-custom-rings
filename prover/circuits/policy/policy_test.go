@@ -152,22 +152,22 @@ var refusals = []struct {
 		b.Policy().Recipients[0] = ringpolicy.Bob
 		b.Rebind(t)
 	}, in: "policy.(*PolicyInputs).assertRecipients", wide: true},
-	{name: "owner off a required list", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0) }, in: "policy.(*PolicyInputs).assertRules", wide: true},
+	{name: "owner off a required list", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0) }, in: "policy.assertPaymentRules", wide: true},
 	{name: "owner on a forbidden list", honest: blocked, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.BlockBit)
-	}, in: "policy.(*PolicyInputs).assertRules", wide: true},
+	}, in: "policy.assertPaymentRules", wide: true},
 	{name: "sender on a forbidden list", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Sender] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.FrozenBit)
-	}, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "asset off a required list", honest: ringpolicy.Four, world: func(w *ringpolicy.World) { delete(w.Own, ringpolicy.AssetB) }, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "curator list missing from the curator registry", honest: curated, world: func(w *ringpolicy.World) { delete(w.Curator, ringpolicy.Alice) }, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "subject on an alternative list", honest: alternative, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.BlockBit) }, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "scalar guard above its threshold", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "scalar guard over two assets", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Asset = ringpolicy.AssetB }, in: "policy.(*PolicyInputs).assertRules"},
-	{name: "asset guard above the inline limit", honest: assetGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.(*PolicyInputs).assertRules", wide: true},
-	{name: "asset guard without an inline limit", honest: assetGuardedListed, world: func(w *ringpolicy.World) { w.Slots[0].Asset = ringpolicy.AssetB }, in: "policy.(*PolicyInputs).assertRules"},
-	{name: "scalar guard over split outputs", honest: scalarSplit, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.(*PolicyInputs).assertRules"},
-	{name: "asset scalar guard above its threshold", honest: assetScalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.(*PolicyInputs).assertRules"},
+	}, in: "policy.assertSenderRules", wide: true},
+	{name: "asset off a required list", honest: ringpolicy.Four, world: func(w *ringpolicy.World) { delete(w.Own, ringpolicy.AssetB) }, in: "policy.assertPaymentRules", wide: true},
+	{name: "curator list missing from the curator registry", honest: curated, world: func(w *ringpolicy.World) { delete(w.Curator, ringpolicy.Alice) }, in: "policy.assertPaymentRules", wide: true},
+	{name: "subject on an alternative list", honest: alternative, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.BlockBit) }, in: "policy.assertPaymentRules", wide: true},
+	{name: "scalar guard above its threshold", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.assertPaymentRules", wide: true},
+	{name: "scalar guard over two assets", honest: scalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
+	{name: "asset guard above the inline limit", honest: assetGuarded, world: func(w *ringpolicy.World) { w.Slots[0].Amount = 600 }, in: "policy.assertPaymentRules", wide: true},
+	{name: "asset guard without an inline limit", honest: assetGuardedListed, world: func(w *ringpolicy.World) { w.Slots[0].Asset = ringpolicy.AssetB }, in: "policy.assertPaymentRules"},
+	{name: "scalar guard over split outputs", honest: scalarSplit, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
+	{name: "asset scalar guard above its threshold", honest: assetScalarGuarded, world: func(w *ringpolicy.World) { w.Slots[1].Amount = 300 }, in: "policy.assertPaymentRules"},
 	{name: "escrow of another key ciphertext", honest: ringpolicy.Confidential, witness: func(_ testing.TB, b ringpolicy.Witness) { b.Policy().CtHashes[0] = 7 }, in: "policy.(*PolicyInputs).assertEscrow"},
 	{name: "escrow without a registered key", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Alice] = ringpolicy.Record{Lists: ringregistry.AllowBit}

@@ -86,7 +86,7 @@ func TestDepositScreensEachAssetOnItsRecord(t *testing.T) {
 		t.Fatalf("listed asset refused: %v", err)
 	}
 	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.Allowlisted(ringpolicy.AssetB)).Circuit
-	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositScreen.Assert")
 }
 
 // A curator served allow list admits a listed asset and refuses one off it.
@@ -95,7 +95,40 @@ func TestDepositScreensEachAssetOnItsCuratorRecord(t *testing.T) {
 		t.Fatalf("curator listed asset refused: %v", err)
 	}
 	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.CuratorAllowlisted(ringpolicy.AssetB)).Circuit
-	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositScreen.Assert")
+}
+
+func TestDepositScreensEachRecipientOnTheAllowList(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsListed(0, 1)).Circuit); err != nil {
+		t.Fatalf("listed recipients refused: %v", err)
+	}
+	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsListed(0)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositScreen.Assert")
+}
+
+func TestDepositScreensEachRecipientOnTheBlockList(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsBlocked()).Circuit); err != nil {
+		t.Fatalf("unblocked recipients refused: %v", err)
+	}
+	blocked := ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsBlocked(1)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(blocked), "policy.paymentScreen.assert", "policy.DepositScreen.Assert")
+}
+
+func TestDepositScreensEachRecipientOnItsCuratorRecord(t *testing.T) {
+	listed := ringdeposit.RecipientsListed(0, 1)
+	listed.Curator = true
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, listed).Circuit); err != nil {
+		t.Fatalf("curator listed recipients refused: %v", err)
+	}
+	unlisted := ringdeposit.RecipientsListed(0)
+	unlisted.Curator = true
+	ringtest.RequireRefused(t, solveDeposit(ringdeposit.BuildScreened(t, 2, unlisted).Circuit), "policy.paymentScreen.assert", "policy.DepositScreen.Assert")
+}
+
+func TestDepositRefusesAnotherRecipientsRecord(t *testing.T) {
+	d := ringdeposit.BuildScreened(t, 2, ringdeposit.RecipientsListed(0))
+	d.Circuit.OwnerRecords[1] = d.Circuit.OwnerRecords[0]
+	ringtest.RequireRefused(t, solveDeposit(d.Circuit), "policy.DepositScreen.Assert")
 }
 
 func TestDepositKey(t *testing.T) {

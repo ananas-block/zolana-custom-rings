@@ -52,8 +52,9 @@ type ruleVector struct {
 		Amount uint64       `json:"amount"`
 	} `json:"outputs"`
 	Outcome struct {
-		Kind string `json:"kind"`
-		Rule int    `json:"rule"`
+		Kind    string `json:"kind"`
+		Rule    int    `json:"rule"`
+		Subject string `json:"subject"`
 	} `json:"outcome"`
 }
 
@@ -164,7 +165,11 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 					t.Fatalf("the rules before rule %d refuse, %v", v.Outcome.Rule, err)
 				}
 				for _, rules := range []int{v.Outcome.Rule + 1, len(v.Rules)} {
-					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*PolicyInputs).assertRules")
+					section := "policy.assertPaymentRules"
+					if v.Outcome.Subject == "sender" {
+						section = "policy.assertSenderRules"
+					}
+					ringtest.RequireRefused(t, v.solve(t, rules), section)
 				}
 			default:
 				t.Fatalf("outcome %q", v.Outcome.Kind)

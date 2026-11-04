@@ -106,7 +106,7 @@ func TestEveryCoOwnerIsScreened(t *testing.T) {
 	w.Inputs = []ringpolicy.Slot{{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 400}, {Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 100}}
 	requireSolved(t, w.Build(t))
 	w.Own[ringpolicy.Bob] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.FrozenBit)
-	requireRefusedIn(t, w, "policy.(*PolicyInputs).assertRules")
+	requireRefusedIn(t, w, "policy.assertSenderRules")
 }
 
 // Input assets stay hidden from the program, only the proof can see a deposit no owner could be credited alone.
@@ -164,6 +164,6 @@ func TestZeroNullifierKeyWaivesOnlyTheEscrow(t *testing.T) {
 		w := zeroKey()
 		w.Slots[0].ZeroKey = true
 		w.Own[ringpolicy.Alice] = ringpolicy.Record{}
-		requireRefusedIn(t, w, "policy.(*PolicyInputs).assertRules")
+		requireRefusedIn(t, w, "policy.assertPaymentRules")
 	})
 }

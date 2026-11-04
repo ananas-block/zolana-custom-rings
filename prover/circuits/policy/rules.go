@@ -30,19 +30,31 @@ type outputTotals struct {
 	byOwner, byAsset, byOwnerAndAsset frontend.Variable
 }
 
-func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, screened frontend.Variable, table tableView, resolved subjects, outputs []Payment) {
-	// 1. Every payment's guard inputs fold once.
-	screen := newPaymentScreen(api, cmp, resolved, outputs)
-	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	assertScalarAssets(api, outputs, api.Mul(screened, table.scalarOwner))
-	// 3. Every active rule holds for its subjects, each screened sender and each live output owner or asset.
+func screenedRules(api frontend.API, screened frontend.Variable, table tableView) []frontend.Variable {
+	active := make([]frontend.Variable, len(table.rules))
+	for r := range table.rules {
+		active[r] = api.Mul(screened, table.ruleActive[r])
+	}
+	return active
+}
+
+// assertSenderRules holds every screened sender to every sender rule, with or without a spent input or an output.
+func assertSenderRules(api frontend.API, active []frontend.Variable, table tableView, resolved subjects) {
 	for r, rule := range table.rules {
-		active := api.Mul(screened, table.ruleActive[r])
-		// Every screened sender meets every sender rule, with or without a spent input or an output.
 		for j, sender := range resolved.senders {
-			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active, rule.onSender, resolved.liveSenders[j]), V: rule.refuses(api, sender.onList)})
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(active[r], rule.onSender, resolved.liveSenders[j]), V: rule.refuses(api, sender.onList)})
 		}
-		screen.assert(api, rule, api.Mul(active, api.Add(rule.onOwner, rule.onAsset)))
+	}
+}
+
+// assertPaymentRules holds every live payment's owner and asset to every rule on them.
+func assertPaymentRules(api frontend.API, cmp comparator, screened frontend.Variable, active []frontend.Variable, table tableView, resolved subjects, payments []Payment) {
+	// 1. Every payment's guard inputs fold once.
+	screen := newPaymentScreen(api, cmp, resolved, payments)
+	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
+	assertScalarAssets(api, payments, api.Mul(screened, table.scalarOwner))
+	for r, rule := range table.rules {
+		screen.assert(api, rule, api.Mul(active[r], api.Add(rule.onOwner, rule.onAsset)))
 	}
 }
 

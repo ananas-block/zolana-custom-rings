@@ -70,7 +70,7 @@ func TestSignerRailSpends(t *testing.T) {
 	t.Run("a co-owner off the policy is refused though it receives nothing", func(t *testing.T) {
 		w := ringtransfer.Signed(confidential2)
 		w.CoOwners, w.FrozenCoOwner = []*big.Int{coOwner}, true
-		refused(t, w.Build(t), "policy.(*PolicyInputs).assertRules")
+		refused(t, w.Build(t), "policy.assertSenderRules")
 	})
 }
 
@@ -185,7 +185,7 @@ func TestAnonymousRailSpends(t *testing.T) {
 	t.Run("a co-owner off the policy is refused though it receives nothing", func(t *testing.T) {
 		w := ringtransfer.Hidden(anonymous2)
 		w.CoOwners, w.FrozenCoOwner = []*big.Int{coOwner}, true
-		refusedAnonymous(t, w.Build(t), "policy.(*PolicyInputs).assertRules")
+		refusedAnonymous(t, w.Build(t), "policy.assertSenderRules")
 	})
 	t.Run("a policy leaves three rows beside the hidden sender", func(t *testing.T) {
 		w := ringtransfer.Hidden(anonymous2)
