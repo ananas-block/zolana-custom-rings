@@ -122,6 +122,7 @@ impl SppWitness<'_> {
         let mut complete = match self.rail {
             SppRail::Anonymous(owner) => {
                 let result = AnonymousRingEddsaProver {
+                    cache_accounts: inputs.cache_accounts,
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
                     blinding_seed: inputs.blinding_seed,
@@ -149,6 +150,7 @@ impl SppWitness<'_> {
             }
             SppRail::OwnerSigners => {
                 let result = RingTransferProver {
+                    cache_accounts: inputs.cache_accounts,
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
                     blinding_seed: inputs.blinding_seed,
