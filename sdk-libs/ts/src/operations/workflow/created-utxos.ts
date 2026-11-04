@@ -8,11 +8,6 @@ import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import { RecordKind } from "../../protocol/codec/audit-stream.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import type { RingDepositOutput } from "../../protocol/codec/ring-deposit-plaintext.js";
-import { readHistoricalDepositCapsule } from "../../protocol/historical/v3/deposit-capsule.js";
-import {
-  openHistoricalDepositOpening,
-  type HistoricalDepositOpening,
-} from "../../protocol/historical/v3/deposit-opening.js";
 
 import {
   knownUtxoHash,
@@ -146,10 +141,7 @@ function depositUtxos(
   return Object.freeze(utxos);
 }
 
-/** A deposit's auditor opening, `version` names the capsule the program sealed. */
-export type OpenedDeposit =
-  | (Readonly<{ version: "v4" }> & Omit<RingDepositOpening, "recipientCiphertext">)
-  | (Readonly<{ version: "historicalV3" }> & HistoricalDepositOpening);
+export type OpenedDeposit = Omit<RingDepositOpening, "recipientCiphertext">;
 
 /** Refuses a capsule the confirmed binding does not name and a record off the published owner hash. */
 export function openConfirmedDeposit(
@@ -161,14 +153,6 @@ export function openConfirmedDeposit(
 ): OpenedDeposit {
   const { output, auditor, binding } = input;
   const { ciphertext } = output.encrypted;
-  if (binding.version === "historicalV3") {
-    const capsule = readHistoricalDepositCapsule(ciphertext);
-    if (capsule === undefined) throw depositRefusal();
-    return Object.freeze({
-      version: "historicalV3",
-      ...openHistoricalDepositOpening(capsule, auditor, output.ownerUtxoHash, binding),
-    });
-  }
   const capsule = readRingDepositCapsule(ciphertext);
   if (capsule === undefined) throw depositRefusal();
   const opening = openRingDepositOpening(capsule, auditor, output.ownerUtxoHash, binding);
@@ -176,7 +160,7 @@ export function openConfirmedDeposit(
     opening.blinding.fill(0);
     throw depositRefusal();
   }
-  return Object.freeze({ version: "v4", ...opening });
+  return Object.freeze(opening);
 }
 
 /** @internal Rebuilds the full commitment, the record names the mint and amount the event publishes. */
@@ -190,18 +174,11 @@ export function createdDepositUtxo(
   }>,
 ): CreatedRingUtxo {
   const { output, opening, slot } = input;
-  if (
-    opening.version === "v4" &&
-    (opening.record.mint !== output.asset || opening.record.amount !== output.amount)
-  )
+  if (opening.record.mint !== output.asset || opening.record.amount !== output.amount)
     throw depositRefusal();
   const utxo: KnownUtxo = Object.freeze({
     ownerKey: opening.ownerKey,
-    owner: Object.freeze(
-      opening.version === "v4"
-        ? { kind: "keyed", nullifierPk: opening.record.nullifierPk }
-        : { kind: "deposited", ownerHash: opening.ownerHash.slice() as Bytes32 },
-    ),
+    owner: Object.freeze({ kind: "keyed", nullifierPk: opening.record.nullifierPk }),
     asset: hashBytes(addressBytes(output.asset)) as Bytes32,
     mint: output.asset,
     amount: output.amount,

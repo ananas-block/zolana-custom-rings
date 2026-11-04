@@ -378,8 +378,6 @@ export type {
   NullifierSecrets,
   OpenedRingAudit,
   OutputOpening,
-  EscrowPendingOutput,
-  EscrowPendingSlot,
   RingOwnerTag,
   OutputPayloadError,
   OutputPayloadErrorKind,
@@ -400,7 +398,6 @@ export {
 } from "../operations/workflow/created-utxos.js";
 export type { CreatedRingUtxosPage, OpenedDeposit } from "../operations/workflow/created-utxos.js";
 export type {
-  HistoricalMergeRow,
   MergeNullifierClass,
   MergeNullifierRow,
   OpenedRingMerge,
@@ -451,7 +448,6 @@ export {
 export type {
   ConfirmedEventKind,
   ConfirmedRingTransaction,
-  DepositCapsuleVersion,
   OriginInstruction,
   OriginInstructionGroup,
   RingWithdrawal,
@@ -484,7 +480,6 @@ export type { RingEnrolmentAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
-  UnresolvedRingMerge,
   DecryptedRingInput,
   DecryptedRingDefaultInput,
   DecryptedOutputContext,
@@ -571,6 +566,14 @@ export {
 } from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
+export {
+  decideAddressCeiling,
+  spentInputOf,
+  type CeilingDecision,
+  type MergeCapacity,
+  type MergeGroup,
+  type SpentInput,
+} from "../operations/workflow/address-ceiling.js";
 export type { RingListSalt } from "../proof/policy-proof.js";
 export type { RingPublicSpend } from "../operations/payments/transfer.js";
 export type { RingMergeSealer } from "../crypto/audit/merge-disclosure.js";

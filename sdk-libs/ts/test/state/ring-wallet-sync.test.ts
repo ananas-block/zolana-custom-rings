@@ -1,3 +1,4 @@
+import type { Address } from "@heliuslabs/zolana/interface";
 import { address, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -13,8 +14,7 @@ import {
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { bytesKey, ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { bytesKey, ZERO_NULLIFIER_PK, encodeBase58 } from "@heliuslabs/zolana/internal";
 import {
   AssetRegistry,
   Wallet,
@@ -26,10 +26,9 @@ import {
   encodeRingOutput,
   RingScheme,
 } from "../../src/protocol/transaction/output.js";
-import { sealDeliveredBody } from "../../src/protocol/historical/v3/delivered-body.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
-import { isZeroKeyNote, noteState } from "../../src/state/exposed-notes.js";
+import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
+import { noteState } from "../../src/state/exposed-notes.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { openRingNotes, syncRingWallet, type RingSyncClient } from "../../src/state/ring-sync.js";
 
@@ -46,10 +45,13 @@ function blinding(): Bytes32 {
   return bytes as Bytes32;
 }
 
-function note(owner: ShieldedKeypair): Readonly<{ utxo: Utxo; hash: Bytes32 }> {
+function note(
+  owner: ShieldedKeypair,
+  asset: Address = SOL_MINT,
+): Readonly<{ utxo: Utxo; hash: Bytes32 }> {
   const utxo = new Utxo({
     owner: owner.shieldedAddress().signingPublicKey,
-    asset: SOL_MINT,
+    asset,
     amount: AMOUNT,
     blinding: blinding(),
     data: new Data(),
@@ -83,37 +85,6 @@ function transaction(
   };
 }
 
-/** Scheme 10 under the sender's agreement with the recipient key, the body names no asset. */
-function delivered(
-  recipient: ShieldedKeypair,
-  hash = note(recipient).hash,
-  owner = recipient.shieldedAddress(),
-  keyEscrow = false,
-): IndexedShieldedTransaction {
-  const txKey = ViewingKey.generate();
-  const viewing = recipient.shieldedAddress().viewingPublicKey;
-  const slotSecret = deliveredSlotSecret({
-    agreement: txKey.ecdh(viewing),
-    txViewingKey: txKey.publicKey(),
-    recipientViewingKey: viewing,
-    salt: SALT,
-    outputIndex: 0,
-    firstNullifier: FIRST_NULLIFIER,
-  });
-  const body = sealDeliveredBody(slotSecret, {
-    blinding: blinding(),
-    amount: AMOUNT,
-    ownerKey: owner.signingPublicKey.confidentialViewTag(),
-    nullifierPk: keyEscrow ? undefined : owner.nullifierPublicKey,
-  });
-  return transaction(
-    txKey,
-    viewing.u(),
-    hash,
-    encodeRingOutput(RingScheme.ringConfidentialDelivered, body),
-  );
-}
-
 async function opened(
   keys: Parameters<typeof openRingNotes>[0]["keys"],
   transactions: readonly IndexedShieldedTransaction[],
@@ -124,7 +95,7 @@ async function opened(
 describe("openRingNotes", () => {
   it("opens a delivered note under ring keys by trial over the registered mints", async () => {
     const recipient = ShieldedKeypair.generate();
-    const tx = delivered(recipient);
+    const tx = ringBody(recipient);
     const notes = await opened(LocalRingKeys.fromKeypair(recipient), [tx]);
     expect(notes.utxos.map((entry) => [entry.utxo.amount, entry.utxo.asset])).toEqual([
       [AMOUNT, SOL_MINT],
@@ -137,63 +108,6 @@ describe("openRingNotes", () => {
     expect(plain.utxos).toEqual([]);
     const stranger = await opened(LocalRingKeys.fromKeypair(ShieldedKeypair.generate()), [tx]);
     expect(stranger).toEqual({ utxos: [], pending: 0 });
-  });
-
-  it.each([false, true])(
-    "opens a note under the zero key as exposed, key named in the body: %s",
-    async (keyEscrow) => {
-      const recipient = ShieldedKeypair.generate();
-      const address = recipient.shieldedAddress();
-      const zeroKeyed = ShieldedAddress.fromPublicKeys(
-        address.signingPublicKey,
-        ZERO_NULLIFIER_PK as Bytes32,
-        address.viewingPublicKey,
-      );
-      const hash = note(recipient).utxo.hash(ZERO_NULLIFIER_PK as Bytes32, DEFAULT_TREE_ID);
-      const keys = LocalRingKeys.fromKeypair(recipient);
-      const derive = vi.spyOn(keys, "derive");
-      const notes = await opened(keys, [delivered(recipient, hash, zeroKeyed, keyEscrow)]);
-      const [held] = notes.utxos;
-      if (held === undefined) throw new Error("no note");
-      expect(isZeroKeyNote(held)).toBe(true);
-      expect(noteState(held)).toBe("exposedIfSpent");
-      expect(derive).not.toHaveBeenCalled();
-    },
-  );
-
-  it("refuses a body naming another owner though its commitment rebuilds", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const other = ShieldedKeypair.generate().shieldedAddress();
-    const keys = LocalRingKeys.fromKeypair(recipient);
-    const named = await opened(keys, [delivered(recipient, note(recipient).hash, other)]);
-    expect(named).toEqual({ utxos: [], pending: 0 });
-    const address = recipient.shieldedAddress();
-    const owner = {
-      signingPublicKey: address.signingPublicKey,
-      nullifierPublicKey: other.nullifierPublicKey,
-      viewingPublicKey: address.viewingPublicKey,
-    };
-    const nullifier = await opened(keys, [
-      delivered(recipient, note(recipient).hash, owner as unknown as typeof other),
-    ]);
-    expect(nullifier).toEqual({ utxos: [], pending: 0 });
-  });
-
-  it("opens a key escrow body of the owner's key alone", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
-      delivered(recipient, note(recipient).hash, recipient.shieldedAddress(), true),
-    ]);
-    expect(notes.utxos.map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
-  });
-
-  it("keeps no note and counts it pending when no registered mint rebuilds its commitment", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const unregistered = new Uint8Array(32).fill(1) as Bytes32;
-    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
-      delivered(recipient, unregistered),
-    ]);
-    expect(notes).toEqual({ utxos: [], pending: 1 });
   });
 });
 
@@ -220,7 +134,11 @@ function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
 }
 
 /** Scheme 13 under the sender's agreement with the recipient key. */
-function ringBody(recipient: ShieldedKeypair, hash: Bytes32): IndexedShieldedTransaction {
+function ringBody(
+  recipient: ShieldedKeypair,
+  hash: Bytes32 = note(recipient).hash,
+  mint: Address = SOL_MINT,
+): IndexedShieldedTransaction {
   const txKey = ViewingKey.generate();
   const viewing = recipient.shieldedAddress().viewingPublicKey;
   const slotSecret = deliveredSlotSecret({
@@ -234,9 +152,14 @@ function ringBody(recipient: ShieldedKeypair, hash: Bytes32): IndexedShieldedTra
   const body = sealRecipientBody(slotSecret, {
     blinding: blinding(),
     amount: AMOUNT,
-    mint: SOL_MINT,
+    mint,
   });
-  return transaction(txKey, viewing.u(), hash, encodeRingBodyOutput(body, new Uint8Array()));
+  return transaction(
+    txKey,
+    slotTag(viewing.u()),
+    hash,
+    encodeRingBodyOutput(body, new Uint8Array()),
+  );
 }
 
 describe("scheme 13 bodies", () => {
@@ -283,7 +206,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     const retry = { numRetries: 2, delayMs: 1n, maxDelayMs: 2n };
     const context = { signal: new AbortController().signal };
     const input = {
@@ -329,7 +252,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     await syncWallet({ wallet, keys, client });
     const tag = bytesKey(keys.viewingPublicKeys()[0]!.u());
     expect(wallet._syncCheckpoint("transactions", tag)).toBe(20n);
@@ -345,7 +268,7 @@ describe("syncRingWallet", () => {
   it("reads delivered history after ring derivation keys become available", async () => {
     const recipient = ShieldedKeypair.generate();
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     await syncRingWallet({ wallet, keys: LocalShieldedKeys.fromKeypair(recipient), client });
     expect(wallet.utxos()).toEqual([]);
 
@@ -363,7 +286,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     const failure = new Error("unavailable");
     client.getShieldedTransactionsByNullifiers.mockRejectedValueOnce(failure);
     const before = wallet._state();
@@ -382,7 +305,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     vi.spyOn(keys, "derive").mockResolvedValue([]);
     const before = wallet._state();
 
@@ -399,7 +322,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const client = syncClient([delivered(recipient)]);
+    const client = syncClient([ringBody(recipient)]);
     const failure = new Error("holder offline");
     vi.spyOn(keys, "ringDeliverySecrets").mockRejectedValue(failure);
     const before = wallet._state();
@@ -415,7 +338,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     vi.spyOn(keys, "ringDeliverySecrets").mockResolvedValue([]);
-    await expect(opened(keys, [delivered(recipient)])).rejects.toMatchObject({
+    await expect(opened(keys, [ringBody(recipient)])).rejects.toMatchObject({
       code: "WALLET_KEYS_BATCH_MISMATCH",
     });
   });
@@ -423,7 +346,7 @@ describe("syncRingWallet", () => {
   it("skips a body off its length and keeps the note beside it", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
-    const good = delivered(recipient);
+    const good = ringBody(recipient);
     const [slot] = good.outputSlots;
     if (slot === undefined) throw new Error("no slot");
     const short = {
@@ -432,7 +355,7 @@ describe("syncRingWallet", () => {
       outputSlots: [
         {
           ...slot,
-          payload: encodeRingOutput(RingScheme.ringConfidentialDelivered, new Uint8Array(5)),
+          payload: encodeRingOutput(RingScheme.ringBody, new Uint8Array(5)),
         },
       ],
     };
@@ -444,7 +367,7 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const asked = vi.spyOn(keys, "ringDeliverySecrets");
-    const good = delivered(recipient);
+    const good = ringBody(recipient);
     const smallOrder = X25519PublicKey.fromBytes(
       new Uint8Array([4, ...new Uint8Array(32)]) as Bytes33,
     );
@@ -460,8 +383,10 @@ describe("syncRingWallet", () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const wallet = new Wallet({ identity: recipient.shieldedAddress() });
-    const unknownHash = new Uint8Array(32).fill(1) as Bytes32;
-    const client = syncClient([delivered(recipient, unknownHash)]);
+    const unknownMint = encodeBase58(new Uint8Array(32).fill(1));
+    const client = syncClient([
+      ringBody(recipient, note(recipient, unknownMint).hash, unknownMint),
+    ]);
     const before = wallet._state();
 
     await expect(syncRingWallet({ wallet, keys, client })).rejects.toMatchObject({

@@ -1,3 +1,4 @@
+import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";
 import { getBase58Decoder, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,7 +15,6 @@ import { SOL_MINT, Utxo, type IndexedShieldedTransaction } from "@heliuslabs/zol
 
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { encodeRingOutput, RingScheme } from "../../src/protocol/transaction/output.js";
 import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
@@ -312,7 +312,7 @@ describe("full scan recovery", () => {
         {
           viewTag: randomTag(),
           outputContext: { hash, tree: TREE, treeId: TREE_ID, leafIndex: 0n },
-          payload: encodeRingOutput(RingScheme.ringRecipientBody, body),
+          payload: encodeRingBodyOutput(body, new Uint8Array()),
         },
       ],
       messages: [],

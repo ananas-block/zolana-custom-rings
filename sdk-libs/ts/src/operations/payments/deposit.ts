@@ -455,6 +455,7 @@ export class PreparedRingDeposit {
             config,
             owner: this.#ownerPkHash,
             nullifierPk: this.#nullifierPk,
+            viewingU: this.#recipient.viewingPublicKey.u(),
             asset: this.#asset.asset,
             listSalts:
               this.#listSalt === undefined

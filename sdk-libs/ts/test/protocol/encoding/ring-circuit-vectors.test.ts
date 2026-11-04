@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import bodies from "../../../../../test-vectors/audit/anonymous_bodies.json" with { type: "json" };
 import signerSet from "../../../../../test-vectors/audit/signer_set.json" with { type: "json" };
-import statements from "../../../../../test-vectors/audit/transfer_statement_v3.json" with { type: "json" };
 import debits from "../../../../../test-vectors/policy/debit.json" with { type: "json" };
 import zeroNullifier from "../../../../../test-vectors/registry/zero_nullifier.json" with { type: "json" };
 import {
@@ -12,7 +11,7 @@ import {
   bytesToBigInt,
   encodeBase58,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
 import {
   ViewingKey,
   X25519Keypair,
@@ -42,16 +41,7 @@ import {
   sealSenderBundle,
 } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { ownerDebits } from "../../../src/protocol/membership/owner-debits.js";
-import {
-  ciphertextDigest,
-  recipientTagChain,
-  signerBinding,
-  transferStatementElements,
-  transferStatementHash,
-  type TransferFamily,
-  type TransferStatement,
-} from "../../../src/protocol/historical/v3/statement.js";
-import type { RingOutput } from "../../../src/protocol/historical/v3/frame.js";
+import { ciphertextDigest, signerBinding } from "../../../src/protocol/proof/statement.js";
 import { LocalRingKeys, type RingTagProbe } from "../../../src/state/ring-keys.js";
 
 function bytes<T extends Uint8Array>(value: string, length: number): T {
@@ -67,185 +57,6 @@ function field(value: string): Bytes32 {
 function hex(value: Uint8Array): string {
   return Buffer.from(value).toString("hex");
 }
-
-describe("transfer_statement_v3.json", () => {
-  interface StatementVector {
-    readonly name: string;
-    readonly family: string;
-    readonly in_proof: boolean;
-    readonly delegate: boolean;
-    readonly exempt: boolean;
-    readonly approval_required: boolean;
-    readonly first_nullifier: string;
-    readonly ring_id: string;
-    readonly tx_viewing_u: string;
-    readonly auditor_pubkey: string;
-    readonly eph_u: string;
-    readonly envelope: string;
-    readonly salt: string;
-    readonly layout: number;
-    readonly output_capacity: number;
-    readonly output_count: number;
-    readonly outputs: readonly Readonly<{
-      kind: string;
-      hash: string;
-      u?: string;
-      body?: string;
-      record?: string;
-      recipient_body?: string | null;
-      tag?: string;
-    }>[];
-    readonly input_count: number;
-    readonly sender_bundle?: string | null;
-    readonly sender_bundle_tag?: string | null;
-    readonly replies?: string | null;
-    readonly private_tx_hash: string;
-    readonly sender?: string;
-    readonly recipients?: readonly string[];
-    readonly party_identities?: readonly string[];
-    readonly signer_slots: number;
-    readonly signer_count: number;
-    readonly signer_chain: string;
-    readonly signers?: readonly string[];
-    readonly policy_hash: string;
-    readonly own_root: string;
-    readonly curator_root: string;
-    readonly public_assets: readonly string[];
-    readonly public_amounts: readonly string[];
-    readonly public_gross: readonly string[];
-    readonly withdrawal_hash: string;
-    readonly elements: readonly string[];
-    readonly public_input_hash: string;
-  }
-  type StatementCase = (typeof statements.cases)[number];
-  const statementCases = statements.cases as unknown as readonly StatementVector[];
-
-  const raw = (value: string): Uint8Array => Uint8Array.from(Buffer.from(value, "hex"));
-
-  function statementOf(vector: StatementVector): TransferStatement {
-    const outputs = vector.outputs.map((output): RingOutput => {
-      const hash = field(output.hash);
-      if (output.kind === "exit")
-        return { kind: "exit", hash, ownerTag: ZERO_32, payload: new Uint8Array() };
-      if (output.kind === "delivered")
-        return { kind: "delivered", hash, u: field(output.u ?? ""), body: raw(output.body ?? "") };
-      return output.recipient_body === null || output.recipient_body === undefined
-        ? { kind: "change", hash, tag: ZERO_32 }
-        : {
-            kind: "anonymous",
-            hash,
-            tag: field(output.tag ?? ""),
-            body: raw(output.recipient_body),
-          };
-    });
-    const family: TransferFamily =
-      vector.family === "anonymous"
-        ? {
-            kind: "anonymous",
-            partyIdentities: (vector.party_identities ?? []).map(field) as unknown as [
-              Bytes32,
-              Bytes32,
-              Bytes32,
-            ],
-            senderBundle: raw(vector.sender_bundle ?? ""),
-            senderBundleTag: field(vector.sender_bundle_tag ?? ""),
-            ...(vector.replies === null || vector.replies === undefined || vector.replies === ""
-              ? {}
-              : { replies: raw(vector.replies) }),
-          }
-        : {
-            kind: "confidential",
-            inProof: vector.in_proof,
-            delegate: vector.delegate,
-            sender: field(vector.sender ?? ""),
-            recipients: (vector.recipients ?? []).map(field),
-          };
-    return {
-      head: {
-        firstNullifier: field(vector.first_nullifier),
-        ringId: field(vector.ring_id),
-        txViewingU: field(vector.tx_viewing_u),
-        auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
-        ephU: field(vector.eph_u),
-        envelope: raw(vector.envelope),
-        salt: bytes<Bytes16>(vector.salt, 16),
-        layout: {
-          keyEscrow: (vector.layout & 2) !== 0,
-          fullOpenings: (vector.layout & 8) !== 0,
-        },
-      },
-      family,
-      exempt: vector.exempt,
-      approvalRequired: vector.approval_required,
-      capacity: vector.output_capacity,
-      outputs,
-      outputCiphertexts: vector.outputs.map((output) =>
-        raw(output.kind === "delivered" ? (output.body ?? "") : (output.record ?? "")),
-      ),
-      // The vector's signers are owner identities, the chain rebuilds from them as they stand.
-      signers: signerBinding((vector.signers ?? []).map(field), vector.signer_slots),
-      inputCount: vector.input_count,
-      privateTxHash: field(vector.private_tx_hash),
-      roots: {
-        policyHash: field(vector.policy_hash),
-        ownRoot: field(vector.own_root),
-        curatorRoot: field(vector.curator_root),
-      },
-      publicAssets: vector.public_assets.map(field),
-      publicAmounts: vector.public_amounts.map(field),
-      publicGross: vector.public_gross.map(field),
-      withdrawalHash: field(vector.withdrawal_hash),
-    };
-  }
-
-  it.each(statementCases.map((vector) => [vector.name, vector] as const))(
-    "reaches the public input hash of %s from its preimages",
-    (_, vector) => {
-      expect(vector.elements).toHaveLength(
-        vector.family === "anonymous" ? 45 : 41 + vector.output_capacity,
-      );
-      const statement = statementOf(vector);
-      expect(hex(statement.signers.chain)).toBe(vector.signer_chain);
-      expect(transferStatementElements(statement).map(hex)).toEqual(vector.elements);
-      expect(hex(transferStatementHash(statement))).toBe(vector.public_input_hash);
-    },
-  );
-
-  it("reads a tag on every recipient and dummy slot and a zero cell on change and exit through the real chain", () => {
-    for (const vector of statementCases.filter((row) => row.family === "anonymous")) {
-      const statement = statementOf(vector);
-      const elements = transferStatementElements(statement);
-      const cells = vector.outputs.map((output) => output.tag ?? "00".repeat(32));
-      expect(
-        statement.outputs.map((output) => hex(output.kind === "anonymous" ? output.tag : ZERO_32)),
-        vector.name,
-      ).toEqual(cells);
-      expect(hex(elements[18] ?? ZERO_32), vector.name).toBe(
-        hex(
-          recipientTagChain(
-            statement.outputs,
-            vector.output_capacity,
-            field(vector.sender_bundle_tag ?? ""),
-          ),
-        ),
-      );
-    }
-  });
-
-  it("binds chain zero at a signer count of zero on every rail and one chain per run", () => {
-    const signerRow = (vector: StatementCase) =>
-      vector.family === "anonymous" ? [27, 28] : [24, 25];
-    for (const vector of statements.cases) {
-      const [count, chain] = signerRow(vector).map((index) => vector.elements[index] ?? "");
-      expect(BigInt(`0x${count}`), vector.name).toBe(BigInt(vector.signer_count));
-      if (vector.signer_count === 0) expect(chain, vector.name).toBe(hex(ZERO_32));
-      else expect(chain, vector.name).not.toBe(hex(ZERO_32));
-    }
-    const coOwned = statements.cases.find((vector) => vector.name === "commitment_co_owner");
-    const oneOwner = signerSet.cases.find((vector) => vector.name === "one owner");
-    expect(coOwned?.elements[28]).toBe(oneOwner?.signer_chain);
-  });
-});
 
 describe("signer_set.json", () => {
   it.each(signerSet.cases.map((vector) => [vector.name, vector] as const))(
@@ -290,8 +101,12 @@ describe("anonymous_bodies.json", () => {
     const recipient = holderOf(bodies.recipient_viewing_sk);
     const [recipientMatches] = await recipient.ringTagMatches([
       frame(recipient, [
-        { kind: "recipient", outputIndex: bodies.body_index, tag: field(bodies.body_tag) },
-        { kind: "recipient", outputIndex: bodies.body_index, tag: field(bodies.dummy_tag) },
+        { kind: "recipient", outputIndex: bodies.body_index, tag: slotTag(field(bodies.body_tag)) },
+        {
+          kind: "recipient",
+          outputIndex: bodies.body_index,
+          tag: slotTag(field(bodies.dummy_tag)),
+        },
       ]),
     ]);
     expect(recipientMatches?.map((secret) => secret && hex(secret))).toEqual([
@@ -377,7 +192,7 @@ describe("anonymous_bodies.json", () => {
     txViewingKey.destroy();
   });
 
-  it("seals and opens the scheme 11 body", () => {
+  it("seals and opens the scheme 13 body", () => {
     const secret = field(bodies.body_slot_secret);
     expect(hex(sealRecipientBody(secret, body))).toBe(bodies.body);
     expect(openRecipientBody(secret, bytes(bodies.body, 72))).toEqual(body);

@@ -103,23 +103,7 @@ export type OutputOpening =
   | Readonly<{ kind: "ring"; utxo: AuditedUtxo; ownerTag: RingOwnerTag }>
   /** A default-ring UTXO, its owner the published owner tag. */
   | Readonly<{ kind: "exit"; utxo: AuditedUtxo }>
-  | Readonly<{ kind: "dummy" }>
-  /** A key escrow slot before its owner's record is read, its proof fixes the fields and no hash rebuilds. */
-  | (Readonly<{ kind: "escrowPending" }> & EscrowPendingOutput);
-
-/** Rust `EscrowPendingOutput`. */
-export interface EscrowPendingOutput {
-  readonly ownerKey: Bytes32;
-  readonly amount: bigint;
-  readonly blinding: Bytes32;
-  readonly slot: EscrowPendingSlot;
-}
-
-/** Rust `EscrowPendingSlot`. */
-export type EscrowPendingSlot =
-  /** A delivered body omits the asset, only the nullifier key finds it. */
-  | Readonly<{ kind: "ring"; recipientU: Bytes32 }>
-  | Readonly<{ kind: "exit"; asset: Bytes32; mint?: Address }>;
+  | Readonly<{ kind: "dummy" }>;
 
 /** Rust `AuditedOutput`, one published slot whose rebuilt commitment is the published one. */
 export interface AuditedRingOutput {
@@ -129,15 +113,7 @@ export interface AuditedRingOutput {
 }
 
 /** Rust `OutputPayloadErrorKind`, why a published slot did not open. */
-export type OutputPayloadErrorKind =
-  | "frame"
-  | "disclosure"
-  | "recipientKey"
-  | "commitment"
-  /** No registered asset rebuilds the commitment. */
-  | "unknownAsset"
-  /** A key escrow slot before its owner's record is read. */
-  | "escrowPending";
+export type OutputPayloadErrorKind = "frame" | "disclosure" | "recipientKey" | "commitment";
 
 export interface OutputPayloadError {
   readonly slotIndex: number;
@@ -191,16 +167,6 @@ export interface AuditedInput {
   readonly hash?: Bytes32;
   readonly opening: InputOpening;
 }
-
-/** @internal One audited frame, its input opening per frame format. */
-export type AuditedTransferOf<Input> = Omit<AuditedRingTransaction, "inputs"> &
-  Readonly<{
-    inputs: readonly Readonly<{
-      nullifier: Bytes32;
-      hash?: Bytes32;
-      opening: Input;
-    }>[];
-  }>;
 
 /** Rust `AuditedTransaction`. */
 export interface AuditedRingTransaction {
@@ -523,7 +489,7 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
 /** Every opened UTXO by its hash, Rust `AuditedTransaction::utxos`. */
 export function auditedUtxos(transaction: AuditedRingTransaction): readonly CreatedRingUtxo[] {
   return transaction.outputs.flatMap((output) =>
-    output.opening.kind === "dummy" || output.opening.kind === "escrowPending"
+    output.opening.kind === "dummy"
       ? []
       : [
           Object.freeze({
@@ -569,7 +535,6 @@ export function knownUtxoOwnerHash(utxo: Pick<KnownUtxo, "ownerKey" | "owner">):
 export function hasUnknownAssets(transaction: AuditedRingTransaction): boolean {
   return (
     auditedUtxos(transaction).some(({ utxo }) => utxo.mint === undefined) ||
-    transaction.payloadErrors.some(({ kind }) => kind === "unknownAsset") ||
     transaction.inputs.some(
       (input) => input.opening.kind === "opened" && input.opening.mint === undefined,
     )
@@ -632,7 +597,7 @@ export async function auditRing(
   });
 }
 
-/** An input a later row opens resolves on the last pass, historical rows stay out. */
+/** An input a later row opens resolves on the last pass. */
 export function auditConfirmedRingHistory(
   input: Readonly<{
     auditor: X25519Keypair;
@@ -946,19 +911,7 @@ function senderOfKnown(
       });
 }
 
-/** @internal */
-export interface SpentInputs<Input> {
-  /** Absent outside the anonymous rail. */
-  readonly sender?: AuditedSender;
-  readonly inputs: readonly Readonly<{
-    nullifier: Bytes32;
-    hash?: Bytes32;
-    opening: Input;
-  }>[];
-}
-
-/** @internal Shared with the historical reader. */
-export function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
+function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
   return Object.freeze({
     kind: "opened",
     asset: utxo.asset,
@@ -969,24 +922,7 @@ export function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
   });
 }
 
-/** @internal Every key with evidence keeps dummies last as SPP does, opening k belongs to nullifier k. */
-export function spentInputs<Input>(
-  nullifiers: readonly Bytes32[],
-  openings: readonly Input[],
-): readonly Readonly<{ nullifier: Bytes32; opening: Input }>[] {
-  return Object.freeze(
-    openings.map((opening, index) => {
-      const nullifier = nullifiers[index];
-      if (nullifier === undefined)
-        throw new RingError("RING_AUDIT_MESSAGE", {
-          details: { reason: "layout" },
-        });
-      return Object.freeze({ nullifier, opening });
-    }),
-  );
-}
-
-export const DUMMY_INPUT: InputOpening = Object.freeze({ kind: "dummy" });
+const DUMMY_INPUT: InputOpening = Object.freeze({ kind: "dummy" });
 const DUMMY: OutputOpening = Object.freeze({ kind: "dummy" });
 const UNRESOLVED_REAL: InputOpening = Object.freeze({ kind: "unresolvedReal" });
 const EMPTY = new Uint8Array();

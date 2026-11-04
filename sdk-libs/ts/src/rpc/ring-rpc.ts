@@ -138,7 +138,6 @@ export const RING_AUDITED_UTXOS_LIMIT = 100;
 /** Rust `AUDIT_CURSOR_LIMIT`. */
 export const RING_READ_CURSOR_LIMIT = 256;
 
-
 /** Rust `PagedRead`, the paged read a reader's signature authorizes. */
 export type RingPagedRead = "getDecryptedTransactions" | "getWalletActivity" | "getAuditedMerges";
 
@@ -913,8 +912,6 @@ export type {
   InputRing,
   KnownUtxo,
   OutputOpening,
-  EscrowPendingOutput,
-  EscrowPendingSlot,
   OutputPayloadError,
   OutputPayloadErrorKind,
 } from "../operations/audit/audit.js";
@@ -1043,22 +1040,9 @@ export interface AuditedRingMerge {
   readonly outputCommitment: Bytes32;
   readonly ownerKey: Bytes32;
   readonly asset: Bytes32;
-  /** Absent while the asset registry does not know the asset. */
-  readonly mint?: Address;
+  readonly mint: Address;
   readonly amount: bigint;
-  /** The real inputs of a tag 47 merge in slot order. */
-  readonly inputCommitments: readonly Bytes32[];
-  /** Nullifiers of a tag 57 merge, never padding. */
   readonly realNullifiers: readonly Bytes32[];
-}
-
-/** Mirrors Rust `UnresolvedMergeRecord`, a confirmed merge with an input the auditor cannot name. */
-export interface UnresolvedRingMerge {
-  readonly slot: bigint;
-  readonly signature: Signature;
-  readonly eventIndex: number;
-  readonly outputCommitment: Bytes32;
-  readonly inputCommitments: readonly Bytes32[];
 }
 
 /** Mirrors Rust `GetAuditedMergesResponse`. */
@@ -1066,7 +1050,6 @@ export interface AuditedMergesPage {
   readonly slot: bigint;
   readonly blockTime: bigint;
   readonly opened: readonly AuditedRingMerge[];
-  readonly unresolved: readonly UnresolvedRingMerge[];
   readonly cursor?: Uint8Array;
 }
 
@@ -1602,19 +1585,13 @@ export class RingRpc {
     );
     const cursor = readResponseCursor(value["cursor"], checked);
     const opened = list(value["opened"], "result.value.opened");
-    const unresolved = list(value["unresolved"], "result.value.unresolved");
-    if (opened.length + unresolved.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT))
+    if (opened.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT))
       throw invalid("result.value");
     return Object.freeze({
       slot: integer(wireContext["slot"], "result.context.slot"),
       blockTime: signedInteger(wireContext["blockTime"], "result.context.blockTime"),
       opened: Object.freeze(
         opened.map((entry, index) => decodeAuditedMerge(entry, `result.value.opened[${index}]`)),
-      ),
-      unresolved: Object.freeze(
-        unresolved.map((entry, index) =>
-          decodeUnresolvedMerge(entry, `result.value.unresolved[${index}]`),
-        ),
       ),
       ...(cursor === undefined ? {} : { cursor }),
     });
@@ -2199,42 +2176,24 @@ function decodeInput(value: Record<string, unknown>, path: string): DecryptedRin
 function decodeAuditedMerge(value: unknown, path: string): AuditedRingMerge {
   const wire = exactRecord(value, AUDITED_MERGE_FIELDS, AUDITED_MERGE_REQUIRED_FIELDS, path);
   const asset = canonicalHash(wire["asset"], `${path}.asset`);
-  const inputCommitments = mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`);
   const realNullifiers = absent(wire["realNullifiers"])
     ? []
     : mergeCommitments(wire["realNullifiers"], `${path}.realNullifiers`);
-  // A tag 47 merge names its inputs, a tag 57 merge its nullifiers.
-  if (inputCommitments.length === 0 && realNullifiers.length === 0)
-    throw invalid(`${path}.inputCommitments`);
   return Object.freeze({
     ...mergeRow(wire, path),
     ownerKey: hash(wire["ownerKey"], `${path}.ownerKey`),
     asset,
-    ...namedMint(wire, asset, path),
+    mint: namedMint(wire, asset, path),
     amount: u64(wire["amount"], `${path}.amount`),
-    inputCommitments,
     realNullifiers,
   });
 }
 
-function decodeUnresolvedMerge(value: unknown, path: string): UnresolvedRingMerge {
-  const wire = exactRecord(value, UNRESOLVED_MERGE_FIELDS, UNRESOLVED_MERGE_FIELDS, path);
-  return Object.freeze({
-    ...mergeRow(wire, path),
-    inputCommitments: mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`),
-  });
-}
-
 /** The commitment binds the asset field alone, a named mint must derive it. */
-function namedMint(
-  wire: Record<string, unknown>,
-  asset: Bytes32,
-  path: string,
-): Readonly<{ mint?: Address }> {
-  if (absent(wire["mint"])) return {};
+function namedMint(wire: Record<string, unknown>, asset: Bytes32, path: string): Address {
   const mint = address(wire["mint"], `${path}.mint`);
   if (!equalBytes(assetField(mint), asset)) throw invalid(`${path}.mint`);
-  return { mint };
+  return mint;
 }
 
 function mergeCommitments(value: unknown, path: string): readonly Bytes32[] {
@@ -2262,8 +2221,6 @@ export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Objec
   "disclosure",
   "recipientKey",
   "commitment",
-  "unknownAsset",
-  "escrowPending",
 ]);
 
 function payloadErrorKind(value: unknown, path: string): OutputPayloadErrorKind {
@@ -2455,21 +2412,18 @@ const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"])
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
-const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "unresolved", "cursor"]);
-const UNRESOLVED_MERGE_FIELDS = new Set([
+const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "cursor"]);
+const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
   "slot",
   "txSignature",
   "eventIndex",
   "outputCommitment",
-  "inputCommitments",
-]);
-const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
-  ...UNRESOLVED_MERGE_FIELDS,
   "ownerKey",
   "asset",
+  "mint",
   "amount",
 ]);
-const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "mint", "realNullifiers"]);
+const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "realNullifiers"]);
 const SIGNED_AUDITOR_FIELDS = new Set([
   "ringProgramId",
   "authority",

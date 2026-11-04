@@ -277,15 +277,11 @@ describe("the v4 ring frame", () => {
     expect(RingTransactData.circuit(exit).kind).toBe("ringAuthorityExit");
   });
 
-  it("names the rail from the tag and refuses a historical tag", () => {
+  it("names the rail from the tag and refuses a retired tag", () => {
     expect(RingInstructionTag.transfer).toBe(55);
     expect(RingInstructionTag.authorityTransfer).toBe(56);
     expect(RingInstructionTag.merge).toBe(57);
     expect(RingInstructionTag.deposit).toBe(58);
-    expect(RingInstructionTag.historicalTransferV3).toBe(45);
-    expect(RingInstructionTag.historicalAuthorityTransferV3).toBe(46);
-    expect(RingInstructionTag.historicalMergeV3).toBe(47);
-    expect(RingInstructionTag.historicalDeposit).toBe(31);
     expect(ringRailOf(55, "anonymous")).toBe("anonymous");
     expect(ringRailOf(56, "anonymous")).toBe("anonymousDelegate");
     expect(ringRailOf(56, "confidential")).toBe("delegate");

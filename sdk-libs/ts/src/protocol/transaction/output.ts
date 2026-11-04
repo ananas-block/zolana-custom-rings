@@ -4,10 +4,6 @@ import { TransactionError } from "@heliuslabs/zolana/transaction";
 /** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
 export const RingScheme = Object.freeze({
   confidential: 3,
-  /** Read-only, frames before statement version 4. */
-  ringConfidentialDelivered: 10,
-  /** Read-only, frames before statement version 4. */
-  ringRecipientBody: 11,
   ringSenderBundle: 12,
   /** `u16le(body_len) ‖ body ‖ reply`, one form on every rail. */
   ringBody: 13,
@@ -86,11 +82,6 @@ export function ringBodyOutput(
   const rest = payload.subarray(2);
   if (length < RING_BODY_MIN_LEN || length > rest.length) return undefined;
   return Object.freeze({ body: rest.subarray(0, length), reply: rest.subarray(length) });
-}
-
-/** The scheme 11 payload of a frame before statement version 4. */
-export function historicalRecipientOutputBody(data: Uint8Array): Uint8Array | undefined {
-  return encryptedOutputBody(data, RingScheme.ringRecipientBody);
 }
 
 export function senderBundleOutputBody(data: Uint8Array): Uint8Array | undefined {

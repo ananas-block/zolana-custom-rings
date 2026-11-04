@@ -1,16 +1,6 @@
 import { ctr } from "@noble/ciphers/aes.js";
 
-import {
-  fieldAdd,
-  fieldSub,
-  isCanonicalField,
-  bigIntToBytes,
-  bytesToBigInt,
-  checkedBytes,
-  concatBytes,
-  copyBytes,
-  u32be,
-} from "@heliuslabs/zolana/internal";
+import { checkedBytes, concatBytes, copyBytes, u32be } from "@heliuslabs/zolana/internal";
 import type { MessageData } from "@heliuslabs/zolana/interface";
 import {
   type Bytes16,
@@ -38,7 +28,6 @@ import { RingKeyError } from "../error.js";
 
 /** Schedule labels, one secret under two labels gives two unrelated keys. */
 export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt1");
-export const DELIVERED_BODY_ENC_INFO = new TextEncoder().encode("CRING/bdy1");
 export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk1");
 export const DEPOSIT_ENC_INFO = new TextEncoder().encode("CRING/dep1");
 export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp1");
@@ -48,8 +37,6 @@ export const MERGE_RECORD_ENC_INFO = new TextEncoder().encode("CRING/mrg2");
 
 /** `"CR_S"`, Rust `DOM_SEP_CR_SHARED`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;
-/** `"CR_MD"`, Go `MergeDisclosureDomain`, a merge pad never repeats another pad. */
-const MERGE_DISCLOSURE_DOMAIN = 0x4352_5f4d44n;
 const STREAM_LABEL_BYTES = 10;
 const U32_MAX = 0xffff_ffff;
 
@@ -167,23 +154,6 @@ export function auditSharedSecret(
   }
 }
 
-/** A fresh ephemeral key per call, a reused one repeats the keystream over another plaintext. */
-export function sealAuditorStream(
-  input: Readonly<{
-    auditorPublicKey: X25519PublicKey;
-    envelope: Uint8Array;
-    records: readonly AuditorRegion[];
-    tails?: readonly AuditorRegion[];
-  }>,
-): AuditorEnvelope {
-  const ephemeral = X25519Keypair.generate();
-  try {
-    return sealRegions(ephemeral, input, (shared) => shared);
-  } finally {
-    ephemeral.destroy();
-  }
-}
-
 /** A resend repeats the transfer's key, the salt keeps its keystream apart. */
 export function sealSaltedAuditorStream(
   input: Readonly<{
@@ -264,8 +234,8 @@ export function saltedAuditorSchedule(
   }
 }
 
-/** The schedule `sealAuditorStream` encrypted under, the caller destroys it. */
-export function auditorSchedule(
+/** The caller destroys the schedule. */
+function auditorSchedule(
   auditor: X25519Keypair,
   ephemeralPublicKey: X25519PublicKey,
 ): AuditSchedule {
@@ -282,7 +252,7 @@ export function auditorSchedule(
   }
 }
 
-/** The auditor's side of `sealAuditorStream`, one plaintext per region. */
+/** One plaintext per region. */
 export function openAuditorRegions(
   auditor: X25519Keypair,
   ephemeralPublicKey: X25519PublicKey,
@@ -369,46 +339,6 @@ export function packDisclosure(plaintext: Uint8Array): readonly Bytes32[] {
   );
 }
 
-/** Rust `unpack_disclosure`, a field with bytes outside its chunk is refused. */
-export function unpackDisclosure(fields: readonly Bytes32[], length: number): Uint8Array {
-  if (fields.length !== Math.ceil(length / DISCLOSURE_CHUNK_BYTES))
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { expected: length, actual: fields.length });
-  const plaintext = new Uint8Array(length);
-  fields.forEach((field, index) => {
-    const chunk = Math.min(length - index * DISCLOSURE_CHUNK_BYTES, DISCLOSURE_CHUNK_BYTES);
-    if (field[0] !== 0 || field.subarray(1 + chunk).some((byte) => byte !== 0))
-      throw new RingKeyError("KEYPAIR_DISCLOSURE_PADDING", { index });
-    plaintext.set(field.subarray(1, 1 + chunk), index * DISCLOSURE_CHUNK_BYTES);
-  });
-  return plaintext;
-}
-
-/** Masks a merge disclosure plaintext already zero padded to whole chunks, Rust `MergeDisclosureEncryption::seal`. */
-export function sealMergeDisclosureFields(
-  key: Bytes32,
-  salt: Bytes16,
-  plaintext: Uint8Array,
-): readonly Bytes32[] {
-  if (plaintext.length % DISCLOSURE_CHUNK_BYTES !== 0)
-    throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "merge" });
-  const chunks = packDisclosure(plaintext);
-  try {
-    return applyDisclosurePad(key, salt, chunks, true, MERGE_DISCLOSURE_DOMAIN);
-  } finally {
-    for (const chunk of chunks) chunk.fill(0);
-  }
-}
-
-/** Unmasks an anonymous merge disclosure, the plaintext zero padded to whole chunks, Rust `open_merge_disclosure`. */
-export function openMergeDisclosureFields(
-  key: Bytes32,
-  salt: Bytes16,
-  fields: readonly Bytes32[],
-): Uint8Array {
-  const chunks = applyDisclosurePad(key, salt, fields, false, MERGE_DISCLOSURE_DOMAIN);
-  return unpackDisclosure(chunks, chunks.length * DISCLOSURE_CHUNK_BYTES);
-}
-
 function checkLabel(label: Uint8Array): void {
   if (label.length !== STREAM_LABEL_BYTES)
     throw new RingKeyError("KEYPAIR_DISCLOSURE_SHAPE", { name: "label" });
@@ -430,43 +360,6 @@ function envelopeSecret(
     return auditSharedSecret(dh, ephemeralPublicKey, auditorPublicKey);
   } finally {
     dh.fill(0);
-  }
-}
-
-/** Masks (`seal`) or unmasks the published values with the keystream at their positions. */
-function applyDisclosurePad(
-  secret: Bytes32,
-  salt: Bytes16,
-  values: readonly Bytes32[],
-  seal: boolean,
-  domain: bigint,
-): readonly Bytes32[] {
-  values.forEach((value, index) => {
-    if (!isCanonicalField(value))
-      throw new RingKeyError("KEYPAIR_DISCLOSURE_FIELD", { name: "field", index });
-  });
-  const packedKey = packBytesBe(checkedBytes<Bytes32>(secret, 32, "disclosure key"));
-  const seed = new Uint8Array(32);
-  try {
-    seed.set(
-      poseidon([
-        bigIntToBytes(domain) as Bytes32,
-        ...packedKey,
-        rightAlign(checkedBytes<Bytes16>(salt, 16, "salt")),
-      ]),
-    );
-    return Object.freeze(
-      values.map((value, index) => {
-        const mask = bytesToBigInt(poseidon([seed, bigIntToBytes(BigInt(index)) as Bytes32]));
-        const masked = seal
-          ? fieldAdd(bytesToBigInt(value), mask)
-          : fieldSub(bytesToBigInt(value), mask);
-        return bigIntToBytes(masked) as Bytes32;
-      }),
-    );
-  } finally {
-    for (const field of packedKey) field.fill(0);
-    seed.fill(0);
   }
 }
 

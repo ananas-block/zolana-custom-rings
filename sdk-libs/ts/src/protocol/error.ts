@@ -73,7 +73,6 @@ export const RING_ERROR_CODES = [
   "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
   "RING_HISTORY_PAGE_INVALID",
   "RING_HISTORY_CURSOR_INVALID",
-  "RING_MERGE_TOO_WIDE",
   "RING_ANONYMOUS_EXIT_LINKS_OWNER",
   "RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED",
   "RING_ANONYMOUS_EXIT_ACCOUNT_HAS_DATA",
@@ -169,6 +168,9 @@ export const RING_ERROR_CODES = [
   "RING_DELEGATE_DEPOSIT_LEG",
   "RING_MERGE_OWNER_MISMATCH",
   "RING_LIST_SALT_MISSING",
+  "RING_RECIPIENT_VIEWING_KEY_STALE",
+  "RING_ADDRESS_CEILING",
+  "RING_FRAME_EVENT_INVALID",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
@@ -284,6 +286,13 @@ export const RingProgramError = Object.freeze({
   invalidTrackingRegistry: 8502,
   trackingRootBelowFloor: 8503,
   saltedSourceOtherTracking: 8504,
+  invalidFrameBuffer: 8520,
+  frameLength: 8521,
+  unauthorizedFrameWriter: 8522,
+  frameDigestMismatch: 8523,
+  frameWriteOutOfRange: 8524,
+  unsupportedBufferedTag: 8525,
+  framePayerNotWriter: 8526,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

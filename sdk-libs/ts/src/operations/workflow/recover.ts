@@ -107,15 +107,12 @@ export async function recoverRingMemberNotes(
   for (const transaction of audited) {
     for (const { nullifier, opening } of transaction.inputs)
       if (opening.kind === "unresolvedReal") unresolvedReal.push(nullifier);
-    for (const error of transaction.payloadErrors) {
-      // Any other unopened slot could hide a source UTXO.
-      if (error.kind !== "unknownAsset")
-        throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", {
-          details: { reason: "unopened", slotIndex: error.slotIndex },
-        });
-      const commitment = transaction.outputCommitments[error.slotIndex];
-      if (commitment !== undefined) found.unknownAssets.push(commitment);
-    }
+    // An unopened slot could hide a source UTXO.
+    const [unopened] = transaction.payloadErrors;
+    if (unopened !== undefined)
+      throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", {
+        details: { reason: "unopened", slotIndex: unopened.slotIndex },
+      });
     for (const output of transaction.outputs) {
       if (output.opening.kind !== "ring") continue;
       const { utxo } = output.opening;
@@ -154,8 +151,7 @@ export async function recoverRingMemberNotes(
     unopened: Object.freeze(
       found.unresolved
         .filter(({ nullifier }) => nullifier === undefined || !spent.has(bytesKey(nullifier)))
-        .map(({ commitment }) => commitment)
-        .concat(found.unknownAssets),
+        .map(({ commitment }) => commitment),
     ),
     unsupportedDeposits: Object.freeze(unsupportedDeposits),
     unknownMints: Object.freeze([...found.unknownMints]),
@@ -196,8 +192,6 @@ class Found {
     readonly nullifier?: Bytes32;
   }[] = [];
   readonly unknownMints = new Set<Address>();
-  /** Commitments of delivered slots no registered asset rebuilds. */
-  readonly unknownAssets: Bytes32[] = [];
   /** Every deposit and merge UTXO of an anonymous ring, its transfer disclosures name them by hash or prefix. */
   readonly created = new KnownUtxoIndex();
   readonly #seen = new Set<string>();
