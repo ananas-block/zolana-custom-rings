@@ -1286,7 +1286,7 @@ function checkPolicySection(typed: RingProofRequest & PolicyProofInputs, sender:
     policyWithdrawalHash(typed.withdrawals.slice(0, typed.withdrawalCount)),
   );
   if (isZero(typed.policyHash)) {
-    // The anonymous rail reads delivery addresses under the own root off a policy too.
+    // A ring with active thresholds binds the own root off a policy too.
     expect(isZero(typed.ownRoot) || typed.exempt || typed.kind === "transferAnonymous").toBe(true);
     return;
   }

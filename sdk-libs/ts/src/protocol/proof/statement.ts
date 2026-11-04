@@ -57,7 +57,7 @@ export type TransferFamily =
   /** The anonymous frame, the head's layout picks the entry disclosure. */
   | Readonly<{
       kind: "anonymous";
-      /** `solana_owner_identity` of the payer, each co-signer and the exit destination, zero when absent. */
+      /** `solana_owner_identity` of the payer, the co-signer and the exit destination, zero when absent. */
       partyIdentities: readonly Bytes32[];
       /** No hidden sender exists, every live owner is a published signer. */
       publicOwners: boolean;

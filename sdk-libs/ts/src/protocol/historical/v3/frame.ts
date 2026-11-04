@@ -1174,8 +1174,7 @@ function shortRead(error: unknown, reason: string): unknown {
     : error;
 }
 
-/** `reason` names the `CustomRingError` the program raises. */
-/** The statement chain refuses a value off the field, the program names it first. */
+/** The statement chain refuses a value off the field. */
 function checkedViewTag(tag: Bytes32): Bytes32 {
   if (!isCanonicalField(tag)) throw invalid("ViewTagNotCanonical");
   return tag;

@@ -97,7 +97,7 @@ const (
 	SenderBundleHeadLen = 80
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a note under it waives only the escrow requirement.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a ring output under it holds its owner to no tracking row.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
@@ -131,7 +131,7 @@ func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) fronten
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
-// ListSalt is Poseidon(CRPS, nullifierSecret), one way, a holder learns the owner's private list position and never the secret.
+// ListSalt is Poseidon(CRPS, nullifierSecret), one way, a holder learns the owner's salted record key and never the secret.
 func ListSalt(api frontend.API, nullifierSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret})
 }

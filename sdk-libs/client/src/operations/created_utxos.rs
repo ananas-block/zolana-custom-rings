@@ -72,7 +72,6 @@ pub struct DepositNote {
 #[derive(Debug, Default)]
 pub struct CreatedNotes {
     pub utxos: Vec<CreatedUtxo>,
-    /// Deposits no escrowed owner names yet.
     pub unowned: Vec<DepositNote>,
 }
 

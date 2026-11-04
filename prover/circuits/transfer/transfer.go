@@ -87,7 +87,7 @@ type Sections struct {
 	// Rows are the distinct live input owners, ascending with zero rows last.
 	Rows []frontend.Variable
 	policy.Tracking
-	// ApprovalMask is the proven approval bits, the program demands their co-signers.
+	// ApprovalMask is the proven approval bits, the program demands their co-signer.
 	ApprovalMask frontend.Variable
 	policy.Policy
 }

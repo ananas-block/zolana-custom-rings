@@ -88,7 +88,6 @@ instruction_tags! {
     /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
     Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
-    // Tags 55 to 58 are reserved for the transfer, merge and deposit renumbering.
 }
 
 /// Fixed for the ring's life.

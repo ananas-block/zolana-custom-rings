@@ -32,7 +32,6 @@ pub struct MemberArgs {
     assets: Vec<Address>,
 }
 
-/// The escrow bit comes only from `key register`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberList(ListId);
 
@@ -380,7 +379,7 @@ mod tests {
         for list in MemberList::ALL {
             assert!(join(list.0.name()).is_ok(), "{}", list.0.name());
         }
-        for list in ["allow", "escrow", "block"] {
+        for list in ["allow", "block"] {
             assert!(join(list).is_err(), "{list}");
         }
     }

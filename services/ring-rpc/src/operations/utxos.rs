@@ -51,7 +51,7 @@ pub(crate) struct AuditStore {
     late_owners: RwLock<BTreeSet<[u8; 32]>>,
     /// Set once the book holds the table's rows.
     loaded: AtomicBool,
-    /// One backfill and escrow refresh at a time.
+    /// One backfill and tracked key refresh at a time.
     pub(crate) backfill: AsyncMutex<HistoryPosition>,
 }
 

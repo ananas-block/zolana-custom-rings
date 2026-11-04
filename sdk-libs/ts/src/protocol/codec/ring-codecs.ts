@@ -93,7 +93,7 @@ export interface StorageRegistry {
 export interface RingPolicy {
   readonly bump: number;
   readonly mode: RingMode;
-  /** `mode === "confidentialEscrow"`, every output nullifier key is escrowed in the registry. */
+  /** True only on the retired mode byte 1, Rust `RingMode` refuses it. */
   readonly keyEscrow: boolean;
   /** `RING_COSIGN_*` bits some `CoSigner` record covers, absent without a record. */
   readonly coSignerClasses?: number;

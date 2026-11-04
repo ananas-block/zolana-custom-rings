@@ -46,7 +46,7 @@ All wire fields use camel case.
 | `getAuditedMerges` | Ring, page, and read authorization | Merge output records and unresolved merges |
 | `getAuditedUtxos` | Ring, 1 to 100 UTXO hashes, and read authorization | `utxos`, in request order, the opening of each hash the service opened, `null` for any other |
 | `getWalletStatus` | Ring, wallet, an optional cursor, and read authorization | `historyThrough`, `enrollment`, `balances`, `notes` and `cursor`. See [Balance status](#balance-status) |
-| `getSpendCoverage` | Ring, authority, timestamp, nonce, and the authority's signature | `historyThrough`, the nullifier counts by state, `unresolvedReal`, `unreadable` and `integrityFaults`. See [Balance status](#balance-status) |
+| `getSpendCoverage` | Ring, authority, timestamp, nonce, and the authority's signature | `positionSlot`, absent inside a paged read, `historyThrough`, the nullifier counts by state, `unresolvedReal`, `unreadable` and `integrityFaults`. See [Balance status](#balance-status) |
 | `setReaderGrant` | Ring, optional wallet, reader, `grant` or `revoke`, timestamp, nonce, and the signature of the wallet or, without one, of the policy authority | The action the service holds for the grant |
 
 `ringDeposits` walks ring history backwards from the newest signature. A deposit publishes its asset and amount, so the method needs no auditor key and no read authorization. Its `limit` counts signatures examined rather than deposits found, so a page can hold no deposits and still have history behind it. The default limit is 50 and the service clamps it to 200.
@@ -210,9 +210,9 @@ Disclosure errors leave unresolved history. An output waits for a missing escrow
 
 `getWalletStatus` lists one wallet's notes as of `historyThrough`, the finalized slot the service verified. Only an unreadable frame holds `historyThrough` back, and an unresolved spend never does. A note created past `historyThrough` stays out, so a spent input and its change never both count. `balances` sums the `unspent` notes over every page. A note with no readable secret reads `unknown` and never counts, and a zero key note of an Ed25519 owner reads `exposedIfSpent` outside the balance. Activity after `historyThrough` can spend a listed note.
 
-`getSpendCoverage` is the one read that names an unresolved spend. Only the ring authority signs it, and a reader grant never reaches it. It lists the unresolved rows, the unreadable frames and each repeated nullifier as an `integrityFaults` row.
+`getSpendCoverage` is the one read that lists unresolved spends by nullifier. Only the ring authority signs it, and a reader grant never reaches it. It lists the unresolved rows, the unreadable frames and each repeated nullifier as an `integrityFaults` row.
 
-`finalized_spent_commitments` records inputs before a merge transition applies. Repeated events do not change the first spend. The projection does not read the separate `spent_commitments` table. Historical frames with incomplete input evidence keep coverage incomplete.
+`finalized_spent_commitments` records inputs before a merge transition applies. Repeated events do not change the first spend. The projection does not read the separate `spent_commitments` table. Historical frames with incomplete input evidence leave their unmatched nullifiers unresolved.
 
 A deployment uses fresh registries, indexer records and RPC operation state. Finality initialization refuses populated relay, reservation, record update or record batch tables. Relay completion, record application and blockhash expiry require finalized state.
 

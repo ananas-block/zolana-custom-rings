@@ -145,7 +145,7 @@ impl<S: TransactionSource> Hub<S> {
         if let Some(step) = relay.stored(&relay_id).await? {
             return Ok(step);
         }
-        // 2. The config names the key its delegate and escrows to the auditor key held here.
+        // 2. The config names the key its delegate and the auditor key held here.
         let config = shared.source.ring_config(ring).await?;
         let config = config
             .filter(|config| config.delegate == Some(delegate))

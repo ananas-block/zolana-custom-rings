@@ -24,7 +24,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// Poseidon(0) is the zero key, never enrolled.
 	api.AssertIsDifferent(secret, 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{secret})
-	// 2. A list tag from another secret would move the owner's private list position.
+	// 2. A list tag from another secret would move the owner's salted record key.
 	listTag := shared.ListTag(api, shared.ListSalt(api, secret))
 	// The envelope seals the same 32 bytes to the auditor under CRING/nfk1, its cipher bounds every ciphertext byte.
 	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)

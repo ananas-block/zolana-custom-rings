@@ -9,8 +9,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// WithdrawalWires names the screened owner, asset and gross amount of a public leg.
-// These payments do not enter private_tx_hash, escrow or net outflow a second time.
+// WithdrawalWires feeds the payment rules alone, net outflow reads the statement's gross.
 type WithdrawalWires struct{ Owner, Asset, Amount frontend.Variable }
 
 func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []Payment {

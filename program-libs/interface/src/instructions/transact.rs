@@ -70,7 +70,7 @@ pub enum RingRail {
 pub enum RailSigner {
     /// The confidential rail's owner signer run.
     Owners,
-    /// The anonymous rail, the payer, the owner run and the co-signers sign.
+    /// The anonymous rail, the payer, the owner run and the co-signer sign.
     Payer,
     Delegate {
         delegate: Address,
