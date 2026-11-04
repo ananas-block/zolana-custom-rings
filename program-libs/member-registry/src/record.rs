@@ -1,14 +1,13 @@
 use custom_ring_interface::{
-    member_registry::{AuthorizedAddress, EscrowKey},
-    QueueEntry, FIELD_MAX,
+    queue_chain, restrictive_write, ApplyRecordsStatement, QueueEntry, FIELD_MAX, QUAD_HEIGHT,
 };
-use spr_hasher::{
-    primitives::{hash_bytes, right_align},
-    Hasher, HasherError, Poseidon,
-};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use zolana_ring_policy::MintPolicy;
 
-use crate::RecordTreeError;
+use crate::{
+    tree::{ApplyProofInputs, IndexedLeaf, WritableLeaf, WriteStep},
+    QuadPath, RecordTreeError,
+};
 
 /// One authenticated leaf, including packed mint settings and its withdrawal threshold.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -17,33 +16,24 @@ pub struct MemberRecord {
     pub next: [u8; 32],
     /// Bit `id - 1` marks list `id`.
     pub lists: u64,
-    /// `EscrowKey::hash` once registered, zero before.
-    pub escrow_key: [u8; 32],
     pub mint_policy: MintPolicy,
-    /// `AuthorizedAddress::hash` once enrolled, zero before.
-    pub address_hash: [u8; 32],
 }
 
-/// The preimages a write proves when it sets an address or a first escrow key and the record then holds both, one nullifier key in both.
+/// One queued write's proof input, mirror `RecordWrite` of
+/// `prover/circuits/registry/apply_records.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AddressEscrowPair {
-    pub address: AuthorizedAddress,
-    pub escrow_ciphertext_hash: [u8; 32],
-}
-
-impl AddressEscrowPair {
-    pub fn new(
-        address: AuthorizedAddress,
-        escrow: &EscrowKey<'_>,
-    ) -> Result<Self, RecordTreeError> {
-        if address.nullifier_pk != *escrow.nullifier_pk {
-            return Err(RecordTreeError::PairNullifierMismatch);
-        }
-        Ok(Self {
-            address,
-            escrow_ciphertext_hash: hash_bytes(escrow.ciphertext)?,
-        })
-    }
+pub struct RecordWriteProofInput {
+    pub entry: QueueEntry,
+    pub exists: bool,
+    /// The old record's fields, an absent member reads its low record's `next` and nothing else.
+    pub old_next: [u8; 32],
+    pub old_lists: u64,
+    pub old_mint_policy: MintPolicy,
+    /// The record's leaf, an absent member's `next_index` leaf after the relink or low leaf when full.
+    pub slot: QuadPath,
+    /// An absent member's low record and its path before the relink, empty for a present member.
+    pub low: MemberRecord,
+    pub low_path: QuadPath,
 }
 
 impl MemberRecord {
@@ -52,73 +42,149 @@ impl MemberRecord {
         member: [0; 32],
         next: FIELD_MAX,
         lists: 0,
-        escrow_key: [0; 32],
         mint_policy: MintPolicy::EMPTY,
-        address_hash: [0; 32],
     };
 
+    /// `Poseidon(member, next, lists, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2)`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         let [limits_0, limits_1, limits_2] = self.mint_policy.limits.fields();
         Poseidon::hashv(&[
             &self.member,
             &self.next,
             &right_align(&self.lists.to_be_bytes()),
-            &self.escrow_key,
             &self.mint_policy.field(),
             &right_align(&self.mint_policy.withdrawal_threshold.to_be_bytes()),
             &limits_0,
             &limits_1,
             &limits_2,
-            &self.address_hash,
         ])
     }
 
-    /// List bits outside the mask keep their value, a registered key is final, a zero address keeps the bound one.
+    /// List bits outside the mask keep their value.
     #[must_use]
     pub fn written(self, entry: &QueueEntry) -> Self {
-        let escrow_key = if self.escrow_key == [0; 32] {
-            entry.escrow_key
-        } else {
-            self.escrow_key
-        };
-        let address_hash = if entry.address_hash == [0; 32] {
-            self.address_hash
-        } else {
-            entry.address_hash
-        };
         Self {
             lists: (self.lists & !entry.mask) | entry.value,
-            escrow_key,
             mint_policy: entry.mint_policy.unwrap_or(self.mint_policy),
-            address_hash,
             ..self
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lists == 0
-            && self.escrow_key == [0; 32]
-            && self.mint_policy == MintPolicy::EMPTY
-            && self.address_hash == [0; 32]
-    }
-
-    /// `address` is the preimage of the leaf's address hash, absent exactly while the hash is zero.
-    pub fn check_address(
-        &self,
-        address: Option<&AuthorizedAddress>,
-    ) -> Result<(), RecordTreeError> {
-        let expected = match address {
-            Some(address) => address.hash(&self.member)?,
-            None => [0; 32],
-        };
-        if expected != self.address_hash {
-            return Err(RecordTreeError::AddressMismatch);
-        }
-        Ok(())
+        self.lists == 0 && self.mint_policy == MintPolicy::EMPTY
     }
 
     pub fn brackets(&self, member: &[u8; 32]) -> bool {
         self.member < *member && *member < self.next
+    }
+}
+
+impl IndexedLeaf for MemberRecord {
+    const SENTINEL: Self = Self::SENTINEL;
+
+    fn member(&self) -> &[u8; 32] {
+        &self.member
+    }
+
+    fn next(&self) -> &[u8; 32] {
+        &self.next
+    }
+
+    fn relinked(self, next: [u8; 32]) -> Self {
+        Self { next, ..self }
+    }
+
+    fn leaf_hash(&self) -> Result<[u8; 32], HasherError> {
+        self.hash()
+    }
+
+    fn is_blank(&self) -> bool {
+        self.is_empty()
+    }
+
+    fn blank(member: [u8; 32], next: [u8; 32]) -> Self {
+        Self {
+            member,
+            next,
+            lists: 0,
+            mint_policy: MintPolicy::EMPTY,
+        }
+    }
+}
+
+impl WritableLeaf<QUAD_HEIGHT> for MemberRecord {
+    type Entry = QueueEntry;
+    type WriteProof = RecordWriteProofInput;
+
+    fn entry_member(entry: &QueueEntry) -> &[u8; 32] {
+        &entry.member
+    }
+
+    fn check_entry(entry: &QueueEntry) -> Result<(), RecordTreeError> {
+        check_member(&entry.member)?;
+        if entry.value & !entry.mask != 0 {
+            return Err(RecordTreeError::ValueOutsideMask);
+        }
+        Ok(())
+    }
+
+    fn chained(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
+        queue_chain(previous, entry)
+    }
+
+    fn after(self, entry: &QueueEntry) -> Result<Self, RecordTreeError> {
+        Ok(self.written(entry))
+    }
+
+    fn write_proof(entry: QueueEntry, step: WriteStep<Self, QUAD_HEIGHT>) -> RecordWriteProofInput {
+        match step {
+            WriteStep::Present { old, slot } => RecordWriteProofInput {
+                entry,
+                exists: true,
+                old_next: old.next,
+                old_lists: old.lists,
+                old_mint_policy: old.mint_policy,
+                slot,
+                low: Self::default(),
+                low_path: QuadPath::default(),
+            },
+            WriteStep::Absent {
+                low,
+                low_path,
+                slot,
+            } => RecordWriteProofInput {
+                entry,
+                exists: false,
+                old_next: low.next,
+                old_lists: 0,
+                old_mint_policy: MintPolicy::EMPTY,
+                slot,
+                low,
+                low_path,
+            },
+        }
+    }
+}
+
+impl ApplyProofInputs<RecordWriteProofInput> {
+    pub fn statement(&self) -> Result<ApplyRecordsStatement, RecordTreeError> {
+        let index = |value: u64| u32::try_from(value).map_err(|_| RecordTreeError::IndexOutOfRange);
+        Ok(ApplyRecordsStatement {
+            old_root: self.old_root,
+            new_root: self.new_root,
+            old_next_index: index(self.old_next_index)?,
+            new_next_index: index(self.new_next_index)?,
+            chain_start: self.chain_start,
+            chain_end: self.chain_end,
+            count: self.writes.len() as u64,
+            restrictive: self.writes.iter().any(|write| {
+                restrictive_write(
+                    write.entry.mask,
+                    write.entry.value,
+                    write.entry.mint_policy.is_some(),
+                )
+            }),
+        })
     }
 }
 
