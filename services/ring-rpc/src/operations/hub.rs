@@ -246,6 +246,15 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
             false => Err(RelayError::RingNotServed.into()),
         }
     }
+
+    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
+        self.0
+            .source
+            .tracking_root(ring)
+            .await?
+            .map(|root| root.registry)
+            .ok_or_else(|| RelayError::RingNotServed.into())
+    }
 }
 
 impl<S: TransactionSource> Shared<S> {

@@ -41,6 +41,10 @@ impl ServedRings for OneRing {
             false => Err(RelayError::RingNotServed.into()),
         }
     }
+
+    async fn tracking_registry(&self, _ring: Address) -> Result<Address, RingRpcError> {
+        Ok(TRACKING_REGISTRY)
+    }
 }
 
 struct Fixture {
@@ -216,11 +220,22 @@ async fn a_deposit_relays_through_the_depositors_signature() {
     );
 }
 
+const TRACKING_REGISTRY: Address = Address::new_from_array([0x71; 32]);
+
 fn enrollment(owner: Address, data: Vec<u8>, quote: RelayQuote) -> PrepareRelayRequest {
+    enrollment_under(TRACKING_REGISTRY, owner, data, quote)
+}
+
+fn enrollment_under(
+    registry: Address,
+    owner: Address,
+    data: Vec<u8>,
+    quote: RelayQuote,
+) -> PrepareRelayRequest {
     let inputs = RelayEnrollInputs {
         ring_program_id: RING,
         owner,
-        tracking_registry: Address::new_from_array([0x71; 32]),
+        tracking_registry: registry,
         instruction_data: data,
     };
     PrepareRelayRequest {
@@ -285,6 +300,12 @@ async fn the_relay_forwards_no_other_storage_instruction_and_never_enrolls_itsel
     for request in [
         enrollment(owner.pubkey(), vec![7, 1, 2, 3], quote.clone()),
         enrollment(owner.pubkey(), Vec::new(), quote.clone()),
+        enrollment_under(
+            Address::new_from_array([0x72; 32]),
+            owner.pubkey(),
+            vec![6, 1, 2, 3],
+            quote.clone(),
+        ),
         enrollment(fixture.fee_payer, vec![6, 1, 2, 3], quote),
     ] {
         let serde_json::Value::Object(params) = serde_json::to_value(&request).expect("json")

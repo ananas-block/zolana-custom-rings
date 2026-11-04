@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::STORAGE_PROGRAM_ID;
+use custom_ring_interface::{tracking::TrackingAuthorization, STORAGE_PROGRAM_ID};
 use custom_ring_sdk::RingError;
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -101,6 +101,9 @@ pub enum RelayPayload {
 #[async_trait]
 pub trait ServedRings: Send + Sync {
     async fn check(&self, ring: Address) -> Result<(), RingRpcError>;
+
+    /// The tracking registry the ring pins, the relay pays for no other enrollment.
+    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError>;
 }
 
 struct NoRings;
@@ -221,6 +224,10 @@ impl ServedRings for NoRings {
     async fn check(&self, _ring: Address) -> Result<(), RingRpcError> {
         Err(RelayError::RingNotServed.into())
     }
+
+    async fn tracking_registry(&self, _ring: Address) -> Result<Address, RingRpcError> {
+        Err(RelayError::RingNotServed.into())
+    }
 }
 
 impl Relay {
@@ -280,6 +287,11 @@ impl Relay {
         let ring = request.ring.0;
         self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
+        if let RelayPayload::Enroll(enrollment) = &payload {
+            if enrollment.tracking_registry != self.rings.tracking_registry(ring).await? {
+                return Err(RelayError::InvalidEnrollment.into());
+            }
+        }
         let parties = self.parties();
         let Checked {
             owner_signature,
@@ -953,14 +965,8 @@ fn check_enrollment(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Resul
 
 /// `payer, owner, tracking_registry, authorization, system_program`.
 fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> ProvenRelay {
-    let (authorization, _) = Address::find_program_address(
-        &[
-            b"tracking",
-            enrollment.tracking_registry.as_ref(),
-            enrollment.owner.as_ref(),
-        ],
-        &STORAGE_PROGRAM_ID,
-    );
+    let (authorization, _) =
+        TrackingAuthorization::find_address(&enrollment.tracking_registry, &enrollment.owner);
     ProvenRelay {
         instruction: Instruction {
             program_id: STORAGE_PROGRAM_ID,
