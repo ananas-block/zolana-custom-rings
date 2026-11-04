@@ -43,16 +43,6 @@ pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
 pub const LIST_SALT: u32 = 0x4352_5053;
 /// `"CRPT"`
 pub const LIST_TAG: u32 = 0x4352_5054;
-/// `"CRPL"`
-pub const LIST_POSITION: u32 = 0x4352_504c;
-/// `"CRPV"`
-pub const LIST_LEAF: u32 = 0x4352_5056;
-/// `"CRPU"`
-pub const LIST_LEAF_SALT: u32 = 0x4352_5055;
-/// `"CRPQ"`
-pub const LIST_WRITE: u32 = 0x4352_5051;
-/// `"CRPA"`
-pub const APPLY_LIST: u32 = 0x4352_5041;
 
 /// `"CRTX"`
 pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;

@@ -256,7 +256,7 @@ export const RingProgramError = Object.freeze({
   anonymousExitAccountHasData: 8248,
   anonymousExitTokenAccountOnCurve: 8249,
   anonymousExitTokenAccountInvalid: 8250,
-  anonymousRingDataNotZero: 8251,
+  // 8251 retired.
   outputBodyLength: 8253,
   listNotPolicyReadable: 8255,
   outputCountOutOfRange: 8257,
@@ -267,7 +267,7 @@ export const RingProgramError = Object.freeze({
   coSignerOutOfScope: 8262,
   coSignerCountOutOfRange: 8263,
   recordsRegistryOtherRing: 8266,
-  viewTagNotCanonical: 8267,
+  // 8267 retired.
   changeTagNotZero: 8268,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,

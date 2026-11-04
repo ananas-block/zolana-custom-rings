@@ -129,15 +129,14 @@ ring_errors! {
         "an anonymous SPL withdrawal's token account address must be off the ed25519 curve",
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
-    AnonymousRingDataNotZero = 8251 => "an anonymous ring merge output carries ring data",
-    // 8252 retired.
+    // 8251 and 8252 retired.
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
     // 8254 and 8256 retired.
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
-    ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
+    // 8267 retired.
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
     ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
