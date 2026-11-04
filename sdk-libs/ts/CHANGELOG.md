@@ -2,6 +2,13 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `createRingTransferSubmission`, `createRingExitSubmission`, `createRingEntrySubmission` and `createRingWithdrawalSubmission` now settle a transfer past one transaction from a buffer, a `send` result of `unknown` can name a write or a close, `RingSubmissionAttempt` gains `upload`, and a kit transport signs each transaction only with the held signers it names.
+- `closeAbandonedFrameBuffers` returns the rent of the buffers a writer left on a ring once the wallet holds no pending submission, refuses earlier with `RING_SUBMISSION_PENDING`, and a refused close throws `RING_FRAME_BUFFER_CLOSE`.
+- `TransactionFit`, `Fit`, `FitSigners`, `FitBudget`, `FitTransport` and `SetupEffect` report a transaction's signatures, bytes, addresses, SPP CPI bytes and what its setup adds, and every direct transfer refuses before proving with `RING_FIT_SIGNATURES`, `RING_FIT_INSTRUCTIONS`, `RING_FIT_BYTES`, `RING_FIT_ADDRESSES`, `RING_FIT_CPI_BYTES` or `RING_FIT_UNPARSED_FRAME`.
+- A send the node refuses as past its blockhash now reads `expired` and rebuilds, where it read `failed`.
+- `sealedWide`, `unreadSubjectPools` and `UnreadSubjects` name the wide flag a relayed transfer seals under before any record read, and the catalog adds the wide 8x16 and the 4x8 entry transfer keys.
+- `openRecipientNote` opened a body with application bytes under a zero data hash and stored bytes no commitment binds, it now opens nothing.
+
 - `POLICY_TABLE_VERSION`, `VIEWING_HISTORY_VERSION`, `ANONYMOUS_WALLET_VERSION`, `RING_ADDRESS_VERSION`, `RING_VIEWING_HISTORY_VERSION` and `KEYPAIR_UNKNOWN_RING_ADDRESS_VERSION` are gone, no ring statement, table hash, address, wallet document, signed message or cipher label carries a version, `RingInstructionTag.clearCoSigner` moves to 62, `setDelegate` to 64, `RingScheme` is 9 and 10, and the merge key is `custom-ring-merge` → deploy this release's ring program, prover and keys together, reissue every `RingAddress`, rebuild each wallet document with a sync, and re-register each ring under its newly derived auditor key.
 - `AuthorityPayment` names its `mint`, `AuthorityTransfer` drops its own and takes `sources` in place of `source`, `RingDelegateRecoveredParams` takes `sources` as a list of `DelegateSource`, each mint's change returns to the owner of the last note spent in that mint and a source named twice refuses with `repeatedSource`. `DelegateTransfer.withCoSource` and `withTxViewingKey` name other owners' keys and the signed key.
 - `ApprovalTotals` reads a transfer's per-slot totals, `peakOf`, `outflowOf` and the frame's `commitment`. A transfer request carries optional `approvalTotals` and `approvalBlinder`, an absent pair reads zero.
