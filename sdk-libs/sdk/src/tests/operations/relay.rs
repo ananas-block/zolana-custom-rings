@@ -297,7 +297,7 @@ mod delegate_message {
     fn paying(honest: &Instruction, slot: usize, owner_tag: [u8; 32]) -> Instruction {
         let parsed = RingTransactData::parse(&honest.data[1..], RingRail::Delegate).unwrap();
         let mut data = parsed.into_data();
-        data.outputs[slot].owner_tag = &owner_tag;
+        data.outputs[slot].owner_tag = custom_ring_interface::stream::slot_tag(owner_tag);
         Instruction {
             data: [vec![tag::AUTHORITY_TRANSFER], data.encode().unwrap()].concat(),
             ..honest.clone()

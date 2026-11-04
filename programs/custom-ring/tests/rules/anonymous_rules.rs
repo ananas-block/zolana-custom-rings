@@ -71,7 +71,7 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
             (&tags[0], SlotBody::None),
             (&tags[1], SlotBody::Recipient(&body)),
         ]) {
-            output.owner_tag = tag;
+            output.owner_tag = custom_ring_interface::stream::slot_tag(*tag);
             output.body = body;
         }
         data.sender = data.sender.map(|sender| FramedSenderBundle {

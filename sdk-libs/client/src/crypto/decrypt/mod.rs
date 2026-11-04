@@ -157,6 +157,7 @@ impl<'a> TransactionAudit<'a> {
             .ok_or(AuditError::AuditorMessageLength(data.len()))?;
         let opened = AuditEnvelope {
             eph_u: X25519Pubkey::from_bytes(*message.eph_pk)?.u(),
+            salt: &salt,
             ciphertext: message.envelope,
         }
         .open(auditor, layout)?;

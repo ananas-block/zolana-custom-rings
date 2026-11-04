@@ -132,7 +132,6 @@ impl Fixture {
                 tag: &self.tags[15],
                 body: &self.bundle[..sender_bundle_len(usize::from(n_out))],
             }),
-            eph_u: &self.keys[1],
             envelope: &[],
             private_tx_hash: &self.fields[0],
             anonymous: hidden_sender.then(|| AnonymousProofData {
@@ -151,7 +150,7 @@ impl Fixture {
         data.outputs = (0..usize::from(n_out))
             .map(|slot| RingOutput {
                 hash: &self.fields[10 + slot],
-                owner_tag: &self.tags[slot],
+                owner_tag: custom_ring_interface::stream::slot_tag(self.tags[slot]),
                 body: SlotBody::Recipient(&self.bodies[slot]),
                 record: &self.records[slot],
                 tail: None,
@@ -642,10 +641,9 @@ fn a_truncated_or_appended_ciphertext_is_refused() {
         let stream = data.audit_stream().unwrap();
         let compact = data.encode().unwrap();
         let end = compact
-            .windows(32)
-            .position(|window| window == data.eph_u)
+            .windows(data.envelope.len())
+            .position(|window| window == data.envelope)
             .unwrap()
-            + 32
             + stream.envelope().len
             + stream.records_len();
         let mut truncated = compact.clone();

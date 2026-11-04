@@ -1,9 +1,8 @@
 {
   "circuitType": "custom-ring-transfer-entry-4-in8-w4-s8",
-  "publicInputHash": "0x29e4afcdfb0b7ab0a98324bb3c16296db1af9450c330ec1538add5a05e9aad5b",
+  "publicInputHash": "0x29a78398a1a809bc7b8cf822abae87b963eee077a2ded161b9bfbbb3ece5c64d",
   "firstNullifier": "0x0000000000000000000000000000000000000000000000000000000000001f1f",
   "txViewingSk": "0x001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e",
-  "ephSk": "0x01232021262724252a2b28292e2f2c2d32333031363734353a3b38393e3f3c3d",
   "auditorPk": "0x708c2645c705baaf44f2ab947574174f9280df58be6fc2f6f2e8881b78a3115a",
   "salt": "0xa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
   "layout": 2,

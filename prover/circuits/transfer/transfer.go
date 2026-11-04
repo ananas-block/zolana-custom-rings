@@ -76,7 +76,6 @@ type Sections struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	FirstNullifier  frontend.Variable
 	TxViewingSk     [32]frontend.Variable
-	EphSk           [32]frontend.Variable
 	AuditorPk       [32]frontend.Variable
 	Salt            [16]frontend.Variable
 	Layout          frontend.Variable
@@ -173,7 +172,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	}
 	c.assertRail(api)
 	rc := rangecheck.New(api)
-	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
+	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
 	stream := c.Shape.Stream()
 	layout := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
@@ -195,7 +194,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
-	sealed := w.SealStream(api, rc, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
+	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
 }

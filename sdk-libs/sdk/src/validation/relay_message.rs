@@ -1,7 +1,8 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
 use custom_ring_interface::{
-    compute_unit_limit, tag, DepositPrefix, InstructionTag, RingRail, RingTransactData,
+    compute_unit_limit, stream::slot_tag, tag, DepositPrefix, InstructionTag, RingRail,
+    RingTransactData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -137,7 +138,7 @@ impl ExpectedDelegate {
         })
     }
 
-    /// A confidential slot alone shows its viewing key, a dummy publishes as a real recipient's would.
+    /// A confidential slot alone shows a slot tag of its viewing key, a dummy publishes as a real recipient's would.
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
         let envelope = Envelope {
             ring: self.ring,
@@ -165,7 +166,7 @@ impl ExpectedDelegate {
             if !paid
                 .iter()
                 .zip(&self.payees)
-                .all(|(slot, payee)| slot.owner_tag == payee)
+                .all(|(slot, payee)| slot.owner_tag == slot_tag(*payee))
             {
                 return Err(MessageMismatch::Recipients);
             }

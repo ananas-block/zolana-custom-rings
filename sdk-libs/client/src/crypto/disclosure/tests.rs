@@ -4,7 +4,8 @@ use custom_ring_interface::{
 use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
 use super::*;
-use crate::encryption::{seal_stream, StreamSchedule};
+
+const SALT: [u8; 16] = [7; 16];
 
 fn field(byte: u8) -> [u8; 32] {
     let mut field = [byte; 32];
@@ -80,6 +81,7 @@ fn opened_envelope(
 ) -> Result<OpenedAudit, AuditError> {
     AuditEnvelope {
         eph_u: sealed.eph_u,
+        salt: &SALT,
         ciphertext: &sealed.envelope,
     }
     .open(auditor, layout)
@@ -89,30 +91,26 @@ fn opened_envelope(
 fn raw_envelope(plaintext: &[u8], auditor: &X25519Keypair) -> SealedAuditStream {
     let ephemeral = X25519Keypair::new();
     let mut envelope = plaintext.to_vec();
-    seal_stream(
-        &ephemeral,
-        &auditor.pubkey(),
-        StreamSchedule::Ring(AUDIT_STREAM_LABEL),
-        &mut envelope,
-    )
-    .unwrap();
+    sealing_salted_stream(&ephemeral, &auditor.pubkey(), &SALT, AUDIT_STREAM_LABEL)
+        .unwrap()
+        .apply_at(STREAM_FIRST_COUNTER, &mut envelope);
     SealedAuditStream {
         eph_u: ephemeral.pubkey().u(),
         envelope,
         records: Vec::new(),
         tails: Vec::new(),
-        ephemeral_sk: ephemeral.secret_bytes(),
     }
 }
 
 #[test]
-fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
+fn the_envelope_opens_to_the_sealed_key_and_a_resend_seals_another_stream() {
     let auditor = X25519Keypair::new();
     let tx_viewing_key = ViewingKey::new();
-    let seal = || {
+    let seal = |salt: &[u8; 16]| {
         AuditStreamSeal {
             layout: plain_layout(),
             tx_viewing_key: &tx_viewing_key,
+            salt,
             real_inputs: 1,
             evidence: AuditEvidence::None,
             records: vec![ring_record(1), AuditRecord::default()],
@@ -121,9 +119,9 @@ fn the_envelope_opens_to_the_sealed_key_under_a_fresh_ephemeral_key() {
         .seal(&auditor.pubkey())
         .unwrap()
     };
-    let (first, second) = (seal(), seal());
-    assert_ne!(first.eph_u, second.eph_u);
-    assert_ne!(first.envelope, second.envelope);
+    let first = seal(&SALT);
+    assert_eq!(first.eph_u, tx_viewing_key.pubkey().u());
+    assert_ne!(first.envelope, seal(&[8; 16]).envelope);
     let opened = opened_envelope(&first, &auditor, plain_layout()).unwrap();
     assert_eq!(opened.tx_viewing_key.pubkey(), tx_viewing_key.pubkey());
     assert_eq!(opened.real_inputs, 1);
@@ -161,6 +159,7 @@ fn a_record_opens_only_at_the_counter_of_its_slot() {
     let sealed = AuditStreamSeal {
         layout: plain_layout(),
         tx_viewing_key: &tx_viewing_key,
+        salt: &SALT,
         real_inputs: 1,
         evidence: AuditEvidence::None,
         records: vec![record, AuditRecord::default()],
@@ -191,6 +190,7 @@ fn a_tail_opens_only_at_the_counter_of_its_slot() {
     let sealed = AuditStreamSeal {
         layout: data_layout(),
         tx_viewing_key: &tx_viewing_key,
+        salt: &SALT,
         real_inputs: 1,
         evidence: AuditEvidence::None,
         records: vec![ring_record(1), AuditRecord::default()],
@@ -214,6 +214,7 @@ fn the_entry_evidence_and_records_round_their_own_regions() {
     let sealed = AuditStreamSeal {
         layout: entry_layout(),
         tx_viewing_key: &tx_viewing_key,
+        salt: &SALT,
         real_inputs: 1,
         evidence: entry_evidence(),
         records: vec![AuditRecord::default(), ring_record(0x27)],
@@ -241,6 +242,7 @@ fn a_seal_off_its_layout_is_refused() {
         AuditStreamSeal {
             layout,
             tx_viewing_key: &tx_viewing_key,
+            salt: &SALT,
             real_inputs: 1,
             evidence,
             records,

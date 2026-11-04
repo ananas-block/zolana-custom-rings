@@ -9,6 +9,9 @@ use thiserror::Error;
 
 use crate::{domain, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG};
 
+/// The bytes of a ring slot tag a frame carries, a false match costs one trial open.
+pub const SLOT_TAG_LEN: usize = 8;
+
 #[derive(Debug, Error, PartialEq)]
 pub enum StreamError {
     #[error("value is not a canonical field element")]
@@ -74,6 +77,17 @@ impl SlotSecret {
     pub fn sender_tag(&self) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[&domain::field(domain::SENDER_TAG), &self.0])
     }
+}
+
+/// A ring slot's tag reaches the indexer alone, its leading bytes stay zero and off the frame.
+pub const fn slot_tag(tag: [u8; 32]) -> [u8; 32] {
+    let mut short = [0; 32];
+    let mut byte = 32 - SLOT_TAG_LEN;
+    while byte < 32 {
+        short[byte] = tag[byte];
+        byte += 1;
+    }
+    short
 }
 
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {

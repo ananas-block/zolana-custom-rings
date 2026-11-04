@@ -1,11 +1,11 @@
 //! Frames of every rail, shared by the codec and the heap budget tests.
 
 use custom_ring_interface::{
-    cosign::ApprovalMask, sender_bundle_len, storage::Revision, AnonymousProofData, AppMessage,
-    CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
-    SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, RECIPIENT_BODY_LEN,
-    RING_POLICY,
+    cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
+    AnonymousProofData, AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
+    RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    DATA_TAIL_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -99,7 +99,6 @@ impl Fixture {
             outputs: Vec::new(),
             replies: None,
             sender: None,
-            eph_u: &self.bytes[1],
             envelope: &[],
             private_tx_hash: &self.fields[0],
             anonymous: None,
@@ -116,7 +115,7 @@ impl Fixture {
     pub fn exit<'a>(&'a self, slot: usize, payload: &'a [u8]) -> RingOutput<'a> {
         RingOutput {
             hash: &self.fields[10 + slot],
-            owner_tag: &self.bytes[12 + slot],
+            owner_tag: self.bytes[12 + slot],
             body: SlotBody::Exit(payload),
             record: &self.records[slot],
             tail: None,
@@ -304,7 +303,7 @@ impl Fixture {
     pub fn recipient(&self, slot: usize) -> RingOutput<'_> {
         RingOutput {
             hash: &self.fields[10 + slot],
-            owner_tag: &self.bytes[3 + slot],
+            owner_tag: slot_tag(self.bytes[3 + slot]),
             body: SlotBody::Recipient(&self.recipient_body),
             record: &self.records[slot],
             tail: None,
@@ -316,9 +315,9 @@ impl Fixture {
         RingOutput {
             hash: &self.fields[10 + slot],
             owner_tag: if slot == 0 {
-                &ZERO_TAG
+                ZERO_TAG
             } else {
-                &self.tags[slot]
+                slot_tag(self.tags[slot])
             },
             body: match slot {
                 0 => SlotBody::None,

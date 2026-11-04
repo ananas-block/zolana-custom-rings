@@ -53,7 +53,7 @@ fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() 
         array::<32>(&vector["ring_id"])
     );
     let tx_key = ViewingKey::from_canonical_bytes(&array(&vector["tx_viewing_sk"])).unwrap();
-    let eph = X25519Keypair::from_bytes(&array(&vector["eph_sk"]));
+    let eph = X25519Keypair::from_bytes(&array(&vector["tx_viewing_sk"]));
     let first_nullifier = array::<32>(&vector["first_nullifier"]);
     let tree_id: u16 = vector["output_tree_id"].as_u64().unwrap() as u16;
     let no_assets = RingAssets::new([]).unwrap();

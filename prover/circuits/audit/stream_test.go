@@ -91,6 +91,21 @@ func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
 	}
 }
 
+// A resend repeats the sealing key, the salt alone keeps its keystream from repeating.
+func TestResendUnderAnotherSaltSealsAnotherStream(t *testing.T) {
+	s := ringaudit.NewSection(t, plainShape)
+	first := s.Stream(t)
+	s.Salt[0] ^= 1
+	if bytes.Equal(first.Ciphertext, s.Stream(t).Ciphertext) {
+		t.Fatal("two salts sealed one stream")
+	}
+	t.Run("a stream sealed under another salt fails the binding", func(t *testing.T) {
+		honest, resent := ringaudit.NewSection(t, plainShape), ringaudit.NewSection(t, plainShape)
+		resent.Salt[0] ^= 1
+		compileSection(t, plainShape).RefuseStatement(t, honest.Circuit(t), honest.StatementOf(t, resent.Stream(t), honest.Claim()))
+	})
+}
+
 func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 	c := compileSection(t, entryShape)
 	s := ringaudit.NewSection(t, entryShape)
@@ -301,12 +316,11 @@ func TestStreamVector(t *testing.T) {
 		}
 		cases[k] = v
 	}
-	txViewingSk, auditorSk, ephSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk(), sections[0].section.Keys.EphSk()
+	txViewingSk, auditorSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk()
 	ringtest.PinVector(t, "audit/audit-stream-v4.json", map[string]any{
 		"description":     "Auditor streams of statement version 4 from solved witnesses. envelope = tx_viewing_sk || R || default_input_bits (entry keys) || entries, records at first_record_counter + 7 * i, tails at first_tail_counter + 4 * i under label CRING/adt1. Produced by prover/circuits/audit/stream_test.go with WRITE_AUDIT_VECTORS=1.",
 		"tx_viewing_sk":   hex.EncodeToString(txViewingSk[:]),
 		"auditor_sk":      hex.EncodeToString(auditorSk[:]),
-		"eph_sk":          hex.EncodeToString(ephSk[:]),
 		"salt":            hex.EncodeToString(sections[0].section.Salt[:]),
 		"first_nullifier": ringtest.FieldHex(sections[0].section.FirstNullifier),
 		"ring_id":         ringtest.FieldHex(sections[0].section.RingProgramID),

@@ -1,5 +1,6 @@
 //! Ring transfers as the ring program publishes them, under the keys of the Go `ringaudit` fixture.
 
+use custom_ring_interface::stream::slot_tag;
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
     encode_ring_sender_bundle_output,
@@ -198,11 +199,6 @@ pub struct Frame<'a> {
     pub rail: Rail,
 }
 
-/// The ephemeral key every fixture seals under, the vectors pin its stream.
-pub fn ephemeral() -> X25519Keypair {
-    X25519Keypair::from_bytes(&scalar(0x22))
-}
-
 impl Transfer {
     /// The values of Go `ringaudit.newTransfer`.
     pub fn fixture() -> Self {
@@ -254,7 +250,10 @@ impl Transfer {
             indexed(
                 RingOutput {
                     hash: &hash,
-                    owner_tag: &owner_tag,
+                    owner_tag: match body {
+                        SlotBody::Exit(_) => owner_tag,
+                        _ => slot_tag(owner_tag),
+                    },
                     body,
                     record: &record,
                     tail: None,
@@ -330,17 +329,18 @@ impl Transfer {
             .collect()
     }
 
-    /// The stream of `disclosure` under the fixture's ephemeral key.
+    /// The stream of `disclosure` under the fixture's viewing key.
     pub fn seal(&self, disclosure: &Disclosure, auditor: &X25519Pubkey) -> SealedAuditStream {
         AuditStreamSeal {
             layout: disclosure.layout,
             tx_viewing_key: &self.tx_key,
+            salt: &self.salt,
             real_inputs: disclosure.real_inputs,
             evidence: disclosure.evidence.clone(),
             records: disclosure.records.clone(),
             tails: disclosure.tails.clone(),
         }
-        .seal_with(ephemeral(), auditor)
+        .seal(auditor)
         .unwrap()
     }
 
@@ -474,7 +474,6 @@ impl Transfer {
             })
             .unwrap();
         let message = AuditorMessage::parse(&tx.messages.last().unwrap().data, layout).unwrap();
-        let eph_u = X25519Pubkey::from_bytes(*message.eph_pk).unwrap().u();
         let tx_viewing_u = self.tx_key.pubkey().u();
         let zero = [0; 32];
         let groth16 = PlainGroth16Proof {
@@ -528,7 +527,6 @@ impl Transfer {
                         .unwrap(),
                 }
             }),
-            eph_u: &eph_u,
             envelope: message.envelope,
             private_tx_hash: &zero,
             anonymous: anonymous.then_some(AnonymousProofData {
@@ -575,7 +573,10 @@ fn wire<'a>(
     };
     RingOutput {
         hash: &slot.output_context.hash,
-        owner_tag: &slot.view_tag,
+        owner_tag: match body {
+            SlotBody::Exit(_) => slot.view_tag,
+            _ => slot_tag(slot.view_tag),
+        },
         body,
         record,
         tail,
@@ -600,7 +601,7 @@ pub fn audited_opening(output: &Output, slot: &Slot) -> OutputOpening {
             tag,
         } => OutputOpening::Ring {
             utxo: audited(utxo),
-            owner_tag: RingOwnerTag(tag.unwrap_or(*recipient_u)),
+            owner_tag: RingOwnerTag(slot_tag(tag.unwrap_or(*recipient_u))),
         },
         Output::Exit(utxo) => OutputOpening::Exit(audited(utxo)),
         Output::Dummy => OutputOpening::Dummy,

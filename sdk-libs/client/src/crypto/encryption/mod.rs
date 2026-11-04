@@ -101,6 +101,34 @@ pub(crate) fn opening_ring_stream(
     )?)
 }
 
+/// A resend repeats the transfer's key, the salt keeps its keystream apart.
+pub(crate) fn sealing_salted_stream(
+    key: &X25519Keypair,
+    auditor: &X25519Pubkey,
+    salt: &[u8; 16],
+    label: &[u8; 10],
+) -> Result<RingStream> {
+    let secret = salted(&*sealing_secret(key, auditor)?, salt)?;
+    Ok(RingStream::new(&secret, label)?)
+}
+
+pub(crate) fn opening_salted_stream(
+    auditor: &X25519Keypair,
+    key: &X25519Pubkey,
+    salt: &[u8; 16],
+    label: &[u8; 10],
+) -> Result<RingStream> {
+    let secret = salted(&*opening_secret(auditor, key)?, salt)?;
+    Ok(RingStream::new(&secret, label)?)
+}
+
+fn salted(secret: &[u8; 32], salt: &[u8; 16]) -> Result<Zeroizing<[u8; 32]>> {
+    Ok(Zeroizing::new(Poseidon::hashv(&[
+        secret,
+        &right_align(salt),
+    ])?))
+}
+
 fn sealing_secret(
     ephemeral: &X25519Keypair,
     auditor: &X25519Pubkey,

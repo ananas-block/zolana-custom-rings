@@ -43,7 +43,6 @@ type Opening struct {
 type AuditParams struct {
 	FirstNullifier Field `json:"firstNullifier"`
 	TxViewingSk    Bytes `json:"txViewingSk"`
-	EphSk          Bytes `json:"ephSk"`
 	AuditorPk      Bytes `json:"auditorPk"`
 	Salt           Bytes `json:"salt"`
 	Layout         uint8 `json:"layout"`

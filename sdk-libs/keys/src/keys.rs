@@ -1,4 +1,4 @@
-use custom_ring_interface::stream::{DeliveredSlot, SlotSecret, StreamError};
+use custom_ring_interface::stream::{slot_tag, DeliveredSlot, SlotSecret, StreamError};
 use spr_keypair::{
     shielded::{ShieldedAddress, ShieldedKeypair},
     viewing_key::{Salt, ViewTag},
@@ -267,7 +267,8 @@ fn tag_matches<H: HeldKeys>(
                         RingTagKind::SenderBundle => secret.sender_tag(),
                     }
                     .map_err(StreamError::from)?;
-                    Ok((tag == probe.tag).then_some(secret))
+                    // A historical frame publishes the whole tag.
+                    Ok((tag == probe.tag || slot_tag(tag) == probe.tag).then_some(secret))
                 })
                 .collect()
         })
