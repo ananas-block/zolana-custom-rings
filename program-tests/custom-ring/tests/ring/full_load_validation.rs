@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use solana_account::Account;
 use spr_client::ConfirmedInstructionGroups;
 use spr_indexer_api::{
-    GetMerkleProofsRequest, GetMerkleProofsResponse, Hash, MerkleContext, MerkleProof,
+    GetMerkleProofsRequest, GetMerkleProofsResponse, Hash, MerkleContext, MerkleProof, RpcMethod,
     SerializablePubkey, GET_MERKLE_PROOFS,
 };
 use spr_interface::{shape::Shape, SOL_INTERFACE};
@@ -39,10 +39,13 @@ use spr_program::instruction::TransactSolTransferAccounts;
 use spr_transaction::Mint;
 use zolana_ring_client::{ring_event_origin_in, rpc::RelayOperation, RingIndexer};
 use zolana_ring_indexer::{
-    rpc::GetStorageRecordPoolRequest, tracking::GetTrackingRecordPoolRequest,
+    rpc::{method::GetStorageRecordPool, GetStorageRecordPoolRequest},
+    tracking::{method::GetTrackingRecordPool, GetTrackingRecordPoolRequest},
 };
 use zolana_ring_member_registry::RecordTree;
 
+const STORAGE_POOL: &str = GetStorageRecordPool::NAME;
+const TRACKING_POOL: &str = GetTrackingRecordPool::NAME;
 const NOTE: u64 = 1_000_000_000;
 const SPENT_NOTES: usize = 5;
 const PAYMENTS: usize = 12;
@@ -81,13 +84,13 @@ impl SeededService {
                     .map(serde_json::to_value)
                     .transpose()?
             }
-            Some("getStorageRecordPool") => {
+            Some(STORAGE_POOL) => {
                 let request: GetStorageRecordPoolRequest = serde_json::from_value(params)?;
                 Some(serde_json::to_value(
                     self.seeded.get_storage_record_pool(request)?,
                 )?)
             }
-            Some("getTrackingRecordPool") => {
+            Some(TRACKING_POOL) => {
                 let request: GetTrackingRecordPoolRequest = serde_json::from_value(params)?;
                 Some(serde_json::to_value(
                     self.seeded.get_tracking_record_pool(request)?,
@@ -138,9 +141,7 @@ impl SeededService {
         };
         if let Some(result) = served {
             let reply = json!({ "jsonrpc": "2.0", "id": call["id"], "result": result });
-            return Ok(Response::new(Full::new(Bytes::from(serde_json::to_vec(
-                &reply,
-            )?))));
+            return json_response(StatusCode::OK, Bytes::from(serde_json::to_vec(&reply)?));
         }
         let forwarded = self
             .http
@@ -150,10 +151,15 @@ impl SeededService {
             .send()
             .await?;
         let status = forwarded.status();
-        let mut response = Response::new(Full::new(forwarded.bytes().await?));
-        *response.status_mut() = status;
-        Ok(response)
+        json_response(status, forwarded.bytes().await?)
     }
+}
+
+fn json_response(status: StatusCode, body: Bytes) -> Result<Response<Full<Bytes>>> {
+    Ok(Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Full::new(body))?)
 }
 
 struct SeededHttp {
