@@ -152,6 +152,8 @@ pub enum RingError {
     PublicSpendWalletMismatch { named: Address, sender: Address },
     #[error("a public spend signs the transaction, it cannot prove its owner in the proof")]
     PublicSpendInProofOwner,
+    #[error(transparent)]
+    AddressCeiling(#[from] crate::AddressCeilingError),
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
     DepositFrameReused,
     #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]

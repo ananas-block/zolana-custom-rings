@@ -3,6 +3,8 @@
 
 #[path = "state/account.rs"]
 mod account;
+#[path = "validation/address_ceiling.rs"]
+mod address_ceiling;
 #[path = "operations/admin.rs"]
 mod admin;
 #[path = "rpc/client.rs"]
@@ -58,6 +60,9 @@ pub use crate::{
     account::{
         CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, RingRegistration,
         RingStatus,
+    },
+    address_ceiling::{
+        AddressCeiling, AddressCeilingError, CeilingDecision, MergeGroup, SpentInput,
     },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
