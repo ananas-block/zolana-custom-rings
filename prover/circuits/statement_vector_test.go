@@ -57,7 +57,7 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 			Assets          []string `json:"assets"`
 			Amounts         []uint64 `json:"amounts"`
 			TrackingRoot    string   `json:"tracking_root"`
-			OwnRoot         *string  `json:"own_root"`
+			OwnRoot         *string  `json:"member_registry_root"`
 			CuratorRoot     *string  `json:"curator_root"`
 			PolicyHash      *string  `json:"policy_hash"`
 			PublicInputHash string   `json:"public_input_hash"`
