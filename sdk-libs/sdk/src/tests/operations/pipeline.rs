@@ -939,6 +939,7 @@ impl<'a> MoveFixture<'a> {
                 .collect(),
             assets: self.assets,
             wide_frames: WideFrames::Refuse,
+            tx_viewing_key: spr_keypair::ViewingKey::new(),
         }
     }
 }

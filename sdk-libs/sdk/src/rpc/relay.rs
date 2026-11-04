@@ -11,7 +11,7 @@ use zolana_ring_client::rpc::{
 
 use crate::{
     relay_message::{ExpectedDelegate, ExpectedMessage},
-    MessageMismatch, RingError, VerifiedMessage,
+    CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
 #[async_trait]
@@ -59,7 +59,7 @@ pub enum RelaySent {
 pub struct PendingSignature {
     relay_id: RelayId,
     message: Vec<u8>,
-    expected: Option<ExpectedMessage>,
+    expected: Option<Box<ExpectedMessage>>,
 }
 
 impl PreparedRelay {
@@ -93,8 +93,9 @@ impl PreparedAuthorityTransfer {
     pub fn new(
         request: PrepareAuthorityTransferRequest,
         quote: &RelayQuote,
+        config: &CustomRingConfig,
     ) -> Result<Self, RingError> {
-        let expected = ExpectedDelegate::new(&request, quote)?;
+        let expected = ExpectedDelegate::new(&request, quote, config)?;
         Ok(Self { request, expected })
     }
 
@@ -130,7 +131,7 @@ impl RelaySent {
     fn expecting(self, expected: Option<ExpectedMessage>) -> Self {
         match self {
             Self::SignMessage(pending) => Self::SignMessage(PendingSignature {
-                expected,
+                expected: expected.map(Box::new),
                 ..pending
             }),
             submitted @ Self::Submitted(_) => submitted,
@@ -171,7 +172,7 @@ impl PendingSignature {
         rpc: &C,
         signer: &dyn Signer,
     ) -> Result<RelayStatus, RingError> {
-        if let Some(ExpectedMessage::Delegate(delegate)) = &self.expected {
+        if let Some(ExpectedMessage::Delegate(delegate)) = self.expected.as_deref() {
             if let Some(buffer) = delegate.settled_buffer(&self.message)? {
                 let held = rpc
                     .get_account(buffer)

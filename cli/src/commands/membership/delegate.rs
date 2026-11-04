@@ -94,6 +94,7 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 .collect(),
             assets: assets.registry(),
             wide_frames: WideFrames::Buffer,
+            tx_viewing_key: spr_keypair::ViewingKey::new(),
         }
         .select(ctx.ring_client()),
     )?;
