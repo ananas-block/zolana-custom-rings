@@ -100,6 +100,14 @@ deposit on an anonymous Ring goes through its submission. A deposit to the
 wallet's own note returns the viewing history, and the wallet stores it before
 `send`.
 
+A rule over several `absent` lists passes when the owner is off any one of them.
+To refuse owners on a public list and on a private list, write one deny rule per
+list. One rule over both admits a publicly blocked owner with no private entry.
+
+A `RingAddress` carries the owner's `listSalt`, and the salt is final. Every
+reader of a published address can compute the owner's private list key and read
+its list status, so publish an address only where that disclosure is acceptable.
+
 On an anonymous Ring the transfer proof binds each live recipient slot's
 ciphertext, its recipient and its discovery tag. A wallet finds its notes with
 `AnonymousSync.fetch`, which scans every Ring its `ViewingHistory` names, and
