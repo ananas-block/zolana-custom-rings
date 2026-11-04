@@ -275,20 +275,59 @@ struct Measured {
 }
 
 impl Measured {
-    fn ceiling_verdict(&self) -> String {
-        let mut over = Vec::new();
+    const fn fits_inline(&self) -> bool {
+        self.fit.fits() && self.spp_cpi_len <= MAX_CPI_DATA_LEN
+    }
+
+    fn buffered_limits(&self) -> Vec<String> {
+        let mut limits = Vec::new();
         if !self.buffered.fits() {
-            over.push(self.buffered.over());
+            limits.push(self.buffered.over());
         }
         if self.frame_len > MAX_FRAME_LEN {
-            over.push(format!("frame {} B", self.frame_len - MAX_FRAME_LEN));
+            limits.push(format!(
+                "buffer create {} B",
+                self.frame_len - MAX_FRAME_LEN
+            ));
         }
         if self.spp_cpi_len > MAX_CPI_DATA_LEN {
-            over.push(format!("CPI {} B", self.spp_cpi_len - MAX_CPI_DATA_LEN));
+            limits.push(format!("SPP CPI {} B", self.spp_cpi_len - MAX_CPI_DATA_LEN));
         }
-        match over.is_empty() {
-            true => "yes".to_owned(),
-            false => format!("no, {}", over.join(", ")),
+        limits
+    }
+
+    /// Transaction and CPI ceilings only, the catalog key apart.
+    fn outcome(&self) -> Outcome {
+        let limits = self.buffered_limits();
+        if self.fits_inline() {
+            Outcome::Inline
+        } else if limits.is_empty() {
+            Outcome::Buffered
+        } else {
+            Outcome::No(limits.join(", "))
+        }
+    }
+}
+
+enum Outcome {
+    Inline,
+    Buffered,
+    No(String),
+}
+
+impl Outcome {
+    const fn fits(&self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Buffered => "buffered",
+            Self::No(_) => "no",
+        }
+    }
+
+    fn limit(&self) -> &str {
+        match self {
+            Self::Inline | Self::Buffered => "",
+            Self::No(limit) => limit,
         }
     }
 }
@@ -756,9 +795,9 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     Fit::of(&instruction, &PAYER, full)
 }
 
-fn verdict(fit: Fit) -> &'static str {
+fn unbuffered_fit(fit: Fit) -> &'static str {
     match fit.fits() {
-        true => "fits",
+        true => "inline",
         false => "no",
     }
 }
@@ -774,8 +813,9 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over | frame | SPP CPI | buffered bytes | buffered accounts | clears ceilings |")?;
+    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The inline owner run is the inline ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "fits: the path that clears the transaction and CPI ceilings, the catalog key apart. limit: what stops a row with no path, rail for a shape the rail has no SPP key for, else the excess in accounts, signatures, bytes, buffer create or CPI data at that row's load. A missing catalog key is a choice of the catalog, no runtime limit.")?;
+    writeln!(table, "| shape | rail | load | catalog key | inline bytes | inline accounts | signatures | inline owner run | inline over | frame | SPP CPI | buffered bytes | buffered accounts | fits | limit |")?;
     writeln!(
         table,
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
@@ -783,6 +823,13 @@ fn table() -> Result<String> {
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
+                writeln!(
+                    table,
+                    "| {}x{} | {} | - | - | - | - | - | - | - | - | - | - | - | no | rail |",
+                    shape.n_inputs(),
+                    shape.n_outputs(),
+                    frame.name(),
+                )?;
                 continue;
             }
             for load in LOADS {
@@ -800,6 +847,7 @@ fn table() -> Result<String> {
                     false => "-".to_owned(),
                 };
                 let fit = measured.fit;
+                let outcome = measured.outcome();
                 writeln!(
                     table,
                     "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
@@ -812,13 +860,13 @@ fn table() -> Result<String> {
                     fit.addresses,
                     fit.signatures,
                     widest,
-                    verdict(fit),
                     fit.over(),
                     measured.frame_len,
                     measured.spp_cpi_len,
                     measured.buffered.bytes,
                     measured.buffered.addresses,
-                    measured.ceiling_verdict(),
+                    outcome.fits(),
+                    outcome.limit(),
                 )?;
             }
         }
@@ -831,11 +879,12 @@ fn table() -> Result<String> {
             let fit = merge_fit(width, authority)?;
             writeln!(
                 table,
-                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | {} | - | - | - | - | - |",
+                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                verdict(fit),
+                fit.over(),
+                unbuffered_fit(fit),
                 fit.over(),
             )?;
         }
@@ -845,11 +894,12 @@ fn table() -> Result<String> {
             let fit = deposit_fit(width, full)?;
             writeln!(
                 table,
-                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | {} | - | - | - | - | - |",
+                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                verdict(fit),
+                fit.over(),
+                unbuffered_fit(fit),
                 fit.over(),
             )?;
         }
