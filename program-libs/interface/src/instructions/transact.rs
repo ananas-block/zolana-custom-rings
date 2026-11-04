@@ -435,7 +435,7 @@ impl InputTrees {
 pub enum SlotBody<'a> {
     /// A slot another message covers, such as change the sender bundle holds.
     None,
-    /// Scheme 13 under the slot's view tag or recipient key.
+    /// Ring body under the slot's view tag or recipient key.
     Recipient(&'a [u8]),
     /// Scheme 3 under its own owner tag, a default-ring wallet reads it.
     Exit(&'a [u8]),
@@ -509,7 +509,7 @@ fn slot_bits(set: impl Iterator<Item = bool>) -> u64 {
         .fold(0, |bits, (slot, _)| bits | 1 << slot)
 }
 
-/// Scheme 12, forwarded under its tag as the first SPP message, `m` fixes the length.
+/// Sender bundle, forwarded under its tag as the first SPP message, `m` fixes the length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramedSenderBundle<'a> {
     pub tag: &'a [u8; 32],

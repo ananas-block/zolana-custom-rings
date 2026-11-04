@@ -5,7 +5,7 @@
   "tracking_registry": "0303030303030303030303030303030303030303030303030303030303030303",
   "instruction_data": "060708",
   "encoded": "0101010101010101010101010101010101010101010101010101010101010101020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030300000000000000060708",
-  "request_digest": "fcb768e127c618a7a42404f0e5d57f0292fbf81b4292b6ac052d39865eeb4c7f",
+  "request_digest": "54c9430e3a04547b208f19ff087fc99eafaa350d12da8dba5c0e895e5c2de0cc",
   "enroll_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"enroll\",\"proofInputs\":\"AwQF\",\"ownerSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
   "delegate_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"delegate\",\"proofInputs\":\"AwQF\",\"delegateSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}"
 }

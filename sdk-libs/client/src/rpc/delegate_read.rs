@@ -10,7 +10,7 @@ use super::{
 };
 
 pub const GET_DELEGATE_NOTES: &str = "getDelegateNotes";
-const DELEGATE_NOTES_DOMAIN: &str = "zolana/ring-rpc-delegate-notes/v1";
+const DELEGATE_NOTES_DOMAIN: &str = "zolana/ring-rpc-delegate-notes";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

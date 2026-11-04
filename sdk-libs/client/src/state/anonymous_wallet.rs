@@ -17,8 +17,6 @@ use crate::{
     ViewingHistory,
 };
 
-pub const ANONYMOUS_WALLET_VERSION: u32 = 1;
-
 /// Notes stay listed once spent, their nullifiers mark them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnonymousWallet {
@@ -78,7 +76,6 @@ impl fmt::Debug for PendingClaim {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WalletJson {
-    wallet_version: u32,
     history: Value,
     notes: Vec<WalletUtxo>,
     spent_nullifiers: Vec<String>,
@@ -233,7 +230,6 @@ impl AnonymousWallet {
     /// Its notes open the wallet's funds, store it as key material under one atomic replace.
     pub fn to_json(&self) -> String {
         let wallet = WalletJson {
-            wallet_version: ANONYMOUS_WALLET_VERSION,
             history: self.history.to_json_value(),
             notes: self.notes.clone(),
             spent_nullifiers: self.spent_nullifiers.iter().map(hex::encode).collect(),
@@ -255,12 +251,6 @@ impl AnonymousWallet {
 
     pub fn from_json(text: &str) -> Result<Self, AnonymousError> {
         let wallet: WalletJson = serde_json::from_str(text).map_err(unparsed)?;
-        if wallet.wallet_version != ANONYMOUS_WALLET_VERSION {
-            return Err(AnonymousError::WalletDocument(format!(
-                "version {} is unknown",
-                wallet.wallet_version
-            )));
-        }
         let spent_nullifiers = wallet
             .spent_nullifiers
             .iter()

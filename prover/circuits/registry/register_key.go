@@ -32,7 +32,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	salt := shared.PackBounded(api, c.ListSalt[1:])[0]
 	api.AssertIsDifferent(salt, 0)
 	listTag := shared.ListTag(api, salt)
-	// The cipher under CRING/nfk1 bounds every ciphertext byte.
+	// The cipher under CRING/nfk bounds every ciphertext byte.
 	sealed := shared.Envelope{Plaintext: slices.Concat(c.NullifierSecret[:], c.ListSalt[:]), EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
 	// 3. The statement binds the ring, member and auditor key the program supplies, and the instruction's envelope.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, nullifierPk, listTag, sealed)))

@@ -74,7 +74,7 @@ describe("wallet status attestation", () => {
       nonce: NONCE,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      `zolana/ring-rpc-wallet-status/v1\n${TARGET_LINES}\ntimestamp: 1700000000\nnonce: ${NONCE_BASE64}\nwallet: ${WALLET}\ncursor: `,
+      `zolana/ring-rpc-wallet-status\n${TARGET_LINES}\ntimestamp: 1700000000\nnonce: ${NONCE_BASE64}\nwallet: ${WALLET}\ncursor: `,
     );
   });
 
@@ -86,7 +86,7 @@ describe("wallet status attestation", () => {
       nonce: NONCE,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      `zolana/ring-rpc-spend-coverage/v1\n${TARGET_LINES}\nauthority: ${WALLET}\ntimestamp: 1700000000\nnonce: ${NONCE_BASE64}`,
+      `zolana/ring-rpc-spend-coverage\n${TARGET_LINES}\nauthority: ${WALLET}\ntimestamp: 1700000000\nnonce: ${NONCE_BASE64}`,
     );
   });
 });

@@ -50,7 +50,7 @@ export const RING_KEYS: readonly Readonly<{
       ...[1, 2, 4, 8].map(
         (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
       ),
-      [{ family: "merge" }, "custom-ring-merge-v4"],
+      [{ family: "merge" }, "custom-ring-merge"],
     ] as const
   ).map(([circuit, name]) =>
     Object.freeze({ circuit: Object.freeze<RingKeyCircuit>(circuit), name }),

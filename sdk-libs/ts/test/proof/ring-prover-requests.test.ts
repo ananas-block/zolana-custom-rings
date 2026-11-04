@@ -508,7 +508,7 @@ function request(item: Json): RingProofRequest {
       ...policy(item),
     };
   }
-  if (circuitType === "custom-ring-merge-v4")
+  if (circuitType === "custom-ring-merge")
     return {
       kind: "merge",
       publicInputHash,

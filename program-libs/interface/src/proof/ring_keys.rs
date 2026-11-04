@@ -173,6 +173,6 @@ pub const RING_KEYS: [RingKey; 26] = [
     },
     RingKey {
         circuit: RingCircuit::Merge,
-        name: "custom-ring-merge-v4",
+        name: "custom-ring-merge",
     },
 ];

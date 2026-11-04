@@ -9,12 +9,10 @@ use crate::{field_u8, ListId, ListSet, Member};
 pub const MAX_RULES: usize = 16;
 /// Source slots, one per list the enum can name.
 pub const MAX_SOURCES: usize = 8;
-/// Enters `policy_hash`, bump it with any change of the encoding below.
-pub const POLICY_TABLE_VERSION: u8 = 14;
 /// `"CRTB"`, the first field of the table hash, `domain::POLICY_TABLE` of the interface.
 pub const POLICY_TABLE_DOMAIN: u32 = 0x4352_5442;
 pub const POLICY_TABLE_FIELDS: usize =
-    (4 + 2 * MAX_SOURCES + MAX_RULES).div_ceil(POLICY_TABLE_RATE) * POLICY_TABLE_RATE;
+    (3 + 2 * MAX_SOURCES + MAX_RULES).div_ceil(POLICY_TABLE_RATE) * POLICY_TABLE_RATE;
 /// Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum.
 pub(crate) const POLICY_TABLE_RATE: usize = 11;
 
@@ -683,11 +681,7 @@ impl EncodedRuleTable {
 
     /// Every slot past a count enters as stored, `validate` keeps it zero.
     pub fn fields(&self, sources: &SourceMap) -> [[u8; 32]; POLICY_TABLE_FIELDS] {
-        let header = [
-            right_align(&POLICY_TABLE_DOMAIN.to_be_bytes()),
-            field_u8(POLICY_TABLE_VERSION),
-        ];
-        let values = header
+        let values = [right_align(&POLICY_TABLE_DOMAIN.to_be_bytes())]
             .into_iter()
             .chain(
                 sources

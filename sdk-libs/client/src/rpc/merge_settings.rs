@@ -5,7 +5,7 @@ use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
 
 use super::{base64, Attestation, ReadTarget, RequestBuildError, SignedRequest};
 
-const MERGE_SETTINGS_DOMAIN: &str = "zolana/ring-rpc-merge-settings/v1";
+const MERGE_SETTINGS_DOMAIN: &str = "zolana/ring-rpc-merge-settings";
 
 /// Ring RPC merges the owner's notes of `mint` toward these settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

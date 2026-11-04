@@ -381,7 +381,7 @@ enum Site {
     Message(usize),
 }
 
-/// A scheme 13 or 12 payload the entry's key may open.
+/// A ring body or sender bundle payload the entry's key may open.
 struct Body<'t> {
     tx: &'t ShieldedTransaction,
     site: Site,

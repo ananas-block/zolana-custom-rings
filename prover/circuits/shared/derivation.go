@@ -56,9 +56,6 @@ const (
 	ListKeyDomain = 0x4352504c
 )
 
-// TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
-const TransferStatementVersion = 4
-
 // Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
 	// DomSepCRShared = "CR_S"
@@ -68,17 +65,17 @@ const (
 // Key schedule labels, distinct per ciphertext kind.
 const (
 	// AuditEncInfo mirrors AUDIT_STREAM_LABEL in program-libs/interface/src/proof/domain.rs.
-	AuditEncInfo = "CRING/adt1"
+	AuditEncInfo = "CRING/adt"
 	// NfKeyEncInfo mirrors REGISTER_KEY_LABEL.
-	NfKeyEncInfo = "CRING/nfk1"
+	NfKeyEncInfo = "CRING/nfk"
 	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
-	DepositEncInfo = "CRING/dep1"
+	DepositEncInfo = "CRING/dep"
 	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
-	MergeEncInfo = "CRING/mrg2"
+	MergeEncInfo = "CRING/mrg"
 	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
-	RecipientBodyEncInfo = "CRING/rcp1"
+	RecipientBodyEncInfo = "CRING/rcp"
 	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
-	SenderBundleEncInfo = "CRING/snd1"
+	SenderBundleEncInfo = "CRING/snd"
 )
 
 const (

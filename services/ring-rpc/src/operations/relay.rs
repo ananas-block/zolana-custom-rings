@@ -64,15 +64,15 @@ const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 
 const LANDING_POLL: Duration = Duration::from_millis(500);
-const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
+const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge";
 /// Modelled, the first enrollment verifies a proof in its instruction.
 /// One blockhash lifetime for the last write to land and one for the wallet to sign.
 pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
 const SWEEP_PAGE: u64 = 16;
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
-const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame/v1";
-const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll/v1";
-const SETUP_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-setup/v1";
+const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame";
+const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll";
+const SETUP_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-setup";
 
 #[derive(Debug, Error)]
 pub enum RelayError {

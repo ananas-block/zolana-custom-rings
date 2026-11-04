@@ -492,8 +492,6 @@ function sourceInvalid(reason: string, details: Readonly<Record<string, unknown>
   return new RingError("RING_POLICY_SOURCE_INVALID", { details: { reason, ...details } });
 }
 
-/** Rust `POLICY_TABLE_VERSION`, the second field of the table hash. */
-export const POLICY_TABLE_VERSION = 14;
 /** Fields absorbed per Poseidon call beside the accumulator, the 12-input syscall maximum. */
 const POLICY_TABLE_RATE = 11;
 
@@ -523,7 +521,6 @@ export function policyTableFields(table: RuleTable, sources: PolicySources): rea
   const slots = policyTableProofInputs(table, sources);
   const values = [
     domainField(RingDomain.policyTable),
-    fieldU8(POLICY_TABLE_VERSION),
     ...slots.sources.flatMap((owner) => [fieldU8(owner.listId), owner.registry]),
     fieldU8(slots.salted),
     fieldU8(slots.policyLen),

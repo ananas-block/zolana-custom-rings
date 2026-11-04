@@ -44,7 +44,7 @@ use spr_transaction::{
 use zolana_ring_client::{
     note_state, open_ring_confidential, verify_ring_owned, AnonymousError, AnonymousScan,
     AnonymousStream, AnonymousSync, AnonymousWallet, NoteState, RingConfidentialScan, SentCheck,
-    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP, VIEWING_HISTORY_VERSION,
+    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame,
@@ -1087,7 +1087,7 @@ async fn a_sent_body_that_fails_to_open_leaves_no_row() {
     let mut alice = Wallet::new(1);
     let bob = Wallet::new(2).address();
     let mut paid = alice.seal(&indexer, &[pay(&bob, 30)]);
-    // A scheme 13 body cut short, behind the encoding tag, the length and the scheme.
+    // A ring body cut short, behind the encoding tag, the length and the scheme.
     let short_body = RECIPIENT_BODY_LEN - 1;
     let payload = &mut paid.output_slots[1].payload;
     payload.truncate(6 + short_body);
@@ -1843,7 +1843,7 @@ async fn a_payment_without_a_reply_names_no_sender() {
 }
 
 #[test]
-fn a_wallet_document_round_trips_and_refuses_another_version() {
+fn a_wallet_document_round_trips_and_refuses_an_unknown_field() {
     let bob = Wallet::new(2);
     let mut confirmed = fresh(&bob);
     confirmed
@@ -1855,24 +1855,19 @@ fn a_wallet_document_round_trips_and_refuses_another_version() {
     let wallet = AnonymousWallet::new(rotated);
     let json = wallet.to_json();
     assert_eq!(AnonymousWallet::from_json(&json).unwrap(), wallet);
-    assert!(json.contains(&format!("\"version\":{VIEWING_HISTORY_VERSION}")));
-    let other = json.replacen(
-        &format!("\"version\":{VIEWING_HISTORY_VERSION}"),
-        "\"version\":6",
-        1,
-    );
+    let other = json.replacen('{', r#"{"version":6,"#, 1);
     assert!(matches!(
         AnonymousWallet::from_json(&other),
-        Err(AnonymousError::ViewingHistoryVersion { version: 6 })
+        Err(AnonymousError::WalletDocument(_))
     ));
     assert!(matches!(
-        AnonymousWallet::from_json(r#"{"version":6,"viewingHistory":[]}"#),
+        AnonymousWallet::from_json(r#"{"viewingHistory":[]}"#),
         Err(AnonymousError::WalletDocument(_))
     ));
 }
 
 #[test]
-fn a_bare_history_of_the_current_version_is_refused() {
+fn a_bare_history_is_refused() {
     let bob = Wallet::new(2);
     let wallet = AnonymousWallet::new(fresh(&bob));
     let document: serde_json::Value = serde_json::from_str(&wallet.to_json()).unwrap();
@@ -1956,7 +1951,7 @@ fn deposit_of(
             recipient_ciphertext: &encrypted.ciphertext,
         }
         .encode(),
-        false => b"CRDEP002".to_vec(),
+        false => b"CRDEPOST".to_vec(),
     };
     let payload = encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
         owner_utxo_hash: owner_utxo_hash(&owner.owner_hash().unwrap(), &blinding).unwrap(),

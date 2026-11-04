@@ -48,7 +48,7 @@ pub use ring_deposit::RingDepositPlaintext;
 pub enum RingDelivery {
     /// A body under the owner's viewing key, the owner tag its `u`.
     Delivered,
-    /// Scheme 13 under view tags at each recipient output, scheme 12 in a message.
+    /// Ring body under view tags at each recipient output, sender bundle in a message.
     Anonymous(Box<AnonymousPlan>),
 }
 

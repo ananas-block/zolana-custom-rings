@@ -68,9 +68,9 @@ const ZERO_MINT = encodeBase58(new Uint8Array(32));
 
 /** How the ring outputs of one transfer reach their recipients, Rust `RingDelivery`. */
 export type RingDelivery =
-  /** Scheme 13 under the owner's viewing key. */
+  /** Ring body under the owner's viewing key. */
   | Readonly<{ kind: "delivered" }>
-  /** Scheme 13 under view tags at each recipient output, scheme 12 in a message. */
+  /** Ring body under view tags at each recipient output, sender bundle in a message. */
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan }>;
 
 /** One recipient body, its tag derived from the slot secret. */
@@ -683,7 +683,7 @@ function anonymousWire(
   return { hash, ownerTag, body: { kind: "recipient", body: framedBody.body } };
 }
 
-/** The bytes past a scheme 13 body, `undefined` on any other slot. */
+/** The bytes past a ring body, `undefined` on any other slot. */
 function replyOf(
   wire: SlotWire,
   published: TransactOutput,

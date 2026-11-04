@@ -53,7 +53,7 @@ func (s Statement) Elements(t testing.TB) []*big.Int {
 		elements = append(elements, s.PublicAssets[k], s.PublicNets[k], s.PublicGross[k])
 	}
 	elements = append(elements, s.WithdrawalHash)
-	return append(elements, big.NewInt(int64(len(elements)+2)), big.NewInt(shared.TransferStatementVersion))
+	return append(elements, big.NewInt(int64(len(elements)+1)))
 }
 
 func bitField(set bool) *big.Int {

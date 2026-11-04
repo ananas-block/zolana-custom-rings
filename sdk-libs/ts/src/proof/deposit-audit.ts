@@ -42,7 +42,6 @@ import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 
 const PAYLOAD_LENGTH = RING_DEPOSIT_OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
 const ZERO = new Uint8Array(32) as Bytes32;
-const DEPOSIT_STATEMENT_VERSION = 4n;
 
 /** One deposit the auditor opens, the record's `secret` is its blinding. */
 export interface RingDepositSealInput {
@@ -219,7 +218,7 @@ export interface DepositStatement {
   readonly registry?: DepositRegistry;
 }
 
-/** Rust `DepositPublicInput::elements`, every slot padded to the maximum, the version closing. */
+/** Rust `DepositPublicInput::elements`, every slot padded to the maximum. */
 export function depositStatementElements(input: DepositStatement): readonly Bytes32[] {
   const count = input.ownerUtxoHashes.length;
   if (
@@ -265,7 +264,6 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
         ? [ZERO, ZERO]
         : [deposited.asset, bigIntBytes(deposited.amount) as Bytes32];
     }).flat(),
-    bigIntBytes(DEPOSIT_STATEMENT_VERSION) as Bytes32,
   ]);
 }
 

@@ -504,11 +504,10 @@ fn table_fields_bind_sources_and_all_rules_without_mint_tables() {
     let fields = table.encode().fields(&map);
     assert_eq!(fields.len(), 44);
     assert_eq!(fields[0], right_align(b"CRTB"));
-    assert_eq!(fields[1], field_u8(14));
-    assert_eq!(fields[18], [0; 32]);
-    assert_eq!(fields[19], field_u8(16));
-    assert_eq!(fields[35], table.rules()[15].encoded());
-    assert!(fields[36..].iter().all(|field| *field == [0; 32]));
+    assert_eq!(fields[17], [0; 32]);
+    assert_eq!(fields[18], field_u8(16));
+    assert_eq!(fields[34], table.rules()[15].encoded());
+    assert!(fields[35..].iter().all(|field| *field == [0; 32]));
     assert_eq!(table.encode().decode(), Ok(table));
     let hash = table.hash(&map).unwrap();
     let mut changed = table.encode();

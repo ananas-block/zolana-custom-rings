@@ -13,8 +13,6 @@ use zolana_ring_transaction::is_contributory;
 
 use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
 
-pub const VIEWING_HISTORY_VERSION: u32 = 8;
-
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
 
@@ -391,7 +389,6 @@ impl fmt::Debug for ViewingHistory {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct HistoryJson {
-    version: u32,
     viewing_history: Vec<EntryJson>,
 }
 
@@ -461,7 +458,6 @@ impl ViewingHistory {
     /// Stored only inside `AnonymousWallet`, its positions and watermarks cover the wallet's notes.
     pub(crate) fn to_json_value(&self) -> serde_json::Value {
         let history = HistoryJson {
-            version: VIEWING_HISTORY_VERSION,
             viewing_history: self
                 .entries
                 .iter()
@@ -494,16 +490,7 @@ impl ViewingHistory {
             .expect("a struct of strings, integers and vectors serializes")
     }
 
-    /// Another version fails with [`AnonymousError::ViewingHistoryVersion`], a sync rebuilds it.
     pub(crate) fn from_json_value(value: serde_json::Value) -> Result<Self, AnonymousError> {
-        #[derive(Deserialize)]
-        struct Versioned {
-            version: u32,
-        }
-        let Versioned { version } = Versioned::deserialize(&value).map_err(unparsed)?;
-        if version != VIEWING_HISTORY_VERSION {
-            return Err(AnonymousError::ViewingHistoryVersion { version });
-        }
         let entries = HistoryJson::deserialize(&value)
             .map_err(unparsed)?
             .viewing_history

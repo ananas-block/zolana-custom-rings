@@ -23,8 +23,6 @@ pub enum RingKeyError {
     InvalidRingAddressBase58,
     #[error("ring address has the wrong length")]
     InvalidRingAddressLength,
-    #[error("unknown ring address version {0}")]
-    UnknownRingAddressVersion(u8),
     #[error("ring address checksum mismatch")]
     InvalidRingAddressChecksum,
     #[error("ring address list salt does not fit its nullifier key")]

@@ -8,7 +8,7 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 use super::{base64, Attestation, ReadTarget, RequestBuildError, SignedRequest};
 
 pub const GET_LIST_SALT: &str = "getListSalt";
-const LIST_SALT_DOMAIN: &str = "zolana/ring-rpc-list-salt/v1";
+const LIST_SALT_DOMAIN: &str = "zolana/ring-rpc-list-salt";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

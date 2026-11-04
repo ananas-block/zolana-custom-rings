@@ -19,8 +19,6 @@ import (
 
 const (
 	MaxDeposits = 8
-	// DepositStatementVersion closes the statement, mirrored by DEPOSIT_STATEMENT_VERSION in program-libs/interface/src/instructions/deposit.rs.
-	DepositStatementVersion = 4
 	// DepositRecordLen is the canonical record then the blinding, mirrored by RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN.
 	DepositRecordLen = MergeRecordLen
 )
@@ -123,7 +121,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	transfer.AssertOutputOwners(api, tracking, slots, c.OutputEntries)
 	// 6. On a policy ring every recipient and deposited asset meets the rules under the bound roots.
 	c.ScreenDeposit(api, rc, tracking, slots)
-	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep1 stream puts slot i at counter 2 + 9i.
+	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, one CRING/dep stream puts slot i at counter 2 + 9i.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.SealStream(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, count, commitments, sealed)))
 	return nil
@@ -148,5 +146,5 @@ func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, com
 			chain = append(chain, 0, 0)
 		}
 	}
-	return append(chain, DepositStatementVersion)
+	return chain
 }

@@ -27,7 +27,6 @@ import {
   GapScan,
   PENDING_RETENTION,
   StreamCounter,
-  VIEWING_HISTORY_VERSION,
   ViewingHistory,
 } from "../../src/state/viewing-history.js";
 import {
@@ -586,7 +585,7 @@ describe("viewing history", () => {
     expect(counter.pending).toEqual([2n]);
   });
 
-  it("writes the version 8 form sorted by key text", () => {
+  it("writes the form sorted by key text", () => {
     const ringB = "So11111111111111111111111111111111111111112" as typeof RING;
     const ringA = "11111111111111111111111111111111" as typeof RING;
     const viewingPublicKey = key();
@@ -598,22 +597,18 @@ describe("viewing history", () => {
     const sorted = senders.map(hex2).sort();
     const counter = '{"next":0,"scanned":0,"pending":[]}';
     expect(history.toJson()).toBe(
-      `{"version":${VIEWING_HISTORY_VERSION},"viewingHistory":[{"viewingPubkey":"${hex2(viewingPublicKey)}","createdAt":3,` +
+      `{"viewingHistory":[{"viewingPubkey":"${hex2(viewingPublicKey)}","createdAt":3,` +
         `"tx":${counter},"request":${counter},"knownSenders":["${sorted[0]}","${sorted[1]}"],` +
         `"ringPositions":[{"ring":"${ringA}","afterSlot":null},{"ring":"${ringB}","afterSlot":8}]}]}`,
     );
     expect(ViewingHistory.fromJson(history.toJson()).toJson()).toBe(history.toJson());
-    expect(VIEWING_HISTORY_VERSION).toBe(8);
   });
 
-  it("refuses another version, a stale rotation, a malformed counter and a repeated ring", () => {
+  it("refuses another field, a stale rotation, a malformed counter and a repeated ring", () => {
     const history = ViewingHistory.create(key(), 0n);
-    const stored = JSON.parse(history.toJson()) as { version: number };
+    const stored = JSON.parse(history.toJson()) as object;
     expect(() => ViewingHistory.fromJson(JSON.stringify({ ...stored, version: 7 }))).toThrow(
-      expect.objectContaining({
-        code: "RING_VIEWING_HISTORY_VERSION",
-        details: { version: "7" },
-      }),
+      "RING_VIEWING_HISTORY_INVALID",
     );
     const rotated = history.withRotatedKey(key(), 5n);
     expect(() => rotated.withRotatedKey(key(), 5n)).toThrow("RING_ROTATED_KEY_NOT_NEWER");

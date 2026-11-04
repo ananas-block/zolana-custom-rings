@@ -235,7 +235,7 @@ func TestMergeRecordRebuildsTheOutput(t *testing.T) {
 
 func TestMergeCost(t *testing.T) {
 	cs := ringkey.Compile(t, &circuits.MergeCircuit{})
-	ringkey.RequirePinned(t, "custom_ring_merge_v4", cs)
+	ringkey.RequirePinned(t, "custom_ring_merge", cs)
 	for _, s := range []*ringmerge.Statement{ringmerge.Build(t), ringmerge.BuildZeroKey(t)} {
 		if err := solveCS(t, cs, s.Circuit); err != nil {
 			t.Fatal(err)

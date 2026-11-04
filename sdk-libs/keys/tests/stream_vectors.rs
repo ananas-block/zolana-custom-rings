@@ -68,7 +68,7 @@ fn parties() -> Parties {
 
 struct Worked<'a> {
     name: &'a str,
-    label: &'a [u8; 10],
+    label: &'a [u8; 9],
     secret: [u8; 32],
     counter: u32,
     plaintext: Vec<u8>,
@@ -77,10 +77,10 @@ struct Worked<'a> {
 impl Worked<'_> {
     /// The key and nonce come from the schedule's text, the ciphertext from the SDK stream.
     fn json(self) -> Value {
-        let mut tag = [0u8; 11];
-        tag[..10].copy_from_slice(self.label);
+        let mut tag = [0u8; 10];
+        tag[..9].copy_from_slice(self.label);
         let head = Poseidon::hashv(&[&right_align(&tag), &self.secret]).unwrap();
-        tag[10] = 1;
+        tag[9] = 1;
         let tail = Poseidon::hashv(&[&right_align(&tag), &self.secret]).unwrap();
         let key = [&head[1..], &tail[19..20]].concat();
         let nonce = &tail[20..];
