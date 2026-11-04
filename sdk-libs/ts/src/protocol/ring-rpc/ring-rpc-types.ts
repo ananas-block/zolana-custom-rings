@@ -63,6 +63,8 @@ export type RelayIntent =
   | Readonly<{
       operation: "delegate";
       proofInputs: Base64String;
+      /** The ring delegate's Ed25519 over `SppProofInputs::message_hash`. */
+      delegateSignature: Signature;
       tokenAccountSetup?: readonly TokenAccountSetup[];
     }>
   /** `proofInputs` is a Rust `RelayDepositInputs` or `RelayMergeInputs`. */

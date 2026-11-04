@@ -55,6 +55,8 @@ pub struct DelegateMove<'a> {
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
     pub wide_frames: WideFrames,
+    /// A relayed delegate names it, its wallet then reads the proven records.
+    pub tx_viewing_key: ViewingKey,
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -70,6 +72,7 @@ pub struct Delegated<'a> {
     output_tree_id: Option<u16>,
     shape: Option<Shape>,
     assets: Option<&'a AssetRegistry>,
+    tx_viewing_key: ViewingKey,
 }
 
 pub struct DelegateTransferInput<'a> {
@@ -114,9 +117,16 @@ impl<'a> RingTransfer<Delegated<'a>> {
                 output_tree_id: None,
                 shape: None,
                 assets: None,
+                tx_viewing_key: ViewingKey::new(),
             },
             list_salts: Vec::new(),
         }
+    }
+
+    #[must_use = "use the updated move"]
+    pub fn with_tx_viewing_key(mut self, key: ViewingKey) -> Self {
+        self.rail.tx_viewing_key = key;
+        self
     }
 
     /// The proof settles on `ring_authority_exit` and publishes the output's owner tag.
@@ -216,11 +226,12 @@ impl<'a> DelegateMove<'a> {
                 .collect(),
         })
         .with_assets(self.assets)
+        .with_tx_viewing_key(self.tx_viewing_key.clone())
     }
 }
 
 /// An anonymous ring keeps the victim and recipients hidden.
-pub(super) const fn delegate_rail(mode: RingMode) -> RingRail {
+pub(crate) const fn delegate_rail(mode: RingMode) -> RingRail {
     match mode {
         RingMode::Anonymous => RingRail::AnonymousDelegate,
         RingMode::Confidential => RingRail::Delegate,
@@ -321,8 +332,7 @@ impl Delegated<'_> {
             }
             .delivery()?,
         };
-        // The delegate holds no viewing key of the member, a fresh transaction key seals the move.
-        let rail = RingOutputRail::new(ViewingKey::new(), delivery);
+        let rail = RingOutputRail::new(self.tx_viewing_key.clone(), delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &self.source)?;
         let proof_inputs = rail.encrypt(transaction, &self.source)?;
         let shape = Shape::new(

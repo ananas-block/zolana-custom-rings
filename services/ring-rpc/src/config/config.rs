@@ -120,14 +120,22 @@ pub struct ServeArgs {
         requires_all = ["store_url", "prover_url"]
     )]
     pub fee_payer_key_file: Option<PathBuf>,
-    /// Enrollments the fee payer funds over the store's life, zero relays none.
+    /// Lamports reserved and spent over the store's life on buffers, enrollments and token accounts, zero funds none.
     #[arg(
         long,
-        env = "RING_RPC_ENROLLMENT_BUDGET",
+        env = "RING_RPC_RELAY_BUDGET_LAMPORTS",
         default_value_t = 0,
         requires = "fee_payer_key_file"
     )]
-    pub enrollment_budget: u64,
+    pub relay_budget_lamports: u64,
+    /// Lamports one signer holds outstanding at once.
+    #[arg(
+        long,
+        env = "RING_RPC_RELAY_SIGNER_BUDGET_LAMPORTS",
+        default_value_t = 0,
+        requires = "relay_budget_lamports"
+    )]
+    pub relay_signer_budget_lamports: u64,
     /// `postgres://` or `sqlite://` URL of the service store, also turns the record writer on.
     #[arg(
         long,

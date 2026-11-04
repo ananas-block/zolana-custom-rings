@@ -13,13 +13,14 @@ impl MigratorTrait for Migrator {
 #[derive(DeriveMigrationName)]
 struct Schema;
 
-const TABLES: [&str; 15] = [
+const TABLES: [&str; 16] = [
     "spend_unread_frames",
     "spend_integrity_faults",
     "spend_checkpoints",
     "replay_nonces",
     "relay_relays",
-    "relay_enrollments",
+    "relay_reservations",
+    "relay_reserved",
     "records_updates",
     "merge_settings",
     "merge_inputs",
@@ -48,7 +49,16 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE merge_inputs (nullifier {blob} PRIMARY KEY, ring {blob} NOT NULL, relay_id {blob} NOT NULL)"),
             format!("CREATE TABLE merge_settings (ring {blob} NOT NULL, owner {blob} NOT NULL, mint {blob} NOT NULL, target_note_count BIGINT NOT NULL, min_average_amount {blob} NOT NULL, signed_at BIGINT NOT NULL, PRIMARY KEY(ring, owner, mint))"),
             format!("CREATE TABLE records_updates (seq {serial}, id {blob} NOT NULL UNIQUE, registry {blob} NOT NULL, ring {blob} NOT NULL, request TEXT NOT NULL, writes {blob} NOT NULL, queued_slot BIGINT NOT NULL, valid_until_slot BIGINT NOT NULL, status TEXT NOT NULL, batch BIGINT REFERENCES records_batches(id), reason TEXT, attempts BIGINT NOT NULL DEFAULT 0, awaited BIGINT NOT NULL DEFAULT 0, joined {blob}, member {blob}, signer {blob}, role TEXT)"),
-            format!("CREATE TABLE relay_enrollments (relay_id {blob} NOT NULL PRIMARY KEY)"),
+            format!(
+                "CREATE TABLE relay_reservations (key {blob} NOT NULL PRIMARY KEY, relay_id {blob} NOT NULL, \
+                 signer {blob} NOT NULL, lamports BIGINT NOT NULL, landing_rent BIGINT NOT NULL, ring {blob}, buffer {blob}, \
+                 uploaded BIGINT NOT NULL, spent BIGINT NOT NULL, proven TEXT, touched_slot BIGINT NOT NULL)"
+            ),
+            format!(
+                "CREATE TABLE relay_reserved (scope {blob} NOT NULL PRIMARY KEY, committed BIGINT NOT NULL)"
+            ),
+            "CREATE INDEX relay_reservations_relay ON relay_reservations(relay_id)".to_owned(),
+            "CREATE INDEX relay_reservations_touched ON relay_reservations(touched_slot)".to_owned(),
             format!("CREATE TABLE relay_relays (relay_id {blob} PRIMARY KEY, status TEXT NOT NULL, state TEXT NOT NULL)"),
             format!("CREATE TABLE replay_nonces (ring {blob} NOT NULL, nonce {blob} NOT NULL, signed_at BIGINT NOT NULL, PRIMARY KEY(ring, nonce))"),
             format!("CREATE TABLE spend_checkpoints (ring {blob} NOT NULL PRIMARY KEY, after_slot BIGINT, token VARCHAR(256), through_slot BIGINT NOT NULL, block_time BIGINT NOT NULL)"),

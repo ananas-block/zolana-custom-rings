@@ -54,6 +54,8 @@ pub enum RelayRail {
     Confidential,
     Delegate {
         delegate: Address,
+        /// Present exactly on an anonymous ring, the frame's sender bundle reads it.
+        plan: Option<Box<AnonymousPlan>>,
     },
 }
 
@@ -277,6 +279,7 @@ enum RailWire {
     Confidential,
     Delegate {
         delegate: Address,
+        plan: Option<Box<PlanWire>>,
     },
 }
 
@@ -458,19 +461,13 @@ impl RailWire {
                 plan,
                 exit_token_owner,
             } => Self::Anonymous {
-                plan: Box::new(PlanWire {
-                    recipients: plan
-                        .recipients()
-                        .iter()
-                        .map(|recipient| *recipient.as_bytes())
-                        .collect(),
-                    dummy_preimages: *plan.dummy_preimages(),
-                }),
+                plan: Box::new(PlanWire::of(plan)),
                 exit_token_owner: *exit_token_owner,
             },
             RelayRail::Confidential => Self::Confidential,
-            RelayRail::Delegate { delegate } => Self::Delegate {
+            RelayRail::Delegate { delegate, plan } => Self::Delegate {
                 delegate: *delegate,
+                plan: plan.as_deref().map(|plan| Box::new(PlanWire::of(plan))),
             },
         }
     }
@@ -481,20 +478,41 @@ impl RailWire {
                 plan,
                 exit_token_owner,
             } => RelayRail::Anonymous {
-                plan: Box::new(AnonymousPlan::from_parts(
-                    plan.recipients
-                        .iter()
-                        .map(|recipient| X25519Pubkey::from_bytes(*recipient))
-                        .collect::<Result<_, KeypairError>>()?,
-                    plan.dummy_preimages,
-                )),
+                plan: Box::new(plan.plan()?),
                 exit_token_owner: *exit_token_owner,
             },
             Self::Confidential => RelayRail::Confidential,
-            Self::Delegate { delegate } => RelayRail::Delegate {
+            Self::Delegate { delegate, plan } => RelayRail::Delegate {
                 delegate: *delegate,
+                plan: plan
+                    .as_deref()
+                    .map(|plan| plan.plan().map(Box::new))
+                    .transpose()?,
             },
         })
+    }
+}
+
+impl PlanWire {
+    fn of(plan: &AnonymousPlan) -> Self {
+        Self {
+            recipients: plan
+                .recipients()
+                .iter()
+                .map(|recipient| *recipient.as_bytes())
+                .collect(),
+            dummy_preimages: *plan.dummy_preimages(),
+        }
+    }
+
+    fn plan(&self) -> Result<AnonymousPlan, RelayProofInputsError> {
+        Ok(AnonymousPlan::from_parts(
+            self.recipients
+                .iter()
+                .map(|recipient| X25519Pubkey::from_bytes(*recipient))
+                .collect::<Result<_, KeypairError>>()?,
+            self.dummy_preimages,
+        ))
     }
 }
 

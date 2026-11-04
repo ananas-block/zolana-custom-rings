@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import type { RelayIntent } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import {
   encodeRelayEnrollInputs,
   enrollRequestDigest,
@@ -61,48 +61,64 @@ describe("prepareRelay", () => {
   });
 });
 
-describe("an enrollment relay", () => {
+describe("relay_enroll_inputs.json", () => {
+  const vector = JSON.parse(
+    readFileSync(
+      new URL("../../../../../test-vectors/rpc/relay_enroll_inputs.json", import.meta.url),
+      "utf8",
+    ),
+  ) as Readonly<Record<string, string>>;
+  const bytes = (name: string) => Uint8Array.from(Buffer.from(vector[name] ?? "", "hex"));
+  const hex = (value: Uint8Array) => Buffer.from(value).toString("hex");
   const inputs = {
     ringProgramId: filled(1, 32) as Address,
     owner: filled(2, 32) as Address,
     trackingRegistry: filled(3, 32) as Address,
-    instructionData: Uint8Array.of(6, 7, 8),
+    instructionData: bytes("instruction_data"),
   };
-  const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
+  const request = (intent: RelayIntent) => ({
+    ring: filled(1, 32) as Address,
+    quote: { feePayer: filled(2, 32) as Address, validUntilSlot: 4242n },
+    intent,
+  });
+  const proofInputs = "AwQF" as indexerTypes.Base64String;
+  const signature = filled(7, 64) as Signature;
 
-  it("encodes the bytes Rust `RelayEnrollInputs::encode` writes", () => {
-    expect(hex(encodeRelayEnrollInputs(inputs))).toBe(
-      `${"01".repeat(32)}${"02".repeat(32)}${"03".repeat(32)}0300000000000000060708`,
-    );
+  it("encodes the inputs and hashes the digest Rust writes", () => {
+    expect(hex(encodeRelayEnrollInputs(inputs))).toBe(vector["encoded"]);
+    expect(hex(enrollRequestDigest(inputs))).toBe(vector["request_digest"]);
   });
 
-  it("signs a digest over the domain and every field, a changed field moves it", () => {
-    const expected = createHash("sha256")
-      .update("zolana/ring-rpc-relay-enroll/v1")
-      .update(Buffer.from("01".repeat(32) + "02".repeat(32) + "03".repeat(32) + "060708", "hex"))
-      .digest("hex");
-    expect(hex(enrollRequestDigest(inputs))).toBe(expected);
+  it("moves the digest with a changed field", () => {
     expect(
       hex(enrollRequestDigest({ ...inputs, instructionData: Uint8Array.of(6, 7, 9) })),
-    ).not.toBe(expected);
+    ).not.toBe(vector["request_digest"]);
   });
 
-  it("carries the owner signature and refuses an intent without one", () => {
-    const request = (ownerSignature: unknown) => ({
-      ring: filled(1, 32) as Address,
-      quote: { feePayer: filled(2, 32) as Address, validUntilSlot: 4242n },
-      intent: {
-        operation: "enroll" as const,
-        proofInputs: "AwQF" as indexerTypes.Base64String,
-        ownerSignature: ownerSignature as Signature,
-      },
-    });
-    expect(encodePrepareRelayRequest(request(filled(7, 64))).intent).toEqual({
-      operation: "enroll",
-      proofInputs: "AwQF",
-      ownerSignature: filled(7, 64),
-    });
-    expect(() => encodePrepareRelayRequest(request(undefined))).toThrow();
+  it("carries each signature byte for byte as Rust", () => {
+    expect(
+      JSON.stringify(
+        encodePrepareRelayRequest(
+          request({ operation: "enroll", proofInputs, ownerSignature: signature }),
+        ),
+      ),
+    ).toBe(vector["enroll_wire"]);
+    expect(
+      JSON.stringify(
+        encodePrepareRelayRequest(
+          request({ operation: "delegate", proofInputs, delegateSignature: signature }),
+        ),
+      ),
+    ).toBe(vector["delegate_wire"]);
+  });
+
+  it("refuses an enroll or delegate intent with no signature", () => {
+    const missing = undefined as unknown as Signature;
+    for (const intent of [
+      { operation: "enroll", proofInputs, ownerSignature: missing },
+      { operation: "delegate", proofInputs, delegateSignature: missing },
+    ] as const)
+      expect(() => encodePrepareRelayRequest(request(intent))).toThrow();
   });
 });
 

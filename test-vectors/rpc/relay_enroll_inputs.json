@@ -1,0 +1,11 @@
+{
+  "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, tracking registry of 0x03 and instruction data 06 07 08, encoded in wincode, with the digest its owner signs. enroll_wire and delegate_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
+  "ring_program_id": "0101010101010101010101010101010101010101010101010101010101010101",
+  "owner": "0202020202020202020202020202020202020202020202020202020202020202",
+  "tracking_registry": "0303030303030303030303030303030303030303030303030303030303030303",
+  "instruction_data": "060708",
+  "encoded": "0101010101010101010101010101010101010101010101010101010101010101020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030300000000000000060708",
+  "request_digest": "fcb768e127c618a7a42404f0e5d57f0292fbf81b4292b6ac052d39865eeb4c7f",
+  "enroll_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"enroll\",\"proofInputs\":\"AwQF\",\"ownerSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
+  "delegate_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"delegate\",\"proofInputs\":\"AwQF\",\"delegateSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}"
+}

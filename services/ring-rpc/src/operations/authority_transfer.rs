@@ -32,6 +32,8 @@ pub enum AuthorityTransferError {
     SourceKey = -32223,
     #[error("the service runs no relay")]
     RelayUnavailable = -32224,
+    #[error("the transaction key is not a clamped X25519 secret")]
+    TxViewingKey = -32225,
 }
 
 impl AuthorityTransferError {
@@ -139,6 +141,10 @@ impl<S: TransactionSource> Hub<S> {
             now,
         }
         .decide()?;
+        let tx_viewing_key = request
+            .tx_viewing_key
+            .key()
+            .map_err(|_| AuthorityTransferError::TxViewingKey)?;
         let relay_id = request
             .relay_id()
             .map_err(|_| RingRpcError::StateUnavailable)?;
@@ -153,15 +159,17 @@ impl<S: TransactionSource> Hub<S> {
         if config.auditor_pubkey != service.auditor_pubkey() {
             return Err(AuthorityTransferError::EscrowUnserved.into());
         }
-        shared
-            .replay
-            .accept(ReplayCheck {
-                ring,
-                nonce,
-                timestamp: request.timestamp,
-                now,
-            })
-            .await?;
+        if !relay.holds(&relay_id).await? {
+            shared
+                .replay
+                .accept(ReplayCheck {
+                    ring,
+                    nonce,
+                    timestamp: request.timestamp,
+                    now,
+                })
+                .await?;
+        }
         // 3. The escrowed secret opens to the source's nullifier key and stays in memory.
         let source = transfer.source.0;
         let owner_key = source
@@ -195,6 +203,7 @@ impl<S: TransactionSource> Hub<S> {
                     delegate,
                     source,
                     nullifier_key: &nullifier_key,
+                    tx_viewing_key,
                     notes: &notes,
                     mint,
                     payments: transfer
@@ -223,7 +232,7 @@ mod tests {
     use solana_message::VersionedMessage;
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
-    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
+    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
@@ -236,12 +245,14 @@ mod tests {
         managed_merge::tests::{fee_payer, Fixture, ScriptedChain, GENESIS, MINT, RING},
         relay::{RelayParts, RelayPayload},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+        relay_reservations::RelayReservations,
     };
 
     #[derive(Default)]
     struct SealingProver {
         sealed: Mutex<Vec<Sealed>>,
         proven: Mutex<Vec<(Address, [u8; 31])>>,
+        frame: Mutex<Option<Vec<u8>>>,
     }
 
     struct Sealed {
@@ -256,7 +267,7 @@ mod tests {
             let RelayPayload::Transfer(proof_inputs) = request.payload else {
                 panic!("an authority transfer proves a transfer");
             };
-            let RelayRail::Delegate { delegate } = proof_inputs.rail else {
+            let RelayRail::Delegate { delegate, .. } = proof_inputs.rail else {
                 panic!("an authority transfer proves on the delegate rail");
             };
             self.proven
@@ -270,7 +281,12 @@ mod tests {
                         AccountMeta::new(request.parties.fee_payer, true),
                         AccountMeta::new_readonly(delegate, true),
                     ],
-                    data: vec![21],
+                    data: self
+                        .frame
+                        .lock()
+                        .expect("frame")
+                        .clone()
+                        .unwrap_or_else(|| vec![21]),
                 },
                 budget: ComputeBudgetConfig::new(400_000),
                 co_signers: Vec::new(),
@@ -288,10 +304,11 @@ mod tests {
                 secret: *seal.nullifier_key.secret(),
                 nullifiers: seal.notes.iter().map(|note| note.nullifier).collect(),
             });
-            let tx_viewing_key = ViewingKey::new();
+            let tx_viewing_key = seal.tx_viewing_key;
             Ok(RelayProofInputs {
                 rail: RelayRail::Delegate {
                     delegate: seal.delegate,
+                    plan: None,
                 },
                 ring_program_id: seal.ring,
                 sender: seal.source,
@@ -394,6 +411,68 @@ mod tests {
             *prover.proven.lock().expect("proven"),
             [(delegate.pubkey(), *escrowed.secret())]
         );
+    }
+
+    /// A retry of the signed request passes its own nonce, proves nothing and resumes the upload.
+    #[tokio::test]
+    async fn a_wide_delegate_frame_reserves_under_the_delegate_and_a_retry_resumes() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let prover = Arc::new(SealingProver::default());
+        let mut frame = vec![9; 6000];
+        frame[0] = custom_ring_interface::tag::AUTHORITY_TRANSFER;
+        *prover.frame.lock().expect("frame") = Some(frame);
+        let chain = Arc::new(ScriptedChain::default());
+        *chain.outcome.lock().expect("outcome") =
+            Some(crate::landing::ChainOutcome::Confirmed { slot: 1 });
+        *chain.down.lock().expect("down") = true;
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let relay = RelayParts {
+            store: store.clone(),
+            prover: prover.clone(),
+            fee_payer: fee_payer(),
+            chain: chain.clone(),
+        };
+        let fixture = Fixture::serving(Some(delegate.pubkey()), Some(relay)).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let reservations = RelayReservations::new(store.connection());
+
+        let stranger = Keypair::new_from_array([22; 32]);
+        let foreign = request(&fixture, &stranger, address(&wallet, &escrowed));
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&foreign)
+            .await
+            .is_err());
+        let foreign_id = foreign.relay_id().expect("relay id");
+        assert!(reservations
+            .by_relay(&foreign_id)
+            .await
+            .expect("read")
+            .is_none());
+
+        let signed = request(&fixture, &delegate, address(&wallet, &escrowed));
+        let relay_id = signed.relay_id().expect("relay id");
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&signed)
+            .await
+            .is_err());
+        let held = reservations
+            .by_relay(&relay_id)
+            .await
+            .expect("read")
+            .expect("reservation");
+        assert_eq!(held.signer, delegate.pubkey());
+
+        *chain.down.lock().expect("down") = false;
+        let step = fixture
+            .hub
+            .prepare_authority_transfer(&signed)
+            .await
+            .expect("the retry");
+        assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
+        assert_eq!(prover.proven.lock().expect("proven").len(), 1);
     }
 
     fn notes_request(

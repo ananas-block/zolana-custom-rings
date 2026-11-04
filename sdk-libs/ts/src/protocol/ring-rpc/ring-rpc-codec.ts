@@ -118,6 +118,7 @@ function encodeRelayIntent(intent: RelayIntent): WireObject {
       return {
         operation: intent.operation,
         proofInputs,
+        delegateSignature: checkedSignature(intent.delegateSignature, "intent.delegateSignature"),
         ...encodeTokenAccountSetup(intent.tokenAccountSetup),
       };
     case "deposit":

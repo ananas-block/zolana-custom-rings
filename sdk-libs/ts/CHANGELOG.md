@@ -2,7 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
-- `RelayIntent` adds `enroll` with an `ownerSignature` over `enrollRequestDigest`, `encodeRelayEnrollInputs` encodes its `proofInputs`, and the Ring RPC refusals add -32202 to -32205.
+- `RelayIntent` adds `enroll` with an `ownerSignature` over `enrollRequestDigest`, `encodeRelayEnrollInputs` encodes its `proofInputs`, the `delegate` intent requires a `delegateSignature`, and `RingRpcRefusal` adds -32202 to -32206 → sign `SppProofInputs.messageHash` with the ring delegate key and pass it as `delegateSignature`.
 - `AnonymousPayment` takes `data` as `NoteData`, a `ringDataHash` goes to any recipient and an `application` hash makes the output's owner a signer, and application bytes under a zero hash refuse with `RING_NOTE_DATA_UNBOUND`.
 - `DelegateTransfer.withBufferedSettlement` and `BufferedFrame` carry a delegate frame, `BufferedFrame.forWriter` names its nonce from the digest, and `PendingRelaySignature.signOnChain` reads a settling message's buffer and runs every delegate check over its frame, while `sign` refuses such a message with the `SettlesBuffer` mismatch.
 - A two-output spend of 25 to 49 published inputs proves on `custom-ring-transfer-wide-2-in49-w4-s12`, `FrameKey` takes `inputs`, and a spend no key holds refuses with `RING_CATALOG_KEY_MISSING` where it read `RING_TRANSACT_DATA_INVALID`.
