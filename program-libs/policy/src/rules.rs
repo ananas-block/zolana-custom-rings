@@ -59,6 +59,8 @@ pub enum TransferSubject {
     Owner(usize),
     /// A position in `TransferSubjects::outputs`.
     Asset(usize),
+    /// A position in the live inputs `evaluate_input_assets` reads.
+    InputAsset(usize),
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -126,6 +128,38 @@ impl RuleTable {
         )
     }
 
+    /// The unconditional asset rules over each live input's asset, mirror `assertInputAssetRules`.
+    ///
+    /// A zero value input can name an asset no payment moves. A guarded rule stays out, its total
+    /// reads payments alone and a payment of the asset already meets it.
+    pub fn evaluate_input_assets(
+        &self,
+        sources: &SourceMap,
+        assets: &[RecordLists],
+    ) -> Result<(), RuleRefusal> {
+        let (foreign, salted) = (foreign_lists(sources), sources.salted());
+        for (index, rule) in self.rules().iter().enumerate() {
+            if rule.subject != Subject::Asset || !matches!(rule.guard, Guard::Always) {
+                continue;
+            }
+            let check = RuleCheck {
+                outputs: &[],
+                scope: GuardScope {
+                    ring_inputs: &[],
+                    payments: &[],
+                },
+                foreign,
+                salted,
+                index,
+                rule,
+            };
+            for (input, lists) in assets.iter().enumerate() {
+                check.listed(TransferSubject::InputAsset(input), *lists)?;
+            }
+        }
+        Ok(())
+    }
+
     fn screen(&self, sources: &SourceMap, screened: Screened<'_>) -> Result<(), RuleRefusal> {
         let Screened { senders, payments } = screened;
         let foreign = foreign_lists(sources);
@@ -172,6 +206,7 @@ impl fmt::Display for TransferSubject {
             Self::Sender => f.write_str("the sender"),
             Self::Owner(output) => write!(f, "the owner of output {output}"),
             Self::Asset(output) => write!(f, "the asset of output {output}"),
+            Self::InputAsset(input) => write!(f, "the asset of live input {input}"),
         }
     }
 }
@@ -227,7 +262,7 @@ impl RuleCheck<'_> {
 
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
         let salted = match subject {
-            TransferSubject::Asset(_) => ListSet::EMPTY,
+            TransferSubject::Asset(_) | TransferSubject::InputAsset(_) => ListSet::EMPTY,
             TransferSubject::Sender | TransferSubject::Owner(_) => self.salted,
         };
         if holds(self.rule, records.on(self.foreign, salted)) {
