@@ -8,7 +8,7 @@ export const RING_DEPOSIT_AUDIT_SLOTS = 8;
 export const RING_DEPOSIT_OPENING_LENGTH = OPENING_RECORD_LEN;
 /** The batch's stream blocks of one record, slot `i` opens at `STREAM_FIRST_COUNTER + 9i`. */
 export const RING_DEPOSIT_OPENING_BLOCKS = 9;
-const MAGIC = new TextEncoder().encode("CRDEP002");
+const MAGIC = new TextEncoder().encode("CRDEPOST");
 const HEADER_LENGTH = 42 + RING_DEPOSIT_OPENING_LENGTH;
 
 export interface RingDepositCapsule {

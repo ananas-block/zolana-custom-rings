@@ -94,7 +94,7 @@ fn compute_vectors() -> ExpansionVectors {
         })
         .collect();
     ExpansionVectors {
-        description: "Compact ring transact data of each rail at statement version 4 and what \
+        description: "Compact ring transact data of each rail and what \
                       the ring program forwards for it, the SPP TransactIxData, the SPP instruction \
                       data and the external data hash over the SPP tag, the data before \
                       private_tx_hash and two settlement accounts per leg. Byte 0 carries the \
@@ -110,11 +110,11 @@ fn compute_vectors() -> ExpansionVectors {
                       of ceil(m / 8) bytes each. A slot is a u16 body length under has_data, its \
                       hash, its tag of 8 bytes or 32 on an exit and its body, 72 bytes for a recipient body and 83 for an exit \
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
-                      per body-bearing slot follow the slots. The anonymous frame's scheme 12 \
-                      bundle follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
+                      per body-bearing slot follow the slots. The anonymous frame's sender bundle \
+                      follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
                       m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
-                      those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || tx_viewing_u \
-                      || envelope || records || tails. Recipient bodies forward as scheme 13, \
+                      those of ring-disclosure-ranges.json. The auditor message is 0x04 || tx_viewing_u \
+                      || envelope || records || tails. Recipient bodies forward as ring body, \
                       u16le(body_len) || body || reply. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),

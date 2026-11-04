@@ -10,7 +10,7 @@ export interface RelayEnrollInputs {
   readonly instructionData: Uint8Array;
 }
 
-const ENROLL_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-enroll/v1");
+const ENROLL_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-enroll");
 
 export function encodeRelayEnrollInputs(value: RelayEnrollInputs): Uint8Array {
   return new Writer()

@@ -1,7 +1,6 @@
 use custom_ring_interface::{
     CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
-    OpeningRecord, PlainGroth16Proof, RecordKind, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
-    DEPOSIT_STATEMENT_VERSION, MAX_RING_DEPOSIT_AUDIT_SLOTS,
+    OpeningRecord, PlainGroth16Proof, RecordKind, MAX_RING_DEPOSIT_AUDIT_SLOTS,
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
 };
 use serde::Deserialize;
@@ -287,33 +286,15 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
     }
 }
 
+/// HashChain4 pads zeros, every count hashes one length.
 #[test]
-fn the_statement_closes_on_its_version() {
-    let input = DepositPublicInput {
-        context_hash: &[5; 32],
-        anonymous: false,
-        owner_utxo_hashes: &[[1; 32]],
-        ciphertexts: &[[3; CT]],
-        assets: &[asset(10, 11)],
-        auditor_pk: &[6; 33],
-        eph_pk: &[7; 33],
-        tracking_root: &[14; 32],
-        registry: None,
-    };
-    let elements = input.elements().unwrap();
-    assert_eq!(elements.last().unwrap()[31], DEPOSIT_STATEMENT_VERSION);
-    assert_eq!(CT, 144);
-}
-
-/// Modelled with the closing element dropped.
-#[test]
-fn a_chain_without_its_close_stays_injective_at_its_one_length() {
+fn a_zero_tail_stays_injective_at_the_one_length() {
     let owners = [[1; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS];
     let ciphertexts = [[3; CT]; MAX_RING_DEPOSIT_AUDIT_SLOTS];
     let assets: [DepositedAsset; MAX_RING_DEPOSIT_AUDIT_SLOTS] =
         core::array::from_fn(|_| asset(10, 11));
     let chain = |count: usize| {
-        let elements = DepositPublicInput {
+        DepositPublicInput {
             context_hash: &[5; 32],
             anonymous: false,
             owner_utxo_hashes: &owners[..count],
@@ -325,17 +306,16 @@ fn a_chain_without_its_close_stays_injective_at_its_one_length() {
             registry: None,
         }
         .elements()
-        .unwrap();
-        elements[..DEPOSIT_PUBLIC_INPUT_ELEMENTS - 1].to_vec()
+        .unwrap()
     };
     let hash = |elements: &[[u8; 32]]| create_hash_chain_4_from_slice(elements).unwrap();
     let one = chain(1);
     assert_eq!(one.last(), Some(&[0; 32]));
     let reference = hash(&one);
-    let padded = |zeros: usize| hash(&[one.clone(), vec![[0; 32]; zeros]].concat());
+    let padded = |zeros: usize| hash(&[one.to_vec(), vec![[0; 32]; zeros]].concat());
     assert_eq!((padded(1), padded(2)), (reference, reference));
     assert_ne!(padded(3), reference);
-    let mut moved = one.clone();
+    let mut moved = one;
     moved.last_mut().unwrap()[31] = 1;
     assert_ne!(hash(&moved), reference);
     let hashes: std::collections::BTreeSet<_> = (1..=MAX_RING_DEPOSIT_AUDIT_SLOTS)

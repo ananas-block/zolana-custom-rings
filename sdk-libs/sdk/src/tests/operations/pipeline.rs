@@ -289,11 +289,10 @@ fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
             let OwnerTag::Inline(tag) = output.owner_tag else {
                 panic!("an anonymous slot is tagged inline, {:?}", output.owner_tag);
             };
-            let body = output.data.as_deref().map(|data| {
-                ring_body_output(data)
-                    .expect("a scheme 13 recipient body")
-                    .0
-            });
+            let body = output
+                .data
+                .as_deref()
+                .map(|data| ring_body_output(data).expect("a ring body").0);
             (tag, body)
         })
         .collect()
@@ -327,7 +326,7 @@ fn payment_at(staged: &Staged<'_>, reader: &ShieldedKeypair, position: usize) ->
 fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> SenderBundle {
     let external = &staged.proof_inputs.external_data;
     let message = &external.messages[0];
-    let body = ring_sender_bundle_output_body(&message.data).expect("a scheme 12 sender bundle");
+    let body = ring_sender_bundle_output_body(&message.data).expect("a sender bundle");
     let published = external.outputs.len();
     open_sender_bundle(body, &slot_secret(staged, sender, published), published).unwrap()
 }

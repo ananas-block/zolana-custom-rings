@@ -8,7 +8,7 @@ pub const MAX_RING_DEPOSIT_AUDIT_SLOTS: usize = 8;
 pub const RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN: usize = OPENING_RECORD_LEN;
 pub const RING_DEPOSIT_AUDIT_PREFIX_LEN: usize = core::mem::size_of::<CapsuleHeader>();
 
-const MAGIC: &[u8; 8] = b"CRDEP002";
+const MAGIC: &[u8; 8] = b"CRDEPOST";
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]

@@ -98,12 +98,11 @@ func (c *tableCircuit) Define(api frontend.API) error {
 
 func TestPolicyTableMatchesRustVectors(t *testing.T) {
 	var vectors struct {
-		Version int           `json:"version"`
-		Cases   []tableVector `json:"cases"`
+		Cases []tableVector `json:"cases"`
 	}
 	ringtest.ReadVector(t, "policy/ring-policy-table.json", &vectors)
-	if vectors.Version != policy.PolicyTableVersion || len(vectors.Cases) == 0 {
-		t.Fatalf("version %d with %d cases, want version %d", vectors.Version, len(vectors.Cases), policy.PolicyTableVersion)
+	if len(vectors.Cases) == 0 {
+		t.Fatal("no cases")
 	}
 	split := ringtest.RegisteredHint(t, "rulePartsHint")
 	for _, v := range vectors.Cases {

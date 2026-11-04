@@ -29,7 +29,7 @@ pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {
 /// The key schedule of a sealed stream.
 #[derive(Clone, Copy)]
 pub(crate) enum StreamSchedule {
-    Ring(&'static [u8; 10]),
+    Ring(&'static [u8; 9]),
 }
 
 /// Binds the X25519 output to both keys that produced it, in the order `seal.go` hashes.
@@ -74,7 +74,7 @@ pub(crate) fn open_stream(
 pub(crate) fn sealing_ring_stream(
     ephemeral: &X25519Keypair,
     auditor: &X25519Pubkey,
-    label: &[u8; 10],
+    label: &[u8; 9],
 ) -> Result<RingStream> {
     Ok(RingStream::new(
         &*sealing_secret(ephemeral, auditor)?,
@@ -86,7 +86,7 @@ pub(crate) fn sealing_ring_stream(
 pub(crate) fn opening_ring_stream(
     auditor: &X25519Keypair,
     ephemeral: &X25519Pubkey,
-    label: &[u8; 10],
+    label: &[u8; 9],
 ) -> Result<RingStream> {
     Ok(RingStream::new(
         &*opening_secret(auditor, ephemeral)?,
@@ -99,7 +99,7 @@ pub(crate) fn sealing_salted_stream(
     key: &X25519Keypair,
     auditor: &X25519Pubkey,
     salt: &[u8; 16],
-    label: &[u8; 10],
+    label: &[u8; 9],
 ) -> Result<RingStream> {
     let secret = salted(&*sealing_secret(key, auditor)?, salt)?;
     Ok(RingStream::new(&secret, label)?)
@@ -109,7 +109,7 @@ pub(crate) fn opening_salted_stream(
     auditor: &X25519Keypair,
     key: &X25519Pubkey,
     salt: &[u8; 16],
-    label: &[u8; 10],
+    label: &[u8; 9],
 ) -> Result<RingStream> {
     let secret = salted(&*opening_secret(auditor, key)?, salt)?;
     Ok(RingStream::new(&secret, label)?)

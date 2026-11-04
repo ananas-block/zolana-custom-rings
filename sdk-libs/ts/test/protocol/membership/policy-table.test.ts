@@ -9,7 +9,6 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import rulesVector from "../../../../../test-vectors/policy/ring-policy-rules.json" with { type: "json" };
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import {
-  POLICY_TABLE_VERSION,
   admitTransfer,
   decodeRule,
   decodeRuleTable,
@@ -37,13 +36,9 @@ const tableVector = JSON.parse(
     new URL("../../../../../test-vectors/policy/ring-policy-table.json", import.meta.url),
     "utf8",
   ),
-) as Readonly<{ version: number; cases: readonly TableCase[] }>;
+) as Readonly<{ cases: readonly TableCase[] }>;
 
 describe("ring-policy-table.json", () => {
-  it("names the encoding version", () => {
-    expect(tableVector.version).toBe(POLICY_TABLE_VERSION);
-  });
-
   it.each(tableVector.cases.map((vector) => [vector.name, vector] as const))("%s", (_, vector) => {
     const table = { rules: vector.rules.map((row) => decodeRule(field(row))) };
     const sources = {

@@ -14,7 +14,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// RecipientBody is the scheme 13 plaintext, the host twin of audit.AuditWires.assertRecipientBody.
+// RecipientBody is the ring body plaintext, the host twin of audit.AuditWires.assertRecipientBody.
 type RecipientBody struct {
 	Blinding *big.Int
 	Amount   uint64
@@ -28,7 +28,7 @@ func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [shared.Recipient
 	return [shared.RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
 }
 
-// SenderBundle is the scheme 12 plaintext, the host twin of audit.AuditWires.sealSenderBundle, one key per published slot.
+// SenderBundle is the sender bundle plaintext, the host twin of audit.AuditWires.sealSenderBundle, one key per published slot.
 type SenderBundle struct {
 	Mint              [32]byte
 	Amount, SolAmount uint64

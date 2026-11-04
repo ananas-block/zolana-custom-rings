@@ -1179,7 +1179,7 @@ describe("RpcTransactionOrigin", () => {
         RING,
       );
 
-    it("binds a CRDEP002 capsule and refuses another forwarded byte", () => {
+    it("binds a CRDEPOST capsule and refuses another forwarded byte", () => {
       expect(bound(source)).toHaveLength(1);
       const tampered = source.slice();
       tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;

@@ -1,4 +1,4 @@
-//! Confidential ring notes of scheme 13 and ring deposits opened into a wallet, the pinned zolana scan skips them.
+//! Confidential ring notes and ring deposits opened into a wallet, the pinned zolana scan skips them.
 
 use std::collections::HashSet;
 
@@ -213,7 +213,7 @@ pub fn open_ring_confidential<K: ShieldedKeys + RingKeys + ?Sized>(
     RingConfidentialScan::new(keys, assets).open(transactions)
 }
 
-/// `None` off scheme 13 or on a body that rebuilds nothing.
+/// `None` off a ring body output or on a body that rebuilds nothing.
 fn open_recipient_candidate(
     address: &ShieldedAddress,
     assets: &RingAssets,
