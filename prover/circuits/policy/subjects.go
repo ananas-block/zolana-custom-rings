@@ -100,13 +100,13 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 		resolved.owners[i] = resolveOwner(p.OwnerEntries[i], api.Mul(pay.Active, g.Screened), pay.Owner)
 		var record pooledRecord
 		resolved.assets[i], record = resolve(p.AssetEntries[i], api.Mul(pay.Active, mintRead), curated, pay.Asset)
-		resolved.mintPolicies[i] = record.mintPolicy
+		resolved.mintPolicies[i] = decodeMintPolicy(api, record.mintPolicy)
 	}
 	for k, index := range p.PublicAssetEntries {
 		asset := p.PublicAssets[k]
 		active := api.Mul(ringgadget.IsNonZero(api, asset), mintRead)
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: asset, index: index}))
-		resolved.publicAssets = append(resolved.publicAssets, publicAsset{limitedAsset: limitedAsset{asset: asset, active: active, policy: record.mintPolicy}, withdrawalThreshold: record.withdrawalThreshold})
+		resolved.publicAssets = append(resolved.publicAssets, publicAsset{limitedAsset: limitedAsset{asset: asset, active: active, policy: decodeMintPolicy(api, record.mintPolicy)}, withdrawalThreshold: record.withdrawalThreshold})
 	}
 	return resolved
 }

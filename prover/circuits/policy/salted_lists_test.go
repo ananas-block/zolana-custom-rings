@@ -154,7 +154,7 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 	t.Run("another owner's tracking subject fails the member", func(t *testing.T) {
 		b := listed(t)
 		b.Circuit.OwnerEntries[0].Tracking = trackingSubject(t, b, big.NewInt(ringpolicy.Sender))
-		ringtest.RequireRefused(t, solveSalted(b), "policy.subjectPool.resolve")
+		ringtest.RequireRefused(t, solveSalted(b), "policy.subjectPool.read")
 	})
 	t.Run("a low tracking record cannot call the owner absent", func(t *testing.T) {
 		b := listed(t)
@@ -165,12 +165,12 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 				break
 			}
 		}
-		ringtest.RequireRefused(t, solveSalted(b), "policy.recordPool.resolve")
+		ringtest.RequireRefused(t, solveSalted(b), "policy.recordPool.read")
 	})
 	t.Run("another owner's salted subject fails the key", func(t *testing.T) {
 		b := listed(t)
 		b.Circuit.OwnerEntries[0].OwnSalted = b.Circuit.OwnerEntries[0].Own
-		ringtest.RequireRefused(t, solveSalted(b), "policy.subjectPool.resolve")
+		ringtest.RequireRefused(t, solveSalted(b), "policy.subjectPool.read")
 	})
 	t.Run("a low salted record cannot call the key absent", func(t *testing.T) {
 		b := listed(t)
@@ -181,7 +181,7 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 				break
 			}
 		}
-		ringtest.RequireRefused(t, solveSalted(b), "policy.recordPool.resolve")
+		ringtest.RequireRefused(t, solveSalted(b), "policy.recordPool.read")
 	})
 }
 
