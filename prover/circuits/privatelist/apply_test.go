@@ -61,7 +61,7 @@ func honestBatch(t testing.TB, width int, restrictive bool, changes ...ringpriva
 	oldRoot := curator.Tree.Root()
 	writes := make([]ringprivatelist.Applied, len(changes))
 	for i, change := range changes {
-		writes[i] = curator.Write(t, change)
+		writes[i] = curator.Tree.Apply(t, change, uint64(i+1))
 	}
 	return curator.Tree, applied(t, curator.Tree, width, restrictive, writes, oldRoot)
 }
@@ -70,23 +70,25 @@ func setBlock(owner *big.Int) ringprivatelist.Change {
 	return ringprivatelist.Change{Owner: owner, ListSalt: salt, Mask: privatelist.BlockBit, Value: privatelist.BlockBit}
 }
 
-// A batch under both a salted and a salt 0 position, and a later edit of a written leaf.
-func TestApplyWritesBothPositionsThenEditsALeaf(t *testing.T) {
+// A batch writes a salted position and another owner's salt 0 position, a later batch edits a written leaf.
+func TestApplyWritesEachPositionKindThenEditsALeaf(t *testing.T) {
 	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
+	tag := ringprivatelist.ListTag(t, salt)
 	oldRoot := curator.Tree.Root()
-	both := curator.WriteBoth(t, alice, salt, privatelist.BlockBit, privatelist.BlockBit)
-	first := applied(t, curator.Tree, 2, true, both[:], oldRoot)
+	batch := []ringprivatelist.Applied{
+		curator.WriteSalted(t, alice, salt, tag, privatelist.BlockBit, privatelist.BlockBit),
+		curator.WriteUnenrolled(t, otherOne, privatelist.BlockBit, privatelist.BlockBit),
+	}
+	first := applied(t, curator.Tree, 2, true, batch, oldRoot)
 	bound := ringkey.Bind(t, applyCircuit(t, 2), first)
 	bound.RequireSolved(t, first)
 	secondRoot := curator.Tree.Root()
-	// Keeps Allow set by the first write of this batch, clears the block with a mask of its own bit.
+	// The second edit keeps the bit the first edit of the batch set.
 	edits := []ringprivatelist.Applied{
-		curator.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.AllowBit, Value: privatelist.AllowBit}),
-		curator.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.BlockBit, Value: 0}),
+		curator.WriteSalted(t, alice, salt, tag, privatelist.AllowBit, privatelist.AllowBit),
+		curator.WriteSalted(t, alice, salt, tag, privatelist.BlockBit, 0),
 	}
-	second := applied(t, curator.Tree, 2, false, edits, secondRoot)
-	second.ChainStart = big.NewInt(chainSeed)
-	bound.RequireSolved(t, second)
+	bound.RequireSolved(t, applied(t, curator.Tree, 2, false, edits, secondRoot))
 	opened := curator.Tree.Read(t, alice, salt)
 	if !opened.Written || opened.Lists != privatelist.AllowBit {
 		t.Fatalf("lists %b", opened.Lists)
@@ -201,9 +203,10 @@ func TestApplyRefusesAnUnshippedWidth(t *testing.T) {
 
 func TestReaderRebuildsTheRootFromPublishedWrites(t *testing.T) {
 	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
-	curator.WriteBoth(t, alice, salt, privatelist.BlockBit, privatelist.BlockBit)
-	curator.Write(t, ringprivatelist.Change{Owner: otherOne, ListSalt: noSalt, Mask: privatelist.AllowBit, Value: privatelist.AllowBit})
-	curator.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.BlockBit, Value: 0})
+	tag := ringprivatelist.ListTag(t, salt)
+	curator.WriteSalted(t, alice, salt, tag, privatelist.BlockBit, privatelist.BlockBit)
+	curator.WriteUnenrolled(t, otherOne, privatelist.AllowBit, privatelist.AllowBit)
+	curator.WriteSalted(t, alice, salt, tag, privatelist.BlockBit, 0)
 	rebuilt := ringprivatelist.Rebuild(t, curator.Tree.Writes())
 	if rebuilt.Root().Cmp(curator.Tree.Root()) != 0 {
 		t.Fatal("rebuilt root differs")
@@ -212,16 +215,16 @@ func TestReaderRebuildsTheRootFromPublishedWrites(t *testing.T) {
 	if opened := rebuilt.Read(t, alice, salt); !opened.Written || opened.Lists != 0 {
 		t.Fatalf("opened %+v", opened)
 	}
-	if err := solveRow(rowFor(t, rebuilt, enrolled(t, alice, salt), salt, privatelist.BlockBit)); err != nil {
+	if err := solveRow(rowFor(t, rebuilt, enrolled(t, alice, salt), salt, 0)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// Pins the stated disclosure, a dictionary over public keys finds salt 0 entries and no salted one.
+// Pins the stated disclosure, a dictionary over public keys finds salt 0 entries and no enrolled owner.
 func TestDictionaryFindsOnlySaltZeroEntries(t *testing.T) {
 	curator := ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
-	curator.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: privatelist.BlockBit, Value: privatelist.BlockBit})
-	curator.Write(t, ringprivatelist.Change{Owner: otherOne, ListSalt: noSalt, Mask: privatelist.BlockBit, Value: privatelist.BlockBit})
+	curator.WriteSalted(t, alice, salt, ringprivatelist.ListTag(t, salt), privatelist.BlockBit, privatelist.BlockBit)
+	curator.WriteUnenrolled(t, otherOne, privatelist.BlockBit, privatelist.BlockBit)
 	found := map[string]bool{}
 	for _, write := range curator.Tree.Writes() {
 		for _, owner := range []*big.Int{alice, otherOne} {

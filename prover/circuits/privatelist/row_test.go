@@ -71,6 +71,11 @@ func curator(t *testing.T) *ringprivatelist.Curator {
 	return &ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
 }
 
+func writeAlice(t *testing.T, c *ringprivatelist.Curator, mask, value uint64) ringprivatelist.Applied {
+	t.Helper()
+	return c.WriteSalted(t, alice, salt, ringprivatelist.ListTag(t, salt), mask, value)
+}
+
 func TestRowReadsEachCase(t *testing.T) {
 	const allowed, blocked = privatelist.AllowBit, privatelist.BlockBit
 	present := func(t *testing.T) privatelist.Subject { return enrolled(t, alice, salt) }
@@ -85,32 +90,32 @@ func TestRowReadsEachCase(t *testing.T) {
 		{"unenrolled owner with no curator action reads nothing", nil, absent, noSalt, 0},
 		{"enrolled owner with no curator action reads nothing", nil, present, salt, 0},
 		{"unenrolled listed owner reads its salt 0 block", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: noSalt, Mask: blocked, Value: blocked})
+			c.WriteUnenrolled(t, alice, blocked, blocked)
 		}, absent, noSalt, blocked},
 		{"enrolled listed owner reads its salted block", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.WriteBoth(t, alice, salt, blocked, blocked)
+			writeAlice(t, c, blocked, blocked)
 		}, present, salt, blocked},
 		{"a block written before enrollment still reads after it, with no new write", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: noSalt, Mask: blocked, Value: blocked})
+			c.WriteUnenrolled(t, alice, blocked, blocked)
 		}, present, salt, blocked},
-		{"a both-position block reads under an old tracking root claiming unenrolled", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.WriteBoth(t, alice, salt, blocked, blocked)
-		}, absent, noSalt, blocked},
+		{"a stale unenrolled claim misses a salted block, only the loader's tracking floor stops it", func(t *testing.T, c *ringprivatelist.Curator) {
+			writeAlice(t, c, blocked, blocked)
+		}, absent, noSalt, 0},
 		{"a salt 0 grant dies at enrollment", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: noSalt, Mask: allowed, Value: allowed})
+			c.WriteUnenrolled(t, alice, allowed, allowed)
 		}, present, salt, 0},
 		{"a salted grant reads for the enrolled owner", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: allowed, Value: allowed})
+			writeAlice(t, c, allowed, allowed)
 		}, present, salt, allowed},
 		{"a salt 0 grant reads for the unenrolled owner", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: noSalt, Mask: allowed, Value: allowed})
+			c.WriteUnenrolled(t, alice, allowed, allowed)
 		}, absent, noSalt, allowed},
 		{"an opened leaf with the bit clear passes", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: blocked, Value: blocked})
-			c.Write(t, ringprivatelist.Change{Owner: alice, ListSalt: salt, Mask: blocked, Value: 0})
+			writeAlice(t, c, blocked, blocked)
+			writeAlice(t, c, blocked, 0)
 		}, present, salt, 0},
 		{"another owner's entries change nothing", func(t *testing.T, c *ringprivatelist.Curator) {
-			c.WriteBoth(t, otherOne, salt, blocked, blocked)
+			c.WriteSalted(t, otherOne, salt, ringprivatelist.ListTag(t, salt), blocked, blocked)
 		}, present, salt, 0},
 	}
 	for _, tt := range tests {
@@ -130,7 +135,7 @@ func TestRowRefusals(t *testing.T) {
 	const blocked = privatelist.BlockBit
 	blockedTree := func(t *testing.T) *ringprivatelist.Tree {
 		c := curator(t)
-		c.WriteBoth(t, alice, salt, blocked, blocked)
+		writeAlice(t, c, blocked, blocked)
 		return c.Tree
 	}
 	read := []string{"privatelist.Opening.read"}
@@ -198,7 +203,7 @@ func TestRowRefusals(t *testing.T) {
 
 func TestRowReadsListedBitAsSet(t *testing.T) {
 	c := curator(t)
-	c.WriteBoth(t, alice, salt, privatelist.BlockBit, privatelist.BlockBit)
+	writeAlice(t, c, privatelist.BlockBit, privatelist.BlockBit)
 	ringtest.RequireRefused(t, solveRow(rowFor(t, c.Tree, enrolled(t, alice, salt), salt, 0)), "rowCircuit).Define")
 }
 

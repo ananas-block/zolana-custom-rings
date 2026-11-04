@@ -230,13 +230,22 @@ type Curator struct {
 	Counter uint64
 }
 
-// WriteBoth covers an enrolled owner's salted position and its salt-0 position, a subject proving under an old tracking root still reads the entry.
-func (c *Curator) WriteBoth(t testing.TB, owner, listSalt *big.Int, mask, value uint64) [2]Applied {
+// WriteSalted writes an applied tracking row's owner, a salt off its list tag is refused ahead of any proof.
+func (c *Curator) WriteSalted(t testing.TB, owner, listSalt, listTag *big.Int, mask, value uint64) Applied {
 	t.Helper()
-	return [2]Applied{c.Write(t, Change{Owner: owner, ListSalt: listSalt, Mask: mask, Value: value}), c.Write(t, Change{Owner: owner, ListSalt: big.NewInt(0), Mask: mask, Value: value})}
+	if ListTag(t, listSalt).Cmp(listTag) != 0 {
+		t.Fatal("salt does not open the tracking row's list tag")
+	}
+	return c.write(t, Change{Owner: owner, ListSalt: listSalt, Mask: mask, Value: value})
 }
 
-func (c *Curator) Write(t testing.TB, change Change) Applied {
+// WriteUnenrolled is public by construction, an enrolled owner never takes it.
+func (c *Curator) WriteUnenrolled(t testing.TB, owner *big.Int, mask, value uint64) Applied {
+	t.Helper()
+	return c.write(t, Change{Owner: owner, ListSalt: big.NewInt(0), Mask: mask, Value: value})
+}
+
+func (c *Curator) write(t testing.TB, change Change) Applied {
 	t.Helper()
 	c.Counter++
 	return c.Tree.Apply(t, change, c.Counter)
