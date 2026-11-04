@@ -1,4 +1,5 @@
 /** The transfer key catalog, Rust `key_catalog.rs` and `Shapes` in `prover/circuits/transfer`. */
+import { firstRecordCounter } from "../codec/ring-disclosure-layout.js";
 import type { RingRail } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
 
@@ -36,11 +37,16 @@ const NARROW_SHAPES: readonly TransferShape[] = Object.freeze([
 const WIDE_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(8, 24, 32, 24, false, true),
   shape(16, 5, 8, 5, false, true),
+  // Sized by the 8x16 rows of `ring-frame-fit.md`, those frames settle buffered. Wide alone, a
+  // narrow row would leave a salted read of the same frame with no key.
+  shape(16, 8, 8, 8, false, true),
   shape(2, 49, 4, 12, false, true),
 ]);
+/** A frame takes the first row holding its width, the last sized by the 4x8 rows of `ring-frame-fit.md`. */
 const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
   shape(4, 8, 4, 8, true, true),
   shape(8, 2, 4, 2, true, true),
+  shape(8, 4, 4, 4, true, true),
 ]);
 /** Sized by the entry table of `ring-frame-fit.md`. */
 const WIDE_ENTRY_SHAPE = shape(2, 24, 32, 12, true, true);
@@ -116,6 +122,36 @@ export function fittedSpend(spend: TransferSpend): TransferSpend {
   return { ...spend, wide: narrow === undefined || !shapeHolds(narrow, spend) };
 }
 
+/**
+ * The wide flag a wallet seals under ahead of every record read, `pools` from `unreadSubjectPools`.
+ * The reasoning stands at Rust `TransferSpend::sealed_wide`.
+ */
+export function sealedWide(spend: TransferSpend, hasData: boolean): boolean {
+  if (fittedSpend({ ...spend, pools: { own: 0, curator: 0, tracking: 0 } }).wide) return true;
+  const narrow = frameKeyShape({ ...spend, wide: false });
+  const wide = frameKeyShape({ ...spend, wide: true });
+  return (
+    fittedSpend(spend).wide &&
+    narrow !== undefined &&
+    wide !== undefined &&
+    !sealsLike(narrow, wide, hasData)
+  );
+}
+
+/** What a wallet counts ahead of its reads on a table with a salted list, Rust `UnreadSubjects`. */
+export interface UnreadSubjects {
+  /** Distinct live input and output owners, plus one per leg since a destination stays unread. */
+  readonly owners: number;
+  /** Distinct live input, output and public assets. */
+  readonly assets: number;
+}
+
+/** The widest read of these subjects, every owner enrolled with a public and a salted record. */
+export function unreadSubjectPools(subjects: UnreadSubjects): PolicyPoolCapacity {
+  const records = 2 * subjects.owners + subjects.assets;
+  return Object.freeze({ own: records, curator: records, tracking: subjects.owners });
+}
+
 /** The one transfer key serving the spend, `undefined` when the catalog keys none. */
 export function ringTransferCircuit(spend: TransferSpend): TransferKeyCircuit | undefined {
   const found = frameKeyShape(spend);
@@ -131,7 +167,13 @@ export function signerSlots(circuit: TransferKeyCircuit): number {
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  const distinct = circuit.owners + 2 * circuit.outputs + circuit.withdrawals + saltedKeys(circuit);
+  // A zero value input can name any asset, every input slot takes its own row.
+  const distinct =
+    circuit.owners +
+    2 * circuit.outputs +
+    circuit.withdrawals +
+    saltedKeys(circuit) +
+    circuit.class;
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,
@@ -218,6 +260,15 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
     spend.pools.own <= pools.own &&
     spend.pools.curator <= pools.curator &&
     spend.pools.tracking <= pools.tracking
+  );
+}
+
+/** Rust `TransferShape::seals_like`. */
+function sealsLike(left: TransferShape, right: TransferShape, hasData: boolean): boolean {
+  const recordCounter = (entry: TransferShape): number =>
+    firstRecordCounter({ class: entry.inputs, entry: entry.entry });
+  return (
+    recordCounter(left) === recordCounter(right) && (!hasData || left.outputs === right.outputs)
   );
 }
 

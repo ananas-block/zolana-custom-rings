@@ -269,7 +269,7 @@ impl PolicyRead<'_> {
     }
 
     /// The distinct live input owners ascending, the delegate moves a zero-key note with no row.
-    fn owner_rows(&self) -> Result<Vec<[u8; 32]>, RingError> {
+    pub(super) fn owner_rows(&self) -> Result<Vec<[u8; 32]>, RingError> {
         let delegate = self.rail.is_delegate();
         let mut rows = self
             .inputs
@@ -299,7 +299,7 @@ impl PolicyRead<'_> {
             .collect()
     }
 
-    fn output_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
+    pub(super) fn output_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
         self.inputs
             .output_utxos
             .iter()
@@ -314,7 +314,7 @@ impl PolicyRead<'_> {
             .collect()
     }
 
-    fn output_assets(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
+    pub(super) fn output_assets(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
         self.inputs
             .output_utxos
             .iter()
