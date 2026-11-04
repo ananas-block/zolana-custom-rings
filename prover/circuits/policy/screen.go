@@ -10,6 +10,8 @@ import (
 type Spend struct {
 	Senders []frontend.Variable
 	Inputs  []shared.Output
+	// Tracking binds each private row's salt, unread on a key with no rows.
+	Tracking TrackingPool
 }
 
 // ApprovalMask reads zero while Outflow is off.
@@ -22,7 +24,7 @@ func (p *Policy) Screen(api frontend.API, rc frontend.Rangechecker, g Gates, spe
 	table := p.Table.decodeWhen(api, rc, g.Screened, p.PolicyHash)
 	p.assertOwnOnly(api)
 	payments := append(slotPayments(outputs), p.openWithdrawals(api, rc)...)
-	resolved := p.resolveSubjects(api, table, g, spend.Senders, payments)
+	resolved := p.resolveSubjects(api, rc, table, g, spend, payments)
 	active := screenedRules(api, g.Screened, table)
 	// 1. The sender section reads the rows, a deposit has none.
 	assertRowsAscending(api, g.Rows, spend.Senders, resolved.liveSenders)

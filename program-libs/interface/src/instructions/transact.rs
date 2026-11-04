@@ -1164,6 +1164,7 @@ impl<'a> RingTransactData<'a> {
             legs,
             owners: usize::from(rows),
             has_data: self.has_data,
+            private_source: self.extensions.private_revision.is_some(),
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
     }

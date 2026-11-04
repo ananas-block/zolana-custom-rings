@@ -36,7 +36,7 @@ type ownersCircuit struct {
 
 func newOwnersCircuit(t testing.TB) *ownersCircuit {
 	t.Helper()
-	tracking, err := policy.NewTracking(testRows, testOutputs)
+	tracking, err := policy.NewTracking(testRows, testOutputs, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func newOwnersCircuit(t testing.TB) *ownersCircuit {
 }
 
 func (c *ownersCircuit) Define(api frontend.API) error {
-	if err := c.ValidateTracking(testRows, testOutputs); err != nil {
+	if err := c.ValidateTracking(testRows, testOutputs, 0); err != nil {
 		return err
 	}
 	pool := c.OpenTracking(api)
@@ -120,7 +120,7 @@ func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 			}
 		}
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners)
+	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil)
 	c.Delegate, c.Hidden, c.HiddenOwner = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0
 	if w.hiddenOwner != nil {
 		c.HiddenOwner = w.hiddenOwner

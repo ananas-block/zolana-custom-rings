@@ -49,17 +49,24 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs []shared.Utxo
 		}
 		return poolEntry
 	}
+	owner := func(member frontend.Variable, active bool) policy.PoolEntry {
+		poolEntry := entry(member, active)
+		if policyWitness.Private > 0 {
+			poolEntry.Private = []frontend.Variable{0}
+		}
+		return poolEntry
+	}
 	for j, sender := range senders {
-		policyWitness.SenderEntries[j] = entry(sender, ringtest.AsBigInt(sender).Sign() != 0)
+		policyWitness.SenderEntries[j] = owner(sender, ringtest.AsBigInt(sender).Sign() != 0)
 	}
 	for i, out := range outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
-		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
+		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = owner(out.OwnerPkHash, active), entry(out.Asset, active)
 	}
 	for i, out := range policyWitness.Withdrawals {
 		active := int64(i) < ringtest.AsBigInt(policyWitness.WithdrawalCount).Int64()
 		index := len(outputs) + i
-		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
+		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = owner(out.Owner, active), entry(out.Asset, active)
 	}
 	for i := range policyWitness.PublicAssetEntries {
 		asset := policyWitness.PublicAssets[i]

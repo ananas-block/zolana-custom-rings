@@ -1183,6 +1183,7 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
             withdrawals: 4,
             owners: 4,
             data: false,
+            private: 0,
         })
     );
     assert_eq!(

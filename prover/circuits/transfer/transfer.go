@@ -24,6 +24,11 @@ const (
 	ownerAddresses = 64 - 4 - 6
 )
 
+// privateRows opens every owner and four withdrawal owners, a transaction past them fails closed.
+func privateRows(owners, outputs, withdrawals int) int {
+	return owners + outputs + min(withdrawals, smallOwners)
+}
+
 // ownerCapacities are the row counts a key of inputs input slots takes, ascending, mirrored by TransferShape::owners.
 func ownerCapacities(inputs int) []int {
 	small, full := min(smallOwners, inputs), min(inputs, ownerAddresses-inputs)
@@ -55,16 +60,14 @@ type Sections struct {
 	// Rows are the distinct live input owners, ascending with zero rows last.
 	Rows []frontend.Variable
 	policy.Tracking
-	// PrivateRoot is the private list tree the owner rows read, zero without a private source.
-	PrivateRoot frontend.Variable
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
 	ApprovalMask frontend.Variable
 	policy.Policy
 }
 
 type SectionsShape struct {
-	inputs, outputs, withdrawals, owners int
-	entry, data                          bool
+	inputs, outputs, withdrawals, owners, private int
+	entry, data                                   bool
 }
 
 func (s SectionsShape) stream() audit.StreamShape {
@@ -72,11 +75,11 @@ func (s SectionsShape) stream() audit.StreamShape {
 }
 
 func NewSections(shape SectionsShape) (Sections, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.outputs, Withdrawals: shape.withdrawals, Senders: shape.owners}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.outputs, Withdrawals: shape.withdrawals, Senders: shape.owners, Private: shape.private}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
-	tracking, err := policy.NewTracking(shape.owners, shape.outputs)
+	tracking, err := policy.NewTracking(shape.owners, shape.outputs, shape.private)
 	if err != nil {
 		return Sections{}, err
 	}
@@ -108,7 +111,7 @@ func (c *Sections) validate(shape SectionsShape) error {
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.owners),
 		shared.ValidateLength("transfer", "withdrawal", len(c.Withdrawals), shape.withdrawals),
-		c.ValidateTracking(shape.owners, shape.outputs),
+		c.ValidateTracking(shape.owners, shape.outputs, shape.private),
 	)
 }
 
@@ -146,7 +149,7 @@ func (c *Sections) prove(api frontend.API, shape SectionsShape, r rail) {
 	c.assertBypass(api, r.delegate)
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: r.delegate}.Gates(api, c.PolicyHash)
-	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots}, opened.Slots)
+	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	sealed := w.SealStream(api, rc, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers, r)))

@@ -13,12 +13,12 @@ from ring_key_layout import verifier_relative_path
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def variant(k):
-    i, o, w, s, d = k['Inputs'], k['Outputs'], k['Withdrawals'], k['Owners'], str(k['Data']).lower()
-    return [f'TransferConfidential {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
-            f'TransferConfidentialEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
-            f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
-            f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d} }}',
-            f'ApplyRecords {{ writes: {i} }}', f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
+    i, o, w, s, d, p = k['Inputs'], k['Outputs'], k['Withdrawals'], k['Owners'], str(k['Data']).lower(), k['Private']
+    return [f'TransferConfidential {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, data: {d}, private: {p} }}',
+            f'TransferConfidentialEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d}, private: {p} }}',
+            f'TransferAnonymous {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d}, private: {p} }}',
+            f'TransferAnonymousEntry {{ outputs: {o}, class: {i}, withdrawals: {w}, owners: {s}, data: {d}, private: {p} }}',
+            f'ApplyRecords {{ writes: {i} }}', f'ApplyEnrollments {{ writes: {i} }}', f'ApplyPrivateList {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
             'Merge'][k['Family']]
 
 def main():
