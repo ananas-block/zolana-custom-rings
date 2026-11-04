@@ -29,10 +29,10 @@ use super::{account, apply_data, block, replay_indexer, rpc, Chain};
 use crate::{
     api,
     block::{BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo},
-    indexer::Indexer,
+    indexer::{Indexer, RegistryCall},
     storage::{self, Enrollment, RingCursor, TrackingState, TrackingStore},
     tests::{database, field},
-    tracking_registry,
+    tracking_registry::TrackingCall,
 };
 
 const OWNER: Address = Address::new_from_array([51; 32]);
@@ -183,7 +183,7 @@ impl Ledger {
         .unwrap()
     }
 
-    /// `entries` applied to `tree`, as an honest applier proves them at the projected revision.
+    /// The apply an honest applier proves at the projected revision.
     async fn apply(&self, tree: &mut TrackingTree, entries: &[TrackingEntry]) -> Instruction {
         let revision: Revision = self.state().await.account.newest().revision;
         let chain_start = tracking_chain_start(&self.registry, revision).unwrap();
@@ -198,7 +198,7 @@ impl Ledger {
         )
     }
 
-    /// The chain confirms the projection at `slot`, reads pass their last check.
+    /// The chain confirms the projection at `slot`.
     async fn serve(&mut self, slot: u64) {
         let state = self.state().await;
         {
@@ -241,7 +241,7 @@ impl Ledger {
 #[tokio::test]
 async fn a_replayed_enrollment_takes_final_fields_from_the_account_and_its_key_from_the_block() {
     let mut ledger = Ledger::new().await;
-    // The chain moved on, a replay of the first enrollment still reads revision 1 from the block.
+    // A replay of the first enrollment reads revision 1 from the block.
     ledger.hold_account(7, 2);
     let proof = CustomRingProof::zeroed();
     ledger
@@ -630,7 +630,7 @@ async fn a_rotation_after_an_apply_stays_pending_behind_the_leaf() {
 async fn a_root_off_the_projected_entry_stops_the_projection_and_applies_nothing() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
-    // The program read revision 1, this proof names a rotation the block never holds.
+    // The proof names a rotation the block never holds.
     let apply = ledger.apply(&mut tree, &[ledger.entry(6, 2)]).await;
     ledger.land(3, apply).await.unwrap();
     let fault = ledger.state().await.fault.unwrap();
@@ -801,7 +801,7 @@ async fn the_shared_enrollment_vector_projects_to_its_entry_and_chain() {
         ring_id: field(9),
         auditor_pubkey: [9; 33],
     };
-    tracking_registry::create(
+    <TrackingCall as RegistryCall<TrackingRegistry>>::create(
         &ledger.store(),
         &TrackingState {
             registry: ledger.registry.to_bytes(),

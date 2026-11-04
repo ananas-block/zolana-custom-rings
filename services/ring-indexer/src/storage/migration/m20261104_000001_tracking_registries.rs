@@ -12,7 +12,7 @@ const CLEARED_TABLES: [&str; 4] = [
     "storage_registries",
 ];
 
-/// Policy leaves change and an older index skipped every enrollment, so all registries reindex.
+/// Policy leaves change and an older index skipped every enrollment.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -37,14 +37,14 @@ impl MigrationTrait for Migration {
             "CREATE INDEX tracking_records_applied ON tracking_records(program, applied)".into(),
             format!(
                 "CREATE TABLE tracking_authorizations (registry {blob} NOT NULL, \
-                 owner {blob} NOT NULL, authorization {blob} NOT NULL, member {blob} NOT NULL, \
+                 owner {blob} NOT NULL, authorization_account {blob} NOT NULL, member {blob} NOT NULL, \
                  nullifier_pk {blob} NOT NULL, \
                  ct_hash {blob} NOT NULL, list_tag {blob} NOT NULL, eph_u {blob} NOT NULL, \
                  ciphertext {blob} NOT NULL, slot BIGINT NOT NULL, \
                  PRIMARY KEY(registry, owner))"
             ),
             "CREATE INDEX tracking_authorizations_account \
-             ON tracking_authorizations(registry, authorization)"
+             ON tracking_authorizations(registry, authorization_account)"
                 .into(),
             "CREATE INDEX tracking_authorizations_member \
              ON tracking_authorizations(registry, member)"

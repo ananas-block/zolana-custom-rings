@@ -23,7 +23,7 @@ pub(crate) struct Enrollment {
 }
 
 impl Enrollment {
-    /// The account the program holds, its canonical checks run on this image.
+    /// The image the program's canonical checks run on.
     pub fn account(&self, registry: [u8; 32]) -> TrackingAuthorization {
         TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
@@ -42,7 +42,7 @@ impl Enrollment {
     }
 }
 
-const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization, a.member, a.nullifier_pk, \
+const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization_account, a.member, a.nullifier_pk, \
      a.ct_hash, a.list_tag, a.eph_u, a.ciphertext, e.viewing_u, e.revision, \
      e.slot AS last_enroll_slot, \
      (SELECT COALESCE(MAX(d.revision),0) FROM tracking_enrollments AS d \
@@ -53,6 +53,21 @@ const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization, a.member, a.null
      AND e.revision=(SELECT MAX(m.revision) FROM tracking_enrollments AS m \
      WHERE m.registry=a.registry AND m.owner=a.owner)";
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EnrollmentRevision {
+    pub owner: [u8; 32],
+    pub viewing_u: [u8; 32],
+    pub revision: u64,
+    pub slot: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AppliedRevision {
+    pub owner: [u8; 32],
+    pub revision: u64,
+    pub slot: u64,
+}
+
 impl<C: ConnectionTrait> TrackingStore<'_, C> {
     pub async fn enrollment(&self, owner: &[u8; 32]) -> Result<Option<Enrollment>> {
         self.enrollment_where("a.owner", owner).await
@@ -60,7 +75,7 @@ impl<C: ConnectionTrait> TrackingStore<'_, C> {
 
     /// The account an apply names.
     pub async fn enrollment_at(&self, authorization: &[u8; 32]) -> Result<Option<Enrollment>> {
-        self.enrollment_where("a.authorization", authorization)
+        self.enrollment_where("a.authorization_account", authorization)
             .await
     }
 
@@ -87,7 +102,8 @@ impl<C: ConnectionTrait> TrackingStore<'_, C> {
     }
 
     pub async fn save_first(&self, first: &Enrollment, slot: u64) -> Result<()> {
-        let sql = "INSERT INTO tracking_authorizations(registry,owner,authorization,member,\
+        let sql =
+            "INSERT INTO tracking_authorizations(registry,owner,authorization_account,member,\
                    nullifier_pk,ct_hash,list_tag,eph_u,ciphertext,slot) \
                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
         let values = vec![
@@ -102,32 +118,40 @@ impl<C: ConnectionTrait> TrackingStore<'_, C> {
             int(slot)?,
         ];
         self.tree.exec(sql, values).await?;
-        self.save_revision(&first.owner, &first.viewing_u, first.revision, slot)
-            .await
+        self.save_revision(&EnrollmentRevision {
+            owner: first.owner,
+            viewing_u: first.viewing_u,
+            revision: first.revision,
+            slot,
+        })
+        .await
     }
 
-    pub async fn save_revision(
-        &self,
-        owner: &[u8; 32],
-        viewing_u: &[u8; 32],
-        revision: u64,
-        slot: u64,
-    ) -> Result<()> {
+    pub async fn save_revision(&self, saved: &EnrollmentRevision) -> Result<()> {
         let sql = "INSERT INTO tracking_enrollments(registry,owner,revision,viewing_u,slot) \
                    VALUES($1,$2,$3,$4,$5)";
-        let values = vec![bytes(owner), int(revision)?, bytes(viewing_u), int(slot)?];
+        let values = vec![
+            bytes(&saved.owner),
+            int(saved.revision)?,
+            bytes(&saved.viewing_u),
+            int(saved.slot)?,
+        ];
         self.tree.exec(sql, values).await
     }
 
-    pub async fn mark_applied(&self, owner: &[u8; 32], revision: u64, slot: u64) -> Result<()> {
+    pub async fn mark_applied(&self, applied: &AppliedRevision) -> Result<()> {
         let sql = "UPDATE tracking_enrollments SET applied_slot=$4 \
                    WHERE registry=$1 AND owner=$2 AND revision=$3";
-        let values = vec![bytes(owner), int(revision)?, int(slot)?];
+        let values = vec![
+            bytes(&applied.owner),
+            int(applied.revision)?,
+            int(applied.slot)?,
+        ];
         self.tree.exec(sql, values).await
     }
 }
 
-/// Undoes what the block at `slot` wrote, enrollments carry no revision a registry undo can read.
+/// Enrollments carry no revision a registry undo can read.
 pub(super) async fn rollback_slot<C: ConnectionTrait>(conn: &C, slot: u64) -> Result<()> {
     for sql in [
         "DELETE FROM tracking_authorizations WHERE slot=$1",
@@ -142,7 +166,7 @@ pub(super) async fn rollback_slot<C: ConnectionTrait>(conn: &C, slot: u64) -> Re
 fn enrollment(row: &QueryResult) -> Result<Enrollment> {
     Ok(Enrollment {
         owner: field(row, "owner")?,
-        authorization: field(row, "authorization")?,
+        authorization: field(row, "authorization_account")?,
         member: field(row, "member")?,
         nullifier_pk: field(row, "nullifier_pk")?,
         ct_hash: field(row, "ct_hash")?,
@@ -187,10 +211,22 @@ mod tests {
         let owner = first(9);
         store.save_first(&owner, 10).await.unwrap();
         assert_eq!(store.pending(None, 8).await.unwrap(), [owner]);
-        store.mark_applied(&owner.owner, 1, 11).await.unwrap();
+        store
+            .mark_applied(&AppliedRevision {
+                owner: owner.owner,
+                revision: 1,
+                slot: 11,
+            })
+            .await
+            .unwrap();
         assert!(store.pending(None, 8).await.unwrap().is_empty());
         store
-            .save_revision(&owner.owner, &[8; 32], 2, 12)
+            .save_revision(&EnrollmentRevision {
+                owner: owner.owner,
+                viewing_u: [8; 32],
+                revision: 2,
+                slot: 12,
+            })
             .await
             .unwrap();
         let rotated = Enrollment {
@@ -231,9 +267,21 @@ mod tests {
         let store = TrackingStore::new(&db, REGISTRY);
         let owner = first(9);
         store.save_first(&owner, 10).await.unwrap();
-        store.mark_applied(&owner.owner, 1, 11).await.unwrap();
         store
-            .save_revision(&owner.owner, &[8; 32], 2, 12)
+            .mark_applied(&AppliedRevision {
+                owner: owner.owner,
+                revision: 1,
+                slot: 11,
+            })
+            .await
+            .unwrap();
+        store
+            .save_revision(&EnrollmentRevision {
+                owner: owner.owner,
+                viewing_u: [8; 32],
+                revision: 2,
+                slot: 12,
+            })
             .await
             .unwrap();
         rollback_slot(&db, 12).await.unwrap();

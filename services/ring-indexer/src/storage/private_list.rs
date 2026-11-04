@@ -6,12 +6,20 @@ use sea_orm::{ConnectionTrait, QueryResult};
 
 use super::{bytes, field, int, uint, ProjectedStore, StorageStore};
 
-/// A write's published fields, the only part of a private source the index holds.
+/// The only part of a private source the index holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StoredListWrite {
     pub position: [u8; 32],
     pub leaf: [u8; 32],
     pub write_counter: u64,
+}
+
+/// From `start`, written at or below `revision`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ListWritePage {
+    pub start: u64,
+    pub limit: u64,
+    pub revision: u64,
 }
 
 impl<C: ConnectionTrait> StorageStore<'_, C> {
@@ -21,7 +29,7 @@ impl<C: ConnectionTrait> StorageStore<'_, C> {
             .await
     }
 
-    /// Ordinals continue over the source, a rollback removes the revisions above it.
+    /// Ordinals continue over the source.
     pub async fn save_list_writes(
         &self,
         writes: &[PrivateListWriteData],
@@ -46,16 +54,10 @@ impl<C: ConnectionTrait> StorageStore<'_, C> {
         Ok(())
     }
 
-    /// From `start`, written at or below `revision`.
-    pub async fn list_writes(
-        &self,
-        start: u64,
-        limit: u64,
-        revision: u64,
-    ) -> Result<Vec<StoredListWrite>> {
+    pub async fn list_writes(&self, page: ListWritePage) -> Result<Vec<StoredListWrite>> {
         let sql = "SELECT position, leaf, write_counter FROM private_list_writes \
                    WHERE registry=$1 AND ordinal>=$2 AND revision<=$3 ORDER BY ordinal LIMIT $4";
-        let values = vec![int(start)?, int(revision)?, int(limit)?];
+        let values = vec![int(page.start)?, int(page.revision)?, int(page.limit)?];
         let rows = self.tree.query_all(sql, values).await?;
         rows.iter().map(list_write).collect()
     }

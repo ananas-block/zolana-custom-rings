@@ -211,10 +211,9 @@ fn replay_indexer(db: Arc<DatabaseConnection>, rpc: Arc<SolanaRpc>) -> Indexer {
     }
 }
 
-/// `authority, registry`, the storage program's `Update` accounts.
-fn update_instruction(authority: Address, registry: Address, data: &StorageUpdateIxData) -> Value {
+fn update_instruction(accounts: [Address; 2], data: &StorageUpdateIxData) -> Value {
     let wire = [&[tag::UPDATE][..], &data.encode().unwrap()].concat();
-    transaction(STORAGE_PROGRAM_ID, &[authority, registry], &wire)
+    transaction(STORAGE_PROGRAM_ID, &accounts, &wire)
 }
 
 fn initialize_transaction(
@@ -263,8 +262,7 @@ impl StorageReplay {
             .apply(chain_start, &entries)
             .unwrap();
         let update = update_instruction(
-            creator,
-            registry,
+            [creator, registry],
             &StorageUpdateIxData {
                 revision: Revision::default(),
                 restrictive: false,
@@ -376,8 +374,7 @@ async fn a_restrictive_update_stops_every_older_root_in_the_same_slot() {
             .unwrap();
         let root = inputs.new_root;
         let sent = update_instruction(
-            creator,
-            registry,
+            [creator, registry],
             &StorageUpdateIxData {
                 revision,
                 restrictive,

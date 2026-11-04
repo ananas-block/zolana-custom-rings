@@ -5,12 +5,12 @@ use custom_ring_interface::{
 };
 use sea_orm::ConnectionTrait;
 use solana_address::Address;
-use spr_indexer_api::Hash;
+use zolana_ring_indexer::tree::MemberRecord;
 
 use crate::{
     block::Instruction,
-    indexer::{fault, from_storage, ApplyError},
-    member_registry::{plant_tree, LoadedRegistry, TreeRead},
+    indexer::{fault, from_storage, ApplyError, Projection, RegistryCall, RegistryInstruction},
+    member_registry::{plant_tree, AppliedBatch},
     storage::{StorageRoot, StorageState, StorageStore},
 };
 
@@ -40,14 +40,8 @@ pub(crate) struct PrivateUpdate<'a> {
     pub data: PrivateUpdateIxData<'a>,
 }
 
-/// `call` fails on data the program refuses.
-pub(crate) struct StorageInstruction<'a> {
-    pub registry: Address,
-    pub call: Result<StorageCall<'a>, StorageError>,
-}
-
-/// Account order of the `custom_ring_sdk` storage builders.
-pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>> {
+/// Account order the tags document in `storage_instruction`.
+pub(crate) fn decode(instruction: &Instruction) -> Option<RegistryInstruction<StorageCall<'_>>> {
     let (&tag, data) = instruction.data.split_first()?;
     let account = |index: usize| {
         instruction
@@ -58,7 +52,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
     };
     let registry = |index: usize| account(index).ok();
     let instruction = match tag {
-        tag::INITIALIZE => StorageInstruction {
+        tag::INITIALIZE => RegistryInstruction {
             registry: registry(2)?,
             call: account(1).and_then(|creator| {
                 let data = bytemuck::try_from_bytes(data)
@@ -66,7 +60,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                 Ok(StorageCall::Initialize(StorageInit { creator, data }))
             }),
         },
-        tag::UPDATE => StorageInstruction {
+        tag::UPDATE => RegistryInstruction {
             registry: registry(1)?,
             call: account(0).and_then(|authority| {
                 Ok(StorageCall::Update(StorageUpdate {
@@ -75,7 +69,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                 }))
             }),
         },
-        tag::UPDATE_PRIVATE => StorageInstruction {
+        tag::UPDATE_PRIVATE => RegistryInstruction {
             registry: registry(1)?,
             call: account(0).and_then(|authority| {
                 Ok(StorageCall::UpdatePrivate(PrivateUpdate {
@@ -85,7 +79,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                 }))
             }),
         },
-        tag::UPDATE_AUTHORITY => StorageInstruction {
+        tag::UPDATE_AUTHORITY => RegistryInstruction {
             registry: registry(2)?,
             call: account(0).and_then(|authority| {
                 Ok(StorageCall::UpdateAuthority {
@@ -99,56 +93,55 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
     Some(instruction)
 }
 
-impl StorageInit<'_> {
-    /// `None` off the canonical registry address, the program refuses it.
-    pub fn state(&self, registry: Address) -> Option<StorageState> {
-        let (canonical, _) = StorageRegistry::find_address(&self.creator, &self.data.registry_id);
+impl RegistryCall<StorageRegistry> for StorageCall<'_> {
+    fn created(&self, registry: Address) -> Option<StorageState> {
+        let Self::Initialize(init) = self else {
+            return None;
+        };
+        let (canonical, _) = StorageRegistry::find_address(&init.creator, &init.data.registry_id);
         (canonical == registry).then(|| StorageState {
             registry: registry.to_bytes(),
-            account: Box::new(StorageRegistry::new(self.creator, self.data)),
+            account: Box::new(StorageRegistry::new(init.creator, init.data)),
             fault: None,
         })
     }
-}
 
-pub(crate) async fn create<C: ConnectionTrait>(
-    store: &StorageStore<'_, C>,
-    state: &StorageState,
-) -> anyhow::Result<()> {
-    // A private source opens through its published writes, it has no policy leaves.
-    if !state.account.is_private() {
-        plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
+    async fn create<C: ConnectionTrait>(
+        store: &StorageStore<'_, C>,
+        state: &StorageState,
+    ) -> anyhow::Result<()> {
+        // A private source opens through its published writes, it has no policy leaves.
+        if !state.account.is_private() {
+            plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
+        }
+        store
+            .save_root(&StorageRoot::current(&*state.account))
+            .await?;
+        store.save_state(state).await
     }
-    store
-        .save_root(&StorageRoot::current(&*state.account))
-        .await?;
-    store.save_state(state).await
-}
 
-pub(crate) struct StorageProjection<'p, 'c, C> {
-    pub store: &'p StorageStore<'c, C>,
-    pub state: &'p mut StorageState,
-    pub slot: u64,
-}
-
-impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
     /// A refusal of the program's own checks means the projection drifted.
-    pub async fn project(self, call: StorageCall<'_>) -> Result<(), ApplyError> {
-        match call {
-            StorageCall::Initialize(_) => Err(fault("initialized twice")),
-            StorageCall::Update(update) => self.update(update).await,
-            StorageCall::UpdatePrivate(update) => self.update_private(update).await,
-            StorageCall::UpdateAuthority {
+    async fn project<C: ConnectionTrait>(
+        self,
+        projection: Projection<'_, '_, C, StorageRegistry>,
+    ) -> Result<(), ApplyError> {
+        match self {
+            Self::Initialize(_) => Err(fault("initialized twice")),
+            Self::Update(update) => projection.update(update).await,
+            Self::UpdatePrivate(update) => projection.update_private(update).await,
+            Self::UpdateAuthority {
                 authority,
                 new_authority,
             } => {
-                self.authorize(&authority)?;
-                self.state.account.authority = new_authority;
+                projection.authorize(&authority)?;
+                projection.state.account.authority = new_authority;
                 Ok(())
             }
         }
     }
+}
 
+impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
     async fn update(self, update: StorageUpdate<'_>) -> Result<(), ApplyError> {
         let StorageUpdate { authority, data } = update;
         // 1. The program admits the update at the projected revision.
@@ -175,34 +168,17 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
         let registry = Address::new_from_array(self.state.registry);
         let chain_start = chain_start(&registry, data.revision)
             .map_err(|error| fault(format!("chain start failed ({error})")))?;
-        let loaded: LoadedRegistry =
-            TreeRead::batch::<QUAD_HEIGHT>(StorageRoot::current(account).tree(), &entries)
-                .load(self.store.tree())
-                .await
-                .map_err(from_storage)?;
-        let batch = loaded
-            .tree
-            .apply_batch(chain_start, &entries)
-            .map_err(|error| fault(format!("records do not apply ({error})")))?;
-        let inputs = &batch.inputs;
-        let recorded_next_index = u64::from(data.apply.new_next_index());
-        if inputs.new_root != data.apply.new_root || inputs.new_next_index != recorded_next_index {
-            return Err(fault(format!(
-                "applied root mismatch at revision {revision}, projected {} at {}, program {} at {}",
-                Hash(inputs.new_root),
-                inputs.new_next_index,
-                Hash(data.apply.new_root),
-                recorded_next_index
-            )));
+        AppliedBatch::<MemberRecord, QUAD_HEIGHT> {
+            at: StorageRoot::current(account).tree(),
+            chain_start,
+            entries: &entries,
+            new_root: data.apply.new_root,
+            new_next_index: data.apply.new_next_index(),
+            revision,
         }
-        // 3. Rows at the new revision hold the new tree.
-        let records = batch.rows.records.values().copied().collect::<Vec<_>>();
-        self.store.tree().save_records(&records, revision).await?;
-        self.store
-            .tree()
-            .save_nodes(&batch.rows.nodes, revision)
-            .await?;
-        // 4. The roots rotate as the program rotates them.
+        .save(self.store.tree())
+        .await?;
+        // 3. The roots rotate as the program rotates them.
         *self.state.account = rotated;
         self.store
             .save_root(&StorageRoot::current(&rotated))
@@ -210,7 +186,7 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
         Ok(())
     }
 
-    /// The proof binds the writes' chain to the root, the index keeps only what they publish.
+    /// The proof binds the writes' chain to the root.
     async fn update_private(self, update: PrivateUpdate<'_>) -> Result<(), ApplyError> {
         let PrivateUpdate {
             authority,

@@ -83,29 +83,34 @@ fn pair() -> Pair {
     }
 }
 
-fn private_update(
+#[must_use]
+struct SentUpdate {
     source: Address,
     tracking: Address,
     revision: u64,
     restrictive: bool,
     writes: Vec<PrivateListWriteData>,
     new_root: [u8; 32],
-) -> Value {
-    let apply = ApplyPrivateListIxData {
-        proof: Zeroable::zeroed(),
-        new_root,
-    };
-    let data = PrivateUpdateIxData {
-        revision: Revision::from(revision),
-        restrictive,
-        writes,
-        apply: &apply,
-    };
-    transaction(
-        STORAGE_PROGRAM_ID,
-        &[CREATOR, source, tracking],
-        &[&[tag::UPDATE_PRIVATE][..], &data.encode().unwrap()].concat(),
-    )
+}
+
+impl SentUpdate {
+    fn transaction(self) -> Value {
+        let apply = ApplyPrivateListIxData {
+            proof: Zeroable::zeroed(),
+            new_root: self.new_root,
+        };
+        let data = PrivateUpdateIxData {
+            revision: Revision::from(self.revision),
+            restrictive: self.restrictive,
+            writes: self.writes,
+            apply: &apply,
+        };
+        transaction(
+            STORAGE_PROGRAM_ID,
+            &[CREATOR, self.source, self.tracking],
+            &[&[tag::UPDATE_PRIVATE][..], &data.encode().unwrap()].concat(),
+        )
+    }
 }
 
 #[tokio::test]
@@ -128,7 +133,15 @@ async fn a_reader_rebuilds_a_private_source_from_its_published_writes_alone() {
                 2,
                 block(
                     2,
-                    vec![private_update(source, tracking, 0, true, writes, root)],
+                    vec![SentUpdate {
+                        source,
+                        tracking,
+                        revision: 0,
+                        restrictive: true,
+                        writes,
+                        new_root: root,
+                    }
+                    .transaction()],
                 ),
             ),
         ]
@@ -214,14 +227,15 @@ async fn fault_after(update: impl FnOnce(&Pair) -> Value) -> Option<String> {
 async fn a_private_update_naming_another_tracking_registry_stops_the_projection() {
     let foreign = Address::new_from_array([60; 32]);
     let fault = fault_after(|pair| {
-        private_update(
-            pair.source,
-            foreign,
-            0,
-            false,
-            vec![list_write(1, 1)],
-            field(9),
-        )
+        SentUpdate {
+            source: pair.source,
+            tracking: foreign,
+            revision: 0,
+            restrictive: false,
+            writes: vec![list_write(1, 1)],
+            new_root: field(9),
+        }
+        .transaction()
     })
     .await
     .unwrap();
@@ -231,14 +245,15 @@ async fn a_private_update_naming_another_tracking_registry_stops_the_projection(
 #[tokio::test]
 async fn a_private_update_at_another_revision_stops_the_projection() {
     let fault = fault_after(|pair| {
-        private_update(
-            pair.source,
-            pair.tracking,
-            5,
-            false,
-            vec![list_write(1, 1)],
-            field(9),
-        )
+        SentUpdate {
+            source: pair.source,
+            tracking: pair.tracking,
+            revision: 5,
+            restrictive: false,
+            writes: vec![list_write(1, 1)],
+            new_root: field(9),
+        }
+        .transaction()
     })
     .await
     .unwrap();
@@ -248,14 +263,15 @@ async fn a_private_update_at_another_revision_stops_the_projection() {
 #[tokio::test]
 async fn a_private_write_counter_that_does_not_increase_stops_the_projection() {
     let fault = fault_after(|pair| {
-        private_update(
-            pair.source,
-            pair.tracking,
-            0,
-            false,
-            vec![list_write(1, 5), list_write(2, 5)],
-            field(9),
-        )
+        SentUpdate {
+            source: pair.source,
+            tracking: pair.tracking,
+            revision: 0,
+            restrictive: false,
+            writes: vec![list_write(1, 5), list_write(2, 5)],
+            new_root: field(9),
+        }
+        .transaction()
     })
     .await
     .unwrap();

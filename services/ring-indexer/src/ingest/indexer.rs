@@ -10,9 +10,10 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use custom_ring_interface::STORAGE_PROGRAM_ID;
+use custom_ring_interface::{storage::StorageError, STORAGE_PROGRAM_ID};
 use futures::{stream, StreamExt};
-use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
 use thiserror::Error;
 
@@ -20,11 +21,10 @@ use crate::{
     block::{BlockInfo, BlockMetadata, Instruction, TransactionInfo},
     rpc::{RpcError, SolanaRpc},
     storage::{
-        self, BlockJournal, BlockUndo, RingCursor, StorageState, StorageStore, StorageUndo,
-        TrackingStore, TrackingUndo,
+        self, BlockJournal, BlockUndo, ProjectedAccount, ProjectedStore, RegistryState,
+        RegistryUndo, RingCursor,
     },
-    storage_registry::{self, StorageCall, StorageProjection},
-    tracking_registry::{self, TrackingCall, TrackingInstruction, TrackingProjection},
+    storage_registry, tracking_registry,
 };
 
 const MAX_RETRY_DELAY_SECS: u64 = 15;
@@ -325,6 +325,34 @@ pub(crate) fn from_storage(error: anyhow::Error) -> ApplyError {
     fault(format!("{error:#}"))
 }
 
+/// `call` fails on data the program refuses.
+pub(crate) struct RegistryInstruction<K> {
+    pub registry: Address,
+    pub call: Result<K, StorageError>,
+}
+
+pub(crate) trait RegistryCall<A: ProjectedAccount>: Send + Sized {
+    /// The state an `Initialize` leaves, `None` off the canonical address and for any other call.
+    fn created(&self, registry: Address) -> Option<RegistryState<A>>;
+
+    fn create<C: ConnectionTrait>(
+        store: &ProjectedStore<'_, C, A>,
+        state: &RegistryState<A>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn project<C: ConnectionTrait>(
+        self,
+        projection: Projection<'_, '_, C, A>,
+    ) -> impl Future<Output = Result<(), ApplyError>> + Send;
+}
+
+pub(crate) struct Projection<'p, 'c, C, A: ProjectedAccount> {
+    pub store: &'p ProjectedStore<'c, C, A>,
+    pub state: &'p mut RegistryState<A>,
+    pub slot: u64,
+    pub rpc: &'p SolanaRpc,
+}
+
 struct BlockWork<'a> {
     tx: &'a DatabaseTransaction,
     block: &'a BlockInfo,
@@ -340,104 +368,62 @@ impl BlockWork<'_> {
                 if instruction.program_id != STORAGE_PROGRAM_ID {
                     continue;
                 }
-                match tracking_registry::decode(instruction) {
-                    Some(decoded) => self.project_tracking(decoded, &mut undo.tracking).await?,
-                    None => self.project_storage(instruction, &mut undo.storage).await?,
+                if let Some(decoded) = tracking_registry::decode(instruction) {
+                    self.project(decoded, &mut undo.tracking).await?;
+                } else if let Some(decoded) = storage_registry::decode(instruction) {
+                    self.project(decoded, &mut undo.storage).await?;
                 }
             }
         }
         Ok(undo)
     }
 
-    async fn project_storage(
+    /// A refused change stops only its registry.
+    async fn project<A: ProjectedAccount, K: RegistryCall<A>>(
         &self,
-        instruction: &Instruction,
-        undo: &mut Vec<StorageUndo>,
+        instruction: RegistryInstruction<K>,
+        undo: &mut Vec<RegistryUndo<A>>,
     ) -> Result<()> {
-        let Some(decoded) = storage_registry::decode(instruction) else {
-            return Ok(());
-        };
-        let store = StorageStore::new(self.tx, decoded.registry.to_bytes());
-        let Some(state) = store.state().await? else {
-            if let Ok(StorageCall::Initialize(init)) = &decoded.call {
-                if let Some(created) = init.state(decoded.registry) {
-                    storage_registry::create(&store, &created).await?;
-                    undo.push(store.undo(None));
-                }
+        let RegistryInstruction { registry, call } = instruction;
+        let store = ProjectedStore::<_, A>::new(self.tx, registry.to_bytes());
+        let Some(before) = store.state().await? else {
+            if let Some(created) = call.as_ref().ok().and_then(|call| call.created(registry)) {
+                K::create(&store, &created).await?;
+                undo.push(store.undo(None));
             }
             return Ok(());
         };
-        if state.fault.is_some() {
+        if before.fault.is_some() {
             return Ok(());
         }
-        let outcome = match decoded.call {
-            Ok(call) => self.advance_storage(state.clone(), call).await,
-            Err(error) => Err(fault(error.to_string())),
-        };
-        undo.push(settle(&store, state, outcome).await?);
-        Ok(())
-    }
-
-    async fn advance_storage(
-        &self,
-        mut state: StorageState,
-        call: StorageCall<'_>,
-    ) -> Result<(), ApplyError> {
-        let savepoint = self.tx.begin().await?;
-        let store = StorageStore::new(&savepoint, state.registry);
-        let projection = StorageProjection {
-            store: &store,
-            state: &mut state,
-            slot: self.block.metadata.slot,
-        };
-        let saved = match projection.project(call).await {
-            Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
-            Err(error) => Err(error),
-        };
-        keep(savepoint, saved).await
-    }
-}
-
-impl BlockWork<'_> {
-    async fn project_tracking(
-        &self,
-        decoded: TrackingInstruction<'_>,
-        undo: &mut Vec<TrackingUndo>,
-    ) -> Result<()> {
-        let store = TrackingStore::new(self.tx, decoded.registry.to_bytes());
-        let Some(mut state) = store.state().await? else {
-            if let Ok(TrackingCall::Initialize(init)) = &decoded.call {
-                if let Some(created) = init.state(decoded.registry) {
-                    tracking_registry::create(&store, &created).await?;
-                    undo.push(store.undo(None));
-                }
-            }
-            return Ok(());
-        };
-        if state.fault.is_some() {
-            return Ok(());
-        }
-        let before = state.clone();
-        let outcome = match decoded.call {
-            Ok(call) => {
-                let savepoint = self.tx.begin().await?;
-                let store = TrackingStore::new(&savepoint, state.registry);
-                let projection = TrackingProjection {
-                    store: &store,
-                    state: &mut state,
-                    slot: self.block.metadata.slot,
-                    rpc: self.rpc,
-                };
-                let saved = match projection.project(call).await {
-                    Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
-                    Err(error) => Err(error),
-                };
-                keep(savepoint, saved).await
-            }
+        let outcome = match call {
+            Ok(call) => self.advance(before.clone(), call).await,
             Err(error) => Err(fault(error.to_string())),
         };
         undo.push(settle(&store, before, outcome).await?);
         Ok(())
+    }
+
+    async fn advance<A: ProjectedAccount, K: RegistryCall<A>>(
+        &self,
+        mut state: RegistryState<A>,
+        call: K,
+    ) -> Result<(), ApplyError> {
+        let savepoint = self.tx.begin().await?;
+        let store = ProjectedStore::<_, A>::new(&savepoint, state.registry);
+        let projected = call
+            .project(Projection {
+                store: &store,
+                state: &mut state,
+                slot: self.block.metadata.slot,
+                rpc: self.rpc,
+            })
+            .await;
+        let saved = match projected {
+            Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
+            Err(error) => Err(error),
+        };
+        keep(savepoint, saved).await
     }
 }
 
