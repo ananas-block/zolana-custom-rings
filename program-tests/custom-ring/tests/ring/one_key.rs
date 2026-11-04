@@ -59,6 +59,8 @@ const KEY: RingCircuit = RingCircuit::Transfer {
 };
 const REVISION: u64 = 1;
 const DISCOVERY_DEPOSIT: u64 = 1_000_000;
+/// Photon's state kind, the indexed prover refuses another.
+const STATE_TREE_TYPE: u16 = 1;
 /// The default heap frame, no ring transaction requests a larger one.
 const HEAP_LIMIT: u64 = 32 * 1024;
 const TRACKING_SECTION: [&str; 6] = [
@@ -110,7 +112,10 @@ impl SeededNotes {
         let leaf_index = self.first_leaf + position as u64;
         Ok(Some(MerkleProof {
             leaf,
-            merkle_context: MerkleContext { tree_type: 0, tree },
+            merkle_context: MerkleContext {
+                tree_type: STATE_TREE_TYPE,
+                tree,
+            },
             path: (0..STATE_TREE_HEIGHT)
                 .map(|level| self.node(level, (leaf_index >> level) ^ 1))
                 .collect::<Result<_, _>>()?,
