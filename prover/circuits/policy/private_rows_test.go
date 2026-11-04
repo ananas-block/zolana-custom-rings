@@ -16,7 +16,6 @@ import (
 
 var _ [NSources]frontend.Variable = [privatelist.NLists]frontend.Variable{}
 
-// The decoded rules read an owner row through the private source and an asset row through its public column.
 type privateRowsCircuit struct {
 	Root       frontend.Variable
 	Source     privatelist.Source
@@ -103,7 +102,6 @@ func TestRulesReadPrivateOwnerRowsBesideAPublicAssetSource(t *testing.T) {
 	}
 }
 
-// A Present rule reads only the salted position once the tracking row exists.
 func TestAllowlistedWalletRefusedAfterEnrollingUntilTheSaltedWrite(t *testing.T) {
 	const allow = privatelist.AllowBit
 	owner, salt := big.NewInt(0xa11ce), big.NewInt(0x5a17)

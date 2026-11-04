@@ -760,9 +760,6 @@ impl<'a> RingTransactData<'a> {
             false => &[],
         };
         let exits = bytes.bitmap(output_count)?;
-        if rail.is_delegate() && exits != 0 {
-            return Err(CustomRingError::FlagNotAllowed);
-        }
         let bodiless = bytes.bitmap(output_count)?;
         if exits & bodiless != 0 {
             return Err(CustomRingError::InvalidChangeBits);
@@ -932,9 +929,6 @@ impl<'a> RingTransactData<'a> {
             })
         {
             return Err(CustomRingError::RingTransactLength);
-        }
-        if self.rail.is_delegate() && self.outputs.iter().any(RingOutput::is_exit) {
-            return Err(CustomRingError::FlagNotAllowed);
         }
         if let Some(replies) = self.replies {
             replies.checked(self.recipient_body_count())?;
@@ -1216,6 +1210,11 @@ impl<'a> RingTransactData<'a> {
             }
             (CircuitId::AnonymousRingEddsa(n_in, n_out, slots, proof_data), Some(access)) => {
                 CircuitId::AnonymousRingEddsaCached(n_in, n_out, slots, proof_data, access)
+            }
+            (CircuitId::RingAuthority(n_in, n_out, slots), None)
+                if self.outputs.iter().any(RingOutput::is_exit) =>
+            {
+                CircuitId::RingAuthorityExit(n_in, n_out, slots)
             }
             (circuit, _) => circuit,
         }

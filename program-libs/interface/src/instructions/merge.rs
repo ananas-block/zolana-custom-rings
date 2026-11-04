@@ -95,7 +95,7 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
             proof: bytes.pod()?,
             eph_pk: bytes.array()?,
             ciphertext: bytes.array()?,
-            body: SppMergeBody::read(&mut bytes)?,
+            body: SppMergeBody::read(bytes)?,
         })
     }
 
@@ -132,7 +132,7 @@ pub(crate) struct SppMergeBody<'a> {
 }
 
 impl<'a> SppMergeBody<'a> {
-    pub(crate) fn read(bytes: &mut Bytes<'a>) -> Result<Self, CustomRingError> {
+    pub(crate) fn read(mut bytes: Bytes<'a>) -> Result<Self, CustomRingError> {
         Ok(Self {
             head: bytes.array()?,
             compressed_b: bytes.array()?,

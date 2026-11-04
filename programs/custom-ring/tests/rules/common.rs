@@ -1,12 +1,14 @@
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit,
-    storage::{Revision, Root, RootUpdate, StorageRegistry},
-    storage_instruction::{InitializeIxData as StorageInitialize, StorageUpdateIxData, UpdateMode},
-    tag, ApplyRecordsIxData, CustomRingError, InitializeIxData, InstructionTag,
-    PolicyBindingIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
-    SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
-    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    storage::{Revision, Root, StorageRegistry},
+    storage_instruction::InitializeIxData as StorageInitialize,
+    tag,
+    tracking::TrackingRegistry,
+    CustomRingError, InitializeIxData, InstructionTag, PolicyBindingIxData, PolicyTableIxData,
+    RingKind, RingPolicy, RingRole, RingRoles, RootRead, SetCoSignerRecordIxData, SourceSpec,
+    UpdateAuthorityIxData, UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED,
+    STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -46,6 +48,12 @@ pub fn policy_pda() -> Address {
 
 pub fn ring_auth() -> Address {
     pda(RING_AUTH_PDA_SEED)
+}
+
+/// Where `Initialize` creates the tracking registry the ring pins.
+pub fn tracking_registry() -> Address {
+    let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
+    TrackingRegistry::find_address(&ring_auth(), &ring_id).0
 }
 
 pub fn program_data() -> Address {
@@ -131,6 +139,8 @@ impl Ring {
             .expect("load the ring program");
         svm.add_program(SHIELDED_POOL, &shielded_pool_bytes())
             .expect("load the shielded pool");
+        svm.add_program(STORAGE_PROGRAM_ID, &deployed("storage_program.so"))
+            .expect("load the storage program");
         let payer = Keypair::new();
         let authority = Keypair::new();
         for wallet in [&payer, &authority] {
@@ -226,25 +236,12 @@ impl Ring {
         );
     }
 
-    /// The registry after the storage program applies an `UpdateImmediate`.
+    /// The registry after the storage program applies a restrictive update.
     pub fn apply_immediate(&mut self, address: Address, new_root: [u8; 32]) {
         let mut registry: StorageRegistry = self.read(&address);
-        let apply = ApplyRecordsIxData {
-            new_root,
-            new_next_index: registry.next_index,
-            ..Zeroable::zeroed()
-        };
-        registry
-            .update(RootUpdate {
-                mode: UpdateMode::Immediate,
-                slot: 0,
-                data: &StorageUpdateIxData {
-                    revision: registry.roots[0].revision,
-                    writes: Vec::new(),
-                    apply: &apply,
-                },
-            })
-            .expect("apply the update");
+        let revision = registry.roots[0].revision.value() + 1;
+        registry.roots.fill(Root::zeroed());
+        registry.roots[0] = root(revision, new_root);
         self.store(
             address,
             STORAGE_PROGRAM_ID,
@@ -515,6 +512,8 @@ impl InitializeIx<'_> {
             AccountMeta::new_readonly(protocol_config(), false),
             AccountMeta::new(ring_auth(), false),
             AccountMeta::new_readonly(SHIELDED_POOL, false),
+            AccountMeta::new(tracking_registry(), false),
+            AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false),
         ];
         if self.data.policy.is_some() {
             accounts.push(AccountMeta::new_readonly(RECORDS, false));
@@ -707,7 +706,7 @@ pub fn set_delegate(admin: &Address, delegate: &Address) -> Instruction {
     )
 }
 
-/// A policy ring whose delegate put it in `ConfidentialEscrow` mode.
+/// A policy ring with a delegate.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
     let admin = ring.holder(RingRole::Admin);
