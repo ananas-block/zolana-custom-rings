@@ -484,6 +484,7 @@ describe("prover/ring/params.go", () => {
       withdrawals: 4,
       owners: 4,
       entry: false,
+      wide: false,
     } as const;
     const capacity = transferPoolCapacity(circuit);
     const zero = fill(0);

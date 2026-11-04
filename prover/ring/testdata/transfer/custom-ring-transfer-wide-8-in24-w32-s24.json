@@ -1,5 +1,5 @@
 {
-  "circuitType": "custom-ring-transfer-8-in24-w32-s24",
+  "circuitType": "custom-ring-transfer-wide-8-in24-w32-s24",
   "publicInputHash": "0x2f9fbbb61d6cab3de6dd4c7b39282962c1e64328983449cbbdcfdb4c78d17375",
   "firstNullifier": "0x0000000000000000000000000000000000000000000000000000000000001f1f",
   "txViewingSk": "0x001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e",
