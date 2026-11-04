@@ -468,7 +468,6 @@ pub(super) fn check_anonymous_inputs(
     if !hidden_leads {
         return Err(RingError::HiddenOwnerMissing);
     }
-    check_zero_key_inputs(&inputs.input_utxos, &sender.signing_pubkey)?;
     if inputs
         .input_utxos
         .iter()
@@ -480,6 +479,7 @@ pub(super) fn check_anonymous_inputs(
     {
         return Err(RingError::InvalidAnonymousSlot);
     }
+    check_zero_key_inputs(&inputs.input_utxos, &sender.signing_pubkey)?;
     check_entry_inputs(inputs, sender)?;
     check_audit_key(inputs)
 }
