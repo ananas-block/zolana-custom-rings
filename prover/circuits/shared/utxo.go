@@ -54,11 +54,12 @@ func (w UtxoWires) Open(api frontend.API) Output {
 	return Output{UtxoWires: w, Hash: hash, Utxo: utxo, Ring: ring, Exit: api.Sub(utxo, ring)}
 }
 
-// OpenInput opens a spent slot, no address input and a dummy that carries nothing but its blinding.
+// OpenInput opens a spent slot, an address spends nothing and reaches the proof through the address chain alone, a dummy carries nothing but its blinding.
 func (w UtxoWires) OpenInput(api frontend.API) Output {
 	opened := w.Open(api)
 	dummy := api.IsZero(api.Sub(w.Domain, transaction.DummyDomain))
-	api.AssertIsEqual(api.Add(opened.Utxo, dummy), 1)
+	address := api.IsZero(api.Sub(w.Domain, transaction.AddressDomain))
+	api.AssertIsEqual(api.Add(opened.Utxo, dummy, address), 1)
 	// Open zeroes a dummy's owner hash before the hash reads it.
 	transaction.AssertWhen(api, dummy, transaction.UtxoCircuitFields{
 		Domain: w.Domain, Owner: 0, Asset: w.Asset, Amount: w.Amount, Blinding: w.Blinding,

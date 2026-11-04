@@ -8,7 +8,7 @@
     },
     {
       "name": "empty on an entry key",
-      "slots": 0,
+      "slots": 8,
       "signers": [],
       "signer_chain": "0000000000000000000000000000000000000000000000000000000000000000"
     },

@@ -53,6 +53,8 @@ fn every_catalog_key_is_locked_with_its_verifying_key() {
 /// Every circuit the program selects for a supported shape, as the generated catalog spells it.
 fn selectable_circuits() -> BTreeSet<String> {
     let mut circuits = vec![RingCircuit::RegisterKey];
+    circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_enrollments));
+    circuits.extend((1..=APPLY_BATCH as u64).filter_map(RingCircuit::apply_private_list));
     circuits.extend((1..=8).map(RingCircuit::deposit));
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
@@ -63,16 +65,22 @@ fn selectable_circuits() -> BTreeSet<String> {
             for inputs in 1..=n_in {
                 for spends_default_ring in [false, true] {
                     for legs in 0..=MAX_INTERFACE_TRANSFERS {
-                        circuits.extend(RingCircuit::transfer(TransferSpend {
-                            rail,
-                            inputs,
-                            outputs: n_out,
-                            spends_default_ring,
-                            legs,
-                            owners: 0,
-                            has_data: false,
-                            private_source: false,
-                        }));
+                        for owners in 0..=n_in {
+                            for (has_data, private_source) in
+                                [(false, false), (true, false), (false, true)]
+                            {
+                                circuits.extend(RingCircuit::transfer(TransferSpend {
+                                    rail,
+                                    inputs,
+                                    outputs: n_out,
+                                    spends_default_ring,
+                                    legs,
+                                    owners,
+                                    has_data,
+                                    private_source,
+                                }));
+                            }
+                        }
                     }
                 }
             }

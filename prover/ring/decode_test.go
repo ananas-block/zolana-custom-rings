@@ -50,7 +50,7 @@ func TestDecodeRejectsMalformedRequests(t *testing.T) {
 		{"layout above a byte", confidentialKey, func(m map[string]any) { m["layout"] = 256 }, "number 256"},
 		{"an output past the capacity", confidentialKey, func(m map[string]any) { m["outputs"] = append(m["outputs"].([]any), output(m)) }, "Outputs: expected 2 values"},
 		{"an owner key one byte short", confidentialKey, func(m map[string]any) { output(m)["ownerKey"] = output(m)["ownerKey"].(string)[:64] }, "OwnerKey: expected 32 values"},
-		{"another key's request", confidentialKey, func(m map[string]any) { m["circuitType"] = "custom-ring-transfer-confidential-4-in24-w4" }, "custom-ring-transfer-confidential-4-in24-w4 request on the custom-ring-transfer-confidential-2-in24-w4 key"},
+		{"another key's request", confidentialKey, func(m map[string]any) { m["circuitType"] = "custom-ring-transfer-confidential-4-in24-w4-s4" }, "custom-ring-transfer-confidential-4-in24-w4-s4 request on the custom-ring-transfer-confidential-2-in24-w4-s4 key"},
 		{"a write past the capacity", batchKey, func(m map[string]any) { m["writes"] = append(m["writes"].([]any), write(m)) }, "Writes: expected 16 values"},
 		{"a path one sibling short", batchKey, func(m map[string]any) { write(m)["path"] = write(m)["path"].([]any)[1:] }, "Writes[0].Slot.Siblings[9]: expected 3 values"},
 		{"a path one sibling long", batchKey, func(m map[string]any) { write(m)["lowPath"] = append(write(m)["lowPath"].([]any), m["oldRoot"]) }, "Writes[0].LowSlot.Siblings: expected 10 values"},
@@ -76,7 +76,7 @@ func TestDecodeRejectsMalformedRequests(t *testing.T) {
 	if _, err := decode(confidentialKey, repeated); err == nil || !strings.Contains(err.Error(), `repeated field "firstNullifier"`) {
 		t.Fatalf("a repeated field decoded: %v", err)
 	}
-	if _, err := decode("custom-ring-transfer-confidential-4-in24-w4", honest); err == nil {
+	if _, err := decode("custom-ring-transfer-confidential-4-in24-w4-s4", honest); err == nil {
 		t.Fatal("a request for the 2-output key decoded on the 4-output key")
 	}
 }

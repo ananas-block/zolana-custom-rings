@@ -19,6 +19,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -262,6 +263,16 @@ func TestDelegateBypass(t *testing.T) {
 		anon.World = frozen(anon.World)
 		requireSolved(t, anon.Build(t).Circuit)
 	})
+	t.Run("withdraws with empty legs and pays no threshold", func(t *testing.T) {
+		w := onRail(confidential2, ringtransfer.Delegate)
+		w.Policy.Cap, w.Policy.CosignAbove, w.Policy.WithdrawalThreshold = 1, 1, 1
+		w.Public = []ringtransfer.PublicSlot{{Asset: ringtransfer.Asset(t), Net: -500, Gross: 500}}
+		requireSolved(t, w.Build(t).Circuit)
+	})
+	t.Run("exits with the owner published by SPP", func(t *testing.T) {
+		shape := transfer.AnonymousShape{InputClass: 16, Outputs: 4, Withdrawals: 4, Owners: 4}
+		requireSolved(t, onAnonymous(shape, ringtransfer.AnonymousDelegate).Build(t).Circuit)
+	})
 	t.Run("several victims move in one transfer", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
 		w.CoOwners = []*big.Int{coOwner}
@@ -302,6 +313,46 @@ func TestDelegateBypass(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
 		w.Unenrolled = []*big.Int{ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 1, 1, 1).OwnerKey)}
 		refused(t, w.Build(t).Circuit, "transfer.AssertOutputOwners")
+	})
+}
+
+// The output predicate binds a live ring output on every rail, an exit keeps its own exception.
+func TestOutputPredicateOnEveryRail(t *testing.T) {
+	recipient := ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 1, 1, 1).OwnerKey)
+	frame := "transfer.AssertOutputOwners"
+	unenrolled := func(w ringtransfer.World) ringtransfer.World {
+		w.Unenrolled = []*big.Int{recipient}
+		return w
+	}
+	zeroToEnrolled := func(w ringtransfer.World) ringtransfer.World {
+		w.Outputs = map[int]func(*ringaudit.Slot){1: func(slot *ringaudit.Slot) {
+			slot.OwnerKey = ringtransfer.SenderKey()
+			slot.Utxo.OwnerPkHash, slot.Utxo.NullifierPk = ringtransfer.Sender(t), shared.ZeroNullifierPk
+		}}
+		return w
+	}
+	for name, mutate := range map[string]func(ringtransfer.World) ringtransfer.World{"a nonzero key with no row": unenrolled, "a zero key under a row": zeroToEnrolled} {
+		t.Run(name, func(t *testing.T) {
+			for _, rail := range []ringtransfer.Rail{ringtransfer.Signer, ringtransfer.InProof, ringtransfer.Delegate} {
+				w := onRail(confidential2, rail)
+				w.World = mutate(w.World)
+				refused(t, w.Build(t).Circuit, frame)
+			}
+			for _, rail := range []ringtransfer.AnonymousRail{ringtransfer.HiddenSender, ringtransfer.PublicOwners, ringtransfer.AnonymousDelegate} {
+				w := onAnonymous(anonymous2, rail)
+				w.World = mutate(w.World)
+				refused(t, w.Build(t).Circuit, frame)
+			}
+		})
+	}
+	t.Run("a zero key to an owner with no row", func(t *testing.T) {
+		w := ringtransfer.Signed(confidential2)
+		w.Outputs = map[int]func(*ringaudit.Slot){1: func(slot *ringaudit.Slot) { slot.Utxo.NullifierPk = shared.ZeroNullifierPk }}
+		requireSolved(t, w.Build(t).Circuit)
+	})
+	t.Run("an exit to an owner with no row", func(t *testing.T) {
+		w := ringtransfer.Signed(transfer.ConfidentialShape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
+		requireSolved(t, w.Build(t).Circuit)
 	})
 }
 
@@ -497,6 +548,53 @@ func TestInputOrder(t *testing.T) {
 		b.Audit.InputCount, b.Circuit.InputCount = 1, 1
 		b.Rebind(t)
 		refused(t, b.Circuit, "transfer.OpenInputs")
+	})
+}
+
+// An address slot follows the notes and reaches the proof through the address chain, SPP's rail rules decide who may use it.
+func TestAddressSlots(t *testing.T) {
+	sender, nk, ring := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t), ringID(t)
+	addressSlot := func() ringaudit.Input {
+		slot := ringaudit.SpareInput(1)
+		slot.Domain, slot.OwnerPkHash = transaction.AddressDomain, sender
+		return ringaudit.Input{Utxo: slot}
+	}
+	world := func(t *testing.T) ringtransfer.Confidential {
+		w := ringtransfer.Signed(confidential2)
+		w.Inputs = []ringaudit.Input{{Utxo: ringaudit.SpentUtxo(t, sender, nk, ring, 100, 51)}, addressSlot()}
+		return w
+	}
+	t.Run("beside a spent note", func(t *testing.T) {
+		b := world(t).Build(t)
+		b.Circuit.AddressChain = 0x77
+		b.Rehash(t)
+		requireSolved(t, b.Circuit)
+	})
+	t.Run("the chain binds the transaction hash", func(t *testing.T) {
+		b := world(t).Build(t)
+		b.Circuit.AddressChain = 0x77
+		b.Rehash(t)
+		b.Circuit.AddressChain = 0x78
+		refused(t, b.Circuit, "transfer.transactionBinding.bindTransaction")
+	})
+	t.Run("a note called an address leaves the input chain SPP hashed", func(t *testing.T) {
+		w := world(t)
+		w.Inputs[1] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, nk, ring, 60, 52)}
+		b := w.Build(t)
+		spent := b.Circuit.PrivateTxHash
+		b.Circuit.Inputs[1].Domain = transaction.AddressDomain
+		b.Circuit.PrivateTxHash = spent
+		refused(t, b.Circuit, "transfer.transactionBinding.bindTransaction")
+	})
+	t.Run("a note after an address", func(t *testing.T) {
+		w := world(t)
+		w.Inputs = []ringaudit.Input{addressSlot(), {Utxo: ringaudit.SpentUtxo(t, sender, nk, ring, 100, 51)}}
+		refused(t, w.Build(t).Circuit, "transfer.OpenInputs")
+	})
+	t.Run("an unknown domain", func(t *testing.T) {
+		b := world(t).Build(t)
+		b.Circuit.Inputs[1].Domain = 9
+		refused(t, b.Circuit, "shared.UtxoWires.OpenInput")
 	})
 }
 
