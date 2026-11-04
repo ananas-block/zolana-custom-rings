@@ -1,3 +1,14 @@
+**Use cases:**
+
+1. KYC-gated payments.
+2. Sanctions screening.
+3. Transaction monitoring.
+4. Freezing funds.
+5. Recovering funds through a permanent delegate.
+6. Small payments without KYC, with KYC required above a threshold.
+
+**Features:**
+
 1. **Auditor recovery**
 
    **Purpose:**
