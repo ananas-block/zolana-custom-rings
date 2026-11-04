@@ -338,7 +338,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 // reopen fills both pools over the circuit's rows.
 func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	t.Helper()
-	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos())
+	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos(), c.Inputs)
 	outputOwners := make([]frontend.Variable, len(a.Audit.Outputs))
 	payments := make([]frontend.Variable, 0, len(c.OwnerEntries))
 	for o, slot := range a.Audit.Outputs {
@@ -358,7 +358,7 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy, payments)
 }
 
-func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {
+func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo, inputs []shared.UtxoWires) {
 	t.Helper()
 	p.Table = w.table()
 	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
@@ -392,7 +392,7 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 	for o, utxo := range utxos {
 		wires[o] = utxo.Wires()
 	}
-	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator, a.Tracking)
+	ringpolicy.FillPools(t, p, wires, inputs, senders, a.Own, a.Curator, a.Tracking)
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.

@@ -36,12 +36,12 @@ const sectionSenders = 4
 // SectionShape sizes a harness, Records zero takes the shape's limits.
 type SectionShape struct {
 	Outputs, Withdrawals, SaltedKeys int
-	OwnOnly                          bool
 	Records                          policy.RecordPoolShape
 }
 
 func NewSectionCircuit(shape SectionShape) (*SectionCircuit, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: sectionSenders, SaltedKeys: shape.SaltedKeys, OwnOnly: shape.OwnOnly}.Inputs(), shape.Records, transaction.NPublicSlots)
+	inputs := shape.Outputs + transaction.NPublicSlots
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: sectionSenders, SaltedKeys: shape.SaltedKeys, Spent: inputs}.Inputs(), shape.Records, transaction.NPublicSlots)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func NewSectionCircuit(shape SectionShape) (*SectionCircuit, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SectionCircuit{Policy: p, Tracking: tracking, Outputs: make([]shared.UtxoWires, shape.Outputs), Inputs: make([]shared.UtxoWires, shape.Outputs+transaction.NPublicSlots), Senders: make([]frontend.Variable, sectionSenders)}, nil
+	return &SectionCircuit{Policy: p, Tracking: tracking, Outputs: make([]shared.UtxoWires, shape.Outputs), Inputs: make([]shared.UtxoWires, inputs), Senders: make([]frontend.Variable, sectionSenders)}, nil
 }
 
 func (c *SectionCircuit) Define(api frontend.API) error {

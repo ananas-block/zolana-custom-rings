@@ -35,7 +35,6 @@ var curatorRegistry = big.NewInt(0xc0ffee)
 type World struct {
 	Outputs            int
 	WithdrawalCapacity int
-	OwnOnly            bool
 	Withdrawals        []Slot
 	// Anonymous publishes no recipient, Unscreened writes no policy hash, NoOwnRegistry holds no thresholds, Delegate bypasses every policy.
 	Unscreened, NoOwnRegistry, Delegate bool

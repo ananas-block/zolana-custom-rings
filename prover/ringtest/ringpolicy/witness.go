@@ -29,7 +29,7 @@ func (w World) Build(t testing.TB) Witness {
 // BuildRows builds the world under rows in place of Table's, the table a vector carries.
 func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	t.Helper()
-	c, err := NewSectionCircuit(SectionShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, SaltedKeys: w.SaltedKeys, OwnOnly: w.OwnOnly, Records: w.Records})
+	c, err := NewSectionCircuit(SectionShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, SaltedKeys: w.SaltedKeys, Records: w.Records})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	for _, owner := range w.Enrolled {
 		Enroll(t, tracking, big.NewInt(owner), big.NewInt(owner+1))
 	}
-	FillPools(t, p, c.Outputs, c.Senders, own, curator, tracking)
+	FillPools(t, p, c.Outputs, c.Inputs, c.Senders, own, curator, tracking)
 	payments := make([]frontend.Variable, 0, len(p.OwnerEntries))
 	for _, out := range c.Outputs {
 		payments = append(payments, out.OwnerPkHash)

@@ -219,7 +219,7 @@ func (s Spec) Build(t testing.TB) *Deposit {
 			outputs[i].Domain = big.NewInt(protocol.UtxoDomain)
 		}
 	}
-	ringpolicy.FillPools(t, &c.Policy, outputs, nil, own, curator, d.Tracking)
+	ringpolicy.FillPools(t, &c.Policy, outputs, nil, nil, own, curator, d.Tracking)
 	ringpolicy.FillTracking(t, &c.Tracking, d.Tracking, nil, owners, &c.Policy, owners)
 	c.OwnRoot, c.CuratorRoot = big.NewInt(0), big.NewInt(0)
 	if screened {
