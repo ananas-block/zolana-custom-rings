@@ -7,7 +7,7 @@ use pinocchio::{AccountView, Address, ProgramResult};
 use instructions::{
     process_apply_enrollments_ix, process_enroll_ix, process_initialize_ix,
     process_initialize_tracking_ix, process_owner_grant_ix, process_update_authority_ix,
-    process_update_ix,
+    process_update_ix, process_update_private_ix,
 };
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
@@ -34,6 +34,7 @@ pub fn process_instruction(
         tag::APPLY_ENROLLMENTS => process_apply_enrollments_ix(program_id, accounts, data),
         tag::OWNER_GRANT => process_owner_grant_ix(program_id, accounts, data),
         tag::INITIALIZE_TRACKING => process_initialize_tracking_ix(program_id, accounts, data),
+        tag::UPDATE_PRIVATE => process_update_private_ix(program_id, accounts, data),
         _ => Err(StorageError::InvalidInstructionData.into()),
     }
 }
