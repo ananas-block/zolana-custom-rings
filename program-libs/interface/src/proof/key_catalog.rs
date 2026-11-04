@@ -431,7 +431,7 @@ impl RingCircuit {
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
-            tracking: owners + outputs + private,
+            tracking: (owners + outputs).max(private),
         })
     }
 }

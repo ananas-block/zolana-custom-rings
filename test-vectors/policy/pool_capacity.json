@@ -1,5 +1,5 @@
 {
-  "description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = S + N + P with P the key's private rows. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+  "description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = max(S + N, P) with P the key's private rows. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
   "keys": [
     {
       "key": "custom_ring_transfer_confidential_2_in24_w4_s4",
@@ -173,25 +173,25 @@
       "key": "custom_ring_transfer_confidential_2_in24_w4_s4_p10",
       "own": 15,
       "curator": 15,
-      "tracking": 16
+      "tracking": 10
     },
     {
       "key": "custom_ring_transfer_confidential_4_in24_w4_s4_p12",
       "own": 19,
       "curator": 19,
-      "tracking": 20
+      "tracking": 12
     },
     {
       "key": "custom_ring_transfer_confidential_8_in16_w4_s4_p16",
       "own": 27,
       "curator": 27,
-      "tracking": 28
+      "tracking": 16
     },
     {
       "key": "custom_ring_transfer_confidential_16_in5_w8_s4_p24",
       "own": 47,
       "curator": 47,
-      "tracking": 44
+      "tracking": 24
     },
     {
       "key": "custom_ring_transfer_confidential_entry_2_in8_w4_s4",
@@ -257,19 +257,19 @@
       "key": "custom_ring_transfer_confidential_entry_2_in8_w4_s4_p10",
       "own": 15,
       "curator": 15,
-      "tracking": 16
+      "tracking": 10
     },
     {
       "key": "custom_ring_transfer_confidential_entry_4_in8_w4_s4_p12",
       "own": 19,
       "curator": 19,
-      "tracking": 20
+      "tracking": 12
     },
     {
       "key": "custom_ring_transfer_confidential_entry_8_in2_w4_s2_p14",
       "own": 25,
       "curator": 25,
-      "tracking": 24
+      "tracking": 14
     },
     {
       "key": "custom_ring_transfer_anonymous_2_in24_w4_s4",
@@ -395,19 +395,19 @@
       "key": "custom_ring_transfer_anonymous_2_in24_w4_s4_p10",
       "own": 15,
       "curator": 15,
-      "tracking": 16
+      "tracking": 10
     },
     {
       "key": "custom_ring_transfer_anonymous_4_in16_w4_s4_p12",
       "own": 19,
       "curator": 19,
-      "tracking": 20
+      "tracking": 12
     },
     {
       "key": "custom_ring_transfer_anonymous_8_in5_w24_s4_p16",
       "own": 47,
       "curator": 47,
-      "tracking": 28
+      "tracking": 16
     },
     {
       "key": "custom_ring_transfer_anonymous_entry_2_in8_w4_s4",
@@ -473,19 +473,19 @@
       "key": "custom_ring_transfer_anonymous_entry_2_in8_w4_s4_p10",
       "own": 15,
       "curator": 15,
-      "tracking": 16
+      "tracking": 10
     },
     {
       "key": "custom_ring_transfer_anonymous_entry_4_in8_w4_s4_p12",
       "own": 19,
       "curator": 19,
-      "tracking": 20
+      "tracking": 12
     },
     {
       "key": "custom_ring_transfer_anonymous_entry_8_in2_w4_s2_p14",
       "own": 25,
       "curator": 25,
-      "tracking": 24
+      "tracking": 14
     }
   ]
 }

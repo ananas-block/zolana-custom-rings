@@ -237,7 +237,7 @@ func TestPoolCapacityVector(t *testing.T) {
 		keys = append(keys, poolCapacity{shape.String(), c.RecordPools().Own, c.RecordPools().Curator, c.TrackingPoolSize()})
 	}
 	ringtest.PinVector(t, "policy/pool_capacity.json", map[string]any{
-		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = S + N + P with P the key's private rows. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "The pools each transfer key compiles. distinct = S + 2 * N + w, own = distinct + max(min(w, 3), 3), curator = distinct + min(w, 3), tracking = max(S + N, P) with P the key's private rows. Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1.",
 		"keys":        keys,
 	})
 }

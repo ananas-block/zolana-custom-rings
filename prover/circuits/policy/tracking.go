@@ -25,9 +25,13 @@ type TrackingView struct {
 	NullifierPk, ListTag frontend.Variable
 }
 
-// NewTracking holds one record per row, output and private subject, a withdrawal owner enters through its private row.
+// Distinct members, a live source gives each row and output owner a private row.
+func trackingCapacity(rows, outputs, private int) int {
+	return max(rows+outputs, private)
+}
+
 func NewTracking(rows, outputs, private int) (Tracking, error) {
-	capacity := rows + outputs + private
+	capacity := trackingCapacity(rows, outputs, private)
 	proof, err := registry.NewTrackingProof(capacity)
 	if err != nil {
 		return Tracking{}, err
@@ -43,7 +47,7 @@ func NewTracking(rows, outputs, private int) (Tracking, error) {
 
 // Validate refuses a pool sized off the key before any wire is read.
 func (t *Tracking) ValidateTracking(rows, outputs, private int) error {
-	capacity := rows + outputs + private
+	capacity := trackingCapacity(rows, outputs, private)
 	if len(t.RowEntries) != rows || len(t.OutputEntries) != outputs {
 		return fmt.Errorf("tracking requires one reference per row and output")
 	}
@@ -78,6 +82,6 @@ func (t *Tracking) OpenTracking(api frontend.API) TrackingPool {
 
 // Row reads member at entry while active is set, zeros otherwise.
 func (p TrackingPool) Row(api frontend.API, active, member, entry frontend.Variable) TrackingView {
-	columns := p.subjects.resolve(api, recordQuery{active: active, member: member, index: entry})
+	columns := p.subjects.read(api, recordQuery{active: active, member: member, index: entry})
 	return TrackingView{NullifierPk: columns[0], ListTag: columns[1]}
 }

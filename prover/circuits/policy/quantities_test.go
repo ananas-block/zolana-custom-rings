@@ -132,6 +132,7 @@ func TestOutflowSettlesAtItselfAndRefusesOneBelow(t *testing.T) {
 		{"a zero key changes nothing", []ringpolicy.Slot{zeroKey}, []ringpolicy.Slot{slot(s, 1000), exit(alice, 1000)}, deposit(1000, 0), 1000},
 		{"a deposit funds the return of a withdrawal", []ringpolicy.Slot{slot(s, 1000)}, []ringpolicy.Slot{slot(s, 1001)}, deposit(1, 999), 999},
 		{"a withdrawal with change", []ringpolicy.Slot{slot(s, 200)}, []ringpolicy.Slot{slot(s, 50)}, deposit(-150, 150), 150},
+		{"a withdrawal no output shares", []ringpolicy.Slot{slot(s, 200)}, nil, deposit(-200, 200), 200},
 		{"a same-owner exit with no deposit", []ringpolicy.Slot{slot(s, 200)}, []ringpolicy.Slot{exit(s, 200)}, nil, 200},
 		{"an owner who kept its funds is not charged", []ringpolicy.Slot{slot(s, 1000), slot(bob, 1000)}, []ringpolicy.Slot{slot(s, 1000), exit(alice, 1000)}, nil, 1000},
 		{"public funds passing through charge only held funds", []ringpolicy.Slot{slot(s, 1000)}, []ringpolicy.Slot{slot(s, 1000), exit(alice, 5000)}, deposit(5000, 0), 1000},
