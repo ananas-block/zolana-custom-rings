@@ -775,16 +775,14 @@ impl DepositAssembly<'_> {
         })?[..] else {
             return Err(CustomRingError::InvalidDepositData.into());
         };
-        let supplied: Vec<Address> = co_signer.into_iter().collect();
         let cosigner = CoSignerChoice {
             ring,
             config,
             demand: CoSignDemand::DEPOSIT,
-            supplied: &supplied,
+            supplied: co_signer,
         }
         .resolve(rpc)
-        .await?
-        .pop();
+        .await?;
         let address = note.address;
         Ok(PreparedRingDeposit {
             priority_fee: None,

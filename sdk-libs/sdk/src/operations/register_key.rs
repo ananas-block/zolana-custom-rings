@@ -1,6 +1,7 @@
 //! Enrolls a member's nullifier key on the ring's tracking registry, the first enrollment proves the sealed key.
 
 use custom_ring_interface::{
+    domain,
     key_catalog::RingCircuit,
     storage_instruction::{tag, EnrollIxData, OwnerGrantIxData},
     tracking::TrackingAuthorization,
@@ -10,10 +11,9 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::{right_align, solana_owner_identity};
-use spr_keypair::ViewingKey;
+use spr_keypair::{NullifierKey, ViewingKey};
 use zeroize::Zeroizing;
 use zolana_ring_client::NullifierKeyEnvelope;
-use zolana_ring_keys::RingNullifierKey;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -29,7 +29,7 @@ pub struct Enroll<'a> {
     pub ring: CustomRing,
     pub payer: Address,
     pub owner: Address,
-    pub nullifier_key: &'a RingNullifierKey,
+    pub nullifier_key: &'a NullifierKey,
     pub viewing_key: &'a ViewingKey,
 }
 
@@ -55,10 +55,11 @@ impl Enroll<'_> {
         let policy = config.account();
         let ring_id = self.ring.ring_id()?;
         let auditor_pk = config.auditor_pubkey;
-        let key = self.nullifier_key.nullifier_key();
+        let key = self.nullifier_key;
         let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
-        let nullifier_pk = self.nullifier_key.nullifier_pubkey()?;
-        let list_tag = self.nullifier_key.list_tag()?;
+        let nullifier_pk = key.pubkey()?;
+        let secret = Zeroizing::new(right_align(&key.secret()));
+        let list_tag = domain::list_tag(&domain::list_salt(&secret)?)?;
         let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {
@@ -75,7 +76,7 @@ impl Enroll<'_> {
             public_input_hash,
             ring_id,
             member,
-            nullifier_secret: Zeroizing::new(right_align(&key.secret())),
+            nullifier_secret: secret,
             eph_sk: envelope.ephemeral_sk.clone(),
             auditor_pk,
         };

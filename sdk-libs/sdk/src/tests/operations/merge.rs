@@ -48,7 +48,6 @@ impl Merge<'_> {
     }
 }
 
-
 /// The hidden owner never pays, signs or co-signs its anonymous merge.
 #[tokio::test]
 async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_proving() {
@@ -168,7 +167,9 @@ async fn the_next_merge_width_past_the_ring_widest_does_not_fit() {
     assert!(matches!(
         crate::submission::check_transaction_size(
             &payer,
-            &prepared.preview_instruction(&input, payer, &config).unwrap(),
+            &prepared
+                .preview_instruction(&input, payer, &config)
+                .unwrap(),
             ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
         ),
         Err(RingError::TransactionTooLarge { .. })

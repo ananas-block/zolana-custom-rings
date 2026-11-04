@@ -53,7 +53,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn new(input: CustomRingTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signers: Vec::new(),
+            co_signer: None,
             priority_fee: None,
             rail: Owner {
                 sender: input.sender,

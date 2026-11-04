@@ -4,9 +4,7 @@ use spr_interface::pda;
 use zolana_ring_keys::RingAddress;
 
 use crate::{
-    tests::support::{
-        history, keypair, ring, Chain, RingSettings, TREE_ID,
-    },
+    tests::support::{history, keypair, ring, Chain, RingSettings, TREE_ID},
     DepositAsset, DepositRecipient, RingDeposit, RingError,
 };
 
@@ -57,7 +55,6 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
         (member.signing_pubkey(), 5)
     );
 }
-
 
 #[tokio::test]
 async fn a_deposit_names_the_co_signer_a_deposit_scope_demands() {
@@ -457,15 +454,18 @@ mod relay_message {
             }
             .prepare(&self.chain)
             .await?
-            .instruction(CustomRingProof::zeroed(), crate::deposit::DepositRoots {
-                tracking: crate::submission::BoundRoot::tracking(
-                    &*ring().require_policy(&self.chain).await?,
-                    &self.chain,
-                )
-                .await?,
-                own: None,
-                curator: None,
-            })?;
+            .instruction(
+                CustomRingProof::zeroed(),
+                crate::deposit::DepositRoots {
+                    tracking: crate::submission::BoundRoot::tracking(
+                        &*ring().require_policy(&self.chain).await?,
+                        &self.chain,
+                    )
+                    .await?,
+                    own: None,
+                    curator: None,
+                },
+            )?;
             let message = self.answer.message(&honest, inputs.depositor);
             *self.honest.lock().unwrap() = Some((honest, inputs));
             Ok(RelayStep::SignMessage {

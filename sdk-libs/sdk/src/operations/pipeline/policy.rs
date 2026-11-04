@@ -102,7 +102,7 @@ impl PolicyRead<'_> {
             legs: withdrawals.len(),
             owners: live_rows.len(),
             has_data: self.has_data,
-            private_source: policy.private_registry(read).is_some(),
+            private_source: read == RootRead::Policy && !policy.salted().is_empty(),
         };
         let unkeyed = || RingError::ShapeUnkeyed { rail: self.rail };
         let circuit = RingCircuit::transfer(spend).ok_or_else(unkeyed)?;

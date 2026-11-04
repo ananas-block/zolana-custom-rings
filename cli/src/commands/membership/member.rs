@@ -83,7 +83,7 @@ fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
             ring: ctx.ring,
             payer: payer.pubkey(),
             owner: member.pubkey(),
-            nullifier_key: &ring_key,
+            nullifier_key: ring_key.nullifier_key(),
             viewing_key: &member.viewing_key,
         }
         .prove(ctx.ring_client()),

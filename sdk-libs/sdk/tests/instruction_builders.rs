@@ -14,6 +14,7 @@ use custom_ring_sdk::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
+use spr_interface::instruction::instruction_data::merge_ring::MergeRingAuthority;
 use spr_interface::{
     instruction::instruction_data::merge_transact::{
         MergeOutputEncryption, MergeProof, MergeTransactIxData,
@@ -21,7 +22,6 @@ use spr_interface::{
     pda, BPF_LOADER_UPGRADEABLE_ID,
 };
 use spr_keypair::X25519Keypair;
-use spr_interface::instruction::instruction_data::merge_ring::MergeRingAuthority;
 use spr_program::instruction::MergeRingV2;
 use wincode::{config::DefaultConfig, SchemaRead};
 use zolana_ring_client::ReaderKey;
@@ -551,7 +551,10 @@ fn a_zero_key_merge_puts_its_signing_owner_on_spp_and_reads_the_authority_back()
         [prefix, spp.accounts.clone()].concat()
     );
     assert!(instruction.accounts[2 + RING_MERGE_OWNER_INDEX].is_signer);
-    assert_eq!(instruction.accounts[2 + RING_MERGE_OWNER_INDEX].pubkey, owner);
+    assert_eq!(
+        instruction.accounts[2 + RING_MERGE_OWNER_INDEX].pubkey,
+        owner
+    );
     let (ix_tag, body) = split(&instruction);
     assert_eq!(ix_tag, tag::MERGE);
     let parsed = CustomRingMergeIxDataRef::from_bytes(body).unwrap();

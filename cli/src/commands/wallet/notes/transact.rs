@@ -142,7 +142,7 @@ struct Outflow {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Requirement {
-    demanded: CoSignRequirement,
+    demanded: Option<CoSignRequirement>,
 }
 
 /// Applies only on a policy that reads the ring's own `Allow`.
@@ -892,13 +892,13 @@ impl CoSigner {
     /// Refused when the operation demands a co-signer the operator did not pass.
     fn sign_for(&self, requirement: Requirement) -> Result<Option<&(dyn Signer + Sync)>> {
         ensure!(
-            requirement.demanded.is_satisfied() || self.keypair.is_some(),
+            requirement.demanded.is_none() || self.keypair.is_some(),
             "the operation needs the co-signer's approval, pass --cosigner-keypair"
         );
         Ok(self
             .keypair
             .as_ref()
-            .filter(|_| !requirement.demanded.is_satisfied())
+            .filter(|_| requirement.demanded.is_some())
             .map(|keypair| keypair as &(dyn Signer + Sync)))
     }
 }
@@ -916,7 +916,7 @@ impl Requirement {
             Demand::Approval => spend(ApprovalMask::OUTFLOW).demand(),
         };
         Ok(Self {
-            demanded: demanded.requirement(config)?,
+            demanded: demanded.requirement(config),
         })
     }
 }
@@ -1227,11 +1227,7 @@ impl Transfer<'_> {
                             asset: mint,
                             payments: payees.clone(),
                             entry: *entry,
-                            co_signers: self
-                                .cosigner
-                                .iter()
-                                .map(|signer| signer.pubkey())
-                                .collect(),
+                            co_signer: self.cosigner.map(|signer| signer.pubkey()),
                         };
                         ctx.block(select.select(ctx.ring_client()))?
                     }

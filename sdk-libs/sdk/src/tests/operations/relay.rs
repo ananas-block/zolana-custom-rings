@@ -198,8 +198,7 @@ mod delegate_message {
     use std::sync::Mutex;
 
     use custom_ring_interface::{
-        compute_unit_limit, tag, InstructionTag, RingRail,
-        RingTransactData,
+        compute_unit_limit, tag, InstructionTag, RingRail, RingTransactData,
     };
     use solana_instruction::Instruction;
     use solana_signer::Signer;

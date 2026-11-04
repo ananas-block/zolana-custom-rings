@@ -23,7 +23,6 @@ use spr_client::{
 };
 use spr_hasher::{Hasher, Poseidon};
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey};
-use spr_keypair::ShieldedAddress;
 use spr_interface::{
     state::{
         default_tree_fees,
@@ -32,6 +31,7 @@ use spr_interface::{
     },
     RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
+use spr_keypair::ShieldedAddress;
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
 use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};

@@ -1,7 +1,7 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    cosign::CoSignHeader, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingProof,
+    cosign::ApprovalMask, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingProof,
     FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
     Replies, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody,
     AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
@@ -110,7 +110,6 @@ pub(crate) struct OwnedAppMessage {
 pub(crate) struct OwnedExtensions {
     pub data_hash: Option<[u8; 32]>,
     pub ring_data_hash: Option<[u8; 32]>,
-    pub private_revision: Option<Revision>,
     pub messages: Vec<OwnedAppMessage>,
     pub cache: Option<CacheAccess>,
 }
@@ -120,7 +119,6 @@ impl OwnedExtensions {
         FrameExtensions {
             data_hash: self.data_hash.as_ref(),
             ring_data_hash: self.ring_data_hash.as_ref(),
-            private_revision: self.private_revision,
             messages: self
                 .messages
                 .iter()
@@ -159,7 +157,7 @@ pub(crate) struct TransactParts {
     pub own_revision: Option<Revision>,
     pub policy: Option<PolicyProof>,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
-    pub co_sign: CoSignHeader,
+    pub approval: ApprovalMask,
     pub no_spend: bool,
     pub public_owners: bool,
     pub expiry_unix_ts: u32,
@@ -213,7 +211,7 @@ impl TransactParts {
             own_revision: self.own_revision,
             policy: self.policy,
             spl_withdrawal_owners: &self.spl_withdrawal_owners,
-            co_sign: self.co_sign,
+            approval: self.approval,
             no_spend: self.no_spend,
             public_owners: self.public_owners,
             expiry_unix_ts: self.expiry_unix_ts,
@@ -259,7 +257,7 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    pub co_signers: Vec<Address>,
+    pub co_signer: Option<Address>,
     pub delegate: Option<Address>,
 }
 
@@ -313,9 +311,9 @@ impl TransactAccounts {
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
         accounts.extend(
-            self.co_signers
-                .iter()
-                .flat_map(|co_signer| ring.co_signer_metas(*co_signer)),
+            self.co_signer
+                .into_iter()
+                .flat_map(|co_signer| ring.co_signer_metas(co_signer)),
         );
         accounts.extend(
             self.delegate

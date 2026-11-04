@@ -1,8 +1,8 @@
 //! A child of `pipeline`, every rail stages and assembles through its private items.
 
 use custom_ring_interface::{
-    ring_body_output, ring_sender_bundle_output_body, CustomRingError, RecipientBody,
-    RingMode, RingRail, RingTransactData, SenderBundle, RECIPIENT_BODY_LEN,
+    ring_body_output, ring_sender_bundle_output_body, CustomRingError, RecipientBody, RingMode,
+    RingRail, RingTransactData, SenderBundle, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -289,7 +289,9 @@ fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
                 panic!("an anonymous slot is tagged inline, {:?}", output.owner_tag);
             };
             let body = output.data.as_deref().map(|data| {
-                ring_body_output(data).expect("a scheme 13 recipient body").0
+                ring_body_output(data)
+                    .expect("a scheme 13 recipient body")
+                    .0
             });
             (tag, body)
         })
@@ -501,7 +503,7 @@ impl<'a> MoveSender<'a> {
             asset: Mint::SOL,
             payments,
             entry: EntrySpend::Allow,
-            co_signers: Vec::new(),
+            co_signer: None,
         }
     }
 }
@@ -712,7 +714,6 @@ async fn an_anonymous_transfer_reserving_an_address_is_refused_before_signing() 
         ));
     }
 }
-
 
 /// The fee payer is a public signer, the hidden owner may not pay its move.
 #[tokio::test]
@@ -1476,7 +1477,6 @@ async fn an_anonymous_frame_of_only_public_owners_is_refused() {
     ));
 }
 
-
 /// The frame carries `m` and leaves each omitted slot off the wire.
 #[tokio::test]
 async fn compact_padding_publishes_the_prefix_under_the_keys_capacity() {
@@ -1585,7 +1585,16 @@ async fn the_owner_count_selects_the_key_and_opens_ascending_rows() {
         panic!("five owners select the key with full rows");
     };
     assert!(framed.frame.parts.wide_owners);
-    assert_eq!(framed.frame.policy.rows.iter().filter(|row| **row != [0; 32]).count(), 5);
+    assert_eq!(
+        framed
+            .frame
+            .policy
+            .rows
+            .iter()
+            .filter(|row| **row != [0; 32])
+            .count(),
+        5
+    );
 }
 
 /// The refusal of a recipient off the allow list names its rule and output.
@@ -2716,8 +2725,6 @@ async fn change_slots_and_replies_move_the_anonymous_frame_by_their_bytes() {
     assert_eq!(co_owned.bytes().await - base.bytes().await, 32 + 65);
 }
 
-
-
 #[tokio::test]
 async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_proving() {
     use crate::tests::support::{keypair, payer, Registry};
@@ -2765,7 +2772,6 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
     );
 }
 
-
 #[tokio::test]
 async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() {
     let sender = &crate::tests::support::keypair(1);
@@ -2793,7 +2799,6 @@ async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() 
     ));
 }
 
-
 #[test]
 fn a_payment_total_past_a_u64_is_refused() {
     assert!(matches!(
@@ -2801,7 +2806,6 @@ fn a_payment_total_past_a_u64_is_refused() {
         Err(RingError::PaymentOverflow)
     ));
 }
-
 
 #[tokio::test]
 async fn automatic_selection_skips_a_zero_key_note_and_names_the_exposure() {
@@ -2987,10 +2991,16 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
             .client()
     };
     let enrolled = on_chain(&[address]);
-    assert!(owner_transfer(&sender, keyed()).frame(&enrolled).await.is_ok());
+    assert!(owner_transfer(&sender, keyed())
+        .frame(&enrolled)
+        .await
+        .is_ok());
     let another_key = on_chain(&[rekeyed]);
     assert!(matches!(
-        owner_transfer(&sender, keyed()).frame(&another_key).await.err(),
+        owner_transfer(&sender, keyed())
+            .frame(&another_key)
+            .await
+            .err(),
         Some(RingError::InputKeyNotEnrolled { index: 0 })
     ));
 }
@@ -3055,7 +3065,11 @@ async fn each_proven_class_takes_its_own_co_signer() {
         Address::new_from_array([63; 32]),
     );
     let record = |signer: Address, scope: CoSignScope| {
-        let bump = Address::find_program_address(&[CoSigner::SEED, signer.as_ref()], &crate::tests::support::program()).1;
+        let bump = Address::find_program_address(
+            &[CoSigner::SEED, signer.as_ref()],
+            &crate::tests::support::program(),
+        )
+        .1;
         account(
             crate::tests::support::program(),
             &CoSigner {
@@ -3073,13 +3087,22 @@ async fn each_proven_class_takes_its_own_co_signer() {
         .added(CoSignScope::APPROVE_WITHDRAWAL)
         .unwrap();
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
-        .with(ring().policy_pda(), account(crate::tests::support::program(), &*ring_settings))
-        .with(ring().co_signer_pda(&outflow), record(outflow, CoSignScope::APPROVE_OUTFLOW))
+        .with(
+            ring().policy_pda(),
+            account(crate::tests::support::program(), &*ring_settings),
+        )
+        .with(
+            ring().co_signer_pda(&outflow),
+            record(outflow, CoSignScope::APPROVE_OUTFLOW),
+        )
         .with(
             ring().co_signer_pda(&withdrawal),
             record(withdrawal, CoSignScope::APPROVE_WITHDRAWAL),
         )
-        .with(ring().co_signer_pda(&stranger), record(stranger, CoSignScope::TRANSFERS));
+        .with(
+            ring().co_signer_pda(&stranger),
+            record(stranger, CoSignScope::TRANSFERS),
+        );
     let config = ring().require_config(&chain).await.unwrap();
     let demand = CoSignOperation {
         spends_note: true,
@@ -3125,7 +3148,11 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let approver = Address::new_from_array([77; 32]);
     let withdrawing = |amount: u64| {
         let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 200, 0)]);
-        let recipient = keypair(40).shielded_address().unwrap().solana_address().unwrap();
+        let recipient = keypair(40)
+            .shielded_address()
+            .unwrap()
+            .solana_address()
+            .unwrap();
         transaction.withdraw_sol(amount, recipient).unwrap();
         owner_transfer(&sender, transaction).with_interface_transfer_accounts(vec![
             TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts { recipient }),
@@ -3143,8 +3170,13 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let unconfigured = Chain::ring(RingSettings::new(RingMode::Confidential))
         .with_records(thresholds())
         .client();
-    let below = withdrawing(100).frame(&unconfigured).await.ok().unwrap().frame;
-    assert!(below.parts.co_sign.approval.is_empty());
+    let below = withdrawing(100)
+        .frame(&unconfigured)
+        .await
+        .ok()
+        .unwrap()
+        .frame;
+    assert!(below.parts.approval.is_empty());
     assert!(below.parts.own_revision.is_some());
     assert!(matches!(
         withdrawing(101).frame(&unconfigured).await.err(),
@@ -3163,7 +3195,7 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
         .ok()
         .unwrap()
         .frame;
-    assert_eq!(above.parts.co_sign.approval, ApprovalMask::WITHDRAWAL);
+    assert_eq!(above.parts.approval, ApprovalMask::WITHDRAWAL);
     assert_eq!(above.parts.co_sign.co_signers, 1);
     assert_eq!(above.accounts.co_signers, [approver]);
 }
@@ -3216,7 +3248,7 @@ async fn a_delegate_exit_and_withdrawal_read_no_policy() {
     let frame = &exit.frame;
     assert_eq!(frame.parts.rail, RingRail::Delegate);
     assert!(frame.parts.own_revision.is_none() && frame.parts.policy.is_none());
-    assert!(frame.parts.co_sign.approval.is_empty());
+    assert!(frame.parts.approval.is_empty());
     assert!(matches!(
         frame.parts.data().circuit(),
         spr_interface::instruction::CircuitId::RingAuthorityExit(..)
