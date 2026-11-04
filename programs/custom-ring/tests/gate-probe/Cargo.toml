@@ -1,4 +1,4 @@
-# Test only, stands at a ring's address to reach SPP past the ring pairing, out of the workspace.
+# Test only.
 [package]
 name = "ring-gate-probe"
 version = "0.1.0"

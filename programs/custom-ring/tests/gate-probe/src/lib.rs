@@ -1,4 +1,4 @@
-//! Replaces the ring's code in a test, never deployable as a ring, it holds no proof check.
+//! Test stand-in for the ring without proof checks.
 
 use pinocchio::{
     address::address_eq,
@@ -55,7 +55,7 @@ fn forward(program_id: &Address, accounts: &[AccountView], target: &[u8]) -> Pro
     )
 }
 
-/// Creates an account of `space` bytes through CPI, the path a frame buffer takes.
+/// Creates an account of `space` bytes through CPI.
 fn grow(program_id: &Address, accounts: &mut [AccountView], space: &[u8]) -> ProgramResult {
     let [payer, target, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);

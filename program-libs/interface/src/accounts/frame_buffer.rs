@@ -1,5 +1,3 @@
-//! A frame too wide for one transaction, written to an account and settled by its digest.
-
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use spr_hasher::{Hasher, Sha256};
@@ -24,7 +22,7 @@ pub struct FrameBufferHeader {
     pub writer: Address,
     pub rent_payer: Address,
     pub digest: [u8; 32],
-    /// Directly ahead of the frame, the event reads its data in place.
+    /// The event reads from here through the frame.
     event_tag: u8,
 }
 
@@ -135,7 +133,6 @@ impl<'a> FrameBuffer<'a> {
         Ok(())
     }
 
-    /// The frame a co-signer parses, its bytes checked against the digest it signs.
     pub fn inspect(
         owner: &Address,
         program: &Address,
@@ -175,7 +172,7 @@ impl<'a> FrameBufferWrite<'a> {
         })
     }
 
-    /// Sealed bytes never change, a co-signer's inspected bytes are the settled bytes.
+    /// A co-signer's inspected bytes are the settled bytes.
     pub fn apply(
         self,
         writer: &Address,
@@ -287,7 +284,7 @@ impl<'a> WriteFrameIxData<'a> {
     }
 }
 
-/// Owners and co-signers sign `digest`, it fixes the frame.
+/// Owners and co-signers sign `digest`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettleBufferedIxData<'a> {
     pub digest: &'a [u8; 32],

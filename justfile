@@ -65,7 +65,7 @@ build-ring-program: build-storage-program
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/custom-ring/tests/gate-probe/Cargo.toml -- --locked
 
-# The buffered gate's heap figures, the ring program returning its bump allocator peak.
+# The ring's bump allocator peak.
 build-ring-heap-report:
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/custom-ring/tests/heap-report/Cargo.toml -- --locked

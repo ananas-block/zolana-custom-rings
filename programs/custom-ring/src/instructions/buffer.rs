@@ -22,7 +22,6 @@ use crate::instructions::{
     process_deposit_ix, process_merge_ix, process_transfer_ix,
 };
 
-/// The writer seeds the address and signs, nobody squats its nonce.
 #[inline(never)]
 pub fn process_create_frame_buffer_ix(
     program_id: &Address,
@@ -91,7 +90,6 @@ pub fn process_write_frame_ix(
     Ok(())
 }
 
-/// Rent returns to the recorded payer, never to the closer.
 #[inline(never)]
 pub fn process_close_frame_buffer_ix(
     program_id: &Address,
@@ -128,7 +126,7 @@ pub fn process_settle_buffered_ix(
     let (fixed, inner) = accounts
         .split_at_mut_checked(3)
         .ok_or(ProgramError::NotEnoughAccountKeys)?;
-    // The runtime resolves the event's callee among the caller's accounts, the third holds the program.
+    // The event CPI resolves its callee here.
     let [buffer, rent_payer, _program] = fixed else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
@@ -151,7 +149,7 @@ pub fn process_settle_buffered_ix(
             inner,
             ring_auth.index,
         )?;
-        // A failed settlement reverts this event with the rest, the event needs no proof ahead of it.
+        // A failed settlement reverts the event.
         ring_auth.emit(program_id, inner, frame_buffer.event_data())?;
         let frame = frame_buffer.frame();
         let body = frame.get(1..).unwrap_or_default();
@@ -165,7 +163,6 @@ pub fn process_settle_buffered_ix(
     close_into(buffer, rent_payer, CustomRingError::FrameRentPayer)
 }
 
-/// Only the ring PDA signs, a caller cannot forge a frame.
 #[inline(never)]
 pub fn process_frame_event_ix(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
@@ -193,7 +190,7 @@ fn load_frame_buffer<'a>(
         .map_err(|_| CustomRingError::InvalidFrameBuffer.into())
 }
 
-/// The ring PDA in the inner list, the inner handler checks its slot.
+/// The inner handler checks the slot.
 struct RingAuthSlot {
     index: usize,
     bump: u8,
@@ -230,7 +227,7 @@ impl RingAuthSlot {
     }
 }
 
-/// The anonymous proof excludes the payer from the hidden sender, writer and rent payer must hold that slot.
+/// The anonymous proof excludes the payer from the hidden sender.
 fn check_parties(
     program_id: &Address,
     header: &FrameBufferHeader,

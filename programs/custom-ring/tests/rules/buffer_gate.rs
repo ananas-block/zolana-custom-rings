@@ -1,4 +1,4 @@
-//! Gate items 1 to 4 as far as a failing proof reaches, no row shows a frame settling.
+//! No row shows a frame settling.
 
 use custom_ring_interface::{
     frame_digest,
@@ -46,7 +46,7 @@ fn funded(ring: &mut Ring) -> Keypair {
     wallet
 }
 
-/// Decompresses and fails the pairing, the pairing syscall still runs.
+/// The pairing syscall runs and fails.
 fn failing_spp_proof() -> PlainGroth16Proof {
     PlainGroth16Proof {
         proof_a: [0; 32],
@@ -65,7 +65,7 @@ fn logs_refuse_size(sent: &SentWithMeta) -> bool {
     })
 }
 
-/// The ring's bump allocator peak from `just build-ring-heap-report`, `None` without that build.
+/// `None` without `just build-ring-heap-report`.
 fn ring_heap_peak(ring: &mut Ring, instruction: &Instruction) -> Option<u64> {
     let report = std::panic::catch_unwind(|| deployed("ring_heap_report.so")).ok()?;
     ring.svm()
@@ -85,7 +85,7 @@ fn ring_heap_peak(ring: &mut Ring, instruction: &Instruction) -> Option<u64> {
     ))
 }
 
-/// A sealed buffer the program never wrote, for lengths its create refuses.
+/// For lengths the create refuses.
 fn store_sealed(ring: &mut Ring, frame: &[u8], rent_payer: Address) -> Address {
     let create = CreateFrameBufferIxData {
         nonce: 0,
@@ -404,7 +404,7 @@ fn gate_1_the_widest_buffer_reaches_the_ring_pairing() {
     run_row(&mut ring, row);
 }
 
-/// The rows stop at SPP's first pairing, its transfers and event stay unrun.
+/// The rows stop at SPP's first pairing.
 #[test]
 fn gate_1_spp_reaches_its_pairing_on_the_expanded_frames() {
     let proof = failing_spp_proof();
@@ -468,7 +468,7 @@ fn gate_1_spp_reaches_its_pairing_on_the_expanded_frames() {
             );
         }
     }
-    // No ring key serves 49 inputs, the row starts at the expansion.
+    // No ring key serves 49 inputs.
     let ring = Ring::new(Setup::Policy);
     let policy: RingPolicy = ring.read(&policy_pda());
     let mut data = fixture.transfer(RingRail::Confidential, 24, 2, false);

@@ -1,4 +1,4 @@
-# Test only, the ring program returning its bump allocator peak, out of the workspace.
+# Test only.
 [package]
 name = "ring-heap-report"
 version = "0.1.0"
