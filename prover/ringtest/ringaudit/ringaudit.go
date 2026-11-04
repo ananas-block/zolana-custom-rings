@@ -3,6 +3,7 @@ package ringaudit
 
 import (
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
@@ -77,6 +78,18 @@ type Sealed struct {
 	CiphertextHash *big.Int
 }
 
+// Seal mirrors shared.Envelope.Seal, the merge envelope.
+func (k Keys) Seal(t testing.TB, plaintext []byte, info string) Sealed {
+	t.Helper()
+	return k.Sealed(t, k.EnvelopeCiphertext(t, plaintext, info))
+}
+
+func (k Keys) EnvelopeCiphertext(t testing.TB, plaintext []byte, info string) []byte {
+	t.Helper()
+	key, nonce := ringprotocol.KeySchedule(t, k.envelopeSecret(t), info)
+	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
+}
+
 func (k Keys) SealStream(t testing.TB, plaintext []byte, label string) Sealed {
 	t.Helper()
 	return k.Sealed(t, k.StreamCiphertext(t, plaintext, label))
@@ -123,9 +136,30 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 	}
 }
 
+// Stream is the auditor keystream's ciphertext over every region of a key.
 type Stream struct {
 	Ranges     audit.StreamRanges
 	Ciphertext []byte
+}
+
+// SealAuditorStream mirrors audit.AuditWires.SealStream, a region the key lacks stays empty.
+func (k Keys) SealAuditorStream(t testing.TB, ranges audit.StreamRanges, envelope []byte, records, tails [][]byte) Stream {
+	t.Helper()
+	plaintext := append(slices.Clone(envelope), make([]byte, ranges.RecordOffset(0)-len(envelope))...)
+	plaintext = append(plaintext, slices.Concat(records...)...)
+	plaintext = append(plaintext, slices.Concat(tails...)...)
+	return Stream{Ranges: ranges, Ciphertext: k.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
+}
+
+// Open decrypts a stream the auditor read, the keystream is the zero plaintext's ciphertext.
+func (k Keys) Open(t testing.TB, stream Stream) []byte {
+	t.Helper()
+	keystream := k.StreamCiphertext(t, make([]byte, len(stream.Ciphertext)), shared.AuditEncInfo)
+	plaintext := make([]byte, len(keystream))
+	for i := range plaintext {
+		plaintext[i] = keystream[i] ^ stream.Ciphertext[i]
+	}
+	return plaintext
 }
 
 func (s Stream) Envelope(count int) []byte {

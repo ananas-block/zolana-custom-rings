@@ -1125,6 +1125,14 @@ impl<'a> RingTransactData<'a> {
         if self.own_revision.is_some() != (read != RootRead::None) {
             return Err(CustomRingError::FlagNotAllowed);
         }
+        let private_revision = match (
+            self.extensions.private_revision,
+            ring.private_registry(read),
+        ) {
+            (None, None) => None,
+            (Some(revision), Some(_)) => Some(revision),
+            _ => return Err(CustomRingError::FlagNotAllowed),
+        };
         if !self.co_sign.approval.is_empty() && self.rail.is_delegate() {
             return Err(CustomRingError::UnexpectedApproval);
         }
@@ -1140,6 +1148,9 @@ impl<'a> RingTransactData<'a> {
         }
         if let Some(revision) = curator_revision {
             bound.curator_root = roots.curator(revision)?;
+        }
+        if let Some(revision) = private_revision {
+            bound.private_root = roots.private_source(revision)?;
         }
         Ok(bound)
     }

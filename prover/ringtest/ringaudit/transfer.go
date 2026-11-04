@@ -20,8 +20,8 @@ type Transfer struct {
 	SeedOut        *big.Int
 }
 
-// newTransfer is the fixture transfer of the default keys in the ring of program address 0x90..90.
-func newTransfer(t testing.TB) Transfer {
+// NewTransfer is the fixture transfer of the default keys in the ring of program address 0x90..90.
+func NewTransfer(t testing.TB) Transfer {
 	t.Helper()
 	ringProgram := ringtest.Repeat(0x90)
 	tr := Transfer{
@@ -43,21 +43,22 @@ func (tr Transfer) WithKeys(t testing.TB, keys Keys) Transfer {
 	return tr
 }
 
-// WithUnrelatedKey seals under a key whose seed differs from the one the slots were built over.
-func (tr Transfer) WithUnrelatedKey(t testing.TB) Transfer {
-	t.Helper()
-	return tr.WithKeys(t, tr.Keys.WithRawTxScalar(t, ringprotocol.Clamped(ringtest.Scalar(0x44))))
-}
-
 // Blinding is the TXOB blinding SPP derives for slot i of the transfer.
 func (tr Transfer) Blinding(t testing.TB, i int) *big.Int {
 	t.Helper()
 	return ringprotocol.OutputBlinding(t, tr.FirstNullifier, tr.SeedOut, i)
 }
 
+func (tr Transfer) AuditHead(t testing.TB, layout Layout, envelope []byte) AuditHead {
+	t.Helper()
+	head := tr.Keys.AuditHead(t, tr.FirstNullifier, tr.RingProgramID, tr.Salt, envelope)
+	head.Layout = layout.Value()
+	return head
+}
+
 // Wires are the audit wires of the transfer under layout.
-func (tr Transfer) Wires(layout int64) audit.AuditWires {
-	w := audit.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, Layout: layout}
+func (tr Transfer) Wires(layout Layout) audit.AuditWires {
+	w := audit.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, Layout: layout.Value()}
 	ringtest.SetBytes(w.TxViewingSk[:], tr.Keys.txViewingSk[:])
 	ringtest.SetBytes(w.EphSk[:], tr.Keys.ephSk[:])
 	ringtest.SetBytes(w.AuditorPk[:], tr.Keys.auditorPk[:])
@@ -65,61 +66,36 @@ func (tr Transfer) Wires(layout int64) audit.AuditWires {
 	return w
 }
 
-// NewRingOutput pays slot's recipient under the TXOB blinding of its index, with no data.
-func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot) Slot {
-	t.Helper()
-	return Slot{
-		Utxo: Utxo{
-			Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, slot.OwnerKey),
-			NullifierPk: slot.NullifierPk, Asset: ringtest.AssetField(t, slot.AssetAddress), Amount: slot.Amount,
-			Blinding: tr.Blinding(t, slot.Index), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: tr.RingProgramID,
-		},
-		OwnerKey: slot.OwnerKey, Mint: slot.AssetAddress,
-	}
-}
-
-// ExitOwnerKey owns every fixture exit.
-var ExitOwnerKey = ringtest.Repeat(0xe5)
-
-// NewExit leaves the ring for the default ring, its owner published by SPP.
-func (tr Transfer) NewExit(t testing.TB, i int) Slot {
-	t.Helper()
-	return Slot{
-		Utxo: Utxo{
-			Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, ExitOwnerKey),
-			NullifierPk: spptest.MustNullifierPk(t, big.NewInt(23)), Asset: ringtest.AssetField(t, [32]byte{}), Amount: 40,
-			Blinding: tr.Blinding(t, i), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: big.NewInt(0),
-		},
-		OwnerKey: ExitOwnerKey,
-	}
-}
-
-// NewDummy pads a slot, every record byte reads zero.
-func (tr Transfer) NewDummy(t testing.TB, i int) Slot {
-	t.Helper()
-	return Slot{Utxo: Dummy(OutputTreeID, tr.Blinding(t, i))}
-}
-
-// DeliverySlot names the recipient and the opening of one ring output.
-type DeliverySlot struct {
-	Index        int
-	OwnerKey     [32]byte
-	NullifierPk  *big.Int
-	AssetAddress [32]byte
-	Amount       uint64
-}
-
-// Recipient is fixture recipient n, every key derived from n.
-func Recipient(t testing.TB, n byte, index int, amount uint64) DeliverySlot {
-	t.Helper()
-	return DeliverySlot{
-		Index:        index,
-		OwnerKey:     ringtest.Repeat(0xb2 + n),
-		NullifierPk:  spptest.MustNullifierPk(t, big.NewInt(20+int64(n))),
-		AssetAddress: ringtest.Repeat(0x0a),
-		Amount:       amount,
-	}
-}
-
 // OutputTreeID is the fixture tree every output is appended to.
 const OutputTreeID = 9
+
+// inputTreeID is the fixture tree every input spends from.
+const inputTreeID = 3
+
+// SpentUtxo is a data-free input of owner in the given ring, 0 for the default ring.
+func SpentUtxo(t testing.TB, ownerPkHash, nullifierPk, ringID *big.Int, amount uint64, blinding int64) Utxo {
+	t.Helper()
+	return Utxo{
+		Domain: protocol.UtxoDomain, TreeID: inputTreeID, OwnerPkHash: ownerPkHash, NullifierPk: nullifierPk,
+		Asset: ringtest.AssetField(t, FixtureMint), Amount: amount, Blinding: big.NewInt(blinding),
+		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: ringID,
+	}
+}
+
+// SpareInput is a slot past the published count.
+func SpareInput(i int) Utxo {
+	return Dummy(inputTreeID, big.NewInt(0x9000+int64(i)))
+}
+
+// SpentHashes is the private_tx_hash entry of every slot, zero off a UTXO.
+func SpentHashes(t testing.TB, utxos []Utxo) []*big.Int {
+	t.Helper()
+	hashes := make([]*big.Int, len(utxos))
+	for i, utxo := range utxos {
+		hashes[i] = utxo.spentHash(t)
+	}
+	return hashes
+}
+
+// FixtureMint is the mint of every fixture note.
+var FixtureMint = ringtest.Repeat(0x0a)

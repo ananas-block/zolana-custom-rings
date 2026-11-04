@@ -4,6 +4,7 @@ mod asset_limits;
 mod list;
 mod member;
 mod mint;
+mod private_source;
 mod quantities;
 mod rule_table;
 mod rules;
@@ -12,6 +13,7 @@ pub use asset_limits::{AssetLimits, AssetLimitsError};
 pub use list::{ListChange, ListId, ListSet, ListWrite, ListWriteError, Writer};
 pub use member::{Member, MemberError, WALLET_GRANT_DOMAIN};
 pub use mint::MintPolicy;
+pub use private_source::{PrivateSource, PrivateSourceError};
 pub use quantities::{
     asset_guard, owner_debits, owner_guard, ApprovalMask, DebitInput, DebitOutput, DebitTransfer,
     OwnerDebit, PublicGross,

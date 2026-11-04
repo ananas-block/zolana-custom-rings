@@ -1,23 +1,28 @@
-//! The 4-ary indexed record tree of a ring's member registry, one apply and one
-//! opening over any [`RecordStore`].
+//! The 4-ary indexed trees of a ring, its policy records and its tracking leaves,
+//! one apply and one opening over any [`RecordStore`].
 
 mod memory;
 mod path;
+mod private_tree;
 mod record;
 mod record_pool;
+mod tracking;
 mod tree;
 
 use spr_hasher::HasherError;
 use thiserror::Error;
 
-pub use custom_ring_interface::member_registry::AuthorizedAddress;
-pub use memory::MemberRegistryTree;
-pub use path::{quad_node, NodePosition, QuadPath, ZERO_SUBTREES};
-pub use record::{AddressEscrowPair, MemberRecord};
-pub use record_pool::{Canopy, PoolSubject, RecordPool, SharedPath, SharedProof};
+pub use memory::{MemberRegistryTree, MemoryTree};
+pub use path::{quad_node, NodePosition, QuadPath, QuadPathOf, TrackingPath, ZERO_SUBTREES};
+pub use private_tree::PrivateListTree;
+pub use record::{MemberRecord, RecordWriteProofInput};
+pub use record_pool::{Canopy, PoolSubject, RecordPool, RecordPoolOf, SharedPath, SharedProof};
+pub use tracking::{
+    TrackingOpening, TrackingPool, TrackingRecord, TrackingTree, TrackingWriteProofInput,
+};
 pub use tree::{
-    ApplyProofInputs, IndexedRecord, OpeningCheck, RecordOpening, RecordStore, RecordTree,
-    RecordWriteProofInput,
+    ApplyProofInputs, IndexedLeaf, IndexedRecord, OpeningCheck, RecordOpening, RecordStore,
+    RecordTree, WritableLeaf, WriteStep,
 };
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -50,12 +55,8 @@ pub enum RecordTreeError {
     PoolCapacity,
     #[error("the record pool proof has the wrong shape")]
     PoolShape,
-    #[error("the authorized address does not hash to the record's address hash")]
-    AddressMismatch,
-    #[error("the address and the escrow key hold two nullifier keys")]
-    PairNullifierMismatch,
-    #[error("a write binding the address and the escrow key lacks a preimage")]
-    PairPreimageMissing,
+    #[error("a tracking entry changes a final field or names a zero key")]
+    TrackingKeyChanged,
 }
 
 impl From<HasherError> for RecordTreeError {
