@@ -83,7 +83,6 @@ fn sealers_and_readers_agree_with_the_proven_ciphertexts() {
     assert_eq!(opened, bundle);
 }
 
-/// The sealer's tags agree with the vector's on a live slot, a dummy and the bundle, change publishes zero.
 #[test]
 fn the_rail_publishes_the_vector_tags() {
     let vector: Vector = serde_json::from_str(include_str!(
