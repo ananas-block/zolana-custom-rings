@@ -45,8 +45,9 @@ pub fn process_update_private_ix(
     let chain_end = ix.writes.iter().try_fold(
         chain_start,
         |chain, write| -> Result<[u8; 32], ProgramError> {
-            write
-                .published()
+            let published = write.published();
+            registry.advance_write_counter(published.write_counter)?;
+            published
                 .chain(&chain)
                 .map_err(|_| StorageError::HashingFailed.into())
         },
