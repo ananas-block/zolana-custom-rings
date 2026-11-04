@@ -17,7 +17,7 @@ use crate::{
         AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
         CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow,
     },
-    cosign_usage::{Reservation, Reserve, UsageLedger, UsageWindow},
+    cosign_usage::{MessageDigest, Reservation, Reserve, UsageLedger, UsageWindow},
     database::Store,
     error::RingRpcError,
     hub::Shared,
@@ -216,19 +216,24 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
         {
             return Ok(CoSignDecision::Refused(CoSignRefusal::NotApproved));
         }
-        let signature = self.signer.sign_message(&request.message.serialize());
+        let message_bytes = request.message.serialize();
+        let signature = self.signer.sign_message(&message_bytes);
+        let message = MessageDigest::of(&message_bytes);
 
         // 4. Co-signers sharing the store decide one at a time for each asset.
         let transaction = self.store.connection().begin().await?;
         let ledger = UsageLedger { conn: &transaction };
         ledger.admit(&request.ring, &assets).await?;
 
-        // 5. A repeated message keeps its rows.
+        // 5. The same approver repeating a message keeps its rows.
         if ledger.reserved(&signature).await? {
             return Ok(CoSignDecision::Signed(signature));
         }
 
-        // 6. The window read and the reservation commit in one database transaction.
+        // 6. The window read and the reservation commit in one database transaction. Another
+        // approver's rows of the message stay out of the read, so a later approver passes the
+        // same limits the message passed once and adds no second count, and a message admitted
+        // since then has already counted the first approver's rows.
         let usage = WindowUsage {
             slot,
             reservations: ledger
@@ -236,6 +241,7 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
                     ring: &request.ring,
                     assets: &assets,
                     since_slot: slot.saturating_sub(longest_window(&checks)),
+                    message: &message,
                 })
                 .await?,
         };
@@ -249,6 +255,7 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             ledger
                 .reserve(Reserve {
                     signature: &signature,
+                    message: &message,
                     ring: &request.ring,
                     slot,
                     flows: &flows,
@@ -1113,6 +1120,86 @@ mod tests {
                 .await,
             Err(RingRpcError::CoSign(CoSignError::RepeatedAsset))
         ));
+    }
+
+    fn approver(store: &Store, key: u8) -> LimitedCoSigner<FixedLimits> {
+        LimitedCoSignerInit {
+            signer: Keypair::new_from_array([key; 32]),
+            limits: within_limits(),
+            store: Arc::new(store.clone()),
+            approval: all_classes(),
+        }
+        .build()
+    }
+
+    async fn signed(approver: &LimitedCoSigner<FixedLimits>, request: &CoSignRequest) -> Signature {
+        match approver.decide(request).await.expect("decision") {
+            CoSignDecision::Signed(signature) => signature,
+            refused => panic!("within the cap, got {refused:?}"),
+        }
+    }
+
+    async fn assert_over_limit(approver: &LimitedCoSigner<FixedLimits>, request: &CoSignRequest) {
+        assert_eq!(
+            approver.decide(request).await.expect("decision"),
+            CoSignDecision::Refused(CoSignRefusal::OverLimit)
+        );
+    }
+
+    #[tokio::test]
+    async fn two_approvers_count_one_message_once_and_another_message_again() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let [first, second] = [5, 6].map(|key| approver(&store, key));
+        let shared = signed(&first, &request(1, 60)).await;
+        let other = signed(&second, &request(1, 60)).await;
+        assert_ne!(shared, other, "each approver signs with its own key");
+
+        assert_over_limit(&second, &request(2, 41)).await;
+        signed(&second, &request(2, 40)).await;
+        assert_over_limit(&first, &request(3, 1)).await;
+    }
+
+    #[tokio::test]
+    async fn a_message_counts_until_every_approver_frees_it() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let [first, second] = [5, 6].map(|key| approver(&store, key));
+        let first_hold = signed(&first, &request(1, 60)).await;
+        let second_hold = signed(&second, &request(1, 60)).await;
+
+        first
+            .settle(CoSignSettlement::Failed(first_hold))
+            .await
+            .expect("settle");
+        assert_over_limit(&first, &request(2, 41)).await;
+
+        second
+            .settle(CoSignSettlement::Failed(second_hold))
+            .await
+            .expect("settle");
+        signed(&first, &request(2, 100)).await;
+    }
+
+    #[tokio::test]
+    async fn one_approver_confirming_keeps_the_message_through_the_other_failing() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let [first, second] = [5, 6].map(|key| approver(&store, key));
+        let first_hold = signed(&first, &request(1, 60)).await;
+        let second_hold = signed(&second, &request(1, 60)).await;
+
+        first
+            .settle(CoSignSettlement::Confirmed(first_hold))
+            .await
+            .expect("confirm");
+        second
+            .settle(CoSignSettlement::Failed(second_hold))
+            .await
+            .expect("late failure");
+        first
+            .settle(CoSignSettlement::Failed(first_hold))
+            .await
+            .expect("late failure");
+        assert_over_limit(&second, &request(2, 41)).await;
+        signed(&second, &request(2, 40)).await;
     }
 
     async fn co_signer(url: &str) -> Arc<LimitedCoSigner<FixedLimits>> {
