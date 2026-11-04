@@ -1515,7 +1515,6 @@
     "chain_start": "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
     "chain_end": "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
     "count": 16,
-    "restrictive": true,
     "elements": [
       "0000000000000000000000000000000000000000000000000000000043524150",
       "1e09090909090909090909090909090909090909090909090909090909090909",
@@ -1524,97 +1523,10 @@
       "0000000000000000000000000000000000000000000000000000000000000011",
       "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
       "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
-      "0000000000000000000000000000000000000000000000000000000000000010",
-      "0000000000000000000000000000000000000000000000000000000000000001"
+      "0000000000000000000000000000000000000000000000000000000000000010"
     ],
-    "public_input_hash": "0702eb3d180e2bc1a4aaa14355830a280f0b4b49d846a658ba2160b5be66397f"
+    "public_input_hash": "2b9b48f7dd9872109c84da0de95bb86439e84e52539d270cb53a33c01ba5415c"
   },
-  "restrictive": [
-    {
-      "mask": 1,
-      "value": 1,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 1,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": true
-    },
-    {
-      "mask": 64,
-      "value": 64,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 64,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": true
-    },
-    {
-      "mask": 2,
-      "value": 2,
-      "replaces_mint_policy": false,
-      "restrictive": true
-    },
-    {
-      "mask": 2,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 4,
-      "value": 4,
-      "replaces_mint_policy": false,
-      "restrictive": true
-    },
-    {
-      "mask": 4,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 32,
-      "value": 32,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 32,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 0,
-      "value": 0,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 0,
-      "value": 0,
-      "replaces_mint_policy": true,
-      "restrictive": true
-    },
-    {
-      "mask": 3,
-      "value": 1,
-      "replaces_mint_policy": false,
-      "restrictive": false
-    },
-    {
-      "mask": 5,
-      "value": 5,
-      "replaces_mint_policy": false,
-      "restrictive": true
-    }
-  ],
   "apply_enrollments": {
     "old_root": "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
     "new_root": "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",

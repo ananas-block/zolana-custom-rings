@@ -39,41 +39,6 @@ impl ApprovalMask {
     }
 }
 
-/// One record per class at most, a further record covers nothing.
-pub const MAX_CO_SIGNERS: usize = 5;
-
-#[must_use]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CoSignHeader {
-    pub approval: ApprovalMask,
-    /// `[record, signer]` pairs ahead of the SPP accounts.
-    pub co_signers: u8,
-}
-
-impl CoSignHeader {
-    const MASK_BITS: u8 = 2;
-    const COUNT_BITS: u8 = 3;
-
-    pub fn from_byte(byte: u8) -> Result<Self, CustomRingError> {
-        if byte >> (Self::MASK_BITS + Self::COUNT_BITS) != 0 {
-            return Err(CustomRingError::FlagNotAllowed);
-        }
-        let co_signers = byte >> Self::MASK_BITS;
-        if usize::from(co_signers) > MAX_CO_SIGNERS {
-            return Err(CustomRingError::TooManyCoSigners);
-        }
-        Ok(Self {
-            approval: ApprovalMask::new(byte & ((1 << Self::MASK_BITS) - 1))
-                .ok_or(CustomRingError::FlagNotAllowed)?,
-            co_signers,
-        })
-    }
-
-    pub const fn byte(self) -> u8 {
-        self.approval.bits() | self.co_signers << Self::MASK_BITS
-    }
-}
-
 /// A transfer's economic operation, merge and delegate demand nothing.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,57 +75,34 @@ impl CoSignDemand {
         classes: CoSignScope::DEPOSITS,
     };
 
-    /// A class with no record drops out, an approval class fails closed.
-    pub fn requirement(self, ring: &RingPolicy) -> Result<CoSignRequirement, CustomRingError> {
-        let covered = ring.co_signers.covered();
-        if self
+    /// Approval classes never drop out.
+    pub fn requirement(self, ring: &RingPolicy) -> Option<CoSignRequirement> {
+        let configured = ring.co_signers.covered().unwrap_or(CoSignScope::NONE);
+        let classes = self
             .classes
-            .intersection(CoSignScope::APPROVALS)
-            .without(covered)
-            != CoSignScope::NONE
-        {
-            return Err(CustomRingError::ApproverMissing);
-        }
-        Ok(CoSignRequirement {
-            uncovered: self.classes.intersection(covered),
-        })
+            .intersection(configured | CoSignScope::APPROVALS);
+        (!classes.is_empty()).then_some(CoSignRequirement { classes })
     }
 }
 
+/// One record holds every demanded class.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoSignRequirement {
-    uncovered: CoSignScope,
+    classes: CoSignScope,
 }
 
 impl CoSignRequirement {
-    pub const fn is_satisfied(self) -> bool {
-        self.uncovered.is_empty()
+    pub const fn classes(self) -> CoSignScope {
+        self.classes
     }
 
-    pub const fn uncovered(self) -> CoSignScope {
-        self.uncovered
-    }
-
-    /// An unrelated or repeated record covers nothing and is refused.
-    pub fn cover(self, record: &CoSigner) -> Result<(Self, Address), CustomRingError> {
-        let scope = record.scope().ok_or(CustomRingError::CoSignerOutOfScope)?;
-        if !scope.intersects(self.uncovered) {
-            return Err(CustomRingError::CoSignerOutOfScope);
-        }
-        Ok((
-            Self {
-                uncovered: self.uncovered.without(scope),
-            },
-            record.signer,
-        ))
-    }
-
-    pub const fn check_satisfied(self) -> Result<(), CustomRingError> {
-        match self.is_satisfied() {
-            true => Ok(()),
-            false => Err(CustomRingError::MissingCoSigner),
-        }
+    pub fn check(self, record: &CoSigner) -> Result<Address, CustomRingError> {
+        record
+            .scope()
+            .filter(|scope| scope.contains(self.classes))
+            .map(|_| record.signer)
+            .ok_or(CustomRingError::CoSignerOutOfScope)
     }
 }
 
@@ -169,6 +111,9 @@ mod tests {
     use super::*;
     use crate::{CoSignerCounts, CO_SIGNER};
     use bytemuck::Zeroable;
+
+    const OUTFLOW: CoSignScope = CoSignScope::APPROVE_OUTFLOW;
+    const WITHDRAWAL: CoSignScope = CoSignScope::APPROVE_WITHDRAWAL;
 
     fn ring(scopes: &[CoSignScope]) -> RingPolicy {
         let mut ring = RingPolicy::zeroed();
@@ -202,78 +147,57 @@ mod tests {
     fn an_optional_class_without_a_record_demands_nothing() {
         let all = CoSignScope::TRANSFERS | CoSignScope::DEPOSITS | CoSignScope::WITHDRAWALS;
         let demand = operation(true, all, 0);
-        assert!(demand.requirement(&ring(&[])).unwrap().is_satisfied());
+        assert_eq!(demand.requirement(&ring(&[])), None);
         let one = demand.requirement(&ring(&[CoSignScope::DEPOSITS])).unwrap();
-        assert_eq!(one.uncovered(), CoSignScope::DEPOSITS);
+        assert_eq!(one.classes(), CoSignScope::DEPOSITS);
     }
 
     #[test]
     fn a_pure_deposit_needs_no_transfer_co_signer() {
         let transfers = ring(&[CoSignScope::TRANSFERS]);
         let no_spend = operation(false, CoSignScope::DEPOSITS, 0);
-        assert!(no_spend.requirement(&transfers).unwrap().is_satisfied());
-        assert!(CoSignDemand::DEPOSIT
-            .requirement(&transfers)
-            .unwrap()
-            .is_satisfied());
+        assert_eq!(no_spend.requirement(&transfers), None);
+        assert_eq!(CoSignDemand::DEPOSIT.requirement(&transfers), None);
     }
 
     #[test]
-    fn a_proven_bit_fails_closed_without_its_approver() {
-        for (bit, other) in [
-            (ApprovalMask::OUTFLOW, CoSignScope::APPROVE_WITHDRAWAL),
-            (ApprovalMask::WITHDRAWAL, CoSignScope::APPROVE_OUTFLOW),
+    fn a_proven_bit_needs_its_approver_with_or_without_a_record() {
+        for (bit, class, other) in [
+            (ApprovalMask::OUTFLOW, OUTFLOW, WITHDRAWAL),
+            (ApprovalMask::WITHDRAWAL, WITHDRAWAL, OUTFLOW),
         ] {
-            let demand = operation(true, CoSignScope::NONE, bit.bits());
+            let requirement = operation(true, CoSignScope::NONE, bit.bits())
+                .requirement(&ring(&[]))
+                .unwrap();
+            assert_eq!(requirement.classes(), class);
             assert_eq!(
-                demand.requirement(&ring(&[])),
-                Err(CustomRingError::ApproverMissing)
+                requirement.check(&record(other, 1)),
+                Err(CustomRingError::CoSignerOutOfScope)
             );
             assert_eq!(
-                demand.requirement(&ring(&[other, CoSignScope::TRANSFERS])),
-                Err(CustomRingError::ApproverMissing)
+                requirement.check(&record(class, 2)),
+                Ok(Address::new_from_array([2; 32]))
             );
         }
         let below = operation(true, CoSignScope::NONE, 0);
-        assert!(below.requirement(&ring(&[])).unwrap().is_satisfied());
+        assert_eq!(below.requirement(&ring(&[])), None);
     }
 
+    /// Withdrawing 5000 under `cosign_above` 100 and `withdrawal_threshold` 1000 sets both bits.
     #[test]
-    fn each_class_needs_a_covering_record() {
-        let (outflow, withdrawal) = (
-            CoSignScope::APPROVE_OUTFLOW,
-            CoSignScope::APPROVE_WITHDRAWAL,
-        );
-        let configured = ring(&[outflow, withdrawal]);
-        let start = operation(false, CoSignScope::NONE, 3)
-            .requirement(&configured)
+    fn a_transaction_past_both_thresholds_needs_one_record_holding_both_classes() {
+        let requirement = operation(true, CoSignScope::WITHDRAWALS, 3)
+            .requirement(&ring(&[OUTFLOW, WITHDRAWAL]))
             .unwrap();
-        let (rest, first) = start.cover(&record(outflow, 1)).unwrap();
-        assert_eq!(first, Address::new_from_array([1; 32]));
+        for split in [OUTFLOW, WITHDRAWAL] {
+            assert_eq!(
+                requirement.check(&record(split, 1)),
+                Err(CustomRingError::CoSignerOutOfScope)
+            );
+        }
         assert_eq!(
-            rest.check_satisfied(),
-            Err(CustomRingError::MissingCoSigner)
-        );
-        let (done, _) = rest.cover(&record(withdrawal, 2)).unwrap();
-        assert_eq!(done.check_satisfied(), Ok(()));
-        let (one_for_both, _) = start.cover(&record(outflow | withdrawal, 3)).unwrap();
-        assert_eq!(one_for_both.check_satisfied(), Ok(()));
-    }
-
-    #[test]
-    fn an_unrelated_or_repeated_record_satisfies_nothing() {
-        let configured = ring(&[CoSignScope::TRANSFERS, CoSignScope::DEPOSITS]);
-        let start = operation(true, CoSignScope::NONE, 0)
-            .requirement(&configured)
-            .unwrap();
-        assert_eq!(
-            start.cover(&record(CoSignScope::DEPOSITS, 1)),
-            Err(CustomRingError::CoSignerOutOfScope)
-        );
-        let (done, _) = start.cover(&record(CoSignScope::TRANSFERS, 2)).unwrap();
-        assert_eq!(
-            done.cover(&record(CoSignScope::TRANSFERS, 2)),
-            Err(CustomRingError::CoSignerOutOfScope)
+            requirement.check(&record(OUTFLOW | WITHDRAWAL, 3)),
+            Ok(Address::new_from_array([3; 32]))
         );
     }
 
@@ -287,9 +211,12 @@ mod tests {
             .unwrap()
             .added(CoSignScope::ALL)
             .unwrap();
-        assert_eq!(counts.covered(), CoSignScope::ALL);
+        assert_eq!(
+            counts.covered(),
+            Some(CoSignScope::TRANSFERS | CoSignScope::DEPOSITS | CoSignScope::WITHDRAWALS)
+        );
         let rest = counts.removed(CoSignScope::ALL).unwrap();
-        assert_eq!(rest.covered(), CoSignScope::APPROVE_OUTFLOW);
+        assert_eq!(rest.covered(), None);
         assert_eq!(
             rest.removed(CoSignScope::TRANSFERS),
             Err(CustomRingError::CoSignerCountOutOfRange)
@@ -297,30 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn merge_and_delegate_refuse_any_record() {
-        let configured = ring(&[CoSignScope::ALL]);
-        let none = CoSignDemand::NONE.requirement(&configured).unwrap();
-        assert!(none.is_satisfied());
+    fn merge_and_delegate_demand_nothing() {
         assert_eq!(
-            none.cover(&record(CoSignScope::ALL, 1)),
-            Err(CustomRingError::CoSignerOutOfScope)
-        );
-    }
-
-    #[test]
-    fn the_header_refuses_a_count_past_five_and_unknown_bits() {
-        let header = CoSignHeader {
-            approval: ApprovalMask::WITHDRAWAL,
-            co_signers: 5,
-        };
-        assert_eq!(CoSignHeader::from_byte(header.byte()), Ok(header));
-        assert_eq!(
-            CoSignHeader::from_byte(6 << 2),
-            Err(CustomRingError::TooManyCoSigners)
-        );
-        assert_eq!(
-            CoSignHeader::from_byte(1 << 5),
-            Err(CustomRingError::FlagNotAllowed)
+            CoSignDemand::NONE.requirement(&ring(&[CoSignScope::ALL])),
+            None
         );
     }
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader, CoSignOperation},
+    cosign::{ApprovalMask, CoSignOperation},
     key_catalog::{
         TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES,
@@ -242,10 +242,7 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> RingTransact
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
     if case.policy || case.thresholds {
-        data.co_sign = CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 5,
-        };
+        data.approval = ApprovalMask::OUTFLOW;
         data.own_revision = Some(Revision::from(7));
     }
     data.interface_transfers = (0..case.legs)
@@ -327,7 +324,7 @@ fn measure(compact: &[u8], rail: RingRail) -> Phases {
     let demand = CoSignOperation {
         spends_note: !data.no_spend,
         public_legs: slots.classes(),
-        approval: data.co_sign.approval,
+        approval: data.approval,
     }
     .demand();
     let legs = Arena::used();

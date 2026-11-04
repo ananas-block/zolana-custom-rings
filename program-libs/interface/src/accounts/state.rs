@@ -267,25 +267,26 @@ impl BitOr for CoSignScope {
     }
 }
 
+/// Records per optional class.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct CoSignerCounts([u8; 5]);
+pub struct CoSignerCounts([u8; 3]);
 
 impl CoSignerCounts {
-    const CLASSES: [CoSignScope; 5] = [
+    const CLASSES: [CoSignScope; 3] = [
         CoSignScope::TRANSFERS,
         CoSignScope::DEPOSITS,
         CoSignScope::WITHDRAWALS,
-        CoSignScope::APPROVE_OUTFLOW,
-        CoSignScope::APPROVE_WITHDRAWAL,
     ];
 
-    pub fn covered(&self) -> CoSignScope {
-        Self::CLASSES
+    /// `None` without a record.
+    pub fn covered(&self) -> Option<CoSignScope> {
+        let covered = Self::CLASSES
             .iter()
             .zip(self.0)
             .filter(|(_, count)| *count != 0)
-            .fold(CoSignScope::NONE, |covered, (class, _)| covered | *class)
+            .fold(CoSignScope::NONE, |covered, (class, _)| covered | *class);
+        CoSignScope::new(covered.bits())
     }
 
     pub fn added(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
@@ -345,7 +346,7 @@ pub enum ListRegistry {
 pub enum RootRead {
     None,
     Own,
-    /// The own root, and the curator and private roots when the ring names them.
+    /// The own root, and the curator root when the ring names one.
     Policy,
 }
 
@@ -379,7 +380,6 @@ pub struct LiveRoots<'a> {
     pub curator: Option<&'a StorageRegistry>,
     /// Bound by address to the ring's pin.
     pub tracking: &'a TrackingRegistry,
-    pub private_source: Option<&'a StorageRegistry>,
     pub slot: u64,
 }
 
@@ -394,12 +394,9 @@ impl LiveRoots<'_> {
             .ok_or(CustomRingError::MissingRegistry)
     }
 
-    /// A root below a private source's floor stays served by the registry, refused here.
+    /// Refused below a salted source's floor.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        for source in [self.own, self.curator, self.private_source]
-            .into_iter()
-            .flatten()
-        {
+        for source in [self.own, self.curator].into_iter().flatten() {
             source
                 .check_tracking_revision(revision)
                 .map_err(|_| CustomRingError::TrackingRootBelowFloor)?;
@@ -407,11 +404,6 @@ impl LiveRoots<'_> {
         self.tracking
             .root(revision, self.slot)
             .map_err(|_| CustomRingError::RootNotServed)
-    }
-
-    pub fn private_source(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        self.served(self.private_source, revision)?
-            .ok_or(CustomRingError::MissingRegistry)
     }
 
     /// Without the records, `None` at revision zero and `unread` otherwise.
@@ -478,10 +470,8 @@ pub struct RingPolicy {
     pub records: Address,
     /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
-    /// Zero without a private source, its `tracking_registry` equals `tracking`.
-    pub private_source: Address,
-    /// [`ListSet`] bits owner rows read from `private_source`, asset rows keep the public slot.
-    pub private_lists: u8,
+    /// [`ListSet`] bits owner rows read under salted keys.
+    pub salted_lists: u8,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -506,9 +496,11 @@ pub struct CoSigner {
 
 #[must_use]
 #[derive(Debug, Copy, Clone)]
-pub struct PrivateSourceWrite<'a> {
-    pub owner_lists: ListSet,
-    pub source: Option<(Address, &'a StorageRegistry)>,
+pub struct PolicyUpdate {
+    pub sources: [SourceSlot; N_SOURCE_SLOTS],
+    pub salted_lists: ListSet,
+    pub rules: EncodedRuleTable,
+    pub slot: u64,
 }
 
 #[must_use]
@@ -585,25 +577,28 @@ impl RingPolicy {
         (self.policy_hash != [0; 32]).then_some(&self.policy_hash)
     }
 
-    /// Validates the table against the sources and repins its hash.
-    pub fn set_policy(
-        &mut self,
-        sources: [SourceSlot; N_SOURCE_SLOTS],
-        rules: EncodedRuleTable,
-        slot: u64,
-    ) -> Result<(), CustomRingError> {
-        let source_map = source_map(&sources)?.with_private(self.private_parts()?)?;
+    /// A list no rule reads keeps no salted bit.
+    pub fn set_policy(&mut self, update: PolicyUpdate) -> Result<(), CustomRingError> {
+        let PolicyUpdate {
+            sources,
+            salted_lists,
+            rules,
+            slot,
+        } = update;
+        let salted_lists = ListSet::from_bits(salted_lists.bits() & rules.referenced().bits());
+        let source_map = salted_source_map(&sources, salted_lists, &self.records)?;
         rules.validate(&source_map)?;
         let policy_hash = rules.hash(&source_map)?;
         self.count_generation(slot)?;
         self.policy_hash = policy_hash;
         self.sources = sources;
+        self.salted_lists = salted_lists.bits();
         self.rules = rules;
         Ok(())
     }
 
     pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
-        if self.curator() == Some(records) || self.private_source == records {
+        if self.curator() == Some(records) {
             return Err(CustomRingError::InvalidSource);
         }
         self.count_generation(slot)?;
@@ -640,18 +635,11 @@ impl RingPolicy {
 
     /// The map `policy_hash` was computed over.
     pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        Ok(source_map(&self.sources)?.with_private(self.private_parts()?)?)
+        salted_source_map(&self.sources, self.salted(), &self.records)
     }
 
-    fn private_parts(&self) -> Result<PrivateSource, CustomRingError> {
-        let registry = match self.private_source == Address::default() {
-            true => [0; 32],
-            false => registry_field(self.private_source.as_array())?,
-        };
-        Ok(PrivateSource::new(
-            ListSet::from_bits(self.private_lists),
-            registry,
-        )?)
+    pub const fn salted(&self) -> ListSet {
+        ListSet::from_bits(self.salted_lists)
     }
 
     pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {
@@ -663,48 +651,23 @@ impl RingPolicy {
         self.own_registry(read)
             .into_iter()
             .chain(self.curator_registry(read))
-            .chain(self.private_registry(read))
             .chain([self.tracking])
     }
 
-    /// A floor stored against another tracking registry guards nothing.
-    pub fn check_source_pair(&self, source: &StorageRegistry) -> Result<(), CustomRingError> {
-        match source.is_private() && source.tracking_registry != self.tracking {
-            true => Err(CustomRingError::PrivateSourceOtherTracking),
-            false => Ok(()),
-        }
-    }
-
-    pub fn set_private_source(
-        &mut self,
-        write: PrivateSourceWrite<'_>,
-        slot: u64,
+    /// A salted list needs a floor against the ring's tracking registry.
+    pub fn check_source_pair(
+        &self,
+        address: &Address,
+        source: &StorageRegistry,
     ) -> Result<(), CustomRingError> {
-        if !write.owner_lists.is_subset(ListSet::POLICY_LISTS) {
-            return Err(CustomRingError::ListNotPolicyReadable);
+        let needs_pin = self
+            .salted()
+            .iter()
+            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address);
+        match source.tracking_registry == self.tracking || (!needs_pin && !source.is_private()) {
+            true => Ok(()),
+            false => Err(CustomRingError::SaltedSourceOtherTracking),
         }
-        let address = match write.source {
-            None if write.owner_lists.is_empty() => Address::default(),
-            Some((address, source)) if !write.owner_lists.is_empty() => {
-                if !source.is_private() {
-                    return Err(CustomRingError::PublicRegistryAsPrivateSource);
-                }
-                self.check_source_pair(source)?;
-                if address == self.records || Some(address) == self.curator() {
-                    return Err(CustomRingError::InvalidSource);
-                }
-                address
-            }
-            _ => return Err(CustomRingError::InvalidSource),
-        };
-        let mut next = *self;
-        next.private_source = address;
-        next.private_lists = write.owner_lists.bits();
-        // A proof bound to the old source fails under the new table hash.
-        next.policy_hash = next.rules.hash(&next.source_map()?)?;
-        next.count_generation(slot)?;
-        *self = next;
-        Ok(())
     }
 
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
@@ -714,11 +677,6 @@ impl RingPolicy {
     pub fn curator_registry(&self, read: RootRead) -> Option<Address> {
         (read == RootRead::Policy).then(|| self.curator()).flatten()
     }
-
-    pub fn private_registry(&self, read: RootRead) -> Option<Address> {
-        (read == RootRead::Policy && self.private_source != Address::default())
-            .then_some(self.private_source)
-    }
 }
 
 impl CoSigner {
@@ -727,20 +685,38 @@ impl CoSigner {
     }
 }
 
-fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, CustomRingError> {
+/// A zero slot serves the own records.
+fn source_address<'a>(slot: &'a SourceSlot, records: &'a Address) -> &'a Address {
+    match slot.registry == Address::default() {
+        true => records,
+        false => &slot.registry,
+    }
+}
+
+fn salted_source_map(
+    sources: &[SourceSlot; N_SOURCE_SLOTS],
+    salted: ListSet,
+    records: &Address,
+) -> Result<SourceMap, CustomRingError> {
     let mut slots = [PolicySource::default(); N_SOURCE_SLOTS];
     for (dst, slot) in slots.iter_mut().zip(sources) {
         *dst = slot.policy_source()?;
     }
-    Ok(SourceMap::from_slots(slots)?)
+    let registry = match salted.iter().next() {
+        Some(list_id) => {
+            registry_field(source_address(&sources[list_id.slot()], records).as_array())?
+        }
+        None => [0; 32],
+    };
+    Ok(SourceMap::from_slots(slots)?.with_private(PrivateSource::new(salted, registry)?)?)
 }
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1127);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 8);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 136);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 168);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 209);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, tracking) == 241);
+const _: () = assert!(RingPolicy::SIZE == 1093);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, tracking) == 239);
 const _: () = assert!(CoSigner::SIZE == 35);

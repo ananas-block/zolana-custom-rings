@@ -11,7 +11,9 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 
-use crate::loader::{check_authority, check_signer, load_registry_mut};
+use crate::loader::{
+    check_authority, check_signer, load_pinned_tracking_revision, load_registry_mut,
+};
 
 pub fn process_update_ix(
     program_id: &Address,
@@ -19,18 +21,26 @@ pub fn process_update_ix(
     data: &[u8],
 ) -> ProgramResult {
     let ix = StorageUpdateIxData::parse(data)?;
-    let [authority_account, registry_account, ..] = accounts else {
+    let [authority_account, registry_account, optional @ ..] = accounts else {
         return Err(StorageError::MissingAccounts.into());
     };
     check_signer(authority_account)?;
     let chain_start = chain_start(registry_account.address(), ix.revision)?;
     let mut registry = load_registry_mut(program_id, registry_account)?;
     check_authority(&registry, authority_account)?;
+    let tracking_revision = registry
+        .reads_tracking(&ix)
+        .then(|| {
+            let tracking = optional.first().ok_or(StorageError::MissingAccounts)?;
+            load_pinned_tracking_revision(program_id, &registry, tracking)
+        })
+        .transpose()?;
     let (old_root, old_next_index) = (registry.roots[0].hash, registry.next_index());
     // A stale revision fails here, ahead of the proof made against its old root.
     registry.update(RootUpdate {
         slot: Clock::get()?.slot,
         data: &ix,
+        tracking_revision,
     })?;
     let chain_end = ix.entries().try_fold(
         chain_start,
@@ -47,7 +57,6 @@ pub fn process_update_ix(
         chain_start,
         chain_end,
         count: ix.writes.len() as u64,
-        restrictive: ix.restrictive,
     };
     RingProof {
         proof: &ix.apply.proof,

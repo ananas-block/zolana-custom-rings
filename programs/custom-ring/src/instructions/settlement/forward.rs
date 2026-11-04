@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RingMode, RootRead,
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
+    cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RingMode,
+    RootRead, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
 };
 use pinocchio::{
     error::ProgramError,
@@ -54,16 +54,13 @@ pub fn process_deposit_ix(
         policy_hash: ring.written_policy_hash(),
     });
     // 3. One record covering the deposit class signs when the ring configured one.
-    let requirement = CoSignDemand::DEPOSIT.requirement(&ring)?;
-    if !requirement.is_satisfied() {
+    if let Some(requirement) = CoSignDemand::DEPOSIT.requirement(&ring) {
         CoSignerSlot {
             program_id,
             record: iter.next_account("co_signer_record")?,
             signer: iter.next_account("co_signer")?,
         }
-        .verify(requirement)?
-        .0
-        .check_satisfied()?;
+        .verify(requirement)?;
     }
     let spp_accounts = iter.remaining()?;
     let anonymous = mode == RingMode::Anonymous;

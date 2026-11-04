@@ -6,7 +6,6 @@ use spr_hasher::{
     Hasher, HasherError, Poseidon,
 };
 use spr_interface::N_PUBLIC_SLOTS;
-use zolana_ring_policy::ListId;
 
 use crate::{
     anonymous_exit::ANONYMOUS_PARTIES,
@@ -279,13 +278,6 @@ impl TransferStatement<'_> {
     }
 }
 
-/// Mirror `registry.Restrictive`.
-pub const fn restrictive_write(mask: u64, value: u64, replaces_mint_policy: bool) -> bool {
-    const GRANT: u64 = ListId::Allow.record_bit() | ListId::Approval.record_bit();
-    const DENY: u64 = ListId::Block.record_bit() | ListId::Frozen.record_bit();
-    replaces_mint_policy || mask & GRANT & !value != 0 || value & DENY != 0
-}
-
 /// An application of `count` queued writes, mirror `prover/circuits/registry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyRecordsStatement {
@@ -298,13 +290,11 @@ pub struct ApplyRecordsStatement {
     /// `chain(tail - 1)`.
     pub chain_end: [u8; 32],
     pub count: u64,
-    /// The proof computes it, a wrong bit fails the statement.
-    pub restrictive: bool,
 }
 
 impl ApplyRecordsStatement {
-    /// `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`.
-    pub fn elements(&self) -> [[u8; 32]; 9] {
+    /// `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`.
+    pub fn elements(&self) -> [[u8; 32]; 8] {
         [
             domain::field(domain::APPLY_RECORDS),
             self.old_root,
@@ -314,7 +304,6 @@ impl ApplyRecordsStatement {
             self.chain_start,
             self.chain_end,
             right_align(&self.count.to_be_bytes()),
-            bit(self.restrictive),
         ]
     }
 

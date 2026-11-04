@@ -5,13 +5,11 @@ mod frames;
 use frames::{config, spp_b, Fixture};
 
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignHeader},
-    input_flag,
-    key_catalog::RingCircuit,
-    output_flag, shape_flag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
-    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
-    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
-    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, CO_SIGN_BYTE,
+    cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
+    transact_flag, AuditKey, AuditStreamLayout, AuditorMessage, ConfidentialSender,
+    CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof, Replies, RingPolicy,
+    RingRail, RingTransactData, Settlement, SignerSet, SlotBody, TransferBinding, TransferFamily,
+    TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -903,26 +901,20 @@ fn public_owners_select_the_confidential_circuit() {
 }
 
 #[test]
-fn the_co_sign_byte_sits_past_the_header() {
+fn the_approval_byte_sits_past_the_header() {
     let fixture = Fixture::new();
     let data = fixture.confidential_policy();
     let compact = data.encode().unwrap();
-    assert_eq!(compact[CO_SIGN_BYTE], data.co_sign.byte());
-    for byte in [0b0010_0000, 0b0001_1000] {
+    assert_eq!(compact[APPROVAL_BYTE], data.approval.bits());
+    for byte in [0b0000_0100, 0b0010_0000] {
         let mut refused = compact.clone();
-        refused[CO_SIGN_BYTE] = byte;
+        refused[APPROVAL_BYTE] = byte;
         assert!(RingTransactData::parse(&refused, RingRail::Confidential).is_err());
     }
     let parsed = RingTransactData::parse(&compact, RingRail::Confidential)
         .unwrap()
         .into_data();
-    assert_eq!(
-        parsed.co_sign,
-        CoSignHeader {
-            approval: ApprovalMask::OUTFLOW,
-            co_signers: 1
-        }
-    );
+    assert_eq!(parsed.approval, ApprovalMask::OUTFLOW);
 }
 
 #[test]

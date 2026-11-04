@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    queue_chain, restrictive_write, ApplyRecordsStatement, QueueEntry, FIELD_MAX, QUAD_HEIGHT,
+    queue_chain, ApplyRecordsStatement, QueueEntry, FIELD_MAX, QUAD_HEIGHT,
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use zolana_ring_policy::MintPolicy;
@@ -178,13 +178,6 @@ impl ApplyProofInputs<RecordWriteProofInput> {
             chain_start: self.chain_start,
             chain_end: self.chain_end,
             count: self.writes.len() as u64,
-            restrictive: self.writes.iter().any(|write| {
-                restrictive_write(
-                    write.entry.mask,
-                    write.entry.value,
-                    write.entry.mint_policy.is_some(),
-                )
-            }),
         })
     }
 }

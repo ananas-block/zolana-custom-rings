@@ -22,8 +22,7 @@ type batch struct {
 	circuit *registry.ApplyRecordsCircuit
 	writes  []ringregistry.Write
 	// chain[k] is the chain value after k entries, chain[0] the start.
-	chain       []*big.Int
-	restrictive bool
+	chain []*big.Int
 }
 
 func entry(member, mask, value int64) ringregistry.Entry {
@@ -44,7 +43,6 @@ func applyBatch(t *testing.T, members *ringregistry.Registry, n int, chainStart 
 		b.writes = append(b.writes, w)
 		c.Writes[i] = writeWires(w)
 		b.chain = append(b.chain, ringtest.MustPoseidonHash(t, b.chain[i], e.Hash(t)))
-		b.restrictive = b.restrictive || e.Restrictive()
 	}
 	c.NewRoot, c.NewNextIndex, c.ChainEnd = members.Root(), new(big.Int).SetUint64(members.NextIndex()), b.chain[len(entries)]
 	b.bind(t)
@@ -59,11 +57,6 @@ func (b *batch) bind(t *testing.T) {
 	for _, v := range []frontend.Variable{c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count} {
 		statement = append(statement, ringtest.AsBigInt(v))
 	}
-	bit := int64(0)
-	if b.restrictive {
-		bit = 1
-	}
-	statement = append(statement, big.NewInt(bit))
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }
 
@@ -253,14 +246,6 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			// An unmasked bit already clear keeps the record, only the chain sees the other entry.
 			b.circuit.Writes[0].Entry.Mask = big.NewInt(ringregistry.ReaderBit | ringregistry.AllowBit)
 		}, define},
-		{"a restrictive batch stated as permissive", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
-			b.restrictive = false
-			b.bind(t)
-		}, define},
-		{"a permissive batch stated as restrictive", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
-			b.restrictive = true
-			b.bind(t)
-		}, define},
 		{"the queue applied out of order", seeded, registry.ApplyBatch, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit), entry(0x10, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
 			// The writes and the root follow the swapped order, the chain end the queued one.
 			swapped := applyBatch(t, seeded(t), registry.ApplyBatch, b.chain[0], b.writes[1].Entry, b.writes[0].Entry)
@@ -311,52 +296,6 @@ func fourRecords(t *testing.T) *ringregistry.Registry {
 	members := seeded(t)
 	members.Apply(t, entry(0x40, ringregistry.AllowBit, ringregistry.AllowBit))
 	return members
-}
-
-// Direction of a write decides the bit, list state and rule tables never enter.
-func TestApplyRecordsRestrictiveBit(t *testing.T) {
-	mint := entry(0x10, 0, 0)
-	mint.MintPolicy = new(big.Int).Lsh(big.NewInt(1), 192)
-	for _, tt := range []struct {
-		name    string
-		entries []ringregistry.Entry
-		want    bool
-	}{
-		{"set allow", []ringregistry.Entry{entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit)}, false},
-		{"clear allow", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit, 0)}, true},
-		{"set approval", []ringregistry.Entry{entry(0x20, ringregistry.ApprovalBit, ringregistry.ApprovalBit)}, false},
-		{"clear approval", []ringregistry.Entry{entry(0x10, ringregistry.ApprovalBit, 0)}, true},
-		{"set block", []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, true},
-		{"clear block", []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, 0)}, false},
-		{"set frozen", []ringregistry.Entry{entry(0x10, ringregistry.FrozenBit, ringregistry.FrozenBit)}, true},
-		{"clear frozen", []ringregistry.Entry{entry(0x10, ringregistry.FrozenBit, 0)}, false},
-		{"set reader", []ringregistry.Entry{entry(0x20, ringregistry.ReaderBit, ringregistry.ReaderBit)}, false},
-		{"clear reader", []ringregistry.Entry{entry(0x30, ringregistry.ReaderBit, 0)}, false},
-		{"replace mint settings", []ringregistry.Entry{mint}, true},
-		{"an unmasked write", []ringregistry.Entry{entry(0x10, 0, 0)}, false},
-		{"set allow and clear block", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit)}, false},
-		{"set allow and set frozen", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit|ringregistry.FrozenBit, ringregistry.AllowBit|ringregistry.FrozenBit)}, true},
-		{"a restrictive write after a permissive one", []ringregistry.Entry{entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit), entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			b := applyBatch(t, seeded(t), registry.ApplyBatch, big.NewInt(0), tt.entries...)
-			if b.restrictive != tt.want {
-				t.Fatalf("host twin says %v", b.restrictive)
-			}
-			if err := solve(t, b.circuit); err != nil {
-				t.Fatal(err)
-			}
-			b.restrictive = !tt.want
-			b.bind(t)
-			ringtest.RequireRefused(t, solve(t, b.circuit), "[assertIsEqual]", "registry.(*ApplyRecordsCircuit).Define")
-		})
-	}
-	// A padding write past Count holds a deny bit, the bit reads active writes only.
-	b := applyBatch(t, seeded(t), registry.ApplyBatch, big.NewInt(0), entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit))
-	b.circuit.Writes[1].Entry.Mask, b.circuit.Writes[1].Entry.Value = big.NewInt(ringregistry.BlockBit), big.NewInt(ringregistry.BlockBit)
-	if err := solve(t, b.circuit); err != nil {
-		t.Fatalf("padding set the bit: %v", err)
-	}
 }
 
 func TestApplyRecordsKeys(t *testing.T) {

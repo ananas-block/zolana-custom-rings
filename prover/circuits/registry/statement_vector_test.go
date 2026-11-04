@@ -69,11 +69,10 @@ type applyStatementFields struct {
 
 type recordsStatementCircuit struct {
 	applyStatementFields
-	Restrictive frontend.Variable
 }
 
 func (c *recordsStatementCircuit) Define(api frontend.API) error {
-	statement := (&ApplyRecordsCircuit{OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex, ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count}).statement(c.Restrictive)
+	statement := (&ApplyRecordsCircuit{OldRoot: c.OldRoot, NewRoot: c.NewRoot, OldNextIndex: c.OldNextIndex, NewNextIndex: c.NewNextIndex, ChainStart: c.ChainStart, ChainEnd: c.ChainEnd, Count: c.Count}).statement()
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
@@ -96,7 +95,6 @@ type applyStatementVector struct {
 	ChainStart      string `json:"chain_start"`
 	ChainEnd        string `json:"chain_end"`
 	Count           uint64 `json:"count"`
-	Restrictive     bool   `json:"restrictive"`
 	PublicInputHash string `json:"public_input_hash"`
 }
 
@@ -116,10 +114,6 @@ func TestApplyStatementsMatchRustVector(t *testing.T) {
 		ApplyEnrollments applyStatementVector `json:"apply_enrollments"`
 	}
 	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	restrictive := 0
-	if vectors.ApplyRecords.Restrictive {
-		restrictive = 1
-	}
-	ringtest.RequirePublicInputBound(t, &recordsStatementCircuit{}, &recordsStatementCircuit{applyStatementFields: vectors.ApplyRecords.fields(t), Restrictive: restrictive})
+	ringtest.RequirePublicInputBound(t, &recordsStatementCircuit{}, &recordsStatementCircuit{applyStatementFields: vectors.ApplyRecords.fields(t)})
 	ringtest.RequirePublicInputBound(t, &enrollmentsStatementCircuit{}, &enrollmentsStatementCircuit{applyStatementFields: vectors.ApplyEnrollments.fields(t)})
 }

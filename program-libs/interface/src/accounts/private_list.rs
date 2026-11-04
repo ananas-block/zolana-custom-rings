@@ -1,14 +1,10 @@
 //! Mirrors `prover/circuits/privatelist`.
 
-use solana_address::Address;
-use spr_hasher::{
-    hash_chain::create_hash_chain_4_from_slice, primitives::right_align, Hasher, HasherError,
-    Poseidon,
-};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
-use zolana_ring_policy::{registry_field, ListId, ListSet};
+use zolana_ring_policy::{ListId, ListSet};
 
-use crate::{domain, storage::Revision};
+use crate::domain;
 
 pub const PRIVATE_LIST_DEPTH: usize = 96;
 pub const PRIVATE_LIST_APPLY_WIDTHS: [u8; 3] = [2, 8, 16];
@@ -198,47 +194,6 @@ impl BlindWrite {
             write_counter: self.write_counter,
         })
     }
-}
-
-/// `restrictive` decides the root rotation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ApplyPrivateListStatement {
-    pub old_root: [u8; 32],
-    pub new_root: [u8; 32],
-    pub chain_start: [u8; 32],
-    pub chain_end: [u8; 32],
-    pub count: u64,
-    pub restrictive: bool,
-}
-
-impl ApplyPrivateListStatement {
-    pub fn elements(&self) -> [[u8; 32]; 7] {
-        [
-            domain::field(domain::APPLY_LIST),
-            self.old_root,
-            self.new_root,
-            self.chain_start,
-            self.chain_end,
-            right_align(&self.count.to_be_bytes()),
-            right_align(&[self.restrictive as u8]),
-        ]
-    }
-
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_4_from_slice(&self.elements())
-    }
-}
-
-/// `APPLY_LIST` binds the registry address and revision before the ordered writes.
-pub fn private_list_chain_start(
-    registry: &Address,
-    revision: Revision,
-) -> Result<[u8; 32], HasherError> {
-    create_hash_chain_4_from_slice(&[
-        domain::field(domain::APPLY_LIST),
-        registry_field(registry.as_array())?,
-        right_align(&revision.value().to_be_bytes()),
-    ])
 }
 
 #[cfg(test)]
