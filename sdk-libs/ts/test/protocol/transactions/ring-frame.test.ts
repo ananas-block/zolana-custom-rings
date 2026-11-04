@@ -244,7 +244,7 @@ describe("the ring frame", () => {
     // The extension byte follows the salt.
     const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
     expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
-    bytes[extensions] = 1 | 2 | 4 | 8 | 16;
+    bytes[extensions] = 1 | 2 | 4 | 8 | 32;
     expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
     const { messages } = RingTransactData.expand(frame, { auditorPubkey: AUDITOR });
     expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);
@@ -295,7 +295,7 @@ describe("the ring frame", () => {
 });
 
 describe("the transfer statement", () => {
-  const STATEMENT_LENGTH = 48;
+  const STATEMENT_LENGTH = 49;
 
   it("orders the confidential elements and closes on the length", () => {
     const frame: Frame = {
@@ -308,21 +308,26 @@ describe("the transfer statement", () => {
     const bigint = (bytes: Bytes32 | undefined): bigint =>
       bytes === undefined ? -1n : BigInt(`0x${Buffer.from(bytes).toString("hex")}`);
     expect(bigint(elements[15])).toBe(3n);
-    expect(bigint(elements[16])).toBe(1n);
-    expect(bigint(elements[17])).toBe(2n);
-    expect(bigint(elements[21])).toBe(2n);
-    expect(bigint(elements[31])).toBe(1n);
+    expect(bigint(elements[16])).toBe(0n);
+    expect(bigint(elements[17])).toBe(1n);
+    expect(bigint(elements[18])).toBe(2n);
+    expect(bigint(elements[22])).toBe(2n);
+    expect(bigint(elements[32])).toBe(1n);
     expect(bigint(elements.at(-1))).toBe(BigInt(elements.length));
+    const disclosed: Frame = { ...frame, extensions: { approvalTotals: field(88) } };
+    expect(
+      transferStatementElements(ringTransferStatement(disclosed, binding([field(31)])))[16],
+    ).toEqual(field(88));
   });
 
   it("zero fills the output chains to the capacity and leaves the tail chain zero off has_data", () => {
     const frame = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 });
     const elements = transferStatementElements(ringTransferStatement(frame, binding()));
-    expect(elements[20]).toEqual(ZERO);
+    expect(elements[21]).toEqual(ZERO);
     const withData = ringFrame({ rail: "confidential", inputs: 1, outputs: 2, hasData: true });
     const data = transferStatementElements(ringTransferStatement(withData, binding()));
-    expect(data[20]).not.toEqual(ZERO);
-    expect(elements[18]).toEqual(hashChain4(frame.outputs.map((output) => output.hash)) as Bytes32);
+    expect(data[21]).not.toEqual(ZERO);
+    expect(elements[19]).toEqual(hashChain4(frame.outputs.map((output) => output.hash)) as Bytes32);
   });
 
   it("carries the seven parties and both rail bits on the anonymous frame", () => {
