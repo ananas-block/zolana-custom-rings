@@ -76,7 +76,6 @@ func TestTrackingOpeningResolvesPresentAndAbsentOwners(t *testing.T) {
 	}
 }
 
-// A zero-key output reads absence and a nonzero one reads the row, each lie names its check.
 func TestTrackingOpeningRefusals(t *testing.T) {
 	tree := trackingTree(t)
 	alice, bob := big.NewInt(0x10), big.NewInt(0x20)
