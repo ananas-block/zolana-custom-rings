@@ -51,7 +51,7 @@ import {
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
 import { sealSaltedAuditorStream } from "../../src/crypto/audit/audit.js";
-import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
+import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   DUMMY_RECORD,
   encodeAuditEnvelope,
@@ -482,6 +482,7 @@ function request(item: Json): RingProofRequest {
       ringId: field(item["ringId"]),
       member: field(item["member"]),
       nullifierSecret: bytes<Bytes32>(item["nullifierSecret"], 32),
+      listSalt: bytes<Bytes32>(item["listSalt"], 32),
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
     };
@@ -831,13 +832,14 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
       const envelope = sealNullifierKeyWith(
         ephemeral,
         key,
+        typed.listSalt,
         X25519PublicKey.fromBytes(tagged(typed.auditorPk)),
       );
       const statement = {
         ringId: typed.ringId,
         member: typed.member,
         nullifierPk: envelope.nullifierPublicKey,
-        listTag: listTagOf(listSaltOf(key, typed.ringId)),
+        listTag: listTagOf(typed.listSalt),
         auditorPubkey: tagged(typed.auditorPk),
         ephU: envelope.sealed.ephemeralPublicKey.u(),
         ciphertext: envelope.sealed.ciphertext,

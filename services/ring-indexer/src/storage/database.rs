@@ -620,7 +620,7 @@ fn stored_record<L: StoredLeaf>(row: &QueryResult) -> Result<IndexedRecord<L>> {
     })
 }
 
-fn field(row: &QueryResult, column: &str) -> Result<[u8; 32]> {
+fn field<const N: usize>(row: &QueryResult, column: &str) -> Result<[u8; N]> {
     row.try_get::<Vec<u8>>("", column)?
         .try_into()
         .map_err(|_| anyhow::anyhow!("{column} is not 32 bytes"))
@@ -639,7 +639,7 @@ async fn exec<C: ConnectionTrait>(conn: &C, sql: &str, values: Vec<Value>) -> Re
     Ok(())
 }
 
-fn bytes(value: &[u8; 32]) -> Value {
+fn bytes<const N: usize>(value: &[u8; N]) -> Value {
     value.to_vec().into()
 }
 

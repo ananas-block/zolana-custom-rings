@@ -183,3 +183,8 @@ fn a_transfer_reads_the_own_and_curator_roots_before_the_pinned_tracking_registr
         vec![key(9)]
     );
 }
+
+#[test]
+fn the_salted_registries_name_the_source_of_each_salted_list() {
+    assert_eq!(salted_ring(key(9)).salted_registries(), Ok(vec![key(9)]));
+}

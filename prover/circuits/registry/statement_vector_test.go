@@ -18,7 +18,7 @@ type keyStatementCircuit struct {
 	ListTag         frontend.Variable
 	AuditorPubkey   [33]frontend.Variable
 	EphU            [32]frontend.Variable
-	Ciphertext      [32]frontend.Variable
+	Ciphertext      [64]frontend.Variable
 }
 
 func (c *keyStatementCircuit) Define(api frontend.API) error {
@@ -57,7 +57,7 @@ func TestRegisterKeyStatementMatchesRustVector(t *testing.T) {
 	}
 	copy(witness.AuditorPubkey[:], ringtest.VectorWires(t, v.AuditorPubkey, 33))
 	copy(witness.EphU[:], ringtest.VectorWires(t, v.EphU, 32))
-	copy(witness.Ciphertext[:], ringtest.VectorWires(t, v.Ciphertext, 32))
+	copy(witness.Ciphertext[:], ringtest.VectorWires(t, v.Ciphertext, 64))
 	ringtest.RequirePublicInputBound(t, &keyStatementCircuit{}, witness)
 }
 

@@ -105,7 +105,8 @@ To refuse owners on a public list and on a private list, write one deny rule per
 list. One rule over both admits a publicly blocked owner with no private entry.
 
 A `RingAddress` carries the owner's `listSalt`, and the salt is final. A wallet
-holds one salt per Ring, derived from its nullifier secret and the Ring's id. Every
+holds one salt per Ring, derived from its identity viewing key. Enrollment seals
+the salt to that Ring's auditor, and no other Ring's auditor can derive it. Every
 reader of a published address can compute the owner's private list key on that
 Ring and read its list status there, so publish an address only where that
 disclosure is acceptable.

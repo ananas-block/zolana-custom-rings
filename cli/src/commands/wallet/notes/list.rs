@@ -4,8 +4,8 @@ use anyhow::{bail, ensure, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SaltedOwnerCheck, SourceOwner,
-    UpdatePolicy, WalletRecordUpdate,
+    AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, PolicyUpdate, SaltedOwnerCheck,
+    SourceOwner, UpdatePolicy, WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -31,13 +31,22 @@ pub struct MemberArgs {
     /// A mint the list screens, repeatable.
     #[arg(long = "asset", value_name = "MINT")]
     assets: Vec<Address>,
-    /// A member's ring address on a private list, whose salt keys its record, repeatable.
-    #[arg(long = "salted-owner", value_name = "RING_ADDRESS", value_parser = parse_ring_address)]
-    salted_owners: Vec<RingAddress>,
+    /// A member on a private list, its ring address or its owner key with the salt read from Ring RPC, repeatable.
+    #[arg(long = "salted-owner", value_name = "RING_ADDRESS_OR_OWNER", value_parser = parse_salted_owner)]
+    salted_owners: Vec<SaltedOwner>,
 }
 
-fn parse_ring_address(text: &str) -> Result<RingAddress, RingKeyError> {
-    RingAddress::from_base58(text)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaltedOwner {
+    Address(Box<RingAddress>),
+    Key(Address),
+}
+
+fn parse_salted_owner(text: &str) -> Result<SaltedOwner, RingKeyError> {
+    match RingAddress::from_base58(text) {
+        Ok(address) => Ok(SaltedOwner::Address(Box::new(address))),
+        Err(refused) => text.parse().map(SaltedOwner::Key).map_err(|_| refused),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,7 +100,12 @@ pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
 
 impl MemberArgs {
     /// A private list reads only an owner's salted key, a public one never does.
-    pub(crate) fn subjects(&self, list_id: ListId, ring: Address) -> Result<Vec<Subject>> {
+    pub(crate) fn subjects(
+        &self,
+        list_id: ListId,
+        ring: Address,
+        read_salt: &dyn Fn(&Address) -> Result<[u8; 32]>,
+    ) -> Result<Vec<Subject>> {
         if !ListSet::PRIVATE_LISTS.contains(list_id) {
             ensure!(
                 self.salted_owners.is_empty(),
@@ -107,19 +121,27 @@ impl MemberArgs {
         );
         self.salted_owners
             .iter()
-            .map(|address| {
-                ensure!(
-                    address.ring_program_id == ring,
-                    "a ring address of ring {} cannot name a member of ring {ring}",
-                    address.ring_program_id
-                );
-                ensure!(
-                    address.list_salt != [0; 32],
-                    "a ring address with no salt has no tracking row and no private record"
-                );
-                let owner = address.recipient.signing_pubkey.as_ed25519()?;
+            .map(|salted| {
+                let (owner, list_salt) = match salted {
+                    SaltedOwner::Address(address) => {
+                        ensure!(
+                            address.ring_program_id == ring,
+                            "a ring address of ring {} cannot name a member of ring {ring}",
+                            address.ring_program_id
+                        );
+                        ensure!(
+                            address.list_salt != [0; 32],
+                            "a ring address with no salt has no tracking row and no private record"
+                        );
+                        (
+                            address.recipient.signing_pubkey.as_ed25519()?,
+                            address.list_salt,
+                        )
+                    }
+                    SaltedOwner::Key(owner) => (owner.to_bytes(), read_salt(owner)?),
+                };
                 Ok(Subject {
-                    member: Member::salted(&Member::owner_tag(&owner)?, &address.list_salt)?,
+                    member: Member::salted(&Member::owner_tag(&owner)?, &list_salt)?,
                     label: format!("salted owner {}", Address::new_from_array(owner)),
                 })
             })
@@ -217,8 +239,30 @@ impl EntryArgs {
     /// Checked against the chain, a salted entry under any other salt is one no proof reads.
     fn checked_subjects(&self, ctx: &Context) -> Result<Vec<Subject>> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects(list_id, ctx.ring.program_id())?;
-        for address in &self.members.salted_owners {
+        let read_salt = |owner: &Address| -> Result<[u8; 32]> {
+            let list_salt = ctx
+                .ring_rpc()
+                .list_salt(ctx.ring_rpc_target()?, *owner, ctx.authority()?)?
+                .with_context(|| format!("{owner} has no tracking row and no private record"))?;
+            ctx.zolana
+                .block_on(
+                    OwnerSaltCheck {
+                        ring: ctx.ring,
+                        owner,
+                        list_salt: &list_salt,
+                    }
+                    .run(ctx.zolana.as_async()),
+                )
+                .with_context(|| format!("the salt Ring RPC returned opens no tag of {owner}"))?;
+            Ok(list_salt)
+        };
+        let subjects = self
+            .members
+            .subjects(list_id, ctx.ring.program_id(), &read_salt)?;
+        for salted in &self.members.salted_owners {
+            let SaltedOwner::Address(address) = salted else {
+                continue;
+            };
             ctx.zolana
                 .block_on(
                     SaltedOwnerCheck {
@@ -410,7 +454,9 @@ mod tests {
             _ => panic!("a member command"),
         };
         Ok(members
-            .subjects(ListId::Block, Address::new_from_array([0x11; 32]))
+            .subjects(ListId::Block, Address::new_from_array([0x11; 32]), &|_| {
+                bail!("no read")
+            })
             .expect("members"))
     }
 
@@ -423,13 +469,17 @@ mod tests {
         )
         .unwrap();
         let address = RingAddress::enrolled(&wallet, ring).unwrap();
-        let args = |owners: Vec<Address>, salted_owners: Vec<RingAddress>| MemberArgs {
+        let args = |owners: Vec<Address>, addresses: Vec<RingAddress>| MemberArgs {
             owners,
             assets: Vec::new(),
-            salted_owners,
+            salted_owners: addresses
+                .into_iter()
+                .map(|address| SaltedOwner::Address(Box::new(address)))
+                .collect(),
         };
+        let no_read = |_: &Address| -> Result<[u8; 32]> { bail!("no read") };
         let salted = args(Vec::new(), vec![address.clone()])
-            .subjects(ListId::PrivateBlock, ring)
+            .subjects(ListId::PrivateBlock, ring, &no_read)
             .unwrap();
         let owner = address.recipient.signing_pubkey.as_ed25519().unwrap();
         assert_eq!(
@@ -438,15 +488,32 @@ mod tests {
         );
         assert_ne!(salted[0].member, Member::owner_tag(&owner).unwrap());
 
+        let by_key = MemberArgs {
+            owners: Vec::new(),
+            assets: Vec::new(),
+            salted_owners: vec![SaltedOwner::Key(Address::new_from_array(owner))],
+        };
+        let read = by_key
+            .subjects(ListId::PrivateBlock, ring, &|_| Ok(address.list_salt))
+            .unwrap();
+        assert_eq!(read[0].member, salted[0].member);
+        assert!(by_key
+            .subjects(ListId::PrivateBlock, ring, &no_read)
+            .is_err());
+
         let plain = TAG.parse().unwrap();
         assert!(args(vec![plain], Vec::new())
-            .subjects(ListId::PrivateAllow, ring)
+            .subjects(ListId::PrivateAllow, ring, &no_read)
             .is_err());
         assert!(args(Vec::new(), vec![address.clone()])
-            .subjects(ListId::Block, ring)
+            .subjects(ListId::Block, ring, &no_read)
             .is_err());
         assert!(args(Vec::new(), vec![address])
-            .subjects(ListId::PrivateBlock, Address::new_from_array([0x12; 32]))
+            .subjects(
+                ListId::PrivateBlock,
+                Address::new_from_array([0x12; 32]),
+                &no_read
+            )
             .is_err());
     }
 

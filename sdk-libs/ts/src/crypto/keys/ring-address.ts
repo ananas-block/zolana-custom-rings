@@ -26,8 +26,6 @@ import {
 } from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
-import { ringIdField } from "../derivation/ring-stream.js";
-import { listSaltOf } from "./list-salt.js";
 
 const addressDecoder = getAddressDecoder();
 const addressEncoder = getAddressEncoder();
@@ -76,16 +74,11 @@ export class RingAddress {
 
   /** Reveals the owner's list status. */
   static async enrolled(
-    holder: Pick<ShieldedKeypairLike, "shieldedAddress" | "nullifierKey">,
+    holder: Pick<ShieldedKeypairLike, "shieldedAddress">,
     ringProgramId: Address,
+    listSalt: Bytes32,
   ): Promise<RingAddress> {
-    const recipient = await holder.shieldedAddress();
-    const key = await holder.nullifierKey();
-    try {
-      return new RingAddress({ recipient, ringProgramId, listSalt: listSaltOf(key, ringIdField(ringProgramId)) });
-    } finally {
-      key.destroy();
-    }
+    return new RingAddress({ recipient: await holder.shieldedAddress(), ringProgramId, listSalt });
   }
 
   equals(other: RingAddress): boolean {

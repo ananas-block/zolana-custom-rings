@@ -10,16 +10,16 @@ use spr_keypair::X25519Pubkey;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{
-        AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
+        unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, DecryptedTransaction,
         DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest,
+        GetDecryptedTransactionsResponse, GetListSaltResponse, GetPendingEnrolmentsRequest,
         GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, HealthResponse,
-        PendingEnrolment, ReadTarget, RecordUpdateStatus, RingState, RingStatusRequest,
-        RingStatusResponse, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
-        CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_DECRYPTED_TRANSACTIONS,
-        GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
-        SUBMIT_RECORD_UPDATE,
+        ListSaltAttestation, ListSaltRequest, PendingEnrolment, ReadTarget, RecordUpdateStatus,
+        RingState, RingStatusRequest, RingStatusResponse, SubmitRecordUpdateRequest,
+        SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY,
+        GET_DECRYPTED_TRANSACTIONS, GET_LIST_SALT, GET_PENDING_ENROLMENTS,
+        GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS, SUBMIT_RECORD_UPDATE,
     },
 };
 
@@ -190,6 +190,23 @@ impl RingRpcClient {
                 Ok(page.value)
             })
         })
+    }
+
+    pub fn list_salt(
+        &self,
+        target: ReadTarget,
+        owner: Address,
+        writer: &dyn Signer,
+    ) -> Result<Option<[u8; 32]>> {
+        let request = ListSaltRequest::new(ListSaltAttestation {
+            target,
+            writer: writer.pubkey(),
+            owner,
+        })
+        .at(unix_now()?)
+        .sign(writer)?;
+        let response: GetListSaltResponse = self.call(GET_LIST_SALT, request)?;
+        Ok(response.list_salt.map(|salt| salt.0))
     }
 
     /// Blocks until the writer applies the update, a refusal fails.

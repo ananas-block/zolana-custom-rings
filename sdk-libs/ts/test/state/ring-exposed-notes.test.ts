@@ -10,8 +10,8 @@ import { SOL_MINT, Wallet, type WalletUtxo } from "@heliuslabs/zolana/transactio
 import { getBase58Decoder, type Address } from "@solana/kit";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
-import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
-import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
+import { LocalRingKeys } from "../../src/state/ring-keys.js";
+import { LIST_SALT_LABEL, listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { selectRingInputs } from "../../src/operations/payments/transfer.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
@@ -123,15 +123,24 @@ describe("list_salt.json", () => {
     const holder = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(hexToBytes(vector["signing_secret"] ?? "") as Bytes32),
     );
-    const key = holder.nullifierKey();
-    expect(bytesToHex(Uint8Array.of(0, ...key.secretBytes()))).toBe(vector["nullifier_secret"]);
-    const salt = listSaltOf(key, hexToBytes(vector["ring_id"] ?? "") as Bytes32);
+    const program = getBase58Decoder().decode(hexToBytes(vector["ring_program_id"] ?? "")) as Address;
+    const salt = listSaltOf(holder.viewingKey(), program);
     expect(bytesToHex(salt)).toBe(vector["list_salt"]);
     expect(bytesToHex(listTagOf(salt))).toBe(vector["list_tag"]);
-    const program = getBase58Decoder().decode(new Uint8Array(32).fill(4)) as Address;
-    const addressed = await RingAddress.enrolled(holder, program);
+    const addressed = await RingAddress.enrolled(holder, program, salt);
     expect(addressed.recipient.toBytes()).toEqual(holder.shieldedAddress().toBytes());
-    expect(addressed.listSalt).toEqual(listSaltOf(key, ringIdField(program)));
-    key.destroy();
+    expect(addressed.listSalt).toEqual(salt);
+    const other = getBase58Decoder().decode(new Uint8Array(32).fill(5)) as Address;
+    expect(listSaltOf(holder.viewingKey(), other)).not.toEqual(salt);
+    await expect(LocalRingKeys.fromKeypair(holder).listSalt(program)).resolves.toEqual(salt);
+    await expect(
+      LocalRingKeys.fromKeypair(holder).mergeSeeds([
+        {
+          viewingPublicKey: holder.viewingPublicKey(),
+          ringProgramId: program,
+          firstNullifier: LIST_SALT_LABEL,
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "KEYPAIR_INVALID_MERGE_SEED" });
   });
 });

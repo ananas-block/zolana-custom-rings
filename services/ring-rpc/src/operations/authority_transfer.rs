@@ -1,11 +1,13 @@
 use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
+use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::NullifierKey;
 use thiserror::Error;
 use zolana_ring_client::rpc::{
     AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
-    GetDelegateNotesResponse, PrepareAuthorityTransferRequest, RelayStep,
+    GetDelegateNotesResponse, GetListSaltRequest, GetListSaltResponse, ListSaltAttestation,
+    PrepareAuthorityTransferRequest, RelayStep,
 };
 
 use crate::{
@@ -34,6 +36,8 @@ pub enum AuthorityTransferError {
     RelayUnavailable = -32224,
     #[error("the transaction key is not a clamped X25519 secret")]
     TxViewingKey = -32225,
+    #[error("the signer writes no salted list of the ring")]
+    NotListWriter = -32226,
 }
 
 impl AuthorityTransferError {
@@ -111,6 +115,64 @@ impl<S: TransactionSource> Hub<S> {
                 after: cursor,
                 limit: WALLET_NOTE_PAGE_LIMIT,
             }),
+        })
+    }
+
+    /// An owner dodging a block need not hand over an address.
+    pub async fn list_salt(
+        &self,
+        request: &GetListSaltRequest,
+    ) -> Result<GetListSaltResponse, RingRpcError> {
+        let (ring, writer, owner) = (request.ring.0, request.writer.0, request.owner.0);
+        let service = self.service(Some(ring))?;
+        let shared = self.shared();
+        let now = shared.clock.now()?;
+        // 1. The named key signed the read for the service and ring.
+        let nonce = WalletCheck {
+            wallet: writer,
+            signature: &request.signature,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            attestation: &ListSaltAttestation {
+                target: service.read_target(),
+                writer,
+                owner,
+            },
+            now,
+        }
+        .decide()?;
+        // 2. The policy authority or the authority of a salted list's registry, under the auditor key held here.
+        let config = shared
+            .source
+            .ring_config(ring)
+            .await?
+            .ok_or(AuthorityTransferError::NotListWriter)?;
+        let writes = config.roles.policy == writer
+            || shared
+                .source
+                .salted_list_writers(ring)
+                .await?
+                .contains(&writer);
+        if !writes {
+            return Err(AuthorityTransferError::NotListWriter.into());
+        }
+        if config.auditor_pubkey != service.auditor_pubkey() {
+            return Err(AuthorityTransferError::EscrowUnserved.into());
+        }
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
+        Ok(GetListSaltResponse {
+            list_salt: service
+                .tracked_list_salt(&owner.to_bytes())
+                .await?
+                .map(Hash),
         })
     }
 
@@ -242,7 +304,9 @@ mod tests {
     use super::*;
     use crate::{
         database::Store,
-        managed_merge::tests::{fee_payer, Fixture, ScriptedChain, GENESIS, MINT, RING},
+        managed_merge::tests::{
+            fee_payer, list_writer, Fixture, ScriptedChain, GENESIS, LIST_SALT, MINT, RING,
+        },
         relay::{RelayParts, RelayPayload},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
         relay_reservations::RelayReservations,
@@ -517,6 +581,49 @@ mod tests {
             .await
             .expect_err("only the configured delegate reads");
         assert_eq!(ErrorObjectOwned::from(refused).code(), -32220);
+    }
+
+    fn salt_request(fixture: &Fixture, signer: &Keypair, owner: Address) -> GetListSaltRequest {
+        SignedRequest::new(ListSaltAttestation {
+            target: ReadTarget {
+                cluster: GENESIS,
+                service: fixture.hub.service_pubkey(),
+                ring: RING,
+            },
+            writer: signer.pubkey(),
+            owner,
+        })
+        .at(unix_now().expect("clock"))
+        .sign(signer)
+        .expect("signed request")
+    }
+
+    #[tokio::test]
+    async fn a_list_writer_reads_the_salt_and_another_key_nothing() {
+        let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 1);
+        let writer = list_writer();
+        let read = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &writer, wallet.pubkey()))
+            .await
+            .expect("the writer reads");
+        assert_eq!(read.list_salt.expect("salt").0, LIST_SALT);
+        let impostor = Keypair::new_from_array([22; 32]);
+        let refused = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &impostor, wallet.pubkey()))
+            .await
+            .expect_err("only a writer reads");
+        assert_eq!(ErrorObjectOwned::from(refused).code(), -32226);
+        let unenrolled = Keypair::new_from_array([12; 32]);
+        let none = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &writer, unenrolled.pubkey()))
+            .await
+            .expect("no row reads nothing");
+        assert_eq!(none.list_salt, None);
     }
 
     #[tokio::test]

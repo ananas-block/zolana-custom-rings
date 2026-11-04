@@ -10,7 +10,7 @@ import records from "../../../../../test-vectors/registry/ring-records.json" wit
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
 import { ZERO_32, solanaOwnerIdentity, encodeBase58 } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   fittedSpend,
@@ -335,7 +335,7 @@ describe("ring-statements.json", () => {
       listTag: field(register.list_tag),
       auditorPubkey: bytes<Bytes33>(register.auditor_pubkey, 33),
       ephU: field(register.eph_u),
-      ciphertext: field(register.ciphertext),
+      ciphertext: bytes<Bytes64>(register.ciphertext, 64),
     };
     expect(hexes(registerKeyStatementElements(registerStatement))).toEqual(register.elements);
     expect(hex(registerKeyStatementHash(registerStatement))).toBe(register.public_input_hash);

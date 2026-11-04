@@ -23,6 +23,7 @@ describe("ring prover contracts", () => {
     ringId: bytes(5),
     member: bytes(2),
     nullifierSecret: new Uint8Array(32) as Bytes32,
+    listSalt: new Uint8Array(32) as Bytes32,
     ephSk: bytes(3),
     auditorPk: bytes(4),
   };

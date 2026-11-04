@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
 import {
   NullifierKey,
   ShieldedKeypair,
@@ -14,7 +14,7 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { listSaltOf, listTagOf } from "../../../src/crypto/keys/list-salt.js";
+import { listTagOf } from "../../../src/crypto/keys/list-salt.js";
 import {
   applyEnrollmentsInstruction,
   checkEnrollment,
@@ -56,7 +56,7 @@ const SEAL: EnrollmentSeal = Object.freeze({
   nullifierPk: field(0x11),
   listTag: field(0x12),
   ephU: field(0x13),
-  ciphertext: field(0x14),
+  ciphertext: new Uint8Array(64).fill(0x14) as Bytes64,
 });
 
 function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorization {
@@ -76,7 +76,7 @@ const unenrolled = {
 } as never;
 
 function authorizationBytes(): Uint8Array {
-  const data = new Uint8Array(241);
+  const data = new Uint8Array(273);
   data[0] = 4;
   data.set(addressBytes(REGISTRY, "registry"), 1);
   data.set(addressBytes(OWNER, "owner"), 33);
@@ -86,8 +86,8 @@ function authorizationBytes(): Uint8Array {
   data.set(SEAL.ephU, 161);
   data.set(SEAL.ciphertext, 193);
   const view = new DataView(data.buffer);
-  view.setBigUint64(225, 3n, true);
-  view.setBigUint64(233, 2n, true);
+  view.setBigUint64(257, 3n, true);
+  view.setBigUint64(265, 2n, true);
   return data;
 }
 
@@ -240,7 +240,7 @@ describe("enrollment instructions", () => {
     expect(data.bytes(32, "listTag")).toEqual(SEAL.listTag);
     expect(data.bytes(32, "viewingU")).toEqual(field(0x15));
     expect(data.bytes(32, "ephU")).toEqual(SEAL.ephU);
-    expect(data.bytes(32, "ciphertext")).toEqual(SEAL.ciphertext);
+    expect(data.bytes(64, "ciphertext")).toEqual(SEAL.ciphertext);
     expect(data.bytes(192, "proof")).toEqual(PROOF);
     data.done();
     expect(first.programAddress).toBe(STORAGE_PROGRAM_ID);
@@ -262,7 +262,7 @@ describe("enrollment instructions", () => {
       },
       unenrolled,
     );
-    expect(rotation.data).toHaveLength(1 + 160);
+    expect(rotation.data).toHaveLength(1 + 192);
   });
 
   it("checks the stored authorization of the signing owner before it builds", async () => {
@@ -278,7 +278,7 @@ describe("enrollment instructions", () => {
         enrolled,
       );
     await expect(enroll(SEAL)).resolves.toBeDefined();
-    await expect(enroll({ ...SEAL, ciphertext: field(0x16) })).rejects.toMatchObject({
+    await expect(enroll({ ...SEAL, ciphertext: new Uint8Array(64).fill(0x16) as Bytes64 })).rejects.toMatchObject({
       code: "RING_ENROLLMENT_KEY_MISMATCH",
     });
     await expect(
@@ -342,6 +342,8 @@ describe("enrollment instructions", () => {
   });
 });
 
+const SALT = Uint8Array.of(0, ...new Uint8Array(31).fill(9)) as Bytes32;
+
 describe("proveEnrollment", () => {
   const auditor = X25519Keypair.generate();
 
@@ -364,6 +366,7 @@ describe("proveEnrollment", () => {
       holder,
       owner: OWNER,
       trackingRegistry: REGISTRY,
+      listSalt: SALT,
       client: {
         getAccount: vi.fn(async () => registryAccount(ringId)),
       } as never,
@@ -376,7 +379,7 @@ describe("proveEnrollment", () => {
     });
     expect(proof).toEqual(PROOF);
     expect(seal.nullifierPk).toEqual(holder.nullifierPublicKey());
-    expect(seal.listTag).toEqual(listTagOf(listSaltOf(holder.nullifierKey(), ringId)));
+    expect(seal.listTag).toEqual(listTagOf(SALT));
     const [request] = seen;
     if (request === undefined) throw new Error("no proof asked");
     expect(request.ringId).toEqual(ringId);
@@ -407,6 +410,7 @@ describe("proveEnrollment", () => {
         holder,
         owner: OWNER,
         trackingRegistry: REGISTRY,
+        listSalt: SALT,
         client: { getAccount: async () => undefined } as never,
         prover: { proveRing } as never,
       }),
@@ -440,13 +444,8 @@ describe("list salt vector", () => {
   ) as { tracking: Record<string, string> };
 
   it("derives the list salt and tag the Go circuit proves", () => {
-    const { nullifier_secret: secret, salt_ring_id: ring, list_salt: salt, secret_list_tag: tag } = vector.tracking;
-    if (secret === undefined || ring === undefined || salt === undefined || tag === undefined)
-      throw new Error("no vector");
-    const key = NullifierKey.fromSecret(hexToBytes(secret).subarray(1) as never);
-    const derivedSalt = listSaltOf(key, hexToBytes(ring) as Bytes32);
-    expect(listSaltOf(key, new Uint8Array(32).fill(0x0d) as Bytes32)).not.toEqual(derivedSalt);
-    expect(Buffer.from(derivedSalt).toString("hex")).toBe(salt);
-    expect(Buffer.from(listTagOf(derivedSalt)).toString("hex")).toBe(tag);
+    const { list_salt: salt, secret_list_tag: tag } = vector.tracking;
+    if (salt === undefined || tag === undefined) throw new Error("no vector");
+    expect(Buffer.from(listTagOf(hexToBytes(salt) as Bytes32)).toString("hex")).toBe(tag);
   });
 });

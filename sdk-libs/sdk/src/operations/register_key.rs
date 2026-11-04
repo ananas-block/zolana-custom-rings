@@ -1,6 +1,7 @@
 //! The first enrollment proves the sealed key.
 
 use custom_ring_interface::{
+    domain,
     key_catalog::RingCircuit,
     storage_instruction::{tag, EnrollIxData, OwnerGrantIxData},
     tracking::TrackingAuthorization,
@@ -13,7 +14,6 @@ use spr_hasher::primitives::{right_align, solana_owner_identity};
 use spr_keypair::{NullifierKey, ViewingKey};
 use zeroize::Zeroizing;
 use zolana_ring_client::NullifierKeyEnvelope;
-use zolana_ring_keys::list_tag;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -31,6 +31,8 @@ pub struct Enroll<'a> {
     pub owner: Address,
     pub nullifier_key: &'a NullifierKey,
     pub viewing_key: &'a ViewingKey,
+    /// `ListSaltHolder::list_salt` of the ring.
+    pub list_salt: [u8; 32],
 }
 
 /// The program signs through CPI for a PDA.
@@ -56,10 +58,10 @@ impl Enroll<'_> {
         let ring_id = self.ring.ring_id()?;
         let auditor_pk = config.auditor_pubkey;
         let key = self.nullifier_key;
-        let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
+        let envelope = NullifierKeyEnvelope::new(key, &self.list_salt, &auditor_pk)?;
         let nullifier_pk = key.pubkey()?;
         let secret = Zeroizing::new(right_align(&key.secret()));
-        let list_tag = list_tag(key, &ring_id)?;
+        let list_tag = domain::list_tag(&self.list_salt)?;
         let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {
@@ -77,6 +79,7 @@ impl Enroll<'_> {
             ring_id,
             member,
             nullifier_secret: secret,
+            list_salt: self.list_salt,
             eph_sk: envelope.ephemeral_sk.clone(),
             auditor_pk,
         };

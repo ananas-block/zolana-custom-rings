@@ -36,7 +36,6 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 		{"CRTK", shared.TrackingLeafDomain},
 		{"CRTQ", shared.TrackingEntryDomain},
 		{"CRTA", shared.ApplyEnrollmentsDomain},
-		{"CRPS", shared.ListSaltDomain},
 		{"CRPT", shared.ListTagDomain},
 		{"CR_S", shared.DomSepCRShared},
 	} {

@@ -653,6 +653,8 @@ pub(crate) struct KeyRegister {
     pub member: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub nullifier_secret: Zeroizing<[u8; 32]>,
+    #[serde(with = "fe")]
+    pub list_salt: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]

@@ -48,8 +48,6 @@ const (
 	TrackingEntryDomain = 0x43525451
 	// ApplyEnrollmentsDomain = "CRTA"
 	ApplyEnrollmentsDomain = 0x43525441
-	// ListSaltDomain = "CRPS"
-	ListSaltDomain = 0x43525053
 	// ListTagDomain = "CRPT"
 	ListTagDomain = 0x43525054
 	// ListKeyDomain = "CRPL"
@@ -129,11 +127,6 @@ func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt front
 // DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
-}
-
-// ListSalt is Poseidon(CRPS, nullifierSecret, ringID), a holder learns the owner's salted record key in one ring and never the secret.
-func ListSalt(api frontend.API, nullifierSecret, ringID frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret, ringID})
 }
 
 // ListTag is Poseidon(CRPT, listSalt), the tracking leaf's commitment to the owner's one salt.

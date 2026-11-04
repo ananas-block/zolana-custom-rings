@@ -15,6 +15,8 @@ pub enum RingKeyError {
     UnknownViewingKey,
     #[error("merge seed is not a nonzero field element")]
     InvalidMergeSeed,
+    #[error("list salt derivation failed")]
+    InvalidListSalt,
     #[error("ring payment request does not start with zolana:")]
     InvalidRingAddressScheme,
     #[error("ring address is not base58")]

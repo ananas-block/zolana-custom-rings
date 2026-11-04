@@ -63,8 +63,6 @@ struct TrackingCase {
     list_tag: String,
     entry_hash: String,
     chain_from_zero: String,
-    nullifier_secret: String,
-    salt_ring_id: String,
     list_salt: String,
     secret_list_tag: String,
 }
@@ -534,10 +532,10 @@ fn compute_vectors() -> StatementVectors {
         revision: 3,
         list_tag: values.fields[16],
     };
-    let nullifier_secret = right_aligned(0x07);
     let ring_id = values.fields[17];
-    let list_salt = domain::list_salt(&nullifier_secret, &ring_id).unwrap();
+    let list_salt = right_aligned(0x07);
     let list_tag = values.fields[16];
+    let register_ciphertext = [0x44; 64];
     let register = RegisterKeyStatement {
         ring_id: &ring_id,
         member: &owner_signer,
@@ -545,7 +543,7 @@ fn compute_vectors() -> StatementVectors {
         list_tag: &list_tag,
         auditor_pubkey: &values.auditor_pubkey,
         eph_u: &values.keys[9],
-        ciphertext: &values.keys[10],
+        ciphertext: &register_ciphertext,
     };
     let program_id = [0x77; 32];
     let tree = [0x55; 32];
@@ -643,8 +641,6 @@ fn compute_vectors() -> StatementVectors {
             list_tag: hex::encode(tracking_entry.list_tag),
             entry_hash: hex::encode(tracking_entry.hash().unwrap()),
             chain_from_zero: hex::encode(tracking_entry.chained(&[0; 32]).unwrap()),
-            nullifier_secret: hex::encode(nullifier_secret),
-            salt_ring_id: hex::encode(ring_id),
             list_salt: hex::encode(list_salt),
             secret_list_tag: hex::encode(domain::list_tag(&list_salt).unwrap()),
         },
