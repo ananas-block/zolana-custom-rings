@@ -171,28 +171,28 @@ export const RING_ERROR_CODES = [
   "RING_RECIPIENT_VIEWING_KEY_STALE",
   "RING_ADDRESS_CEILING",
   "RING_FRAME_EVENT_INVALID",
+  "RING_FRAME_TOO_LARGE",
+  "RING_BUFFERED_TAG",
+  "RING_BUFFERED_NONCE",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
 
 export type RingErrorCode = (typeof RING_ERROR_CODES)[number];
 
-/** Rust `CustomRingError`, a retired code is never reused. */
+/** Rust `CustomRingError`. */
 export const RingProgramError = Object.freeze({
   invalidInstructionData: 8100,
   proofVerificationFailed: 8101,
   hashingFailed: 8102,
   invalidShieldedPoolProgram: 8103,
   missingRingAuth: 8104,
-  // 8105 and 8106 retired.
   unauthorizedAuthority: 8107,
   invalidAuditorPubkey: 8108,
   invalidSystemProgram: 8111,
-  // 8112 retired.
   unsupportedCircuit: 8113,
   unauthorizedInitializer: 8114,
   tooManyAccounts: 8115,
-  // 8116 to 8118 retired.
   invalidListId: 8126,
   invalidSource: 8134,
   invalidCuratorRegistry: 8135,
@@ -208,7 +208,6 @@ export const RingProgramError = Object.freeze({
   unauthorizedDelegate: 8151,
   delegatePublicLeg: 8152,
   delegateAlreadySet: 8153,
-  // 8160, 8163 and 8165 retired.
   invalidDepositDisclosure: 8166,
   missingFundingSigner: 8173,
   invalidRingMode: 8174,
@@ -221,19 +220,14 @@ export const RingProgramError = Object.freeze({
   ringTransactLength: 8200,
   ringShapeUnkeyed: 8201,
   flagNotAllowed: 8202,
-  // 8203 to 8205 retired.
   ownerSignerCount: 8208,
   memberOutOfRange: 8209,
   listBitNotWritable: 8210,
   valueOutsideMask: 8211,
-  // 8212 retired.
   authorityBatchTooLarge: 8214,
-  // 8215 and 8216 retired.
   policyNotSet: 8217,
   invalidSppProofPoint: 8218,
-  // 8219 retired.
   policyAlreadySet: 8221,
-  // 8222 and 8223 retired.
   dataFreeBodyLength: 8224,
   zeroPublicLegAmount: 8225,
   tooManyPublicAssets: 8226,
@@ -244,7 +238,6 @@ export const RingProgramError = Object.freeze({
   coSignerIsOwner: 8231,
   memberWrittenListRule: 8233,
   ringAuthOutOfSlot: 8234,
-  // 8235 and 8236 retired.
   invalidRingProofPoint: 8238,
   thresholdsWithoutWithdrawals: 8239,
   unexpectedMemberRegistryRoot: 8240,
@@ -257,7 +250,6 @@ export const RingProgramError = Object.freeze({
   anonymousExitAccountHasData: 8248,
   anonymousExitTokenAccountOnCurve: 8249,
   anonymousExitTokenAccountInvalid: 8250,
-  // 8251 retired.
   outputBodyLength: 8253,
   listNotPolicyReadable: 8255,
   outputCountOutOfRange: 8257,
@@ -268,12 +260,10 @@ export const RingProgramError = Object.freeze({
   coSignerOutOfScope: 8262,
   coSignerCountOutOfRange: 8263,
   recordsRegistryOtherRing: 8266,
-  // 8267 retired.
   changeTagNotZero: 8268,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
-  // 8303 to 8306 retired.
   invalidAssetLimits: 8390,
   depositMintAccountMissing: 8410,
   depositAssetIndexUnknown: 8411,

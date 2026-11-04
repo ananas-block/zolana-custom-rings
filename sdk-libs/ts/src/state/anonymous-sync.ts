@@ -46,7 +46,7 @@ import { ringBodyOutput, senderBundleOutputBody } from "../protocol/transaction/
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { HalvingPageLimit, readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
 import { answered, unseen } from "./batch.js";
-import { zeroKeyNullifier } from "./exposed-notes.js";
+import { isZeroKeyNote as isExposedNote, zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges, type OpenedZeroKeyMerge } from "./zero-key-merge.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
@@ -56,7 +56,7 @@ import { RingError } from "../protocol/error.js";
 import {
   GapScan,
   type EntryStream,
-  type ViewingHistory,
+  ViewingHistory,
   type ViewingKeyEntry,
   viewTagStream,
 } from "./viewing-history.js";
@@ -126,7 +126,15 @@ export interface AnonymousRecovery {
   readonly unmatched: readonly Bytes32[];
 }
 
+/** Bodies no held key rebuilt, an owner's note under a bad body opens only through an auditor read. */
+export interface AuditorRecovery {
+  /** Commitments, foreign notes and dummies among them. */
+  readonly unopened: readonly Bytes32[];
+}
+
 export interface AnonymousScan extends AnonymousRecovery {
+  /** Filled by a full scan alone. */
+  readonly auditorRecovery: AuditorRecovery;
   /** Counters, watermarks and ring positions as read, `AnonymousWallet.absorb` stores them with the notes. */
   readonly history: ViewingHistory;
 }
@@ -277,6 +285,53 @@ export class AnonymousSync {
   }
 }
 
+export interface RingFullScan {
+  /** Under the wallet's own nullifier key. */
+  readonly utxos: readonly WalletUtxo[];
+  /** Unspent zero-key notes in publication order. */
+  readonly exposedIfSpent: readonly WalletUtxo[];
+  /** The nullifiers of the spent zero-key notes. */
+  readonly spentExposed: readonly Bytes32[];
+  readonly pending: readonly WalletUtxo[];
+  readonly auditorRecovery: AuditorRecovery;
+}
+
+/** A wrong tag hides nothing here, every held key tries every site of `ring`. */
+export async function ringFullScan(
+  input: Readonly<{
+    keys: SyncKeys;
+    assets: AssetRegistry;
+    client: AnonymousSyncClient;
+    ring: Address;
+    config?: IndexerRpcConfig;
+  }>,
+  context?: RequestContext,
+): Promise<RingFullScan> {
+  const [current, ...retired] = [...input.keys.viewingPublicKeys()].reverse();
+  if (current === undefined)
+    throw new RingError("RING_VIEWING_HISTORY_INVALID", {
+      details: { reason: "no held viewing key" },
+    });
+  const history = retired
+    .reduce(
+      (held, key, index) => held.withRotatedKey(key, BigInt(index + 1)),
+      ViewingHistory.create(current, 0n),
+    )
+    .withRing(input.ring);
+  const sync = AnonymousSync.create(input.keys, input.assets);
+  const scan = await (
+    input.config === undefined ? sync : sync.withIndexerConfig(input.config)
+  ).fullScan(input.client, history, input.ring, context);
+  const zeroKey = scan.utxos.filter(isExposedNote);
+  return Object.freeze({
+    utxos: Object.freeze(scan.utxos.filter((note) => !isExposedNote(note))),
+    exposedIfSpent: Object.freeze(zeroKey.filter((note) => !note.spent)),
+    spentExposed: Object.freeze(zeroKey.filter((note) => note.spent).map((note) => note.nullifier)),
+    pending: scan.pendingOpenings,
+    auditorRecovery: scan.auditorRecovery,
+  });
+}
+
 /** One round's tags, every read of a published tag goes through `match`. */
 class TagWindow<T> {
   readonly #byTag = new Map<string, T>();
@@ -376,6 +431,7 @@ interface RebuiltNote extends Rebuilt {
 }
 
 class Scan {
+  readonly #unopened = new Map<string, Bytes32>();
   readonly #sync: SyncFields;
   readonly #client: AnonymousSyncClient;
   readonly #context: RequestContext | undefined;
@@ -504,8 +560,18 @@ class Scan {
   }
 
   async result(): Promise<AnonymousScan> {
+    const recovery = await this.#ledger.recovery(this.#context);
+    for (const note of [...recovery.utxos, ...recovery.pendingOpenings])
+      this.#unopened.delete(bytesKey(note.outputContext.hash));
     const scan: AnonymousScan = Object.freeze({
-      ...(await this.#ledger.recovery(this.#context)),
+      ...recovery,
+      auditorRecovery: Object.freeze({
+        unopened: Object.freeze(
+          [...this.#unopened.entries()]
+            .sort(([left], [right]) => (left < right ? -1 : 1))
+            .map(([, hash]) => hash),
+        ),
+      }),
       history: this.#history,
     });
     issuedScans.set(scan, this.#originalHistory);
@@ -621,11 +687,14 @@ class Scan {
     );
   }
 
-  /** Recovery, every body and bundle opens with no tag read and every deposit is tried. */
+  /** The one recovery path of every rail, no tag is read here. */
   async #tryEverySite(
     viewingPublicKey: X25519PublicKey,
     rows: readonly IndexedShieldedTransaction[],
   ): Promise<void> {
+    for (const slot of rows.flatMap((tx) => tx.outputSlots))
+      if (ringBodyOutput(slot.payload) !== undefined)
+        this.#unopened.set(bytesKey(slot.outputContext.hash), slot.outputContext.hash);
     const bodies = rows.flatMap((tx) =>
       sitesOf(tx).flatMap((site) => bodyAt(tx, site, FULL_SCAN) ?? []),
     );
