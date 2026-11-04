@@ -11,6 +11,7 @@ import {
   concatBytes,
   encodeBase58,
   equalBytes,
+  isZero,
   meta,
   solanaOwnerIdentity,
   treeAddress,
@@ -55,7 +56,6 @@ import { RingError } from "../../protocol/error.js";
 import {
   policyLegs,
   policyDemand,
-  readsPolicyRoot,
   policyRoots,
   publishedNotes,
   readPolicy,
@@ -67,7 +67,8 @@ import {
   type RingListSalt,
 } from "../../proof/policy-proof.js";
 import { selectTransferKey, transferProofRequest } from "../../proof/transfer-proof.js";
-import { fittedSpend } from "../../protocol/proof/transfer-shapes.js";
+import { sealedWide, unreadSubjectPools } from "../../protocol/proof/transfer-shapes.js";
+import { memberOfAsset, pinnedPolicy, policySourceView } from "../../protocol/membership/policy.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import { framesData, type PublishedSlot, type RingOutputRail } from "../payments/output-rail.js";
 import {
@@ -377,7 +378,7 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
   return { demandInput, demand, keySpend, addresses, circuit, wideOwners };
 }
 
-/** Rust `Prepared::unread_wide`. */
+/** Rust `Prepared::sealing_wide`, the flag of a seal ahead of every record read. */
 function unreadWide(
   input: Readonly<{
     config: RingPolicy;
@@ -386,21 +387,58 @@ function unreadWide(
 ): boolean {
   const { config, staged } = input;
   const { proofInputs, spend } = staged;
+  const delegate = isDelegateRail(spend.rail);
+  const transfers = proofInputs.externalData.interfaceTransfers;
   const inputs = publishedNotes(proofInputs);
-  const entry = spendsDefaultRing(proofInputs);
-  const { wide } = fittedSpend({
-    rail: spend.rail,
-    inputs: inputs.length,
-    outputs: proofInputs.checkShape().outputs,
-    spendsDefaultRing: entry,
-    legs: proofInputs.externalData.interfaceTransfers.length,
-    owners: ownerRows({ inputs, delegate: isDelegateRail(spend.rail) }).length,
-    pools: { own: 0, curator: 0, tracking: 0 },
-    wide: false,
-  });
-  const reads = readsPolicyRoot(config, spend.rail);
-  const data = framesData(proofInputs.outputs.filter((output) => !output.isDummy()));
-  return wide || (reads && (data || entry));
+  const live = proofInputs.outputs.filter((output) => !output.isDummy());
+  // 1. The program names the key from the legs its read screens, a ring reading no root screens
+  // none and a deposit never counts, so the wallet counts the same legs.
+  const legs = policyLegs(config, spend.rail, transfers);
+  const rows = ownerRows({ inputs, delegate });
+  // 2. Only a salted list opens more records than the row holding these counts provides, every
+  // other read fits it by the catalog's pool widths.
+  const distinct = (fields: readonly Bytes32[]): number => new Set(fields.map(bytesKey)).size;
+  const pools =
+    transferRootRead(config, delegate) === "policy" && readsSaltedList(config)
+      ? unreadSubjectPools({
+          owners:
+            legs +
+            distinct([
+              ...rows,
+              ...live.flatMap((output) =>
+                output.ownerAddress === undefined
+                  ? []
+                  : [output.ownerAddress.signingPublicKey.ownerProofInputHash()],
+              ),
+            ]),
+          assets: distinct([
+            ...live.map((output) => memberOfAsset(output.asset)),
+            ...proofInputs.inputUtxos
+              .filter((spent) => !spent.isDummy())
+              .map((spent) => memberOfAsset(spent.utxo.asset)),
+            ...publicSlots(transfers).assets.filter((asset) => !isZero(asset)),
+          ]),
+        })
+      : { own: 0, curator: 0, tracking: 0 };
+  // 3. One selection on both sides, only the bound stands in for the reads.
+  return sealedWide(
+    {
+      rail: spend.rail,
+      inputs: inputs.length,
+      outputs: proofInputs.checkShape().outputs,
+      spendsDefaultRing: spendsDefaultRing(proofInputs),
+      legs,
+      owners: rows.length,
+      pools,
+      wide: false,
+    },
+    framesData(live),
+  );
+}
+
+function readsSaltedList(config: RingPolicy): boolean {
+  const { sources, salted } = pinnedPolicy(config);
+  return policySourceView({ slots: sources, salted }).salted !== 0;
 }
 
 /** A relayed owner's seal, the caller wipes `sealed.ephemeralSecret`. */
