@@ -11,6 +11,9 @@ import {
   mergeOutputBlinding,
   mergeOutputKey,
   equalBytes,
+  solanaOwnerIdentity,
+  hashBytes,
+  addressBytes,
   poseidon,
   encodeMergeOutputData,
   encryptMergeOutput,
@@ -18,7 +21,12 @@ import {
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import {
+  ShieldedKeypair,
+  ViewingKey,
+  X25519Keypair,
+  X25519PublicKey,
+} from "@heliuslabs/zolana/keypair";
 import { AssetRegistry, SOL_MINT, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import {
   encodeRingOutput,
@@ -50,6 +58,9 @@ import {
   symmetricAuditApply,
 } from "../../../src/crypto/audit/audit.js";
 import { ciphertextDigest } from "../../../src/protocol/proof/statement.js";
+import { ringBlindingSeed, ringOutputBlinding } from "../../../src/crypto/derivation/blinding.js";
+import { dummyUtxoHash } from "../../../src/protocol/membership/utxo-hash.js";
+import { txKeySlotSecret } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   disclosurePlaintext,
   openAuditEnvelope,
@@ -1408,6 +1419,89 @@ describe("auditRing", () => {
     });
   });
 
+  it("resolves a merged input before tracing its later transfer in either history order", async () => {
+    const auditor = X25519Keypair.generate();
+    const entry = vectorOf("anonymous", "commitment");
+    const vector = anonymousCase("commitment");
+    const assets = vectorAssets(vector);
+    const target = field(vector.inputs[0]!.commitment);
+    const original = spentUtxos(vector, assets).utxo(target)!;
+    const predecessor = { ...original, blinding: field("01".repeat(32)) };
+    const commitment = knownUtxoHash(predecessor, field(vector.ring_id));
+    const known = new KnownUtxoIndex([{ commitment, utxo: predecessor }]);
+    const salt = new Uint8Array(16).fill(3) as Bytes16;
+    const firstNullifier = field("02".repeat(32));
+    const { disclosure, ephemeralSecret, disclosureKey } = sealRingMergeDisclosure(
+      [commitment, ...Array.from({ length: 7 }, () => ZERO_32)],
+      salt,
+      auditor.publicKey(),
+    );
+    const merge: IndexedShieldedTransaction = {
+      slot: 6n,
+      txSignature: "6".repeat(87) as Signature,
+      eventIndex: 0,
+      proofless: false,
+      ringProgramId: RING,
+      nullifiers: [firstNullifier, field("03".repeat(32))],
+      messages: [],
+      outputSlots: [
+        {
+          viewTag: firstNullifier,
+          payload: encodeMergeOutputData({
+            salt,
+            ciphertext: [ZERO_32, ZERO_32, ZERO_32],
+            ringDataHash: ZERO_32,
+          }),
+          outputContext: {
+            hash: target,
+            tree: treeAddress(original.treeId),
+            treeId: original.treeId,
+            leafIndex: 9n,
+          },
+        },
+      ],
+    };
+    const transfer = vectorTransaction(entry, auditor.publicKey());
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async (transaction) =>
+        transaction.txSignature === merge.txSignature
+          ? {
+              kind: "merge",
+              transaction,
+              disclosure: { ...disclosure, proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH) },
+            }
+          : {
+              kind: "transfer",
+              transaction,
+              layout: entry.bound,
+              inputTreeIds: transaction.nullifiers.map(() => undefined),
+            },
+    };
+    try {
+      for (const history of [
+        [merge, transfer],
+        [transfer, merge],
+      ]) {
+        const page = await scan(history, origin, { auditor, assets, knownUtxos: known });
+        expect(page.skipped).toEqual([]);
+        expect(page.transactions[0]?.sender).toEqual({
+          ownerKey: field(vector.sender_key),
+          nullifierPk: field(vector.sender_nullifier_pk),
+        });
+        expect(page.transactions[0]?.inputs[0]?.opening).toMatchObject({
+          kind: "merged",
+          ownerKey: original.ownerKey,
+          asset: original.asset,
+          amount: original.amount,
+        });
+      }
+    } finally {
+      ephemeralSecret.fill(0);
+      disclosureKey.fill(0);
+      auditor.destroy();
+    }
+  });
+
   it("audits the ring's confirmed transfers and skips every other event", async () => {
     const auditor = X25519Keypair.generate();
     const transfer = vectorTransaction(PAIR, auditor.publicKey());
@@ -1682,7 +1776,7 @@ describe("auditRing", () => {
       });
     const capped = await audit(1);
     expect(capped.transactions.map((audited) => audited.signature)).toEqual([SIGNATURE]);
-    expect(capped.nextCursor).toEqual(historyCursor(ring, "tags", "t1"));
+    expect(capped.nextCursor).toEqual(historyCursor(ring, "ring", "t1"));
     const complete = await audit();
     expect(complete.transactions.map((audited) => audited.signature)).toEqual([
       SIGNATURE,
@@ -1724,8 +1818,8 @@ describe("auditRing", () => {
     ];
     await expect(audit(stuck).result).rejects.toThrow(ringError("RING_HISTORY_PAGE_INVALID"));
     for (const cursor of [
-      historyCursor(ring, "ring", "t1"),
-      historyCursor("11111111111111111111111111111111" as Address, "tags", "t1"),
+      historyCursor(ring, "tags", "t1"),
+      historyCursor("11111111111111111111111111111111" as Address, "ring", "t1"),
       "t1",
       Uint8Array.of(2, 1) as unknown as string,
     ]) {
@@ -1784,6 +1878,70 @@ describe("recoverRingMemberNotes", () => {
     };
   }
 
+  function anonymousTransfer(
+    input: Readonly<{
+      owner: ShieldedKeypair;
+      auditor: X25519PublicKey;
+      mint: Address;
+      firstInput?: Readonly<{ hash: Bytes32; nullifier: Bytes32 }>;
+    }>,
+  ) {
+    const base = anonymousCase("commitment");
+    const firstNullifier = input.firstInput?.nullifier ?? field(base.first_nullifier);
+    const blindingSeed = ringBlindingSeed(field(base.tx_viewing_sk), hex<Bytes16>(base.salt, 16));
+    const address = input.owner.shieldedAddress();
+    const slots = base.slots.map((slot, outputIndex) => {
+      const blinding = ringOutputBlinding({ firstNullifier, blindingSeed, outputIndex });
+      if (slot.kind === "dummy")
+        return {
+          ...slot,
+          blinding: toHex(blinding),
+          output_hash: toHex(dummyUtxoHash(base.output_tree_id, blinding)),
+        };
+      const opened =
+        outputIndex === 0
+          ? {
+              ...slot,
+              owner_key: toHex(address.confidentialViewTag()),
+              nullifier_pk: toHex(address.nullifierPublicKey),
+              asset_address: toHex(addressBytes(input.mint)),
+              asset: toHex(hashBytes(addressBytes(input.mint))),
+            }
+          : slot;
+      const output = ownerUtxoHash({
+        owner: poseidon([
+          solanaOwnerIdentity(field(need(opened.owner_key, "owner"))),
+          field(need(opened.nullifier_pk, "nullifier")),
+        ]),
+        asset: encodeBase58(field(need(opened.asset_address, "asset"))),
+        amount: BigInt(need(opened.amount, "amount")),
+        blinding,
+        treeId: base.output_tree_id,
+        ringProgramId: RING,
+      });
+      return { ...opened, blinding: toHex(blinding), output_hash: toHex(output) };
+    });
+    const vector = {
+      ...base,
+      first_nullifier: toHex(firstNullifier),
+      inputs: base.inputs.map((entry, index) => ({
+        ...entry,
+        nullifier: index === 0 ? toHex(firstNullifier) : entry.nullifier,
+        commitment:
+          index === 0 ? toHex(input.firstInput?.hash ?? field(entry.commitment)) : toHex(ZERO_32),
+      })),
+      slots,
+    } as Vector;
+    const first = slots[0]!;
+    return {
+      transaction: vectorTransaction({ layout: "anonymous", vector }, input.auditor),
+      layout: bound("anonymous", vector),
+      commitment: field(first.output_hash),
+      blinding: field(first.blinding),
+      amount: BigInt(need(first.amount, "amount")),
+    };
+  }
+
   function recover(
     input: Readonly<{
       owner: ShieldedKeypair;
@@ -1791,6 +1949,7 @@ describe("recoverRingMemberNotes", () => {
       transaction: IndexedShieldedTransaction;
       spends?: readonly IndexedShieldedTransaction[];
       nullifierKey?: ShieldedKeypair;
+      assets?: AssetRegistry;
       tags?: () => ReturnType<typeof transactionsPage>;
       /** The ring's history, else the audited page. */
       history?: readonly IndexedShieldedTransaction[];
@@ -1806,57 +1965,51 @@ describe("recoverRingMemberNotes", () => {
       client: {
         ...ringAuditReader({
           getShieldedTransactionsByTags: async (request) =>
-            request.tags.length === 0 && history !== undefined
+            request.tags.length === 0 && (history !== undefined || input.spends !== undefined)
               ? transactionsPage({
-                  data: transactionItems(history),
+                  data: transactionItems([
+                    ...(history ?? []),
+                    input.transaction,
+                    ...(input.spends ?? []),
+                  ]),
                 })
               : (input.tags ?? page)(),
           solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) },
         }),
-        getShieldedTransactionsByNullifiers: async (request) =>
-          transactionsPage({
-            data: transactionItems(
-              (input.spends ?? []).filter((spend) =>
-                spend.nullifiers.some((nullifier) =>
-                  request.nullifiers.some((asked) => equalBytes(asked, nullifier)),
-                ),
-              ),
-            ),
-          }),
       },
       ringProgramId: RING,
       auditor: input.auditor,
       source: input.owner.shieldedAddress(),
       nullifierKey: (input.nullifierKey ?? input.owner).nullifierKey(),
-      assets: new AssetRegistry([[2n, FOREIGN_MINT]]),
+      assets: input.assets ?? new AssetRegistry([[2n, FOREIGN_MINT]]),
       origin: input.origin ?? TRANSFERS,
     });
   }
 
   /** A ring merge spending `nullifier` first, its output encrypted for `owner`. */
-  function mergeOf(owner: ShieldedKeypair, nullifier: Bytes32) {
+  function mergeOf(
+    owner: ShieldedKeypair,
+    nullifier: Bytes32,
+    amount = 1000n,
+    mint: Address = SOL_MINT,
+  ) {
     const key = owner.nullifierKey();
     const salt = new Uint8Array(16).fill(3) as Bytes16;
     const ringDataHash = new Uint8Array(32).fill(5) as Bytes32;
-    const amount = 1000n;
     const blinding = mergeOutputBlinding(key, nullifier);
     const commitment = ownerUtxoHash({
       owner: poseidon([
         owner.shieldedAddress().signingPublicKey.ownerProofInputHash(),
         key.publicKey(),
       ]),
-      asset: SOL_MINT,
+      asset: mint,
       amount,
       blinding,
       treeId: PAIR_VECTOR.output_tree_id,
       ringDataHash,
       ringProgramId: RING,
     });
-    const ciphertext = encryptMergeOutput(
-      { amount, mint: SOL_MINT },
-      mergeOutputKey(key, nullifier),
-      salt,
-    );
+    const ciphertext = encryptMergeOutput({ amount, mint }, mergeOutputKey(key, nullifier), salt);
     const transaction: IndexedShieldedTransaction = {
       slot: 8n,
       txSignature: "6".repeat(64) as Signature,
@@ -1891,11 +2044,54 @@ describe("recoverRingMemberNotes", () => {
     ]);
     expect(recovered.unopened).toEqual([]);
     const nullifier = recovered.notes[0]!.nullifier;
+    const txKey = ViewingKey.fromBytes(field(PAIR_VECTOR.tx_viewing_sk));
+    const salt = hex<Bytes16>(PAIR_VECTOR.salt, 16);
+    const blindingSeed = ringBlindingSeed(field(PAIR_VECTOR.tx_viewing_sk), salt);
+    const spendVector = {
+      ...PAIR_VECTOR,
+      first_nullifier: toHex(nullifier),
+      slots: PAIR_VECTOR.slots.map((slot, outputIndex) => {
+        const blinding = ringOutputBlinding({
+          firstNullifier: nullifier,
+          blindingSeed,
+          outputIndex,
+        });
+        const output = ownerUtxoHash({
+          owner: poseidon([
+            solanaOwnerIdentity(field(need(slot.owner_key, "owner"))),
+            field(need(slot.nullifier_pk, "nullifier")),
+          ]),
+          asset: encodeBase58(field(need(slot.asset_address, "asset"))),
+          amount: BigInt(need(slot.amount, "amount")),
+          blinding,
+          treeId: PAIR_VECTOR.output_tree_id,
+          ...(slot.kind === "exit" ? {} : { ringProgramId: RING }),
+        });
+        const secret =
+          slot.kind === "exit"
+            ? undefined
+            : txKeySlotSecret({
+                txViewingKey: txKey,
+                recipientViewingKey: x25519FromU(
+                  field(need("recipient_u" in slot ? slot.recipient_u : undefined, "recipient")),
+                ),
+                salt,
+                outputIndex,
+                firstNullifier: nullifier,
+              });
+        return {
+          ...slot,
+          blinding: toHex(blinding),
+          output_hash: toHex(output),
+          ...(secret === undefined ? {} : { slot_secret: toHex(secret) }),
+        };
+      }),
+    } as Vector;
     const spend = {
-      ...transaction,
+      ...vectorTransaction({ layout: "delivered", vector: spendVector }, auditor.publicKey()),
       txSignature: "5".repeat(64) as Signature,
-      nullifiers: [nullifier],
     };
+    txKey.destroy();
     const spent = await recover({
       owner,
       auditor,
@@ -2257,6 +2453,218 @@ describe("recoverRingMemberNotes", () => {
       [merge.commitment, 1000n],
     ]);
     expect(merged.unopened).toEqual([]);
+  });
+
+  it("recovers a complete merge from its inputs when the native ciphertext is invalid", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const { transaction, commitment, amount } = ownedTransfer(owner, auditor.publicKey());
+    const unspent = await recover({ owner, auditor, transaction });
+    const merge = mergeOf(owner, unspent.notes[0]!.nullifier, amount);
+    const salt = new Uint8Array(16).fill(3) as Bytes16;
+    const { disclosure, ephemeralSecret, disclosureKey } = sealRingMergeDisclosure(
+      [commitment, ...Array.from({ length: 7 }, () => ZERO_32)],
+      salt,
+      auditor.publicKey(),
+    );
+    const invalid = {
+      ...merge.transaction,
+      outputSlots: merge.transaction.outputSlots.map((slot) => ({
+        ...slot,
+        payload: encodeMergeOutputData({
+          salt,
+          ciphertext: [new Uint8Array(32).fill(255) as Bytes32, ZERO_32, ZERO_32],
+          ringDataHash: new Uint8Array(32).fill(5) as Bytes32,
+        }),
+      })),
+    };
+    const origin: TransactionOrigin = {
+      confirmedTransaction: async (indexed, ring) =>
+        indexed.txSignature === invalid.txSignature
+          ? {
+              kind: "merge",
+              transaction: indexed,
+              disclosure: { ...disclosure, proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH) },
+            }
+          : TRANSFERS.confirmedTransaction(indexed, ring),
+    };
+    try {
+      const result = await recover({ owner, auditor, transaction, history: [invalid], origin });
+      expect(result.notes.map((note) => [note.outputContext.hash, note.utxo.amount])).toEqual([
+        [merge.commitment, amount],
+      ]);
+      expect(result.unopened).toEqual([]);
+      const wrong = {
+        ...invalid,
+        outputSlots: invalid.outputSlots.map((slot) => ({
+          ...slot,
+          outputContext: { ...slot.outputContext, hash: field("01".repeat(32)) },
+        })),
+      };
+      const refused = await recover({ owner, auditor, transaction, history: [wrong], origin });
+      expect(refused.notes).toEqual([]);
+      expect(refused.unopened).toEqual([wrong.outputSlots[0]!.outputContext.hash]);
+    } finally {
+      ephemeralSecret.fill(0);
+      disclosureKey.fill(0);
+      auditor.destroy();
+    }
+  });
+
+  it("reads an unknown merge mint from valid native bytes and retains a bad-body opening", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const source = anonymousTransfer({ owner, auditor: auditor.publicKey(), mint: FOREIGN_MINT });
+    const nullifier = owner.nullifierKey().nullifier(source.commitment, source.blinding);
+    const merge = mergeOf(owner, nullifier, source.amount, FOREIGN_MINT);
+    const salt = new Uint8Array(16).fill(3) as Bytes16;
+    const sealed = sealRingMergeDisclosure(
+      [source.commitment, ...Array.from({ length: 7 }, () => ZERO_32)],
+      salt,
+      auditor.publicKey(),
+    );
+    try {
+      for (const validBody of [true, false]) {
+        const transaction = validBody
+          ? merge.transaction
+          : {
+              ...merge.transaction,
+              outputSlots: merge.transaction.outputSlots.map((slot) => ({
+                ...slot,
+                payload: encodeMergeOutputData({
+                  salt,
+                  ciphertext: [new Uint8Array(32).fill(255) as Bytes32, ZERO_32, ZERO_32],
+                  ringDataHash: new Uint8Array(32).fill(5) as Bytes32,
+                }),
+              })),
+            };
+        const result = await recover({
+          owner,
+          auditor,
+          transaction: source.transaction,
+          history: [transaction],
+          assets: new AssetRegistry(),
+          origin: {
+            confirmedTransaction: async (row) =>
+              row.txSignature === transaction.txSignature
+                ? {
+                    kind: "merge",
+                    transaction: row,
+                    disclosure: {
+                      ...sealed.disclosure,
+                      proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
+                    },
+                  }
+                : {
+                    kind: "transfer",
+                    transaction: row,
+                    layout: source.layout,
+                    inputTreeIds: row.nullifiers.map(() => undefined),
+                  },
+          },
+        });
+        expect(result.notes).toEqual([]);
+        expect(result.unopened).toEqual([merge.commitment]);
+        expect(result.unknownMints).toEqual(validBody ? [FOREIGN_MINT] : []);
+      }
+    } finally {
+      sealed.ephemeralSecret.fill(0);
+      sealed.disclosureKey.fill(0);
+      auditor.destroy();
+    }
+  });
+
+  it("refreshes unseen inputs after recovering a native merge from complete deposit history", async () => {
+    const auditor = X25519Keypair.generate();
+    const owner = ShieldedKeypair.generate();
+    const source = ownedTransfer(owner, auditor.publicKey());
+    const blinding = field(PAIR_VECTOR.slots[0]!.blinding);
+    const sealed = sealRingDepositOpenings(
+      [
+        {
+          ownerHash: owner.ownerHash(),
+          blinding,
+          ownerKey: owner.shieldedAddress().confidentialViewTag(),
+          recipientCiphertext: Uint8Array.of(1),
+        },
+      ],
+      auditor.publicKey(),
+    );
+    const signature = "2".repeat(87) as Signature;
+    const ownerCommitment = ownerUtxoHash(owner.ownerHash(), blinding);
+    const deposits = ConfirmedDeposit.fromTransaction(
+      confirmedDepositTransaction(RING, signature, sealed.capsules, [ownerCommitment]),
+      signature,
+      0,
+      RING,
+    );
+    const deposit: IndexedShieldedTransaction = {
+      slot: 5n,
+      txSignature: signature,
+      eventIndex: 0,
+      proofless: true,
+      ringProgramId: RING,
+      nullifiers: [],
+      messages: [],
+      outputSlots: [
+        {
+          viewTag: ZERO_32,
+          outputContext: source.transaction.outputSlots[0]!.outputContext,
+          payload: ringDepositPayload({
+            ring: RING,
+            ownerCommitment,
+            asset: SOL_MINT,
+            amount: source.amount,
+            capsule: sealed.capsules[0]!,
+          }),
+        },
+      ],
+    };
+    const merge = mergeOf(
+      owner,
+      owner.nullifierKey().nullifier(source.commitment, blinding),
+      source.amount,
+    );
+    const mergedBlinding = mergeOutputBlinding(
+      owner.nullifierKey(),
+      merge.transaction.nullifiers[0]!,
+    );
+    const spend = anonymousTransfer({
+      owner: ShieldedKeypair.generate(),
+      auditor: auditor.publicKey(),
+      mint: SOL_MINT,
+      firstInput: {
+        hash: merge.commitment,
+        nullifier: owner.nullifierKey().nullifier(merge.commitment, mergedBlinding),
+      },
+    });
+    try {
+      const result = await recover({
+        owner,
+        auditor,
+        transaction: spend.transaction,
+        history: [deposit, merge.transaction],
+        origin: {
+          confirmedTransaction: async (transaction) =>
+            transaction.txSignature === signature
+              ? { kind: "deposit", transaction, deposits }
+              : transaction.txSignature === merge.transaction.txSignature
+                ? { kind: "merge", transaction }
+                : {
+                    kind: "transfer",
+                    transaction,
+                    layout: spend.layout,
+                    inputTreeIds: transaction.nullifiers.map(() => undefined),
+                  },
+        },
+      });
+      expect(result.notes).toEqual([]);
+      expect(result.unopened).toEqual([]);
+      expect(result.unseenInputs).toEqual([]);
+    } finally {
+      sealed.ephemeralSecret.fill(0);
+      auditor.destroy();
+    }
   });
 
   it("refuses another nullifier key, an output the auditor cannot open and a scan the page cap cuts", async () => {

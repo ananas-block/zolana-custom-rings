@@ -210,7 +210,7 @@ impl ScanAt<'_> {
             let scan = sync(assets, wallet)?;
             let merged_unknown = !scan.decrypted().unknown_mints.is_empty();
             let mut unknown_mints = scan.decrypted().unknown_mints.clone();
-            wallet.absorb(scan);
+            wallet.absorb(scan)?;
             // A mint registered after the registry read names its notes under the chain's assets.
             if merged_unknown || !wallet.pending_notes().is_empty() {
                 let chain = (self.chain_assets)()?;
@@ -218,7 +218,7 @@ impl ScanAt<'_> {
                 if merged_unknown {
                     let scan = sync(&chain, wallet)?;
                     unknown_mints.clone_from(&scan.decrypted().unknown_mints);
-                    wallet.absorb(scan);
+                    wallet.absorb(scan)?;
                 }
             }
             unknown_mints.extend(wallet.pending_notes().iter().map(|note| note.mint()));

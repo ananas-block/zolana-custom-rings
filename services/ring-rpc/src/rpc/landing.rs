@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use solana_commitment_config::CommitmentLevel;
+use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_hash::Hash;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
-use solana_transaction_status_client_types::TransactionConfirmationStatus;
+use solana_transaction_status_client_types::{TransactionConfirmationStatus, TransactionStatus};
 use spr_client::{AsyncRpc, AsyncSolanaRpc, ClientError, RpcSendTransactionConfig};
 
 use crate::{error::RingRpcError, relay::RelayError};
@@ -15,12 +15,13 @@ pub trait ChainSubmit: Send + Sync {
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError>;
 
+    /// Finalized height, pending signatures cannot expire against a newer fork.
     async fn block_height(&self) -> Result<u64, RingRpcError>;
 
     /// A transaction the cluster already processed counts as sent, one its preflight refuses fails.
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError>;
 
-    /// `None` until the transaction is confirmed or failed.
+    /// `None` until success or failure is finalized.
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError>;
 }
 
@@ -99,7 +100,11 @@ impl ChainSubmit for SolanaChain {
     }
 
     async fn block_height(&self) -> Result<u64, RingRpcError> {
-        Ok(self.rpc.get_block_height().await?)
+        self.rpc
+            .client()
+            .get_block_height_with_commitment(CommitmentConfig::finalized())
+            .await
+            .map_err(|error| ClientError::Rpc(format!("get_block_height: {error}")).into())
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
@@ -140,19 +145,168 @@ impl ChainSubmit for SolanaChain {
         let Some(Some(status)) = statuses.into_iter().next() else {
             return Ok(None);
         };
-        if !matches!(
-            status.confirmation_status,
-            Some(
-                TransactionConfirmationStatus::Confirmed | TransactionConfirmationStatus::Finalized
-            )
-        ) {
-            return Ok(None);
+        Ok(finalized_outcome(status))
+    }
+}
+
+fn finalized_outcome(status: TransactionStatus) -> Option<ChainOutcome> {
+    if status.confirmation_status != Some(TransactionConfirmationStatus::Finalized) {
+        return None;
+    }
+    Some(match status.err {
+        None => ChainOutcome::Confirmed { slot: status.slot },
+        Some(error) => ChainOutcome::Failed {
+            reason: error.to_string(),
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use super::*;
+
+    struct ScriptedLanding {
+        statuses: Mutex<VecDeque<Result<Option<TransactionStatus>, RingRpcError>>>,
+        finalized_height: Option<u64>,
+    }
+
+    #[async_trait]
+    impl ChainSubmit for ScriptedLanding {
+        async fn slot(&self) -> Result<u64, RingRpcError> {
+            unreachable!()
         }
-        Ok(Some(match status.err {
-            None => ChainOutcome::Confirmed { slot: status.slot },
-            Some(error) => ChainOutcome::Failed {
-                reason: error.to_string(),
+
+        async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+            unreachable!()
+        }
+
+        async fn block_height(&self) -> Result<u64, RingRpcError> {
+            self.finalized_height.ok_or(RingRpcError::StateUnavailable)
+        }
+
+        async fn send(&self, _transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+            unreachable!()
+        }
+
+        async fn outcome(
+            &self,
+            _signature: Signature,
+        ) -> Result<Option<ChainOutcome>, RingRpcError> {
+            self.statuses
+                .lock()
+                .expect("statuses")
+                .pop_front()
+                .expect("scripted status")
+                .map(|status| status.and_then(finalized_outcome))
+        }
+    }
+
+    fn attempt() -> Attempt {
+        Attempt {
+            signature: Signature::default(),
+            last_valid_block_height: 50,
+        }
+    }
+
+    fn status(
+        confirmation_status: TransactionConfirmationStatus,
+        err: Option<TransactionError>,
+    ) -> TransactionStatus {
+        TransactionStatus {
+            slot: 41,
+            confirmations: (confirmation_status != TransactionConfirmationStatus::Finalized)
+                .then_some(1),
+            status: err.clone().map_or(Ok(()), Err),
+            err,
+            confirmation_status: Some(confirmation_status),
+        }
+    }
+
+    #[tokio::test]
+    async fn unfinalized_success_and_failure_keep_the_attempt_pending() {
+        for confirmation in [
+            TransactionConfirmationStatus::Processed,
+            TransactionConfirmationStatus::Confirmed,
+        ] {
+            for error in [None, Some(TransactionError::AccountNotFound)] {
+                let chain = ScriptedLanding {
+                    statuses: Mutex::new(VecDeque::from([Ok(Some(status(
+                        confirmation.clone(),
+                        error,
+                    )))])),
+                    finalized_height: Some(attempt().last_valid_block_height),
+                };
+                assert_eq!(
+                    attempt().landing(&chain).await.expect("landing"),
+                    Landing::Pending
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_orphaned_confirmation_expires_after_finalized_height_passes_the_window() {
+        let chain = ScriptedLanding {
+            statuses: Mutex::new(VecDeque::from([
+                Ok(Some(status(TransactionConfirmationStatus::Confirmed, None))),
+                Ok(None),
+            ])),
+            finalized_height: Some(attempt().last_valid_block_height + 1),
+        };
+        assert_eq!(
+            attempt().landing(&chain).await.expect("landing"),
+            Landing::Expired
+        );
+    }
+
+    #[tokio::test]
+    async fn finalization_between_status_and_height_wins_over_expiry() {
+        for (error, expected) in [
+            (None, ChainOutcome::Confirmed { slot: 41 }),
+            (
+                Some(TransactionError::AccountNotFound),
+                ChainOutcome::Failed {
+                    reason: TransactionError::AccountNotFound.to_string(),
+                },
+            ),
+        ] {
+            let finalized = status(TransactionConfirmationStatus::Finalized, error);
+            let chain = ScriptedLanding {
+                statuses: Mutex::new(VecDeque::from([Ok(None), Ok(Some(finalized))])),
+                finalized_height: Some(attempt().last_valid_block_height + 1),
+            };
+            assert_eq!(
+                attempt().landing(&chain).await.expect("landing"),
+                Landing::Landed(expected),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_or_height_errors_never_expire_an_attempt() {
+        for chain in [
+            ScriptedLanding {
+                statuses: Mutex::new(VecDeque::from([Err(RingRpcError::StateUnavailable)])),
+                finalized_height: Some(attempt().last_valid_block_height + 1),
             },
-        }))
+            ScriptedLanding {
+                statuses: Mutex::new(VecDeque::from([Ok(None)])),
+                finalized_height: None,
+            },
+            ScriptedLanding {
+                statuses: Mutex::new(VecDeque::from([
+                    Ok(None),
+                    Err(RingRpcError::StateUnavailable),
+                ])),
+                finalized_height: Some(attempt().last_valid_block_height + 1),
+            },
+        ] {
+            assert!(matches!(
+                attempt().landing(&chain).await,
+                Err(RingRpcError::StateUnavailable),
+            ));
+        }
     }
 }

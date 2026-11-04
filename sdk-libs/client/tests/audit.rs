@@ -1009,6 +1009,8 @@ async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_eve
         [spent[0].commitment(&transfer, Some(transfer.ring))]
     );
     assert_eq!(page.next_cursor, None);
+    assert_eq!(page.merges.len(), 1);
+    assert_eq!(page.merges[0].inputs, [field(MERGED_INPUT)]);
     let merges = MergeAudit::new(transfer.ring, &auditor)
         .run(&history, &ConfirmedOrigins(origins.clone()))
         .await
@@ -2127,4 +2129,22 @@ async fn the_merge_audit_refuses_a_disclosure_it_cannot_open() {
         .run(&history, &ConfirmedOrigins(origins))
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn input_metadata_resolves_after_the_page_opens_a_later_output() {
+    let (paid, spent) = paid_and_spent();
+    let (indexer, origin) = anonymous_page(&[&spent, &paid]);
+    let audited = anonymous_scan()
+        .audit(&auditor(), &indexer, &origin, &assets())
+        .await
+        .unwrap();
+    let spending = &audited.transactions[0];
+    assert!(spending.sender.is_some());
+    assert_eq!(
+        spending.inputs[0].opening.opened().unwrap().ring,
+        Some(InputRing::Ring {
+            commitment: paid.slots[0].output.output_context.hash,
+        })
+    );
 }

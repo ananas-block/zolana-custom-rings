@@ -1,3 +1,4 @@
+use sea_orm::{DatabaseBackend, DatabaseConnection, EntityTrait};
 use sea_orm_migration::prelude::*;
 
 mod cosign3_000001_admission;
@@ -12,9 +13,29 @@ mod records4_000001_signers;
 mod records_000001_queue;
 mod relay_000001_relays;
 mod replay_000001_nonces;
+mod spent2_000001_finalized;
 mod spent_000001_commitments;
 
 pub struct Migrator;
+
+impl Migrator {
+    pub(crate) async fn check_finality_upgrade(db: &DatabaseConnection) -> Result<(), DbErr> {
+        let manager = SchemaManager::new(db);
+        let applied = manager
+            .has_table(Self::migration_table_name().to_string())
+            .await?
+            && sea_orm_migration::seaql_migrations::Entity::find_by_id(
+                spent2_000001_finalized::Migration.name(),
+            )
+            .one(db)
+            .await?
+            .is_some();
+        if !applied {
+            spent2_000001_finalized::require_fresh_operations(&manager).await?;
+        }
+        Ok(())
+    }
+}
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
@@ -33,6 +54,23 @@ impl MigratorTrait for Migrator {
             Box::new(replay_000001_nonces::Migration),
             Box::new(spent_000001_commitments::Migration),
             Box::new(cosign4_000001_owner_debits::Migration),
+            Box::new(spent2_000001_finalized::Migration),
         ]
     }
+}
+
+async fn create_spent_table(manager: &SchemaManager<'_>, table: &str) -> Result<(), DbErr> {
+    let blob = match manager.get_database_backend() {
+        DatabaseBackend::Postgres => "BYTEA",
+        _ => "BLOB",
+    };
+    manager
+        .get_connection()
+        .execute_unprepared(&format!(
+            "CREATE TABLE {table} (utxo_hash {blob} NOT NULL PRIMARY KEY, \
+             slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, \
+             first_nullifier {blob} NOT NULL, source VARCHAR(16) NOT NULL)"
+        ))
+        .await?;
+    Ok(())
 }

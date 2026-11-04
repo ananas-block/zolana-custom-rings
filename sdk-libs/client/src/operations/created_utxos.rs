@@ -15,12 +15,13 @@ use spr_keypair::X25519Keypair;
 
 use crate::history::HistoryCursor;
 use crate::{
+    confirmed_merge,
     encryption::{open_deposit, DepositOpening},
     origin::{ConfirmedDeposit, ConfirmedEventKind, RingOrigin, TransactionOrigin},
     recover::deposit_output,
     scan::{RingHistory, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
     types::{CreatedUtxo, KnownUtxo, UtxoOwner},
-    AuditError,
+    AuditError, ConfirmedMerge,
 };
 
 /// `transaction` is bound to `origin` through [`RingOrigin::bind_transaction`].
@@ -79,6 +80,7 @@ pub struct CreatedNotes {
 /// `next_cursor` is live only when the page cap stopped the read.
 pub struct CreatedUtxoPage {
     pub utxos: Vec<CreatedUtxo>,
+    pub merges: Vec<ConfirmedMerge>,
     pub next_cursor: Option<HistoryCursor>,
     pub skipped: Vec<SkippedRow>,
 }
@@ -146,8 +148,20 @@ impl<'a> CreatedUtxoScan<'a> {
         .bound(indexer, origin)
         .await?;
         let mut utxos = Vec::new();
+        let mut merges = Vec::new();
         let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
+            if confirmed.event.kind() == ConfirmedEventKind::Merge {
+                let event_index = transaction
+                    .event_index
+                    .ok_or(AuditError::MissingEventIndex)?;
+                match confirmed_merge(transaction, event_index, confirmed, auditor) {
+                    Ok(Some(merge)) => merges.push(merge),
+                    Ok(None) => {}
+                    Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
+                }
+                continue;
+            }
             let opened = CreatedUtxos {
                 transaction,
                 origin: confirmed,
@@ -161,6 +175,7 @@ impl<'a> CreatedUtxoScan<'a> {
         }
         Ok(CreatedUtxoPage {
             utxos,
+            merges,
             next_cursor: page.next_cursor,
             skipped,
         })

@@ -88,6 +88,7 @@ function confirmedMerge(merge: LedgerMerge): ConfirmedMerge {
     treeId: merge.treeId,
     leafIndex: BigInt(merge.leafIndex),
     firstNullifier: field(merge.firstNullifier),
+    ringDataHash: new Uint8Array(32) as Bytes32,
     inputs: realMergeInputs(merge.list.map(field), merge.list.length),
   };
 }
@@ -119,6 +120,7 @@ function merge(id: number, inputs: readonly number[], output: number): Confirmed
     treeId: 1,
     leafIndex: BigInt(id),
     firstNullifier: filled(id),
+    ringDataHash: new Uint8Array(32) as Bytes32,
     inputs: inputs.map(filled),
   };
 }
@@ -143,6 +145,8 @@ describe("MergeLedger", () => {
         eventIndex: 0,
         treeId: 1,
         leafIndex: 1n,
+        firstNullifier: filled(1),
+        ringDataHash: ZERO,
         ownerKey: OWNER_KEY,
         owner: { kind: "keyed", nullifierPk: NULLIFIER_PK },
         asset: ASSET,

@@ -98,6 +98,7 @@ pub enum SentCheck {
 
 /// Only [`crate::AnonymousWallet::absorb`] stores what it covers.
 pub struct AnonymousScan {
+    starting_history: ViewingHistory,
     history: ViewingHistory,
     decrypted: DecryptionResult,
     pending: Vec<PendingNote>,
@@ -126,6 +127,10 @@ impl AnonymousScan {
     /// Replies on the wallet's notes, unauthenticated, [`ViewingHistory::confirm_sender`] is the only trust path.
     pub fn sender_claims(&self) -> &[SenderClaim] {
         &self.sender_claims
+    }
+
+    pub(crate) fn starts_from(&self, history: &ViewingHistory) -> bool {
+        self.starting_history == *history
     }
 
     pub(crate) fn into_stored(
@@ -227,11 +232,11 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
         for read in scan.ring_reads(&held) {
             scan.read_ring(read, Trial::ProvenTags).await?;
         }
-        scan.merges().await?;
+        scan.merges(MergeSource::Indexer).await?;
         scan.finish(self.keys)
     }
 
-    /// Tries every slot, bundle and deposit of `ring` from its start with no use of a tag, a sender's wrong tag hides nothing.
+    /// Reads `ring` from its first row without tag or nullifier queries.
     pub async fn full_scan<I: AsyncRpc + ?Sized>(
         &self,
         indexer: &I,
@@ -240,19 +245,17 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
     ) -> Result<AnonymousScan, AnonymousError> {
         let mut scan = self.scan(indexer, history)?;
         let held = scan.held_entries();
-        for index in &held {
-            scan.entry(*index).await?;
-        }
-        scan.read_ring(
-            RingRead {
-                ring,
-                position: HistoryPosition::default(),
-                entries: held,
-            },
-            Trial::EverySite,
-        )
-        .await?;
-        scan.merges().await?;
+        let merges = scan
+            .read_ring(
+                RingRead {
+                    ring,
+                    position: HistoryPosition::default(),
+                    entries: held,
+                },
+                Trial::EverySite,
+            )
+            .await?;
+        scan.merges(MergeSource::History(merges)).await?;
         scan.finish(self.keys)
     }
 
@@ -274,6 +277,7 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> AnonymousSync<'a, K> {
             sync: self,
             address: self.keys.address()?,
             reads: IndexerReads::configured(indexer, self.config),
+            starting_history: history.clone(),
             history: history.clone(),
             found: Vec::new(),
             held_back: Vec::new(),
@@ -296,6 +300,11 @@ fn sites_of(tx: &ShieldedTransaction) -> impl Iterator<Item = Site> {
 enum Trial {
     ProvenTags,
     EverySite,
+}
+
+enum MergeSource {
+    Indexer,
+    History(RingMerges),
 }
 
 /// One history query, every entry listed shares its position and pays one read.
@@ -344,6 +353,7 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     sync: &'s AnonymousSync<'a, K>,
     address: ShieldedAddress,
     reads: IndexerReads<'r, I>,
+    starting_history: ViewingHistory,
     history: ViewingHistory,
     /// Notes whose rebuilt hash matched, before their nullifiers.
     found: Vec<WalletUtxo>,
@@ -451,12 +461,17 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     }
 
     /// Reads to a terminal page, only its `context.slot` becomes a position.
-    async fn read_ring(&mut self, read: RingRead, trial: Trial) -> Result<(), AnonymousError> {
+    async fn read_ring(
+        &mut self,
+        read: RingRead,
+        trial: Trial,
+    ) -> Result<RingMerges, AnonymousError> {
         let RingRead {
             ring,
             mut position,
             entries,
         } = read;
+        let mut merges = Vec::new();
         loop {
             let (page, limit) = self.reads.ring_page(ring, &position).await?;
             let end = position
@@ -480,11 +495,14 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 }
                 self.open_historical(*index, &rows)?;
             }
+            if trial == Trial::EverySite {
+                merges.extend(RingMerges::among(rows).0);
+            }
             if let PageEnd::Terminal(context) = end {
                 for index in &entries {
                     self.entry_mut(*index).set_ring_position(ring, context.slot);
                 }
-                return Ok(());
+                return Ok(RingMerges(merges));
             }
         }
     }
@@ -833,19 +851,19 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         match opened {
             Ok(Some(OpenedBody::Note { utxo, nullifier_pk })) => {
                 self.accept(index, body.tx, body.found, position, utxo, nullifier_pk)?;
-                if let Ok(Some(claim)) = open_reply(reply, secret) {
-                    let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-                    self.sender_claims.push(SenderClaim {
-                        utxo_hash: slot.output_context.hash,
-                        viewing_pubkey,
-                        claim,
-                    });
-                }
             }
             Ok(Some(OpenedBody::UnknownMint { utxo, nullifier_pk })) => {
                 self.hold_back(body.tx, position, utxo, nullifier_pk)?;
             }
-            Ok(None) | Err(_) => {}
+            Ok(None) | Err(_) => return Ok(()),
+        }
+        if let Ok(Some(claim)) = open_reply(reply, secret) {
+            let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+            self.sender_claims.push(SenderClaim {
+                utxo_hash: slot.output_context.hash,
+                viewing_pubkey,
+                claim,
+            });
         }
         Ok(())
     }
@@ -1063,7 +1081,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     }
 
     /// The spends of every found or held ring note, round after round, open the ring merges among them.
-    async fn merges(&mut self) -> Result<(), AnonymousError> {
+    async fn merges(&mut self, source: MergeSource) -> Result<(), AnonymousError> {
         let mut queried: HashSet<[u8; 32]> = HashSet::new();
         let held: Vec<[u8; 32]> = self
             .sync
@@ -1090,7 +1108,23 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             if frontier.is_empty() {
                 return Ok(());
             }
-            let spends = self.reads.spends(&frontier).await?;
+            let spends = match &source {
+                MergeSource::Indexer => self.reads.spends(&frontier).await?,
+                MergeSource::History(merges) => {
+                    let frontier: HashSet<_> = frontier.iter().copied().collect();
+                    merges
+                        .0
+                        .iter()
+                        .filter(|transaction| {
+                            transaction
+                                .nullifiers
+                                .iter()
+                                .any(|nullifier| frontier.contains(nullifier))
+                        })
+                        .cloned()
+                        .collect()
+                }
+            };
             self.note_spends(&spends);
             let merges = RingMerges::among(spends);
             let opened = merges.open(self.sync.keys, self.sync.assets)?;
@@ -1137,6 +1171,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     /// A held back note carries its nullifier, an absorb stores it with the position past its row.
     fn finish<S: ShieldedKeys + ?Sized>(self, keys: &S) -> Result<AnonymousScan, AnonymousError> {
         let Scan {
+            starting_history,
             history,
             found,
             held_back,
@@ -1151,6 +1186,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         let mut held = DecryptionResult::default();
         assign_nullifiers(keys, &mut held, held_back)?;
         Ok(AnonymousScan {
+            starting_history,
             history,
             decrypted,
             pending: held.utxos.into_iter().map(PendingNote::new).collect(),

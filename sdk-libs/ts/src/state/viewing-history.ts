@@ -317,11 +317,12 @@ export class ViewingHistory {
     ].sort();
   }
 
-  /** The current key reads `ring` past `afterSlot`, added at enrollment, a watched ring keeps its position. */
   withRing(ring: Address, afterSlot: bigint | null = null): ViewingHistory {
-    const current = this.current();
-    if (current.ringPosition(ring) !== undefined) return this;
-    return this.withEntry(this.entries.length - 1, current._withRingPosition(ring, afterSlot));
+    return new ViewingHistory(
+      this.entries.map((entry) =>
+        entry.ringPosition(ring) === undefined ? entry._withRingPosition(ring, afterSlot) : entry,
+      ),
+    );
   }
 
   /** The wallet's own decision to trust a claimed sender under its current key. */

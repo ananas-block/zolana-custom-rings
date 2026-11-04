@@ -20,7 +20,7 @@ import {
 } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
-import { RowOrigins } from "../audit/row-origins.js";
+import { RowOrigins, rowEventIndex } from "../audit/row-origins.js";
 import { readRingHistory, scanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
@@ -29,10 +29,13 @@ import {
   type TransactionOrigin,
 } from "../../protocol/transaction/origin.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
+import { confirmedMerge } from "../audit/audit-merge.js";
+import type { ConfirmedMerge } from "../../state/merge-ledger.js";
 
 /** Rust `CreatedUtxoPage`. */
 export interface CreatedRingUtxosPage {
   readonly utxos: readonly CreatedRingUtxo[];
+  readonly merges: readonly ConfirmedMerge[];
   /** Rows that do not decode or fail to open, their notes stay out of `utxos`. */
   readonly skipped: readonly SkippedRingTransaction[];
   /** Set only when the page cap stopped the read. */
@@ -54,6 +57,7 @@ export async function scanCreatedRingUtxos(
 ): Promise<CreatedRingUtxosPage> {
   await initializePoseidon();
   const utxos: CreatedRingUtxo[] = [];
+  const merges: ConfirmedMerge[] = [];
   const rows = new RowOrigins(
     input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
     input.ringProgramId,
@@ -68,6 +72,15 @@ export async function scanCreatedRingUtxos(
       limits: scanLimits(input),
     },
     (confirmed) => {
+      if (confirmed.kind === "merge") {
+        const merge = confirmedMerge({
+          transaction: confirmed.transaction,
+          eventIndex: rowEventIndex(confirmed.transaction),
+          disclosure: confirmed.disclosure,
+          auditor: input.auditor,
+        });
+        if (merge !== undefined) merges.push(merge);
+      }
       utxos.push(
         ...createdRingUtxos({
           confirmed,
@@ -80,6 +93,7 @@ export async function scanCreatedRingUtxos(
   );
   return Object.freeze({
     utxos: Object.freeze(utxos),
+    merges: Object.freeze(merges),
     skipped: Object.freeze(rows.skipped),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   });

@@ -369,7 +369,7 @@ describe("anonymous sync", () => {
     await wallet.absorb(next);
     await expect(wallet.absorb(next)).rejects.toThrow("RING_SCAN_CONSUMED");
     await expect(wallet.absorb({ ...next })).rejects.toThrow("RING_SCAN_CONSUMED");
-    const repeated = await bob.sync(indexer, held.history, held.utxos);
+    const repeated = await bob.sync(indexer, wallet.history(), wallet.notes());
     await wallet.absorb(repeated);
     expect(wallet.notes().map((utxo) => [hex(utxo.outputContext.hash), utxo.spent])).toEqual([
       ...held.utxos.map((utxo) => [hex(utxo.outputContext.hash), true]),

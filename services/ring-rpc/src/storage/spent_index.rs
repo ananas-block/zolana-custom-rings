@@ -1,4 +1,4 @@
-//! Commitments a confirmed spend or merge named, a missing row never reads as unspent.
+//! Finalized spend rows are isolated from confirmed history.
 
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use solana_signature::Signature;
@@ -46,7 +46,8 @@ impl SpentSource {
 impl<C: ConnectionTrait> SpentIndex<'_, C> {
     /// The first event that names a commitment holds its row, a replay changes nothing.
     pub async fn record(&self, rows: &[SpentCommitment]) -> Result<(), DbErr> {
-        let sql = "INSERT INTO spent_commitments(utxo_hash,slot,tx_signature,event_index,\
+        let sql =
+            "INSERT INTO finalized_spent_commitments(utxo_hash,slot,tx_signature,event_index,\
                    first_nullifier,source) VALUES($1,$2,$3,$4,$5,$6) \
                    ON CONFLICT(utxo_hash) DO NOTHING";
         for row in rows {
@@ -74,7 +75,7 @@ impl<C: ConnectionTrait> SpentIndex<'_, C> {
     /// Every row, the store mirrors them across a restart.
     pub async fn rows(&self) -> Result<Vec<SpentCommitment>, DbErr> {
         let sql = "SELECT utxo_hash,slot,tx_signature,event_index,first_nullifier,source \
-                   FROM spent_commitments";
+                   FROM finalized_spent_commitments";
         self.conn
             .query_all(Statement::from_string(
                 self.conn.get_database_backend(),
@@ -152,5 +153,55 @@ mod tests {
         let mut read = index.rows().await.expect("rows");
         read.sort_by_key(|row| row.slot);
         assert_eq!(read, rows);
+    }
+
+    #[tokio::test]
+    async fn finalized_rows_survive_restart_without_loading_confirmed_rows() {
+        let path = std::env::temp_dir().join(format!(
+            "finalized-spent-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let store = Store::open(&url, 1).await.expect("store");
+        store
+            .connection()
+            .execute_unprepared(
+                "INSERT INTO spent_commitments VALUES(zeroblob(32),1,zeroblob(64),0,\
+                 zeroblob(32),'transfer')",
+            )
+            .await
+            .expect("confirmed row");
+        let index = SpentIndex {
+            conn: store.connection(),
+        };
+        assert!(index.rows().await.expect("empty index").is_empty());
+        let finalized = row(3, 4, SpentSource::Merge);
+        index.record(&[finalized]).await.expect("finalized row");
+        store
+            .connection()
+            .execute_unprepared("INSERT INTO relay_relays VALUES(zeroblob(32),'confirmed','{}')")
+            .await
+            .expect("finalized relay");
+        drop(store);
+
+        let restarted = Store::open(&url, 1).await.expect("restart");
+        let index = SpentIndex {
+            conn: restarted.connection(),
+        };
+        assert_eq!(index.rows().await.expect("finalized rows"), [finalized]);
+        let confirmed = restarted
+            .connection()
+            .query_one(Statement::from_string(
+                restarted.connection().get_database_backend(),
+                "SELECT COUNT(*) AS count FROM spent_commitments".to_owned(),
+            ))
+            .await
+            .expect("confirmed query")
+            .expect("confirmed count");
+        assert_eq!(confirmed.try_get::<i64>("", "count").expect("count"), 1);
     }
 }

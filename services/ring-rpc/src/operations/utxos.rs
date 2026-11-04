@@ -12,12 +12,9 @@ use std::{
 
 use solana_address::Address;
 use solana_signature::Signature;
-use spr_event::{split_merge_output_body, OutputDataEncoding, MERGE_OUTPUT_SCHEME};
 use spr_indexer_api::{Context, Hash};
 use spr_keypair::{NullifierKey, PublicKey};
-use spr_transaction::{
-    instructions::merge::merge_output_blinding, Data, Mint, ShieldedTransaction, Utxo, WalletUtxo,
-};
+use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
     history::HistoryPosition,
@@ -48,12 +45,11 @@ pub(crate) struct AuditStore {
     held: RwLock<HashMap<[u8; 32], (CreatedIn, HeldNote)>>,
     /// The registry last tried on the held notes, a different one retries them.
     assets: RwLock<Option<RingAssets>>,
-    /// Every nullifier a confirmed event of the ring history published.
+    /// Only finalized ring events contribute nullifiers.
     spent: RwLock<HashSet<[u8; 32]>>,
-    /// Commitments a confirmed event named, mirroring `spent_commitments`.
+    /// Mirrors `finalized_spent_commitments`.
     spent_commitments: RwLock<HashMap<[u8; 32], SpentCommitment>>,
     merges: RwLock<MergeLedger>,
-    merge_recovery: RwLock<HashMap<[u8; 32], MergeRecovery>>,
     /// Rows whose evidence the auditor could not name, kept until each input opens.
     history: RwLock<BTreeMap<EventKey, UnnamedSpend>>,
     /// Notes of one record member, ordered by commitment for the unspent cursor.
@@ -167,12 +163,6 @@ pub(crate) struct StoredUtxo {
     leaf_index: u64,
 }
 
-#[derive(Clone, Copy)]
-struct MergeRecovery {
-    first_nullifier: [u8; 32],
-    ring_data_hash: [u8; 32],
-}
-
 #[derive(Default)]
 struct EscrowMap {
     root: Option<EscrowRoot>,
@@ -260,6 +250,10 @@ impl AuditStore {
                 .collect();
             stored.extend(named);
         }
+        self.merges
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .name_assets(assets);
         self.open_held();
     }
 
@@ -315,39 +309,6 @@ impl AuditStore {
         drop(known);
         drop(merges);
         self.own_merge_outputs(&transition.resolved);
-    }
-
-    /// Only a bound confirmed merge supplies recovery context.
-    pub(crate) fn remember_merge(
-        &self,
-        transaction: &ShieldedTransaction,
-    ) -> Result<(), RingRpcError> {
-        let [slot] = transaction.output_slots.as_slice() else {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        };
-        let first_nullifier = transaction
-            .nullifiers
-            .first()
-            .copied()
-            .ok_or(RingRpcError::InvalidIndexerResponse)?;
-        let Some(OutputDataEncoding::Encrypted(blob)) = slot.output_data() else {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        };
-        let Some((&MERGE_OUTPUT_SCHEME, body)) = blob.split_first() else {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        };
-        let Some((Some(&ring_data_hash), _)) = split_merge_output_body(body) else {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        };
-        self.merge_recovery
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(slot.output_context.hash)
-            .or_insert(MergeRecovery {
-                first_nullifier,
-                ring_data_hash,
-            });
-        Ok(())
     }
 
     /// A new opening can complete a held merge and each of its descendants.
@@ -565,21 +526,24 @@ impl AuditStore {
             .filter(|note| !matches!(note, Ok(note) if spent.contains(&note.nullifier)))
             .collect::<Result<Vec<_>, _>>()?;
         let merges = self.merges.read().unwrap_or_else(PoisonError::into_inner);
-        let recovery = self
-            .merge_recovery
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
         for output in merges.outputs().filter(|output| {
             !spent_commitments.contains_key(&output.commitment)
                 && known.get(&output.commitment).is_none()
                 && output.owner_key == notes.owner_key
                 && output.mint == Some(notes.mint.asset)
         }) {
-            let Some(context) = recovery.get(&output.commitment) else {
+            let Some(utxo) = output.opening(notes.ring, notes.nullifier_key)? else {
                 continue;
             };
-            let Some(opening) = context.open(output, &notes)? else {
-                continue;
+            let opening = StoredUtxo {
+                utxo,
+                created_in: CreatedIn {
+                    slot: output.slot,
+                    tx_signature: output.tx_signature,
+                    event_index: output.event_index,
+                },
+                slot_index: 0,
+                leaf_index: output.leaf_index,
             };
             let note = opening.wallet_utxo(&output.commitment, &notes)?;
             if !spent.contains(&note.nullifier) {
@@ -693,47 +657,6 @@ impl AuditStore {
 
     fn stored(&self, utxo_hash: &[u8; 32]) -> Option<StoredUtxo> {
         self.known().get(utxo_hash).copied()
-    }
-}
-
-impl MergeRecovery {
-    fn open(
-        &self,
-        output: &AuditedMergeOutput,
-        notes: &SpendableNotes<'_>,
-    ) -> Result<Option<StoredUtxo>, RingRpcError> {
-        let inherited = KnownUtxo {
-            owner_key: output.owner_key,
-            owner: output.owner,
-            asset: output.asset,
-            mint: output.mint,
-            amount: output.amount,
-            blinding: merge_output_blinding(notes.nullifier_key, &self.first_nullifier)?,
-            data_hash: [0; 32],
-            ring_data_hash: self.ring_data_hash,
-            tree_id: output.tree_id,
-        };
-        let utxo = KnownUtxo {
-            owner: UtxoOwner::Keyed {
-                nullifier_pk: notes.nullifier_key.pubkey()?,
-            },
-            ..inherited
-        };
-        if utxo.owner_hash()? != inherited.owner_hash()?
-            || utxo.commitment(Some(notes.ring))? != output.commitment
-        {
-            return Ok(None);
-        }
-        Ok(Some(StoredUtxo {
-            utxo,
-            created_in: CreatedIn {
-                slot: output.slot,
-                tx_signature: output.tx_signature,
-                event_index: output.event_index,
-            },
-            slot_index: 0,
-            leaf_index: output.leaf_index,
-        }))
     }
 }
 
@@ -977,6 +900,51 @@ mod tests {
     }
 
     #[test]
+    fn a_registry_refresh_names_resolved_merges_and_their_descendants() {
+        let store = AuditStore::default();
+        let mint = Address::new_from_array([6; 32]);
+        let assets = RingAssets::new([Mint::new(mint, 3)]).unwrap();
+        let mut input = created(None);
+        input.utxo.asset = spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap();
+        store.record(created_in(10), [input]);
+        for (slot, input, output) in [(11, [1; 32], [2; 32]), (12, [2; 32], [3; 32])] {
+            store.apply_merge(ConfirmedMerge {
+                slot,
+                tx_signature: Signature::from([slot as u8; 64]),
+                event_index: 0,
+                output_commitment: output,
+                tree_id: 1,
+                leaf_index: slot,
+                first_nullifier: [9; 32],
+                ring_data_hash: [0; 32],
+                inputs: vec![input],
+            });
+            store.spend_commitments([spent(input)]);
+            assert_eq!(store.merged(&output).unwrap().mint, None);
+        }
+        store.name_assets(&assets);
+        store.name_assets(&RingAssets::new([]).unwrap());
+        assert_eq!(store.stored(&[1; 32]).unwrap().utxo.mint, Some(mint));
+        for commitment in [[2; 32], [3; 32]] {
+            assert_eq!(store.merged(&commitment).unwrap().mint, Some(mint));
+        }
+        store.saw_row(10, false);
+        store.absorbed(frontier(20));
+        let owner = owner_member();
+        let page = store.unspent(UnspentQuery {
+            owner: &owner,
+            after: None,
+            limit: 10,
+        });
+        let [output] = page.utxos.as_slice() else {
+            panic!("one merge output");
+        };
+        assert_eq!(output.utxo_hash.0, [3; 32]);
+        assert_eq!(output.mint, Some(mint.into()));
+        assert_eq!(output.amount, input.utxo.amount);
+    }
+
+    #[test]
     fn revisions_order_one_registry_alone() {
         let current = EscrowRoot {
             registry: Address::new_from_array([1; 32]),
@@ -1202,6 +1170,7 @@ mod tests {
             tree_id: 1,
             leaf_index: 4,
             first_nullifier: [9; 32],
+            ring_data_hash: [0; 32],
             inputs: vec![[1; 32], [0x10; 32]],
         };
         store.apply_merge(merge.clone());

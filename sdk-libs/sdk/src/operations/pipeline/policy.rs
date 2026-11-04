@@ -98,6 +98,14 @@ impl PolicyRead<'_> {
         self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
+        Outflows {
+            senders: &[],
+            inputs: &self.inputs.input_utxos,
+            outputs: &self.inputs.output_utxos,
+            public_assets: &self.public.asset_fields()?,
+            public_amounts: &self.public.amounts(),
+        }
+        .check_deposits()?;
         let n_out = usize::from(self.n_out);
         let (withdrawals, spl_withdrawal_owners) = match self.config.has_policy {
             true => {
@@ -447,7 +455,6 @@ impl PolicyRead<'_> {
             public_assets: &public_assets,
             public_amounts: &self.public.amounts(),
         };
-        outflows.check_deposits()?;
         inputs.approval_required = match self.rail {
             RingRail::Delegate => false,
             RingRail::Confidential | RingRail::Anonymous => outflows.approval_required(&limits)?,

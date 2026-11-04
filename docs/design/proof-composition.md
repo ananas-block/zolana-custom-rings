@@ -260,7 +260,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ## Limits of the composition
 
 - A proof constrains a dummy tag by its preimage alone, so a tag can carry information the sender chooses.
-- A reader's coverage is a read of confirmed history, and no proof backs it. [Reading through Ring RPC](audit-and-escrow.md#reading-through-ring-rpc) states what it claims.
+- A reader's coverage describes finalized history, and no proof backs it. [Reading through Ring RPC](audit-and-escrow.md#reading-through-ring-rpc) states what it claims.
 - A hidden owner's privacy rests on the conditions in [privacy](privacy.md). No constraint covers them.
 
 ## Review practice

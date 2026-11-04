@@ -196,6 +196,31 @@ fn a_lookup_table_transaction_is_refused() {
         parse(&json),
         Err(AuditError::Client(ClientError::AddressLookupTable))
     ));
+    let origins = ConfirmedRingOrigins {
+        signature: Signature::from([6; 64]),
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(origins.keys().copied().collect::<Vec<_>>(), [0]);
+    assert_eq!(origins[&0].pool_accounts, [OTHER]);
+    assert_eq!(origins[&0].signers, [payer]);
+    for loaded in [
+        serde_json::json!({"writable": [OTHER.to_string()], "readonly": []}),
+        serde_json::json!({"writable": [], "readonly": []}),
+        serde_json::Value::Null,
+    ] {
+        let mut missing = json.clone();
+        missing["meta"]["loadedAddresses"] = loaded;
+        assert!(ConfirmedRingOrigins {
+            signature: Signature::from([6; 64]),
+            transaction: serde_json::from_value(missing).unwrap(),
+            ring: RING,
+        }
+        .read()
+        .is_err());
+    }
 }
 
 #[test]
@@ -267,6 +292,34 @@ fn event_ordinals_separate_two_origins_in_one_transaction() {
             ]
         }
     });
+    let origins = ConfirmedRingOrigins {
+        signature,
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(origins.keys().copied().collect::<Vec<_>>(), [0, 1]);
+    assert!(origins[&0].ring_invoked);
+    assert!(!origins[&1].ring_invoked);
+    assert_eq!(origins[&0].signers, [payer]);
+    let other = ConfirmedRingOrigins {
+        signature,
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: OTHER,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(other.keys().copied().collect::<Vec<_>>(), [0, 1]);
+    assert!(!other[&0].ring_invoked);
+    assert!(other[&1].ring_invoked);
+    assert!(ConfirmedRingOrigins {
+        signature: Signature::from([8; 64]),
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .is_err());
     let first: EncodedConfirmedTransactionWithStatusMeta =
         serde_json::from_value(json.clone()).expect("rpc shape");
     let second: EncodedConfirmedTransactionWithStatusMeta =

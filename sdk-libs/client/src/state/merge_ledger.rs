@@ -4,8 +4,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use solana_address::Address;
 use solana_signature::Signature;
+use spr_keypair::NullifierKey;
+use spr_transaction::instructions::merge::merge_output_blinding;
+use zolana_ring_transaction::RingAssets;
 
-use crate::types::{KnownUtxo, UtxoOwner};
+use crate::{
+    types::{KnownUtxo, UtxoOwner},
+    AuditError,
+};
 
 /// `(tx_signature, event_index)`, one confirmed merge.
 pub type MergeId = (Signature, u16);
@@ -20,6 +26,7 @@ pub struct ConfirmedMerge {
     pub tree_id: u16,
     pub leaf_index: u64,
     pub first_nullifier: [u8; 32],
+    pub ring_data_hash: [u8; 32],
     /// The real inputs, a zero entry of the disclosed list is a dummy.
     pub inputs: Vec<[u8; 32]>,
 }
@@ -33,6 +40,8 @@ pub struct AuditedMergeOutput {
     pub event_index: u16,
     pub tree_id: u16,
     pub leaf_index: u64,
+    pub first_nullifier: [u8; 32],
+    pub ring_data_hash: [u8; 32],
     pub owner_key: [u8; 32],
     pub owner: UtxoOwner,
     pub asset: [u8; 32],
@@ -152,6 +161,51 @@ impl MergeLedger {
     pub fn unresolved(&self) -> impl Iterator<Item = &ConfirmedMerge> {
         self.unresolved.values()
     }
+
+    pub fn name_assets(&mut self, assets: &RingAssets) {
+        for output in self.outputs.values_mut() {
+            output.mint = output
+                .mint
+                .or_else(|| assets.by_field(&output.asset).map(|mint| mint.asset));
+        }
+    }
+}
+
+impl AuditedMergeOutput {
+    pub fn opening(
+        &self,
+        ring: Address,
+        nullifier_key: &NullifierKey,
+    ) -> Result<Option<KnownUtxo>, AuditError> {
+        if self
+            .mint
+            .map(|mint| spr_hasher::primitives::hash_bytes(mint.as_array()))
+            .transpose()?
+            .is_some_and(|asset| asset != self.asset)
+        {
+            return Ok(None);
+        }
+        let inherited = KnownUtxo {
+            owner_key: self.owner_key,
+            owner: self.owner,
+            asset: self.asset,
+            mint: self.mint,
+            amount: self.amount,
+            blinding: merge_output_blinding(nullifier_key, &self.first_nullifier)?,
+            data_hash: [0; 32],
+            ring_data_hash: self.ring_data_hash,
+            tree_id: self.tree_id,
+        };
+        let opening = KnownUtxo {
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: nullifier_key.pubkey()?,
+            },
+            ..inherited
+        };
+        Ok((opening.owner_hash()? == inherited.owner_hash()?
+            && opening.commitment(Some(ring))? == self.commitment)
+            .then_some(opening))
+    }
 }
 
 impl ConfirmedMerge {
@@ -191,6 +245,8 @@ impl ConfirmedMerge {
             event_index: self.event_index,
             tree_id: self.tree_id,
             leaf_index: self.leaf_index,
+            first_nullifier: self.first_nullifier,
+            ring_data_hash: self.ring_data_hash,
             owner_key: first.owner_key,
             owner,
             asset: first.asset,
@@ -228,6 +284,7 @@ mod tests {
             tree_id: 1,
             leaf_index: u64::from(id),
             first_nullifier: [id; 32],
+            ring_data_hash: [0; 32],
             inputs: inputs.to_vec(),
         }
     }

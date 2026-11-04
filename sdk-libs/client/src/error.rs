@@ -283,6 +283,8 @@ pub enum AnonymousError {
     InvalidHistoryPage,
     #[error("a counter update may not move a stored scan position or watermark")]
     ScanProgressMoved,
+    #[error("wallet history changed during the scan")]
+    ScanHistoryChanged,
     #[error("the wallet document does not parse because {0}")]
     WalletDocument(String),
     #[error("a view tag counter passed u64")]

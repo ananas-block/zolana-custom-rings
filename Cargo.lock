@@ -9256,6 +9256,7 @@ dependencies = [
  "solana-loader-v3-interface 8.0.1",
  "solana-message",
  "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
  "solana-transaction",

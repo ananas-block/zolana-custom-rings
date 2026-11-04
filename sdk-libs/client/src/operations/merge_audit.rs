@@ -55,6 +55,7 @@ pub(crate) struct MergeOutput {
     pub(crate) tree_id: u16,
     pub(crate) leaf_index: u64,
     pub(crate) first_nullifier: [u8; 32],
+    pub(crate) ring_data_hash: [u8; 32],
     pub(crate) width: usize,
     pub(crate) salt: [u8; MERGE_OUTPUT_SALT_LEN],
 }
@@ -229,6 +230,7 @@ pub fn confirmed_merge(
         tree_id: output.tree_id,
         leaf_index: output.leaf_index,
         first_nullifier: output.first_nullifier,
+        ring_data_hash: output.ring_data_hash,
         inputs: ConfirmedMerge::real_inputs(&list),
     }))
 }
@@ -266,6 +268,7 @@ impl MergeOutput {
             tree_id: slot.output_context.tree_id,
             leaf_index: slot.output_context.leaf_index,
             first_nullifier,
+            ring_data_hash: *ring_data_hash,
             width,
             salt: *salt,
         })

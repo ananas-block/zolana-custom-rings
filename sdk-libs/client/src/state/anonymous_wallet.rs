@@ -150,8 +150,11 @@ impl AnonymousWallet {
         Ok(())
     }
 
-    /// Takes a scan's notes, pending notes, spends, claims and progress together, a repeated scan adds nothing.
-    pub fn absorb(&mut self, scan: AnonymousScan) {
+    /// Rejects a scan if the wallet history changed.
+    pub fn absorb(&mut self, scan: AnonymousScan) -> Result<(), AnonymousError> {
+        if !scan.starts_from(&self.history) {
+            return Err(AnonymousError::ScanHistoryChanged);
+        }
         let (history, decrypted, pending, claims) = scan.into_stored();
         let mut held: HashSet<[u8; 32]> = self.notes.iter().map(|note| note.utxo_hash).collect();
         self.notes.extend(
@@ -186,6 +189,7 @@ impl AnonymousWallet {
                 }),
         );
         self.history = history;
+        Ok(())
     }
 
     /// A tag counter or an added key, a stored position or watermark never moves here.

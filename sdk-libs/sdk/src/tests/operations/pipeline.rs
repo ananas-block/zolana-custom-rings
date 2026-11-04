@@ -2923,6 +2923,38 @@ async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() 
     ));
 }
 
+#[tokio::test]
+async fn an_audit_only_deposit_refuses_only_mixed_owners_of_its_spent_asset() {
+    use crate::tests::support::{keypair, payer};
+
+    let sender = keypair(1);
+    let other = keypair(2);
+    let unrelated = Mint::new(Address::new_from_array([0x31; 32]), 2);
+    let client = Chain::ring(RingSettings::new(RingMode::Confidential)).client();
+    for (asset, second_owner, refused) in [
+        (Mint::SOL, &other, true),
+        (Mint::SOL, &sender, false),
+        (unrelated, &other, false),
+    ] {
+        let mut transaction = ring_transaction(vec![
+            ring_utxo(&sender, asset, 10, 0),
+            ring_utxo(second_owner, asset, 10, 1),
+        ]);
+        transaction.deposit_sol(5, payer()).unwrap();
+        let transfer = owner_transfer(&sender, transaction).with_interface_transfer_accounts(vec![
+            TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                recipient: payer(),
+            }),
+        ]);
+        let result = transfer.frame(&client).await;
+        if refused {
+            assert!(matches!(result, Err(RingError::MixedOwnerDeposit)));
+        } else {
+            result.unwrap();
+        }
+    }
+}
+
 #[test]
 fn a_payment_total_past_a_u64_is_refused() {
     assert!(matches!(

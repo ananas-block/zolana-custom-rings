@@ -1,7 +1,6 @@
 //! Rebuilds a source member's unspent ring notes from what the auditor sees.
 
 use std::{
-    cell::Cell,
     collections::{BTreeSet, HashMap, HashSet},
     num::{NonZeroU32, NonZeroUsize},
 };
@@ -13,7 +12,6 @@ use spr_event::{
     split_merge_output_body, EncryptedRingDepositOutput, OutputDataEncoding, MERGE_OUTPUT_SCHEME,
 };
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
-use spr_indexer_api::PAGE_LIMIT;
 use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::{
     instructions::merge::{
@@ -24,20 +22,15 @@ use spr_transaction::{
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
+    confirmed_merge,
     created::{CreatedUtxos, DepositSlot},
     decrypt::TransactionAudit,
-    history::HistoryPosition,
     known::KnownUtxoIndex,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
-    scan::{
-        Pages, RingHistory, RingScan, RowOrigins, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES,
-        RING_HISTORY_PAGE_SIZE,
-    },
+    scan::{RingHistory, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
     types::{OutputOpening, OutputPayloadErrorKind},
-    AuditError,
+    AuditError, KnownUtxo, UtxoOwner,
 };
-
-const SPEND_PAGE_SIZE: NonZeroU32 = NonZeroU32::new(PAGE_LIMIT as u32).unwrap();
 
 #[must_use = "run the recovery explicitly"]
 pub struct RingRecovery<'a> {
@@ -179,10 +172,19 @@ struct Found {
     unknown_mints: BTreeSet<Address>,
     /// Every note an anonymous transfer may name by hash or prefix, in history order.
     known: KnownUtxoIndex,
-    unseen_inputs: Vec<[u8; 32]>,
+    unseen_inputs: Vec<([u8; 32], [u8; 32])>,
     /// Commitments of delivered slots no held asset rebuilds.
     unknown_assets: Vec<[u8; 32]>,
-    skipped: Vec<SkippedRow>,
+}
+
+impl Found {
+    fn nullifiers(&self) -> HashSet<[u8; 32]> {
+        self.candidates
+            .iter()
+            .map(|note| note.nullifier)
+            .chain(self.unresolved.iter().map(|(_, nullifier)| *nullifier))
+            .collect()
+    }
 }
 
 impl<'a> MemberRecovery<'a> {
@@ -200,8 +202,8 @@ impl<'a> MemberRecovery<'a> {
         let recovery = &self.recovery;
         let history = self.ring_history(indexer, origin).await?;
         let mut found = Found::default();
-        if recovery.mode == RingMode::Anonymous {
-            for (transaction, confirmed) in &history {
+        for (transaction, confirmed) in &history {
+            if recovery.mode == RingMode::Anonymous {
                 let created = CreatedUtxos {
                     transaction,
                     origin: confirmed,
@@ -214,21 +216,42 @@ impl<'a> MemberRecovery<'a> {
                         .map(|created| (created.commitment, created.utxo)),
                 );
             }
-        }
-        let page = RingScan::new(recovery.ring_program_id, recovery.auditor.pubkey())
-            .with_page_size(recovery.page_size)
-            .with_max_pages(recovery.max_pages)
-            .indexer_config(recovery.indexer_config)
-            .confirmed(indexer, origin)
-            .await?;
-        for confirmed in &complete(page)? {
-            self.audited_utxos(confirmed, owner_hash, assets, &mut found)?;
+            if confirmed.event.kind() == ConfirmedEventKind::Merge {
+                let event_index = transaction
+                    .event_index
+                    .ok_or(AuditError::MissingEventIndex)?;
+                if let Some(merge) =
+                    confirmed_merge(transaction, event_index, confirmed, recovery.auditor)?
+                {
+                    found.known.apply_merge(merge);
+                }
+            }
         }
         let unsupported_deposits = self.deposited_utxos(&history, assets, &mut found)?;
-        let (spent, merges) = self
-            .follow_spends(indexer, origin, assets, &mut found)
-            .await?;
-        refuse_skipped(found.skipped)?;
+        for confirmed in &history {
+            if confirmed.1.requires_audit() {
+                self.audited_utxos(confirmed, owner_hash, assets, &mut found)?;
+            }
+        }
+        let spent = history
+            .iter()
+            .flat_map(|(transaction, _)| transaction.nullifiers.iter().copied())
+            .collect::<HashSet<_>>();
+        let merges = MergeRecovery {
+            ring: recovery.ring_program_id,
+            history: &history,
+            assets,
+            found: &mut found,
+        }
+        .recover(&self.source)?;
+        let unseen_inputs = found
+            .unseen_inputs
+            .iter()
+            .filter(|(hash, _)| {
+                found.known.get(hash).is_none() && found.known.merge_output(hash).is_none()
+            })
+            .map(|(_, nullifier)| *nullifier)
+            .collect();
         let mut unopened: Vec<_> = found
             .unresolved
             .into_iter()
@@ -251,7 +274,7 @@ impl<'a> MemberRecovery<'a> {
             unopened,
             unsupported_deposits,
             unknown_mints: found.unknown_mints,
-            unseen_inputs: found.unseen_inputs,
+            unseen_inputs,
         })
     }
 
@@ -282,7 +305,7 @@ impl<'a> MemberRecovery<'a> {
                 .inputs
                 .iter()
                 .filter(|input| input.opening.is_unseen())
-                .map(|input| input.nullifier),
+                .map(|input| (input.hash, input.nullifier)),
         );
         for error in &audited.payload_errors {
             // A mint the registry lacks reads here, another member's recovery goes on.
@@ -348,7 +371,6 @@ impl<'a> MemberRecovery<'a> {
         Ok(())
     }
 
-    /// The ring's deposits, and on an anonymous ring its merges, the notes a spend names by hash or prefix.
     async fn ring_history<I: AsyncRpc, O: TransactionOrigin>(
         &self,
         indexer: &I,
@@ -356,16 +378,16 @@ impl<'a> MemberRecovery<'a> {
     ) -> Result<Vec<(ShieldedTransaction, RingOrigin)>, AuditError> {
         let RingRecovery {
             ring_program_id,
-            mode,
             page_size,
             max_pages,
             indexer_config,
             ..
         } = self.recovery;
-        let kinds: &[ConfirmedEventKind] = match mode {
-            RingMode::Anonymous => &[ConfirmedEventKind::Deposit, ConfirmedEventKind::Merge],
-            RingMode::Confidential | RingMode::ConfidentialEscrow => &[ConfirmedEventKind::Deposit],
-        };
+        let kinds = &[
+            ConfirmedEventKind::Deposit,
+            ConfirmedEventKind::Merge,
+            ConfirmedEventKind::Transfer,
+        ];
         let page = RingHistory {
             ring: ring_program_id,
             kinds,
@@ -440,6 +462,22 @@ impl<'a> MemberRecovery<'a> {
                 if !opens {
                     return Err(AuditError::DepositOpeningMismatch);
                 }
+                found.known.insert(
+                    context.hash,
+                    KnownUtxo {
+                        owner_key: opening.owner_key,
+                        owner: UtxoOwner::Keyed {
+                            nullifier_pk: self.source.address.nullifier_pubkey,
+                        },
+                        asset: spr_hasher::primitives::hash_bytes(asset.as_array())?,
+                        mint: Some(asset),
+                        amount: output.amount,
+                        blinding: *opening.blinding,
+                        data_hash: hashes.data_hash.unwrap_or_default(),
+                        ring_data_hash: hashes.ring_data_hash.unwrap_or_default(),
+                        tree_id: context.tree_id,
+                    },
+                );
                 found.seen.insert(context.hash);
                 if mint.is_some() {
                     found.candidates.push(held);
@@ -451,150 +489,172 @@ impl<'a> MemberRecovery<'a> {
         }
         Ok(unsupported)
     }
+}
 
-    /// Spent nullifiers and the merges that spent the source's notes, each successor checked too.
-    async fn follow_spends<I: AsyncRpc, O: TransactionOrigin>(
-        &self,
-        indexer: &I,
-        origin: &O,
-        assets: &RingAssets,
-        found: &mut Found,
-    ) -> Result<(HashSet<[u8; 32]>, Vec<ShieldedTransaction>), AuditError> {
-        let ring = self.recovery.ring_program_id;
-        let mut nullifiers: Vec<_> = found
-            .candidates
-            .iter()
-            .map(|candidate| candidate.nullifier)
-            .chain(found.unresolved.iter().map(|(_, nullifier)| *nullifier))
-            .collect();
-        let mut spent = HashSet::new();
-        let mut merges: Vec<ShieldedTransaction> = Vec::new();
-        let mut merge_outputs = HashSet::new();
-        let mut remaining = self.recovery.max_pages.get();
-        let mut rows = RowOrigins {
-            origin,
-            ring,
-            skipped: Vec::new(),
+struct RecoveredMerge {
+    note: WalletUtxo,
+    opening: KnownUtxo,
+}
+
+impl RecoveredMerge {
+    fn from_note(note: WalletUtxo) -> Result<Self, AuditError> {
+        let opening = KnownUtxo {
+            owner_key: note.utxo.owner.confidential_view_tag()?,
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: note.nullifier_pubkey,
+            },
+            asset: spr_hasher::primitives::hash_bytes(note.utxo.asset.asset.as_array())?,
+            mint: Some(note.utxo.asset.asset),
+            amount: note.utxo.amount,
+            blinding: note.utxo.blinding,
+            data_hash: [0; 32],
+            ring_data_hash: note.ring_data_hash.unwrap_or_default(),
+            tree_id: note.tree_id,
         };
+        Ok(Self { note, opening })
+    }
+}
+
+struct MergeRecovery<'a, 'h> {
+    ring: Address,
+    history: &'h [(ShieldedTransaction, RingOrigin)],
+    assets: &'a RingAssets,
+    found: &'a mut Found,
+}
+
+impl<'h> MergeRecovery<'_, 'h> {
+    fn recover(
+        self,
+        source: &SourceMember<'_>,
+    ) -> Result<Vec<&'h ShieldedTransaction>, AuditError> {
+        let Self {
+            ring,
+            history,
+            assets,
+            found,
+        } = self;
+        let merges: Vec<_> = history
+            .iter()
+            .filter(|(transaction, origin)| {
+                origin.event.kind() == ConfirmedEventKind::Merge
+                    && transaction.output_slots.len() == 1
+                    && merge_circuit_width(transaction.nullifiers.len()).is_some()
+            })
+            .map(|(transaction, _)| transaction)
+            .collect();
+        let owner_hash = source.address.owner_hash()?;
         loop {
-            for mut transaction in self
-                .spend_history(indexer, &nullifiers, &mut remaining)
-                .await?
-            {
-                if transaction.ring_program_id != Some(ring) {
-                    continue;
-                }
-                let Some(confirmed) = rows.read(&transaction).await? else {
-                    continue;
-                };
-                if !confirmed.ring_invoked {
-                    continue;
-                }
-                confirmed.bind_transaction(&mut transaction, ring)?;
-                if !transaction
-                    .nullifiers
-                    .iter()
-                    .any(|nullifier| nullifiers.contains(nullifier))
-                {
-                    continue;
-                }
-                spent.extend(transaction.nullifiers.iter().copied());
-                if confirmed.event.kind() != crate::ConfirmedEventKind::Merge
-                    || transaction.output_slots.len() != 1
-                    || merge_circuit_width(transaction.nullifiers.len()).is_none()
-                    || merge_outputs.contains(&transaction.output_slots[0].output_context.hash)
-                {
-                    continue;
-                }
-                merge_outputs.insert(transaction.output_slots[0].output_context.hash);
-                merges.push(transaction);
-            }
-            let previous = found.candidates.len();
-            let previous_unresolved = found.unresolved.len();
+            let previous = found.seen.len();
+            let source_nullifiers = found.nullifiers();
             for transaction in &merges {
                 let output = &transaction.output_slots[0].output_context;
                 if found.seen.contains(&output.hash) {
                     continue;
                 }
-                let successor = merge_successor(&self.source, transaction, ring);
-                let mut successor = match successor {
-                    Ok(Some(successor)) => successor,
-                    Ok(None) => continue,
-                    Err(error) => {
-                        rows.skipped.push(SkippedRow::of(transaction, error)?);
-                        continue;
+                let inherited = found.known.merge_output(&output.hash).cloned();
+                let owned = inherited.as_ref().is_some_and(|merged| {
+                    merged.owner.hash(&merged.owner_key).ok() == Some(owner_hash)
+                });
+                if !owned
+                    && !transaction
+                        .nullifiers
+                        .iter()
+                        .any(|nullifier| source_nullifiers.contains(nullifier))
+                {
+                    continue;
+                }
+                let successor = match inherited {
+                    Some(mut merged) => {
+                        merged.mint = merged
+                            .mint
+                            .or_else(|| assets.by_field(&merged.asset).map(|mint| mint.asset));
+                        match merged.opening(ring, source.nullifier_key)? {
+                            Some(opening) if opening.owner_hash()? == owner_hash => {
+                                if let Some(mint) = opening.mint {
+                                    let utxo = Utxo {
+                                        ring_program_id: Some(ring),
+                                        ..source.utxo(
+                                            spr_transaction::Mint::new(mint, 0),
+                                            opening.amount,
+                                            opening.blinding,
+                                        )
+                                    };
+                                    Some(RecoveredMerge {
+                                        note: WalletUtxo {
+                                            nullifier: source
+                                                .nullifier_key
+                                                .nullifier(&output.hash, &opening.blinding)?,
+                                            utxo,
+                                            nullifier_pubkey: source.address.nullifier_pubkey,
+                                            utxo_hash: output.hash,
+                                            tx_viewing_key: None,
+                                            data_hash: None,
+                                            ring_data_hash: Some(opening.ring_data_hash),
+                                            tree_id: output.tree_id,
+                                            leaf_index: output.leaf_index,
+                                            latest_tree_id: None,
+                                            slot: transaction.slot,
+                                            tx_signature: transaction.tx_signature,
+                                            slot_index: 0,
+                                        },
+                                        opening,
+                                    })
+                                } else if let Some(note) =
+                                    merge_successor(source, transaction, ring)?
+                                {
+                                    Some(RecoveredMerge::from_note(note)?)
+                                } else {
+                                    found.seen.insert(output.hash);
+                                    found.unresolved.push((
+                                        output.hash,
+                                        source
+                                            .nullifier_key
+                                            .nullifier(&output.hash, &opening.blinding)?,
+                                    ));
+                                    continue;
+                                }
+                            }
+                            _ => None,
+                        }
                     }
+                    None => merge_successor(source, transaction, ring)?
+                        .map(RecoveredMerge::from_note)
+                        .transpose()?,
+                };
+                let Some(RecoveredMerge { mut note, opening }) = successor else {
+                    continue;
                 };
                 found.seen.insert(output.hash);
-                match assets.registry().mint(&successor.utxo.asset.asset) {
+                found.known.insert(output.hash, opening);
+                match assets.registry().mint(&note.utxo.asset.asset) {
                     Ok(mint) => {
-                        successor.utxo.asset = mint;
-                        found.candidates.push(successor);
+                        note.utxo.asset = mint;
+                        found.candidates.push(note);
                     }
                     Err(TransactionError::UnknownMint(mint)) => {
                         found.unknown_mints.insert(mint);
-                        found
-                            .unresolved
-                            .push((successor.utxo_hash, successor.nullifier));
+                        found.unresolved.push((note.utxo_hash, note.nullifier));
                     }
                     Err(error) => return Err(error.into()),
                 }
             }
-            if previous == found.candidates.len() && previous_unresolved == found.unresolved.len() {
-                found.skipped = rows.skipped;
-                return Ok((spent, merges));
+            if found.seen.len() == previous {
+                break;
             }
-            nullifiers = found.candidates[previous..]
-                .iter()
-                .map(|candidate| candidate.nullifier)
-                .chain(
-                    found.unresolved[previous_unresolved..]
+        }
+        let source_nullifiers = found.nullifiers();
+        Ok(merges
+            .into_iter()
+            .filter(|transaction| {
+                found
+                    .seen
+                    .contains(&transaction.output_slots[0].output_context.hash)
+                    || transaction
+                        .nullifiers
                         .iter()
-                        .map(|(_, nullifier)| *nullifier),
-                )
-                .collect();
-        }
-    }
-
-    /// Every transaction spending one of `nullifiers`, `remaining` bounds the queries.
-    async fn spend_history<I: AsyncRpc>(
-        &self,
-        indexer: &I,
-        nullifiers: &[[u8; 32]],
-        remaining: &mut usize,
-    ) -> Result<Vec<ShieldedTransaction>, AuditError> {
-        let config = self.recovery.indexer_config;
-        let mut transactions = Vec::new();
-        for batch in nullifiers.chunks(PAGE_LIMIT as usize) {
-            let budget = NonZeroUsize::new(*remaining).ok_or(AuditError::IncompleteScan)?;
-            let read = Cell::new(0);
-            let page = Pages {
-                position: HistoryPosition::default(),
-                max_pages: budget,
-                page_size: SPEND_PAGE_SIZE,
-            }
-            .read(|token, filters| {
-                read.set(read.get() + 1);
-                async move {
-                    indexer
-                        .get_shielded_transactions_by_nullifiers(
-                            batch.to_vec(),
-                            token,
-                            Some(SPEND_PAGE_SIZE.get()),
-                            filters,
-                            config,
-                        )
-                        .await
-                }
+                        .any(|nullifier| source_nullifiers.contains(nullifier))
             })
-            .await?;
-            *remaining -= read.get();
-            if page.next.is_some() {
-                return Err(AuditError::IncompleteScan);
-            }
-            transactions.extend(page.transactions);
-        }
-        Ok(transactions)
+            .collect())
     }
 }
 

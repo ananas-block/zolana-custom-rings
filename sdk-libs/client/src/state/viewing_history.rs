@@ -279,12 +279,11 @@ impl ViewingHistory {
         Ok(self)
     }
 
-    /// The current key reads `ring` from the slot `after_slot`, a watched ring keeps its position.
+    /// Existing ring positions remain unchanged.
     pub fn with_ring(mut self, ring: Address, after_slot: Option<u64>) -> Self {
-        self.current_mut()
-            .ring_positions
-            .entry(ring)
-            .or_insert(after_slot);
+        for entry in &mut self.entries {
+            entry.ring_positions.entry(ring).or_insert(after_slot);
+        }
         self
     }
 
@@ -765,6 +764,24 @@ mod tests {
         assert_eq!(added.current().viewing_pubkey(), rotated);
         assert_eq!(added.current().ring_positions()[&ring], None);
         assert_eq!(added.entries()[1].ring_positions()[&ring], Some(40));
+    }
+
+    #[test]
+    fn watching_a_ring_fills_absent_positions_and_preserves_existing_ones() {
+        let existing = Address::new_from_array([7; 32]);
+        let added = Address::new_from_array([8; 32]);
+        let history = ViewingHistory::new(ViewingKey::new().pubkey(), 10)
+            .with_ring(existing, Some(40))
+            .with_rotated_key(ViewingKey::new().pubkey(), 20)
+            .unwrap()
+            .with_ring(existing, Some(90))
+            .with_ring(added, Some(60));
+        assert_eq!(history.entries()[0].ring_positions()[&existing], Some(40));
+        assert_eq!(history.entries()[1].ring_positions()[&existing], None);
+        assert!(history
+            .entries()
+            .iter()
+            .all(|entry| entry.ring_positions()[&added] == Some(60)));
     }
 
     #[test]

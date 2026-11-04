@@ -28,7 +28,7 @@ pub struct GetUnspentUtxosRequest {
     pub auth: ReadAuth,
 }
 
-/// A provisional observation at `confirmed` commitment, a listed note reads "not seen spent through `coverage.through_slot`", never "unspent".
+/// Notes not seen spent through the finalized coverage boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetUnspentUtxosResponse {
@@ -45,7 +45,7 @@ pub struct GetUnspentUtxosResponse {
 pub struct Coverage {
     /// The first slot past the newest historical row, older notes are never covered.
     pub from_slot: u64,
-    /// At `confirmed` commitment, a later rollback goes undetected.
+    /// The completed finalized history boundary.
     pub through_slot: u64,
     /// False after a failed or partial pass, or while a spend or merge in the window has an input the auditor cannot name.
     pub complete: bool,

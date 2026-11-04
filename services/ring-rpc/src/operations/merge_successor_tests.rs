@@ -222,8 +222,43 @@ async fn a_confirmed_merge_successor_is_spendable_with_invalid_native_plaintext(
     assert_eq!(note.slot, fixture.transaction.slot);
     assert_eq!(note.tx_signature, fixture.transaction.tx_signature);
     assert!(store.utxo(&note.utxo_hash).is_none());
+    let mut audited = store.merged(&note.utxo_hash).unwrap();
+    assert!(audited.opening(RING, &fixture.key).unwrap().is_some());
+    audited.mint = Some(Address::new_from_array([7; 32]));
+    assert!(audited.opening(RING, &fixture.key).unwrap().is_none());
     store.spend([note.nullifier]);
     assert!(fixture.selected(&store).is_empty());
+}
+
+#[tokio::test]
+async fn a_merge_successor_becomes_spendable_after_its_mint_is_named() {
+    let fixture = MergeFixture::new().await;
+    let store = AuditStore::default();
+    let mut input = fixture.input;
+    input.utxo.mint = None;
+    store.record(fixture.created_in(), [input]);
+    let service = fixture.fixture.hub.service(None).unwrap();
+    let merge = confirmed_merge(
+        &fixture.transaction,
+        0,
+        &fixture.origin(),
+        service.auditor_keypair(),
+    )
+    .unwrap()
+    .unwrap();
+    apply_confirmed_merge(None, &store, merge).await.unwrap();
+    assert!(fixture.selected(&store).is_empty());
+
+    store.name_assets(&RingAssets::new([Mint::new(MINT, 7)]).unwrap());
+    let selected = fixture.selected(&store);
+    let [output] = selected.as_slice() else {
+        panic!("one merge output");
+    };
+    assert_eq!(
+        output.utxo_hash,
+        fixture.output.commitment(Some(RING)).unwrap()
+    );
+    assert_eq!(output.utxo.amount, fixture.output.amount);
 }
 
 #[tokio::test]
@@ -254,7 +289,7 @@ async fn a_merge_successor_waits_for_the_input_escrow_key() {
 }
 
 #[tokio::test]
-async fn a_merge_replay_restores_recovery_after_its_ledger_already_resolved() {
+async fn a_merge_replay_keeps_one_spendable_successor() {
     let fixture = MergeFixture::new().await;
     let service = fixture.fixture.hub.service(None).unwrap();
     let merge = confirmed_merge(
@@ -275,7 +310,7 @@ async fn a_merge_replay_restores_recovery_after_its_ledger_already_resolved() {
         )
         .await
         .unwrap();
-        assert!(fixture.selected(&restarted).is_empty());
+        assert_eq!(fixture.selected(&restarted).len(), 1);
         fixture.audit(&restarted).await;
         fixture.audit(&restarted).await;
         assert_eq!(fixture.selected(&restarted).len(), 1);

@@ -21,6 +21,7 @@ const merge: ConfirmedMerge = {
   treeId: 1,
   leafIndex: 0n,
   firstNullifier: hash,
+  ringDataHash: new Uint8Array(32) as Bytes32,
   inputs: [hash],
 };
 const initializedBeforeHooks = isPoseidonInitialized();

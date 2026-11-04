@@ -139,11 +139,14 @@ export interface AnonymousScan extends AnonymousRecovery {
 }
 
 /** A scan a sync issued and no absorb took, no copy carries a position past its notes. */
-const issuedScans = new WeakSet<AnonymousScan>();
+const issuedScans = new WeakMap<AnonymousScan, string>();
 
 /** @internal `AnonymousWallet.absorb` alone. */
-export function consumeScan(scan: AnonymousScan): void {
-  if (!issuedScans.delete(scan)) throw new RingError("RING_SCAN_CONSUMED");
+export function consumeScan(scan: AnonymousScan, history: ViewingHistory): void {
+  const original = issuedScans.get(scan);
+  if (original === undefined) throw new RingError("RING_SCAN_CONSUMED");
+  if (original !== history.toJson()) throw new RingError("RING_SCAN_HISTORY_CHANGED");
+  issuedScans.delete(scan);
 }
 
 export type AnonymousSyncClient = Pick<
@@ -262,7 +265,6 @@ export class AnonymousSync {
     context?: RequestContext,
   ): Promise<AnonymousScan> {
     const scan = this.#scan(client, history, context);
-    await scan.entries();
     await scan.recover(ring);
     return scan.result();
   }
@@ -376,6 +378,7 @@ class Scan {
   readonly #context: RequestContext | undefined;
   readonly #address: ShieldedAddress;
   readonly #ledger: NoteLedger;
+  readonly #originalHistory: string;
   #history: ViewingHistory;
 
   constructor(
@@ -389,6 +392,7 @@ class Scan {
     this.#context = context;
     this.#address = sync.keys.address();
     this.#ledger = new NoteLedger(sync.keys, sync.held);
+    this.#originalHistory = history.toJson();
     this.#history = history;
   }
 
@@ -483,7 +487,7 @@ class Scan {
       ...(await this.#ledger.recovery(this.#context)),
       history: this.#history,
     });
-    issuedScans.add(scan);
+    issuedScans.set(scan, this.#originalHistory);
     return scan;
   }
 

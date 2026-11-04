@@ -1,4 +1,4 @@
-import { historyCursor, historyCursorToken, nextHistoryToken } from "../../rpc/history.js";
+import { readRingHistory, scanLimits } from "../../rpc/history.js";
 import type { IndexerReader, KitRpcAccess } from "@heliuslabs/zolana/client";
 import {
   addressBytes,
@@ -57,10 +57,22 @@ import {
 import { deliveredSlotSecret, ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../../protocol/error.js";
-import type { MergeInput } from "../../state/merge-ledger.js";
+import {
+  MergeLedger,
+  mergeInputOf,
+  type AuditedMergeOutput,
+  type ConfirmedMerge,
+  type MergeInput,
+} from "../../state/merge-ledger.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
-import { RpcTransactionOrigin, type TransactionOrigin } from "../../protocol/transaction/origin.js";
-import { RowOrigins } from "./row-origins.js";
+import {
+  RpcTransactionOrigin,
+  type ConfirmedRingTransaction,
+  type TransactionOrigin,
+} from "../../protocol/transaction/origin.js";
+import { RowOrigins, rowEventIndex } from "./row-origins.js";
+import { confirmedMerge } from "./audit-merge.js";
+import { createdRingUtxos } from "../workflow/created-utxos.js";
 import { ringBlindingSeed, ringOutputBlinding } from "../../crypto/derivation/blinding.js";
 import { dummyUtxoHash, fieldUtxoHash } from "../../protocol/membership/utxo-hash.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
@@ -234,8 +246,12 @@ export interface KnownUtxos {
 
 export class KnownUtxoIndex implements KnownUtxos {
   readonly #utxos = new Map<string, KnownUtxo>();
+  readonly #merges = new MergeLedger();
 
-  constructor(utxos: Iterable<Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>> = []) {
+  constructor(
+    utxos: Iterable<Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>> = [],
+    private readonly fallback?: KnownUtxos,
+  ) {
     for (const { commitment, utxo } of utxos) this.insert(commitment, utxo);
   }
 
@@ -245,10 +261,32 @@ export class KnownUtxoIndex implements KnownUtxos {
     const kept = this.#utxos.get(key);
     if (kept !== undefined && (kept.mint !== undefined || utxo.mint === undefined)) return;
     this.#utxos.set(key, utxo);
+    this.#resolveMerges();
   }
 
   utxo(commitment: Bytes32): KnownUtxo | undefined {
-    return this.#utxos.get(bytesKey(commitment));
+    return this.#utxos.get(bytesKey(commitment)) ?? this.fallback?.utxo(commitment);
+  }
+
+  applyMerge(merge: ConfirmedMerge): void {
+    this.#merges.apply(merge, (commitment) => this.#mergeInput(commitment));
+  }
+
+  merged(commitment: Bytes32): MergeInput | undefined {
+    return this.#merges.output(commitment) ?? this.fallback?.merged?.(commitment);
+  }
+
+  mergeOutput(commitment: Bytes32): AuditedMergeOutput | undefined {
+    return this.#merges.output(commitment);
+  }
+
+  #resolveMerges(): void {
+    this.#merges.resolve((commitment) => this.#mergeInput(commitment));
+  }
+
+  #mergeInput(commitment: Bytes32): MergeInput | undefined {
+    const utxo = this.utxo(commitment);
+    return utxo === undefined ? this.fallback?.merged?.(commitment) : mergeInputOf(utxo);
   }
 }
 
@@ -573,76 +611,116 @@ export async function auditRing(
   context?: RequestContext,
 ): Promise<RingAuditPage> {
   await initializePoseidon();
-  const viewTag = auditorViewTag(input.auditor.publicKey());
-  const pageSize = input.pageSize ?? DEFAULT_PAGE_SIZE;
-  const maxPages = input.maxPages ?? DEFAULT_MAX_PAGES;
-  for (const [name, value] of [
-    ["pageSize", pageSize],
-    ["maxPages", maxPages],
-  ] as const) {
-    if (!Number.isSafeInteger(value) || value < 1)
-      throw new RingError("RING_RPC", {
-        details: { reason: "invalid scan limit", name, value },
-      });
-  }
-  const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
-  const rows = new RowOrigins(origin, input.ringProgramId, context);
-  const known = new ScanUtxos(input.knownUtxos);
-  const transactions: AuditedRingTransaction[] = [];
-  let assetsRefreshed = false;
-  let token = historyCursorToken(input.cursor, input.ringProgramId, "tags");
-  for (let page = 0; page < maxPages; page++) {
-    const response = await input.client.getShieldedTransactionsByTags(
-      {
-        tags: [viewTag],
-        limit: pageSize,
-        ...(token === undefined ? {} : { paginationToken: token }),
-      },
-      undefined,
-      context,
-    );
-    for (const indexed of response.data.flatMap((item) => item.events)) {
-      if (indexed.ringProgramId !== input.ringProgramId) continue;
-      const confirmed = await rows.read(indexed);
-      if (confirmed?.kind !== "transfer") continue;
-      const opened = rows.attempt(indexed, () =>
-        openRingTransfer({
-          auditor: input.auditor,
-          transaction: confirmed.transaction,
-          assets: input.assets,
-          layout: confirmed.layout,
-          inputTreeIds: confirmed.inputTreeIds,
-          knownUtxos: known,
-          ...(input.escrowedKeys === undefined ? {} : { escrowedKeys: input.escrowedKeys }),
-        }),
-      );
-      if (opened === undefined) continue;
-      let audited: AuditedRingTransaction | undefined = opened.audited;
-      if (!assetsRefreshed && hasUnknownAssets(audited)) {
-        assetsRefreshed = true;
-        for (const { assetId, mint } of await fetchSplAssetRegistrations(input.client, context))
-          input.assets.register(assetId, mint);
-        audited = rows.attempt(indexed, () => opened.withAssets(input.assets));
-        if (audited === undefined) continue;
-      }
-      known.add(audited);
-      transactions.push(audited);
-    }
-    const next = nextHistoryToken(token, response);
-    if (next === undefined)
-      return Object.freeze({
-        transactions: Object.freeze(transactions),
-        skipped: Object.freeze(rows.skipped),
-      });
-    token = next;
-  }
+  const rows = new RowOrigins(
+    input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc),
+    input.ringProgramId,
+    context,
+  );
+  const history: ConfirmedRingTransaction[] = [];
+  const { nextCursor } = await readRingHistory(
+    {
+      client: input.client,
+      ringProgramId: input.ringProgramId,
+      rows,
+      limits: scanLimits({
+        pageSize: input.pageSize ?? DEFAULT_PAGE_SIZE,
+        maxPages: input.maxPages ?? DEFAULT_MAX_PAGES,
+      }),
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+    },
+    (confirmed) => history.push(confirmed),
+    context,
+  );
+  const transactions = await auditConfirmedRingHistory(
+    { ...input, history, rows, known: new KnownUtxoIndex([], input.knownUtxos) },
+    context,
+  );
   return Object.freeze({
-    transactions: Object.freeze(transactions),
+    transactions,
     skipped: Object.freeze(rows.skipped),
-    ...(token === undefined
-      ? {}
-      : { nextCursor: historyCursor(input.ringProgramId, "tags", token) }),
+    ...(nextCursor === undefined ? {} : { nextCursor }),
   });
+}
+
+export async function auditConfirmedRingHistory(
+  input: Readonly<{
+    client: RingAuditReader;
+    auditor: X25519Keypair;
+    ringProgramId: Address;
+    assets: AssetRegistry;
+    escrowedKeys?: EscrowedKeys;
+    history: readonly ConfirmedRingTransaction[];
+    rows: RowOrigins;
+    known: KnownUtxoIndex;
+  }>,
+  context?: RequestContext,
+): Promise<readonly AuditedRingTransaction[]> {
+  const { known, rows } = input;
+  for (const confirmed of input.history) {
+    rows.attempt(confirmed.transaction, () => {
+      if (confirmed.kind === "deposit") {
+        for (const { commitment, utxo } of createdRingUtxos({
+          confirmed,
+          ringProgramId: input.ringProgramId,
+          auditor: input.auditor,
+        }))
+          known.insert(commitment, utxo);
+      } else if (confirmed.kind === "merge") {
+        const merge = confirmedMerge({
+          transaction: confirmed.transaction,
+          eventIndex: rowEventIndex(confirmed.transaction),
+          disclosure: confirmed.disclosure,
+          auditor: input.auditor,
+        });
+        if (merge !== undefined) known.applyMerge(merge);
+      }
+    });
+  }
+  const transactions: { audited: AuditedRingTransaction; anonymous: boolean }[] = [];
+  let assetsRefreshed = false;
+  for (const confirmed of input.history) {
+    if (confirmed.kind !== "transfer") continue;
+    const opened = rows.attempt(confirmed.transaction, () =>
+      openRingTransfer({
+        auditor: input.auditor,
+        transaction: confirmed.transaction,
+        assets: input.assets,
+        layout: confirmed.layout,
+        inputTreeIds: confirmed.inputTreeIds,
+        knownUtxos: known,
+        ...(input.escrowedKeys === undefined ? {} : { escrowedKeys: input.escrowedKeys }),
+      }),
+    );
+    if (opened === undefined) continue;
+    let audited: AuditedRingTransaction | undefined = opened.audited;
+    if (!assetsRefreshed && hasUnknownAssets(audited)) {
+      assetsRefreshed = true;
+      for (const { assetId, mint } of await fetchSplAssetRegistrations(input.client, context))
+        input.assets.register(assetId, mint);
+      audited = rows.attempt(confirmed.transaction, () => opened.withAssets(input.assets));
+      if (audited === undefined) continue;
+    }
+    for (const { commitment, utxo } of auditedUtxos(audited)) known.insert(commitment, utxo);
+    transactions.push({ audited, anonymous: confirmed.layout.key.kind === "commitment" });
+  }
+  return Object.freeze(
+    transactions.map(({ audited, anonymous }) => {
+      const first = audited.inputs[0]?.hash;
+      const sender = anonymous && first !== undefined ? knownSender(first, known) : audited.sender;
+      return Object.freeze({
+        ...audited,
+        ...(sender === undefined ? {} : { sender }),
+        inputs: Object.freeze(
+          audited.inputs.map((spent) =>
+            spent.hash === undefined ||
+            (spent.opening.kind !== "unseenHash" && spent.opening.kind !== "merged")
+              ? spent
+              : Object.freeze({ ...spent, opening: commitmentInput(spent.hash, known) }),
+          ),
+        ),
+      });
+    }),
+  );
 }
 
 /** The ring program encodes every exit under scheme 3, every other slot under its rail's scheme. */
@@ -758,28 +836,12 @@ export class TransferSlots {
     if (published.kind === "commitments") {
       const openings = published.hashes.map((hash): InputOpening => {
         if (hash === undefined) return DUMMY_INPUT;
-        const utxo = known?.utxo(hash);
-        if (utxo !== undefined) return ringInput(hash, utxo);
-        const merged = known?.merged?.(hash);
-        return merged === undefined
-          ? Object.freeze({ kind: "unseenHash", hash })
-          : Object.freeze({
-              kind: "merged",
-              ownerKey: merged.ownerKey,
-              asset: merged.asset,
-              ...(merged.mint === undefined ? {} : { mint: merged.mint }),
-              amount: merged.amount,
-            });
+        return commitmentInput(hash, known);
       });
       const first = published.hashes[0];
-      const zero = first === undefined ? undefined : (known?.utxo(first) ?? known?.merged?.(first));
-      // Spent UTXO 0 is the hidden owner's, its record names the sender on the anonymous rail alone.
       const sender =
-        spent.evidence.kind === "anonymous" && zero !== undefined
-          ? Object.freeze({
-              ownerKey: zero.ownerKey,
-              ...(zero.owner.kind === "keyed" ? { nullifierPk: zero.owner.nullifierPk } : {}),
-            })
+        spent.evidence.kind === "anonymous" && first !== undefined
+          ? knownSender(first, known)
           : undefined;
       return Object.freeze({
         ...(sender === undefined ? {} : { sender }),
@@ -1172,24 +1234,27 @@ class AuditRecord {
   }
 }
 
-class ScanUtxos implements KnownUtxos {
-  readonly #opened = new KnownUtxoIndex();
-  readonly #known: KnownUtxos | undefined;
+function commitmentInput(hash: Bytes32, known: KnownUtxos | undefined): InputOpening {
+  const utxo = known?.utxo(hash);
+  if (utxo !== undefined) return ringInput(hash, utxo);
+  const merged = known?.merged?.(hash);
+  return merged === undefined
+    ? Object.freeze({ kind: "unseenHash", hash })
+    : Object.freeze({
+        kind: "merged",
+        ownerKey: merged.ownerKey,
+        asset: merged.asset,
+        ...(merged.mint === undefined ? {} : { mint: merged.mint }),
+        amount: merged.amount,
+      });
+}
 
-  constructor(known: KnownUtxos | undefined) {
-    this.#known = known;
-  }
-
-  add(transaction: AuditedRingTransaction): void {
-    for (const { commitment, utxo } of auditedUtxos(transaction))
-      this.#opened.insert(commitment, utxo);
-  }
-
-  utxo(commitment: Bytes32): KnownUtxo | undefined {
-    return this.#opened.utxo(commitment) ?? this.#known?.utxo(commitment);
-  }
-
-  merged(commitment: Bytes32): MergeInput | undefined {
-    return this.#known?.merged?.(commitment);
-  }
+function knownSender(hash: Bytes32, known: KnownUtxos | undefined): AuditedSender | undefined {
+  const utxo = known?.utxo(hash) ?? known?.merged?.(hash);
+  return utxo === undefined
+    ? undefined
+    : Object.freeze({
+        ownerKey: utxo.ownerKey,
+        ...(utxo.owner.kind === "keyed" ? { nullifierPk: utxo.owner.nullifierPk } : {}),
+      });
 }

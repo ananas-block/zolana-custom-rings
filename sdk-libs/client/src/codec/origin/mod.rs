@@ -604,22 +604,51 @@ fn ring_withdrawals_of(
 #[cfg(all(test, feature = "solana-rpc"))]
 use rpc::confirmed_origin_for;
 #[cfg(feature = "solana-rpc")]
-pub use rpc::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
+pub use rpc::{confirmed_origin, ConfirmedRingOrigins, ORIGIN_TRANSACTION_CONFIG};
 
 #[cfg(feature = "solana-rpc")]
 mod rpc {
+    use std::collections::BTreeMap;
+
     use solana_address::Address;
     use solana_commitment_config::CommitmentConfig;
     use solana_rpc_client_api::config::RpcTransactionConfig;
     use solana_signature::Signature;
     use solana_transaction_status_client_types::{
-        EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage,
-        UiTransactionEncoding,
+        option_serializer::OptionSerializer, EncodedConfirmedTransactionWithStatusMeta,
+        EncodedTransaction, UiMessage, UiTransactionEncoding,
     };
     use spr_client::{AsyncSolanaRpc, Blocking, ConfirmedInstructionGroups, SolanaRpc};
 
-    use super::{ring_event_origin_in, RingOrigin, TransactionOrigin};
+    use super::{ring_event_origin_in, trusted_event_sources, RingOrigin, TransactionOrigin};
     use crate::AuditError;
+
+    pub struct ConfirmedRingOrigins {
+        pub signature: Signature,
+        pub transaction: EncodedConfirmedTransactionWithStatusMeta,
+        pub ring: Address,
+    }
+
+    impl ConfirmedRingOrigins {
+        pub fn read(mut self) -> Result<BTreeMap<u16, RingOrigin>, AuditError> {
+            validate_signature(self.signature, &self.transaction)?;
+            resolve_loaded_addresses(&mut self.transaction)?;
+            let signers = signers_of(&self.transaction);
+            let slot = self.transaction.slot;
+            let groups = ConfirmedInstructionGroups::try_from(self.transaction)?;
+            let mut origins = BTreeMap::new();
+            for (index, _) in trusted_event_sources(&groups.groups).enumerate() {
+                let index = u16::try_from(index).map_err(|_| {
+                    AuditError::InvalidConfirmedEvent("event index exceeds its range".into())
+                })?;
+                let mut origin = ring_event_origin_in(&groups.groups, index, self.ring)?;
+                origin.signers.clone_from(&signers);
+                origin.event = origin.event.with_slot(slot);
+                origins.insert(index, origin);
+            }
+            Ok(origins)
+        }
+    }
 
     /// A v1 transaction read back at a maximum version of 0 is an error, not the transaction.
     pub const ORIGIN_TRANSACTION_CONFIG: RpcTransactionConfig = RpcTransactionConfig {
@@ -651,16 +680,64 @@ mod rpc {
         event_index: u16,
         ring: Address,
     ) -> Result<RingOrigin, AuditError> {
-        if !matches!(&transaction.transaction.transaction,
+        validate_signature(signature, &transaction)?;
+        confirmed_origin(transaction, event_index, ring)
+    }
+
+    fn resolve_loaded_addresses(
+        transaction: &mut EncodedConfirmedTransactionWithStatusMeta,
+    ) -> Result<(), AuditError> {
+        let invalid =
+            || AuditError::InvalidConfirmedEvent("loaded account addresses disagree".into());
+        let EncodedTransaction::Json(encoded) = &mut transaction.transaction.transaction else {
+            return Err(invalid());
+        };
+        let UiMessage::Raw(message) = &mut encoded.message else {
+            return Err(invalid());
+        };
+        let lookups = message.address_table_lookups.as_deref().unwrap_or_default();
+        let writable = lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len())
+            .sum::<usize>();
+        let readonly = lookups
+            .iter()
+            .map(|lookup| lookup.readonly_indexes.len())
+            .sum::<usize>();
+        let Some(meta) = &mut transaction.transaction.meta else {
+            return Err(invalid());
+        };
+        let loaded = match &mut meta.loaded_addresses {
+            OptionSerializer::Some(loaded) => loaded,
+            OptionSerializer::None | OptionSerializer::Skip if writable == 0 && readonly == 0 => {
+                return Ok(())
+            }
+            OptionSerializer::None | OptionSerializer::Skip => return Err(invalid()),
+        };
+        if writable != loaded.writable.len() || readonly != loaded.readonly.len() {
+            return Err(invalid());
+        }
+        message.account_keys.append(&mut loaded.writable);
+        message.account_keys.append(&mut loaded.readonly);
+        message.address_table_lookups = None;
+        Ok(())
+    }
+
+    fn validate_signature(
+        signature: Signature,
+        transaction: &EncodedConfirmedTransactionWithStatusMeta,
+    ) -> Result<(), AuditError> {
+        if matches!(&transaction.transaction.transaction,
             EncodedTransaction::Json(ui)
                 if ui.signatures.first().is_some_and(|value| value == &signature.to_string()))
         {
-            return Err(unavailable(
+            Ok(())
+        } else {
+            Err(unavailable(
                 signature,
                 "confirmed transaction signature does not match the request",
-            ));
+            ))
         }
-        confirmed_origin(transaction, event_index, ring)
     }
 
     /// The first `num_required_signatures` keys, an unknown encoding names no signer.

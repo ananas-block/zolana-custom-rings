@@ -36,6 +36,7 @@ fn confirmed(id: u8, inputs: &[u8], output: u8) -> ConfirmedMerge {
         tree_id: 1,
         leaf_index: u64::from(id),
         first_nullifier: [id; 32],
+        ring_data_hash: [0; 32],
         inputs: ConfirmedMerge::real_inputs(
             &inputs.iter().map(|byte| [*byte; 32]).collect::<Vec<_>>(),
         ),

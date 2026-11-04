@@ -62,7 +62,7 @@ pub use crate::anonymous_wallet::{
     AnonymousWallet, PendingClaim, PendingNote, ANONYMOUS_WALLET_VERSION,
 };
 #[cfg(feature = "solana-rpc")]
-pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
+pub use crate::origin::{confirmed_origin, ConfirmedRingOrigins, ORIGIN_TRANSACTION_CONFIG};
 pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST};
 pub use crate::viewing_history::{
     AdvancedTag, StreamCounter, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,

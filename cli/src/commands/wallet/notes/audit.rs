@@ -5,7 +5,7 @@ use std::fmt;
 use anyhow::{Context as _, Result};
 use solana_address::Address;
 use zolana_ring_client::{
-    AuditError, AuditedTransaction, CreatedUtxoScan, OutputOpening, RingScan,
+    AuditError, AuditedTransaction, CreatedUtxoScan, KnownUtxoIndex, OutputOpening, RingScan,
 };
 
 use crate::{
@@ -36,20 +36,25 @@ pub fn run(ctx: &Context, args: AuditArgs) -> Result<()> {
         );
     }
     let chain = ctx.chain();
-    if config.mode == custom_ring_interface::RingMode::Anonymous {
+    {
         let created = ctx.block(
             CreatedUtxoScan::new(ctx.ring.program_id(), &auditor).run(chain.indexer(), chain.rpc()),
         )?;
         if created.next_cursor.is_some() {
             return Err(AuditError::IncompleteScan.into());
         }
-        scan = scan.with_known_utxos(
-            created
-                .utxos
-                .into_iter()
-                .map(|note| (note.commitment, note.utxo))
-                .collect(),
-        );
+        if let Some(skipped) = created.skipped.into_iter().next() {
+            return Err(skipped.error.into());
+        }
+        let mut known: KnownUtxoIndex = created
+            .utxos
+            .into_iter()
+            .map(|note| (note.commitment, note.utxo))
+            .collect();
+        for merge in created.merges {
+            known.apply_merge(merge);
+        }
+        scan = scan.with_known_utxos(known);
     }
     let page = ctx.block(scan.audit(&auditor, chain.indexer(), chain.rpc(), &assets))?;
     for transaction in &page.transactions {

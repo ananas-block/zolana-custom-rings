@@ -18,7 +18,7 @@ use spr_client::{
 };
 use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositOutput,
-    MergeOutputDataRef,
+    MergeOutputDataRef, OutputDataEncoding, MERGE_OUTPUT_SCHEME,
 };
 use spr_hasher::primitives::right_align;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
@@ -46,6 +46,7 @@ struct Fixture {
     sequence: Cell<u8>,
     confirmed: Mutex<Vec<(Signature, Vec<zolana_ring_client::ConfirmedDeposit>)>>,
     frames: Mutex<Vec<(Signature, Vec<u8>)>>,
+    merges: Mutex<Vec<(Signature, zolana_ring_client::ConfirmedMergeDisclosure)>>,
 }
 
 impl Fixture {
@@ -67,6 +68,7 @@ impl Fixture {
             sequence: Cell::new(0),
             confirmed: Mutex::new(Vec::new()),
             frames: Mutex::new(Vec::new()),
+            merges: Mutex::new(Vec::new()),
         }
     }
 
@@ -96,6 +98,7 @@ impl Fixture {
     ) -> Result<RecoveredNotes, AuditError> {
         *history.confirmed.lock().unwrap() = self.confirmed.lock().unwrap().clone();
         *history.frames.lock().unwrap() = self.frames.lock().unwrap().clone();
+        *history.merges.lock().unwrap() = self.merges.lock().unwrap().clone();
         recovery
             .run(history, history, &RingAssets::new([]).unwrap())
             .await
@@ -269,6 +272,47 @@ impl Fixture {
         (held, transaction)
     }
 
+    fn audited_merge(
+        &self,
+        inputs: &[WalletUtxo],
+        tree_id: u16,
+    ) -> (WalletUtxo, ShieldedTransaction) {
+        let (held, mut transaction) = self.merge(inputs, tree_id);
+        let width =
+            spr_transaction::instructions::merge::merge_circuit_width(transaction.nullifiers.len())
+                .unwrap();
+        let mut commitments: Vec<_> = inputs.iter().map(|input| input.utxo_hash).collect();
+        commitments.resize(width, [0; 32]);
+        let Some(OutputDataEncoding::Encrypted(blob)) = transaction.output_slots[0].output_data()
+        else {
+            panic!("merge output encoding");
+        };
+        let (&scheme, body) = blob.split_first().unwrap();
+        assert_eq!(scheme, MERGE_OUTPUT_SCHEME);
+        let (_, encrypted) = spr_event::split_merge_output_body(body).unwrap();
+        let (salt, _) = encrypted
+            .split_first_chunk::<{ spr_event::merge_output::MERGE_OUTPUT_SALT_LEN }>()
+            .unwrap();
+        let sealed = zolana_ring_client::MergeDisclosureEncryption::new(
+            &zolana_ring_client::MergeOpening {
+                input_commitments: commitments,
+            },
+            *salt,
+            &self.auditor.pubkey(),
+        )
+        .unwrap();
+        self.merges.lock().unwrap().push((
+            transaction.tx_signature,
+            zolana_ring_client::ConfirmedMergeDisclosure {
+                eph_pk: *sealed.eph_pk.as_bytes(),
+                ciphertext: sealed.ciphertext,
+                fields: sealed.fields,
+            },
+        ));
+        *transaction.output_slots[0].payload.last_mut().unwrap() ^= 1;
+        (held, transaction)
+    }
+
     fn deposit(
         &self,
         output: SppProofOutputUtxo,
@@ -410,6 +454,7 @@ struct History {
     queried: Mutex<Vec<Vec<[u8; 32]>>>,
     confirmed: Mutex<Vec<(Signature, Vec<zolana_ring_client::ConfirmedDeposit>)>>,
     frames: Mutex<Vec<(Signature, Vec<u8>)>>,
+    merges: Mutex<Vec<(Signature, zolana_ring_client::ConfirmedMergeDisclosure)>>,
     foreign: Vec<Signature>,
     confirmed_events: std::collections::HashMap<Signature, zolana_ring_client::ConfirmedEvent>,
     required_slots: Mutex<Vec<Option<u64>>>,
@@ -417,8 +462,8 @@ struct History {
     unread: Vec<Signature>,
     /// Signatures whose confirmed call does not decode.
     undecodable: Vec<Signature>,
-    /// Rows only a query by nullifier returns.
-    spends_only: Vec<ShieldedTransaction>,
+    additional_history: Vec<ShieldedTransaction>,
+    discovery_unavailable: bool,
 }
 
 const INDEXED: u64 = 100;
@@ -460,7 +505,9 @@ impl AsyncRpc for History {
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.read(config)?;
         assert_eq!(options.ring_program_id, RING);
-        Ok(self.page(self.transactions.clone()))
+        let mut rows = self.transactions.clone();
+        rows.extend(self.additional_history.clone());
+        Ok(self.page(rows))
     }
     async fn get_shielded_transactions_by_tags(
         &self,
@@ -470,6 +517,9 @@ impl AsyncRpc for History {
         _filters: HistoryFilters,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        if self.discovery_unavailable {
+            return Err(ClientError::Rpc("discovery disabled".to_owned()));
+        }
         self.read(config)?;
         Ok(self.page(
             self.transactions
@@ -496,12 +546,15 @@ impl AsyncRpc for History {
         _filters: HistoryFilters,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByNullifiersResponse, ClientError> {
+        if self.discovery_unavailable {
+            return Err(ClientError::Rpc("discovery disabled".to_owned()));
+        }
         self.read(config)?;
         self.queried.lock().unwrap().push(nullifiers.clone());
         Ok(self.page(
             self.transactions
                 .iter()
-                .chain(&self.spends_only)
+                .chain(&self.additional_history)
                 .filter(|tx| {
                     tx.nullifiers
                         .iter()
@@ -554,7 +607,13 @@ impl TransactionOrigin for History {
                 .find(|(key, _)| *key == signature)
                 .map(|(_, bindings)| bindings.clone())
                 .unwrap_or_default(),
-            merge_disclosure: None,
+            merge_disclosure: self
+                .merges
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(key, _)| *key == signature)
+                .map(|(_, disclosure)| disclosure.clone()),
             transact: self
                 .frames
                 .lock()
@@ -662,7 +721,7 @@ async fn the_spend_read_goes_past_a_row_that_does_not_decode_and_the_recovery_th
         transactions: vec![tx.clone()],
         undecodable: vec![bad.tx_signature],
         unread: vec![unreachable.tx_signature],
-        spends_only: vec![bad.clone(), unreachable],
+        additional_history: vec![bad.clone(), unreachable],
         ..Default::default()
     };
     assert!(matches!(
@@ -672,7 +731,7 @@ async fn the_spend_read_goes_past_a_row_that_does_not_decode_and_the_recovery_th
     let history = History {
         transactions: vec![tx],
         undecodable: vec![bad.tx_signature],
-        spends_only: vec![bad],
+        additional_history: vec![bad],
         ..Default::default()
     };
     assert!(matches!(
@@ -728,12 +787,7 @@ async fn follows_chained_merges_across_trees_and_keeps_only_the_live_successor()
         .expect("recover");
     assert_eq!(recovered.utxos, vec![successor.clone()]);
     assert!(recovered.unopened.is_empty());
-    assert!(history
-        .queried
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|query| query.contains(&successor.nullifier)));
+    assert!(history.queried.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -915,7 +969,7 @@ async fn every_read_requires_the_slot_and_an_indexer_behind_it_fails_the_recover
         .expect("recover");
     assert_eq!(recovered.utxos, vec![merged]);
     let required = std::mem::take(&mut *history.required_slots.lock().unwrap());
-    assert!(required.len() >= 3, "{required:?}");
+    assert_eq!(required, [Some(INDEXED)]);
     assert!(required.iter().all(|slot| *slot == Some(INDEXED)));
 
     assert!(matches!(
@@ -925,11 +979,11 @@ async fn every_read_requires_the_slot_and_an_indexer_behind_it_fails_the_recover
 }
 
 #[tokio::test]
-async fn a_query_bound_never_returns_an_unchecked_merge_successor() {
+async fn a_terminal_history_page_recovers_merge_successors_at_the_page_cap() {
     let fixture = Fixture::new();
     let (first, first_tx) = fixture.encrypt(fixture.output(4), 2);
     let (second, second_tx) = fixture.encrypt(fixture.output(5), 2);
-    let (_, merge_tx) = fixture.merge(&[first, second], 7);
+    let (merged, merge_tx) = fixture.merge(&[first, second], 7);
     let history = History {
         transactions: vec![first_tx, second_tx, merge_tx],
         ..Default::default()
@@ -940,10 +994,9 @@ async fn a_query_bound_never_returns_an_unchecked_merge_successor() {
             address: &fixture.address,
             nullifier_key: &fixture.member.nullifier_key,
         });
-    assert!(matches!(
-        fixture.run(recovery, &history).await,
-        Err(AuditError::IncompleteScan)
-    ));
+    let recovered = fixture.run(recovery, &history).await.unwrap();
+    assert_eq!(recovered.utxos, [merged]);
+    assert!(history.queried.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -983,12 +1036,7 @@ async fn unknown_audited_deposit_mints_remain_unresolved_without_hiding_other_ut
     assert_eq!(recovered.unopened, vec![unknown.utxo_hash]);
     assert!(recovered.unsupported_deposits.is_empty());
     assert_eq!(recovered.unknown_mints, [mint.asset].into_iter().collect());
-    assert!(history
-        .queried
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|batch| batch.contains(&unknown.nullifier)));
+    assert!(history.queried.lock().unwrap().is_empty());
 
     let assets = RingAssets::new([mint]).unwrap();
     let recovered = fixture
@@ -1206,12 +1254,7 @@ async fn unknown_merge_mints_remain_unresolved_and_still_follow_spends() {
     assert!(recovered.utxos.is_empty());
     assert_eq!(recovered.unopened, vec![merged.utxo_hash]);
     assert_eq!(recovered.unknown_mints, [mint.asset].into_iter().collect());
-    assert!(history
-        .queried
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|batch| batch.contains(&merged.nullifier)));
+    assert!(history.queried.lock().unwrap().is_empty());
     let assets = RingAssets::new([mint]).unwrap();
     let recovered = fixture
         .recovery()
@@ -1277,4 +1320,62 @@ async fn an_anonymous_spend_of_deposits_under_the_commitment_key_leaves_the_chan
     let gap = fixture.run(fixture.recovery(), &unseen).await.unwrap();
     assert_eq!(gap.utxos, [change]);
     assert_eq!(gap.unseen_inputs, [unseen_nullifier]);
+}
+
+#[tokio::test]
+async fn complete_history_recovers_proved_merge_chains_with_invalid_native_ciphertext() {
+    for reverse in [false, true] {
+        let fixture = Fixture::anonymous();
+        let (first, first_tx) = fixture.deposit(fixture.output(4), 2);
+        let (second, second_tx) = fixture.deposit(fixture.output(5), 2);
+        let (third, third_tx) = fixture.deposit(fixture.output(6), 7);
+        let (merged, merge_tx) = fixture.audited_merge(&[first, second], 7);
+        let (successor, successor_tx) = fixture.audited_merge(&[merged, third], 9);
+        let mut transactions = vec![first_tx, second_tx, third_tx, merge_tx, successor_tx];
+        if reverse {
+            transactions.reverse();
+        }
+        let history = History {
+            transactions,
+            discovery_unavailable: true,
+            ..Default::default()
+        };
+        let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+        assert_eq!(recovered.utxos, [successor]);
+        assert!(recovered.unopened.is_empty());
+        assert!(history.queried.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_transfer_after_a_proved_merge_resolves_its_input_from_complete_history() {
+    let fixture = Fixture::anonymous();
+    let (first, first_tx) = fixture.deposit(fixture.output(4), 2);
+    let (second, second_tx) = fixture.deposit(fixture.output(5), 2);
+    let (merged, merge_tx) = fixture.audited_merge(&[first, second], 7);
+    let (change, spend_tx) = fixture.anonymous_spend(&[&merged], 9, 7);
+    let history = History {
+        transactions: vec![spend_tx, merge_tx, second_tx, first_tx],
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert_eq!(recovered.utxos, [change]);
+    assert!(recovered.unseen_inputs.is_empty());
+    assert!(recovered.unopened.is_empty());
+}
+
+#[tokio::test]
+async fn proved_merge_metadata_must_rebuild_the_confirmed_output() {
+    let fixture = Fixture::anonymous();
+    let (first, first_tx) = fixture.deposit(fixture.output(4), 2);
+    let (second, second_tx) = fixture.deposit(fixture.output(5), 2);
+    let (_, mut merge_tx) = fixture.audited_merge(&[first, second], 7);
+    merge_tx.output_slots[0].output_context.hash = field(91);
+    let history = History {
+        transactions: vec![first_tx, second_tx, merge_tx],
+        ..Default::default()
+    };
+    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert!(recovered.utxos.is_empty());
+    assert_eq!(recovered.unopened, [field(91)]);
 }

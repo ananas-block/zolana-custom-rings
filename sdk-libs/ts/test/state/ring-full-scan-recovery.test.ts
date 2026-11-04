@@ -67,7 +67,25 @@ describe("full scan recovery", () => {
     indexer.publish(wrong);
     expect((await bob.sync(indexer, bob.fresh())).utxos).toEqual([]);
     expect((await alice.sync(indexer, alice.fresh())).utxos).toEqual([]);
-    const recovered = await recover(bob, indexer);
+    const byTag = vi.fn(async () => {
+      throw new Error("tag reads unavailable");
+    });
+    const byNullifier = vi.fn(async () => {
+      throw new Error("nullifier reads unavailable");
+    });
+    const history = (await ViewingHistory.create(bob.viewingKey, 0n).requestTag(bob.keys)).history;
+    const recovered = await AnonymousSync.create(bob.keys, ASSETS).fullScan(
+      {
+        ...indexer.client(),
+        getEncryptedUtxosByTags: byTag,
+        getShieldedTransactionsByNullifiers: byNullifier,
+      },
+      history,
+      RING,
+    );
+    expect(byTag).not.toHaveBeenCalled();
+    expect(byNullifier).not.toHaveBeenCalled();
+    expect(recovered.history.current().request).toEqual(history.current().request);
     expect(found(recovered)).toEqual([hex(output(wrong, 1))]);
     expect(recovered.found[0]?.stream).toEqual({ kind: "fullScan" });
     expect((await recover(alice, indexer)).utxos.map((note) => note.utxo.amount)).toEqual([70n]);

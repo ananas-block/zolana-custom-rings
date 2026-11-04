@@ -59,6 +59,10 @@ impl<T: Borrow<KnownUtxo>> KnownUtxos for KnownUtxoIndex<T> {
     fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
         self.get(commitment).map(|record| *record.borrow())
     }
+
+    fn merged(&self, commitment: &[u8; 32]) -> Option<MergeInput> {
+        self.merge_output(commitment).map(MergeInput::from)
+    }
 }
 
 /// The nullifier key each registered owner escrows, keyed by its raw Solana key.
@@ -523,26 +527,6 @@ impl Transfer<'_> {
         } = spent;
         match evidence {
             AuditEvidence::InputHashes(hashes) => {
-                let opening = |hash: &[u8; 32]| {
-                    if *hash == [0; 32] {
-                        return InputOpening::Dummy;
-                    }
-                    known
-                        .and_then(|known| {
-                            known
-                                .utxo(hash)
-                                .map(|utxo| InputOpening::Opened(ring_input(*hash, utxo)))
-                                .or_else(|| {
-                                    known.merged(hash).map(|input| {
-                                        InputOpening::Merged(MergedInput {
-                                            commitment: *hash,
-                                            input,
-                                        })
-                                    })
-                                })
-                        })
-                        .unwrap_or(InputOpening::UnseenHash { hash: *hash })
-                };
                 // The commitment key's sender is input 0's owner, the circuit holds it real.
                 let sender = match key {
                     AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. }) => {
@@ -558,7 +542,7 @@ impl Transfer<'_> {
                         .map(|(nullifier, hash)| AuditedInput {
                             nullifier: *nullifier,
                             hash: *hash,
-                            opening: opening(hash),
+                            opening: known_input(known, hash),
                         })
                         .collect(),
                 })
@@ -638,6 +622,27 @@ impl Transfer<'_> {
     }
 }
 
+fn known_input(known: Option<&dyn KnownUtxos>, hash: &[u8; 32]) -> InputOpening {
+    if *hash == [0; 32] {
+        return InputOpening::Dummy;
+    }
+    known
+        .and_then(|known| {
+            known
+                .utxo(hash)
+                .map(|utxo| InputOpening::Opened(ring_input(*hash, utxo)))
+                .or_else(|| {
+                    known.merged(hash).map(|input| {
+                        InputOpening::Merged(MergedInput {
+                            commitment: *hash,
+                            input,
+                        })
+                    })
+                })
+        })
+        .unwrap_or(InputOpening::UnseenHash { hash: *hash })
+}
+
 fn ring_input(commitment: [u8; 32], utxo: KnownUtxo) -> AuditedInputOpening {
     AuditedInputOpening {
         asset: utxo.asset,
@@ -715,6 +720,28 @@ impl UnresolvedOutput {
 }
 
 impl AuditedTransaction {
+    pub(crate) fn resolve_inputs(&mut self, known: &dyn KnownUtxos, key: AuditKey) {
+        for input in &mut self.inputs {
+            if matches!(
+                input.opening,
+                InputOpening::UnseenHash { .. } | InputOpening::Merged(_)
+            ) {
+                input.opening = known_input(Some(known), &input.hash);
+            }
+        }
+        if self.sender.is_none()
+            && matches!(
+                key,
+                AuditKey::Anonymous(AnonymousAuditKey::Commitment { .. })
+            )
+        {
+            self.sender = self
+                .inputs
+                .first()
+                .and_then(|input| known.sender_of(&input.hash));
+        }
+    }
+
     /// Retries only the key and asset lookups, no disclosure or input opens again.
     pub fn resolve(
         &mut self,

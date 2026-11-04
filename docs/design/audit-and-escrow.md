@@ -70,15 +70,12 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 
 ## Reading through Ring RPC
 
-- Ring RPC binds every audited row to the confirmed SPP event it rebuilds from the chain.
-- Photon is trusted for completeness. A row Photon omits never reaches a reader.
+- Ring RPC enumerates finalized signatures from an archival Solana RPC and binds each indexed event to the canonical transaction.
+- Missing or altered indexed events stop the page before coverage advances.
 - No nullifier secret leaves Ring RPC.
-- `getUnspentUtxos` lists what the auditor opened and has not seen spent, beside the slots it covers. Each note reads only as not seen spent through `through_slot`.
-- The read is a provisional observation at `confirmed` commitment. Photon has no rollback path, so an orphaned spend can hide a valid note and an orphaned output can appear available.
-- A stale Photon row is not repaired by waiting until its slot is finalized.
-- No authoritative balance, limit decision or debit reservation reads it.
-- Merge selection reads the same spent mirror, so a stale spend can hide valid funds from merge selection. Ring RPC has no rollback detection and no reconciliation.
-- `through_slot` is the backfill's last terminal page context. `complete` holds only while the latest pass reached a final page with nothing unresolved, and any failed or partial pass makes it false.
+- `getUnspentUtxos` lists opened notes not seen spent through `through_slot`, within the reported coverage window.
+- No limit decision or debit reservation reads the balance response.
+- `through_slot` is the completed finalized snapshot. `complete` requires a terminal page with no unresolved input, and a failed or partial pass clears it.
 - A wallet-scoped read gets an incomplete-coverage indicator and no unrelated decrypted commitments. Detailed unresolved rows go only to a grant that authorizes them.
 - Coverage starts past the newest historical row, so an older note is never reported as covered. A spend of an older note has an unnamed input, and `complete` stays false.
 

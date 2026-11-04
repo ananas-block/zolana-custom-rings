@@ -1,5 +1,5 @@
 import { address, type Signature } from "@solana/kit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Data,
   LocalShieldedKeys,
@@ -7,11 +7,17 @@ import {
   ShieldedKeypair,
   Utxo,
   ViewingKey,
+  syncWallet,
   type Bytes16,
   type Bytes32,
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
-import { AssetRegistry, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import { bytesKey } from "@heliuslabs/zolana/internal";
+import {
+  AssetRegistry,
+  Wallet,
+  type IndexedShieldedTransaction,
+} from "@heliuslabs/zolana/transaction";
 
 import {
   encodeRingOutput,
@@ -20,7 +26,7 @@ import {
 } from "../../src/protocol/transaction/output.js";
 import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
-import { openRingNotes } from "../../src/state/ring-sync.js";
+import { openRingNotes, syncRingWallet, type RingSyncClient } from "../../src/state/ring-sync.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
@@ -161,5 +167,158 @@ describe("openRingNotes", () => {
       delivered(recipient, unregistered),
     ]);
     expect(notes).toEqual({ utxos: [], pending: 1 });
+  });
+});
+
+function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
+  return {
+    getEncryptedUtxosByTags: vi.fn<RingSyncClient["getEncryptedUtxosByTags"]>(async () => ({
+      context: { slot: 20n, blockTime: 0n },
+      data: [],
+      paginationToken: null,
+    })),
+    getShieldedTransactionsByTags: vi.fn<RingSyncClient["getShieldedTransactionsByTags"]>(
+      async (request) => ({
+        context: { slot: 20n, blockTime: 0n },
+        data: transactions
+          .filter((tx) => tx.slot > (request.filters?.slot?.gt ?? 0n))
+          .map((tx) => ({ slot: tx.slot, signature: tx.txSignature, events: [tx] })),
+        paginationToken: null,
+      }),
+    ),
+    getShieldedTransactionsByNullifiers: vi.fn<
+      RingSyncClient["getShieldedTransactionsByNullifiers"]
+    >(async () => ({ context: { slot: 20n, blockTime: 0n }, data: [], paginationToken: null })),
+  };
+}
+
+describe("syncRingWallet", () => {
+  it("counts ring notes and reads stable tags once per sync", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    const retry = { numRetries: 2, delayMs: 1n, maxDelayMs: 2n };
+    const context = { signal: new AbortController().signal };
+    const input = {
+      wallet,
+      keys,
+      client,
+      config: { requireSlot: 7n, retry, queryChunk: 3, pageLimit: 5 },
+    };
+
+    const report = await syncRingWallet(input, context);
+
+    expect(report.storedUtxos).toBe(1);
+    expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
+    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(1);
+    expect(client.getEncryptedUtxosByTags).toHaveBeenCalledTimes(1);
+    expect(client.getShieldedTransactionsByTags.mock.calls[0]).toEqual([
+      expect.objectContaining({ limit: 5 }),
+      { poll: retry, requireSlot: 7n },
+      context,
+    ]);
+    expect(client.getShieldedTransactionsByNullifiers.mock.calls[0]).toEqual([
+      expect.objectContaining({ limit: 5, nullifiers: [wallet.utxos()[0]?.nullifier] }),
+      { poll: retry, requireSlot: 7n },
+      context,
+    ]);
+    const tag = bytesKey(keys.viewingPublicKeys()[0]!.u());
+    expect(wallet._syncCheckpoint("transactions", tag)).toBe(20n);
+    expect(wallet._syncCheckpoint("proofless", tag)).toBe(20n);
+
+    const second = await syncRingWallet(input, context);
+
+    expect(second.storedUtxos).toBe(0);
+    expect(wallet.utxos()).toHaveLength(1);
+    expect(client.getShieldedTransactionsByTags).toHaveBeenCalledTimes(2);
+    expect(client.getShieldedTransactionsByTags.mock.calls[1]?.[0].filters).toBeUndefined();
+  });
+
+  it("reads ring notes below an existing core checkpoint", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    await syncWallet({ wallet, keys, client });
+    const tag = bytesKey(keys.viewingPublicKeys()[0]!.u());
+    expect(wallet._syncCheckpoint("transactions", tag)).toBe(20n);
+    expect(wallet.utxos()).toEqual([]);
+
+    const report = await syncRingWallet({ wallet, keys, client });
+
+    expect(report.storedUtxos).toBe(1);
+    expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
+    expect(client.getShieldedTransactionsByTags.mock.calls[1]?.[0].filters).toBeUndefined();
+  });
+
+  it("reads delivered history after ring derivation keys become available", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    await syncRingWallet({ wallet, keys: LocalShieldedKeys.fromKeypair(recipient), client });
+    expect(wallet.utxos()).toEqual([]);
+
+    const report = await syncRingWallet({
+      wallet,
+      keys: LocalRingKeys.fromKeypair(recipient),
+      client,
+    });
+
+    expect(report.storedUtxos).toBe(1);
+    expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
+  });
+
+  it("keeps the wallet unchanged when a ring spend read fails", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    const failure = new Error("unavailable");
+    client.getShieldedTransactionsByNullifiers.mockRejectedValueOnce(failure);
+    const before = wallet._state();
+    const revision = wallet._revision;
+
+    await expect(syncRingWallet({ wallet, keys, client })).rejects.toBe(failure);
+
+    expect(wallet._state()).toEqual(before);
+    expect(wallet._revision).toBe(revision);
+    expect(wallet.lastSynced).toBe(0n);
+    expect(wallet._checkpointEntries("transactions")).toEqual([]);
+    expect(wallet._checkpointEntries("proofless")).toEqual([]);
+  });
+
+  it("keeps the wallet unchanged when ring nullifier derivation fails", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([delivered(recipient)]);
+    vi.spyOn(keys, "derive").mockResolvedValue([]);
+    const before = wallet._state();
+
+    await expect(syncRingWallet({ wallet, keys, client })).rejects.toMatchObject({
+      code: "WALLET_KEYS_BATCH_MISMATCH",
+    });
+
+    expect(wallet._state()).toEqual(before);
+    expect(wallet._checkpointEntries("transactions")).toEqual([]);
+    expect(client.getShieldedTransactionsByNullifiers).not.toHaveBeenCalled();
+  });
+
+  it("retains unread positions while a ring mint remains unresolved", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const keys = LocalRingKeys.fromKeypair(recipient);
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const unknownHash = new Uint8Array(32).fill(1) as Bytes32;
+    const client = syncClient([delivered(recipient, unknownHash)]);
+    const before = wallet._state();
+
+    await expect(syncRingWallet({ wallet, keys, client })).rejects.toMatchObject({
+      code: "WALLET_UNRESOLVED_ASSET",
+    });
+
+    expect(wallet._state()).toEqual(before);
+    expect(wallet._checkpointEntries("transactions")).toEqual([]);
+    expect(wallet._checkpointEntries("proofless")).toEqual([]);
   });
 });

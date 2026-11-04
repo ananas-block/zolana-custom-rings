@@ -23,6 +23,8 @@ mod enrolment;
 mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;
+#[path = "rpc/finalized_history.rs"]
+mod finalized_history;
 #[path = "storage/grant_rows.rs"]
 mod grant_rows;
 #[path = "security/grants.rs"]

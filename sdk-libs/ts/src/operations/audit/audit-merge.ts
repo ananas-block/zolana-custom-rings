@@ -195,6 +195,7 @@ export function confirmedMerge(
     treeId: outputTreeId(slot.outputContext),
     leafIndex: slot.outputContext.leafIndex,
     firstNullifier,
+    ringDataHash,
     inputs: realMergeInputs(list, transaction.nullifiers.length),
   });
 }

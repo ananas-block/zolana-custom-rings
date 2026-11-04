@@ -274,11 +274,6 @@ impl RingScan {
         self
     }
 
-    pub(crate) fn indexer_config(mut self, config: Option<IndexerRpcConfig>) -> Self {
-        self.indexer_config = config;
-        self
-    }
-
     pub async fn run<I: AsyncRpc, O: TransactionOrigin>(
         self,
         indexer: &I,
@@ -314,26 +309,33 @@ impl RingScan {
         for (transaction, confirmed) in &page.transactions {
             let opened = confirmed.audit_stream(mode).and_then(|layout| {
                 let trees = confirmed.event.input_tree_ids(transaction);
-                TransactionAudit::new(transaction, layout)
+                let audited = TransactionAudit::new(transaction, layout)
                     .with_input_trees(&trees)?
                     .with_known_utxos(&known)
                     .with_escrowed_keys(&escrowed)
-                    .run(auditor, assets)
+                    .run(auditor, assets)?;
+                Ok((audited, layout.key))
             });
             match opened {
-                Ok(audited) => {
+                Ok((audited, key)) => {
                     known.extend(
                         audited
                             .utxos()
                             .map(|created| (created.commitment, created.utxo)),
                     );
-                    transactions.push(audited);
+                    transactions.push((audited, key));
                 }
                 Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
             }
         }
         Ok(ScanPage {
-            transactions,
+            transactions: transactions
+                .into_iter()
+                .map(|(mut audited, key)| {
+                    audited.resolve_inputs(&known, key);
+                    audited
+                })
+                .collect(),
             next_cursor: page.next_cursor,
             skipped,
         })

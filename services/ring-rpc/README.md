@@ -197,25 +197,23 @@ A transfer's evidence names every spent note by its full hash. The service reads
 
 A transaction that carries the auditor view tag but did not run under this ring is not reported. It reaches neither the audited items nor the skipped rows, and the page cursor still advances past it, so an empty page is not the end of the history.
 
-Photon supplies transaction discovery. Ring RPC fetches each candidate from Solana RPC and requires successful execution with the ring as SPP's direct caller. It reconstructs the exact SPP event and checks the indexed UTXO hashes, ciphertext, viewing metadata, nullifiers and output positions against it. Recovery applies the same check to deposits, merges and spend-query responses. Transfer proofs are enforced by the confirmed on-chain execution.
+Ring RPC enumerates finalized ring signatures from an archival Solana RPC. It requires each expected SPP event exactly once in Photon and binds the indexed fields to the canonical transaction. Missing, repeated or altered events stop the page before coverage advances. The service requires successful execution with the ring as SPP's direct caller.
 
-Clients of Ring RPC trust the configured service to perform these checks. Rebuilding the UTXO hashes of the returned openings alone does not independently authenticate chain history.
+Clients trust the configured service and archival RPC for complete chain history. Rebuilding returned UTXO commitments alone does not authenticate that history. Initial signature discovery reads and stores the requested history range. The service reuses the snapshot during pagination and appends newer finalized signatures on the next scan.
 
-The chain RPC remains trusted for confirmed contents. Photon remains trusted for complete history. These checks detect changed contents, but cannot prove that an indexer omitted no transaction. Rows that fail event binding or disclosure checks appear in `skipped`, as does a row whose confirmed instruction does not decode, and the backfill goes past them. A failed chain lookup or a confirmed call stack that names no parent returns an error and the backfill stays at its position. A confirmed transfer without its auditor message appears in `skipped` on a read, and the backfill stays at its position. An output whose fields opened but whose escrowed key or mint is not known yet is held in memory with the notes, and it enters the store when a new registry root or asset registry rebuilds its commitment. The backfill goes past its row, and only a restart reads the row again. Only a nullifier of a row bound to its confirmed event marks a note spent.
+Disclosure errors leave unresolved history. An output waits for a missing escrow key or mint, and new registry data can complete its opening. Only a finalized event marks a note spent.
 
-`getAuditedMerges` checks each confirmed merge against the chain and opens its disclosure with the auditor key. The disclosure names every input commitment. An output with every input known reads as a record of its inherited owner and asset and the sum of its inputs. It carries no wallet opening. An unknown input leaves the merge unresolved until the note opens, through descendants to a fixed point. Each confirmed merge applies once.
+`getAuditedMerges` opens the proved input list of each finalized merge. Known inputs supply the output's owner, asset and total. The result is an audit record. A nullifier secret also permits a wallet opening after its full commitment verifies. Missing inputs hold the merge and its descendants unresolved until the inputs become known.
 
 ## Balance status
 
-`getUnspentUtxos` returns a provisional observation at `confirmed` commitment. A listed note reads "not seen spent through `coverage.through_slot`", never "unspent", and a note outside the window from `coverage.from_slot` to `coverage.through_slot` is not listed. `coverage.complete` is true only while the latest pass reached a final page and no row in the window has an input the auditor cannot name.
+`getUnspentUtxos` lists notes not seen spent through the finalized `coverage.through_slot`. Notes outside the reported coverage window are excluded. `coverage.complete` requires a terminal page and no unresolved input in that window. Activity after the boundary can spend a listed note.
 
 A wallet read names the owner the wallet grant covers. It gets `coverage` and an empty `unresolved`, because a row names another owner's spend links. A ring-wide grant gets each unresolved row with the commitments the auditor cannot name.
 
-Photon has no rollback path. An orphaned spend can hide a valid note, and an orphaned output can stay listed. A stale row does not repair itself when its slot finalizes. No authoritative balance, limit decision or debit reservation reads this method. Merge selection and authority transfers read the same spent rows through `spendable`, so a stale row wrongly hides funds from them. The service detects no rollback and reconciles no row.
+`finalized_spent_commitments` records inputs before a merge transition applies. Repeated events do not change the first spend. The projection does not read the separate `spent_commitments` table. Historical frames with incomplete input evidence keep coverage incomplete.
 
-`spent_commitments` holds one row per commitment a confirmed event named, the first event wins, and a merge writes its inputs before the ledger applies it. A row of a historical frame has `source` `historical`, and a row whose inputs the reader cannot name exactly stays unresolved. Notes those rows created stay unopened, so a later spend of one reads as an unresolved row too.
-
-A deployment starts from empty record, reservation and spent tables, and from empty registries and indexer record tables. No reservation carries over from another deployment.
+A deployment uses fresh registries, indexer records and RPC operation state. Finality initialization refuses populated relay, reservation, record update or record batch tables. Relay completion, record application and blockhash expiry require finalized state.
 
 ## Operation
 

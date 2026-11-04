@@ -28,7 +28,7 @@ psl = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 sea-orm = { workspace = true }
-sea-orm-migration = { workspace = true }
+sea-orm-migration = { workspace = true, features = ["sqlx-sqlite"] }
 base64 = { workspace = true }
 bytemuck = { workspace = true }
 serde = { workspace = true }
@@ -43,6 +43,7 @@ solana-message = { workspace = true }
 solana-signer = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-rpc-client = { workspace = true }
+solana-rpc-client-api = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
 solana-instruction = { workspace = true }
 solana-transaction = { workspace = true }

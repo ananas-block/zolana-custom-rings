@@ -1,10 +1,28 @@
 import { RingError } from "../protocol/error.js";
 import { getBase58Encoder, type Address } from "@solana/kit";
 
-import { U64_MAX, bytesKey, equalBytes, isZero } from "@heliuslabs/zolana/internal";
+import {
+  U64_MAX,
+  ZERO_32,
+  bytesKey,
+  equalBytes,
+  isZero,
+  mergeOutputBlinding,
+  solanaOwnerIdentity,
+  addressBytes,
+  hashBytes,
+} from "@heliuslabs/zolana/internal";
 import type { Bytes32, Signature } from "@heliuslabs/zolana/interface";
 
-import { knownUtxoOwnerHash, type KnownUtxo, type UtxoOwner } from "../operations/audit/audit.js";
+import { ownerHash, type NullifierKey } from "@heliuslabs/zolana/keypair";
+
+import { ringIdField } from "../crypto/derivation/ring-stream.js";
+import {
+  knownUtxoHash,
+  knownUtxoOwnerHash,
+  type KnownUtxo,
+  type UtxoOwner,
+} from "../operations/audit/audit.js";
 
 const base58Encoder = getBase58Encoder();
 
@@ -17,6 +35,7 @@ export interface ConfirmedMerge {
   readonly treeId: number;
   readonly leafIndex: bigint;
   readonly firstNullifier: Bytes32;
+  readonly ringDataHash: Bytes32;
   /** The output of {@link realMergeInputs}. */
   readonly inputs: readonly Bytes32[];
 }
@@ -39,6 +58,8 @@ export interface AuditedMergeOutput extends MergeInput {
   readonly treeId: number;
   readonly leafIndex: bigint;
   readonly inputs: readonly Bytes32[];
+  readonly firstNullifier: Bytes32;
+  readonly ringDataHash: Bytes32;
 }
 
 export interface MergeTransition {
@@ -188,6 +209,8 @@ function resolvedOutput(
     ...(mint === undefined ? {} : { mint }),
     amount,
     inputs: merge.inputs,
+    firstNullifier: merge.firstNullifier,
+    ringDataHash: merge.ringDataHash,
   });
 }
 
@@ -199,4 +222,38 @@ function oldestFirst(left: ConfirmedMerge, right: ConfirmedMerge): number {
   const differing = leftBytes.findIndex((byte, index) => byte !== rightBytes[index]);
   if (differing === -1) return left.eventIndex - right.eventIndex;
   return (leftBytes[differing] ?? 0) - (rightBytes[differing] ?? 0);
+}
+
+export function reconstructMergeOutput(
+  input: Readonly<{
+    output: AuditedMergeOutput;
+    nullifierKey: NullifierKey;
+    ringProgramId: Address;
+  }>,
+): KnownUtxo | undefined {
+  const { output, nullifierKey } = input;
+  const nullifierPk = nullifierKey.publicKey();
+  if (output.mint !== undefined && !equalBytes(hashBytes(addressBytes(output.mint)), output.asset))
+    return undefined;
+  if (
+    !equalBytes(
+      knownUtxoOwnerHash(output),
+      ownerHash(solanaOwnerIdentity(output.ownerKey), nullifierPk),
+    )
+  )
+    return undefined;
+  const utxo: KnownUtxo = Object.freeze({
+    ownerKey: output.ownerKey,
+    owner: Object.freeze({ kind: "keyed", nullifierPk }),
+    asset: output.asset,
+    ...(output.mint === undefined ? {} : { mint: output.mint }),
+    amount: output.amount,
+    blinding: mergeOutputBlinding(nullifierKey, output.firstNullifier),
+    dataHash: ZERO_32,
+    ringDataHash: output.ringDataHash,
+    treeId: output.treeId,
+  });
+  return equalBytes(knownUtxoHash(utxo, ringIdField(input.ringProgramId)), output.commitment)
+    ? utxo
+    : undefined;
 }

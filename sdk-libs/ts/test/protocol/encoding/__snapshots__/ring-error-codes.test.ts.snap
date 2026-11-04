@@ -132,6 +132,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_COUNTER_OVERFLOW",
   "RING_IMPORTED_KEY_NOT_OLDER",
   "RING_SCAN_CONSUMED",
+  "RING_SCAN_HISTORY_CHANGED",
   "RING_SCAN_PROGRESS_MOVED",
   "RING_UNKNOWN_SENDER_CLAIM",
   "RING_WALLET_DOCUMENT",

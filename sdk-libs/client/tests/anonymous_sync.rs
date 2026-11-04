@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use custom_ring_interface::{
     encode_ring_recipient_output, encode_ring_sender_bundle_output,
     stream::{DeliveredSlot, SlotSecret},
-    RecipientBody, RingDepositAuditCapsule, SenderBundle, RECIPIENT_BODY_LEN,
+    RecipientBody, RingDepositAuditCapsule, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -54,7 +54,7 @@ use zolana_ring_transaction::{
         CommittedRecipientPlaintext, CommittedSenderPlaintext, UncommittedRecipientPlaintext,
         UncommittedSenderPlaintext,
     },
-    seal_recipient_body, seal_sender_bundle, AnonymousPlan, ReplyMetadata, RingAssets,
+    seal_recipient_body, seal_reply, seal_sender_bundle, AnonymousPlan, ReplyMetadata, RingAssets,
     RingDelivery, RingDepositPlaintext, RingOutputRail,
 };
 
@@ -247,6 +247,21 @@ impl AsyncRpc for Indexer {
     }
 }
 
+struct RingHistoryOnly<'a>(&'a Indexer);
+
+#[async_trait]
+impl AsyncRpc for RingHistoryOnly<'_> {
+    async fn get_shielded_transactions_by_ring(
+        &self,
+        options: RingHistoryOptions,
+        config: Option<IndexerRpcConfig>,
+    ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+        self.0
+            .get_shielded_transactions_by_ring(options, config)
+            .await
+    }
+}
+
 struct Wallet {
     keys: ShieldedKeypair,
     /// Holds the deposit tag counters a depositor stores before it sends.
@@ -378,7 +393,7 @@ impl Wallet {
 
     async fn recover(&self, indexer: &Indexer) -> AnonymousScan {
         AnonymousSync::new(&self.keys, &assets())
-            .full_scan(indexer, &fresh(self), RING)
+            .full_scan(&RingHistoryOnly(indexer), &fresh(self), RING)
             .await
             .unwrap()
     }
@@ -573,7 +588,7 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
         .await
         .unwrap();
     assert_eq!(found(&scan), [output(&to_old, 1)]);
-    wallet.absorb(scan);
+    wallet.absorb(scan).unwrap();
 
     let next = ViewingKey::new();
     let keys = keys.rotate(next.clone()).unwrap();
@@ -599,7 +614,7 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
         .fetch(&indexer, restarted.history())
         .await
         .unwrap();
-    restarted.absorb(scan);
+    restarted.absorb(scan).unwrap();
     let mut expected = [
         output(&to_old, 1),
         output(&to_new, 1),
@@ -623,6 +638,33 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
     assert_eq!(notes, expected);
     let unspent = verify_spendable(&restarted_keys, recovered.decrypted()).unwrap();
     assert_eq!(unspent.utxos().count(), expected.len());
+}
+
+#[tokio::test]
+async fn a_ring_watched_after_rotation_reads_payments_to_the_retired_key() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let identity = keypair(2);
+    let old_address = identity.shielded_address().unwrap();
+    let keys = RotatingRingKeys::new(&identity, Vec::new())
+        .unwrap()
+        .rotate(ViewingKey::new())
+        .unwrap();
+    let history = ViewingHistory::new(old_address.viewing_pubkey, 0)
+        .with_rotated_key(keys.address().unwrap().viewing_pubkey, 1)
+        .unwrap()
+        .with_ring(RING, None);
+    let payment = alice.pay(&indexer, &[pay(&old_address, 30)]);
+    let scan = AnonymousSync::new(&keys, &assets())
+        .fetch(&indexer, &history)
+        .await
+        .unwrap();
+    assert_eq!(found(&scan), [output(&payment, 1)]);
+    assert!(scan
+        .history()
+        .entries()
+        .iter()
+        .all(|entry| entry.ring_positions()[&RING] == Some(payment.slot)));
 }
 
 /// A key added after a sync reads the ring's whole history under its own query, the stored key reads on.
@@ -739,7 +781,7 @@ async fn a_crash_on_either_side_of_the_one_write_skips_no_funds() {
     assert_eq!(found(&replay), [output(&paid, 1)]);
 
     // The crash after it.
-    wallet.absorb(scan);
+    wallet.absorb(scan).unwrap();
     let after = wallet.to_json();
     let mut restarted = AnonymousWallet::from_json(&after).unwrap();
     assert_eq!(restarted, wallet);
@@ -750,9 +792,45 @@ async fn a_crash_on_either_side_of_the_one_write_skips_no_funds() {
         .utxos
         .is_empty());
 
-    // A replay of the old read adds no second note.
-    restarted.absorb(replay);
+    let before = restarted.clone();
+    assert!(matches!(
+        restarted.absorb(replay),
+        Err(AnonymousError::ScanHistoryChanged)
+    ));
+    assert_eq!(restarted, before);
     assert_eq!(restarted.notes().len(), 1);
+}
+
+#[tokio::test]
+async fn a_scan_cannot_overwrite_a_later_tag_key_or_sender() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let history = fresh(&bob);
+    let mut confirmed = history.clone();
+    confirmed
+        .confirm_sender(alice.keys.viewing_pubkey())
+        .unwrap();
+    let updates = [
+        history.request_tag(&bob.keys).unwrap().history,
+        history
+            .clone()
+            .with_rotated_key(ViewingKey::new().pubkey(), 1)
+            .unwrap(),
+        confirmed,
+    ];
+    for updated in updates {
+        let mut wallet = AnonymousWallet::new(history.clone());
+        let scan = bob.sync(&indexer, wallet.history()).await;
+        wallet.update_history(updated).unwrap();
+        let before = wallet.clone();
+        assert!(matches!(
+            wallet.absorb(scan),
+            Err(AnonymousError::ScanHistoryChanged)
+        ));
+        assert_eq!(wallet, before);
+    }
 }
 
 #[tokio::test]
@@ -1161,6 +1239,13 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
 async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_until_registered() {
     let indexer = Indexer::default();
     let bob = Wallet::new(2);
+    let sender = keypair(3);
+    let reply = ReplyMetadata {
+        viewing_key: sender.viewing_pubkey(),
+        owner_key: sender.signing_pubkey().as_ed25519().unwrap(),
+        nullifier_pk: sender.nullifier_key.pubkey().unwrap(),
+        data: Data::default(),
+    };
     let unregistered = Mint {
         asset: Address::new_from_array([0xee; 32]),
         asset_id: 9,
@@ -1199,7 +1284,7 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
         &secret,
     )
     .unwrap();
-    indexer.publish(ShieldedTransaction {
+    let mut transaction = ShieldedTransaction {
         slot: 3,
         tx_signature: Signature::from(signature(3)),
         event_index: Some(0),
@@ -1212,20 +1297,34 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
                 tree_id: TREE,
                 leaf_index: 0,
             },
-            payload: encode_ring_recipient_output(&body, &[]).unwrap(),
+            payload: encode_ring_recipient_output(
+                &body,
+                &seal_reply(&reply, MIN_REPLY_LEN, &secret).unwrap(),
+            )
+            .unwrap(),
         }],
         messages: Vec::new(),
         nullifiers: vec![first_nullifier],
         proofless: false,
         ring_config: None,
         ring_program_id: Some(RING),
-    });
+    };
+    indexer.publish(transaction.clone());
+    transaction.slot = 4;
+    transaction.tx_signature = Signature::from(signature(4));
+    transaction.output_slots[0].output_context.hash = field(8, 8);
+    indexer.publish(transaction);
     let mut wallet = AnonymousWallet::new(fresh(&bob));
     let scan = bob.sync(&indexer, wallet.history()).await;
     assert_eq!(scan.unmatched, [hash]);
-    assert_eq!(after_slot(scan.history()), Some(3), "the position moves");
+    assert_eq!(after_slot(scan.history()), Some(4), "the position moves");
     assert!(scan.utxos.is_empty());
-    wallet.absorb(scan);
+    let [claim] = scan.sender_claims() else {
+        panic!("one claim from the matching commitment");
+    };
+    assert_eq!(claim.utxo_hash, hash);
+    assert_eq!(claim.claim.claimed(), &reply);
+    wallet.absorb(scan).unwrap();
 
     let mut wallet = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
     let [pending] = wallet.pending_notes() else {
@@ -1235,6 +1334,13 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
         (pending.mint(), pending.amount(), pending.utxo_hash()),
         (unregistered.asset, 5, hash)
     );
+    let [claim] = wallet.pending_claims() else {
+        panic!("one stored claim");
+    };
+    assert_eq!(claim.utxo_hash, hash);
+    assert_eq!(claim.claimed_viewing_key, reply.viewing_key);
+    assert_eq!(claim.claimed_owner_key, reply.owner_key);
+    assert_eq!(claim.claimed_nullifier_pk, reply.nullifier_pk);
     assert!(wallet.notes().is_empty());
     assert_eq!(
         verify_spendable(&bob.keys, &wallet.decrypted())
@@ -1250,7 +1356,7 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
         next.utxos.is_empty() && next.unmatched.is_empty(),
         "no row reads again"
     );
-    wallet.absorb(next);
+    wallet.absorb(next).unwrap();
     assert_eq!(wallet.pending_notes().len(), 1);
 
     wallet.resolve_pending(&assets());
@@ -1409,7 +1515,7 @@ async fn a_historical_note_under_an_unknown_mint_waits_while_the_position_moves(
         let scan = wallet.sync(&indexer, stored.history()).await;
         assert_eq!(after_slot(scan.history()), Some(4), "the position moves");
         assert!(scan.utxos.is_empty());
-        stored.absorb(scan);
+        stored.absorb(scan).unwrap();
         assert_eq!(stored.pending_notes()[0].utxo_hash(), hash);
         assert!(
             stored.notes().is_empty(),
@@ -1524,7 +1630,7 @@ async fn a_failed_holder_moves_nothing(
         .await
         .unwrap();
     assert!(after_slot(scan.history()).is_some());
-    wallet.absorb(scan);
+    wallet.absorb(scan).unwrap();
     let held: Vec<[u8; 32]> = wallet
         .notes()
         .iter()
@@ -1614,7 +1720,7 @@ async fn a_deposit_of_an_unknown_mint_waits_with_its_data_hashes() {
     assert_eq!(scan.pending_notes().len(), 1);
     assert_eq!(scan.pending_notes()[0].utxo_hash(), hash);
     assert!(scan.utxos.is_empty());
-    wallet.absorb(scan);
+    wallet.absorb(scan).unwrap();
     wallet.resolve_pending(&RingAssets::new([unregistered]).unwrap());
     assert_eq!(wallet.notes()[0].utxo_hash, hash);
     assert_eq!(wallet.notes()[0].utxo.asset, unregistered);
@@ -1727,7 +1833,7 @@ async fn a_reply_stays_an_unverified_claim_until_the_wallet_confirms_it() {
         wallet.confirm_claim(sender),
         Err(AnonymousError::UnknownSenderClaim)
     ));
-    wallet.absorb(unconfirmed);
+    wallet.absorb(unconfirmed).unwrap();
     let restarted = AnonymousWallet::from_json(&wallet.to_json()).unwrap();
     assert_eq!(restarted.pending_claims().len(), 1);
     assert_eq!(restarted.pending_claims()[0].claimed_viewing_key, sender);

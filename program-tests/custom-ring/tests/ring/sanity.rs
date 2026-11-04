@@ -274,7 +274,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
                     .await
                     .map_err(anyhow::Error::from)
             })?;
-            wallet.absorb(scan);
+            wallet.absorb(scan)?;
             ensure!(wallet.notes().len() == 1 && wallet.notes()[0].utxo.amount == 101);
         }
     }
@@ -287,7 +287,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
             .await
             .map_err(anyhow::Error::from)
     })?;
-    restarted.absorb(scan);
+    restarted.absorb(scan)?;
     let mut amounts: Vec<_> = restarted
         .notes()
         .iter()

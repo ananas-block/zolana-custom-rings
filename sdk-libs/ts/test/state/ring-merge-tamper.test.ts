@@ -41,6 +41,7 @@ function ledgerOutputs(list: readonly Bytes32[]): number {
     treeId: 0,
     leafIndex: 0n,
     firstNullifier: field(41),
+    ringDataHash: new Uint8Array(32) as Bytes32,
     inputs: realMergeInputs(list, 2),
   };
   const transition = new MergeLedger().apply(merge, (commitment) =>

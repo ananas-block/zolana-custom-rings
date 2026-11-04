@@ -219,6 +219,42 @@ describe("ring scan position", () => {
 });
 
 describe("atomic progress", () => {
+  it.each(["counter", "key", "sender", "ring"] as const)(
+    "refuses a scan after a %s change without consuming it",
+    async (change) => {
+      const indexer = new ScanIndexer();
+      const alice = new ScanWallet(1);
+      const bob = new ScanWallet(2);
+      await alice.pay(indexer, [{ to: bob.address, amount: 7n, reply: alice.replyTo() }]);
+      const original = bob.fresh();
+      const wallet = anonymousWallet(bob, original);
+      const scan = await bob.sync(indexer, original);
+      let updated = original;
+      switch (change) {
+        case "counter":
+          updated = (await original.requestTag(bob.keys)).history;
+          break;
+        case "key":
+          updated = original.withRotatedKey(ViewingKey.generate().publicKey(), 5n);
+          break;
+        case "sender":
+          updated = original.withConfirmedSender(alice.viewingKey);
+          break;
+        case "ring":
+          updated = original.withRing(randomAddress());
+          break;
+      }
+      wallet.updateHistory(updated);
+      const stored = wallet.toJson();
+      await expect(wallet.absorb(scan)).rejects.toThrow("RING_SCAN_HISTORY_CHANGED");
+      expect(wallet.toJson()).toBe(stored);
+      const unchanged = anonymousWallet(bob, ViewingHistory.fromJson(original.toJson()));
+      await unchanged.absorb(scan);
+      expect(unchanged.notes().map((note) => note.utxo.amount)).toEqual([7n]);
+      expect(unchanged.pendingClaims()).toHaveLength(1);
+    },
+  );
+
   it("stores notes, spends, claims and the position in one document", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);
@@ -352,6 +388,37 @@ describe("viewing keys", () => {
       nullifierKey: bob.keypair.nullifierKey(),
     });
   }
+
+  it("reads a newly watched ring under every retained key", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const bob = new ScanWallet(2);
+    const added = keypair(5).viewingKey();
+    const history = ViewingHistory.create(bob.viewingKey, 0n)
+      .withRotatedKey(added.publicKey(), 5n)
+      .withRing(RING);
+    const paid = await alice.pay(indexer, [{ to: bob.address, amount: 7n }], { slot: 10n });
+    const scan = await AnonymousSync.create(rotatedHolder(bob, added), ASSETS).fetch(
+      indexer.client(),
+      history,
+    );
+    expect(found(scan)).toEqual([hex(output(paid, 1))]);
+    expect(indexer.ringReads).toHaveLength(1);
+    expect(history.withRing(RING, 20n).entries.map((entry) => entry.ringPosition(RING))).toEqual([
+      null,
+      null,
+    ]);
+  });
+
+  it("adds missing ring positions without changing an existing checkpoint", () => {
+    const bob = new ScanWallet(2);
+    const added = keypair(5).viewingKey();
+    const history = ViewingHistory.create(bob.viewingKey, 0n)
+      .withRotatedKey(added.publicKey(), 5n)
+      ._withRingCheckpoint(RING, added.publicKey(), 30n)
+      .withRing(RING, 10n);
+    expect(history.entries.map((entry) => entry.ringPosition(RING))).toEqual([10n, 30n]);
+  });
 
   it("scans a rotated key as its own query from its own start, the old key from its position", async () => {
     const indexer = new ScanIndexer();

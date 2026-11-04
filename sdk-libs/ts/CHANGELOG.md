@@ -2,11 +2,15 @@
 
 ## 0.1.0-alpha — unreleased
 
+- `AnonymousWallet.absorb` rejects a scan after its starting history changes, and new ring watches include retained viewing keys.
+- `fullScan` recovers from ring history without tag discovery, and merge recovery checks reconstructed output commitments against complete input history.
+- `auditRing` uses ring history cursors and resolves merge inputs before sender tracing, and saved tag cursors require a new scan.
+- `syncRingWallet` commits core and ring notes together, reports newly stored core and ring notes and reads stable tag history once per call.
 - `ringTransferCircuit` rejects nonpositive input counts and negative or fractional withdrawal counts.
 - Ring history reads follow `@heliuslabs/zolana` 0.9.0-alpha pagination. `cursor` and `nextCursor` on `auditRing`, `auditRingMerges` and `scanCreatedRingUtxos` become the text `<ring>:<stream>:<token>`, and a cursor of another ring or stream fails with `RING_HISTORY_CURSOR_INVALID` → start a saved byte cursor's read over.
 - `RING_SCAN_FRONTIER_MISSING` and `nextScanCursor` are removed, `RING_HISTORY_PAGE_INVALID` reports a page that does not advance, and `historyCursor` and `historyCursorToken` join the advanced exports.
 - A ring scan reads scheme 1 outputs and scheme 2 bundles as Rust `read_ring` does, its notes report stream `historical`, and a note under an unregistered mint waits in `pendingOpenings` while the position moves.
-- `RingRpc.getUnspentUtxos` is a provisional observation at `confirmed` commitment, and `coverage.complete` is false after a failed or partial pass until a later pass reaches a terminal page.
+- `RingRpc.getUnspentUtxos` reports finalized history coverage, and incomplete indexed events prevent the coverage boundary from advancing.
 
 The custom ring surface of `@heliuslabs/zolana` moves into
 `@heliuslabs/zolana-custom-rings`, built on `@heliuslabs/zolana` as a pinned

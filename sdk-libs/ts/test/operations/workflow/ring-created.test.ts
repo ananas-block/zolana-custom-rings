@@ -216,6 +216,7 @@ describe("createdRingUtxos", () => {
       });
       expect(scanned).toEqual({
         utxos: deposit.created,
+        merges: [],
         skipped: [],
       });
       const failing = (code: "RING_ORIGIN_DECODE" | "RING_ORIGIN_UNAVAILABLE") =>
@@ -237,6 +238,7 @@ describe("createdRingUtxos", () => {
         });
       await expect(failing("RING_ORIGIN_DECODE")).resolves.toEqual({
         utxos: deposit.created,
+        merges: [],
         skipped: [
           {
             slot: transfer.slot,
@@ -257,10 +259,11 @@ describe("createdRingUtxos", () => {
           },
         ]),
       });
-      expect(foreign).toEqual({ utxos: [], skipped: [] });
+      expect(foreign).toEqual({ utxos: [], merges: [], skipped: [] });
       const capped = await scan({ data: transactionItems([transfer]), paginationToken: "t7" }, 1);
       expect(capped).toEqual({
         utxos: [],
+        merges: [],
         skipped: [],
         nextCursor: historyCursor(RING, "ring", "t7"),
       });

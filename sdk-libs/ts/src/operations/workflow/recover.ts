@@ -1,5 +1,6 @@
 import type { Address } from "@solana/kit";
 
+import { initializePoseidon } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
 import {
   solanaOwnerIdentity,
@@ -7,6 +8,9 @@ import {
   PAGE_LIMIT,
   equalBytes,
   bytesKey,
+  hashBytes,
+  addressBytes,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { ownerHash } from "@heliuslabs/zolana/keypair";
@@ -20,9 +24,15 @@ import type {
 import { Utxo } from "@heliuslabs/zolana/transaction";
 
 import { nextHistoryToken } from "../../rpc/history.js";
-import { KnownUtxoIndex, auditRing, type RingAuditReader } from "../audit/audit.js";
+import {
+  KnownUtxoIndex,
+  auditConfirmedRingHistory,
+  knownUtxoOwnerHash,
+  openedUtxo,
+  type RingAuditReader,
+} from "../audit/audit.js";
 import { recoverMergeOpening } from "../audit/audit-merge.js";
-import { createdDepositUtxo, createdRingUtxos } from "./created-utxos.js";
+import { createdDepositUtxo } from "./created-utxos.js";
 import { openRingDepositOpening, ringDepositOutput } from "../../proof/deposit-audit.js";
 import { readRingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import { RingError } from "../../protocol/error.js";
@@ -32,12 +42,13 @@ import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   RpcTransactionOrigin,
   type ConfirmedDeposit,
+  type ConfirmedRingTransaction,
   type TransactionOrigin,
 } from "../../protocol/transaction/origin.js";
 import { outputTreeId } from "../../protocol/membership/trees.js";
+import { reconstructMergeOutput } from "../../state/merge-ledger.js";
 
-export type RingRecoveryClient = RingAuditReader &
-  Pick<IndexerReader, "getShieldedTransactionsByNullifiers">;
+export type RingRecoveryClient = RingAuditReader;
 
 /** Mirrors Rust `MemberRecovery`, a source member's notes from the auditor's view and its nullifier key. */
 export interface RingRecoveryParams {
@@ -49,7 +60,6 @@ export interface RingRecoveryParams {
   readonly assets: AssetRegistry;
   readonly origin?: TransactionOrigin;
   readonly pageSize?: number;
-  /** Bounds each history scan and all spentness queries together. */
   readonly maxPages?: number;
 }
 
@@ -70,11 +80,13 @@ export async function recoverRingMemberNotes(
   input: RingRecoveryParams,
   context?: RequestContext,
 ): Promise<RecoveredRingNotes> {
+  await initializePoseidon();
   if (!equalBytes(input.nullifierKey.publicKey(), input.source.nullifierPublicKey))
     throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
   const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
   const history: RecoveryHistory = {
     rows: new RowOrigins(origin, input.ringProgramId, context),
+    transactions: [],
     limits: scanLimits({
       pageSize: input.pageSize ?? Number(PAGE_LIMIT),
       maxPages: input.maxPages,
@@ -84,30 +96,28 @@ export async function recoverRingMemberNotes(
   // Deposits are found by ring, never by their recipient view tags.
   const unsupportedDeposits = await recoverDeposits(input, history, found, context);
   const sourceKey = input.source.confidentialViewTag();
-  const page = await auditRing(
+  const audited = await auditConfirmedRingHistory(
     {
       client: input.client,
       auditor: input.auditor,
       ringProgramId: input.ringProgramId,
       assets: input.assets,
-      origin,
-      knownUtxos: found.created,
+      history: history.transactions,
+      rows: history.rows,
+      known: found.created,
       escrowedKeys: {
         nullifierPk: (ownerKey) =>
           equalBytes(ownerKey, sourceKey) ? input.source.nullifierPublicKey : undefined,
       },
-      ...(input.pageSize === undefined ? {} : { pageSize: input.pageSize }),
-      ...(input.maxPages === undefined ? {} : { maxPages: input.maxPages }),
     },
     context,
   );
-  if (page.nextCursor !== undefined) throw new RingError("RING_RECOVERY_INCOMPLETE");
-  refuseSkipped([...history.rows.skipped, ...page.skipped]);
+  refuseSkipped(history.rows.skipped);
   const sourceOwner = input.source.ownerHash();
-  const unseenInputs: Bytes32[] = [];
-  for (const transaction of page.transactions) {
+  const unseenInputs: { hash: Bytes32; nullifier: Bytes32 }[] = [];
+  for (const transaction of audited) {
     for (const { nullifier, opening } of transaction.inputs)
-      if (opening.kind === "unseenHash") unseenInputs.push(nullifier);
+      if (opening.kind === "unseenHash") unseenInputs.push({ hash: opening.hash, nullifier });
     for (const error of transaction.payloadErrors) {
       // Any other unopened slot could hide a source UTXO.
       if (error.kind !== "unknownAsset")
@@ -148,7 +158,7 @@ export async function recoverRingMemberNotes(
       else found.unresolve(context.hash, opened.utxo.nullifier);
     }
   }
-  const spent = await followSpends(input, history, found, context);
+  const spent = followSpends(input, history, found);
   refuseSkipped(history.rows.skipped);
   return Object.freeze({
     notes: Object.freeze(found.candidates.filter((note) => !spent.has(bytesKey(note.nullifier)))),
@@ -160,13 +170,21 @@ export async function recoverRingMemberNotes(
     ),
     unsupportedDeposits: Object.freeze(unsupportedDeposits),
     unknownMints: Object.freeze([...found.unknownMints]),
-    unseenInputs: Object.freeze(unseenInputs),
+    unseenInputs: Object.freeze(
+      unseenInputs
+        .filter(
+          ({ hash }) =>
+            found.created.utxo(hash) === undefined && found.created.merged(hash) === undefined,
+        )
+        .map(({ nullifier }) => nullifier),
+    ),
   });
 }
 
 interface RecoveryHistory {
   readonly rows: RowOrigins;
   readonly limits: ScanLimits;
+  readonly transactions: ConfirmedRingTransaction[];
 }
 
 /** A row left unread can hold a source note or its spend, Rust `complete`. */
@@ -264,16 +282,10 @@ async function recoverDeposits(
   const stopped = await readRingHistory(
     { client: input.client, ringProgramId: input.ringProgramId, ...history },
     (confirmed) => {
-      if (confirmed.kind === "merge") {
-        for (const { commitment, utxo } of createdRingUtxos({
-          confirmed,
-          ringProgramId: input.ringProgramId,
-          auditor: input.auditor,
-        }))
-          found.created.insert(commitment, utxo);
+      if (confirmed.kind !== "deposit") {
+        history.transactions.push(confirmed);
         return;
       }
-      if (confirmed.kind !== "deposit") return;
       for (const [slotIndex, slot] of confirmed.transaction.outputSlots.entries()) {
         const deposit = ringDepositOutput(slot.payload, input.ringProgramId);
         const commitment = slot.outputContext.hash;
@@ -344,53 +356,99 @@ async function recoverDeposits(
   return unsupported;
 }
 
-/** Mirrors Rust `follow_spends`, spent nullifiers and the merges that spent the source's notes. */
-async function followSpends(
+function followSpends(
   input: RingRecoveryParams,
-  { rows, limits }: RecoveryHistory,
+  { transactions }: RecoveryHistory,
   found: Found,
-  context: RequestContext | undefined,
-): Promise<Set<string>> {
-  const spent = new Set<string>();
-  const merges = new Map<string, IndexedShieldedTransaction>();
-  const budget = { remaining: limits.maxPages };
-  let queries = [
-    ...found.candidates.map((candidate) => candidate.nullifier),
-    ...found.unresolved.flatMap(({ nullifier }) => (nullifier === undefined ? [] : [nullifier])),
-  ];
+): Set<string> {
+  const spent = new Set(
+    transactions.flatMap(({ transaction }) => transaction.nullifiers.map(bytesKey)),
+  );
+  const merges = transactions.flatMap((confirmed) =>
+    confirmed.kind !== "merge" ||
+    confirmed.transaction.outputSlots.length !== 1 ||
+    mergePaddedInputCount(confirmed.transaction.nullifiers.length) === undefined
+      ? []
+      : [confirmed.transaction],
+  );
+  const relevant = new Map<string, IndexedShieldedTransaction>();
   for (;;) {
-    const requested = new Set(queries.map(bytesKey));
-    for (const indexed of await spendingTransactions(input.client, queries, budget, context)) {
-      if (indexed.ringProgramId !== input.ringProgramId) continue;
-      const confirmed = await rows.read(indexed);
-      if (confirmed === undefined) continue;
-      const { transaction } = confirmed;
-      if (!transaction.nullifiers.some((nullifier) => requested.has(bytesKey(nullifier)))) continue;
-      for (const nullifier of transaction.nullifiers) spent.add(bytesKey(nullifier));
-      const output = transaction.outputSlots[0];
-      if (
-        confirmed.kind !== "merge" ||
-        output === undefined ||
-        transaction.outputSlots.length !== 1 ||
-        mergePaddedInputCount(transaction.nullifiers.length) === undefined
-      )
-        continue;
-      merges.set(bytesKey(output.outputContext.hash), transaction);
-    }
+    const sourceNullifiers = new Set([
+      ...found.candidates.map((candidate) => bytesKey(candidate.nullifier)),
+      ...found.unresolved.flatMap(({ nullifier }) =>
+        nullifier === undefined ? [] : [bytesKey(nullifier)],
+      ),
+    ]);
     const before = found.candidates.length;
     const unresolvedBefore = found.unresolved.length;
-    for (const transaction of merges.values()) {
+    for (const transaction of merges) {
       const commitment = transaction.outputSlots[0]!.outputContext.hash;
       if (found.seen(commitment)) continue;
-      const opening = recoverMergeOpening(
-        {
-          member: input.source.signingPublicKey.ownerProofInputHash(),
-          nullifierKey: input.nullifierKey,
-          ringProgramId: input.ringProgramId,
-        },
-        transaction,
+      const resolved = found.created.mergeOutput(commitment);
+      if (
+        !transaction.nullifiers.some((nullifier) => sourceNullifiers.has(bytesKey(nullifier))) &&
+        (resolved === undefined ||
+          !equalBytes(knownUtxoOwnerHash(resolved), input.source.ownerHash()))
+      )
+        continue;
+      relevant.set(bytesKey(commitment), transaction);
+      const utxo =
+        resolved === undefined
+          ? undefined
+          : reconstructMergeOutput({
+              output: resolved,
+              nullifierKey: input.nullifierKey,
+              ringProgramId: input.ringProgramId,
+            });
+      const owned =
+        utxo !== undefined && equalBytes(knownUtxoOwnerHash(utxo), input.source.ownerHash())
+          ? utxo
+          : undefined;
+      const inherited =
+        owned?.mint === undefined
+          ? undefined
+          : {
+              member: input.source.signingPublicKey.ownerProofInputHash(),
+              asset: owned.mint,
+              amount: owned.amount,
+              blinding: owned.blinding,
+              outputContext: transaction.outputSlots[0]!.outputContext,
+              nullifier: input.nullifierKey.nullifier(commitment, owned.blinding),
+              ringDataHash: owned.ringDataHash,
+            };
+      const opening =
+        inherited ??
+        recoverMergeOpening(
+          {
+            member: input.source.signingPublicKey.ownerProofInputHash(),
+            nullifierKey: input.nullifierKey,
+            ringProgramId: input.ringProgramId,
+          },
+          transaction,
+        );
+      if (opening === undefined) {
+        if (owned !== undefined) {
+          found.claim(commitment);
+          found.unresolve(commitment, input.nullifierKey.nullifier(commitment, owned.blinding));
+        }
+        continue;
+      }
+      found.created.insert(
+        commitment,
+        openedUtxo(
+          {
+            ownerKey: input.source.confidentialViewTag(),
+            nullifierPk: input.nullifierKey.publicKey(),
+            asset: hashBytes(addressBytes(opening.asset)) as Bytes32,
+            mint: opening.asset,
+            amount: opening.amount,
+            blinding: opening.blinding,
+            dataHash: ZERO_32,
+            ringDataHash: opening.ringDataHash ?? ZERO_32,
+          },
+          outputTreeId(opening.outputContext),
+        ),
       );
-      if (opening === undefined) continue;
       found.claim(commitment);
       if (registeredMint(input.assets, opening.asset) === undefined) {
         found.unknownMints.add(opening.asset);
@@ -414,18 +472,12 @@ async function followSpends(
       );
     }
     if (found.candidates.length === before && found.unresolved.length === unresolvedBefore) {
-      for (const transaction of merges.values()) {
+      for (const transaction of relevant.values()) {
         const commitment = transaction.outputSlots[0]!.outputContext.hash;
         if (!found.seen(commitment)) found.unresolve(commitment);
       }
       return spent;
     }
-    queries = [
-      ...found.candidates.slice(before).map((candidate) => candidate.nullifier),
-      ...found.unresolved
-        .slice(unresolvedBefore)
-        .flatMap(({ nullifier }) => (nullifier === undefined ? [] : [nullifier])),
-    ];
   }
 }
 

@@ -40,7 +40,13 @@ use zolana_ring_transaction::RingAssets;
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
 
-use crate::{audit::Page, error::RingRpcError};
+use crate::{
+    audit::Page,
+    error::RingRpcError,
+    finalized_history::{
+        FinalizedHistory, FinalizedPage, FinalizedUpstreams, HistorySelection, OriginRead,
+    },
+};
 
 pub trait TransactionSource: Send + Sync {
     fn transactions_by_tag(
@@ -159,6 +165,7 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
 #[derive(Clone, Copy)]
 #[must_use]
 pub struct TransactionPage {
+    pub ring: Address,
     pub tag: [u8; 32],
     pub position: HistoryPosition,
     pub limit: NonZeroU32,
@@ -235,29 +242,63 @@ pub struct Upstreams<'a> {
 }
 
 pub struct ChainSource {
+    history: FinalizedHistory,
     indexer: AsyncZolanaIndexer,
     rpc: AsyncSolanaRpc,
 }
 
 /// The merge audit reads ring history and its registry through one source.
 struct HistorySource<'a> {
-    rpc: &'a AsyncSolanaRpc,
-    indexer: &'a AsyncZolanaIndexer,
+    source: &'a ChainSource,
 }
 
 #[async_trait]
 impl AsyncRpc for HistorySource<'_> {
     async fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
-        self.rpc.get_account(address).await
+        self.source.rpc.get_account(address).await
     }
 
     async fn get_shielded_transactions_by_ring(
         &self,
         options: RingHistoryOptions,
-        config: Option<IndexerRpcConfig>,
+        _config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        self.indexer
-            .get_shielded_transactions_by_ring(options, config)
+        let position = match options.pagination_token {
+            Some(token) => HistoryPosition::resume(token),
+            None => options
+                .filters
+                .slot
+                .floor()
+                .map_or_else(HistoryPosition::default, HistoryPosition::after_slot),
+        };
+        if options.filters.slot.lt.is_some() || options.filters.slot.lte.is_some() {
+            return Err(ClientError::Rpc(
+                "finalized history rejects an upper slot bound".into(),
+            ));
+        }
+        let limit = options
+            .limit
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| ClientError::Rpc("finalized history requires a page limit".into()))?;
+        self.source
+            .ring_history(RingHistoryPage {
+                ring: options.ring_program_id,
+                position,
+                limit,
+            })
+            .await
+    }
+}
+
+impl TransactionOrigin for HistorySource<'_> {
+    async fn origin(
+        &self,
+        signature: Signature,
+        event_index: u16,
+        ring: Address,
+    ) -> Result<RingOrigin, AuditError> {
+        self.source
+            .transaction_origin(signature, event_index, ring)
             .await
     }
 }
@@ -268,7 +309,10 @@ impl AsyncRingIndexer for HistorySource<'_> {
         &self,
         request: GetStorageMemberRecordsRequest,
     ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
-        self.indexer.get_storage_member_records(request).await
+        self.source
+            .indexer
+            .get_storage_member_records(request)
+            .await
     }
 }
 
@@ -279,6 +323,7 @@ impl ChainSource {
             .build()
             .map_err(|error| ClientError::Rpc(format!("http client: {error}")))?;
         Ok(Self {
+            history: FinalizedHistory::default(),
             indexer: AsyncZolanaIndexer::with_api(ZolanaApi::with_client(
                 upstreams.indexer_url,
                 http,
@@ -298,10 +343,7 @@ impl ChainSource {
     }
 
     fn history(&self) -> HistorySource<'_> {
-        HistorySource {
-            rpc: &self.rpc,
-            indexer: &self.indexer,
-        }
+        HistorySource { source: self }
     }
 
     /// A foreign owner means the account does not exist for its program, not
@@ -331,7 +373,7 @@ impl TransactionSource for ChainSource {
         MergeAudit::new(request.ring, request.auditor)
             .with_cursor(request.page.history_cursor())
             .with_page_size(request.page.limit())
-            .page(&self.history(), &self.rpc)
+            .page(&self.history(), &self.history())
             .await
     }
 
@@ -339,13 +381,18 @@ impl TransactionSource for ChainSource {
         &self,
         request: TransactionPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        self.indexer
-            .get_shielded_transactions_by_tags(
-                vec![request.tag],
-                request.position.token(),
-                Some(request.limit.get()),
-                request.position.filters(),
-                None,
+        self.history
+            .page(
+                FinalizedPage {
+                    ring: request.ring,
+                    position: request.position,
+                    limit: request.limit,
+                    selection: HistorySelection::Tag(request.tag),
+                },
+                &FinalizedUpstreams {
+                    rpc: &self.rpc,
+                    indexer: &self.indexer,
+                },
             )
             .await
     }
@@ -354,14 +401,19 @@ impl TransactionSource for ChainSource {
         &self,
         request: RingHistoryPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let options = RingHistoryOptions {
-            ring_program_id: request.ring,
-            pagination_token: request.position.token(),
-            limit: Some(request.limit.get()),
-            filters: request.position.filters(),
-        };
-        self.history()
-            .get_shielded_transactions_by_ring(options, None)
+        self.history
+            .page(
+                FinalizedPage {
+                    ring: request.ring,
+                    position: request.position,
+                    limit: request.limit,
+                    selection: HistorySelection::Ring,
+                },
+                &FinalizedUpstreams {
+                    rpc: &self.rpc,
+                    indexer: &self.indexer,
+                },
+            )
             .await
     }
 
@@ -378,7 +430,7 @@ impl TransactionSource for ChainSource {
                     before: page.before,
                     until: None,
                     limit: Some(page.limit),
-                    commitment: Some(CommitmentConfig::confirmed()),
+                    commitment: Some(CommitmentConfig::finalized()),
                 },
             )
             .await
@@ -399,7 +451,7 @@ impl TransactionSource for ChainSource {
                 .await?;
             for indexed in response.transactions {
                 let records = ConfirmedDepositRecords {
-                    origin: &self.rpc,
+                    origin: &self.history(),
                     signature,
                     ring,
                     indexed,
@@ -420,7 +472,15 @@ impl TransactionSource for ChainSource {
         event_index: u16,
         ring: Address,
     ) -> Result<RingOrigin, AuditError> {
-        self.rpc.origin(signature, event_index, ring).await
+        FinalizedUpstreams {
+            rpc: &self.rpc,
+            indexer: &self.indexer,
+        }
+        .origins(OriginRead { ring, signature })
+        .await?
+        .origins
+        .remove(&event_index)
+        .ok_or(AuditError::InvalidEventIndex(event_index))
     }
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, ClientError> {

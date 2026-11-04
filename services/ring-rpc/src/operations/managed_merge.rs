@@ -857,4 +857,37 @@ pub(crate) mod tests {
         assert!(after.builder.owners.lock().expect("owners").is_empty());
         assert_eq!(*after.chain.sent.lock().expect("sent"), 1);
     }
+
+    #[tokio::test]
+    async fn a_restart_releases_orphaned_merge_inputs_after_finalized_expiry() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let before = Fixture::on(store.clone()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        before.escrow_notes(&wallet, 3);
+        before.settle(&wallet, 1).await;
+        assert_eq!(before.merge_due().await.len(), 1);
+        drop(before);
+
+        let after = Fixture::on(store).await;
+        *after.chain.height.lock().expect("height") = LAST_VALID_BLOCK_HEIGHT;
+        after.track().await;
+        let held = after.held().await;
+        assert_eq!(held.len(), 3);
+        assert!(held.iter().all(|input| input.phase == RelayPhase::Pending));
+
+        *after.chain.height.lock().expect("height") = LAST_VALID_BLOCK_HEIGHT + 1;
+        after.track().await;
+        let managed = ManagedMergeInit {
+            hub: after.hub.clone(),
+            builder: after.builder.clone(),
+            relay: after.relay().clone(),
+        }
+        .build();
+        assert!(managed
+            .held_inputs(RING)
+            .await
+            .expect("held inputs")
+            .is_empty());
+        assert!(after.held().await.is_empty());
+    }
 }

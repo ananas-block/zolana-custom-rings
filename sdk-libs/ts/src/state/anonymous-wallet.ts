@@ -86,8 +86,8 @@ export class AnonymousWallet {
 
   /** Takes a scan's notes, spends, claims and progress together and consumes it. */
   async absorb(scan: AnonymousScan): Promise<void> {
-    consumeScan(scan);
     return this.wallet._withSyncLock(async () => {
+      consumeScan(scan, this.#history);
       const state = this.wallet._state();
       const nullifiers = new Set([...state.nullifiers, ...scan.spentNullifiers.map(bytesKey)]);
       const pendingState = this.#pending._state();

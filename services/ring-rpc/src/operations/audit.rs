@@ -630,6 +630,7 @@ impl<S: TransactionSource> AuditService<S> {
             .shared
             .source
             .transactions_by_tag(TransactionPage {
+                ring: self.ring,
                 tag: self.view_tag,
                 position,
                 limit,
@@ -811,7 +812,6 @@ impl<S: TransactionSource> AuditService<S> {
                             if let Some(merge) = merge {
                                 apply_confirmed_merge(self.shared.database.as_ref(), store, merge)
                                     .await?;
-                                store.remember_merge(&tx)?;
                             }
                         }
                         Err(error) if error.disposition() == RowDisposition::Retry => {
@@ -1323,6 +1323,7 @@ mod tests {
             tree_id: 1,
             leaf_index: 3,
             first_nullifier: [9; 32],
+            ring_data_hash: [0; 32],
             inputs: vec![[1; 32], [2; 32]],
         }
     }
@@ -1341,14 +1342,14 @@ mod tests {
         let database = Store::open("sqlite::memory:", 1).await.expect("store");
         let store = AuditStore::default();
         let merge = two_input_merge();
-        rename_spent_table(&database, "spent_commitments", "parked").await;
+        rename_spent_table(&database, "finalized_spent_commitments", "parked").await;
         assert!(
             apply_confirmed_merge(Some(&database), &store, merge.clone())
                 .await
                 .is_err()
         );
         assert!(store.spent_commitment(&[1; 32]).is_none());
-        rename_spent_table(&database, "parked", "spent_commitments").await;
+        rename_spent_table(&database, "parked", "finalized_spent_commitments").await;
         apply_confirmed_merge(Some(&database), &store, merge.clone())
             .await
             .expect("retry");
@@ -1385,13 +1386,13 @@ mod tests {
     async fn a_merge_lost_to_a_restart_before_its_write_replays_every_input() {
         let database = Store::open("sqlite::memory:", 1).await.expect("store");
         let merge = two_input_merge();
-        rename_spent_table(&database, "spent_commitments", "parked").await;
+        rename_spent_table(&database, "finalized_spent_commitments", "parked").await;
         assert!(
             apply_confirmed_merge(Some(&database), &AuditStore::default(), merge.clone())
                 .await
                 .is_err()
         );
-        rename_spent_table(&database, "parked", "spent_commitments").await;
+        rename_spent_table(&database, "parked", "finalized_spent_commitments").await;
         let restarted = AuditStore::default();
         apply_confirmed_merge(Some(&database), &restarted, merge.clone())
             .await

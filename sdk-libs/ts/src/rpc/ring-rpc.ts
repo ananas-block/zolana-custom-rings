@@ -1104,7 +1104,7 @@ export interface RingUnspentUtxo {
 export interface RingCoverage {
   /** Older notes are never covered. */
   readonly fromSlot: bigint;
-  /** At `confirmed` commitment, a later rollback goes undetected. */
+  /** The completed finalized history boundary. */
   readonly throughSlot: bigint;
   /** False after a failed or partial pass or on an input the auditor cannot name, a wallet scoped read sees the flag and no row. */
   readonly complete: boolean;
@@ -1134,7 +1134,7 @@ export interface RingUnresolvedHistory {
   readonly inputs: readonly Bytes32[];
 }
 
-/** Mirrors Rust `GetUnspentUtxosResponse`, provisional, a limit or spend decision must not read it as canonical. */
+/** Notes not seen spent through the finalized coverage boundary. */
 export interface RingUnspentUtxosPage {
   readonly utxos: readonly RingUnspentUtxo[];
   readonly coverage: RingCoverage;
@@ -1543,7 +1543,7 @@ export class RingRpc {
     });
   }
 
-  /** Provisional at `confirmed` commitment, each note not seen spent through `coverage.throughSlot`. */
+  /** Notes not seen spent through the finalized coverage boundary. */
   async getUnspentUtxos(
     input: Readonly<{
       target: RingReadTarget;
@@ -1613,7 +1613,7 @@ export class RingRpc {
     });
   }
 
-  /** The server opens confirmed ring merges with its auditor key. */
+  /** Merge records require finalized execution. */
   async getAuditedMerges(
     input: Readonly<{
       target: RingReadTarget;
