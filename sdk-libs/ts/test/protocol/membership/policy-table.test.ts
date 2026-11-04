@@ -12,6 +12,10 @@ import {
   admitTransfer,
   decodeRule,
   decodeRuleTable,
+  evaluateInputAssets,
+  evaluatePayments,
+  evaluateSenders,
+  ListId,
   policyTableFields,
   policyTableHash,
   type RecordLists,
@@ -24,7 +28,6 @@ const field = (text: string): Bytes32 => hexToBytes(text) as Bytes32;
 interface TableCase {
   readonly name: string;
   readonly sources: readonly Readonly<{ list_id: number; registry: string }>[];
-  readonly salted: number;
   readonly rules: readonly string[];
   readonly fields: readonly string[];
   readonly policy_hash: string;
@@ -41,13 +44,10 @@ const tableVector = JSON.parse(
 describe("ring-policy-table.json", () => {
   it.each(tableVector.cases.map((vector) => [vector.name, vector] as const))("%s", (_, vector) => {
     const table = { rules: vector.rules.map((row) => decodeRule(field(row))) };
-    const sources = {
-      slots: vector.sources.map((slot) => ({
-        listId: slot.list_id,
-        registry: field(slot.registry),
-      })),
-      salted: vector.salted,
-    };
+    const sources = vector.sources.map((slot) => ({
+      listId: slot.list_id,
+      registry: field(slot.registry),
+    }));
     expect(policyTableFields(table, sources).map((row) => bytesToHex(row))).toEqual(vector.fields);
     expect(bytesToHex(policyTableHash(table, sources))).toBe(vector.policy_hash);
   });
@@ -108,5 +108,68 @@ describe("ring-policy-rules.json", () => {
       },
     );
     expect(refusal).toEqual(expected(vector.outcome));
+  });
+});
+
+describe("sender, payment and input asset evaluation", () => {
+  const member = (byte: number): Bytes32 => new Uint8Array(32).fill(byte) as Bytes32;
+  const sources = [] as const;
+  const onBlock = 1n << BigInt(ListId.block - 1);
+  const off: RecordLists = { own: 0n, curator: 0n };
+  const on: RecordLists = { own: onBlock, curator: 0n };
+  const table = (subject: "sender" | "outputOwner" | "asset") =>
+    Object.freeze({
+      rules: [
+        {
+          subject,
+          source: { kind: "lists" as const, present: [], absent: [ListId.block] },
+          guard: { kind: "always" as const },
+        },
+      ],
+    });
+  const payment = (ownerLists: RecordLists, assetLists: RecordLists) => ({
+    ring: true,
+    owner: member(1),
+    asset: member(2),
+    amount: 5n,
+    ownerLists,
+    assetLists,
+    mintPolicy: EMPTY_MINT_POLICY,
+  });
+  const noSenders = (subject: "outputOwner" | "asset", lists: RecordLists) =>
+    evaluatePayments(table(subject), sources, {
+      ringInputs: [],
+      outputs: [payment(lists, lists)],
+    });
+
+  it("refuses a blocked recipient and asset with no sender row", () => {
+    expect(noSenders("outputOwner", on)?.subject).toEqual({ kind: "owner", output: 0 });
+    expect(noSenders("asset", on)?.subject).toEqual({ kind: "asset", output: 0 });
+    expect(noSenders("outputOwner", off)).toBeUndefined();
+    expect(noSenders("asset", off)).toBeUndefined();
+  });
+
+  it("holds sender rules to the sender alone", () => {
+    expect(evaluateSenders(table("sender"), sources, [off, on])?.subject).toEqual({
+      kind: "sender",
+    });
+    expect(evaluateSenders(table("sender"), sources, [off])).toBeUndefined();
+    expect(evaluateSenders(table("sender"), sources, [])).toBeUndefined();
+    expect(
+      evaluatePayments(table("sender"), sources, { ringInputs: [], outputs: [payment(on, on)] }),
+    ).toBeUndefined();
+  });
+
+  it("refuses a delisted input asset under an unconditional asset rule alone", () => {
+    const inputs = [{ input: 1, lists: on }];
+    expect(evaluateInputAssets(table("asset"), sources, inputs)?.subject).toEqual({
+      kind: "inputAsset",
+      input: 1,
+    });
+    expect(evaluateInputAssets(table("outputOwner"), sources, inputs)).toBeUndefined();
+    const guarded = {
+      rules: [{ ...table("asset").rules[0]!, guard: { kind: "aboveAmount" as const, amount: 9n } }],
+    };
+    expect(evaluateInputAssets(guarded, sources, inputs)).toBeUndefined();
   });
 });

@@ -33,7 +33,6 @@ export interface AuditHead {
   readonly txViewingU: Bytes32;
   /** `0x04 ‖ u` as the ring config stores it. */
   readonly auditorPubkey: Bytes33;
-  readonly ephU: Bytes32;
   /** `envelope_ct`, the transmitted length is the stream layout's. */
   readonly envelope: Uint8Array;
   readonly salt: Bytes16;
@@ -81,6 +80,8 @@ export interface TransferStatement {
   readonly approvalMask: number;
   /** Zero unless the frame discloses totals to a co-signer. */
   readonly approvalTotals: Bytes32;
+  /** 5 bits per signer of the run, low bits first, zero past it. */
+  readonly signerDataCounts: bigint;
   /** `R` is zero, the frame takes public funds alone. */
   readonly noSpend: boolean;
   /** The `m` published slots. */
@@ -166,6 +167,7 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ...railBits,
     rightAlign(Uint8Array.of(statement.approvalMask)),
     statement.approvalTotals,
+    bigIntBytes(statement.signerDataCounts) as Bytes32,
     bit(statement.noSpend),
     u32Field(outputs.length, "output count"),
     filledChain(
@@ -241,7 +243,6 @@ export function ringTransferStatement(
       ringId: binding.ringId,
       txViewingU: data.txViewingU,
       auditorPubkey: binding.auditorPubkey,
-      ephU: data.txViewingU,
       envelope: data.envelope,
       salt: data.salt,
       layout: RingTransactData.auditLayout(data),
@@ -249,6 +250,7 @@ export function ringTransferStatement(
     family,
     approvalMask: data.approval,
     approvalTotals: data.extensions.approvalTotals ?? ZERO_FIELD,
+    signerDataCounts: data.extensions.signerDataCounts ?? 0n,
     noSpend: data.noSpend,
     outputs: data.outputs,
     capacity: RingTransactData.streamLayout(data).capacity,
@@ -346,7 +348,6 @@ function auditHeadElements(head: AuditHead): readonly Bytes32[] {
     checkedBytes<Bytes32>(head.ringId, 32, "ring id"),
     ...packedKey(taggedX25519(head.txViewingU)),
     ...packedKey(checkedBytes<Bytes33>(head.auditorPubkey, 33, "auditor pubkey")),
-    ...packedKey(taggedX25519(head.ephU)),
     ciphertextDigest(head.envelope),
     rightAlign(checkedBytes<Bytes16>(head.salt, 16, "salt")),
     rightAlign(Uint8Array.of(auditLayoutValue(head.layout))),

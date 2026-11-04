@@ -146,7 +146,6 @@ export function ringPolicyData(
     bump: number;
     records?: Address;
     tracking?: Address;
-    saltedLists?: number;
     roles?: Partial<RingRoles>;
     auditorPublicKey?: Uint8Array;
     mode?: RingMode;
@@ -175,8 +174,7 @@ export function ringPolicyData(
     .bytes(input.auditorPublicKey ?? FIXTURE_AUDITOR, 33, "auditorPublicKey")
     .u64(input.createdSlot ?? 0n, "createdSlot")
     .bytes(addressBytes(input.records ?? ZERO_ADDRESS))
-    .bytes(addressBytes(input.tracking ?? ZERO_ADDRESS))
-    .u8(input.saltedLists ?? 0, "saltedLists");
+    .bytes(addressBytes(input.tracking ?? ZERO_ADDRESS));
   writePolicyFields(writer, input);
   return writer.finish();
 }

@@ -1,8 +1,10 @@
 //! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK, the client and the ring program tests.
 
 mod frames;
+mod ring_policy;
 
-use frames::{config, spp_b, Fixture};
+use frames::{spp_b, Fixture};
+use ring_policy::config;
 
 use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,

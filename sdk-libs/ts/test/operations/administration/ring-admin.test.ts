@@ -63,7 +63,12 @@ function u64le(value: bigint): number[] {
 const RULES: readonly Rule[] = [
   {
     subject: "outputOwner",
-    source: { kind: "lists", present: [ListId.allow], absent: [ListId.block] },
+    source: { kind: "lists", present: [ListId.allow], absent: [] },
+    guard: { kind: "always" },
+  },
+  {
+    subject: "outputOwner",
+    source: { kind: "lists", present: [], absent: [ListId.block] },
     guard: { kind: "always" },
   },
 ];
@@ -72,8 +77,8 @@ describe("initialize and policy update", () => {
   it("creates the ring account and the pool registration in one instruction", async () => {
     const auditor = X25519Keypair.generate().publicKey();
     const table = buildRuleTable({ rules: RULES });
-    const [rule] = table.rules;
-    if (rule === undefined) throw new Error("table without its rule");
+    const [rule, denial] = table.rules;
+    if (rule === undefined || denial === undefined) throw new Error("table without its rules");
     const head = [
       [PAYER, SIGN_WRITE],
       [AUTHORITY, SIGN],
@@ -108,8 +113,9 @@ describe("initialize and policy update", () => {
         0,
         ListId.block,
         0,
-        1,
+        2,
         ...encodeRule(rule),
+        ...encodeRule(denial),
       ),
     );
     expect(metas(policy)).toEqual([...head, [RECORDS, READ]]);
@@ -455,6 +461,46 @@ describe("policy writes", () => {
     },
   );
 
+  it.each([
+    ["MultiListAbsence", [], [ListId.block, ListId.frozen]],
+    ["MixedPolarity", [ListId.allow], [ListId.block]],
+    ["InvertedPolarity", [ListId.block], []],
+    ["InvertedPolarity", [], [ListId.allow]],
+  ] as const)("refuses %s on every table write", async (reason, present, absent) => {
+    const rule: Rule = {
+      subject: "outputOwner",
+      source: { kind: "lists", present, absent },
+      guard: { kind: "always" },
+    };
+    for (const write of tableWrites)
+      await expect(write({ table: buildRuleTable({ rules: [rule] }) })).rejects.toMatchObject({
+        code: "RING_RULE_TABLE_INVALID",
+        details: { reason },
+      });
+  });
+
+  it("keeps a grant over several lists and one denial per row", async () => {
+    const rules: readonly Rule[] = [
+      {
+        subject: "outputOwner",
+        source: { kind: "lists", present: [ListId.allow, ListId.approval], absent: [] },
+        guard: { kind: "always" },
+      },
+      {
+        subject: "outputOwner",
+        source: { kind: "lists", present: [], absent: [ListId.block] },
+        guard: { kind: "always" },
+      },
+      {
+        subject: "outputOwner",
+        source: { kind: "lists", present: [], absent: [ListId.frozen] },
+        guard: { kind: "always" },
+      },
+    ];
+    for (const write of tableWrites)
+      await expect(write({ table: buildRuleTable({ rules }) })).resolves.toBeDefined();
+  });
+
   it("refuses a hand-built table its builder refuses before the authority signs", async () => {
     for (const write of tableWrites)
       await expect(write({ table: { rules: [...RULES, ...RULES] } })).rejects.toMatchObject({
@@ -476,15 +522,9 @@ describe("policy writes", () => {
       [AUTHORITY, SIGN],
       [await ringPolicyAddress(RING), WRITE],
     ];
-    expect(curator.data).toEqual(Uint8Array.of(54, 1, ListId.block, 1, 0));
+    expect(curator.data).toEqual(Uint8Array.of(54, 1, ListId.block, 1));
     expect(metas(curator)).toEqual([...head, [CURATOR, READ]]);
-    expect(own.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0, 0));
-    const salted = await updateRingPolicyInstruction({
-      ringProgramId: RING,
-      authority: AUTHORITY,
-      update: { kind: "source", listId: ListId.block, source: { kind: "own" }, salted: true },
-    });
-    expect(salted.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0, 1));
+    expect(own.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0));
     expect(metas(own)).toEqual(head);
   });
 

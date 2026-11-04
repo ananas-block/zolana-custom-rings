@@ -157,7 +157,6 @@ describe("transfer_statement.json", () => {
         ringId: field(vector.ring_id),
         txViewingU: field(vector.tx_viewing_u),
         auditorPubkey: hexToBytes(vector.auditor_pubkey) as Bytes33,
-        ephU: field(vector.eph_u),
         envelope: hexToBytes(vector.envelope),
         salt: hexToBytes(vector.salt) as Bytes16,
         layout: { hasData: (vector.layout & 1) !== 0, entry: (vector.layout & 2) !== 0 },
@@ -178,6 +177,7 @@ describe("transfer_statement.json", () => {
             },
       approvalMask: vector.approval_mask,
       approvalTotals: field(vector.approval_totals),
+      signerDataCounts: BigInt((vector as { signer_data_counts?: number }).signer_data_counts ?? 0),
       noSpend: vector.no_spend,
       outputs: vector.outputs.map((output) => ({
         hash: field(output.hash),

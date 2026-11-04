@@ -30,7 +30,12 @@ const LIFETIME = Object.freeze({
 const RULES: readonly Rule[] = [
   {
     subject: "outputOwner",
-    source: { kind: "lists", present: [ListId.allow], absent: [ListId.block] },
+    source: { kind: "lists", present: [ListId.allow], absent: [] },
+    guard: { kind: "always" },
+  },
+  {
+    subject: "outputOwner",
+    source: { kind: "lists", present: [], absent: [ListId.block] },
     guard: { kind: "always" },
   },
 ];
@@ -38,10 +43,10 @@ const RULES: readonly Rule[] = [
 beforeAll(initializePoseidon);
 
 /** The ring's policy reads allow from its own records and block from curator A. */
-async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
+async function chain(input: Readonly<{ hasPolicy?: boolean; privateBlock?: boolean }> = {}) {
   const accounts = new Map<Address, RpcAccount>();
   const sources: RingSourceSlot[] = LIST_IDS.map((listId) =>
-    listId === ListId.allow
+    listId === ListId.allow || (input.privateBlock === true && listId === ListId.privateBlock)
       ? { listId, registry: ZERO_ADDRESS }
       : listId === ListId.block
         ? { listId, registry: CURATOR_A }
@@ -56,6 +61,7 @@ async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
         bump: policyBump,
         roles: { policy: AUTHORITY },
         records: RECORDS,
+        ...(input.privateBlock === true ? { tracking: CURATOR_A } : {}),
         sources,
         ...(input.hasPolicy === false ? {} : { policyHash: new Uint8Array(32).fill(1) as Bytes32 }),
       }),
@@ -128,6 +134,20 @@ describe("policy transactions", () => {
     });
     expect(client.getAccount).not.toHaveBeenCalledWith(CURATOR_A, undefined);
     expect(client.getLatestBlockhash).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unpaired source for a private list whatever the stored bits say", async () => {
+    const client = await chain({ privateBlock: true });
+    await expect(
+      buildRingUpdatePolicyTransaction({
+        client,
+        ringProgramId: RING,
+        authority: AUTHORITY,
+        update: { kind: "source", listId: ListId.privateBlock, source: { kind: "own" } },
+      }),
+    ).rejects.toMatchObject({
+      causeCode: "RING_POLICY_SOURCE_INVALID",
+    });
   });
 
   it("re-points a referenced list and keeps the sources to one curator", async () => {

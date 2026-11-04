@@ -3,9 +3,9 @@
 use custom_ring_interface::{
     cosign::ApprovalMask, sender_bundle_len, storage::Revision, stream::slot_tag,
     AnonymousProofData, AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
-    RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    DATA_TAIL_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingRail,
+    RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN,
+    RECIPIENT_BODY_LEN,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -394,12 +394,4 @@ pub fn field(seed: u8) -> [u8; 32] {
     let mut value = [seed; 32];
     value[0] = 0x0f;
     value
-}
-
-pub fn config() -> Box<RingPolicy> {
-    let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
-    config.discriminator = RING_POLICY;
-    config.auditor_pubkey[0] = 4;
-    config.auditor_pubkey[1..].copy_from_slice(&[0xa1; 32]);
-    config
 }

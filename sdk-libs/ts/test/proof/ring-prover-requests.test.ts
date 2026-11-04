@@ -461,6 +461,9 @@ function request(item: Json): RingProofRequest {
       inputs: list(item["inputs"]).map(opening),
       entries: item["entries"] === undefined ? [] : list(item["entries"]).map(entryOpening),
       signerCount: count(item["signerCount"]),
+      ...(item["signerDataCounts"] === undefined
+        ? {}
+        : { signerDataCounts: BigInt(count(item["signerDataCounts"])) }),
       signers: fields(item["signers"]),
       rows: fields(item["rows"]),
       privateTxHash: field(item["privateTxHash"]),
@@ -989,7 +992,6 @@ function checkTransferStatement(typed: TransferProofRequest): void {
       ringId: typed.ringId,
       txViewingU,
       auditorPubkey: tagged(typed.auditorPk),
-      ephU: txViewingU,
       envelope: sealed.envelope,
       salt: typed.salt,
       layout: typed.layout,
@@ -1010,6 +1012,7 @@ function checkTransferStatement(typed: TransferProofRequest): void {
           },
     approvalMask: typed.approvalMask,
     approvalTotals: typed.approvalTotals ?? ZERO_32,
+    signerDataCounts: typed.signerDataCounts ?? 0n,
     noSpend: live.length === 0,
     outputs: slots.map(({ output }, slot) => ({
       hash: openingHash(output),

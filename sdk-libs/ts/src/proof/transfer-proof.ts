@@ -1,8 +1,12 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections. */
-import { ZERO_32 } from "@heliuslabs/zolana/internal";
+import { hashChain, ZERO_32 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { ProofInputUtxo, SppProofInputs } from "@heliuslabs/zolana/transaction";
+import { randomBlinding, type X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type {
+  ProofInputUtxo,
+  ProofOutputUtxo,
+  SppProofInputs,
+} from "@heliuslabs/zolana/transaction";
 
 import type { TransferProofRequest } from "../rpc/prover/ring.js";
 import type { RingOutputRail } from "../operations/payments/output-rail.js";
@@ -25,7 +29,14 @@ import {
   outputOpenings,
   type SealedAudit,
 } from "./audit-proof.js";
-import { policyParams, type PolicyInputs, type PolicyProving } from "./policy-proof.js";
+import {
+  approvalTotalsOf,
+  policyParams,
+  type PolicyInputs,
+  type PolicyProving,
+} from "./policy-proof.js";
+import { approvalOpeningOf, type ApprovalOpening } from "../protocol/membership/approval-totals.js";
+import { signerDataCountsOf } from "../protocol/membership/signer-data-counts.js";
 
 /** The key a transfer proves under, `wideOwners` the frame flag naming its rows. */
 export interface TransferKeySelection {
@@ -72,6 +83,58 @@ function unkeyed(spend: TransferSpend): RingError {
 
 export type { TransferProofRequest };
 
+/** A frame's digest and what opens it, Rust `Frame::approval_opening`. */
+export interface TransferApproval {
+  readonly digest: Bytes32;
+  readonly opening: ApprovalOpening;
+}
+
+/**
+ * A blinder per attempt, the digest hides the totals only under one. Drawn as 31 bytes, so it stays
+ * below the field for every draw and the chain can never reject or reduce it. The outputs and legs
+ * read here are the ones sealing keeps, the auditor message changes neither.
+ */
+export function freshTransferApproval(proofInputs: SppProofInputs): TransferApproval {
+  const totals = approvalTotalsOf(proofInputs, proofInputs.checkShape().outputs);
+  const blinder = randomBlinding();
+  return Object.freeze({
+    digest: totals.commitment(blinder),
+    opening: approvalOpeningOf(totals, blinder),
+  });
+}
+
+/** The statement's element over the run `signers` binds and the slots SPP publishes, refused where the circuit has no solution. */
+export function ownerDataCounts(
+  run: readonly Bytes32[],
+  outputs: readonly ProofOutputUtxo[],
+): bigint {
+  const counts = signerDataCountsOf(
+    run,
+    outputs.flatMap((output) =>
+      output.isDummy() || output.ownerAddress === undefined || output.dataHash === undefined
+        ? []
+        : [
+            {
+              ownerIdentity: output.ownerAddress.signingPublicKey.ownerProofInputHash(),
+              dataHash: output.dataHash,
+            },
+          ],
+    ),
+  );
+  if (counts === undefined)
+    throw new RingError("RING_TRANSACT_DATA_INVALID", {
+      details: { reason: "InvalidSignerDataCounts" },
+    });
+  return counts;
+}
+
+/** Mirror `PrivateTxHash`, no chain folds an empty list. */
+function addressChainOf(proofInputs: SppProofInputs): Bytes32 {
+  return hashChain(
+    proofInputs.inputUtxos.filter((input) => input.isAddress()).map((input) => input.nullifier()),
+  );
+}
+
 /** The request of the key the frame selects, every section over the same slots. */
 export function transferProofRequest(
   input: Readonly<{
@@ -96,6 +159,8 @@ export function transferProofRequest(
     partyIdentities: readonly Bytes32[];
     /** SPP's owner signer run by owner identity, in-proof and authority bind none. */
     signers: readonly Bytes32[];
+    /** Zeros when the frame discloses no totals, a zero digest opens nothing. */
+    approval?: TransferApproval;
   }>,
 ): TransferProofRequest {
   const { policy, proofInputs, inputs, signers } = input;
@@ -113,8 +178,8 @@ export function transferProofRequest(
       auditor: input.auditor,
     }),
     approvalMask: policy.approvalMask,
-    approvalTotals: ZERO_32,
-    approvalBlinder: ZERO_32,
+    approvalTotals: input.approval?.digest ?? ZERO_32,
+    approvalBlinder: input.approval?.opening.blinder ?? ZERO_32,
     outputCount: input.outputCount,
     // Every slot of the key's capacity, an omitted suffix runs its gadgets over its own proof output.
     outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId, circuit.outputs),
@@ -122,6 +187,7 @@ export function transferProofRequest(
     inputs: inputOpenings(inputs, inputClass),
     entries: entry ? entryOpenings(inputs, inputClass) : [],
     signerCount: signers.length,
+    signerDataCounts: ownerDataCounts(signers, proofInputs.outputs),
     signers: [
       ...signers,
       ...Array.from({ length: Math.max(0, signerSlots(circuit) - signers.length) }, () => ZERO_32),
@@ -129,7 +195,7 @@ export function transferProofRequest(
     rows: policy.rows,
     privateTxHash: input.privateTxHash,
     privateTxBlinding: proofInputs.privateTxBlinding(),
-    addressChain: ZERO_32,
+    addressChain: addressChainOf(proofInputs),
     ...policy.tracking,
     ...policyParams(policy, input.proving),
     inProof: input.inProof,

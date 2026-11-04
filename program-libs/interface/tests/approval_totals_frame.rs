@@ -1,6 +1,5 @@
 //! Pins `test-vectors/proof/approval_totals_frame.json` for the TS SDK.
 
-#[expect(dead_code, reason = "shared fixture, two of its frames are read")]
 mod frames;
 
 use custom_ring_interface::{extension_flag, RingRail, RingTransactData};
@@ -63,13 +62,21 @@ fn case<'a>(name: &'static str, digest: &'a [u8; 32], mut data: RingTransactData
 fn vector_text() -> String {
     let fixture = Fixture::new();
     let digest = &fixture.fields[73];
+    let frame = |name: &str| {
+        let (_, data) = fixture
+            .cases()
+            .into_iter()
+            .find(|(case, _)| *case == name)
+            .expect("named frame");
+        data
+    };
     let vector = Vector {
         description: "A confidential frame with no other extension and one with every other \
                       SPP extension, each with the approval totals digest under bit 4 of the \
                       extension byte. base is the same frame with no digest.",
         cases: vec![
-            case("alone", digest, fixture.confidential_thresholds()),
-            case("withOthers", digest, fixture.confidential_extensions()),
+            case("alone", digest, frame("confidential_thresholds")),
+            case("withOthers", digest, frame("confidential_extensions")),
         ],
     };
     serde_json::to_string_pretty(&vector).expect("json") + "\n"

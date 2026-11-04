@@ -97,7 +97,6 @@ function saltedRing(list: ListId = ListId.privateBlock): RingPolicy {
   return {
     records: RECORDS,
     tracking: TRACKING,
-    saltedLists: 0,
     hasPolicy: true,
     policyHash: policyTableHash(table, policySourceOwners(sources)),
     sources,
