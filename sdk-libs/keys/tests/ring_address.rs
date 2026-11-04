@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use zolana_ring_keys::{
     ring_address::{RING_ADDRESS_CHECKSUM_DOMAIN, RING_ADDRESS_VERSION},
@@ -24,6 +25,7 @@ struct ValidCase {
     uri: String,
     recipient: String,
     ring_program_id: String,
+    list_salt: String,
     deposit_tag: Option<String>,
     amount: Option<String>,
     mint: Option<String>,
@@ -38,6 +40,8 @@ struct RejectedCase {
 }
 
 const RING: Address = Address::new_from_array([0x11; 32]);
+
+const LIST_SALT: [u8; 32] = [0x07; 32];
 
 fn viewing_key() -> ViewingKey {
     ViewingKey::from_bytes(&[0x21; 32])
@@ -55,6 +59,7 @@ fn fixture_address() -> RingAddress {
             ..wallet
         },
         ring_program_id: RING,
+        list_salt: LIST_SALT,
     }
 }
 
@@ -75,6 +80,7 @@ fn valid_case(name: &str, request: &RingPaymentRequest) -> ValidCase {
         uri: request.to_string(),
         recipient: hex::encode(request.address.recipient.to_bytes()),
         ring_program_id: request.address.ring_program_id.to_string(),
+        list_salt: hex::encode(request.address.list_salt),
         deposit_tag: request.deposit_tag.map(hex::encode),
         amount: request.amount.map(|amount| amount.to_string()),
         mint: request.mint.map(|mint| mint.to_string()),
@@ -143,6 +149,11 @@ fn compute() -> RingAddressVectors {
     *bad_checksum.last_mut().unwrap() ^= 1;
     let mut bad_viewing_key = payload.clone();
     bad_viewing_key[1 + 34 + 32] = 5;
+    let salt_at = payload.len() - 4 - 32;
+    let mut zero_salt = payload.clone();
+    zero_salt[salt_at..salt_at + 32].fill(0);
+    let mut non_canonical_salt = payload.clone();
+    non_canonical_salt[salt_at..salt_at + 32].fill(0xff);
     let mut nonzero_lead = fixture_tag();
     nonzero_lead[0] = 1;
     let rejected = vec![
@@ -156,6 +167,11 @@ fn compute() -> RingAddressVectors {
         ("unknown_version", uri(&with_checksum(wrong_version))),
         ("bad_checksum", uri(&bad_checksum)),
         ("bad_viewing_key", uri(&with_checksum(bad_viewing_key))),
+        ("zero_salt_on_keyed_address", uri(&with_checksum(zero_salt))),
+        (
+            "non_canonical_salt",
+            uri(&with_checksum(non_canonical_salt)),
+        ),
         ("delivery_tag_key", format!("zolana:{base58}?tag={tag}")),
         (
             "uppercase_tag",
@@ -201,6 +217,7 @@ fn shared_vectors_match() {
             request.address.ring_program_id.to_string(),
             case.ring_program_id
         );
+        assert_eq!(hex::encode(request.address.list_salt), case.list_salt);
         assert_eq!(request.deposit_tag.map(hex::encode), case.deposit_tag);
         assert_eq!(
             request.address,
@@ -215,6 +232,8 @@ fn shared_vectors_match() {
         ("unknown_version", "UnknownRingAddressVersion"),
         ("bad_checksum", "InvalidRingAddressChecksum"),
         ("bad_viewing_key", "InvalidPublicKey"),
+        ("zero_salt_on_keyed_address", "InvalidRingAddressListSalt"),
+        ("non_canonical_salt", "InvalidRingAddressListSalt"),
         ("delivery_tag_key", "UnknownRingPaymentKey"),
         ("uppercase_tag", "InvalidRingPaymentTag"),
         ("short_tag", "InvalidRingPaymentTag"),
@@ -230,6 +249,30 @@ fn shared_vectors_match() {
     for (case, (name, error)) in committed.rejected.iter().zip(expected_errors) {
         assert_eq!((case.name.as_str(), case.error.as_str()), (name, error));
     }
+}
+
+/// An unenrolled PDA is paid under the zero key, whose list position reads salt zero.
+#[test]
+fn a_zero_key_address_carries_salt_zero_and_nothing_else() {
+    let mut recipient = fixture_address().recipient;
+    recipient.nullifier_pubkey = ZERO_NULLIFIER_PUBKEY;
+    let zero_key = RingAddress {
+        recipient,
+        ring_program_id: RING,
+        list_salt: [0; 32],
+    };
+    assert_eq!(
+        RingAddress::from_base58(&zero_key.to_base58()).unwrap(),
+        zero_key
+    );
+    let salted = RingAddress {
+        list_salt: LIST_SALT,
+        ..zero_key
+    };
+    assert_eq!(
+        RingAddress::from_base58(&salted.to_base58()).unwrap_err(),
+        RingKeyError::InvalidRingAddressListSalt
+    );
 }
 
 #[test]

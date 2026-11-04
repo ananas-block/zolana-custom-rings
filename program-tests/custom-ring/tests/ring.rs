@@ -860,10 +860,11 @@ impl PaymentLanding<'_> {
 
 /// The wallet's spec identity on `ring`, its own viewing key the recipient key.
 fn ring_address(owner: &ShieldedKeypair, ring: Address) -> Result<RingAddress> {
-    Ok(RingAddress {
-        recipient: owner.shielded_address()?,
-        ring_program_id: ring,
-    })
+    Ok(RingAddress::enrolled(
+        owner.shielded_address()?,
+        ring,
+        &owner.nullifier_key,
+    )?)
 }
 
 fn unspent_utxo(wallet: &Wallet, amount: u64) -> Result<Utxo> {

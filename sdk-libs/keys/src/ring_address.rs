@@ -5,24 +5,38 @@ use std::{fmt, str::FromStr};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-
+use custom_ring_interface::domain;
+use spr_hasher::{
+    primitives::{is_canonical_bn254_scalar_be, right_align},
+    Hasher, Poseidon,
+};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
     viewing_key::ViewTag,
+    NullifierKey,
 };
+use zeroize::Zeroizing;
 
 use crate::RingKeyError;
 
-pub const RING_ADDRESS_VERSION: u8 = 3;
+pub const RING_ADDRESS_VERSION: u8 = 4;
 
-pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr/v3";
+pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr/v4";
 
 pub const RING_PAYMENT_SCHEME: &str = "zolana:";
 
 const CHECKSUM_LEN: usize = 4;
 
-/// `version ‖ recipient ‖ ring_program_id`.
-const BODY_LEN: usize = 1 + SHIELDED_ADDRESS_LEN + 32;
+/// `"CRPS"`
+const LIST_SALT_DOMAIN: u32 = 0x4352_5053;
+/// `"CRPT"`
+const LIST_TAG_DOMAIN: u32 = 0x4352_5054;
+
+const LIST_SALT_LEN: usize = 32;
+
+/// `version ‖ recipient ‖ ring_program_id ‖ list_salt`.
+const BODY_LEN: usize = 1 + SHIELDED_ADDRESS_LEN + 32 + LIST_SALT_LEN;
 
 pub const RING_ADDRESS_PAYLOAD_LEN: usize = BODY_LEN + CHECKSUM_LEN;
 
@@ -37,6 +51,8 @@ const LABEL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 pub struct RingAddress {
     pub recipient: ShieldedAddress,
     pub ring_program_id: Address,
+    /// Read on a private list row, a resolver checks it against the tracking leaf's `list_tag`.
+    pub list_salt: [u8; 32],
 }
 
 impl fmt::Debug for RingAddress {
@@ -48,15 +64,43 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    /// `version ‖ recipient ‖ ring_program_id ‖ checksum`.
+    /// An enrolled wallet's address, its salt derives from the nullifier key it enrolled.
+    pub fn enrolled(
+        recipient: ShieldedAddress,
+        ring_program_id: Address,
+        nullifier_key: &NullifierKey,
+    ) -> Result<Self, RingKeyError> {
+        Ok(Self {
+            recipient,
+            ring_program_id,
+            list_salt: list_salt(nullifier_key)?,
+        })
+    }
+
+    /// A zero nullifier key has salt zero and every other key a nonzero canonical one.
+    pub fn check_list_salt(
+        recipient: &ShieldedAddress,
+        list_salt: &[u8; 32],
+    ) -> Result<(), RingKeyError> {
+        let zero_key = recipient.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY;
+        let zero_salt = *list_salt == [0; LIST_SALT_LEN];
+        match zero_key == zero_salt && is_canonical_bn254_scalar_be(list_salt) {
+            true => Ok(()),
+            false => Err(RingKeyError::InvalidRingAddressListSalt),
+        }
+    }
+
+    /// `version ‖ recipient ‖ ring_program_id ‖ list_salt ‖ checksum`.
     pub fn to_bytes(&self) -> [u8; RING_ADDRESS_PAYLOAD_LEN] {
         let mut bytes = [0u8; RING_ADDRESS_PAYLOAD_LEN];
         let (body, tail) = bytes.split_at_mut(BODY_LEN);
         let (version, rest) = body.split_at_mut(1);
-        let (recipient, program) = rest.split_at_mut(SHIELDED_ADDRESS_LEN);
+        let (recipient, rest) = rest.split_at_mut(SHIELDED_ADDRESS_LEN);
+        let (program, salt) = rest.split_at_mut(32);
         version[0] = RING_ADDRESS_VERSION;
         recipient.copy_from_slice(&self.recipient.to_bytes());
         program.copy_from_slice(self.ring_program_id.as_array());
+        salt.copy_from_slice(&self.list_salt);
         tail.copy_from_slice(&checksum(body));
         bytes
     }
@@ -75,15 +119,21 @@ impl RingAddress {
         if *checksum_bytes != checksum(body) {
             return Err(RingKeyError::InvalidRingAddressChecksum);
         }
-        let (recipient, program) = rest
+        let (recipient, rest) = rest
             .split_first_chunk::<SHIELDED_ADDRESS_LEN>()
             .ok_or(RingKeyError::InvalidRingAddressLength)?;
-        let program: [u8; 32] = program
+        let (program, salt) = rest
+            .split_first_chunk::<32>()
+            .ok_or(RingKeyError::InvalidRingAddressLength)?;
+        let list_salt: [u8; LIST_SALT_LEN] = salt
             .try_into()
             .map_err(|_| RingKeyError::InvalidRingAddressLength)?;
+        let recipient = ShieldedAddress::from_bytes(recipient)?;
+        Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {
-            recipient: ShieldedAddress::from_bytes(recipient)?,
-            ring_program_id: Address::new_from_array(program),
+            recipient,
+            ring_program_id: Address::new_from_array(*program),
+            list_salt,
         })
     }
 
@@ -101,6 +151,17 @@ impl RingAddress {
             })?;
         Self::from_bytes(&bytes[..len])
     }
+}
+
+/// `Poseidon(CRPS, secret)`, one way, a holder learns the owner's list position and never the secret.
+pub fn list_salt(nullifier_key: &NullifierKey) -> Result<[u8; 32], RingKeyError> {
+    let secret = Zeroizing::new(right_align(&*nullifier_key.secret()));
+    Ok(Poseidon::hashv(&[&domain::field(LIST_SALT_DOMAIN), &*secret])?)
+}
+
+/// `Poseidon(CRPT, list_salt)`, the tracking leaf's commitment to the owner's one salt.
+pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], RingKeyError> {
+    Ok(Poseidon::hashv(&[&domain::field(LIST_TAG_DOMAIN), list_salt])?)
 }
 
 /// The first 4 bytes of `SHA256(domain ‖ body)`.
