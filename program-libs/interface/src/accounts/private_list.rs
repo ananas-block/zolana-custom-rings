@@ -52,11 +52,11 @@ impl ListSalt {
 
     /// One way, a disclosed salt reveals no nullifier secret.
     pub fn derive(nullifier_secret: &[u8; 32]) -> Result<Self, HasherError> {
-        Poseidon::hashv(&[&domain::field(domain::LIST_SALT), nullifier_secret]).map(Self)
+        domain::list_salt(nullifier_secret).map(Self)
     }
 
     pub fn tag(&self) -> Result<ListTag, HasherError> {
-        Poseidon::hashv(&[&domain::field(domain::LIST_TAG), &self.0]).map(ListTag)
+        domain::list_tag(&self.0).map(ListTag)
     }
 
     pub fn position(&self, owner: &[u8; 32]) -> Result<ListPosition, HasherError> {
