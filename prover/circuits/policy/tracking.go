@@ -9,7 +9,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 )
 
-// Tracking opens every owner row and live ring output under the frame's tracking root.
+// Tracking opens every owner row, output owner and withdrawal owner under the frame's tracking root.
 type Tracking struct {
 	TrackingRoot     frontend.Variable
 	TrackingRecords  []registry.TrackingRecord
@@ -25,13 +25,9 @@ type TrackingView struct {
 	NullifierPk, ListTag frontend.Variable
 }
 
-// Distinct members, a live source gives each row and output owner a private row.
-func trackingCapacity(rows, outputs, private int) int {
-	return max(rows+outputs, private)
-}
-
-func NewTracking(rows, outputs, private int) (Tracking, error) {
-	capacity := trackingCapacity(rows, outputs, private)
+// NewTracking also sizes for the key's withdrawal owners, a salted list reads each owner's row.
+func NewTracking(rows, outputs, withdrawals int) (Tracking, error) {
+	capacity := rows + outputs + withdrawals
 	proof, err := registry.NewTrackingProof(capacity)
 	if err != nil {
 		return Tracking{}, err
@@ -46,8 +42,8 @@ func NewTracking(rows, outputs, private int) (Tracking, error) {
 }
 
 // Validate refuses a pool sized off the key before any wire is read.
-func (t *Tracking) ValidateTracking(rows, outputs, private int) error {
-	capacity := trackingCapacity(rows, outputs, private)
+func (t *Tracking) ValidateTracking(rows, outputs, withdrawals int) error {
+	capacity := rows + outputs + withdrawals
 	if len(t.RowEntries) != rows || len(t.OutputEntries) != outputs {
 		return fmt.Errorf("tracking requires one reference per row and output")
 	}

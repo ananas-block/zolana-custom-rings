@@ -1,9 +1,7 @@
 use solana_program_error::ProgramError;
 use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_ring_policy::{
-    AssetLimitsError, PolicyTableError, PrivateSourceError, RuleTableError, SourceMapError,
-};
+use zolana_ring_policy::{AssetLimitsError, PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
     ($($variant:ident = $code:literal => $message:literal,)*) => {
@@ -160,13 +158,9 @@ ring_errors! {
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
-    ApproverMissing = 8500 => "a proven approval bit has no configured approver for its class",
-    TooManyCoSigners = 8501 => "the frame carries more co-signers than the five classes need",
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
-    TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a private source's floor",
-    PrivateSourceOtherTracking = 8504 => "a private source pairs with another tracking registry",
-    PublicRegistryAsPrivateSource = 8505 => "the private source names a registry with no tracking pair",
-    RuleListPolarity = 8506 => "a rule reads a grant list by absence or a deny list by presence",
+    TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
+    SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
     InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
     FrameBufferExists = 8521 => "frame buffer already exists",
     FrameBufferAddress = 8522 => "frame buffer is not at its writer and nonce address",
@@ -203,7 +197,6 @@ impl From<RuleTableError> for CustomRingError {
         match error {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
             RuleTableError::ListNotPolicyReadable => Self::ListNotPolicyReadable,
-            RuleTableError::ListPolarity => Self::RuleListPolarity,
             _ => Self::InvalidPolicyRules,
         }
     }
@@ -228,12 +221,6 @@ impl From<crate::PublicSlotError> for CustomRingError {
             crate::PublicSlotError::AmountOverflow { .. } => Self::PublicAmountOverflow,
             crate::PublicSlotError::ZeroNet { .. } => Self::ZeroNetPublicAmount,
         }
-    }
-}
-
-impl From<PrivateSourceError> for CustomRingError {
-    fn from(_: PrivateSourceError) -> Self {
-        Self::InvalidSource
     }
 }
 

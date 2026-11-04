@@ -1,10 +1,12 @@
 package policy_test
 
 import (
+	"math/big"
 	"slices"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/consensys/gnark/test"
@@ -12,8 +14,10 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
+	"github.com/helius-labs/zolana/prover/server/prover-test/hintattack"
 )
 
 const (
@@ -147,6 +151,33 @@ func TestOutflowSettlesAtItselfAndRefusesOneBelow(t *testing.T) {
 			requireSolved(t, outflowWorld(swapped, tc.outputs, tc.public, tc.outflow).Build(t))
 		})
 	}
+}
+
+// One owner past the cap refuses the transfer whichever row holds it, a lower row cannot hide it.
+func TestOwnerPastTheCapBesideOneUnderIt(t *testing.T) {
+	for name, inputs := range map[string][]ringpolicy.Slot{
+		"the first row past the cap":  {slot(s, 1000), slot(bob, 100)},
+		"the second row past the cap": {slot(s, 100), slot(bob, 1000)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			outputs := []ringpolicy.Slot{slot(alice, 1100)}
+			requireSolved(t, outflowWorld(inputs, outputs, nil, 1000).Build(t))
+			requireRefusedIn(t, outflowWorld(inputs, outputs, nil, 999), outflow)
+			// The lower owner's outflow as the peak clears the cap and matches a row, its gap to the higher owner leaves the range.
+			b := outflowWorld(inputs, outputs, nil, 500).Build(t)
+			witness, err := frontend.NewWitness(b.Assignment(), ecc.BN254.ScalarField())
+			if err != nil {
+				t.Fatal(err)
+			}
+			hintattack.RequireConstraintRejection(t, ringkey.Compile(t, b.Assignment()).IsSolved(witness, hintattack.SkipMissingLookupQueries(t), solver.OverrideHint(solver.GetHintID(policy.PeakHint), secondLargest)))
+		})
+	}
+}
+
+func secondLargest(_ *big.Int, inputs, outputs []*big.Int) error {
+	sorted := slices.SortedFunc(slices.Values(inputs), func(a, b *big.Int) int { return b.Cmp(a) })
+	outputs[0].Set(sorted[1])
+	return nil
 }
 
 func TestOutflowWithNothingLeaving(t *testing.T) {

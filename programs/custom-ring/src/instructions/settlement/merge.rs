@@ -58,8 +58,8 @@ pub fn process_merge_ix(
             let owner = spp_accounts
                 .get(RING_MERGE_OWNER_INDEX)
                 .ok_or(ProgramError::NotEnoughAccountKeys)?;
-            let identity = solana_owner_identity(owner.address().as_array())
-                .map_err(CustomRingError::from)?;
+            let identity =
+                solana_owner_identity(owner.address().as_array()).map_err(CustomRingError::from)?;
             ([0; 32], identity)
         }
     };

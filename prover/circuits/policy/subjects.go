@@ -4,8 +4,8 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -61,19 +61,30 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 	if !p.OwnOnly {
 		curator = openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof, curatorColumns), p.CuratorSubjects)
 	}
-	resolve := func(entry PoolEntry, active, member frontend.Variable) (subjectView, pooledRecord) {
+	resolve := func(entry PoolEntry, active, curatedRead, member frontend.Variable) (subjectView, pooledRecord) {
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: member, index: entry.Own}))
 		view := subjectView{onList: record.onList}
 		if !p.OwnOnly {
-			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curated), member: member, index: entry.Curator[0]})
+			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
 			view.onList = table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))
 		}
 		return view, record
 	}
-	private := p.openPrivateRows(api, rc, g, spend.Tracking)
-	resolveOwner := func(entry PoolEntry, active, member frontend.Variable) subjectView {
-		view, _ := resolve(entry, active, member)
-		view.onList = private.overlay(api, entry, active, member, view.onList)
+	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
+	ownerCurated := api.Mul(curated, table.sources.publicForeign)
+	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {
+		view, _ := resolve(entry.PoolEntry, active, ownerCurated, member)
+		// A proven absent tracking row is the one skip, a present row forces its salt and so its key.
+		row := spend.Tracking.Row(api, api.Mul(active, anySalted), member, entry.Tracking)
+		enrolled := ringgadget.IsNonZero(api, row.NullifierPk)
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: enrolled, A: shared.ListTag(api, entry.ListSalt), B: row.ListTag})
+		key := shared.ListKey(api, member, entry.ListSalt)
+		salted := pooledRecordAt(own.resolve(api, recordQuery{active: api.Mul(enrolled, table.sources.saltedOwn), member: key, index: entry.OwnSalted})).onList
+		if !p.OwnOnly {
+			curated := curator.resolve(api, recordQuery{active: api.Mul(enrolled, table.sources.saltedCurated), member: key, index: entry.CuratorSalted[0]})
+			salted = table.sources.lists(api, salted, [NSources]frontend.Variable(curated))
+		}
+		view.onList = table.sources.owner(api, view.onList, salted)
 		return view
 	}
 	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
@@ -88,7 +99,7 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 	for i, pay := range payments {
 		resolved.owners[i] = resolveOwner(p.OwnerEntries[i], api.Mul(pay.Active, g.Screened), pay.Owner)
 		var record pooledRecord
-		resolved.assets[i], record = resolve(p.AssetEntries[i], api.Mul(pay.Active, mintRead), pay.Asset)
+		resolved.assets[i], record = resolve(p.AssetEntries[i], api.Mul(pay.Active, mintRead), curated, pay.Asset)
 		resolved.mintPolicies[i] = decodeMintPolicy(api, record.mintPolicy)
 	}
 	for k, index := range p.PublicAssetEntries {
@@ -98,39 +109,6 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 		resolved.publicAssets = append(resolved.publicAssets, publicAsset{limitedAsset: limitedAsset{asset: asset, active: active, policy: decodeMintPolicy(api, record.mintPolicy)}, withdrawalThreshold: record.withdrawalThreshold})
 	}
 	return resolved
-}
-
-// privateRows overlays a private source on an owner's public lists, assets keep the public slots.
-type privateRows struct {
-	view   privatelist.SourceView
-	pool   privatelist.Pool
-	active frontend.Variable
-	keyed  bool
-}
-
-// openPrivateRows refuses a private source on a key with no rows, its owners would read only public lists.
-func (p *Policy) openPrivateRows(api frontend.API, rc frontend.Rangechecker, g Gates, tracking TrackingPool) privateRows {
-	if p.Private == 0 {
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: g.Screened, V: ringgadget.IsNonZero(api, p.Source.OwnerLists)})
-		return privateRows{}
-	}
-	view := p.Source.View(api)
-	active := api.Mul(g.Screened, view.Any)
-	owners := make([]privatelist.Subject, len(p.PrivateRows))
-	for i, row := range p.PrivateRows {
-		// The tracking row binds the salt and enrollment, an unbound subject would pick its position.
-		tracked := tracking.Row(api, api.Mul(active, row.Live), p.PrivateOwners[i], p.PrivateTracking[i])
-		owners[i] = privatelist.Subject{Owner: p.PrivateOwners[i], Enrolled: ringgadget.IsNonZero(api, tracked.NullifierPk), ListTag: tracked.ListTag}
-	}
-	return privateRows{view: view, pool: privatelist.OpenPool(api, rc, active, p.PrivateRoot, p.PrivateRows, owners), active: active, keyed: true}
-}
-
-func (r privateRows) overlay(api frontend.API, entry PoolEntry, active, member frontend.Variable, public [NSources]frontend.Variable) [NSources]frontend.Variable {
-	if !r.keyed {
-		return public
-	}
-	read := r.pool.Read(api, privatelist.Query{Active: api.Mul(active, r.active), Owner: member, Index: entry.Private[0]})
-	return r.view.OwnerRow(api, public, read)
 }
 
 func (p *PolicyInputs) assertOwnOnly(api frontend.API) {

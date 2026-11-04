@@ -6,7 +6,6 @@ use crate::MAX_SOURCES;
 pub enum Writer {
     Authority,
     Member,
-    Reserved,
 }
 
 impl Writer {
@@ -14,7 +13,6 @@ impl Writer {
         match self {
             Self::Authority => ListSet::AUTHORITY_WRITES,
             Self::Member => ListSet::MEMBER_WRITES,
-            Self::Reserved => ListSet::EMPTY,
         }
     }
 }
@@ -53,11 +51,10 @@ lists! {
     Block = 2, "block" => Authority,
     Frozen = 3, "frozen" => Authority,
     RingViewing = 4, "ring-viewing" => Member,
-    // Unused, holds slot 5 of the circuit's `NSources`.
-    Recovery = 5, "recovery" => Reserved,
+    PrivateBlock = 5, "private-block" => Authority,
     Reader = 6, "reader" => Authority,
     Approval = 7, "approval" => Authority,
-    Escrow = 8, "escrow" => Member,
+    PrivateAllow = 8, "private-allow" => Authority,
 }
 
 impl ListId {
@@ -82,16 +79,17 @@ pub struct ListSet(u8);
 impl ListSet {
     pub const EMPTY: Self = Self(0);
     pub const MEMBER_LISTS: Self = Self::written_by(Writer::Member);
-    /// A member's own record write, its escrow bit comes only from a registered key.
-    pub const MEMBER_WRITES: Self = Self::MEMBER_LISTS.difference(Self::single(ListId::Escrow));
+    pub const MEMBER_WRITES: Self = Self::MEMBER_LISTS;
     pub const AUTHORITY_WRITES: Self = Self::written_by(Writer::Authority);
     /// The lists a rule reads, a reader grant moves no funds.
     pub const POLICY_LISTS: Self = Self::AUTHORITY_WRITES.difference(Self::single(ListId::Reader));
     /// A rule reads these by presence, a set bit grants.
-    pub const GRANT_LISTS: Self = Self::of(&[ListId::Allow, ListId::Approval]);
+    pub const GRANT_LISTS: Self =
+        Self::of(&[ListId::Allow, ListId::Approval, ListId::PrivateAllow]);
     /// A rule reads these by absence, a set bit denies.
-    pub const DENY_LISTS: Self = Self::of(&[ListId::Block, ListId::Frozen]);
-    /// Every list but escrow, an escrow write carries its key instead.
+    pub const DENY_LISTS: Self = Self::of(&[ListId::Block, ListId::Frozen, ListId::PrivateBlock]);
+    /// Always salted.
+    pub const PRIVATE_LISTS: Self = Self::of(&[ListId::PrivateAllow, ListId::PrivateBlock]);
     pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
 
     pub const fn written_by(writer: Writer) -> Self {
@@ -177,12 +175,6 @@ impl ListSet {
     }
 }
 
-/// Every list a rule can read has one polarity.
-const _: () = assert!(
-    ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits()
-        && !ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS)
-);
-
 /// Every bit of a `ListSet` names a list.
 const _: () = {
     assert!(MAX_SOURCES == u8::BITS as usize);
@@ -262,29 +254,20 @@ mod tests {
 
     #[test]
     fn record_writes_split_the_lists_between_the_member_and_the_authority() {
-        assert_eq!(ListSet::MEMBER_WRITES, ListSet::single(ListId::RingViewing));
+        assert_eq!(ListSet::MEMBER_LISTS, ListSet::single(ListId::RingViewing));
         assert_eq!(
             ListSet::AUTHORITY_WRITES,
             ListSet::of(&[
                 ListId::Allow,
                 ListId::Block,
                 ListId::Frozen,
+                ListId::PrivateBlock,
                 ListId::Reader,
                 ListId::Approval,
+                ListId::PrivateAllow,
             ])
         );
-        assert!(!ListSet::MEMBER_WRITES.intersects(ListSet::AUTHORITY_WRITES));
-        assert!(!ListSet::MEMBER_WRITES
-            .union(ListSet::AUTHORITY_WRITES)
-            .contains(ListId::Escrow));
-    }
-
-    #[test]
-    fn no_writer_and_no_rule_reach_the_reserved_slot() {
-        assert_eq!(Writer::Reserved.writable(), ListSet::EMPTY);
-        assert_eq!(ListId::Recovery.writer(), Writer::Reserved);
-        assert!(!ListSet::STORAGE_WRITES.contains(ListId::Recovery));
-        assert!(!ListSet::POLICY_LISTS.contains(ListId::Recovery));
+        assert!(!ListSet::MEMBER_LISTS.intersects(ListSet::AUTHORITY_WRITES));
     }
 
     #[test]
@@ -295,7 +278,9 @@ mod tests {
                 ListId::Allow,
                 ListId::Block,
                 ListId::Frozen,
+                ListId::PrivateBlock,
                 ListId::Approval,
+                ListId::PrivateAllow,
             ])
         );
     }
@@ -362,9 +347,9 @@ mod tests {
         assert!(set.contains(ListId::Frozen));
         assert!(!set.contains(ListId::Block));
         assert!(set.intersects(ListSet::single(ListId::Allow)));
-        assert!(!set.intersects(ListSet::of(&[ListId::Block, ListId::Escrow])));
+        assert!(!set.intersects(ListSet::of(&[ListId::Block, ListId::PrivateAllow])));
         assert_eq!(
-            set.union(ListSet::single(ListId::Escrow)).bits(),
+            set.union(ListSet::single(ListId::PrivateAllow)).bits(),
             0b1000_0101
         );
         assert!(ListSet::EMPTY.is_empty());

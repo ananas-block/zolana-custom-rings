@@ -224,6 +224,8 @@ pub struct PolicyBindingIxData {
 pub struct PolicySourceIxData {
     pub list_id: u8,
     pub source: u8,
+    /// Owner rows read the list under salted keys.
+    pub salted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -236,9 +238,6 @@ pub enum UpdatePolicyIxData {
     /// One trailing records registry under any authority.
     #[wincode(tag = 2)]
     Records,
-    /// [`ListSet`](zolana_ring_policy::ListSet) bits and one trailing private registry, zero bits and no registry clear it.
-    #[wincode(tag = 3)]
-    PrivateSource { owner_lists: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
@@ -433,7 +432,7 @@ mod tests {
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
-        for unwritable in [ListId::Escrow, ListId::Recovery] {
+        for unwritable in [ListId::PrivateAllow, ListId::PrivateBlock] {
             assert_eq!(
                 write(unwritable.record_bit(), 0),
                 Err(CustomRingError::ListBitNotWritable)
@@ -464,10 +463,6 @@ mod tests {
         assert!(write(ListId::Block.record_bit()).is_ok());
         assert_eq!(
             write(ListId::RingViewing.record_bit()),
-            Err(CustomRingError::ListBitNotWritable)
-        );
-        assert_eq!(
-            write(ListId::Escrow.record_bit()),
             Err(CustomRingError::ListBitNotWritable)
         );
     }

@@ -84,7 +84,6 @@ struct TransferCase {
     own_root: String,
     curator_root: String,
     tracking_root: String,
-    private_root: String,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     public_gross: Vec<String>,
@@ -178,7 +177,6 @@ fn transfer_statements_reach_the_go_public_inputs() {
             own_root: array(&case.own_root),
             curator_root: array(&case.curator_root),
             tracking_root: array(&case.tracking_root),
-            private_root: array(&case.private_root),
         };
         let statement = TransferStatement {
             head: AuditHead {

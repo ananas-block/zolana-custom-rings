@@ -6,6 +6,8 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
+var PeakHint = peakHint
+
 func DecodeTable(t Table, api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) {
 	t.decode(api, rc, policyHash)
 }
