@@ -80,9 +80,9 @@ func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { refuseSealed(t, s, edit) })
 	}
-	for name, mutate := range map[string]func(*ringaudit.Section){
-		"evidence naming another owner": func(s *ringaudit.Section) { s.Inputs[1].OwnerKey[0] ^= 1 },
-		"evidence naming another mint":  func(s *ringaudit.Section) { s.Inputs[1].Mint[0] ^= 1 },
+	for name, mutate := range map[string]func(*ringaudit.Audit){
+		"evidence naming another owner": func(s *ringaudit.Audit) { s.Inputs[1].OwnerKey[0] ^= 1 },
+		"evidence naming another mint":  func(s *ringaudit.Audit) { s.Inputs[1].Mint[0] ^= 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := ringaudit.NewSection(t, entryShape)
@@ -97,7 +97,7 @@ func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 	c := compileSection(t, entryShape)
 	s := ringaudit.NewSection(t, entryShape)
 	other := ringtest.Repeat(0xa3)
-	s.Inputs[0] = ringaudit.Slot{Utxo: ringaudit.SpentUtxo(t, ringtest.MustSolanaPkField(t, other), spptest.MustNullifierPk(t, big.NewInt(9)), big.NewInt(0), 30, 53), OwnerKey: other, Mint: ringaudit.FixtureMint}
+	s.Inputs[0] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, ringtest.MustSolanaPkField(t, other), spptest.MustNullifierPk(t, big.NewInt(9)), big.NewInt(0), 30, 53), OwnerKey: other, Mint: ringaudit.FixtureMint}
 	c.RequireSolved(t, s.Circuit(t))
 	plaintext := s.Keys.Open(t, s.Stream(t))
 	head := audit.EnvelopeKeyLen + audit.RealInputCountLen + audit.DefaultInputBitsLen
@@ -108,7 +108,7 @@ func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 
 func TestDataTails(t *testing.T) {
 	c := compileSection(t, dataShape)
-	withData := func(t *testing.T) ringaudit.Section {
+	withData := func(t *testing.T) ringaudit.Audit {
 		t.Helper()
 		s := ringaudit.NewSection(t, dataShape)
 		s.HasData = true
@@ -131,9 +131,9 @@ func TestDataTails(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { refuseSealed(t, withData(t), edit) })
 	}
-	for name, mutate := range map[string]func(*ringaudit.Section){
-		"data hash with has_data clear":      func(s *ringaudit.Section) { s.Outputs[0].Utxo.DataHash = big.NewInt(5) },
-		"ring data hash with has_data clear": func(s *ringaudit.Section) { s.Outputs[0].Utxo.RingDataHash = big.NewInt(5) },
+	for name, mutate := range map[string]func(*ringaudit.Audit){
+		"data hash with has_data clear":      func(s *ringaudit.Audit) { s.Outputs[0].Utxo.DataHash = big.NewInt(5) },
+		"ring data hash with has_data clear": func(s *ringaudit.Audit) { s.Outputs[0].Utxo.RingDataHash = big.NewInt(5) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := ringaudit.NewSection(t, dataShape)
@@ -148,7 +148,7 @@ func TestDataTails(t *testing.T) {
 	})
 	t.Run("a clear has_data keeps tails off the frame", func(t *testing.T) {
 		s := ringaudit.NewSection(t, dataShape)
-		if s.PublishedTails(s.Stream(t)) != nil {
+		if outputs := s.StatementOutputs(t, s.Stream(t)); outputs[0].Tail != nil {
 			t.Fatal("a dataless frame transmits a tail")
 		}
 	})
@@ -253,10 +253,10 @@ func TestStreamVector(t *testing.T) {
 	data.Outputs[0].Utxo.RingDataHash = big.NewInt(0x5ca1e)
 	sections := []struct {
 		name    string
-		section ringaudit.Section
+		section ringaudit.Audit
 	}{
 		{"plain_with_exit_and_dummy", ringaudit.NewSection(t, plainShape)},
-		{"compact", ringaudit.NewSection(t, plainShape).Omit(1)},
+		{"compact", ringaudit.NewSection(t, plainShape).Omit(t, 1)},
 		{"data", data},
 		{"entry", ringaudit.NewSection(t, entryShape)},
 	}
@@ -266,11 +266,11 @@ func TestStreamVector(t *testing.T) {
 		compileSection(t, s.Shape).RequireSolved(t, s.Circuit(t))
 		p, stream := s.Plaintexts(t), s.Stream(t)
 		v := vectorCase{
-			Name: tc.name, Layout: s.Layout().Value(), InputClass: s.Shape.InputClass, Outputs: s.Shape.Outputs, OutputCount: s.OutputCount(), InputCount: s.InputCount,
+			Name: tc.name, Layout: s.Layout(), InputClass: s.Shape.InputClass, Outputs: s.Shape.Outputs, OutputCount: s.OutputCount(), InputCount: s.InputCount,
 			Envelope: hex.EncodeToString(p.Envelope), EnvelopeCt: hex.EncodeToString(stream.Envelope(s.InputCount)),
 			EnvelopeHash: ringtest.FieldHex(s.StatementOf(t, stream, s.Claim())[9]),
-			RecordChain:  ringtest.FieldHex(ringaudit.RegionChain(t, s.PublishedRecords(stream), len(s.Outputs))),
-			TailChain:    ringtest.FieldHex(big.NewInt(0)),
+			RecordChain:  ringtest.FieldHex(ringaudit.RecordChain(t, s.StatementOutputs(t, stream))),
+			TailChain:    ringtest.FieldHex(ringaudit.TailChain(t, s.StatementOutputs(t, stream))),
 		}
 		for i := range s.OutputCount() {
 			v.Records = append(v.Records, hex.EncodeToString(p.Records[i]))
@@ -281,9 +281,6 @@ func TestStreamVector(t *testing.T) {
 				v.Tails = append(v.Tails, hex.EncodeToString(p.Tails[i]))
 				v.TailCts = append(v.TailCts, hex.EncodeToString(stream.Tail(i)))
 			}
-		}
-		if s.HasData {
-			v.TailChain = ringtest.FieldHex(ringaudit.RegionChain(t, s.PublishedTails(stream), len(s.Outputs)))
 		}
 		cases[k] = v
 	}
