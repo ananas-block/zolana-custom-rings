@@ -1381,6 +1381,7 @@
     "chain_start": "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
     "chain_end": "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
     "count": 16,
+    "restrictive": true,
     "elements": [
       "0000000000000000000000000000000000000000000000000000000043524150",
       "1e09090909090909090909090909090909090909090909090909090909090909",
@@ -1389,27 +1390,152 @@
       "0000000000000000000000000000000000000000000000000000000000000011",
       "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
       "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
-      "0000000000000000000000000000000000000000000000000000000000000010"
+      "0000000000000000000000000000000000000000000000000000000000000010",
+      "0000000000000000000000000000000000000000000000000000000000000001"
     ],
-    "public_input_hash": "2b9b48f7dd9872109c84da0de95bb86439e84e52539d270cb53a33c01ba5415c"
+    "public_input_hash": "0702eb3d180e2bc1a4aaa14355830a280f0b4b49d846a658ba2160b5be66397f"
+  },
+  "restrictive": [
+    {
+      "mask": 1,
+      "value": 1,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 1,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": true
+    },
+    {
+      "mask": 64,
+      "value": 64,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 64,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": true
+    },
+    {
+      "mask": 2,
+      "value": 2,
+      "replaces_mint_policy": false,
+      "restrictive": true
+    },
+    {
+      "mask": 2,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 4,
+      "value": 4,
+      "replaces_mint_policy": false,
+      "restrictive": true
+    },
+    {
+      "mask": 4,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 32,
+      "value": 32,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 32,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 0,
+      "value": 0,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 0,
+      "value": 0,
+      "replaces_mint_policy": true,
+      "restrictive": true
+    },
+    {
+      "mask": 3,
+      "value": 1,
+      "replaces_mint_policy": false,
+      "restrictive": false
+    },
+    {
+      "mask": 5,
+      "value": 5,
+      "replaces_mint_policy": false,
+      "restrictive": true
+    }
+  ],
+  "apply_enrollments": {
+    "old_root": "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "new_root": "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+    "old_next_index": 7,
+    "new_next_index": 9,
+    "chain_start": "1e09090909090909090909090909090909090909090909090909090909090909",
+    "chain_end": "1e0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "count": 2,
+    "elements": [
+      "0000000000000000000000000000000000000000000000000000000043525441",
+      "1e0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "1e0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+      "0000000000000000000000000000000000000000000000000000000000000007",
+      "0000000000000000000000000000000000000000000000000000000000000009",
+      "1e09090909090909090909090909090909090909090909090909090909090909",
+      "1e0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "0000000000000000000000000000000000000000000000000000000000000002"
+    ],
+    "public_input_hash": "2cbf0dae39a15e8d060e8ebde56f59cdc401ec0f2f442fdbe3f4ca5302422c93"
+  },
+  "tracking": {
+    "empty_root": "06521543909eca81a731131d6a31f23969c667c0f28c8e7cb1a0036b7b36b376",
+    "member": "1e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+    "nullifier_pk": "1e0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "ct_hash": "1e0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "viewing_u": "6969696969696969696969696969696969696969696969696969696969696969",
+    "revision": 3,
+    "list_tag": "1e10101010101010101010101010101010101010101010101010101010101010",
+    "entry_hash": "114877c99271591970a20184c08396c80f8d07d8977b3873860c58ffdbb81b8a",
+    "chain_from_zero": "092ba94b49f9268694c984674157428ae34547293cd719ce033ac11a8ea4166d",
+    "nullifier_secret": "0000000000000000000000000000000000000000000000000000000000000007",
+    "list_salt": "13eaac981f8e63c2353538278693adc591894c338422265abd663fc497f4d1fa",
+    "secret_list_tag": "270a88cbe901deaff1868405f48b0354298b4c844d14ea504203972d162bc24b"
   },
   "register_key": {
+    "ring_id": "1e11111111111111111111111111111111111111111111111111111111111111",
     "member": "0443a3de5231e61e56cd0d40e31a26abd294014f94d00b6d564fee3d4a4cc8fe",
     "nullifier_pk": "1e0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "list_tag": "1e10101010101010101010101010101010101010101010101010101010101010",
     "auditor_pubkey": "04a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "eph_u": "6969696969696969696969696969696969696969696969696969696969696969",
     "ciphertext": "6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a",
     "elements": [
       "0000000000000000000000000000000000000000000000000000000043525247",
+      "1e11111111111111111111111111111111111111111111111111111111111111",
       "0443a3de5231e61e56cd0d40e31a26abd294014f94d00b6d564fee3d4a4cc8fe",
       "1e0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+      "1e10101010101010101010101010101010101010101010101010101010101010",
       "0004a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "000000000000000000000000000000000000000000000000000000000000a1a1",
       "0004696969696969696969696969696969696969696969696969696969696969",
       "0000000000000000000000000000000000000000000000000000000000006969",
       "2ce02b273e37860f6a3242f3c24d91c6ebb9d202f46fae4725a652cc48f7ef22"
     ],
-    "public_input_hash": "155074449f9519c800331dd64dc0bff74ea36b142d23dad2d3ed8a536ddc8725"
+    "public_input_hash": "00609bd568d05dc98784361c05342ab5eb0b4a6f70faf61366ee8966129af378"
   },
   "deposit": {
     "program_id": "7777777777777777777777777777777777777777777777777777777777777777",

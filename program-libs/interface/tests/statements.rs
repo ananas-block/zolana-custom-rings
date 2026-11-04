@@ -1,13 +1,15 @@
 //! Pins `test-vectors/proof/ring-statements.json` for the Go circuits and the TS SDK.
 
+use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use custom_ring_interface::{
-    change_bitmap, ciphertext_digest, exits_bitmap, output_ciphertext_chain, sender_bundle_len,
-    slot_ciphertext_hash, AnonymousAuditKey, ApplyRecordsStatement, AuditHead, AuditKey,
-    AuditLayout, AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext,
-    DepositPublicInput, DepositRegistry, DepositedAsset, FramedSenderBundle, RegisterKeyStatement,
-    RingOutput, SignerSet, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN,
-    AUDIT_HEAD_ELEMENTS, DELIVERED_BODY_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
-    ESCROWED_DELIVERED_BODY_LEN, ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN, RECIPIENT_BODY_LEN,
+    change_bitmap, ciphertext_digest, domain, exits_bitmap, output_ciphertext_chain,
+    restrictive_write, sender_bundle_len, slot_ciphertext_hash, AnonymousAuditKey,
+    ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
+    AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
+    DepositRegistry, DepositedAsset, FramedSenderBundle, RegisterKeyStatement, RingOutput,
+    SignerSet, TransferFamily, TransferStatement, ANONYMOUS_RECORD_LEN, AUDIT_HEAD_ELEMENTS,
+    DELIVERED_BODY_LEN, DEPOSIT_PUBLIC_INPUT_ELEMENTS, ESCROWED_DELIVERED_BODY_LEN,
+    ESCROWED_EXIT_RECORD_LEN, EXIT_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -32,8 +34,48 @@ struct StatementVectors {
     description: String,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
+    restrictive: Vec<RestrictiveCase>,
+    apply_enrollments: ApplyEnrollmentsCase,
+    tracking: TrackingCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct RestrictiveCase {
+    mask: u64,
+    value: u64,
+    replaces_mint_policy: bool,
+    restrictive: bool,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct ApplyEnrollmentsCase {
+    old_root: String,
+    new_root: String,
+    old_next_index: u32,
+    new_next_index: u32,
+    chain_start: String,
+    chain_end: String,
+    count: u64,
+    elements: Vec<String>,
+    public_input_hash: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct TrackingCase {
+    empty_root: String,
+    member: String,
+    nullifier_pk: String,
+    ct_hash: String,
+    viewing_u: String,
+    revision: u64,
+    list_tag: String,
+    entry_hash: String,
+    chain_from_zero: String,
+    nullifier_secret: String,
+    list_salt: String,
+    secret_list_tag: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -103,14 +145,17 @@ struct ApplyCase {
     chain_start: String,
     chain_end: String,
     count: u64,
+    restrictive: bool,
     elements: Vec<String>,
     public_input_hash: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct RegisterKeyCase {
+    ring_id: String,
     member: String,
     nullifier_pk: String,
+    list_tag: String,
     auditor_pubkey: String,
     eph_u: String,
     ciphertext: String,
@@ -545,10 +590,34 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
+        restrictive: true,
     };
+    let apply_enrollments = ApplyEnrollmentsStatement {
+        old_root: values.fields[11],
+        new_root: values.fields[12],
+        old_next_index: 7,
+        new_next_index: 9,
+        chain_start: values.fields[9],
+        chain_end: values.fields[10],
+        count: 2,
+    };
+    let tracking_entry = TrackingEntry {
+        member: values.fields[14],
+        nullifier_pk: values.fields[13],
+        ct_hash: values.fields[15],
+        viewing_u: values.keys[9],
+        revision: 3,
+        list_tag: values.fields[16],
+    };
+    let nullifier_secret = right_aligned(0x07);
+    let list_salt = domain::list_salt(&nullifier_secret).unwrap();
+    let ring_id = values.fields[17];
+    let list_tag = values.fields[16];
     let register = RegisterKeyStatement {
+        ring_id: &ring_id,
         member: &owner_signer,
         nullifier_pk: &values.fields[13],
+        list_tag: &list_tag,
         auditor_pubkey: &values.auditor_pubkey,
         eph_u: &values.keys[9],
         ciphertext: &values.keys[10],
@@ -633,12 +702,41 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
+            restrictive: apply.restrictive,
             elements: hexes(&apply.elements()),
             public_input_hash: hex::encode(apply.hash().unwrap()),
         },
+        restrictive: restrictive_cases(),
+        apply_enrollments: ApplyEnrollmentsCase {
+            old_root: hex::encode(apply_enrollments.old_root),
+            new_root: hex::encode(apply_enrollments.new_root),
+            old_next_index: apply_enrollments.old_next_index,
+            new_next_index: apply_enrollments.new_next_index,
+            chain_start: hex::encode(apply_enrollments.chain_start),
+            chain_end: hex::encode(apply_enrollments.chain_end),
+            count: apply_enrollments.count,
+            elements: hexes(&apply_enrollments.elements()),
+            public_input_hash: hex::encode(apply_enrollments.hash().unwrap()),
+        },
+        tracking: TrackingCase {
+            empty_root: hex::encode(TRACKING_EMPTY_ROOT),
+            member: hex::encode(tracking_entry.member),
+            nullifier_pk: hex::encode(tracking_entry.nullifier_pk),
+            ct_hash: hex::encode(tracking_entry.ct_hash),
+            viewing_u: hex::encode(tracking_entry.viewing_u),
+            revision: tracking_entry.revision,
+            list_tag: hex::encode(tracking_entry.list_tag),
+            entry_hash: hex::encode(tracking_entry.hash().unwrap()),
+            chain_from_zero: hex::encode(tracking_entry.chained(&[0; 32]).unwrap()),
+            nullifier_secret: hex::encode(nullifier_secret),
+            list_salt: hex::encode(list_salt),
+            secret_list_tag: hex::encode(domain::list_tag(&list_salt).unwrap()),
+        },
         register_key: RegisterKeyCase {
+            ring_id: hex::encode(register.ring_id),
             member: hex::encode(register.member),
             nullifier_pk: hex::encode(register.nullifier_pk),
+            list_tag: hex::encode(register.list_tag),
             auditor_pubkey: hex::encode(register.auditor_pubkey),
             eph_u: hex::encode(register.eph_u),
             ciphertext: hex::encode(register.ciphertext),
@@ -675,8 +773,62 @@ fn compute_vectors() -> StatementVectors {
     }
 }
 
+/// Every list direction, a neutral list and the mint settings, each alone and one mixed batch.
+fn restrictive_cases() -> Vec<RestrictiveCase> {
+    use zolana_ring_policy::ListId::{Allow, Approval, Block, Frozen, Reader};
+    let set = |list: zolana_ring_policy::ListId| (list.record_bit(), list.record_bit(), false);
+    let clear = |list: zolana_ring_policy::ListId| (list.record_bit(), 0, false);
+    [
+        set(Allow),
+        clear(Allow),
+        set(Approval),
+        clear(Approval),
+        set(Block),
+        clear(Block),
+        set(Frozen),
+        clear(Frozen),
+        set(Reader),
+        clear(Reader),
+        (0, 0, false),
+        (0, 0, true),
+        (
+            Allow.record_bit() | Block.record_bit(),
+            Allow.record_bit(),
+            false,
+        ),
+        (
+            Allow.record_bit() | Frozen.record_bit(),
+            Allow.record_bit() | Frozen.record_bit(),
+            false,
+        ),
+    ]
+    .into_iter()
+    .map(|(mask, value, replaces_mint_policy)| RestrictiveCase {
+        mask,
+        value,
+        replaces_mint_policy,
+        restrictive: restrictive_write(mask, value, replaces_mint_policy),
+    })
+    .collect()
+}
+
 fn right_aligned(amount: u64) -> [u8; 32] {
     spr_hasher::primitives::right_align(&amount.to_be_bytes())
+}
+
+#[test]
+fn restrictive_write_follows_list_direction() {
+    let flags: Vec<bool> = restrictive_cases()
+        .iter()
+        .map(|case| case.restrictive)
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            false, true, false, true, true, false, true, false, false, false, false, true, false,
+            true
+        ]
+    );
 }
 
 #[test]
