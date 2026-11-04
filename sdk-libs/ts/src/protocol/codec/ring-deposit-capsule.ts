@@ -1,7 +1,6 @@
 import { copyBytes, fail } from "@heliuslabs/zolana/internal";
 import type { Bytes33 } from "@heliuslabs/zolana";
 
-import { readHistoricalDepositCapsule } from "../historical/v3/deposit-capsule.js";
 import { OPENING_RECORD_LEN } from "./ring-disclosure-layout.js";
 
 export const RING_DEPOSIT_AUDIT_SLOTS = 8;
@@ -59,8 +58,6 @@ export function readRingDepositCapsule(input: Uint8Array): RingDepositCapsule | 
   });
 }
 
-/** The recipient ciphertext of either capsule, a malformed recognized one refuses. */
 export function ringDepositRecipientCiphertext(bytes: Uint8Array): Uint8Array {
-  const capsule = readRingDepositCapsule(bytes) ?? readHistoricalDepositCapsule(bytes);
-  return capsule?.recipientCiphertext ?? bytes;
+  return readRingDepositCapsule(bytes)?.recipientCiphertext ?? bytes;
 }

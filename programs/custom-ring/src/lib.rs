@@ -3,7 +3,7 @@
 mod instructions;
 mod state;
 
-use custom_ring_interface::{CustomRingError, InstructionTag};
+use custom_ring_interface::InstructionTag;
 use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
 
 use crate::instructions::*;
@@ -28,15 +28,6 @@ pub fn process_instruction(
         InstructionTag::Transfer | InstructionTag::AuthorityTransfer => {
             process_transfer_ix(program_id, accounts, ix_data, ix_tag)
         }
-        InstructionTag::LegacyTransact
-        | InstructionTag::LegacyDelegateTransact
-        | InstructionTag::HistoricalTransfer
-        | InstructionTag::HistoricalTransferV3
-        | InstructionTag::HistoricalAuthorityTransfer
-        | InstructionTag::HistoricalAuthorityTransferV3
-        | InstructionTag::HistoricalDeposit
-        | InstructionTag::HistoricalMerge
-        | InstructionTag::HistoricalMergeV3 => Err(CustomRingError::InvalidInstructionData.into()),
         // The deposit prefix layout starts at the tag byte.
         InstructionTag::Deposit => process_deposit_ix(program_id, accounts, instruction_data),
         // SPP proves that owner, asset, value and ring ownership stay unchanged.
@@ -49,5 +40,11 @@ pub fn process_instruction(
         InstructionTag::SetCoSigner => process_set_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::ClearCoSigner => process_clear_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::SetDelegate => process_set_delegate_ix(program_id, accounts, ix_data),
+        InstructionTag::WriteFrame => process_write_frame_ix(program_id, accounts, ix_data),
+        InstructionTag::CloseFrameBuffer => {
+            process_close_frame_buffer_ix(program_id, accounts, ix_data)
+        }
+        InstructionTag::SettleBuffered => process_settle_buffered_ix(program_id, accounts, ix_data),
+        InstructionTag::FrameEvent => Ok(()),
     }
 }

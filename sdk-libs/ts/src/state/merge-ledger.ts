@@ -1,4 +1,3 @@
-import { RingError } from "../protocol/error.js";
 import { getBase58Encoder, type Address } from "@solana/kit";
 
 import {
@@ -6,7 +5,6 @@ import {
   ZERO_32,
   bytesKey,
   equalBytes,
-  isZero,
   mergeOutputBlinding,
   solanaOwnerIdentity,
   addressBytes,
@@ -36,7 +34,6 @@ export interface ConfirmedMerge {
   readonly leafIndex: bigint;
   readonly firstNullifier: Bytes32;
   readonly ringDataHash: Bytes32;
-  /** The output of {@link realMergeInputs}. */
   readonly inputs: readonly Bytes32[];
 }
 
@@ -72,21 +69,6 @@ export interface MergeTransition {
 /** Reads the auditor's openings. */
 export type KnownMergeInput = (commitment: Bytes32) => MergeInput | undefined;
 
-/** A zero entry is a dummy and never spent, slot 0 stays real and a slot past the published count holds nothing. */
-export function realMergeInputs(
-  list: readonly Bytes32[],
-  publishedInputs: number,
-): readonly Bytes32[] {
-  const [first] = list;
-  if (
-    first === undefined ||
-    isZero(first) ||
-    list.slice(publishedInputs).some((entry) => !isZero(entry))
-  )
-    throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "merge disclosure list" } });
-  return Object.freeze(list.filter((entry) => !isZero(entry)));
-}
-
 export function mergeInputOf(utxo: KnownUtxo): MergeInput {
   return Object.freeze({
     ownerKey: utxo.ownerKey,
@@ -119,6 +101,14 @@ export class MergeLedger {
     this.#unresolved.set(id, pending);
     this.#commit(resolved);
     return Object.freeze({ spent: inputs, resolved });
+  }
+
+  /** A tag 57 record names the output, no input opening resolves it. */
+  applyRecord(output: AuditedMergeOutput): void {
+    const id = mergeId(output);
+    if (this.#applied.has(id)) return;
+    this.#applied.add(id);
+    this.#outputs.set(bytesKey(output.commitment), Object.freeze(output));
   }
 
   /** Runs after every new opening, a resolved output can complete its descendant. */

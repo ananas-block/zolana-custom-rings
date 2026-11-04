@@ -133,7 +133,7 @@ fn transfer_statements_reach_the_go_public_inputs() {
         let outputs: Vec<RingOutput<'_>> = (0..case.outputs.len())
             .map(|slot| RingOutput {
                 hash: &hashes[slot],
-                owner_tag: &zero_tag,
+                owner_tag: zero_tag,
                 body: SlotBody::None,
                 record: &records[slot],
                 tail: tails[slot].as_ref(),

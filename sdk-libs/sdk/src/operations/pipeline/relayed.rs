@@ -46,8 +46,9 @@ impl<'a> RingTransfer<Relayed<'a>> {
     pub fn relayed(input: RelayedTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
+            buffered: false,
             rail: Relayed {
                 proof_inputs: input.proof_inputs,
                 fee_payer: input.fee_payer,
@@ -216,7 +217,6 @@ impl Relayed<'_> {
             spend,
             presealed: Some(PresealedAudit {
                 message: auditor_message,
-                eph_sk: relayed.audit_ephemeral_key.clone(),
             }),
             list_salts: relayed.list_salts.clone(),
         })

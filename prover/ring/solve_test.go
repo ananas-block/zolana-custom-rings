@@ -25,7 +25,8 @@ const (
 	transfer4Key  common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
 	transfer8Key  common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
 	transfer16Key common.CircuitType = "custom-ring-transfer-16-in5-w8-s5"
-	wideKey       common.CircuitType = "custom-ring-transfer-8-in24-w32-s24"
+	wideKey       common.CircuitType = "custom-ring-transfer-wide-8-in24-w32-s24"
+	wide16Key     common.CircuitType = "custom-ring-transfer-wide-16-in5-w8-s5"
 	entryKey      common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
 	entry8Key     common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
 	applyKey      common.CircuitType = "custom-ring-apply-records-1"
@@ -37,7 +38,7 @@ const (
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, entryKey, entry8Key, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, transfer16Key, wideKey, wide16Key, entryKey, entry8Key, applyKey, batchKey, enrollKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -157,7 +158,8 @@ func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) 
 	tree := ringregistry.NewTracking(t)
 	entry := func(i int, revision int64) ringregistry.TrackingEntry {
 		owner := big.NewInt(0x100 + int64(i))
-		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: big.NewInt(revision), View1: big.NewInt(1), Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
+		view0, view1 := ringregistry.PackedView(big.NewInt(0x100 + revision))
+		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: view0, View1: view1, Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
 	}
 	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
 	if err != nil {

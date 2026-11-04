@@ -68,6 +68,7 @@ fn a_stalled_forester_stops_a_dummy_input_transfer_and_no_deposit() -> Result<()
         tier: Tier::AuditOnly,
     }
     .send(&env.client)?;
+    enroll_actors(&env, ring)?;
     let sender = &env.sender.keypair;
     let notes = || RingNotes {
         ring,

@@ -59,6 +59,16 @@ export function txKeySlotSecret(
   }
 }
 
+/** The bytes of a ring slot tag a frame carries, a false match costs one trial open. */
+export const SLOT_TAG_LEN = 8;
+
+/** Leading bytes stay zero and off the frame. */
+export function slotTag(tag: Bytes32): Bytes32 {
+  const short = new Uint8Array(32);
+  short.set(tag.subarray(32 - SLOT_TAG_LEN), 32 - SLOT_TAG_LEN);
+  return short as Bytes32;
+}
+
 /** `Poseidon(CRRT, slot_secret)`, published for a live recipient and proven against its body's secret. */
 export function recipientTag(slotSecret: Bytes32): Bytes32 {
   return domainHash(RingDomain.recipientTagDomain, [

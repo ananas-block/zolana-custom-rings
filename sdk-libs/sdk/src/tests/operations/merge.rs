@@ -127,11 +127,7 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
         .prepare(&chain)
         .await
         .unwrap();
-    let published = carried
-        .inputs()
-        .iter()
-        .filter(|input| !input.is_compact())
-        .count();
+    let published = carried.published_inputs();
     assert_eq!(published, WIDEST_MERGE);
 
     let config = ring().require_config(&chain).await.unwrap();

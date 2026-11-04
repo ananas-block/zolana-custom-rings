@@ -1,17 +1,16 @@
 /** Circuit-facing codecs, registry proofs, and policy primitives. */
 export {
   AUDIT_ENC_INFO,
-  DELIVERED_BODY_ENC_INFO,
   DEPOSIT_ENC_INFO,
   auditSharedSecret,
   auditorMessageData,
   auditorViewTag,
   openAuditorRegions,
   packDisclosure,
-  parseAuditorMessage,
-  sealAuditorStream,
-  symmetricAuditApply,
   unpackDisclosure,
+  parseAuditorMessage,
+  sealSaltedAuditorStream,
+  symmetricAuditApply,
 } from "../crypto/audit/audit.js";
 export type {
   AuditorEnvelope,
@@ -89,7 +88,6 @@ export { deliveredSlotSecret, ringIdField } from "../crypto/derivation/ring-stre
 export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
   encodeRingBodyOutput,
-  historicalRecipientOutputBody,
   ringBodyOutput,
   senderBundleOutputBody,
   RingScheme,
@@ -118,16 +116,6 @@ export {
   type OwnerDebit,
 } from "../protocol/membership/owner-debits.js";
 export {
-  decodeAnonymousRecipient,
-  decodeAnonymousSender,
-  type AnonymousRecipientPlaintext,
-  type AnonymousSenderPlaintext,
-  type CommittedRecipientPlaintext,
-  type CommittedSenderPlaintext,
-  type UncommittedRecipientPlaintext,
-  type UncommittedSenderPlaintext,
-} from "../protocol/historical/anonymous-plaintext.js";
-export {
   OutputBlindings,
   openRecipientNote,
   ringBlindingSeed,
@@ -139,6 +127,7 @@ export {
 
 export {
   ANONYMOUS_PARTIES,
+  MAX_CO_SIGNERS,
   ApprovalMask,
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
@@ -300,25 +289,13 @@ export {
   type MintPolicy,
 } from "../protocol/membership/mint-policy.js";
 export {
-  RingTransactDataV3,
-  auditHistoryV3,
-  auditRingMergesV3,
-  auditRingTransactionV3,
-  historicalCoverageRow,
-  landedRingRailV3,
-  openHistoricalDepositOpening,
-  openHistoricalMerge,
-  openHistoricalRingTransfer,
-  openRingMergeDisclosureV3,
-  openRingTransferV3,
-  readHistoricalDepositCapsule,
-  type AuditStreamLayoutV3,
-  type HistoricalDepositCapsule,
-  type HistoricalDepositOpening,
-  type RingMergeDisclosureV3,
-  type RingRailV3,
-  type HistoricalCoverageRow,
-  type HistoricalInputOpening,
-  type HistoricalTransfer,
-  type HistoricalTransferInput,
-} from "../protocol/historical/index.js";
+  closeFrameBufferData,
+  FRAME_BUFFER_HEADER_LEN,
+  FRAME_BUFFER_PDA_SEED,
+  frameDigest,
+  MAX_FRAME_LEN,
+  settleBufferedData,
+  settledFrame,
+  writeFrameData,
+  type WriteFrame,
+} from "../protocol/transaction/frame-buffer.js";

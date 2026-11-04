@@ -59,7 +59,7 @@ pub mod viewing_history;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
+    AnonymousRingUtxo, AnonymousScan, AuditorRecovery, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
     SentPayment,
 };
 pub use crate::anonymous_wallet::{
@@ -73,22 +73,20 @@ pub use crate::viewing_history::{
     VIEWING_HISTORY_VERSION,
 };
 pub use crate::{
-    confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
+    confidential::{
+        open_ring_confidential, RingConfidentialNotes, RingConfidentialScan, RingFullScan,
+    },
     created::{
         CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
         DepositOwners,
     },
-    decrypt::{AuditFrame, FramedRow, HistoricalLayout, TransactionAudit},
+    decrypt::{FramedRow, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
-    disclosure::{
-        historical_evidence, AuditEnvelope, AuditStreamSeal, DisclosurePad, HistoricalEvidence,
-        OpenedAudit, SealedAuditStream,
-    },
+    disclosure::{AuditEnvelope, AuditStreamSeal, OpenedAudit, SealedAuditStream},
     encryption::{
-        auditor_view_tag, open_deposit, open_merge_disclosure, open_merge_record, seal_deposits,
-        DepositCapsule, DepositEncryption, DepositOpening, DepositedNote, HistoricalDepositCapsule,
-        MergeOpening, MergeRecordSeal, NullifierKeyEnvelope, SealedMergeOpening,
+        auditor_view_tag, open_deposit, open_merge_record, seal_deposits, DepositEncryption,
+        DepositOpening, DepositedNote, MergeRecordSeal, NullifierKeyEnvelope, SealedMergeOpening,
         SealedNullifierKey,
     },
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
@@ -99,10 +97,7 @@ pub use crate::{
     indexer::{AsyncRingIndexer, RingIndexer, RingIndexerError},
     known::KnownUtxoIndex,
     merge_audit::{confirmed_merge, MergeAudit, MergeAuditPage},
-    merge_ledger::{
-        AuditedMergeOutput, ConfirmedMerge, MergeDisclosed, MergeId, MergeInput, MergeLedger,
-        MergeRecordOutput, MergeTransition,
-    },
+    merge_ledger::{AuditedMergeOutput, ConfirmedMerge, MergeId, MergeLedger, MergeRecordOutput},
     origin::{
         ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
         ConfirmedMergeDisclosure, RingOrigin, RingWithdrawal, TransactionOrigin,

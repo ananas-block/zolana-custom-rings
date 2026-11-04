@@ -1,5 +1,6 @@
-//! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
+//! The relay co-signs within its asset's window caps, sends once a second approver signed, and refuses an outflow beyond them, a proof naming a co-signer the run left out, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
 
+use custom_ring_sdk::CustomRing;
 use jsonrpsee::RpcModule;
 use sea_orm::{ConnectionTrait, Statement};
 use solana_instruction::AccountMeta;
@@ -47,11 +48,11 @@ fn sender_fields(amount: u64) -> UtxoFields {
 }
 
 impl FramedProver {
-    /// `[co-signer run, SPP's transact list]`, `spp[1]` the output tree and the ring auth at 4.
+    /// `[record, signer]` per co-signer, then SPP's transact list, `spp[1]` the output tree and the ring auth at 4.
     fn accounts(ring: Address, fee_payer: Address, named: &[Address]) -> Vec<AccountMeta> {
         named
             .iter()
-            .map(|signer| AccountMeta::new_readonly(*signer, true))
+            .flat_map(|signer| CustomRing::new(ring).co_signer_metas(*signer))
             .chain([
                 AccountMeta::new(fee_payer, true),
                 AccountMeta::new(spr_interface::pda::tree(TREE_ID), false),
@@ -122,9 +123,8 @@ impl RelayProver for FramedProver {
         };
         let mut proven = self.inner.prove(request).await?;
         if let Some(data) = framed {
-            let named: Vec<Address> = proven.co_signer.into_iter().collect();
             proven.instruction.data = data;
-            proven.instruction.accounts = Self::accounts(ring, fee_payer, &named);
+            proven.instruction.accounts = Self::accounts(ring, fee_payer, &proven.co_signers);
         }
         Ok(proven)
     }
@@ -181,6 +181,13 @@ impl CappedRelay {
             },
         );
         let co_signer = co_signer_key().pubkey();
+        source.co_signers.extend([
+            (
+                co_signer,
+                CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS | CoSignScope::DEPOSITS,
+            ),
+            (second_approver().pubkey(), CoSignScope::APPROVE_OUTFLOW),
+        ]);
         let chain = Arc::new(RecordingChain::default());
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let hub = Hub::builder(source, identity(GENESIS))
@@ -196,7 +203,7 @@ impl CappedRelay {
                 store: store.clone(),
                 prover: Arc::new(FramedProver {
                     inner: RecordingProver {
-                        co_signer: Some(named.unwrap_or(co_signer)),
+                        co_signers: named.map(|named| vec![named]),
                         ..RecordingProver::default()
                     },
                     auditor: fixture.auditor.pubkey(),
@@ -394,6 +401,55 @@ async fn a_relayed_exit_to_the_sender_over_the_sender_window_cap_is_refused() {
         // An exit leaves the ring even to the sender, the sender cap counts it.
         .assert_second_refused(|inputs| inputs.outputs[0].ring_program_id = None)
         .await;
+}
+
+fn second_approver() -> Keypair {
+    Keypair::new_from_array([0x62; 32])
+}
+
+#[tokio::test]
+async fn two_approvers_carry_their_pairs_and_the_relay_sends_once_both_signed() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    let second = second_approver();
+    let mut inputs = proof_inputs(RING, RelayRail::Confidential);
+    inputs.outputs[0].ring_program_id = None;
+    let mut request = signed_request(relay.quote.clone(), &inputs);
+    request.co_signers = vec![second.pubkey().into(), relay.co_signer.into()];
+    let step: RelayStep = relay
+        .module
+        .call(PREPARE_RELAY, as_object(request))
+        .await
+        .expect("prepared");
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the second approver signs, got {step:?}");
+    };
+    assert!(relay.chain.sent().is_empty());
+
+    let _: RelayStatus = relay
+        .module
+        .call(
+            SUBMIT_RELAY,
+            as_object(SubmitRelayRequest {
+                relay_id,
+                signer: second.pubkey().into(),
+                signature: second.sign_message(&message.0).into(),
+            }),
+        )
+        .await
+        .expect("both signed");
+
+    let [sent] = relay.chain.sent().try_into().expect("one sent transaction");
+    assert!(signers_verify(&sent));
+    let keys = sent.message.static_account_keys();
+    let ring = CustomRing::new(RING);
+    for signer in [second.pubkey(), relay.co_signer] {
+        assert!(keys.contains(&signer));
+        assert!(keys.contains(&ring.co_signer_pda(&signer)));
+    }
+    assert_eq!(
+        usize::from(sent.message.header().num_required_signatures),
+        3
+    );
 }
 
 #[tokio::test]

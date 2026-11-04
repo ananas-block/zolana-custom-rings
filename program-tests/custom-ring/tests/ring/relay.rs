@@ -20,7 +20,7 @@ fn a_relayed_anonymous_payment_reaches_its_recipient() -> Result<()> {
     let ring_rpc = relayed.serve()?;
     let (sender, recipient) = (&env.sender.keypair, &env.recipient.keypair);
     let ring_program = relayed.ring.program_id();
-    EnrollAddresses {
+    EnrollOwners {
         ring: relayed.ring,
         owners: &[sender, recipient],
         env,
@@ -112,6 +112,7 @@ fn a_relayed_deposit_lands_the_note_the_auditor_recovers() -> Result<()> {
         asset: DepositAsset::Sol,
         amount: DEPOSIT,
         cosigner: None,
+        list_salt: None,
     };
     let quote = ring_rpc.quote(env, RelayOperation::Deposit)?;
 
@@ -156,7 +157,7 @@ fn a_relayed_user_merge_lands_one_note_of_the_merged_value() -> Result<()> {
 }
 
 #[test]
-fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> {
+fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> {
     const MOVED: u64 = TRANSFER_AMOUNT / 2;
 
     let relayed = RelayedRing::register(Tier::policy(&EMPTY))?;
@@ -164,7 +165,7 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
     let member = &env.sender.keypair;
     let member_address = member.shielded_address()?;
     let delegate = env.funded_keypair()?;
-    relayed.escrow(&delegate)?;
+    relayed.appoint(&delegate)?;
     env.enable_authority_rail(relayed.ring)?;
     relayed.notes(member, 1).deposit()?;
     let ring_rpc = relayed.serve()?;
@@ -179,8 +180,8 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
 
     let quote = ring_rpc.quote(env, RelayOperation::Delegate)?;
 
-    // The service opens the member's deposit under its escrowed key at its next backfill.
-    let pending = wait_for("the service to open the escrowed note", || {
+    // The service opens the member's deposit under its enrolled key at its next backfill.
+    let pending = wait_for("the service to open the enrolled note", || {
         let request = AuthorityTransferRequest::new(AuthorityTransferAttestation {
             target: ring_rpc.target,
             delegate: delegate.pubkey(),
@@ -211,7 +212,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
     let relayed = RelayedRing::register(Tier::policy(&EMPTY))?;
     let env = &relayed.env;
     let member = &env.sender.keypair;
-    relayed.escrow(&env.funded_keypair()?)?;
+    relayed.appoint(&env.funded_keypair()?)?;
     relayed.notes(member, 2).deposit()?;
     let ring_rpc = relayed.serve()?;
     let request = MergeSettingsRequest::new(MergeSettingsAttestation {
@@ -226,7 +227,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
     .sign(member)?;
     env.run(ring_rpc.relay.set_merge_settings(request))?;
 
-    // A pass merges nothing until the backfill opens the deposits under the escrowed key.
+    // A pass merges nothing until the backfill opens the deposits under the enrolled key.
     let sent = wait_for("a managed merge", || {
         let sent = ring_rpc.managed_merge_pass()?;
         Ok(if sent.is_empty() {
@@ -260,6 +261,7 @@ impl RelayedRing {
             tier,
         }
         .send(&env.client)?;
+        enroll_actors(&env, ring)?;
         Ok(Self { env, ring, auditor })
     }
 
@@ -299,8 +301,8 @@ impl RelayedRing {
         .with_output_tree_id(env.tree_id(env.tree)?)?)
     }
 
-    fn escrow(&self, delegate: &Keypair) -> Result<()> {
-        EscrowedDelegate {
+    fn appoint(&self, delegate: &Keypair) -> Result<()> {
+        EnrolledDelegate {
             ring: self.ring,
             delegate,
             members: &[&self.env.sender.keypair],

@@ -152,6 +152,10 @@ pub enum RingError {
     PublicSpendWalletMismatch { named: Address, sender: Address },
     #[error("a public spend signs the transaction, it cannot prove its owner in the proof")]
     PublicSpendInProofOwner,
+    #[error(transparent)]
+    AddressCeiling(#[from] crate::AddressCeilingError),
+    #[error(transparent)]
+    Resolve(#[from] zolana_ring_client::ResolveError),
     #[error("a deposit frame proves once, a retry draws a new blinding secret")]
     DepositFrameReused,
     #[error("a deposit to another member needs its request's tag, the viewing key is no tag")]
@@ -194,6 +198,11 @@ pub enum RingError {
     EnrolledRecipientAtZeroKey { slot_index: usize },
     #[error("output {slot_index} names another key than its owner's tracking row")]
     RecipientKeyMismatch { slot_index: usize },
+    #[error("output {slot_index} names a viewing key other than its owner's row at revision {row_revision}, ask for a new address")]
+    RecipientViewingKeyStale {
+        slot_index: usize,
+        row_revision: u64,
+    },
     #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]
     TooManyOwnerSigners { owners: usize, limit: usize },
     #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]

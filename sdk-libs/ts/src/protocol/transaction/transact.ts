@@ -3,6 +3,7 @@ import {
   Reader,
   Writer,
   concatBytes,
+  equalBytes,
   solanaOwnerIdentity,
 } from "@heliuslabs/zolana/internal";
 import {
@@ -43,6 +44,7 @@ import {
   type AuditStreamLayout,
 } from "../codec/ring-disclosure-layout.js";
 import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
+import { SLOT_TAG_LEN, slotTag } from "../../crypto/derivation/ring-stream.js";
 import { frameKeyShape } from "../proof/transfer-shapes.js";
 
 import { RingInstructionTag } from "./instruction-tag.js";
@@ -90,8 +92,10 @@ export interface FrameExtensions {
 
 /** Rust `ApprovalMask`. */
 export const ApprovalMask = Object.freeze({ outflow: 1, withdrawal: 2 } as const);
-/** Rust `ANONYMOUS_PARTIES`, the payer, the co-signer and the exit destination. */
-export const ANONYMOUS_PARTIES = 3;
+/** Each record covers a new class. */
+export const MAX_CO_SIGNERS = 5;
+/** Rust `ANONYMOUS_PARTIES`. */
+export const ANONYMOUS_PARTIES = 2 + MAX_CO_SIGNERS;
 
 /** The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it. */
 export interface InProofOwner {
@@ -191,7 +195,6 @@ export interface RingTransactData {
   readonly replies?: Replies;
   /** Present exactly on the anonymous frame. */
   readonly sender?: PublishedSenderBundle;
-  readonly ephU: Bytes32;
   /** `envelope_ct`, the transmitted length is the stream layout's. */
   readonly envelope: Uint8Array;
   readonly privateTxHash: Bytes32;
@@ -373,10 +376,10 @@ export const RingTransactData = Object.freeze({
     });
   },
 
-  /** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...`. */
-  auditorMessage(data: Pick<RingTransactData, "ephU" | "envelope" | "outputs">): Uint8Array {
+  /** `0x04 ‖ tx_viewing_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...`. */
+  auditorMessage(data: Pick<RingTransactData, "txViewingU" | "envelope" | "outputs">): Uint8Array {
     return concatBytes(
-      taggedX25519(data.ephU),
+      taggedX25519(data.txViewingU),
       data.envelope,
       ...data.outputs.map((output) => output.record),
       ...data.outputs.flatMap((output) => (output.tail === undefined ? [] : [output.tail])),
@@ -583,7 +586,6 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
         body: bytes.bytes(senderBundleLen(outputCount), "sender.body"),
       })
     : undefined;
-  const ephU = field32(bytes, "ephU");
   const envelope = bytes.bytes(envelopeRegion(stream).length, "envelope");
   const records = slots.map(() => bytes.bytes(AUDIT_RECORD_LEN, "record"));
   const tails = stream.hasData ? slots.map(() => bytes.bytes(DATA_TAIL_LEN, "tail")) : undefined;
@@ -643,7 +645,6 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     outputs: Object.freeze(outputs),
     ...(replies === undefined ? {} : { replies }),
     ...(sender === undefined ? {} : { sender }),
-    ephU,
     envelope,
     privateTxHash,
     ...(anonymous === undefined ? {} : { anonymous }),
@@ -666,7 +667,8 @@ function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: bool
         ? CONFIDENTIAL_DATA_FREE_BODY_LEN
         : RECIPIENT_BODY_LEN;
   const hash = field32(bytes, "output.hash");
-  const ownerTag = field32(bytes, "output.ownerTag");
+  // SPP binds an exit's tag to its owner, any other is a slot tag.
+  const ownerTag = exit ? field32(bytes, "output.ownerTag") : readSlotTag(bytes);
   const raw = bytes.bytes(length, "output.body");
   const body: SlotBody = bodiless
     ? Object.freeze({ kind: "none" })
@@ -674,6 +676,12 @@ function readSlot(bytes: Reader, hasData: boolean, exit: boolean, bodiless: bool
       ? Object.freeze({ kind: "exit", payload: raw })
       : Object.freeze({ kind: "recipient", body: raw });
   return { hash, ownerTag, body };
+}
+
+function readSlotTag(bytes: Reader): Bytes32 {
+  const tag = new Uint8Array(32);
+  tag.set(bytes.bytes(SLOT_TAG_LEN, "output.ownerTag"), 32 - SLOT_TAG_LEN);
+  return tag as Bytes32;
 }
 
 /** `reply_len`, then one reply per body-bearing slot. */
@@ -858,7 +866,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
     out.u16(data.replies.length, "replyLen").bytes(data.replies.region);
   if (data.sender !== undefined)
     out.bytes(data.sender.tag, 32, "sender.tag").bytes(data.sender.body);
-  out.bytes(data.ephU, 32, "ephU").bytes(data.envelope);
+  out.bytes(data.envelope);
   for (const output of data.outputs) out.bytes(output.record, AUDIT_RECORD_LEN, "record");
   for (const output of data.outputs)
     if (output.tail !== undefined) out.bytes(output.tail, DATA_TAIL_LEN, "tail");
@@ -914,15 +922,17 @@ function writeSlot(out: Writer, output: RingOutput, hasData: boolean): void {
     if (raw.length > 0xffff) throw invalid("OutputBodyLength");
     out.u16(raw.length, "output.bodyLen");
   }
-  out
-    .bytes(output.hash, 32, "output.hash")
-    .bytes(output.ownerTag, 32, "output.ownerTag")
-    .bytes(raw);
+  out.bytes(output.hash, 32, "output.hash");
+  if (output.body.kind === "exit") out.bytes(output.ownerTag, 32, "output.ownerTag");
+  else out.bytes(output.ownerTag.subarray(32 - SLOT_TAG_LEN), SLOT_TAG_LEN, "output.ownerTag");
+  out.bytes(raw);
 }
 
 /** A frame with no data carries each body at its plain length. */
 function slotFits(output: RingOutput, hasData: boolean): boolean {
   if ((output.tail !== undefined) !== hasData) return false;
+  if (output.body.kind !== "exit" && !equalBytes(slotTag(output.ownerTag), output.ownerTag))
+    return false;
   if (hasData) return true;
   switch (output.body.kind) {
     case "none":

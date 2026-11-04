@@ -15,7 +15,7 @@ use spr_keypair::X25519Keypair;
 use crate::history::HistoryCursor;
 use crate::{
     confirmed_merge,
-    encryption::{open_deposit, DepositCapsule, DepositOpening},
+    encryption::{open_deposit, DepositOpening},
     origin::{ConfirmedDeposit, ConfirmedEventKind, RingOrigin, TransactionOrigin},
     recover::deposit_output,
     scan::{RingHistory, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
@@ -72,7 +72,6 @@ pub struct DepositNote {
 #[derive(Debug, Default)]
 pub struct CreatedNotes {
     pub utxos: Vec<CreatedUtxo>,
-    /// Deposits no escrowed owner names yet.
     pub unowned: Vec<DepositNote>,
 }
 
@@ -330,10 +329,12 @@ impl DepositSlot<'_> {
         else {
             return Ok(None);
         };
-        let capsule = DepositCapsule::parse(&self.output.encrypted.ciphertext)
-            .ok()
-            .flatten()
-            .ok_or(AuditError::DepositOpeningMismatch)?;
+        let capsule = custom_ring_interface::RingDepositAuditCapsule::parse(
+            &self.output.encrypted.ciphertext,
+        )
+        .ok()
+        .flatten()
+        .ok_or(AuditError::DepositOpeningMismatch)?;
         let opening = open_deposit(&capsule, auditor, &self.output.owner_utxo_hash, binding)?;
         match opening.agrees_with(&self.output.asset, self.output.amount) {
             true => Ok(Some(opening)),

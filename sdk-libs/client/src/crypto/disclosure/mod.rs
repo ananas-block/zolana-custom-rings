@@ -4,28 +4,21 @@ use custom_ring_interface::{
     domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail,
     StreamRegion, AUDIT_RECORD_LEN, DATA_TAIL_LEN, STREAM_FIRST_COUNTER,
 };
-use spr_hasher::{
-    primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
-    Hasher, Poseidon,
-};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::field::{field_add, field_sub};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_ring_keys::RingStream;
 
 use crate::{
-    encryption::{opening_ring_stream, sealing_ring_stream},
+    encryption::{opening_salted_stream, sealing_salted_stream},
     AuditError,
 };
 
-mod historical;
-
-pub use historical::{historical_evidence, HistoricalEvidence};
-
-/// Everything one transfer seals to its auditor under one ephemeral key.
+/// Everything one transfer seals to its auditor under its own viewing key.
 pub struct AuditStreamSeal<'a> {
     pub layout: AuditStreamLayout,
     pub tx_viewing_key: &'a ViewingKey,
+    pub salt: &'a [u8; 16],
     /// `R`, nullifiers at or past it are padding.
     pub real_inputs: u8,
     pub evidence: AuditEvidence,
@@ -36,31 +29,22 @@ pub struct AuditStreamSeal<'a> {
 }
 
 pub struct SealedAuditStream {
+    /// The transfer's own viewing key.
     pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
     /// One per slot.
     pub records: Vec<[u8; AUDIT_RECORD_LEN]>,
     /// One per slot under `has_data`, else none.
     pub tails: Vec<[u8; DATA_TAIL_LEN]>,
-    pub ephemeral_sk: Zeroizing<[u8; 32]>,
 }
 
 impl AuditStreamSeal<'_> {
-    /// A fresh ephemeral key per call, a reused one repeats the stream under another plaintext.
+    /// The salt separates a resend, the viewing key repeats under one first nullifier.
     pub fn seal(self, auditor_pk: &X25519Pubkey) -> Result<SealedAuditStream, AuditError> {
-        self.seal_with(X25519Keypair::new(), auditor_pk)
-    }
-
-    /// Pins a vector, every build seals through [`Self::seal`].
-    #[doc(hidden)]
-    pub fn seal_with(
-        self,
-        ephemeral: X25519Keypair,
-        auditor_pk: &X25519Pubkey,
-    ) -> Result<SealedAuditStream, AuditError> {
         let Self {
             layout,
             tx_viewing_key,
+            salt,
             real_inputs,
             evidence,
             records,
@@ -70,7 +54,8 @@ impl AuditStreamSeal<'_> {
         if records.len() != layout.outputs || tails.len() != tails_expected {
             return Err(AuditError::DisclosureLayout);
         }
-        let stream = sealing_ring_stream(&ephemeral, auditor_pk, AUDIT_STREAM_LABEL)?;
+        let key = X25519Keypair::from_bytes(&tx_viewing_key.secret_bytes());
+        let stream = sealing_salted_stream(&key, auditor_pk, salt, AUDIT_STREAM_LABEL)?;
         let mut plaintext = custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: *tx_viewing_key.secret_bytes(),
             real_inputs,
@@ -102,11 +87,10 @@ impl AuditStreamSeal<'_> {
             })
             .collect();
         Ok(SealedAuditStream {
-            eph_u: ephemeral.pubkey().u(),
+            eph_u: tx_viewing_key.pubkey().u(),
             envelope,
             records,
             tails,
-            ephemeral_sk: ephemeral.secret_bytes(),
         })
     }
 }
@@ -115,6 +99,7 @@ impl AuditStreamSeal<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditEnvelope<'a> {
     pub eph_u: [u8; 32],
+    pub salt: &'a [u8; 16],
     pub ciphertext: &'a [u8],
 }
 
@@ -133,9 +118,10 @@ impl AuditEnvelope<'_> {
         auditor: &X25519Keypair,
         layout: AuditStreamLayout,
     ) -> Result<OpenedAudit, AuditError> {
-        let stream = opening_ring_stream(
+        let stream = opening_salted_stream(
             auditor,
             &X25519Pubkey::from_u(self.eph_u)?,
+            self.salt,
             AUDIT_STREAM_LABEL,
         )?;
         let mut plaintext = Zeroizing::new(self.ciphertext.to_vec());
@@ -192,53 +178,6 @@ fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
             canonical(input.data_hash)?;
             canonical(input.ring_data_hash).map(drop)
         }),
-    }
-}
-
-/// `pad_j = Poseidon(seed, j)`, a known pad reveals no other.
-pub struct DisclosurePad {
-    seed: Zeroizing<[u8; 32]>,
-}
-
-impl DisclosurePad {
-    /// `seed = Poseidon(domain, pack_be(key), salt)`, the domain keeps a merge pad apart.
-    pub(crate) fn keyed(
-        domain: &[u8; 32],
-        key: &[u8; 32],
-        salt: &[u8; 16],
-    ) -> Result<Self, AuditError> {
-        let [key0, key1] = pack_be(key);
-        Ok(Self {
-            seed: Zeroizing::new(Poseidon::hashv(&[
-                domain,
-                &key0,
-                &key1,
-                &right_align(salt),
-            ])?),
-        })
-    }
-
-    /// `C_j = P_j + pad_j mod q`.
-    pub fn encrypt(&self, plaintext: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, AuditError> {
-        self.apply(plaintext, field_add)
-    }
-
-    pub fn decrypt(&self, published: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, AuditError> {
-        self.apply(published, field_sub)
-    }
-
-    fn apply(
-        &self,
-        fields: &[[u8; 32]],
-        combine: fn(&[u8; 32], &[u8; 32]) -> [u8; 32],
-    ) -> Result<Vec<[u8; 32]>, AuditError> {
-        (0u64..)
-            .zip(fields)
-            .map(|(index, field)| {
-                let pad = Poseidon::hashv(&[&*self.seed, &right_align(&index.to_be_bytes())])?;
-                Ok(combine(&canonical(*field)?, &pad))
-            })
-            .collect()
     }
 }
 

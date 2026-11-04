@@ -503,6 +503,7 @@ impl<'a> MoveSender<'a> {
             asset: Mint::SOL,
             payments,
             entry: EntrySpend::Allow,
+            wide_frames: WideFrames::Refuse,
             co_signer: None,
         }
     }
@@ -642,6 +643,7 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     assert!(spend(30).await.frame.parts.entry);
     let refused = AnonymousMove {
         entry: EntrySpend::Refuse,
+        wide_frames: WideFrames::Refuse,
         ..owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), 30)])
     };
     assert!(matches!(
@@ -1197,7 +1199,7 @@ fn slot_kinds(request: &serde_json::Value, sender_key: &[u8; 32]) -> Vec<&'stati
 
 /// A rebuilt transfer never reuses a key and nonce with another plaintext.
 #[tokio::test]
-async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key() {
+async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_seal_another_stream() {
     let sender = &crate::tests::support::keypair(1);
     let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
     let build = || async {
@@ -1211,11 +1213,6 @@ async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key(
     };
     let (first, second) = (build().await, build().await);
     assert_ne!(first.frame.parts.salt, second.frame.parts.salt);
-    assert_ne!(first.frame.parts.eph_u, second.frame.parts.eph_u);
-    assert_ne!(
-        **first.frame.sealed.ephemeral_secret(),
-        **second.frame.sealed.ephemeral_secret()
-    );
     assert_ne!(first.frame.parts.envelope, second.frame.parts.envelope);
 }
 
@@ -1250,6 +1247,7 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -1305,6 +1303,7 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
             withdrawals: 4,
             owners: 4,
             entry: false,
+            wide: false,
         }
     );
     let built = serde_json::to_value(
@@ -1774,19 +1773,15 @@ async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
 /// `frame` runs before any witness read or prover call, the ceiling keeps no margin.
 #[tokio::test]
 async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving() {
-    let entry = |reply_len| Measure {
-        reply_len: Some(reply_len),
-        ..Measure::pinned(Measured::AnonymousEntry, spr_client::Shape::new(1, 8))
-    };
-    let at_ceiling = entry(custom_ring_interface::MIN_REPLY_LEN).fit().await;
+    let at_ceiling = ceiling_entry(CEILING_REPLY_LEN).fit().await;
     assert_eq!(at_ceiling.bytes, solana_message::v1::MAX_TRANSACTION_SIZE);
     assert!(at_ceiling.addresses.is_some());
-    let past = entry(custom_ring_interface::MIN_REPLY_LEN + 4).fit().await;
-    assert!(past.bytes > solana_message::v1::MAX_TRANSACTION_SIZE);
+    let past = ceiling_entry(CEILING_REPLY_LEN + 1).fit().await;
+    assert_eq!(past.bytes, solana_message::v1::MAX_TRANSACTION_SIZE + 1);
     assert!(past.addresses.is_none(), "TransferTooWide");
     let paid = Measure {
         priority_fee: true,
-        ..entry(custom_ring_interface::MIN_REPLY_LEN)
+        ..ceiling_entry(CEILING_REPLY_LEN)
     }
     .fit()
     .await;
@@ -1796,6 +1791,47 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
         "the fee moves the frame past the ceiling"
     );
 }
+
+/// A payment a recipient cannot open is refused before proving, a rotated row names the current key.
+#[tokio::test]
+async fn a_payment_names_the_viewing_key_of_its_owners_row() {
+    use crate::tests::support::{keypair, payer};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let client = enrolled(&[&sender, &recipient]).client();
+    let utxos = vec![ring_utxo(&sender, Mint::SOL, 10, 0)];
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let current = ring_address(&recipient);
+    let pay = |to| owner.anonymous_move(&utxos, vec![RingPayment::new(to, 5)]);
+    let paid = pay(current.clone()).select(&client).await.unwrap();
+    assert!(paid.assemble(&client).await.is_ok());
+
+    let stale = RingAddress {
+        recipient: spr_keypair::ShieldedAddress {
+            viewing_pubkey: spr_keypair::ViewingKey::new().pubkey(),
+            ..current.recipient
+        },
+        ..current
+    };
+    assert!(matches!(
+        pay(stale).select(&client).await,
+        Err(RingError::RecipientViewingKeyStale { .. })
+    ));
+}
+
+/// One body takes the reply, each byte of it is one byte of the frame.
+fn ceiling_entry(reply_len: usize) -> Measure {
+    Measure {
+        reply_len: Some(reply_len),
+        ..Measure::pinned(Measured::AnonymousEntry, spr_client::Shape::new(1, 2))
+    }
+}
+
+/// Sets [`ceiling_entry`] at the transaction ceiling exactly.
+const CEILING_REPLY_LEN: usize = 2306;
 
 include!("size_pins.rs");
 
@@ -2423,7 +2459,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
-        .filter(|shape| !shape.entry && shape.withdrawals != 32);
+        .filter(|shape| !shape.entry && !shape.wide);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
@@ -2471,12 +2507,8 @@ async fn every_frame_limit_of_the_byte_model_holds() {
     let ceiling = solana_message::v1::MAX_TRANSACTION_SIZE;
     let pin = |measure: Measure| async move { measure.bytes().await };
 
-    // Entry with a 97 byte reply at one input, the anonymous ceiling.
-    let entry = Measure {
-        reply_len: Some(custom_ring_interface::MIN_REPLY_LEN),
-        ..Measure::pinned(Measured::AnonymousEntry, Shape::new(1, 8))
-    };
-    assert_eq!(pin(entry).await, 4096);
+    // An entry whose reply reaches the ceiling exactly.
+    assert_eq!(pin(ceiling_entry(CEILING_REPLY_LEN)).await, ceiling);
 
     // Plain policy at 24x4 with an outsider payer.
     let signer_policy = Measure {
@@ -2487,28 +2519,28 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 4094);
-    assert_eq!(pin(in_proof_policy).await, 4093);
+    assert_eq!(pin(signer_policy).await, 3406);
+    assert_eq!(pin(in_proof_policy).await, 3405);
 
-    // 5x16 fits an owner payer and not an outsider.
+    // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN5_OUT16);
-    assert_eq!(pin(owner_paid).await, 4003);
+    assert_eq!(pin(owner_paid).await, 4681);
     assert_eq!(
         pin(Measure {
             payer: Payer::Outsider,
             ..owner_paid
         })
         .await,
-        4099
+        4777
     );
 
-    // Plain policy past 8 outputs fits only through compact padding.
+    // Past 8 outputs a frame fits only through compact padding.
     let plain = |inputs, published| Measure {
         published: Some(published),
         ..Measure::pinned(Measured::ConfidentialPolicy, Shape::new(inputs, 16))
     };
-    assert!(pin(plain(1, 15)).await <= ceiling);
-    assert!(pin(plain(1, 16)).await > ceiling);
+    assert!(pin(plain(1, 14)).await <= ceiling);
+    assert!(pin(plain(1, 15)).await > ceiling);
     let outsider = |inputs, published| Measure {
         payer: Payer::Outsider,
         ..plain(inputs, published)
@@ -2570,33 +2602,33 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4265),
-        (with_reply(Measured::Anonymous, 5), 4316),
+        (with_reply(Measured::AnonymousEntry, 2), 4228),
+        (with_reply(Measured::Anonymous, 5), 3983),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            4118,
+            3754,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            4117,
+            3753,
         ),
-        (compact_fifteen, 4021),
-        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4098),
+        (compact_fifteen, 3689),
+        (relayed(Measured::InProofOwner, Shape::IN5_OUT16), 4776),
         (
             relayed(Measured::InProofOwnerEscrow, Shape::IN5_OUT16),
-            4139,
+            4776,
         ),
         (
             Measure::pinned(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4044,
+            4681,
         ),
         (
             relayed(Measured::ConfidentialEscrow, Shape::IN5_OUT16),
-            4140,
+            4777,
         ),
-        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4001),
-        (key_escrow_co_signed, 4096),
-        (loaded_commitment, 4084),
+        (relayed(Measured::InProofOwner, Shape::new(4, 16)), 4711),
+        (key_escrow_co_signed, 3536),
+        (loaded_commitment, 3281),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2646,10 +2678,10 @@ async fn co_signers_and_sol_legs_keep_their_slopes() {
 async fn spl_legs_take_their_accounts_and_the_policy_owner_field() {
     use spr_client::Shape;
     for (rail, first, later) in [
-        (Measured::Confidential, 175, 47),
+        (Measured::Confidential, 207, 79),
         (Measured::ConfidentialPolicy, 207, 79),
         (Measured::ConfidentialEscrow, 207, 79),
-        (Measured::Anonymous, 175, 15),
+        (Measured::Anonymous, 207, 47),
         (Measured::AnonymousPolicy, 207, 47),
     ] {
         let at = |legs| Measure {
@@ -2671,23 +2703,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1359 + 38,
+            1446 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1712 + 38,
+            1613 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            4022 + 39,
+            3658 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            4094 + 40,
+            3406 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            4093 + 40,
+            3405 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -2709,9 +2741,9 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
 async fn omitted_slots_save_their_bytes_on_each_family() {
     use spr_client::Shape;
     for (rail, saved) in [
-        (Measured::Confidential, 168),
-        (Measured::ConfidentialPolicy, 200),
-        (Measured::Anonymous, 272),
+        (Measured::Confidential, 217),
+        (Measured::ConfidentialPolicy, 217),
+        (Measured::Anonymous, 249),
     ] {
         let at = |published| Measure {
             published: Some(published),
@@ -2793,6 +2825,8 @@ async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_prov
         ),
         "{refused:?}"
     );
+    let buffered = transfer.with_buffered_settlement();
+    assert!(buffered.measure(&client).await.is_ok());
 }
 
 #[tokio::test]
@@ -3075,7 +3109,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
 
 /// A record of one class covers nothing.
 #[tokio::test]
-async fn the_one_co_signer_record_holds_every_demanded_class() {
+async fn a_second_co_signer_covers_what_the_first_record_leaves() {
     use crate::co_signer::CoSignerChoice;
     use custom_ring_interface::{
         cosign::{ApprovalMask, CoSignOperation},
@@ -3100,18 +3134,18 @@ async fn the_one_co_signer_record_holds_every_demanded_class() {
             ring: ring(),
             config: &config,
             demand,
-            supplied: Some(signer),
+            supplied: vec![signer],
         }
         .resolve(&chain)
         .await
     };
     assert_eq!(
         resolve(chain(CoSignScope::APPROVALS)).await.unwrap(),
-        Some(signer)
+        vec![signer]
     );
     assert!(matches!(
         resolve(chain(CoSignScope::APPROVE_OUTFLOW)).await,
-        Err(RingError::Program(CustomRingError::CoSignerOutOfScope))
+        Err(RingError::Program(CustomRingError::MissingCoSigner))
     ));
 }
 
@@ -3164,7 +3198,7 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let past_threshold = withdrawing(101).with_co_signer(approver);
     let above = past_threshold.frame(&configured).await.ok().unwrap().frame;
     assert_eq!(above.parts.approval, ApprovalMask::WITHDRAWAL);
-    assert_eq!(above.accounts.co_signer, Some(approver));
+    assert_eq!(above.accounts.co_signers, vec![approver]);
 }
 
 fn delegate_transfer<'a>(
@@ -3335,5 +3369,45 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
         owner_transfer(&sender, transaction).frame(&client).await.err(),
         Some(RingError::ListSaltMismatch { member })
             if member == address.signing_pubkey.owner_proof_input_hash().unwrap()
+    ));
+}
+
+/// A wrong salt would write an entry no proof reads, only the row's own salt passes.
+#[tokio::test]
+async fn a_salted_owner_passes_under_its_rows_tag_alone() {
+    use crate::{tests::support::keypair, SaltedOwnerCheck};
+    use custom_ring_interface::domain;
+    use zolana_ring_client::ResolveError;
+    let owner = keypair(1);
+    let salt = [7; 32];
+    let address = ring_address(&owner);
+    assert_eq!(address.list_salt, salt);
+    let enrolled = [address.recipient];
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_tracking_tag(&enrolled, domain::list_tag(&salt).unwrap());
+    let client = &chain;
+    let read = |address| async move {
+        SaltedOwnerCheck {
+            ring: ring(),
+            address,
+        }
+        .run(client)
+        .await
+    };
+    assert!(read(&address).await.is_ok());
+
+    let forged = RingAddress {
+        list_salt: [8; 32],
+        ..address.clone()
+    };
+    assert!(matches!(
+        read(&forged).await,
+        Err(RingError::Resolve(ResolveError::ListTagMismatch))
+    ));
+
+    let unenrolled = ring_address(&keypair(2));
+    assert!(matches!(
+        read(&unenrolled).await,
+        Err(RingError::Resolve(ResolveError::NotEnrolled))
     ));
 }

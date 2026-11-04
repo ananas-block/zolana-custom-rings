@@ -101,7 +101,7 @@ fn real(nullifier: [u8; 32], at: CreatedIn, position: u16) -> Observation {
         nullifier,
         frame: at,
         position,
-        read: InputRead::Real { evidence: None },
+        read: InputRead::Real,
         hit: None,
     }
 }
@@ -181,7 +181,7 @@ fn a_late_key_recomputes_the_owners_notes_and_resolves_their_rows() {
     });
     assert!(matches!(
         store.row_state(&nullifier),
-        Some(SpendState::UnresolvedReal { .. })
+        Some(SpendState::UnresolvedReal)
     ));
     keys.grant(owner, 7);
     store
@@ -401,50 +401,6 @@ fn a_zero_key_note_of_a_wallet_is_exposed_and_a_pda_note_is_not() {
     assert_eq!(
         statuses(&status_of(&store, owner)),
         [WalletNoteStatus::Spent]
-    );
-}
-
-#[test]
-fn a_frames_evidence_resolves_its_note_and_a_later_opening_settles_an_unseen_one() {
-    let store = AuditStore::default();
-    let owner = wallet(1);
-    let keys = Keys::none();
-    let seen = note(owner, &secret(7), 0x10, 50);
-    let unseen = note(owner, &secret(7), 0x11, 20);
-    let named = |nullifier, commitment, position| Observation {
-        read: InputRead::Real {
-            evidence: Some(commitment),
-        },
-        ..real(nullifier, frame(6), position)
-    };
-    apply(&store, &keys, |work| {
-        work.open(frame(5), [seen]);
-        work.observe(named([1; 32], seen.commitment, 0));
-        work.observe(named([2; 32], unseen.commitment, 1));
-    });
-    assert_eq!(
-        store.row_state(&[1; 32]),
-        Some(SpendState::Resolved {
-            note: seen.commitment
-        })
-    );
-    assert_eq!(
-        store.row_state(&[2; 32]),
-        Some(SpendState::UnresolvedReal {
-            evidence: Some(unseen.commitment)
-        })
-    );
-    apply(&store, &keys, |work| work.open(frame(5), [unseen]));
-    assert_eq!(
-        store.row_state(&[2; 32]),
-        Some(SpendState::Resolved {
-            note: unseen.commitment
-        })
-    );
-    through(&store, &keys, 7);
-    assert_eq!(
-        statuses(&status_of(&store, owner)),
-        [WalletNoteStatus::Spent, WalletNoteStatus::Spent]
     );
 }
 

@@ -16,7 +16,7 @@ import (
 
 var (
 	transferShape = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	entryShape    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true}
+	entryShape    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true}
 )
 
 // A request of every rail decodes strictly and solves on its key.

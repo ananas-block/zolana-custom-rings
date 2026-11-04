@@ -94,7 +94,7 @@ export function transferProofRequest(
     sender: Bytes32;
     inProof: boolean;
     publicOwners: boolean;
-    /** Payer, co-signer and exit destination, zero when absent, unread off the anonymous frame. */
+    /** Payer, each co-signer and exit destination, zero when absent, unread off the anonymous frame. */
     partyIdentities: readonly Bytes32[];
     /** SPP's owner signer run by owner identity, in-proof and authority bind none. */
     signers: readonly Bytes32[];
@@ -117,7 +117,7 @@ export function transferProofRequest(
     approvalMask: policy.approvalMask,
     outputCount: input.outputCount,
     // Every slot of the key's capacity, an omitted suffix runs its gadgets over its own proof output.
-    outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId),
+    outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId, circuit.outputs),
     inputCount: inputs.length,
     inputs: inputOpenings(inputs, inputClass),
     entries: entry ? entryOpenings(inputs, inputClass) : [],

@@ -13,15 +13,14 @@ use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{viewing_key::ViewTag, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_transaction::{
     instructions::merge::{MergeOutputPlaintext, MergeSeed},
-    DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
-    ShieldedTransaction, TransactionError, TransactionKeyRequest, WalletUtxo,
+    DecryptionResult, DepositPayload, Mint, ShieldedKeys, ShieldedTransaction, TransactionError,
+    TransactionKeyRequest, WalletUtxo,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind,
     RingTagProbe, ViewTagRequest, ViewTagStream,
 };
 use zolana_ring_transaction::{
-    historical::{HistoricalBody, HistoricalReader, HistoricalSite},
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
     OpenedBody, OpenedNote, ReplyClaim, RingAssets,
 };
@@ -56,8 +55,6 @@ pub enum AnonymousStream {
     },
     /// Found by trying the slot with no use of its tag.
     FullScan,
-    /// A scheme 1 or 2 body of a row older than the proven tags.
-    Historical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +93,13 @@ pub enum SentCheck {
     Unverified,
 }
 
+/// Bodies no held key rebuilt, an owner's note under a bad body opens only through an auditor read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuditorRecovery {
+    /// Commitments, foreign notes and dummies among them.
+    pub unopened: Vec<[u8; 32]>,
+}
+
 /// Only [`crate::AnonymousWallet::absorb`] stores what it covers.
 pub struct AnonymousScan {
     starting_history: ViewingHistory,
@@ -108,6 +112,8 @@ pub struct AnonymousScan {
     pub unmatched: Vec<[u8; 32]>,
     /// The wallet's payments in the transfers whose bundle it opened, a body that fails to open left out.
     pub sent: Vec<SentPayment>,
+    /// Filled by a full scan alone.
+    pub auditor_recovery: AuditorRecovery,
 }
 
 impl AnonymousScan {
@@ -287,6 +293,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             unmatched: Vec::new(),
             sent: Vec::new(),
             sender_claims: Vec::new(),
+            unopened: BTreeSet::new(),
         })
     }
 }
@@ -372,6 +379,7 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     unmatched: Vec<[u8; 32]>,
     sent: Vec<SentPayment>,
     sender_claims: Vec<SenderClaim>,
+    unopened: BTreeSet<[u8; 32]>,
 }
 
 /// A recipient body at an output, a sender bundle in a message.
@@ -502,7 +510,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
                     Trial::ProvenTags => self.test_tags(*index, &rows)?,
                     Trial::EverySite => self.try_every_site(*index, &rows)?,
                 }
-                self.open_historical(*index, &rows)?;
                 self.open_owner_merges(*index, &rows)?;
             }
             if trial == Trial::EverySite {
@@ -579,13 +586,19 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         self.read_bodies(index, &matched)
     }
 
-    /// Recovery, every body and bundle opens with no tag read and every deposit is tried.
+    /// The one recovery path of every rail, tags are unproved hints and no tag is read here.
     fn try_every_site(
         &mut self,
         index: usize,
         rows: &[ShieldedTransaction],
     ) -> Result<(), AnonymousError> {
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        self.unopened.extend(
+            rows.iter()
+                .flat_map(|tx| &tx.output_slots)
+                .filter(|slot| recipient_payload(&slot.payload).is_some())
+                .map(|slot| slot.output_context.hash),
+        );
         let bodies: Vec<Body<'_>> = rows
             .iter()
             .flat_map(|tx| {
@@ -652,63 +665,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         Ok(())
     }
 
-    /// Rows before the proven tags carry scheme 1 and 2 bodies no tag test answers.
-    fn open_historical(
-        &mut self,
-        index: usize,
-        rows: &[ShieldedTransaction],
-    ) -> Result<(), AnonymousError> {
-        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        for tx in rows {
-            let Some(context) = RingDeliveryContext::of(tx) else {
-                continue;
-            };
-            let outputs = (0..tx.output_slots.len()).map(HistoricalSite::Output);
-            let messages = (0..tx.messages.len()).map(HistoricalSite::Message);
-            for site in outputs.chain(messages) {
-                let Some(body) = HistoricalBody::of(tx, site) else {
-                    continue;
-                };
-                let request = DecryptRequest {
-                    viewing_pubkey,
-                    ciphertext: body.ciphertext,
-                    tx_viewing_pubkey: context.tx_viewing_pk,
-                    salt: context.salt,
-                    slot_index: body.slot_index,
-                    label: DecryptLabel::Utxo,
-                };
-                // The cipher is unauthenticated, an error is the holder failing and no foreign ciphertext.
-                let plaintext = exactly_one(self.sync.keys.decrypt(&[request])?)?;
-                let notes = HistoricalReader {
-                    owner: &self.address,
-                    assets: self.sync.assets,
-                    ring: context.ring,
-                    first_nullifier: &context.first_nullifier,
-                }
-                .notes(tx, site, &plaintext);
-                for note in notes {
-                    let opened = OpenedNote {
-                        utxo: note.utxo,
-                        nullifier_pk: note.nullifier_pk,
-                        data_hash: None,
-                        ring_data_hash: None,
-                    };
-                    match note.registered {
-                        true => self.accept(
-                            index,
-                            tx,
-                            AnonymousStream::Historical,
-                            note.position,
-                            opened,
-                        )?,
-                        false => self.hold_back(tx, note.position, opened)?,
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Only the seed a held key derives opens a zero-key merge.
     fn open_owner_merges(
         &mut self,
@@ -769,12 +725,16 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
                 }
             })
             .collect();
-        let mut bootstrap = Some(viewing_pubkey.u());
+        let mut bootstrap = Some([
+            viewing_pubkey.u(),
+            custom_ring_interface::stream::slot_tag(viewing_pubkey.u()),
+        ]);
         while !active.is_empty() {
             let mut tagged: Vec<(RoundTag, ViewTag)> = bootstrap
                 .take()
-                .map(|tag| (RoundTag::Bootstrap, tag))
                 .into_iter()
+                .flatten()
+                .map(|tag| (RoundTag::Bootstrap, tag))
                 .collect();
             for (slot, stream) in active.iter_mut().enumerate() {
                 let indices = stream.scan.round();
@@ -1229,11 +1189,15 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             unmatched,
             sent,
             sender_claims,
+            mut unopened,
             ..
         } = self;
         assign_nullifiers(keys, &mut decrypted, found)?;
         let mut held = DecryptionResult::default();
         assign_nullifiers(keys, &mut held, held_back)?;
+        for note in decrypted.utxos.iter().chain(&held.utxos) {
+            unopened.remove(&note.utxo_hash);
+        }
         Ok(AnonymousScan {
             starting_history,
             history,
@@ -1243,6 +1207,9 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             utxos,
             unmatched,
             sent,
+            auditor_recovery: AuditorRecovery {
+                unopened: unopened.into_iter().collect(),
+            },
         })
     }
 

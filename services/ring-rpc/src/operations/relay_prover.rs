@@ -40,17 +40,17 @@ pub struct DelegateSeal<'a> {
 }
 
 /// Read from the relay, never from the request.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RelayParties {
     pub fee_payer: Address,
-    /// Read only when the ring demands a co-signer.
-    pub co_signer: Option<Address>,
+    /// In run order, read while a demanded class stays uncovered.
+    pub co_signers: Vec<Address>,
 }
 
 pub struct ProvenRelay {
     pub instruction: Instruction,
     pub budget: ComputeBudgetConfig,
-    pub co_signer: Option<Address>,
+    pub co_signers: Vec<Address>,
     /// The owners, the delegate or the depositor, each signs the returned message.
     pub signers: Vec<Address>,
 }
@@ -126,11 +126,15 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             proof_inputs,
             fee_payer: request.parties.fee_payer,
         });
+        // The relay writes the buffer of a frame past one transaction, a delegate settles inline.
+        if !matches!(proof_inputs.rail, RelayRail::Delegate { .. }) {
+            transfer = transfer.with_buffered_settlement();
+        }
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
         }
-        if let Some(co_signer) = request.parties.co_signer {
-            transfer = transfer.with_co_signer(co_signer);
+        for co_signer in &request.parties.co_signers {
+            transfer = transfer.with_co_signer(*co_signer);
         }
         let proven = transfer
             .prove(&self.client)
@@ -143,7 +147,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         Ok(ProvenRelay {
             instruction: proven.instruction().map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
-            co_signer: proven.co_signer,
+            co_signers: proven.co_signers.clone(),
             signers: proven
                 .owner_signers()
                 .iter()
@@ -162,7 +166,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             ring: CustomRing::new(request.ring),
             inputs: deposit,
             fee_payer: request.parties.fee_payer,
-            co_signer: request.parties.co_signer,
+            // A deposit demands one class, one record covers it.
+            co_signer: request.parties.co_signers.first().copied(),
         }
         .prepare(self.client.zolana())
         .await
@@ -173,7 +178,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .await
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Deposit)),
-            co_signer: prepared.co_signer(),
+            co_signers: prepared.co_signer().into_iter().collect(),
             signers: vec![prepared.depositor()],
         })
     }
@@ -205,7 +210,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .instruction(request.parties.fee_payer)
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
-            co_signer: None,
+            co_signers: Vec::new(),
             signers: Vec::new(),
         })
     }

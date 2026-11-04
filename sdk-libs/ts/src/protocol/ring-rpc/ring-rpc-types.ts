@@ -67,6 +67,8 @@ export interface PrepareRelayRequest {
   readonly ring: Address;
   readonly quote: RelayQuote;
   readonly intent: RelayIntent;
+  /** In run order, absent names the service alone. */
+  readonly coSigners?: readonly Address[];
 }
 
 /** Rust `RelayStep`, `message` the v1 message the wallet signs for `submitRelay`. */

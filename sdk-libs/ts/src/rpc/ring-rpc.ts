@@ -126,7 +126,6 @@ const READ_DOMAIN = "zolana/ring-rpc-read/v2";
 const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
-const UNSPENT_UTXOS_DOMAIN = "zolana/ring-rpc-unspent-utxos/v1";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
 const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
 const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
@@ -138,8 +137,6 @@ export const RING_READ_PAGE_LIMIT = 100n;
 export const RING_AUDITED_UTXOS_LIMIT = 100;
 /** Rust `AUDIT_CURSOR_LIMIT`. */
 export const RING_READ_CURSOR_LIMIT = 256;
-
-export const GET_UNSPENT_UTXOS = "getUnspentUtxos";
 
 /** Rust `PagedRead`, the paged read a reader's signature authorizes. */
 export type RingPagedRead = "getDecryptedTransactions" | "getWalletActivity" | "getAuditedMerges";
@@ -265,31 +262,6 @@ export function auditedUtxosAttestation(
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `utxos: ${base64Decoder.decode(sha256(joined))}`,
-      ...walletLines(input.wallet),
-    ].join("\n"),
-  );
-}
-
-/** Mirrors Rust `UnspentUtxosAttestation::message`, binds the owner the read lists. */
-export function unspentUtxosAttestation(
-  input: Readonly<{
-    target: RingReadTarget;
-    timestamp: bigint;
-    nonce: Bytes32;
-    owner: Bytes32;
-    cursor?: Uint8Array;
-    wallet?: Address;
-  }>,
-): Uint8Array {
-  const cursor = input.cursor === undefined ? "" : base64Decoder.decode(input.cursor);
-  return encoder.encode(
-    [
-      UNSPENT_UTXOS_DOMAIN,
-      ...targetLines(input.target),
-      `timestamp: ${input.timestamp}`,
-      `nonce: ${base64Decoder.decode(input.nonce)}`,
-      `owner: ${base58Decoder.decode(input.owner)}`,
-      `cursor: ${cursor}`,
       ...walletLines(input.wallet),
     ].join("\n"),
   );
@@ -759,82 +731,6 @@ export class RingAuditedUtxosRequest {
   }
 }
 
-/** Mirrors Rust `GetUnspentUtxosRequest` after `UnspentUtxosRequest::sign`. */
-export interface SignedUnspentUtxosRead {
-  readonly ringProgramId: Address;
-  /** The owner's record member. */
-  readonly owner: Bytes32;
-  readonly cursor?: Uint8Array;
-  /** Scopes the read to a wallet grant, it names the same owner. */
-  readonly wallet?: Address;
-  readonly reader: Uint8Array;
-  readonly timestamp: bigint;
-  readonly nonce: Bytes32;
-  readonly signature: Uint8Array | WebAuthnSignature;
-}
-
-/** Mirrors Rust `UnspentUtxosRequest`. */
-export class RingUnspentUtxosRequest {
-  readonly #target: RingReadTarget;
-  readonly #owner: Bytes32;
-  #cursor?: Uint8Array;
-  #wallet?: Address;
-  #timestamp?: bigint;
-
-  private constructor(target: RingReadTarget, owner: Bytes32) {
-    this.#target = checkedReadTarget(target);
-    this.#owner = owner;
-  }
-
-  static read(target: RingReadTarget, owner: Bytes32): RingUnspentUtxosRequest {
-    return new RingUnspentUtxosRequest(target, requestBytes(owner, 32, "owner") as Bytes32);
-  }
-
-  withCursor(cursor: Uint8Array): this {
-    this.#cursor = checkedReadCursor(cursor);
-    return this;
-  }
-
-  withWallet(wallet: Address): this {
-    addressBytes(wallet, "wallet");
-    this.#wallet = wallet;
-    return this;
-  }
-
-  /** Unix seconds, the RPC rejects a clock more than its skew away. */
-  at(timestamp: bigint): this {
-    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
-    return this;
-  }
-
-  async sign(signer: RingReadSigner): Promise<SignedUnspentUtxosRead> {
-    const timestamp = timestampOrNow(this.#timestamp);
-    const nonce = freshNonce();
-    const optional = {
-      ...(this.#cursor === undefined ? {} : { cursor: this.#cursor }),
-      ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
-    };
-    const signature = await signer.sign(
-      unspentUtxosAttestation({
-        target: this.#target,
-        timestamp,
-        nonce,
-        owner: this.#owner,
-        ...optional,
-      }),
-    );
-    return Object.freeze({
-      ringProgramId: this.#target.ringProgramId,
-      owner: this.#owner,
-      ...optional,
-      reader: signer.reader,
-      timestamp,
-      nonce,
-      signature,
-    });
-  }
-}
-
 /** Mirrors Rust `CreateAuditorKeyRequest` after `AuditorKeyRequest::sign`. */
 export interface SignedAuditorKeyRequest {
   readonly ringProgramId: Address;
@@ -1016,8 +912,6 @@ export type {
   InputRing,
   KnownUtxo,
   OutputOpening,
-  EscrowPendingOutput,
-  EscrowPendingSlot,
   OutputPayloadError,
   OutputPayloadErrorKind,
 } from "../operations/audit/audit.js";
@@ -1146,22 +1040,9 @@ export interface AuditedRingMerge {
   readonly outputCommitment: Bytes32;
   readonly ownerKey: Bytes32;
   readonly asset: Bytes32;
-  /** Absent while the asset registry does not know the asset. */
-  readonly mint?: Address;
+  readonly mint: Address;
   readonly amount: bigint;
-  /** The real inputs of a tag 47 merge in slot order. */
-  readonly inputCommitments: readonly Bytes32[];
-  /** Nullifiers of a tag 57 merge, never padding. */
   readonly realNullifiers: readonly Bytes32[];
-}
-
-/** Mirrors Rust `UnresolvedMergeRecord`, a confirmed merge with an input the auditor cannot name. */
-export interface UnresolvedRingMerge {
-  readonly slot: bigint;
-  readonly signature: Signature;
-  readonly eventIndex: number;
-  readonly outputCommitment: Bytes32;
-  readonly inputCommitments: readonly Bytes32[];
 }
 
 /** Mirrors Rust `GetAuditedMergesResponse`. */
@@ -1169,7 +1050,6 @@ export interface AuditedMergesPage {
   readonly slot: bigint;
   readonly blockTime: bigint;
   readonly opened: readonly AuditedRingMerge[];
-  readonly unresolved: readonly UnresolvedRingMerge[];
   readonly cursor?: Uint8Array;
 }
 
@@ -1188,70 +1068,6 @@ export interface RingAuditedUtxosPage {
   readonly blockTime: bigint;
   /** In request order, `undefined` for a UTXO the service has not opened. */
   readonly utxos: readonly (RingAuditedUtxo | undefined)[];
-}
-
-/** Mirrors Rust `UnspentUtxoKind`. */
-export type RingUnspentUtxoKind =
-  /** A note whose full opening rebuilt its commitment. */
-  | Readonly<{ kind: "opened"; blinding: Bytes32; treeId: number }>
-  /** An audit record of inherited fields, a wallet cannot spend from it. */
-  | Readonly<{ kind: "mergeOutput" }>;
-
-/** Mirrors Rust `UnspentUtxoView`, a note not seen spent through `coverage.throughSlot`. */
-export interface RingUnspentUtxo {
-  readonly utxoHash: Bytes32;
-  readonly asset: Bytes32;
-  /** Absent while the asset registry does not know the asset. */
-  readonly mint?: Address;
-  readonly amount: bigint;
-  readonly kind: RingUnspentUtxoKind;
-  readonly slot: bigint;
-  readonly signature: Signature;
-  readonly eventIndex: number;
-  readonly slotIndex: number;
-}
-
-/** Mirrors Rust `Coverage`, absence from the spend index proves nothing outside these slots or while `complete` is false. */
-export interface RingCoverage {
-  /** Older notes are never covered. */
-  readonly fromSlot: bigint;
-  /** The completed finalized history boundary. */
-  readonly throughSlot: bigint;
-  /** False after a failed or partial pass or on an input the auditor cannot name, a wallet scoped read sees the flag and no row. */
-  readonly complete: boolean;
-}
-
-/** Mirrors Rust `UnresolvedReason`. */
-export type RingUnresolvedReason =
-  | "unknownSpend"
-  | "unknownMergeInput"
-  | "historicalPrefix"
-  | "unreadableRow";
-
-const UNRESOLVED_REASONS: readonly RingUnresolvedReason[] = Object.freeze([
-  "unknownSpend",
-  "unknownMergeInput",
-  "historicalPrefix",
-  "unreadableRow",
-]);
-
-/** Mirrors Rust `UnresolvedHistory`. */
-export interface RingUnresolvedHistory {
-  readonly slot: bigint;
-  readonly signature: Signature;
-  readonly eventIndex: number;
-  readonly reason: RingUnresolvedReason;
-  /** The commitments the auditor cannot name, empty on a historical row. */
-  readonly inputs: readonly Bytes32[];
-}
-
-/** Notes not seen spent through the finalized coverage boundary. */
-export interface RingUnspentUtxosPage {
-  readonly utxos: readonly RingUnspentUtxo[];
-  readonly coverage: RingCoverage;
-  /** The rows that keep `coverage.complete` false, empty on a wallet scoped read. */
-  readonly unresolved: readonly RingUnresolvedHistory[];
-  readonly cursor?: Uint8Array;
 }
 
 export interface RingRpcOptions {
@@ -1731,76 +1547,6 @@ export class RingRpc {
     });
   }
 
-  /** Notes not seen spent through the finalized coverage boundary. */
-  async getUnspentUtxos(
-    input: Readonly<{
-      target: RingReadTarget;
-      /** The owner's record member. */
-      owner: Bytes32;
-      signer: RingReadSigner;
-      cursor?: Uint8Array;
-      wallet?: Address;
-      timestamp?: bigint;
-    }>,
-    context?: RequestContext,
-  ): Promise<RingUnspentUtxosPage> {
-    let request = RingUnspentUtxosRequest.read(input.target, input.owner);
-    if (input.cursor !== undefined) request = request.withCursor(input.cursor);
-    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
-    if (input.timestamp !== undefined) request = request.at(input.timestamp);
-    return this.readSignedUnspentUtxos(await request.sign(input.signer), context);
-  }
-
-  /** A note outside `coverage` and a complete page with an unresolved row are malformed. */
-  async readSignedUnspentUtxos(
-    read: SignedUnspentUtxosRead,
-    context?: RequestContext,
-  ): Promise<RingUnspentUtxosPage> {
-    const request = exactRequestRecord(
-      read,
-      SIGNED_UNSPENT_FIELDS,
-      SIGNED_UNSPENT_REQUIRED_FIELDS,
-      "request",
-    );
-    const owner = requestBytes(request["owner"], 32, "owner");
-    const cursor =
-      request["cursor"] === undefined ? undefined : checkedReadCursor(request["cursor"]);
-    const checked = checkedReadAuth(request);
-    const wire = exactRecord(
-      await this.#call(
-        GET_UNSPENT_UTXOS,
-        {
-          ...signedReadParams({
-            ...checked,
-            ...(cursor === undefined ? {} : { cursor }),
-          }),
-          owner: base58Decoder.decode(owner),
-        },
-        context,
-      ),
-      UNSPENT_PAGE_FIELDS,
-      UNSPENT_PAGE_FIELDS,
-      "result",
-    );
-    const coverage = decodeCoverage(wire["coverage"]);
-    const utxos = list(wire["utxos"], "result.utxos").map((entry, index) =>
-      decodeUnspentUtxo(entry, `result.utxos[${index}]`),
-    );
-    const unresolved = list(wire["unresolved"], "result.unresolved").map((entry, index) =>
-      decodeUnresolvedHistory(entry, `result.unresolved[${index}]`),
-    );
-    if (coverage.complete && unresolved.length > 0) throw invalid("result.coverage.complete");
-    if (utxos.some(({ slot }) => slot < coverage.fromSlot || slot > coverage.throughSlot))
-      throw invalid("result.utxos");
-    const nextCursor = readResponseCursor(wire["cursor"], { cursor }, "result.cursor");
-    return Object.freeze({
-      utxos: Object.freeze(utxos),
-      coverage,
-      unresolved: Object.freeze(unresolved),
-      ...(nextCursor === undefined ? {} : { cursor: nextCursor }),
-    });
-  }
-
   /** Merge records require finalized execution. */
   async getAuditedMerges(
     input: Readonly<{
@@ -1839,19 +1585,13 @@ export class RingRpc {
     );
     const cursor = readResponseCursor(value["cursor"], checked);
     const opened = list(value["opened"], "result.value.opened");
-    const unresolved = list(value["unresolved"], "result.value.unresolved");
-    if (opened.length + unresolved.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT))
+    if (opened.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT))
       throw invalid("result.value");
     return Object.freeze({
       slot: integer(wireContext["slot"], "result.context.slot"),
       blockTime: signedInteger(wireContext["blockTime"], "result.context.blockTime"),
       opened: Object.freeze(
         opened.map((entry, index) => decodeAuditedMerge(entry, `result.value.opened[${index}]`)),
-      ),
-      unresolved: Object.freeze(
-        unresolved.map((entry, index) =>
-          decodeUnresolvedMerge(entry, `result.value.unresolved[${index}]`),
-        ),
       ),
       ...(cursor === undefined ? {} : { cursor }),
     });
@@ -2436,42 +2176,24 @@ function decodeInput(value: Record<string, unknown>, path: string): DecryptedRin
 function decodeAuditedMerge(value: unknown, path: string): AuditedRingMerge {
   const wire = exactRecord(value, AUDITED_MERGE_FIELDS, AUDITED_MERGE_REQUIRED_FIELDS, path);
   const asset = canonicalHash(wire["asset"], `${path}.asset`);
-  const inputCommitments = mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`);
   const realNullifiers = absent(wire["realNullifiers"])
     ? []
     : mergeCommitments(wire["realNullifiers"], `${path}.realNullifiers`);
-  // A tag 47 merge names its inputs, a tag 57 merge its nullifiers.
-  if (inputCommitments.length === 0 && realNullifiers.length === 0)
-    throw invalid(`${path}.inputCommitments`);
   return Object.freeze({
     ...mergeRow(wire, path),
     ownerKey: hash(wire["ownerKey"], `${path}.ownerKey`),
     asset,
-    ...namedMint(wire, asset, path),
+    mint: namedMint(wire, asset, path),
     amount: u64(wire["amount"], `${path}.amount`),
-    inputCommitments,
     realNullifiers,
   });
 }
 
-function decodeUnresolvedMerge(value: unknown, path: string): UnresolvedRingMerge {
-  const wire = exactRecord(value, UNRESOLVED_MERGE_FIELDS, UNRESOLVED_MERGE_FIELDS, path);
-  return Object.freeze({
-    ...mergeRow(wire, path),
-    inputCommitments: mergeCommitments(wire["inputCommitments"], `${path}.inputCommitments`),
-  });
-}
-
 /** The commitment binds the asset field alone, a named mint must derive it. */
-function namedMint(
-  wire: Record<string, unknown>,
-  asset: Bytes32,
-  path: string,
-): Readonly<{ mint?: Address }> {
-  if (absent(wire["mint"])) return {};
+function namedMint(wire: Record<string, unknown>, asset: Bytes32, path: string): Address {
   const mint = address(wire["mint"], `${path}.mint`);
   if (!equalBytes(assetField(mint), asset)) throw invalid(`${path}.mint`);
-  return { mint };
+  return mint;
 }
 
 function mergeCommitments(value: unknown, path: string): readonly Bytes32[] {
@@ -2499,8 +2221,6 @@ export const RING_PAYLOAD_ERROR_KINDS: readonly OutputPayloadErrorKind[] = Objec
   "disclosure",
   "recipientKey",
   "commitment",
-  "unknownAsset",
-  "escrowPending",
 ]);
 
 function payloadErrorKind(value: unknown, path: string): OutputPayloadErrorKind {
@@ -2544,65 +2264,6 @@ function u64(value: unknown, path: string): bigint {
   const decoded = integer(value, path);
   if (decoded < 0n || decoded > 0xffff_ffff_ffff_ffffn) throw invalid(path);
   return decoded;
-}
-
-function decodeCoverage(value: unknown): RingCoverage {
-  const wire = exactRecord(value, COVERAGE_FIELDS, COVERAGE_FIELDS, "result.coverage");
-  const complete = wire["complete"];
-  if (typeof complete !== "boolean") throw invalid("result.coverage.complete");
-  return Object.freeze({
-    fromSlot: u64(wire["fromSlot"], "result.coverage.fromSlot"),
-    throughSlot: u64(wire["throughSlot"], "result.coverage.throughSlot"),
-    complete,
-  });
-}
-
-function decodeUnspentUtxo(value: unknown, path: string): RingUnspentUtxo {
-  const wire = exactRecord(value, UNSPENT_UTXO_FIELDS, UNSPENT_UTXO_REQUIRED_FIELDS, path);
-  const asset = canonicalHash(wire["asset"], `${path}.asset`);
-  return Object.freeze({
-    utxoHash: canonicalHash(wire["utxoHash"], `${path}.utxoHash`),
-    asset,
-    ...namedMint(wire, asset, path),
-    amount: u64(wire["amount"], `${path}.amount`),
-    kind: decodeUnspentUtxoKind(wire["kind"], `${path}.kind`),
-    slot: u64(wire["slot"], `${path}.slot`),
-    signature: signature(wire["txSignature"], `${path}.txSignature`),
-    eventIndex: u16(wire["eventIndex"], `${path}.eventIndex`),
-    slotIndex: u32(wire["slotIndex"], `${path}.slotIndex`),
-  });
-}
-
-function decodeUnspentUtxoKind(value: unknown, path: string): RingUnspentUtxoKind {
-  const tag = record(value, path)["kind"];
-  if (tag === "mergeOutput") {
-    exactRecord(value, MERGE_OUTPUT_KIND_FIELDS, MERGE_OUTPUT_KIND_FIELDS, path);
-    return Object.freeze({ kind: "mergeOutput" });
-  }
-  if (tag !== "opened") throw invalid(`${path}.kind`);
-  const wire = exactRecord(value, OPENED_KIND_FIELDS, OPENED_KIND_FIELDS, path);
-  return Object.freeze({
-    kind: "opened",
-    blinding: canonicalHash(wire["blinding"], `${path}.blinding`),
-    treeId: u16(wire["treeId"], `${path}.treeId`),
-  });
-}
-
-function decodeUnresolvedHistory(value: unknown, path: string): RingUnresolvedHistory {
-  const wire = exactRecord(value, UNRESOLVED_FIELDS, UNRESOLVED_FIELDS, path);
-  const reason = UNRESOLVED_REASONS.find((candidate) => candidate === wire["reason"]);
-  if (reason === undefined) throw invalid(`${path}.reason`);
-  return Object.freeze({
-    slot: u64(wire["slot"], `${path}.slot`),
-    signature: signature(wire["txSignature"], `${path}.txSignature`),
-    eventIndex: u16(wire["eventIndex"], `${path}.eventIndex`),
-    reason,
-    inputs: Object.freeze(
-      list(wire["inputs"], `${path}.inputs`).map((input, index) =>
-        canonicalHash(input, `${path}.inputs[${index}]`),
-      ),
-    ),
-  });
 }
 
 function decodeSkipped(wire: Record<string, unknown>): SkippedRingTransaction {
@@ -2748,49 +2409,21 @@ const SIGNED_UTXOS_REQUIRED_FIELDS = new Set([
   "signature",
 ]);
 const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"]);
-const SIGNED_UNSPENT_REQUIRED_FIELDS = new Set([
-  "ringProgramId",
-  "owner",
-  "reader",
-  "timestamp",
-  "nonce",
-  "signature",
-]);
-const SIGNED_UNSPENT_FIELDS = new Set([...SIGNED_UNSPENT_REQUIRED_FIELDS, "cursor", "wallet"]);
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
-const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "unresolved", "cursor"]);
-const UNRESOLVED_MERGE_FIELDS = new Set([
+const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "cursor"]);
+const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
   "slot",
   "txSignature",
   "eventIndex",
   "outputCommitment",
-  "inputCommitments",
-]);
-const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
-  ...UNRESOLVED_MERGE_FIELDS,
   "ownerKey",
   "asset",
+  "mint",
   "amount",
 ]);
-const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "mint", "realNullifiers"]);
-const UNSPENT_PAGE_FIELDS = new Set(["utxos", "coverage", "unresolved", "cursor"]);
-const COVERAGE_FIELDS = new Set(["fromSlot", "throughSlot", "complete"]);
-const UNSPENT_UTXO_REQUIRED_FIELDS = new Set([
-  "utxoHash",
-  "asset",
-  "amount",
-  "kind",
-  "slot",
-  "txSignature",
-  "eventIndex",
-  "slotIndex",
-]);
-const UNSPENT_UTXO_FIELDS = new Set([...UNSPENT_UTXO_REQUIRED_FIELDS, "mint"]);
-const OPENED_KIND_FIELDS = new Set(["kind", "blinding", "treeId"]);
-const MERGE_OUTPUT_KIND_FIELDS = new Set(["kind"]);
-const UNRESOLVED_FIELDS = new Set(["slot", "txSignature", "eventIndex", "reason", "inputs"]);
+const AUDITED_MERGE_FIELDS = new Set([...AUDITED_MERGE_REQUIRED_FIELDS, "realNullifiers"]);
 const SIGNED_AUDITOR_FIELDS = new Set([
   "ringProgramId",
   "authority",

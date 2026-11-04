@@ -17,8 +17,6 @@ import {
   addressBytes,
   equalBytes,
   hashBytes,
-  BN254_SCALAR_ORDER,
-  bigIntToBytes,
   ZERO_32,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
@@ -41,10 +39,6 @@ import {
 } from "../../../src/crypto/audit/merge-disclosure.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import { RecordKind, type AuditRecord } from "../../../src/protocol/codec/audit-stream.js";
-import { auditRingMergesV3 } from "../../../src/protocol/historical/v3/audit.js";
-import { sealRingMergeDisclosure } from "../../../src/protocol/historical/v3/merge-disclosure.js";
-import { RingError } from "../../../src/protocol/error.js";
-import type { TransactionOrigin } from "../../../src/protocol/transaction/origin.js";
 import {
   kitReads,
   solanaRpcReads,
@@ -114,22 +108,6 @@ function memberOf(index: number): Bytes32 {
   return value as Bytes32;
 }
 
-/** Every transaction is a tag 18 merge, the binding is the origin tests' concern. */
-const MERGES: TransactionOrigin = {
-  confirmedTransaction: async (transaction) => ({
-    kind: "historicalMerge",
-    transaction,
-    instruction: Uint8Array.of(20),
-  }),
-};
-
-const EMPTY_DISCLOSURE = {
-  proof: new Uint8Array(192),
-  ephemeralPublicKey: new Uint8Array(33) as Bytes33,
-  ciphertext: new Uint8Array(32) as Bytes32,
-  fields: [],
-};
-
 /** A ring merge whose output the member's escrowed key opens. */
 function escrowedMerge(input: Readonly<{ member: Bytes32; key: NullifierKey }>) {
   const firstNullifier = memberOf(0x77);
@@ -187,184 +165,6 @@ function scanClient(input: Readonly<{ transactions: readonly IndexedShieldedTran
   };
 }
 
-describe("auditRingMerges", () => {
-  it("walks every history page and leaves a merge without a disclosure to the historical reader", async () => {
-    const auditor = X25519Keypair.generate();
-    const { client, transactionPages } = scanClient({
-      transactions: [[UNOPENED], []],
-    });
-    const result = await auditRingMerges({
-      client,
-      ringProgramId: ring,
-      auditor,
-      origin: MERGES,
-    });
-    expect(transactionPages).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ merges: [], skipped: [] });
-    expect(result.historical).toEqual([
-      { slot: UNOPENED.slot, signature: SIGNATURE, eventIndex: 0 },
-    ]);
-    expect(result.nextCursor).toBeUndefined();
-  });
-
-  it("refuses a merge read twice", async () => {
-    const auditor = X25519Keypair.generate();
-    const twice = scanClient({ transactions: [[UNOPENED], [UNOPENED]] });
-    await expect(
-      auditRingMergesV3({
-        client: twice.client,
-        ringProgramId: ring,
-        auditor,
-        origin: {
-          confirmedTransaction: async (transaction) => ({
-            kind: "historicalMergeV3",
-            transaction,
-            disclosure: EMPTY_DISCLOSURE,
-          }),
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "RING_RPC",
-      details: { reason: "duplicate merge" },
-    });
-  });
-});
-
-describe("auditRingMergesV3 rows", () => {
-  const auditor = X25519Keypair.generate();
-  const listed = {
-    slot: UNOPENED.slot,
-    signature: UNOPENED.txSignature,
-    eventIndex: UNOPENED.eventIndex,
-    reason: "invalidAuditData",
-  };
-
-  it("opens the proved input list with a noncanonical native ciphertext field", async () => {
-    const owner = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
-    const merge = escrowedMerge({ member: OWNER_MEMBER, key: owner });
-    const transaction = {
-      ...merge.transaction,
-      outputSlots: merge.transaction.outputSlots.map((slot) => ({
-        ...slot,
-        payload: encodeMergeOutputData({
-          salt: merge.salt,
-          ciphertext: [bigIntToBytes(BN254_SCALAR_ORDER) as Bytes32, memberOf(0), memberOf(0)],
-          ringDataHash: merge.ringDataHash,
-        }),
-      })),
-    };
-    const list = Array.from({ length: 8 }, (_, slot) =>
-      slot < 2 ? memberOf(slot + 1) : memberOf(0),
-    );
-    const { disclosure } = sealRingMergeDisclosure(list, merge.salt, auditor.publicKey());
-    const origin: TransactionOrigin = {
-      confirmedTransaction: async (confirmed) => ({
-        kind: "historicalMergeV3",
-        transaction: confirmed,
-        disclosure: { ...disclosure, proof: new Uint8Array(192) },
-      }),
-    };
-    const { client } = scanClient({ transactions: [[transaction]] });
-    const result = await auditRingMergesV3({
-      client,
-      ringProgramId: ring,
-      auditor,
-      origin,
-    });
-    expect(result.spent).toEqual(list.slice(0, 2));
-    expect(result.skipped).toEqual([]);
-    expect(result.unresolved).toHaveLength(1);
-    owner.destroy();
-  });
-
-  it.each<readonly [string, TransactionOrigin]>([
-    [
-      "does not decode",
-      {
-        confirmedTransaction: async () => {
-          throw new RingError("RING_ORIGIN_DECODE");
-        },
-      },
-    ],
-    [
-      "fails its disclosure",
-      {
-        confirmedTransaction: async (transaction) => ({
-          kind: "historicalMergeV3",
-          transaction,
-          disclosure: EMPTY_DISCLOSURE,
-        }),
-      },
-    ],
-    [
-      "publishes two outputs",
-      {
-        confirmedTransaction: async (transaction) => ({
-          kind: "historicalMergeV3",
-          transaction: {
-            ...transaction,
-            outputSlots: [...transaction.outputSlots, ...transaction.outputSlots],
-          },
-          disclosure: EMPTY_DISCLOSURE,
-        }),
-      },
-    ],
-  ])("lists a merge that %s", async (_name, origin) => {
-    const { client } = scanClient({ transactions: [[UNOPENED]] });
-    await expect(
-      auditRingMergesV3({ client, ringProgramId: ring, auditor, origin }),
-    ).resolves.toMatchObject({
-      spent: [],
-      outputs: [],
-      unresolved: [],
-      skipped: [listed],
-    });
-  });
-
-  it("lists a disclosure under another auditor key and spends nothing", async () => {
-    const owner = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
-    const { transaction, salt } = escrowedMerge({
-      member: OWNER_MEMBER,
-      key: owner,
-    });
-    const other = X25519Keypair.generate();
-    const list = Array.from({ length: 8 }, (_, slot) =>
-      slot < 2 ? memberOf(slot + 1) : memberOf(0),
-    );
-    const { disclosure } = sealRingMergeDisclosure(list, salt, other.publicKey());
-    const origin: TransactionOrigin = {
-      confirmedTransaction: async (confirmed) => ({
-        kind: "historicalMergeV3",
-        transaction: confirmed,
-        disclosure: { ...disclosure, proof: new Uint8Array(192) },
-      }),
-    };
-    const { client } = scanClient({ transactions: [[transaction]] });
-    const result = await auditRingMergesV3({
-      client,
-      ringProgramId: ring,
-      auditor,
-      origin,
-    });
-    expect(result.spent).toEqual([]);
-    expect(result.skipped.map((row) => row.signature)).toEqual([transaction.txSignature]);
-    other.destroy();
-    owner.destroy();
-  });
-
-  it("stops at a failed origin read", async () => {
-    const { client } = scanClient({ transactions: [[UNOPENED]] });
-    const origin: TransactionOrigin = {
-      confirmedTransaction: async () => {
-        throw new RingError("RING_ORIGIN_UNAVAILABLE");
-      },
-    };
-    await expect(
-      auditRingMergesV3({ client, ringProgramId: ring, auditor, origin }),
-    ).rejects.toMatchObject({ code: "RING_ORIGIN_UNAVAILABLE" });
-  });
-});
-
 describe("recoverMergeOpening", () => {
   it("opens a merge with the member's key and derives its nullifier", () => {
     const key = NullifierKey.fromSecret(new Uint8Array(31).fill(5) as Bytes31);
@@ -415,12 +215,12 @@ describe("the tag 57 reader", () => {
     const firstNullifier = hex(request.firstNullifier) as Bytes32;
     const ringDataHash = hex(request.outputRingDataHash) as Bytes32;
     const record = hex(entry.record);
-    const mint = encodeBase58(record.subarray(48, 80));
+    const mint = encodeBase58(record.subarray(41, 73));
     const hash =
       overrides.hash ??
       knownUtxoHash(
         {
-          ownerKey: record.slice(16, 48) as Bytes32,
+          ownerKey: record.slice(9, 41) as Bytes32,
           owner: { kind: "keyed", nullifierPk: hex(request.nullifierPk) as Bytes32 },
           asset: hashBytes(addressBytes(mint)) as Bytes32,
           amount: BigInt(request.amount),
@@ -481,9 +281,9 @@ describe("the tag 57 reader", () => {
         record: {
           kind: RecordKind.ring,
           amount: 12n,
-          ownerKey: record.slice(16, 48) as Bytes32,
-          mint: encodeBase58(record.subarray(48, 80)),
-          nullifierPk: record.slice(80, 112) as Bytes32,
+          ownerKey: record.slice(9, 41) as Bytes32,
+          mint: encodeBase58(record.subarray(41, 73)),
+          nullifierPk: record.slice(73, 105) as Bytes32,
           ...edit,
         },
         secret: seed as Bytes32,
@@ -499,10 +299,10 @@ describe("the tag 57 reader", () => {
     });
     const record = hex(entry.record);
     expect(opened.utxo).toEqual({
-      ownerKey: record.slice(16, 48),
+      ownerKey: record.slice(9, 41),
       nullifierPk: hex(entry.request.nullifierPk),
-      asset: hashBytes(record.subarray(48, 80)),
-      mint: encodeBase58(record.subarray(48, 80)),
+      asset: hashBytes(record.subarray(41, 73)),
+      mint: encodeBase58(record.subarray(41, 73)),
       amount: 12n,
       blinding: hex(entry.output_blinding),
       dataHash: ZERO_32,
@@ -640,7 +440,6 @@ describe("the tag 57 reader", () => {
       },
     });
     expect(page.merges.map(({ signature }) => signature)).toEqual([SIGNATURE]);
-    expect(page.historical).toEqual([]);
     expect(page.skipped.map(({ signature }) => signature)).toEqual([bad.transaction.txSignature]);
     const { client: other } = scanClient({ transactions: [[good.transaction]] });
     const foreign = await auditRingMerges({

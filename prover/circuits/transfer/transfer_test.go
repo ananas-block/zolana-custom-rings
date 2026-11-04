@@ -22,9 +22,9 @@ import (
 
 var (
 	confidential2 = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24}
+	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24, Wide: true}
 	dataKey2      = confidential2
-	confEntry2    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true}
+	confEntry2    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true}
 	anonymous2    = confidential2
 	anonData2     = confidential2
 	entry2        = confEntry2

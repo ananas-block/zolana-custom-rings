@@ -1,11 +1,3 @@
-// Proves that the auditor opens the output of a ring's SPP merge, under the owner, asset
-// and amount the output commits and the seed its blinding derives from. The SPP proof ties
-// every input to that owner, asset and sum, the ring proof opens no input and one key
-// serves every merge width.
-//
-// Read after shared/envelope.go, registry/opening.go.
-// Read before prover/ring/ring.go.
-
 package circuits
 
 import (
@@ -24,16 +16,10 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-// Properties:
-// 1. OutputUtxoHash commits the record's owner, nullifier key, mint and amount under the TMOB blinding of Seed and FirstNullifier.
-// 2. Only the auditor opens the record, its plaintext is the kind, amount, owner key, mint, nullifier key and seed in one canonical encoding.
-// 3. A nullifier key off ZeroNullifierPk has its row under TrackingRoot and its owner stays hidden, ZeroNullifierPk reads no row and publishes its owner.
-// 4. No list, guard, cap or co-signer rule is proven, a merge keeps one owner's value in one asset.
-
 // MergeRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
 const MergeRecordLen = audit.RecordStride + 32
 
-// MergeCircuit binds a ring's SPP merge output to a record only its auditor opens.
+// MergeCircuit binds a ring's SPP merge output to a record only its auditor opens, SPP's proof ties every input to that owner, asset and sum.
 type MergeCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 
@@ -59,6 +45,7 @@ type MergeCircuit struct {
 	Tracking           registry.TrackingOpening
 }
 
+// No list, guard, cap or co-signer rule is proven, a merge keeps one owner's value in one asset.
 func (c *MergeCircuit) Define(api frontend.API) error {
 	zeroKey := api.IsZero(api.Sub(c.NullifierPk, shared.ZeroNullifierPk))
 	hidden := api.Sub(1, zeroKey)

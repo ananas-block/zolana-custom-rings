@@ -45,6 +45,7 @@ import {
 import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
+import { settledFrame } from "./frame-buffer.js";
 import {
   decodeRingMergeRequest,
   forwardedMergeData,
@@ -52,24 +53,7 @@ import {
   type MergeRingAuthority,
   type SealedMergeRecord,
 } from "../../crypto/audit/merge-disclosure.js";
-import {
-  HISTORICAL_DEPOSIT_PREFIX_LENGTH,
-  encodeHistoricalDepositCapsule,
-  readHistoricalDepositCapsule,
-  type HistoricalDepositCapsule,
-} from "../historical/v3/deposit-capsule.js";
-import {
-  RingTransactData as RingTransactDataV3,
-  landedRingRail as landedRingRailV3,
-  type RingRail as RingRailV3,
-} from "../historical/v3/frame.js";
-import type { AuditStreamLayout as AuditStreamLayoutV3 } from "../historical/v3/layout.js";
-import {
-  readRingMergeDisclosure as readMergeDisclosureV3,
-  writeRingMergeDisclosure as writeMergeDisclosureV3,
-  type RingMergeDisclosure as RingMergeDisclosureV3,
-} from "../historical/v3/merge-disclosure.js";
-import { REVISION_LENGTH, RingTransactData, landedRingRail, type RingRail } from "./transact.js";
+import { RingTransactData, landedRingRail, type RingRail } from "./transact.js";
 import { readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 
 const base58Encoder = getBase58Encoder();
@@ -104,38 +88,6 @@ export type ConfirmedRingTransaction =
       /** The record whose proof the direct ring caller verified. */
       sealedRecord: Pick<SealedMergeRecord, "ephemeralPublicKey" | "ciphertext">;
       authority: MergeRingAuthority;
-    }>
-  /** Tag 3, 25, 43 or 44, the historical path decodes `instruction`. */
-  | Readonly<{
-      kind: "historicalTransfer";
-      transaction: IndexedShieldedTransaction;
-      inputTreeIds: readonly (number | undefined)[];
-      /** The ring instruction's data, its first byte the tag. */
-      instruction: Uint8Array;
-      /** SPP proved the transfer on the anonymous rail. */
-      sppAnonymous: boolean;
-    }>
-  /** Tag 45 or 46, read through `protocol/historical/v3`. */
-  | Readonly<{
-      kind: "historicalTransferV3";
-      transaction: IndexedShieldedTransaction;
-      inputTreeIds: readonly (number | undefined)[];
-      layout: AuditStreamLayoutV3;
-      rail: RingRailV3;
-    }>
-  /** The historical path decodes `instruction`. */
-  | Readonly<{
-      kind: "historicalMerge";
-      transaction: IndexedShieldedTransaction;
-      /** The ring instruction's data, its first byte the tag. */
-      instruction: Uint8Array;
-    }>
-  /** Tag 47, read through `protocol/historical/v3`. */
-  | Readonly<{
-      kind: "historicalMergeV3";
-      transaction: IndexedShieldedTransaction;
-      /** The merge disclosure whose proof the direct ring caller verified. */
-      disclosure: RingMergeDisclosureV3;
     }>;
 
 /** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never absent. */
@@ -172,36 +124,7 @@ function confirmedMergeRecordOf(
   };
 }
 
-/** Tag 47's disclosure, the ring forwards `ringDataHash || body` with the body's `b` decompressed. */
-function confirmedMergeDisclosureV3Of(found: TrustedEvent): RingMergeDisclosureV3 {
-  const wrapper = found.wrapper;
-  if (found.source.data[0] !== InstructionTag.ringMergeTransact || wrapper === undefined)
-    throw invalid("merge.instruction");
-  const request = new Reader(wrapper.data.subarray(MERGE_V3_REQUEST_OFFSET));
-  const ringDataHash = request.bytes(32, "merge.ringDataHash");
-  const disclosure = readMergeDisclosureV3(request);
-  const prefix =
-    MERGE_V3_REQUEST_OFFSET + 32 + writeMergeDisclosureV3(new Writer(), disclosure).finish().length;
-  const forwarded = found.source.data;
-  if (
-    !equalBytes(forwarded.subarray(1, 33), ringDataHash) ||
-    !equalBytes(
-      forwarded.subarray(FORWARDED_MERGE_V3_PREFIX),
-      sppMergeBody(wrapper.data.subarray(prefix)),
-    )
-  )
-    throw invalid("merge.disclosure");
-  return disclosure;
-}
-
-/** `tag || own_revision` ahead of the tag 47 request. */
-const MERGE_V3_REQUEST_OFFSET = 1 + REVISION_LENGTH;
-/** `tag || ringDataHash` ahead of the forwarded SPP merge body. */
-const FORWARDED_MERGE_V3_PREFIX = 1 + 32;
-
 const CONFIRMED_DEPOSIT = Symbol("confirmed audited deposit");
-
-export type DepositCapsuleVersion = "v4" | "historicalV3";
 
 /** Authenticates one capsule against the successful audited deposit that published it. */
 export class ConfirmedDeposit {
@@ -209,8 +132,6 @@ export class ConfirmedDeposit {
   readonly #capsuleHash: Uint8Array;
   private constructor(
     token: symbol,
-    /** Tag 58 seals a record, tag 31 the older opening. */
-    readonly version: DepositCapsuleVersion,
     readonly slotIndex: number,
     ownerCommitment: Uint8Array,
     capsule: Uint8Array,
@@ -241,23 +162,15 @@ export class ConfirmedDeposit {
     const found = ringEventIn(confirmedInstructionGroups(transaction), eventIndex, ring);
     if (found === undefined || found.source.data[0] !== InstructionTag.ringDeposit) return [];
     const wrapper = found.wrapper?.data;
-    const version = depositVersionOf(wrapper?.[0]);
-    if (wrapper === undefined || version === undefined) return [];
-    const prefix =
-      version === "v4" ? AUDITED_DEPOSIT_PREFIX_LENGTH : HISTORICAL_DEPOSIT_PREFIX_LENGTH;
-    if (!equalBytes(wrapper.subarray(prefix), found.source.data)) throw invalid("auditedDeposit");
-    return ConfirmedDeposit.#decode(found.source.data, version);
+    if (wrapper?.[0] !== RingInstructionTag.deposit) return [];
+    if (!equalBytes(wrapper.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), found.source.data))
+      throw invalid("auditedDeposit");
+    return ConfirmedDeposit.#decode(found.source.data);
   }
 
   /** The digest covers the entire capsule, including recipient ciphertext and slot. */
-  authenticate(
-    capsule: RingDepositCapsule | HistoricalDepositCapsule,
-    ownerCommitment: Bytes32,
-  ): void {
-    const encoded =
-      this.version === "v4"
-        ? encodeRingDepositCapsule(capsule)
-        : encodeHistoricalDepositCapsule(capsule as HistoricalDepositCapsule);
+  authenticate(capsule: RingDepositCapsule, ownerCommitment: Bytes32): void {
+    const encoded = encodeRingDepositCapsule(capsule);
     if (
       capsule.slotIndex !== this.slotIndex ||
       !equalBytes(ownerCommitment, this.#ownerCommitment) ||
@@ -269,32 +182,18 @@ export class ConfirmedDeposit {
     }
   }
 
-  static #decode(data: Uint8Array, version: DepositCapsuleVersion): readonly ConfirmedDeposit[] {
+  static #decode(data: Uint8Array): readonly ConfirmedDeposit[] {
     const decoded = decodeRingDepositInstructionData(data.subarray(1));
     if (decoded.deposits.length < 1 || decoded.deposits.length > RING_DEPOSIT_AUDIT_SLOTS)
       throw invalid("deposits.length");
     const deposits = decoded.deposits.map((deposit, slot) => {
       const ciphertext = deposit.encrypted.ciphertext;
-      const capsule =
-        version === "v4"
-          ? readRingDepositCapsule(ciphertext)
-          : readHistoricalDepositCapsule(ciphertext);
+      const capsule = readRingDepositCapsule(ciphertext);
       if (capsule === undefined || capsule.slotIndex !== slot) throw invalid("deposit capsule");
-      return new ConfirmedDeposit(
-        CONFIRMED_DEPOSIT,
-        version,
-        slot,
-        deposit.ownerUtxoHash,
-        ciphertext,
-      );
+      return new ConfirmedDeposit(CONFIRMED_DEPOSIT, slot, deposit.ownerUtxoHash, ciphertext);
     });
     return Object.freeze(deposits);
   }
-}
-
-function depositVersionOf(tag: number | undefined): DepositCapsuleVersion | undefined {
-  if (tag === RingInstructionTag.deposit) return "v4";
-  return tag === RingInstructionTag.historicalDeposit ? "historicalV3" : undefined;
 }
 
 export interface OriginInstruction {
@@ -360,6 +259,33 @@ interface TrustedEvent {
   readonly source: OriginInstruction;
   readonly event: OriginInstruction;
   readonly wrapper: OriginInstruction | undefined;
+}
+
+/** A settlement closes its buffer, its own event inside it alone names the frame it signed. */
+function callerFrame(
+  groups: readonly OriginInstructionGroup[],
+  caller: OriginInstruction,
+  ring: Address,
+): Uint8Array | undefined {
+  if (caller.data[0] !== RingInstructionTag.settleBuffered) return caller.data;
+  const event = instructionAncestry(groups).find(
+    ({ instruction, parent }) =>
+      parent === caller && instruction.data[0] === RingInstructionTag.frameEvent,
+  )?.instruction;
+  if (event === undefined) return undefined;
+  try {
+    return settledFrame({
+      ringProgram: ring,
+      settleProgram: caller.programId,
+      eventProgram: event.programId,
+      succeeded: true,
+      settle: caller.data,
+      event: event.data,
+    });
+  } catch (cause) {
+    if (cause instanceof RingError) return undefined;
+    throw cause;
+  }
 }
 
 function ringEventIn(
@@ -554,7 +480,8 @@ export function confirmedRingWithdrawals(
       if (withdrawals.length === 0) return withdrawals;
       const source = settlementDataOf(instruction);
       if (source === undefined) return withdrawals;
-      const frame = screenedFrame(parent.data, source.anonymous);
+      const settled = callerFrame(groups, parent, ring);
+      const frame = settled === undefined ? undefined : screenedFrame(settled, source.anonymous);
       if (frame === undefined) return withdrawals;
       const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
         const writer = new Writer();
@@ -589,28 +516,13 @@ function screenedFrame(
     }>
   | undefined {
   const tag = instruction[0];
-  if (tag === RingInstructionTag.transfer || tag === RingInstructionTag.authorityTransfer) {
-    const frame = RingTransactData.parse(
-      instruction.subarray(1),
-      landedRingRail(instruction, sppAnonymous),
-    );
-    return frame.ownRevision === undefined ? undefined : frame;
-  }
-  if (
-    tag !== RingInstructionTag.historicalTransferV3 &&
-    tag !== RingInstructionTag.historicalAuthorityTransferV3
-  )
+  if (tag !== RingInstructionTag.transfer && tag !== RingInstructionTag.authorityTransfer)
     return undefined;
-  const frame = RingTransactDataV3.parse(
+  const frame = RingTransactData.parse(
     instruction.subarray(1),
-    landedRingRailV3(instruction, sppAnonymous),
+    landedRingRail(instruction, sppAnonymous),
   );
-  return frame.policy === undefined
-    ? undefined
-    : {
-        interfaceTransfers: frame.interfaceTransfers,
-        splWithdrawalOwners: frame.policy.splWithdrawalOwners,
-      };
+  return frame.ownRevision === undefined ? undefined : frame;
 }
 
 /**
@@ -741,16 +653,15 @@ function readConfirmedEvent(
     });
     return { ...data, outputTree, firstLeaf, kind: "transfer", inputTrees };
   }
-  if (tag === InstructionTag.ringMergeTransact || tag === InstructionTag.ringMergeV2) {
+  if (tag === InstructionTag.ringMergeV2) {
     if (kind !== 3) throw invalid("event.kind");
     const data = new Reader(source.data.slice(1));
     const ringDataHash = data.bytes(32, "merge.ringDataHash") as Bytes32;
-    const ringV2 = tag === InstructionTag.ringMergeV2;
-    if (ringV2) data.u8("merge.authority");
+    data.u8("merge.authority");
     const merge = readMergeData(data);
     data.done();
     const { salt, ciphertext } = merge.outputEncryption;
-    const payload = encodeMergeOutputData({ ringDataHash, salt, ciphertext, ringV2 });
+    const payload = encodeMergeOutputData({ ringDataHash, salt, ciphertext, ringV2: true });
     const { outputTree, firstLeaf } = readEventLocation(event);
     const viewTag = event.bytes(32, "merge.viewTag") as Bytes32;
     event.done();
@@ -818,7 +729,8 @@ function bindConfirmedTransaction(
   ring: Address,
 ): ConfirmedRingTransaction | undefined {
   if (indexed.eventIndex === undefined) throw invalid("eventIndex");
-  const found = ringEventIn(confirmedInstructionGroups(confirmed), indexed.eventIndex, ring);
+  const groups = confirmedInstructionGroups(confirmed);
+  const found = ringEventIn(groups, indexed.eventIndex, ring);
   if (found === undefined) return undefined;
   try {
     const data = readConfirmedEvent(found.source, found.event);
@@ -906,20 +818,6 @@ function bindConfirmedTransaction(
         ),
       });
     if (data.kind === "merge") {
-      const wrapperTag = found.wrapper?.data[0];
-      if (wrapperTag === RingInstructionTag.historicalMergeV3)
-        return Object.freeze({
-          kind: "historicalMergeV3",
-          transaction,
-          disclosure: confirmedMergeDisclosureV3Of(found),
-        });
-      // SPP's first ring merge tag, no later instruction forwards it.
-      if (found.wrapper !== undefined && found.source.data[0] === InstructionTag.ringMergeTransact)
-        return Object.freeze({
-          kind: "historicalMerge",
-          transaction,
-          instruction: found.wrapper.data,
-        });
       return Object.freeze({
         kind: data.kind,
         transaction,
@@ -931,40 +829,17 @@ function bindConfirmedTransaction(
     const inputTreeIds = Object.freeze(
       data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
     );
-    const wrapper = found.wrapper;
-    const wrapperTag = wrapper?.data[0];
     const sppAnonymous = data.anonymous === true;
     const published = { outputs: outputSlots.length, inputs: data.nullifiers.length };
-    if (
-      wrapper !== undefined &&
-      (wrapperTag === RingInstructionTag.historicalTransfer ||
-        wrapperTag === RingInstructionTag.historicalAuthorityTransfer ||
-        wrapperTag === RingInstructionTag.legacyTransact ||
-        wrapperTag === RingInstructionTag.legacyDelegateTransact)
-    )
-      return Object.freeze({
-        kind: "historicalTransfer",
-        transaction,
-        inputTreeIds,
-        instruction: wrapper.data,
-        sppAnonymous,
-      });
-    if (
-      wrapper !== undefined &&
-      (wrapperTag === RingInstructionTag.historicalTransferV3 ||
-        wrapperTag === RingInstructionTag.historicalAuthorityTransferV3)
-    )
-      return Object.freeze({
-        kind: "historicalTransferV3",
-        transaction,
-        inputTreeIds,
-        ...boundFrameV3(wrapper.data, sppAnonymous, published),
-      });
     return Object.freeze({
       kind: data.kind,
       transaction,
       inputTreeIds,
-      ...boundFrame(found, sppAnonymous, published),
+      ...boundFrame(
+        found.wrapper === undefined ? undefined : callerFrame(groups, found.wrapper, ring),
+        sppAnonymous,
+        published,
+      ),
     });
   } catch (cause) {
     if (cause instanceof RingError) throw cause;
@@ -982,14 +857,13 @@ interface PublishedCounts {
 
 /** The frame of the ring's own `Transfer` or `AuthorityTransfer`, the one the program verified. */
 function boundFrame(
-  found: TrustedEvent,
+  instruction: Uint8Array | undefined,
   sppAnonymous: boolean,
   published: PublishedCounts,
 ): Pick<
   Extract<ConfirmedRingTransaction, { kind: "transfer" }>,
   "layout" | "rail" | "noSpend" | "hasData" | "entry"
 > {
-  const instruction = found.wrapper?.data;
   const tag = instruction?.[0];
   if (
     instruction === undefined ||
@@ -1007,18 +881,6 @@ function boundFrame(
     hasData: data.hasData,
     entry: data.entry,
   };
-}
-
-function boundFrameV3(
-  instruction: Uint8Array,
-  sppAnonymous: boolean,
-  published: PublishedCounts,
-): Readonly<{ layout: AuditStreamLayoutV3; rail: RingRailV3 }> {
-  const rail = landedRingRailV3(instruction, sppAnonymous);
-  const data = RingTransactDataV3.parse(instruction.subarray(1), rail);
-  if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
-    throw invalid("transfer.instruction");
-  return { layout: RingTransactDataV3.streamLayout(data), rail };
 }
 
 /** Mirrors Rust `settlement_width`, the accounts `append_interface_transfer_accounts` adds. */

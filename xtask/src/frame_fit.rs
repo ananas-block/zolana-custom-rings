@@ -2,14 +2,14 @@ use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};
 use custom_ring_interface::{
-    cosign::ApprovalMask, key_catalog::TransferShape, sender_bundle_len, spl_withdrawal_count,
-    storage::Revision, tag, AnonymousProofData, CustomRingMergeIxData, CustomRingProof,
-    DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
-    OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    cosign::ApprovalMask, frame_digest, key_catalog::TransferShape, sender_bundle_len,
+    settle_buffered_data, spl_withdrawal_count, storage::Revision, stream::slot_tag, tag,
+    AnonymousProofData, CustomRingMergeIxData, CustomRingProof, DepositPrefix, FrameExtensions,
+    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, RecipientBody,
+    Replies, RingDepositAuditCapsule, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead,
+    SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MAX_FRAME_LEN,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN,
+    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -50,6 +50,7 @@ const TRACKING: Address = address(0xa7);
 const DELEGATE: Address = address(0xa8);
 const COSIGNER_RECORD: Address = address(0xac);
 const COSIGNER: Address = address(0xad);
+const BUFFER: Address = address(0xae);
 const TOKEN_PROGRAM: Address = address(0xab);
 
 const fn address(seed: u8) -> Address {
@@ -266,8 +267,69 @@ struct Transfer {
 
 struct Measured {
     fit: Fit,
+    buffered: Fit,
+    frame_len: usize,
+    spp_cpi_len: usize,
     /// The catalog keys it and `parse` read it back.
     keyed: bool,
+}
+
+impl Measured {
+    const fn fits_inline(&self) -> bool {
+        self.fit.fits() && self.spp_cpi_len <= MAX_CPI_DATA_LEN
+    }
+
+    fn buffered_limits(&self) -> Vec<String> {
+        let mut limits = Vec::new();
+        if !self.buffered.fits() {
+            limits.push(self.buffered.over());
+        }
+        if self.frame_len > MAX_FRAME_LEN {
+            limits.push(format!(
+                "buffer create {} B",
+                self.frame_len - MAX_FRAME_LEN
+            ));
+        }
+        if self.spp_cpi_len > MAX_CPI_DATA_LEN {
+            limits.push(format!("SPP CPI {} B", self.spp_cpi_len - MAX_CPI_DATA_LEN));
+        }
+        limits
+    }
+
+    /// Transaction and CPI ceilings only, the catalog key apart.
+    fn outcome(&self) -> Outcome {
+        let limits = self.buffered_limits();
+        if self.fits_inline() {
+            Outcome::Inline
+        } else if limits.is_empty() {
+            Outcome::Buffered
+        } else {
+            Outcome::No(limits.join(", "))
+        }
+    }
+}
+
+enum Outcome {
+    Inline,
+    Buffered,
+    No(String),
+}
+
+impl Outcome {
+    const fn fits(&self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Buffered => "buffered",
+            Self::No(_) => "no",
+        }
+    }
+
+    fn limit(&self) -> &str {
+        match self {
+            Self::Inline | Self::Buffered => "",
+            Self::No(limit) => limit,
+        }
+    }
 }
 
 impl Transfer {
@@ -338,7 +400,7 @@ impl Transfer {
         let slots: Vec<RingOutput<'_>> = (0..outputs)
             .map(|slot| RingOutput {
                 hash: &field,
-                owner_tag: &field,
+                owner_tag: slot_tag(field),
                 body: match (load.every_body, anonymous_frame, slot) {
                     (true, _, slot) if slot + 1 == outputs => SlotBody::Exit(&exit_body),
                     (false, true, 0) => SlotBody::None,
@@ -392,7 +454,6 @@ impl Transfer {
                 tag: &field,
                 body: &bundle,
             }),
-            eph_u: &field,
             envelope: &[],
             private_tx_hash: &field,
             anonymous: frame.hidden_sender().then_some(AnonymousProofData {
@@ -430,6 +491,7 @@ impl Transfer {
             withdrawals: u8::try_from(LEGS)?,
             owners: u8::try_from(inputs)?,
             entry: frame.entry(),
+            wide: data.wide_owners,
         };
         let envelope = vec![14u8; data.stream_under(key).envelope().len];
         data.envelope = &envelope;
@@ -457,6 +519,7 @@ impl Transfer {
         let accounts: Vec<TransactInterfaceTransferAccounts> =
             legs.iter().map(|(_, accounts)| *accounts).collect();
         let expanded = data.transact_ix_data(&config, TransactProof::zeroed())?;
+        let spp_cpi_len = 1 + expanded.serialize()?.len();
         let spp = match delegate {
             true => {
                 RingAuthorityTransact {
@@ -508,13 +571,30 @@ impl Transfer {
             true => tag::AUTHORITY_TRANSFER,
             false => tag::TRANSFER,
         };
-        let instruction = Instruction {
-            program_id: RING_PROGRAM,
-            accounts: metas,
-            data: [&[ring_tag][..], &encoded].concat(),
+        let frame_bytes = [&[ring_tag][..], &encoded].concat();
+        let settle = settle_buffered_data(&frame_digest(&frame_bytes)?);
+        let mut settling = vec![
+            AccountMeta::new(BUFFER, false),
+            AccountMeta::new_readonly(RING_PROGRAM, false),
+        ];
+        settling.extend_from_slice(&metas);
+        let frame_len = frame_bytes.len();
+        let fit_of = |accounts, data| {
+            Fit::of(
+                &Instruction {
+                    program_id: RING_PROGRAM,
+                    accounts,
+                    data,
+                },
+                &payer,
+                load.priority_fee,
+            )
         };
         Ok(Measured {
-            fit: Fit::of(&instruction, &payer, load.priority_fee)?,
+            fit: fit_of(metas, frame_bytes)?,
+            buffered: fit_of(settling, settle)?,
+            frame_len,
+            spp_cpi_len,
             keyed,
         })
     }
@@ -695,6 +775,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     .instruction()?;
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
+        key_capacity: u8::try_from(width)?,
         proof: bytemuck::Zeroable::zeroed(),
         tracking_revision: Revision::from(1),
         own_revision: Revision::from(1),
@@ -714,9 +795,9 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     Fit::of(&instruction, &PAYER, full)
 }
 
-fn verdict(fit: Fit) -> &'static str {
+fn unbuffered_fit(fit: Fit) -> &'static str {
     match fit.fits() {
-        true => "fits",
+        true => "inline",
         false => "no",
     }
 }
@@ -732,12 +813,23 @@ fn table() -> Result<String> {
         table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
     )?;
-    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
-    writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over |")?;
-    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|")?;
+    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The inline owner run is the inline ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "fits: the path that clears the transaction and CPI ceilings, the catalog key apart. limit: what stops a row with no path, rail for a shape the rail has no SPP key for, else the excess in accounts, signatures, bytes, buffer create or CPI data at that row's load. A missing catalog key is a choice of the catalog, no runtime limit.")?;
+    writeln!(table, "| shape | rail | load | catalog key | inline bytes | inline accounts | signatures | inline owner run | inline over | frame | SPP CPI | buffered bytes | buffered accounts | fits | limit |")?;
+    writeln!(
+        table,
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+    )?;
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
+                writeln!(
+                    table,
+                    "| {}x{} | {} | - | - | - | - | - | - | - | - | - | - | - | no | rail |",
+                    shape.n_inputs(),
+                    shape.n_outputs(),
+                    frame.name(),
+                )?;
                 continue;
             }
             for load in LOADS {
@@ -755,9 +847,10 @@ fn table() -> Result<String> {
                     false => "-".to_owned(),
                 };
                 let fit = measured.fit;
+                let outcome = measured.outcome();
                 writeln!(
                     table,
-                    "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                     shape.n_inputs(),
                     shape.n_outputs(),
                     frame.name(),
@@ -767,8 +860,13 @@ fn table() -> Result<String> {
                     fit.addresses,
                     fit.signatures,
                     widest,
-                    verdict(fit),
                     fit.over(),
+                    measured.frame_len,
+                    measured.spp_cpi_len,
+                    measured.buffered.bytes,
+                    measured.buffered.addresses,
+                    outcome.fits(),
+                    outcome.limit(),
                 )?;
             }
         }
@@ -781,11 +879,12 @@ fn table() -> Result<String> {
             let fit = merge_fit(width, authority)?;
             writeln!(
                 table,
-                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | {} |",
+                "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                verdict(fit),
+                fit.over(),
+                unbuffered_fit(fit),
                 fit.over(),
             )?;
         }
@@ -795,11 +894,12 @@ fn table() -> Result<String> {
             let fit = deposit_fit(width, full)?;
             writeln!(
                 table,
-                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | {} |",
+                "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | - | - | - | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
-                verdict(fit),
+                fit.over(),
+                unbuffered_fit(fit),
                 fit.over(),
             )?;
         }

@@ -53,7 +53,7 @@ import {
   type PolicyReadClient,
 } from "../../proof/policy-proof.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
-import { DEPOSIT_DEMAND, demandRequirement, resolveRingCoSigner } from "../../proof/cosign.js";
+import { DEPOSIT_DEMAND, demandRequirement, resolveRingCoSigners } from "../../proof/cosign.js";
 import { type RingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import {
   ringDepositContextHash,
@@ -250,13 +250,13 @@ export class PreparedRingDeposit {
       // An optional class with no configured record demands nothing.
       const demanded = demandRequirement(DEPOSIT_DEMAND, sealing.config) !== undefined;
       if (demanded)
-        await resolveRingCoSigner(
+        await resolveRingCoSigners(
           {
             client: params.client,
             ringProgramId: params.ringProgramId,
             config: sealing.config,
             demand: DEPOSIT_DEMAND,
-            ...(params.cosigner === undefined ? {} : { supplied: signerAddress(params.cosigner) }),
+            supplied: params.cosigner === undefined ? [] : [signerAddress(params.cosigner)],
             ownerSigners: [],
           },
           context,
@@ -455,6 +455,7 @@ export class PreparedRingDeposit {
             config,
             owner: this.#ownerPkHash,
             nullifierPk: this.#nullifierPk,
+            viewingU: this.#recipient.viewingPublicKey.u(),
             asset: this.#asset.asset,
             listSalts:
               this.#listSalt === undefined

@@ -47,7 +47,7 @@ import {
   NO_DEMAND,
   operationDemand,
   publicLegClasses,
-  resolveRingCoSigner,
+  resolveRingCoSigners,
 } from "../../proof/cosign.js";
 import { RingError } from "../../protocol/error.js";
 import {
@@ -93,7 +93,9 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
+import { decideAddressCeiling } from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
+import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
 
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
@@ -105,8 +107,8 @@ export type RingProvingClient = TreeContext &
 /** What an anonymous frame adds to a staged transfer, Rust `AnonymousSpend`. */
 export interface AnonymousSpendValues {
   readonly tokenOwner?: Address;
-  /** Binds the signing co-signer, each of `ANONYMOUS_PARTIES` zero when absent. */
-  partyIdentities(coSigner: Address | undefined): readonly Bytes32[];
+  /** Binds the signing co-signers, each of `ANONYMOUS_PARTIES` zero when absent. */
+  partyIdentities(coSigners: readonly Address[]): readonly Bytes32[];
 }
 
 /** How the SPP proof authorizes the spends of one rail, Rust `Spend`. */
@@ -151,8 +153,7 @@ export interface RingTransactAccounts {
   readonly withdrawal?: TransactWithdrawal;
   /** Read only, right after the ring account, tracking last. */
   readonly registries: readonly Address[];
-  /** Signs beside its record. */
-  readonly coSigner?: Address;
+  readonly coSigners: readonly Address[];
   readonly delegate?: Address;
 }
 
@@ -172,19 +173,19 @@ export class ProvenRingTransfer {
   readonly accounts: RingTransactAccounts;
   /** Padding included, final slot order. */
   readonly outputs: readonly ProofOutputUtxo[];
-  readonly coSigner?: Address;
+  readonly coSigners: readonly Address[];
   /** The live roots the proofs bind, a submission proves again once one leaves its registry. */
   readonly roots: readonly BoundRoot[];
   readonly trackingRoot: BoundRoot;
   readonly policy?: BoundPolicy;
 
   /** @internal */
-  constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
+  constructor(fields: Omit<ProvenRingTransfer, "instruction" | "buffered">) {
     this.ringProgramId = fields.ringProgramId;
     this.data = fields.data;
     this.accounts = fields.accounts;
     this.outputs = fields.outputs;
-    if (fields.coSigner !== undefined) this.coSigner = fields.coSigner;
+    this.coSigners = fields.coSigners;
     this.roots = fields.roots;
     this.trackingRoot = fields.trackingRoot;
     if (fields.policy !== undefined) this.policy = fields.policy;
@@ -193,6 +194,11 @@ export class ProvenRingTransfer {
 
   instruction(): Promise<Instruction> {
     return ringTransactInstruction(this.ringProgramId, this.accounts, this.data);
+  }
+
+  /** `nonce` names the buffer, the payer writes it and pays the settlement. */
+  async buffered(nonce: bigint): Promise<BufferedFrame> {
+    return BufferedFrame.of(await this.instruction(), this.accounts.payer, nonce);
   }
 }
 
@@ -204,7 +210,7 @@ interface AssembledTransfer {
   readonly proofInputs: SppProofInputs;
   readonly slots: PublicSlots;
   readonly policy: PolicyInputs;
-  readonly coSigner?: Address;
+  readonly coSigners: readonly Address[];
   /** Zeros off the anonymous frame. */
   readonly partyIdentities: readonly Bytes32[];
   /** The in-proof owner's identity, zero on every other rail. */
@@ -229,12 +235,13 @@ export type StagedTransferInput = Readonly<{
   ringProgramId: Address;
   config: RingPolicy;
   staged: StagedTransfer;
-  /** Read only when the operation demands one, its record holds every demanded class. */
-  coSigner?: Address;
+  coSigners?: readonly Address[];
   /** An enrolled subject on a ring reading a salted list needs its salt here. */
   listSalts?: readonly RingListSalt[];
   transaction?: RingTransactionFrame;
-  approve?: (coSigner: Address | undefined) => Promise<void>;
+  /** Past one transaction the frame settles from a buffer its payer writes. */
+  bufferedSettlement?: boolean;
+  approve?: (coSigners: readonly Address[]) => Promise<void>;
 }>;
 
 /** Rust `Pipeline::assemble` and `Assembled::prove`, neither proof is an input to the other. */
@@ -243,7 +250,7 @@ export function proveStagedTransfer(
   context?: RequestContext,
 ): Promise<ProvenRingTransfer> {
   return assembleStagedTransfer(input, context, async (assembled) => {
-    await input.approve?.(assembled.coSigner);
+    await input.approve?.(assembled.coSigners);
     return proveAssembled(input, assembled, context);
   });
 }
@@ -356,7 +363,7 @@ async function assembleStagedTransfer<T>(
     const addresses = { nInputs: shape.inputs, legs: transfers.length };
     const { circuit } = selectTransferKey({
       spend: keySpend,
-      addresses: { ...addresses, coSigners: input.coSigner === undefined ? 0 : 1 },
+      addresses: { ...addresses, coSigners: input.coSigners?.length ?? 0 },
       ownerSigners: staged.ownerSigners.length,
     });
     const policy = await readPolicy(
@@ -378,30 +385,30 @@ async function assembleStagedTransfer<T>(
           publicLegs: publicLegClasses(transfers),
           approval: policy.approvalMask,
         });
-    const resolved = await resolveRingCoSigner(
-      {
-        client,
-        ringProgramId,
-        config,
-        demand: coSignDemand,
-        ...(input.coSigner === undefined ? {} : { supplied: input.coSigner }),
-        ownerSigners:
-          spend.inProofOwner === undefined
-            ? staged.ownerSigners
-            : [...staged.ownerSigners, encodeBase58(spend.inProofOwner)],
-        ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
-      },
-      context,
-    );
-    const coSigner = resolved?.signer;
-    // The final co-signer moves the account bound.
+    const coSigners = (
+      await resolveRingCoSigners(
+        {
+          client,
+          ringProgramId,
+          config,
+          demand: coSignDemand,
+          supplied: input.coSigners ?? [],
+          ownerSigners:
+            spend.inProofOwner === undefined
+              ? staged.ownerSigners
+              : [...staged.ownerSigners, encodeBase58(spend.inProofOwner)],
+        },
+        context,
+      )
+    ).map(({ signer }) => signer);
+    // The final co-signer count moves the account bound.
     const { wideOwners } = selectTransferKey({
       spend: keySpend,
-      addresses: { ...addresses, coSigners: coSigner === undefined ? 0 : 1 },
+      addresses: { ...addresses, coSigners: coSigners.length },
       ownerSigners: staged.ownerSigners.length,
     });
     const partyIdentities =
-      spend.anonymous?.partyIdentities(coSigner) ??
+      spend.anonymous?.partyIdentities(coSigners) ??
       Array.from({ length: ANONYMOUS_PARTIES }, () => zeroField());
     const privateTxHash = proofInputs.privateTxHash();
     const statementSender =
@@ -418,7 +425,7 @@ async function assembleStagedTransfer<T>(
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
       registries: ringRegistrySlots(config, transferRootRead(config, delegate)),
-      ...(coSigner === undefined ? {} : { coSigner }),
+      coSigners,
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
     });
     const ringId = ringIdField(ringProgramId);
@@ -465,12 +472,24 @@ async function assembleStagedTransfer<T>(
       )
     )
       throw new RingError("RING_EXTERNAL_DATA_MISMATCH");
-    checkTransferFits(shape, {
-      ...input.transaction,
-      feePayer: proofInputs.payer,
-      instructions: [await ringTransactInstruction(ringProgramId, accounts, preview)],
-      computeUnitLimit: ringComputeUnitLimit(transactTag(ringRail)),
-    });
+    const inline = await ringTransactInstruction(ringProgramId, accounts, preview);
+    const computeUnitLimit = ringComputeUnitLimit(transactTag(ringRail));
+    if (input.bufferedSettlement === true)
+      await decideAddressCeiling({
+        ...input.transaction,
+        payer: proofInputs.payer,
+        instruction: inline,
+        computeUnitLimit,
+        inputs: [],
+        mergeCapacity: { keyed: 0, zeroKey: 0 },
+      });
+    else
+      checkTransferFits(shape, {
+        ...input.transaction,
+        feePayer: proofInputs.payer,
+        instructions: [inline],
+        computeUnitLimit,
+      });
     return await use(
       Object.freeze({
         sealed,
@@ -479,7 +498,7 @@ async function assembleStagedTransfer<T>(
         proofInputs,
         slots,
         policy,
-        ...(coSigner === undefined ? {} : { coSigner }),
+        coSigners,
         partyIdentities,
         sender: statementSender,
         signers,
@@ -502,7 +521,7 @@ async function proveAssembled(
 ): Promise<ProvenRingTransfer> {
   const { client, ringProgramId, config, staged } = input;
   const { rail, spend } = staged;
-  const { proofInputs, policy, coSigner, privateTxHash, ringId, preview, inputs } = assembled;
+  const { proofInputs, policy, coSigners, privateTxHash, ringId, preview, inputs } = assembled;
   const request = transferProofRequest({
     rail,
     ringRail: spend.rail,
@@ -544,7 +563,7 @@ async function proveAssembled(
     data,
     accounts: assembled.accounts,
     outputs: proofInputs.outputs,
-    ...(coSigner === undefined ? {} : { coSigner }),
+    coSigners,
     roots: boundRoots(policy),
     trackingRoot: policy.trackingBound,
     ...(screened(policy)
@@ -584,8 +603,8 @@ export async function ringTransactInstruction(
     meta(ring, false, false),
     ...accounts.registries.map((registry) => meta(registry, false, false)),
   ];
-  if (accounts.coSigner !== undefined)
-    prefix.push(...(await ringCoSignerMetas(ringProgramId, accounts.coSigner)));
+  for (const coSigner of accounts.coSigners)
+    prefix.push(...(await ringCoSignerMetas(ringProgramId, coSigner)));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));
   const encoded = RingTransactData.encode(data);
   const bytes = new Uint8Array(1 + encoded.length);
@@ -700,7 +719,6 @@ function previewData(
           }),
         }),
     ...(input.sender === undefined ? {} : { sender: input.sender }),
-    ephU: sealed.ephemeralPublicKey.u(),
     envelope: sealed.envelope,
     privateTxHash: input.privateTxHash,
     ...(input.rail === "anonymous" && !input.publicOwners
@@ -876,9 +894,8 @@ function transactTag(rail: RingRail): RingInstructionTag {
   return isDelegateRail(rail) ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 
-function wipeAuditRequest(request: Readonly<{ txViewingSk: Bytes32; ephSk: Bytes32 }>): void {
+function wipeAuditRequest(request: Readonly<{ txViewingSk: Bytes32 }>): void {
   request.txViewingSk.fill(0);
-  request.ephSk.fill(0);
 }
 
 function zeroField(): Bytes32 {

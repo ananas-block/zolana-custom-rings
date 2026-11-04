@@ -1,4 +1,3 @@
-import { policyWithdrawalHash } from "../../src/proof/withdrawals.js";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
@@ -9,21 +8,22 @@ import {
   ringProofCircuit,
   ringProofRequestBody,
   ringRequestKey,
-  type AnonymousSlotProofInputs,
-  type AnonymousTransferProofRequest,
   type AuditEnvelopeProofInputs,
-  type ConfidentialTransferProofRequest,
-  type DeliveredSlotProofInputs,
+  type EntryOpeningProofInput,
+  type OutputOpeningProofInput,
+  type PolicyOwnerEntry,
   type PolicyProofInputs,
   type PolicySubjectEntry,
   type PolicyTableProofInputs,
   type RingProofRequest,
   type RingSlotOpening,
+  type TrackingProofInputs,
+  type TrackingWriteProofInput,
+  type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
-import { type PresentRecordOpening } from "../../src/rpc/prover/types.js";
-import { encodeBase58, isZero, solanaOwnerIdentity } from "@heliuslabs/zolana/internal";
+import { encodeBase58, isZero } from "@heliuslabs/zolana/internal";
 import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import {
   NullifierKey,
   poseidon,
@@ -32,74 +32,53 @@ import {
   X25519Keypair,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
-import {
-  AssetRegistry,
-  ConfidentialTransfer,
-  privateTxHash,
-  SOL_MINT,
-} from "@heliuslabs/zolana/transaction";
+import { AssetRegistry, ConfidentialTransfer, SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type {
   MemberRecord,
   QuadPath,
-  RecordOpening,
   RecordPool,
   RecordWriteProofInput,
 } from "../../src/protocol/membership/member-registry.js";
+import type {
+  TrackingEntry,
+  TrackingOpening,
+  TrackingRecord,
+} from "../../src/protocol/membership/tracking.js";
 import {
   RING_KEYS,
   RING_PROVING_KEY_SHA256S,
   ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
+import { sealSaltedAuditorStream } from "../../src/crypto/audit/audit.js";
+import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
-  AUDIT_ENC_INFO,
-  auditSharedSecret,
-  symmetricAuditApply,
-} from "../../src/crypto/audit/audit.js";
-import { RECIPIENT_BODY_LEN } from "../../src/protocol/codec/anonymous-delivery.js";
+  DUMMY_RECORD,
+  encodeAuditEnvelope,
+  encodeAuditRecord,
+  encodeDataTail,
+  RecordKind,
+  type AuditRecord,
+} from "../../src/protocol/codec/audit-stream.js";
 import {
-  deliveredBodyLen,
   recordRegion,
-  recordSlots,
-  STREAM_FIRST_COUNTER,
+  tailRegion,
   type AuditLayout,
   type AuditStreamLayout,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import {
-  disclosurePlaintext,
-  type AnonymousOutputOpening,
-  type DeliveredOutputOpening,
-  type RingDisclosure,
-} from "../../src/crypto/audit/ring-disclosure.js";
-import { sealSenderBundle } from "../../src/protocol/codec/anonymous-delivery.js";
-import { sealDeliveredBody } from "../../src/protocol/transaction/output.js";
-import { deliveredSlotSecret } from "../../src/crypto/derivation/ring-stream.js";
-import {
-  addressRecordHash,
   applyRecordsStatement,
   replayRecordWrites,
-  verifyRecordPool,
-  type MemberOpeningRead,
 } from "../../src/protocol/membership/member-opening.js";
-import {
-  buildRuleTable,
-  decodeRule,
-  policyTableHash,
-} from "../../src/protocol/membership/policy.js";
+import { buildRuleTable } from "../../src/protocol/membership/policy.js";
 import { sealNullifierKeyWith } from "../../src/operations/management/register-key.js";
 import {
   applyRecordsStatementHash,
   registerKeyStatementHash,
   signerBinding,
   transferStatementHash,
-  type AuditHead,
+  type TransferStatement,
 } from "../../src/protocol/proof/statement.js";
-import type { RingOutput } from "../../src/protocol/transaction/transact.js";
-import {
-  OutputBlindings,
-  ringBlindingSeed,
-  ringOutputBlinding,
-} from "../../src/crypto/derivation/blinding.js";
 import { signingKeySpendSigner } from "../../src/operations/payments/anonymous.js";
 import { CustomRingTransfer } from "../../src/operations/payments/transfer-rails.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
@@ -206,48 +185,6 @@ function quadPath(index: unknown, flat: unknown): QuadPath {
 }
 
 /** Go `RecordOpening` carries no member, the test names the subject it opens. */
-function presentRecord(value: unknown, member: Bytes32): PresentRecordOpening {
-  const item = record(value);
-  return {
-    kind: "present",
-    record: {
-      mintPolicy: mintSettings(
-        item["mintPolicy"],
-        item["withdrawalThreshold"],
-        item["assetLimits"],
-      ),
-      member,
-      next: field(item["next"]),
-      lists: BigInt(count(item["lists"])),
-      escrowKey: field(item["escrowKey"]),
-      addressHash: field(item["addressHash"]),
-    },
-    path: quadPath(item["index"], item["path"]),
-  };
-}
-
-function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefined {
-  if (value === null) return undefined;
-  const item = record(value);
-  if (flag(item["present"])) return presentRecord(item, member);
-  return {
-    kind: "absent",
-    low: {
-      mintPolicy: mintSettings(
-        item["lowMintPolicy"],
-        item["lowWithdrawalThreshold"],
-        item["lowAssetLimits"],
-      ),
-      member: field(item["lowMember"]),
-      next: field(item["lowNext"]),
-      lists: BigInt(count(item["lowLists"])),
-      escrowKey: field(item["lowEscrow"]),
-      addressHash: field(item["lowAddressHash"]),
-    },
-    path: quadPath(item["index"], item["path"]),
-  };
-}
-
 function table(item: Json): PolicyTableProofInputs {
   return {
     sources: list(item["sources"]).map((value) => {
@@ -257,6 +194,7 @@ function table(item: Json): PolicyTableProofInputs {
         registry: field(source["registry"]),
       };
     }),
+    salted: count(item["salted"]),
     policyLen: count(item["policyLen"]),
     rules: fields(item["rules"]),
   };
@@ -269,6 +207,19 @@ function entry(value: unknown): PolicySubjectEntry {
   return { own: count(item["own"]), curator: count(curator) };
 }
 
+function ownerEntry(value: unknown): PolicyOwnerEntry {
+  const item = record(value);
+  const [curatorSalted, ...rest] = list(item["curatorSalted"]);
+  if (curatorSalted === undefined || rest.length !== 0) throw new Error("golden salted entry");
+  return {
+    ...entry(item),
+    tracking: count(item["tracking"]),
+    listSalt: field(item["listSalt"]),
+    ownSalted: count(item["ownSalted"]),
+    curatorSalted: count(curatorSalted),
+  };
+}
+
 function memberRecord(value: unknown): MemberRecord {
   const item = record(value);
   return {
@@ -276,8 +227,6 @@ function memberRecord(value: unknown): MemberRecord {
     member: field(item["member"]),
     next: field(item["next"]),
     lists: BigInt(count(item["lists"])),
-    escrowKey: field(item["escrowKey"]),
-    addressHash: field(item["addressHash"]),
   };
 }
 
@@ -309,8 +258,8 @@ function recordPool(records: unknown, proof: unknown, subjects: unknown): Record
 function layout(value: unknown): AuditLayout {
   const flags = count(value);
   return {
-    keyEscrow: (flags & 2) !== 0,
-    fullOpenings: (flags & 8) !== 0,
+    hasData: (flags & 1) !== 0,
+    entry: (flags & 2) !== 0,
   };
 }
 
@@ -318,35 +267,79 @@ function envelope(item: Json): AuditEnvelopeProofInputs {
   return {
     firstNullifier: field(item["firstNullifier"]),
     txViewingSk: bytes<Bytes32>(item["txViewingSk"], 32),
-    ephSk: bytes<Bytes32>(item["ephSk"], 32),
     auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
     salt: bytes<Bytes16>(item["salt"], 16),
     layout: layout(item["layout"]),
   };
 }
 
-function delivered(value: unknown, keyEscrow: boolean): DeliveredSlotProofInputs {
+function outputOpening(value: unknown): OutputOpeningProofInput {
   const item = record(value);
   return {
     output: opening(item["output"]),
-    recipientKey: bytes<Bytes32>(item["recipientKey"], 32),
     ownerKey: bytes<Bytes32>(item["ownerKey"], 32),
-    body: bytes(item["body"], deliveredBodyLen(keyEscrow)),
+    mintChunks: fields(item["mintChunks"]),
   };
 }
 
-function anonymousSlot(value: unknown): AnonymousSlotProofInputs {
+function entryOpening(value: unknown): EntryOpeningProofInput {
   const item = record(value);
   return {
-    output: opening(item["output"]),
     ownerKey: bytes<Bytes32>(item["ownerKey"], 32),
-    recipientKey: bytes<Bytes32>(item["recipientKey"], 32),
-    addressRevision: BigInt(count(item["addressRevision"])),
     mintChunks: fields(item["mintChunks"]),
-    body: bytes(item["body"], RECIPIENT_BODY_LEN),
-    tag: field(item["tag"]),
-    tagPreimage: field(item["tagPreimage"]),
   };
+}
+
+function trackingRecord(value: unknown): TrackingRecord {
+  const item = record(value);
+  return {
+    member: field(item["member"]),
+    next: field(item["next"]),
+    ...trackingFields(item),
+  };
+}
+
+function trackingFields(item: Json): Omit<TrackingEntry, "member"> {
+  const view0 = field(item["view0"]);
+  const view1 = field(item["view1"]);
+  return {
+    nullifierPk: field(item["nullifierPk"]),
+    ctHash: field(item["ctHash"]),
+    viewingU: Uint8Array.of(...view0.subarray(1), ...view1.subarray(31)) as Bytes32,
+    revision: amountOf(field(item["revision"])),
+    listTag: field(item["listTag"]),
+  };
+}
+
+function trackingSection(item: Json): TrackingProofInputs {
+  const proof = record(item["trackingProof"]);
+  return {
+    trackingRoot: field(item["trackingRoot"]),
+    trackingPool: {
+      records: list(item["trackingRecords"]).map(trackingRecord),
+      canopy: fields(proof["canopy"]),
+      paths: list(proof["paths"]).map((value) => {
+        const path = record(value);
+        return { index: count(path["index"]), siblings: list(path["siblings"]).map(fields) };
+      }),
+      subjects: list(item["trackingSubjects"]).map((value) => {
+        const subject = record(value);
+        return { member: field(subject["member"]), recordIndex: count(subject["recordIndex"]) };
+      }),
+    },
+    rowEntries: list(item["rowEntries"]).map(count),
+    outputEntries: list(item["outputEntries"]).map(count),
+  };
+}
+
+function trackingOpening(value: unknown): TrackingOpening | undefined {
+  if (value === null) return undefined;
+  const item = record(value);
+  const path = record(item["path"]);
+  const quad = { index: count(path["index"]), siblings: list(path["siblings"]).map(fields) };
+  return flag(item["present"])
+    ? { kind: "present", record: trackingRecord(item["record"]), path: quad }
+    : { kind: "absent", low: trackingRecord(item["record"]), path: quad };
 }
 
 function policy(item: Json): PolicyProofInputs {
@@ -370,12 +363,10 @@ function policy(item: Json): PolicyProofInputs {
     publicAmounts: fields(item["publicAmounts"]),
     publicGross: fields(item["publicGross"]),
     ...table(item),
-    ctHashes: fields(item["ctHashes"]),
-    recipients: fields(item["recipients"]),
     ownPool: recordPool(item["ownRecords"], item["ownProof"], item["ownSubjects"]),
     curatorPool: recordPool(item["curatorRecords"], item["curatorProof"], item["curatorSubjects"]),
-    senderEntries: list(item["senderEntries"]).map(entry),
-    ownerEntries: list(item["ownerEntries"]).map(entry),
+    senderEntries: list(item["senderEntries"]).map(ownerEntry),
+    ownerEntries: list(item["ownerEntries"]).map(ownerEntry),
     assetEntries: list(item["assetEntries"]).map(entry),
     publicAssetEntries: list(item["publicAssetEntries"]).map(count),
   };
@@ -385,31 +376,28 @@ function write(value: unknown): RecordWriteProofInput {
   const item = record(value);
   const queued = record(item["entry"]);
   return {
+    entry: {
+      member: field(queued["member"]),
+      mask: BigInt(count(queued["mask"])),
+      value: BigInt(count(queued["value"])),
+      ...(amountOf(field(queued["mintPolicy"])) === 0n
+        ? {}
+        : {
+            mintPolicy: mintSettings(
+              queued["mintPolicy"],
+              queued["withdrawalThreshold"],
+              queued["assetLimits"],
+            ),
+          }),
+    },
+    exists: flag(item["exists"]),
+    oldNext: field(item["oldNext"]),
+    oldLists: BigInt(count(item["oldLists"])),
     oldMintPolicy: mintSettings(
       item["oldMintPolicy"],
       item["oldWithdrawalThreshold"],
       item["oldAssetLimits"],
     ),
-    entry: {
-      member: field(queued["member"]),
-      mask: BigInt(count(queued["mask"])),
-      value: BigInt(count(queued["value"])),
-      escrowKey: field(queued["escrowKey"]),
-      addressHash: field(queued["addressHash"]),
-    },
-    exists: flag(item["exists"]),
-    oldNext: field(item["oldNext"]),
-    oldLists: BigInt(count(item["oldLists"])),
-    oldEscrow: field(item["oldEscrow"]),
-    oldAddressHash: field(item["oldAddressHash"]),
-    pair: {
-      nullifierPk: field(item["nullifierPk"]),
-      addressRing: field(item["addressRing"]),
-      view0: field(item["view0"]),
-      view1: field(item["view1"]),
-      addressRevision: BigInt(count(item["addressRevision"])),
-      escrowCiphertextHash: field(item["escrowCtHash"]),
-    },
     slot: quadPath(item["index"], item["path"]),
     low: {
       mintPolicy: mintSettings(
@@ -420,9 +408,19 @@ function write(value: unknown): RecordWriteProofInput {
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
-      escrowKey: field(item["lowEscrow"]),
-      addressHash: field(item["lowAddressHash"]),
     },
+    lowPath: quadPath(item["lowIndex"], item["lowPath"]),
+  };
+}
+
+function trackingWrite(value: unknown): TrackingWriteProofInput {
+  const item = record(value);
+  return {
+    entry: { member: field(item["member"]), ...trackingFields(item) },
+    exists: flag(item["exists"]),
+    oldRecord: trackingRecord(item["oldRecord"]),
+    slot: quadPath(item["index"], item["path"]),
+    lowRecord: trackingRecord(item["lowRecord"]),
     lowPath: quadPath(item["lowIndex"], item["lowPath"]),
   };
 }
@@ -431,59 +429,51 @@ function write(value: unknown): RecordWriteProofInput {
 function request(item: Json): RingProofRequest {
   const circuitType = text(item["circuitType"]);
   const publicInputHash = field(item["publicInputHash"]);
-  const transfer = () => ({
+  const applied = () => ({
     publicInputHash,
-    ...envelope(item),
-    exempt: flag(item["exempt"]),
-    approvalRequired: flag(item["approvalRequired"]),
-    outputCount: count(item["outputCount"]),
-    inputCount: count(item["inputCount"]),
-    signerCount: count(item["signerCount"]),
-    signers: fields(item["signers"]),
-    privateTxHash: field(item["privateTxHash"]),
-    privateTxBlinding: field(item["privateTxBlinding"]),
-    ...policy(item),
+    oldRoot: field(item["oldRoot"]),
+    newRoot: field(item["newRoot"]),
+    oldNextIndex: count(item["oldNextIndex"]),
+    newNextIndex: count(item["newNextIndex"]),
+    chainStart: field(item["chainStart"]),
+    chainEnd: field(item["chainEnd"]),
   });
-  if (circuitType.startsWith("custom-ring-transfer-confidential-"))
+  if (circuitType.startsWith("custom-ring-transfer-"))
     return {
-      kind: "transferConfidential",
-      ...transfer(),
+      kind: "transfer",
+      publicInputHash,
+      ...envelope(item),
       inProof: flag(item["inProof"]),
+      hidden: flag(item["hidden"]),
       delegate: flag(item["delegate"]),
-      outputs: list(item["outputs"]).map((output) =>
-        delivered(output, layout(item["layout"]).keyEscrow),
-      ),
-      inputs: list(item["inputs"]).map(opening),
       sender: field(item["sender"]),
-      senderPkHash: field(item["senderPkHash"]),
-    };
-  if (circuitType.startsWith("custom-ring-transfer-anonymous-"))
-    return {
-      kind: "transferAnonymous",
-      ...transfer(),
-      outputs: list(item["outputs"]).map(anonymousSlot),
-      ...(item["senderKey"] === undefined
-        ? {}
-        : { senderKey: bytes<Bytes32>(item["senderKey"], 32) }),
+      partyIdentities: fields(item["partyIdentities"]),
+      approvalMask: count(item["approvalMask"]),
+      outputCount: count(item["outputCount"]),
+      outputs: list(item["outputs"]).map(outputOpening),
+      inputCount: count(item["inputCount"]),
       inputs: list(item["inputs"]).map(opening),
-      partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
-      senderNullifierPk: field(item["senderNullifierPk"]),
-      senderViewingKey: bytes<Bytes32>(item["senderViewingKey"], 32),
-      senderAddressRevision: BigInt(count(item["senderAddressRevision"])),
-      senderBundleTag: field(item["senderBundleTag"]),
-      replyDigest: field(item["replyDigest"]),
+      entries: item["entries"] === undefined ? [] : list(item["entries"]).map(entryOpening),
+      signerCount: count(item["signerCount"]),
+      signers: fields(item["signers"]),
+      rows: fields(item["rows"]),
+      privateTxHash: field(item["privateTxHash"]),
+      privateTxBlinding: field(item["privateTxBlinding"]),
+      addressChain: field(item["addressChain"]),
+      ...trackingSection(item),
+      ...policy(item),
     };
   if (circuitType.startsWith("custom-ring-apply-records-"))
     return {
       kind: "applyRecords",
-      publicInputHash,
-      oldRoot: field(item["oldRoot"]),
-      newRoot: field(item["newRoot"]),
-      oldNextIndex: count(item["oldNextIndex"]),
-      newNextIndex: count(item["newNextIndex"]),
-      chainStart: field(item["chainStart"]),
-      chainEnd: field(item["chainEnd"]),
+      ...applied(),
       writes: list(item["writes"]).slice(0, count(item["count"])).map(write),
+    };
+  if (circuitType.startsWith("custom-ring-apply-enrollments-"))
+    return {
+      kind: "applyEnrollments",
+      ...applied(),
+      writes: list(item["writes"]).slice(0, count(item["count"])).map(trackingWrite),
     };
   if (circuitType === "custom-ring-register-key")
     return {
@@ -500,6 +490,7 @@ function request(item: Json): RingProofRequest {
     return {
       kind: "deposit",
       publicInputHash,
+      capacity: ownerPkHashes.length,
       contextHash: field(item["contextHash"]),
       count: count(item["count"]),
       anonymous: item["anonymous"] === undefined ? false : flag(item["anonymous"]),
@@ -507,73 +498,39 @@ function request(item: Json): RingProofRequest {
       ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
       nullifierPks: fields(item["nullifierPks"]),
       blindingSecrets: fields(item["blindingSecrets"]),
-      ctHashes: fields(item["ctHashes"]),
-      members: list(item["members"]).map((member, i) =>
-        member === null ? undefined : presentRecord(member, ownerPkHashes[i] ?? ZERO),
-      ),
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
-      keyEscrow: flag(item["keyEscrow"]),
-      memberRegistryRoot: field(item["memberRegistryRoot"]),
-      curatorRoot: field(item["curatorRoot"]),
-      policyHash: field(item["policyHash"]),
       assets: fields(item["assets"]),
       amounts: fields(item["amounts"]),
-      ...(item["table"] === undefined ? {} : { table: table(record(item["table"])) }),
-      assetRecords: list(item["assetRecords"]).map((opening, i) =>
-        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
-      ),
-      curatorAssetRecords: list(item["curatorAssetRecords"]).map((opening, i) =>
-        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
-      ),
-      ownerRecords: list(item["ownerRecords"]).map((opening, i) =>
-        memberOpening(opening, fields(item["ownerPkHashes"])[i] ?? ZERO),
-      ),
-      curatorOwnerRecords: list(item["curatorOwnerRecords"]).map((opening, i) =>
-        memberOpening(opening, fields(item["ownerPkHashes"])[i] ?? ZERO),
-      ),
+      mintChunks: list(item["mintChunks"]).map(fields),
+      ...trackingSection(item),
+      ...policy(item),
     };
   }
-  if (circuitType.startsWith("custom-ring-merge-v3-")) {
-    const ownerKey = bytes<Bytes32>(item["ownerKey"], 32);
+  if (circuitType === "custom-ring-merge-v4")
     return {
       kind: "merge",
-      partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
       publicInputHash,
-      privateTxHash: field(item["privateTxHash"]),
       outputUtxoHash: field(item["outputUtxoHash"]),
       firstNullifier: field(item["firstNullifier"]),
       ringProgramId: field(item["ringProgramId"]),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
-      salt: field(item["salt"]),
+      payer: field(item["payer"]),
+      trackingRoot: field(item["trackingRoot"]),
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
-      disclosureKey: bytes<Bytes32>(item["disclosureKey"], 32),
-      ownerKey,
-      nullifierSecret: field(item["nullifierSecret"]),
+      ownerKey: bytes<Bytes32>(item["ownerKey"], 32),
+      ownerPkHash: field(item["ownerPkHash"]),
+      mintChunks: fields(item["mintChunks"]),
       asset: field(item["asset"]),
-      inputCount: count(item["inputCount"]),
-      inputs: list(item["inputs"]).map((value) => {
-        const input = record(value);
-        return {
-          domain: field(input["domain"]),
-          treeId: field(input["treeId"]),
-          amount: field(input["amount"]),
-          blinding: field(input["blinding"]),
-          ringDataHash: field(input["ringDataHash"]),
-        };
-      }),
+      amount: field(item["amount"]),
+      nullifierPk: field(item["nullifierPk"]),
+      seed: field(item["seed"]),
       outputTreeId: field(item["outputTreeId"]),
       outputRingDataHash: field(item["outputRingDataHash"]),
-      keyEscrow: flag(item["keyEscrow"]),
-      memberRegistryRoot: field(item["memberRegistryRoot"]),
-      ctHash: field(item["ctHash"]),
-      ...(item["member"] === null
+      ...(item["tracking"] === null
         ? {}
-        : {
-            member: presentRecord(item["member"], solanaOwnerIdentity(ownerKey) as Bytes32),
-          }),
+        : { tracking: trackingOpening(item["tracking"]) as TrackingOpening }),
     };
-  }
   throw new Error(`no request for ${circuitType}`);
 }
 
@@ -588,75 +545,6 @@ function publicKeyOf(secret: Uint8Array): X25519PublicKey {
   } finally {
     keypair.destroy();
   }
-}
-
-function agreement(secret: Uint8Array, peer: X25519PublicKey): Bytes32 {
-  const keypair = X25519Keypair.fromBytes(secret);
-  try {
-    return keypair.ecdh(peer);
-  } finally {
-    keypair.destroy();
-  }
-}
-
-/** The auditor stream the circuit seals, rebuilt from the request's secrets. */
-function requestStream(
-  envelope: AuditEnvelopeProofInputs,
-  disclosure: RingDisclosure,
-): Readonly<{ envelope: Uint8Array; records: readonly Uint8Array[] }> {
-  const auditor = X25519PublicKey.fromBytes(tagged(envelope.auditorPk));
-  const eph = publicKeyOf(envelope.ephSk);
-  const shared = auditSharedSecret(agreement(envelope.ephSk, auditor), eph, auditor);
-  const plaintext = disclosurePlaintext(disclosure);
-  const seal = (counter: number, data: Uint8Array) =>
-    symmetricAuditApply(shared, { label: AUDIT_ENC_INFO, counter }, data);
-  return {
-    envelope: seal(
-      STREAM_FIRST_COUNTER,
-      Uint8Array.of(...envelope.txViewingSk, ...plaintext.evidence),
-    ),
-    records: recordSlots(disclosure.layout).map((slot, index) =>
-      seal(recordRegion(disclosure.layout, slot).startCounter, plaintext.records[index]!),
-    ),
-  };
-}
-
-function auditHead(
-  envelope: AuditEnvelopeProofInputs & Readonly<{ ringId: Bytes32 }>,
-  stream: Readonly<{ envelope: Uint8Array }>,
-): AuditHead {
-  return {
-    firstNullifier: envelope.firstNullifier,
-    ringId: envelope.ringId,
-    txViewingU: publicKeyOf(envelope.txViewingSk).u(),
-    auditorPubkey: tagged(envelope.auditorPk),
-    ephU: publicKeyOf(envelope.ephSk).u(),
-    envelope: stream.envelope,
-    salt: envelope.salt,
-    layout: envelope.layout,
-  };
-}
-
-/** Bit `i` set when slot `i` opens a UTXO outside the ring. */
-function exitsOf(outputs: readonly Readonly<{ output: RingSlotOpening }>[]): bigint {
-  return outputs.reduce(
-    (bits, { output }, slot) =>
-      isUtxo(output) && !isRingOutput(output) ? bits | (1n << BigInt(slot)) : bits,
-    0n,
-  );
-}
-
-/** One ring disclosure ciphertext per slot, `record` the stream's record of `slot`. */
-function slotCiphertexts(
-  layout: AuditStreamLayout,
-  records: readonly Uint8Array[],
-  bodyOf: (slot: number) => Uint8Array | undefined,
-): readonly Uint8Array[] {
-  const slots = recordSlots(layout);
-  return Array.from({ length: layout.outputs }, (_, slot) => {
-    const index = slots.indexOf(slot);
-    return index < 0 ? bodyOf(slot)! : records[index]!;
-  });
 }
 
 /** Go `UtxoHashCircuit`, a dummy's owner is zero. */
@@ -681,19 +569,6 @@ function isRingOutput(slot: RingSlotOpening): boolean {
   return isUtxo(slot) && amountOf(slot.ringProgramId) !== 0n;
 }
 
-/** SPP's TXOB blinding of slot `outputIndex` under the seed the envelope's `tx_viewing_sk` fixes. */
-function blindingOf(envelope: AuditEnvelopeProofInputs, outputIndex: number): Bytes32 {
-  return ringOutputBlinding({
-    firstNullifier: envelope.firstNullifier,
-    blindingSeed: ringBlindingSeed(envelope.txViewingSk, envelope.salt),
-    outputIndex,
-  });
-}
-
-function exitOutput(hash: Bytes32): RingOutput {
-  return { kind: "exit", hash, ownerTag: ZERO, payload: new Uint8Array(0) };
-}
-
 // The Go ring prover goldens live outside the repository.
 const CIRCUIT_TYPES = [...GOLDEN_BY_CIRCUIT.keys()].sort();
 
@@ -710,7 +585,10 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
   });
 
   it.each(CIRCUIT_TYPES)("encodes %s byte for byte", (circuitType) => {
-    expectReencoded(golden(circuitType));
+    const item = golden(circuitType);
+    expectReencoded(item);
+    // Go goldens fix the key order, the strict decoder takes any.
+    expect(JSON.stringify(ringProofRequestBody(request(item)))).toBe(JSON.stringify(item));
   });
 
   it("names the deposit key the prover loads and refuses a shape no ring key serves", () => {
@@ -720,40 +598,43 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
     });
     expect(() =>
       ringProvingKey({
-        family: "transferConfidential",
+        family: "transfer",
         outputs: 3,
-        inputs: 40,
+        class: 40,
         withdrawals: 4,
+        owners: 4,
+        entry: false,
+        wide: false,
       }),
     ).toThrow(expect.objectContaining({ code: "INTERFACE_INVALID_SHAPE" }));
   });
 });
 
-function recorded<K extends "transferConfidential" | "transferAnonymous">(
-  fixture: Fixture,
-  kind: K,
-): Extract<RingProofRequest, { kind: K }> {
-  const found = fixture.ringRequests.find((item) => item.kind === kind);
-  if (found === undefined) throw new Error(`no ${kind} request`);
-  return found as Extract<RingProofRequest, { kind: K }>;
+function recorded(fixture: Fixture): TransferProofRequest {
+  const found = fixture.ringRequests.find((item) => item.kind === "transfer");
+  if (found === undefined) throw new Error("no transfer request");
+  return found as TransferProofRequest;
 }
 
 const assets = new AssetRegistry();
 
 async function confidentialRequest(
   options: Readonly<{ policy?: boolean; inProof?: boolean }> = {},
-): Promise<ConfidentialTransferProofRequest> {
+): Promise<TransferProofRequest> {
   const signing = SigningKey.generate();
   const sender = ShieldedKeypair.fromKeypair(signing);
+  const recipient = ShieldedKeypair.generate();
   const fixture = await ringFixture(
     options.policy === true ? { table: buildRuleTable({ rules: [] }), records: [] } : {},
   );
+  fixture.enroll(sender.shieldedAddress());
+  fixture.enroll(recipient.shieldedAddress());
   const transfer = new ConfidentialTransfer(
     sender.shieldedAddress(),
     [noteInput(sender, 1_000n, fixture.ringProgramId)],
     fixture.authority,
   );
-  transfer.send(ShieldedKeypair.generate().shieldedAddress(), SOL_MINT, 400n);
+  transfer.send(recipient.shieldedAddress(), SOL_MINT, 400n);
   const rail = CustomRingTransfer.new({
     ringProgramId: fixture.ringProgramId,
     keys: walletKeys(sender),
@@ -763,12 +644,12 @@ async function confidentialRequest(
   await (
     options.inProof === true ? rail.withInProofOwner(signingKeySpendSigner(signing)) : rail
   ).prove(fixture.client);
-  return recorded(fixture, "transferConfidential");
+  return recorded(fixture);
 }
 
 async function anonymousRequest(
   options: Readonly<{ entry?: boolean; policy?: boolean }> = {},
-): Promise<AnonymousTransferProofRequest> {
+): Promise<TransferProofRequest> {
   const signing = SigningKey.generate();
   const sender = ShieldedKeypair.fromKeypair(signing);
   const bob = ShieldedKeypair.generate();
@@ -801,7 +682,7 @@ async function anonymousRequest(
       reply: null,
     })
     .prove(fixture.client);
-  return recorded(fixture, "transferAnonymous");
+  return recorded(fixture);
 }
 
 const GO_PARAMS = readFileSync(
@@ -828,18 +709,14 @@ const ENTRY = await anonymousRequest({ entry: true });
 
 describe("ring prover requests of the rails", () => {
   it("sends the keys of the Go params in declaration order", () => {
-    expect(Object.keys(ringProofRequestBody(CONFIDENTIAL))).toEqual(
-      goKeys("ConfidentialTransferParams"),
-    );
-    const anonymous = goKeys("AnonymousTransferParams");
-    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(anonymous);
-    expect(Object.keys(ringProofRequestBody(ANONYMOUS))).toEqual(
-      anonymous.filter((key) => key !== "senderKey"),
-    );
+    const keys = goKeys("TransferParams");
+    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(keys);
+    const off = keys.filter((key) => key !== "entries");
+    expect(Object.keys(ringProofRequestBody(CONFIDENTIAL))).toEqual(off);
+    expect(Object.keys(ringProofRequestBody(ANONYMOUS))).toEqual(off);
     const keysOfSlot = (request: RingProofRequest) =>
       Object.keys(record(list(ringProofRequestBody(request)["outputs"])[0]));
-    expect(keysOfSlot(CONFIDENTIAL)).toEqual(goKeys("DeliveredOutput"));
-    expect(keysOfSlot(ANONYMOUS)).toEqual(goKeys("AnonymousOutput"));
+    expect(keysOfSlot(CONFIDENTIAL)).toEqual(goKeys("OutputOpening"));
   });
 
   it("encodes the full u64 withdrawal range exactly and rejects overflow", () => {
@@ -880,20 +757,16 @@ describe("ring prover requests of the rails", () => {
     expect(() =>
       ringProofRequestBody({
         ...base,
-        outputs: [{ ...first, body: first.body.slice(1) }, ...rest],
+        outputs: [{ ...first, ownerKey: first.ownerKey.slice(1) as Bytes32 }, ...rest],
       }),
     ).toThrow(
       expect.objectContaining({
         code: "CLIENT_INVALID_LENGTH",
-        details: {
-          field: "outputs[0].body",
-          expected: first.body.length,
-          actual: first.body.length - 1,
-        },
+        details: { field: "outputs[0].ownerKey", expected: 32, actual: 31 },
       }),
     );
     const unknown = { ...base };
-    Reflect.set(unknown, "kind", "transferConfidentialV2");
+    Reflect.set(unknown, "kind", "transferV2");
     const loose = { ...base };
     Reflect.set(loose, "outputs", { length: base.outputs.length });
     for (const malformed of [unknown, loose]) {
@@ -906,15 +779,12 @@ describe("ring prover requests of the rails", () => {
     }
   });
 
-  it("sends the sender key on the entry key alone", () => {
-    expect(ringProofRequestBody(ANONYMOUS)).not.toHaveProperty("senderKey");
-    expect(ringProofRequestBody(ENTRY)).toHaveProperty("senderKey");
-    const { senderKey, ...keyless } = ENTRY;
-    if (senderKey === undefined) throw new Error("entry request without its sender key");
-    for (const refused of [{ ...ANONYMOUS, senderKey }, keyless])
-      expect(() => ringProofRequestBody(refused)).toThrow(
-        expect.objectContaining({ code: "CLIENT_INVALID_PROOF_INPUTS" }),
-      );
+  it("sends the entries on the entry key alone", () => {
+    expect(ringProofRequestBody(ANONYMOUS)).not.toHaveProperty("entries");
+    expect(ringProofRequestBody(ENTRY)).toHaveProperty("entries");
+    expect(() => ringProofRequestBody({ ...ENTRY, entries: ENTRY.entries.slice(1) })).toThrow(
+      expect.objectContaining({ code: "CLIENT_INVALID_LENGTH" }),
+    );
   });
 
   it("reads every body field back and rebuilds each rail's statement from the request", async () => {
@@ -924,11 +794,11 @@ describe("ring prover requests of the rails", () => {
       await confidentialRequest({ inProof: true }),
     ]) {
       expectReencoded(JSON.parse(JSON.stringify(ringProofRequestBody(typed))));
-      checkConfidentialStatement(typed);
+      checkTransferStatement(typed);
     }
     for (const typed of [ANONYMOUS, ENTRY, await anonymousRequest({ policy: true })]) {
       expectReencoded(JSON.parse(JSON.stringify(ringProofRequestBody(typed))));
-      checkAnonymousStatement(typed);
+      checkTransferStatement(typed);
     }
   });
 });
@@ -939,8 +809,14 @@ describe("ring prover request encoding against the Rust fixtures", () => {
     expect(RUST_TRANSFER_FIXTURES.length).toBeGreaterThan(0);
   });
 
-  it.each(RUST_TRANSFER_FIXTURES)("encodes %s byte for byte", (name) => {
+  it.each(RUST_TRANSFER_FIXTURES)("encodes %s field for field", (name) => {
     expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
+  });
+
+  it.each(RUST_TRANSFER_FIXTURES)("rebuilds the statement of %s", (name) => {
+    const typed = request(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
+    if (typed.kind !== "transfer") throw new Error("transfer fixture");
+    checkTransferStatement(typed);
   });
 });
 
@@ -961,7 +837,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         ringId: typed.ringId,
         member: typed.member,
         nullifierPk: envelope.nullifierPublicKey,
-        listTag: field(golden("custom-ring-register-key")["listTag"]),
+        listTag: listTagOf(listSaltOf(key, typed.ringId)),
         auditorPubkey: tagged(typed.auditorPk),
         ephU: envelope.sealed.ephemeralPublicKey.u(),
         ciphertext: envelope.sealed.ciphertext,
@@ -993,367 +869,167 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
     },
   );
 
-  it.each(CIRCUIT_TYPES.filter((name) => name.startsWith("custom-ring-transfer-confidential-")))(
-    "rebuilds %s from tx_sk, every recipient key and its registry openings",
+  it.each(CIRCUIT_TYPES.filter((name) => name.startsWith("custom-ring-transfer-")))(
+    "rebuilds %s from its secrets and openings",
     (circuitType) => {
       const typed = request(golden(circuitType));
-      if (typed.kind !== "transferConfidential") throw new Error("confidential golden");
-      checkConfidentialStatement(typed);
-    },
-  );
-
-  it.each(CIRCUIT_TYPES.filter((name) => name.startsWith("custom-ring-transfer-anonymous-")))(
-    "rebuilds %s with its owner keys, its spent inputs and its registry openings",
-    (circuitType) => {
-      const typed = request(golden(circuitType));
-      if (typed.kind !== "transferAnonymous") throw new Error("anonymous golden");
-      checkAnonymousStatement(typed);
+      if (typed.kind !== "transfer") throw new Error("transfer golden");
+      checkTransferStatement(typed);
     },
   );
 });
 
-function checkConfidentialStatement(typed: ConfidentialTransferProofRequest): void {
-  const { keyEscrow } = typed.layout;
-  const slots = typed.outputs.slice(0, typed.outputCount);
-  const layout: AuditStreamLayout = {
-    key: { kind: "confidential", class: typed.inputs.length },
-    keyEscrow,
-    inputs: typed.inputCount,
-    capacity: typed.outputs.length,
-    outputs: typed.outputCount,
-    exits: exitsOf(slots),
-    change: 0n,
-  };
-  const outputs = slots.map((slot, i): DeliveredOutputOpening => {
-    const opened = slot.output;
-    if (!isUtxo(opened)) return { kind: "body" };
-    const nullifierPk = keyEscrow ? undefined : opened.nullifierPk;
-    expect(hex(blindingOf(typed, i))).toBe(hex(opened.blinding));
-    if (!isRingOutput(opened)) {
-      return {
-        kind: "exit",
-        nullifierPk,
-        asset: opened.asset,
-        amount: amountOf(opened.amount),
-      };
-    }
-    const secret = slotSecret(typed, slot.recipientKey, i);
-    expect(
-      hex(
-        sealDeliveredBody(secret, {
-          blinding: opened.blinding,
-          amount: amountOf(opened.amount),
-          ownerKey: slot.ownerKey,
-          nullifierPk,
-        }),
-      ),
-    ).toBe(hex(slot.body));
-    expect(hex(opened.ringDataHash)).toBe(hex(ZERO));
-    return { kind: "body" };
-  });
-  const firstSigner = typed.signerCount > 0 ? typed.signers[0] : undefined;
-  checkPolicySection(typed, firstSigner ?? typed.senderPkHash);
-  const stream = requestStream(typed, {
-    kind: "delivered",
-    layout,
-    inputs: inputCommitmentsOf(typed.inputs.slice(0, typed.inputCount)),
-    outputs,
-  });
-  const hash = transferStatementHash({
-    ...statementTail(typed),
-    head: auditHead(typed, stream),
-    family: {
-      kind: "confidential",
-      inProof: typed.inProof,
-      delegate: typed.delegate,
-      sender: typed.sender,
-      recipients: typed.recipients,
-    },
-    outputs: slots.map((slot) =>
-      isUtxo(slot.output) && !isRingOutput(slot.output)
-        ? exitOutput(openingHash(slot.output))
-        : {
-            kind: "delivered",
-            hash: openingHash(slot.output),
-            u: slot.recipientKey,
-            body: slot.body,
-          },
-    ),
-    outputCiphertexts: slotCiphertexts(layout, stream.records, (slot) => typed.outputs[slot]?.body),
-  });
-  expect(hex(hash)).toBe(hex(typed.publicInputHash));
+const EMPTY_ENTRY = {
+  ownerKey: ZERO,
+  nullifierPk: ZERO,
+  amount: 0n,
+  mint: encodeBase58(ZERO),
+  blinding: ZERO,
+  dataHash: ZERO,
+  ringDataHash: ZERO,
+};
+
+/** Go `assertMint`, the mint's 31 and 1 byte chunks. */
+function mintOf(chunks: readonly Bytes32[]): Address {
+  const [high, low] = chunks;
+  if (high === undefined || low === undefined) throw new Error("mint chunks");
+  return encodeBase58(Uint8Array.of(...high.subarray(1), ...low.subarray(31)));
 }
 
-function checkAnonymousStatement(typed: AnonymousTransferProofRequest): void {
-  const spent = typed.inputs.slice(0, typed.inputCount);
-  const [first] = spent;
-  if (first === undefined) throw new Error("anonymous request without an input");
-  const senderPkHash = first.ownerPkHash;
-  expect(typed.senderKey === undefined).toBe(!typed.layout.fullOpenings);
-  if (typed.senderKey !== undefined)
-    expect(hex(solanaOwnerIdentity(typed.senderKey))).toBe(hex(senderPkHash));
+/** The stream is deterministic under the transfer's key and salt. */
+function checkTransferStatement(typed: TransferProofRequest): void {
+  const hasData = typed.layout.hasData;
   const slots = typed.outputs.slice(0, typed.outputCount);
-  const changes = slots.map(
-    (slot) =>
-      isRingOutput(slot.output) &&
-      hex(slot.output.ownerPkHash) === hex(senderPkHash) &&
-      hex(slot.output.nullifierPk) === hex(typed.senderNullifierPk) &&
-      hex(slot.recipientKey) === hex(typed.senderViewingKey),
-  );
-  const outputs = slots.map((slot, i): AnonymousOutputOpening => {
-    const opened = slot.output;
-    if (!isUtxo(opened)) return { kind: "dummy" };
-    expect(hex(blindingOf(typed, i))).toBe(hex(opened.blinding));
-    if (!isRingOutput(opened)) {
-      return {
-        kind: "exit",
-        nullifierPk: opened.nullifierPk,
-        asset: opened.asset,
-        amount: amountOf(opened.amount),
-      };
-    }
-    // A ring output commits to no ring data, its owner the identity of its disclosed key.
-    expect(hex(opened.ringDataHash)).toBe(hex(ZERO));
-    expect(hex(solanaOwnerIdentity(slot.ownerKey))).toBe(hex(opened.ownerPkHash));
+  const inputs = typed.inputs.slice(0, typed.inputCount);
+  const live = inputs.filter(isUtxo);
+  const layout: AuditStreamLayout = {
+    key: { class: typed.inputs.length, entry: typed.layout.entry },
+    inputs: typed.inputCount,
+    outputs: typed.outputCount,
+    capacity: typed.outputs.length,
+    hasData,
+  };
+  const evidence = typed.layout.entry
+    ? {
+        kind: "entry" as const,
+        defaultInputBits: inputs.reduce(
+          (bits, input, slot) =>
+            isUtxo(input) && amountOf(input.ringProgramId) === 0n
+              ? bits | (1n << BigInt(slot))
+              : bits,
+          0n,
+        ),
+        inputs: inputs.map((input, slot) => {
+          const entry = typed.entries[slot];
+          if (entry === undefined) throw new Error("no entry");
+          // A ring note's evidence stays zero.
+          if (!isUtxo(input) || amountOf(input.ringProgramId) !== 0n) return EMPTY_ENTRY;
+          return {
+            ownerKey: entry.ownerKey,
+            nullifierPk: input.nullifierPk,
+            amount: amountOf(input.amount),
+            mint: mintOf(entry.mintChunks),
+            blinding: input.blinding,
+            dataHash: input.dataHash,
+            ringDataHash: input.ringDataHash,
+          };
+        }),
+      }
+    : ({ kind: "none" } as const);
+  const records = slots.map((slot): AuditRecord => {
+    const { output } = slot;
+    if (!isUtxo(output)) return DUMMY_RECORD;
     return {
-      kind: "ring",
-      nullifierPk: opened.nullifierPk,
+      kind: isRingOutput(output) ? RecordKind.ring : RecordKind.exit,
+      amount: amountOf(output.amount),
       ownerKey: slot.ownerKey,
-      asset: opened.asset,
-      amount: amountOf(opened.amount),
+      mint: mintOf(slot.mintChunks),
+      nullifierPk: output.nullifierPk,
     };
   });
-  expect(
-    hex(
-      privateTxHash({
-        inputHashes: typed.inputs.map((slot) => (isUtxo(slot) ? openingHash(slot) : ZERO)),
-        outputHashes: typed.outputs.map((slot) =>
-          isUtxo(slot.output) ? openingHash(slot.output) : ZERO,
-        ),
-        blinding: typed.privateTxBlinding,
-      }),
-    ),
-  ).toBe(hex(typed.privateTxHash));
-  checkPolicySection(typed, senderPkHash);
-  checkSenderAddress(typed, senderPkHash);
-  const { fullOpenings } = typed.layout;
-  const layout: AuditStreamLayout = {
-    key: {
-      kind: fullOpenings ? "entry" : "commitment",
-      class: typed.inputs.length,
-    },
-    keyEscrow: false,
-    inputs: typed.inputCount,
-    capacity: typed.outputs.length,
-    outputs: typed.outputCount,
-    exits: exitsOf(slots),
-    change: changes.reduce(
-      (bits, change, slot) => (change ? bits | (1n << BigInt(slot)) : bits),
-      0n,
-    ),
-  };
-  const stream = requestStream(typed, {
-    kind: "anonymous",
-    layout,
-    outputs,
-    inputs:
-      typed.senderKey === undefined
-        ? inputCommitmentsOf(spent)
-        : {
-            kind: "openings",
-            senderKey: typed.senderKey,
-            senderNullifierPk: first.nullifierPk,
-            inputs: spent.map((slot) =>
-              isUtxo(slot)
-                ? {
-                    hash: openingHash(slot),
-                    asset: slot.asset,
-                    amount: amountOf(slot.amount),
-                    blinding: slot.blinding,
-                  }
-                : undefined,
-            ),
-          },
-  });
-  // A digest alone cannot rebuild a reply region, every request here names no reply.
-  expect(hex(typed.replyDigest)).toBe(hex(ZERO));
-  const hash = transferStatementHash({
-    ...statementTail(typed),
-    head: auditHead(typed, stream),
-    family: {
-      kind: "anonymous",
-      partyIdentities: typed.partyIdentities,
-      senderBundle: rebuiltBundle(typed, slots, changes),
-      senderBundleTag: typed.senderBundleTag,
-    },
-    outputs: slots.map((slot, i): RingOutput => {
-      const hash = openingHash(slot.output);
-      if (isUtxo(slot.output) && !isRingOutput(slot.output)) return exitOutput(hash);
-      return changes[i] === true
-        ? { kind: "change", hash, tag: ZERO }
-        : { kind: "anonymous", hash, tag: slot.tag, body: slot.body };
+  const tails = slots.map(({ output }) =>
+    encodeDataTail({ dataHash: output.dataHash, ringDataHash: output.ringDataHash }),
+  );
+  const auditor = X25519PublicKey.fromBytes(tagged(typed.auditorPk));
+  const sealed = sealSaltedAuditorStream({
+    txViewingSecret: typed.txViewingSk,
+    salt: typed.salt,
+    auditorPublicKey: auditor,
+    envelope: encodeAuditEnvelope({
+      txViewingSecret: typed.txViewingSk,
+      realInputs: live.length,
+      evidence,
     }),
-    outputCiphertexts: stream.records,
+    records: records.map((entry, slot) => ({
+      counter: recordRegion(layout, slot).startCounter,
+      bytes: encodeAuditRecord(entry),
+    })),
+    ...(hasData
+      ? {
+          tails: tails.map((bytes, slot) => ({
+            counter: tailRegion(layout, slot).startCounter,
+            bytes,
+          })),
+        }
+      : {}),
   });
-  expect(hex(hash)).toBe(hex(typed.publicInputHash));
-}
-
-/** One list feeds the evidence and the transaction binding, a dummy reads zero. */
-function inputCommitmentsOf(spent: readonly RingSlotOpening[]) {
-  return {
-    kind: "commitments" as const,
-    hashes: spent.map((slot) => (isUtxo(slot) ? openingHash(slot) : undefined)),
-  };
-}
-
-/** The scheme 12 ciphertext the circuit seals from the request's slots at index `m`. */
-function rebuiltBundle(
-  typed: AnonymousTransferProofRequest,
-  slots: readonly AnonymousSlotProofInputs[],
-  changes: readonly boolean[],
-): Uint8Array {
-  const blindings = new OutputBlindings(
-    typed.firstNullifier,
-    ringBlindingSeed(typed.txViewingSk, typed.salt),
-  );
-  const [first, second] = slots;
-  return sealSenderBundle(slotSecret(typed, typed.senderViewingKey, slots.length), {
-    mint:
-      changes[0] === true && first !== undefined ? mintOf(first) : encodeBase58(new Uint8Array(32)),
-    amount: changes[0] === true && first !== undefined ? amountOf(first.output.amount) : 0n,
-    solAmount: changes[1] === true && second !== undefined ? amountOf(second.output.amount) : 0n,
-    outputSeed: blindings.outputSeed(),
-    recipientKeys: slots.map((slot, i) => (changes[i] === true ? ZERO : slot.recipientKey)),
-  });
-}
-
-/** `mint[0..31]` right aligned then `mint[31]`, the `hash_bytes_32` halves. */
-function mintOf(slot: AnonymousSlotProofInputs) {
-  const [head, tail] = slot.mintChunks;
-  if (head === undefined || tail === undefined) throw new Error("slot without mint chunks");
-  return encodeBase58(Uint8Array.of(...head.subarray(1), tail[31] ?? 0));
-}
-
-/** The sender's own row binds the address the proof encrypts change and the bundle to. */
-function checkSenderAddress(typed: AnonymousTransferProofRequest, sender: Bytes32): void {
-  const row = typed.senderEntries[0]?.own ?? -1;
-  expect(typed.ownPool.subjects[row]?.member).toEqual(sender);
-  const reads = poolReads(typed.ownPool, typed.ownRoot);
-  expect(hex(reads[row]?.record()?.addressHash ?? ZERO)).toBe(
-    hex(
-      addressRecordHash({
-        member: sender,
-        ringId: typed.ringId,
-        nullifierPk: typed.senderNullifierPk,
-        viewingU: typed.senderViewingKey,
-        addressRevision: typed.senderAddressRevision,
-      }),
-    ),
-  );
-}
-
-/** The statement values the request binds beside the head, the family and the slots. */
-function statementTail(
-  typed: ConfidentialTransferProofRequest | AnonymousTransferProofRequest,
-): Omit<
-  Parameters<typeof transferStatementHash>[0],
-  "head" | "family" | "outputs" | "outputCiphertexts"
-> {
-  return {
-    exempt: typed.exempt,
-    approvalRequired: typed.approvalRequired,
-    capacity: typed.recipients.length,
-    signers: signerBinding(typed.signers.slice(0, typed.signerCount), typed.inputs.length),
+  const txViewingU = publicKeyOf(typed.txViewingSk).u();
+  const parties = typed.partyIdentities.some((party) => !isZero(party));
+  const statement: TransferStatement = {
+    head: {
+      firstNullifier: typed.firstNullifier,
+      ringId: typed.ringId,
+      txViewingU,
+      auditorPubkey: tagged(typed.auditorPk),
+      ephU: txViewingU,
+      envelope: sealed.envelope,
+      salt: typed.salt,
+      layout: typed.layout,
+    },
+    family:
+      typed.hidden || parties
+        ? {
+            kind: "anonymous",
+            partyIdentities: typed.partyIdentities,
+            publicOwners: !typed.hidden && !typed.delegate,
+            delegate: typed.delegate,
+          }
+        : {
+            kind: "confidential",
+            inProof: typed.inProof,
+            delegate: typed.delegate,
+            sender: typed.sender,
+          },
+    approvalMask: typed.approvalMask,
+    noSpend: live.length === 0,
+    outputs: slots.map(({ output }, slot) => ({
+      hash: openingHash(output),
+      record: sealed.records[slot] as Uint8Array,
+      ...(sealed.tails === undefined ? {} : { tail: sealed.tails[slot] as Uint8Array }),
+    })),
+    capacity: typed.outputs.length,
     inputCount: typed.inputCount,
     privateTxHash: typed.privateTxHash,
+    signers: signerBinding(typed.signers.slice(0, typed.signerCount), typed.inputs.length),
     roots: {
       policyHash: typed.policyHash,
       ownRoot: typed.ownRoot,
       curatorRoot: typed.curatorRoot,
+      trackingRoot: typed.trackingRoot,
     },
     publicAssets: typed.publicAssets,
     publicAmounts: typed.publicAmounts,
     publicGross: typed.publicGross,
     withdrawalHash: typed.withdrawalHash,
   };
-}
-
-/** A screened request opens the sender and every live slot in pools under the bound roots, an unscreened one binds no root. */
-function checkPolicySection(typed: RingProofRequest & PolicyProofInputs, sender: Bytes32): void {
-  if (typed.kind !== "transferConfidential" && typed.kind !== "transferAnonymous")
-    throw new Error("transfer golden");
-  expect(typed.withdrawalHash).toEqual(
-    policyWithdrawalHash(typed.withdrawals.slice(0, typed.withdrawalCount)),
-  );
-  if (isZero(typed.policyHash)) {
-    // The anonymous rail reads delivery addresses under the own root off a policy too.
-    expect(isZero(typed.ownRoot) || typed.exempt || typed.kind === "transferAnonymous").toBe(true);
-    return;
-  }
-  const table = buildRuleTable({
-    rules: typed.rules.slice(0, typed.policyLen).map(decodeRule),
-  });
-  expect(hex(policyTableHash(table, typed.sources))).toBe(hex(typed.policyHash));
-  const ownReads = poolReads(typed.ownPool, typed.ownRoot);
-  if (!isZero(typed.curatorRoot)) poolReads(typed.curatorPool, typed.curatorRoot);
-  const own = (entry: PolicySubjectEntry | undefined, member: Bytes32) => {
-    const index = entry?.own ?? -1;
-    expect(typed.ownPool.subjects[index]?.member).toEqual(member);
-    return ownReads[index]?.record();
-  };
-  own(typed.senderEntries[0], sender);
-  typed.outputs.forEach((slot, i) => {
-    const output = slot.output;
-    if (!isUtxo(output)) return;
-    const owner = own(typed.ownerEntries[i], output.ownerPkHash);
-    own(typed.assetEntries[i], output.asset);
-    const ctHash = typed.ctHashes[i];
-    // The escrow key binds the ciphertext hash under key escrow alone, the gate off leaves it unread.
-    if (typed.layout.keyEscrow && ctHash !== undefined && owner !== undefined)
-      expect(hex(owner.escrowKey)).toBe(hex(poseidon([output.nullifierPk, ctHash])));
-  });
+  expect(hex(transferStatementHash(statement))).toBe(hex(typed.publicInputHash));
 }
 
 function expectReencoded(item: Json): void {
   const typed = request(item);
   const body = ringProofRequestBody(typed);
   expect(body).toEqual(item);
-  expect(JSON.stringify(body)).toBe(JSON.stringify(item));
   expect(ringCircuitType(ringProofCircuit(typed))).toBe(text(item["circuitType"]));
-}
-
-/** Every subject's read, the padded pool verified as the indexer would serve it. */
-function poolReads(pool: RecordPool, root: Bytes32): readonly MemberOpeningRead[] {
-  return verifyRecordPool(
-    {
-      records: pool.records.map((record, i) => ({
-        record,
-        path: pool.paths[i] as QuadPath,
-      })),
-      canopy: pool.canopy,
-      subjects: pool.subjects.map((subject) => subject.recordIndex),
-    },
-    root,
-    pool.subjects.map((subject) => subject.member),
-    pool.records.length,
-  );
-}
-
-/** CRDS under `X25519(tx_sk, u)`, the secret the recipient rebuilds from its own key. */
-function slotSecret(
-  envelope: AuditEnvelopeProofInputs,
-  recipientKey: Bytes32,
-  outputIndex: number,
-): Bytes32 {
-  const recipient = X25519PublicKey.fromBytes(tagged(recipientKey));
-  return deliveredSlotSecret({
-    agreement: agreement(envelope.txViewingSk, recipient),
-    txViewingKey: publicKeyOf(envelope.txViewingSk),
-    recipientViewingKey: recipient,
-    salt: envelope.salt,
-    outputIndex,
-    firstNullifier: envelope.firstNullifier,
-  });
 }
 
 function mintSettings(packed: unknown, withdrawal: unknown, limits: unknown) {

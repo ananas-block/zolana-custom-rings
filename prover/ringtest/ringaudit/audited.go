@@ -9,7 +9,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -186,7 +185,7 @@ func (a Audit) Stream(t testing.TB) Stream {
 			plaintext = append(plaintext, slot.Tail(t)...)
 		}
 	}
-	return Stream{Ranges: ranges, Ciphertext: a.Keys.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
+	return Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt)}
 }
 
 // Head is what the program holds for the statement's head.

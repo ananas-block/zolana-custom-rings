@@ -210,14 +210,14 @@ describe("ring setup", () => {
 
 describe("ring account", () => {
   const MODE_OFFSET = 2;
-  const CREATED_SLOT_OFFSET = 201;
+  const CREATED_SLOT_OFFSET = 199;
   const account = () => ringPolicyData({ bump: 254 });
 
   it("reads the roles and the created slot after the auditor key", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1127);
+    expect(data).toHaveLength(1093);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,
@@ -240,13 +240,15 @@ describe("ring account", () => {
         expect.objectContaining({ code: "RING_POLICY_INVALID" }),
       );
     }
-    data[MODE_OFFSET] = 3;
-    expect(() => decodeRingPolicy(data)).toThrow(
-      expect.objectContaining({
-        code: "RING_POLICY_INVALID",
-        details: expect.objectContaining({ mode: 3 }),
-      }),
-    );
+    for (const mode of [1, 3]) {
+      data[MODE_OFFSET] = mode;
+      expect(() => decodeRingPolicy(data)).toThrow(
+        expect.objectContaining({
+          code: "RING_POLICY_INVALID",
+          details: expect.objectContaining({ mode }),
+        }),
+      );
+    }
   });
 });
 
@@ -430,8 +432,6 @@ describe("policy writes", () => {
 
   it.each([
     [ListId.ringViewing, "MemberWrittenList"],
-    [ListId.escrow, "MemberWrittenList"],
-    [ListId.recovery, "ListNotPolicyReadable"],
     [ListId.reader, "ListNotPolicyReadable"],
   ] as const)(
     "refuses a rule over list %i outside the policy lists, like Rust `EncodedRuleTable::validate`",
@@ -476,9 +476,15 @@ describe("policy writes", () => {
       [AUTHORITY, SIGN],
       [await ringPolicyAddress(RING), WRITE],
     ];
-    expect(curator.data).toEqual(Uint8Array.of(54, 1, ListId.block, 1));
+    expect(curator.data).toEqual(Uint8Array.of(54, 1, ListId.block, 1, 0));
     expect(metas(curator)).toEqual([...head, [CURATOR, READ]]);
-    expect(own.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0));
+    expect(own.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0, 0));
+    const salted = await updateRingPolicyInstruction({
+      ringProgramId: RING,
+      authority: AUTHORITY,
+      update: { kind: "source", listId: ListId.block, source: { kind: "own" }, salted: true },
+    });
+    expect(salted.data).toEqual(Uint8Array.of(54, 1, ListId.block, 0, 1));
     expect(metas(own)).toEqual(head);
   });
 

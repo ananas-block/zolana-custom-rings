@@ -16,7 +16,7 @@ use zolana_ring_client::{
         RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, WalletGrant,
         ENROLMENT_LISTS,
     },
-    AsyncRingIndexer, ReaderKey,
+    AsyncRingIndexer, ReaderKey, RecipientResolver, ResolvedRecipient,
 };
 use zolana_ring_indexer::{
     rpc::{
@@ -25,6 +25,7 @@ use zolana_ring_indexer::{
     },
     tracking::{GetTrackingOpeningsRequest, GetTrackingRecordPoolRequest},
 };
+use zolana_ring_keys::RingAddress;
 use zolana_ring_member_registry::{
     Canopy, OpeningCheck, PoolSubject, SharedPath, SharedProof, TrackingOpening, TrackingPool,
     TrackingRecord,
@@ -214,6 +215,30 @@ impl TrackingPoolRead {
     }
 }
 
+/// A salted entry reads only under the salt the owner's row commits, any other disarms it silently.
+#[must_use]
+pub struct SaltedOwnerCheck<'a> {
+    pub ring: CustomRing,
+    pub address: &'a RingAddress,
+}
+
+impl SaltedOwnerCheck<'_> {
+    pub async fn run(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<ResolvedRecipient, RingError> {
+        let policy = self.ring.require_policy(rpc).await?;
+        let tracking = BoundRoot::tracking(&policy, rpc).await?;
+        Ok(RecipientResolver {
+            address: self.address,
+            registry: tracking.registry,
+            root: tracking.root,
+        }
+        .resolve(rpc)
+        .await?)
+    }
+}
+
 pub(crate) struct TrackingMemberRead {
     pub root: BoundRoot,
     pub member: [u8; 32],
@@ -266,6 +291,23 @@ pub(crate) fn check_output_key(
             Err(RingError::RecipientKeyMismatch { slot_index })
         }
         (Some(_), false) => Ok(()),
+    }
+}
+
+/// The row names the current viewing key, a body sealed to any other stays unread.
+pub(crate) fn check_recipient_viewing_key(
+    row: Option<&TrackingRecord>,
+    viewing_u: &[u8; 32],
+    slot_index: usize,
+) -> Result<(), RingError> {
+    match row {
+        Some(record) if record.viewing_u != *viewing_u => {
+            Err(RingError::RecipientViewingKeyStale {
+                slot_index,
+                row_revision: record.revision,
+            })
+        }
+        Some(_) | None => Ok(()),
     }
 }
 

@@ -1,10 +1,3 @@
-// Defines how member records sit in the ring's Merkle tree. Every circuit that
-// reads or updates a record uses these hashes, so they must match the Rust
-// registry exactly.
-//
-// Read first. Read before registry/opening.go, registry/shared_path.go,
-// registry/apply_records.go.
-
 // Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes a storage `Update` or `UpdateImmediate` carries to it.
 package registry
 
@@ -14,7 +7,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
@@ -70,23 +62,6 @@ func (b RecordBody) assertEmptyWhen(api frontend.API, cond frontend.Variable) {
 	for _, field := range b.contents() {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: cond, V: field})
 	}
-}
-
-// EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.
-func EscrowKey(api frontend.API, nullifierPk, ciphertextHash frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{nullifierPk, ciphertextHash})
-}
-
-// Address is one owner's delivery address preimage, View the pack_be of its X25519 u.
-type Address struct {
-	RingID, Member, NullifierPk frontend.Variable
-	View                        [2]frontend.Variable
-	Revision                    frontend.Variable
-}
-
-// Hash mirrors AuthorizedAddress::hash in program-libs/interface/src/accounts/member_registry.rs, the ring id keeps a record of another ring from opening.
-func (a Address) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.AuthorizedAddressDomain, a.RingID, a.Member, a.NullifierPk, a.View[0], a.View[1], a.Revision})
 }
 
 type QuadPath struct {

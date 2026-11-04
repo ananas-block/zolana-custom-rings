@@ -1,11 +1,3 @@
-// Proves that a batch of queued record updates was applied to the registry.
-// Updates apply in queue order with none skipped
-// or added, and the records stay sorted by member, as proofs of a missing record
-// need.
-//
-// Read after registry/registry.go, ringgadget/count.go, shared/width.go. Read
-// before policy/record_pool.go, prover/ring/ring.go.
-
 package registry
 
 import (
@@ -20,12 +12,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
-
-// Properties:
-// 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
-// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask.
-// 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
-// 4. The statement binds both roots, both next indexes, both chain ends and the count.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -57,6 +43,7 @@ type RecordWrite struct {
 	LowSlot QuadPath
 }
 
+// ApplyRecordsCircuit keeps the records sorted by member, as proofs of a missing record need.
 type ApplyRecordsCircuit struct {
 	NumWrites int `gnark:"-"`
 

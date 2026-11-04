@@ -18,7 +18,12 @@ import {
 
 import { extended } from "../operations/workflow/extended.js";
 import { RingKeyError } from "../crypto/error.js";
-import { bundleTag, deliveredSlotSecret, recipientTag } from "../crypto/derivation/ring-stream.js";
+import {
+  bundleTag,
+  deliveredSlotSecret,
+  recipientTag,
+  slotTag,
+} from "../crypto/derivation/ring-stream.js";
 
 /** The public context of one delivered ring output slot. */
 export interface RingDeliveryRequest {
@@ -250,7 +255,8 @@ export class ViewingKeyHolder {
       return frames.map((frame) =>
         frame.probes.map((probe) => {
           const secret = agreements.slotSecret(frame, probe.outputIndex);
-          const tag = probe.kind === "recipient" ? recipientTag(secret) : bundleTag(secret);
+          const tag =
+            probe.kind === "recipient" ? slotTag(recipientTag(secret)) : bundleTag(secret);
           if (equalBytes(tag, probe.tag)) return secret;
           secret.fill(0);
           return undefined;

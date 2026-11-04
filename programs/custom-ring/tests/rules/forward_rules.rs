@@ -51,7 +51,6 @@ pub fn ring_deposit() -> RingDepositIxData {
     deposit_of(vec![deposit_entry(0, &auditor_pubkey())])
 }
 
-/// `registry` the own revision an escrow-mode ring binds.
 fn audited_deposit(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = deposit_instruction(ring, registry, &ring_deposit());
     ring.send(instruction, &[])

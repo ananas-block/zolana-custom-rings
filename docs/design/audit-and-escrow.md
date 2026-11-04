@@ -39,8 +39,6 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 - An exit's recipient body is a zolana ciphertext, and no ring proof binds it. A sender can settle an exit the auditor opens and its owner cannot.
 - An evidence entry can name a note the auditor has not opened. An unnamed note leaves every output open on every rail.
 - Under the anonymous commitment key an unnamed first note leaves the sender unnamed, because only that note binds the owner key. A later read with the note names the sender and opens the input.
-- A delivered key escrow slot gives its proven owner key, amount and blinding before the auditor reads the owner's escrow record. An exit gives its asset and amount, its blinding from `seed_out`, and its owner from the owner key SPP publishes. The commitment is not rebuilt yet. The asset of a ring output stays unknown, because a delivered body omits it and only the nullifier key finds it.
-- A note under the zero nullifier key rebuilds with no escrow record, so a reader tries the registered key and then the zero key.
 
 ## Deposits and merges
 
@@ -77,10 +75,3 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 - No limit decision or debit reservation reads the balance response.
 - `through_slot` is the completed finalized snapshot. `complete` requires a terminal page with no unresolved input, and a failed or partial pass clears it.
 - A wallet-scoped read gets an incomplete-coverage indicator and no unrelated decrypted commitments. Detailed unresolved rows go only to a grant that authorizes them.
-- Coverage starts past the newest historical row, so an older note is never reported as covered. A spend of an older note has an unnamed input, and `complete` stays false.
-
-## Historical rows
-
-- The program refuses the historical transfer and merge tags. Readers keep one decoding path for statement version 2, schemes 1 and 2, and prefix evidence.
-- A prefix that fits several notes or none stays unresolved, and it never reads as covered.
-- No version 3 frame decoder reads prefix evidence.

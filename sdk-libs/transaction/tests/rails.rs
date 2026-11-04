@@ -254,7 +254,9 @@ fn a_delivered_output_opens_only_for_the_key_its_owner_tag_names() {
     );
     assert_eq!(
         proof.external_data.outputs[0].owner_tag,
-        OwnerTag::Inline(recipient.viewing_pubkey.u())
+        OwnerTag::Inline(custom_ring_interface::stream::slot_tag(
+            recipient.viewing_pubkey.u()
+        ))
     );
     let published = rail.published_slots(&proof, &address(&sender)).unwrap();
     assert_eq!(published.len(), proof.output_utxos.len());
@@ -312,7 +314,9 @@ fn an_anonymous_transfer_seals_each_payment_at_its_position_and_the_bundle_after
     let recipient_secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 1);
     assert_eq!(
         proof.external_data.outputs[1].owner_tag,
-        OwnerTag::Inline(recipient_secret.recipient_tag().unwrap())
+        OwnerTag::Inline(custom_ring_interface::stream::slot_tag(
+            recipient_secret.recipient_tag().unwrap()
+        ))
     );
     let sender_secret = delivered_secret(&sender.viewing_key, &proof, &rail, 2);
     assert_eq!(
@@ -625,7 +629,9 @@ fn a_dummy_publishes_the_tag_of_its_preimage_and_a_recipient_length_body() {
         let Some(AnonymousSlot::Dummy { preimage }) = dummy.anonymous else {
             panic!("dummy slot expected")
         };
-        let tag = SlotSecret::new(preimage).unwrap().recipient_tag().unwrap();
+        let tag = custom_ring_interface::stream::slot_tag(
+            SlotSecret::new(preimage).unwrap().recipient_tag().unwrap(),
+        );
         assert_eq!(dummy.owner_tag, &tag);
         assert!(matches!(
             dummy.body,

@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use custom_ring_interface::{
     storage::StorageRegistry,
     tracking::{OwnerGrant, TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY},
-    ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
+    CoSignScope, ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
 };
-use custom_ring_sdk::RingError;
+use custom_ring_sdk::{CustomRing, RingError};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -47,6 +47,7 @@ use zolana_ring_client::rpc::{
 
 use crate::{
     audit::Page,
+    cosign::CoSignError,
     error::RingRpcError,
     finalized_history::{
         FinalizedHistory, FinalizedPage, FinalizedUpstreams, HistorySelection, OriginRead,
@@ -55,6 +56,14 @@ use crate::{
 };
 
 pub trait TransactionSource: Send + Sync {
+    /// A buffer the co-signer reads against its signed digest, an absent one refuses.
+    fn account(
+        &self,
+        _address: Address,
+    ) -> impl Future<Output = Result<Option<Account>, ClientError>> + Send {
+        async { Ok(None) }
+    }
+
     fn transactions_by_tag(
         &self,
         request: TransactionPage,
@@ -131,6 +140,15 @@ pub trait TransactionSource: Send + Sync {
         &self,
         _ring: Address,
     ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// The classes the ring's record of `signer` holds.
+    fn co_signer_scope(
+        &self,
+        _ring: Address,
+        _signer: Address,
+    ) -> impl Future<Output = Result<Option<CoSignScope>, RingRpcError>> + Send {
         async { Ok(None) }
     }
 
@@ -417,6 +435,10 @@ impl ChainSource {
 }
 
 impl TransactionSource for ChainSource {
+    async fn account(&self, address: Address) -> Result<Option<Account>, ClientError> {
+        self.rpc.get_account(address).await
+    }
+
     async fn tree_id(&self, tree: Address) -> Result<u16, RingError> {
         custom_ring_sdk::tree_id(&self.rpc, tree).await
     }
@@ -594,6 +616,18 @@ impl TransactionSource for ChainSource {
             .map_or(RecordsTip::NoRegistry, |registry| {
                 RecordsTip::Newest(StorageTip::newest(records, &registry))
             }))
+    }
+
+    async fn co_signer_scope(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<Option<CoSignScope>, RingRpcError> {
+        let record = CustomRing::new(ring)
+            .co_signer(&HistorySource { source: self }, &signer)
+            .await
+            .map_err(|_| CoSignError::LimitsUnavailable)?;
+        Ok(record.map(|record| record.scope))
     }
 
     async fn tracking_root(&self, ring: Address) -> Result<Option<TrackingRoot>, ClientError> {

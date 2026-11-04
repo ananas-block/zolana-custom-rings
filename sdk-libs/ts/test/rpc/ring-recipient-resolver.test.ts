@@ -59,7 +59,7 @@ async function addressed() {
     ...TRACKING_SENTINEL,
     member,
     nullifierPk: wallet.nullifierPublicKey(),
-    viewingU: new Uint8Array(32).fill(9) as Bytes32,
+    viewingU: to.recipient.viewingPublicKey.u(),
     revision: 3n,
     listTag: listTagOf(to.listSalt),
   };
@@ -69,7 +69,7 @@ async function addressed() {
 beforeAll(initializePoseidon);
 
 describe("resolveRingRecipient", () => {
-  it("returns the row's key, newer viewing key, revision and tag, never a salt", async () => {
+  it("returns the row's key, viewing key, revision and tag, never a salt", async () => {
     const { to, row } = await addressed();
     const resolved = await resolveRingRecipient({
       client: chain(row, "present"),
@@ -108,6 +108,20 @@ describe("resolveRingRecipient", () => {
         to,
       }),
     ).rejects.toMatchObject({ code: "RING_RECIPIENT_NOT_ENROLLED" });
+  });
+
+  it("refuses an address whose viewing key differs from the row, naming the row's revision", async () => {
+    const { to, row } = await addressed();
+    await expect(
+      resolveRingRecipient({
+        client: chain({ ...row, viewingU: new Uint8Array(32).fill(9) as Bytes32 }, "present"),
+        trackingRegistry: REGISTRY,
+        to,
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_RECIPIENT_VIEWING_KEY_STALE",
+      details: { rowRevision: "3" },
+    });
   });
 
   describe("under the zero key", () => {

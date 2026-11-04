@@ -1,9 +1,4 @@
-// Holds the hashes that ring proofs, the programs and the SDKs must compute the
-// same way. Each kind of hash starts with its own tag, so a value made for one
-// purpose cannot pass as another.
-//
-// Read first. Read before shared/disclosure.go, shared/envelope.go,
-// audit/audit.go.
+// Each hash starts with its own tag, a value made for one purpose cannot pass as another.
 
 // Package shared holds the ring derivations, the auditor envelope and the SPP openings two or more ring circuits share.
 package shared
@@ -43,8 +38,6 @@ const (
 	WithdrawalsDomain = 0x43525057
 	// TransferStatementDomain = "CRTX"
 	TransferStatementDomain = 0x43525458
-	// AuthorizedAddressDomain = "CRAD"
-	AuthorizedAddressDomain = 0x43524144
 	// RecipientTagDomain = "CRRT"
 	RecipientTagDomain = 0x43525254
 	// SenderTagDomain = "CRST"
@@ -104,7 +97,7 @@ const (
 	SenderBundleHeadLen = 80
 )
 
-// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a note under it waives only the escrow requirement.
+// ZeroNullifierPk is Poseidon(0), mirrored by ZERO_NULLIFIER_PUBKEY in zolana/program-libs/interface/src/lib.rs, a ring output under it holds its owner to no tracking row.
 var ZeroNullifierPk, _ = new(big.Int).SetString("2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c", 16)
 
 // SolAssetField is the native SOL asset, mirrored by SOL_ASSET_FIELD in zolana/program-libs/interface/src/lib.rs.
@@ -138,7 +131,7 @@ func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) fronten
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }
 
-// ListSalt is Poseidon(CRPS, nullifierSecret, ringID), a holder learns the owner's private list position in one ring and never the secret.
+// ListSalt is Poseidon(CRPS, nullifierSecret, ringID), a holder learns the owner's salted record key in one ring and never the secret.
 func ListSalt(api frontend.API, nullifierSecret, ringID frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{ListSaltDomain, nullifierSecret, ringID})
 }
@@ -154,7 +147,7 @@ func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Varia
 }
 
 // AnonymousParties is mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 3
+const AnonymousParties = 7
 
 // AssertAnonymousParties separates the hidden owner from the public identities
 // reconstructed by the verifier. Zero denotes an absent optional party.

@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
+use custom_ring_interface::stream::slot_tag;
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output,
     stream::{DeliveredSlot, SlotSecret},
@@ -24,8 +25,7 @@ use spr_client::{
 };
 use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
-    EncryptedRingDepositOutput, MergeOutputDataRef, MessageData, OutputDataEncoding,
-    ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
+    EncryptedRingDepositOutput, MergeOutputDataRef, MessageData,
 };
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
@@ -38,26 +38,19 @@ use spr_transaction::{
         merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
         transact::ConfidentialTransaction,
     },
-    owner_utxo_hash,
-    utxo::derive_transact_output_blinding,
-    verify_spendable, Data, DecryptRequest, DecryptionResult, DeriveRequest, Mint, ShieldedKeys,
-    TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
+    owner_utxo_hash, verify_spendable, Data, DecryptRequest, DecryptionResult, DeriveRequest, Mint,
+    ShieldedKeys, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
 use zolana_ring_client::{
-    note_state, verify_ring_owned, AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync,
-    AnonymousWallet, NoteState, SentCheck, ViewingHistory, TAGS_PER_REQUEST, TAG_GAP,
-    VIEWING_HISTORY_VERSION,
+    note_state, open_ring_confidential, verify_ring_owned, AnonymousError, AnonymousScan,
+    AnonymousStream, AnonymousSync, AnonymousWallet, NoteState, RingConfidentialScan, SentCheck,
+    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame,
     RotatingRingKeys, ViewTagRequest,
 };
 use zolana_ring_transaction::{
-    historical::{
-        AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-        CommittedRecipientPlaintext, CommittedSenderPlaintext, UncommittedRecipientPlaintext,
-        UncommittedSenderPlaintext,
-    },
     seal_recipient_body, seal_reply, seal_sender_bundle, AnonymousPlan, ReplyMetadata, RingAssets,
     RingDelivery, RingDepositPlaintext, RingOutputRail,
 };
@@ -1189,7 +1182,7 @@ async fn sender_chosen_garbage_under_a_proven_tag_never_fails_the_sync() {
             .iter()
             .zip(0u32..)
             .map(|((body, hash), slot)| OutputSlot {
-                view_tag: secret(&first_nullifier, slot).recipient_tag().unwrap(),
+                view_tag: slot_tag(secret(&first_nullifier, slot).recipient_tag().unwrap()),
                 output_context: OutputContext {
                     hash: *hash,
                     tree_id: TREE,
@@ -1303,7 +1296,7 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
         tx_viewing_pk: Some(tx_key.pubkey()),
         salt: Some(salt),
         output_slots: vec![OutputSlot {
-            view_tag: secret.recipient_tag().unwrap(),
+            view_tag: slot_tag(secret.recipient_tag().unwrap()),
             output_context: OutputContext {
                 hash,
                 tree_id: TREE,
@@ -1386,159 +1379,6 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
     assert_eq!(note.utxo_hash, hash);
     assert_eq!(note.utxo.asset, unregistered);
     assert_ne!(note.nullifier, [0; 32]);
-}
-
-fn historical_site(scheme: u8, body: &[u8]) -> Vec<u8> {
-    let framed = [&[scheme], body].concat();
-    [
-        &[OutputDataEncoding::ENCRYPTED_TAG],
-        &u32::try_from(framed.len()).unwrap().to_le_bytes()[..],
-        &framed,
-    ]
-    .concat()
-}
-
-/// Publishes one scheme 1 and 2 row, its change and payment rebuilding their hashes under `unregistered`.
-fn publish_historical_row(indexer: &Indexer, alice: &Wallet, bob: &Wallet) -> HistoricalRow {
-    let unregistered = Mint {
-        asset: Address::new_from_array([0xee; 32]),
-        asset_id: 9,
-    };
-    let first_nullifier = field(9, 4);
-    let blinding_seed = field(9, 3);
-    let tx_key = ViewingKey::new();
-    let salt = random_salt();
-    let (sender, recipient) = (alice.address(), bob.address());
-    let hash_of = |owner: &ShieldedAddress, amount, blinding| {
-        Utxo {
-            owner: owner.signing_pubkey,
-            asset: unregistered,
-            amount,
-            blinding,
-            ring_program_id: Some(RING),
-            data: Data::default(),
-        }
-        .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
-        .unwrap()
-    };
-    let change_blinding =
-        derive_transact_output_blinding(&first_nullifier, &blinding_seed, 0).unwrap();
-    let note_blinding = field(9, 2);
-    let change_hash = hash_of(&sender, 6, change_blinding);
-    let note_hash = hash_of(&recipient, 5, note_blinding);
-    let payment = AnonymousTransferRecipientPlaintext {
-        committed: CommittedRecipientPlaintext {
-            owner_pubkey: recipient.signing_pubkey,
-            mint: unregistered.asset,
-            amount: 5,
-            blinding: note_blinding,
-        },
-        uncommitted: UncommittedRecipientPlaintext {
-            sender_pubkey: sender.viewing_pubkey,
-            data: Data::default(),
-        },
-    }
-    .serialize()
-    .unwrap();
-    let bundle = AnonymousTransferSenderPlaintext {
-        committed: CommittedSenderPlaintext {
-            owner_pubkey: sender.signing_pubkey,
-            spl_mint: unregistered.asset,
-            spl_amount: 6,
-            sol_amount: 0,
-            blinding_seed,
-        },
-        uncommitted: UncommittedSenderPlaintext {
-            recipient_viewing_pks: vec![recipient.viewing_pubkey],
-            spl_data: Data::default(),
-            sol_data: Data::default(),
-        },
-    }
-    .serialize()
-    .unwrap();
-    let slot = |hash, leaf_index, payload| OutputSlot {
-        view_tag: [0x11; 32],
-        output_context: OutputContext {
-            hash,
-            tree_id: TREE,
-            leaf_index,
-        },
-        payload,
-    };
-    indexer.publish(ShieldedTransaction {
-        slot: 4,
-        tx_signature: Signature::from(signature(4)),
-        event_index: Some(0),
-        tx_viewing_pk: Some(tx_key.pubkey()),
-        salt: Some(salt),
-        output_slots: vec![
-            slot(change_hash, 0, Vec::new()),
-            slot(
-                note_hash,
-                1,
-                historical_site(
-                    ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
-                    &tx_key
-                        .encrypt_slot(&recipient.viewing_pubkey, &payment, salt, 1)
-                        .unwrap(),
-                ),
-            ),
-        ],
-        messages: vec![MessageData {
-            view_tag: [0x12; 32],
-            data: historical_site(
-                ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
-                &tx_key
-                    .encrypt_slot(&sender.viewing_pubkey, &bundle, salt, 2)
-                    .unwrap(),
-            ),
-        }],
-        nullifiers: vec![first_nullifier],
-        proofless: false,
-        ring_config: None,
-        ring_program_id: Some(RING),
-    });
-    HistoricalRow {
-        unregistered,
-        change_hash,
-        note_hash,
-    }
-}
-
-struct HistoricalRow {
-    unregistered: Mint,
-    change_hash: [u8; 32],
-    note_hash: [u8; 32],
-}
-
-#[tokio::test]
-async fn a_historical_note_under_an_unknown_mint_waits_while_the_position_moves() {
-    let indexer = Indexer::default();
-    let alice = Wallet::new(1);
-    let bob = Wallet::new(2);
-    let HistoricalRow {
-        unregistered,
-        change_hash,
-        note_hash,
-    } = publish_historical_row(&indexer, &alice, &bob);
-    let registered = RingAssets::new([unregistered]).unwrap();
-    for (wallet, hash) in [(&bob, note_hash), (&alice, change_hash)] {
-        let mut stored = AnonymousWallet::new(fresh(wallet));
-        let scan = wallet.sync(&indexer, stored.history()).await;
-        assert_eq!(after_slot(scan.history()), Some(4), "the position moves");
-        assert!(scan.utxos.is_empty());
-        stored.absorb(scan).unwrap();
-        assert_eq!(stored.pending_notes()[0].utxo_hash(), hash);
-        assert!(
-            stored.notes().is_empty(),
-            "nothing to spend before it registers"
-        );
-        indexer.take_ring_pages();
-        stored.resolve_pending(&registered);
-        assert_eq!(indexer.take_ring_pages(), 0, "resolving reads no history");
-        assert_eq!(stored.notes()[0].utxo_hash, hash);
-        assert_eq!(stored.notes()[0].utxo.asset, unregistered);
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1667,17 +1507,6 @@ async fn a_holder_failure_on_a_tag_test_leaves_the_position_and_the_retry_finds_
     let holder = FlakyHolder::new(2, HolderCall::TagMatches);
     let mut wallet = AnonymousWallet::new(fresh(&bob));
     a_failed_holder_moves_nothing(&indexer, &holder, &mut wallet, output(&paid, 1)).await;
-}
-
-#[tokio::test]
-async fn a_holder_failure_on_a_historical_body_leaves_the_position_and_the_retry_finds_the_note() {
-    let indexer = Indexer::default();
-    let alice = Wallet::new(1);
-    let bob = Wallet::new(2);
-    let row = publish_historical_row(&indexer, &alice, &bob);
-    let holder = FlakyHolder::new(2, HolderCall::Decrypt);
-    let mut wallet = AnonymousWallet::new(fresh(&bob));
-    a_failed_holder_moves_nothing(&indexer, &holder, &mut wallet, row.note_hash).await;
 }
 
 #[tokio::test]
@@ -2361,7 +2190,7 @@ async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
         tx_viewing_pk: Some(tx_key.pubkey()),
         salt: Some(salt),
         output_slots: vec![OutputSlot {
-            view_tag: secret.recipient_tag().unwrap(),
+            view_tag: slot_tag(secret.recipient_tag().unwrap()),
             output_context: OutputContext {
                 hash,
                 tree_id: TREE,
@@ -2387,4 +2216,112 @@ async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
         opened.utxo.data.utxo_data().map(<[u8]>::to_vec),
         Some(b"memo".to_vec())
     );
+}
+
+/// Publishes one confidential payment, `published` edits its recipient slot before the indexer serves it.
+fn deliver(
+    sender: &mut Wallet,
+    indexer: &Indexer,
+    to: &ShieldedAddress,
+    published: impl FnOnce(&mut OutputSlot),
+) -> ShieldedTransaction {
+    let input = sender.funding.remove(0);
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![input],
+        sender.address().solana_address().unwrap(),
+        RING,
+    )
+    .unwrap()
+    .with_output_tree_id(TREE)
+    .unwrap();
+    transaction
+        .transfer_with_ring(to, Mint::SOL, 30, Some(RING))
+        .unwrap();
+    let rail = RingOutputRail::new(ViewingKey::new(), RingDelivery::Delivered);
+    let proof = rail.encrypt(transaction, &sender.address()).unwrap();
+    let external = &proof.external_data;
+    let leaf = indexer.leaves(external.outputs.len());
+    let position = external
+        .resolved_owner_tags
+        .iter()
+        .position(|tag| *tag == custom_ring_interface::stream::slot_tag(to.viewing_pubkey.u()))
+        .unwrap();
+    let mut output_slots: Vec<OutputSlot> = external
+        .outputs
+        .iter()
+        .zip(&external.resolved_owner_tags)
+        .zip(leaf..)
+        .map(|((output, tag), leaf_index)| OutputSlot {
+            view_tag: *tag,
+            output_context: OutputContext {
+                hash: output.utxo_hash,
+                tree_id: TREE,
+                leaf_index,
+            },
+            payload: output.data.clone().unwrap_or_default(),
+        })
+        .collect();
+    published(&mut output_slots[position]);
+    let tx = ShieldedTransaction {
+        slot: leaf + 1,
+        tx_signature: Signature::from(signature(leaf)),
+        event_index: Some(0),
+        tx_viewing_pk: Some(rail.tx_viewing_key().pubkey()),
+        salt: Some(rail.salt()),
+        output_slots,
+        messages: Vec::new(),
+        nullifiers: vec![proof.first_nullifier().unwrap()],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    };
+    indexer.publish(tx.clone());
+    tx
+}
+
+#[tokio::test]
+async fn a_full_scan_finds_a_confidential_note_under_a_wrong_tag() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let mut hash = [0; 32];
+    let tx = deliver(&mut alice, &indexer, &bob.address(), |slot| {
+        slot.view_tag = [0x55; 32];
+        hash = slot.output_context.hash;
+    });
+
+    let tagged = open_ring_confidential(&bob.keys, &assets(), core::slice::from_ref(&tx)).unwrap();
+    assert!(tagged.owned.utxos.is_empty());
+
+    let recovered = RingConfidentialScan::new(&bob.keys, &assets())
+        .full_scan(&indexer, RING)
+        .await
+        .unwrap();
+    assert_eq!(recovered.owned.owned.utxos.len(), 1);
+    assert_eq!(recovered.owned.owned.utxos[0].utxo_hash, hash);
+    assert!(!recovered.auditor_recovery.unopened.contains(&hash));
+}
+
+#[tokio::test]
+async fn a_bad_body_opens_nothing_and_a_foreign_slot_stays_a_miss_under_auditor_recovery() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let carol = Wallet::new(3);
+    let mut bad = [0; 32];
+    deliver(&mut alice, &indexer, &bob.address(), |slot| {
+        *slot.payload.last_mut().unwrap() ^= 1;
+        bad = slot.output_context.hash;
+    });
+    let mut foreign = [0; 32];
+    deliver(&mut alice, &indexer, &carol.address(), |slot| {
+        foreign = slot.output_context.hash;
+    });
+    let scan = RingConfidentialScan::new(&bob.keys, &assets())
+        .full_scan(&indexer, RING)
+        .await
+        .unwrap();
+    assert!(scan.owned.owned.utxos.is_empty());
+    assert!(scan.auditor_recovery.unopened.contains(&bad));
+    assert!(scan.auditor_recovery.unopened.contains(&foreign));
 }

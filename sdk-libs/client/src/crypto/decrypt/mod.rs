@@ -13,7 +13,6 @@ use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
     OutputContext, OutputSlot, ShieldedTransaction,
 };
-use zolana_ring_transaction::RingAssets;
 
 use crate::{
     disclosure::{canonical, AuditEnvelope},
@@ -25,29 +24,11 @@ use crate::{
     AuditError,
 };
 
-mod historical;
-
-pub use historical::HistoricalLayout;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuditFrame {
-    /// Tags 55 and 56.
-    Records(AuditStreamLayout),
-    /// Tags 45 and 46.
-    Historical(HistoricalLayout),
-}
-
-impl From<AuditStreamLayout> for AuditFrame {
-    fn from(layout: AuditStreamLayout) -> Self {
-        Self::Records(layout)
-    }
-}
-
 /// Only [`crate::RingScan::audit`] binds the transaction to its confirmed event.
 #[must_use = "run the audit explicitly"]
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
-    frame: AuditFrame,
+    layout: AuditStreamLayout,
     input_trees: Option<&'a [Option<u16>]>,
 }
 
@@ -105,10 +86,10 @@ impl FramedRow<'_, '_> {
 }
 
 impl<'a> TransactionAudit<'a> {
-    pub fn new(transaction: &'a ShieldedTransaction, frame: impl Into<AuditFrame>) -> Self {
+    pub fn new(transaction: &'a ShieldedTransaction, layout: AuditStreamLayout) -> Self {
         Self {
             transaction,
-            frame: frame.into(),
+            layout,
             input_trees: None,
         }
     }
@@ -126,27 +107,10 @@ impl<'a> TransactionAudit<'a> {
         Ok(self)
     }
 
-    /// `assets` names mints on a historical frame alone.
-    pub fn run(
-        self,
-        auditor: &X25519Keypair,
-        assets: &RingAssets,
-    ) -> Result<AuditedTransaction, AuditError> {
-        match self.frame {
-            AuditFrame::Records(layout) => self.records(layout, auditor),
-            AuditFrame::Historical(layout) => {
-                historical::audit(self.transaction, layout, self.input_trees, auditor, assets)
-            }
-        }
-    }
-
     /// Reads no mint registry or earlier note.
-    fn records(
-        self,
-        layout: AuditStreamLayout,
-        auditor: &X25519Keypair,
-    ) -> Result<AuditedTransaction, AuditError> {
+    pub fn run(self, auditor: &X25519Keypair) -> Result<AuditedTransaction, AuditError> {
         let tx = self.transaction;
+        let layout = self.layout;
         let tx_viewing_pk = tx.tx_viewing_pk.ok_or(AuditError::MissingTxViewingPk)?;
         let salt = tx.salt.ok_or(AuditError::MissingSalt)?;
         let ring = tx.ring_program_id.ok_or(AuditError::MissingRingProgram)?;
@@ -157,6 +121,7 @@ impl<'a> TransactionAudit<'a> {
             .ok_or(AuditError::AuditorMessageLength(data.len()))?;
         let opened = AuditEnvelope {
             eph_u: X25519Pubkey::from_bytes(*message.eph_pk)?.u(),
+            salt: &salt,
             ciphertext: message.envelope,
         }
         .open(auditor, layout)?;
@@ -428,6 +393,3 @@ impl AuditedTransaction {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,10 +1,3 @@
-// Proves that the auditor can open every deposited note, that each output key
-// answers its owner's tracking row, and that the ring accepts the deposited token.
-// A deposit spends nothing, so it reads no nullifier tree and waits on no forester.
-//
-// Read after shared/envelope.go, audit/record.go, registry/tracking.go, policy/deposit.go.
-// Read before prover/ring/ring.go.
-
 // Package circuits proves a ring deposit and an anonymous ring merge.
 package circuits
 
@@ -24,13 +17,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// Properties:
-// 1. The first Count of 1..Capacity owner commitments each open to the blinding and the record sealed to AuditorPk at their slot, a padding slot's plaintext is all zero.
-// 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
-// 3. Each occupied slot's record names the key whose Solana owner identity is its owner_pk_hash and the mint whose asset field is its asset.
-// 4. A nullifier key off ZeroNullifierPk is the one its owner's row holds under TrackingRoot, ZeroNullifierPk holds its owner to no row under TrackingRoot.
-// 5. Under a nonzero PolicyHash every active owner and asset rule of its table holds for each deposit on the lists its records under OwnRoot and CuratorRoot carry.
-
 const (
 	MaxDeposits = 8
 	// DepositStatementVersion closes the statement, mirrored by DEPOSIT_STATEMENT_VERSION in program-libs/interface/src/instructions/deposit.rs.
@@ -39,7 +25,7 @@ const (
 	DepositRecordLen = MergeRecordLen
 )
 
-// DepositCircuit binds every deposited owner commitment to a record sealed for the auditor.
+// DepositCircuit binds every deposited owner commitment to a record sealed for the auditor, it spends nothing and reads no nullifier tree.
 type DepositCircuit struct {
 	Capacity        int               `gnark:"-"`
 	PublicInputHash frontend.Variable `gnark:",public"`

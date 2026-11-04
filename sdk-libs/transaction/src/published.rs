@@ -41,7 +41,7 @@ impl<'a> PublishedSlot<'a> {
     {
         RingOutput {
             hash: self.hash,
-            owner_tag: self.owner_tag,
+            owner_tag: *self.owner_tag,
             body: self.body,
             record,
             tail,

@@ -1,8 +1,4 @@
-// Opens many registry records under one root at a lower cost, because their
-// Merkle paths share the top of the tree. Each record still proves its full
-// path to the root.
-//
-// Read after registry/registry.go. Read before policy/record_pool.go.
+// Records under one root share the top of their Merkle paths, each still proves its full path.
 
 package registry
 

@@ -2,6 +2,7 @@
 import { clampViewingSecret, concatBytes } from "@heliuslabs/zolana/internal";
 import {
   ViewingKey,
+  type Bytes16,
   type Bytes32,
   type X25519Keypair,
   type X25519PublicKey,
@@ -30,8 +31,8 @@ import {
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import { RingKeyError } from "../error.js";
 import {
-  auditorSchedule,
-  sealAuditorStream,
+  saltedAuditorSchedule,
+  sealSaltedAuditorStream,
   type AuditorEnvelope,
   type AuditorMessage,
 } from "./audit.js";
@@ -49,13 +50,15 @@ export interface RingDisclosure {
 export interface PublishedAudit {
   readonly layout: AuditStreamLayout;
   readonly message: AuditorMessage;
+  readonly salt: Bytes16;
 }
 
-/** Refuses a disclosure off its layout before any ephemeral key exists. */
+/** Refuses a disclosure off its layout before sealing. */
 export function sealRingDisclosure(
   input: Readonly<{
     layout: AuditStreamLayout;
     auditorPublicKey: X25519PublicKey;
+    salt: Bytes16;
     disclosure: RingDisclosure;
   }>,
 ): AuditorEnvelope {
@@ -73,7 +76,9 @@ export function sealRingDisclosure(
   const tailBytes = tails.map(encodeDataTail);
   try {
     if (envelope.length !== envelopeRegion(layout).length) throw shapeError("envelope");
-    return sealAuditorStream({
+    return sealSaltedAuditorStream({
+      txViewingSecret: disclosure.envelope.txViewingSecret,
+      salt: input.salt,
       auditorPublicKey,
       envelope,
       records: recordBytes.map((bytes, slot) => ({
@@ -101,8 +106,8 @@ export function openRingDisclosure(
   auditor: X25519Keypair,
   published: PublishedAudit,
 ): RingDisclosure {
-  const { layout, message } = published;
-  const schedule = auditorSchedule(auditor, message.ephemeralPublicKey);
+  const { layout, message, salt } = published;
+  const schedule = saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
   const opened: Uint8Array[] = [];
   const plain = (counter: number, bytes: Uint8Array): Uint8Array => {
     const plaintext = schedule.apply(counter, bytes);

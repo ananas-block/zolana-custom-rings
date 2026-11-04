@@ -215,20 +215,35 @@ fn every_withdrawal_of_a_spend_names_the_same_destination() {
 #[test]
 fn an_absent_party_is_a_zero_identity() {
     let payer = [7; 32];
-    let co_signer = [8; 32];
+    let co_signer = Address::new_from_array([8; 32]);
     let parties = AnonymousParties {
         payer: &payer,
-        co_signer: Some(&co_signer),
+        co_signers: &[co_signer],
         exit_destination: Some(&OWNER),
     };
     assert_eq!(
         parties.identities(),
         Ok([
             solana_owner_identity(&payer).unwrap(),
-            solana_owner_identity(&co_signer).unwrap(),
+            solana_owner_identity(co_signer.as_array()).unwrap(),
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            [0; 32],
             solana_owner_identity(&OWNER).unwrap(),
         ])
     );
+}
+
+#[test]
+fn a_co_signer_past_the_fifth_is_refused() {
+    let co_signers = [Address::new_from_array([8; 32]); 6];
+    let parties = AnonymousParties {
+        payer: &[7; 32],
+        co_signers: &co_signers,
+        exit_destination: None,
+    };
+    assert!(parties.identities().is_err());
 }
 
 #[test]

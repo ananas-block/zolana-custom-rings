@@ -30,33 +30,23 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { slotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
   openRecipientBody,
   openReply,
   openSenderBundle,
-  RECIPIENT_BODY_LEN,
   senderBundleLen,
   type RecipientBody,
   type ReplyMetadata,
   type SenderBundle,
 } from "../protocol/codec/anonymous-delivery.js";
-import {
-  historicalBody,
-  historicalNotes,
-  type HistoricalSite,
-} from "../protocol/historical/anonymous-body.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
-import {
-  historicalRecipientOutputBody,
-  ringBodyOutput,
-  senderBundleOutputBody,
-} from "../protocol/transaction/output.js";
+import { ringBodyOutput, senderBundleOutputBody } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { HalvingPageLimit, readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
 import { answered, unseen } from "./batch.js";
-import { zeroKeyNullifier } from "./exposed-notes.js";
+import { isZeroKeyNote as isExposedNote, zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges, type OpenedZeroKeyMerge } from "./zero-key-merge.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
@@ -66,7 +56,7 @@ import { RingError } from "../protocol/error.js";
 import {
   GapScan,
   type EntryStream,
-  type ViewingHistory,
+  ViewingHistory,
   type ViewingKeyEntry,
   viewTagStream,
 } from "./viewing-history.js";
@@ -81,13 +71,11 @@ export type AnonymousStream =
   /** A deposit under a tag the wallet minted for a request. */
   | Readonly<{ kind: "request"; index: bigint }>
   | Readonly<{ kind: "bootstrap" }>
-  /** A transfer's slot or bundle whose proven tag matched. */
+  /** A transfer's slot or bundle whose tag matched. */
   | Readonly<{ kind: "provenTag" }>
   | Readonly<{ kind: "merge"; firstNullifier: Bytes32 }>
   /** Tried with no use of its tag. */
-  | Readonly<{ kind: "fullScan" }>
-  /** A scheme 1 output or scheme 2 message, those frames prove no tag. */
-  | Readonly<{ kind: "historical" }>;
+  | Readonly<{ kind: "fullScan" }>;
 
 export interface AnonymousRingUtxo {
   readonly utxoHash: Bytes32;
@@ -138,7 +126,15 @@ export interface AnonymousRecovery {
   readonly unmatched: readonly Bytes32[];
 }
 
+/** Bodies no held key rebuilt, an owner's note under a bad body opens only through an auditor read. */
+export interface AuditorRecovery {
+  /** Commitments, foreign notes and dummies among them. */
+  readonly unopened: readonly Bytes32[];
+}
+
 export interface AnonymousScan extends AnonymousRecovery {
+  /** Filled by a full scan alone. */
+  readonly auditorRecovery: AuditorRecovery;
   /** Counters, watermarks and ring positions as read, `AnonymousWallet.absorb` stores them with the notes. */
   readonly history: ViewingHistory;
 }
@@ -289,6 +285,53 @@ export class AnonymousSync {
   }
 }
 
+export interface RingFullScan {
+  /** Under the wallet's own nullifier key. */
+  readonly utxos: readonly WalletUtxo[];
+  /** Unspent zero-key notes in publication order. */
+  readonly exposedIfSpent: readonly WalletUtxo[];
+  /** The nullifiers of the spent zero-key notes. */
+  readonly spentExposed: readonly Bytes32[];
+  readonly pending: readonly WalletUtxo[];
+  readonly auditorRecovery: AuditorRecovery;
+}
+
+/** A wrong tag hides nothing here, every held key tries every site of `ring`. */
+export async function ringFullScan(
+  input: Readonly<{
+    keys: SyncKeys;
+    assets: AssetRegistry;
+    client: AnonymousSyncClient;
+    ring: Address;
+    config?: IndexerRpcConfig;
+  }>,
+  context?: RequestContext,
+): Promise<RingFullScan> {
+  const [current, ...retired] = [...input.keys.viewingPublicKeys()].reverse();
+  if (current === undefined)
+    throw new RingError("RING_VIEWING_HISTORY_INVALID", {
+      details: { reason: "no held viewing key" },
+    });
+  const history = retired
+    .reduce(
+      (held, key, index) => held.withRotatedKey(key, BigInt(index + 1)),
+      ViewingHistory.create(current, 0n),
+    )
+    .withRing(input.ring);
+  const sync = AnonymousSync.create(input.keys, input.assets);
+  const scan = await (
+    input.config === undefined ? sync : sync.withIndexerConfig(input.config)
+  ).fullScan(input.client, history, input.ring, context);
+  const zeroKey = scan.utxos.filter(isExposedNote);
+  return Object.freeze({
+    utxos: Object.freeze(scan.utxos.filter((note) => !isExposedNote(note))),
+    exposedIfSpent: Object.freeze(zeroKey.filter((note) => !note.spent)),
+    spentExposed: Object.freeze(zeroKey.filter((note) => note.spent).map((note) => note.nullifier)),
+    pending: scan.pendingOpenings,
+    auditorRecovery: scan.auditorRecovery,
+  });
+}
+
 /** One round's tags, every read of a published tag goes through `match`. */
 class TagWindow<T> {
   readonly #byTag = new Map<string, T>();
@@ -331,9 +374,11 @@ interface SlotContext {
 }
 
 /** A recipient body at an output, a sender bundle in a message. */
-type Site = HistoricalSite;
+type Site =
+  | Readonly<{ kind: "output"; position: number }>
+  | Readonly<{ kind: "message"; message: number }>;
 
-/** A scheme 13 or 11 body or a scheme 12 bundle a held key may open. */
+/** A scheme 13 body or a scheme 12 bundle a held key may open. */
 interface Body {
   readonly tx: IndexedShieldedTransaction;
   readonly site: Site;
@@ -386,6 +431,7 @@ interface RebuiltNote extends Rebuilt {
 }
 
 class Scan {
+  readonly #unopened = new Map<string, Bytes32>();
   readonly #sync: SyncFields;
   readonly #client: AnonymousSyncClient;
   readonly #context: RequestContext | undefined;
@@ -421,15 +467,16 @@ class Scan {
     const entry = this.#entry(index);
     const { viewingPublicKey } = entry;
     const streams: readonly EntryStream[] = ["tx", "request"];
-    let active = streams.map((stream): ActiveStream => ({
-      stream,
-      scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
-    }));
-    let bootstrap: ViewTag | undefined = viewingPublicKey.u();
+    let active = streams.map(
+      (stream): ActiveStream => ({
+        stream,
+        scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
+      }),
+    );
+    let bootstrap: readonly ViewTag[] = [viewingPublicKey.u(), slotTag(viewingPublicKey.u())];
     while (active.length > 0) {
-      const tagged: (readonly [RoundTag, ViewTag])[] =
-        bootstrap === undefined ? [] : [[BOOTSTRAP, bootstrap]];
-      bootstrap = undefined;
+      const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);
+      bootstrap = [];
       for (const { stream, scan } of active) {
         const indices = scan.round();
         const tags = await streamTags(
@@ -513,8 +560,18 @@ class Scan {
   }
 
   async result(): Promise<AnonymousScan> {
+    const recovery = await this.#ledger.recovery(this.#context);
+    for (const note of [...recovery.utxos, ...recovery.pendingOpenings])
+      this.#unopened.delete(bytesKey(note.outputContext.hash));
     const scan: AnonymousScan = Object.freeze({
-      ...(await this.#ledger.recovery(this.#context)),
+      ...recovery,
+      auditorRecovery: Object.freeze({
+        unopened: Object.freeze(
+          [...this.#unopened.entries()]
+            .sort(([left], [right]) => (left < right ? -1 : 1))
+            .map(([, hash]) => hash),
+        ),
+      }),
       history: this.#history,
     });
     issuedScans.set(scan, this.#originalHistory);
@@ -564,7 +621,6 @@ class Scan {
         for (const viewingPublicKey of keys)
           if (trial === "provenTags") await this.#testTags(viewingPublicKey, fresh);
           else await this.#tryEverySite(viewingPublicKey, fresh);
-        for (const viewingPublicKey of keys) await this.#openHistorical(viewingPublicKey, fresh);
       },
       this.#context,
     );
@@ -631,11 +687,14 @@ class Scan {
     );
   }
 
-  /** Recovery, every body and bundle opens with no tag read and every deposit is tried. */
+  /** Recovers every rail without reading a tag, tags are unproved hints. */
   async #tryEverySite(
     viewingPublicKey: X25519PublicKey,
     rows: readonly IndexedShieldedTransaction[],
   ): Promise<void> {
+    for (const slot of rows.flatMap((tx) => tx.outputSlots))
+      if (ringBodyOutput(slot.payload) !== undefined)
+        this.#unopened.set(bytesKey(slot.outputContext.hash), slot.outputContext.hash);
     const bodies = rows.flatMap((tx) =>
       sitesOf(tx).flatMap((site) => bodyAt(tx, site, FULL_SCAN) ?? []),
     );
@@ -657,41 +716,6 @@ class Scan {
         },
         this.#context,
       );
-  }
-
-  /** A holder failure refuses the page, a position past an unread body skips its note. */
-  async #openHistorical(
-    viewingPublicKey: X25519PublicKey,
-    rows: readonly IndexedShieldedTransaction[],
-  ): Promise<void> {
-    const bodies = rows.flatMap((tx) => {
-      const context = slotContext(tx);
-      if (context === undefined) return [];
-      return sitesOf(tx).flatMap((site) => {
-        const body = historicalBody(tx, site);
-        return body === undefined
-          ? []
-          : [{ ...body, reply: new Uint8Array(), tx, site, context, found: HISTORICAL }];
-      });
-    });
-    if (bodies.length === 0) return;
-    const plaintexts = await this.#sync.keys.decrypt(
-      bodies.map(({ ciphertext, slotIndex, context }) => ({
-        ciphertext,
-        viewingPublicKey,
-        txViewingPublicKey: context.txViewingPublicKey,
-        salt: context.salt,
-        slotIndex,
-        label: "transfer" as const,
-      })),
-      this.#context,
-    );
-    const read = new BodyRead(this.#sync);
-    for (const [body, plaintext] of answered(bodies, plaintexts)) {
-      read.historicalBody(body, plaintext);
-      plaintext.fill(0);
-    }
-    this.#ledger.absorb(viewingPublicKey, read);
   }
 
   async #read(
@@ -1108,18 +1132,6 @@ class BodyRead {
     }
   }
 
-  historicalBody(body: Body, plaintext: Uint8Array): void {
-    const { ring, firstNullifier } = body.context;
-    const reader = { owner: this.#owner, ring, firstNullifier };
-    for (const { position, utxo } of historicalNotes(reader, body.tx, body.site, plaintext))
-      this.#keep(
-        body,
-        position,
-        Object.freeze({ utxo, nullifierPublicKey: this.#owner.nullifierPublicKey }),
-        undefined,
-      );
-  }
-
   /** Only a rebuilt commitment counts, the cipher authenticates nothing. */
   #note(
     body: Body,
@@ -1151,7 +1163,7 @@ class BodyRead {
     txViewingKey: ViewingKey,
   ): SentPayment | undefined {
     const slot = body.tx.outputSlots[position];
-    const parts = slot === undefined ? undefined : recipientParts(slot);
+    const parts = slot === undefined ? undefined : ringBodyOutput(slot.payload);
     if (slot === undefined || parts === undefined) return undefined;
     const opening = decoded(() => {
       const secret = txKeySlotSecret({
@@ -1342,7 +1354,7 @@ function bodyAt(
   if (context === undefined) return undefined;
   if (site.kind === "output") {
     const slot = tx.outputSlots[site.position];
-    const parts = slot === undefined ? undefined : recipientParts(slot);
+    const parts = slot === undefined ? undefined : ringBodyOutput(slot.payload);
     return parts === undefined
       ? undefined
       : { tx, site, ciphertext: parts.body, reply: parts.reply, context, found };
@@ -1353,21 +1365,6 @@ function bodyAt(
   return bundle?.length === senderBundleLen(tx.outputSlots.length)
     ? { tx, site, ciphertext: bundle, reply: new Uint8Array(), context, found }
     : undefined;
-}
-
-/** Scheme 13 names its body length, scheme 11 of an old frame cuts at the fixed body. */
-function recipientParts(
-  slot: OutputSlot,
-): Readonly<{ body: Uint8Array; reply: Uint8Array }> | undefined {
-  const current = ringBodyOutput(slot.payload);
-  if (current !== undefined) return current;
-  const old = historicalRecipientOutputBody(slot.payload);
-  return old === undefined || old.length < RECIPIENT_BODY_LEN
-    ? undefined
-    : {
-        body: old.subarray(0, RECIPIENT_BODY_LEN),
-        reply: old.subarray(RECIPIENT_BODY_LEN),
-      };
 }
 
 /** `undefined` without a reply or on bytes that never decode. */
@@ -1383,7 +1380,6 @@ function outputIndex(body: Body): number {
 const BOOTSTRAP = Object.freeze({ kind: "bootstrap" });
 const FULL_SCAN: AnonymousStream = Object.freeze({ kind: "fullScan" });
 const PROVEN_TAG: AnonymousStream = Object.freeze({ kind: "provenTag" });
-const HISTORICAL: AnonymousStream = Object.freeze({ kind: "historical" });
 /** A capped read never moves a position, a scan runs to its terminal page. */
 const SCAN_TO_TERMINAL = scanLimits({ maxPages: Number.MAX_SAFE_INTEGER });
 const MAX_CHANGE_SLOTS = 2;

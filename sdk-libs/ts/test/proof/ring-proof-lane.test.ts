@@ -1,3 +1,4 @@
+import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -9,11 +10,10 @@ import { bytesKey, hashChain4 } from "@heliuslabs/zolana/internal";
 import type { Address } from "@solana/kit";
 
 import {
-  checkCoSigner,
   demandRequirement,
   operationDemand,
   publicLegClasses,
-  resolveRingCoSigner,
+  resolveRingCoSigners,
 } from "../../src/proof/cosign.js";
 import {
   defaultInputBits,
@@ -24,6 +24,9 @@ import {
 import { depositStatementElements } from "../../src/proof/deposit-audit.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";
+import { anonymousPartyIdentities } from "../../src/protocol/membership/parties.js";
+import { ANONYMOUS_PARTIES } from "../../src/protocol/transaction/transact.js";
+import { ringCoSignerAccount } from "../helpers/ring-accounts.js";
 import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import { selectTransferKey } from "../../src/proof/transfer-proof.js";
 import {
@@ -97,15 +100,15 @@ describe("selectTransferKey", () => {
   });
 
   it("refuses past the account bound with the counts", () => {
-    const addresses = { nInputs: 24, coSigners: 1, legs: 2 };
+    const addresses = { nInputs: 24, coSigners: 5, legs: 2 };
     const capacity = ownerSignerCapacity(addresses);
-    expect(capacity).toBe(64 - 4 - 6 - 24 - 2 - 2);
+    expect(capacity).toBe(64 - 4 - 6 - 24 - 10 - 2);
     selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity });
     const refused = refusal(() =>
       selectTransferKey({ spend: SPEND, addresses, ownerSigners: capacity + 1 }),
     );
     expect(refused.code).toBe("RING_TRANSFER_PAST_ACCOUNT_BOUND");
-    expect(refused.details).toMatchObject({ ownerSigners: capacity + 1, capacity, coSigners: 1 });
+    expect(refused.details).toMatchObject({ ownerSigners: capacity + 1, capacity, coSigners: 5 });
   });
 
   it("names rows past the widest and an unkeyed shape", () => {
@@ -197,22 +200,49 @@ describe("co-sign", () => {
 
   it("drops transfers under no_spend and adds deposits for a deposit leg", () => {
     const ring = { coSignerClasses: RING_COSIGN_TRANSFERS | RING_COSIGN_DEPOSITS };
-    expect(demandRequirement(demand(false, 0, true), ring)?.classes).toBe(RING_COSIGN_DEPOSITS);
-    expect(demandRequirement(demand(true, 0), ring)?.classes).toBe(RING_COSIGN_TRANSFERS);
+    expect(demandRequirement(demand(false, 0, true), ring)?.uncovered).toBe(RING_COSIGN_DEPOSITS);
+    expect(demandRequirement(demand(true, 0), ring)?.uncovered).toBe(RING_COSIGN_TRANSFERS);
   });
 
-  it("needs one record holding every demanded class", () => {
-    const both = ApprovalMask.outflow | ApprovalMask.withdrawal;
-    const requirement = demandRequirement(demand(false, both), {});
-    if (requirement === undefined) throw new Error("an approval class never drops out");
-    checkCoSigner(requirement, {
-      scope: RING_COSIGN_APPROVE_OUTFLOW | RING_COSIGN_APPROVE_WITHDRAWAL,
-      signer: ONE,
+  it("resolves one approver per class in either order, a missing approver refused", async () => {
+    const outflow = "11111111111111111111111111111112" as Address;
+    const withdrawal = "11111111111111111111111111111113" as Address;
+    const records = new Map<Address, Readonly<{ scope: number; signer: Address }>>([
+      [outflow, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: outflow }],
+      [withdrawal, { scope: RING_COSIGN_APPROVE_WITHDRAWAL, signer: withdrawal }],
+    ]);
+    const accounts = new Map(
+      await Promise.all([...records.values()].map((record) => ringCoSignerAccount(ONE, record))),
+    );
+    const base = {
+      client: { getAccount: async (account: Address) => accounts.get(account) },
+      ringProgramId: ONE,
+      config: {},
+      demand: demand(false, ApprovalMask.outflow | ApprovalMask.withdrawal),
+      ownerSigners: [],
+    };
+    const signers = async (supplied: readonly Address[]) =>
+      (await resolveRingCoSigners({ ...base, supplied })).map(({ signer }) => signer);
+    expect(await signers([outflow, withdrawal])).toEqual([outflow, withdrawal]);
+    expect(await signers([withdrawal, outflow])).toEqual([withdrawal, outflow]);
+    await expect(signers([outflow])).rejects.toMatchObject({
+      code: "RING_COSIGNER_REQUIRED",
+      details: { reason: "missing", uncovered: RING_COSIGN_APPROVE_WITHDRAWAL },
     });
-    expect(
-      refusal(() => checkCoSigner(requirement, { scope: RING_COSIGN_APPROVE_OUTFLOW, signer: ONE }))
-        .code,
-    ).toBe("RING_COSIGNER_OUT_OF_SCOPE");
+    await expect(signers([outflow, outflow])).rejects.toMatchObject({
+      code: "RING_COSIGNER_OUT_OF_SCOPE",
+    });
+  });
+
+  it("binds each co-signer in its party slot, the destination last", () => {
+    const parties = anonymousPartyIdentities({
+      payer: ONE,
+      coSigners: [ONE, ONE],
+      exitDestination: ONE,
+    });
+    expect(parties).toHaveLength(ANONYMOUS_PARTIES);
+    expect(parties[3]?.every((byte) => byte === 0)).toBe(true);
+    expect(parties.at(-1)?.every((byte) => byte === 0)).toBe(false);
   });
 
   it("refuses an owner signer as co-signer and a missing approver signature", async () => {
@@ -224,9 +254,11 @@ describe("co-sign", () => {
       demand: demand(true, 0),
     };
     await expect(
-      resolveRingCoSigner({ ...base, supplied: ONE, ownerSigners: [ONE] }),
+      resolveRingCoSigners({ ...base, supplied: [ONE], ownerSigners: [ONE] }),
     ).rejects.toMatchObject({ code: "RING_COSIGNER_REQUIRED" });
-    await expect(resolveRingCoSigner({ ...base, ownerSigners: [] })).rejects.toMatchObject({
+    await expect(
+      resolveRingCoSigners({ ...base, supplied: [], ownerSigners: [] }),
+    ).rejects.toMatchObject({
       code: "RING_COSIGNER_REQUIRED",
     });
   });
@@ -434,21 +466,47 @@ describe("tracking predicates", () => {
   });
 
   it("holds an output to the rule of its key", () => {
-    const output = (key: Bytes32): ProofOutputUtxo =>
+    const output = (key: Bytes32, viewingU = fill(4)): ProofOutputUtxo =>
       ({
         ownerAddress: {
           nullifierPublicKey: key,
           signingPublicKey: { ownerProofInputHash: () => fill(1) },
+          viewingPublicKey: { u: () => viewingU },
         },
       }) as unknown as ProofOutputUtxo;
-    checkOutputKeys([output(fill(9)), undefined], () => row(fill(9)));
-    checkOutputKeys([output(zero)], () => undefined);
-    expect(refusal(() => checkOutputKeys([output(zero)], () => row(fill(9)))).code).toBe(
+    const checked = (
+      outputs: readonly (ProofOutputUtxo | undefined)[],
+      served: TrackingRecord | undefined,
+      spenders: readonly ShieldedPublicKey[] = [],
+    ) => checkOutputKeys({ outputs, rowOf: () => served, spenders });
+    checked([output(fill(9)), undefined], row(fill(9)));
+    checked([output(zero)], undefined);
+    expect(refusal(() => checked([output(zero)], row(fill(9)))).code).toBe(
       "RING_RECIPIENT_ENROLLED",
     );
-    expect(refusal(() => checkOutputKeys([output(fill(9))], () => undefined)).code).toBe(
+    expect(refusal(() => checked([output(fill(9))], undefined)).code).toBe(
       "RING_RECIPIENT_NOT_ENROLLED",
     );
+  });
+
+  it("refuses a recipient address sealing to a viewing key the row retired", () => {
+    const spender = {} as ShieldedPublicKey;
+    const output = {
+      ownerAddress: {
+        nullifierPublicKey: fill(9),
+        signingPublicKey: {
+          ownerProofInputHash: () => fill(1),
+          equals: (other: unknown) => other === spender,
+        },
+        viewingPublicKey: { u: () => fill(8) },
+      },
+    } as unknown as ProofOutputUtxo;
+    const stale = refusal(() =>
+      checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [] }),
+    );
+    expect(stale.code).toBe("RING_RECIPIENT_VIEWING_KEY_STALE");
+    expect(stale.details).toMatchObject({ rowRevision: "1" });
+    checkOutputKeys({ outputs: [output], rowOf: () => row(fill(9)), spenders: [spender] });
   });
 });
 
@@ -484,6 +542,7 @@ describe("prover/ring/params.go", () => {
       withdrawals: 4,
       owners: 4,
       entry: false,
+      wide: false,
     } as const;
     const capacity = transferPoolCapacity(circuit);
     const zero = fill(0);
@@ -510,7 +569,6 @@ describe("prover/ring/params.go", () => {
       publicInputHash: zero,
       firstNullifier: zero,
       txViewingSk: zero,
-      ephSk: zero,
       auditorPk: zero,
       salt: new Uint8Array(16) as TransferProofRequest["salt"],
       layout: { hasData: false, entry: false },
@@ -562,7 +620,7 @@ describe("prover/ring/params.go", () => {
       hidden: false,
       delegate: false,
       sender: zero,
-      partyIdentities: repeat(3, zero),
+      partyIdentities: repeat(7, zero),
     };
     const keys = Object.keys(ringProofRequestBody(request));
     const go = tags("TransferParams");

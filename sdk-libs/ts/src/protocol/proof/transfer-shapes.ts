@@ -12,6 +12,8 @@ export interface TransferShape {
   readonly owners: number;
   /** One evidence slot per input, the key also spends default-ring notes. */
   readonly entry: boolean;
+  /** A salted and a public record per owner fit. */
+  readonly wide: boolean;
 }
 
 const shape = (
@@ -20,24 +22,29 @@ const shape = (
   withdrawals: number,
   owners: number,
   entry: boolean,
-): TransferShape => Object.freeze({ outputs, inputs, withdrawals, owners, entry });
+  wide: boolean,
+): TransferShape => Object.freeze({ outputs, inputs, withdrawals, owners, entry, wide });
 
 /** Ascending outputs, a frame takes the first that holds its SPP width. */
 const NARROW_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(2, 24, 4, 4, false),
-  shape(4, 24, 4, 4, false),
-  shape(8, 16, 4, 4, false),
-  shape(16, 5, 8, 5, false),
+  shape(2, 24, 4, 4, false, false),
+  shape(4, 24, 4, 4, false, false),
+  shape(8, 16, 4, 4, false, false),
+  shape(16, 5, 8, 5, false, false),
 ]);
-const WIDE_SHAPE = shape(8, 24, 32, 24, false);
+/** Ascending outputs, the wide flag takes the first that holds the SPP width. */
+const WIDE_SHAPES: readonly TransferShape[] = Object.freeze([
+  shape(8, 24, 32, 24, false, true),
+  shape(16, 5, 8, 5, false, true),
+]);
 const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
-  shape(4, 8, 4, 8, true),
-  shape(8, 2, 4, 2, true),
+  shape(4, 8, 4, 8, true, true),
+  shape(8, 2, 4, 2, true, true),
 ]);
 
 export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
   ...NARROW_SHAPES,
-  WIDE_SHAPE,
+  ...WIDE_SHAPES,
   ...ENTRY_SHAPES,
 ]);
 
@@ -57,7 +64,7 @@ export function frameKeyShape(key: FrameKey): TransferShape | undefined {
     return key.rail === "delegate" || key.rail === "anonymousDelegate"
       ? undefined
       : ENTRY_SHAPES.find(holds);
-  return key.wide ? (holds(WIDE_SHAPE) ? WIDE_SHAPE : undefined) : NARROW_SHAPES.find(holds);
+  return (key.wide ? WIDE_SHAPES : NARROW_SHAPES).find(holds);
 }
 
 /** A transfer key, Rust `RingCircuit::Transfer`. */
@@ -69,6 +76,8 @@ export interface TransferKeyCircuit {
   readonly withdrawals: number;
   readonly owners: number;
   readonly entry: boolean;
+  /** A salted and a public record per owner fit. */
+  readonly wide: boolean;
 }
 
 /** A key's record pool widths, Rust `RecordPools`. */
@@ -125,7 +134,7 @@ export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCap
 
 /** The circuit type the prover serves the key under, Go `Key.circuitType`. */
 export function transferCircuitType(circuit: TransferKeyCircuit): string {
-  const family = circuit.entry ? "transfer-entry" : "transfer";
+  const family = circuit.entry ? "transfer-entry" : circuit.wide ? "transfer-wide" : "transfer";
   return `custom-ring-${family}-${circuit.outputs}-in${circuit.class}-w${circuit.withdrawals}-s${circuit.owners}`;
 }
 
@@ -160,8 +169,6 @@ const SPP_ADDRESSES = 4;
 const RING_ADDRESSES = 6;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 const MAX_TRANSACTION_ADDRESSES = 64;
-/** Go `narrowWithdrawals`. */
-const NARROW_WITHDRAWALS = 4;
 /** Go `ownerAddresses`. */
 const OWNER_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
 
@@ -188,6 +195,7 @@ function shapeCircuit(entry: TransferShape): TransferKeyCircuit {
     withdrawals: entry.withdrawals,
     owners: entry.owners,
     entry: entry.entry,
+    wide: entry.wide,
   });
 }
 
@@ -206,11 +214,6 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
   );
 }
 
-/** Rust `TransferShape::narrow_pools`. */
-function narrowPools(circuit: TransferKeyCircuit): boolean {
-  return circuit.withdrawals <= NARROW_WITHDRAWALS && !circuit.entry;
-}
-
 /** Go `publicOwners`. */
 function publicOwners(circuit: TransferKeyCircuit): number {
   const fit = Math.floor((OWNER_ADDRESSES - circuit.withdrawals) / 2);
@@ -219,12 +222,12 @@ function publicOwners(circuit: TransferKeyCircuit): number {
 
 /** Go `trackedWithdrawals`. */
 function trackedWithdrawals(circuit: TransferKeyCircuit): number {
-  return narrowPools(circuit) ? 0 : publicOwners(circuit) - circuit.owners;
+  return circuit.wide ? publicOwners(circuit) - circuit.owners : 0;
 }
 
 /** Go `saltedKeys`. */
 function saltedKeys(circuit: TransferKeyCircuit): number {
-  return narrowPools(circuit)
-    ? 0
-    : 2 * publicOwners(circuit) + circuit.outputs - circuit.owners - circuit.withdrawals;
+  return circuit.wide
+    ? 2 * publicOwners(circuit) + circuit.outputs - circuit.owners - circuit.withdrawals
+    : 0;
 }

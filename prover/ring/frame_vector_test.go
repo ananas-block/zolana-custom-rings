@@ -18,6 +18,7 @@ const (
 	frameProofLen    = 192
 	frameSppProofLen = 128
 	frameTreeLen     = 4
+	frameSlotTagLen  = 8
 	frameExitBodyLen = 83
 	frameViewTagLen  = 32
 	frameCacheWrites = 16
@@ -129,7 +130,11 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 		default:
 			length = shared.RecipientBodyLen
 		}
-		c.take(32 + 32 + length)
+		tag := frameSlotTagLen
+		if exit {
+			tag = 32
+		}
+		c.take(32 + tag + length)
 		if bears && !exit {
 			bodies++
 		}
@@ -140,7 +145,6 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if anonymousFrame {
 		c.take(32 + shared.SenderBundleHeadLen + 32*m)
 	}
-	c.take(32)
 	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0, Data: inputByte&hasData != 0}.Ranges()
 	c.take(stream.EnvelopeLen(n))
 	c.take(m * audit.RecordLen)
@@ -170,16 +174,13 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 
 // walkExtensions mirrors FrameExtensions::read.
 func walkExtensions(c *frameCursor) {
-	const dataHash, ringDataHash, privateSource, messages, cache = 1, 2, 4, 8, 16
+	const dataHash, ringDataHash, messages, cache = 1, 2, 4, 8
 	flags := c.take(1)[0]
 	if flags&dataHash != 0 {
 		c.take(32)
 	}
 	if flags&ringDataHash != 0 {
 		c.take(32)
-	}
-	if flags&privateSource != 0 {
-		c.take(8)
 	}
 	if flags&messages != 0 {
 		for range int(c.take(1)[0]) {

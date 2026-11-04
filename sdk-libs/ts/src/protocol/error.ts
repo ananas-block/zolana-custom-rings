@@ -73,7 +73,6 @@ export const RING_ERROR_CODES = [
   "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
   "RING_HISTORY_PAGE_INVALID",
   "RING_HISTORY_CURSOR_INVALID",
-  "RING_MERGE_TOO_WIDE",
   "RING_ANONYMOUS_EXIT_LINKS_OWNER",
   "RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED",
   "RING_ANONYMOUS_EXIT_ACCOUNT_HAS_DATA",
@@ -95,7 +94,6 @@ export const RING_ERROR_CODES = [
   "RING_SPP_PROOF_MISMATCH",
   "RING_ANONYMOUS_EXIT_NAMED_OWNER_MISMATCH",
   "RING_KEYS_REQUIRED",
-  "RING_MIXED_OWNER_DEPOSIT",
   "RING_TOO_MANY_OWNERS",
   "RING_ADDRESS_NOT_ENROLLED",
   "RING_ADDRESS_MISMATCH",
@@ -154,7 +152,6 @@ export const RING_ERROR_CODES = [
   "RING_PROVING_KEYS_MISSING",
   "RING_SCAN_WORKER_FAILED",
   "RING_ENROLLMENT_KEY_MISMATCH",
-  "RING_LIST_SALT_MISSING",
   "RING_ENROLLMENT_ZERO_KEY",
   "RING_ENROLLMENT_NONE_NAMED",
   "RING_TRACKING_INVALID",
@@ -170,28 +167,33 @@ export const RING_ERROR_CODES = [
   "RING_COSIGNER_OUT_OF_SCOPE",
   "RING_DELEGATE_DEPOSIT_LEG",
   "RING_MERGE_OWNER_MISMATCH",
+  "RING_LIST_SALT_MISSING",
+  "RING_RECIPIENT_VIEWING_KEY_STALE",
+  "RING_MERGE_TOO_WIDE",
+  "RING_ADDRESS_CEILING",
+  "RING_FRAME_EVENT_INVALID",
+  "RING_FRAME_TOO_LARGE",
+  "RING_BUFFERED_TAG",
+  "RING_BUFFERED_NONCE",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
 
 export type RingErrorCode = (typeof RING_ERROR_CODES)[number];
 
-/** Rust `CustomRingError`, a retired code is never reused. */
+/** Rust `CustomRingError`. */
 export const RingProgramError = Object.freeze({
   invalidInstructionData: 8100,
   proofVerificationFailed: 8101,
   hashingFailed: 8102,
   invalidShieldedPoolProgram: 8103,
   missingRingAuth: 8104,
-  // 8105 and 8106 retired.
   unauthorizedAuthority: 8107,
   invalidAuditorPubkey: 8108,
   invalidSystemProgram: 8111,
-  // 8112 retired.
   unsupportedCircuit: 8113,
   unauthorizedInitializer: 8114,
   tooManyAccounts: 8115,
-  // 8116 to 8118 retired.
   invalidListId: 8126,
   invalidSource: 8134,
   invalidCuratorRegistry: 8135,
@@ -207,7 +209,6 @@ export const RingProgramError = Object.freeze({
   unauthorizedDelegate: 8151,
   delegatePublicLeg: 8152,
   delegateAlreadySet: 8153,
-  // 8160, 8163 and 8165 retired.
   invalidDepositDisclosure: 8166,
   missingFundingSigner: 8173,
   invalidRingMode: 8174,
@@ -220,19 +221,14 @@ export const RingProgramError = Object.freeze({
   ringTransactLength: 8200,
   ringShapeUnkeyed: 8201,
   flagNotAllowed: 8202,
-  // 8203 to 8205 retired.
   ownerSignerCount: 8208,
   memberOutOfRange: 8209,
   listBitNotWritable: 8210,
   valueOutsideMask: 8211,
-  // 8212 retired.
   authorityBatchTooLarge: 8214,
-  // 8215 and 8216 retired.
   policyNotSet: 8217,
   invalidSppProofPoint: 8218,
-  // 8219 retired.
   policyAlreadySet: 8221,
-  // 8222 and 8223 retired.
   dataFreeBodyLength: 8224,
   zeroPublicLegAmount: 8225,
   tooManyPublicAssets: 8226,
@@ -243,7 +239,6 @@ export const RingProgramError = Object.freeze({
   coSignerIsOwner: 8231,
   memberWrittenListRule: 8233,
   ringAuthOutOfSlot: 8234,
-  // 8235 and 8236 retired.
   invalidRingProofPoint: 8238,
   thresholdsWithoutWithdrawals: 8239,
   unexpectedMemberRegistryRoot: 8240,
@@ -256,7 +251,6 @@ export const RingProgramError = Object.freeze({
   anonymousExitAccountHasData: 8248,
   anonymousExitTokenAccountOnCurve: 8249,
   anonymousExitTokenAccountInvalid: 8250,
-  anonymousRingDataNotZero: 8251,
   outputBodyLength: 8253,
   listNotPolicyReadable: 8255,
   outputCountOutOfRange: 8257,
@@ -267,12 +261,10 @@ export const RingProgramError = Object.freeze({
   coSignerOutOfScope: 8262,
   coSignerCountOutOfRange: 8263,
   recordsRegistryOtherRing: 8266,
-  viewTagNotCanonical: 8267,
   changeTagNotZero: 8268,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
-  // 8303 to 8306 retired.
   invalidAssetLimits: 8390,
   depositMintAccountMissing: 8410,
   depositAssetIndexUnknown: 8411,
@@ -285,6 +277,13 @@ export const RingProgramError = Object.freeze({
   invalidTrackingRegistry: 8502,
   trackingRootBelowFloor: 8503,
   saltedSourceOtherTracking: 8504,
+  invalidFrameBuffer: 8520,
+  frameLength: 8521,
+  unauthorizedFrameWriter: 8522,
+  frameDigestMismatch: 8523,
+  frameWriteOutOfRange: 8524,
+  unsupportedBufferedTag: 8525,
+  framePayerNotWriter: 8526,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

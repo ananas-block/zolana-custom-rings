@@ -103,7 +103,7 @@ function trackingTree(row: TrackingRecord) {
 }
 
 /** The chain and indexer of a ring whose tracking registry holds `who`, serving `seal`. */
-async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | undefined = who.seal) {
+async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | null = who.seal) {
   const { root, rowPath, absent } = trackingTree(who.row);
   const [policy, policyBump] = await ringPolicyPda(RING);
   const accounts = new Map<Address, RpcAccount>([
@@ -115,7 +115,7 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | undef
           bump: policyBump,
           roles: { policy: AUTHORITY },
           auditorPublicKey: AUDITOR.publicKey().toBytes(),
-          mode: "confidentialEscrow",
+          mode: "confidential",
           policyHash: new Uint8Array(32).fill(1) as Bytes32,
           tracking: TRACKING,
         }),
@@ -127,15 +127,16 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | undef
     slot: 1n,
     root: request.expectedRoot,
     revision: REVISION,
-    openings: request.members.map((member): ServedTrackingOpening =>
-      equalBytes(member, who.row.member)
-        ? {
-            kind: "present",
-            record: who.row,
-            path: rowPath,
-            ...(seal === undefined ? {} : { seal }),
-          }
-        : absent(member),
+    openings: request.members.map(
+      (member): ServedTrackingOpening =>
+        equalBytes(member, who.row.member)
+          ? {
+              kind: "present",
+              record: who.row,
+              path: rowPath,
+              ...(seal === null ? {} : { seal }),
+            }
+          : absent(member),
     ),
   }));
   return {
@@ -151,11 +152,9 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | undef
 function trackingRegistryData(root: Bytes32): Uint8Array {
   const writer = new Writer()
     .u8(3, "discriminator")
-    .u8(255, "bump")
     .bytes(new Uint8Array(32), 32, "ringId")
     .bytes(AUDITOR.publicKey().toBytes(), 33, "auditor")
-    .u32(2, "nextIndex")
-    .u32(2, "reservedLeaves");
+    .u32(2, "nextIndex");
   for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
     writer
       .bytes(slot === 0 ? root : new Uint8Array(32), 32, "hash")
@@ -234,6 +233,7 @@ describe("enrolled keys", () => {
     for (const seal of [
       { ...who.seal, ciphertext },
       { ...who.seal, owner: actor(14).signer },
+      null,
     ]) {
       const { client } = await ring(who, seal);
       await expect(

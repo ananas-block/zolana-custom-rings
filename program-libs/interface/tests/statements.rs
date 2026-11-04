@@ -224,7 +224,7 @@ impl Values {
         (0..count)
             .map(|slot| RingOutput {
                 hash: &self.fields[20 + slot],
-                owner_tag: &self.keys[4 + slot % 4],
+                owner_tag: custom_ring_interface::stream::slot_tag(self.keys[4 + slot % 4]),
                 body: SlotBody::None,
                 record: &self.records[slot],
                 tail: tails.then_some(&self.tails[slot]),
@@ -704,7 +704,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert!(transfer.iter().all(|len| *len == 45));
+    assert!(transfer.iter().all(|len| *len == 49));
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -986,7 +986,7 @@ fn delivery_bytes_stay_outside_the_statement() {
     };
     let body = [7u8; RECIPIENT_BODY_LEN];
     let mut rewritten = outputs.clone();
-    rewritten[1].owner_tag = &values.keys[9];
+    rewritten[1].owner_tag = custom_ring_interface::stream::slot_tag(values.keys[9]);
     rewritten[1].body = SlotBody::Recipient(&body);
     rewritten[2].body = SlotBody::Exit(&body);
     let moved = TransferStatement {

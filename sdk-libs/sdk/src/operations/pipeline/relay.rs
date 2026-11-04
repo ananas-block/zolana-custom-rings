@@ -109,6 +109,13 @@ impl<R: Rail> WalletRelay<'_, R> {
             ring: SerializablePubkey(self.transfer.ring.program_id()),
             quote,
             intent,
+            co_signers: self
+                .transfer
+                .co_signers
+                .iter()
+                .copied()
+                .map(SerializablePubkey)
+                .collect(),
         }))
     }
 }
@@ -139,7 +146,6 @@ impl Sealed<'_> {
             sender: staged.sender,
             nullifier_key,
             tx_viewing_key: staged.rail.tx_viewing_key().clone(),
-            audit_ephemeral_key: self.sealed.ephemeral_secret().clone(),
             inputs: inputs.input_utxos.clone(),
             outputs: inputs.output_utxos.clone(),
             external_data: inputs.external_data.clone(),

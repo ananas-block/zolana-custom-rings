@@ -1,10 +1,3 @@
-// Proves that a batch of enrollments the program read from authorization accounts
-// was applied to the tracking tree. Anyone may apply, the program computes each
-// entry, so the proof only moves the tree.
-//
-// Read after registry/tracking.go, registry/apply_records.go. Read before
-// prover/ring/ring.go.
-
 package registry
 
 import (
@@ -17,12 +10,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
-
-// Properties:
-// 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in the named order, exactly the Count entries whose chain runs from ChainStart to ChainEnd.
-// 2. A rotation changes only the view key and the revision, the nullifier key, ciphertext hash and list tag of a leaf are final.
-// 3. An absent owner is inserted after its low record at exactly the next index, below capacity, a rotation needs no free leaf.
-// 4. The statement binds both roots, both next indexes, both chain ends and the count.
 
 // TrackingEntry mirrors the entry the program computes from an authorization account.
 type TrackingEntry struct {
@@ -43,6 +30,7 @@ type EnrollmentWrite struct {
 	LowSlot TrackingPath
 }
 
+// ApplyEnrollmentsCircuit only moves the tree, the program computes each entry and anyone may apply.
 type ApplyEnrollmentsCircuit struct {
 	NumWrites int `gnark:"-"`
 

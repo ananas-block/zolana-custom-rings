@@ -128,7 +128,7 @@ export type {
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 export { MemberOpeningRead } from "../protocol/membership/member-opening.js";
 export type { EscrowedRecord } from "../protocol/membership/member-opening.js";
-export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-record.js";
+export { readMemberRecords } from "../rpc/registered-record.js";
 export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
@@ -193,7 +193,13 @@ export type {
 } from "../state/anonymous-scan.js";
 export { AnonymousWallet, ANONYMOUS_WALLET_VERSION } from "../state/anonymous-wallet.js";
 export type { PendingClaim } from "../state/anonymous-wallet.js";
-export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export {
+  AnonymousSync,
+  ringFullScan,
+  TAGS_PER_REQUEST,
+  type AuditorRecovery,
+  type RingFullScan,
+} from "../state/anonymous-sync.js";
 export type {
   AnonymousRingUtxo,
   AnonymousScan,
@@ -378,8 +384,6 @@ export type {
   NullifierSecrets,
   OpenedRingAudit,
   OutputOpening,
-  EscrowPendingOutput,
-  EscrowPendingSlot,
   RingOwnerTag,
   OutputPayloadError,
   OutputPayloadErrorKind,
@@ -400,7 +404,6 @@ export {
 } from "../operations/workflow/created-utxos.js";
 export type { CreatedRingUtxosPage, OpenedDeposit } from "../operations/workflow/created-utxos.js";
 export type {
-  HistoricalMergeRow,
   MergeNullifierClass,
   MergeNullifierRow,
   OpenedRingMerge,
@@ -451,7 +454,6 @@ export {
 export type {
   ConfirmedEventKind,
   ConfirmedRingTransaction,
-  DepositCapsuleVersion,
   OriginInstruction,
   OriginInstructionGroup,
   RingWithdrawal,
@@ -463,9 +465,6 @@ export {
   RING_READ_CURSOR_LIMIT,
   RING_READ_PAGE_LIMIT,
   RingAuditedUtxosRequest,
-  RingUnspentUtxosRequest,
-  GET_UNSPENT_UTXOS,
-  unspentUtxosAttestation,
   RingAuditorKeyRequest,
   RingAuthorityTransferRequest,
   RingReadRequest,
@@ -487,14 +486,6 @@ export type { RingEnrolmentAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
-  UnresolvedRingMerge,
-  SignedUnspentUtxosRead,
-  RingUnspentUtxo,
-  RingUnspentUtxoKind,
-  RingCoverage,
-  RingUnresolvedReason,
-  RingUnresolvedHistory,
-  RingUnspentUtxosPage,
   DecryptedRingInput,
   DecryptedRingDefaultInput,
   DecryptedOutputContext,
@@ -581,6 +572,16 @@ export {
 } from "../protocol/membership/tracking.js";
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
+export { BufferedFrame } from "../operations/payments/buffered-frame.js";
+export type { TransactionSize } from "../operations/workflow/compile.js";
+export {
+  decideAddressCeiling,
+  spentInputOf,
+  type CeilingDecision,
+  type MergeCapacity,
+  type MergeGroup,
+  type SpentInput,
+} from "../operations/workflow/address-ceiling.js";
 export type { RingListSalt } from "../proof/policy-proof.js";
 export type { RingPublicSpend } from "../operations/payments/transfer.js";
 export type { RingMergeSealer } from "../crypto/audit/merge-disclosure.js";

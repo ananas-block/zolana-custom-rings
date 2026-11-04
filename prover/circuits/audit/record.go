@@ -1,6 +1,4 @@
 // A dummy's plaintext is all zero, the auditor skips it by one byte under a proof.
-//
-// Read after audit/audit.go, audit/layout.go, shared/utxo.go, before transfer/transfer.go.
 
 package audit
 

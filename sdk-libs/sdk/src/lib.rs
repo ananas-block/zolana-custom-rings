@@ -3,8 +3,12 @@
 
 #[path = "state/account.rs"]
 mod account;
+#[path = "validation/address_ceiling.rs"]
+mod address_ceiling;
 #[path = "operations/admin.rs"]
 mod admin;
+#[path = "operations/buffered.rs"]
+mod buffered;
 #[path = "rpc/client.rs"]
 mod client;
 #[path = "validation/co_signer.rs"]
@@ -59,10 +63,14 @@ pub use crate::{
         CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, RingRegistration,
         RingStatus,
     },
+    address_ceiling::{
+        AddressCeiling, AddressCeilingError, CeilingDecision, MergeCapacity, MergeGroup, SpentInput,
+    },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
         SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
+    buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
     deposit::{
         fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
@@ -80,11 +88,11 @@ pub use crate::{
         DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
         DelegateWithdrawal, Delegated, EntrySpend, Owner, ProvenRingTransfer, PublicOwnerTransfer,
         PublicOwners, Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment,
-        RingSender, RingTransfer, TransferKey,
+        RingSender, RingTransfer, TransferKey, WideFrames,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
-        WalletRecordUpdate,
+        SaltedOwnerCheck, WalletRecordUpdate,
     },
     register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},

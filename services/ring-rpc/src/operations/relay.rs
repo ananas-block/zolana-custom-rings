@@ -2,9 +2,12 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage_instruction, tracking::TrackingAuthorization, STORAGE_PROGRAM_ID,
+    compute_unit_limit, storage_instruction, tag as ring_tag, tracking::TrackingAuthorization,
+    InstructionTag, STORAGE_PROGRAM_ID,
 };
-use custom_ring_sdk::RingError;
+use custom_ring_sdk::{
+    close_frame_buffer, AddressCeiling, BufferedFrame, CeilingDecision, MergeCapacity, RingError,
+};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use sea_orm::{
@@ -18,7 +21,7 @@ use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::{compile_message, ComputeBudgetConfig};
+use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use zolana_ring_client::rpc::{
@@ -48,6 +51,8 @@ pub const QUOTE_SLOTS: u64 = 150;
 pub const RELAY_TRACK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
+
+const LANDING_POLL: Duration = Duration::from_millis(500);
 const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
 /// Modelled, the first enrollment verifies a proof in its instruction.
 const ENROLL_COMPUTE_UNITS: u32 = 400_000;
@@ -274,10 +279,13 @@ impl Relay {
         self.fee_payer.pubkey()
     }
 
-    fn parties(&self) -> RelayParties {
+    fn parties(&self, named: &[spr_indexer_api::SerializablePubkey]) -> RelayParties {
         RelayParties {
             fee_payer: self.fee_payer(),
-            co_signer: self.co_signer.signer(),
+            co_signers: match named {
+                [] => self.co_signer.signer().into_iter().collect(),
+                named => named.iter().map(|signer| signer.0).collect(),
+            },
         }
     }
 
@@ -308,7 +316,7 @@ impl Relay {
                 return Err(RelayError::InvalidEnrollment.into());
             }
         }
-        let parties = self.parties();
+        let parties = self.parties(&request.co_signers);
         let Checked {
             owner_signature,
             setup,
@@ -333,7 +341,7 @@ impl Relay {
                 self.prover
                     .prove(RelayProofRequest {
                         ring,
-                        parties,
+                        parties: parties.clone(),
                         payload: &payload,
                         owner_signature,
                     })
@@ -345,6 +353,7 @@ impl Relay {
             payload,
             setup,
             proven,
+            parties,
         })
         .await
     }
@@ -392,18 +401,19 @@ impl Relay {
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
         self.rings.check(ring).await?;
-        let parties = self.parties();
+        let parties = self.parties(&[]);
         let (payload, proven) = {
             let _proof = self
                 .proofs
                 .try_acquire()
                 .map_err(|_| RingRpcError::RelayProverBusy)?;
-            let payload = RelayPayload::Transfer(self.prover.seal_delegate(seal, parties).await?);
+            let payload =
+                RelayPayload::Transfer(self.prover.seal_delegate(seal, parties.clone()).await?);
             let proven = self
                 .prover
                 .prove(RelayProofRequest {
                     ring,
-                    parties,
+                    parties: parties.clone(),
                     payload: &payload,
                     owner_signature: None,
                 })
@@ -415,6 +425,7 @@ impl Relay {
             payload,
             setup: Vec::new(),
             proven,
+            parties,
         })
         .await
     }
@@ -426,7 +437,10 @@ impl Relay {
             payload,
             mut setup,
             proven,
+            parties,
         } = proven;
+        let mut proven = proven;
+        self.buffer_wide_frame(&mut proven).await?;
         let fee_payer = self.fee_payer();
         let LatestBlockhash {
             blockhash,
@@ -437,6 +451,7 @@ impl Relay {
         let awaited = CoSignStep {
             payload: &payload,
             proven,
+            named: &parties.co_signers,
         }
         .plan(self.co_signer.as_ref())?;
         // The decoded secrets zeroize before the store and send awaits.
@@ -463,6 +478,7 @@ impl Relay {
             Err(error) => Some(UnstoredWrite::Failed(error)),
         };
         if let Some(write) = write {
+            self.close_buffer(&record.message).await;
             let stored = self.relays().get(&relay_id).await;
             self.free_unless_stored(FailedWrite {
                 write,
@@ -481,6 +497,91 @@ impl Relay {
     }
 
     /// The record and its held inputs commit together before the send.
+    /// A frame past one transaction settles from a buffer the relay writes and pays for.
+    async fn buffer_wide_frame(&self, proven: &mut ProvenRelay) -> Result<(), RingRpcError> {
+        if proven.instruction.data.first() != Some(&ring_tag::TRANSFER) {
+            return Ok(());
+        }
+        let writer = self.fee_payer();
+        let decision = AddressCeiling {
+            payer: writer,
+            instruction: &proven.instruction,
+            budget: proven.budget,
+            inputs: &[],
+            merge_capacity: MergeCapacity {
+                keyed: 0,
+                zero_key: 0,
+            },
+        }
+        .decide()
+        .map_err(|error| RelayError::proof(error.into()))?;
+        if !matches!(decision, CeilingDecision::Buffered(_)) {
+            return Ok(());
+        }
+        let frame = BufferedFrame::for_writer(&proven.instruction, writer)
+            .map_err(|error| RelayError::proof(error.into()))?;
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::WriteFrame));
+        for write in frame.writes().map_err(RelayError::proof)? {
+            self.land(write, budget).await?;
+        }
+        proven.instruction = frame.settle();
+        proven.budget =
+            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
+        Ok(())
+    }
+
+    /// One transaction the relay alone signs, carried to its finalized outcome.
+    async fn land(
+        &self,
+        instruction: Instruction,
+        budget: ComputeBudgetConfig,
+    ) -> Result<(), RingRpcError> {
+        let LatestBlockhash {
+            blockhash,
+            last_valid_block_height,
+        } = self.chain.latest_blockhash().await?;
+        let message = compile_message(&self.fee_payer(), &[instruction], blockhash, budget)?;
+        let transaction = sign_transaction(message, &[&self.fee_payer])?;
+        self.chain.send(&transaction).await?;
+        let attempt = Attempt {
+            signature: transaction.signatures[0],
+            last_valid_block_height,
+        };
+        loop {
+            match attempt.landing(self.chain.as_ref()).await? {
+                Landing::Pending => tokio::time::sleep(LANDING_POLL).await,
+                Landing::Landed(ChainOutcome::Confirmed { .. }) => return Ok(()),
+                Landing::Landed(ChainOutcome::Failed { reason }) => {
+                    return Err(RelayError::SendRefused { reason }.into())
+                }
+                Landing::Expired => {
+                    return Err(RelayError::SendRefused {
+                        reason: EXPIRED.to_owned(),
+                    }
+                    .into())
+                }
+            }
+        }
+    }
+
+    /// Returns the rent of a settlement that will not land, a refused close stays logged.
+    async fn close_buffer(&self, message: &VersionedMessage) {
+        let keys = message.static_account_keys();
+        let buffer = message.instructions().iter().find_map(|instruction| {
+            (instruction.data.first() == Some(&ring_tag::SETTLE_BUFFERED)).then_some(())?;
+            let ring = *keys.get(usize::from(instruction.program_id_index))?;
+            let buffer = *keys.get(usize::from(*instruction.accounts.first()?))?;
+            Some(close_frame_buffer(ring, self.fee_payer(), buffer))
+        });
+        let Some(close) = buffer else {
+            return;
+        };
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::CloseFrameBuffer));
+        if let Err(error) = self.land(close, budget).await {
+            warn!("relay buffer did not close {}", redacted(&error));
+        }
+    }
+
     pub(crate) async fn send_merge(&self, merge: HeldMerge) -> Result<RelayId, RingRpcError> {
         let relay_id = RelayId(
             <[u8; 32]>::from(
@@ -773,6 +874,7 @@ impl Relay {
             }
             _ => {
                 self.relays().update(relay_id, record).await?;
+                self.close_buffer(&record.message).await;
                 self.settle(record.co_signature, CoSignSettlement::Failed)
                     .await
             }
@@ -807,11 +909,14 @@ struct ProvenStep {
     payload: RelayPayload,
     setup: Vec<Instruction>,
     proven: ProvenRelay,
+    parties: RelayParties,
 }
 
 struct CoSignStep<'a> {
     payload: &'a RelayPayload,
     proven: ProvenRelay,
+    /// The prover names none outside it.
+    named: &'a [Address],
 }
 
 struct Awaited {
@@ -820,24 +925,39 @@ struct Awaited {
 }
 
 impl CoSignStep<'_> {
+    /// The service signs its own place in the run, each other approver signs the message.
     fn plan(self, co_signer: &dyn CoSignPolicy) -> Result<Awaited, RingRpcError> {
-        let Self { payload, proven } = self;
-        let Some(named) = proven.co_signer else {
-            return Ok(Awaited {
-                co_sign: None,
-                signers: proven.signers,
-            });
-        };
-        let signer = co_signer
-            .signer_named(named)
-            .ok_or(RelayError::CoSignRefused)?;
+        let Self {
+            payload,
+            proven,
+            named,
+        } = self;
+        if !proven
+            .co_signers
+            .iter()
+            .all(|signer| named.contains(signer))
+        {
+            return Err(RelayError::CoSignRefused.into());
+        }
+        let own = co_signer
+            .signer()
+            .filter(|signer| proven.co_signers.contains(signer));
+        let co_sign = own
+            .map(|signer| {
+                Ok::<_, RingRpcError>(PendingCoSign {
+                    signer,
+                    ring: payload.ring_program_id(),
+                    flows: payload.flows()?,
+                })
+            })
+            .transpose()?;
+        let others = proven
+            .co_signers
+            .into_iter()
+            .filter(|signer| Some(*signer) != own);
         Ok(Awaited {
-            co_sign: Some(PendingCoSign {
-                signer,
-                ring: payload.ring_program_id(),
-                flows: payload.flows()?,
-            }),
-            signers: proven.signers,
+            co_sign,
+            signers: proven.signers.into_iter().chain(others).collect(),
         })
     }
 }
@@ -1023,7 +1143,7 @@ fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Proven
             data: enrollment.instruction_data.clone(),
         },
         budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
-        co_signer: None,
+        co_signers: Vec::new(),
         signers: vec![enrollment.owner],
     }
 }

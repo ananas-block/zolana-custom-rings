@@ -98,8 +98,9 @@ impl<'a> RingTransfer<Delegated<'a>> {
     pub fn new(input: DelegateTransferInput<'_>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
+            buffered: false,
             rail: Delegated {
                 delegate: input.delegate,
                 payer: input.payer,

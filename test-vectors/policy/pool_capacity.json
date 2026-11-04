@@ -21,15 +21,21 @@
     },
     {
       "key": "custom_ring_transfer_16_in5_w8_s5",
-      "own": 77,
-      "curator": 77,
-      "tracking": 29
+      "own": 48,
+      "curator": 48,
+      "tracking": 21
     },
     {
-      "key": "custom_ring_transfer_8_in24_w32_s24",
+      "key": "custom_ring_transfer_wide_8_in24_w32_s24",
       "own": 113,
       "curator": 113,
       "tracking": 51
+    },
+    {
+      "key": "custom_ring_transfer_wide_16_in5_w8_s5",
+      "own": 77,
+      "curator": 77,
+      "tracking": 29
     },
     {
       "key": "custom_ring_transfer_entry_4_in8_w4_s8",

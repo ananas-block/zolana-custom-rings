@@ -145,7 +145,7 @@ impl<S: TransactionSource> Hub<S> {
         if let Some(step) = relay.stored(&relay_id).await? {
             return Ok(step);
         }
-        // 2. The config names the key its delegate and escrows to the auditor key held here.
+        // 2. The config names the key its delegate and the auditor key held here.
         let config = shared.source.ring_config(ring).await?;
         let config = config
             .filter(|config| config.delegate == Some(delegate))
@@ -225,7 +225,6 @@ mod tests {
     use spr_client::ComputeBudgetConfig;
     use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
-    use zeroize::Zeroizing;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
         AuthorityTransferRequest, ReadTarget, RelayProofInputs, RelayRail, SignedRequest,
@@ -274,7 +273,7 @@ mod tests {
                     data: vec![21],
                 },
                 budget: ComputeBudgetConfig::new(400_000),
-                co_signer: None,
+                co_signers: Vec::new(),
                 signers: vec![delegate],
             })
         }
@@ -305,7 +304,6 @@ mod tests {
                     Vec::new(),
                 ),
                 tx_viewing_key,
-                audit_ephemeral_key: Zeroizing::new([0; 32]),
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 interface_transfer_accounts: Vec::new(),

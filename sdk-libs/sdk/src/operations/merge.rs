@@ -57,7 +57,7 @@ pub struct CustomRingMerge {
     first_nullifier: [u8; 32],
 }
 
-/// The longest prefix of `inputs` whose keyed merge fits one transaction, compact padding publishes nothing.
+/// The longest prefix of `inputs` whose merge fits one transaction, compact padding publishes nothing.
 #[must_use]
 pub struct FittedMerge<'a, K: ?Sized> {
     pub ring: CustomRing,
@@ -68,7 +68,7 @@ pub struct FittedMerge<'a, K: ?Sized> {
     pub payer: Address,
 }
 
-impl<K: ShieldedKeys + ?Sized> FittedMerge<'_, K> {
+impl<K: ShieldedKeys + MergeSeedHolder + ?Sized> FittedMerge<'_, K> {
     /// The size refusal of the shortest mergeable prefix when none fits.
     pub async fn prepare(
         self,
@@ -76,11 +76,24 @@ impl<K: ShieldedKeys + ?Sized> FittedMerge<'_, K> {
     ) -> Result<PreparedCustomRingMerge, RingError> {
         let config = self.ring.require_config(rpc).await?;
         let budget = send_budget(InstructionTag::Merge, None);
+        let zero_key = self
+            .inputs
+            .first()
+            .is_some_and(|input| input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY);
         let mut count = self.inputs.len();
         loop {
-            let prepared = CustomRingMerge::new(self.ring, self.inputs[..count].to_vec(), None)?
-                .with_output_tree_id(self.output_tree_id)
-                .encrypt(self.keys)?;
+            let merge = CustomRingMerge::new(self.ring, self.inputs[..count].to_vec(), None)?
+                .with_output_tree_id(self.output_tree_id);
+            let prepared = match zero_key {
+                true => merge.encrypt_zero_key(
+                    self.keys,
+                    &ShieldedAddress {
+                        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+                        ..self.keys.address()?
+                    },
+                )?,
+                false => merge.encrypt(self.keys)?,
+            };
             let instruction =
                 prepared.preview_instruction(self.proof_input, self.payer, &config)?;
             match check_transaction_size(&self.payer, &instruction, budget) {
@@ -198,6 +211,14 @@ impl PreparedCustomRingMerge {
 
     pub const fn ring(&self) -> CustomRing {
         self.ring
+    }
+
+    /// Compact padding publishes no nullifier.
+    pub fn published_inputs(&self) -> usize {
+        self.inputs()
+            .iter()
+            .filter(|input| !input.is_compact())
+            .count()
     }
 
     pub fn inputs(&self) -> &[SppProofInputUtxo] {
@@ -562,6 +583,7 @@ impl MergeRelay {
             intent: RelayIntent::Merge {
                 proof_inputs: ProofInputBytes::new(proof_inputs),
             },
+            co_signers: Vec::new(),
         }))
     }
 }

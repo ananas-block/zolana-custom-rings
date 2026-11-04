@@ -11,7 +11,6 @@ use spr_transaction::{
     instructions::transact::SppProofInputs, utxo::SppProofInputUtxo, Mint, SppProofOutputUtxo,
     TransactionError,
 };
-use zeroize::Zeroizing;
 use zolana_ring_client::AuditStreamSeal;
 use zolana_ring_transaction::RingOutputRail;
 
@@ -28,12 +27,10 @@ pub(crate) struct SealedAudit {
     pub records: Vec<[u8; AUDIT_RECORD_LEN]>,
     /// One per slot under `has_data`, else none.
     pub tails: Vec<[u8; DATA_TAIL_LEN]>,
-    eph_sk: Zeroizing<[u8; 32]>,
 }
 
 pub(crate) struct PresealedAudit {
     pub message: MessageData,
-    pub eph_sk: Zeroizing<[u8; 32]>,
 }
 
 pub(super) struct AuditSeal<'a> {
@@ -42,13 +39,6 @@ pub(super) struct AuditSeal<'a> {
     pub flags: AuditLayout,
     pub inputs: &'a SppProofInputs,
     pub auditor: &'a X25519Pubkey,
-}
-
-impl SealedAudit {
-    /// The secret opens the stream with the auditor public key alone.
-    pub(crate) fn ephemeral_secret(&self) -> &Zeroizing<[u8; 32]> {
-        &self.eph_sk
-    }
 }
 
 impl AuditSeal<'_> {
@@ -65,6 +55,7 @@ impl AuditSeal<'_> {
         let sealed = AuditStreamSeal {
             layout: self.layout,
             tx_viewing_key: self.rail.tx_viewing_key(),
+            salt: &self.rail.salt(),
             real_inputs: real_input_count(&self.inputs.input_utxos)?,
             evidence: self.evidence()?,
             records,
@@ -77,7 +68,6 @@ impl AuditSeal<'_> {
             envelope: sealed.envelope,
             records: sealed.records,
             tails: sealed.tails,
-            eph_sk: sealed.ephemeral_sk,
         })
     }
 
@@ -200,7 +190,6 @@ impl PresealedAudit {
             envelope: message.envelope.to_vec(),
             records,
             tails,
-            eph_sk: self.eph_sk,
         })
     }
 }
@@ -237,7 +226,6 @@ impl AuditSection<'_> {
                 .ok_or(TransactionError::NoInputs)?
                 .nullifier(),
             tx_viewing_sk: self.rail.tx_viewing_key().secret_bytes(),
-            eph_sk: self.sealed.eph_sk.clone(),
             auditor_pk: *self.auditor,
             salt: self.rail.salt(),
             layout: self.sealed.flags.value(),

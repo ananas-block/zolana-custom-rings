@@ -421,6 +421,20 @@ impl Chain {
         .with(TRACKING, tracking.account())
     }
 
+    /// One tag on every row, a test of a salt names the tag it hashes to.
+    pub(crate) fn with_tracking_tag(
+        self,
+        addresses: &[ShieldedAddress],
+        list_tag: [u8; 32],
+    ) -> Self {
+        let tracking = Arc::new(TrackingFixture::tagged(addresses, list_tag));
+        Self {
+            tracking: Some(Arc::clone(&tracking)),
+            ..self
+        }
+        .with(TRACKING, tracking.account())
+    }
+
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
     pub(crate) fn client(self) -> RingClient<Chain, Chain> {
         self.client_on(ProofDataSource::Prover)
@@ -669,6 +683,10 @@ impl TrackingFixture {
 
     /// Records in leaf order, each owner's own key.
     fn of(addresses: &[ShieldedAddress]) -> Self {
+        Self::tagged(addresses, [0x06; 32])
+    }
+
+    fn tagged(addresses: &[ShieldedAddress], list_tag: [u8; 32]) -> Self {
         let mut members: Vec<([u8; 32], ShieldedAddress)> = addresses
             .iter()
             .map(|address| {
@@ -695,7 +713,7 @@ impl TrackingFixture {
                 ct_hash: [0x05; 32],
                 viewing_u: address.viewing_pubkey.u(),
                 revision: 1,
-                list_tag: [0x06; 32],
+                list_tag,
             });
         }
         Self {

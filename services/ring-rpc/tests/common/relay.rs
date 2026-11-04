@@ -41,8 +41,10 @@ const OWNER_SEED: [u8; 32] = [5; 32];
 #[derive(Default)]
 pub struct RecordingProver {
     pub requests: Mutex<Vec<(Address, Option<[u8; 64]>)>>,
-    /// Named as a signer on every proven transfer.
-    pub co_signer: Option<Address>,
+    /// Named as signers on every proven transfer, absent reads the relay's parties.
+    pub co_signers: Option<Vec<Address>>,
+    /// The next proven transfer's data, a frame past one transaction.
+    pub frame: Mutex<Option<Vec<u8>>>,
 }
 
 #[async_trait]
@@ -64,14 +66,19 @@ impl RelayProver for RecordingProver {
             RelayPayload::Merge(_) => (Vec::new(), vec![1, 2, 3]),
             RelayPayload::Enroll(_) => panic!("the relay builds an enrollment itself"),
         };
+        let co_signers = self
+            .co_signers
+            .clone()
+            .unwrap_or_else(|| request.parties.co_signers.clone());
         let accounts = core::iter::once(AccountMeta::new(request.parties.fee_payer, true))
             .chain(
                 signers
                     .iter()
-                    .chain(&self.co_signer)
+                    .chain(&co_signers)
                     .map(|signer| AccountMeta::new_readonly(*signer, true)),
             )
             .collect();
+        let data = self.frame.lock().expect("frame").take().unwrap_or(data);
         Ok(ProvenRelay {
             instruction: Instruction {
                 program_id: request.ring,
@@ -79,7 +86,7 @@ impl RelayProver for RecordingProver {
                 data,
             },
             budget: ComputeBudgetConfig::new(400_000),
-            co_signer: self.co_signer,
+            co_signers,
             signers,
         })
     }
@@ -241,7 +248,6 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
             }],
         ),
         tx_viewing_key,
-        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
         inputs: vec![spend],
         outputs: vec![SppProofOutputUtxo {
             asset: Mint::SOL,
@@ -288,6 +294,7 @@ pub fn deposit_request(
         intent: RelayIntent::Deposit {
             proof_inputs: ProofInputBytes::new(deposit.encode().expect("encode")),
         },
+        co_signers: Vec::new(),
     }
 }
 
@@ -314,6 +321,7 @@ pub fn signed_request(quote: RelayQuote, proof_inputs: &RelayProofInputs) -> Pre
                 token_account_setup: Vec::new(),
             },
         },
+        co_signers: Vec::new(),
     }
 }
 

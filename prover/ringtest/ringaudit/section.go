@@ -52,7 +52,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 		slots[i] = input.OpenInput(api)
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: slots[i].Utxo})
 	}
-	stream := c.SealStream(api, rc, c.Shape, opened, audit.SpentInputs{Slots: slots, Count: count, Entries: c.Entries})
+	stream := c.SealStream(api, rc, envelope, c.Shape, opened, audit.SpentInputs{Slots: slots, Count: count, Entries: c.Entries})
 	statement := append(envelope.Head(c.AuditWires, stream, shared.AuditStatementDomain),
 		stream.NoSpend, c.OutputCount, opened.OutputChain, stream.RecordChain, stream.TailChain, c.InputCount)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
@@ -157,13 +157,13 @@ func (a Audit) Seal(t testing.TB, p Plaintexts) Stream {
 	plaintext := append(slices.Clone(p.Envelope), make([]byte, ranges.RecordOffset(0)-len(p.Envelope))...)
 	plaintext = append(plaintext, slices.Concat(p.Records...)...)
 	plaintext = append(plaintext, slices.Concat(p.Tails...)...)
-	return Stream{Ranges: ranges, Ciphertext: a.Keys.StreamCiphertext(t, plaintext, shared.AuditEncInfo)}
+	return Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt)}
 }
 
 // Open decrypts a stream the auditor read, the keystream is the zero plaintext's ciphertext.
 func (k Keys) Open(t testing.TB, stream Stream) []byte {
 	t.Helper()
-	keystream := k.StreamCiphertext(t, make([]byte, len(stream.Ciphertext)), shared.AuditEncInfo)
+	keystream := k.TransferCiphertext(t, make([]byte, len(stream.Ciphertext)), stream.Salt)
 	plaintext := make([]byte, len(keystream))
 	for i := range plaintext {
 		plaintext[i] = keystream[i] ^ stream.Ciphertext[i]

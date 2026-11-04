@@ -5,7 +5,7 @@ use zolana_ring_policy::{AssetLimitsError, PolicyTableError, RuleTableError, Sou
 
 macro_rules! ring_errors {
     ($($variant:ident = $code:literal => $message:literal,)*) => {
-        /// From 8100 clear of SPP, pinned by `error_codes_are_stable`, no retired code reused.
+        /// From 8100 clear of SPP, pinned by `error_codes_are_stable`.
         #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
         #[repr(u32)]
         pub enum CustomRingError {
@@ -20,30 +20,17 @@ ring_errors! {
     HashingFailed = 8102 => "hashing failed",
     InvalidShieldedPoolProgram = 8103 => "shielded pool program account is invalid",
     MissingRingAuth = 8104 => "ring auth account is missing from the forwarded account list",
-    // 8105 and 8106 retired.
     UnauthorizedAuthority = 8107 => "signer is not the configured ring authority",
     InvalidAuditorPubkey = 8108 => "auditor public key is not allowed",
-    // 8109 and 8110 retired.
     InvalidSystemProgram = 8111 => "system program account is invalid",
-    // 8112 retired.
     UnsupportedCircuit = 8113 => "circuit selector is not supported by the ring",
     UnauthorizedInitializer = 8114 => "authority is not the program upgrade authority",
     TooManyAccounts = 8115 => "forwarded account list exceeds the CPI account limit",
-    // 8116 to 8118 retired.
-    // 8119 retired.
-    // 8120 to 8122 retired.
-    // 8123 retired.
-    // 8124 and 8125 retired.
     InvalidListId = 8126 => "list is unknown",
-    // 8127 retired.
-    // 8128 retired, an empty policy table is valid.
-    // 8129 and 8130 retired.
-    // 8131 to 8133 retired.
     InvalidSource = 8134 =>
         "policy sources do not match the referenced lists or name a second curator",
     InvalidCuratorRegistry = 8135 =>
         "curator member registry account is not an initialized member registry",
-    // 8136 to 8139 retired.
     InvalidPolicyRules = 8140 => "policy rules do not decode to a table the circuit enforces",
     PolicyGenerationOverflow = 8141 => "policy generation overflows",
     PolicyOnAuditOnlyRing = 8142 => "an audit-only ring takes no policy",
@@ -52,52 +39,31 @@ ring_errors! {
     InvalidCoSignerScope = 8145 => "co-signer scope must be a nonzero subset of the scope bits",
     InvalidCoSigner = 8146 => "co-signer address is invalid",
     InvalidCoSignerThresholds = 8147 => "co-signer thresholds exceed the table or repeat a mint",
-    // 8148 and 8149 retired.
     DelegateDisabled = 8150 => "the ring has no delegate",
     UnauthorizedDelegate = 8151 => "the delegate must sign",
     DelegatePublicLeg = 8152 => "a delegate move takes no deposit leg",
     DelegateAlreadySet = 8153 => "the delegate is permanent",
-    // 8154 to 8156 retired.
-    // 8157 retired.
-    // 8158 and 8159 retired.
-    // 8160 to 8165 retired.
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
-    // 8167 retired.
-    // 8168 and 8169 retired.
-    // 8170 retired.
-    // 8171 retired.
-    // 8172 retired.
     MissingFundingSigner = 8173 => "forwarded funding account must sign on entry",
     InvalidRingMode = 8174 => "the ring mode is unknown",
-    // 8175 retired.
-    // 8176 retired.
     InvalidAnonymousOutput = 8177 => "an anonymous ring output must carry a zero owner tag",
     InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run and the co-signer, and no owner run on the entry key",
     InvalidMergeDisclosure = 8179 =>
         "the merge disclosure does not match the ring mode or the auditor key",
     InvalidDepositData = 8180 => "forwarded deposit data is invalid",
-    // 8181 to 8191 retired.
     MissingOwnerSigner = 8192 => "forwarded owner signer must sign on entry",
-    // 8193 to 8198 retired.
     MergeDisclosureWidth = 8199 => "the merge disclosure field count does not match the merge width",
     RingTransactLength = 8200 => "the compact transact data length disagrees with its flags and shape",
     RingShapeUnkeyed = 8201 => "no audit key or SPP rail key serves the shape on the rail",
     FlagNotAllowed = 8202 => "a transact flag the ring mode or policy forbids",
-    // 8203 to 8205 retired.
-    // 8206 and 8207 retired.
     OwnerSignerCount = 8208 => "the owner run is empty under a policy or exceeds the key's signer slots",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
     ValueOutsideMask = 8211 => "the list value leaves its mask or the mask is zero",
-    // 8212 retired.
-    // 8213 retired.
     AuthorityBatchTooLarge = 8214 => "pending and authority writes exceed one batch",
-    // 8215 and 8216 retired.
     PolicyNotSet = 8217 => "the policy ring has no policy yet",
     InvalidSppProofPoint = 8218 => "the compressed SPP proof point does not decompress",
-    // 8219 retired.
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
-    // 8222 and 8223 retired.
     DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",
     ZeroPublicLegAmount = 8225 => "a public leg moves no amount",
     TooManyPublicAssets = 8226 => "the public legs name more assets than the public slots",
@@ -106,11 +72,8 @@ ring_errors! {
     MissingPolicyProof = 8229 => "a policy ring transfer carries no policy proof",
     UnexpectedPolicyProof = 8230 => "an audit-only ring transfer carries a policy proof",
     CoSignerIsOwner = 8231 => "dual control needs a co-signer other than the owner",
-    // 8232 retired.
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
-    // 8235 and 8236 retired.
-    // 8237 retired.
     InvalidRingProofPoint = 8238 => "a ring proof point does not decompress",
     ThresholdsWithoutWithdrawals = 8239 => "co-signer thresholds need the withdrawal scope",
     UnexpectedMemberRegistryRoot = 8240 => "the statement binds no member registry root",
@@ -118,7 +81,6 @@ ring_errors! {
     InvalidSettlementAccounts = 8242 => "settlement accounts do not match the public legs",
     TooManyPublicLegs = 8243 => "too many public legs",
     InvalidAuditedDeposit = 8244 => "audited deposit does not wrap an SPP deposit",
-    // 8245 retired.
     AnonymousExitDestinationsDiffer = 8246 =>
         "all withdrawals of an anonymous spend must name the same destination key",
     AnonymousExitTokenAccountShared = 8247 =>
@@ -129,15 +91,11 @@ ring_errors! {
         "an anonymous SPL withdrawal's token account address must be off the ed25519 curve",
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
-    AnonymousRingDataNotZero = 8251 => "an anonymous ring merge output carries ring data",
-    // 8252 retired.
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
-    // 8254 and 8256 retired.
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
-    ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
     ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
@@ -147,8 +105,6 @@ ring_errors! {
     InvalidRingPolicy = 8300 => "ring policy account is invalid",
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
-    // 8303 to 8306 retired.
-    // 8350 retired.
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
@@ -161,6 +117,13 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
+    InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
+    FrameLength = 8521 => "frame length is zero or exceeds one inner create",
+    UnauthorizedFrameWriter = 8522 => "the signer is not the frame buffer writer",
+    FrameDigestMismatch = 8523 => "the frame does not match the signed digest",
+    FrameWriteOutOfRange = 8524 => "the write falls outside the frame",
+    UnsupportedBufferedTag = 8525 => "the frame's tag does not settle from a buffer",
+    FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
 }
 
 impl From<CustomRingError> for ProgramError {

@@ -57,16 +57,11 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
       return 3 * ACCOUNT_UNITS + POLICY_UNITS;
     case RingInstructionTag.updatePolicy:
       return POLICY_UNITS;
-    case RingInstructionTag.legacyTransact:
-    case RingInstructionTag.legacyDelegateTransact:
     case RingInstructionTag.transfer:
     case RingInstructionTag.merge:
     case RingInstructionTag.authorityTransfer:
-    case RingInstructionTag.historicalTransfer:
-    case RingInstructionTag.historicalAuthorityTransfer:
-    case RingInstructionTag.historicalMerge:
-    case RingInstructionTag.historicalDeposit:
     case RingInstructionTag.deposit:
+    case RingInstructionTag.settleBuffered:
       return PROOF_UNITS;
     default:
       return ACCOUNT_UNITS;

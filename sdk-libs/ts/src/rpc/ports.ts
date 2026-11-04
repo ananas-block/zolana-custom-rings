@@ -161,7 +161,6 @@ export interface RingProver {
 export type RingMergeClient = TreeContext &
   BlockhashProvider &
   Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getStorageMemberOpenings"> &
   Pick<MergeAssembler, "proveMerge"> &
   RingProver;
 

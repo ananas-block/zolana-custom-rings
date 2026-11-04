@@ -63,7 +63,6 @@ pub struct AuditedUtxo {
     pub nullifier_pk: [u8; 32],
     /// `hash_bytes(mint)`.
     pub asset: [u8; 32],
-    /// `None` on a historical frame until the asset registry knows the asset.
     pub mint: Option<Address>,
     pub amount: u64,
     pub blinding: [u8; 32],
@@ -161,34 +160,11 @@ pub enum OutputPayloadErrorKind {
     RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// No held asset rebuilds a version 3 delivered body.
-    UnknownAsset,
-    /// The reader holds no key to rebuild a version 3 key escrow slot.
-    EscrowPending,
 }
 
 impl AuditedTransaction {
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
         self.outputs.iter().filter_map(AuditedOutput::created)
-    }
-
-    /// A registry refresh may name a historical frame's mint.
-    pub fn has_unknown_assets(&self) -> bool {
-        let outputs = self
-            .outputs
-            .iter()
-            .filter_map(|output| output.opening.utxo())
-            .map(|utxo| utxo.mint);
-        let inputs = self
-            .inputs
-            .iter()
-            .filter_map(|input| input.opening.default_input())
-            .map(|input| input.utxo.mint);
-        outputs.chain(inputs).any(|mint| mint.is_none())
-            || self
-                .payload_errors
-                .iter()
-                .any(|error| error.kind == OutputPayloadErrorKind::UnknownAsset)
     }
 }
 

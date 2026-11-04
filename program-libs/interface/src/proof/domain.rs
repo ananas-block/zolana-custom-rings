@@ -43,16 +43,6 @@ pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
 pub const LIST_SALT: u32 = 0x4352_5053;
 /// `"CRPT"`
 pub const LIST_TAG: u32 = 0x4352_5054;
-/// `"CRPL"`
-pub const LIST_POSITION: u32 = 0x4352_504c;
-/// `"CRPV"`
-pub const LIST_LEAF: u32 = 0x4352_5056;
-/// `"CRPU"`
-pub const LIST_LEAF_SALT: u32 = 0x4352_5055;
-/// `"CRPQ"`
-pub const LIST_WRITE: u32 = 0x4352_5051;
-/// `"CRPA"`
-pub const APPLY_LIST: u32 = 0x4352_5041;
 
 /// `"CRTX"`
 pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
@@ -72,7 +62,7 @@ pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
 }
 
-/// `Poseidon(CRPS, nullifier_secret, ring_id)`, a holder reads the owner's private list position in one ring and never the secret.
+/// `Poseidon(CRPS, nullifier_secret, ring_id)`, a holder reads the owner's salted record key in one ring and never the secret.
 pub fn list_salt(nullifier_secret: &[u8; 32], ring_id: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret, ring_id])
 }

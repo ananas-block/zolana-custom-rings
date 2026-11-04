@@ -10,8 +10,7 @@ use spr_interface::{
 
 use crate::{CustomRingError, SYSTEM_PROGRAM_ID};
 
-/// The payer, the co-signer and the exit destination.
-pub const ANONYMOUS_PARTIES: usize = 3;
+pub const ANONYMOUS_PARTIES: usize = 2 + crate::cosign::MAX_CO_SIGNERS;
 
 /// The recipient in a SOL withdrawal's settlement group.
 const SOL_WITHDRAWAL_RECIPIENT: usize = 1;
@@ -54,7 +53,7 @@ pub trait SettlementAccount {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnonymousParties<'a> {
     pub payer: &'a [u8; 32],
-    pub co_signer: Option<&'a [u8; 32]>,
+    pub co_signers: &'a [Address],
     pub exit_destination: Option<&'a [u8; 32]>,
 }
 
@@ -175,11 +174,16 @@ impl AnonymousParties<'_> {
     pub fn identities(&self) -> Result<[[u8; 32]; ANONYMOUS_PARTIES], HasherError> {
         let identity =
             |party: Option<&[u8; 32]>| party.map_or(Ok([0u8; 32]), solana_owner_identity);
-        Ok([
-            identity(Some(self.payer))?,
-            identity(self.co_signer)?,
-            identity(self.exit_destination)?,
-        ])
+        if self.co_signers.len() > crate::cosign::MAX_CO_SIGNERS {
+            return Err(HasherError::InvalidNumFields);
+        }
+        let mut identities = [[0u8; 32]; ANONYMOUS_PARTIES];
+        identities[0] = identity(Some(self.payer))?;
+        for (slot, co_signer) in identities[1..].iter_mut().zip(self.co_signers) {
+            *slot = identity(Some(co_signer.as_array()))?;
+        }
+        identities[ANONYMOUS_PARTIES - 1] = identity(self.exit_destination)?;
+        Ok(identities)
     }
 }
 

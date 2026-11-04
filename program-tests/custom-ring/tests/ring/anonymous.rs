@@ -44,7 +44,7 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
     );
     let text = merged(&refused);
     assert!(text.contains("--fee-payer-keypair"), "{text}");
-    EnrollAddresses {
+    EnrollOwners {
         ring,
         owners: &[&project.demo_sender()?, &recipient],
         env: &env,
@@ -118,7 +118,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     assert_eq!(config.mode, RingMode::Anonymous);
     let sender_keys = &env.sender.keypair;
     let recipient_keys = &env.recipient.keypair;
-    EnrollAddresses {
+    EnrollOwners {
         ring,
         owners: &[sender_keys, recipient_keys],
         env: &env,
@@ -144,6 +144,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
         let next = deposit
             .viewing_history()?
@@ -260,7 +261,6 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
 
     // 4. The auditor reads the hidden sender, its inputs and every output's asset and amount.
     let audited = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk).with_mode(RingMode::Anonymous),
         auditor: &auditor,
         signature: indexed.tx_signature,
@@ -277,16 +277,19 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
             .all(|utxo| utxo.mint == Some(SOL_MINT)),
         "the disclosure names every output's asset"
     );
-    assert_eq!(
-        audited.sender.map(|sender| sender.owner_key),
-        Some(sender_keys.signing_pubkey().as_ed25519()?),
+    let spent = AuditedSpends {
+        ring,
+        auditor: &auditor,
+        owners: &[sender_keys.pubkey()],
+        audited: &audited,
+    }
+    .notes(&env)?;
+    let sender_key = sender_keys.signing_pubkey().as_ed25519()?;
+    assert!(
+        spent.iter().all(|note| note.owner_key == sender_key),
         "the auditor names the hidden sender"
     );
-    let mut input_amounts: Vec<u64> = audited
-        .inputs
-        .iter()
-        .filter_map(|input| input.opening.opened().map(|opening| opening.amount))
-        .collect();
+    let mut input_amounts: Vec<u64> = spent.iter().map(|note| note.amount).collect();
     input_amounts.sort_unstable();
     assert_eq!(input_amounts, [RING_DEPOSIT_B, RING_DEPOSIT_A]);
 
@@ -435,7 +438,6 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
             nullifier_key: recipient_keys.nullifier_key.clone(),
             input_tree: env.tree,
             output_tree: env.tree,
-            co_signer: None,
         },
     );
     land(&env, merge, payer, &[])?;
@@ -502,7 +504,7 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
 
     // 1. A separate depositor funds the hidden note, the owner signs nothing.
     let sender = &env.sender.keypair;
-    EnrollAddresses {
+    EnrollOwners {
         ring,
         owners: &[sender, &env.recipient.keypair],
         env: &env,
@@ -566,18 +568,25 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     }
     .land(&env)?;
     let audited = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(config.mode),
         auditor: &auditor,
         signature: landed.indexed.tx_signature,
     }
     .run(&env)?;
-    let opened = audited
-        .sender
-        .context("an anonymous transfer discloses its sender to the auditor")?;
-    assert_eq!(
-        opened.owner_key,
-        sender.signing_pubkey().confidential_view_tag()?,
+    let spent = AuditedSpends {
+        ring,
+        auditor: &auditor,
+        owners: &[sender.pubkey()],
+        audited: &audited,
+    }
+    .notes(&env)?;
+    let screened = sender.signing_pubkey().confidential_view_tag()?;
+    ensure!(
+        !spent.is_empty(),
+        "an anonymous transfer discloses its sender to the auditor"
+    );
+    assert!(
+        spent.iter().all(|note| note.owner_key == screened),
         "the auditor opens the screened owner"
     );
     Ok(())

@@ -422,7 +422,7 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
     .expect("rewrite the table");
     let after: RingPolicy = ring.read(&policy_pda());
     assert_eq!(after.policy_hash, before.policy_hash);
-    assert_eq!(after.generation(), before.generation() + 1);
+    assert_eq!(after.generation(), before.generation() + 2);
 }
 
 #[test]
@@ -743,7 +743,7 @@ fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
 }
 
 #[test]
-fn retired_and_unknown_tags_are_refused() {
+fn unknown_tags_are_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let instruction = |data: Vec<u8>| Instruction {
         program_id: PROGRAM,

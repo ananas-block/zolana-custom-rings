@@ -23,7 +23,9 @@ use super::{
 };
 use crate::{
     limits::Outflows,
-    records::{check_output_key, PoolRead, TrackingPoolRead, TrackingRead},
+    records::{
+        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
+    },
     request::{
         OwnerEntry, PolicyParams, PolicyTable, PolicyWithdrawalRequest, PoolEntry, RecordPools,
         TrackingParams,
@@ -340,7 +342,17 @@ impl PolicyRead<'_> {
             let (Some(address), Some(member)) = (output.owner_address, owner) else {
                 continue;
             };
-            check_output_key(pool.record(member), &address.nullifier_pubkey, slot_index)?;
+            let row = pool.record(member);
+            check_output_key(row, &address.nullifier_pubkey, slot_index)?;
+            // A spending owner holds every key it ever enrolled.
+            let spends = self
+                .inputs
+                .input_utxos
+                .iter()
+                .any(|input| !input.is_dummy() && input.utxo.owner == address.signing_pubkey);
+            if !spends {
+                check_recipient_viewing_key(row, &address.viewing_pubkey.u(), slot_index)?;
+            }
         }
         Ok(())
     }

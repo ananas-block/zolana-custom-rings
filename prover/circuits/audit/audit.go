@@ -1,6 +1,3 @@
-// Read after shared/envelope.go, shared/derivation.go, shared/utxo.go. Read
-// before audit/layout.go, audit/record.go, transfer/transfer.go.
-
 // Package audit proves what a ring auditor reads from a ring transfer.
 package audit
 
@@ -22,7 +19,6 @@ type AuditWires struct {
 	// RingProgramID is hash_bytes(ring program address), the id SPP binds every ring output to.
 	RingProgramID frontend.Variable
 	TxViewingSk   [32]frontend.Variable
-	EphSk         [32]frontend.Variable
 	AuditorPk     [32]frontend.Variable
 	Salt          [16]frontend.Variable
 	Layout        frontend.Variable
@@ -147,7 +143,7 @@ type Stream struct {
 }
 
 // SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
-func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape StreamShape, opened Opened, spent SpentInputs) Stream {
+func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Envelope, shape StreamShape, opened Opened, spent SpentInputs) Stream {
 	ranges := shape.Ranges()
 	evidence := spent.evidence(api, rc, ranges)
 	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
@@ -160,7 +156,7 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, shape
 		panic("audit: the stream plaintext differs from its ranges")
 	}
 	// One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
-	sealed := shared.Envelope{Plaintext: plaintext, EphSk: w.EphSk, AuditorPk: w.AuditorPk, Info: shared.AuditEncInfo}.SealStream(api)
+	sealed := shared.Envelope{Plaintext: plaintext, EphSk: w.TxViewingSk, AuditorPk: w.AuditorPk, Info: shared.AuditEncInfo}.SealSalted(api, e.txPk[:], e.salt)
 	return Stream{
 		ranges:      ranges,
 		sealed:      sealed,

@@ -48,11 +48,11 @@ export interface SealedAudit {
   readonly records: readonly Uint8Array[];
   /** One per published slot under `hasData`. */
   readonly tails?: readonly Uint8Array[];
-  /** The proof's input, the caller wipes it once the proof returns. */
+  /** Sent to the relay, the caller wipes it. */
   readonly ephemeralSecret: Bytes32;
 }
 
-/** A fresh ephemeral key per build, one key and nonce serves one plaintext. */
+/** The transaction viewing key and salt seal, a resend under a new salt keeps the keystream apart. */
 export function sealAudit(
   input: Readonly<{
     rail: RingOutputRail;
@@ -69,6 +69,7 @@ export function sealAudit(
     const sealed = sealRingDisclosure({
       layout,
       auditorPublicKey: input.auditor,
+      salt: input.rail.salt,
       disclosure: auditDisclosure({
         txViewingSecret,
         layout,
@@ -192,7 +193,6 @@ export function auditEnvelope(
 ): AuditEnvelopeProofInputs {
   return Object.freeze({
     firstNullifier: input.firstNullifier,
-    ephSk: input.sealed.ephemeralSecret,
     auditorPk: input.auditor.u(),
     salt: input.rail.salt,
     layout: input.sealed.audit,
@@ -204,9 +204,13 @@ export function auditEnvelope(
 export function outputOpenings(
   outputs: readonly ProofOutputUtxo[],
   tree: TreeId,
+  capacity: number,
 ): readonly OutputOpeningProofInput[] {
-  return Object.freeze(
-    outputs.map((output) =>
+  const padding = Array.from({ length: Math.max(0, capacity - outputs.length) }, () =>
+    Object.freeze({ output: zeroSlotOpening(), ...zeroEntryOpening() }),
+  );
+  return Object.freeze([
+    ...outputs.map((output) =>
       Object.freeze({
         output: ringOutputOpening(output, tree),
         ...(output.ownerAddress === undefined
@@ -217,7 +221,8 @@ export function outputOpenings(
             }),
       }),
     ),
-  );
+    ...padding,
+  ]);
 }
 
 /** The spent notes' openings in SPP order, padding past them to the key's input class. */
@@ -281,6 +286,21 @@ function isLive(input: ProofInputUtxo): boolean {
 
 function isDefaultRing(input: ProofInputUtxo): boolean {
   return isLive(input) && input.utxo.ringProgramId === undefined;
+}
+
+function zeroSlotOpening(): RingSlotOpening {
+  return {
+    domain: ZERO_32,
+    treeId: ZERO_32,
+    ownerPkHash: ZERO_32,
+    nullifierPk: ZERO_32,
+    asset: ZERO_32,
+    amount: ZERO_32,
+    blinding: ZERO_32,
+    dataHash: ZERO_32,
+    ringDataHash: ZERO_32,
+    ringProgramId: ZERO_32,
+  };
 }
 
 function zeroEntryOpening(): EntryOpeningProofInput {

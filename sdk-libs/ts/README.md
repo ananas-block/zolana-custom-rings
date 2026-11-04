@@ -88,7 +88,7 @@ it chooses. `createRingTransferSubmission`, `createRingExitSubmission`,
 `send` takes the transport of `createKitRingSubmissionTransport`. A rejected
 proof whose root left its registry proves again under the live root. A spend
 with `inProofOwner` signs inside the proof, spends ring notes only, and only
-the fee payer and a demanded co-signer sign the transaction. Without it each
+the fee payer and each demanded co-signer sign the transaction. Without it each
 input owner signs. A withdrawal creates its recipient's missing associated
 token account in the same transaction. On an anonymous Ring a spend
 takes `anonymous`, the hidden owner's signer and an explicit `reply`. The fee
@@ -105,19 +105,20 @@ To refuse owners on a public list and on a private list, write one deny rule per
 list. One rule over both admits a publicly blocked owner with no private entry.
 
 A `RingAddress` carries the owner's `listSalt`, and the salt is final. A wallet
-holds one salt per Ring, derived from its nullifier secret and the ring id. Every
+holds one salt per Ring, derived from its nullifier secret and the Ring's id. Every
 reader of a published address can compute the owner's private list key on that
-Ring and read its list status there, so publish an address only where that disclosure
-is acceptable.
+Ring and read its list status there, so publish an address only where that
+disclosure is acceptable.
 
 On a ring reading a salted list, a relayed transfer or deposit gives Ring RPC the
 salt of every enrolled owner the policy screens, and Ring RPC can then read those
-owners' list status on every Ring. A transfer names other owners in `listSalts`
+owners' list status on that Ring. A transfer names other owners in `listSalts`
 and Ring RPC derives the sender's from the nullifier key it holds. A deposit
 carries the recipient's.
 
 On an anonymous Ring the transfer proof binds each live recipient slot's
-ciphertext, its recipient and its discovery tag. A wallet finds its notes with
+ciphertext and its recipient, no proof binds a discovery tag. A bad tag costs the
+note its discovery by `fetch`, and `fullScan` still opens it. A wallet finds its notes with
 `AnonymousSync.fetch`, which scans every Ring its `ViewingHistory` names, and
 adds a Ring with `withRing` when a key enrolls. `AnonymousSync.fullScan` reads a
 Ring from its start and uses no tag. `AnonymousWallet` holds the notes, spends,

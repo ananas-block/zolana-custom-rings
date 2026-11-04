@@ -174,7 +174,7 @@ describe("wallet relay", () => {
   });
 
   it("relays a deposit into a key escrow ring with no opening request", async () => {
-    const fixture = await ringFixture({ mode: "confidentialEscrow", records: [] });
+    const fixture = await ringFixture({ mode: "confidential", records: [] });
     const network = walletNetwork(fixture);
     const recipient = ShieldedKeypair.generate().shieldedAddress();
     const approvals: ApprovalRequest[] = [];
@@ -205,7 +205,7 @@ describe("wallet relay", () => {
   });
 
   it("relays an approved merge of the wallet's leased notes with no path or opening request", async () => {
-    const fixture = await ringFixture({ mode: "confidentialEscrow", records: [] });
+    const fixture = await ringFixture({ mode: "confidential", records: [] });
     const network = walletNetwork(fixture);
     const sender = owner(fixture, 3);
     const approvals: ApprovalRequest[] = [];

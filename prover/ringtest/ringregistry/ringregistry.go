@@ -74,31 +74,6 @@ func (l Limits) Wires() [registry.LimitFields]frontend.Variable {
 	return w
 }
 
-// EscrowKey mirrors registry.EscrowKey.
-func EscrowKey(t testing.TB, nullifierPk, ctHash *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, nullifierPk, ctHash)
-}
-
-// Address mirrors registry.Address over the X25519 u.
-type Address struct {
-	RingID, Member, NullifierPk *big.Int
-	ViewingKey                  [32]byte
-	Revision                    uint64
-}
-
-// Hash mirrors registry.Address.Hash.
-func (a Address) Hash(t testing.TB) *big.Int {
-	t.Helper()
-	view0, view1 := a.View()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.AuthorizedAddressDomain), a.RingID, a.Member, a.NullifierPk, view0, view1, new(big.Int).SetUint64(a.Revision))
-}
-
-// View is pack_be of the viewing key.
-func (a Address) View() (view0, view1 *big.Int) {
-	return new(big.Int).SetBytes(a.ViewingKey[:31]), big.NewInt(int64(a.ViewingKey[31]))
-}
-
 // Path mirrors registry.QuadPath.
 type Path struct {
 	Index    uint64

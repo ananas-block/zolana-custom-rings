@@ -101,12 +101,11 @@ func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, 
 
 // view decodes the table, the caller binds it to policy_hash.
 func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
-	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
+	// Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
 		ruleActive: ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
 		sources:    t.readSources(api),
 	}
-	// 2. Every rule decodes once.
 	for i, packed := range t.Rules {
 		d.rules[i] = decodeRule(api, rc, packed)
 	}
@@ -172,23 +171,23 @@ func (s sourceView) owner(api frontend.API, public, salted [NSources]frontend.Va
 }
 
 func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Variable) ruleFields {
-	// 1. The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
+	// The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
 	parts, err := api.Compiler().NewHint(rulePartsHint, len(ruleParts), packed)
 	if err != nil {
 		panic(err)
 	}
 	subject, mode, mask, guard, threshold, alternative := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
+	// Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
 	for _, i := range []int{0, 1, 3, 4} {
 		rc.Check(parts[i], int(ruleParts[i].width))
 	}
-	// 3. Both list masks split into one bit per source slot, bit i marks list i+1.
+	// Both list masks split into one bit per source slot, bit i marks list i+1.
 	listBits, altBits := api.ToBinary(mask, NSources), api.ToBinary(alternative, NSources)
 	recomposed := frontend.Variable(0)
 	for i, part := range ruleParts {
 		recomposed = api.Add(recomposed, api.Mul(parts[i], new(big.Int).Lsh(big.NewInt(1), part.shift)))
 	}
-	// 4. The bounded parts recompose to the hashed row over the integers, no part can alias another.
+	// The bounded parts recompose to the hashed row over the integers, no part can alias another.
 	api.AssertIsEqual(recomposed, packed)
 	is := func(value frontend.Variable, want int) frontend.Variable { return api.IsZero(api.Sub(value, want)) }
 	rule := ruleFields{
@@ -202,7 +201,7 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		listBits:    listBits,
 		altBits:     altBits,
 	}
-	// 5. A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
+	// A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
 	present := is(mode, ModePresent)
 	for i := range rule.admitWeight {
 		inPresent := api.Mul(present, listBits[i])

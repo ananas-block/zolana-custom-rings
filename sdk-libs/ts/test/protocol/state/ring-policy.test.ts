@@ -139,7 +139,7 @@ describe("rule rows", () => {
   });
 
   it("orders a set in slot order", () => {
-    expect(listSet(0b1000_0101)).toEqual([ListId.allow, ListId.frozen, ListId.escrow]);
+    expect(listSet(0b1000_0101)).toEqual([ListId.allow, ListId.frozen, ListId.privateAllow]);
     expect(LIST_IDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
@@ -331,13 +331,13 @@ describe("rule encoding", () => {
   it("lists presences before absences in slot order", () => {
     expect(
       ruleAlternatives(
-        rule("outputOwner", [ListId.frozen, ListId.allow], [ListId.escrow, ListId.block]),
+        rule("outputOwner", [ListId.frozen, ListId.allow], [ListId.privateAllow, ListId.block]),
       ),
     ).toEqual([
       { listId: ListId.allow, mode: "present" },
       { listId: ListId.frozen, mode: "present" },
       { listId: ListId.block, mode: "absent" },
-      { listId: ListId.escrow, mode: "absent" },
+      { listId: ListId.privateAllow, mode: "absent" },
     ]);
     expect(ruleAlternatives(forbid("sender", ListId.frozen))).toEqual([
       { listId: ListId.frozen, mode: "absent" },
@@ -507,10 +507,10 @@ describe("list authorization", () => {
       "authority",
       "authority",
       "member",
-      "reserved",
       "authority",
       "authority",
-      "member",
+      "authority",
+      "authority",
     ]);
   });
 

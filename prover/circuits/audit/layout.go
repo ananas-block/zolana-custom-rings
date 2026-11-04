@@ -1,6 +1,4 @@
 // The program cuts every ciphertext from the layout flags, a flag off the key shifts every frame length.
-//
-// Read after audit/audit.go, before audit/record.go.
 
 package audit
 

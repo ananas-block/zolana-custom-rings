@@ -1,10 +1,8 @@
-//! A SOL withdrawal within the asset record's threshold settles under the exempt bit with no
-//! co-signer, one past it keeps the co-signer, and no frame altered after proving settles.
+//! A SOL withdrawal within the asset record's threshold needs no co-signer.
 
 use super::*;
-use custom_ring_interface::{storage::Revision, RootRead};
+use custom_ring_interface::{cosign::ApprovalMask, storage::Revision, RootRead};
 use custom_ring_sdk::{live_registry, SetCoSigner};
-use solana_instruction::AccountMeta;
 use spr_program::instruction::TransactSolTransferAccounts;
 use spr_test_utils::test_validator_asserts::assert_optional_account_unchanged;
 use zolana_ring_policy::MintPolicy;
@@ -45,6 +43,7 @@ impl<'a> ExemptRing<'a> {
             tier,
         }
         .send(&env.client)?;
+        enroll_actors(env, ring)?;
         let cosigner = env.funded_keypair()?;
         let cosign_admin = RingRoleKeys::of(&env.payer).cosign_admin;
         SendAs {
@@ -57,7 +56,7 @@ impl<'a> ExemptRing<'a> {
             payer: env.payer.pubkey(),
             authority: cosign_admin.pubkey(),
             signer: cosigner.pubkey(),
-            scope: CoSignScope::WITHDRAWALS,
+            scope: CoSignScope::APPROVE_WITHDRAWAL,
         }
         .instruction()?])?;
         let destination = Keypair::new().pubkey();
@@ -156,7 +155,7 @@ impl<'a> ExemptRing<'a> {
         Ok(env.run(transfer.prove(env.client.ring_client())))
     }
 
-    /// The waiver follows the indexer, a record write lands ahead of the index serving it.
+    /// A record write lands ahead of the index the empty mask reads.
     fn prove_exempt(&self, note: &WalletUtxo, amount: u64) -> Result<ProvenRingTransfer> {
         let withdrawal = Withdrawal {
             amount,
@@ -195,46 +194,29 @@ impl<'a> ExemptRing<'a> {
     }
 
     /// The co-signer slot sits after the ring account and its registries.
-    fn co_signer_slot(&self, exempt: bool) -> Result<usize> {
+    fn co_signer_slot(&self) -> Result<usize> {
         let policy = policy_registry(self.ring, self.env)?;
         Ok(1 + policy
-            .root_registries(RootRead::transfer(&policy, exempt))
+            .root_registries(RootRead::transfer(&policy, false))
             .count())
     }
 
-    /// `proven` under the exempt bit it never proved, the co-signer slot gone and the own registry read.
     fn forged_exemption(&self, proven: &ProvenRingTransfer) -> Result<Instruction> {
-        let revision = self.revision()?;
         let mut instruction = self.altered(proven, |data| {
-            data.exempt = true;
-            data.own_revision = Some(revision);
+            data.approval = ApprovalMask::default();
         })?;
         let metas = self.ring.co_signer_metas(self.cosigner.pubkey());
         instruction
             .accounts
             .retain(|meta| metas.iter().all(|dropped| dropped.pubkey != meta.pubkey));
-        if !self.policy {
-            instruction
-                .accounts
-                .insert(1, AccountMeta::new_readonly(self.records()?, false));
-        }
         Ok(instruction)
     }
 
-    /// `proven` with its exempt bit cleared and the co-signer it never proved signing.
     fn cleared_exemption(&self, proven: &ProvenRingTransfer) -> Result<Instruction> {
-        let policy = self.policy;
         let mut instruction = self.altered(proven, |data| {
-            data.exempt = false;
-            if !policy {
-                data.own_revision = None;
-            }
+            data.approval = ApprovalMask::WITHDRAWAL;
         })?;
-        if !policy {
-            let records = self.records()?;
-            instruction.accounts.retain(|meta| meta.pubkey != records);
-        }
-        let slot = self.co_signer_slot(false)?;
+        let slot = self.co_signer_slot()?;
         for (offset, meta) in self
             .ring
             .co_signer_metas(self.cosigner.pubkey())
@@ -290,7 +272,6 @@ impl<'a> ExemptRing<'a> {
             "destination after the withdrawal"
         );
         let audited = AuditLookup {
-            ring: self.ring.program_id(),
             scan: RingScan::new(self.ring.program_id(), self.auditor.pubkey()).with_mode(self.mode),
             auditor: &self.auditor,
             signature,
@@ -310,17 +291,21 @@ impl<'a> ExemptRing<'a> {
         Ok(())
     }
 
-    /// The proof binds the bit, the revision and every leg, each altered after proving fails the pairing.
+    /// The proof binds the mask, the revision and every leg.
     fn within_threshold(&self) -> Result<()> {
         let note = self.note()?;
         let proven = self.prove_exempt(&note, THRESHOLD)?;
-        assert_eq!(proven.co_signer, None, "the waiver removes the co-signer");
+        assert_eq!(
+            proven.co_signers,
+            Vec::new(),
+            "an empty mask demands no co-signer"
+        );
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
-        assert!(data.exempt);
+        assert!(data.approval.is_empty());
         let revision = data
             .own_revision
-            .context("an exempt frame names the own revision")?;
+            .context("a frame under a threshold names the own revision")?;
         assert_eq!(data.policy.is_some(), self.policy);
         let nullifier = data.nullifiers[0];
         let altered_leg = self.altered(&proven, |data| {
@@ -357,7 +342,6 @@ impl<'a> ExemptRing<'a> {
         self.landed(&proven, &[], &withdrawal)
     }
 
-    /// One lamport past the threshold keeps the co-signer, a forged exempt bit fails the pairing.
     fn past_threshold(&self) -> Result<()> {
         let note = self.note()?;
         let mut withdrawal = Withdrawal {
@@ -371,10 +355,13 @@ impl<'a> ExemptRing<'a> {
         }
         withdrawal.cosigner = true;
         let proven = self.prove(&note, &withdrawal)??;
-        assert_eq!(proven.co_signer, Some(self.cosigner.pubkey()));
+        assert_eq!(
+            proven.co_signers.first().copied(),
+            Some(self.cosigner.pubkey())
+        );
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
-        assert!(!data.exempt);
+        assert_eq!(data.approval, ApprovalMask::WITHDRAWAL);
         let nullifier = data.nullifiers[0];
         self.refused(
             self.forged_exemption(&proven)?,
@@ -400,10 +387,13 @@ impl<'a> ExemptRing<'a> {
             cosigner: true,
         };
         let proven = self.prove(&note, &withdrawal)??;
-        assert_eq!(proven.co_signer, Some(self.cosigner.pubkey()));
+        assert_eq!(
+            proven.co_signers.first().copied(),
+            Some(self.cosigner.pubkey())
+        );
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
-        assert!(!data.exempt);
+        assert_eq!(data.approval, ApprovalMask::WITHDRAWAL);
         let nullifier = data.nullifiers[0];
         self.refused(
             self.forged_exemption(&proven)?,

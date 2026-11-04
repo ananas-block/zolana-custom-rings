@@ -60,11 +60,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
         }
         .prepare(ctx.zolana.as_async()),
     )?;
-    let input_count = prepared
-        .inputs()
-        .iter()
-        .filter(|input| !input.is_compact())
-        .count();
+    let input_count = prepared.published_inputs();
     let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
     let merge = RingMergeOperation::new(prepared, proof_input);
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;

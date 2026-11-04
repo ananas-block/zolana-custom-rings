@@ -87,13 +87,11 @@ pinned_codes! {
     AnonymousExitAccountHasData = 8248,
     AnonymousExitTokenAccountOnCurve = 8249,
     AnonymousExitTokenAccountInvalid = 8250,
-    AnonymousRingDataNotZero = 8251,
     OutputBodyLength = 8253,
     OutputCountOutOfRange = 8257,
     InvalidChangeBits = 8258,
     ReplyLength = 8259,
     RecordsRegistryOtherRing = 8266,
-    ViewTagNotCanonical = 8267,
     ChangeTagNotZero = 8268,
     ListNotPolicyReadable = 8255,
     InvalidCoSignerRecord = 8260,
@@ -115,6 +113,13 @@ pinned_codes! {
     InvalidTrackingRegistry = 8502,
     TrackingRootBelowFloor = 8503,
     SaltedSourceOtherTracking = 8504,
+    InvalidFrameBuffer = 8520,
+    FrameLength = 8521,
+    UnauthorizedFrameWriter = 8522,
+    FrameDigestMismatch = 8523,
+    FrameWriteOutOfRange = 8524,
+    UnsupportedBufferedTag = 8525,
+    FramePayerNotWriter = 8526,
 }
 
 #[test]

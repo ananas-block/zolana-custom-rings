@@ -105,8 +105,16 @@ pub struct AnonymousMove<'a> {
     /// The change returns to the sender.
     pub payments: Vec<RingPayment>,
     pub entry: EntrySpend,
+    pub wide_frames: WideFrames,
     /// Read only when the ring demands a co-signer.
     pub co_signer: Option<Address>,
+}
+
+/// A frame past one transaction settles from a buffer only when the caller's send path writes one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WideFrames {
+    Refuse,
+    Buffer,
 }
 
 /// A default-ring spend publishes the hidden owner's key, a move takes one only when allowed.
@@ -141,8 +149,9 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn with_anonymous_signer(self, signer: &'a SigningKey) -> RingTransfer<Anonymous<'a>> {
         RingTransfer {
             ring: self.ring,
-            co_signer: self.co_signer,
+            co_signers: self.co_signers,
             priority_fee: self.priority_fee,
+            buffered: self.buffered,
             rail: Anonymous {
                 owner: self.rail,
                 signer,
@@ -273,7 +282,7 @@ impl<'a> AnonymousMove<'a> {
             self.ring.program_id(),
         )?;
         let transfer = RingTransfer {
-            co_signer: self.co_signer,
+            co_signers: self.co_signer.into_iter().collect(),
             ..RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
                 ring: self.ring,
                 sender: self.sender,
@@ -293,6 +302,10 @@ impl<'a> AnonymousMove<'a> {
                 })
             })?
             .with_shape(shape)
+            .map(|transfer| match self.wide_frames {
+                WideFrames::Buffer => transfer.with_buffered_settlement(),
+                WideFrames::Refuse => transfer,
+            })
     }
 }
 

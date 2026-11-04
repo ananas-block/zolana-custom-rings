@@ -108,7 +108,6 @@ func newFlowSource(api frontend.API, spend Spend, outputs []shared.Output, publi
 // flowsOf attributes the asset's displaced amount over the rows in their constrained order, no prover input selects a share.
 func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Variable) []ownerFlow {
 	flags := s.flagsOf(api, asset)
-	// 1. Every exit and public withdrawal of the asset leaves.
 	leaving := frontend.Variable(0)
 	for o, exit := range s.exits {
 		leaving = api.Add(leaving, api.Mul(flags.outputs[o], exit))
@@ -116,13 +115,12 @@ func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Var
 	for k, public := range s.publicAssets {
 		leaving = api.Add(leaving, api.Mul(api.IsZero(api.Sub(public, asset)), s.gross[k]))
 	}
-	// 2. Each row splits its held funds into a net debit and the part returned to it.
 	split := s.splitOf(api, cmp, flags)
 	flows := split.rows
-	// 3. displaced <= split.kept since split.debit + split.kept = split.held, a zero kept total forces a zero displaced and a divisor of one.
+	// displaced <= split.kept since split.debit + split.kept = split.held, a zero kept total forces a zero displaced and a divisor of one.
 	displaced := api.Sub(cmp.min(api, leaving, split.held), cmp.min(api, leaving, split.debit))
 	divisor := api.Add(split.kept, api.IsZero(split.kept))
-	// 4. Running floors telescope to displaced so charge <= kept, the last floor is displaced itself.
+	// Running floors telescope to displaced so charge <= kept, the last floor is displaced itself.
 	running, previous := frontend.Variable(0), frontend.Variable(0)
 	for j := range flows {
 		share := displaced

@@ -2,19 +2,12 @@ import {
   type RingMemberOpening,
   type RingRecordReader,
   type StorageRoot,
-  type TrackingReader,
 } from "./ports.js";
 import { type PresentRecordOpening } from "./prover/types.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
-import {
-  bytesKey,
-  equalBytes,
-  waitForProjection,
-  ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
+import { equalBytes, waitForProjection } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import { fetchRingPolicy, fetchStorageRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
@@ -23,10 +16,8 @@ import {
   ownerEscrowed,
   verifyRecordPool,
 } from "../protocol/membership/member-opening.js";
-import { verifyTrackingOpening } from "../protocol/membership/tracking.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
-import { newestTrackingRoot } from "./tracking-resolver.js";
 
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &
   Pick<RingRecordReader, "getStorageMemberOpenings">;
@@ -114,48 +105,6 @@ export function readOwnRecords(
     MEMBER_REGISTRY_PROJECTION_ERRORS,
     context,
   );
-}
-
-/** Under key escrow the first recipient with no applied row for its nullifier key is refused. */
-export async function checkEscrowedRecipients(
-  input: Readonly<{
-    client: Pick<ChainReader, "getAccount"> & Pick<TrackingReader, "getTrackingOpenings">;
-    ringProgramId: Address;
-    recipients: readonly ShieldedAddress[];
-  }>,
-  context?: RequestContext,
-): Promise<void> {
-  const { client, ringProgramId } = input;
-  const config = await fetchRingPolicy(client, ringProgramId, context);
-  if (config.mode !== "confidentialEscrow") return;
-  // The zero nullifier key escrows nothing.
-  const recipients = input.recipients.filter(
-    (recipient) => !equalBytes(recipient.nullifierPublicKey, ZERO_NULLIFIER_PK),
-  );
-  if (recipients.length === 0) return;
-  const { root } = await newestTrackingRoot(
-    { client, trackingRegistry: config.tracking, ring: ringProgramId },
-    context,
-  );
-  for (let offset = 0; offset < recipients.length; offset += MAX_RING_MEMBER_BATCH) {
-    const chunk = recipients.slice(offset, offset + MAX_RING_MEMBER_BATCH);
-    const members = chunk.map((recipient) => recipient.signingPublicKey.ownerProofInputHash());
-    const { openings } = await client.getTrackingOpenings(
-      { registry: config.tracking, members, expectedRoot: root },
-      context,
-    );
-    chunk.forEach((recipient, at) => {
-      const member = members[at];
-      const opening = openings[at];
-      if (member === undefined || opening === undefined)
-        throw new RingError("RING_TRACKING_INVALID", { details: { reason: "openings" } });
-      const row = verifyTrackingOpening(opening, root, member);
-      if (row === undefined || !equalBytes(row.nullifierPk, recipient.nullifierPublicKey))
-        throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", {
-          details: { owner: bytesKey(member) },
-        });
-    });
-  }
 }
 
 /** One opening per member in member order, each verified against `root`, Rust `RecordReads::read`. */

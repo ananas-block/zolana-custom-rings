@@ -5,9 +5,7 @@ use spr_transaction::OutputContext;
 use super::*;
 use crate::{
     AuditedDefaultInput, InputOpening, OutputPayloadError,
-    OutputPayloadErrorKind::{
-        self, Commitment, Disclosure, EscrowPending, Frame, RecipientKey, UnknownAsset,
-    },
+    OutputPayloadErrorKind::{self, Commitment, Disclosure, Frame, RecipientKey},
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -608,17 +606,9 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     .expect("vector");
     // A new kind fails to compile here, `kinds` and the vector must then name it.
     let named = |kind: OutputPayloadErrorKind| match kind {
-        Frame | Disclosure | RecipientKey | Commitment | UnknownAsset | EscrowPending => kind,
+        Frame | Disclosure | RecipientKey | Commitment => kind,
     };
-    let kinds = [
-        Frame,
-        Disclosure,
-        RecipientKey,
-        Commitment,
-        UnknownAsset,
-        EscrowPending,
-    ]
-    .map(named);
+    let kinds = [Frame, Disclosure, RecipientKey, Commitment].map(named);
     assert_eq!(serde_json::to_value(kinds).unwrap(), vector.kinds);
     let slots = [(2, Commitment), (5, RecipientKey)]
         .map(|(slot_index, kind)| DecryptedPayloadError { slot_index, kind });
@@ -843,6 +833,7 @@ fn a_relay_request_serializes_to_the_shared_vector() {
             owner_signature: Signature::from([7; 64]).into(),
             token_account_setup: Vec::new(),
         },
+        co_signers: Vec::new(),
     };
     assert_eq!(serde_json::to_string(&request).expect("json"), vector.wire);
     let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");
@@ -1015,7 +1006,6 @@ fn relay_proof_inputs() -> RelayProofInputs {
         nullifier_key: NullifierKey::from_secret(*owner.nullifier_key.secret()),
         sender,
         tx_viewing_key,
-        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
         inputs: vec![
             spend,
             SppProofInputUtxo::dummy_with_blinding([27; 32], 4).expect("dummy"),

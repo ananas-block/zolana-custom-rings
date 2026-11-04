@@ -1,10 +1,3 @@
-// Defines how enrollments sit in a ring's tracking tree, apart from its policy
-// registry. Every circuit that reads an owner's enrolled key opens one of these
-// leaves under the tracking root.
-//
-// Read after registry/registry.go. Read before registry/apply_enrollments.go,
-// policy/record_pool.go, merge.go.
-
 package registry
 
 import (

@@ -1,4 +1,4 @@
-/** Ring notes of scheme 10 and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
+/** Ring notes of scheme 13 and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
 import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
 import {
@@ -10,6 +10,7 @@ import {
   PAGE_LIMIT,
   ZERO_NULLIFIER_PK,
 } from "@heliuslabs/zolana/internal";
+import { slotTag } from "../crypto/derivation/ring-stream.js";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -25,7 +26,6 @@ import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transact
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
-import { openRingDelivery } from "../protocol/historical/v3/delivered-body.js";
 import { registeredMint, spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
@@ -35,10 +35,6 @@ import { answered, exactlyOne, unseen } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges } from "./zero-key-merge.js";
 import { HalvingPageLimit, nextHistoryToken } from "../rpc/history.js";
-import {
-  RING_DELIVERY_UNRESOLVED,
-  type RingDeliveredNote,
-} from "../protocol/historical/v3/delivered-body.js";
 
 export interface RingNotes {
   readonly utxos: readonly WalletUtxo[];
@@ -46,7 +42,7 @@ export interface RingNotes {
   readonly pending: number;
 }
 
-/** Every note is unspent, scheme 10 opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
+/** Every note is unspent, scheme 13 opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
 export async function openRingNotes(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -159,7 +155,7 @@ export async function syncRingWallet(
     const owner = keys.address();
     const budget = { remaining: Number.MAX_SAFE_INTEGER };
     const chunkSize = input.config?.queryChunk ?? 64;
-    for (let frontier = fresh; frontier.length > 0;) {
+    for (let frontier = fresh; frontier.length > 0; ) {
       const spends: IndexedShieldedTransaction[] = [];
       for (let offset = 0; offset < frontier.length; offset += chunkSize)
         spends.push(
@@ -219,7 +215,7 @@ interface Site {
   readonly slot: IndexedShieldedTransaction["outputSlots"][number];
 }
 
-type Note = RingDeliveredNote & Omit<RingDepositNote, "utxo"> & Readonly<{ slot: Site["slot"] }>;
+type Note = RingDepositNote & Readonly<{ utxoHash: Bytes32 }> & Readonly<{ slot: Site["slot"] }>;
 
 const PENDING = Symbol("pending");
 
@@ -343,10 +339,7 @@ async function openSlot(
   if (frame.encoding !== "encrypted") return undefined;
   if (!isRingKeys(input.keys)) return undefined;
   const reads = { keys: input.keys, assets: input.assets };
-  if (frame.scheme === RingScheme.ringBody) return recipientNote(reads, site, context);
-  if (frame.scheme === RingScheme.ringConfidentialDelivered)
-    return deliveredNote(reads, site, frame.body, context);
-  return undefined;
+  return frame.scheme === RingScheme.ringBody ? recipientNote(reads, site, context) : undefined;
 }
 
 /** The body names its mint, a commitment under the wallet's key or zero proves the note. */
@@ -382,42 +375,6 @@ async function recipientNote(
   }
 }
 
-/** The slot secret keys the body, the asset is the registered mint that rebuilds the commitment. */
-async function deliveredNote(
-  input: Readonly<{ keys: RingKeys; assets: AssetRegistry }>,
-  site: Site,
-  body: Uint8Array,
-  context: RequestContext | undefined,
-): Promise<Note | typeof PENDING | undefined> {
-  const slotSecret = await heldSlotSecret(input.keys, site, context);
-  if (slotSecret === undefined) return undefined;
-  const owner = input.keys.address();
-  try {
-    const note = decoded(() =>
-      openRingDelivery(
-        { ring: site.ring },
-        {
-          body,
-          slotSecret,
-          owner: {
-            signingPublicKey: owner.signingPublicKey,
-            nullifierPublicKey: owner.nullifierPublicKey,
-          },
-          commitment: site.slot.outputContext.hash,
-          treeId: outputTreeId(site.slot.outputContext),
-        },
-        input.assets,
-      ),
-    );
-    if (note === undefined) return undefined;
-    return note === RING_DELIVERY_UNRESOLVED
-      ? PENDING
-      : Object.freeze({ ...note, slot: site.slot });
-  } finally {
-    slotSecret.fill(0);
-  }
-}
-
 /** Malformed published bytes skip the slot, a holder failure refuses the sync. */
 async function heldSlotSecret(
   keys: RingKeys,
@@ -426,7 +383,7 @@ async function heldSlotSecret(
 ): Promise<Bytes32 | undefined> {
   const viewingPublicKey = keys
     .viewingPublicKeys()
-    .find((key) => equalBytes(key.u(), site.slot.viewTag));
+    .find((key) => equalBytes(slotTag(key.u()), site.slot.viewTag));
   const firstNullifier = site.tx.nullifiers[0];
   if (
     viewingPublicKey === undefined ||
