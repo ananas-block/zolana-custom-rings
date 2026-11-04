@@ -23,6 +23,10 @@ pub const AUTHORIZED_ADDRESS: u32 = 0x4352_4144;
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`
 pub const REGISTER_KEY: u32 = 0x4352_5247;
+/// `"CRPS"`
+pub const LIST_SALT: u32 = 0x4352_5053;
+/// `"CRPT"`
+pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
@@ -56,4 +60,14 @@ pub fn field(domain: u32) -> [u8; 32] {
 /// `Poseidon(CRDB, blinding_secret)`.
 pub fn deposit_blinding(blinding_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[&field(DEPOSIT_BLINDING), blinding_secret])
+}
+
+/// `Poseidon(CRPS, nullifier_secret)`, a holder learns the private list position and never the secret.
+pub fn list_salt(nullifier_secret: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_SALT), nullifier_secret])
+}
+
+/// `Poseidon(CRPT, list_salt)`, the tracking leaf's commitment to the owner's one salt.
+pub fn list_tag(list_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&field(LIST_TAG), list_salt])
 }

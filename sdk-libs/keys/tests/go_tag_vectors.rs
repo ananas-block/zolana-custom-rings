@@ -1,6 +1,7 @@
 //! The key holder reads the tags the Go witnesses prove.
 
 use serde::Deserialize;
+use solana_address::Address;
 use spr_keypair::{viewing_key::ViewTag, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
 use zolana_ring_keys::{RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys};
 
@@ -73,7 +74,10 @@ fn holder(vector: &Bodies) -> (RotatingRingKeys, X25519Pubkey, X25519Pubkey) {
     let mut identity =
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[7; 32])).unwrap();
     identity.viewing_key = sender;
-    let keys = RotatingRingKeys::new(&identity, vec![recipient]).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &Address::new_from_array([4; 32]))
+        .unwrap()
+        .with_retired(vec![recipient])
+        .unwrap();
     (keys, sender_key, recipient_key)
 }
 

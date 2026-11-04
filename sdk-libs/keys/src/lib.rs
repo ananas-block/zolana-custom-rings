@@ -3,6 +3,7 @@
 mod error;
 mod keys;
 pub mod ring_address;
+mod ring_nullifier_key;
 mod stream_cipher;
 
 pub use error::RingKeyError;
@@ -11,4 +12,5 @@ pub use keys::{
     ViewTagRequest, ViewTagStream,
 };
 pub use ring_address::{RingAddress, RingPaymentRequest};
+pub use ring_nullifier_key::RingNullifierKey;
 pub use stream_cipher::{symmetric_apply_audit, RingStream};
