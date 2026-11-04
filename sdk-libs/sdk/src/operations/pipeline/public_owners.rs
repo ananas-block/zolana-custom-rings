@@ -69,12 +69,7 @@ impl RingTransfer<PublicOwners<'_>> {
     /// Every ring output owner other than the wallet is paid here, before the transaction is padded.
     pub fn with_payment(mut self, payment: AnonymousPayment) -> Result<Self, RingError> {
         check_payment_ring(&payment, self.ring)?;
-        self.rail.owner.transaction.transfer_with_ring(
-            &payment.to.recipient,
-            payment.asset,
-            payment.amount,
-            Some(payment.to.ring_program_id),
-        )?;
+        payment.add_to(&mut self.rail.owner.transaction)?;
         self.rail.payments.push(payment);
         Ok(self)
     }

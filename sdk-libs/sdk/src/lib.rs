@@ -84,11 +84,11 @@ pub use crate::{
     },
     pipeline::{
         entry_shape_keyed, shape_keyed, transfer_key, Anonymous, AnonymousMove, AnonymousPayment,
-        AnonymousTransfer, CoOwner, CustomRingTransfer, CustomRingTransferInput, DelegateMove,
-        DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
-        DelegateWithdrawal, Delegated, EntrySpend, Owner, ProvenRingTransfer, PublicOwnerTransfer,
-        PublicOwners, Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment,
-        RingSender, RingTransfer, TransferKey, WideFrames,
+        AnonymousTransfer, ApplicationData, CoOwner, CustomRingTransfer, CustomRingTransferInput,
+        DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
+        DelegateWithdrawal, Delegated, EntrySpend, NoteData, Owner, ProvenRingTransfer,
+        PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed, RelayedTransfer,
+        RelayedTransferInput, RingPayment, RingSender, RingTransfer, TransferKey, WideFrames,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,

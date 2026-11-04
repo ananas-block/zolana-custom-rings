@@ -48,7 +48,10 @@ impl BufferedFrame {
                 limit: MAX_FRAME_LEN,
             });
         }
-        if inline.data.first() != Some(&tag::TRANSFER) {
+        if !matches!(
+            inline.data.first(),
+            Some(&(tag::TRANSFER | tag::AUTHORITY_TRANSFER))
+        ) {
             return Err(CustomRingError::UnsupportedBufferedTag.into());
         }
         let (buffer, _) = Address::find_program_address(
