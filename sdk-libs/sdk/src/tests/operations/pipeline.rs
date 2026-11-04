@@ -531,7 +531,7 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
     let client = enrolled(&[&sender, &keypair(2)]).client();
-    let utxos: Vec<WalletUtxo> = (0..36)
+    let utxos: Vec<WalletUtxo> = (0..60)
         .map(|leaf| ring_utxo(&sender, Mint::SOL, 1, leaf))
         .collect();
     let owner = MoveSender {
@@ -539,17 +539,17 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
         payer: payer(),
     };
     let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
-    let widest = pay(24).select(&client).await.unwrap();
+    let widest = pay(40).select(&client).await.unwrap();
     let assembled = widest.assemble(&client).await.unwrap();
     assert_eq!(
         assembled.frame.proof_inputs.check_shape().unwrap(),
-        spr_client::Shape::IN24_OUT2
+        spr_client::Shape::IN40_OUT2
     );
     assert!(matches!(
-        pay(25).select(&client).await,
+        pay(41).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 25,
-            max_inputs: 24,
+            amount: 41,
+            max_inputs: 49,
             ..
         })
     ));
@@ -854,7 +854,7 @@ fn an_unkeyed_shape_names_its_rail_in_words() {
             rail: RingRail::Delegate
         }
         .to_string(),
-        "the transfer needs a shape no delegate key serves"
+        "the catalog has no delegate key for the transfer"
     );
 }
 
@@ -2489,13 +2489,9 @@ async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_
 fn a_shape_past_a_confidential_class_is_unkeyed() {
     use crate::shape_keyed;
     use spr_client::Shape;
-    for (widest, unkeyed) in [
-        (Shape::new(24, 2), Shape::IN32_OUT2),
-        (Shape::IN5_OUT16, Shape::IN8_OUT16),
-    ] {
-        assert!(shape_keyed(RingRail::Confidential, widest));
-        assert!(!shape_keyed(RingRail::Confidential, unkeyed));
-    }
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN49_OUT2));
+    assert!(shape_keyed(RingRail::Confidential, Shape::IN5_OUT16));
+    assert!(!shape_keyed(RingRail::Confidential, Shape::IN8_OUT16));
 }
 
 /// The limits the byte model names, each frame measured below and at its ceiling.

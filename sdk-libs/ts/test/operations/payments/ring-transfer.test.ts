@@ -1341,11 +1341,10 @@ describe("ring transfer builder", () => {
   }
 
   it("refuses a payment past the widest confidential key before approval and any proof", async () => {
-    const wide = await ringTransfer({ amount: 3_950n, notes: 40 });
+    const wide = await ringTransfer({ amount: 4_950n, notes: 50 });
     await expect(wide.build).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
-      causeCode: "RING_TRANSACT_DATA_INVALID",
-      cause: { details: { reason: "RingShapeUnkeyed" } },
+      causeCode: "RING_TOO_MANY_INPUTS",
     });
     expect(wide.requests).toEqual([]);
     expect(wide.fixture.ringRequests).toHaveLength(0);

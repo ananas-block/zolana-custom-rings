@@ -170,6 +170,7 @@ export const RING_ERROR_CODES = [
   "RING_LIST_SALT_MISSING",
   "RING_RECIPIENT_VIEWING_KEY_STALE",
   "RING_ADDRESS_CEILING",
+  "RING_CATALOG_KEY_MISSING",
   "RING_FRAME_EVENT_INVALID",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";

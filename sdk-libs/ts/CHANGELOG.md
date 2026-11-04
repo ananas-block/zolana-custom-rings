@@ -2,6 +2,7 @@
 
 ## 0.1.0-alpha — unreleased
 
+- A two-output spend of 25 to 49 published inputs proves on `custom-ring-transfer-wide-2-in49-w4-s12`, `FrameKey` takes `inputs`, and a spend no key holds refuses with `RING_CATALOG_KEY_MISSING` where it read `RING_TRANSACT_DATA_INVALID`.
 - `getAuditedMerges` drops `unresolved` and `UnresolvedRingMerge`, an audited merge drops `inputCommitments` and always names its `mint` → read `realNullifiers` and stop handling an absent mint.
 - `unpackDisclosure` and the `unknownAsset` kind of `OutputPayloadErrorKind` and `RING_PAYLOAD_ERROR_KINDS` are gone, and `recoverRingMemberNotes` no longer lists such a slot in `unopened` → remove branches on `unknownAsset`.
 - `@heliuslabs/zolana-custom-rings/advanced` adds `writeFrameData`, `closeFrameBufferData`, `settleBufferedData`, `frameDigest`, `WriteFrame`, `FRAME_BUFFER_PDA_SEED`, `FRAME_BUFFER_HEADER_LEN` and `MAX_FRAME_LEN` to write a frame to a buffer account, close the buffer and settle the frame by its digest, `settledFrame` to read the frame of a successful settlement or refuse with `RING_FRAME_EVENT_INVALID`, and `RingInstructionTag` adds tags 59 to 61 and 63 and `RingProgramError` adds codes 8520 to 8526.
