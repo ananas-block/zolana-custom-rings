@@ -1,13 +1,12 @@
 //! Policy transfers read every root from the live registries they pass, each bound to the ring.
 
-use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    storage_instruction::{InitializeIxData as StorageInitialize, InitializeTrackingIxData},
+    storage_instruction::InitializeTrackingIxData,
     tag,
     tracking::TrackingRegistry,
-    CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole, RingTransactData,
-    SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
+    CustomRingError, PolicySourceIxData, PolicyTableIxData, RingPolicy, RingRail, RingRole,
+    RingTransactData, SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
@@ -199,37 +198,31 @@ fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at
     reaches_verification(reading(tracking_registry(), &mut ring));
 }
 
-const PRIVATE: Address = Address::new_from_array([0x5f; 32]);
-
-fn store_private(ring: &mut Ring, pair: Address, floor: u64) {
-    let mut registry = StorageRegistry::new(
-        Keypair::new().pubkey(),
-        &StorageInitialize {
-            ring_id: ring_id_field(PROGRAM.as_array()).unwrap(),
-            tracking_registry: pair,
-            ..Zeroable::zeroed()
-        },
-    );
-    registry.roots[0] = root(2, [0x0a; 32]);
-    registry.tracking_floor = Revision::from(floor);
-    ring.store(
-        PRIVATE,
-        STORAGE_PROGRAM_ID,
-        bytemuck::bytes_of(&registry).to_vec(),
-    );
-}
-
-fn name_private_source(ring: &mut Ring) -> Sent {
+fn salt_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
     let authority = ring.holder(RingRole::Policy);
     let update = UpdatePolicyIx {
         authority: authority.pubkey(),
-        update: UpdatePolicyIxData::PrivateSource {
-            owner_lists: ListSet::single(ListId::Block).bits(),
-        },
-        trailing: &[PRIVATE],
+        update: UpdatePolicyIxData::Source(PolicySourceIxData {
+            list_id: ListId::Allow as u8,
+            source: 0,
+            salted: true,
+        }),
+        trailing: &[],
     }
     .instruction();
-    ring.send(update, &[&authority])
+    ring.send(update, &[&authority]).unwrap();
+    pin_records(ring, pair, floor);
+}
+
+fn pin_records(ring: &mut Ring, pair: Address, floor: u64) {
+    let mut records: StorageRegistry = ring.read(&RECORDS);
+    records.tracking_registry = pair;
+    records.tracking_floor = Revision::from(floor);
+    ring.store(
+        RECORDS,
+        STORAGE_PROGRAM_ID,
+        bytemuck::bytes_of(&records).to_vec(),
+    );
 }
 
 fn store_tracking_history(ring: &mut Ring) {
@@ -244,69 +237,39 @@ fn store_tracking_history(ring: &mut Ring) {
 }
 
 #[test]
-fn a_private_source_names_only_a_registry_paired_with_the_pin() {
+fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
+    let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    store_private(&mut ring, Address::new_from_array([0x61; 32]), 0);
-    refused(
-        name_private_source(&mut ring),
-        CustomRingError::PrivateSourceOtherTracking,
-    );
-    store_private(&mut ring, Address::default(), 0);
-    refused(
-        name_private_source(&mut ring),
-        CustomRingError::PublicRegistryAsPrivateSource,
-    );
-    store_private(&mut ring, tracking_registry(), 0);
-    name_private_source(&mut ring).unwrap();
+    let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    salt_allow_list(&mut ring, Address::default(), 0);
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.private_source, PRIVATE);
+    assert_eq!(account.salted(), ListSet::single(ListId::Allow));
+    for unpaired in [Address::default(), Address::new_from_array([0x61; 32])] {
+        pin_records(&mut ring, unpaired, 0);
+        refused(
+            transfer_reading(&mut ring, &[RECORDS], &data),
+            CustomRingError::SaltedSourceOtherTracking,
+        );
+    }
+    pin_records(&mut ring, tracking_registry(), 0);
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }
 
 #[test]
-fn a_tracking_root_below_the_private_floor_is_refused_at_load() {
+fn a_tracking_root_below_the_salted_floor_is_refused_at_load() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     store_tracking_history(&mut ring);
-    store_private(&mut ring, tracking_registry(), 3);
-    name_private_source(&mut ring).unwrap();
+    salt_allow_list(&mut ring, tracking_registry(), 3);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.extensions.private_revision = Some(Revision::from(2));
     data.tracking_revision = Revision::from(2);
     refused(
-        transfer_reading(&mut ring, &[RECORDS, PRIVATE], &data),
+        transfer_reading(&mut ring, &[RECORDS], &data),
         CustomRingError::TrackingRootBelowFloor,
     );
     data.tracking_revision = Revision::from(3);
-    reaches_verification(transfer_reading(&mut ring, &[RECORDS, PRIVATE], &data));
-    store_private(&mut ring, tracking_registry(), 2);
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
+    pin_records(&mut ring, tracking_registry(), 2);
     data.tracking_revision = Revision::from(2);
-    reaches_verification(transfer_reading(&mut ring, &[RECORDS, PRIVATE], &data));
-}
-
-#[test]
-fn a_frame_names_the_private_root_exactly_when_the_ring_has_a_private_source() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Policy);
-    let mut named = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    named.extensions.private_revision = Some(Revision::from(2));
-    refused(
-        transfer_reading(&mut ring, &[RECORDS], &named),
-        CustomRingError::FlagNotAllowed,
-    );
-    store_private(&mut ring, tracking_registry(), 0);
-    name_private_source(&mut ring).unwrap();
-    let omitted = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    refused(
-        transfer_reading(&mut ring, &[RECORDS, PRIVATE], &omitted),
-        CustomRingError::FlagNotAllowed,
-    );
-    refused(
-        transfer_reading(&mut ring, &[RECORDS], &named),
-        CustomRingError::UnboundRegistry,
-    );
-    named.extensions.private_revision = Some(Revision::from(9));
-    refused(
-        transfer_reading(&mut ring, &[RECORDS, PRIVATE], &named),
-        CustomRingError::RootNotServed,
-    );
+    reaches_verification(transfer_reading(&mut ring, &[RECORDS], &data));
 }

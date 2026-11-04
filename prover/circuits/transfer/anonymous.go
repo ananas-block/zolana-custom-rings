@@ -74,7 +74,7 @@ type AnonymousTransferCircuit struct {
 	Shape AnonymousShape `gnark:"-"`
 	// PublicOwners names the rail where every live owner is a published signer, Delegate the authority rail, neither the hidden sender rail.
 	PublicOwners, Delegate frontend.Variable
-	// PartyIdentities are payer, five co-signers and exit destination, an absent party is zero.
+	// PartyIdentities are payer, co-signer and exit destination, an absent party is zero.
 	PartyIdentities [shared.AnonymousParties]frontend.Variable
 	Sections
 }

@@ -28,7 +28,7 @@ use crate::{
         MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
     },
     bytes::Bytes,
-    cosign::CoSignHeader,
+    cosign::ApprovalMask,
     disclosure::AuditLayout,
     error::CustomRingError,
     key_catalog::{
@@ -254,7 +254,6 @@ pub struct FrameExtensions<'a> {
     pub data_hash: Option<&'a [u8; 32]>,
     /// The transaction's ring digest, distinct from a note's `ring_data_hash`.
     pub ring_data_hash: Option<&'a [u8; 32]>,
-    pub private_revision: Option<Revision>,
     pub messages: Vec<AppMessage<'a>>,
     /// The cached selector, refused on the authority rails.
     pub cache: Option<CacheAccess>,
@@ -276,9 +275,6 @@ impl<'a> FrameExtensions<'a> {
             .transpose()?;
         let ring_data_hash = has(extension_flag::RING_DATA_HASH)
             .then(|| bytes.array())
-            .transpose()?;
-        let private_revision = has(extension_flag::PRIVATE_SOURCE)
-            .then(|| bytes.pod().copied())
             .transpose()?;
         let messages = match has(extension_flag::MESSAGES) {
             false => Vec::new(),
@@ -302,7 +298,6 @@ impl<'a> FrameExtensions<'a> {
         Ok(Self {
             data_hash,
             ring_data_hash,
-            private_revision,
             messages,
             cache,
         })
@@ -316,10 +311,6 @@ impl<'a> FrameExtensions<'a> {
                     self.ring_data_hash.is_some(),
                     extension_flag::RING_DATA_HASH,
                 )
-                | flag(
-                    self.private_revision.is_some(),
-                    extension_flag::PRIVATE_SOURCE,
-                )
                 | flag(!self.messages.is_empty(), extension_flag::MESSAGES)
                 | flag(self.cache.is_some(), extension_flag::CACHE),
         );
@@ -328,9 +319,6 @@ impl<'a> FrameExtensions<'a> {
         }
         if let Some(hash) = self.ring_data_hash {
             out.extend_from_slice(hash);
-        }
-        if let Some(revision) = self.private_revision {
-            out.extend_from_slice(&revision.0);
         }
         if !self.messages.is_empty() {
             out.push(count_byte(self.messages.len())?);
@@ -352,9 +340,6 @@ impl<'a> FrameExtensions<'a> {
         const FIELD: usize = 32;
         1 + self.data_hash.map_or(0, |_| FIELD)
             + self.ring_data_hash.map_or(0, |_| FIELD)
-            + self
-                .private_revision
-                .map_or(0, |_| core::mem::size_of::<Revision>())
             + match self.messages.is_empty() {
                 true => 0,
                 false => {
@@ -372,10 +357,9 @@ impl<'a> FrameExtensions<'a> {
 pub mod extension_flag {
     pub const DATA_HASH: u8 = 1 << 0;
     pub const RING_DATA_HASH: u8 = 1 << 1;
-    pub const PRIVATE_SOURCE: u8 = 1 << 2;
-    pub const MESSAGES: u8 = 1 << 3;
-    pub const CACHE: u8 = 1 << 4;
-    pub const KNOWN: u8 = DATA_HASH | RING_DATA_HASH | PRIVATE_SOURCE | MESSAGES | CACHE;
+    pub const MESSAGES: u8 = 1 << 2;
+    pub const CACHE: u8 = 1 << 3;
+    pub const KNOWN: u8 = DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE;
 }
 
 const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
@@ -626,7 +610,7 @@ impl<'a> ParsedTransact<'a> {
                 layout: data.audit_layout(),
             },
             family,
-            approval_mask: data.co_sign.approval,
+            approval_mask: data.approval,
             no_spend: data.no_spend,
             outputs: &data.outputs,
             output_capacity: self.stream.capacity,
@@ -678,8 +662,7 @@ pub struct RingTransactData<'a> {
     pub policy: Option<PolicyProof>,
     /// Token owners checked on chain in SPL withdrawal order, present with `own_revision`.
     pub spl_withdrawal_owners: &'a [[u8; 32]],
-    /// The proven approval mask and the co-signers the transaction carries.
-    pub co_sign: CoSignHeader,
+    pub approval: ApprovalMask,
     pub no_spend: bool,
     /// The anonymous rail with every live owner a published signer, SPP's confidential rail settles it.
     pub public_owners: bool,
@@ -723,7 +706,7 @@ impl<'a> RingTransactData<'a> {
         let input_count = header.input_count;
         let key = rail.audit_key(&header)?;
         let output_count = usize::from(header.output_count);
-        let co_sign = CoSignHeader::from_byte(bytes.byte()?)?;
+        let approval = ApprovalMask::new(bytes.byte()?).ok_or(CustomRingError::FlagNotAllowed)?;
         let proof = bytes.pod()?;
         let tracking_revision = *bytes.pod()?;
         let own_revision = flags
@@ -869,7 +852,7 @@ impl<'a> RingTransactData<'a> {
             own_revision,
             policy,
             spl_withdrawal_owners,
-            co_sign,
+            approval,
             no_spend: flags.has(transact_flag::NO_SPEND),
             public_owners: header.flags.public_owners,
             expiry_unix_ts,
@@ -934,7 +917,7 @@ impl<'a> RingTransactData<'a> {
         let mut out = Vec::with_capacity(self.frame_len(stream, interface_transfers.len())?);
         out.push(flags.0);
         out.extend(header.bytes()?);
-        out.push(self.co_sign.byte());
+        out.push(self.approval.bits());
         out.extend_from_slice(bytemuck::bytes_of(self.proof));
         out.extend_from_slice(&self.tracking_revision.0);
         if let Some(revision) = self.own_revision {
@@ -1112,15 +1095,7 @@ impl<'a> RingTransactData<'a> {
         if self.own_revision.is_some() != (read != RootRead::None) {
             return Err(CustomRingError::FlagNotAllowed);
         }
-        let private_revision = match (
-            self.extensions.private_revision,
-            ring.private_registry(read),
-        ) {
-            (None, None) => None,
-            (Some(revision), Some(_)) => Some(revision),
-            _ => return Err(CustomRingError::FlagNotAllowed),
-        };
-        if !self.co_sign.approval.is_empty() && self.rail.is_delegate() {
+        if !self.approval.is_empty() && self.rail.is_delegate() {
             return Err(CustomRingError::UnexpectedApproval);
         }
         let mut bound = TransferRoots {
@@ -1135,9 +1110,6 @@ impl<'a> RingTransactData<'a> {
         }
         if let Some(revision) = curator_revision {
             bound.curator_root = roots.curator(revision)?;
-        }
-        if let Some(revision) = private_revision {
-            bound.private_root = roots.private_source(revision)?;
         }
         Ok(bound)
     }
@@ -1157,7 +1129,7 @@ impl<'a> RingTransactData<'a> {
             legs,
             owners: usize::from(rows),
             has_data: self.has_data,
-            private_source: self.extensions.private_revision.is_some(),
+            private_source: false,
         })
         .ok_or(CustomRingError::RingShapeUnkeyed)
     }
@@ -1451,7 +1423,7 @@ pub const OUTPUT_COUNT_BYTE: usize = 3;
 pub mod output_flag {
     pub const WIDE_OWNERS: u8 = 1 << 7;
 }
-pub const CO_SIGN_BYTE: usize = 4;
+pub const APPROVAL_BYTE: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TransactFlags(u8);
