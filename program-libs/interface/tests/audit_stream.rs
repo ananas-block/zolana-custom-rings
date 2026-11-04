@@ -334,9 +334,20 @@ fn envelopes_read_back_at_their_layout_length() {
         ring_data_hash: [0x46; 32],
     };
     let cases = [
-        (AuditKey { class: 8, entry: false }, 3, AuditEvidence::None, 33),
         (
-            AuditKey { class: 8, entry: true },
+            AuditKey {
+                class: 8,
+                entry: false,
+            },
+            3,
+            AuditEvidence::None,
+            33,
+        ),
+        (
+            AuditKey {
+                class: 8,
+                entry: true,
+            },
             2,
             AuditEvidence::Entry {
                 default_input_bits: 0b01,
@@ -445,7 +456,10 @@ fn the_recipient_body_extends_past_its_plain_head() {
         data: vec![9; 32],
         ..plain.clone()
     };
-    assert_eq!(RecipientBody::decode(&application.encode()), Ok(application));
+    assert_eq!(
+        RecipientBody::decode(&application.encode()),
+        Ok(application)
+    );
 
     let both = RecipientBody {
         ring_data_hash: Some([3; 32]),
