@@ -12,16 +12,16 @@ type Spend struct {
 	Inputs  []shared.Output
 }
 
-// Approval reads zero while Outflow is off.
+// ApprovalMask reads zero while Outflow is off.
 type Screening struct {
-	Approval frontend.Variable
+	ApprovalMask frontend.Variable
 	// Address hashes read zero off a record.
 	SenderAddress  frontend.Variable
 	OwnerAddresses []frontend.Variable
 }
 
 func (p *Policy) Screen(api frontend.API, rc frontend.Rangechecker, g Gates, spend Spend, outputs []shared.Output) Screening {
-	cmp := p.comparator(rc)
+	cmp := newComparator(rc)
 	table := p.Table.decodeWhen(api, rc, g.Screened, p.PolicyHash)
 	p.assertOwnOnly(api)
 	p.assertRecipients(api, g.Screened, g.Published, outputs)
@@ -29,12 +29,15 @@ func (p *Policy) Screen(api frontend.API, rc frontend.Rangechecker, g Gates, spe
 	escrows := escrowsOwed(api, g.KeyEscrow, outputs)
 	resolved := p.resolveSubjects(api, table, g, spend.Senders, payments, escrows)
 	active := screenedRules(api, g.Screened, table)
+	// 1. The sender section reads the rows, a deposit has none.
+	assertRowsAscending(api, g.Rows, spend.Senders, resolved.liveSenders)
 	assertSenderRules(api, active, table, resolved)
-	assertPaymentRules(api, cmp, g.Screened, active, table, resolved, payments)
-	approval := p.constrainOutflow(api, rc, g.Outflow, spend, outputs, resolved)
-	p.assertExemption(api, cmp, g.Exempt, resolved.publicAssets)
+	// 2. The payment section is the one a deposit shares.
+	assertPaymentRules(api, cmp, active, table, resolved, payments, spend.Inputs)
+	// 3. The outflow section binds on a ring with an own registry, with or without a policy hash.
+	mask := p.constrainOutflow(api, cmp, g.Outflow, spend, outputs, resolved)
 	p.assertEscrow(api, escrows, resolved.owners, outputs)
-	screening := Screening{Approval: approval, SenderAddress: resolved.senders[0].addressHash, OwnerAddresses: make([]frontend.Variable, len(outputs))}
+	screening := Screening{ApprovalMask: mask, SenderAddress: resolved.senders[0].addressHash, OwnerAddresses: make([]frontend.Variable, len(outputs))}
 	for o := range outputs {
 		screening.OwnerAddresses[o] = resolved.owners[o].addressHash
 	}
