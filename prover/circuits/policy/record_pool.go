@@ -25,9 +25,10 @@ type RecordPoolShape struct {
 	OwnSubjects, CuratorSubjects int
 }
 
+// Curator keeps the one element the request's list carries.
 type PoolEntry struct {
 	Own     frontend.Variable
-	Curator []frontend.Variable
+	Curator [1]frontend.Variable
 }
 
 type OwnerEntry struct {
@@ -35,34 +36,12 @@ type OwnerEntry struct {
 	Tracking      frontend.Variable
 	ListSalt      frontend.Variable
 	OwnSalted     frontend.Variable
-	CuratorSalted []frontend.Variable
-}
-
-func newPoolEntry(ownOnly bool) PoolEntry {
-	entry := PoolEntry{}
-	if !ownOnly {
-		entry.Curator = make([]frontend.Variable, 1)
-	}
-	return entry
-}
-
-func newOwnerEntry(ownOnly bool) OwnerEntry {
-	entry := OwnerEntry{PoolEntry: newPoolEntry(ownOnly)}
-	if !ownOnly {
-		entry.CuratorSalted = make([]frontend.Variable, 1)
-	}
-	return entry
+	CuratorSalted [1]frontend.Variable
 }
 
 func (s RecordPoolShape) validate(limits RecordPoolShape) error {
 	if err := validatePoolCapacity(s.Own, s.OwnSubjects, limits.Own); err != nil {
 		return err
-	}
-	if limits.Curator == 0 {
-		if s.Curator != 0 || s.CuratorSubjects != 0 {
-			return fmt.Errorf("policy own pool has curator capacity")
-		}
-		return nil
 	}
 	return validatePoolCapacity(s.Curator, s.CuratorSubjects, limits.Curator)
 }
@@ -76,37 +55,13 @@ func validatePoolCapacity(records, subjects, maximum int) error {
 	return nil
 }
 
-func (e PoolEntry) validate(ownOnly bool) error {
-	if len(e.Curator) != curatorEntries(ownOnly) {
-		return fmt.Errorf("policy curator reference shape is invalid")
-	}
-	return nil
-}
-
-func (e OwnerEntry) validate(ownOnly bool) error {
-	if len(e.CuratorSalted) != curatorEntries(ownOnly) {
-		return fmt.Errorf("policy curator salted reference shape is invalid")
-	}
-	return e.PoolEntry.validate(ownOnly)
-}
-
-func curatorEntries(ownOnly bool) int {
-	if ownOnly {
-		return 0
-	}
-	return 1
-}
-
 func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
 	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
-	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys
-	limits := RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets)}
-	if !p.OwnOnly {
-		limits.Curator = distinct + withdrawalAssets
-	}
-	return limits
+	// A funded input's asset already sits among the output and public assets, SPP's balance sees to that. A zero value input can name any other, and every live input can be one, so each input slot takes its own row. The row bounds what the key can prove and never what it checks, every input queries the pools whatever the capacity.
+	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys + p.Spent
+	return RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets), Curator: distinct + withdrawalAssets}
 }
 
 func (s RecordPoolShape) withDefaults(limits RecordPoolShape) RecordPoolShape {
@@ -212,7 +167,7 @@ func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Vari
 // Zeros for an inactive query or an absent member.
 func (p recordPool) read(api frontend.API, query recordQuery) []frontend.Variable {
 	row := p.lookup(api, query)
-	present := api.IsZero(api.Sub(row[0], query.member))
+	present := IsSame(api, row[0], query.member)
 	ringgadget.AssertOrderedWhen(api, api.Mul(query.active, api.Sub(1, present)), row[0], query.member, row[1])
 	// An absent member reads zeros whatever its predecessor holds.
 	return gated(api, api.Mul(query.active, present), row[2:])

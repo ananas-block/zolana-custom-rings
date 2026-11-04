@@ -17,67 +17,53 @@ import (
 func TestPooledPolicyModes(t *testing.T) {
 	worlds := []ringpolicy.World{ringpolicy.Confidential(), ringpolicy.Anonymous(), curated(), delegate2(), withdrawalWorld()}
 	for i, world := range worlds {
-		for _, own := range []bool{false, true} {
-			if own && len(world.Table.Curator) != 0 {
-				continue
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			witness := world.Build(t)
+			if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
+				t.Fatal(err)
 			}
-			world.OwnOnly = own
-			t.Run(fmt.Sprintf("%d-own%v", i, own), func(t *testing.T) {
-				witness := world.Build(t)
-				if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
-					t.Fatal(err)
-				}
-			})
-		}
+		})
 	}
 }
 
 func TestPooledPolicyConstraintMatrix(t *testing.T) {
-	for _, own := range []bool{false, true} {
-		for _, shape := range []ringpolicy.SectionShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
-			shape.OwnOnly = own
-			for _, compact := range []bool{true, false} {
-				capacity := compactPools(compact, own)
-				shape.Records = capacity
-				c, err := ringpolicy.NewSectionCircuit(shape)
-				if err != nil {
-					t.Fatal(err)
-				}
-				cs := ringkey.Compile(t, c)
-				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, false).Build(t))
-				if !compact {
-					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, false).Build(t))
-				}
-				t.Logf("section-%d-w%d-own%v capacity=%d/%d constraints=%d", shape.Outputs, shape.Withdrawals, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
+	for _, shape := range []ringpolicy.SectionShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
+		for _, compact := range []bool{true, false} {
+			shape.Records = compactPools(compact)
+			c, err := ringpolicy.NewSectionCircuit(shape)
+			if err != nil {
+				t.Fatal(err)
 			}
+			cs := ringkey.Compile(t, c)
+			requirePooledCompiledSolved(t, cs, poolWorld(shape, false, false).Build(t))
+			if !compact {
+				requirePooledCompiledSolved(t, cs, poolWorld(shape, true, false).Build(t))
+			}
+			t.Logf("section-%d-w%d capacity=%d/%d constraints=%d", shape.Outputs, shape.Withdrawals, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
 		}
-		for _, width := range []int{2, 4} {
-			for _, compact := range []bool{true, false} {
-				capacity := compactPools(compact, own)
-				shape := ringpolicy.SectionShape{Outputs: width, OwnOnly: own, Records: capacity}
-				c, err := ringpolicy.NewSectionCircuit(shape)
-				if err != nil {
-					t.Fatal(err)
-				}
-				cs := ringkey.Compile(t, c)
-				requirePooledCompiledSolved(t, cs, poolWorld(shape, false, true).Build(t))
-				if !compact {
-					requirePooledCompiledSolved(t, cs, poolWorld(shape, true, true).Build(t))
-				}
-				t.Logf("delegate-%dx%d-own%v capacity=%d/%d constraints=%d", width, width, own, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
+	}
+	for _, width := range []int{2, 4} {
+		for _, compact := range []bool{true, false} {
+			shape := ringpolicy.SectionShape{Outputs: width, Records: compactPools(compact)}
+			c, err := ringpolicy.NewSectionCircuit(shape)
+			if err != nil {
+				t.Fatal(err)
 			}
+			cs := ringkey.Compile(t, c)
+			requirePooledCompiledSolved(t, cs, poolWorld(shape, false, true).Build(t))
+			if !compact {
+				requirePooledCompiledSolved(t, cs, poolWorld(shape, true, true).Build(t))
+			}
+			t.Logf("delegate-%dx%d capacity=%d/%d constraints=%d", width, width, len(c.OwnRecords), len(c.CuratorRecords), cs.GetNbConstraints())
 		}
 	}
 }
 
-func compactPools(compact, own bool) policy.RecordPoolShape {
-	switch {
-	case !compact:
-		return policy.RecordPoolShape{}
-	case own:
-		return policy.RecordPoolShape{Own: 3}
+func compactPools(compact bool) policy.RecordPoolShape {
+	if compact {
+		return policy.RecordPoolShape{Own: 3, Curator: 3}
 	}
-	return policy.RecordPoolShape{Own: 3, Curator: 3}
+	return policy.RecordPoolShape{}
 }
 
 func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, policyWitness ringpolicy.Witness) {
@@ -97,7 +83,7 @@ func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, p
 
 func poolWorld(shape ringpolicy.SectionShape, distinct, delegate bool) ringpolicy.World {
 	world := ringpolicy.Confidential()
-	world.Outputs, world.WithdrawalCapacity, world.OwnOnly, world.Records = shape.Outputs, shape.Withdrawals, shape.OwnOnly, shape.Records
+	world.Outputs, world.WithdrawalCapacity, world.Records = shape.Outputs, shape.Withdrawals, shape.Records
 	world.Table.Limits = nil
 	world.Table.Rules = append(world.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
 	world.Slots, world.Withdrawals = nil, nil
@@ -136,11 +122,9 @@ func poolWorld(shape ringpolicy.SectionShape, distinct, delegate bool) ringpolic
 	} else {
 		world.Delegate = true
 	}
-	if !shape.OwnOnly {
-		world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-		for member, record := range world.Own {
-			world.Curator[member] = record
-		}
+	world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+	for member, record := range world.Own {
+		world.Curator[member] = record
 	}
 	return world
 }

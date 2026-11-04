@@ -125,7 +125,7 @@ func (s flowSource) flowsOf(api frontend.API, cmp comparator, asset frontend.Var
 		leaving = api.Add(leaving, api.Mul(flags.outputs[o], exit))
 	}
 	for k, public := range s.publicAssets {
-		leaving = api.Add(leaving, api.Mul(api.IsZero(api.Sub(public, asset)), s.gross[k]))
+		leaving = api.Add(leaving, api.Mul(IsSame(api, public, asset), s.gross[k]))
 	}
 	split := s.splitOf(api, cmp, flags)
 	flows := split.rows
@@ -181,7 +181,7 @@ func ownedAmounts(api frontend.API, rows []frontend.Variable, slots []shared.Out
 	for j, row := range rows {
 		ownedBy[j] = make([]frontend.Variable, len(slots))
 		for i, slot := range slots {
-			ownedBy[j][i] = api.IsZero(api.Sub(slot.OwnerPkHash, row))
+			ownedBy[j][i] = IsSame(api, slot.OwnerPkHash, row)
 		}
 	}
 	return amounts, ownedBy
@@ -190,7 +190,7 @@ func ownedAmounts(api frontend.API, rows []frontend.Variable, slots []shared.Out
 func assetFlags(api frontend.API, asset frontend.Variable, slots []shared.Output) []frontend.Variable {
 	flags := make([]frontend.Variable, len(slots))
 	for i, slot := range slots {
-		flags[i] = api.IsZero(api.Sub(slot.Asset, asset))
+		flags[i] = IsSame(api, slot.Asset, asset)
 	}
 	return flags
 }

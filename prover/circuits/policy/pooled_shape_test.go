@@ -22,16 +22,16 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		}},
 		{"missing owner references", func(p *Policy) { p.OwnerEntries = nil }},
 		{"missing asset references", func(p *Policy) { p.AssetEntries = nil }},
+		{"missing input asset references", func(p *Policy) { p.AssetEntries = p.AssetEntries[:p.Outputs] }},
 		{"missing own records", func(p *Policy) { p.OwnRecords = nil }},
 		{"missing own subjects", func(p *Policy) { p.OwnSubjects = nil }},
 		{"missing sender references", func(p *Policy) { p.SenderEntries = nil }},
-		{"missing curator reference", func(p *Policy) { p.SenderEntries[0].Curator = nil }},
 		{"oversized own pool", func(p *Policy) { p.OwnRecords = append(p.OwnRecords, p.OwnRecords[0]) }},
 		{"missing public asset references", func(p *Policy) { p.PublicAssetEntries = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := NewPolicy(InputsShape{Outputs: 2, Senders: 4}.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
+			p, err := NewPolicy(InputsShape{Outputs: 2, Senders: 4, Spent: 3}.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -41,14 +41,28 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 			}
 		})
 	}
-	t.Run("own registry with curator records", func(t *testing.T) {
-		p, err := NewPolicy(InputsShape{Outputs: 2, Senders: 4, OwnOnly: true}.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
-		if err != nil {
-			t.Fatal(err)
-		}
-		p.CuratorRecords = p.OwnRecords[:1]
-		if err = p.Validate(transaction.NPublicSlots); err == nil {
-			t.Fatal("curator records accepted by own only shape")
-		}
-	})
+}
+
+// Each input slot widens both registries' pools by one row, the owner references stay per payment.
+func TestInputSlotsWidenBothPools(t *testing.T) {
+	shape := InputsShape{Outputs: 2, Withdrawals: 1, Senders: 4}
+	base, err := NewPolicy(shape.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape.Spent = 3
+	spent, err := NewPolicy(shape.Inputs(), RecordPoolShape{}, transaction.NPublicSlots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = spent.Validate(transaction.NPublicSlots); err != nil {
+		t.Fatal(err)
+	}
+	widened, pools := spent.RecordPools(), base.RecordPools()
+	if widened != (RecordPoolShape{Own: pools.Own + 3, Curator: pools.Curator + 3, OwnSubjects: pools.OwnSubjects + 3, CuratorSubjects: pools.CuratorSubjects + 3}) {
+		t.Fatalf("pools %+v over %+v", widened, pools)
+	}
+	if len(spent.AssetEntries) != len(base.AssetEntries)+3 || len(spent.OwnerEntries) != len(base.OwnerEntries) {
+		t.Fatalf("references %d and %d", len(spent.AssetEntries), len(spent.OwnerEntries))
+	}
 }
