@@ -8,6 +8,7 @@ import (
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
+	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/consensys/gnark/test"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/lookup"
 
@@ -31,9 +32,10 @@ type poolQueryWires struct {
 func (c *recordPoolCircuit) Define(api frontend.API) error {
 	pool := openRecordPool(api, c.Active, c.Root, c.Records, c.Proof, ownColumns)
 	for _, query := range c.Queries {
-		resolved := pooledRecordAt(pool.resolve(api, recordQuery{active: query.Active, member: query.Member, index: query.Index}))
+		resolved := pooledRecordAt(withLists(api, pool.read(api, recordQuery{active: query.Active, member: query.Member, index: query.Index})))
 		api.AssertIsEqual(api.FromBinary(resolved.onList[:]...), query.Lists)
-		api.AssertIsEqual(api.Add(api.Mul(resolved.mintPolicy.threshold, new(big.Int).Lsh(big.NewInt(1), 128)), api.Mul(resolved.mintPolicy.cap, new(big.Int).Lsh(big.NewInt(1), 64)), resolved.mintPolicy.cosignAbove), query.MintPolicy)
+		mintPolicy := decodeMintPolicy(api, resolved.mintPolicy)
+		api.AssertIsEqual(api.Add(api.Mul(mintPolicy.threshold, new(big.Int).Lsh(big.NewInt(1), 128)), api.Mul(mintPolicy.cap, new(big.Int).Lsh(big.NewInt(1), 64)), mintPolicy.cosignAbove), query.MintPolicy)
 	}
 	return nil
 }
@@ -185,7 +187,7 @@ type curatorQueryWires struct {
 func (c *curatorPoolCircuit) Define(api frontend.API) error {
 	pool := openRecordPool(api, c.Active, c.Root, c.Records, c.Proof, curatorColumns)
 	for _, query := range c.Queries {
-		resolved := pool.resolve(api, recordQuery{active: query.Active, member: query.Member, index: query.Index})
+		resolved := withLists(api, pool.read(api, recordQuery{active: query.Active, member: query.Member, index: query.Index}))
 		api.AssertIsEqual(api.FromBinary(resolved...), query.Lists)
 	}
 	return nil
@@ -250,22 +252,26 @@ func TestCuratorPoolKeepsFieldsThePolicyDoesNotRead(t *testing.T) {
 	if err := test.IsSolved(fixture, fixture, ecc.BN254.ScalarField()); err != nil {
 		t.Fatal(err)
 	}
-	unread := []func(*registry.Record){
+	unreadFields := []func(*registry.Record){
 		func(r *registry.Record) { r.Next = 12 },
 		func(r *registry.Record) { r.MintPolicy = 0 },
 		func(r *registry.Record) { r.WithdrawalThreshold = 44 },
 		func(r *registry.Record) { r.AssetLimits[2] = 60 },
 	}
-	for i, mutate := range unread {
+	for i, mutate := range unreadFields {
 		circuit := curatorPoolFixture(t)
 		mutate(&circuit.Records[0])
 		if test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()) == nil {
 			t.Fatalf("unread field %d escaped the leaf hash", i)
 		}
 	}
-	// The own pool decodes the same record and refuses it.
-	own := &recordPoolCircuit{Root: fixture.Root, Active: 1, Records: fixture.Records, Proof: fixture.Proof, Queries: []poolQueryWires{{Member: 41, Index: 0, Active: 0, Lists: 0, MintPolicy: 0}}}
-	if test.IsSolved(own, own, ecc.BN254.ScalarField()) == nil {
+	// An own pool reader decodes the same record and refuses it, a query that reads zeros does not.
+	unread := &recordPoolCircuit{Root: fixture.Root, Active: 1, Records: fixture.Records, Proof: fixture.Proof, Queries: []poolQueryWires{{Member: 41, Index: 0, Active: 0, Lists: 0, MintPolicy: 0}}}
+	if err := test.IsSolved(unread, unread, ecc.BN254.ScalarField()); err != nil {
+		t.Fatal(err)
+	}
+	read := &recordPoolCircuit{Root: fixture.Root, Active: 1, Records: fixture.Records, Proof: fixture.Proof, Queries: []poolQueryWires{{Member: 11, Index: 0, Active: 1, Lists: 3, MintPolicy: 0}}}
+	if test.IsSolved(read, read, ecc.BN254.ScalarField()) == nil {
 		t.Fatal("own pool decoded a mint policy past its limbs")
 	}
 }
@@ -278,4 +284,83 @@ func TestCuratorPoolBindsEveryLookupColumn(t *testing.T) {
 	}
 	shape := &curatorPoolCircuit{Records: make([]registry.Record, len(circuit.Records)), Queries: make([]curatorQueryWires, len(circuit.Queries)), Proof: proof}
 	requireLookupColumnsBound(t, shape, circuit, 2+curatorColumns.width)
+}
+
+type sourceListsCircuit struct {
+	Lists frontend.Variable
+	Bits  [NSources]frontend.Variable
+}
+
+func (c *sourceListsCircuit) Define(api frontend.API) error {
+	for i, bit := range sourceLists(api, c.Lists) {
+		api.AssertIsEqual(bit, c.Bits[i])
+	}
+	return nil
+}
+
+func TestSourceListsSplitsOneWay(t *testing.T) {
+	field := ecc.BN254.ScalarField()
+	honest := &sourceListsCircuit{Lists: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), registry.ListBits-1), big.NewInt(5)), Bits: [NSources]frontend.Variable{1, 0, 1, 0, 0, 0, 0, 0}}
+	if err := test.IsSolved(honest, honest, field); err != nil {
+		t.Fatal(err)
+	}
+	past := &sourceListsCircuit{Lists: new(big.Int).Lsh(big.NewInt(1), registry.ListBits), Bits: [NSources]frontend.Variable{0, 0, 0, 0, 0, 0, 0, 0}}
+	if test.IsSolved(past, past, field) == nil {
+		t.Fatal("lists past their width accepted")
+	}
+	cs, err := frontend.Compile(field, r1cs.NewBuilder, &sourceListsCircuit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Any other low part leaves the rest off a multiple of the bit width.
+	forged := &sourceListsCircuit{Lists: 5, Bits: [NSources]frontend.Variable{0, 1, 1, 0, 0, 0, 0, 0}}
+	witness, err := frontend.NewWitness(forged, field)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cs.IsSolved(witness, solver.OverrideHint(solver.GetHintID(rangecheck.DecomposeHint), func(_ *big.Int, inputs, outputs []*big.Int) error {
+		if inputs[0].Int64() == NSources {
+			outputs[0].SetInt64(6)
+			return nil
+		}
+		return rangecheck.DecomposeHint(ecc.BN254.ScalarField(), inputs, outputs)
+	}))
+	if err == nil {
+		t.Fatal("a forged low part accepted")
+	}
+}
+
+type peakCircuit struct {
+	Values [3]frontend.Variable
+	Peak   frontend.Variable
+}
+
+func (c *peakCircuit) Define(api frontend.API) error {
+	api.AssertIsEqual(newComparator(rangecheck.New(api)).peak(api, c.Values[:]), c.Peak)
+	return nil
+}
+
+func TestPeakIsTheLargestValue(t *testing.T) {
+	field := ecc.BN254.ScalarField()
+	honest := &peakCircuit{Values: [3]frontend.Variable{3, 7, 5}, Peak: 7}
+	if err := test.IsSolved(honest, honest, field); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := frontend.Compile(field, r1cs.NewBuilder, &peakCircuit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, forged := range map[string]int64{"below a value": 5, "above every value": 8} {
+		witness, err := frontend.NewWitness(&peakCircuit{Values: [3]frontend.Variable{3, 7, 5}, Peak: forged}, field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = cs.IsSolved(witness, solver.OverrideHint(solver.GetHintID(peakHint), func(_ *big.Int, _, outputs []*big.Int) error {
+			outputs[0].SetInt64(forged)
+			return nil
+		}))
+		if err == nil {
+			t.Fatalf("a peak %s accepted", name)
+		}
+	}
 }
