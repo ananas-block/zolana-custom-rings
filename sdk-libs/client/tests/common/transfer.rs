@@ -3,10 +3,7 @@
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
     encode_ring_sender_bundle_output,
-    key_catalog::{
-        TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
-        ENTRY_TRANSFER_SHAPES,
-    },
+    key_catalog::FrameKey,
     sender_bundle_len,
     stream::{DeliveredSlot, SlotSecret},
     tag as ring_tag, tagged_x25519, AnonymousProofData, AuditEvidence, AuditKey, AuditRecord,
@@ -389,12 +386,11 @@ impl Transfer {
 
     /// `R` is every published input.
     pub fn disclosure(&self, rail: Rail, outputs: &[Output]) -> Disclosure {
-        let family = match rail {
-            Rail::Delivered => &CONFIDENTIAL_TRANSFER_SHAPES[..],
-            Rail::Anonymous => &ANONYMOUS_TRANSFER_SHAPES[..],
-        };
         self.keyed(Keyed {
-            family,
+            rail: match rail {
+                Rail::Delivered => RingRail::Confidential,
+                Rail::Anonymous => RingRail::Anonymous,
+            },
             entry: false,
             outputs,
             evidence: AuditEvidence::None,
@@ -408,7 +404,7 @@ impl Transfer {
         inputs: Vec<EntryInput>,
     ) -> Disclosure {
         self.keyed(Keyed {
-            family: &ENTRY_TRANSFER_SHAPES,
+            rail: RingRail::Confidential,
             entry: true,
             outputs,
             evidence: AuditEvidence::Entry {
@@ -426,12 +422,19 @@ impl Transfer {
 
     fn keyed(&self, keyed: Keyed<'_>) -> Disclosure {
         let Keyed {
-            family,
+            rail,
             entry,
             outputs,
             evidence,
         } = keyed;
-        let shape = TransferShape::of(family, outputs.len()).expect("a key serves the outputs");
+        let shape = FrameKey {
+            rail,
+            outputs: outputs.len(),
+            spends_default_ring: entry,
+            wide: false,
+        }
+        .shape()
+        .expect("a key serves the outputs");
         Disclosure {
             layout: AuditStreamLayout {
                 key: AuditKey {
@@ -440,7 +443,7 @@ impl Transfer {
                 },
                 inputs: self.nullifiers.len(),
                 outputs: outputs.len(),
-                capacity: outputs.len(),
+                capacity: usize::from(shape.outputs),
                 has_data: false,
             },
             in_proof: false,
@@ -545,7 +548,7 @@ impl Transfer {
 }
 
 struct Keyed<'a> {
-    family: &'a [TransferShape],
+    rail: RingRail,
     entry: bool,
     outputs: &'a [Output],
     evidence: AuditEvidence,

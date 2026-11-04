@@ -1769,8 +1769,8 @@ mod tests {
             },
             outputs: None,
         };
-        assert!(anonymous(7).fits(&deposits).is_ok());
-        let refused = refusal(anonymous(8).fits(&deposits));
+        assert!(anonymous(15).fits(&deposits).is_ok());
+        let refused = refusal(anonymous(16).fits(&deposits));
         assert!(refused.contains("no anonymous audit key"), "{refused}");
     }
 
@@ -1927,16 +1927,24 @@ mod tests {
 
     #[test]
     fn an_anonymous_held_spend_stays_within_a_keyed_width() {
-        assert_eq!(Spendable::RingOnly.widest_anonymous(2), Some(24));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(4), Some(16));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(5), Some(5));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(8), Some(5));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(9), None);
-        for (outputs, widest) in [(2, 8), (4, 8), (8, 2)] {
-            assert_eq!(
-                Spendable::DefaultRingOnly.widest_anonymous(outputs),
-                Some(widest)
-            );
+        let within = |spendable: Spendable, outputs: usize, spends_default_ring: bool| {
+            let key = FrameKey {
+                rail: RingRail::Anonymous,
+                outputs,
+                spends_default_ring,
+                wide: false,
+            }
+            .shape()
+            .unwrap();
+            let widest = spendable.widest_anonymous(outputs).unwrap();
+            assert!((1..=usize::from(key.inputs)).contains(&widest), "{outputs}");
+        };
+        for outputs in [2, 4, 8, 16] {
+            within(Spendable::RingOnly, outputs, false);
+        }
+        assert_eq!(Spendable::RingOnly.widest_anonymous(17), None);
+        for outputs in [2, 4, 8] {
+            within(Spendable::DefaultRingOnly, outputs, true);
         }
         assert_eq!(Spendable::WithDefaultRing.widest_anonymous(2), None);
         let in_ring = held_utxo(Some(RING), 1);

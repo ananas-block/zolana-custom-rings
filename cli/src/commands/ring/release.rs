@@ -188,7 +188,7 @@ mod tests {
         );
         let key = release.key(RING_KEYS[0]).expect_err("no key").to_string();
         assert!(
-            key.contains("ships no key for custom-ring-transfer-confidential-2-in24-w4"),
+            key.contains(&format!("ships no key for {}", RING_KEYS[0].name)),
             "{key}"
         );
         assert_eq!(
