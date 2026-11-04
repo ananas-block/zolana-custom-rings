@@ -9176,6 +9176,7 @@ dependencies = [
  "ctr",
  "custom-ring-interface",
  "hex",
+ "hkdf",
  "percent-encoding",
  "serde",
  "serde_json",

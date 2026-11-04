@@ -13,6 +13,8 @@ pub enum RingKeyError {
     Hasher(#[from] HasherError),
     #[error("the keypair holds no viewing key for the requested public key")]
     UnknownViewingKey,
+    #[error("merge seed is not a nonzero field element")]
+    InvalidMergeSeed,
     #[error("ring payment request does not start with zolana:")]
     InvalidRingAddressScheme,
     #[error("ring address is not base58")]
