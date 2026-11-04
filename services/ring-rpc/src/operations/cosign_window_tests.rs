@@ -8,6 +8,7 @@ use solana_message::Message;
 use zolana_ring_policy::AssetLimits;
 
 use super::*;
+use crate::cosign::ApproveClass;
 
 const RING: Address = Address::new_from_array([9; 32]);
 const SOL: Address = Address::new_from_array([3; 32]);
@@ -48,6 +49,14 @@ struct Clocked {
 }
 
 impl AssetLimitSource for Clocked {
+    async fn co_signer_scope(
+        &self,
+        _ring: Address,
+        _signer: Address,
+    ) -> Result<CoSignScope, RingRpcError> {
+        Ok(CoSignScope::ALL)
+    }
+
     async fn current_slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.slot.load(Ordering::Relaxed))
     }
@@ -77,6 +86,7 @@ impl AssetLimitSource for Clocked {
             flows: self.frame.clone(),
             spends_note: true,
             approval_bits: None,
+            co_signers: Vec::new(),
         }))
     }
 }

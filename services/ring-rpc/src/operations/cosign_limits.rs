@@ -1,6 +1,7 @@
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
 use async_trait::async_trait;
+use custom_ring_interface::CoSignScope;
 use sea_orm::TransactionTrait;
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -13,8 +14,8 @@ use zolana_ring_policy::{
 
 use crate::{
     cosign::{
-        ApproveClass, AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy,
-        CoSignRefusal, CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow,
+        AssetFlow, CoSignDecision, CoSignError, CoSignFlows, CoSignPolicy, CoSignRefusal,
+        CoSignRequest, CoSignSettlement, CoSignerApproval, OwnerFlow,
     },
     cosign_usage::{Reservation, Reserve, UsageLedger, UsageWindow},
     database::Store,
@@ -33,6 +34,13 @@ pub trait AssetLimitSource: Send + Sync {
         ring: Address,
         assets: &[Address],
     ) -> impl Future<Output = Result<Vec<Option<MintPolicy>>, RingRpcError>> + Send;
+
+    /// The classes the ring's record of `signer` holds, none without a record.
+    fn co_signer_scope(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> impl Future<Output = Result<CoSignScope, RingRpcError>> + Send;
 
     /// One flow per owner and asset of the transfer `message` carries, refused on an unknown input.
     fn transfer_flows(
@@ -57,6 +65,8 @@ pub struct TransferRead {
     pub spends_note: bool,
     /// The frame's proven mask, `None` on a frame that carries none.
     pub approval_bits: Option<u8>,
+    /// In run order, each covers the classes the earlier ones left.
+    pub co_signers: Vec<Address>,
 }
 
 /// Reads each asset record under the newest root of the ring's records registry.
@@ -136,7 +146,7 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
 
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
         // 1. The frame names every transfer outflow, an owner and asset appears once.
-        let (flows, operation) = match &request.flows {
+        let (flows, operation, run) = match &request.flows {
             CoSignFlows::Frame => {
                 match self
                     .limits
@@ -155,10 +165,11 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
                             spends_note: read.spends_note,
                             approval_bits: read.approval_bits,
                         },
+                        read.co_signers,
                     ),
                 }
             }
-            CoSignFlows::Published(flows) => (flows.clone(), Operation::Published),
+            CoSignFlows::Published(flows) => (flows.clone(), Operation::Published, Vec::new()),
         };
         let rows: BTreeSet<_> = flows
             .iter()
@@ -190,10 +201,18 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             })
             .collect::<Option<_>>()
             .ok_or(CoSignError::UnrecordedAsset)?;
-        // 3. No explicit approval of a demanded class, no signature, whatever the caps say.
+        // 3. Demanded classes its record holds and the earlier run left, each explicitly approved.
         let mask = approval_mask(&flows, &checks);
+        let signer = self.signer.pubkey();
+        let mut share = operation
+            .demand(&flows, mask)
+            .intersection(self.limits.co_signer_scope(request.ring, signer).await?);
+        for earlier in run.iter().take_while(|approver| **approver != signer) {
+            share = share.without(self.limits.co_signer_scope(request.ring, *earlier).await?);
+        }
         if !operation.frame_holds(mask)
-            || !self.approval.covers_any(&operation.demand(&flows, mask))
+            || share.is_empty()
+            || !self.approval.scope().contains(share)
         {
             return Ok(CoSignDecision::Refused(CoSignRefusal::NotApproved));
         }
@@ -285,6 +304,19 @@ impl<S: TransactionSource + 'static> AssetLimitSource for RecordLimits<S> {
             .collect())
     }
 
+    async fn co_signer_scope(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<CoSignScope, RingRpcError> {
+        Ok(self
+            .0
+            .source
+            .co_signer_scope(ring, signer)
+            .await?
+            .unwrap_or(CoSignScope::NONE))
+    }
+
     async fn transfer_flows(
         &self,
         ring: Address,
@@ -355,30 +387,25 @@ impl Operation {
     }
 
     /// The classes the ring's rule demands of this operation.
-    fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> BTreeSet<ApproveClass> {
-        let mut demand = BTreeSet::new();
-        for moved in flows.iter().map(|flow| flow.flow) {
-            if moved.deposited != 0 {
-                demand.insert(ApproveClass::Deposits);
-            }
-            if moved.withdrawn != 0 {
-                demand.insert(ApproveClass::Withdrawals);
-            }
-        }
-        if mask.contains(ApprovalMask::OUTFLOW) {
-            demand.insert(ApproveClass::Outflow);
-        }
-        if mask.contains(ApprovalMask::WITHDRAWAL) {
-            demand.insert(ApproveClass::Withdrawal);
-        }
+    fn demand(self, flows: &[OwnerFlow], mask: ApprovalMask) -> CoSignScope {
+        let moved = |legs: fn(&AssetFlow) -> u64| flows.iter().any(|flow| legs(&flow.flow) != 0);
+        let when = |held: bool, scope| if held { scope } else { CoSignScope::NONE };
+        let deposits = moved(|flow| flow.deposited);
         let spends_note = match self {
             Self::Transfer { spends_note, .. } => spends_note,
-            Self::Published => !demand.contains(&ApproveClass::Deposits),
+            Self::Published => !deposits,
         };
-        if spends_note {
-            demand.insert(ApproveClass::Transfers);
-        }
-        demand
+        when(deposits, CoSignScope::DEPOSITS)
+            | when(moved(|flow| flow.withdrawn), CoSignScope::WITHDRAWALS)
+            | when(
+                mask.contains(ApprovalMask::OUTFLOW),
+                CoSignScope::APPROVE_OUTFLOW,
+            )
+            | when(
+                mask.contains(ApprovalMask::WITHDRAWAL),
+                CoSignScope::APPROVE_WITHDRAWAL,
+            )
+            | when(spends_note, CoSignScope::TRANSFERS)
     }
 }
 
@@ -491,11 +518,14 @@ mod cosign_window_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use sea_orm::ConnectionTrait;
     use solana_message::Message;
     use zolana_ring_policy::AssetLimits;
 
     use super::*;
+    use crate::cosign::ApproveClass;
 
     const ASSET: Address = Address::new_from_array([3; 32]);
     const SENDER_LIMITS: AssetLimits = AssetLimits {
@@ -631,6 +661,8 @@ mod tests {
     struct FixedLimits {
         limits: Option<MintPolicy>,
         flows: Result<FrameRead, CoSignError>,
+        /// A signer outside it holds every class.
+        scopes: HashMap<Address, CoSignScope>,
     }
 
     impl AssetLimitSource for FixedLimits {
@@ -644,6 +676,18 @@ mod tests {
             assets: &[Address],
         ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
             Ok(vec![self.limits; assets.len()])
+        }
+
+        async fn co_signer_scope(
+            &self,
+            _ring: Address,
+            signer: Address,
+        ) -> Result<CoSignScope, RingRpcError> {
+            Ok(self
+                .scopes
+                .get(&signer)
+                .copied()
+                .unwrap_or(CoSignScope::ALL))
         }
 
         async fn transfer_flows(
@@ -692,6 +736,10 @@ mod tests {
         ])
     }
 
+    fn service_key() -> Address {
+        Keypair::new_from_array([5; 32]).pubkey()
+    }
+
     fn signer_over(store: Store, limits: FixedLimits) -> LimitedCoSigner<FixedLimits> {
         approving(store, limits, all_classes())
     }
@@ -715,6 +763,7 @@ mod tests {
             flows,
             spends_note: true,
             approval_bits: None,
+            co_signers: Vec::new(),
         })
     }
 
@@ -737,6 +786,7 @@ mod tests {
             FixedLimits {
                 limits: Some(limits),
                 flows: Ok(read),
+                scopes: HashMap::from([(service_key(), approval.scope())]),
             },
             approval,
         )
@@ -801,6 +851,7 @@ mod tests {
                 }],
                 spends_note: false,
                 approval_bits: None,
+                co_signers: Vec::new(),
             })
         };
         let outflow = CoSignerApproval::new([ApproveClass::Outflow]);
@@ -826,6 +877,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_approver_signs_only_for_the_classes_the_earlier_run_left() {
+        let other = Address::new_from_array([6; 32]);
+        let over = MintPolicy {
+            cosign_above: 100,
+            withdrawal_threshold: 100,
+            ..MintPolicy::EMPTY
+        };
+        let run = |co_signers| {
+            FrameRead::Transfer(TransferRead {
+                flows: vec![OwnerFlow {
+                    owner: member(7),
+                    flow: AssetFlow {
+                        asset: ASSET,
+                        outflow: 101,
+                        deposited: 0,
+                        withdrawn: 101,
+                    },
+                }],
+                spends_note: false,
+                approval_bits: None,
+                co_signers,
+            })
+        };
+        let decide = |co_signers| async {
+            let store = Store::open("sqlite::memory:", 1).await.expect("store");
+            approving(
+                store,
+                FixedLimits {
+                    limits: Some(over),
+                    flows: Ok(run(co_signers)),
+                    scopes: HashMap::from([(
+                        other,
+                        CoSignScope::APPROVE_WITHDRAWAL | CoSignScope::WITHDRAWALS,
+                    )]),
+                },
+                CoSignerApproval::new([ApproveClass::Outflow]),
+            )
+            .decide(&frame_request())
+            .await
+            .expect("decision")
+        };
+        assert!(matches!(
+            decide(vec![other, service_key()]).await,
+            CoSignDecision::Signed(_)
+        ));
+        assert_eq!(
+            decide(vec![service_key()]).await,
+            CoSignDecision::Refused(CoSignRefusal::NotApproved),
+            "alone its signature would cover the withdrawal it does not approve"
+        );
+    }
+
+    #[tokio::test]
     async fn a_delegate_frame_reads_no_limit_and_reserves_nothing() {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let reader = store.clone();
@@ -834,6 +938,7 @@ mod tests {
             FixedLimits {
                 limits: None,
                 flows: Ok(FrameRead::Delegate),
+                scopes: HashMap::new(),
             },
             CoSignerApproval::default(),
         );
@@ -848,6 +953,7 @@ mod tests {
         FixedLimits {
             limits: Some(policy(SENDER_LIMITS)),
             flows: Ok(frame(Vec::new())),
+            scopes: HashMap::new(),
         }
     }
 
@@ -884,6 +990,7 @@ mod tests {
             FixedLimits {
                 limits: None,
                 flows: Ok(frame(Vec::new())),
+                scopes: HashMap::new(),
             },
         );
 
@@ -901,6 +1008,7 @@ mod tests {
             FixedLimits {
                 limits: Some(policy(SENDER_LIMITS)),
                 flows: Ok(frame(vec![debit(7, 101)])),
+                scopes: HashMap::new(),
             },
         );
         let decision = co_signer
@@ -922,6 +1030,7 @@ mod tests {
             FixedLimits {
                 limits: Some(policy(SENDER_LIMITS)),
                 flows: Err(CoSignError::LimitsUnavailable),
+                scopes: HashMap::new(),
             },
         );
         assert!(matches!(
