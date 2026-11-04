@@ -20,6 +20,7 @@ import {
   type UtxoReservation,
   equalBytes,
   assertVersion1Transaction,
+  addressBytes,
   compileUnsignedTransaction,
 } from "@heliuslabs/zolana/internal";
 import type { BlockhashProvider, ChainReader, KitRpcAccess } from "@heliuslabs/zolana/client";
@@ -38,10 +39,11 @@ import type {
 } from "../../rpc/ports.js";
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
+import { frameBufferWriter } from "../../protocol/transaction/frame-buffer.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import { fetchTrackingRegistry } from "../../rpc/tracking-resolver.js";
 import { ringComputeUnitLimit } from "../management/admin.js";
-import { BufferedFrame } from "../payments/buffered-frame.js";
+import { BufferedFrame, closeFrameBuffer } from "../payments/buffered-frame.js";
 import { TransactionFit } from "./address-ceiling.js";
 import {
   boundState,
@@ -73,11 +75,11 @@ export interface RingFrameUpload {
   readonly chain: Pick<ChainReader, "getAccount"> & BlockhashProvider;
 }
 
-/** Returns a resolved submission's buffer rent, a wallet's record names neither its ring nor its writer. */
+/** What `closeAbandonedFrameBuffers` closes through, a wallet's record names neither ring nor writer. */
 export interface RingBufferReclaim {
   readonly ringProgramId: Address;
   readonly writer: Address;
-  readonly chain: Pick<ChainReader, "getAccount"> & BlockhashProvider;
+  readonly chain: Pick<ChainReader, "getProgramAccounts"> & BlockhashProvider;
   readonly transport: RingSubmissionTransport;
 }
 
@@ -122,20 +124,8 @@ const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
 /**
- * The buffer nonce of a submission, the first eight bytes of its id.
- *
- * A wallet's pending record holds the id and the settlement's signature and no buffer address, and a digest nonce would
- * name a frame the record does not keep. Deriving from the id lets a restarted wallet find the buffer from the record
- * alone. Every attempt of a submission shares the one address, a retry rebuilds only after the close lands, and a frame
- * of another length cannot meet a buffer sized for the last one.
- */
-export function submissionBufferNonce(id: string): bigint {
-  return BigInt(`0x${id.slice(0, 16)}`);
-}
-
-/**
  * One proven transfer as an attempt, Rust `RingSubmission::send`'s choice over the complete transaction, setup included.
- * Without `bufferNonce` a transfer stays inline, a caller holding one transaction has nowhere to land writes.
+ * Clear `buffered` keeps a transfer inline, a caller holding one transaction has nowhere to land writes.
  */
 export async function provenRingAttempt(
   input: Readonly<{
@@ -144,7 +134,7 @@ export async function provenRingAttempt(
     chain: RingFrameUpload["chain"];
     transaction: RingTransactionFrame;
     intentHash: Bytes32;
-    bufferNonce?: bigint;
+    buffered: boolean;
   }>,
   context?: RequestContext,
 ): Promise<RingSubmissionAttempt> {
@@ -156,14 +146,11 @@ export async function provenRingAttempt(
   const computeUnitLimit = ringComputeUnitLimit(transactTag(proven.data.rail));
   const signers = fitSigners(feePayer, frame);
   const budget = { ...fitBudget(frame), computeUnitLimit };
-  const fit =
-    input.bufferNonce === undefined
-      ? TransactionFit.inline(inline, signers, budget)
-      : await TransactionFit.of(inline, signers, budget);
+  const fit = input.buffered
+    ? await TransactionFit.of(inline, signers, budget)
+    : TransactionFit.inline(inline, signers, budget);
   const upload =
-    input.bufferNonce !== undefined && fit.transport === "buffered"
-      ? await BufferedFrame.of(inline, feePayer, input.bufferNonce)
-      : undefined;
+    fit.transport === "buffered" ? await BufferedFrame.forWriter(inline, feePayer) : undefined;
   return Object.freeze({
     transaction: compileUnsignedTransaction({
       ...frame,
@@ -376,8 +363,8 @@ export class RingTransactionSubmission {
       for (;;) {
         let concluded = this.#concluded;
         if (concluded === undefined) {
-          // 1. The attempt signs and checkpoints ahead of any write. A restart then finds its record, reads its
-          // signature to a conclusion and reaches the buffer through the record's id.
+          // 1. The attempt signs and checkpoints ahead of any write. A wallet holding no record then has no upload
+          // still relying on a buffer, `closeAbandonedFrameBuffers` reads exactly that.
           const signature = this.#pending ?? (await this.#signAttempt(transport, context));
           // 2. Writes land in order, then the settlement broadcasts once, nothing else spends.
           const landed = await this.#land(signature, transport, context);
@@ -396,11 +383,11 @@ export class RingTransactionSubmission {
           this.#concluded = concluded;
         }
         // 3. Conclusive by here, an expired or refused settlement can no longer land and a failed write never let it
-        // broadcast. The close precedes any rebuild, the next attempt writes to the same address.
+        // broadcast. A rebuilt frame takes another digest and another buffer, so the rent of the old one returns now.
         const closing = await this.#closeBuffer(transport, context);
         if (closing !== undefined)
           return { kind: "unknown", signature: closing, attempts: this.#attempts };
-        // 4. The record leaves last, an interruption before here still names the buffer to a restarted wallet.
+        // 4. The record leaves last, an interruption before here keeps the wallet from reading the buffer as abandoned.
         this.#pending = undefined;
         this.#unsent = undefined;
         this.#written = 0;
@@ -550,7 +537,7 @@ export class RingTransactionSubmission {
   /**
    * `undefined` once the buffer is gone, else the close still on its way. An expired close sends again on the next
    * call, and a buffer no write created stays a miss. A refused close throws with the record kept, its rent and the
-   * notes wait on the writer, `reconcileRingSubmissions` without `reclaim` gives the rent up.
+   * notes wait on the writer, `reconcileRingSubmissions` settles the record and leaves the buffer to a later close.
    */
   async #closeBuffer(
     transport: RingSubmissionTransport,
@@ -577,16 +564,8 @@ export class RingTransactionSubmission {
   }
 }
 
-/**
- * Reads each record to a conclusion. With `reclaim` a concluded attempt's buffer closes ahead of the record's removal,
- * a read past a still open close finds the buffer gone or sends again, and a repeated close costs at most its fee.
- */
 export async function reconcileRingSubmissions(
-  input: WalletPersistence &
-    Readonly<{
-      transport: Pick<RingSubmissionTransport, "status">;
-      reclaim?: RingBufferReclaim;
-    }>,
+  input: WalletPersistence & Readonly<{ transport: Pick<RingSubmissionTransport, "status"> }>,
   context?: RequestContext,
 ): Promise<readonly RingSubmissionResult[]> {
   const results: RingSubmissionResult[] = [];
@@ -616,14 +595,6 @@ export async function reconcileRingSubmissions(
         slot: status.slot,
       });
     } else {
-      const closing =
-        input.reclaim === undefined
-          ? undefined
-          : await sendBufferClose(input.reclaim, pending.id, context);
-      if (closing !== undefined) {
-        results.push({ kind: "unknown", signature: closing, attempts: pending.attempts });
-        continue;
-      }
       input.wallet._releaseReservation(pending.id);
       input.wallet._removePendingSubmission(pending.id);
       results.push(failedSubmission(pending, status));
@@ -633,40 +604,45 @@ export async function reconcileRingSubmissions(
   return results;
 }
 
-/** The signature of a close on its way, `undefined` when no buffer stands at the record's address. */
-async function sendBufferClose(
-  reclaim: RingBufferReclaim,
-  id: string,
-  context: RequestContext | undefined,
-): Promise<Signature | undefined> {
-  const { chain, transport, writer } = reclaim;
-  // The address and the close read the ring, the writer and the nonce, no frame byte.
-  const frame = await BufferedFrame.of(
-    {
-      programAddress: reclaim.ringProgramId,
-      data: Uint8Array.of(RingInstructionTag.transfer),
-    },
-    writer,
-    submissionBufferNonce(id),
-  );
-  if (!(await bufferHeld(chain, frame.buffer, context))) return undefined;
-  const lifetime = await chain.getLatestBlockhash(context);
-  const { signed, signature } = await signUnchanged(
-    transport,
-    compileUnsignedTransaction({
-      feePayer: writer,
-      lifetime,
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.closeFrameBuffer),
-      instructions: [frame.close()],
-    }),
-    context,
-  );
-  const refused = await broadcast(transport, signed, context);
-  if (refused?.kind === "failed")
-    throw new RingError("RING_FRAME_BUFFER_CLOSE", {
-      details: { buffer: frame.buffer, signature },
-    });
-  return signature;
+/**
+ * Returns the rent of the buffers `writer` left on the ring, the signatures of the closes sent, empty once none stands.
+ *
+ * A wallet's record holds no buffer address and a digest nonce names a frame it does not keep, so the chain names them.
+ * Every upload checkpoints its record ahead of its first write, so a wallet holding no record has no upload of its own
+ * still relying on one, and any record refuses with `RING_SUBMISSION_PENDING`. A writer another wallet shares can lose
+ * a buffer that wallet's upload still needs, its settlement then fails before spending and the submission retries.
+ * A close still on its way is sent again, a repeat costs at most its fee.
+ */
+export async function closeAbandonedFrameBuffers(
+  input: RingBufferReclaim & Readonly<{ wallet: Wallet }>,
+  context?: RequestContext,
+): Promise<readonly Signature[]> {
+  const { chain, transport, writer, ringProgramId } = input;
+  if (input.wallet.pendingSubmissions().length > 0) throw new RingError("RING_SUBMISSION_PENDING");
+  const held = await chain.getProgramAccounts(ringProgramId, context);
+  const owned = held.filter(({ account }) => {
+    const bufferWriter = frameBufferWriter(account.data);
+    return bufferWriter !== undefined && equalBytes(bufferWriter, addressBytes(writer));
+  });
+  const signatures: Signature[] = [];
+  for (const { address: buffer } of owned) {
+    const lifetime = await chain.getLatestBlockhash(context);
+    const { signed, signature } = await signUnchanged(
+      transport,
+      compileUnsignedTransaction({
+        feePayer: writer,
+        lifetime,
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.closeFrameBuffer),
+        instructions: [closeFrameBuffer(ringProgramId, writer, buffer)],
+      }),
+      context,
+    );
+    const refused = await broadcast(transport, signed, context);
+    if (refused?.kind === "failed")
+      throw new RingError("RING_FRAME_BUFFER_CLOSE", { details: { buffer, signature } });
+    signatures.push(signature);
+  }
+  return Object.freeze(signatures);
 }
 
 async function bufferHeld(

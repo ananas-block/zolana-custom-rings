@@ -68,7 +68,6 @@ import {
   RingTransactionSubmission,
   checkRetainedEntries,
   provenRingAttempt,
-  submissionBufferNonce,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
@@ -661,7 +660,6 @@ async function buildRingSpend<R>(
       },
     };
     const proven = await proveDirect({ staged, client: params.client, rail, approval }, context);
-    const submission = submitted(retry);
     return await provenRingAttempt(
       {
         proven,
@@ -669,7 +667,7 @@ async function buildRingSpend<R>(
         chain: params.client,
         transaction: approval.transaction,
         intentHash: staged.planned,
-        ...(submission === undefined ? {} : { bufferNonce: submissionBufferNonce(submission) }),
+        buffered: retry.lifetime === "submission",
       },
       context,
     );
@@ -734,11 +732,6 @@ async function relayRingSpend<S, R extends RingRelayRail>(
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError(strategy.errorCode, cause);
   }
-}
-
-/** The submission id of a build a submission drives, the reservation's. */
-function submitted(retry: RingSubmissionBuildState): string | undefined {
-  return retry.lifetime === "submission" ? retry.reservation?.id : undefined;
 }
 
 function relaySpend(rail: RingRelayRail): RingRelaySpend {
@@ -870,7 +863,7 @@ async function stageRingSpend<R>(
     ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
     listSalts: spendListSalts(params),
     // A plain build returns one transaction and a relay writes its own buffer.
-    ...(submitted(retry) === undefined ? {} : { bufferedSettlement: true }),
+    ...(retry.lifetime === "submission" ? { bufferedSettlement: true } : {}),
   });
   return Object.freeze({
     selected,

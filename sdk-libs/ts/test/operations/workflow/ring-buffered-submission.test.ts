@@ -4,7 +4,7 @@ import {
   signTransactionWithSigners,
   type Address,
 } from "@solana/kit";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { addressBytes, compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
 import type {
   Bytes32,
   Instruction,
@@ -19,12 +19,13 @@ import { describe, expect, it, vi } from "vitest";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { BufferedFrame } from "../../../src/operations/payments/buffered-frame.js";
 import {
+  closeAbandonedFrameBuffers,
   reconcileRingSubmissions,
   RingTransactionSubmission,
-  submissionBufferNonce,
   type RingSubmissionAttempt,
 } from "../../../src/operations/workflow/submission.js";
 import { RingProgramError } from "../../../src/protocol/error.js";
+import { FRAME_BUFFER_HEADER_LEN } from "../../../src/protocol/transaction/frame-buffer.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../../src/rpc/ports.js";
 
@@ -53,7 +54,7 @@ function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
 /** A buffered attempt over a chain that answers each sent transaction from `outcomes`, then confirms. */
 async function fixture(outcomes: readonly (RingSubmissionStatus | undefined)[] = []) {
   const payer = await generateKeyPairSigner();
-  const frame = await BufferedFrame.of(inlineFrame(), payer.address, submissionBufferNonce(ID));
+  const frame = await BufferedFrame.forWriter(inlineFrame(), payer.address);
   let bufferHeld = true;
   const chain = {
     getAccount: vi.fn(async (_buffer: Address, _context?: RequestContext) =>
@@ -124,6 +125,16 @@ async function fixture(outcomes: readonly (RingSubmissionStatus | undefined)[] =
 }
 
 describe("a buffered ring submission", () => {
+  it("names one buffer per writer and frame, a resend finds its own", async () => {
+    const f = await fixture();
+    const again = await BufferedFrame.forWriter(inlineFrame(), f.payer.address);
+    expect(again.buffer).toBe(f.frame.buffer);
+    const data = Uint8Array.from(inlineFrame().data ?? []);
+    data[1] = 4;
+    const other = await BufferedFrame.forWriter({ ...inlineFrame(), data }, f.payer.address);
+    expect(other.buffer).not.toBe(f.frame.buffer);
+  });
+
   it("lands every write in order, then broadcasts the settlement once", async () => {
     const f = await fixture();
     const writes = f.frame.writes();
@@ -244,62 +255,41 @@ describe("a buffered ring submission", () => {
   });
 });
 
-describe("reconcileRingSubmissions over a buffered record", () => {
+describe("a buffered record after a restart", () => {
   async function recorded() {
     const f = await fixture();
     f.status.mockResolvedValue({ kind: "unknown" });
     await f.submission.send(f.transport);
-    const store = { save: vi.fn(async () => undefined) };
-    const cipher = walletSnapshotCipher(f.owner);
+    const persistence = {
+      wallet: f.wallet,
+      store: { save: vi.fn(async () => undefined) },
+      cipher: walletSnapshotCipher(f.owner),
+    };
+    const buffer = (writer: Address) => {
+      const data = new Uint8Array(FRAME_BUFFER_HEADER_LEN + 8);
+      data[0] = 16;
+      data.set(addressBytes(writer), 1);
+      return data;
+    };
+    const stranger = await generateKeyPairSigner();
+    const accounts = [
+      { address: f.frame.buffer, account: { data: buffer(f.payer.address) } },
+      { address: stranger.address, account: { data: buffer(stranger.address) } },
+      { address: RING, account: { data: new Uint8Array(64) } },
+    ];
     const reclaim = {
       ringProgramId: RING,
       writer: f.payer.address,
-      chain: f.chain,
+      chain: {
+        getProgramAccounts: vi.fn(async () => accounts as never),
+        getLatestBlockhash: async () => BLOCKHASH,
+      },
       transport: f.transport,
     };
-    const persistence = { wallet: f.wallet, store, cipher };
-    return { ...f, reclaim, persistence };
+    return { ...f, persistence, reclaim };
   }
 
-  it("closes the buffer named by the record's id, the record stays until it is gone", async () => {
-    const f = await recorded();
-    const sentBefore = f.sent.length;
-    const statusOf = { status: async () => ({ kind: "expired" as const }) };
-    const closing = await reconcileRingSubmissions({
-      ...f.persistence,
-      transport: statusOf,
-      reclaim: f.reclaim,
-    });
-    expect(closing[0]?.kind).toBe("unknown");
-    expect(f.chain.getAccount).toHaveBeenCalledWith(f.frame.buffer, undefined);
-    expect(f.sent).toHaveLength(sentBefore + 1);
-    expect(f.carried(sentBefore, f.frame.close())).toBe(true);
-    expect(f.wallet.pendingSubmissions()).toHaveLength(1);
-    f.dropBuffer();
-    const closed = await reconcileRingSubmissions({
-      ...f.persistence,
-      transport: statusOf,
-      reclaim: f.reclaim,
-    });
-    expect(closed[0]?.kind).toBe("failed");
-    expect(f.sent).toHaveLength(sentBefore + 1);
-    expect(f.wallet.pendingSubmissions()).toHaveLength(0);
-  });
-
-  it("leaves the buffer alone while the settlement is unresolved", async () => {
-    const f = await recorded();
-    const sentBefore = f.sent.length;
-    const results = await reconcileRingSubmissions({
-      ...f.persistence,
-      transport: { status: async () => ({ kind: "unknown" as const }) },
-      reclaim: f.reclaim,
-    });
-    expect(results[0]?.kind).toBe("unknown");
-    expect(f.sent).toHaveLength(sentBefore);
-    expect(f.wallet.pendingSubmissions()).toHaveLength(1);
-  });
-
-  it("removes the record with no close when the caller names no reclaim", async () => {
+  it("settles the record by its signature and sends nothing", async () => {
     const f = await recorded();
     const sentBefore = f.sent.length;
     const results = await reconcileRingSubmissions({
@@ -309,5 +299,39 @@ describe("reconcileRingSubmissions over a buffered record", () => {
     expect(results[0]?.kind).toBe("failed");
     expect(f.sent).toHaveLength(sentBefore);
     expect(f.wallet.pendingSubmissions()).toHaveLength(0);
+  });
+
+  it("closes no buffer while the wallet holds a record", async () => {
+    const f = await recorded();
+    await expect(
+      closeAbandonedFrameBuffers({ ...f.reclaim, wallet: f.wallet }),
+    ).rejects.toMatchObject({ code: "RING_SUBMISSION_PENDING" });
+    expect(f.reclaim.chain.getProgramAccounts).not.toHaveBeenCalled();
+  });
+
+  it("closes only the writer's own buffers once no record stands", async () => {
+    const f = await recorded();
+    await reconcileRingSubmissions({
+      ...f.persistence,
+      transport: { status: async () => ({ kind: "expired" as const }) },
+    });
+    const sentBefore = f.sent.length;
+    const closed = await closeAbandonedFrameBuffers({ ...f.reclaim, wallet: f.wallet });
+    expect(closed).toHaveLength(1);
+    expect(f.sent).toHaveLength(sentBefore + 1);
+    const message = new Uint8Array(f.sent[sentBefore]?.messageBytes ?? new Uint8Array());
+    expect(containsBytes(message, addressBytes(f.frame.buffer))).toBe(true);
+  });
+
+  it("throws on a refused close", async () => {
+    const f = await recorded();
+    await reconcileRingSubmissions({
+      ...f.persistence,
+      transport: { status: async () => ({ kind: "expired" as const }) },
+    });
+    f.send.mockResolvedValueOnce({ kind: "failed", customCode: 1 });
+    await expect(
+      closeAbandonedFrameBuffers({ ...f.reclaim, wallet: f.wallet }),
+    ).rejects.toMatchObject({ code: "RING_FRAME_BUFFER_CLOSE" });
   });
 });
