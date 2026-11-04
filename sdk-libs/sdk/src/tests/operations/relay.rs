@@ -1529,6 +1529,25 @@ mod public_signers {
         refused(&pending, &sender, MessageMismatch::Unrequested);
     }
 
+    /// The terms name each create, one with no withdrawal to pay has none.
+    #[tokio::test]
+    async fn an_owners_terms_refuse_a_setup_naming_no_withdrawal() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let transaction = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+            .with_token_account_setup(vec![TokenAccountSetup {
+                owner: SerializablePubkey(Address::new_from_array([0x55; 32])),
+                mint: SerializablePubkey(Address::new_from_array([0x66; 32])),
+            }])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&payee))
+            .unwrap();
+        assert!(matches!(
+            transaction.prepare_relay(client.zolana(), quote()).await,
+            Err(RingError::TokenAccountSetup(_))
+        ));
+    }
+
     /// The sender's slots stay closed to an outside co-signer, it waits on proved totals.
     #[tokio::test]
     async fn an_outside_co_signer_holds_no_terms() {

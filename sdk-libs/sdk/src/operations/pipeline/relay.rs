@@ -89,10 +89,13 @@ impl<R: Rail> WalletRelay<'_, R> {
             self.signer.sign_message(&inputs.message_hash()?)?,
         ));
         let token_account_setup = self.owner.token_account_setup.clone();
-        let setup = sealed
-            .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())
-            .token_account_setup(payer, &token_account_setup)
-            .map_err(|_| RingError::RelayAuditorMessage)?;
+        // The relay refuses a setup naming no withdrawal, only an owner's terms read it here.
+        let setup = match staged.owner_signers.is_empty() {
+            true => Vec::new(),
+            false => sealed
+                .relay_proof_inputs(RelayRail::Confidential, nullifier_key.clone())
+                .token_account_setup(payer, &token_account_setup)?,
+        };
         let terms = sealed.transfer_terms(payer, &setup)?;
         let encode = |rail| {
             sealed

@@ -192,6 +192,8 @@ pub enum RingError {
     MixedOwners { index: usize },
     #[error("a delegate move names one source twice")]
     RepeatedDelegateSource,
+    #[error(transparent)]
+    TokenAccountSetup(#[from] zolana_ring_client::rpc::TokenAccountSetupError),
     #[error("input {index} spends under a key its owner's tracking row does not hold")]
     InputKeyNotEnrolled { index: usize },
     #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]
