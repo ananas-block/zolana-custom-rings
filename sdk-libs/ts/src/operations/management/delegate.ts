@@ -21,10 +21,11 @@ import {
   checkTransactionIntent,
   ownerSolanaAccount,
   type UtxoReservation,
+  encodeBase58,
   equalBytes,
   fetchSplAssetRegistrations,
 } from "@heliuslabs/zolana/internal";
-import type { Address, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
 import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
   approveUnattended,
@@ -36,7 +37,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "./admin.js";
-import { wrapRingError } from "../../protocol/error.js";
+import { RingError, wrapRingError } from "../../protocol/error.js";
 import { boundState } from "../workflow/pipeline.js";
 import {
   DelegateTransfer,
@@ -45,6 +46,7 @@ import {
   type DelegateWithdrawal,
   type RingTransferApproval,
 } from "../payments/transfer-rails.js";
+import { standIn, type CoOwner } from "../payments/ring-spend.js";
 import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
@@ -70,6 +72,8 @@ export interface RingDelegateTransferParams {
   /** A public withdrawal, a delegate takes no deposit leg. */
   readonly withdrawal?: DelegateWithdrawal;
   readonly priorityFeeLamports?: bigint;
+  /** The key the signed request names, fresh unless named. */
+  readonly txViewingKey?: Bytes32;
 }
 
 /** The opened member key proves through the client's proof service. */
@@ -83,21 +87,22 @@ export type RingDelegateRecoveredParams = Omit<
 > &
   Readonly<{
     client: RingDelegateRecoveredClient;
-    source: ShieldedAddress;
-    nullifierKey: NullifierKey;
-    notes: readonly WalletUtxo[];
+    /** Change returns to the owner of the last note spent. */
+    sources: readonly DelegateSource[];
   }>;
+
+export interface DelegateSource {
+  readonly address: ShieldedAddress;
+  /** Recovered from escrow, the proof spends the member's notes with it. */
+  readonly nullifierKey: NullifierKey;
+  readonly notes: readonly WalletUtxo[];
+}
 
 type DelegateMove = Omit<RingDelegateTransferParams, "wallet" | "source" | "approve">;
 
-type DelegateSource =
+type MoveAuthority =
   | Readonly<{ kind: "keys"; keys: WalletKeys; approve: ApprovalHandler }>
-  | Readonly<{
-      kind: "recovered";
-      address: ShieldedAddress;
-      nullifierKey: NullifierKey;
-      proofs: ProofService;
-    }>;
+  | Readonly<{ kind: "recovered"; sources: readonly DelegateSource[]; proofs: ProofService }>;
 
 export function createRingDelegateSubmission(
   input: RingDelegateTransferParams,
@@ -159,51 +164,107 @@ export async function buildRingDelegateRecoveredTransaction(
   ).transaction;
 }
 
-function keysSource(input: RingDelegateTransferParams): DelegateSource {
+function keysSource(input: RingDelegateTransferParams): MoveAuthority {
   return { kind: "keys", keys: input.source, approve: input.approve ?? approveUnattended };
 }
 
 function recoveredWallet(input: RingDelegateRecoveredParams): Wallet {
-  const wallet = new Wallet({ identity: input.source });
-  wallet._replace({ utxos: input.notes, transactions: [], nullifiers: new Set() });
+  const [first] = input.sources;
+  if (first === undefined)
+    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
+  const named = new Set(input.sources.map((source) => encodeBase58(source.address.toBytes())));
+  if (named.size !== input.sources.length)
+    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "repeatedSource" } });
+  if (
+    !input.sources.every(({ address, nullifierKey }) =>
+      equalBytes(nullifierKey.publicKey(), address.nullifierPublicKey),
+    )
+  )
+    throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
+  const wallet = new Wallet({ identity: first.address });
+  wallet._replace({
+    utxos: input.sources.flatMap((source) => source.notes),
+    transactions: [],
+    nullifiers: new Set(),
+  });
   return wallet;
 }
 
-function recoveredSource(input: RingDelegateRecoveredParams): DelegateSource {
-  return {
-    kind: "recovered",
-    address: input.source,
-    nullifierKey: input.nullifierKey,
-    proofs: input.client.proofService,
-  };
+function recoveredSource(input: RingDelegateRecoveredParams): MoveAuthority {
+  return { kind: "recovered", sources: input.sources, proofs: input.client.proofService };
 }
 
-/** The source's address and the authority completing its inputs, released when the attempt settles. */
+function movableOwners(authority: MoveAuthority): readonly ShieldedAddress[] {
+  return authority.kind === "keys"
+    ? [authority.keys.address()]
+    : authority.sources.map((source) => source.address);
+}
+
+/** The authority completing the change owner's inputs, released when the attempt ends. */
 function delegateProofs(
-  source: DelegateSource,
-): Readonly<{ address: ShieldedAddress; proofs: ProofAuthority; release(): void }> {
-  if (source.kind === "keys")
-    return { address: source.keys.address(), proofs: source.keys, release: () => {} };
-  const proofs = new NullifierKeyProofAuthority(source.nullifierKey, source.proofs);
-  return { address: source.address, proofs, release: () => proofs.destroy() };
+  authority: MoveAuthority,
+  changeOwner: ShieldedAddress,
+): Readonly<{ proofs: ProofAuthority; release(): void }> {
+  if (authority.kind === "keys") return { proofs: authority.keys, release: () => {} };
+  const source = authority.sources.find(({ address }) =>
+    equalBytes(address.toBytes(), changeOwner.toBytes()),
+  );
+  if (source === undefined)
+    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+  const proofs = new NullifierKeyProofAuthority(source.nullifierKey, authority.proofs);
+  return { proofs, release: () => proofs.destroy() };
 }
 
 async function buildDelegateTransaction(
   input: Readonly<{
     move: DelegateMove;
     wallet: Wallet;
-    source: DelegateSource;
+    source: MoveAuthority;
     retry: RingSubmissionBuildState;
   }>,
   context: RequestContext | undefined,
 ): Promise<RingSubmissionAttempt> {
   const { move, wallet, source, retry } = input;
   const outputs = Object.freeze(move.outputs.map((output) => Object.freeze({ ...output })));
-  const spender = delegateProofs(source);
+  const owners = movableOwners(source);
+  let spender: ReturnType<typeof delegateProofs> | undefined;
   let reservation: UtxoReservation | undefined;
   try {
-    const owner = spender.address;
-    if (!equalBytes(owner.toBytes(), wallet.identity.toBytes())) throw ringIntentMismatch("source");
+    if (
+      source.kind === "keys" &&
+      !owners.every((owner) => equalBytes(owner.toBytes(), wallet.identity.toBytes()))
+    )
+      throw ringIntentMismatch("source");
+    const assets = wallet.registry.clone();
+    for (const { assetId, mint } of await fetchSplAssetRegistrations(move.client, context))
+      assets.register(assetId, mint);
+    const amounts = new Map<Address, bigint>();
+    for (const output of outputs) {
+      assets.assetId(output.asset);
+      amounts.set(output.asset, (amounts.get(output.asset) ?? 0n) + output.amount);
+    }
+    const { withdrawal } = move;
+    if (withdrawal !== undefined)
+      amounts.set(withdrawal.asset, (amounts.get(withdrawal.asset) ?? 0n) + withdrawal.amount);
+    if (retry.entries !== undefined) checkRetainedEntries(wallet, retry.entries);
+    const selected = retry.entries ?? selectSourceNotes(move, wallet, owners, amounts);
+    reservation = retry.reservation ?? reserveEntries(wallet, selected, retry.lifetime);
+    retry.entries = selected;
+    retry.reservation = reservation;
+    const ownerOf = (entry: WalletUtxo): ShieldedAddress => {
+      const found = owners.find((candidate) => entry.utxo.owner.equals(candidate.signingPublicKey));
+      if (found === undefined)
+        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+      return found;
+    };
+    const last = selected.at(-1);
+    if (last === undefined)
+      throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
+    const owner = ownerOf(last);
+    const coSources = delegateCoSources(source, selected.map(ownerOf), owner);
+    // Every note but the last is spent whole, a second mint would pay its change to another owner.
+    if (coSources.length !== 0 && amounts.size > 1)
+      throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
     const intent: TransactionIntent = Object.freeze({
       kind: "ringDelegate",
       ringProgramId: move.ringProgramId,
@@ -218,32 +279,19 @@ async function buildDelegateTransaction(
     if (retry.intent !== undefined && !equalBytes(retry.intent, planned))
       throw ringIntentMismatch("retryIntent");
     retry.intent = planned;
-    const assets = wallet.registry.clone();
-    for (const { assetId, mint } of await fetchSplAssetRegistrations(move.client, context))
-      assets.register(assetId, mint);
-    const amounts = new Map<Address, bigint>();
-    for (const output of outputs) {
-      assets.assetId(output.asset);
-      amounts.set(output.asset, (amounts.get(output.asset) ?? 0n) + output.amount);
-    }
-    const { withdrawal } = move;
-    if (withdrawal !== undefined)
-      amounts.set(withdrawal.asset, (amounts.get(withdrawal.asset) ?? 0n) + withdrawal.amount);
-    if (retry.entries !== undefined) checkRetainedEntries(wallet, retry.entries);
-    const selected = retry.entries ?? selectSourceNotes(move, wallet, owner, amounts);
-    reservation = retry.reservation ?? reserveEntries(wallet, selected, retry.lifetime);
-    retry.entries = selected;
-    retry.reservation = reservation;
+    spender = delegateProofs(source, owner);
     const transfer = DelegateTransfer.new({
       ringProgramId: move.ringProgramId,
       delegate: intent.delegate,
       payer: move.feePayer,
       source: owner,
       sourceProofs: spender.proofs,
-      inputs: selected.map((entry) => ringProofInput(entry, owner, move.client)),
+      inputs: selected.map((entry) => ringProofInput(entry, ownerOf(entry), move.client)),
+      coSources,
       outputs,
       assets,
       outputTreeId: move.client.treeId,
+      ...(move.txViewingKey === undefined ? {} : { txViewingKey: move.txViewingKey }),
       ...(withdrawal === undefined ? {} : { withdrawal }),
     });
     const approval: RingTransferApproval = {
@@ -262,7 +310,14 @@ async function buildDelegateTransaction(
         }
         // SPP's delegate intent names ring outputs alone.
         if (withdrawal === undefined && outputs.every((output) => output.exit !== true))
-          checkPreparedTransfer(prepared, intent, ringIntentMismatch);
+          checkPreparedTransfer(
+            {
+              ...prepared,
+              inputs: prepared.inputs.map((spent) => standIn(spent, owner)),
+            },
+            intent,
+            ringIntentMismatch,
+          );
       },
     };
     const proven = await transfer.proveApproved(move.client, approval, context);
@@ -288,15 +343,29 @@ async function buildDelegateTransaction(
     if (reservation !== undefined) wallet._releaseReservation(reservation.id);
     throw wrapRingError("RING_BUILD_TRANSFER", cause);
   } finally {
-    spender.release();
+    spender?.release();
   }
+}
+
+function delegateCoSources(
+  authority: MoveAuthority,
+  spent: readonly ShieldedAddress[],
+  changeOwner: ShieldedAddress,
+): readonly CoOwner[] {
+  if (authority.kind === "keys") return [];
+  return authority.sources.flatMap(({ address, nullifierKey }) =>
+    !equalBytes(address.toBytes(), changeOwner.toBytes()) &&
+    spent.some((owner) => equalBytes(owner.toBytes(), address.toBytes()))
+      ? [{ owner: address.solanaAddress(), nullifierKey }]
+      : [],
+  );
 }
 
 /** Plain ring notes of the source, one cover per mint inside the widest authority shape holding the outputs. */
 function selectSourceNotes(
   move: DelegateMove,
   wallet: Wallet,
-  owner: ShieldedAddress,
+  owners: readonly ShieldedAddress[],
   amounts: ReadonlyMap<Address, bigint>,
 ): readonly WalletUtxo[] {
   // Every mint may return change, a withdrawal holds a slot of SPP's authority builder.
@@ -324,9 +393,11 @@ function selectSourceNotes(
             entry.utxo.data.utxoData() === undefined &&
             entry.utxo.data.memo() === undefined &&
             (entry.utxo.data.ringData()?.length ?? 0) === 0 &&
-            equalBytes(
-              entry.utxo.owner.ownerProofInputHash(),
-              owner.signingPublicKey.ownerProofInputHash(),
+            owners.some((owner) =>
+              equalBytes(
+                entry.utxo.owner.ownerProofInputHash(),
+                owner.signingPublicKey.ownerProofInputHash(),
+              ),
             ),
           ordering: "largestFirst",
           allowWideBalance: true,

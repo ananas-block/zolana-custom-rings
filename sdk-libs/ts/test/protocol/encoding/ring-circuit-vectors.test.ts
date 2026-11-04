@@ -87,6 +87,7 @@ describe("anonymous_bodies.json", () => {
           viewing.publicKey(),
         ),
         viewingKeys: [viewing],
+        listRoot: viewing,
         nullifierKey,
       });
     };

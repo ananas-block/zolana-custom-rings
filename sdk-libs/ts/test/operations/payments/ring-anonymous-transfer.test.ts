@@ -498,6 +498,7 @@ describe("anonymous ring payment", () => {
       ringDeliverySecrets: (requests) =>
         track("ringDeliverySecrets", local.ringDeliverySecrets(requests)),
       mergeSeeds: (requests) => track("mergeSeeds", local.mergeSeeds(requests)),
+      listSalt: (ring) => track("listSalt", local.listSalt(ring)),
       ringTagMatches: (frames) => track("ringTagMatches", local.ringTagMatches(frames)),
       viewTags: (requests) => track("viewTags", local.viewTags(requests)),
       prove: (inputs, context) => track("prove", local.prove(inputs, context)),

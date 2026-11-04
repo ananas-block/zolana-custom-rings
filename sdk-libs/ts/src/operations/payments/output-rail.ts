@@ -716,7 +716,7 @@ function checkCompactSuffix(outputs: readonly ProofOutputUtxo[]): void {
 }
 
 /** `m` slots, a compact suffix leaves the frame. */
-function publishedOutputs(outputs: readonly ProofOutputUtxo[]): readonly ProofOutputUtxo[] {
+export function publishedOutputs(outputs: readonly ProofOutputUtxo[]): readonly ProofOutputUtxo[] {
   return outputs.filter((output) => !output.isCompact());
 }
 

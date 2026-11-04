@@ -14,6 +14,7 @@ import {
   meta,
   solanaOwnerIdentity,
   treeAddress,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import { type RingProver } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
@@ -26,7 +27,8 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { ShieldedPublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
@@ -268,6 +270,51 @@ export interface SealedTransfer {
   readonly shape: Shape;
   /** The owner signs its `messageHash`. */
   readonly proofInputs: SppProofInputs;
+}
+
+export function sealedTransferTerms(
+  input: Readonly<{
+    ringProgramId: Address;
+    feePayer: Address;
+    sealed: SealedTransfer;
+    ownerSigners: readonly Address[];
+    setup: readonly TokenAccountCreate[];
+  }>,
+): readonly RelayTransferTerms[] {
+  const { sealed, ringProgramId } = input;
+  const { proofInputs } = sealed;
+  return input.ownerSigners.map((signer) => {
+    const key = ShieldedPublicKey.fromEd25519(addressBytes(signer) as Bytes32);
+    const slots = sealed.published.flatMap(({ output }, slot) => {
+      const owner = output.ownerAddress;
+      if (owner === undefined || output.isDummy() || !owner.signingPublicKey.equals(key)) return [];
+      return [
+        Object.freeze({
+          slot,
+          owner: signer,
+          nullifierPk: owner.nullifierPublicKey,
+          mint: output.asset,
+          amount: output.amount,
+          blinding: output.blinding,
+          treeId: proofInputs.outputTreeId,
+          dataHash: output.dataHash ?? ZERO_32,
+          ringDataHash: output.ringDataHash ?? ZERO_32,
+        }),
+      ];
+    });
+    return Object.freeze({
+      ring: ringProgramId,
+      feePayer: input.feePayer,
+      signer,
+      slots: Object.freeze(slots),
+      nullifiers: Object.freeze(
+        proofInputs.inputUtxos
+          .filter((spent) => !spent.isDummy() && spent.utxo.owner.equals(key))
+          .map((spent) => spent.nullifier()),
+      ),
+      setup: input.setup,
+    });
+  });
 }
 
 /** The key a staged transfer selects, every stream counter follows it. */

@@ -30,6 +30,7 @@ import {
   ShieldedAddress,
   ViewingKey,
   X25519PublicKey,
+  ShieldedPublicKey,
 } from "@heliuslabs/zolana/keypair";
 import {
   ProofInputUtxo,
@@ -43,6 +44,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import { AnonymousPlan } from "../../operations/payments/output-rail.js";
+import type { CoOwner } from "../../operations/payments/ring-spend.js";
 import type { RingListSalt } from "../../proof/policy-proof.js";
 import { RingError } from "../error.js";
 
@@ -50,7 +52,7 @@ import { RingError } from "../error.js";
 export type RelayRail =
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan; exitTokenOwner?: Address }>
   | Readonly<{ kind: "confidential" }>
-  | Readonly<{ kind: "delegate"; delegate: Address }>;
+  | Readonly<{ kind: "delegate"; delegate: Address; plan?: AnonymousPlan }>;
 
 /** Rust `RelayProofInputs`. */
 export interface RelayProofInputs {
@@ -74,6 +76,8 @@ export interface RelayProofInputs {
   readonly assets: AssetRegistry;
   /** Encoding drops the sender's, Ring RPC derives it from `nullifierKey`. */
   readonly listSalts: readonly RingListSalt[];
+  /** The public co-owners whose keys the seal holds. */
+  readonly coOwners: readonly CoOwner[];
 }
 
 export function writeRelayListSalts(
@@ -113,9 +117,17 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
   value.outputs.forEach((output, index) => writeOutput(writer, output, index, value.assets));
   writeExternalData(writer, value.externalData, value.withdrawal);
   writer.bytes(value.blindingSeed, 32, "blindingSeed").u16(value.outputTreeId, "outputTreeId");
-  return writeRelayListSalts(writer, value.listSalts, value.sender)
+  writeRelayListSalts(writer, value.listSalts, value.sender)
     .u8(value.wideOwners ? 1 : 0, "wideOwners")
-    .finish();
+    .u8(value.coOwners.length, "coOwners.length");
+  for (const { owner, nullifierKey } of value.coOwners) {
+    const secret = nullifierKey.secretBytes();
+    writer
+      .bytes(addressBytes(owner), 32, "coOwner.owner")
+      .bytes(secret, BLINDING_LENGTH, "coOwner.nullifierSecret");
+    secret.fill(0);
+  }
+  return writer.finish();
 }
 
 /** Rust `RelayMergeInputs`, Ring RPC derives the merged note from the nullifier key. */
@@ -151,6 +163,7 @@ export function encodeRelayMergeInputs(value: RelayMergeInputs): Uint8Array {
       index,
       leafIndex: value.leafIndexes[index],
       sender: value.sender,
+      coOwners: [],
       assets: value.assets,
     }),
   );
@@ -173,7 +186,7 @@ export async function decodeRelayProofInputs(
   if (!equalBytes(nullifierKey.publicKey(), sender.nullifierPublicKey))
     throw refused("nullifierKey");
   const leafIndexes: bigint[] = [];
-  const inputs = reader.list("inputs", () => {
+  const unresolved = reader.list("inputs", () => {
     const { input, leafIndex } = readInput(reader, sender, nullifierKey);
     leafIndexes.push(leafIndex);
     return input;
@@ -186,7 +199,16 @@ export async function decodeRelayProofInputs(
     Object.freeze({ owner: reader.hash("listSalts.owner"), salt: reader.hash("listSalts.salt") }),
   );
   const wideOwners = reader.u8("wideOwners") === 1;
+  const coOwners = reader.list("coOwners", () =>
+    Object.freeze({
+      owner: reader.address("coOwner.owner"),
+      nullifierKey: NullifierKey.fromSecret(
+        reader.bytes(BLINDING_LENGTH, "coOwner.nullifierSecret") as Bytes31,
+      ),
+    }),
+  );
   reader.done();
+  const inputs = unresolved.map((input) => input(coOwners));
   const legs = await Promise.all(external.legs.map(withdrawalLeg));
   const externalData = createExternalData({
     ...external.fields,
@@ -210,6 +232,7 @@ export async function decodeRelayProofInputs(
     wideOwners,
     assets,
     listSalts,
+    coOwners,
   });
 }
 
@@ -217,15 +240,7 @@ function writeRail(writer: Writer, rail: RelayRail): void {
   switch (rail.kind) {
     case "anonymous": {
       writer.u8(0, "rail");
-      writer.u8(rail.plan.payments.length, "plan.payments.length");
-      for (const payment of rail.plan.payments)
-        writer.bytes(
-          payment.recipient.toBytes(),
-          X25519_PUBLIC_KEY_LENGTH,
-          "plan.payment.recipient",
-        );
-      for (const preimage of rail.plan.dummyPreimages())
-        writer.bytes(preimage, 32, "plan.dummyPreimage");
+      writePlan(writer, rail.plan);
       writer.option(rail.exitTokenOwner, (output, owner) =>
         output.bytes(addressBytes(owner), 32, "exitTokenOwner"),
       );
@@ -236,8 +251,16 @@ function writeRail(writer: Writer, rail: RelayRail): void {
       return;
     case "delegate":
       writer.u8(2, "rail").bytes(addressBytes(rail.delegate), 32, "delegate");
+      writer.option(rail.plan, writePlan);
       return;
   }
+}
+
+function writePlan(writer: Writer, plan: AnonymousPlan): void {
+  writer.u8(plan.payments.length, "plan.payments.length");
+  for (const payment of plan.payments)
+    writer.bytes(payment.recipient.toBytes(), X25519_PUBLIC_KEY_LENGTH, "plan.payment.recipient");
+  for (const preimage of plan.dummyPreimages()) writer.bytes(preimage, 32, "plan.dummyPreimage");
 }
 
 /** A spend of the sender, a dummy or compact padding, the service derives hash and nullifier. */
@@ -262,11 +285,12 @@ function writeInput(
     index,
     leafIndex: value.leafIndexes[index],
     sender: value.sender,
+    coOwners: value.coOwners,
     assets: value.assets,
   });
 }
 
-/** Rust `SpendWire`, refused unless it is a spend of the sender with a named leaf. */
+/** Rust `SpendWire`, refused unless the sender or a held co-owner spends it at a named leaf. */
 function writeSpend(
   writer: Writer,
   spend: Readonly<{
@@ -274,6 +298,7 @@ function writeSpend(
     index: number;
     leafIndex: bigint | undefined;
     sender: ShieldedAddress;
+    coOwners: readonly CoOwner[];
     assets: AssetRegistry;
   }>,
 ): void {
@@ -283,11 +308,20 @@ function writeSpend(
     input.cacheSlot !== undefined ||
     input.isCompact() ||
     input.isDummy() ||
-    !input.utxo.owner.equals(sender.signingPublicKey) ||
-    !equalBytes(input.nullifierPublicKey, sender.nullifierPublicKey) ||
     leafIndex === undefined
   )
     throw refused("input", index);
+  const spentBySender =
+    input.utxo.owner.equals(sender.signingPublicKey) &&
+    equalBytes(input.nullifierPublicKey, sender.nullifierPublicKey);
+  const coOwner = spentBySender
+    ? undefined
+    : spend.coOwners.find(
+        ({ owner, nullifierKey }) =>
+          equalBytes(addressBytes(owner), input.utxo.owner.confidentialViewTag()) &&
+          equalBytes(nullifierKey.publicKey(), input.nullifierPublicKey),
+      );
+  if (!spentBySender && coOwner === undefined) throw refused("input", index);
   const { utxo } = input;
   writer
     .bytes(addressBytes(utxo.asset), 32, "input.asset")
@@ -299,6 +333,7 @@ function writeSpend(
   optionalHash(writer, input.dataHash, "input.dataHash");
   optionalHash(writer, input.ringDataHash, "input.ringDataHash");
   writer.u16(input.treeId, "input.treeId").u64(leafIndex, "input.leafIndex");
+  optionalAddress(writer, coOwner?.owner, "input.coOwner");
 }
 
 function writeOutput(
@@ -416,49 +451,61 @@ class WireReader extends Reader {
   }
 }
 
+function readPlan(reader: WireReader): AnonymousPlan {
+  const payments = reader.list("plan.payments", () => ({
+    recipient: X25519PublicKey.fromBytes(
+      reader.bytes(X25519_PUBLIC_KEY_LENGTH, "plan.payment.recipient"),
+    ),
+    // A reply already sits sealed in the external data, the wire carries no plaintext.
+    reply: null,
+  }));
+  const dummyPreimages = AnonymousPlan.create()
+    .dummyPreimages()
+    .map(() => reader.hash("plan.dummyPreimage"));
+  return AnonymousPlan.fromDummyPreimages(payments, dummyPreimages);
+}
+
 function readRail(reader: WireReader): RelayRail {
   const tag = reader.u8("rail");
   switch (tag) {
     case 0: {
-      const payments = reader.list("plan.payments", () => ({
-        recipient: X25519PublicKey.fromBytes(
-          reader.bytes(X25519_PUBLIC_KEY_LENGTH, "plan.payment.recipient"),
-        ),
-        // A reply already sits sealed in the external data, the wire carries no plaintext.
-        reply: null,
-      }));
-      const dummyPreimages = AnonymousPlan.create()
-        .dummyPreimages()
-        .map(() => reader.hash("plan.dummyPreimage"));
+      const plan = readPlan(reader);
       const exitTokenOwner = reader.option("exitTokenOwner", () =>
         reader.address("exitTokenOwner"),
       );
       return Object.freeze({
         kind: "anonymous",
-        plan: AnonymousPlan.fromDummyPreimages(payments, dummyPreimages),
+        plan,
         ...(exitTokenOwner === undefined ? {} : { exitTokenOwner }),
       });
     }
     case 1:
       return Object.freeze({ kind: "confidential" });
-    case 2:
-      return Object.freeze({ kind: "delegate", delegate: reader.address("delegate") });
+    case 2: {
+      const delegate = reader.address("delegate");
+      const plan = reader.option("plan", () => readPlan(reader));
+      return Object.freeze({ kind: "delegate", delegate, ...(plan === undefined ? {} : { plan }) });
+    }
     default:
       throw refused("rail", tag);
   }
 }
 
+/** A co-owner's key follows the inputs on the wire, each spend resolves once the keys are read. */
 function readInput(
   reader: WireReader,
   sender: ShieldedAddress,
   nullifierKey: NullifierKey,
-): Readonly<{ input: ProofInputUtxo; leafIndex: bigint }> {
+): Readonly<{ input: (coOwners: readonly CoOwner[]) => ProofInputUtxo; leafIndex: bigint }> {
   const tag = reader.u8("input");
-  if (tag === 2)
-    return { input: ProofInputUtxo.compact(reader.u16("input.treeId")), leafIndex: 0n };
+  if (tag === 2) {
+    const compact = ProofInputUtxo.compact(reader.u16("input.treeId"));
+    return { input: () => compact, leafIndex: 0n };
+  }
   if (tag === 1) {
     const blinding = reader.hash("input.blinding");
-    return { input: ProofInputUtxo.dummy(blinding, reader.u16("input.treeId")), leafIndex: 0n };
+    const dummy = ProofInputUtxo.dummy(blinding, reader.u16("input.treeId"));
+    return { input: () => dummy, leafIndex: 0n };
   }
   if (tag !== 0) throw refused("input", tag);
   const asset = reader.address("input.asset");
@@ -473,27 +520,34 @@ function readInput(
   const ringDataHash = reader.option("input.ringDataHash", () => reader.hash("input.ringDataHash"));
   const treeId = reader.u16("input.treeId");
   const leafIndex = reader.u64("input.leafIndex");
-  const utxo = new Utxo({
-    owner: sender.signingPublicKey,
-    asset,
-    amount,
-    blinding,
-    data,
-    ...(ringProgramId === undefined ? {} : { ringProgramId }),
-  });
-  const nullifierPublicKey = nullifierKey.publicKey();
-  const utxoHash = utxo.proofInput(nullifierPublicKey, treeId, dataHash, ringDataHash).hash();
-  return {
-    input: new ProofInputUtxo({
+  const named = reader.option("input.coOwner", () => reader.address("input.coOwner"));
+  const input = (coOwners: readonly CoOwner[]): ProofInputUtxo => {
+    const held = coOwners.find((coOwner) => coOwner.owner === named);
+    if (named !== undefined && held === undefined) throw refused("input", tag);
+    const key = held?.nullifierKey ?? nullifierKey;
+    const utxo = new Utxo({
+      owner:
+        named === undefined
+          ? sender.signingPublicKey
+          : ShieldedPublicKey.fromEd25519(addressBytes(named) as Bytes32),
+      asset,
+      amount,
+      blinding,
+      data,
+      ...(ringProgramId === undefined ? {} : { ringProgramId }),
+    });
+    const nullifierPublicKey = key.publicKey();
+    const utxoHash = utxo.proofInput(nullifierPublicKey, treeId, dataHash, ringDataHash).hash();
+    return new ProofInputUtxo({
       utxo,
       nullifierPublicKey,
-      nullifier: utxo.nullifier(utxoHash, nullifierKey),
+      nullifier: utxo.nullifier(utxoHash, key),
       treeId,
       ...(dataHash === undefined ? {} : { dataHash }),
       ...(ringDataHash === undefined ? {} : { ringDataHash }),
-    }),
-    leafIndex,
+    });
   };
+  return { input, leafIndex };
 }
 
 function readOutput(reader: WireReader): ProofOutputUtxo {

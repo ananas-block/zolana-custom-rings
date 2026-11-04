@@ -49,6 +49,8 @@ export const RingRpcRefusal = Object.freeze({
   sourceUnescrowed: -32222,
   sourceKey: -32223,
   relayUnavailable: -32224,
+  txViewingKey: -32225,
+  notListWriter: -32226,
   readerGrantsInDatabase: -32230,
   enrolmentLists: -32240,
   notConfigAuthority: -32241,

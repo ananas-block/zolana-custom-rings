@@ -414,9 +414,9 @@ describe("atomic progress", () => {
     const bob = new ScanWallet(2);
     const wallet = anonymousWallet(bob, bob.fresh());
     const text = wallet.toJson();
-    expect(() => AnonymousWallet.fromJson(text.replace('"history"', '"version":2,"history"'))).toThrow(
-      "RING_WALLET_DOCUMENT",
-    );
+    expect(() =>
+      AnonymousWallet.fromJson(text.replace('"history"', '"version":2,"history"')),
+    ).toThrow("RING_WALLET_DOCUMENT");
     expect(() =>
       AnonymousWallet.fromJson(text.replace('"claims":[]', '"claims":[{"utxoHash":"zz"}]')),
     ).toThrow("RING_WALLET_DOCUMENT");
@@ -428,6 +428,7 @@ describe("viewing keys", () => {
     return LocalRingKeys.fromKeys({
       address: bob.address,
       viewingKeys: [bob.keypair.viewingKey(), added],
+      listRoot: bob.keypair.viewingKey(),
       nullifierKey: bob.keypair.nullifierKey(),
     });
   }
@@ -526,6 +527,7 @@ describe("viewing keys", () => {
     const holder = LocalRingKeys.fromKeys({
       address: rotatedAddress,
       viewingKeys: [added, bob.keypair.viewingKey()],
+      listRoot: bob.keypair.viewingKey(),
       nullifierKey: bob.keypair.nullifierKey(),
     });
     expect(holder.viewingPublicKeys()).toHaveLength(2);

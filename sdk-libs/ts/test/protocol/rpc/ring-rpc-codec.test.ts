@@ -1,3 +1,5 @@
+import { RingListSaltRequest, RingRpc, listSaltAttestation } from "../../../src/rpc/ring-rpc.js";
+import { encodeGetListSaltRequest } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
 import type { RelayIntent } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import {
   encodeRelayEnrollInputs,
@@ -10,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import {
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
@@ -122,6 +124,74 @@ describe("relay_enroll_inputs.json", () => {
   });
 });
 
+describe("getListSalt", () => {
+  const vector = JSON.parse(
+    readFileSync(
+      new URL("../../../../../test-vectors/rpc/list_salt_request.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { message: string; wire: string };
+  const target = {
+    cluster: new Uint8Array(32).fill(1) as Bytes32,
+    service: filled(2, 32) as Address,
+    ringProgramId: filled(7, 32) as Address,
+  };
+  const owner = filled(3, 32) as Address;
+  const signed = async () => {
+    const writer = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
+    const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
+      (array as Uint8Array).fill(4);
+      return array;
+    });
+    const request = await RingListSaltRequest.forOwner(target, owner)
+      .at(1_700_000_000n)
+      .sign(writer)
+      .finally(() => nonce.mockRestore());
+    return { writer, request };
+  };
+  const answering = (body: unknown) =>
+    new RingRpc("http://ring.example", {
+      allowInsecureHttp: true,
+      fetch: (async () =>
+        new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, ...(body as object) }), {
+          headers: { "content-type": "application/json" },
+        })) as typeof globalThis.fetch,
+    });
+
+  it("signs the writer's request byte for byte as the Rust vector", async () => {
+    const { writer, request } = await signed();
+    const message = listSaltAttestation({
+      target,
+      writer: writer.address,
+      owner,
+      timestamp: 1_700_000_000n,
+      nonce: new Uint8Array(32).fill(4) as Bytes32,
+    });
+    expect(new TextDecoder().decode(message)).toBe(vector.message);
+    expect(JSON.stringify(encodeGetListSaltRequest(request))).toBe(vector.wire);
+  });
+
+  it("reads a salt and an owner with no row", async () => {
+    const { request } = await signed();
+    const salt = new Uint8Array(32).fill(9);
+    const text = getBase58Decoder().decode(salt);
+    await expect(answering({ result: { listSalt: text } }).getListSalt(request)).resolves.toEqual(
+      salt,
+    );
+    await expect(answering({ result: {} }).getListSalt(request)).resolves.toBeUndefined();
+  });
+
+  it("names -32226 as a signer writing no salted list", async () => {
+    const { request } = await signed();
+    await expect(
+      answering({ error: { code: -32226, message: "not a writer" } }).getListSalt(request),
+    ).rejects.toMatchObject({
+      code: "RING_RPC_REFUSED",
+      details: { method: "getListSalt", refusal: "notListWriter" },
+    });
+  });
+});
+
 describe("prepareAuthorityTransfer", () => {
   it("signs the delegate's request byte for byte as the Rust vector", async () => {
     const vector = JSON.parse(
@@ -141,7 +211,7 @@ describe("prepareAuthorityTransfer", () => {
       ringProgramId: filled(7, 32) as Address,
     };
     const transfer = {
-      source: address(5),
+      sources: [address(5)],
       mint: filled(3, 32) as Address,
       payments: [{ recipient: address(9), amount: 250n }],
     };
@@ -159,6 +229,7 @@ describe("prepareAuthorityTransfer", () => {
     });
     const signed = await RingAuthorityTransferRequest.forTransfer(target, transfer)
       .at(1_700_000_000n)
+      .withTxViewingKey(ViewingKey.fromBytes(new Uint8Array(32).fill(6) as Bytes32).secretBytes())
       .sign(delegate)
       .finally(() => nonce.mockRestore());
     expect(JSON.stringify(encodePrepareAuthorityTransferRequest(signed))).toBe(vector.wire);

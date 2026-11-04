@@ -16,6 +16,7 @@ import type {
   MergeSettings,
   PendingEnrolment,
   PendingEnrolmentsPage,
+  GetListSaltRequest,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordsRegistry,
@@ -97,6 +98,13 @@ export function encodePrepareRelayRequest(value: PrepareRelayRequest): WireObjec
       validUntilSlot: toU64(value.quote.validUntilSlot, "quote.validUntilSlot"),
     },
     intent: encodeRelayIntent(value.intent),
+    ...(value.coSigners === undefined || value.coSigners.length === 0
+      ? {}
+      : {
+          coSigners: value.coSigners.map((signer, index) =>
+            checkedAddress(signer, `coSigners[${index}]`),
+          ),
+        }),
   };
 }
 
@@ -425,6 +433,18 @@ export function encodePrepareAuthorityTransferRequest(
   };
 }
 
+/** Rust `GetListSaltRequest`, its serialization byte for byte. */
+export function encodeGetListSaltRequest(value: GetListSaltRequest): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    writer: checkedAddress(value.writer, "writer"),
+    owner: checkedAddress(value.owner, "owner"),
+    timestamp: toU64(value.timestamp, "timestamp"),
+    nonce: checkedBase64(value.nonce, "nonce"),
+    signature: checkedSignature(value.signature, "signature"),
+  };
+}
+
 function checkedTxKey(key: Bytes32): Bytes32 {
   if (key.length !== 32) throw new RingError("RING_RPC", { details: { path: "txViewingKey" } });
   return key;
@@ -432,7 +452,7 @@ function checkedTxKey(key: Bytes32): Bytes32 {
 
 function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {
   return {
-    source: shieldedAddressText(value.source),
+    sources: value.sources.map(shieldedAddressText),
     mint: checkedAddress(value.mint, "transfer.mint"),
     payments: value.payments.map((payment, index) => ({
       recipient: shieldedAddressText(payment.recipient),

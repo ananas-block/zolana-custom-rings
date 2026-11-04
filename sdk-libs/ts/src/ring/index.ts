@@ -251,14 +251,23 @@ export type {
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
 export {
+  OwnerApproval,
   PendingRelaySignature,
+  type OwnerApprovalInput,
   PreparedAuthorityTransfer,
   PreparedRelay,
   relayId,
   submittedRelay,
 } from "../rpc/relay.js";
 export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
-export { VerifiedRelayMessage } from "../rpc/relay-message.js";
+export {
+  VerifiedRelayMessage,
+  decodeRelayTransferTerms,
+  encodeRelayTransferTerms,
+  type RelayTransferTerms,
+  type SlotOpening,
+  type TokenAccountCreate,
+} from "../rpc/relay-message.js";
 export type { RelayMessageMismatch } from "../rpc/relay-message.js";
 export type {
   AuthorityPayment,
@@ -268,6 +277,7 @@ export type {
   GetPendingEnrolmentsRequest,
   PendingEnrolment,
   PendingEnrolmentsPage,
+  GetListSaltRequest,
   PrepareAuthorityTransferRequest,
   RefuseEnrolmentRequest,
   PrepareRelayRequest,
@@ -329,6 +339,7 @@ export {
   createRingDelegateSubmission,
 } from "../operations/management/delegate.js";
 export type {
+  DelegateSource,
   RingDelegateRecoveredClient,
   RingDelegateRecoveredParams,
   RingDelegateTransferClient,
@@ -472,6 +483,8 @@ export {
   RingAuditedUtxosRequest,
   RingAuditorKeyRequest,
   RingAuthorityTransferRequest,
+  RingListSaltRequest,
+  listSaltAttestation,
   RingReadRequest,
   RingReaderGrantRequest,
   RingRpc,
@@ -555,6 +568,10 @@ export {
   type EnrollmentSeal,
   type WriteOwnerGrant,
 } from "../operations/management/enrollment.js";
+export {
+  prepareEnrollRelay,
+  prepareEnrollmentRelay,
+} from "../operations/management/enroll-relay.js";
 export {
   TRACKING_CAPACITY,
   TRACKING_EMPTY_ROOT,
