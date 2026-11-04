@@ -58,6 +58,12 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
 
     // 1. `init` pins the Block row from `ring.toml` at generation 1.
     let Subscriber { project, ring_rpc } = init_subscriber(&rings, FORBID_BLOCK_TOML)?;
+    custom_ring_test_validator::policy::EnrollOwners {
+        ring,
+        owners: &[sender, blocked, &clean],
+        env,
+    }
+    .send()?;
     let pinned = policy_registry(ring, env)?;
     assert_eq!(pinned.rule_table()?, BLOCK_ONLY);
     assert_eq!(pinned.generation(), 1);
@@ -211,6 +217,7 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
         project,
         ring_rpc: _ring_rpc,
     } = init_subscriber(&rings, &block(CURATED_BLOCK_TOML, &rings))?;
+    custom_ring_test_validator::policy::enroll_actors(env, ring)?;
     let pinned = policy_registry(ring, env)?;
     assert_eq!(pinned.rule_table()?, APPROVAL_OR_UNBLOCKED);
     assert_eq!(pinned.generation(), 1);

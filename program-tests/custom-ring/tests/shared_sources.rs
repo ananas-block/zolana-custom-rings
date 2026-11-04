@@ -51,6 +51,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         },
     }
     .send(&env.client)?;
+    custom_ring_test_validator::policy::enroll_actors(env, subscriber)?;
     let _ring_rpc = RingRpcSpec {
         env,
         ring: subscriber.program_id(),

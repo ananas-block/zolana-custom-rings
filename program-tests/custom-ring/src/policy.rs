@@ -11,24 +11,28 @@ use custom_ring_cli::{wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
-    storage_instruction::{AddressWriteData, StorageUpdateIxData, StorageWriteData, UpdateMode},
-    AuthorizedAddress, QueueEntry, RecordWriteData, RingPolicy, WriteRecordsIxData,
+    storage_instruction::{EnrollIxData, StorageUpdateIxData},
+    tracking::TrackingAuthorization,
+    RecordWriteData, RingPolicy, WriteRecordsIxData,
 };
 use custom_ring_sdk::{
-    address_enrollment, CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
-    DepositRecipient, EnrollAddress, InitializeStorage, ProvenRingTransfer, RingDeposit,
+    CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
+    Enroll, EnrollInstruction, EnrollPending, InitializeStorage, ProvenRingTransfer, RingDeposit,
     RingDepositReceipt, RingError, StorageApplyProof, UpdateStorage,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
+use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient, Rpc};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
 use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer, ViewingHistory};
-use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
+use zolana_ring_indexer::{
+    rpc::{GetStorageApplyProofInputsRequest, StorageWriteView},
+    tracking::GetPendingEnrollmentsRequest,
+};
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject,
 };
@@ -167,6 +171,7 @@ impl RingNotes<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: None,
+            list_salt: None,
         }
     }
 
@@ -313,11 +318,11 @@ impl RegistryWrite<'_> {
             },
         }
         .check()?;
-        let write = StorageWriteData::Record(RecordWriteData {
+        let write = RecordWriteData {
             member: *self.member.as_bytes(),
             lists: WriteRecordsIxData::new(lists),
             mint_policy: mint_policy_write(None),
-        });
+        };
         StorageRecords {
             ring: self.ring,
             writes: vec![write],
@@ -328,71 +333,144 @@ impl RegistryWrite<'_> {
     }
 }
 
-/// Each owner's address, signed by the owner, applied and indexed on return, an anonymous sender or recipient needs one.
-pub struct EnrollAddresses<'a> {
+/// `None` before its first enrollment.
+pub fn owner_enrollment(
+    env: &TestEnv,
+    ring: CustomRing,
+    owner: Address,
+) -> Result<Option<TrackingAuthorization>> {
+    let tracking = env
+        .run(ring.require_policy(env.client.as_async()))?
+        .tracking;
+    let (authorization, _) = TrackingAuthorization::find_address(&tracking, &owner);
+    env.client
+        .rpc()
+        .get_account(authorization)?
+        .map(|account| {
+            TrackingAuthorization::decode(&account.owner, &account.data)
+                .ok_or_else(|| anyhow!("{authorization} holds no tracking authorization"))
+        })
+        .transpose()
+}
+
+/// The indexer serves the rows on return.
+pub struct ApplyOwnerEnrollments<'a> {
+    pub ring: CustomRing,
+    pub owners: &'a [Address],
+    pub env: &'a TestEnv,
+}
+
+impl ApplyOwnerEnrollments<'_> {
+    pub fn send(self) -> Result<()> {
+        let env = self.env;
+        let registry = env
+            .run(self.ring.require_policy(env.client.as_async()))?
+            .tracking;
+        wait_for("the applied enrollments", || {
+            let mut applied = true;
+            for owner in self.owners {
+                applied &= owner_enrollment(env, self.ring, *owner)?
+                    .is_some_and(|enrollment| !enrollment.is_pending());
+            }
+            if applied {
+                let pending =
+                    env.client
+                        .indexer()
+                        .get_pending_enrollments(GetPendingEnrollmentsRequest {
+                            registry: registry.into(),
+                            after: None,
+                            limit: 1,
+                        })?;
+                return Ok(match pending.enrollments.is_empty() {
+                    true => Probe::Ready(()),
+                    false => Probe::NotYet,
+                });
+            }
+            match env.run(EnrollPending { ring: self.ring }.prove(env.client.ring_client())) {
+                Ok(Some(instruction)) => {
+                    send(env.client.rpc(), &env.payer, &[instruction])?;
+                    Ok(Probe::NotYet)
+                }
+                Ok(None) => Ok(Probe::NotYet),
+                Err(error) if error.is_projection_lag() => Ok(Probe::Retry(error.into())),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+}
+
+/// A first enrollment or a viewing key rotation, applied on return.
+pub struct EnrollOwners<'a> {
     pub ring: CustomRing,
     pub owners: &'a [&'a ShieldedKeypair],
     pub env: &'a TestEnv,
 }
 
-impl EnrollAddresses<'_> {
+impl EnrollOwners<'_> {
     pub fn send(self) -> Result<()> {
         let env = self.env;
         let payer = env.payer.pubkey();
-        let registry = InitializeStorage::records(self.ring, payer).registry();
-        let mut writes = Vec::with_capacity(self.owners.len());
+        let tracking_registry = env
+            .run(self.ring.require_policy(env.client.as_async()))?
+            .tracking;
         for owner in self.owners {
-            let address = owner.shielded_address()?;
-            let enrollment = EnrollAddress {
-                payer,
-                owner: owner.pubkey(),
-                registry,
-                nullifier_pk: address.nullifier_pubkey,
-                viewing_u: address.viewing_pubkey.u(),
+            let instruction = match owner_enrollment(env, self.ring, owner.pubkey())? {
+                Some(enrolled) => EnrollInstruction {
+                    payer,
+                    owner: owner.pubkey(),
+                    tracking_registry,
+                    data: EnrollIxData {
+                        nullifier_pk: enrolled.nullifier_pk,
+                        list_tag: enrolled.list_tag,
+                        viewing_u: owner.viewing_pubkey().u(),
+                        eph_u: enrolled.eph_u,
+                        ciphertext: enrolled.ciphertext,
+                    },
+                    proof: None,
+                }
+                .instruction(),
+                None => env.run(
+                    Enroll {
+                        ring: self.ring,
+                        payer,
+                        owner: owner.pubkey(),
+                        nullifier_key: &owner.nullifier_key,
+                        viewing_key: &owner.viewing_key,
+                    }
+                    .prove(env.client.ring_client()),
+                )?,
             };
             SendAs {
                 rpc: env.client.rpc(),
                 payer: &env.payer,
                 holder: *owner,
             }
-            .send(&[enrollment.instruction()])?;
-            let enrolled = env.run(address_enrollment(
-                env.client.as_async(),
-                registry,
-                owner.pubkey(),
-            ))?;
-            writes.push(StorageWriteData::Address(AddressWriteData {
-                owner: owner.pubkey(),
-                address_revision: enrolled.address_revision.to_le_bytes(),
-            }));
+            .send(&[instruction])?;
         }
-        StorageRecords {
+        let owners: Vec<Address> = self.owners.iter().map(|owner| owner.pubkey()).collect();
+        ApplyOwnerEnrollments {
             ring: self.ring,
-            writes,
+            owners: &owners,
             env,
         }
-        .send()?;
-        let deadline = Instant::now() + INDEXING_TIMEOUT;
-        for owner in self.owners {
-            let member = owner_member(owner)?;
-            while !env
-                .member_record(self.ring, member)
-                .is_ok_and(|read| read.address.is_some())
-            {
-                if Instant::now() > deadline {
-                    return Err(anyhow!("the address of {member:?} not indexed"));
-                }
-                sleep(Duration::from_millis(500));
-            }
-        }
-        Ok(())
+        .send()
     }
+}
+
+/// A keyed note needs its owner's tracking row on every ring.
+pub fn enroll_actors(env: &TestEnv, ring: CustomRing) -> Result<()> {
+    EnrollOwners {
+        ring,
+        owners: &[&env.sender.keypair, &env.recipient.keypair],
+        env,
+    }
+    .send()
 }
 
 /// Needs the payer as storage authority of the ring's records.
 pub struct StorageRecords<'a> {
     pub ring: CustomRing,
-    pub writes: Vec<StorageWriteData>,
+    pub writes: Vec<RecordWriteData>,
     pub env: &'a TestEnv,
 }
 
@@ -406,31 +484,13 @@ impl StorageRecords<'_> {
     ) -> StorageRecords<'_> {
         StorageRecords {
             ring,
-            writes: vec![StorageWriteData::Record(RecordWriteData {
+            writes: vec![RecordWriteData {
                 member: *member.as_bytes(),
                 mint_policy: mint_policy_write(Some(policy)),
                 ..RecordWriteData::default()
-            })],
+            }],
             env,
         }
-    }
-
-    /// An address write reads its hash from the owner's authorization.
-    fn entry(&self, registry: Address, write: &StorageWriteData) -> Result<QueueEntry> {
-        let StorageWriteData::Address(address) = write else {
-            return Ok(write.entry()?);
-        };
-        let enrolled = self.env.run(address_enrollment(
-            self.env.client.as_async(),
-            registry,
-            address.owner,
-        ))?;
-        Ok(address.entry(&AuthorizedAddress {
-            ring_id: enrolled.ring_id.0,
-            nullifier_pk: enrolled.nullifier_pk.0,
-            viewing_u: enrolled.viewing_u.0,
-            address_revision: enrolled.address_revision,
-        })?)
     }
 
     pub fn send(self) -> Result<Signature> {
@@ -440,7 +500,7 @@ impl StorageRecords<'_> {
         let writes = self
             .writes
             .iter()
-            .map(|write| Ok(StorageWriteView::from(&self.entry(registry, write)?)))
+            .map(|write| Ok(StorageWriteView::from(&write.storage_entry()?)))
             .collect::<Result<Vec<_>>>()?;
         let request = GetStorageApplyProofInputsRequest {
             registry: registry.into(),
@@ -455,17 +515,7 @@ impl StorageRecords<'_> {
                 Ok(response) => Ok(Probe::Ready(response)),
                 Err(error) => {
                     let error = RingError::from(error);
-                    let pending_enrollment = self
-                        .writes
-                        .iter()
-                        .any(|write| matches!(write, StorageWriteData::Address(_)))
-                        && (error
-                            .to_string()
-                            .contains("an address write has no enrollment")
-                            || error
-                                .to_string()
-                                .contains("an address write names no newest enrollment"));
-                    if error.is_projection_lag() || pending_enrollment {
+                    if error.is_projection_lag() {
                         Ok(Probe::Retry(error.into()))
                     } else {
                         Err(error.into())
@@ -479,7 +529,6 @@ impl StorageRecords<'_> {
         let update = UpdateStorage {
             authority,
             registry,
-            mode: UpdateMode::Graced,
             data: StorageUpdateIxData {
                 revision: Revision::from(response.revision),
                 writes: self.writes,
