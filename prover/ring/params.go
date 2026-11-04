@@ -99,6 +99,7 @@ type TransferParams struct {
 	Rows              []Field         `json:"rows"`
 	PrivateTxHash     Field           `json:"privateTxHash"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
+	AddressChain      Field           `json:"addressChain"`
 	TrackingParams
 	PolicyParams
 }

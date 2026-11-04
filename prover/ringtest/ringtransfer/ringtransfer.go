@@ -324,7 +324,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 			c.Entries[i] = input.EntryWires()
 		}
 	}
-	c.PrivateTxBlinding = big.NewInt(privateTxBlinding)
+	c.PrivateTxBlinding, c.AddressChain = big.NewInt(privateTxBlinding), 0
 	c.SignerCount = len(run)
 	for k := range c.Signers {
 		c.Signers[k] = 0
@@ -413,7 +413,7 @@ func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
 	t.Helper()
 	inputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.InputUtxos()))
 	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.Utxos()))
-	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, big.NewInt(0), ringtest.AsBigInt(c.PrivateTxBlinding)})
+	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, ringtest.AsBigInt(c.AddressChain), ringtest.AsBigInt(c.PrivateTxBlinding)})
 }
 
 // values is the statement both families share.
