@@ -22,11 +22,12 @@ type batch struct {
 	circuit *registry.ApplyRecordsCircuit
 	writes  []ringregistry.Write
 	// chain[k] is the chain value after k entries, chain[0] the start.
-	chain []*big.Int
+	chain       []*big.Int
+	restrictive bool
 }
 
-func entry(member, mask, value, escrowKey int64) ringregistry.Entry {
-	return ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(mask), Value: big.NewInt(value), EscrowKey: big.NewInt(escrowKey)}
+func entry(member, mask, value int64) ringregistry.Entry {
+	return ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(mask), Value: big.NewInt(value)}
 }
 
 // applyBatch applies entries to members and assigns the capacity-n circuit, padding writes all zero.
@@ -43,6 +44,7 @@ func applyBatch(t *testing.T, members *ringregistry.Registry, n int, chainStart 
 		b.writes = append(b.writes, w)
 		c.Writes[i] = writeWires(w)
 		b.chain = append(b.chain, ringtest.MustPoseidonHash(t, b.chain[i], e.Hash(t)))
+		b.restrictive = b.restrictive || e.Restrictive()
 	}
 	c.NewRoot, c.NewNextIndex, c.ChainEnd = members.Root(), new(big.Int).SetUint64(members.NextIndex()), b.chain[len(entries)]
 	b.bind(t)
@@ -57,6 +59,11 @@ func (b *batch) bind(t *testing.T) {
 	for _, v := range []frontend.Variable{c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count} {
 		statement = append(statement, ringtest.AsBigInt(v))
 	}
+	bit := int64(0)
+	if b.restrictive {
+		bit = 1
+	}
+	statement = append(statement, big.NewInt(bit))
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }
 
@@ -66,30 +73,24 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 	if w.Exists {
 		exists = 1
 	}
-	zero := big.NewInt(0)
-	pair := ringregistry.Preimages{NullifierPk: zero, AddressRing: zero, View0: zero, View1: zero, EscrowCtHash: zero}
-	if e.Pair != nil {
-		pair = *e.Pair
-	}
 	return registry.RecordWrite{
-		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires(), AddressHash: policyValue(e.AddressHash)},
+		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
 		Exists: exists,
 		Old: registry.RecordBody{
-			Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: policyValue(w.OldMintPolicy),
-			WithdrawalThreshold: policyValue(w.OldWithdrawalThreshold), AssetLimits: w.OldAssetLimits.Wires(), AddressHash: policyValue(w.OldAddressHash),
+			Next: w.OldNext, Lists: w.OldLists, MintPolicy: policyValue(w.OldMintPolicy),
+			WithdrawalThreshold: policyValue(w.OldWithdrawalThreshold), AssetLimits: w.OldAssetLimits.Wires(),
 		},
-		Slot:        w.Slot.Wires(),
-		Low:         w.Low.Wires(),
-		LowSlot:     w.LowPath.Wires(),
-		NullifierPk: pair.NullifierPk, AddressRing: pair.AddressRing, View0: pair.View0, View1: pair.View1, AddressRevision: pair.AddressRevision, EscrowCtHash: pair.EscrowCtHash,
+		Slot:    w.Slot.Wires(),
+		Low:     w.Low.Wires(),
+		LowSlot: w.LowPath.Wires(),
 	}
 }
 
 func zeroWrite() registry.RecordWrite {
 	zero := ringregistry.Write{
-		Entry:   entry(0, 0, 0, 0),
-		OldNext: big.NewInt(0), OldLists: big.NewInt(0), OldEscrow: big.NewInt(0),
-		Low: ringregistry.Record{Member: big.NewInt(0), Next: big.NewInt(0), Lists: big.NewInt(0), EscrowKey: big.NewInt(0)},
+		Entry:   entry(0, 0, 0),
+		OldNext: big.NewInt(0), OldLists: big.NewInt(0),
+		Low: ringregistry.Record{Member: big.NewInt(0), Next: big.NewInt(0), Lists: big.NewInt(0)},
 	}
 	for level := range zero.Slot.Siblings {
 		for k := range zero.Slot.Siblings[level] {
@@ -104,33 +105,32 @@ func solve(t *testing.T, c *registry.ApplyRecordsCircuit) error {
 	return test.IsSolved(applyCircuit(t, c.NumWrites), c, ecc.BN254.ScalarField())
 }
 
-// seeded holds alice (0x10) with the allow list and carol (0x30) with a registered key.
+// seeded holds alice (0x10) on the allow list and carol (0x30) on the reader list.
 func seeded(t *testing.T) *ringregistry.Registry {
 	t.Helper()
 	members := ringregistry.New(t)
-	members.Apply(t, entry(0x10, ringregistry.AllowBit, ringregistry.AllowBit, 0))
-	members.Apply(t, entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc1))
+	members.Apply(t, entry(0x10, ringregistry.AllowBit, ringregistry.AllowBit))
+	members.Apply(t, entry(0x30, ringregistry.ReaderBit, ringregistry.ReaderBit))
 	return members
 }
 
 func TestApplyRecordsAppliesTheQueueInOrder(t *testing.T) {
 	members := seeded(t)
 	b := applyBatch(t, members, registry.ApplyBatch, big.NewInt(0x5eed),
-		entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.BlockBit, 0),                       // insert between alice and carol
-		entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0),                                             // alice keeps allow, gains block
-		entry(0x10, ringregistry.AllowBit, 0, 0),                                                                 // alice drops allow, keeps block
-		entry(0x40, ringregistry.AllowBit, 0, 0),                                                                 // an empty record is never inserted
-		entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc2),                                        // carol keeps her first key
-		entry(0x50, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc3),                                        // RegisterKey inserts a new member
-		entry(0x05, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit|ringregistry.BlockBit, 0), // insert below every member
+		entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.BlockBit),                       // insert between alice and carol
+		entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit),                                             // alice keeps allow, gains block
+		entry(0x10, ringregistry.AllowBit, 0),                                                                 // alice drops allow, keeps block
+		entry(0x40, ringregistry.AllowBit, 0),                                                                 // an empty record is never inserted
+		entry(0x50, ringregistry.ReaderBit, ringregistry.ReaderBit),                                           // inserts a new member
+		entry(0x05, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit|ringregistry.BlockBit), // insert below every member
 	)
 	if err := solve(t, b.circuit); err != nil {
 		t.Fatal(err)
 	}
-	for member, want := range map[int64][2]int64{0x10: {ringregistry.BlockBit, 0}, 0x20: {ringregistry.BlockBit, 0}, 0x30: {ringregistry.EscrowBit, 0xc1}, 0x50: {ringregistry.EscrowBit, 0xc3}, 0x05: {ringregistry.AllowBit | ringregistry.BlockBit, 0}} {
+	for member, want := range map[int64]int64{0x10: ringregistry.BlockBit, 0x20: ringregistry.BlockBit, 0x30: ringregistry.ReaderBit, 0x50: ringregistry.ReaderBit, 0x05: ringregistry.AllowBit | ringregistry.BlockBit} {
 		record := members.Opening(big.NewInt(member))
-		if !record.Present || record.Record.Lists.Int64() != want[0] || record.Record.EscrowKey.Int64() != want[1] {
-			t.Fatalf("member %#x: present=%v lists=%v escrow=%v", member, record.Present, record.Record.Lists, record.Record.EscrowKey)
+		if !record.Present || record.Record.Lists.Int64() != want {
+			t.Fatalf("member %#x: present=%v lists=%v", member, record.Present, record.Record.Lists)
 		}
 	}
 	if members.Opening(big.NewInt(0x40)).Present || members.NextIndex() != 6 {
@@ -139,7 +139,7 @@ func TestApplyRecordsAppliesTheQueueInOrder(t *testing.T) {
 	full := ringregistry.New(t)
 	var entries []ringregistry.Entry
 	for i := range registry.ApplyBatch {
-		entries = append(entries, entry(int64(0x100+i), ringregistry.AllowBit, ringregistry.AllowBit, 0))
+		entries = append(entries, entry(int64(0x100+i), ringregistry.AllowBit, ringregistry.AllowBit))
 	}
 	if err := solve(t, applyBatch(t, full, registry.ApplyBatch, big.NewInt(0), entries...).circuit); err != nil {
 		t.Fatalf("full batch: %v", err)
@@ -152,7 +152,7 @@ func TestApplyRecordsRefusals(t *testing.T) {
 	empty := []string{"gadget.AssertZeroWhen", "registry.RecordWrite.apply"}
 	bracket := []string{"ringgadget.AssertOrderedWhen", "registry.RecordWrite.apply"}
 	define := []string{"[assertIsEqual]", "registry.(*ApplyRecordsCircuit).Define"}
-	insert := entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit, 0)
+	insert := entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit)
 	tests := []struct {
 		name    string
 		members func(*testing.T) *ringregistry.Registry
@@ -173,14 +173,14 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			// carol's record opens under the old root, its link starts above 0x20.
 			opening := seeded(t).Opening(big.NewInt(0x30))
 			w := &b.circuit.Writes[0]
-			w.Low.Member, w.Low.Next, w.Low.Lists, w.Low.EscrowKey = opening.Record.Member, opening.Record.Next, opening.Record.Lists, opening.Record.EscrowKey
+			w.Low.Member, w.Low.Next, w.Low.Lists = opening.Record.Member, opening.Record.Next, opening.Record.Lists
 			w.LowSlot = opening.Path.Wires()
 		}, bracket},
-		{"a present member inserted again through the record linking to it", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+		{"a present member inserted again through the record linking to it", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
 			// The sentinel links to alice, so its relink changes nothing and a second alice record follows.
 			members := seeded(t)
 			sentinel := members.Opening(big.NewInt(1))
-			duplicate := ringregistry.Write{Entry: b.writes[0].Entry, OldNext: big.NewInt(0x10), OldLists: big.NewInt(0), OldEscrow: big.NewInt(0),
+			duplicate := ringregistry.Write{Entry: b.writes[0].Entry, OldNext: big.NewInt(0x10), OldLists: big.NewInt(0),
 				Slot: members.Path(members.NextIndex()), Low: sentinel.Record, LowPath: sentinel.Path}
 			b.circuit.Writes[0] = writeWires(duplicate)
 			b.circuit.NewRoot = duplicate.Slot.Root(t, newRecord(duplicate, ringregistry.BlockBit).Hash(t))
@@ -194,18 +194,11 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			forged.bind(t)
 			*b = *forged
 		}, gate},
-		{"an old list bit on an absent member", seeded, 1, []ringregistry.Entry{entry(0x20, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+		{"an old list bit on an absent member", seeded, 1, []ringregistry.Entry{entry(0x20, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
 			listed := seeded(t)
-			listed.Apply(t, entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit|ringregistry.BlockBit, 0))
+			listed.Apply(t, entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit|ringregistry.BlockBit))
 			b.circuit.Writes[0].Old.Lists = big.NewInt(ringregistry.AllowBit)
 			b.circuit.NewRoot = listed.Root()
-			b.bind(t)
-		}, empty},
-		{"an insert carrying an escrow key the queue never held", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
-			keyed := seeded(t)
-			keyed.Apply(t, entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit, 0x99))
-			b.circuit.Writes[0].Old.EscrowKey = big.NewInt(0x99)
-			b.circuit.NewRoot = keyed.Root()
 			b.bind(t)
 		}, empty},
 		{"an insert linking past the low record's next", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
@@ -222,7 +215,7 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			b.circuit.NewRoot, b.circuit.NewNextIndex = w.Slot.Root(t, newRecord(w, ringregistry.AllowBit).Hash(t)), b.circuit.OldNextIndex
 			b.bind(t)
 		}, gate},
-		{"an update over another old record", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+		{"an update over another old record", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
 			// alice holds allow, the forged witness says she held nothing.
 			w := b.writes[0]
 			w.OldLists = big.NewInt(0)
@@ -239,39 +232,43 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			b.circuit.NewRoot = w.Slot.Root(t, newRecord(w, ringregistry.AllowBit).Hash(t))
 			b.bind(t)
 		}, gate},
-		{"second escrow key replaces the first", seeded, 1, []ringregistry.Entry{entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc2)}, func(t *testing.T, b *batch) {
-			b.circuit.NewRoot = replacedKeyRoot(t)
-			b.bind(t)
-		}, define},
-		{"a bit outside the mask changes", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+		{"a bit outside the mask changes", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
 			cleared := ringregistry.New(t)
-			cleared.Apply(t, entry(0x10, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.BlockBit, 0))
-			cleared.Apply(t, entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc1))
+			cleared.Apply(t, entry(0x10, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.BlockBit))
+			cleared.Apply(t, entry(0x30, ringregistry.ReaderBit, ringregistry.ReaderBit))
 			b.circuit.NewRoot = cleared.Root()
 			b.bind(t)
 		}, define},
-		{"an empty record is inserted", seeded, 1, []ringregistry.Entry{entry(0x40, ringregistry.AllowBit, 0, 0)}, func(t *testing.T, b *batch) {
+		{"an empty record is inserted", seeded, 1, []ringregistry.Entry{entry(0x40, ringregistry.AllowBit, 0)}, func(t *testing.T, b *batch) {
 			forged := seeded(t)
 			b.circuit.Writes[0] = writeWires(forged.Insert(t, b.writes[0].Entry))
 			b.circuit.NewRoot, b.circuit.NewNextIndex = forged.Root(), new(big.Int).SetUint64(forged.NextIndex())
 			b.bind(t)
 		}, define},
-		{"a next index advanced past a no-op", seeded, 1, []ringregistry.Entry{entry(0x40, ringregistry.AllowBit, 0, 0)}, func(t *testing.T, b *batch) {
+		{"a next index advanced past a no-op", seeded, 1, []ringregistry.Entry{entry(0x40, ringregistry.AllowBit, 0)}, func(t *testing.T, b *batch) {
 			b.circuit.NewNextIndex = new(big.Int).Add(ringtest.AsBigInt(b.circuit.NewNextIndex), big.NewInt(1))
 			b.bind(t)
 		}, define},
-		{"an entry the chain never held", seeded, 1, []ringregistry.Entry{entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc2)}, func(_ *testing.T, b *batch) {
-			// carol keeps her first key either way, only the chain sees the other entry.
-			b.circuit.Writes[0].Entry.EscrowKey = big.NewInt(0xc3)
+		{"an entry the chain never held", seeded, 1, []ringregistry.Entry{entry(0x30, ringregistry.ReaderBit, ringregistry.ReaderBit)}, func(_ *testing.T, b *batch) {
+			// An unmasked bit already clear keeps the record, only the chain sees the other entry.
+			b.circuit.Writes[0].Entry.Mask = big.NewInt(ringregistry.ReaderBit | ringregistry.AllowBit)
 		}, define},
-		{"the queue applied out of order", seeded, registry.ApplyBatch, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0), entry(0x10, ringregistry.BlockBit, 0, 0)}, func(t *testing.T, b *batch) {
+		{"a restrictive batch stated as permissive", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
+			b.restrictive = false
+			b.bind(t)
+		}, define},
+		{"a permissive batch stated as restrictive", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
+			b.restrictive = true
+			b.bind(t)
+		}, define},
+		{"the queue applied out of order", seeded, registry.ApplyBatch, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit), entry(0x10, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
 			// The writes and the root follow the swapped order, the chain end the queued one.
 			swapped := applyBatch(t, seeded(t), registry.ApplyBatch, b.chain[0], b.writes[1].Entry, b.writes[0].Entry)
 			swapped.circuit.ChainEnd = b.circuit.ChainEnd
 			swapped.bind(t)
 			*b = *swapped
 		}, define},
-		{"a chain end short of the applied writes", seeded, registry.ApplyBatch, []ringregistry.Entry{insert, entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
+		{"a chain end short of the applied writes", seeded, registry.ApplyBatch, []ringregistry.Entry{insert, entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, func(t *testing.T, b *batch) {
 			b.circuit.ChainEnd = b.chain[1]
 			b.bind(t)
 		}, define},
@@ -296,19 +293,15 @@ func TestApplyRecordsRefusals(t *testing.T) {
 }
 
 func newRecord(w ringregistry.Write, lists int64) ringregistry.Record {
-	escrow := w.OldEscrow
-	if escrow.Sign() == 0 {
-		escrow = w.Entry.EscrowKey
-	}
-	return ringregistry.Record{Member: w.Entry.Member, Next: w.OldNext, Lists: big.NewInt(lists), EscrowKey: escrow}
+	return ringregistry.Record{Member: w.Entry.Member, Next: w.OldNext, Lists: big.NewInt(lists)}
 }
 
 // replaced is the seeded registry with low in alice's place.
 func replaced(t *testing.T, low int64) *ringregistry.Registry {
 	t.Helper()
 	members := ringregistry.New(t)
-	members.Apply(t, entry(low, ringregistry.AllowBit, ringregistry.AllowBit, 0))
-	members.Apply(t, entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc1))
+	members.Apply(t, entry(low, ringregistry.AllowBit, ringregistry.AllowBit))
+	members.Apply(t, entry(0x30, ringregistry.ReaderBit, ringregistry.ReaderBit))
 	return members
 }
 
@@ -316,17 +309,54 @@ func replaced(t *testing.T, low int64) *ringregistry.Registry {
 func fourRecords(t *testing.T) *ringregistry.Registry {
 	t.Helper()
 	members := seeded(t)
-	members.Apply(t, entry(0x40, ringregistry.AllowBit, ringregistry.AllowBit, 0))
+	members.Apply(t, entry(0x40, ringregistry.AllowBit, ringregistry.AllowBit))
 	return members
 }
 
-// replacedKeyRoot is the seeded root with carol's key replaced by 0xc2, a root no fill-once write reaches.
-func replacedKeyRoot(t *testing.T) *big.Int {
-	t.Helper()
-	members := ringregistry.New(t)
-	members.Apply(t, entry(0x10, ringregistry.AllowBit, ringregistry.AllowBit, 0))
-	members.Apply(t, entry(0x30, ringregistry.EscrowBit, ringregistry.EscrowBit, 0xc2))
-	return members.Root()
+// Direction of a write decides the bit, list state and rule tables never enter.
+func TestApplyRecordsRestrictiveBit(t *testing.T) {
+	mint := entry(0x10, 0, 0)
+	mint.MintPolicy = new(big.Int).Lsh(big.NewInt(1), 192)
+	for _, tt := range []struct {
+		name    string
+		entries []ringregistry.Entry
+		want    bool
+	}{
+		{"set allow", []ringregistry.Entry{entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit)}, false},
+		{"clear allow", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit, 0)}, true},
+		{"set approval", []ringregistry.Entry{entry(0x20, ringregistry.ApprovalBit, ringregistry.ApprovalBit)}, false},
+		{"clear approval", []ringregistry.Entry{entry(0x10, ringregistry.ApprovalBit, 0)}, true},
+		{"set block", []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, true},
+		{"clear block", []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, 0)}, false},
+		{"set frozen", []ringregistry.Entry{entry(0x10, ringregistry.FrozenBit, ringregistry.FrozenBit)}, true},
+		{"clear frozen", []ringregistry.Entry{entry(0x10, ringregistry.FrozenBit, 0)}, false},
+		{"set reader", []ringregistry.Entry{entry(0x20, ringregistry.ReaderBit, ringregistry.ReaderBit)}, false},
+		{"clear reader", []ringregistry.Entry{entry(0x30, ringregistry.ReaderBit, 0)}, false},
+		{"replace mint settings", []ringregistry.Entry{mint}, true},
+		{"an unmasked write", []ringregistry.Entry{entry(0x10, 0, 0)}, false},
+		{"set allow and clear block", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit)}, false},
+		{"set allow and set frozen", []ringregistry.Entry{entry(0x10, ringregistry.AllowBit|ringregistry.FrozenBit, ringregistry.AllowBit|ringregistry.FrozenBit)}, true},
+		{"a restrictive write after a permissive one", []ringregistry.Entry{entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit), entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit)}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := applyBatch(t, seeded(t), registry.ApplyBatch, big.NewInt(0), tt.entries...)
+			if b.restrictive != tt.want {
+				t.Fatalf("host twin says %v", b.restrictive)
+			}
+			if err := solve(t, b.circuit); err != nil {
+				t.Fatal(err)
+			}
+			b.restrictive = !tt.want
+			b.bind(t)
+			ringtest.RequireRefused(t, solve(t, b.circuit), "[assertIsEqual]", "registry.(*ApplyRecordsCircuit).Define")
+		})
+	}
+	// A padding write past Count holds a deny bit, the bit reads active writes only.
+	b := applyBatch(t, seeded(t), registry.ApplyBatch, big.NewInt(0), entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit))
+	b.circuit.Writes[1].Entry.Mask, b.circuit.Writes[1].Entry.Value = big.NewInt(ringregistry.BlockBit), big.NewInt(ringregistry.BlockBit)
+	if err := solve(t, b.circuit); err != nil {
+		t.Fatalf("padding set the bit: %v", err)
+	}
 }
 
 func TestApplyRecordsKeys(t *testing.T) {

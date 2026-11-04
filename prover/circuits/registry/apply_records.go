@@ -1,6 +1,7 @@
-// Proves that a batch of queued record updates was applied to the registry.
-// Updates apply in queue order with none skipped or added, and the records stay
-// sorted by member, as proofs of a missing record need.
+// Proves that a batch of queued record updates was applied to the registry and
+// whether any of them restricts. Updates apply in queue order with none skipped
+// or added, and the records stay sorted by member, as proofs of a missing record
+// need.
 //
 // Read after registry/registry.go, ringgadget/count.go, shared/width.go. Read
 // before policy/record_pool.go, prover/ring/ring.go.
@@ -22,10 +23,10 @@ import (
 
 // Properties:
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
-// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask, never replaces a registered escrow key, and keeps the address while its entry carries a zero hash.
+// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask.
 // 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
-// 4. The statement binds both roots, both next indexes, both chain ends and the count.
-// 5. A write that leaves a record with both an address and an escrow key, having set either, opens both preimages under one nullifier key.
+// 4. The statement binds both roots, both next indexes, both chain ends, the count and whether any write is restrictive.
+// 5. A write is restrictive when it clears a grant list, sets a deny list or replaces mint settings, a write to any other list is neutral.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -33,21 +34,18 @@ const ApplyBatch = 16
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
-// QueueEntry's EscrowKey is zero except on a RegisterKey write, its AddressHash except on an owner-signed address write.
 type QueueEntry struct {
 	Member              frontend.Variable
 	Mask                frontend.Variable
 	Value               frontend.Variable
-	EscrowKey           frontend.Variable
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
 	AssetLimits         [LimitFields]frontend.Variable
-	AddressHash         frontend.Variable
 }
 
 // Hash is the entry the program chains at write time in program-libs/interface/src/accounts/member_registry.rs.
 func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:], []frontend.Variable{e.AddressHash}))
+	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:]))
 }
 
 // RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
@@ -58,8 +56,6 @@ type RecordWrite struct {
 	Slot    QuadPath
 	Low     Record
 	LowSlot QuadPath
-	// The preimages of the written record's address and escrow key, read only while a write can pair them.
-	NullifierPk, AddressRing, View0, View1, AddressRevision, EscrowCtHash frontend.Variable
 }
 
 type ApplyRecordsCircuit struct {
@@ -79,6 +75,7 @@ type ApplyRecordsCircuit struct {
 
 type registryState struct {
 	root, next, chain frontend.Variable
+	restrictive       frontend.Variable
 }
 
 func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
@@ -95,7 +92,7 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
 	// 2. Every active write moves the running root, next index and chain in queue order.
-	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
+	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart, restrictive: 0}
 	for i, w := range c.Writes {
 		state = w.apply(api, count.Active[i], state)
 	}
@@ -103,26 +100,23 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.next, c.NewNextIndex)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement()))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(state.restrictive)))
 	return nil
 }
 
 // apply moves s by w while active is set, an unset active leaves it.
 func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
 	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
-	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, w.Entry.Mask), w.Entry.Value)}
-	// 2. A registered escrow key is final, a later key leaves it.
-	updated.EscrowKey = api.Select(api.IsZero(w.Old.EscrowKey), w.Entry.EscrowKey, w.Old.EscrowKey)
-	// The 193 bit decomposition range-checks the entry.
+	maskBits := api.ToBinary(w.Entry.Mask, ListBits)
+	valueBits := api.ToBinary(w.Entry.Value, ListBits)
+	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, maskBits), w.Entry.Value)}
+	// 2. Mint settings move only under bit 192 of the entry, the 193 bit decomposition range-checks it.
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
 	updated.MintPolicy = api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.Old.MintPolicy)
 	updated.WithdrawalThreshold = api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.Old.WithdrawalThreshold)
 	for i := range updated.AssetLimits {
 		updated.AssetLimits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.Old.AssetLimits[i])
 	}
-	// A zero hash keeps the address, an authority batch cannot clear one and only the chained entry can set one.
-	updated.AddressHash = api.Select(api.IsZero(w.Entry.AddressHash), w.Old.AddressHash, w.Entry.AddressHash)
-	w.assertAddressMatchesEscrow(api, active, updated)
 	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
@@ -152,27 +146,28 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	// 7. The chain absorbs every active entry, no write is skipped, added or reordered.
 	chain := gadget.PoseidonHash(api, []frontend.Variable{s.chain, w.Entry.Hash(api)})
 	return registryState{
-		root:  api.Select(changes, written, s.root),
-		next:  api.Add(s.next, insert),
-		chain: api.Select(active, chain, s.chain),
+		root:        api.Select(changes, written, s.root),
+		next:        api.Add(s.next, insert),
+		chain:       api.Select(active, chain, s.chain),
+		restrictive: api.Or(s.restrictive, api.Mul(active, Restrictive(api, maskBits, valueBits, policyBits[192]))),
 	}
 }
 
-// assertAddressMatchesEscrow holds the invariant at the running state, conflicting writes of one batch fail at the second and an unrelated write opens no preimage.
-func (w RecordWrite) assertAddressMatchesEscrow(api frontend.API, active frontend.Variable, updated RecordBody) {
-	setsEscrow := api.Mul(api.IsZero(w.Old.EscrowKey), ringgadget.IsNonZero(api, w.Entry.EscrowKey))
-	changed := api.Or(ringgadget.IsNonZero(api, w.Entry.AddressHash), setsEscrow)
-	bound := api.Mul(active, ringgadget.IsNonZero(api, updated.AddressHash), ringgadget.IsNonZero(api, updated.EscrowKey), changed)
-	// A delivery key apart from the escrow key leaves the auditor unable to open what the recipient spends.
-	address := Address{RingID: w.AddressRing, Member: w.Entry.Member, NullifierPk: w.NullifierPk, View: [2]frontend.Variable{w.View0, w.View1}, Revision: w.AddressRevision}
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: bound, A: updated.AddressHash, B: address.Hash(api)})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: bound, A: updated.EscrowKey, B: EscrowKey(api, w.NullifierPk, w.EscrowCtHash)})
+// Restrictive reads Value bits past the mask as set, a list a write sets without masking still counts.
+func Restrictive(api frontend.API, maskBits, valueBits []frontend.Variable, replacesMintPolicy frontend.Variable) frontend.Variable {
+	terms := []frontend.Variable{replacesMintPolicy}
+	for _, bit := range grantListBits {
+		terms = append(terms, api.Mul(maskBits[bit], api.Sub(1, valueBits[bit])))
+	}
+	for _, bit := range denyListBits {
+		terms = append(terms, valueBits[bit])
+	}
+	return ringgadget.IsAny(api, terms...)
 }
 
-func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable {
-	// Both bitmaps hold ListBits bits, the width of every record and queued mask.
+func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Variable) frontend.Variable {
+	// The bitmap holds ListBits bits, the width of every record and queued mask.
 	oldBits := api.ToBinary(old, ListBits)
-	maskBits := api.ToBinary(mask, ListBits)
 	kept := frontend.Variable(0)
 	for i := range oldBits {
 		kept = api.Add(kept, api.Mul(oldBits[i], api.Sub(1, maskBits[i]), new(big.Int).Lsh(big.NewInt(1), uint(i))))
@@ -181,8 +176,8 @@ func keptLists(api frontend.API, old, mask frontend.Variable) frontend.Variable 
 }
 
 // statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/proof/statement.rs.
-func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
+func (c *ApplyRecordsCircuit) statement(restrictive frontend.Variable) []frontend.Variable {
 	return []frontend.Variable{
-		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
+		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count, restrictive,
 	}
 }

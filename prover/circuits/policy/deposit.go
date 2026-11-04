@@ -38,15 +38,16 @@ func (d DepositScreen) Assert(api frontend.API, rc frontend.Rangechecker, policy
 		active := api.Mul(screened, deposit.Active)
 		// The comparator width holds for u64 amounts only.
 		rc.Check(deposit.Amount, 64)
-		lists, _, mintPolicy, _ := d.AssetRecords[i].Resolve(api, active, ownRoot, deposit.Asset)
-		curated, _, _, _ := d.CuratorAssetRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Asset)
-		resolved.assets[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, lists), sourceLists(api, curated)), escrowKey: 0}
+		lists, mintPolicy, _ := d.AssetRecords[i].Resolve(api, active, ownRoot, deposit.Asset)
+		curated, _, _ := d.CuratorAssetRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Asset)
+		resolved.assets[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, lists), sourceLists(api, curated))}
 		resolved.mintPolicies[i] = decodeMintPolicy(api, mintPolicy)
-		ownerLists, _, _, _ := d.OwnerRecords[i].Resolve(api, active, ownRoot, deposit.Owner)
-		curatedOwner, _, _, _ := d.CuratorOwnerRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Owner)
-		resolved.owners[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, ownerLists), sourceLists(api, curatedOwner)), escrowKey: 0}
-		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active}
+		ownerLists, _, _ := d.OwnerRecords[i].Resolve(api, active, ownRoot, deposit.Owner)
+		curatedOwner, _, _ := d.CuratorOwnerRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Owner)
+		resolved.owners[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, ownerLists), sourceLists(api, curatedOwner))}
+		// Public funds are no same-ring input, every deposit is a receipt.
+		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active, Ring: 1}
 	}
 	// 3. Every active owner and asset rule holds for each deposit as for a transfer output.
-	assertPaymentRules(api, newComparator(rc, len(deposits)), screened, screenedRules(api, screened, table), table, resolved, payments)
+	assertPaymentRules(api, newComparator(rc), screenedRules(api, screened, table), table, resolved, payments, nil)
 }

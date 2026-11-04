@@ -68,11 +68,10 @@ pub struct PublicSlots {
 }
 
 impl Default for PublicSlots {
-    /// A transact without legs is still a transfer.
     fn default() -> Self {
         Self {
             slots: ArrayVec::new(),
-            classes: CoSignScope::TRANSFERS,
+            classes: CoSignScope::NONE,
         }
     }
 }
@@ -113,7 +112,8 @@ impl PublicSlots {
         self.slots.is_empty()
     }
 
-    pub fn classes(&self) -> CoSignScope {
+    /// The co-sign classes the public legs add, `NONE` without a leg.
+    pub const fn classes(&self) -> CoSignScope {
         self.classes
     }
 
@@ -282,13 +282,4 @@ pub const fn funder_account_position(transfer: &InterfaceTransfer) -> Option<usi
         InterfaceTransfer::SplDeposit { .. } => Some(2),
         InterfaceTransfer::SolWithdrawal { .. } | InterfaceTransfer::SplWithdrawal { .. } => None,
     }
-}
-
-pub fn merge_ring_instruction_data(output_ring_data_hash: &[u8; 32], merge: &[u8]) -> Vec<u8> {
-    [
-        &[spr_interface::instruction::tag::RING_MERGE_TRANSACT][..],
-        output_ring_data_hash,
-        merge,
-    ]
-    .concat()
 }

@@ -5,7 +5,6 @@ use custom_ring_interface::{
         TransferShape, ANONYMOUS_TRANSFER_SHAPES, CONFIDENTIAL_TRANSFER_SHAPES,
         ENTRY_TRANSFER_SHAPES,
     },
-    storage::Revision,
     tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
 };
 use solana_address::Address;
@@ -19,7 +18,7 @@ use spr_interface::{
 };
 
 use crate::{
-    common::{policy_pda, transact, Ring, Sent, Setup, RECORDS},
+    common::{policy_pda, transact, Ring, Sent, Setup},
     transact_rules::{spp_list, Fixture},
 };
 
@@ -167,11 +166,7 @@ fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTr
         true => fixture.in_proof_owner(&IN_PROOF_OWNER, case.inputs, case.outputs, case.policy),
         false => fixture.transfer(case.rail, case.inputs, case.outputs, case.policy),
     };
-    data.exempt = case.exempt;
-    if case.exempt {
-        data.own_revision = Some(Revision::from(0));
-    }
-    data.full_openings = case.entry;
+    data.entry = case.entry;
     let count = case.legs.count();
     let amount = |leg: usize| 1_000 + leg as u64;
     data.interface_transfers = match case.legs {
@@ -187,8 +182,8 @@ fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTr
             })
             .collect(),
     };
-    if let (Legs::Spl(_), Some(policy)) = (case.legs, &mut data.policy) {
-        policy.spl_withdrawal_owners = &owners[..count];
+    if let Legs::Spl(_) = case.legs {
+        data.spl_withdrawal_owners = &owners[..count];
     }
     fixture.fit_stream(&mut data);
     data
@@ -259,14 +254,9 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
     let mut spp = spp_list(&payer, &data, &owner_run);
     spp.extend(settlements(ring, &data, &owners));
     let policy: RingPolicy = ring.read(&policy_pda());
-    let prefix = match data.exempt && !policy.has_policy() {
-        true => vec![AccountMeta::new_readonly(RECORDS, false)],
-        false => Vec::new(),
-    };
     let accounts = [
         vec![AccountMeta::new_readonly(policy_pda(), false)],
         ring.registries(RootRead::transfer(&policy, false)),
-        prefix,
         spp,
     ]
     .concat();

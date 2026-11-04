@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use spr_hasher::primitives::right_align;
 use zolana_ring_policy::{
-    registry_field, ListId, ListSet, OutputSubjects, PolicySource, RecordLists, Rule, RuleRefusal,
-    RuleTable, RuleTableBuilder, SourceMap, Subject, TableParts, TransferSubject, TransferSubjects,
+    registry_field, DebitInput, ListId, ListSet, OutputSubjects, PolicySource, RecordLists, Rule,
+    RuleRefusal, RuleTable, RuleTableBuilder, SourceMap, Subject, TableParts, TransferSubject,
+    TransferSubjects,
 };
 
 const VECTORS: &str = concat!(
@@ -35,6 +36,7 @@ struct Case {
     own_records: Vec<Record>,
     curator_records: Vec<Record>,
     sender: String,
+    ring_inputs: Vec<RingInput>,
     outputs: Vec<Output>,
     outcome: Outcome,
 }
@@ -52,7 +54,15 @@ struct Record {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct RingInput {
+    owner: String,
+    asset: String,
+    amount: u64,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Output {
+    ring: bool,
     owner: String,
     asset: String,
     amount: u64,
@@ -66,14 +76,6 @@ enum Outcome {
         rule: usize,
         subject: SubjectKind,
         output: Option<usize>,
-    },
-    NoAssetLimit {
-        rule: usize,
-        output: usize,
-    },
-    MixedAssets {
-        rule: usize,
-        output: usize,
     },
 }
 
@@ -90,8 +92,6 @@ impl Outcome {
         match result {
             Ok(()) => Self::Pass,
             Err(RuleRefusal::Lists { rule, subject }) => Self::lists(rule, subject),
-            Err(RuleRefusal::NoAssetLimit { rule, output }) => Self::NoAssetLimit { rule, output },
-            Err(RuleRefusal::MixedAssets { rule, output }) => Self::MixedAssets { rule, output },
         }
     }
 
@@ -155,7 +155,11 @@ struct Spec {
     curated: ListSet,
     own: Vec<([u8; 32], u64)>,
     curated_records: Vec<([u8; 32], u64)>,
+    /// Same-ring inputs, a receipt nets only these.
+    ring_inputs: Vec<([u8; 32], [u8; 32], u64)>,
     outputs: Vec<([u8; 32], [u8; 32], u64)>,
+    /// Positions in `outputs` that leave the ring.
+    exits: Vec<usize>,
     expected: Outcome,
 }
 
@@ -180,7 +184,9 @@ impl Spec {
         let outputs: Vec<Output> = self
             .outputs
             .iter()
-            .map(|(owner, asset, amount)| Output {
+            .enumerate()
+            .map(|(position, (owner, asset, amount))| Output {
+                ring: !self.exits.contains(&position),
                 owner: hex::encode(owner),
                 asset: hex::encode(asset),
                 amount: *amount,
@@ -210,6 +216,15 @@ impl Spec {
             own_records: records(&own),
             curator_records: records(&curated),
             sender: hex::encode(sender()),
+            ring_inputs: self
+                .ring_inputs
+                .iter()
+                .map(|(owner, asset, amount)| RingInput {
+                    owner: hex::encode(owner),
+                    asset: hex::encode(asset),
+                    amount: *amount,
+                })
+                .collect(),
             outputs,
             outcome: self.expected,
         };
@@ -254,6 +269,7 @@ impl Case {
         let lists_of = |member: &[u8; 32]| RecordLists {
             own: lookup(&self.own_records, member),
             curator: lookup(&self.curator_records, member),
+            private: 0,
         };
         let outputs: Vec<OutputSubjects> = self
             .outputs
@@ -262,6 +278,7 @@ impl Case {
                 let owner = bytes(&output.owner);
                 let asset = bytes(&output.asset);
                 OutputSubjects {
+                    ring: output.ring,
                     owner,
                     asset,
                     amount: output.amount,
@@ -277,8 +294,18 @@ impl Case {
                 }
             })
             .collect();
+        let ring_inputs: Vec<DebitInput> = self
+            .ring_inputs
+            .iter()
+            .map(|input| DebitInput {
+                owner: bytes(&input.owner),
+                asset: bytes(&input.asset),
+                amount: input.amount,
+            })
+            .collect();
         let transfer = TransferSubjects {
             sender: lists_of(&bytes(&self.sender)),
+            ring_inputs: &ring_inputs,
             outputs: &outputs,
         };
         Outcome::of(table.admit(&sources, &transfer))
@@ -311,7 +338,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -321,7 +350,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -331,7 +362,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Sender),
         },
         Spec {
@@ -341,7 +374,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), BLOCK)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Sender),
         },
         Spec {
@@ -354,7 +389,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), FROZEN)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -367,7 +404,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), BLOCK | FROZEN)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Sender),
         },
         Spec {
@@ -380,7 +419,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -390,7 +431,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Owner(1)),
         },
         Spec {
@@ -400,7 +443,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_x(), 10), (ZERO_OWNER, asset_x(), 10)],
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -414,7 +459,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -428,7 +475,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), FROZEN)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Owner(1)),
         },
         Spec {
@@ -442,7 +491,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), BLOCK)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -456,7 +507,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), BLOCK | FROZEN)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Owner(1)),
         },
         Spec {
@@ -469,7 +522,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW), (owner_b(), APPROVAL)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -479,7 +534,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(asset_x(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_x(), 10), (owner_a(), asset_y(), 10)],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Asset(1)),
         },
         Spec {
@@ -489,7 +546,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(asset_y(), BLOCK)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_x(), 10), (ZERO_OWNER, asset_y(), 10)],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Asset(1)),
         },
         Spec {
@@ -499,7 +558,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::single(ListId::Block),
             own: vec![(sender(), BLOCK)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -509,7 +570,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::single(ListId::Block),
             own: vec![],
             curated_records: vec![(sender(), BLOCK)],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Sender),
         },
         Spec {
@@ -519,7 +582,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::single(ListId::Block),
             own: vec![(asset_y(), BLOCK)],
             curated_records: vec![(asset_x(), BLOCK)],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_y(), 10), (owner_b(), asset_x(), 10)],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Asset(1)),
         },
         Spec {
@@ -529,7 +594,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::single(ListId::Block),
             own: vec![(owner_a(), ALLOW | BLOCK), (owner_b(), ALLOW)],
             curated_records: vec![(owner_b(), BLOCK)],
+            ring_inputs: vec![],
             outputs: both.clone(),
+            exits: vec![],
             expected: Outcome::lists(1, TransferSubject::Owner(1)),
         },
         Spec {
@@ -540,7 +607,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_b(), asset_x(), 60), (owner_b(), asset_x(), 40)],
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -551,19 +620,23 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_b(), asset_x(), 60), (owner_b(), asset_x(), 41)],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Owner(0)),
         },
         Spec {
-            name: "a_scalar_owner_guard_refuses_two_assets_whatever_the_lists",
+            name: "a_scalar_owner_guard_reads_each_asset_apart",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
             thresholds: vec![],
             curated: ListSet::EMPTY,
-            own: vec![(owner_a(), ALLOW)],
+            own: vec![],
             curated_records: vec![],
-            outputs: vec![(owner_a(), asset_x(), 10), (owner_a(), asset_y(), 10)],
-            expected: Outcome::MixedAssets { rule: 0, output: 1 },
+            ring_inputs: vec![],
+            outputs: vec![(owner_a(), asset_x(), 100), (owner_a(), asset_y(), 100)],
+            exits: vec![],
+            expected: Outcome::Pass,
         },
         Spec {
             name: "a_scalar_asset_guard_sums_the_asset_across_owners",
@@ -573,11 +646,13 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(asset_x(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![
                 (owner_a(), asset_y(), 60),
                 (owner_b(), asset_y(), 50),
                 (owner_a(), asset_x(), 500),
             ],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Asset(0)),
         },
         Spec {
@@ -588,7 +663,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_b(), asset_x(), 30), (owner_b(), asset_x(), 20)],
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -599,19 +676,88 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_b(), asset_x(), 30), (owner_b(), asset_x(), 21)],
+            exits: vec![],
             expected: Outcome::lists(0, TransferSubject::Owner(0)),
         },
         Spec {
-            name: "an_asset_guard_refuses_an_asset_without_a_limit_whatever_the_lists",
+            name: "a_mint_without_a_limit_admits_a_listed_owner",
             table: RuleTable::builder()
                 .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
             thresholds: vec![(asset_x(), 50)],
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_x(), 10), (owner_a(), asset_y(), 10)],
-            expected: Outcome::NoAssetLimit { rule: 0, output: 1 },
+            exits: vec![],
+            expected: Outcome::Pass,
+        },
+        Spec {
+            name: "a_mint_without_a_limit_refuses_an_unlisted_owner",
+            table: RuleTable::builder()
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above_by_asset()),
+            thresholds: vec![(asset_x(), 50)],
+            curated: ListSet::EMPTY,
+            own: vec![],
+            curated_records: vec![],
+            ring_inputs: vec![],
+            outputs: vec![(owner_a(), asset_x(), 10), (owner_a(), asset_y(), 10)],
+            exits: vec![],
+            expected: Outcome::lists(0, TransferSubject::Owner(1)),
+        },
+        Spec {
+            name: "change_adds_no_receipt",
+            table: RuleTable::builder()
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
+            curated: ListSet::EMPTY,
+            own: vec![],
+            curated_records: vec![],
+            ring_inputs: vec![(owner_a(), asset_x(), 160)],
+            outputs: vec![(owner_b(), asset_x(), 60), (owner_a(), asset_x(), 100)],
+            exits: vec![],
+            expected: Outcome::Pass,
+        },
+        Spec {
+            name: "another_owners_input_funds_a_receipt",
+            table: RuleTable::builder()
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
+            curated: ListSet::EMPTY,
+            own: vec![],
+            curated_records: vec![],
+            ring_inputs: vec![(owner_b(), asset_x(), 200), (owner_a(), asset_x(), 10)],
+            outputs: vec![(owner_a(), asset_x(), 210)],
+            exits: vec![],
+            expected: Outcome::lists(0, TransferSubject::Owner(0)),
+        },
+        Spec {
+            name: "an_exit_stays_gross_against_its_owners_inputs",
+            table: RuleTable::builder()
+                .rule(Rule::require(Subject::OutputOwner, ListId::Allow).above(100)),
+            thresholds: vec![],
+            curated: ListSet::EMPTY,
+            own: vec![],
+            curated_records: vec![],
+            ring_inputs: vec![(owner_a(), asset_x(), 101)],
+            outputs: vec![(owner_a(), asset_x(), 101)],
+            exits: vec![0],
+            expected: Outcome::lists(0, TransferSubject::Owner(0)),
+        },
+        Spec {
+            name: "a_scalar_asset_guard_nets_change",
+            table: RuleTable::builder()
+                .rule(Rule::require(Subject::Asset, ListId::Allow).above(100)),
+            thresholds: vec![],
+            curated: ListSet::EMPTY,
+            own: vec![],
+            curated_records: vec![],
+            ring_inputs: vec![(owner_a(), asset_x(), 160)],
+            outputs: vec![(owner_b(), asset_x(), 60), (owner_a(), asset_x(), 100)],
+            exits: vec![],
+            expected: Outcome::Pass,
         },
         Spec {
             name: "an_asset_guard_asks_no_limit_of_a_zero_owner_output",
@@ -621,7 +767,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(owner_a(), ALLOW)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: vec![(owner_a(), asset_x(), 10), (ZERO_OWNER, asset_y(), 10)],
+            exits: vec![],
             expected: Outcome::Pass,
         },
         Spec {
@@ -633,7 +781,9 @@ fn specs() -> Vec<Spec> {
             curated: ListSet::EMPTY,
             own: vec![(sender(), ALLOW), (owner_a(), ALLOW), (asset_x(), BLOCK)],
             curated_records: vec![],
+            ring_inputs: vec![],
             outputs: both,
+            exits: vec![],
             expected: Outcome::lists(1, TransferSubject::Owner(1)),
         },
     ]
@@ -649,11 +799,11 @@ fn compute_vectors() -> PolicyRulesVectors {
                       slot i names a registry field, else from its own record, an absent member \
                       reads zero. A rule holds when the subject is on any list of its present set \
                       or off any list of its absent set. A zero owner carries no owner obligation. \
-                      A scalar guard exempts an owner's or an asset's output total at or below the \
-                      threshold, on an owner rule every output carries one asset. An asset guard \
-                      needs a record threshold for each live owner's output asset and exempts the \
-                      owner's total of that asset within it. The outcome is pass, or the first \
-                      refusal in table order then output order, a mixed asset refusal first. \
+                      An owner's guard per asset is its same-ring outputs less its ring_inputs, floored \
+                      at zero, plus its outputs with ring false. A scalar guard exempts that guard, \
+                      or on an asset rule its sum over the asset's owners, at or below the threshold. \
+                      An asset guard reads the mint's record threshold, zero without one. The outcome \
+                      is pass, or the first refusal in table order then output order. \
                       Produced by program-libs/policy/tests/policy_rules_vector.rs."
             .to_string(),
         cases: specs().into_iter().map(Spec::case).collect(),

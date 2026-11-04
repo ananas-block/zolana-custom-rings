@@ -3,7 +3,7 @@
 use anyhow::{ensure, Result};
 use custom_ring_interface::RingMode;
 use spr_keypair::ShieldedKeypair;
-use zolana_ring_keys::{RingAddress, RingPaymentRequest};
+use zolana_ring_keys::{RingAddress, RingNullifierKey, RingPaymentRequest};
 
 use crate::{file, AddressArgs, Context};
 
@@ -19,10 +19,12 @@ pub fn run(ctx: &Context, args: AddressArgs) -> Result<()> {
         None => ctx.sender()?,
     };
     let member = ShieldedKeypair::from_keypair(&keypair)?;
-    let address = RingAddress {
-        recipient: member.shielded_address()?,
-        ring_program_id: ctx.ring.program_id(),
-    };
+    let ring = ctx.ring.program_id();
+    let address = RingAddress::enrolled(
+        member.shielded_address()?,
+        ring,
+        &RingNullifierKey::derive(&member, &ring)?,
+    )?;
     // Stored before it prints, a sync reads every deposit tag a payer may hold.
     let deposit_tag = ctx.anonymous_wallet_store(&member).update(|wallet| {
         let minted = wallet.history().request_tag(&member)?;
@@ -67,6 +69,7 @@ mod tests {
         uri: String,
         recipient: String,
         ring_program_id: String,
+        list_salt: String,
         deposit_tag: Option<String>,
         amount: Option<String>,
         mint: Option<String>,
@@ -98,6 +101,7 @@ mod tests {
             let address = RingAddress {
                 recipient: ShieldedAddress::from_bytes(&recipient).unwrap(),
                 ring_program_id: case.ring_program_id.parse().unwrap(),
+                list_salt: hex::decode(&case.list_salt).unwrap().try_into().unwrap(),
             };
             let tag = case
                 .deposit_tag

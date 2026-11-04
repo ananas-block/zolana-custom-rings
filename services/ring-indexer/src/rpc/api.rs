@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fmt::Display,
     future::Future,
     ops::Range,
@@ -8,31 +8,31 @@ use std::{
 };
 
 use custom_ring_interface::{
-    check_member,
-    member_registry::{AuthorizedAddress, EscrowKey},
-    mint_policy_write,
+    check_member, mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
-    storage_instruction::StorageWriteData,
-    tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
-    QUAD_ARITY, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
+    tracking::TrackingRegistry,
+    CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH, QUAD_ARITY,
+    QUAD_HEIGHT, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
 use solana_clock::DEFAULT_MS_PER_SLOT;
 use solana_transaction_status_client_types::TransactionDetails;
-use spr_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePubkey};
+use spr_indexer_api::{Context as ApiContext, Hash, SerializablePubkey};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_indexer::{
     rpc::{
         GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
         GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
         GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
-        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingAddressEscrowPairView,
-        RingAuthorizedAddressView, RingEscrowPreimageView, RingIndexedMemberRecordView,
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
         RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
         StorageRootView, StorageWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
-    tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
+    tree::{
+        Canopy, IndexedLeaf, MemberRecord, OpeningCheck, RecordOpening, RecordPoolOf, RecordTree,
+        RecordWriteProofInput,
+    },
 };
 
 use crate::{
@@ -41,9 +41,18 @@ use crate::{
     member_registry::{LoadedRegistry, RecordRead, TreeRead},
     rpc::SolanaRpc,
     storage::{
-        self, RegistryStore, RingCursor, StorageRoot, StorageState, StorageStore, StoredRecord,
-        TreeVersion,
+        self, ProjectedAccount, ProjectedStore, RegistryState, RegistryStore, RingCursor,
+        StorageRoot, StorageState, StoredLeaf, TreeVersion,
     },
+};
+
+mod private_list;
+mod tracking;
+
+pub(crate) use private_list::private_list_writes;
+pub(crate) use tracking::{
+    pending_enrollments, tracking_apply_proof_inputs, tracking_openings, tracking_record_pool,
+    tracking_records,
 };
 
 /// The longest a stalled tip misses a chain move.
@@ -51,11 +60,27 @@ pub(crate) const CONFIRMATION_AGE: Duration = Duration::from_millis(DEFAULT_MS_P
 
 pub(crate) trait ChainSource {
     /// Fails unless `tip` is canonical and the registry account is no older.
-    fn storage_confirmation(
+    fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> impl Future<Output = Result<Confirmation<StorageRegistry>, RingApiError>> + Send;
+    ) -> impl Future<Output = Result<Confirmation<A>, RingApiError>> + Send;
+}
+
+pub(crate) trait CachedAccount: ProjectedAccount + 'static {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self>;
+}
+
+impl CachedAccount for StorageRegistry {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self> {
+        &chain.storage
+    }
+}
+
+impl CachedAccount for TrackingRegistry {
+    fn cache(chain: &CachedChain) -> &ReadCache<Self> {
+        &chain.tracking
+    }
 }
 
 pub(crate) struct Confirmation<T> {
@@ -67,9 +92,10 @@ pub(crate) struct Confirmation<T> {
 pub(crate) struct CachedChain {
     rpc: Arc<SolanaRpc>,
     storage: ReadCache<StorageRegistry>,
+    tracking: ReadCache<TrackingRegistry>,
 }
 
-struct ReadCache<T> {
+pub(crate) struct ReadCache<T> {
     reads: Mutex<HashMap<[u8; 32], Arc<CacheEntry<T>>>>,
 }
 
@@ -95,6 +121,7 @@ impl CachedChain {
         Self {
             rpc,
             storage: ReadCache::default(),
+            tracking: ReadCache::default(),
         }
     }
 }
@@ -135,22 +162,22 @@ impl<T> ReadCache<T> {
 }
 
 impl ChainSource for CachedChain {
-    async fn storage_confirmation(
+    async fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
-        let fetch = self.rpc.storage_confirmation(tip, registry);
-        self.storage.read(*registry, tip, fetch).await
+    ) -> Result<Confirmation<A>, RingApiError> {
+        let fetch = self.rpc.confirmation(tip, registry);
+        A::cache(self).read(*registry, tip, fetch).await
     }
 }
 
 impl ChainSource for SolanaRpc {
-    async fn storage_confirmation(
+    async fn confirmation<A: CachedAccount>(
         &self,
         tip: &BlockMetadata,
         registry: &[u8; 32],
-    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
+    ) -> Result<Confirmation<A>, RingApiError> {
         let context = canonical_context(self, tip).await.map_err(out_of_sync)?;
         let read = self
             .get_multiple_accounts_from_slot(&[Address::new_from_array(*registry)], tip.slot)
@@ -160,8 +187,8 @@ impl ChainSource for SolanaRpc {
             .into_iter()
             .flatten()
             .find(|account| account.owner == STORAGE_PROGRAM_ID)
-            .and_then(|account| StorageRegistry::from_data(&account.data).copied())
-            .ok_or_else(|| out_of_sync("storage registry is not an initialized account"))?;
+            .and_then(|account| A::from_image(&account.data).copied())
+            .ok_or_else(|| out_of_sync("the registry is not an initialized account"))?;
         Ok(Confirmation {
             context,
             chain: Arc::new(chain),
@@ -175,19 +202,25 @@ pub(crate) async fn storage_member_openings(
     request: GetStorageMemberOpeningsRequest,
 ) -> Result<GetStorageMemberOpeningsResponse, RingApiError> {
     check_members(&request.members)?;
-    let read = Snapshot::storage(db, &request.registry)
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
-    let openings = read
-        .load(&request.members, None)
-        .await?
-        .openings(&read.root.root, &request.members)?;
+    let loaded: LoadedRegistry = read.load(&request.members, None).await?;
+    let openings = request
+        .members
+        .iter()
+        .map(|member| {
+            let opened = loaded.opening(&read.root.root, &member.0)?;
+            Ok(RingMemberOpening {
+                present: opened.present,
+                record: member_view(&opened.record),
+                path: opened.path,
+            })
+        })
+        .collect::<Result<Vec<_>, RingApiError>>()?;
     let root = read.root;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageMemberOpeningsResponse {
         context,
         root: storage_root_view(&root),
@@ -201,10 +234,8 @@ pub(crate) async fn storage_member_records(
     chain: &impl ChainSource,
     request: GetStorageMemberRecordsRequest,
 ) -> Result<GetStorageMemberRecordsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid storage page limit"));
-    }
-    let read = Snapshot::storage(db, &request.registry)
+    check_page_limit(request.limit)?;
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -222,12 +253,12 @@ pub(crate) async fn storage_member_records(
         at: root.tree(),
         leaves: request.start_index..end,
     }
-    .read()
-    .await?;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    .read::<QUAD_HEIGHT>()
+    .await?
+    .iter()
+    .map(indexed_member_view)
+    .collect();
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageMemberRecordsResponse {
         context,
         root: storage_root_view(&root),
@@ -247,24 +278,18 @@ pub(crate) async fn storage_record_pool(
         return Err(validation("invalid record pool openings"));
     }
     let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
-    let read = Snapshot::storage(db, &request.registry)
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
-    let pool = read.load(&request.members, Some(canopy)).await?.pool(
-        &read.root.root,
-        &request.members,
-        canopy,
-    )?;
+    let loaded: LoadedRegistry = read.load(&request.members, Some(canopy)).await?;
+    let pool = loaded.pool(&read.root.root, &request.members, canopy)?;
     let root = read.root;
-    let context = read
-        .snapshot
-        .confirm(chain, StorageServed::Root(&root))
-        .await?;
+    let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;
     Ok(GetStorageRecordPoolResponse {
         context,
         root: storage_root_view(&root),
-        records: pool.records,
+        records: pool.records.iter().map(indexed_member_view).collect(),
         canopy: pool.canopy,
         subjects: pool.subjects,
     })
@@ -285,29 +310,22 @@ pub(crate) async fn storage_apply_proof_inputs(
         .map(storage_entry)
         .collect::<Result<Vec<_>, _>>()
         .map_err(validation)?;
-    let snapshot = Snapshot::storage(db, &request.registry).await?;
-    let root = StorageRoot::current(&snapshot.state.account);
+    let snapshot = Snapshot::<StorageState>::policy(db, &request.registry).await?;
+    let root = StorageRoot::current(&*snapshot.state.account);
     let chain_start = chain_start(&request.registry.0, root.revision.into()).map_err(internal)?;
-    let LoadedRegistry { tree, stored } = TreeRead::batch(root.tree(), &entries)
+    let loaded: LoadedRegistry = TreeRead::batch::<QUAD_HEIGHT>(root.tree(), &entries)
         .load(snapshot.store().tree())
         .await
         .map_err(internal)?;
-    let mut inputs = tree
+    let inputs = loaded
+        .tree
         .apply_batch(chain_start, &entries)
         .map_err(internal)?
         .inputs;
     if inputs.old_root != root.root {
         return Err(internal("the loaded tree does not reach the current root"));
     }
-    PairWitnesses {
-        store: &snapshot.store(),
-        stored: &stored,
-    }
-    .fill(&mut inputs.writes, &request.writes)
-    .await?;
-    let context = snapshot
-        .confirm(chain, StorageServed::Current(&root))
-        .await?;
+    let context = snapshot.confirm(chain, Served::Current(&root)).await?;
     Ok(GetStorageApplyProofInputsResponse {
         context,
         revision: root.revision,
@@ -321,116 +339,11 @@ pub(crate) async fn storage_apply_proof_inputs(
     })
 }
 
-/// The hidden fields of one member's record as a batch's writes change them.
-#[derive(Clone, Copy, Default)]
-struct HiddenSides {
-    address: Option<AuthorizedAddress>,
-    escrow: Option<EscrowPreimage>,
-}
-
-#[derive(Clone, Copy)]
-struct EscrowPreimage {
-    nullifier_pk: [u8; 32],
-    ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
-}
-
-impl EscrowPreimage {
-    fn key(&self) -> EscrowKey<'_> {
-        EscrowKey {
-            nullifier_pk: &self.nullifier_pk,
-            ciphertext: &self.ciphertext,
-        }
+fn check_page_limit(limit: u64) -> Result<(), RingApiError> {
+    if limit == 0 || limit > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid page limit"));
     }
-
-    /// Only a preimage of the entry's key reaches the prover.
-    fn requested(
-        view: &RingEscrowPreimageView,
-        escrow_key: &[u8; 32],
-    ) -> Result<Self, RingApiError> {
-        let preimage = Self {
-            nullifier_pk: view.nullifier_pk.0,
-            ciphertext: view
-                .ciphertext
-                .0
-                .as_slice()
-                .try_into()
-                .map_err(|_| validation("invalid escrow ciphertext length"))?,
-        };
-        if preimage.key().hash().map_err(internal)? != *escrow_key {
-            return Err(validation("the escrow preimage does not hash to its key"));
-        }
-        Ok(preimage)
-    }
-}
-
-impl From<&StoredRecord> for HiddenSides {
-    fn from(stored: &StoredRecord) -> Self {
-        Self {
-            address: stored.address,
-            escrow: stored.seal.map(|seal| EscrowPreimage {
-                nullifier_pk: seal.nullifier_pk,
-                ciphertext: seal.ciphertext,
-            }),
-        }
-    }
-}
-
-/// Resolves the preimages each write proves, from the record, its enrollment or the request.
-struct PairWitnesses<'a, C> {
-    store: &'a StorageStore<'a, C>,
-    stored: &'a BTreeMap<[u8; 32], StoredRecord>,
-}
-
-impl<C: ConnectionTrait> PairWitnesses<'_, C> {
-    async fn fill(
-        &self,
-        writes: &mut [RecordWriteProofInput],
-        requested: &[StorageWriteView],
-    ) -> Result<(), RingApiError> {
-        let mut running = BTreeMap::<[u8; 32], HiddenSides>::new();
-        for (input, request) in writes.iter_mut().zip(requested) {
-            let entry = input.entry;
-            let sides = running.entry(entry.member).or_insert_with(|| {
-                self.stored
-                    .get(&entry.member)
-                    .map(Into::into)
-                    .unwrap_or_default()
-            });
-            if entry.address_hash != [0; 32] {
-                sides.address = Some(self.enrolled(&entry.member, &entry.address_hash).await?);
-            }
-            if input.old_escrow == [0; 32] && entry.escrow_key != [0; 32] {
-                sides.escrow = request
-                    .escrow_preimage
-                    .as_ref()
-                    .map(|view| EscrowPreimage::requested(view, &entry.escrow_key))
-                    .transpose()?;
-            }
-            let escrow = sides.escrow.as_ref().map(EscrowPreimage::key);
-            input.pair = input
-                .pair_witness(sides.address.as_ref(), escrow.as_ref())
-                .map_err(validation)?;
-        }
-        Ok(())
-    }
-
-    /// An address write proves only the newest enrollment.
-    async fn enrolled(
-        &self,
-        member: &[u8; 32],
-        address_hash: &[u8; 32],
-    ) -> Result<AuthorizedAddress, RingApiError> {
-        let enrolled = self
-            .store
-            .newest_enrollment(member)
-            .await
-            .map_err(internal)?
-            .ok_or_else(|| validation("an address write has no enrollment"))?;
-        if enrolled.hash(member).map_err(internal)? != *address_hash {
-            return Err(validation("an address write names no newest enrollment"));
-        }
-        Ok(enrolled)
-    }
+    Ok(())
 }
 
 fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
@@ -455,13 +368,20 @@ struct Released<S> {
     state: S,
 }
 
-struct StorageRootRead {
-    snapshot: Snapshot<StorageState>,
+struct RootRead<A> {
+    snapshot: Snapshot<RegistryState<A>>,
     root: StorageRoot,
 }
 
-struct PoolView {
-    records: Vec<RingIndexedMemberRecordView>,
+/// A verified leaf under one root.
+struct OpenedLeaf<L> {
+    present: bool,
+    record: L,
+    path: RingRecordPathView,
+}
+
+struct PoolView<L> {
+    records: Vec<OpenedLeaf<L>>,
     canopy: Vec<Hash>,
     subjects: Vec<u32>,
 }
@@ -498,26 +418,26 @@ impl<S> Snapshot<S> {
 }
 
 /// `leaves` lie below the tree's next index at `at`.
-struct LeafPage<'a, C> {
-    store: &'a RegistryStore<'a, C>,
+struct LeafPage<'a, C, L> {
+    store: &'a RegistryStore<'a, C, L>,
     root: &'a [u8; 32],
     at: TreeVersion,
     leaves: Range<u64>,
 }
 
-impl<C: ConnectionTrait> LeafPage<'_, C> {
-    async fn read(self) -> Result<Vec<RingIndexedMemberRecordView>, RingApiError> {
+impl<C: ConnectionTrait, L: StoredLeaf> LeafPage<'_, C, L> {
+    async fn read<const H: usize>(self) -> Result<Vec<OpenedLeaf<L>>, RingApiError> {
         let rows = self
             .store
             .records_by_index(self.leaves.clone(), self.at.version)
             .await
             .map_err(internal)?;
-        if !rows.iter().map(|row| row.record.index).eq(self.leaves) {
+        if !rows.iter().map(|row| row.index).eq(self.leaves) {
             return Err(RingApiError::PageGap);
         }
         let members = rows
             .iter()
-            .map(|row| row.record.record.member)
+            .map(|row| *row.record.member())
             .collect::<Vec<_>>();
         let read = TreeRead {
             at: self.at,
@@ -525,53 +445,45 @@ impl<C: ConnectionTrait> LeafPage<'_, C> {
             inserts: 0,
             canopy: None,
         };
-        let loaded = read.load(self.store).await.map_err(internal)?;
+        let loaded: LoadedRegistry<L, H> = read.load(self.store).await.map_err(internal)?;
         members
             .iter()
-            .map(|member| {
-                let opening = loaded.opening(self.root, member)?;
-                Ok(RingIndexedMemberRecordView {
-                    record: opening.record,
-                    path: opening.path,
-                })
-            })
+            .map(|member| loaded.opening(self.root, member))
             .collect()
     }
 }
 
-impl Snapshot<StorageState> {
+impl<A: CachedAccount> Snapshot<RegistryState<A>> {
     /// Fails before any RPC while the projection catches up or holds the registry quarantined.
-    async fn storage(
+    async fn registry(
         db: &DatabaseConnection,
         registry: &SerializablePubkey,
     ) -> Result<Self, RingApiError> {
         let Snapshot { tx, tip, .. } = Snapshot::begin(db).await?;
-        let state = StorageStore::new(&tx, registry.0.to_bytes())
+        let state = ProjectedStore::<_, A>::new(&tx, registry.0.to_bytes())
             .state()
             .await
             .map_err(internal)?
             .ok_or_else(|| out_of_sync("initialization has not been indexed"))?;
         if let Some(fault) = &state.fault {
-            return Err(out_of_sync(format!(
-                "storage registry quarantined, {fault}"
-            )));
+            return Err(out_of_sync(format!("registry quarantined, {fault}")));
         }
         Ok(Self { tx, state, tip })
     }
 
-    fn store(&self) -> StorageStore<'_, DatabaseTransaction> {
-        StorageStore::new(&self.tx, self.state.registry)
+    fn store(&self) -> ProjectedStore<'_, DatabaseTransaction, A> {
+        ProjectedStore::new(&self.tx, self.state.registry)
     }
 
     /// The newest revision the registry verifies `root` under at the tip.
-    async fn at_root(self, root: &[u8; 32]) -> Result<StorageRootRead, RingApiError> {
+    async fn at_root(self, root: &[u8; 32]) -> Result<RootRead<A>, RingApiError> {
         let slot = self.tip.as_ref().map_or(0, |tip| tip.slot);
-        let account = &self.state.account;
+        let account = &*self.state.account;
         let revision = account
-            .roots
+            .roots()
             .iter()
             .map(|held| held.revision)
-            .filter(|revision| account.root(*revision, slot) == Ok(*root))
+            .filter(|revision| account.root_at(*revision, slot) == Ok(*root))
             .max_by_key(|revision| revision.value())
             .ok_or(RingApiError::RootChanged)?;
         let root = self
@@ -581,7 +493,7 @@ impl Snapshot<StorageState> {
             .map_err(internal)?
             .filter(|stored| stored.root == *root)
             .ok_or_else(|| internal("a history root is missing from the projection"))?;
-        Ok(StorageRootRead {
+        Ok(RootRead {
             snapshot: self,
             root,
         })
@@ -590,23 +502,37 @@ impl Snapshot<StorageState> {
     async fn confirm(
         self,
         chain: &impl ChainSource,
-        served: StorageServed<'_>,
+        served: Served<'_>,
     ) -> Result<ApiContext, RingApiError> {
         let Released { tip, state } = self.release().await?;
-        let confirmation = chain.storage_confirmation(&tip, &state.registry).await?;
-        if !served.agrees(&confirmation.chain, tip.slot) {
+        let confirmation = chain.confirmation::<A>(&tip, &state.registry).await?;
+        if !served.agrees(&*confirmation.chain, tip.slot) {
             return Err(RingApiError::RootChanged);
         }
         Ok(confirmation.context)
     }
 }
 
-impl StorageRootRead {
-    async fn load(
+impl Snapshot<StorageState> {
+    /// A private source opens no policy record.
+    async fn policy(
+        db: &DatabaseConnection,
+        registry: &SerializablePubkey,
+    ) -> Result<Self, RingApiError> {
+        let snapshot = Self::registry(db, registry).await?;
+        if snapshot.state.account.is_private() {
+            return Err(validation("a private source serves published writes only"));
+        }
+        Ok(snapshot)
+    }
+}
+
+impl<A: CachedAccount> RootRead<A> {
+    async fn load<const H: usize>(
         &self,
         members: &[Hash],
         canopy: Option<Canopy>,
-    ) -> Result<LoadedRegistry, RingApiError> {
+    ) -> Result<LoadedRegistry<A::Leaf, H>, RingApiError> {
         let read = TreeRead {
             at: self.root.tree(),
             records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
@@ -619,58 +545,45 @@ impl StorageRootRead {
     }
 }
 
-enum StorageServed<'r> {
+enum Served<'r> {
     Root(&'r StorageRoot),
     /// Apply proof inputs hold while the current root stays.
     Current(&'r StorageRoot),
+    /// Pending state names no root.
+    Tip,
 }
 
-impl StorageServed<'_> {
-    fn agrees(&self, chain: &StorageRegistry, slot: u64) -> bool {
+impl Served<'_> {
+    fn agrees<A: ProjectedAccount>(&self, chain: &A, slot: u64) -> bool {
         match self {
-            Self::Root(root) => chain.root(Revision::from(root.revision), slot) == Ok(root.root),
+            Self::Root(root) => chain.root_at(Revision::from(root.revision), slot) == Ok(root.root),
             Self::Current(root) => StorageRoot::current(chain) == **root,
+            Self::Tip => true,
         }
     }
 }
 
-impl LoadedRegistry {
-    fn openings(
-        &self,
-        root: &[u8; 32],
-        members: &[Hash],
-    ) -> Result<Vec<RingMemberOpening>, RingApiError> {
-        members
-            .iter()
-            .map(|member| self.opening(root, &member.0))
-            .collect()
-    }
-
+impl<L: IndexedLeaf + Default, const H: usize> LoadedRegistry<L, H> {
     fn pool(
         &self,
         root: &[u8; 32],
         members: &[Hash],
         canopy: Canopy,
-    ) -> Result<PoolView, RingApiError> {
+    ) -> Result<PoolView<L>, RingApiError> {
         let members: Vec<[u8; 32]> = members.iter().map(|member| member.0).collect();
-        let pool = self.tree.record_pool(&members, canopy).map_err(internal)?;
+        let pool: RecordPoolOf<L> = self.tree.record_pool(&members, canopy).map_err(internal)?;
         pool.verify(root)
-            .map_err(|error| internal(format!("member registry pool disagrees ({error})")))?;
+            .map_err(|error| internal(format!("registry pool disagrees ({error})")))?;
         let records = pool
             .records
             .iter()
             .zip(&pool.proof.paths)
-            .map(|(record, path)| {
-                let stored = self
-                    .stored
-                    .get(&record.member)
-                    .ok_or_else(|| internal("pooled record was not loaded"))?;
-                Ok(RingIndexedMemberRecordView {
-                    record: record_view(stored)?,
-                    path: path_view(path.index, &path.siblings),
-                })
+            .map(|(record, path)| OpenedLeaf {
+                present: true,
+                record: *record,
+                path: path_view(path.index, &path.siblings),
             })
-            .collect::<Result<Vec<_>, RingApiError>>()?;
+            .collect();
         Ok(PoolView {
             records,
             canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
@@ -682,11 +595,7 @@ impl LoadedRegistry {
         })
     }
 
-    fn opening(
-        &self,
-        root: &[u8; 32],
-        member: &[u8; 32],
-    ) -> Result<RingMemberOpening, RingApiError> {
+    fn opening(&self, root: &[u8; 32], member: &[u8; 32]) -> Result<OpenedLeaf<L>, RingApiError> {
         let opening = self.tree.opening(member).map_err(internal)?;
         OpeningCheck {
             opening: &opening,
@@ -694,47 +603,16 @@ impl LoadedRegistry {
             member,
         }
         .verify()
-        .map_err(|error| internal(format!("member registry opening disagrees ({error})")))?;
+        .map_err(|error| internal(format!("registry opening disagrees ({error})")))?;
         let (present, record, path) = match opening {
             RecordOpening::Present { record, path } => (true, record, path),
             RecordOpening::Absent { low, path } => (false, low, path),
         };
-        let stored = self
-            .stored
-            .get(&record.member)
-            .ok_or_else(|| internal("opened record was not loaded"))?;
-        Ok(RingMemberOpening {
+        Ok(OpenedLeaf {
             present,
-            record: record_view(stored)?,
+            record,
             path: path_view(path.index, &path.siblings),
         })
-    }
-}
-
-/// Serves an address only under the leaf hash it opens.
-fn record_view(stored: &StoredRecord) -> Result<RingMemberRecordView, RingApiError> {
-    stored
-        .record
-        .record
-        .check_address(stored.address.as_ref())
-        .map_err(|error| internal(format!("stored address disagrees ({error})")))?;
-    let seal = stored.seal;
-    Ok(RingMemberRecordView {
-        owner_pubkey: seal.map(|seal| Address::new_from_array(seal.owner_pubkey).into()),
-        nullifier_pk: seal.map(|seal| Hash(seal.nullifier_pk)),
-        eph_pk: seal.map(|seal| Base64String(tagged_x25519(&seal.eph_u).to_vec())),
-        ciphertext: seal.map(|seal| Base64String(seal.ciphertext.to_vec())),
-        address: stored.address.as_ref().map(address_view),
-        ..member_view(&stored.record.record)
-    })
-}
-
-fn address_view(address: &AuthorizedAddress) -> RingAuthorizedAddressView {
-    RingAuthorizedAddressView {
-        ring_id: Hash(address.ring_id),
-        nullifier_pk: Hash(address.nullifier_pk),
-        viewing_u: Hash(address.viewing_u),
-        address_revision: address.address_revision,
     }
 }
 
@@ -743,14 +621,14 @@ fn member_view(record: &MemberRecord) -> RingMemberRecordView {
         member: Hash(record.member),
         next: Hash(record.next),
         lists: record.lists,
-        escrow_key: Hash(record.escrow_key),
         mint_policy: record.mint_policy,
-        owner_pubkey: None,
-        nullifier_pk: None,
-        eph_pk: None,
-        ciphertext: None,
-        address_hash: Hash(record.address_hash),
-        address: None,
+    }
+}
+
+fn indexed_member_view(leaf: &OpenedLeaf<MemberRecord>) -> RingIndexedMemberRecordView {
+    RingIndexedMemberRecordView {
+        record: member_view(&leaf.record),
+        path: leaf.path.clone(),
     }
 }
 
@@ -759,19 +637,11 @@ fn write_view(write: &RecordWriteProofInput) -> RingRecordWriteView {
         member: Hash(write.entry.member),
         mask: write.entry.mask,
         value: write.entry.value,
-        escrow_key: Hash(write.entry.escrow_key),
         mint_policy: write.entry.mint_policy,
         exists: write.exists,
         old_next: Hash(write.old_next),
         old_lists: write.old_lists,
-        old_escrow: Hash(write.old_escrow),
         old_mint_policy: write.old_mint_policy,
-        address_hash: Hash(write.entry.address_hash),
-        old_address_hash: Hash(write.old_address_hash),
-        pair: write.pair.as_ref().map(|pair| RingAddressEscrowPairView {
-            address: address_view(&pair.address),
-            escrow_ciphertext_hash: Hash(pair.escrow_ciphertext_hash),
-        }),
         slot: path_view(write.slot.index, &write.slot.siblings),
         low: member_view(&write.low),
         low_path: path_view(write.low_path.index, &write.low_path.siblings),
@@ -793,37 +663,16 @@ fn storage_root_view(root: &StorageRoot) -> StorageRootView {
     }
 }
 
-/// An escrow write names its leaf by the key hash, an address write by the address hash.
 fn storage_entry(write: &StorageWriteView) -> Result<QueueEntry, CustomRingError> {
-    if write.address_hash.0 != [0; 32] {
-        let entry = QueueEntry::address(write.member.0, write.address_hash.0)?;
-        let others = (
-            write.mask,
-            write.value,
-            write.escrow_key.0,
-            write.mint_policy,
-        );
-        if others != (entry.mask, entry.value, entry.escrow_key, None) {
-            return Err(CustomRingError::InvalidInstructionData);
-        }
-        return Ok(entry);
+    RecordWriteData {
+        member: write.member.0,
+        lists: WriteRecordsIxData {
+            mask: write.mask.to_le_bytes(),
+            value: write.value.to_le_bytes(),
+        },
+        mint_policy: mint_policy_write(write.mint_policy),
     }
-    if write.escrow_key.0 == [0; 32] {
-        return StorageWriteData::Record(RecordWriteData {
-            member: write.member.0,
-            lists: WriteRecordsIxData {
-                mask: write.mask.to_le_bytes(),
-                value: write.value.to_le_bytes(),
-            },
-            mint_policy: mint_policy_write(write.mint_policy),
-        })
-        .entry();
-    }
-    let entry = QueueEntry::escrow_hash(write.member.0, write.escrow_key.0)?;
-    if (write.mask, write.value, write.mint_policy) != (entry.mask, entry.value, None) {
-        return Err(CustomRingError::InvalidInstructionData);
-    }
-    Ok(entry)
+    .entry()
 }
 
 async fn canonical_context(rpc: &SolanaRpc, tip: &BlockMetadata) -> anyhow::Result<ApiContext> {

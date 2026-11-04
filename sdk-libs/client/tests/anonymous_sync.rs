@@ -27,6 +27,7 @@ use spr_event::{
     EncryptedRingDepositOutput, MergeOutputDataRef, MessageData, OutputDataEncoding,
     ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
 };
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     random_salt, viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey,
     X25519Pubkey,
@@ -38,15 +39,17 @@ use spr_transaction::{
     },
     owner_utxo_hash,
     utxo::derive_transact_output_blinding,
-    verify_spendable, Data, DecryptRequest, DeriveRequest, Mint, ShieldedKeys, TransactionError,
-    TransactionKeyRequest, Utxo, WalletUtxo,
+    verify_spendable, Data, DecryptRequest, DecryptionResult, DeriveRequest, Mint, ShieldedKeys,
+    TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
 use zolana_ring_client::{
-    AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync, AnonymousWallet, SentCheck,
-    ViewingHistory, TAGS_PER_REQUEST, TAG_GAP, VIEWING_HISTORY_VERSION,
+    note_state, verify_ring_owned, AnonymousError, AnonymousScan, AnonymousStream, AnonymousSync,
+    AnonymousWallet, ListBits, NoteState, PresentRead, SentCheck, ViewingHistory, TAGS_PER_REQUEST,
+    TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_keys::{
-    RingDeliveryRequest, RingKeyError, RingKeys, RingTagFrame, RotatingRingKeys, ViewTagRequest,
+    RingDeliveryRequest, RingKeyError, RingKeys, RingNullifierKey, RingTagFrame, RotatingRingKeys,
+    ViewTagRequest,
 };
 use zolana_ring_transaction::{
     historical::{
@@ -63,6 +66,13 @@ use history_page::{position, EventsPage, OutputsPage};
 const RING: Address = Address::new_from_array([4; 32]);
 const TREE: u16 = 2;
 const RESPONSE_TOO_LARGE: &str = "JSON-RPC error from ring: code=Some(-32008) message=\"large\"";
+
+fn ring_address(identity: &ShieldedKeypair) -> ShieldedAddress {
+    RingNullifierKey::derive(identity, &RING)
+        .unwrap()
+        .address_of(identity.shielded_address().unwrap())
+        .unwrap()
+}
 
 fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
@@ -578,9 +588,9 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let identity = keypair(2);
-    let old_address = identity.shielded_address().unwrap();
+    let old_address = ring_address(&identity);
     let to_old = alice.pay(&indexer, &[pay(&old_address, 30)]);
-    let keys = RotatingRingKeys::new(&identity, Vec::new()).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING).unwrap();
     let history = ViewingHistory::new(old_address.viewing_pubkey, 0).with_ring(RING, None);
     let mut wallet = AnonymousWallet::new(history);
     let scan = AnonymousSync::new(&keys, &assets())
@@ -607,8 +617,10 @@ async fn a_rotated_wallet_finds_notes_under_both_keys_through_a_restart_and_a_re
     let stored = wallet.to_json();
     let mut current = keypair(2);
     current.viewing_key = next;
-    let restarted_keys =
-        RotatingRingKeys::new(&current, vec![identity.viewing_key.clone()]).unwrap();
+    let restarted_keys = RotatingRingKeys::new(&current, &RING)
+        .unwrap()
+        .with_retired(vec![identity.viewing_key.clone()])
+        .unwrap();
     let mut restarted = AnonymousWallet::from_json(&stored).unwrap();
     let scan = AnonymousSync::new(&restarted_keys, &assets())
         .fetch(&indexer, restarted.history())
@@ -645,8 +657,8 @@ async fn a_ring_watched_after_rotation_reads_payments_to_the_retired_key() {
     let indexer = Indexer::default();
     let mut alice = Wallet::new(1);
     let identity = keypair(2);
-    let old_address = identity.shielded_address().unwrap();
-    let keys = RotatingRingKeys::new(&identity, Vec::new())
+    let old_address = ring_address(&identity);
+    let keys = RotatingRingKeys::new(&identity, &RING)
         .unwrap()
         .rotate(ViewingKey::new())
         .unwrap();
@@ -676,11 +688,11 @@ async fn an_imported_key_finds_the_notes_below_the_wallets_position() {
     let imported_key = ViewingKey::new();
     let old_address = ShieldedAddress {
         viewing_pubkey: imported_key.pubkey(),
-        ..identity.shielded_address().unwrap()
+        ..ring_address(&identity)
     };
     let old_note = alice.pay(&indexer, &[pay(&old_address, 30)]);
     let current = identity.viewing_pubkey();
-    let alone = RotatingRingKeys::new(&identity, Vec::new()).unwrap();
+    let alone = RotatingRingKeys::new(&identity, &RING).unwrap();
     let synced = AnonymousSync::new(&alone, &assets())
         .fetch(
             &indexer,
@@ -702,7 +714,10 @@ async fn an_imported_key_finds_the_notes_below_the_wallets_position() {
         "the current key keeps its position"
     );
     indexer.take_ring_pages();
-    let keys = RotatingRingKeys::new(&identity, vec![imported_key.clone()]).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING)
+        .unwrap()
+        .with_retired(vec![imported_key.clone()])
+        .unwrap();
     let scan = AnonymousSync::new(&keys, &assets())
         .fetch(&indexer, &imported)
         .await
@@ -1726,6 +1741,132 @@ async fn a_deposit_of_an_unknown_mint_waits_with_its_data_hashes() {
     assert_eq!(wallet.notes()[0].utxo.asset, unregistered);
 }
 
+/// A merge of notes the wallet never opened names only unknown nullifiers, recovery still rebuilds it.
+#[tokio::test]
+async fn recovery_opens_a_merge_whose_inputs_the_wallet_never_saw() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let first = [0x11; 32];
+    let owner = bob.address();
+    let nullifier_key = &bob.keys.nullifier_key;
+    let merged = Utxo {
+        owner: owner.signing_pubkey,
+        asset: Mint::SOL,
+        amount: 100,
+        blinding: merge_output_blinding(nullifier_key, &first).unwrap(),
+        ring_program_id: Some(RING),
+        data: Default::default(),
+    };
+    let merged_hash = merged
+        .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+    let salt = [8; 16];
+    let ciphertext = MergeOutputPlaintext {
+        amount: 100,
+        mint: Mint::SOL.asset,
+    }
+    .encrypt(&merge_output_key(nullifier_key, &first).unwrap(), &salt)
+    .unwrap();
+    indexer.publish(ShieldedTransaction {
+        slot: 99,
+        tx_signature: Signature::from([0x99; 64]),
+        event_index: Some(0),
+        tx_viewing_pk: None,
+        salt: None,
+        output_slots: vec![OutputSlot {
+            view_tag: first,
+            output_context: OutputContext {
+                hash: merged_hash,
+                tree_id: TREE,
+                leaf_index: indexer.leaves(1),
+            },
+            payload: encode_merge_output_data(MergeOutputDataRef {
+                salt: &salt,
+                ciphertext: &ciphertext,
+                prefix: &[[0; 32]],
+            }),
+        }],
+        messages: Vec::new(),
+        nullifiers: vec![first],
+        proofless: false,
+        ring_config: None,
+        ring_program_id: Some(RING),
+    });
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .full_scan(&indexer, &fresh(&bob), RING)
+        .await
+        .unwrap();
+    assert_eq!(found(&scan), [merged_hash]);
+    assert_eq!(
+        scan.utxos[0].stream,
+        AnonymousStream::Merge {
+            first_nullifier: first
+        }
+    );
+    let tag_only = bob.sync(&indexer, &fresh(&bob)).await;
+    assert!(tag_only.utxos.is_empty());
+}
+
+#[test]
+fn a_ring_added_after_a_rotation_reaches_every_held_key() {
+    let old = ViewingKey::new().pubkey();
+    let new = ViewingKey::new().pubkey();
+    let history = ViewingHistory::new(old, 0)
+        .with_rotated_key(new, 1)
+        .unwrap()
+        .with_ring(RING, None);
+    for key in [old, new] {
+        assert!(history.entry(&key).unwrap().ring_positions().contains_key(&RING));
+    }
+}
+
+/// `Spent` wins over the zero key, and a spent note leaves the exposed list and the balance.
+#[tokio::test]
+async fn a_spent_zero_key_note_leaves_the_exposed_list() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let bob = Wallet::new(2);
+    let unkeyed = ShieldedAddress {
+        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+        ..bob.address()
+    };
+    let paid = alice.pay(&indexer, &[pay(&unkeyed, 30)]);
+    let scan = bob.sync(&indexer, &fresh(&bob)).await;
+    assert_eq!(found(&scan), [output(&paid, 1)]);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    wallet.absorb(scan).unwrap();
+    let note = wallet.notes()[0].clone();
+    assert_eq!(wallet.note_state(&note), NoteState::ExposedIfSpent);
+    let balance = wallet.balances()[&Mint::SOL.asset];
+    assert_eq!((balance.spendable, balance.exposed_if_spent), (0, 30));
+    let owned = verify_ring_owned(&bob.keys, &wallet.decrypted()).unwrap();
+    assert!(owned.owned.utxos.is_empty());
+    assert_eq!(owned.exposed_if_spent.len(), 1);
+    assert_eq!(owned.exposed_if_spent[0].nullifier, note.nullifier);
+
+    let spent = DecryptionResult {
+        spent_nullifiers: [note.nullifier].into_iter().collect(),
+        ..wallet.decrypted()
+    };
+    let owned = verify_ring_owned(&bob.keys, &spent).unwrap();
+    assert!(owned.exposed_if_spent.is_empty());
+    assert!(owned.spent_exposed.contains(&note.nullifier));
+    assert_eq!(
+        note_state(&note, |nullifier| spent.spent_nullifiers.contains(nullifier)),
+        NoteState::Spent
+    );
+}
+
+#[test]
+fn enrolling_past_a_salt_zero_grant_names_the_missing_write() {
+    let read = |salted, salt_zero| ListBits { salted, salt_zero }.present_read();
+    assert_eq!(read(None, true), PresentRead::Granted);
+    assert_eq!(read(None, false), PresentRead::NotListed);
+    assert_eq!(read(Some(true), false), PresentRead::Granted);
+    assert_eq!(read(Some(false), false), PresentRead::NotListed);
+    assert_eq!(read(Some(false), true), PresentRead::SaltedWriteMissing);
+}
+
 #[tokio::test]
 async fn a_merge_of_the_wallets_notes_is_found_by_recovery_and_marks_them_spent() {
     let indexer = Indexer::default();
@@ -1914,7 +2055,10 @@ fn a_bare_history_of_the_current_version_is_refused() {
 async fn a_held_key_with_no_history_entry_refuses_the_scan() {
     let indexer = Indexer::default();
     let identity = keypair(2);
-    let keys = RotatingRingKeys::new(&identity, vec![ViewingKey::new()]).unwrap();
+    let keys = RotatingRingKeys::new(&identity, &RING)
+        .unwrap()
+        .with_retired(vec![ViewingKey::new()])
+        .unwrap();
     let history = ViewingHistory::new(identity.viewing_pubkey(), 0).with_ring(RING, None);
     assert!(matches!(
         AnonymousSync::new(&keys, &assets())

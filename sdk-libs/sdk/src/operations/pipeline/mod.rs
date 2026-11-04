@@ -7,6 +7,7 @@ mod delegate;
 mod owner;
 mod policy;
 mod proof;
+mod public_owners;
 mod relay;
 mod relayed;
 mod selection;
@@ -51,6 +52,7 @@ pub use self::{
         Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
+    public_owners::{PublicOwnerTransfer, PublicOwners},
     relayed::{Relayed, RelayedTransfer, RelayedTransferInput},
 };
 
@@ -96,6 +98,7 @@ pub enum RailKind<'a> {
     Anonymous(&'a Anonymous<'a>),
     Delegated(&'a Delegated<'a>),
     Relayed(&'a Relayed<'a>),
+    PublicOwners(&'a PublicOwners<'a>),
 }
 
 #[must_use = "prove or discard the transfer explicitly"]
@@ -139,6 +142,8 @@ pub(crate) enum Spend<'a> {
     /// The confidential rail's owner signs inside the SPP proof, no owner signs the transaction.
     InProofOwner(OwnerAuthorization<'a>),
     Anonymous(Box<AnonymousSpend<'a>>),
+    /// An anonymous ring's frame with no hidden sender, its owners are the published signers.
+    PublicOwners,
     Delegate {
         delegate: Address,
     },
@@ -153,14 +158,14 @@ impl Spend<'_> {
     fn rail(&self) -> RingRail {
         match self {
             Self::Owner | Self::InProofOwner(_) => RingRail::Confidential,
-            Self::Anonymous(_) => RingRail::Anonymous,
+            Self::Anonymous(_) | Self::PublicOwners => RingRail::Anonymous,
             Self::Delegate { .. } => RingRail::Delegate,
         }
     }
 
     fn spp_rail(&self) -> SppRail<'_> {
         match self {
-            Self::Owner => SppRail::OwnerSigners,
+            Self::Owner | Self::PublicOwners => SppRail::OwnerSigners,
             Self::InProofOwner(owner) => SppRail::Anonymous(*owner),
             Self::Anonymous(anonymous) => SppRail::Anonymous(anonymous.signer),
             Self::Delegate { .. } => SppRail::Delegate,
@@ -170,7 +175,9 @@ impl Spend<'_> {
     fn in_proof_owner(&self) -> Result<Option<[u8; 32]>, RingError> {
         match self {
             Self::InProofOwner(owner) => Ok(Some(owner.public_key().as_ed25519()?)),
-            Self::Owner | Self::Anonymous(_) | Self::Delegate { .. } => Ok(None),
+            Self::Owner | Self::Anonymous(_) | Self::PublicOwners | Self::Delegate { .. } => {
+                Ok(None)
+            }
         }
     }
 }
@@ -190,15 +197,24 @@ pub(crate) struct TransferAuthority {
 
 impl ProofAuthority for TransferAuthority {
     fn complete_inputs(&self, inputs: &mut [TransferInput]) -> Result<(), ClientError> {
+        let zero_key = NullifierKey::from_secret([0; 31]);
         for input in inputs {
+            if input.nullifier_secret.is_some() {
+                continue;
+            }
             let owner_pk_hash = input.owner_pk_hash.to_bytes_be();
             let co_owner = self
                 .co_owners
                 .iter()
                 .find(|co_owner| trailing_eq(&co_owner.owner_pk_hash, &owner_pk_hash));
-            let key = co_owner
-                .map(|co_owner| &co_owner.key)
-                .or(self.owner.as_ref());
+            let zero_nullifier = zero_key.nullifier(&input.utxo.hash()?, &input.utxo.blinding)?;
+            // One owner holds keyed and zero-key notes, each input's own nullifier picks its secret.
+            let key = match trailing_eq(&zero_nullifier, &input.nullifier.to_bytes_be()) {
+                true => Some(&zero_key),
+                false => co_owner
+                    .map(|co_owner| &co_owner.key)
+                    .or(self.owner.as_ref()),
+            };
             if let Some(key) = key {
                 key.complete_inputs(core::slice::from_mut(input))?;
             }
@@ -284,6 +300,7 @@ impl<R: Rail> RingTransfer<R> {
             RailKind::Relayed(relayed) => {
                 boxed(|| relayed.stage(self.ring, client, &config)).await?
             }
+            RailKind::PublicOwners(public) => boxed(|| public.stage(self.ring, &config)).await?,
         };
         check_ring_output_markers(&staged.proof_inputs)?;
         boxed(|| {
@@ -586,14 +603,18 @@ impl<'a> Sealed<'a> {
         }
         let delegate = match spend {
             Spend::Delegate { delegate } => Some(delegate),
-            Spend::Owner | Spend::InProofOwner(_) | Spend::Anonymous(_) => None,
+            Spend::Owner | Spend::InProofOwner(_) | Spend::Anonymous(_) | Spend::PublicOwners => {
+                None
+            }
         };
         if co_signer.is_some() && co_signer == delegate {
             return Err(CustomRingError::CoSignerIsDelegate.into());
         }
         let anonymous = match &spend {
             Spend::Anonymous(anonymous) => Some(anonymous),
-            Spend::Owner | Spend::InProofOwner(_) | Spend::Delegate { .. } => None,
+            Spend::Owner | Spend::InProofOwner(_) | Spend::PublicOwners | Spend::Delegate { .. } => {
+                None
+            }
         };
         let accounts = TransactAccounts {
             payer: proof_inputs.payer,
@@ -725,7 +746,9 @@ impl Unwitnessed<'_> {
         let ring = frame.ring;
         let anonymous = match &spend {
             Spend::Anonymous(anonymous) => Some(anonymous),
-            Spend::Owner | Spend::InProofOwner(_) | Spend::Delegate { .. } => None,
+            Spend::Owner | Spend::InProofOwner(_) | Spend::PublicOwners | Spend::Delegate { .. } => {
+                None
+            }
         };
         let party_identities = anonymous
             .map(|anonymous| anonymous.party_identities(frame.co_signer))
@@ -883,6 +906,8 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
             outputs: shape.n_outputs(),
             spends_default_ring,
             legs: 0,
+            owners: 0,
+            has_data: false,
         })
         .is_some()
 }

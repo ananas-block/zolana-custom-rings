@@ -9,10 +9,7 @@ use custom_ring_interface::{
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::{
-    viewing_key::ViewTag, NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey,
-};
+use spr_keypair::{viewing_key::ViewTag, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_transaction::{
     DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
     ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
@@ -1083,6 +1080,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
     /// The spends of every found or held ring note, round after round, open the ring merges among them.
     async fn merges(&mut self, source: MergeSource) -> Result<(), AnonymousError> {
         let mut queried: HashSet<[u8; 32]> = HashSet::new();
+        let mut first_round = true;
         let held: Vec<[u8; 32]> = self
             .sync
             .held
@@ -1105,26 +1103,17 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                 .chain(held.iter().copied())
                 .filter(|nullifier| queried.insert(*nullifier))
                 .collect();
-            if frontier.is_empty() {
+            let history_unread = first_round && matches!(source, MergeSource::History(_));
+            if frontier.is_empty() && !history_unread {
                 return Ok(());
             }
             let spends = match &source {
                 MergeSource::Indexer => self.reads.spends(&frontier).await?,
-                MergeSource::History(merges) => {
-                    let frontier: HashSet<_> = frontier.iter().copied().collect();
-                    merges
-                        .0
-                        .iter()
-                        .filter(|transaction| {
-                            transaction
-                                .nullifiers
-                                .iter()
-                                .any(|nullifier| frontier.contains(nullifier))
-                        })
-                        .cloned()
-                        .collect()
-                }
+                // Every merge was read, a note outside the frontier opens it as well.
+                MergeSource::History(merges) if first_round => merges.0.clone(),
+                MergeSource::History(_) => Vec::new(),
             };
+            first_round = false;
             self.note_spends(&spends);
             let merges = RingMerges::among(spends);
             let opened = merges.open(self.sync.keys, self.sync.assets)?;
@@ -1244,14 +1233,6 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
         return Ok(());
     }
     delivered::assign_nullifiers(keys, &mut found)?;
-    // A note under the zero key spends under nullifier secret zero, not the wallet's.
-    let zero_secret = NullifierKey::from_secret([0; 31]);
-    for utxo in found
-        .iter_mut()
-        .filter(|utxo| utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY)
-    {
-        utxo.nullifier = zero_secret.nullifier(&utxo.utxo_hash, &utxo.utxo.blinding)?;
-    }
     decrypted.utxos.extend(found);
     delivered::sort_by_publication(&mut decrypted.utxos);
     Ok(())

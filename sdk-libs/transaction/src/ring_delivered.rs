@@ -1,17 +1,59 @@
-//! Delivered ring output bodies of scheme 10 under the stream of a CRDS slot secret, mirrored by
-//! Go `prover/circuits/audit`.
+//! Scheme 10 bodies of frames before statement version 4, read and never written by a new frame.
 
 use custom_ring_interface::{
-    domain::DELIVERED_BODY_LABEL, stream::SlotSecret, DeliveredBody, ESCROWED_DELIVERED_BODY_LEN,
+    domain::DELIVERED_BODY_LABEL, stream::SlotSecret, CustomRingError,
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{Data, Mint, Utxo};
 use zeroize::Zeroizing;
 use zolana_ring_keys::symmetric_apply_audit;
 
 use crate::{RingAssets, RingRailError};
+
+const ESCROWED_DELIVERED_BODY_LEN: usize = 72;
+const DELIVERED_BODY_LEN: usize = 104;
+
+/// `be32(blinding) || u64be(amount) || owner_key || be32(nullifier_pk)`, the key absent under escrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveredBody {
+    pub blinding: [u8; 32],
+    pub amount: u64,
+    pub owner_key: [u8; 32],
+    pub nullifier_pk: Option<[u8; 32]>,
+}
+
+impl DeliveredBody {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(DELIVERED_BODY_LEN);
+        out.extend_from_slice(&self.blinding);
+        out.extend_from_slice(&self.amount.to_be_bytes());
+        out.extend_from_slice(&self.owner_key);
+        if let Some(nullifier_pk) = &self.nullifier_pk {
+            out.extend_from_slice(nullifier_pk);
+        }
+        out
+    }
+
+    pub fn decode(plaintext: &[u8]) -> Result<Self, CustomRingError> {
+        let refused = CustomRingError::RingTransactLength;
+        let (blinding, rest) = plaintext.split_first_chunk::<32>().ok_or(refused)?;
+        let (amount, rest) = rest.split_first_chunk::<8>().ok_or(refused)?;
+        let (owner_key, rest) = rest.split_first_chunk::<32>().ok_or(refused)?;
+        let nullifier_pk = match rest.len() {
+            0 => None,
+            _ => Some(<[u8; 32]>::try_from(rest).map_err(|_| refused)?),
+        };
+        Ok(Self {
+            blinding: *blinding,
+            amount: u64::from_be_bytes(*amount),
+            owner_key: *owner_key,
+            nullifier_pk,
+        })
+    }
+}
 
 /// One slot secret keys one body, the secret binds the slot and the first nullifier.
 pub fn seal_delivered_body(
@@ -34,8 +76,13 @@ pub fn open_delivered_body(
 ) -> Result<DeliveredBody, RingRailError> {
     let mut plaintext = Zeroizing::new(ciphertext.to_vec());
     symmetric_apply_audit(slot_secret.as_bytes(), DELIVERED_BODY_LABEL, &mut plaintext)?;
-    let key_escrow = plaintext.len() == ESCROWED_DELIVERED_BODY_LEN;
-    Ok(DeliveredBody::decode(&plaintext, key_escrow)?)
+    if !matches!(
+        plaintext.len(),
+        ESCROWED_DELIVERED_BODY_LEN | DELIVERED_BODY_LEN
+    ) {
+        return Err(CustomRingError::RingTransactLength.into());
+    }
+    Ok(DeliveredBody::decode(&plaintext)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,27 +122,42 @@ pub struct RingDelivered {
 }
 
 impl RingDeliveryOpening<'_> {
-    /// `None` for keys other than the owner's, a blinding outside the field or a zero amount in no
-    /// held asset, a commitment rebuilt under a sender's choice of keys proves no ownership.
+    /// `None` for keys other than the owner's and zero, a blinding outside the field or a zero
+    /// amount in no held asset, a commitment rebuilt under a sender's choice of keys proves no ownership.
     pub fn open(self, assets: &RingAssets) -> Result<Option<RingDelivered>, RingRailError> {
         let body = open_delivered_body(self.body, self.slot_secret)?;
+        let own_key = *self.owner.nullifier_pubkey;
         let foreign = body.owner_key != self.owner.signing_pubkey.confidential_view_tag()?
-            || body
-                .nullifier_pk
-                .is_some_and(|nullifier_pk| nullifier_pk != *self.owner.nullifier_pubkey);
+            || body.nullifier_pk.is_some_and(|nullifier_pk| {
+                nullifier_pk != own_key && nullifier_pk != ZERO_NULLIFIER_PUBKEY
+            });
         if foreign || !is_canonical_bn254_scalar_be(&body.blinding) {
             return Ok(None);
         }
-        let note = RingDeliveredNote {
+        let note_under = |nullifier_pubkey| RingDeliveredNote {
             owner: *self.owner.signing_pubkey,
-            nullifier_pubkey: *self.owner.nullifier_pubkey,
+            nullifier_pubkey,
             ring: self.ring,
             body,
             utxo_hash: *self.commitment,
             tree_id: self.tree_id,
         };
-        let mint = note.resolve(assets)?;
-        Ok((mint.is_some() || note.body.amount != 0).then_some(RingDelivered { note, mint }))
+        // An escrowed body names no key, an old zero-key note stays readable after enrollment.
+        let candidates = match body.nullifier_pk {
+            Some(named) => [named, named],
+            None => [own_key, ZERO_NULLIFIER_PUBKEY],
+        };
+        for candidate in candidates {
+            let note = note_under(candidate);
+            if let Some(mint) = note.resolve(assets)? {
+                return Ok(Some(RingDelivered {
+                    note,
+                    mint: Some(mint),
+                }));
+            }
+        }
+        let note = note_under(candidates[0]);
+        Ok((note.body.amount != 0).then_some(RingDelivered { note, mint: None }))
     }
 }
 

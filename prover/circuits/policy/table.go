@@ -62,10 +62,6 @@ type tableView struct {
 	rules      [NRules]ruleFields
 	ruleActive []frontend.Variable
 	sources    sourceView
-	// assetRules is set when an active rule reads asset lists.
-	assetRules frontend.Variable
-	// scalarOwner is set when an active owner rule carries a scalar guard.
-	scalarOwner frontend.Variable
 }
 
 type sourceView struct {
@@ -102,17 +98,12 @@ func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, 
 func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
 	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
-		ruleActive:  ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
-		sources:     t.readSources(api),
-		assetRules:  0,
-		scalarOwner: 0,
+		ruleActive: ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
+		sources:    t.readSources(api),
 	}
-	// 2. Every rule decodes once, the flags later steps gate on fold over the active rules.
+	// 2. Every rule decodes once.
 	for i, packed := range t.Rules {
-		rule := decodeRule(api, rc, packed)
-		d.rules[i] = rule
-		d.assetRules = api.Or(d.assetRules, api.Mul(d.ruleActive[i], rule.onAsset))
-		d.scalarOwner = api.Or(d.scalarOwner, api.Mul(d.ruleActive[i], rule.onOwner, rule.scalarGuard))
+		d.rules[i] = decodeRule(api, rc, packed)
 	}
 	return d
 }

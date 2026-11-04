@@ -5,7 +5,10 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::{Guard, ListSet, Rule, RuleSource, RuleTable, SourceMap, Subject};
+use crate::{
+    asset_guard, owner_guard, DebitInput, DebitOutput, Guard, ListSet, Rule, RuleSource, RuleTable,
+    SourceMap, Subject,
+};
 
 /// A member's record `lists` in each registry, zero for an absent member.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -13,10 +16,14 @@ pub struct RecordLists {
     pub own: u64,
     /// Read only for a list a curator serves.
     pub curator: u64,
+    /// Read only for an owner row's list a private source serves.
+    pub private: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputSubjects {
+    /// Set on a same-ring output, clear on an exit or a withdrawal.
+    pub ring: bool,
     /// The owner identity, zero carries no owner obligation.
     pub owner: [u8; 32],
     /// `Member::asset` of the mint.
@@ -30,7 +37,9 @@ pub struct OutputSubjects {
 #[derive(Clone, Copy, Debug)]
 pub struct TransferSubjects<'a> {
     pub sender: RecordLists,
-    /// The UTXO outputs in slot order, dummies and compact padding left out.
+    /// Live inputs of the ring, a default-ring note and a deposit net no receipt.
+    pub ring_inputs: &'a [DebitInput],
+    /// The payments in slot order, dummies and compact padding left out.
     pub outputs: &'a [OutputSubjects],
 }
 
@@ -50,10 +59,6 @@ pub enum RuleRefusal {
         rule: usize,
         subject: TransferSubject,
     },
-    #[error("rule {rule} has no asset limit for the asset of output {output}")]
-    NoAssetLimit { rule: usize, output: usize },
-    #[error("rule {rule} sums each owner over one asset, output {output} carries another")]
-    MixedAssets { rule: usize, output: usize },
 }
 
 impl RuleTable {
@@ -63,12 +68,25 @@ impl RuleTable {
         sources: &SourceMap,
         transfer: &TransferSubjects<'_>,
     ) -> Result<(), RuleRefusal> {
-        self.admit_one_asset(transfer.outputs)?;
         let foreign = foreign_lists(sources);
+        let private = sources.private().owner_lists;
+        let payments: Vec<DebitOutput> = transfer
+            .outputs
+            .iter()
+            .map(|output| DebitOutput {
+                ring: output.ring,
+                owner: output.owner,
+                asset: output.asset,
+                amount: output.amount,
+            })
+            .collect();
         for (index, rule) in self.rules().iter().enumerate() {
             let check = RuleCheck {
                 outputs: transfer.outputs,
+                ring_inputs: transfer.ring_inputs,
+                payments: &payments,
                 foreign,
+                private,
                 index,
                 rule,
             };
@@ -82,23 +100,6 @@ impl RuleTable {
             }
         }
         Ok(())
-    }
-
-    /// A scalar guard on an owner rule sums an owner's outputs, all of one asset.
-    fn admit_one_asset(&self, outputs: &[OutputSubjects]) -> Result<(), RuleRefusal> {
-        let Some(rule) = self.rules().iter().position(|rule| {
-            rule.subject == Subject::OutputOwner && matches!(rule.guard, Guard::AboveAmount(_))
-        }) else {
-            return Ok(());
-        };
-        let mixed = outputs.first().and_then(|first| {
-            outputs
-                .iter()
-                .position(|output| output.asset != first.asset)
-        });
-        mixed.map_or(Ok(()), |output| {
-            Err(RuleRefusal::MixedAssets { rule, output })
-        })
     }
 }
 
@@ -114,15 +115,19 @@ impl fmt::Display for TransferSubject {
 
 impl RecordLists {
     /// List `i + 1` reads the curator record when a curator serves it, else the own record.
-    fn on(self, foreign: ListSet) -> ListSet {
-        let foreign = foreign.record_bits();
-        ListSet::from_bits(((self.own & !foreign) | (self.curator & foreign)) as u8)
+    fn on(self, foreign: ListSet, private: ListSet) -> ListSet {
+        let (foreign, private) = (foreign.record_bits(), private.record_bits());
+        let public = (self.own & !foreign) | (self.curator & foreign);
+        ListSet::from_bits(((public & !private) | (self.private & private)) as u8)
     }
 }
 
 struct RuleCheck<'a> {
     outputs: &'a [OutputSubjects],
+    ring_inputs: &'a [DebitInput],
+    payments: &'a [DebitOutput],
     foreign: ListSet,
+    private: ListSet,
     index: usize,
     rule: &'a Rule,
 }
@@ -134,25 +139,15 @@ impl RuleCheck<'_> {
         if !on_asset && output.owner == [0; 32] {
             return Ok(());
         }
-        let limit = (output.mint_policy.threshold != 0).then_some(output.mint_policy.threshold);
-        if self.rule.guard == Guard::AboveAmountByAsset && limit.is_none() {
-            return Err(RuleRefusal::NoAssetLimit {
-                rule: self.index,
-                output: index,
-            });
-        }
-        let live_owner =
-            |other: &OutputSubjects| other.owner != [0; 32] && other.owner == output.owner;
-        let same_asset = |other: &OutputSubjects| other.asset == output.asset;
         let exempt = match self.rule.guard {
             Guard::Always => false,
             Guard::AboveAmount(threshold) if on_asset => {
-                self.total(same_asset) <= u128::from(threshold)
+                asset_guard(self.ring_inputs, self.payments, &output.asset) <= u128::from(threshold)
             }
-            Guard::AboveAmount(threshold) => self.total(live_owner) <= u128::from(threshold),
-            Guard::AboveAmountByAsset => limit.is_some_and(|limit| {
-                self.total(|other| live_owner(other) && same_asset(other)) <= u128::from(limit)
-            }),
+            Guard::AboveAmount(threshold) => self.guard(output) <= u128::from(threshold),
+            Guard::AboveAmountByAsset => {
+                self.guard(output) <= u128::from(output.mint_policy.threshold)
+            }
         };
         if exempt {
             return Ok(());
@@ -164,22 +159,27 @@ impl RuleCheck<'_> {
         }
     }
 
+    fn guard(&self, output: &OutputSubjects) -> u128 {
+        owner_guard(
+            self.ring_inputs,
+            self.payments,
+            &output.owner,
+            &output.asset,
+        )
+    }
+
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
-        if holds(self.rule, records.on(self.foreign)) {
+        let private = match subject {
+            TransferSubject::Asset(_) => ListSet::EMPTY,
+            TransferSubject::Sender | TransferSubject::Owner(_) => self.private,
+        };
+        if holds(self.rule, records.on(self.foreign, private)) {
             return Ok(());
         }
         Err(RuleRefusal::Lists {
             rule: self.index,
             subject,
         })
-    }
-
-    fn total(&self, grouped: impl Fn(&OutputSubjects) -> bool) -> u128 {
-        self.outputs
-            .iter()
-            .filter(|other| grouped(other))
-            .map(|other| u128::from(other.amount))
-            .sum()
     }
 }
 
@@ -197,4 +197,58 @@ fn foreign_lists(sources: &SourceMap) -> ListSet {
         .filter(|(_, slot)| slot.registry != [0; 32])
         .fold(0u8, |bits, (slot, _)| bits | 1 << slot);
     ListSet::from_bits(bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DebitInput, ListId, MintPolicy, PrivateSource, RuleTableBuilder};
+
+    const OWNER: [u8; 32] = [1; 32];
+    const ASSET: [u8; 32] = [2; 32];
+    const BLOCK: u64 = ListId::Block.record_bit();
+
+    fn admit(table: RuleTableBuilder, lists: RecordLists) -> Result<(), RuleRefusal> {
+        let private = PrivateSource::new(ListSet::single(ListId::Block), [7; 32]).unwrap();
+        let sources = SourceMap::new(&[(ListId::Block, [0; 32])])
+            .unwrap()
+            .with_private(private)
+            .unwrap();
+        let outputs = [OutputSubjects {
+            ring: true,
+            owner: OWNER,
+            asset: ASSET,
+            amount: 1,
+            owner_lists: lists,
+            asset_lists: lists,
+            mint_policy: MintPolicy::EMPTY,
+        }];
+        let ring_inputs: [DebitInput; 0] = [];
+        table.build().admit(
+            &sources,
+            &TransferSubjects {
+                sender: RecordLists::default(),
+                ring_inputs: &ring_inputs,
+                outputs: &outputs,
+            },
+        )
+    }
+
+    #[test]
+    fn an_owner_row_reads_the_private_bit_and_an_asset_row_the_public_one() {
+        let owner = RuleTable::builder().rule(Rule::forbid(Subject::OutputOwner, ListId::Block));
+        let asset = RuleTable::builder().rule(Rule::forbid(Subject::Asset, ListId::Block));
+        let private_only = RecordLists {
+            private: BLOCK,
+            ..RecordLists::default()
+        };
+        let public_only = RecordLists {
+            own: BLOCK,
+            ..RecordLists::default()
+        };
+        assert!(admit(owner, private_only).is_err());
+        assert!(admit(owner, public_only).is_ok());
+        assert!(admit(asset, private_only).is_ok());
+        assert!(admit(asset, public_only).is_err());
+    }
 }

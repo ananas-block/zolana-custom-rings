@@ -11,7 +11,7 @@ const EMPTY: RuleTable = RuleTable::builder().build();
 const GROUP: RuleTable = RuleTable::builder()
     .rule(Rule::require_any(
         Subject::OutputOwner,
-        ListSet::of(&[ListId::Allow, ListId::Frozen]),
+        ListSet::of(&[ListId::Allow, ListId::Approval]),
     ))
     .build();
 
@@ -284,12 +284,12 @@ fn alternatives_list_presences_before_absences_in_slot_order() {
 
 #[test]
 fn validation_needs_a_source_for_every_list_of_a_group() {
-    let both = sources(&[(ListId::Allow, [0u8; 32]), (ListId::Frozen, [5u8; 32])]);
+    let both = sources(&[(ListId::Allow, [0u8; 32]), (ListId::Approval, [5u8; 32])]);
     assert_eq!(GROUP.encode().validate(&both), Ok(GROUP));
     let only_one = sources(&[(ListId::Allow, [0u8; 32])]);
     assert_eq!(
         GROUP.encode().validate(&only_one),
-        Err(PolicyTableError::MissingSource(ListId::Frozen))
+        Err(PolicyTableError::MissingSource(ListId::Approval))
     );
 }
 
@@ -506,10 +506,10 @@ fn table_fields_bind_sources_and_all_rules_without_mint_tables() {
     let fields = table.encode().fields(&map);
     assert_eq!(fields.len(), 44);
     assert_eq!(fields[0], right_align(b"CRTB"));
-    assert_eq!(fields[1], field_u8(12));
-    assert_eq!(fields[18], field_u8(16));
-    assert_eq!(fields[34], table.rules()[15].encoded());
-    assert!(fields[35..].iter().all(|field| *field == [0; 32]));
+    assert_eq!(fields[1], field_u8(13));
+    assert_eq!(fields[20], field_u8(16));
+    assert_eq!(fields[36], table.rules()[15].encoded());
+    assert!(fields[37..].iter().all(|field| *field == [0; 32]));
     assert_eq!(table.encode().decode(), Ok(table));
     let hash = table.hash(&map).unwrap();
     let mut changed = table.encode();
@@ -534,5 +534,109 @@ fn per_asset_guards_are_configured_independently_of_mint_records() {
             .rule(Rule::require(Subject::Sender, ListId::Allow).above_by_asset())
             .try_build(),
         Err(RuleTableError::PerAssetGuardNotOwner)
+    );
+}
+
+#[test]
+fn a_grant_list_reads_by_presence_and_a_deny_list_by_absence() {
+    let map = sources(&[
+        (ListId::Allow, [0; 32]),
+        (ListId::Block, [0; 32]),
+        (ListId::Frozen, [0; 32]),
+        (ListId::Approval, [0; 32]),
+    ]);
+    let polarity = |rule| {
+        RuleTable::builder()
+            .rule(rule)
+            .build()
+            .encode()
+            .validate(&map)
+            .map(|_| ())
+    };
+    let refused = Err(PolicyTableError::Table(RuleTableError::ListPolarity));
+    for list_id in [ListId::Allow, ListId::Approval] {
+        assert_eq!(polarity(Rule::require(Subject::Sender, list_id)), Ok(()));
+        assert_eq!(polarity(Rule::forbid(Subject::Sender, list_id)), refused);
+    }
+    for list_id in [ListId::Block, ListId::Frozen] {
+        assert_eq!(polarity(Rule::forbid(Subject::Sender, list_id)), Ok(()));
+        assert_eq!(polarity(Rule::require(Subject::Sender, list_id)), refused);
+    }
+    assert_eq!(
+        polarity(Rule::any_of(
+            Subject::OutputOwner,
+            ListSet::single(ListId::Approval),
+            ListSet::single(ListId::Block),
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        polarity(Rule::any_of(
+            Subject::OutputOwner,
+            ListSet::single(ListId::Block),
+            ListSet::single(ListId::Allow),
+        )),
+        refused
+    );
+}
+
+#[test]
+fn a_private_source_serves_owner_rows_and_never_asset_rows() {
+    let block = ListSet::single(ListId::Block);
+    let private = PrivateSource::new(block, [7; 32]).unwrap();
+    let map = sources(&[]).with_private(private).unwrap();
+    let validated = |rule| {
+        RuleTable::builder()
+            .rule(rule)
+            .build()
+            .encode()
+            .validate(&map)
+            .map(|_| ())
+    };
+    assert_eq!(
+        validated(Rule::forbid(Subject::Sender, ListId::Block)),
+        Ok(())
+    );
+    assert_eq!(
+        validated(Rule::forbid(Subject::OutputOwner, ListId::Block)),
+        Ok(())
+    );
+    assert_eq!(
+        validated(Rule::forbid(Subject::Asset, ListId::Block)),
+        Err(PolicyTableError::MissingSource(ListId::Block))
+    );
+    let beside = sources(&[(ListId::Allow, [5; 32])])
+        .with_private(private)
+        .unwrap();
+    assert_eq!(beside.curator(), Some([5; 32]));
+    assert_eq!(beside.private().registry, [7; 32]);
+}
+
+#[test]
+fn the_private_source_enters_the_table_hash() {
+    let block = ListSet::single(ListId::Block);
+    let public = sources(&[]);
+    let private = public
+        .with_private(PrivateSource::new(block, [7; 32]).unwrap())
+        .unwrap();
+    let other = public
+        .with_private(PrivateSource::new(block, [8; 32]).unwrap())
+        .unwrap();
+    let hash = |map: &SourceMap| TABLE.hash(map).unwrap();
+    assert_ne!(hash(&public), hash(&private));
+    assert_ne!(hash(&private), hash(&other));
+}
+
+#[test]
+fn an_unpaired_private_source_is_refused_at_the_map() {
+    let unpaired = PrivateSource {
+        owner_lists: ListSet::single(ListId::Block),
+        registry: [0; 32],
+    };
+    assert_eq!(
+        sources(&[]).with_private(unpaired),
+        Err(SourceMapError::Private(
+            PrivateSourceError::UnpairedRegistry
+        ))
     );
 }

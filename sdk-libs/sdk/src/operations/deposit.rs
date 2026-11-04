@@ -1,5 +1,7 @@
 //! Deposits whose proof binds the SPP data and the record of any escrowed owner or screened asset.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
     tag, CoSignScope, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
@@ -59,7 +61,7 @@ pub enum DepositRecipient<'a> {
         keys: &'a dyn RingSender,
         history: &'a ViewingHistory,
     },
-    /// Another member of an anonymous ring, under its request's tag or else its viewing key's.
+    /// Another member of an anonymous ring, under its request's tag.
     AnonymousPayment {
         to: &'a RingAddress,
         deposit_tag: Option<ViewTag>,
@@ -97,7 +99,8 @@ impl DepositRecipient<'_> {
                 }
                 TaggedRecipient {
                     address: to.recipient,
-                    view_tag: deposit_tag.unwrap_or(to.recipient.viewing_pubkey.u()),
+                    // The viewing key as a tag would link every deposit to one recipient.
+                    view_tag: deposit_tag.ok_or(RingError::DepositBootstrapTag)?,
                     history: None,
                 }
             }
@@ -123,7 +126,7 @@ pub struct RingDepositReceipt {
     pub utxo: Utxo,
 }
 
-/// A deposit whose note and auditor ciphertext are fixed, the proof is not.
+/// One deposit frame proves once, a deposit has no nullifier and a resent note would stay unspendable.
 #[must_use]
 pub struct PreparedRingDeposit {
     ring: CustomRing,
@@ -134,6 +137,26 @@ pub struct PreparedRingDeposit {
     disclosure: DepositDisclosure,
     viewing_history: Option<ViewingHistory>,
     priority_fee: Option<u64>,
+    proved: AtomicBool,
+    /// `None` on a relayed deposit, only its depositor draws a new secret.
+    reseal: Option<DepositReseal>,
+}
+
+/// What a retry keeps, everything else of the note is drawn again.
+#[derive(Clone, Copy)]
+struct DepositReseal {
+    terms: NoteTerms,
+    tree: Address,
+    auditor: X25519Pubkey,
+}
+
+#[derive(Clone, Copy)]
+struct NoteTerms {
+    address: ShieldedAddress,
+    owner: DisclosedOwner,
+    view_tag: [u8; 32],
+    asset: DepositAsset,
+    amount: u64,
 }
 
 pub(crate) struct BoundDeposit {
@@ -194,7 +217,7 @@ impl RingDeposit<'_> {
         Ok(self.recipient.tagged(self.ring)?.history)
     }
 
-    /// Fixes the note, every proving attempt deposits the same one.
+    /// Fixes the note of one attempt, [`RingSubmission`] draws a new one for each retry.
     pub async fn prepare(
         &self,
         rpc: &(impl AsyncRpc + ?Sized),
@@ -215,6 +238,7 @@ impl RingDeposit<'_> {
             co_signer: self.cosigner.map(|signer| signer.pubkey()),
             note,
             viewing_history,
+            reseal: true,
         }
         .assemble(rpc)
         .await
@@ -280,47 +304,14 @@ impl RingDeposit<'_> {
             view_tag,
             history,
         } = self.recipient.tagged(self.ring)?;
-        let owner = disclosed_owner(config.mode, &address)?;
-        let blinding_secret = Zeroizing::new(random_blinding());
-        let blinding = deposit_blinding(&blinding_secret)?;
-        let owner_hash = address.owner_hash()?;
-        let mut deposit = RingAssetDeposit {
-            asset: self.asset,
-            view_tag,
-            owner_utxo_hash: owner_utxo_hash(&owner_hash, &blinding)?,
-            amount: self.amount,
-            ring_data_hash: [0; 32],
-            encrypted: RingDepositPlaintext {
-                blinding,
-                utxo_data: None,
-                memo: None,
-                ring_data: Vec::new(),
-            }
-            .encrypt(&address.viewing_pubkey)?,
-        };
-        let encryption = seal_deposits(
-            &[DepositOpening {
-                owner_hash,
-                blinding: Zeroizing::new(blinding),
-                owner_key: owner.key(),
-            }],
-            &config.auditor_pubkey,
-        )?;
-        deposit.encrypted.ciphertext = RingDepositAuditCapsule {
-            slot_index: 0,
-            eph_pk: encryption.ephemeral_pk.as_bytes(),
-            ciphertext: &encryption.ciphertexts[0],
-            recipient_ciphertext: &deposit.encrypted.ciphertext,
-        }
-        .encode();
-        let note = SealedNote {
+        let note = NoteTerms {
+            owner: disclosed_owner(config.mode, &address)?,
             address,
-            owner,
-            blinding_secret,
-            blinding,
-            deposit,
-            encryption,
-        };
+            view_tag,
+            asset: self.asset,
+            amount: self.amount,
+        }
+        .seal(&config.auditor_pubkey)?;
         Ok(SealedDeposit {
             config,
             note,
@@ -342,15 +333,19 @@ impl RingDeposit<'_> {
         fee_payer: &(dyn Signer + Sync),
     ) -> Result<RingDepositReceipt, RingError> {
         let prepared = self.prepare(client.zolana()).await?;
-        let utxo = prepared.utxo.clone();
         let signers = self.signers(&prepared);
-        match RingSubmission::new(prepared)
+        let mut submission = RingSubmission::new(prepared);
+        match submission
             .send_until_settled(client, fee_payer, &signers)
             .await?
         {
-            SettledSubmission::Confirmed { signature, .. } => {
-                Ok(RingDepositReceipt { signature, utxo })
-            }
+            SettledSubmission::Confirmed { signature, .. } => Ok(RingDepositReceipt {
+                signature,
+                utxo: submission
+                    .deposit_utxo()
+                    .ok_or(RingError::DepositFrameReused)?
+                    .clone(),
+            }),
             SettledSubmission::Failed { signature, error } => {
                 Err(RingError::Rejected { signature, error })
             }
@@ -365,7 +360,98 @@ impl RingDeposit<'_> {
     }
 }
 
+impl NoteTerms {
+    /// Draws the blinding secret, the note and its auditor ciphertext.
+    fn seal(self, auditor: &X25519Pubkey) -> Result<SealedNote, RingError> {
+        let blinding_secret = Zeroizing::new(random_blinding());
+        let blinding = deposit_blinding(&blinding_secret)?;
+        let owner_hash = self.address.owner_hash()?;
+        let mut deposit = RingAssetDeposit {
+            asset: self.asset,
+            view_tag: self.view_tag,
+            owner_utxo_hash: owner_utxo_hash(&owner_hash, &blinding)?,
+            amount: self.amount,
+            ring_data_hash: [0; 32],
+            encrypted: RingDepositPlaintext {
+                blinding,
+                utxo_data: None,
+                memo: None,
+                ring_data: Vec::new(),
+            }
+            .encrypt(&self.address.viewing_pubkey)?,
+        };
+        let encryption = seal_deposits(
+            &[DepositOpening {
+                owner_hash,
+                blinding: Zeroizing::new(blinding),
+                owner_key: self.owner.key(),
+            }],
+            auditor,
+        )?;
+        deposit.encrypted.ciphertext = RingDepositAuditCapsule {
+            slot_index: 0,
+            eph_pk: encryption.ephemeral_pk.as_bytes(),
+            ciphertext: &encryption.ciphertexts[0],
+            recipient_ciphertext: &deposit.encrypted.ciphertext,
+        }
+        .encode();
+        Ok(SealedNote {
+            address: self.address,
+            owner: self.owner,
+            blinding_secret,
+            blinding,
+            deposit,
+            encryption,
+        })
+    }
+}
+
 impl PreparedRingDeposit {
+    /// The same deposit under a new blinding secret, nothing here reads a chain value.
+    pub fn fresh_attempt(&self) -> Result<Self, RingError> {
+        let reseal = self.reseal.ok_or(RingError::DepositFrameReused)?;
+        let note = reseal.terms.seal(&reseal.auditor)?;
+        let spp = spr_program::instruction::RingDeposit {
+            tree: reseal.tree,
+            depositor: self.depositor,
+            ring_program_id: self.ring.program_id(),
+            deposits: vec![note.deposit.clone()],
+        }
+        .instruction()?;
+        Ok(Self {
+            ring: self.ring,
+            depositor: self.depositor,
+            cosigner: self.cosigner,
+            utxo: Utxo {
+                blinding: note.blinding,
+                ..self.utxo.clone()
+            },
+            disclosure: DepositDisclosure {
+                context_hash: DepositContext {
+                    program_id: self.ring.program_id().as_array(),
+                    tree: reseal.tree.as_array(),
+                    spp_data: &spp.data,
+                }
+                .hash()?,
+                owner_utxo_hash: note.deposit.owner_utxo_hash,
+                blinding_secret: note.blinding_secret,
+                encryption: note.encryption,
+                owner: self.disclosure.owner,
+                owner_pk_hash: self.disclosure.owner_pk_hash,
+                nullifier_pk: self.disclosure.nullifier_pk,
+                auditor: self.disclosure.auditor,
+                key_escrow: self.disclosure.key_escrow,
+                has_policy: self.disclosure.has_policy,
+                asset: self.disclosure.asset,
+            },
+            spp,
+            viewing_history: self.viewing_history.clone(),
+            priority_fee: self.priority_fee,
+            proved: AtomicBool::new(false),
+            reseal: self.reseal,
+        })
+    }
+
     /// Lamports the v1 header carries, the size check measures the header it adds.
     pub fn with_priority_fee(mut self, lamports: u64) -> Self {
         self.priority_fee = Some(lamports);
@@ -401,7 +487,7 @@ impl PreparedRingDeposit {
         self.viewing_history.as_ref()
     }
 
-    /// Each call binds the newest root, a raised floor needs only a new proof.
+    /// A second proof of this frame is refused, a retry starts from [`Self::fresh_attempt`].
     pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
@@ -413,6 +499,9 @@ impl PreparedRingDeposit {
         &self,
         client: &RingClient<R, I>,
     ) -> Result<BoundDeposit, RingError> {
+        if self.proved.swap(true, Ordering::AcqRel) {
+            return Err(RingError::DepositFrameReused);
+        }
         let disclosure = &self.disclosure;
         retry_projection_lag(|| async {
             let records = match disclosure.key_escrow || disclosure.has_policy {
@@ -549,6 +638,8 @@ struct DepositAssembly<'a> {
     co_signer: Option<Address>,
     note: SealedNote,
     viewing_history: Option<ViewingHistory>,
+    /// Whether this process drew the note's blinding secret.
+    reseal: bool,
 }
 
 impl RelayedDeposit<'_> {
@@ -606,6 +697,7 @@ impl RelayedDeposit<'_> {
             co_signer: self.co_signer,
             note,
             viewing_history: None,
+            reseal: false,
         }
         .assemble(rpc)
         .await
@@ -648,8 +740,20 @@ impl DepositAssembly<'_> {
             co_signer,
             note,
             viewing_history,
+            reseal,
         } = self;
         note.owner.check_signers(public_signers)?;
+        let reseal = reseal.then_some(DepositReseal {
+            terms: NoteTerms {
+                address: note.address,
+                owner: note.owner,
+                view_tag: note.deposit.view_tag,
+                asset: note.deposit.asset,
+                amount: note.deposit.amount,
+            },
+            tree,
+            auditor: config.auditor_pubkey,
+        });
         let mint = note.deposit.asset.mint();
         let mint = Mint::new(mint, fetch_asset_id_async(rpc, mint).await?);
         let spp = spr_program::instruction::RingDeposit {
@@ -708,6 +812,8 @@ impl DepositAssembly<'_> {
             depositor,
             spp,
             viewing_history,
+            proved: AtomicBool::new(false),
+            reseal,
         })
     }
 }

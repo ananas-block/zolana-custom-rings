@@ -209,10 +209,11 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
     let to = match config.mode {
-        RingMode::Anonymous => Recipient::Address(Box::new(RingAddress {
-            recipient: recipient.shielded_address()?,
-            ring_program_id: program,
-        })),
+        RingMode::Anonymous => Recipient::Address(Box::new(RingAddress::enrolled(
+            recipient.shielded_address()?,
+            program,
+            &RingNullifierKey::derive(&recipient, &program)?,
+        )?)),
         RingMode::Confidential | RingMode::ConfidentialEscrow => {
             Recipient::Shielded(recipient.shielded_address()?)
         }
@@ -1504,6 +1505,7 @@ mod tests {
         RingAddress {
             recipient: keypair(seed).shielded_address().unwrap(),
             ring_program_id: ring,
+            list_salt: [7; 32],
         }
     }
 

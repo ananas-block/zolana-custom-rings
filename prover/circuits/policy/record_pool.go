@@ -72,7 +72,7 @@ func (e PoolEntry) validate(ownOnly bool) error {
 }
 
 func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
-	outputs, withdrawals := len(p.CtHashes), len(p.Withdrawals)
+	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
 	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
 	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
 	distinct := p.Senders + outputs + withdrawals + outputs
@@ -104,11 +104,9 @@ type recordQuery struct {
 }
 
 type pooledRecord struct {
-	escrowKey           frontend.Variable
 	onList              [NSources]frontend.Variable
 	mintPolicy          mintPolicyWires
 	withdrawalThreshold frontend.Variable
-	addressHash         frontend.Variable
 }
 
 // recordColumns picks the fields a pool's lookups read, the leaf hash still covers the whole record.
@@ -118,9 +116,9 @@ type recordColumns struct {
 }
 
 var (
-	ownColumns = recordColumns{width: 6 + NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
+	ownColumns = recordColumns{width: 4 + NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		return pooledRecord{escrowKey: record.EscrowKey, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: record.AddressHash}.columns()
+		return pooledRecord{onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold}.columns()
 	}}
 	// A curator lookup reads list bits alone, every other field binds through the leaf hash only.
 	curatorColumns = recordColumns{width: NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
@@ -143,7 +141,7 @@ type subjectPool struct{ pooledTable }
 
 func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof, columns recordColumns) recordPool {
 	api.AssertIsBoolean(active)
-	pool := recordPool{pooledTable{active: active, table: lookup.New(api, 2+columns.width)}, columns.width}
+	pool := newRecordPool(api, active, columns.width)
 	leaves := make([]frontend.Variable, len(records))
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
@@ -151,6 +149,10 @@ func openRecordPool(api frontend.API, active, root frontend.Variable, records []
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
+}
+
+func newRecordPool(api frontend.API, active frontend.Variable, width int) recordPool {
+	return recordPool{pooledTable{active: active, table: lookup.New(api, 2+width)}, width}
 }
 
 // sourceLists keeps the NSources list bits a table can source, the split bounds lists below 2^ListBits.
@@ -189,12 +191,12 @@ func (p recordPool) resolve(api frontend.API, query recordQuery) []frontend.Vari
 }
 
 func (r pooledRecord) columns() []frontend.Variable {
-	return append([]frontend.Variable{r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove, r.withdrawalThreshold, r.addressHash}, r.onList[:]...)
+	return append([]frontend.Variable{r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove, r.withdrawalThreshold}, r.onList[:]...)
 }
 
 func pooledRecordAt(columns []frontend.Variable) pooledRecord {
-	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}, withdrawalThreshold: columns[4], addressHash: columns[5]}
-	copy(record.onList[:], columns[6:])
+	record := pooledRecord{mintPolicy: mintPolicyWires{threshold: columns[0], cap: columns[1], cosignAbove: columns[2]}, withdrawalThreshold: columns[3]}
+	copy(record.onList[:], columns[4:])
 	return record
 }
 

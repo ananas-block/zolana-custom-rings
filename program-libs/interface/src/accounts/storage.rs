@@ -1,28 +1,27 @@
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use solana_program_error::ProgramError;
-use spr_hasher::{
-    hash_chain::create_hash_chain_4_from_slice,
-    primitives::{is_canonical_bn254_scalar_be, is_canonical_x25519_public_key, right_align},
-};
+use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
 use thiserror::Error;
 use zolana_ring_policy::registry_field;
 
 use crate::{
     domain,
-    member_registry::{
-        AuthorizedAddress, QueueEntry, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
-    },
+    member_registry::{MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT},
     state::ROOT_HISTORY,
-    storage_instruction::{
-        AddressWriteData, EnrollAddressIxData, InitializeIxData, StorageUpdateIxData, UpdateMode,
-    },
+    storage_instruction::{InitializeIxData, StorageUpdateIxData},
     STORAGE_PROGRAM_ID,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Revision(pub [u8; 8]);
+
+/// Root of the empty sparse list tree of a private source, depth 96 over a zero leaf.
+pub const PRIVATE_SOURCE_EMPTY_ROOT: [u8; 32] = [
+    0x11, 0xd2, 0xaf, 0xd5, 0xff, 0x79, 0x46, 0xd0, 0x51, 0x67, 0x92, 0xa9, 0xa3, 0x87, 0x45, 0x2b,
+    0xe8, 0x28, 0xde, 0xbd, 0x39, 0xba, 0xf7, 0xe1, 0xe4, 0xc8, 0x02, 0x3e, 0x72, 0xfa, 0x16, 0x35,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
@@ -44,27 +43,16 @@ pub struct StorageRegistry {
     pub authority: Address,
     pub grace_slots: [u8; 8],
     pub next_index: [u8; 4],
-    /// Immutable, every address enrolled here binds it, zero serves as a curator only.
+    /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
+    /// Immutable, a private source's paired tracking registry, zero on a public source.
+    pub tracking_registry: Address,
+    /// The paired registry's revision at the last restrictive update, frames name no older tracking root.
+    pub tracking_floor: Revision,
+    /// Little endian, a private source's newest write counter, a repeat at one position reuses a leaf salt.
+    pub last_write_counter: [u8; 8],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
-}
-
-/// The owner's newest address, an authority applies only what the owner signed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct AddressAuthorization {
-    pub discriminator: u8,
-    pub bump: u8,
-    pub registry: Address,
-    pub owner: Address,
-    pub ring_id: [u8; 32],
-    pub nullifier_pk: [u8; 32],
-    pub viewing_u: [u8; 32],
-    /// Little endian, moves by one at every enrollment.
-    pub revision: [u8; 8],
-    /// Little endian, zero before the first apply.
-    pub applied_revision: [u8; 8],
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -84,7 +72,7 @@ pub enum StorageError {
     InvalidInstructionData = 9005,
     #[error("update carries more writes than one apply proof takes")]
     BatchTooLarge = 9006,
-    #[error("write is neither a record write nor an escrow write")]
+    #[error("write is not a record write")]
     InvalidWrite = 9007,
     #[error("apply proof does not verify")]
     ProofVerificationFailed = 9008,
@@ -104,23 +92,56 @@ pub enum StorageError {
     RevisionOverflow = 9015,
     #[error("no apply key serves the write count")]
     UnsupportedBatch = 9016,
-    #[error("address authorization account is invalid or names another revision")]
-    InvalidAddressAuthorization = 9017,
-    #[error("the authorization's revision is already applied")]
-    AddressAlreadyApplied = 9018,
-    #[error("the registered nullifier key is fixed")]
-    NullifierKeyChanged = 9019,
-    #[error("the registry serves no ring")]
-    RegistryServesNoRing = 9020,
     #[error("viewing key is zero or not canonical")]
     NonCanonicalViewingKey = 9021,
+    #[error("tracking registry is invalid")]
+    InvalidTrackingRegistry = 9022,
+    #[error("tracking authorization is invalid")]
+    InvalidTrackingAuthorization = 9023,
+    #[error("the enrollment's revision is already applied")]
+    EnrollmentAlreadyApplied = 9024,
+    #[error("the enrolled nullifier key, list tag and ciphertext are final")]
+    EnrollmentKeyFinal = 9025,
+    #[error("the tracking tree is full")]
+    TrackingTreeFull = 9026,
+    #[error("the owner rotated within the rate limit")]
+    RotationTooSoon = 9027,
+    #[error("a zero nullifier key does not enroll")]
+    ZeroNullifierKey = 9028,
+    #[error("a first enrollment carries a proof and a rotation none")]
+    EnrollmentProofShape = 9029,
+    #[error("an apply names no enrollment")]
+    NoEnrollmentsNamed = 9030,
+    #[error("owner grant account is invalid")]
+    InvalidOwnerGrant = 9031,
+    #[error("reader key names no scheme")]
+    InvalidReaderKey = 9032,
+    #[error("auditor key is untagged, zero or not canonical")]
+    InvalidAuditorKey = 9033,
+    #[error("the frame names a tracking root below the source's floor")]
+    TrackingRootBelowFloor = 9034,
+    #[error("the update does not fit the source's kind")]
+    SourceKindMismatch = 9035,
+    #[error("a private write's counter does not increase")]
+    WriteCounterNotIncreasing = 9036,
 }
 
 #[must_use]
 pub struct RootUpdate<'a> {
-    pub mode: UpdateMode,
     pub slot: u64,
     pub data: &'a StorageUpdateIxData<'a>,
+}
+
+/// A proven private source write, its tree has no next index.
+#[must_use]
+pub struct PrivateRootUpdate {
+    /// The revision the proof was made against.
+    pub revision: Revision,
+    pub restrictive: bool,
+    pub slot: u64,
+    pub new_root: [u8; 32],
+    /// The paired registry's newest revision, read from the account `tracking_registry` names.
+    pub tracking_revision: Revision,
 }
 
 impl From<u64> for Revision {
@@ -163,8 +184,12 @@ impl StorageRegistry {
         registry.authority = authority;
         registry.grace_slots = ix.grace_slots;
         registry.ring_id = ix.ring_id;
+        registry.tracking_registry = ix.tracking_registry;
         registry.next_index = 1u32.to_le_bytes();
-        registry.roots[0].hash = MEMBER_REGISTRY_EMPTY_ROOT;
+        registry.roots[0].hash = match registry.is_private() {
+            true => PRIVATE_SOURCE_EMPTY_ROOT,
+            false => MEMBER_REGISTRY_EMPTY_ROOT,
+        };
         registry
     }
 
@@ -202,157 +227,81 @@ impl StorageRegistry {
         root_at(&self.roots, revision, slot)
     }
 
+    /// Owner rows may read it, its tree is the sparse list tree.
+    pub fn is_private(&self) -> bool {
+        self.tracking_registry != Address::default()
+    }
+
+    /// The one exception to tracking grace, a stale root could prove a blocked owner unenrolled.
+    pub fn check_tracking_revision(&self, named: Revision) -> Result<(), StorageError> {
+        if named.value() < self.tracking_floor.value() {
+            return Err(StorageError::TrackingRootBelowFloor);
+        }
+        Ok(())
+    }
+
     /// Writes nothing on a refusal.
     pub fn update(&mut self, update: RootUpdate<'_>) -> Result<(), StorageError> {
-        let RootUpdate { mode, slot, data } = update;
-        if data.revision != self.roots[0].revision {
-            return Err(StorageError::RevisionChanged);
+        let RootUpdate { slot, data } = update;
+        if self.is_private() {
+            return Err(StorageError::SourceKindMismatch);
         }
-        let revision = data
-            .revision
-            .value()
-            .checked_add(1)
-            .ok_or(StorageError::RevisionOverflow)?;
-        match mode {
-            UpdateMode::Graced if slot < self.roots[ROOT_HISTORY - 1].expires_at() => {
-                return Err(StorageError::HistoryFull);
-            }
-            UpdateMode::Graced => {
-                // A saturated expiry never lapses.
-                self.roots[0].expires_at = slot.saturating_add(self.grace_slots()).to_le_bytes();
-                self.roots.rotate_right(1);
-            }
-            UpdateMode::Immediate => self.roots.fill(Root::zeroed()),
-        }
-        self.roots[0] = Root {
-            hash: data.apply.new_root,
-            revision: revision.into(),
-            expires_at: [0; 8],
-        };
+        self.advance(data.revision, data.restrictive, slot, data.apply.new_root)?;
         self.next_index = data.apply.new_next_index;
         Ok(())
+    }
+
+    pub const fn last_write_counter(&self) -> u64 {
+        u64::from_le_bytes(self.last_write_counter)
+    }
+
+    /// Strictly increasing across the source, the circuit opens no old counter and the chain binds the new one.
+    pub fn advance_write_counter(&mut self, counter: u64) -> Result<(), StorageError> {
+        if counter <= self.last_write_counter() {
+            return Err(StorageError::WriteCounterNotIncreasing);
+        }
+        self.last_write_counter = counter.to_le_bytes();
+        Ok(())
+    }
+
+    /// Writes nothing on a refusal.
+    pub fn update_private(&mut self, update: PrivateRootUpdate) -> Result<(), StorageError> {
+        if !self.is_private() {
+            return Err(StorageError::SourceKindMismatch);
+        }
+        self.advance(
+            update.revision,
+            update.restrictive,
+            update.slot,
+            update.new_root,
+        )?;
+        if update.restrictive {
+            self.tracking_floor = update.tracking_revision;
+        }
+        Ok(())
+    }
+
+    /// The proof holds `restrictive`, every root older than a restriction stops being served.
+    fn advance(
+        &mut self,
+        revision: Revision,
+        restrictive: bool,
+        slot: u64,
+        new_root: [u8; 32],
+    ) -> Result<(), StorageError> {
+        let retirement = match restrictive {
+            true => Retirement::Immediate,
+            false => Retirement::Graced {
+                slot,
+                grace_slots: self.grace_slots(),
+            },
+        };
+        advance_roots(&mut self.roots, revision, retirement, new_root)
     }
 
     fn valid(&self) -> bool {
         self.discriminator == Self::DISCRIMINATOR
             && (1..=MEMBER_REGISTRY_CAPACITY).contains(&u64::from(self.next_index()))
-    }
-}
-
-impl AddressAuthorization {
-    /// Zero marks an uninitialized account, one a registry.
-    pub const DISCRIMINATOR: u8 = 2;
-    pub const SEED: &'static [u8] = b"address";
-    pub const SIZE: usize = core::mem::size_of::<Self>();
-
-    /// One address per owner per registry.
-    pub fn seeds<'a>(registry: &'a Address, owner: &'a Address) -> [&'a [u8]; 3] {
-        [Self::SEED, registry.as_ref(), owner.as_ref()]
-    }
-
-    pub fn find_address(registry: &Address, owner: &Address) -> (Address, u8) {
-        Address::find_program_address(&Self::seeds(registry, owner), &STORAGE_PROGRAM_ID)
-    }
-
-    pub fn from_data(data: &[u8]) -> Option<&Self> {
-        bytemuck::try_from_bytes::<Self>(data)
-            .ok()
-            .filter(|account| account.discriminator == Self::DISCRIMINATOR)
-    }
-
-    pub fn from_data_mut(data: &mut [u8]) -> Option<&mut Self> {
-        bytemuck::try_from_bytes_mut::<Self>(data)
-            .ok()
-            .filter(|account| account.discriminator == Self::DISCRIMINATOR)
-    }
-
-    pub fn decode(owner: &Address, data: &[u8]) -> Option<Self> {
-        (*owner == STORAGE_PROGRAM_ID)
-            .then(|| Self::from_data(data).copied())
-            .flatten()
-    }
-
-    pub const fn revision(&self) -> u64 {
-        u64::from_le_bytes(self.revision)
-    }
-
-    pub const fn applied_revision(&self) -> u64 {
-        u64::from_le_bytes(self.applied_revision)
-    }
-
-    pub const fn address(&self) -> AuthorizedAddress {
-        AuthorizedAddress {
-            ring_id: self.ring_id,
-            nullifier_pk: self.nullifier_pk,
-            viewing_u: self.viewing_u,
-            address_revision: self.revision(),
-        }
-    }
-
-    /// A later enrollment rotates the viewing key alone, an older address is gone for good.
-    pub fn enroll(&mut self, ix: &EnrollAddressIxData) -> Result<(), StorageError> {
-        if ix.nullifier_pk != self.nullifier_pk {
-            return Err(StorageError::NullifierKeyChanged);
-        }
-        let revision = self
-            .revision()
-            .checked_add(1)
-            .ok_or(StorageError::RevisionOverflow)?;
-        self.viewing_u = ix.viewing_u;
-        self.revision = revision.to_le_bytes();
-        Ok(())
-    }
-
-    /// The entry the apply proof chains, a replay and an older revision refused.
-    pub fn apply(&mut self, write: &AddressWriteData) -> Result<QueueEntry, StorageError> {
-        if self.applied_revision() >= self.revision() {
-            return Err(StorageError::AddressAlreadyApplied);
-        }
-        let entry = write
-            .entry(&self.address())
-            .map_err(|_| StorageError::InvalidAddressAuthorization)?;
-        self.applied_revision = self.revision;
-        Ok(entry)
-    }
-}
-
-/// The first enrollment, at revision 1 under the registry's ring.
-#[must_use]
-pub struct FirstEnrollment<'a> {
-    pub registry: Address,
-    pub owner: Address,
-    pub bump: u8,
-    pub ring_id: [u8; 32],
-    pub ix: &'a EnrollAddressIxData,
-}
-
-impl FirstEnrollment<'_> {
-    pub fn account(self) -> AddressAuthorization {
-        AddressAuthorization {
-            discriminator: AddressAuthorization::DISCRIMINATOR,
-            bump: self.bump,
-            registry: self.registry,
-            owner: self.owner,
-            ring_id: self.ring_id,
-            nullifier_pk: self.ix.nullifier_pk,
-            viewing_u: self.ix.viewing_u,
-            revision: 1u64.to_le_bytes(),
-            applied_revision: [0; 8],
-        }
-    }
-}
-
-impl EnrollAddressIxData {
-    /// A small order key fails later in the delivery proof.
-    pub fn check(&self) -> Result<(), StorageError> {
-        if self.viewing_u == [0; 32] || !is_canonical_x25519_public_key(&self.viewing_u) {
-            return Err(StorageError::NonCanonicalViewingKey);
-        }
-        // The key is fixed, one the address hash refuses would lock the owner out for good.
-        if !is_canonical_bn254_scalar_be(&self.nullifier_pk) {
-            return Err(StorageError::InvalidInstructionData);
-        }
-        Ok(())
     }
 }
 
@@ -367,8 +316,50 @@ pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], S
     .map_err(|_| StorageError::HashingFailed)
 }
 
+/// How an update treats the roots it replaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retirement {
+    /// The outgoing root stays served for `grace_slots`, an unexpired oldest root refuses the update.
+    Graced { slot: u64, grace_slots: u64 },
+    /// Every earlier root stops being served.
+    Immediate,
+}
+
+/// Writes nothing on a refusal, `revision` is the one the proof was made against.
+pub(crate) fn advance_roots(
+    roots: &mut [Root; ROOT_HISTORY],
+    revision: Revision,
+    retirement: Retirement,
+    new_root: [u8; 32],
+) -> Result<(), StorageError> {
+    if revision != roots[0].revision {
+        return Err(StorageError::RevisionChanged);
+    }
+    let next = revision
+        .value()
+        .checked_add(1)
+        .ok_or(StorageError::RevisionOverflow)?;
+    match retirement {
+        Retirement::Graced { slot, .. } if slot < roots[ROOT_HISTORY - 1].expires_at() => {
+            return Err(StorageError::HistoryFull);
+        }
+        Retirement::Graced { slot, grace_slots } => {
+            // A saturated expiry never lapses.
+            roots[0].expires_at = slot.saturating_add(grace_slots).to_le_bytes();
+            roots.rotate_right(1);
+        }
+        Retirement::Immediate => roots.fill(Root::zeroed()),
+    }
+    roots[0] = Root {
+        hash: new_root,
+        revision: next.into(),
+        expires_at: [0; 8],
+    };
+    Ok(())
+}
+
 /// The current root, or a retired one before its expiry.
-fn root_at(
+pub(crate) fn root_at(
     roots: &[Root; ROOT_HISTORY],
     revision: Revision,
     slot: u64,
@@ -392,6 +383,19 @@ impl From<StorageError> for ProgramError {
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<StorageRegistry>() == 1);
-const _: () = assert!(StorageRegistry::SIZE == 1613);
-const _: () = assert!(core::mem::align_of::<AddressAuthorization>() == 1);
-const _: () = assert!(AddressAuthorization::SIZE == 178);
+const _: () = assert!(StorageRegistry::SIZE == 1661);
+
+#[cfg(test)]
+mod tests {
+    use spr_hasher::{Hasher, Poseidon};
+
+    use super::*;
+
+    #[test]
+    fn the_private_empty_root_folds_a_zero_leaf_through_every_level() {
+        let root = (0..96).fold([0u8; 32], |node, _| {
+            Poseidon::hashv(&[&node, &node]).unwrap()
+        });
+        assert_eq!(root, PRIVATE_SOURCE_EMPTY_ROOT);
+    }
+}

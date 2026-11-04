@@ -1,10 +1,13 @@
 //! Frames of every rail, shared by the codec and the heap budget tests.
 
 use custom_ring_interface::{
-    sender_bundle_len, storage::Revision, AnonymousProofData, CustomRingProof, FramedSenderBundle,
-    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, PolicyRecipients, Replies,
-    RingOutput, RingPolicy, RingRail, RingTransactData, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    EXIT_RECORD_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
+    cosign::{ApprovalMask, CoSignHeader},
+    sender_bundle_len,
+    storage::Revision,
+    AnonymousProofData, AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle,
+    InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy,
+    RingRail, RingTransactData, SlotBody, AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    DATA_TAIL_LEN, RECIPIENT_BODY_LEN, RING_POLICY,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -21,12 +24,14 @@ pub struct Fixture {
     pub spp_proof: PlainGroth16Proof,
     pub fields: Vec<[u8; 32]>,
     pub bytes: [[u8; 32]; 64],
-    /// One slot's ciphertext, cut to the stream layout's length.
-    pub ciphertexts: [[u8; 104]; 16],
+    pub records: [[u8; AUDIT_RECORD_LEN]; 16],
+    pub tails: [[u8; DATA_TAIL_LEN]; 16],
     /// Cut to the stream layout's envelope length.
     pub envelope: Vec<u8>,
     pub tags: [[u8; 32]; 8],
     pub recipient_body: [u8; RECIPIENT_BODY_LEN],
+    /// A body past the plain head, a data-bearing frame's.
+    pub extended_body: [u8; RECIPIENT_BODY_LEN + 33],
     /// Cut to the frame's `m`.
     pub sender_body: Vec<u8>,
     /// Cut to one length per body-bearing slot.
@@ -55,10 +60,12 @@ impl Fixture {
             },
             fields: (0..=u8::MAX).map(field).collect(),
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
-            ciphertexts: core::array::from_fn(|i| [0x80 + i as u8; 104]),
+            records: core::array::from_fn(|i| [0x80 + i as u8; AUDIT_RECORD_LEN]),
+            tails: core::array::from_fn(|i| [0xc0 + i as u8; DATA_TAIL_LEN]),
             envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             recipient_body: core::array::from_fn(|byte| byte as u8 ^ 0x5a),
+            extended_body: core::array::from_fn(|byte| byte as u8 ^ 0x3c),
             sender_body: (0..sender_bundle_len(16) as u16)
                 .map(|byte| byte as u8 ^ 0x2d)
                 .collect(),
@@ -76,16 +83,21 @@ impl Fixture {
             n_in,
             n_out,
             proof: &self.proofs[0],
+            tracking_revision: Revision::from(9),
             own_revision: None,
             policy: None,
-            exempt: false,
-            approval_required: false,
+            spl_withdrawal_owners: &[],
+            co_sign: CoSignHeader::default(),
+            no_spend: false,
+            public_owners: false,
             expiry_unix_ts: 1_800_000_000,
             tx_viewing_u: &self.bytes[0],
             salt: &self.salt,
+            extensions: FrameExtensions::default(),
             interface_transfers: Vec::new(),
-            key_escrow: false,
-            full_openings: false,
+            has_data: false,
+            entry: false,
+            wide_owners: false,
             outputs: Vec::new(),
             replies: None,
             sender: None,
@@ -104,40 +116,35 @@ impl Fixture {
     }
 
     pub fn exit<'a>(&'a self, slot: usize, payload: &'a [u8]) -> RingOutput<'a> {
-        RingOutput::Exit {
+        RingOutput {
             hash: &self.fields[10 + slot],
             owner_tag: &self.bytes[12 + slot],
-            payload,
-            record: &self.ciphertexts[slot][..EXIT_RECORD_LEN],
+            body: SlotBody::Exit(payload),
+            record: &self.records[slot],
+            tail: None,
         }
     }
 
-    /// Cuts the envelope and every slot's ciphertext to the frame's stream layout.
+    /// Cuts the envelope to the frame's stream layout and hands each slot a tail under `has_data`.
     pub fn with_audit_stream<'a>(&'a self, mut data: RingTransactData<'a>) -> RingTransactData<'a> {
         let stream = data.audit_stream().unwrap();
         data.envelope = &self.envelope[..stream.envelope().len];
         for (slot, output) in data.outputs.iter_mut().enumerate() {
-            let ciphertext = &self.ciphertexts[slot][..stream.ciphertext_len(slot)];
-            match output {
-                RingOutput::Delivered { body, .. } => *body = ciphertext,
-                RingOutput::Anonymous { record, .. } | RingOutput::Exit { record, .. } => {
-                    *record = ciphertext;
-                }
-            }
+            output.tail = data.has_data.then_some(&self.tails[slot]);
         }
         data
     }
 
     pub fn confidential_policy(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
-        data.key_escrow = true;
         data.own_revision = Some(Revision::from(7));
         data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
             curator_revision: Some(Revision::from(3)),
-            recipients: PolicyRecipients::Framed(&self.fields[50..52]),
         });
-        data.approval_required = true;
+        data.co_sign = CoSignHeader {
+            approval: ApprovalMask::OUTFLOW,
+            co_signers: 1,
+        };
         data.interface_transfers = vec![
             InterfaceTransfer::SolWithdrawal { amount: 5_000 },
             InterfaceTransfer::SplDeposit {
@@ -145,7 +152,7 @@ impl Fixture {
                 spl_interface_bump: 254,
             },
         ];
-        data.outputs = vec![self.delivered(0), self.exit(1, &self.payload)];
+        data.outputs = vec![self.recipient(0), self.exit(1, &self.payload)];
         data.input_trees = InputTrees::Two {
             first: TreeContext {
                 utxo_tree_root_index: 1,
@@ -165,15 +172,13 @@ impl Fixture {
         let mut data = self.base(RingRail::Confidential, 2, 4);
         data.own_revision = Some(Revision::from(5));
         data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
             curator_revision: None,
-            recipients: PolicyRecipients::Framed(&self.fields[50..54]),
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 4_000 }];
         data.outputs = (0..4)
             .map(|slot| match slot {
                 1 => self.exit(slot, &self.payload),
-                _ => self.delivered(slot),
+                _ => self.recipient(slot),
             })
             .collect();
         data.in_proof_owner = Some(InProofOwner {
@@ -189,27 +194,69 @@ impl Fixture {
         data.outputs = (0..8)
             .map(|slot| match slot {
                 3 | 6 => self.exit(slot, &self.payload),
-                _ => self.delivered(slot),
+                _ => self.recipient(slot),
             })
             .collect();
         self.with_audit_stream(data)
     }
 
-    pub fn confidential_exempt(&self) -> RingTransactData<'_> {
+    /// A ring with an own registry and no policy, the proof reads thresholds off the own root.
+    pub fn confidential_thresholds(&self) -> RingTransactData<'_> {
         let mut data = self.confidential_delivered();
-        data.exempt = true;
         data.own_revision = Some(Revision::from(7));
+        data.co_sign = CoSignHeader {
+            approval: ApprovalMask::WITHDRAWAL,
+            co_signers: 1,
+        };
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 2_500 }];
         data
+    }
+
+    /// Bodies past the plain head and one tail per published slot.
+    pub fn confidential_data(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Confidential, 2, 2);
+        data.has_data = true;
+        data.outputs = vec![
+            RingOutput {
+                body: SlotBody::Recipient(&self.extended_body),
+                ..self.recipient(0)
+            },
+            self.exit(1, &self.extended_body),
+        ];
+        self.with_audit_stream(data)
+    }
+
+    /// Every optional SPP field a frame carries.
+    pub fn confidential_extensions(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Confidential, 2, 2);
+        data.extensions = FrameExtensions {
+            data_hash: Some(&self.fields[70]),
+            ring_data_hash: Some(&self.fields[71]),
+            private_revision: None,
+            messages: vec![AppMessage {
+                view_tag: &self.fields[72],
+                data: &self.payload,
+            }],
+            cache: None,
+        };
+        data.outputs = vec![self.recipient(0), self.recipient(1)];
+        self.with_audit_stream(data)
+    }
+
+    /// A public leg with no spend, every input a dummy under the frame's published count.
+    pub fn confidential_no_spend(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Confidential, 2, 2);
+        data.no_spend = true;
+        data.interface_transfers = vec![InterfaceTransfer::SolDeposit { amount: 3_000 }];
+        data.outputs = vec![self.recipient(0), self.recipient(1)];
+        self.with_audit_stream(data)
     }
 
     pub fn anonymous(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 3, 4);
         data.own_revision = Some(Revision::from(31));
         data.policy = Some(PolicyProof {
-            spl_withdrawal_owners: &[],
             curator_revision: None,
-            recipients: PolicyRecipients::Hidden,
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
         data.outputs = (0..4)
@@ -229,8 +276,7 @@ impl Fixture {
 
     pub fn anonymous_entry(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 2, 2);
-        data.own_revision = Some(Revision::from(0));
-        data.full_openings = true;
+        data.entry = true;
         data.outputs = vec![self.tagged(0), self.exit(1, &self.payload)];
         data.sender = self.sender(2);
         data.anonymous = Some(AnonymousProofData {
@@ -243,40 +289,52 @@ impl Fixture {
 
     pub fn delegate(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Delegate, 2, 2);
-        data.key_escrow = true;
-        data.own_revision = Some(Revision::from(0));
-        data.policy = Some(self.delegate_policy(2));
-        data.outputs = vec![self.delivered(0), self.delivered(1)];
+        data.outputs = vec![self.recipient(0), self.recipient(1)];
         self.with_audit_stream(data)
     }
 
-    pub fn delegate_policy(&self, outputs: usize) -> PolicyProof<'_> {
-        PolicyProof {
-            spl_withdrawal_owners: &[],
-            curator_revision: None,
-            recipients: PolicyRecipients::Framed(&self.fields[50..50 + outputs]),
-        }
+    /// The anonymous frame under the authority tag, its statement names the delegate.
+    pub fn anonymous_delegate(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::AnonymousDelegate, 2, 2);
+        data.outputs = vec![self.tagged(0), self.tagged(1)];
+        data.sender = self.sender(2);
+        self.with_audit_stream(data)
     }
 
-    pub fn delivered(&self, slot: usize) -> RingOutput<'_> {
-        RingOutput::Delivered {
+    /// Every live owner a published signer, SPP's confidential rail settles it on an anonymous ring.
+    pub fn anonymous_public_owners(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Anonymous, 2, 2);
+        data.public_owners = true;
+        data.outputs = vec![self.tagged(0), self.tagged(1)];
+        data.sender = self.sender(2);
+        self.with_audit_stream(data)
+    }
+
+    pub fn recipient(&self, slot: usize) -> RingOutput<'_> {
+        RingOutput {
             hash: &self.fields[10 + slot],
-            u: &self.bytes[3 + slot],
-            body: &self.ciphertexts[slot],
+            owner_tag: &self.bytes[3 + slot],
+            body: SlotBody::Recipient(&self.recipient_body),
+            record: &self.records[slot],
+            tail: None,
         }
     }
 
     /// Slot 0 a change output, any other slot a recipient body.
     pub fn tagged(&self, slot: usize) -> RingOutput<'_> {
-        RingOutput::Anonymous {
+        RingOutput {
             hash: &self.fields[10 + slot],
-            tag: if slot == 0 {
+            owner_tag: if slot == 0 {
                 &ZERO_TAG
             } else {
                 &self.tags[slot]
             },
-            body: (slot != 0).then_some(&self.recipient_body),
-            record: &self.ciphertexts[slot],
+            body: match slot {
+                0 => SlotBody::None,
+                _ => SlotBody::Recipient(&self.recipient_body),
+            },
+            record: &self.records[slot],
+            tail: None,
         }
     }
 
@@ -300,7 +358,6 @@ impl Fixture {
 
     pub fn anonymous_compact(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Anonymous, 3, 4);
-        data.own_revision = Some(Revision::from(33));
         data.outputs = vec![self.tagged(0), self.tagged(1)];
         data.sender = self.sender(2);
         data.anonymous = Some(AnonymousProofData {
@@ -313,25 +370,27 @@ impl Fixture {
 
     pub fn confidential_compact(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 1, 8);
-        data.outputs = (0..5).map(|slot| self.delivered(slot)).collect();
+        data.outputs = (0..5).map(|slot| self.recipient(slot)).collect();
         self.with_audit_stream(data)
     }
 
-    pub fn cases(&self) -> [(&'static str, RingTransactData<'_>); 10] {
+    pub fn cases(&self) -> [(&'static str, RingTransactData<'_>); 15] {
         [
-            ("confidential_delivered_policy", self.confidential_policy()),
+            ("confidential_policy", self.confidential_policy()),
             (
                 "confidential_in_proof_owner_policy",
                 self.confidential_in_proof_owner(),
             ),
-            (
-                "confidential_delivered_audit_only",
-                self.confidential_delivered(),
-            ),
-            ("confidential_exempt_audit_only", self.confidential_exempt()),
+            ("confidential_audit_only", self.confidential_delivered()),
+            ("confidential_thresholds", self.confidential_thresholds()),
+            ("confidential_data", self.confidential_data()),
+            ("confidential_extensions", self.confidential_extensions()),
+            ("confidential_no_spend", self.confidential_no_spend()),
             ("anonymous_policy", self.anonymous()),
             ("anonymous_entry_audit_only", self.anonymous_entry()),
+            ("anonymous_public_owners", self.anonymous_public_owners()),
             ("delegate_move", self.delegate()),
+            ("anonymous_delegate_move", self.anonymous_delegate()),
             ("anonymous_reply_metadata", self.anonymous_replies(97)),
             ("anonymous_compact", self.anonymous_compact()),
             ("confidential_compact", self.confidential_compact()),

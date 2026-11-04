@@ -28,13 +28,3 @@ func Zeros(n int) []frontend.Variable {
 	}
 	return out
 }
-
-// DisclosurePad is the merge pad, a reused salt under one key repeats it.
-func DisclosurePad(api frontend.API, domain uint64, key [2]frontend.Variable, salt frontend.Variable, n int) []frontend.Variable {
-	seed := gadget.PoseidonHash(api, []frontend.Variable{domain, key[0], key[1], salt})
-	pad := make([]frontend.Variable, n)
-	for i := range pad {
-		pad[i] = gadget.PoseidonHash(api, []frontend.Variable{seed, i})
-	}
-	return pad
-}

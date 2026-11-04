@@ -1,39 +1,31 @@
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
-use spr_hasher::primitives::solana_owner_identity;
 use zolana_ring_policy::ListSet;
 
 use crate::{
     error::CustomRingError,
-    instruction::{list_and_mint_entry, mint_policy_write, write_count},
-    member_registry::{AuthorizedAddress, EscrowKey, QueueEntry},
+    instruction::{list_and_mint_entry, write_count},
+    member_registry::QueueEntry,
+    private_list::{ListPosition, PublishedListWrite},
     storage::{RegistryId, Revision, StorageError},
-    ApplyRecordsIxData, RecordWriteData, REGISTER_KEY_CIPHERTEXT_LEN,
+    ApplyRecordsIxData, CustomRingProof, ReaderKeyBytes, RecordWriteData,
+    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 pub mod tag {
     pub const INITIALIZE: u8 = 0;
     pub const UPDATE: u8 = 1;
-    pub const UPDATE_IMMEDIATE: u8 = 2;
-    // 3 retired.
+    // 2, 3 and 5 retired.
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
-    pub const ENROLL_ADDRESS: u8 = 5;
-}
-
-/// The first byte of each write in an update.
-pub mod write_kind {
-    pub const RECORD: u8 = 0;
-    pub const ESCROW: u8 = 1;
-    pub const ADDRESS: u8 = 2;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UpdateMode {
-    /// The outgoing root stays readable for the grace period.
-    Graced,
-    /// Every earlier root stops verifying.
-    Immediate,
+    pub const ENROLL: u8 = 6;
+    /// Permissionless, the applier names the authorization accounts.
+    pub const APPLY_ENROLLMENTS: u8 = 7;
+    pub const OWNER_GRANT: u8 = 8;
+    /// The ring program signs its ring PDA as creator through CPI.
+    pub const INITIALIZE_TRACKING: u8 = 9;
+    /// Accounts `authority, registry, tracking_registry`, the registry a private source pairs with.
+    pub const UPDATE_PRIVATE: u8 = 10;
 }
 
 /// The creator signs and becomes the authority.
@@ -45,61 +37,92 @@ pub struct InitializeIxData {
     pub grace_slots: [u8; 8],
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
+    /// Nonzero creates a private source paired with the named tracking registry.
+    pub tracking_registry: Address,
 }
 
-/// Encoded as its `write_kind` byte and body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StorageWriteData {
-    Record(RecordWriteData),
-    Escrow(EscrowWriteData),
-    Address(AddressWriteData),
+/// One write of a private source, the program reads no list bit from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct PrivateListWriteData {
+    pub position: [u8; 32],
+    pub leaf: [u8; 32],
+    /// Little endian.
+    pub write_counter: [u8; 8],
 }
 
-/// The leaf binds every field except `eph_u`.
+/// The proof that applies a private source's writes, the sparse tree has no next index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct EscrowWriteData {
-    /// Its owner identity is the leaf member.
-    pub owner: Address,
+pub struct ApplyPrivateListIxData {
+    pub proof: CustomRingProof,
+    pub new_root: [u8; 32],
+}
+
+/// Tag 10, `revision || restrictive u8 || count u8 || count writes || ApplyPrivateListIxData`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateUpdateIxData<'a> {
+    pub revision: Revision,
+    /// The apply proof holds it, a false value fails verification.
+    pub restrictive: bool,
+    pub writes: Vec<PrivateListWriteData>,
+    pub apply: &'a ApplyPrivateListIxData,
+}
+
+/// Tag 9, accounts `payer, creator, tracking_registry, system_program`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct InitializeTrackingIxData {
+    /// `ring_id_field` of the ring program.
+    pub ring_id: [u8; 32],
+    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+}
+
+/// Tag 6 ahead of a first enrollment's proof, accounts `payer, owner, tracking_registry, authorization, system_program`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct EnrollIxData {
+    /// Final after the first enrollment, with `list_tag`, `eph_u` and `ciphertext`.
     pub nullifier_pk: [u8; 32],
+    pub list_tag: [u8; 32],
+    /// Canonical and nonzero, the owner's signature alone authorizes it.
+    pub viewing_u: [u8; 32],
     pub eph_u: [u8; 32],
     pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
 }
 
-/// Tag 5, the owner's signature is the only authorization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct EnrollAddressIxData {
-    /// Fixed after the first enrollment.
-    pub nullifier_pk: [u8; 32],
-    /// Canonical and nonzero.
-    pub viewing_u: [u8; 32],
+/// Tag 6 data, a first enrollment holds the `RegisterKey` proof and a rotation none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnrollRequest<'a> {
+    pub ix: &'a EnrollIxData,
+    pub proof: Option<&'a CustomRingProof>,
 }
 
-/// Names an enrollment, the address comes from the owner's authorization account and never from data.
+/// Tag 7, accounts `tracking_registry` then one to `APPLY_BATCH` authorizations in chain order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct AddressWriteData {
-    pub owner: Address,
-    /// Little endian, the revision the authorization holds.
-    pub address_revision: [u8; 8],
+pub struct ApplyEnrollmentsIxData {
+    pub revision: Revision,
+    pub apply: ApplyRecordsIxData,
 }
 
-/// Tags 1 and 2, `revision || count u8 || count writes || ApplyRecordsIxData`.
+/// Tag 8, accounts `payer, owner, tracking_registry, grant, system_program`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct OwnerGrantIxData {
+    pub reader: ReaderKeyBytes,
+    /// One grants, zero revokes.
+    pub active: u8,
+}
+
+/// Tag 1, `revision || restrictive u8 || count u8 || count writes || ApplyRecordsIxData`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageUpdateIxData<'a> {
     pub revision: Revision,
-    pub writes: Vec<StorageWriteData>,
+    /// The apply proof holds it, a false value fails verification.
+    pub restrictive: bool,
+    pub writes: Vec<RecordWriteData>,
     pub apply: &'a ApplyRecordsIxData,
-}
-
-impl UpdateMode {
-    pub const fn tag(self) -> u8 {
-        match self {
-            Self::Graced => tag::UPDATE,
-            Self::Immediate => tag::UPDATE_IMMEDIATE,
-        }
-    }
 }
 
 impl InitializeIxData {
@@ -110,152 +133,196 @@ impl InitializeIxData {
     }
 }
 
-impl EnrollAddressIxData {
+impl InitializeTrackingIxData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 }
 
-impl AddressWriteData {
+impl EnrollIxData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
+}
 
-    pub const fn address_revision(&self) -> u64 {
-        u64::from_le_bytes(self.address_revision)
+impl<'a> EnrollRequest<'a> {
+    /// Exactly the fields, or the fields and one proof.
+    pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
+        let (ix, proof) = data
+            .split_at_checked(EnrollIxData::SIZE)
+            .ok_or(StorageError::InvalidInstructionData)?;
+        Ok(Self {
+            ix: bytemuck::try_from_bytes(ix).map_err(|_| StorageError::InvalidInstructionData)?,
+            proof: match proof.is_empty() {
+                true => None,
+                false => Some(
+                    bytemuck::try_from_bytes(proof)
+                        .map_err(|_| StorageError::InvalidInstructionData)?,
+                ),
+            },
+        })
     }
 
-    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
-        Ok(solana_owner_identity(self.owner.as_array())?)
-    }
-
-    /// The leaf write of `address`, the owner's authorized address at the named revision.
-    pub fn entry(&self, address: &AuthorizedAddress) -> Result<QueueEntry, CustomRingError> {
-        if address.address_revision != self.address_revision() {
-            return Err(CustomRingError::AddressRevisionMismatch);
-        }
-        let member = self.member()?;
-        QueueEntry::address(member, address.hash(&member)?)
+    pub fn encode(&self) -> Vec<u8> {
+        let proof = self.proof.map_or(&[][..], bytemuck::bytes_of);
+        [bytemuck::bytes_of(self.ix), proof].concat()
     }
 }
 
-impl StorageWriteData {
-    /// The leaf write the apply proof hashes, an address write reads its hash from the owner's
-    /// authorization through [`AddressWriteData::entry`].
-    pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
-        match self {
-            Self::Record(write) => list_and_mint_entry(
-                write.member,
-                &write.lists,
-                &write.mint_policy,
-                ListSet::STORAGE_WRITES,
-            ),
-            // The leaf binds the published envelope and no other key.
-            Self::Escrow(write) => QueueEntry::escrow(write.member()?, &write.key()),
-            Self::Address(_) => Err(CustomRingError::AddressWriteNeedsAuthorization),
-        }
-    }
+impl ApplyEnrollmentsIxData {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
-        match self {
-            Self::Record(write) => Ok(write.member),
-            Self::Escrow(write) => write.member(),
-            Self::Address(write) => write.member(),
+    /// One account per chained entry, an apply key serves up to `APPLY_BATCH`.
+    pub fn check_count(authorizations: usize) -> Result<(), StorageError> {
+        match authorizations {
+            0 => Err(StorageError::NoEnrollmentsNamed),
+            count => storage_write_count(count).map(|_| ()),
         }
-    }
-
-    pub fn encode_all(writes: &[Self]) -> Vec<u8> {
-        let mut out = Vec::new();
-        for write in writes {
-            write.encode_into(&mut out);
-        }
-        out
-    }
-
-    /// Refuses a mint settings tag above 1 and nonzero settings under tag 0.
-    pub fn parse_all(mut data: &[u8]) -> Result<Vec<Self>, CustomRingError> {
-        let mut writes = Vec::new();
-        while !data.is_empty() {
-            let (write, rest) = Self::split(data)?;
-            if let Self::Record(RecordWriteData { mint_policy, .. }) = &write {
-                if mint_policy[0] != 1 && *mint_policy != mint_policy_write(None) {
-                    return Err(CustomRingError::InvalidInstructionData);
-                }
-            }
-            writes.push(write);
-            data = rest;
-        }
-        Ok(writes)
-    }
-
-    fn split(data: &[u8]) -> Result<(Self, &[u8]), CustomRingError> {
-        let (kind, rest) = data
-            .split_first()
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        match *kind {
-            write_kind::RECORD => leading(rest).map(|(write, rest)| (Self::Record(write), rest)),
-            write_kind::ESCROW => leading(rest).map(|(write, rest)| (Self::Escrow(write), rest)),
-            write_kind::ADDRESS => leading(rest).map(|(write, rest)| (Self::Address(write), rest)),
-            _ => Err(CustomRingError::InvalidInstructionData),
-        }
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        let (kind, body) = match self {
-            Self::Record(write) => (write_kind::RECORD, bytemuck::bytes_of(write)),
-            Self::Escrow(write) => (write_kind::ESCROW, bytemuck::bytes_of(write)),
-            Self::Address(write) => (write_kind::ADDRESS, bytemuck::bytes_of(write)),
-        };
-        out.push(kind);
-        out.extend_from_slice(body);
     }
 }
 
-impl EscrowWriteData {
+impl OwnerGrantIxData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
-
-    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
-        Ok(solana_owner_identity(self.owner.as_array())?)
-    }
-
-    pub fn key(&self) -> EscrowKey<'_> {
-        EscrowKey {
-            nullifier_pk: &self.nullifier_pk,
-            ciphertext: &self.ciphertext,
-        }
-    }
 }
 
 impl<'a> StorageUpdateIxData<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
-        let (revision, data) = data
-            .split_first_chunk::<8>()
-            .ok_or(StorageError::InvalidInstructionData)?;
-        let (count, mut rest) = data
-            .split_first()
-            .ok_or(StorageError::InvalidInstructionData)?;
-        let count = storage_write_count(usize::from(*count))?;
-        let mut writes = Vec::with_capacity(usize::from(count));
-        for _ in 0..count {
-            let (write, tail) =
-                StorageWriteData::split(rest).map_err(|_| StorageError::InvalidInstructionData)?;
-            writes.push(write);
-            rest = tail;
-        }
+        let (header, writes, apply) = UpdateHeader::split::<RecordWriteData>(data)?;
         Ok(Self {
-            revision: Revision(*revision),
+            revision: header.revision,
+            restrictive: header.restrictive,
             writes,
-            apply: ApplyRecordsIxData::parse(rest)
+            apply: ApplyRecordsIxData::parse(apply)
                 .map_err(|_| StorageError::InvalidInstructionData)?,
         })
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, StorageError> {
-        let count = storage_write_count(self.writes.len())?;
-        Ok([
-            &self.revision.0[..],
-            &[count],
-            &StorageWriteData::encode_all(&self.writes),
+        encode_update(
+            UpdateHeader {
+                revision: self.revision,
+                restrictive: self.restrictive,
+            },
+            &self.writes,
             bytemuck::bytes_of(self.apply),
-        ]
-        .concat())
+        )
     }
+
+    /// The leaf writes the apply proof hashes, a mint settings tag above 1 refused.
+    pub fn entries(&self) -> impl Iterator<Item = Result<QueueEntry, CustomRingError>> + '_ {
+        self.writes.iter().map(RecordWriteData::storage_entry)
+    }
+}
+
+impl RecordWriteData {
+    /// The authority's write, the storage program takes no other.
+    pub fn storage_entry(&self) -> Result<QueueEntry, CustomRingError> {
+        list_and_mint_entry(
+            self.member,
+            &self.lists,
+            &self.mint_policy,
+            ListSet::STORAGE_WRITES,
+        )
+    }
+}
+
+impl PrivateListWriteData {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+
+    pub fn published(&self) -> PublishedListWrite {
+        PublishedListWrite {
+            position: ListPosition(self.position),
+            leaf: self.leaf,
+            write_counter: u64::from_le_bytes(self.write_counter),
+        }
+    }
+}
+
+impl From<PublishedListWrite> for PrivateListWriteData {
+    fn from(write: PublishedListWrite) -> Self {
+        Self {
+            position: write.position.0,
+            leaf: write.leaf,
+            write_counter: write.write_counter.to_le_bytes(),
+        }
+    }
+}
+
+impl ApplyPrivateListIxData {
+    pub const SIZE: usize = core::mem::size_of::<Self>();
+}
+
+impl<'a> PrivateUpdateIxData<'a> {
+    pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
+        let (header, writes, apply) = UpdateHeader::split::<PrivateListWriteData>(data)?;
+        Ok(Self {
+            revision: header.revision,
+            restrictive: header.restrictive,
+            writes,
+            apply: bytemuck::try_from_bytes(apply)
+                .map_err(|_| StorageError::InvalidInstructionData)?,
+        })
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, StorageError> {
+        encode_update(
+            UpdateHeader {
+                revision: self.revision,
+                restrictive: self.restrictive,
+            },
+            &self.writes,
+            bytemuck::bytes_of(self.apply),
+        )
+    }
+}
+
+/// `revision || restrictive u8 || count u8`, ahead of the writes of tags 1 and 10.
+struct UpdateHeader {
+    revision: Revision,
+    restrictive: bool,
+}
+
+impl UpdateHeader {
+    fn split<W: Pod>(data: &[u8]) -> Result<(Self, Vec<W>, &[u8]), StorageError> {
+        let (revision, data) = data
+            .split_first_chunk::<8>()
+            .ok_or(StorageError::InvalidInstructionData)?;
+        let ([restrictive, count], rest) = data
+            .split_first_chunk::<2>()
+            .ok_or(StorageError::InvalidInstructionData)?;
+        let restrictive = match *restrictive {
+            0 => false,
+            1 => true,
+            _ => return Err(StorageError::InvalidInstructionData),
+        };
+        let count = usize::from(storage_write_count(usize::from(*count))?);
+        let (writes, apply) = rest
+            .split_at_checked(count * core::mem::size_of::<W>())
+            .ok_or(StorageError::InvalidInstructionData)?;
+        let writes = writes
+            .chunks(core::mem::size_of::<W>())
+            .map(bytemuck::pod_read_unaligned)
+            .collect();
+        Ok((
+            Self {
+                revision: Revision(*revision),
+                restrictive,
+            },
+            writes,
+            apply,
+        ))
+    }
+}
+
+fn encode_update<W: Pod>(
+    header: UpdateHeader,
+    writes: &[W],
+    apply: &[u8],
+) -> Result<Vec<u8>, StorageError> {
+    let count = storage_write_count(writes.len())?;
+    Ok([
+        &header.revision.0[..],
+        &[u8::from(header.restrictive), count],
+        bytemuck::cast_slice(writes),
+        apply,
+    ]
+    .concat())
 }
 
 fn storage_write_count(count: usize) -> Result<u8, StorageError> {
@@ -265,20 +332,17 @@ fn storage_write_count(count: usize) -> Result<u8, StorageError> {
     })
 }
 
-fn leading<T: Pod>(data: &[u8]) -> Result<(T, &[u8]), CustomRingError> {
-    let (body, rest) = data
-        .split_at_checked(core::mem::size_of::<T>())
-        .ok_or(CustomRingError::InvalidInstructionData)?;
-    let value = bytemuck::try_pod_read_unaligned(body)
-        .map_err(|_| CustomRingError::InvalidInstructionData)?;
-    Ok((value, rest))
-}
-
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
-const _: () = assert!(InitializeIxData::SIZE == 72);
-const _: () = assert!(core::mem::align_of::<EscrowWriteData>() == 1);
-const _: () = assert!(EscrowWriteData::SIZE == 128);
-const _: () = assert!(core::mem::align_of::<EnrollAddressIxData>() == 1);
-const _: () = assert!(EnrollAddressIxData::SIZE == 64);
-const _: () = assert!(core::mem::align_of::<AddressWriteData>() == 1);
-const _: () = assert!(AddressWriteData::SIZE == 40);
+const _: () = assert!(InitializeIxData::SIZE == 104);
+const _: () = assert!(core::mem::align_of::<PrivateListWriteData>() == 1);
+const _: () = assert!(PrivateListWriteData::SIZE == 72);
+const _: () = assert!(core::mem::align_of::<ApplyPrivateListIxData>() == 1);
+const _: () = assert!(ApplyPrivateListIxData::SIZE == 224);
+const _: () = assert!(core::mem::align_of::<InitializeTrackingIxData>() == 1);
+const _: () = assert!(InitializeTrackingIxData::SIZE == 65);
+const _: () = assert!(core::mem::align_of::<EnrollIxData>() == 1);
+const _: () = assert!(EnrollIxData::SIZE == 160);
+const _: () = assert!(core::mem::align_of::<ApplyEnrollmentsIxData>() == 1);
+const _: () = assert!(ApplyEnrollmentsIxData::SIZE == 236);
+const _: () = assert!(core::mem::align_of::<OwnerGrantIxData>() == 1);
+const _: () = assert!(OwnerGrantIxData::SIZE == 35);

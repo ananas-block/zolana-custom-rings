@@ -16,8 +16,12 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::AUTHORITY_TRANSFER,
         tag::DEPOSIT,
         tag::HISTORICAL_TRANSFER,
+        tag::HISTORICAL_TRANSFER_V3,
         tag::HISTORICAL_AUTHORITY_TRANSFER,
+        tag::HISTORICAL_AUTHORITY_TRANSFER_V3,
+        tag::HISTORICAL_DEPOSIT,
         tag::HISTORICAL_MERGE,
+        tag::HISTORICAL_MERGE_V3,
         tag::LEGACY_TRANSACT,
         tag::LEGACY_DELEGATE_TRANSACT,
     ];
@@ -29,13 +33,19 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
 #[test]
 fn every_frame_generation_has_its_own_tag() {
     assert_eq!(
-        (tag::TRANSFER, tag::AUTHORITY_TRANSFER, tag::MERGE),
-        (45, 46, 47)
+        (
+            tag::TRANSFER,
+            tag::AUTHORITY_TRANSFER,
+            tag::MERGE,
+            tag::DEPOSIT
+        ),
+        (55, 56, 57, 58)
     );
     assert_eq!(
         (tag::HISTORICAL_TRANSFER, tag::HISTORICAL_AUTHORITY_TRANSFER),
         (43, 44)
     );
+    assert_eq!(tag::HISTORICAL_MERGE_V3, 47);
     assert_eq!(
         tag::HISTORICAL_MERGE,
         spr_interface::instruction::tag::RING_MERGE_TRANSACT

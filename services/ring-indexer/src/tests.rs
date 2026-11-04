@@ -5,7 +5,8 @@ use std::sync::{
 
 use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData},
+    storage_instruction::{tag, InitializeIxData, InitializeTrackingIxData, PrivateListWriteData},
+    tracking::TrackingRegistry,
     MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement, TransactionTrait};
@@ -19,11 +20,15 @@ use crate::{
     api,
     block::{BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo},
     error::RingApiError,
-    indexer::{block_batch, Indexer, Readiness, StartSlot, MIN_BLOCK_BATCH},
+    indexer::{block_batch, Indexer, Readiness, RegistryCall, StartSlot, MIN_BLOCK_BATCH},
     migration::Migrator,
     rpc::SolanaRpc,
-    storage::{self, RingCursor, StorageRoot, StorageState, StorageStore},
-    storage_registry,
+    storage::{
+        self, AppliedRevision, Enrollment, ListWritePage, RingCursor, StorageRoot, StorageState,
+        StorageStore, TrackingState, TrackingStore,
+    },
+    storage_registry::StorageCall,
+    tracking_registry::TrackingCall,
 };
 
 pub(crate) fn field(value: u8) -> [u8; 32] {
@@ -56,14 +61,18 @@ pub(crate) async fn create_registry(db: &DatabaseConnection, registry: [u8; 32])
                 registry_id: RegistryId::default(),
                 grace_slots: [0; 8],
                 ring_id: [0; 32],
+                tracking_registry: Address::default(),
             },
         )),
         fault: None,
     };
     let tx = db.begin().await.unwrap();
-    storage_registry::create(&StorageStore::new(&tx, registry), &state)
-        .await
-        .unwrap();
+    <StorageCall as RegistryCall<StorageRegistry>>::create(
+        &StorageStore::new(&tx, registry),
+        &state,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     state
 }
@@ -94,7 +103,7 @@ async fn member_page_reports_a_missing_leaf_instead_of_skipping_it() {
     let store = StorageStore::new(&db, state.registry);
     store.save_state(&state).await.unwrap();
     store
-        .save_root(&StorageRoot::current(&state.account))
+        .save_root(&StorageRoot::current(&*state.account))
         .await
         .unwrap();
     cursor.resume(&db).await.unwrap();
@@ -214,9 +223,10 @@ async fn storage_shaped_instructions_of_other_programs_cost_no_queries() {
     let storage_tags = [
         tag::INITIALIZE,
         tag::UPDATE,
-        tag::UPDATE_IMMEDIATE,
         tag::UPDATE_AUTHORITY,
-        tag::ENROLL_ADDRESS,
+        tag::ENROLL,
+        tag::APPLY_ENROLLMENTS,
+        tag::INITIALIZE_TRACKING,
     ];
     let shaped = storage_tags
         .into_iter()
@@ -273,9 +283,9 @@ async fn the_record_tree_migration_rewinds_a_key_registry_index_to_its_start() {
 }
 
 #[tokio::test]
-async fn the_address_migration_clears_old_leaves_and_rewinds_to_the_start() {
+async fn the_tracking_migration_clears_policy_rows_and_rewinds_to_the_start() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    Migrator::up(&db, Some(6)).await.unwrap();
+    Migrator::up(&db, Some(7)).await.unwrap();
     let mut cursor = RingCursor::new(9);
     cursor.tip = Some(BlockMetadata {
         slot: 40,
@@ -283,28 +293,22 @@ async fn the_address_migration_clears_old_leaves_and_rewinds_to_the_start() {
     });
     cursor.scanned_slot = 40;
     cursor.resume(&db).await.unwrap();
-    for sql in [
-        "INSERT INTO storage_registries(registry,state) VALUES(x'0b','{}')",
-        "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,lists,escrow_key) \
-         VALUES(x'0b',0,0,x'00',x'00',0,x'00')",
-    ] {
-        db.execute_unprepared(sql).await.unwrap();
-    }
+    db.execute_unprepared("INSERT INTO storage_registries(registry,state) VALUES(x'0b','{}')")
+        .await
+        .unwrap();
     Migrator::up(&db, None).await.unwrap();
     let rewound = storage::cursor(&db).await.unwrap().unwrap();
     assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
     assert!(rewound.tip.is_none() && !rewound.is_ready());
-    for table in ["storage_registries", "ring_records"] {
-        let rows = db
-            .query_one(Statement::from_string(
-                db.get_database_backend(),
-                format!("SELECT COUNT(*) AS rows FROM {table}"),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0, "{table}");
-    }
+    let rows = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS rows FROM storage_registries",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0);
     Migrator::down(&db, Some(1)).await.unwrap();
     Migrator::up(&db, None).await.unwrap();
 }
@@ -335,12 +339,72 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     let store = StorageStore::new(&db, state.registry);
     assert_eq!(store.state().await.unwrap(), Some(state));
     let low = store.tree().low_record(&field(4), 0).await.unwrap();
-    assert_eq!(low.record.index, 0);
+    assert_eq!(low.index, 0);
     let mut cursor = RingCursor::new(0);
     cursor.resume(&db).await.unwrap();
     let tx = storage::begin_read(&db).await.unwrap();
     assert!(storage::cursor(&tx).await.unwrap().unwrap().is_ready());
     tx.commit().await.unwrap();
     storage::prune(&db, 1).await.unwrap();
+    let tracking = TrackingStore::new(&db, [12; 32]);
+    let creator = InitializeTrackingIxData {
+        ring_id: field(9),
+        auditor_pubkey: [9; 33],
+    };
+    <TrackingCall as RegistryCall<TrackingRegistry>>::create(
+        &tracking,
+        &TrackingState {
+            registry: [12; 32],
+            account: Box::new(TrackingRegistry::new(1, &creator)),
+            fault: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(tracking.state().await.unwrap().is_some());
+    let low = tracking.tree().low_record(&field(4), 0).await.unwrap();
+    assert_eq!(low.index, 0);
+    let enrollment = Enrollment {
+        owner: [1; 32],
+        authorization: [2; 32],
+        member: field(4),
+        nullifier_pk: field(5),
+        ct_hash: field(6),
+        list_tag: field(7),
+        eph_u: [8; 32],
+        ciphertext: [9; 32],
+        viewing_u: [10; 32],
+        revision: 1,
+        applied_revision: 0,
+        last_enroll_slot: 5,
+    };
+    tracking.save_first(&enrollment, 5).await.unwrap();
+    assert_eq!(tracking.pending(None, 8).await.unwrap(), [enrollment]);
+    tracking
+        .mark_applied(&AppliedRevision {
+            owner: [1; 32],
+            revision: 1,
+            slot: 6,
+        })
+        .await
+        .unwrap();
+    assert!(tracking.pending(None, 8).await.unwrap().is_empty());
+    let applied = tracking.enrollment_at(&[2; 32]).await.unwrap().unwrap();
+    assert_eq!(applied.applied_revision, 1);
+    let write = PrivateListWriteData {
+        position: field(1),
+        leaf: field(2),
+        write_counter: 1u64.to_le_bytes(),
+    };
+    store.save_list_writes(&[write], 3).await.unwrap();
+    let served = store
+        .list_writes(ListWritePage {
+            start: 0,
+            limit: 8,
+            revision: 3,
+        })
+        .await
+        .unwrap();
+    assert_eq!(served[0].write_counter, 1);
     Migrator::reset(&db).await.unwrap();
 }

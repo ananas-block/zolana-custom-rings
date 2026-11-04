@@ -65,8 +65,8 @@ func TestApplyRecordsMatchesRustVectors(t *testing.T) {
 
 func sameWrite(a, b ringregistry.Write) bool {
 	fields := func(w ringregistry.Write) []*big.Int {
-		values := []*big.Int{w.Entry.Member, w.Entry.Mask, w.Entry.Value, w.Entry.EscrowKey, w.OldNext, w.OldLists, w.OldEscrow,
-			w.Low.Member, w.Low.Next, w.Low.Lists, w.Low.EscrowKey, new(big.Int).SetUint64(w.Slot.Index), new(big.Int).SetUint64(w.LowPath.Index)}
+		values := []*big.Int{w.Entry.Member, w.Entry.Mask, w.Entry.Value, w.OldNext, w.OldLists,
+			w.Low.Member, w.Low.Next, w.Low.Lists, new(big.Int).SetUint64(w.Slot.Index), new(big.Int).SetUint64(w.LowPath.Index)}
 		for _, path := range []ringregistry.Path{w.Slot, w.LowPath} {
 			for _, row := range path.Siblings {
 				values = append(values, row[:]...)

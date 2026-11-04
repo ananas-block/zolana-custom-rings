@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use spr_indexer_api::{Base64String, Context, Hash, RpcMethod, SerializablePubkey};
+use spr_indexer_api::{Context, Hash, RpcMethod, SerializablePubkey};
 use thiserror::Error;
 
 /// Pages and opening batches include one authentication path per record.
@@ -89,7 +89,6 @@ pub struct RingListWriteView {
     pub value: u64,
 }
 
-/// A member's record, with the sealed nullifier key once the member registered one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingMemberRecordView {
@@ -97,35 +96,7 @@ pub struct RingMemberRecordView {
     pub next: Hash,
     /// Bit `i` marks list id `i + 1`.
     pub lists: u64,
-    pub escrow_key: Hash,
-    /// The escrow write's owner, its owner tag hashes to `member`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_pubkey: Option<SerializablePubkey>,
-    /// `escrow_key` is `Poseidon(nullifier_pk, hash_bytes(ciphertext))`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier_pk: Option<Hash>,
-    /// Tagged X25519 ephemeral key of the sealed nullifier secret, 33 bytes.
-    #[serde(default)]
-    pub eph_pk: Option<Base64String>,
-    /// AES-256-CTR ciphertext of the nullifier secret, 32 bytes.
-    #[serde(default)]
-    pub ciphertext: Option<Base64String>,
     pub mint_policy: zolana_ring_policy::MintPolicy,
-    /// Zero before enrollment.
-    pub address_hash: Hash,
-    /// Preimage of `address_hash` under `member`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub address: Option<RingAuthorizedAddressView>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingAuthorizedAddressView {
-    pub ring_id: Hash,
-    pub nullifier_pk: Hash,
-    pub viewing_u: Hash,
-    /// The owner's counter, separate from the registry revision.
-    pub address_revision: u64,
 }
 
 /// A leaf index and the three siblings of every level in ascending child order, leaf level first.
@@ -160,31 +131,16 @@ pub struct RingRecordWriteView {
     pub member: Hash,
     pub mask: u64,
     pub value: u64,
-    pub escrow_key: Hash,
     pub exists: bool,
     pub old_next: Hash,
     pub old_lists: u64,
-    pub old_escrow: Hash,
     pub old_mint_policy: zolana_ring_policy::MintPolicy,
-    pub address_hash: Hash,
-    pub old_address_hash: Hash,
-    /// Present on a write that creates or changes both hashes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pair: Option<RingAddressEscrowPairView>,
     /// The member's leaf, for an absent member the append leaf after its low record relinks.
     pub slot: RingRecordPathView,
     /// An absent member's low record, empty for a present member.
     pub low: RingMemberRecordView,
     pub low_path: RingRecordPathView,
     pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
-}
-
-/// The apply witness, `address.nullifier_pk` is the nullifier key of both hashes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingAddressEscrowPairView {
-    pub address: RingAuthorizedAddressView,
-    pub escrow_ciphertext_hash: Hash,
 }
 
 /// Up to [`MAX_RING_MEMBER_PAGE_LIMIT`] members under one root the registry history holds.
@@ -216,7 +172,6 @@ pub struct GetStorageApplyProofInputsRequest {
     pub writes: Vec<StorageWriteView>,
 }
 
-/// The leaf write of a `StorageWriteData`, `escrow_key` zero except on an escrow write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StorageWriteView {
@@ -224,21 +179,7 @@ pub struct StorageWriteView {
     pub mask: u64,
     /// Lies inside `mask`.
     pub value: u64,
-    pub escrow_key: Hash,
     pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
-    /// Zero except on an address write.
-    pub address_hash: Hash,
-    /// Hashes to `escrow_key`, required on an escrow write beside an address.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub escrow_preimage: Option<RingEscrowPreimageView>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingEscrowPreimageView {
-    pub nullifier_pk: Hash,
-    /// 32 bytes.
-    pub ciphertext: Base64String,
 }
 
 impl From<&custom_ring_interface::QueueEntry> for StorageWriteView {
@@ -247,10 +188,7 @@ impl From<&custom_ring_interface::QueueEntry> for StorageWriteView {
             member: Hash(entry.member),
             mask: entry.mask,
             value: entry.value,
-            escrow_key: Hash(entry.escrow_key),
             mint_policy: entry.mint_policy,
-            address_hash: Hash(entry.address_hash),
-            escrow_preimage: None,
         }
     }
 }

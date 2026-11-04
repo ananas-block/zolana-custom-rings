@@ -398,6 +398,7 @@ impl OwnerFlows<'_> {
             assets: &assets,
             inputs: self.inputs,
             outputs: self.outputs,
+            public_gross: &[],
         })
         .iter()
         .map(|debit| {

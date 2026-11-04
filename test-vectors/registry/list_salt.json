@@ -1,0 +1,8 @@
+{
+  "description": "list_salt = Poseidon(CRPS, nullifier_secret) and list_tag = Poseidon(CRPT, list_salt), under the ring key of the wallet with signing secret [7; 32] on ring program [0xa1; 32]. Produced by prover/circuits/shared/list_salt_test.go with WRITE_AUDIT_VECTORS=1.",
+  "list_salt": "1a286c1339ee84770555b513fbed5c65a09e9de42db1acb1f0c338641d417a01",
+  "list_tag": "28ef57ee4bcfa8da188eb9f79d8aca992c764020d68ce6a4c91c4fe06b087765",
+  "nullifier_secret": "00c82c60fd641271536147f6cc1cbb7bbf32635efe5f1220326e089501912080",
+  "ring_program_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "signing_secret": "0707070707070707070707070707070707070707070707070707070707070707"
+}

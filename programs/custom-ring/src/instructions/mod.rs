@@ -9,8 +9,8 @@ mod initialize;
 mod instruction_runtime;
 #[path = "accounts/loader.rs"]
 mod loader;
-#[path = "settlement/merge_disclosure.rs"]
-mod merge_disclosure;
+#[path = "settlement/merge.rs"]
+mod merge;
 #[path = "verification/policy_binding.rs"]
 mod policy_binding;
 #[path = "verification/public_legs.rs"]
@@ -33,8 +33,9 @@ pub(crate) use buffer::{
     process_close_frame_buffer_ix, process_create_frame_buffer_ix, process_frame_event_ix,
     process_settle_buffered_ix, process_write_frame_ix,
 };
-pub(crate) use forward::{process_deposit_ix, process_merge_ix};
+pub(crate) use forward::process_deposit_ix;
 pub(crate) use initialize::process_initialize_ix;
+pub(crate) use merge::process_merge_ix;
 pub(crate) use set_cosigner::{process_clear_cosigner_ix, process_set_cosigner_ix};
 pub(crate) use set_delegate::process_set_delegate_ix;
 pub(crate) use set_paused::process_set_paused_ix;

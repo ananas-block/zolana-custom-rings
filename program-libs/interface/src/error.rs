@@ -55,21 +55,21 @@ ring_errors! {
     // 8148 and 8149 retired.
     DelegateDisabled = 8150 => "the ring has no delegate",
     UnauthorizedDelegate = 8151 => "the delegate must sign",
-    DelegatePublicLeg = 8152 => "a delegate move settles no public leg",
+    DelegatePublicLeg = 8152 => "a delegate move takes no deposit leg",
     DelegateAlreadySet = 8153 => "the delegate is permanent",
     // 8154 to 8156 retired.
-    ApprovalWithoutCoSigner = 8157 => "dual control needs a configured co-signer",
+    // 8157 retired.
     // 8158 and 8159 retired.
     // 8160 to 8165 retired.
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
     // 8167 retired.
     // 8168 and 8169 retired.
-    DelegateRequiresPolicy = 8170 => "a delegate needs a policy ring",
+    // 8170 retired.
     // 8171 retired.
     // 8172 retired.
     MissingFundingSigner = 8173 => "forwarded funding account must sign on entry",
     InvalidRingMode = 8174 => "the ring mode is unknown",
-    AnonymousRingRefused = 8175 => "an anonymous ring refuses this operation",
+    // 8175 retired.
     // 8176 retired.
     InvalidAnonymousOutput = 8177 => "an anonymous ring output must carry a zero owner tag",
     InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run and the co-signer, and no owner run on the entry key",
@@ -110,7 +110,7 @@ ring_errors! {
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
     // 8235 and 8236 retired.
-    CoSignerIsDelegate = 8237 => "dual control needs a co-signer other than the delegate",
+    // 8237 retired.
     InvalidRingProofPoint = 8238 => "a ring proof point does not decompress",
     ThresholdsWithoutWithdrawals = 8239 => "co-signer thresholds need the withdrawal scope",
     UnexpectedMemberRegistryRoot = 8240 => "the statement binds no member registry root",
@@ -129,16 +129,13 @@ ring_errors! {
         "an anonymous SPL withdrawal's token account address must be off the ed25519 curve",
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
-    AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
+    AnonymousRingDataNotZero = 8251 => "an anonymous ring merge output carries ring data",
     // 8252 retired.
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
-    ExemptionWithoutWithdrawal = 8254 => "an exempt transfer settles no public withdrawal",
-    AnonymousRingNeedsRecords = 8256 => "an anonymous ring needs a records registry",
+    // 8254 and 8256 retired.
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
-    AddressWriteNeedsAuthorization = 8264 => "an address write reads its hash from an authorization",
-    AddressRevisionMismatch = 8265 => "the address write names another revision than the authorization",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
@@ -151,7 +148,7 @@ ring_errors! {
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     // 8303 to 8306 retired.
-    OwnerSignerOnInProofRail = 8350 => "the in-proof owner rail takes no owner signer",
+    // 8350 retired.
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
@@ -161,23 +158,29 @@ ring_errors! {
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
-    InvalidFrameBuffer = 8500 => "frame buffer account is invalid",
-    FrameBufferExists = 8501 => "frame buffer already exists",
-    FrameBufferAddress = 8502 => "frame buffer is not at its writer and nonce address",
-    FrameLength = 8503 => "frame length is zero or exceeds one account create",
-    UnauthorizedFrameWriter = 8504 => "the signer is not the frame buffer writer",
-    FrameBufferSealed = 8505 => "a sealed frame buffer takes no write",
-    FrameBufferNotSealed = 8506 => "the frame buffer is not sealed",
-    FrameDigestMismatch = 8507 => "the frame does not match the digest",
-    FrameBufferExpired = 8508 => "the frame buffer reached its expiry",
-    UnauthorizedFrameCloser = 8509 => "only the writer closes a frame buffer before expiry",
-    FrameRentPayer = 8510 => "the rent account is not the buffer's rent payer",
-    FrameBufferMismatch = 8511 => "the buffer account is not the buffer the settlement names",
-    UnsupportedBufferedTag = 8512 => "the tag does not settle from a buffer",
-    FrameTagMismatch = 8513 => "the frame opens with another tag than the settlement names",
-    FrameWriteOutOfRange = 8514 => "the write falls outside the frame",
-    InvalidFrameEvent = 8515 => "the frame event needs the ring PDA as signer inside a settlement",
-    FramePartyNotPayer = 8516 => "an anonymous settlement needs the payer as writer and rent payer",
+    ApproverMissing = 8500 => "a proven approval bit has no configured approver for its class",
+    TooManyCoSigners = 8501 => "the frame carries more co-signers than the five classes need",
+    InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
+    TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a private source's floor",
+    PrivateSourceOtherTracking = 8504 => "a private source pairs with another tracking registry",
+    PublicRegistryAsPrivateSource = 8505 => "the private source names a registry with no tracking pair",
+    InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
+    FrameBufferExists = 8521 => "frame buffer already exists",
+    FrameBufferAddress = 8522 => "frame buffer is not at its writer and nonce address",
+    FrameLength = 8523 => "frame length is zero or exceeds one account create",
+    UnauthorizedFrameWriter = 8524 => "the signer is not the frame buffer writer",
+    FrameBufferSealed = 8525 => "a sealed frame buffer takes no write",
+    FrameBufferNotSealed = 8526 => "the frame buffer is not sealed",
+    FrameDigestMismatch = 8527 => "the frame does not match the digest",
+    FrameBufferExpired = 8528 => "the frame buffer reached its expiry",
+    UnauthorizedFrameCloser = 8529 => "only the writer closes a frame buffer before expiry",
+    FrameRentPayer = 8530 => "the rent account is not the buffer's rent payer",
+    FrameBufferMismatch = 8531 => "the buffer account is not the buffer the settlement names",
+    UnsupportedBufferedTag = 8532 => "the tag does not settle from a buffer",
+    FrameTagMismatch = 8533 => "the frame opens with another tag than the settlement names",
+    FrameWriteOutOfRange = 8534 => "the write falls outside the frame",
+    InvalidFrameEvent = 8535 => "the frame event needs the ring PDA as signer inside a settlement",
+    FramePartyNotPayer = 8536 => "an anonymous settlement needs the payer as writer and rent payer",
 }
 
 impl From<CustomRingError> for ProgramError {

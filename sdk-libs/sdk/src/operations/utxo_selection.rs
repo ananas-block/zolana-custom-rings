@@ -6,13 +6,13 @@ use std::{
 };
 
 use solana_address::Address;
-use spr_interface::MAX_INPUT_TREES;
+use spr_interface::{MAX_INPUT_TREES, ZERO_NULLIFIER_PUBKEY};
 use spr_transaction::{
     instructions::{merge::MAX_MERGE_INPUTS, transact::MAX_SPEND_INPUTS},
     TransactionError, WalletUtxo,
 };
 
-/// The largest UTXOs `keep` admits until they cover `amount`, at most `max_inputs` up to [`MAX_SPEND_INPUTS`].
+/// The largest keyed UTXOs `keep` admits until they cover `amount`, at most `max_inputs` up to [`MAX_SPEND_INPUTS`].
 pub fn select_spend_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
     asset: Address,
@@ -23,7 +23,7 @@ pub fn select_spend_where<'a>(
     select(candidates(utxos, asset, keep), asset, amount, max_inputs)
 }
 
-/// The smallest UTXOs `keep` admits on the tree holding most of them, at most `max_inputs` up to [`MAX_MERGE_INPUTS`].
+/// The smallest keyed UTXOs `keep` admits on the tree holding most of them, at most `max_inputs` up to [`MAX_MERGE_INPUTS`].
 pub fn select_merge_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
     asset: Address,
@@ -59,7 +59,12 @@ fn candidates<'a>(
 ) -> Vec<&'a WalletUtxo> {
     utxos
         .into_iter()
-        .filter(|utxo| utxo.utxo.asset.asset == asset && utxo.utxo.amount > 0 && keep(utxo))
+        .filter(|utxo| {
+            utxo.utxo.asset.asset == asset
+                && utxo.utxo.amount > 0
+                && utxo.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
+                && keep(utxo)
+        })
         .collect()
 }
 
