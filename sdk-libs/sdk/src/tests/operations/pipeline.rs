@@ -1771,19 +1771,15 @@ async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
 /// `frame` runs before any witness read or prover call, the ceiling keeps no margin.
 #[tokio::test]
 async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving() {
-    let entry = |reply_len| Measure {
-        reply_len: Some(reply_len),
-        ..Measure::pinned(Measured::AnonymousEntry, spr_client::Shape::new(1, 8))
-    };
-    let at_ceiling = entry(custom_ring_interface::MIN_REPLY_LEN).fit().await;
+    let at_ceiling = ceiling_entry(CEILING_REPLY_LEN).fit().await;
     assert_eq!(at_ceiling.bytes, solana_message::v1::MAX_TRANSACTION_SIZE);
     assert!(at_ceiling.addresses.is_some());
-    let past = entry(custom_ring_interface::MIN_REPLY_LEN + 4).fit().await;
-    assert!(past.bytes > solana_message::v1::MAX_TRANSACTION_SIZE);
+    let past = ceiling_entry(CEILING_REPLY_LEN + 1).fit().await;
+    assert_eq!(past.bytes, solana_message::v1::MAX_TRANSACTION_SIZE + 1);
     assert!(past.addresses.is_none(), "TransferTooWide");
     let paid = Measure {
         priority_fee: true,
-        ..entry(custom_ring_interface::MIN_REPLY_LEN)
+        ..ceiling_entry(CEILING_REPLY_LEN)
     }
     .fit()
     .await;
@@ -1823,6 +1819,17 @@ async fn a_payment_names_the_viewing_key_of_its_owners_row() {
         Err(RingError::RecipientViewingKeyStale { .. })
     ));
 }
+
+/// One body takes the reply, each byte of it is one byte of the frame.
+fn ceiling_entry(reply_len: usize) -> Measure {
+    Measure {
+        reply_len: Some(reply_len),
+        ..Measure::pinned(Measured::AnonymousEntry, spr_client::Shape::new(1, 2))
+    }
+}
+
+/// Sets [`ceiling_entry`] at the transaction ceiling exactly.
+const CEILING_REPLY_LEN: usize = 2306;
 
 include!("size_pins.rs");
 
@@ -2498,12 +2505,8 @@ async fn every_frame_limit_of_the_byte_model_holds() {
     let ceiling = solana_message::v1::MAX_TRANSACTION_SIZE;
     let pin = |measure: Measure| async move { measure.bytes().await };
 
-    // Entry with a 97 byte reply at one input, the anonymous ceiling.
-    let entry = Measure {
-        reply_len: Some(custom_ring_interface::MIN_REPLY_LEN),
-        ..Measure::pinned(Measured::AnonymousEntry, Shape::new(1, 8))
-    };
-    assert_eq!(pin(entry).await, 4096);
+    // An entry whose reply reaches the ceiling exactly.
+    assert_eq!(pin(ceiling_entry(CEILING_REPLY_LEN)).await, ceiling);
 
     // Plain policy at 24x4 with an outsider payer.
     let signer_policy = Measure {
@@ -2514,28 +2517,28 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 4094);
-    assert_eq!(pin(in_proof_policy).await, 4093);
+    assert_eq!(pin(signer_policy).await, 3406);
+    assert_eq!(pin(in_proof_policy).await, 3405);
 
-    // 5x16 fits an owner payer and not an outsider.
+    // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN5_OUT16);
-    assert_eq!(pin(owner_paid).await, 4003);
+    assert_eq!(pin(owner_paid).await, 4681);
     assert_eq!(
         pin(Measure {
             payer: Payer::Outsider,
             ..owner_paid
         })
         .await,
-        4099
+        4777
     );
 
-    // Plain policy past 8 outputs fits only through compact padding.
+    // Past 8 outputs a frame fits only through compact padding.
     let plain = |inputs, published| Measure {
         published: Some(published),
         ..Measure::pinned(Measured::ConfidentialPolicy, Shape::new(inputs, 16))
     };
-    assert!(pin(plain(1, 15)).await <= ceiling);
-    assert!(pin(plain(1, 16)).await > ceiling);
+    assert!(pin(plain(1, 14)).await <= ceiling);
+    assert!(pin(plain(1, 15)).await > ceiling);
     let outsider = |inputs, published| Measure {
         payer: Payer::Outsider,
         ..plain(inputs, published)
