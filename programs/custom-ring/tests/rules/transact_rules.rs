@@ -3,12 +3,13 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignHeader},
-    funder_account_position, input_flag, key_catalog::RingCircuit, sender_bundle_len, shape_flag,
-    tag, transact_flag, AnonymousProofData, CoSignScope, CustomRingError, RingRole, CO_SIGN_BYTE,
-    CustomRingProof, FramedSenderBundle, InputTrees, PlainGroth16Proof, PolicyProof, RingOutput,
-    RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, AUDIT_RECORD_LEN,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    RECIPIENT_BODY_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    funder_account_position, input_flag,
+    key_catalog::RingCircuit,
+    sender_bundle_len, shape_flag, tag, transact_flag, AnonymousProofData, CoSignScope,
+    CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees, PlainGroth16Proof,
+    PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData, RootRead, SlotBody,
+    AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, CO_SIGN_BYTE, RECIPIENT_BODY_LEN,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -1021,8 +1022,8 @@ fn each_class_needs_its_own_covering_record() {
         &withdrawal.pubkey(),
         CoSignScope::APPROVE_WITHDRAWAL.bits(),
     );
-    let both = ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits())
-        .unwrap();
+    let both =
+        ApprovalMask::new(ApprovalMask::OUTFLOW.bits() | ApprovalMask::WITHDRAWAL.bits()).unwrap();
     reaches_verification(approved(&mut ring, both, &[&outflow, &withdrawal]));
     refused(
         approved(&mut ring, both, &[&outflow]),
@@ -1049,7 +1050,11 @@ fn each_class_needs_its_own_covering_record() {
 fn optional_classes_follow_the_economic_operation() {
     let (transfers, co_signer) = (Keypair::new(), Keypair::new());
     let mut ring = Ring::new(Setup::AuditOnly);
-    set_co_signer(&mut ring, &transfers.pubkey(), CoSignScope::TRANSFERS.bits());
+    set_co_signer(
+        &mut ring,
+        &transfers.pubkey(),
+        CoSignScope::TRANSFERS.bits(),
+    );
     set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::DEPOSITS.bits());
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);

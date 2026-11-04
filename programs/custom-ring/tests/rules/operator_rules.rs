@@ -1,9 +1,9 @@
 //! Ring account and policy writes, their roles and their declared budgets.
 
 use custom_ring_interface::{
-    tag, tracking::TrackingRegistry, CoSignScope, CoSigner, CustomRingError, InitializeIxData, InstructionTag,
-    PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData, RingKind, RingMode, RingPolicy,
-    RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
+    tag, tracking::TrackingRegistry, CoSignScope, CoSigner, CustomRingError, InitializeIxData,
+    InstructionTag, PolicyBindingIxData, PolicySourceIxData, PolicyTableIxData, RingKind, RingMode,
+    RingPolicy, RingRole, SetPausedIxData, SourceSpec, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -16,8 +16,8 @@ use zolana_ring_policy::{ring_id_field, ListId};
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
     refused, refused_with, ring_auth, root, rules_write, set_co_signer, set_delegate,
-    tracking_registry, within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup,
-    UpdateAuthorityIx, UpdatePolicyIx, PROGRAM, RECORDS,
+    tracking_registry, within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx,
+    Setup, UpdateAuthorityIx, UpdatePolicyIx, PROGRAM, RECORDS,
 };
 use crate::transact_rules::SPP;
 
