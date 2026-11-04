@@ -4,7 +4,7 @@ use solana_address::Address;
 use zolana_ring_client::{
     rpc::{
         AuditedMergesPage, AuditedUtxoView, GetDecryptedTransactionsResponse,
-        GetWalletActivityResponse, WalletActivity, WalletActivityPage,
+        GetWalletActivityResponse, InputParty, WalletActivity, WalletActivityPage,
     },
     ReaderKey,
 };
@@ -75,7 +75,7 @@ impl WalletScope {
                     .value
                     .items
                     .into_iter()
-                    .filter_map(|item| WalletActivity::of(self.wallet, item))
+                    .filter_map(|item| WalletActivity::of(self.wallet, item, |_| InputParty::Other))
                     .collect(),
                 cursor: response.value.cursor,
             },
