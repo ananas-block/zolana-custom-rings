@@ -1,13 +1,13 @@
 //! Each owner's outflow of the transfer a co-signer signs, read from the frame and the note index.
 
 use custom_ring_interface::{
-    ring_deposit_assets, settlement_mints, tag, DepositPrefix, FrameBuffer, InstructionTag,
-    ParsedTransact, RingRail, RingTransactData, SettleBufferedIxData,
-    RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
+    ring_deposit_assets, settlement_mints, tag, DepositPrefix, InstructionTag, ParsedTransact,
+    RingRail, RingTransactData, RING_DEPOSIT_RING_CONFIG_INDEX, RING_TRANSACT_RING_CONFIG_INDEX,
 };
-use solana_account::Account;
 use solana_address::Address;
 use solana_message::VersionedMessage;
+use spr_hasher::primitives::hash_bytes;
+use spr_interface::SOL_ASSET_FIELD;
 use spr_interface::{
     instruction::{
         instruction_data::{deposit::RingDepositIxDataRef, settlement_accounts},
@@ -15,8 +15,6 @@ use spr_interface::{
     },
     pda, PROGRAM_ID_PUBKEY,
 };
-use spr_hasher::primitives::hash_bytes;
-use spr_interface::SOL_ASSET_FIELD;
 use spr_transaction::SOL_MINT;
 use zolana_ring_client::{
     AuditedTransaction, FramedRow, InputOpening, OutputOpening, TransactionAudit,
@@ -37,8 +35,6 @@ use crate::{
 
 /// The output tree's position in SPP's transact account list.
 const TRANSACT_OUTPUT_TREE_INDEX: usize = 1;
-/// `buffer, rent_payer, program` ahead of a buffered frame's own accounts.
-const BUFFERED_FIXED_ACCOUNTS: usize = 3;
 
 /// A ring whose auditor key the service does not hold refuses the limited co-signer.
 #[must_use]
@@ -46,15 +42,6 @@ pub(crate) struct TransferDebits<'a, S> {
     pub shared: &'a std::sync::Arc<Shared<S>>,
     pub ring: Address,
     pub message: &'a VersionedMessage,
-}
-
-/// A settling message's named buffer, the frame's bytes come from it alone.
-struct SealedFrame<'a> {
-    settle: &'a SettleBufferedIxData<'a>,
-    fixed: &'a [Address],
-    ring: Address,
-    account: &'a Account,
-    now_unix_ts: i64,
 }
 
 /// The ring instruction of a message, the only one the co-signer's signature admits.
@@ -85,49 +72,9 @@ const fn scope() -> RingRpcError {
 impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
     pub async fn flows(self) -> Result<FrameRead, RingRpcError> {
         let frame = RingFrame::of(self.message, self.ring)?;
-        if frame.tag != tag::SETTLE_BUFFERED {
-            return self.read(frame).await;
-        }
-        let settle = SettleBufferedIxData::parse(frame.data).map_err(|_| scope())?;
-        let refused = || RingRpcError::CoSign(CoSignError::FrameBuffer);
-        let (fixed, inner) = frame
-            .accounts
-            .split_at_checked(BUFFERED_FIXED_ACCOUNTS)
-            .ok_or_else(scope)?;
-        let account = self
-            .shared
-            .source
-            .frame_buffer(Address::new_from_array(*settle.buffer))
-            .await
-            .map_err(|_| unavailable())?
-            .ok_or_else(refused)?;
-        let now_unix_ts =
-            i64::try_from(self.shared.clock.now()?).map_err(|_| RingRpcError::StateUnavailable)?;
-        // The bytes read here hash to the digest the signature covers, a rewrite fails settlement.
-        let sealed = SealedFrame {
-            settle: &settle,
-            fixed,
-            ring: self.ring,
-            account: &account,
-            now_unix_ts,
-        }
-        .bytes()?;
-        let (inner_tag, body) = sealed.split_first().ok_or_else(refused)?;
-        if !matches!(
-            *inner_tag,
-            tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT
-        ) {
-            return Err(scope());
-        }
-        self.read(RingFrame {
-            tag: *inner_tag,
-            data: body,
-            accounts: inner.to_vec(),
-        })
-        .await
+        self.read(frame).await
     }
 
-    /// The same read and refusals for an inline frame and a sealed one.
     async fn read(&self, frame: RingFrame<'_>) -> Result<FrameRead, RingRpcError> {
         let service = self.shared.service(Some(self.ring))?;
         let config = service.served_config().await?.ok_or_else(unavailable)?;
@@ -163,7 +110,7 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
         .row()
         .map_err(|_| unavailable())?;
         let audited = TransactionAudit::new(&row, parsed.audit_stream())
-            .run(service.auditor_keypair())
+            .run(service.auditor_keypair(), &assets)
             .map_err(|_| unavailable())?;
         let public = public_flows(&parsed, spp)?;
         let window = settlement_accounts(
@@ -187,33 +134,8 @@ impl<S: TransactionSource + 'static> TransferDebits<'_, S> {
             assets: &assets,
             ring: self.ring,
         }
-        .read(parsed.data().co_sign.approval.bits())
+        .read(parsed.data().approval.bits())
         .map(FrameRead::Transfer)
-    }
-}
-
-impl<'a> SealedFrame<'a> {
-    /// Refuses anything settlement would, the owner and seal first since they decide what the bytes mean.
-    fn bytes(self) -> Result<&'a [u8], RingRpcError> {
-        let refused = |_| RingRpcError::CoSign(CoSignError::FrameBuffer);
-        let [buffer, rent_payer, _program] = self.fixed else {
-            return Err(scope());
-        };
-        if buffer.as_array() != self.settle.buffer {
-            return Err(scope());
-        }
-        let frame = FrameBuffer::inspect(
-            &self.account.owner,
-            &self.ring,
-            &self.account.data,
-            self.settle.digest,
-        )
-        .map_err(refused)?;
-        FrameBuffer::of(&self.account.data)
-            .map_err(refused)?
-            .check_settlement(self.settle, rent_payer, self.now_unix_ts)
-            .map_err(refused)?;
-        Ok(frame)
     }
 }
 
@@ -242,10 +164,7 @@ impl<'m> RingFrame<'m> {
         let instruction = holding.ok_or_else(scope)?;
         let (tag, data) = instruction.data.split_first().ok_or_else(scope)?;
         if key(instruction.program_id_index)? != ring
-            || !matches!(
-                *tag,
-                tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT | tag::SETTLE_BUFFERED
-            )
+            || !matches!(*tag, tag::TRANSFER | tag::AUTHORITY_TRANSFER | tag::DEPOSIT)
         {
             return Err(scope());
         }
@@ -602,7 +521,7 @@ mod tests {
         let frame = hex::decode(
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../test-vectors/settlement/frame_v3.hex"
+                "/../../test-vectors/settlement/frame_v4.hex"
             ))
             .lines()
             .next()
@@ -661,7 +580,7 @@ mod tests {
         let field = |byte: u8| hex::encode(right_aligned(byte));
         let input = |owner: u8, asset: u8, amount: u64| serde_json::json!({"owner": field(owner), "asset": field(asset), "amount": amount});
         let output = |ring: bool, owner: u8, asset: u8, amount: u64| serde_json::json!({"ring": ring, "owner": field(owner), "asset": field(asset), "amount": amount});
-        let public = |asset: u8, deposited: u64, withdrawn: u64| serde_json::json!({"mint": hex::encode(mint_of_field(asset)), "deposited": deposited, "withdrawn": withdrawn});
+        let public = |asset: u8, deposited: u64, withdrawn: u64| serde_json::json!({"mint": hex::encode(mint_of_field(asset)), "asset": field(asset), "deposited": deposited, "withdrawn": withdrawn});
         serde_json::json!([
             {"name": "one owner keeps change", "inputs": [input(1, 7, 30), input(1, 7, 20)], "outputs": [output(true, 2, 7, 15), output(true, 1, 7, 35)], "ownerSigners": [field(1)], "public": []},
             {"name": "an exit to the owner leaves the ring", "inputs": [input(1, 7, 30)], "outputs": [output(false, 1, 7, 30)], "ownerSigners": [field(1)], "public": [public(7, 0, 30)]},
@@ -722,6 +641,7 @@ mod tests {
             .iter()
             .map(|flow| PublicFlow {
                 mint: Address::new_from_array(bytes32(&flow["mint"])),
+                asset: bytes32(&flow["asset"]),
                 deposited: flow["deposited"].as_u64().expect("deposited"),
                 withdrawn: flow["withdrawn"].as_u64().expect("withdrawn"),
             })
@@ -902,115 +822,6 @@ mod tests {
             RingFrame::of(&wrapper_program, RING).err(),
             Some(RingRpcError::CoSign(CoSignError::MessageScope))
         ));
-    }
-
-    fn sealed_account(frame: &[u8], rent_payer: Address, sealed: bool) -> Account {
-        use custom_ring_interface::{
-            frame_digest, CreateFrameBufferIxData, FrameBufferHeader, FrameBufferWrite,
-            WriteFrameIxData, FRAME_BUFFER_HEADER_LEN,
-        };
-        let header = FrameBufferHeader::new(
-            &CreateFrameBufferIxData {
-                nonce: 1,
-                length: frame.len() as u16,
-                digest: frame_digest(frame).expect("digest"),
-                expiry_unix_ts: 1_000,
-            },
-            PAYER,
-            rent_payer,
-        )
-        .expect("header");
-        let mut data = vec![0; FRAME_BUFFER_HEADER_LEN + frame.len()];
-        data[..FRAME_BUFFER_HEADER_LEN].copy_from_slice(bytemuck::bytes_of(&header));
-        FrameBufferWrite::of(&mut data)
-            .expect("buffer")
-            .apply(
-                &PAYER,
-                &WriteFrameIxData {
-                    offset: 0,
-                    seal: sealed,
-                    bytes: frame,
-                },
-            )
-            .expect("write");
-        Account {
-            lamports: 1,
-            data,
-            owner: RING,
-            executable: false,
-            rent_epoch: 0,
-        }
-    }
-
-    fn sealed_bytes(
-        account: &Account,
-        digest: &[u8; 32],
-        now_unix_ts: i64,
-    ) -> Result<Vec<u8>, CoSignError> {
-        let buffer = Address::new_from_array([0x55; 32]);
-        let settle = SettleBufferedIxData {
-            digest,
-            buffer: buffer.as_array(),
-            inner_tag: tag::TRANSFER,
-        };
-        SealedFrame {
-            settle: &settle,
-            fixed: &[buffer, PAYER, RING],
-            ring: RING,
-            account,
-            now_unix_ts,
-        }
-        .bytes()
-        .map(<[u8]>::to_vec)
-        .map_err(|error| match error {
-            RingRpcError::CoSign(error) => error,
-            other => panic!("{other}"),
-        })
-    }
-
-    #[test]
-    fn a_sealed_buffer_serves_the_bytes_of_the_signed_digest_and_refuses_every_other() {
-        use custom_ring_interface::frame_digest;
-        let frame_a = [tag::TRANSFER, 1, 2, 3];
-        let frame_b = [tag::TRANSFER, 9, 9, 9];
-        let digest_a = frame_digest(&frame_a).expect("digest");
-        let sealed_a = sealed_account(&frame_a, PAYER, true);
-        assert_eq!(sealed_bytes(&sealed_a, &digest_a, 10).expect("a"), frame_a);
-        let refused = Err(CoSignError::FrameBuffer);
-        // The signed digest names A, a buffer holding B serves nothing.
-        assert_eq!(
-            sealed_bytes(&sealed_account(&frame_b, PAYER, true), &digest_a, 10),
-            refused
-        );
-        assert_eq!(
-            sealed_bytes(&sealed_account(&frame_a, PAYER, false), &digest_a, 10),
-            refused,
-            "an unsealed buffer can still change"
-        );
-        assert_eq!(
-            sealed_bytes(&sealed_a, &digest_a, 1_000),
-            refused,
-            "expired"
-        );
-        assert_eq!(
-            sealed_bytes(
-                &sealed_account(&frame_a, OTHER_PROGRAM, true),
-                &digest_a,
-                10
-            ),
-            refused,
-            "another rent payer"
-        );
-        let mut foreign = sealed_a.clone();
-        foreign.owner = OTHER_PROGRAM;
-        assert_eq!(sealed_bytes(&foreign, &digest_a, 10), refused);
-        let mut short = sealed_a.clone();
-        short.data.pop();
-        assert_eq!(
-            sealed_bytes(&short, &digest_a, 10),
-            refused,
-            "another length"
-        );
     }
 
     #[test]

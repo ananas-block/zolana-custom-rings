@@ -6,6 +6,8 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
+var PeakHint = peakHint
+
 func DecodeTable(t Table, api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) {
 	t.decode(api, rc, policyHash)
 }
@@ -15,11 +17,7 @@ type Quantities struct{ Debit, Kept, Charge, Outflow frontend.Variable }
 
 // RowFlows runs flowsOf over the rows for one asset.
 func RowFlows(api frontend.API, rc frontend.Rangechecker, rows []frontend.Variable, inputs, outputs []shared.Output, publicAssets, gross []frontend.Variable, asset frontend.Variable) []Quantities {
-	live := make([]frontend.Variable, len(rows))
-	for j, row := range rows {
-		live[j] = api.Sub(1, api.IsZero(row))
-	}
-	flows := newFlowSource(api, Spend{Senders: rows, Inputs: inputs}, live, outputs, publicAssets, gross).flowsOf(api, newComparator(rc), asset)
+	flows := newFlowSource(api, Spend{Senders: rows, Inputs: inputs}, outputs, publicAssets, gross).flowsOf(api, newComparator(rc), asset)
 	quantities := make([]Quantities, len(flows))
 	for j, flow := range flows {
 		quantities[j] = Quantities{Debit: flow.debit, Kept: flow.kept, Charge: flow.charge, Outflow: flow.outflow}

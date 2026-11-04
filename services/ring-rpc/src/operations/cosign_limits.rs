@@ -149,9 +149,13 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
                             self.signer.sign_message(&request.message.serialize()),
                         ))
                     }
-                    FrameRead::Transfer(read) => {
-                        (read.flows, Operation::Transfer(read.spends_note))
-                    }
+                    FrameRead::Transfer(read) => (
+                        read.flows,
+                        Operation::Transfer {
+                            spends_note: read.spends_note,
+                            approval_bits: read.approval_bits,
+                        },
+                    ),
                 }
             }
             CoSignFlows::Published(flows) => (flows.clone(), Operation::Published),
@@ -187,7 +191,10 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             .collect::<Option<_>>()
             .ok_or(CoSignError::UnrecordedAsset)?;
         // 3. No explicit approval of a demanded class, no signature, whatever the caps say.
-        if !self.approval.covers_any(&operation.demand(&flows, &checks)) {
+        let mask = approval_mask(&flows, &checks);
+        if !operation.frame_holds(mask)
+            || !self.approval.covers_any(&operation.demand(&flows, mask))
+        {
             return Ok(CoSignDecision::Refused(CoSignRefusal::NotApproved));
         }
         let signature = self.signer.sign_message(&request.message.serialize());

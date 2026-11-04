@@ -12,6 +12,7 @@ mod records2_000001_attempts;
 mod records3_000001_enrolments;
 mod records4_000001_signers;
 mod records_000001_queue;
+mod relay2_000001_enrollments;
 mod relay_000001_relays;
 mod replay_000001_nonces;
 mod spent2_000001_finalized;
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(spent2_000001_finalized::Migration),
             Box::new(spent3_000001_nullifiers::Migration),
             Box::new(cosign5_000001_outflow::Migration),
+            Box::new(relay2_000001_enrollments::Migration),
         ]
     }
 }

@@ -2,8 +2,8 @@ use custom_ring_interface::{
     storage::StorageError,
     storage_instruction::{tag, ApplyEnrollmentsIxData, EnrollRequest, InitializeTrackingIxData},
     tracking::{
-        tracking_chain_start, EnrollmentRotation, TrackingAuthorization, TrackingEntry,
-        TrackingRegistry, TrackingRootUpdate, TRACKING_QUAD_HEIGHT,
+        tracking_chain_start, TrackingAuthorization, TrackingEntry, TrackingRegistry,
+        TrackingRootUpdate, TRACKING_QUAD_HEIGHT,
     },
 };
 use sea_orm::ConnectionTrait;
@@ -95,10 +95,10 @@ impl RegistryCall<TrackingRegistry> for TrackingCall<'_> {
         let Self::Initialize(init) = self else {
             return None;
         };
-        let (canonical, bump) = TrackingRegistry::find_address(&init.creator, &init.data.ring_id);
+        let (canonical, _) = TrackingRegistry::find_address(&init.creator, &init.data.ring_id);
         (canonical == registry).then(|| TrackingState {
             registry: registry.to_bytes(),
-            account: Box::new(TrackingRegistry::new(bump, init.data)),
+            account: Box::new(TrackingRegistry::new(init.data)),
             fault: None,
         })
     }
@@ -150,10 +150,6 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
         if request.proof.is_none() {
             return Err(fault("a first enrollment carries no proof"));
         }
-        self.state
-            .account
-            .reserve_leaf()
-            .map_err(|error| fault(format!("enrollment refused ({error})")))?;
         let held = self.authorization(&authorization).await?;
         if held.registry.to_bytes() != self.state.registry || held.owner != owner {
             return Err(fault("the authorization names another owner"));
@@ -174,7 +170,6 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
             viewing_u: request.ix.viewing_u,
             revision: 1,
             applied_revision: 0,
-            last_enroll_slot: self.slot,
         };
         self.store
             .save_first(&first, self.slot)
@@ -189,10 +184,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
         }
         let mut account = held.account(self.state.registry);
         account
-            .rotate(EnrollmentRotation {
-                slot: self.slot,
-                ix: request.ix,
-            })
+            .rotate(request.ix)
             .map_err(|error| fault(format!("rotation refused ({error})")))?;
         self.store
             .save_revision(&EnrollmentRevision {

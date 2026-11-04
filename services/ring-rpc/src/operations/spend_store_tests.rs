@@ -120,6 +120,7 @@ fn through(store: &AuditStore, keys: &Keys, slot: u64) {
 
 fn status_of(store: &AuditStore, owner: Address) -> GetWalletStatusResponse {
     store.wallet_status(WalletStatusQuery {
+        enrollment: WalletEnrollment::NotEnrolled,
         wallet: owner,
         after: None,
         limit: 100,
@@ -477,11 +478,10 @@ fn merge_selection_skips_a_published_nullifier_and_ignores_an_unrelated_row() {
     assert_eq!(hashes, [kept.commitment]);
 }
 
+type PageScript<'a> = Box<dyn Fn(&mut PageWork<'_>) + 'a>;
+
 /// One scripted run, each page a closure over the overlay.
-fn script<'a>(
-    created: &'a [CreatedUtxo; 2],
-    key: &'a NullifierKey,
-) -> Vec<Box<dyn Fn(&mut PageWork<'_>) + 'a>> {
+fn script<'a>(created: &'a [CreatedUtxo; 2], key: &'a NullifierKey) -> Vec<PageScript<'a>> {
     vec![
         Box::new(move |work| {
             work.open(frame(2), [created[0]]);

@@ -30,10 +30,22 @@ pub struct GetWalletStatusRequest {
 pub struct GetWalletStatusResponse {
     /// Only an unreadable stream holds it back.
     pub history_through: u64,
+    pub enrollment: WalletEnrollment,
     /// `Unspent` notes alone, over every page.
     pub balances: Vec<WalletBalance>,
     pub notes: Vec<WalletNote>,
     pub cursor: Option<Base64String>,
+}
+
+/// The owner's own public tracking account, a pending enrollment grants nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WalletEnrollment {
+    NotEnrolled,
+    Pending,
+    /// The tree is full, the first enrollment stays pending with its rent spent.
+    PendingPastCapacity,
+    Applied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -101,7 +101,9 @@ impl<'a> UpdateQueue<'a> {
             bytes(new.request.registry.0.as_array()),
             bytes(new.request.update.ring.0.as_array()),
             request.into(),
-            bytemuck::cast_slice::<RecordWriteData, u8>(&new.update.writes).to_vec().into(),
+            bytemuck::cast_slice::<RecordWriteData, u8>(&new.update.writes)
+                .to_vec()
+                .into(),
             bytes(new.update.signer.address().as_array()),
             role(new.update.signer).into(),
             integer(new.queued_slot)?,
@@ -163,33 +165,6 @@ impl<'a> UpdateQueue<'a> {
             .iter()
             .map(|row| address(row, "registry"))
             .collect()
-    }
-
-    /// Every queued or submitted write, and the awaiting writes of `members` alone.
-    pub async fn pending_writes(
-        &self,
-        registry: Address,
-        members: &[[u8; 32]],
-    ) -> Result<Vec<RecordWriteData>, DbErr> {
-        let sql = format!(
-            "SELECT writes FROM records_updates WHERE registry=$1 AND (status IN ($2,$3) \
-             OR (status=$4 AND member IN ({})))",
-            placeholders(5, members.len())
-        );
-        let values = [
-            bytes(registry.as_array()),
-            QUEUED.into(),
-            SUBMITTED.into(),
-            AWAITING.into(),
-        ]
-        .into_iter()
-        .chain(members.iter().map(bytes))
-        .collect();
-        let mut writes = Vec::new();
-        for row in self.query_all(&sql, values).await? {
-            writes.extend(stored_writes(&row)?);
-        }
-        Ok(writes)
     }
 
     pub async fn open_batch(&self, registry: Address) -> Result<Option<OpenBatch>, DbErr> {
