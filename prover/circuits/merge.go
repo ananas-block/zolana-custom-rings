@@ -31,7 +31,7 @@ import (
 // 4. No list, guard, cap or co-signer rule is proven, a merge keeps one owner's value in one asset.
 
 // MergeRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
-const MergeRecordLen = audit.RecordLen + 32
+const MergeRecordLen = audit.RecordStride + 32
 
 // MergeCircuit binds a ring's SPP merge output to a record only its auditor opens.
 type MergeCircuit struct {

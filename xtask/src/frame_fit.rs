@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};
 use custom_ring_interface::{
@@ -734,11 +734,19 @@ fn verdict(fit: Fit) -> &'static str {
 }
 
 pub fn run() -> Result<()> {
-    println!(
+    print!("{}", table()?);
+    Ok(())
+}
+
+fn table() -> Result<String> {
+    let mut table = String::new();
+    writeln!(
+        table,
         "Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings {MAX_TRANSACTION_SIZE} B, {MAX_ADDRESSES} accounts, {MAX_SIGNATURES} signatures."
-    );
-    println!("| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over |");
-    println!("|---|---|---|---|---|---|---|---|---|---|");
+    )?;
+    writeln!(table, "min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator, private and tracking roots, one co-signer, {LEGS} SOL legs, a fee, an outside payer, a body on every slot and one exit. The widest owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.")?;
+    writeln!(table, "| shape | rail | load | key | bytes | accounts | signatures | widest owner run | fits | over |")?;
+    writeln!(table, "|---|---|---|---|---|---|---|---|---|---|")?;
     for shape in SPP_SUPPORTED_SHAPES {
         for frame in FrameRail::ALL {
             if !frame.rail().supports(shape) {
@@ -759,7 +767,8 @@ pub fn run() -> Result<()> {
                     false => "-".to_owned(),
                 };
                 let fit = measured.fit;
-                println!(
+                writeln!(
+                    table,
                     "| {}x{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                     shape.n_inputs(),
                     shape.n_outputs(),
@@ -772,7 +781,7 @@ pub fn run() -> Result<()> {
                     widest,
                     verdict(fit),
                     fit.over(),
-                );
+                )?;
             }
         }
     }
@@ -782,28 +791,39 @@ pub fn run() -> Result<()> {
             ("owner signed", MergeRingAuthority::OwnerSigned),
         ] {
             let fit = merge_fit(width, authority)?;
-            println!(
+            writeln!(
+                table,
                 "| {width}x1 | merge | {name} | yes | {} | {} | {} | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
                 verdict(fit),
                 fit.over(),
-            );
+            )?;
         }
     }
     for width in (1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).filter(|width| width.is_power_of_two()) {
         for (name, full) in [("min", false), ("full", true)] {
             let fit = deposit_fit(width, full)?;
-            println!(
+            writeln!(
+                table,
                 "| 0x{width} | deposit | {name} | yes | {} | {} | {} | - | {} | {} |",
                 fit.bytes,
                 fit.addresses,
                 fit.signatures,
                 verdict(fit),
                 fit.over(),
-            );
+            )?;
         }
     }
-    Ok(())
+    Ok(table)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_table_is_the_committed_measurement() {
+        let committed = include_str!("../../test-vectors/proof/ring-frame-fit.md");
+        assert_eq!(super::table().unwrap(), committed);
+    }
 }

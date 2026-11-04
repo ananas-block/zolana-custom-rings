@@ -9,7 +9,7 @@ use custom_ring_interface::{
     sender_bundle_len, AuditEnvelope, AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout,
     AuditorMessage, CustomRingError, DataTail, EntryInput, OpeningRecord, RecipientBody,
     RecordKind, SenderBundle, AUDIT_RECORD_LEN, DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN,
-    RECIPIENT_BODY_LEN, STREAM_BLOCK_LEN,
+    RECIPIENT_BODY_LEN, RECORD_STRIDE, STREAM_BLOCK_LEN,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -139,7 +139,8 @@ fn the_contract_counts_each_key() {
         );
         assert_eq!(key.signer_slots(), key.class(), "{key:?}");
     }
-    assert_eq!(AUDIT_RECORD_LEN, 112);
+    assert_eq!(AUDIT_RECORD_LEN, 105);
+    assert_eq!(RECORD_STRIDE, 112);
     assert_eq!(DATA_TAIL_LEN, 64);
     assert_eq!(ENTRY_INPUT_LEN, 200);
     assert_eq!(OPENING_RECORD_LEN, 144);
@@ -161,7 +162,8 @@ fn no_counter_serves_two_regions_and_every_region_holds_its_bytes() {
             for slot in 0..case.outputs {
                 let record = layout.record(slot);
                 assert_eq!(record.start_counter as usize, next);
-                assert_eq!(record.len, block_bytes(record.max_blocks));
+                assert_eq!(record.len, AUDIT_RECORD_LEN);
+                assert!(record.len <= block_bytes(record.max_blocks));
                 assert_eq!(record.keystream_offset(), block_bytes(next - 2));
                 next += record.max_blocks;
             }
@@ -266,11 +268,10 @@ fn record() -> AuditRecord {
 fn the_record_lays_out_its_contract_bytes() {
     let encoded = record().encode();
     assert_eq!(encoded[0], 1);
-    assert_eq!(encoded[1..8], [0; 7]);
-    assert_eq!(encoded[8..16], [1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(encoded[16..48], [4; 32]);
-    assert_eq!(encoded[48..80], [5; 32]);
-    assert_eq!(encoded[80..], [6; 32]);
+    assert_eq!(encoded[1..9], [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(encoded[9..41], [4; 32]);
+    assert_eq!(encoded[41..73], [5; 32]);
+    assert_eq!(encoded[73..], [6; 32]);
     assert_eq!(AuditRecord::decode(&encoded), Ok(record()));
     assert_eq!(AuditRecord::default().encode(), [0; AUDIT_RECORD_LEN]);
     assert_eq!(
@@ -290,8 +291,6 @@ fn a_record_off_its_form_is_refused() {
         );
     };
     refused(|record| record[0] = 3);
-    refused(|record| record[1] = 1);
-    refused(|record| record[7] = 1);
     // A kind 0 record holding a value is refused.
     refused(|record| record[0] = 0);
     let encoded = record().encode();
@@ -307,8 +306,12 @@ fn an_opening_record_carries_the_record_and_its_secret() {
     };
     let encoded = opening.encode();
     assert_eq!(encoded[..AUDIT_RECORD_LEN], record().encode());
-    assert_eq!(encoded[AUDIT_RECORD_LEN..], [9; 32]);
+    assert_eq!(encoded[AUDIT_RECORD_LEN..RECORD_STRIDE], [0; 7]);
+    assert_eq!(encoded[RECORD_STRIDE..], [9; 32]);
     assert_eq!(OpeningRecord::decode(&encoded), Ok(opening));
+    let mut padded = encoded;
+    padded[AUDIT_RECORD_LEN] = 1;
+    assert!(OpeningRecord::decode(&padded).is_err());
     assert!(OpeningRecord::decode(&encoded[..AUDIT_RECORD_LEN]).is_err());
 }
 
