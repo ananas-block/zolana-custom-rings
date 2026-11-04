@@ -23,6 +23,12 @@ pub const AUTHORIZED_ADDRESS: u32 = 0x4352_4144;
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`
 pub const REGISTER_KEY: u32 = 0x4352_5247;
+/// `"CRTK"`
+pub const TRACKING_LEAF: u32 = 0x4352_544b;
+/// `"CRTQ"`
+pub const TRACKING_ENTRY: u32 = 0x4352_5451;
+/// `"CRTA"`
+pub const APPLY_ENROLLMENTS: u32 = 0x4352_5441;
 /// `"CRDB"`
 pub const DEPOSIT_BLINDING: u32 = 0x4352_4442;
 /// `"CRDP"`
