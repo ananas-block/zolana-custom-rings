@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use custom_ring_interface::{
-    frame_digest, settle_buffered_data, tag, CustomRingError, RecipientBody, RingPolicy, RingRail,
-    RingRole, RingTransactData, RootRead, SettledFrame, SlotBody, WriteFrameIxData,
+    frame_digest, settle_buffered_data, tag, CustomRingError, FrameBufferHeader, RecipientBody,
+    RingPolicy, RingRail, RingTransactData, RootRead, SettledFrame, SlotBody, WriteFrameIxData,
     CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, FRAME_BUFFER_PDA_SEED, MAX_FRAME_LEN,
 };
 use solana_address::Address;
