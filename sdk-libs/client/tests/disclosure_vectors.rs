@@ -1,5 +1,3 @@
-//! Streams from solved witnesses.
-
 use custom_ring_interface::{AuditKey, AuditStreamLayout, AuditorMessage};
 use serde_json::Value;
 use solana_address::Address;

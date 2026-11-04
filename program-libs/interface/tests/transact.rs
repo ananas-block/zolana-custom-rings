@@ -1,4 +1,4 @@
-//! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK and the ring program tests.
+//! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK, the client and the ring program tests.
 
 mod frames;
 
