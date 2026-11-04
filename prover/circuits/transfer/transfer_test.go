@@ -15,6 +15,9 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -515,6 +518,88 @@ func TestRailCells(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.InProof)
 		w.Inputs = []ringaudit.Input{{Utxo: ringaudit.SpentUtxo(t, coOwner, ringtransfer.CoOwnerKey(t, coOwner), ringID(t), 100, 51)}}
 		refused(t, w.Build(t).Circuit, "transfer.SignerSet.AssertOwners")
+	})
+}
+
+// Owner rows read a private source through a salted position, under the tracking row's salt.
+func TestPrivateSource(t *testing.T) {
+	private := transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Private: 10}
+	recipient := ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 0, 0, 1).OwnerKey)
+	source := func(t testing.TB, write func(*ringprivatelist.Curator)) *ringtransfer.PrivateSource {
+		t.Helper()
+		curator := &ringprivatelist.Curator{Tree: ringprivatelist.New(t)}
+		if write != nil {
+			write(curator)
+		}
+		return &ringtransfer.PrivateSource{Tree: curator.Tree, OwnerLists: ringregistry.BlockBit, Registry: big.NewInt(0x77)}
+	}
+	salted := func(t testing.TB, owner *big.Int) *big.Int {
+		t.Helper()
+		return ringpolicy.ListSaltOf(t, owner)
+	}
+	blockSalted := func(t testing.TB, owner *big.Int) func(*ringprivatelist.Curator) {
+		t.Helper()
+		salt := salted(t, owner)
+		return func(c *ringprivatelist.Curator) {
+			c.WriteSalted(t, owner, salt, ringregistry.ListTag(t, salt), ringregistry.BlockBit, ringregistry.BlockBit)
+		}
+	}
+	world := func(s *ringtransfer.PrivateSource) ringtransfer.Confidential {
+		w := ringtransfer.Signed(private)
+		w.Private = s
+		return w
+	}
+	t.Run("an owner with no curator action passes through a nonmembership path", func(t *testing.T) {
+		requireSolved(t, world(source(t, nil)).Build(t).Circuit)
+	})
+	t.Run("a privately blocked owner fails the rule", func(t *testing.T) {
+		refused(t, world(source(t, blockSalted(t, recipient))).Build(t).Circuit, "policy.assertPaymentRules")
+	})
+	t.Run("a block written before enrollment stays read at salt zero", func(t *testing.T) {
+		s := source(t, func(c *ringprivatelist.Curator) {
+			c.WriteUnenrolled(t, recipient, ringregistry.BlockBit, ringregistry.BlockBit)
+		})
+		refused(t, world(s).Build(t).Circuit, "policy.assertPaymentRules")
+	})
+	t.Run("an enrolled owner claiming salt zero", func(t *testing.T) {
+		b := world(source(t, nil)).Build(t)
+		for i, owner := range b.Circuit.PrivateOwners {
+			if ringtest.AsBigInt(owner).Cmp(recipient) == 0 {
+				b.Circuit.PrivateRows[i].ListSalt = 0
+				b.Circuit.PrivateRows[i].Salted = b.World.Private.Tree.Opening(t, recipient, big.NewInt(0))
+			}
+		}
+		refused(t, b.Circuit, "privatelist.Row.read")
+	})
+	t.Run("an enrolled owner under another salt", func(t *testing.T) {
+		b := world(source(t, nil)).Build(t)
+		other := big.NewInt(0x1234)
+		for i, owner := range b.Circuit.PrivateOwners {
+			if ringtest.AsBigInt(owner).Cmp(recipient) == 0 {
+				b.Circuit.PrivateRows[i].ListSalt = other
+				b.Circuit.PrivateRows[i].Salted = b.World.Private.Tree.Opening(t, recipient, other)
+			}
+		}
+		refused(t, b.Circuit, "privatelist.Row.read")
+	})
+	t.Run("a stale private root", func(t *testing.T) {
+		b := world(source(t, nil)).Build(t)
+		b.Circuit.PrivateRoot = 7
+		b.Rebind(t)
+		refused(t, b.Circuit, "privatelist.Opening.read")
+	})
+	t.Run("a key with no private rows refuses a source", func(t *testing.T) {
+		w := ringtransfer.Signed(confidential2)
+		w.Private = source(t, nil)
+		refused(t, w.Build(t).Circuit, "policy.(*Policy).openPrivateRows")
+	})
+	t.Run("a private key with no source pays for padding rows only", func(t *testing.T) {
+		requireSolved(t, ringtransfer.Signed(private).Build(t).Circuit)
+	})
+	t.Run("a delegate reads no private root", func(t *testing.T) {
+		w := onRail(private, ringtransfer.Delegate)
+		w.Private = source(t, blockSalted(t, recipient))
+		requireSolved(t, w.Build(t).Circuit)
 	})
 }
 

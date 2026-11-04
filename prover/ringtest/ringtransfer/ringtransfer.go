@@ -10,11 +10,13 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/privatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprivatelist"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -72,6 +74,15 @@ type World struct {
 	Unenrolled []*big.Int
 	// Enrolled owners hold this row in place of their note's key.
 	Enrolled map[string]*big.Int
+	// Private is the private source, its lists overlay the public slots.
+	Private *PrivateSource
+}
+
+// PrivateSource serves OwnerLists from Tree, the tree's root binds the statement.
+type PrivateSource struct {
+	Tree       *ringprivatelist.Tree
+	OwnerLists uint64
+	Registry   *big.Int
 }
 
 // Asset is the fixture asset of every ring output and spent note.
@@ -97,10 +108,17 @@ func SenderNullifierPk(t testing.TB) *big.Int {
 	return spptest.MustNullifierPk(t, big.NewInt(7))
 }
 
-// table admits every output owner on the allow list and refuses a frozen sender.
-func table() policy.Table {
+// table admits every output owner on the allow list and refuses a frozen sender, a private source also refuses a blocked owner.
+func (w World) table() policy.Table {
 	rules := []ringpolicy.Rule{ringpolicy.Require(policy.SubjectOutputOwner, ringregistry.AllowBit), ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit)}
-	return ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit}, Rules: rules}.Wires()
+	if w.Private != nil {
+		rules = append(rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
+	}
+	table := ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit}, Rules: rules}.Wires()
+	if w.Private != nil {
+		table.Source = privatelist.Source{OwnerLists: new(big.Int).SetUint64(w.Private.OwnerLists), Registry: w.Private.Registry}
+	}
+	return table
 }
 
 // Assembled is what both families' Build share.
@@ -316,7 +334,6 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 	}
 	c.Rows = rows(a, delegate, len(c.Rows))
 	c.ApprovalMask = w.ApprovalMask
-	c.PrivateRoot = 0
 	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
 	assembled.Own, assembled.Curator = w.registries(t, a, c.Rows)
 	w.reopen(t, c, assembled)
@@ -334,13 +351,13 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 			outputOwners[o] = slot.Utxo.OwnerPkHash
 		}
 	}
-	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners)
+	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy)
 }
 
 func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {
 	t.Helper()
-	p.Table = table()
-	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
+	p.Table = w.table()
+	p.PolicyHash, p.OwnRoot, p.CuratorRoot, p.PrivateRoot = 0, 0, 0, 0
 	if !delegate {
 		if w.Policy.Screened {
 			p.PolicyHash = ringpolicy.TableHash(t, p.Table)
@@ -372,6 +389,13 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 		wires[o] = utxo.Wires()
 	}
 	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator)
+	switch {
+	case p.Private > 0 && w.Private != nil && !delegate:
+		p.PrivateRoot = w.Private.Tree.Root()
+		ringpolicy.FillPrivate(t, p, w.Private.Tree, a.Tracking, senders, wires)
+	case p.Private > 0:
+		ringpolicy.FillPrivate(t, p, ringprivatelist.New(t), a.Tracking, make([]frontend.Variable, 0), nil)
+	}
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.

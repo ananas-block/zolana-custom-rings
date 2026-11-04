@@ -9,7 +9,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
-// TrackingRecord mirrors registry.TrackingRecord.
 type TrackingRecord struct {
 	Member, Next, NullifierPk, CtHash, View0, View1, Revision, ListTag *big.Int
 }
@@ -23,7 +22,6 @@ func (r TrackingRecord) Wires() registry.TrackingRecord {
 	return registry.TrackingRecord{Member: copied(r.Member), Next: copied(r.Next), NullifierPk: copied(r.NullifierPk), CtHash: copied(r.CtHash), View0: copied(r.View0), View1: copied(r.View1), Revision: copied(r.Revision), ListTag: copied(r.ListTag)}
 }
 
-// TrackingEntry mirrors registry.TrackingEntry.
 type TrackingEntry struct {
 	Member, NullifierPk, CtHash, View0, View1, Revision, ListTag *big.Int
 }
@@ -49,7 +47,6 @@ func ListTag(t testing.TB, listSalt *big.Int) *big.Int {
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListTagDomain), listSalt)
 }
 
-// TrackingPath mirrors registry.TrackingPath.
 type TrackingPath struct {
 	Index    uint64
 	Siblings [registry.TrackingHeight][registry.Arity - 1]*big.Int
@@ -65,7 +62,6 @@ func (p TrackingPath) Wires() registry.TrackingPath {
 	return w
 }
 
-// TrackingOpening opens Record, the owner's own when Present, else the low record bracketing it.
 type TrackingOpening struct {
 	Present bool
 	Record  TrackingRecord
@@ -80,7 +76,6 @@ func (o TrackingOpening) Wires() registry.TrackingOpening {
 	return w
 }
 
-// TrackingWrite is the witness of one applied entry.
 type TrackingWrite struct {
 	Entry   TrackingEntry
 	Exists  bool
@@ -98,7 +93,6 @@ func (w TrackingWrite) Wires() registry.EnrollmentWrite {
 	return registry.EnrollmentWrite{Entry: w.Entry.Wires(), Exists: exists, Old: w.Old.Wires(), Slot: w.Slot.Wires(), Low: w.Low.Wires(), LowSlot: w.LowPath.Wires()}
 }
 
-// ZeroTrackingWrite is a padding slot past the count.
 func ZeroTrackingWrite() TrackingWrite {
 	zero := big.NewInt(0)
 	record := TrackingRecord{}
@@ -138,7 +132,6 @@ func (r *Tracking) Opening(member *big.Int) TrackingOpening {
 	return TrackingOpening{Present: present, Record: r.records[index], Path: r.Path(index)}
 }
 
-// Apply inserts an absent owner or replaces a present owner's leaf with e, and returns the write's witness.
 func (r *Tracking) Apply(t testing.TB, e TrackingEntry) TrackingWrite {
 	t.Helper()
 	if e.Member.Sign() <= 0 || e.Member.Cmp(fieldMax) >= 0 {
@@ -152,7 +145,7 @@ func (r *Tracking) Apply(t testing.TB, e TrackingEntry) TrackingWrite {
 		return w
 	}
 	low, next := r.records[index], r.NextIndex()
-	w := TrackingWrite{Entry: e, Old: TrackingRecord{Next: low.Next}, Low: low, LowPath: r.Path(index)}
+	w := TrackingWrite{Entry: e, Old: TrackingRecord{Member: e.Member, Next: low.Next}, Low: low, LowPath: r.Path(index)}
 	relinked := low
 	relinked.Next = e.Member
 	r.set(t, index, relinked)
@@ -161,7 +154,6 @@ func (r *Tracking) Apply(t testing.TB, e TrackingEntry) TrackingWrite {
 	return w
 }
 
-// SharedProof opens the leaves at indices through registry.NewTrackingProof.
 func (r *Tracking) SharedProof(indices []uint64) (registry.SharedQuadProof, error) {
 	proof, err := registry.NewTrackingProof(len(indices))
 	if err != nil {

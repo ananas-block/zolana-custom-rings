@@ -25,9 +25,9 @@ type TrackingView struct {
 	NullifierPk, ListTag frontend.Variable
 }
 
-// NewTracking holds one record per row and output, none repeats a member's opening.
-func NewTracking(rows, outputs int) (Tracking, error) {
-	capacity := rows + outputs
+// NewTracking holds one record per row, output and private subject, a withdrawal owner enters through its private row.
+func NewTracking(rows, outputs, private int) (Tracking, error) {
+	capacity := rows + outputs + private
 	proof, err := registry.NewTrackingProof(capacity)
 	if err != nil {
 		return Tracking{}, err
@@ -42,8 +42,8 @@ func NewTracking(rows, outputs int) (Tracking, error) {
 }
 
 // Validate refuses a pool sized off the key before any wire is read.
-func (t *Tracking) ValidateTracking(rows, outputs int) error {
-	capacity := rows + outputs
+func (t *Tracking) ValidateTracking(rows, outputs, private int) error {
+	capacity := rows + outputs + private
 	if len(t.RowEntries) != rows || len(t.OutputEntries) != outputs {
 		return fmt.Errorf("tracking requires one reference per row and output")
 	}
@@ -51,6 +51,11 @@ func (t *Tracking) ValidateTracking(rows, outputs int) error {
 		return errors.New("tracking pool capacity is invalid")
 	}
 	return t.TrackingProof.Validate(capacity)
+}
+
+// TrackingPoolSize is the records and subjects the key opens.
+func (t *Tracking) TrackingPoolSize() int {
+	return len(t.TrackingRecords)
 }
 
 // TrackingPool answers row and output queries, a member absent from the root reads zeros.

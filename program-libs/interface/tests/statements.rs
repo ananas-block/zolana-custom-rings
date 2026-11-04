@@ -704,7 +704,6 @@ fn compute_vectors() -> StatementVectors {
     }
 }
 
-/// Every list direction, a neutral list and the mint settings, each alone and one mixed batch.
 fn restrictive_cases() -> Vec<RestrictiveCase> {
     use zolana_ring_policy::ListId::{Allow, Approval, Block, Frozen, Reader};
     let set = |list: zolana_ring_policy::ListId| (list.record_bit(), list.record_bit(), false);

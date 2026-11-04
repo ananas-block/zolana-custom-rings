@@ -101,9 +101,9 @@ func poolWorld(shape ringpolicy.SectionShape, distinct, delegate bool) ringpolic
 	world.Table.Limits = nil
 	world.Table.Rules = append(world.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
 	world.Slots, world.Withdrawals = nil, nil
-	world.Own = map[int64]ringpolicy.Record{ringpolicy.Sender: ringpolicy.Escrowed(ringregistry.AllowBit)}
+	world.Own = map[int64]ringpolicy.Record{ringpolicy.Sender: ringpolicy.Record{Lists: ringregistry.AllowBit}}
 	add := func(owner, asset int64) ringpolicy.Slot {
-		world.Own[owner] = ringpolicy.Escrowed(ringregistry.AllowBit)
+		world.Own[owner] = ringpolicy.Record{Lists: ringregistry.AllowBit}
 		world.Own[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}
 		return ringpolicy.Slot{Owner: owner, Asset: asset, Amount: 1}
 	}
