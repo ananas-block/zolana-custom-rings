@@ -23,6 +23,7 @@ use crate::{AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RingE
 #[derive(Default)]
 struct StubRelay {
     prepared: Mutex<Vec<PrepareRelayRequest>>,
+    asks_signature: bool,
 }
 
 #[async_trait]
@@ -37,7 +38,13 @@ impl RingRelay for StubRelay {
     async fn prepare_relay(&self, request: PrepareRelayRequest) -> Result<RelayStep, RingError> {
         let relay_id = request.relay_id()?;
         self.prepared.lock().unwrap().push(request);
-        Ok(RelayStep::Submitted { relay_id })
+        Ok(match self.asks_signature {
+            true => RelayStep::SignMessage {
+                relay_id,
+                message: vec![1].into(),
+            },
+            false => RelayStep::Submitted { relay_id },
+        })
     }
 
     async fn prepare_authority_transfer(
@@ -115,9 +122,12 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
     assert!(chain.proof_requests.lock().unwrap().is_empty());
     assert!(chain.witness_requests.lock().unwrap().is_empty());
     assert!(chain.record_requests.lock().unwrap().is_empty());
-    let prepared = relay.prepared.lock().unwrap();
-    let [request] = prepared.as_slice() else {
-        panic!("one prepareRelay call");
+    let request = {
+        let prepared = relay.prepared.lock().unwrap();
+        let [request] = prepared.as_slice() else {
+            panic!("one prepareRelay call");
+        };
+        request.clone()
     };
     assert_eq!(request.relay_id().unwrap(), relay_id);
     let RelayIntent::Anonymous {
@@ -133,6 +143,23 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
     assert!(sender
         .signing_pubkey()
         .verify_message(&message_hash, owner_signature.0.as_array()));
+
+    // A signature the wallet never expected has nothing to check against.
+    let asking = StubRelay {
+        asks_signature: true,
+        ..StubRelay::default()
+    };
+    let crate::RelaySent::SignMessage(pending) = crate::PreparedRelay::new(request)
+        .send(&asking)
+        .await
+        .unwrap()
+    else {
+        panic!("the relay asks a signature");
+    };
+    assert!(matches!(
+        pending.verify(),
+        Err(RingError::RelayMessage(crate::MessageMismatch::Unrequested))
+    ));
 }
 
 #[tokio::test]
@@ -204,10 +231,10 @@ mod delegate_message {
     use solana_instruction::Instruction;
     use solana_signer::Signer;
     use spr_indexer_api::{Base64String, SerializableSignature};
-    use spr_keypair::ShieldedKeypair;
+    use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey};
     use spr_transaction::{AssetRegistry, WalletUtxo};
     use zolana_ring_client::rpc::{
-        AuthorityPayment, AuthorityTransfer, SerializableShieldedAddress,
+        AuthorityPayment, AuthorityTransfer, SerializableShieldedAddress, TxViewingSecret,
     };
 
     use super::*;
@@ -318,14 +345,18 @@ mod delegate_message {
 
     impl DelegateRelay {
         fn new(answer: Answer, delegate: Address) -> Self {
+            Self::on_mode(answer, delegate, RingMode::Confidential)
+        }
+
+        fn on_mode(answer: Answer, delegate: Address, mode: RingMode) -> Self {
             let member = keypair(1);
             let chain = Chain::ring(RingSettings {
                 has_policy: true,
                 delegate: Some(delegate),
-                ..RingSettings::new(RingMode::Confidential)
+                ..RingSettings::new(mode)
             })
             .with_registry(
-                Registry::new(&[(&member, 1), (&keypair(2), 1)]),
+                Registry::new(&[(&member, 1), (&keypair(2), 1), (&keypair(3), 1)]),
                 &pipeline_rules(),
             );
             Self {
@@ -340,7 +371,11 @@ mod delegate_message {
         }
 
         /// `seal_delegate` then `prove` as `SdkRelayProver` runs them, the proofs zeroed.
-        async fn build(&self, transfer: &AuthorityTransfer) -> Result<Instruction, RingError> {
+        async fn build(
+            &self,
+            transfer: &AuthorityTransfer,
+            tx_viewing_key: &TxViewingSecret,
+        ) -> Result<Instruction, RingError> {
             let assets = AssetRegistry::default();
             let proof_inputs = DelegateMove {
                 ring: ring(),
@@ -360,6 +395,7 @@ mod delegate_message {
                     .collect(),
                 assets: &assets,
                 wide_frames: crate::WideFrames::Refuse,
+                tx_viewing_key: tx_viewing_key.key()?,
             }
             .select(&self.client)
             .await?
@@ -399,7 +435,9 @@ mod delegate_message {
             &self,
             request: PrepareAuthorityTransferRequest,
         ) -> Result<RelayStep, RingError> {
-            let honest = self.build(&request.transfer).await?;
+            let honest = self
+                .build(&request.transfer, &request.tx_viewing_key)
+                .await?;
             let message = self.answer.message(&honest, self.delegate);
             *self.honest.lock().unwrap() = Some(honest);
             Ok(RelayStep::SignMessage {
@@ -445,6 +483,7 @@ mod delegate_message {
                     amount: MOVED,
                 }],
             },
+            tx_viewing_key: TxViewingSecret::from(&ViewingKey::from_bytes(&[9; 32])),
             timestamp: 0,
             nonce: Base64String(vec![4; 32]),
             signature: SerializableSignature(Default::default()),
@@ -454,8 +493,9 @@ mod delegate_message {
     async fn relayed_signature(answer: Answer) -> (DelegateRelay, Result<RelayStatus, RingError>) {
         let delegate = keypair(7);
         let relay = DelegateRelay::new(answer, delegate.pubkey());
+        let config = ring().require_config(relay.client.zolana()).await.unwrap();
         let prepared =
-            PreparedAuthorityTransfer::new(request(delegate.pubkey()), &quote()).unwrap();
+            PreparedAuthorityTransfer::new(request(delegate.pubkey()), &quote(), &config).unwrap();
         let RelaySent::SignMessage(pending) = prepared.send(&relay).await.unwrap() else {
             panic!("the delegate signs the move");
         };
@@ -490,11 +530,129 @@ mod delegate_message {
             .verify(relay.delegate.as_ref(), &message.0));
     }
 
+    fn thief() -> ShieldedAddress {
+        keypair(3).shielded_address().unwrap()
+    }
+
+    fn payee() -> ShieldedAddress {
+        keypair(2).shielded_address().unwrap()
+    }
+
+    /// The frame keeps the payee's tag while its note pays another owner.
+    async fn thief_under_payee_tag(
+        relay: &DelegateRelay,
+        asked: &PrepareAuthorityTransferRequest,
+    ) -> Instruction {
+        let mut stolen = asked.transfer.clone();
+        stolen.payments[0].recipient = SerializableShieldedAddress(thief());
+        let frame = relay.build(&stolen, &asked.tx_viewing_key).await.unwrap();
+        match RingTransactData::parse(&frame.data[1..], RingRail::Delegate) {
+            Ok(_) => paying(&frame, 0, payee().viewing_pubkey.u()),
+            Err(_) => frame,
+        }
+    }
+
+    /// Each slot's owner in frame order, opened under the request's transaction key.
+    fn slot_owners(
+        frame: &Instruction,
+        rail: RingRail,
+        expected: &ExpectedDelegate,
+    ) -> Vec<[u8; 32]> {
+        let parsed = RingTransactData::parse(&frame.data[1..], rail).unwrap();
+        let data = parsed.data();
+        let opened = zolana_ring_client::AuditEnvelope {
+            eph_u: *data.tx_viewing_u,
+            salt: data.salt,
+            ciphertext: data.envelope,
+        }
+        .open_sealed(
+            &expected.tx_viewing_key.key().unwrap(),
+            &expected.auditor,
+            parsed.audit_stream(),
+        )
+        .unwrap();
+        data.outputs
+            .iter()
+            .enumerate()
+            .map(|(slot, output)| opened.record(slot, output.record).unwrap().owner_key)
+            .collect()
+    }
+
+    /// An unproved tag binds nothing, the proven records name every owner, mint and amount.
+    #[tokio::test]
+    async fn a_delegate_signs_only_the_move_the_proven_records_show_on_both_rails() {
+        for mode in [RingMode::Confidential, RingMode::Anonymous] {
+            let delegate = keypair(7);
+            let relay = DelegateRelay::on_mode(Answer::Honest, delegate.pubkey(), mode);
+            let asked = request(delegate.pubkey());
+            let config = ring().require_config(relay.client.zolana()).await.unwrap();
+            let expected = ExpectedDelegate::new(&asked, &quote(), &config).unwrap();
+            let verdict_of = |frame: Instruction| {
+                expected
+                    .check(&relay_message(&FEE_PAYER, &[frame], UNITS).0)
+                    .map(drop)
+            };
+            let build = |transfer: AuthorityTransfer, key: TxViewingSecret| {
+                let relay = &relay;
+                async move { relay.build(&transfer, &key).await.unwrap() }
+            };
+
+            let honest = build(asked.transfer.clone(), asked.tx_viewing_key.clone()).await;
+            assert_eq!(verdict_of(honest.clone()), Ok(()), "{mode:?}");
+            let source = keypair(1).shielded_address().unwrap();
+            let owner =
+                |address: ShieldedAddress| address.signing_pubkey.confidential_view_tag().unwrap();
+            let order = match mode {
+                RingMode::Confidential => [owner(payee()), owner(source)],
+                RingMode::Anonymous => [owner(source), owner(payee())],
+            };
+            assert_eq!(
+                slot_owners(&honest, expected.rail, &expected)[..2],
+                order,
+                "{mode:?}"
+            );
+
+            assert_eq!(
+                verdict_of(thief_under_payee_tag(&relay, &asked).await),
+                Err(MessageMismatch::Recipients),
+                "{mode:?}"
+            );
+
+            let mut more = asked.transfer.clone();
+            more.payments[0].amount = MOVED + 1;
+            assert_eq!(
+                verdict_of(build(more, asked.tx_viewing_key.clone()).await),
+                Err(MessageMismatch::Recipients),
+                "{mode:?}"
+            );
+
+            let mut extra = asked.transfer.clone();
+            extra.payments.push(AuthorityPayment {
+                recipient: SerializableShieldedAddress(thief()),
+                amount: 1,
+            });
+            assert_eq!(
+                verdict_of(build(extra, asked.tx_viewing_key.clone()).await),
+                Err(MessageMismatch::Recipients),
+                "{mode:?}"
+            );
+
+            let other_key = TxViewingSecret::from(&ViewingKey::from_bytes(&[8; 32]));
+            assert_eq!(
+                verdict_of(build(asked.transfer.clone(), other_key).await),
+                Err(MessageMismatch::TransactionKey),
+                "{mode:?}"
+            );
+        }
+    }
+
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
     #[serde(deny_unknown_fields, rename_all = "camelCase")]
     struct DelegateRequest {
         prepare: PrepareAuthorityTransferRequest,
         fee_payer: SerializablePubkey,
+        /// The ring account's key, the stream a delegate reads seals to it.
+        auditor: Base64String,
     }
 
     /// The TypeScript check reads the same file and reaches the same verdicts.
@@ -503,6 +661,9 @@ mod delegate_message {
         let (relay, signed) = relayed_signature(Answer::Honest).await;
         signed.unwrap();
         let honest = relay.honest.lock().unwrap().clone().unwrap();
+        let config = ring().require_config(relay.client.zolana()).await.unwrap();
+        let asked = request(relay.delegate);
+        let stolen = thief_under_payee_tag(&relay, &asked).await;
         let fresh = MessageVector {
             description: "One authority transfer the ring delegate asks Ring RPC for, moving 4 \
                           of the member's SOL to a second member with the change back, and the \
@@ -512,8 +673,9 @@ mod delegate_message {
                           the TypeScript checkDelegateMessage return."
                 .to_owned(),
             request: DelegateRequest {
-                prepare: request(relay.delegate),
+                prepare: asked.clone(),
                 fee_payer: SerializablePubkey(FEE_PAYER),
+                auditor: Base64String(config.auditor_pubkey.as_bytes().to_vec()),
             },
             cases: Answer::ALL
                 .map(|answer| {
@@ -524,7 +686,13 @@ mod delegate_message {
                         verdict: verdict.to_owned(),
                     }
                 })
-                .into(),
+                .into_iter()
+                .chain([MessageCase {
+                    name: "thiefUnderPayeeTag".to_owned(),
+                    message: relay_message(&FEE_PAYER, &[stolen], UNITS),
+                    verdict: "Recipients".to_owned(),
+                }])
+                .collect(),
         };
         let buffered = crate::BufferedFrame::for_writer(&honest, FEE_PAYER).unwrap();
         let settle = relay_message(
@@ -541,8 +709,9 @@ mod delegate_message {
             fee_payer: vector.request.fee_payer,
             valid_until_slot: 0,
         };
-        let expected = ExpectedDelegate::new(&vector.request.prepare, &quote).unwrap();
-        assert_eq!(vector.cases.len(), Answer::ALL.len());
+        assert_eq!(vector.request.auditor.0, config.auditor_pubkey.as_bytes());
+        let expected = ExpectedDelegate::new(&vector.request.prepare, &quote, &config).unwrap();
+        assert_eq!(vector.cases.len(), Answer::ALL.len() + 1);
         for case in &vector.cases {
             assert_eq!(
                 verdict(expected.check(&case.message.0)),

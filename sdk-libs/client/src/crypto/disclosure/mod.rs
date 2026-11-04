@@ -124,6 +124,26 @@ impl AuditEnvelope<'_> {
             self.salt,
             AUDIT_STREAM_LABEL,
         )?;
+        self.decode(stream, layout)
+    }
+
+    /// The transaction key reads the stream it seals, the wrong `auditor_pk` decrypts noise.
+    pub fn open_sealed(
+        &self,
+        tx_viewing_key: &ViewingKey,
+        auditor_pk: &X25519Pubkey,
+        layout: AuditStreamLayout,
+    ) -> Result<OpenedAudit, AuditError> {
+        let key = X25519Keypair::from_bytes(&tx_viewing_key.secret_bytes());
+        let stream = sealing_salted_stream(&key, auditor_pk, self.salt, AUDIT_STREAM_LABEL)?;
+        self.decode(stream, layout)
+    }
+
+    fn decode(
+        &self,
+        stream: RingStream,
+        layout: AuditStreamLayout,
+    ) -> Result<OpenedAudit, AuditError> {
         let mut plaintext = Zeroizing::new(self.ciphertext.to_vec());
         stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
         let mut envelope = custom_ring_interface::AuditEnvelope::decode(&plaintext, layout)
