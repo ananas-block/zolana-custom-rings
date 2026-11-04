@@ -3075,7 +3075,7 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_with_no_row() {
 
 /// A record of one class covers nothing.
 #[tokio::test]
-async fn the_one_co_signer_record_holds_every_demanded_class() {
+async fn a_second_co_signer_covers_what_the_first_record_leaves() {
     use crate::co_signer::CoSignerChoice;
     use custom_ring_interface::{
         cosign::{ApprovalMask, CoSignOperation},
@@ -3100,18 +3100,18 @@ async fn the_one_co_signer_record_holds_every_demanded_class() {
             ring: ring(),
             config: &config,
             demand,
-            supplied: Some(signer),
+            supplied: vec![signer],
         }
         .resolve(&chain)
         .await
     };
     assert_eq!(
         resolve(chain(CoSignScope::APPROVALS)).await.unwrap(),
-        Some(signer)
+        vec![signer]
     );
     assert!(matches!(
         resolve(chain(CoSignScope::APPROVE_OUTFLOW)).await,
-        Err(RingError::Program(CustomRingError::CoSignerOutOfScope))
+        Err(RingError::Program(CustomRingError::MissingCoSigner))
     ));
 }
 
@@ -3164,7 +3164,7 @@ async fn the_frame_carries_the_proven_mask_and_its_co_signers() {
     let past_threshold = withdrawing(101).with_co_signer(approver);
     let above = past_threshold.frame(&configured).await.ok().unwrap().frame;
     assert_eq!(above.parts.approval, ApprovalMask::WITHDRAWAL);
-    assert_eq!(above.accounts.co_signer, Some(approver));
+    assert_eq!(above.accounts.co_signers, vec![approver]);
 }
 
 fn delegate_transfer<'a>(

@@ -314,7 +314,7 @@ impl<'a> ExemptRing<'a> {
     fn within_threshold(&self) -> Result<()> {
         let note = self.note()?;
         let proven = self.prove_exempt(&note, THRESHOLD)?;
-        assert_eq!(proven.co_signer, None, "the waiver removes the co-signer");
+        assert_eq!(proven.co_signers, Vec::new(), "the waiver removes the co-signer");
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
         assert!(data.exempt);
@@ -371,7 +371,7 @@ impl<'a> ExemptRing<'a> {
         }
         withdrawal.cosigner = true;
         let proven = self.prove(&note, &withdrawal)??;
-        assert_eq!(proven.co_signer, Some(self.cosigner.pubkey()));
+        assert_eq!(proven.co_signers.first().copied(), Some(self.cosigner.pubkey()));
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
         assert!(!data.exempt);
@@ -400,7 +400,7 @@ impl<'a> ExemptRing<'a> {
             cosigner: true,
         };
         let proven = self.prove(&note, &withdrawal)??;
-        assert_eq!(proven.co_signer, Some(self.cosigner.pubkey()));
+        assert_eq!(proven.co_signers.first().copied(), Some(self.cosigner.pubkey()));
         let instruction = proven.instruction()?;
         let data = frame(&instruction, RingRail::Confidential)?;
         assert!(!data.exempt);

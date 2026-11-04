@@ -2,6 +2,8 @@ import { addressBytes, ZERO_32 } from "@heliuslabs/zolana/internal";
 import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
 import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
 
+import { ANONYMOUS_PARTIES } from "../transaction/transact.js";
+
 /** Ordered exactly as the verifier's `AnonymousParties`, zero for an absent party. */
 export function anonymousPartyIdentities(
   input: Readonly<{
@@ -15,6 +17,7 @@ export function anonymousPartyIdentities(
   return Object.freeze([
     identity(input.payer),
     identity(input.coSigner),
+    ...new Array<Bytes32>(ANONYMOUS_PARTIES - 3).fill(ZERO_32),
     identity(input.exitDestination),
   ]);
 }

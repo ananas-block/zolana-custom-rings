@@ -1072,7 +1072,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     .with_interface_transfer_accounts(vec![settlement])
     .with_co_signer(cosigner.pubkey());
     let unsigned = env.run(unsigned.prove(env.client.ring_client()))?;
-    assert_eq!(unsigned.co_signer, Some(cosigner.pubkey()));
+    assert_eq!(unsigned.co_signers.first().copied(), Some(cosigner.pubkey()));
     let rejection = send_expecting_rejection(
         rpc,
         sender,

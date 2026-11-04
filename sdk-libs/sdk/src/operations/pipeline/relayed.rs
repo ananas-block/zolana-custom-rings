@@ -46,7 +46,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
     pub fn relayed(input: RelayedTransferInput<'a>) -> Self {
         Self {
             ring: input.ring,
-            co_signer: None,
+            co_signers: Vec::new(),
             priority_fee: None,
             rail: Relayed {
                 proof_inputs: input.proof_inputs,

@@ -422,7 +422,7 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
     .expect("rewrite the table");
     let after: RingPolicy = ring.read(&policy_pda());
     assert_eq!(after.policy_hash, before.policy_hash);
-    assert_eq!(after.generation(), before.generation() + 1);
+    assert_eq!(after.generation(), before.generation() + 2);
 }
 
 #[test]

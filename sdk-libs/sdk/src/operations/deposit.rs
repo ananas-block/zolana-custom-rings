@@ -822,10 +822,12 @@ impl DepositAssembly<'_> {
             ring,
             config,
             demand: CoSignDemand::DEPOSIT,
-            supplied: co_signer,
+            supplied: co_signer.into_iter().collect(),
         }
         .resolve(rpc)
-        .await?;
+        .await?
+        .into_iter()
+        .next();
         let address = note.address;
         Ok(PreparedRingDeposit {
             priority_fee: None,

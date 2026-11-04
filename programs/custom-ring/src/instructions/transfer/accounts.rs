@@ -10,7 +10,7 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{check_funding_signer, load_anonymous_exit, CoSignerSlot, RegistrySlots},
+    loader::{check_funding_signer, load_anonymous_exit, CoSigners, RegistrySlots},
     public_legs::public_slots,
 };
 
@@ -64,22 +64,15 @@ impl TransactCheck<'_> {
             }
             .demand(),
         };
-        // The demand fixes the slot.
-        let co_signer_slot = RING_INDEX + 1 + registries.len;
-        let (co_signer, delegate_slot) = match demand.requirement(ring) {
-            Some(requirement) => (
-                Some(
-                    CoSignerSlot {
-                        program_id: self.program_id,
-                        record: account_at(accounts, co_signer_slot)?,
-                        signer: account_at(accounts, co_signer_slot + 1)?,
-                    }
-                    .verify(requirement)?,
-                ),
-                co_signer_slot + 2,
-            ),
-            None => (None, co_signer_slot),
-        };
+        let co_signers_start = RING_INDEX + 1 + registries.len;
+        let co_signers = CoSigners::verify(
+            self.program_id,
+            accounts
+                .get(co_signers_start..)
+                .ok_or(ProgramError::NotEnoughAccountKeys)?,
+            demand.requirement(ring),
+        )?;
+        let delegate_slot = co_signers_start + co_signers.accounts();
         let spp_start = match self.signer {
             RailSigner::Delegate { .. } => delegate_slot + 1,
             RailSigner::Owners | RailSigner::Payer => delegate_slot,
@@ -94,14 +87,14 @@ impl TransactCheck<'_> {
         let (sender, signers) = match self.signer {
             RailSigner::Payer => {
                 let owners = data.owner_signers(spp, window.len())?;
-                check_owner_run(owners, co_signer.as_ref())?;
+                check_owner_run(owners, &co_signers)?;
                 if data.public_owners && !data.no_spend && owners.is_empty() {
                     return Err(CustomRingError::OwnerSignerCount.into());
                 }
                 if spp.iter().any(|account| {
                     account.is_signer()
                         && account.address() != payer.address()
-                        && Some(account.address()) != co_signer.as_ref()
+                        && !co_signers.contains(account.address())
                         && !owners
                             .iter()
                             .any(|owner| owner.address() == account.address())
@@ -112,11 +105,11 @@ impl TransactCheck<'_> {
             }
             RailSigner::Owners => {
                 let owners = data.owner_signers(spp, window.len())?;
-                check_owner_run(owners, co_signer.as_ref())?;
+                check_owner_run(owners, &co_signers)?;
                 let sender = match data.in_proof_owner {
                     Some(owner) => {
                         let owner = Address::new_from_array(*owner.owner);
-                        if co_signer == Some(owner) {
+                        if co_signers.contains(&owner) {
                             return Err(CustomRingError::CoSignerIsOwner.into());
                         }
                         solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?
@@ -175,7 +168,7 @@ impl TransactCheck<'_> {
                 };
                 AnonymousParties {
                     payer: payer.address().as_array(),
-                    co_signer: co_signer.as_ref().map(Address::as_array),
+                    co_signers: co_signers.as_slice(),
                     exit_destination: exit.as_ref(),
                 }
                 .identities()
@@ -203,16 +196,13 @@ fn account_at(accounts: &[AccountView], index: usize) -> Result<&AccountView, Pr
         .ok_or(ProgramError::NotEnoughAccountKeys)
 }
 
-fn check_owner_run(
-    owners: &[AccountView],
-    co_signer: Option<&Address>,
-) -> Result<(), CustomRingError> {
+fn check_owner_run(owners: &[AccountView], co_signers: &CoSigners) -> Result<(), CustomRingError> {
     if owners.iter().any(|owner| !owner.is_signer()) {
         return Err(CustomRingError::MissingOwnerSigner);
     }
     if owners
         .iter()
-        .any(|owner| Some(owner.address()) == co_signer)
+        .any(|owner| co_signers.contains(owner.address()))
     {
         return Err(CustomRingError::CoSignerIsOwner);
     }

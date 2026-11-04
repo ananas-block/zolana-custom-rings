@@ -55,7 +55,7 @@ pub fn process_deposit_ix(
     });
     // 3. One record covering the deposit class signs when the ring configured one.
     if let Some(requirement) = CoSignDemand::DEPOSIT.requirement(&ring) {
-        CoSignerSlot {
+        let _one_class = CoSignerSlot {
             program_id,
             record: iter.next_account("co_signer_record")?,
             signer: iter.next_account("co_signer")?,
