@@ -32,6 +32,8 @@ const (
 	DepositStatementDomain = 0x43524450
 	// MergeStatementDomain = "CRMG"
 	MergeStatementDomain = 0x43524d47
+	// ApprovalTotalsDomain = "CRAO"
+	ApprovalTotalsDomain = 0x4352414f
 	// DepositBlindingDomain = "CRDB"
 	DepositBlindingDomain = 0x43524442
 	// WithdrawalsDomain = "CRPW"
@@ -54,12 +56,6 @@ const (
 	ListKeyDomain = 0x4352504c
 )
 
-// TransferStatementVersion is bound nonzero and last into every transfer statement, mirrored by TRANSFER_STATEMENT_VERSION in program-libs/interface/src/proof/domain.rs.
-const TransferStatementVersion = 4
-
-// PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
-const PolicyStatementVersion = 4
-
 // Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
 	// DomSepCRShared = "CR_S"
@@ -69,26 +65,20 @@ const (
 // Key schedule labels, distinct per ciphertext kind.
 const (
 	// AuditEncInfo mirrors AUDIT_STREAM_LABEL in program-libs/interface/src/proof/domain.rs.
-	AuditEncInfo = "CRING/adt1"
-	// BodyEncInfo mirrors DELIVERED_BODY_LABEL.
-	BodyEncInfo = "CRING/bdy1"
+	AuditEncInfo = "CRING/adt"
 	// NfKeyEncInfo mirrors REGISTER_KEY_LABEL.
-	NfKeyEncInfo = "CRING/nfk1"
+	NfKeyEncInfo = "CRING/nfk"
 	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
-	DepositEncInfo = "CRING/dep1"
+	DepositEncInfo = "CRING/dep"
 	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
-	MergeEncInfo = "CRING/mrg2"
+	MergeEncInfo = "CRING/mrg"
 	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
-	RecipientBodyEncInfo = "CRING/rcp1"
+	RecipientBodyEncInfo = "CRING/rcp"
 	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
-	SenderBundleEncInfo = "CRING/snd1"
+	SenderBundleEncInfo = "CRING/snd"
 )
 
 const (
-	// BodyLen mirrors DELIVERED_BODY_LEN.
-	BodyLen = 104
-	// EscrowBodyLen mirrors ESCROWED_DELIVERED_BODY_LEN.
-	EscrowBodyLen = 72
 	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
 	RecipientBodyLen = 72
 	// SenderBundleHeadLen mirrors SENDER_BUNDLE_HEAD_LEN, mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed.

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use zolana_ring_policy::{
     registry_field, EncodedRuleTable, Guard, ListId, ListSet, Member, Mode, PolicySource, Rule,
-    RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES, POLICY_TABLE_VERSION,
+    RuleSource, RuleTable, SourceMap, Subject, TableParts, MAX_RULES,
 };
 
 const VECTORS: &str = concat!(
@@ -17,7 +17,6 @@ const SUBJECTS: [Subject; 3] = [Subject::OutputOwner, Subject::Sender, Subject::
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct PolicyTableVectors {
     description: String,
-    version: u8,
     cases: Vec<Case>,
 }
 
@@ -369,7 +368,7 @@ fn compute_vectors() -> PolicyTableVectors {
     PolicyTableVectors {
         description: "The 44 policy table fields and their hash, acc = 0 then \
                       acc = Poseidon(acc, fields[11c..11c + 11]) for c = 0..3. Fields are \
-                      CRTB, the version, list id and registry field per source slot, the private \
+                      CRTB, list id and registry field per source slot, the private \
                       source's owner list mask and registry field, the rule count, 16 rule rows \
                       and zero padding to four rate-11 blocks. \
                       rule_parts splits each rule row read as one big-endian field from its low \
@@ -379,7 +378,6 @@ fn compute_vectors() -> PolicyTableVectors {
                       1, above_amount_by_asset 2, mask bit i is list i + 1. Produced by \
                       program-libs/policy/tests/policy_table_vector.rs."
             .to_string(),
-        version: POLICY_TABLE_VERSION,
         cases,
     }
 }

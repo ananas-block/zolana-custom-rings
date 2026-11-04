@@ -2,7 +2,7 @@
   "valid": [
     {
       "name": "no_tag",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       "list_salt": "0707070707070707070707070707070707070707070707070707070707070707",
@@ -13,7 +13,7 @@
     },
     {
       "name": "label_without_tag",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?label=rent",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?label=rent",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       "list_salt": "0707070707070707070707070707070707070707070707070707070707070707",
@@ -24,7 +24,7 @@
     },
     {
       "name": "bare",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       "list_salt": "0707070707070707070707070707070707070707070707070707070707070707",
@@ -35,7 +35,7 @@
     },
     {
       "name": "amount_mint_label",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1500000&mint=4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4&label=Coffee%20%26%20cake%20%E2%98%95%20100%25",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1500000&mint=4Ss5JMkXAD9Z7cktFEdrqeMuT6jGMF1pVozTyPHZ6zT4&label=Coffee%20%26%20cake%20%E2%98%95%20100%25",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       "list_salt": "0707070707070707070707070707070707070707070707070707070707070707",
@@ -46,7 +46,7 @@
     },
     {
       "name": "label_only",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=rent",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=rent",
       "recipient": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000ce02d7711322665f107415edd1ce95cc2aa12378f6cd56d6e0544b800c448d1047d34a4815fa6b982535e60af3bd9b49556816080f1641ff81d2b7c8ae8268a44",
       "ring_program_id": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       "list_salt": "0707070707070707070707070707070707070707070707070707070707070707",
@@ -59,97 +59,92 @@
   "rejected": [
     {
       "name": "missing_scheme",
-      "uri": "6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressScheme"
     },
     {
       "name": "non_base58",
-      "uri": "zolana:0DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:0kyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressBase58"
     },
     {
       "name": "short_payload",
-      "uri": "zolana:2BYeCB9vGbGSkKf8rHassrkPrZ2yzWQZFoEDYLK9GRrx2B5Tt63yH6aE6ibBBZoPWAKdaoKbeBSbAvB1DAC4E7ZQbqkZg3zxSyVKCokfZdHRZHwnW6W27bDJYQnYry76auShnyhzqsumQdQzhstF7zSTXpv6H2gb7oZ5zz1vfq7cTVbMf86Xi5UQyWHti5AGrD3ASij97o6gso3FwFD7HNYT8tSkDQnZEHiD?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:8RTwrKA3hrZKDwXKJjQcu2CMYgVqgWm3VeHXo11Ma5ZmEkZF5cw7LMJDf19SqwcNoBGm5gCeZGUMwfLifNRpR2N1jstTvbJmhupXauYYheWs4hx1xcKWfRT6SBrnrH6hz3ZCq1M2kTmttVnBoP2aoXwxA5iXoiSKBjb6oj9MypJ3PauGq2s2E3QG5m5avU2MJvQryotshvaqS8yVV2agKaZGTEEAHeyNmy?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressLength"
     },
     {
       "name": "long_payload",
-      "uri": "zolana:Q2NjSA44D5XXZFWhJghstLj1GqhRDTwuo4dJQb78o2JRW5FGQTtXEiTwuUsy29JWDabLSy88cyrpyrGEPsDm6FsvaAQNZajwHDkjhm4VHyeUJSuBii9zhK6KukEncJduPAQ9yxdq7HVWYGoybRXraDb29kQ48vgAyBWvCKq6ZoiVLiEP6JcEuBJnCDn5FdDP8c8JqSB8EpedVrTopp5vZXaG2rj39oYumfehrX?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:3Vb8HmyL14mh9orMsZBzEk2i8WpL9TU52YsSVo5wuk3ezbreB62kifZ74NXDXvjaTD9wLj4RDu4D18WCXKfq33mtHxKUA1FgrkyFKbUMzSj6EKkY3tMHDdWhh5LpJquF55YrFDURDhddppi9NHrxKTGjTp8FpK15KYszRkxs1AUVkNqw5mhyRQzt1EhTHaKoSakND6LiRJp8WHQd435s2kFVKpvtV2qejMmo5?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressLength"
     },
     {
-      "name": "unknown_version",
-      "uri": "zolana:4v3w7j8wNbRCv4sX9c6iDRJ3yZiXFC4acanMexupNTzrB3Ax3hFvwzSLkve4sJ6ZkZudSGyivw1KC28S11PwKo2ndXCXK4dzQbKsYXWxdp6DgrLSp2GRfEz83mjaTMKZFXq2rjmgruTdYkoFnBMp3tScygUmftZbfTB4Ya9dAmRaZWHensxJiBA91icAp2ChHPFwCUHBcjYz8UrDEuU1YMhcYiMAebz9cZ4iN?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
-      "error": "UnknownRingAddressVersion"
-    },
-    {
       "name": "bad_checksum",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektP?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X5?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressChecksum"
     },
     {
       "name": "bad_viewing_key",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHPKJ1cXN8ELDjkti3FSxX4qrCNTeZuFd8NdT6UzccoriyTf9YMPiJ8yZRsuD2zGd6LuvAZT7f6kNG1nJGCrPCeQpg147XUj6xDj7qRgcaxjdiU9WJEtbHRctj6zaZLMcXhxpdFGv1a?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFn6tkJKMj1zrfU8UxSj94yFoZM5ZrPndFfrBgtY2x34dugLAUXG1gTzdxn2t4UkaqsUTcs9uR1LLR9JXrT8jF6sNGgXn6FzPQYgUtkT892Y4Td7qpk3AGhXtzMP3k5xkfMGq9e4ego?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidPublicKey"
     },
     {
       "name": "zero_salt_on_keyed_address",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQVDEbvxzH5vkv6pY871Nu5xZ1pS5LKRTYY18PL2xxUysnx7MsD?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1AguAiEGjQt7yRb3gAooeEvtYKaeKbLTonPba5e768HtKbMsfp?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressListSalt"
     },
     {
       "name": "non_canonical_salt",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKSRxQqNzqhm9tjgXShj1LDgjU8S9j3AJFBc7NY1vxcVNNMgrvS2?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis37S5QAG8A67Fo1HxFnokxqhoewJJ2SDFSrVqimY6k8gNmKtm7V?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingAddressListSalt"
     },
     {
       "name": "delivery_tag_key",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "UnknownRingPaymentKey"
     },
     {
       "name": "uppercase_tag",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408BDE019493F212C6D4A3DB392BAF9AA347DECADE1022DB5B322B7FB94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408BDE019493F212C6D4A3DB392BAF9AA347DECADE1022DB5B322B7FB94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "short_tag",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "tag_without_zero_byte",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=01455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=01455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94",
       "error": "InvalidRingPaymentTag"
     },
     {
       "name": "unknown_query_key",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&memo=hi",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&memo=hi",
       "error": "UnknownRingPaymentKey"
     },
     {
       "name": "duplicate_query_key",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1&amount=2",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1&amount=2",
       "error": "DuplicateRingPaymentKey"
     },
     {
       "name": "fractional_amount",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1.5",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=1.5",
       "error": "InvalidRingPaymentAmount"
     },
     {
       "name": "signed_amount",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=+1",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&amount=+1",
       "error": "InvalidRingPaymentAmount"
     },
     {
       "name": "bad_mint",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&mint=notAnAddress",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&mint=notAnAddress",
       "error": "InvalidRingPaymentMint"
     },
     {
       "name": "bad_label_escape",
-      "uri": "zolana:6DYfAKpN7pFAeDMKeYCXZUaXsiPkYpnyNK3LMJF5V6jTrBUheVJ7Q3bepEZqwdmkKi9EUBT5u75wpmh9vfZoEsx3AnBHDNEojeKyM7MjD19VPXnoqRH5v61JRdz3dYdueeUT3wHxJjhu1HiuhRbBKrXN74VLHkRjb2Ud4vf5tPNBVwCeBGKQYJjzpQHZEHMvxC8YgXAzpzU71CCxvRiSjG5pMp4djmz5FektQ?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=%zz",
+      "uri": "zolana:Zkyw6f8vwKjdS7eooGBFScH7gqLHsQMQ1RZxv32Zo19cFhFK9PbpxQazrjeH5239CpLZZe2QmRHmSGE2tMaYH31kGFc9qYRSKa8mzevEvQaoyMjqESthvavAzAvmNW4BtnH9CtXQiqBA2J2SfiDzCPbYT5pJyBtjGNyWdF1ubmkDYgdis1DnQZbfa1ZEizGxe6kKbjyxodWLmxCLihyeZ17RCmP5zWbq7X6?deposit_tag=00455408bde019493f212c6d4a3db392baf9aa347decade1022db5b322b7fb94&label=%zz",
       "error": "InvalidRingPaymentLabel"
     }
   ]

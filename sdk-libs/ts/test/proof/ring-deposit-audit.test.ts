@@ -28,11 +28,7 @@ import {
   type Bytes32,
   type Bytes33,
 } from "@heliuslabs/zolana/interface";
-import {
-  ShieldedKeypair,
-  ViewingKey,
-  X25519Keypair,
-} from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import depositVector from "../../../../test-vectors/deposit/deposit.json" with { type: "json" };
 import mergeVector from "../../../../test-vectors/merge/merge.json" with { type: "json" };
@@ -595,6 +591,7 @@ describe("ring deposit builder", () => {
     return {
       address: () => local.address(),
       viewTags: (requests) => local.viewTags(requests),
+      listSalt: refused,
       ringTagMatches: refused,
       viewingPublicKeys: refused,
       decrypt: refused,

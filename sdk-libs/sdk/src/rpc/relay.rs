@@ -1,6 +1,7 @@
 //! The Ring RPC relay a wallet sends its transfer through.
 
 use async_trait::async_trait;
+use solana_address::Address;
 use solana_signer::Signer;
 use spr_client::AsyncRpc;
 use spr_indexer_api::{SerializablePubkey, SerializableSignature};
@@ -10,7 +11,7 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    relay_message::{ExpectedDelegate, ExpectedMessage},
+    relay_message::{ApprovalOpening, ExpectedDelegate, ExpectedMessage, RelayTransferTerms},
     CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
@@ -159,43 +160,75 @@ impl PendingSignature {
         &self.relay_id
     }
 
+    pub fn message(&self) -> &[u8] {
+        &self.message
+    }
+
+    /// What the wallet sealed for one public owner, an outside co-signer holds none.
+    pub fn transfer_terms(&self, signer: Address) -> Option<&RelayTransferTerms> {
+        self.expected.as_deref()?.terms_for(signer)
+    }
+
+    pub(crate) fn expecting(
+        relay_id: RelayId,
+        message: Vec<u8>,
+        expected: ExpectedMessage,
+    ) -> Self {
+        Self {
+            relay_id,
+            message,
+            expected: Some(Box::new(expected)),
+        }
+    }
+
+    /// For a named co-signer that reads exact totals, the terms of no slot.
+    pub fn approval_opening(&self) -> Option<&ApprovalOpening> {
+        self.expected.as_deref()?.approval_opening()
+    }
+
     /// The expectation comes from the wallet's own request, never from Ring RPC's answer.
-    pub fn verify(&self) -> Result<VerifiedMessage, RingError> {
-        let expected = self.expected.as_ref().ok_or(MessageMismatch::Unrequested)?;
-        Ok(expected.check(&self.message)?)
+    pub fn verify(&self, signer: Address) -> Result<VerifiedMessage, RingError> {
+        let expected = self
+            .expected
+            .as_deref()
+            .ok_or(MessageMismatch::Unrequested)?;
+        Ok(expected.check(&self.message, signer)?)
     }
 
     /// As [`Self::sign`], a settling message reads the frame its digest signs from the chain.
     pub async fn sign_on_chain<R: RingRelay + ?Sized, C: AsyncRpc + ?Sized>(
-        self,
+        &self,
         relay: &R,
         rpc: &C,
         signer: &dyn Signer,
     ) -> Result<RelayStatus, RingError> {
-        if let Some(ExpectedMessage::Delegate(delegate)) = self.expected.as_deref() {
-            if let Some(buffer) = delegate.settled_buffer(&self.message)? {
-                let held = rpc
-                    .get_account(buffer)
-                    .await?
-                    .ok_or(MessageMismatch::Accounts)?;
-                let verified = delegate.check_settled(&self.message, &held.data)?;
-                return self.submit(relay, &verified, signer).await;
-            }
+        let address = signer.try_pubkey()?;
+        let expected = self
+            .expected
+            .as_deref()
+            .ok_or(MessageMismatch::Unrequested)?;
+        if let Some(buffer) = expected.settled_buffer(&self.message, address)? {
+            let held = rpc
+                .get_account(buffer)
+                .await?
+                .ok_or(MessageMismatch::Accounts)?;
+            let verified = expected.check_settled(&self.message, &held.data, address)?;
+            return self.submit(relay, &verified, signer).await;
         }
         self.sign(relay, signer).await
     }
 
     pub async fn sign<R: RingRelay + ?Sized>(
-        self,
+        &self,
         relay: &R,
         signer: &dyn Signer,
     ) -> Result<RelayStatus, RingError> {
-        let verified = self.verify()?;
+        let verified = self.verify(signer.try_pubkey()?)?;
         self.submit(relay, &verified, signer).await
     }
 
     async fn submit<R: RingRelay + ?Sized>(
-        self,
+        &self,
         relay: &R,
         verified: &VerifiedMessage,
         signer: &dyn Signer,
@@ -203,7 +236,7 @@ impl PendingSignature {
         let signature = verified.sign(signer)?;
         relay
             .submit_relay(SubmitRelayRequest {
-                relay_id: self.relay_id,
+                relay_id: self.relay_id.clone(),
                 signer: SerializablePubkey(verified.signer()),
                 signature: SerializableSignature(signature),
             })

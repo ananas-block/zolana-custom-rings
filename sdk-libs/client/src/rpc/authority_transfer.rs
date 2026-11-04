@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use super::{base64, relay_id, Attestation, ReadTarget, RelayId, RequestBuildError, SignedRequest};
 
-const AUTHORITY_TRANSFER_DOMAIN: &str = "zolana/ring-rpc-authority-transfer/v1";
+const AUTHORITY_TRANSFER_DOMAIN: &str = "zolana/ring-rpc-authority-transfer";
 
 /// The base58 text of `ShieldedAddress::to_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,15 +19,15 @@ pub struct SerializableShieldedAddress(pub ShieldedAddress);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityPayment {
     pub recipient: SerializableShieldedAddress,
+    pub mint: SerializablePubkey,
     pub amount: u64,
 }
 
-/// The change returns to `source`.
+/// A delegate moves the notes of any member, its own among them, change returns to an input's owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityTransfer {
-    pub source: SerializableShieldedAddress,
-    pub mint: SerializablePubkey,
+    pub sources: Vec<SerializableShieldedAddress>,
     pub payments: Vec<AuthorityPayment>,
 }
 
@@ -120,17 +120,22 @@ impl Attestation for AuthorityTransferAttestation {
             .fold(String::new(), |mut lines, payment| {
                 let _ = write!(
                     lines,
-                    "\npayment: {} {}",
-                    payment.recipient.0, payment.amount
+                    "\npayment: {} {} {}",
+                    payment.recipient.0, payment.mint.0, payment.amount
                 );
                 lines
             });
+        let sources = transfer
+            .sources
+            .iter()
+            .fold(String::new(), |mut lines, source| {
+                let _ = write!(lines, "\nsource: {}", source.0);
+                lines
+            });
         format!(
-            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}\nsource: {}\nmint: {}{payments}\ntimestamp: {timestamp}\nnonce: {}",
+            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}{payments}\ntimestamp: {timestamp}\nnonce: {}",
             self.target.lines(),
             self.delegate,
-            transfer.source.0,
-            transfer.mint.0,
             base64(nonce),
         )
         .into_bytes()
@@ -142,6 +147,7 @@ impl AuthorityTransferRequest {
     pub fn sign<S: Signer + ?Sized>(
         self,
         delegate: &S,
+        tx_viewing_key: &ViewingKey,
     ) -> Result<PrepareAuthorityTransferRequest, RequestBuildError> {
         let (timestamp, message) = self.message()?;
         let signature = delegate
@@ -151,7 +157,7 @@ impl AuthorityTransferRequest {
             ring: self.attestation.target.ring.into(),
             delegate: self.attestation.delegate.into(),
             transfer: self.attestation.transfer,
-            tx_viewing_key: TxViewingSecret::from(&ViewingKey::new()),
+            tx_viewing_key: TxViewingSecret::from(tx_viewing_key),
             timestamp,
             nonce: self.nonce.to_vec().into(),
             signature: signature.into(),

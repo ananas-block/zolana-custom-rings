@@ -262,6 +262,7 @@ describe("ring-statements.json", () => {
     },
     family: family(vector),
     approvalMask: vector.approval_mask,
+    approvalTotals: field(vector.approval_totals),
     noSpend: vector.no_spend,
     capacity: vector.output_capacity,
     outputs,

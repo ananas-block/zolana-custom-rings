@@ -167,6 +167,20 @@ pub(crate) mod fe {
         bytes(value.as_ref(), serializer)
     }
 
+    pub(crate) mod option {
+        use serde::Serializer;
+
+        pub(crate) fn serialize<S: Serializer>(
+            value: &Option<[u8; 32]>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            match value {
+                Some(value) => super::bytes(value, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+    }
+
     pub(crate) fn zeroizing<S: Serializer, const N: usize>(
         value: &Zeroizing<[u8; N]>,
         serializer: S,

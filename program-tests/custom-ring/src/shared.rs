@@ -255,7 +255,7 @@ impl std::ops::DerefMut for TestWallet {
     }
 }
 
-/// zolana's wallet sync, then the scheme 10 ring notes and ring deposits it skips.
+/// zolana's wallet sync, then the ring notes and ring deposits it skips.
 pub struct WalletSync<'a> {
     pub wallet: &'a mut Wallet,
     pub keys: &'a ShieldedKeypair,

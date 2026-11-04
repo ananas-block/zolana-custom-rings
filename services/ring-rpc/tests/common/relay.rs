@@ -288,6 +288,9 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
         blinding_seed: [28; 32],
         output_tree_id: 4,
         list_salts: Vec::new(),
+        co_owners: Vec::new(),
+        approval_blinder: None,
+        wide_owners: false,
     }
 }
 

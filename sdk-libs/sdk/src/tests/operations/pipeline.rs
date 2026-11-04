@@ -289,11 +289,10 @@ fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
             let OwnerTag::Inline(tag) = output.owner_tag else {
                 panic!("an anonymous slot is tagged inline, {:?}", output.owner_tag);
             };
-            let body = output.data.as_deref().map(|data| {
-                ring_body_output(data)
-                    .expect("a scheme 13 recipient body")
-                    .0
-            });
+            let body = output
+                .data
+                .as_deref()
+                .map(|data| ring_body_output(data).expect("a ring body").0);
             (tag, body)
         })
         .collect()
@@ -327,7 +326,7 @@ fn payment_at(staged: &Staged<'_>, reader: &ShieldedKeypair, position: usize) ->
 fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> SenderBundle {
     let external = &staged.proof_inputs.external_data;
     let message = &external.messages[0];
-    let body = ring_sender_bundle_output_body(&message.data).expect("a scheme 12 sender bundle");
+    let body = ring_sender_bundle_output_body(&message.data).expect("a sender bundle");
     let published = external.outputs.len();
     open_sender_bundle(body, &slot_secret(staged, sender, published), published).unwrap()
 }
@@ -541,16 +540,26 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
         payer: payer(),
     };
     let pay = |amount| owner.anonymous_move(&utxos, vec![RingPayment::new(paid.clone(), amount)]);
-    let widest = pay(40).select(&client).await.unwrap();
-    let assembled = widest.assemble(&client).await.unwrap();
-    assert_eq!(
-        assembled.frame.proof_inputs.check_shape().unwrap(),
-        spr_client::Shape::IN40_OUT2
-    );
+    let buffered = |amount| AnonymousMove {
+        wide_frames: WideFrames::Buffer,
+        ..pay(amount)
+    };
+    for (amount, shape) in [
+        (41, spr_client::Shape::IN48_OUT2),
+        (49, spr_client::Shape::IN49_OUT2),
+    ] {
+        let widest = buffered(amount).select(&client).await.unwrap();
+        let assembled = widest.assemble(&client).await.unwrap();
+        assert_eq!(assembled.frame.proof_inputs.check_shape().unwrap(), shape);
+    }
     assert!(matches!(
         pay(41).select(&client).await,
+        Err(RingError::TransferTooWide { inputs: 48, .. })
+    ));
+    assert!(matches!(
+        pay(50).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 41,
+            amount: 50,
             max_inputs: 49,
             ..
         })
@@ -925,15 +934,17 @@ impl<'a> MoveFixture<'a> {
             ring: ring(),
             delegate: self.delegate,
             payer: case.payer,
-            source: self.member.shielded_address().unwrap(),
-            source_nullifier_key: &self.member.nullifier_key,
-            utxos: case.utxos,
-            mint: Mint::SOL.asset,
+            sources: vec![crate::DelegateSource {
+                address: self.member.shielded_address().unwrap(),
+                nullifier_key: &self.member.nullifier_key,
+                utxos: case.utxos,
+            }],
             payments: case
                 .amounts
                 .iter()
                 .map(|amount| DelegatePayment {
                     recipient: self.recipient,
+                    mint: Mint::SOL.asset,
                     amount: *amount,
                 })
                 .collect(),
@@ -1611,6 +1622,66 @@ async fn the_owner_count_selects_the_key_and_opens_ascending_rows() {
     .unwrap();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/custom-ring-transfer-wide-owners.json");
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    let pinned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(request_layout(&built), request_layout(&pinned));
+}
+
+/// The Go golden test solves the fixture on the wide key, a tail sealed past another capacity fails there.
+#[tokio::test]
+async fn a_wide_spend_with_a_data_tail_seals_on_the_wide_key() {
+    use crate::tests::support::{keypair, Registry};
+    let many: Vec<ShieldedKeypair> = (0..5).map(|seed| keypair(20 + seed)).collect();
+    let members: Vec<(&ShieldedKeypair, u64)> = many.iter().map(|owner| (owner, 1)).collect();
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(Registry::new(&members), &crate::tests::pipeline_rules())
+    .client();
+    let utxos = many
+        .iter()
+        .enumerate()
+        .map(|(leaf, owner)| ring_utxo(owner, Mint::SOL, 1, leaf as u64))
+        .collect();
+    let mut transaction = ring_transaction(utxos);
+    transaction
+        .add_output_utxo(spr_transaction::SppProofOutputUtxo {
+            owner_address: Some(many[1].shielded_address().unwrap()),
+            asset: Mint::SOL,
+            amount: 1,
+            ring_program_id: Some(ring().program_id()),
+            ring_data_hash: Some([3; 32]),
+            ..Default::default()
+        })
+        .unwrap();
+    let wide = many[1..]
+        .iter()
+        .fold(owner_transfer(&many[0], transaction), |transfer, owner| {
+            transfer.with_co_owner(CoOwner {
+                owner: owner.shielded_address().unwrap().solana_address().unwrap(),
+                nullifier_key: &owner.nullifier_key,
+            })
+        });
+    let assembled = match wide.assemble(&client).await {
+        Ok(assembled) => assembled,
+        Err(error) => panic!("{error:?}"),
+    };
+    let request = assembled.request().unwrap();
+    let RingCircuit::Transfer { outputs, wide, .. } = request.circuit else {
+        panic!("a transfer key");
+    };
+    assert!(wide);
+    assert_eq!(outputs, 8);
+    let built = serde_json::to_value(
+        crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+    )
+    .unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/custom-ring-transfer-wide-data.json");
     if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
         std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
     }

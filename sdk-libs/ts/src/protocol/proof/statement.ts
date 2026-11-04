@@ -13,11 +13,7 @@ import { u32Field } from "../../crypto/error.js";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
-import {
-  TRANSFER_STATEMENT_VERSION,
-  RingDomain,
-  domainField,
-} from "../../crypto/derivation/ring-domain.js";
+import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import {
   ANONYMOUS_PARTIES,
@@ -83,6 +79,8 @@ export interface TransferStatement {
   readonly head: AuditHead;
   readonly family: TransferFamily;
   readonly approvalMask: number;
+  /** Zero unless the frame discloses totals to a co-signer. */
+  readonly approvalTotals: Bytes32;
   /** `R` is zero, the frame takes public funds alone. */
   readonly noSpend: boolean;
   /** The `m` published slots. */
@@ -167,6 +165,7 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ...auditHeadElements(statement.head),
     ...railBits,
     rightAlign(Uint8Array.of(statement.approvalMask)),
+    statement.approvalTotals,
     bit(statement.noSpend),
     u32Field(outputs.length, "output count"),
     filledChain(
@@ -192,12 +191,8 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ]),
     checkedBytes<Bytes32>(statement.withdrawalHash, 32, "withdrawal hash"),
   ];
-  // The length counts itself and the version, both close the chain.
-  return [
-    ...elements,
-    bigIntBytes(BigInt(elements.length + 2)) as Bytes32,
-    bigIntBytes(TRANSFER_STATEMENT_VERSION) as Bytes32,
-  ];
+  // The nonzero length counts itself and closes the chain, HashChain4 pads zeros.
+  return [...elements, bigIntBytes(BigInt(elements.length + 1)) as Bytes32];
 }
 
 export function transferStatementHash(statement: TransferStatement): Bytes32 {
@@ -253,6 +248,7 @@ export function ringTransferStatement(
     }),
     family,
     approvalMask: data.approval,
+    approvalTotals: data.extensions.approvalTotals ?? new Uint8Array(32),
     noSpend: data.noSpend,
     outputs: data.outputs,
     capacity: RingTransactData.streamLayout(data).capacity,

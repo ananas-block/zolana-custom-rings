@@ -14,6 +14,7 @@ import {
   meta,
   solanaOwnerIdentity,
   treeAddress,
+  ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import { type RingProver } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
@@ -26,7 +27,8 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { ShieldedPublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
@@ -53,6 +55,7 @@ import { RingError } from "../../protocol/error.js";
 import {
   policyLegs,
   policyDemand,
+  readsPolicyRoot,
   policyRoots,
   publishedNotes,
   readPolicy,
@@ -64,6 +67,7 @@ import {
   type RingListSalt,
 } from "../../proof/policy-proof.js";
 import { selectTransferKey, transferProofRequest } from "../../proof/transfer-proof.js";
+import { fittedSpend } from "../../protocol/proof/transfer-shapes.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import { framesData, type PublishedSlot, type RingOutputRail } from "../payments/output-rail.js";
 import {
@@ -255,7 +259,7 @@ export function proveStagedTransfer(
   });
 }
 
-/** A staged transfer whose external data is final, Rust `Sealed`, before any record read. */
+/** A staged transfer whose external data is final, Rust `Sealed`. */
 export interface SealedTransfer {
   readonly sealed: SealedAudit;
   readonly layout: AuditStreamLayout;
@@ -268,11 +272,136 @@ export interface SealedTransfer {
   readonly proofInputs: SppProofInputs;
 }
 
-/** Rust `Pipeline::seal`, the caller wipes `sealed.ephemeralSecret`. */
-export function sealStagedTransfer(
+export function sealedTransferTerms(
+  input: Readonly<{
+    ringProgramId: Address;
+    feePayer: Address;
+    sealed: SealedTransfer;
+    ownerSigners: readonly Address[];
+    setup: readonly TokenAccountCreate[];
+  }>,
+): readonly RelayTransferTerms[] {
+  const { sealed, ringProgramId } = input;
+  const { proofInputs } = sealed;
+  return input.ownerSigners.map((signer) => {
+    const key = ShieldedPublicKey.fromEd25519(addressBytes(signer) as Bytes32);
+    const slots = sealed.published.flatMap(({ output }, slot) => {
+      const owner = output.ownerAddress;
+      if (owner === undefined || output.isDummy() || !owner.signingPublicKey.equals(key)) return [];
+      return [
+        Object.freeze({
+          slot,
+          owner: signer,
+          nullifierPk: owner.nullifierPublicKey,
+          mint: output.asset,
+          amount: output.amount,
+          blinding: output.blinding,
+          treeId: proofInputs.outputTreeId,
+          dataHash: output.dataHash ?? ZERO_32,
+          ringDataHash: output.ringDataHash ?? ZERO_32,
+        }),
+      ];
+    });
+    return Object.freeze({
+      ring: ringProgramId,
+      feePayer: input.feePayer,
+      signer,
+      slots: Object.freeze(slots),
+      nullifiers: Object.freeze(
+        proofInputs.inputUtxos
+          .filter((spent) => !spent.isDummy() && spent.utxo.owner.equals(key))
+          .map((spent) => spent.nullifier()),
+      ),
+      setup: input.setup,
+    });
+  });
+}
+
+/** The key a staged transfer selects, every stream counter follows it. */
+async function selectStagedKey(input: StagedTransferInput, context: RequestContext | undefined) {
+  const { client, config, staged } = input;
+  const { spend } = staged;
+  const delegate = isDelegateRail(spend.rail);
+  const inputs = publishedNotes(staged.proofInputs);
+  const transfers = staged.proofInputs.externalData.interfaceTransfers;
+  const liveRows = ownerRows({ inputs, delegate });
+  const demandInput = {
+    client,
+    config,
+    rail: spend.rail,
+    proofInputs: staged.proofInputs,
+    publicSlots: publicSlots(transfers),
+    listSalts: input.listSalts ?? [],
+    ...(spend.anonymous?.tokenOwner === undefined
+      ? {}
+      : { tokenOwnerHint: spend.anonymous.tokenOwner }),
+  };
+  const demand = await policyDemand({ ...demandInput, rows: liveRows }, context);
+  const shape = staged.proofInputs.checkShape();
+  const keySpend = {
+    rail: spend.rail,
+    inputs: inputs.length,
+    outputs: shape.outputs,
+    spendsDefaultRing: spendsDefaultRing(staged.proofInputs),
+    legs: policyLegs(config, spend.rail, transfers),
+    owners: liveRows.length,
+    pools: demand.pools,
+    wide: false,
+  };
+  const addresses = { nInputs: shape.inputs, legs: transfers.length };
+  const { circuit, wideOwners } = selectTransferKey({
+    spend: keySpend,
+    addresses: { ...addresses, coSigners: input.coSigners?.length ?? 0 },
+    ownerSigners: staged.ownerSigners.length,
+  });
+  return { demandInput, demand, keySpend, addresses, circuit, wideOwners };
+}
+
+/** Rust `Prepared::unread_wide`. */
+function unreadWide(
+  input: Readonly<{
+    config: RingPolicy;
+    staged: Pick<StagedTransfer, "proofInputs"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
+  }>,
+): boolean {
+  const { config, staged } = input;
+  const { proofInputs, spend } = staged;
+  const inputs = publishedNotes(proofInputs);
+  const entry = spendsDefaultRing(proofInputs);
+  const { wide } = fittedSpend({
+    rail: spend.rail,
+    inputs: inputs.length,
+    outputs: proofInputs.checkShape().outputs,
+    spendsDefaultRing: entry,
+    legs: proofInputs.externalData.interfaceTransfers.length,
+    owners: ownerRows({ inputs, delegate: isDelegateRail(spend.rail) }).length,
+    pools: { own: 0, curator: 0, tracking: 0 },
+    wide: false,
+  });
+  const reads = readsPolicyRoot(config, spend.rail);
+  const data = framesData(proofInputs.outputs.filter((output) => !output.isDummy()));
+  return wide || (reads && (data || entry));
+}
+
+/** A relayed owner's seal, the caller wipes `sealed.ephemeralSecret`. */
+export function sealRelayedTransfer(
   input: Readonly<{
     ringProgramId: Address;
     config: RingPolicy;
+    staged: Omit<StagedTransfer, "spend"> &
+      Readonly<{ spend: Pick<RailSpend, "rail" | "inProofOwner" | "publicOwners"> }>;
+  }>,
+): SealedTransfer & Readonly<{ wideOwners: boolean }> {
+  const wideOwners = unreadWide(input);
+  return Object.freeze({ ...sealStagedTransfer({ ...input, wideOwners }), wideOwners });
+}
+
+/** The caller wipes `sealed.ephemeralSecret`. */
+function sealStagedTransfer(
+  input: Readonly<{
+    ringProgramId: Address;
+    config: RingPolicy;
+    wideOwners: boolean;
     staged: Omit<StagedTransfer, "spend"> &
       Readonly<{ spend: Pick<RailSpend, "rail" | "inProofOwner" | "publicOwners"> }>;
   }>,
@@ -295,6 +424,7 @@ export function sealStagedTransfer(
     entry: spendsDefaultRing(staged.proofInputs),
     hasData: framesData(published.map((slot) => slot.output)),
     publicOwners: spend.publicOwners === true,
+    wideOwners: input.wideOwners,
   });
   const auditor = config.auditorPublicKey;
   // The auditor message precedes every hash over the external data.
@@ -329,46 +459,20 @@ async function assembleStagedTransfer<T>(
   const { rail, spend } = staged;
   const ringRail = spend.rail;
   const delegate = isDelegateRail(ringRail);
+  const selected = await selectStagedKey(input, context);
+  const { demandInput, demand, keySpend, addresses, circuit, wideOwners } = selected;
   const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
-    sealStagedTransfer(input);
+    sealStagedTransfer({ ...input, wideOwners });
   const auditor = config.auditorPublicKey;
   try {
     const transfers = proofInputs.externalData.interfaceTransfers;
     const slots = publicSlots(transfers);
     const entry = layout.key.entry;
-    const liveRows = ownerRows({ inputs, delegate });
     const listSalts = input.listSalts ?? [];
-    const demandInput = {
-      client,
-      config,
-      rail: ringRail,
-      proofInputs,
-      publicSlots: slots,
-      listSalts,
-      ...(spend.anonymous?.tokenOwner === undefined
-        ? {}
-        : { tokenOwnerHint: spend.anonymous.tokenOwner }),
-    };
-    const demand = await policyDemand({ ...demandInput, rows: liveRows }, context);
-    const keySpend = {
-      rail: ringRail,
-      inputs: inputs.length,
-      outputs: shape.outputs,
-      spendsDefaultRing: entry,
-      legs: policyLegs(config, ringRail, transfers),
-      owners: liveRows.length,
-      pools: demand.pools,
-      wide: false,
-    };
-    const addresses = { nInputs: shape.inputs, legs: transfers.length };
-    const { circuit } = selectTransferKey({
-      spend: keySpend,
-      addresses: { ...addresses, coSigners: input.coSigners?.length ?? 0 },
-      ownerSigners: staged.ownerSigners.length,
-    });
     const policy = await readPolicy(
       {
         ...demandInput,
+        proofInputs,
         ringProgramId,
         publicOwners: spend.publicOwners === true,
         circuit,
@@ -402,7 +506,7 @@ async function assembleStagedTransfer<T>(
       )
     ).map(({ signer }) => signer);
     // The final co-signer count moves the account bound.
-    const { wideOwners } = selectTransferKey({
+    selectTransferKey({
       spend: keySpend,
       addresses: { ...addresses, coSigners: coSigners.length },
       ownerSigners: staged.ownerSigners.length,

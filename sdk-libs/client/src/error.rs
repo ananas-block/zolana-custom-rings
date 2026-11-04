@@ -262,8 +262,6 @@ pub enum AnonymousError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Hasher(#[from] HasherError),
-    #[error("viewing history version {version} needs a sync from index 0")]
-    ViewingHistoryVersion { version: u32 },
     #[error("viewing history does not parse because {0}")]
     ViewingHistory(String),
     #[error("a rotated viewing key must be new and created after the current one")]

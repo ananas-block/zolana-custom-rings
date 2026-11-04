@@ -1,19 +1,22 @@
+use std::collections::BTreeSet;
+
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
 use spr_client::AsyncRpc;
 use spr_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
-use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
+use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SppProofOutputUtxo},
-    AssetRegistry, WalletUtxo,
+    AssetRegistry, TransactionError, WalletUtxo,
 };
 use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 
 use super::{
     anonymous::{SenderChange, WideFrames},
     canonical_shape, pad_under_rail, sealed,
-    selection::{payment_total, widest, Funding},
-    shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
+    selection::{payment_total, widest, Candidate, Funding},
+    shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{CustomRing, CustomRingConfig, RingError};
@@ -38,6 +41,7 @@ pub struct DelegateWithdrawal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DelegatePayment {
     pub recipient: ShieldedAddress,
+    pub mint: Address,
     pub amount: u64,
 }
 
@@ -46,17 +50,23 @@ pub struct DelegateMove<'a> {
     pub ring: CustomRing,
     pub delegate: Address,
     pub payer: Address,
-    pub source: ShieldedAddress,
-    pub source_nullifier_key: &'a NullifierKey,
-    /// The source's UTXOs on any tree.
-    pub utxos: &'a [WalletUtxo],
-    pub mint: Address,
-    /// The change returns to the source.
+    /// The delegate's own notes and several members' stand alike.
+    pub sources: Vec<DelegateSource<'a>>,
+    /// Each mint's change returns to the owner of the last note spent in it.
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
     pub wide_frames: WideFrames,
     /// A relayed delegate names it, its wallet then reads the proven records.
     pub tx_viewing_key: ViewingKey,
+}
+
+#[derive(Clone, Copy)]
+pub struct DelegateSource<'a> {
+    pub address: ShieldedAddress,
+    /// Recovered from escrow, the proof spends the member's notes with it.
+    pub nullifier_key: &'a NullifierKey,
+    /// The source's UTXOs on any tree.
+    pub utxos: &'a [WalletUtxo],
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -65,6 +75,8 @@ pub struct Delegated<'a> {
     payer: Address,
     source: ShieldedAddress,
     pub(super) source_key: NullifierKey,
+    /// Owners of the inputs `source` does not own.
+    co_sources: Vec<CoOwner<'a>>,
     inputs: Vec<WalletUtxo>,
     outputs: Vec<DelegateOutput>,
     exits: Vec<DelegateOutput>,
@@ -110,6 +122,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
                 payer: input.payer,
                 source: input.source,
                 source_key: input.source_nullifier_key.clone(),
+                co_sources: Vec::new(),
                 inputs: input.inputs,
                 outputs: input.outputs,
                 exits: Vec::new(),
@@ -120,7 +133,14 @@ impl<'a> RingTransfer<Delegated<'a>> {
                 tx_viewing_key: ViewingKey::new(),
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
+    }
+
+    #[must_use = "use the updated move"]
+    pub fn with_co_source(mut self, co_source: CoOwner<'a>) -> Self {
+        self.rail.co_sources.push(co_source);
+        self
     }
 
     #[must_use = "use the updated move"]
@@ -173,25 +193,75 @@ impl<'a> DelegateMove<'a> {
         self,
         client: &RingClient<P, I>,
     ) -> Result<DelegateTransfer<'a>, RingError> {
-        let amount = payment_total(self.payments.iter().map(|payment| payment.amount))?;
+        let mut named = BTreeSet::new();
+        if !self
+            .sources
+            .iter()
+            .all(|source| named.insert(source.address.to_bytes()))
+        {
+            return Err(RingError::RepeatedDelegateSource);
+        }
+        let utxos: Vec<WalletUtxo> = self
+            .sources
+            .iter()
+            .flat_map(|source| source.utxos.iter().filter(|utxo| self.spends(source, utxo)))
+            .cloned()
+            .collect();
         let payments = self.payments.len();
         let keyed = |shape| shape_keyed(RingRail::Delegate, shape);
         let unkeyed = || RingError::ShapeUnkeyed {
             rail: RingRail::Delegate,
         };
         let max_inputs = widest(payments, keyed).ok_or_else(unkeyed)?;
-        let funding = Funding {
-            utxos: self.utxos,
-            asset: self.mint,
-            amount,
-            max_inputs,
-        };
-        let attempts = funding
-            .candidates(|utxo| self.spends(utxo))
+        let fundings = self
+            .mint_totals()?
             .into_iter()
-            .map(|candidate| {
-                let shape = candidate.shape(payments, keyed).ok_or_else(unkeyed)?;
-                self.transfer(candidate.utxos)
+            .map(|(asset, amount)| Funding {
+                utxos: &utxos,
+                asset,
+                amount,
+                max_inputs,
+            })
+            .collect::<Vec<_>>();
+        let trees: BTreeSet<u16> = utxos.iter().map(|utxo| utxo.tree_id).collect();
+        let mut ranked: Vec<_> = trees
+            .into_iter()
+            .filter_map(|tree| {
+                let funded = fundings
+                    .iter()
+                    .map(|funding| {
+                        let mut candidates =
+                            funding.candidates(|utxo| utxo.tree_id == tree).into_iter();
+                        candidates
+                            .next()
+                            .map(|candidate| (funding.asset, funding.amount, candidate.utxos))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let notes = funded
+                    .iter()
+                    .map(|(_, _, utxos)| utxos.len())
+                    .sum::<usize>();
+                let total: u128 = funded
+                    .iter()
+                    .flat_map(|(_, _, utxos)| utxos)
+                    .map(|utxo| u128::from(utxo.utxo.amount))
+                    .sum();
+                Some(((notes, total, tree), funded))
+            })
+            .collect();
+        ranked.sort_unstable_by_key(|(order, _)| *order);
+        let attempts = ranked
+            .into_iter()
+            .map(|(_, funded)| {
+                let spent = self.spent_by_mint(funded)?;
+                let change = spent.iter().filter(|mint| mint.change > 0).count();
+                let shape = Candidate {
+                    utxos: spent.iter().flat_map(|mint| mint.utxos.clone()).collect(),
+                    change: false,
+                }
+                .shape(payments + change, keyed)
+                .ok_or_else(unkeyed)?;
+                self.transfer(spent)?
                     .with_shape(shape)
                     .map(|transfer| match self.wide_frames {
                         WideFrames::Buffer => transfer.with_buffered_settlement(),
@@ -199,35 +269,124 @@ impl<'a> DelegateMove<'a> {
                     })
             })
             .collect();
+        // With no tree funding them all, the first short mint names the refusal.
+        let funding = fundings
+            .iter()
+            .find(|funding| funding.candidates(|_| true).is_empty())
+            .or_else(|| fundings.first())
+            .ok_or(TransactionError::ZeroSpendAmount)?;
         funding.first_fit(attempts, client).await
     }
 
-    fn spends(&self, utxo: &WalletUtxo) -> bool {
-        utxo.utxo.owner == self.source.signing_pubkey
+    /// In first-use order, a mint's total refused when zero or past a u64.
+    fn mint_totals(&self) -> Result<Vec<(Address, u64)>, RingError> {
+        let mut mints: Vec<Address> = Vec::new();
+        for payment in &self.payments {
+            if !mints.contains(&payment.mint) {
+                mints.push(payment.mint);
+            }
+        }
+        mints
+            .into_iter()
+            .map(|mint| {
+                let amounts = self.payments.iter().filter(|payment| payment.mint == mint);
+                Ok((mint, payment_total(amounts.map(|payment| payment.amount))?))
+            })
+            .collect()
+    }
+
+    fn spent_by_mint(
+        &self,
+        funded: Vec<(Address, u64, Vec<WalletUtxo>)>,
+    ) -> Result<Vec<SpentMint>, RingError> {
+        funded
+            .into_iter()
+            .map(|(mint, amount, utxos)| {
+                let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
+                let change = u64::try_from(total.saturating_sub(u128::from(amount)))
+                    .map_err(|_| RingError::PaymentOverflow)?;
+                Ok(SpentMint {
+                    mint,
+                    utxos,
+                    change,
+                })
+            })
+            .collect()
+    }
+
+    fn spends(&self, source: &DelegateSource<'_>, utxo: &WalletUtxo) -> bool {
+        utxo.utxo.owner == source.address.signing_pubkey
             && utxo.utxo.ring_program_id == Some(self.ring.program_id())
     }
 
-    fn transfer(&self, utxos: Vec<WalletUtxo>) -> DelegateTransfer<'a> {
-        DelegateTransfer::new(DelegateTransferInput {
+    /// Every note of a mint but the last is spent whole, so its change is that note's owner's.
+    fn transfer(&self, spent: Vec<SpentMint>) -> Result<DelegateTransfer<'a>, RingError> {
+        let owner_of = |utxo: &WalletUtxo| {
+            self.sources
+                .iter()
+                .find(|source| source.address.signing_pubkey == utxo.utxo.owner)
+                .copied()
+                .ok_or(TransactionError::NoInputs)
+        };
+        let change_owner =
+            |mint: &SpentMint| owner_of(mint.utxos.last().ok_or(TransactionError::NoInputs)?);
+        let sender = change_owner(spent.first().ok_or(TransactionError::NoInputs)?)?;
+        let mut outputs: Vec<DelegateOutput> = self
+            .payments
+            .iter()
+            .map(|payment| DelegateOutput {
+                recipient: payment.recipient,
+                asset: payment.mint,
+                amount: payment.amount,
+            })
+            .collect();
+        // The sender's change pads in, another owner's is a slot of its own.
+        for mint in &spent {
+            let owner = change_owner(mint)?;
+            if mint.change > 0 && owner.address != sender.address {
+                outputs.push(DelegateOutput {
+                    recipient: owner.address,
+                    asset: mint.mint,
+                    amount: mint.change,
+                });
+            }
+        }
+        let inputs: Vec<WalletUtxo> = spent.into_iter().flat_map(|mint| mint.utxos).collect();
+        let mut co_sources: Vec<CoOwner<'a>> = Vec::new();
+        for utxo in &inputs {
+            let source = owner_of(utxo)?;
+            let owner = source.address.solana_address()?;
+            if source.address != sender.address
+                && !co_sources.iter().any(|held| held.owner == owner)
+            {
+                co_sources.push(CoOwner {
+                    owner,
+                    nullifier_key: source.nullifier_key,
+                });
+            }
+        }
+        let transfer = DelegateTransfer::new(DelegateTransferInput {
             ring: self.ring,
             delegate: self.delegate,
             payer: self.payer,
-            source: self.source,
-            source_nullifier_key: self.source_nullifier_key,
-            inputs: utxos,
-            outputs: self
-                .payments
-                .iter()
-                .map(|payment| DelegateOutput {
-                    recipient: payment.recipient,
-                    asset: self.mint,
-                    amount: payment.amount,
-                })
-                .collect(),
+            source: sender.address,
+            source_nullifier_key: sender.nullifier_key,
+            inputs,
+            outputs,
         })
         .with_assets(self.assets)
-        .with_tx_viewing_key(self.tx_viewing_key.clone())
+        .with_tx_viewing_key(self.tx_viewing_key.clone());
+        Ok(co_sources
+            .into_iter()
+            .fold(transfer, DelegateTransfer::with_co_source))
     }
+}
+
+/// The notes funding one mint and what returns from the last of them.
+struct SpentMint {
+    mint: Address,
+    utxos: Vec<WalletUtxo>,
+    change: u64,
 }
 
 /// An anonymous ring keeps the victim and recipients hidden.
@@ -255,11 +414,14 @@ impl Delegated<'_> {
         if self.source_key.pubkey()? != self.source.nullifier_pubkey {
             return Err(RingError::NullifierKeyMismatch);
         }
-        if let Some(index) = self
-            .inputs
+        let named = self
+            .co_sources
             .iter()
-            .position(|input| input.utxo.owner != self.source.signing_pubkey)
-        {
+            .map(|co_source| Ok(PublicKey::from_ed25519(co_source.owner.as_array())))
+            .collect::<Result<Vec<_>, RingError>>()?;
+        if let Some(index) = self.inputs.iter().position(|input| {
+            input.utxo.owner != self.source.signing_pubkey && !named.contains(&input.utxo.owner)
+        }) {
             return Err(RingError::MixedOwners { index });
         }
         let assets = self.assets.ok_or(RingError::MissingAssetRegistry)?;
@@ -347,7 +509,11 @@ impl Delegated<'_> {
             rail,
             sender: self.source,
             authority: TransferAuthority {
-                co_owners: Vec::new(),
+                co_owners: self
+                    .co_sources
+                    .iter()
+                    .map(CoOwnerKey::of)
+                    .collect::<Result<_, RingError>>()?,
                 owner: Some(self.source_key.clone()),
             },
             owner_signers: Vec::new(),

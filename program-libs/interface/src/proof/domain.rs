@@ -44,17 +44,14 @@ pub const LIST_TAG: u32 = 0x4352_5054;
 
 /// `"CRTX"`
 pub const TRANSFER_STATEMENT: u32 = 0x4352_5458;
-/// Bound nonzero and last into every transfer statement, a layout change raises it.
-pub const TRANSFER_STATEMENT_VERSION: u8 = 4;
 
-pub const AUDIT_STREAM_LABEL: &[u8; 10] = b"CRING/adt1";
-pub const DELIVERED_BODY_LABEL: &[u8; 10] = b"CRING/bdy1";
-pub const RECIPIENT_BODY_LABEL: &[u8; 10] = b"CRING/rcp1";
-pub const REPLY_LABEL: &[u8; 10] = b"CRING/rpl1";
-pub const SENDER_BUNDLE_LABEL: &[u8; 10] = b"CRING/snd1";
-pub const REGISTER_KEY_LABEL: &[u8; 10] = b"CRING/nfk1";
-pub const DEPOSIT_AUDIT_LABEL: &[u8; 10] = b"CRING/dep1";
-pub const MERGE_RECORD_LABEL: &[u8; 10] = b"CRING/mrg2";
+pub const AUDIT_STREAM_LABEL: &[u8; 9] = b"CRING/adt";
+pub const RECIPIENT_BODY_LABEL: &[u8; 9] = b"CRING/rcp";
+pub const REPLY_LABEL: &[u8; 9] = b"CRING/rpl";
+pub const SENDER_BUNDLE_LABEL: &[u8; 9] = b"CRING/snd";
+pub const REGISTER_KEY_LABEL: &[u8; 9] = b"CRING/nfk";
+pub const DEPOSIT_AUDIT_LABEL: &[u8; 9] = b"CRING/dep";
+pub const MERGE_RECORD_LABEL: &[u8; 9] = b"CRING/mrg";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())

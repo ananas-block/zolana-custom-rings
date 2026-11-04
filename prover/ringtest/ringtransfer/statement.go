@@ -14,7 +14,7 @@ import (
 type Statement struct {
 	Head                                           ringaudit.AuditHead
 	RailBits                                       [3]bool
-	ApprovalMask                                   *big.Int
+	ApprovalMask, ApprovalTotals                   *big.Int
 	NoSpend                                        bool
 	Outputs                                        []ringaudit.StatementOutput
 	InputCount                                     int
@@ -42,7 +42,7 @@ func railValues(t testing.TB, c *transfer.TransferCircuit, a Assembled) Statemen
 func (s Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	elements := append(s.Head.ElementsUnder(t, shared.TransferStatementDomain),
-		bitField(s.RailBits[0]), bitField(s.RailBits[1]), bitField(s.RailBits[2]), s.ApprovalMask, bitField(s.NoSpend),
+		bitField(s.RailBits[0]), bitField(s.RailBits[1]), bitField(s.RailBits[2]), s.ApprovalMask, s.ApprovalTotals, bitField(s.NoSpend),
 		big.NewInt(int64(ringaudit.OutputCount(s.Outputs))),
 		ringaudit.OutputChain(t, s.Outputs), ringaudit.RecordChain(t, s.Outputs), ringaudit.TailChain(t, s.Outputs),
 		big.NewInt(int64(s.InputCount)), s.PrivateTxHash,
@@ -53,7 +53,7 @@ func (s Statement) Elements(t testing.TB) []*big.Int {
 		elements = append(elements, s.PublicAssets[k], s.PublicNets[k], s.PublicGross[k])
 	}
 	elements = append(elements, s.WithdrawalHash)
-	return append(elements, big.NewInt(int64(len(elements)+2)), big.NewInt(shared.TransferStatementVersion))
+	return append(elements, big.NewInt(int64(len(elements)+1)))
 }
 
 func bitField(set bool) *big.Int {

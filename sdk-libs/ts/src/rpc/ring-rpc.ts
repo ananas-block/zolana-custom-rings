@@ -1,3 +1,4 @@
+import { ViewingKey } from "@heliuslabs/zolana/keypair";
 import { checkedApiKey, serviceUrl } from "@heliuslabs/zolana/internal";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
@@ -65,6 +66,7 @@ import {
   decodeSubmitRecordUpdate,
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
+  encodeGetListSaltRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
@@ -83,6 +85,7 @@ import {
   type CreateRecordsRegistryRequest,
   type GetPendingEnrolmentsRequest,
   type PendingEnrolmentsPage,
+  type GetListSaltRequest,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type ReaderGrantAction,
@@ -122,15 +125,16 @@ export interface WebAuthnSignature {
   readonly clientDataJSON: Uint8Array;
 }
 
-const READ_DOMAIN = "zolana/ring-rpc-read/v2";
-const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
-const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
-const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
-const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
-const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
-const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
-const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status/v1";
-const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage/v1";
+const READ_DOMAIN = "zolana/ring-rpc-read";
+const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key";
+const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request";
+const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos";
+const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer";
+const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt";
+const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment";
+const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant";
+const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status";
+const SPEND_COVERAGE_DOMAIN = "zolana/ring-rpc-spend-coverage";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -320,7 +324,7 @@ export function authorityTransferAttestation(
       AUTHORITY_TRANSFER_DOMAIN,
       ...targetLines(input.target),
       `delegate: ${input.delegate}`,
-      `source: ${shieldedAddressText(input.transfer.source)}`,
+      ...input.transfer.sources.map((source) => `source: ${shieldedAddressText(source)}`),
       `mint: ${input.transfer.mint}`,
       ...input.transfer.payments.map(
         (payment) => `payment: ${shieldedAddressText(payment.recipient)} ${payment.amount}`,
@@ -336,6 +340,7 @@ export class RingAuthorityTransferRequest {
   readonly #target: RingReadTarget;
   readonly #transfer: AuthorityTransfer;
   #timestamp?: bigint;
+  #txViewingKey?: Bytes32;
 
   private constructor(target: RingReadTarget, transfer: AuthorityTransfer) {
     this.#target = checkedReadTarget(target);
@@ -352,6 +357,12 @@ export class RingAuthorityTransferRequest {
   /** Unix seconds, the RPC rejects a clock more than its skew away. */
   at(timestamp: bigint): this {
     this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  /** A fresh key when absent. */
+  withTxViewingKey(txViewingKey: Bytes32): this {
+    this.#txViewingKey = txViewingKey;
     return this;
   }
 
@@ -372,6 +383,81 @@ export class RingAuthorityTransferRequest {
       ring: this.#target.ringProgramId,
       delegate: delegate.address,
       transfer: this.#transfer,
+      txViewingKey: this.#txViewingKey ?? freshTxViewingKey(),
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
+}
+
+function freshTxViewingKey(): Bytes32 {
+  const key = ViewingKey.generate();
+  const secret = key.secretBytes();
+  key.destroy();
+  return secret;
+}
+
+/** Mirrors Rust `ListSaltAttestation::message`. */
+export function listSaltAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    writer: Address;
+    owner: Address;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      LIST_SALT_DOMAIN,
+      ...targetLines(input.target),
+      `writer: ${input.writer}`,
+      `owner: ${input.owner}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `ListSaltRequest`, a writer of the ring's salted lists signs it. */
+export class RingListSaltRequest {
+  readonly #target: RingReadTarget;
+  readonly #owner: Address;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, owner: Address) {
+    this.#target = checkedReadTarget(target);
+    this.#owner = owner;
+  }
+
+  static forOwner(target: RingReadTarget, owner: Address): RingListSaltRequest {
+    return new RingListSaltRequest(target, owner);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(writer: MessagePartialSigner): Promise<GetListSaltRequest> {
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      writer,
+      listSaltAttestation({
+        target: this.#target,
+        writer: writer.address,
+        owner: this.#owner,
+        timestamp,
+        nonce,
+      }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      writer: writer.address,
+      owner: this.#owner,
       timestamp,
       nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
       signature: base58Decoder.decode(signature) as Signature,
@@ -1666,6 +1752,20 @@ export class RingRpc {
     );
   }
 
+  /** `undefined` while the owner has no tracking row. */
+  async getListSalt(
+    request: GetListSaltRequest,
+    context?: RequestContext,
+  ): Promise<Bytes32 | undefined> {
+    const wire = exactRecord(
+      await this.#call(RingRpcMethod.getListSalt, encodeGetListSaltRequest(request), context),
+      LIST_SALT_FIELDS,
+      NO_FIELDS,
+      "result",
+    );
+    return absent(wire["listSalt"]) ? undefined : hash(wire["listSalt"], "result.listSalt");
+  }
+
   async prepareAuthorityTransfer(
     request: PrepareAuthorityTransferRequest,
     context?: RequestContext,
@@ -2412,6 +2512,8 @@ const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"])
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "real"]);
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
+const LIST_SALT_FIELDS = new Set(["listSalt"]);
+const NO_FIELDS = new Set<string>();
 const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "cursor"]);
 const AUDITED_MERGE_REQUIRED_FIELDS = new Set([
   "slot",

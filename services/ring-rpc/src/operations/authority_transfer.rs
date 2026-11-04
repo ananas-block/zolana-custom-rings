@@ -1,5 +1,6 @@
 use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
+use solana_address::Address;
 use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::NullifierKey;
@@ -15,7 +16,7 @@ use crate::{
     authorize::WalletCheck,
     error::RingRpcError,
     hub::Hub,
-    relay_prover::DelegateSeal,
+    relay_prover::{DelegateSeal, SealedSource},
     replay::ReplayCheck,
     upstream::TransactionSource,
     utxos::{SpendableNotes, WalletStatusQuery},
@@ -232,47 +233,60 @@ impl<S: TransactionSource> Hub<S> {
                 })
                 .await?;
         }
-        // 3. The escrowed secret opens to the source's nullifier key and stays in memory.
-        let source = transfer.source.0;
-        let owner_key = source
-            .solana_address()
-            .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
-            .to_bytes();
-        // A zero key note moves under the public secret, the delegate proves no owner signature.
-        let nullifier_key = match source.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY {
-            true => NullifierKey::from_secret([0; 31]),
-            false => service
-                .tracked_nullifier_key(&owner_key)?
-                .ok_or(AuthorityTransferError::SourceUnescrowed)?,
-        };
-        if nullifier_key.pubkey()? != source.nullifier_pubkey {
-            return Err(AuthorityTransferError::SourceKey.into());
-        }
-        // 4. Only notes the service opened for the source under that key and mint fund the move.
+        // 3. Each escrowed secret opens to its source's key and stays in memory, the source's notes follow.
         let assets = shared.due_assets().await;
-        let mint = transfer.mint.0;
-        let notes = shared.store(ring).spendable(SpendableNotes {
-            ring,
-            owner_key,
-            mint: assets.registry().mint(&mint)?,
-            nullifier_key: &nullifier_key,
-        })?;
+        let mut mints: Vec<Address> = Vec::new();
+        for payment in &transfer.payments {
+            if !mints.contains(&payment.mint.0) {
+                mints.push(payment.mint.0);
+            }
+        }
+        let mut sources = Vec::with_capacity(transfer.sources.len());
+        for source in &transfer.sources {
+            let source = source.0;
+            let owner_key = source
+                .solana_address()
+                .map_err(|_| AuthorityTransferError::SourceUnescrowed)?
+                .to_bytes();
+            // A zero key note moves under the public secret, the delegate proves no owner signature.
+            let nullifier_key = match source.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY {
+                true => NullifierKey::from_secret([0; 31]),
+                false => service
+                    .tracked_nullifier_key(&owner_key)?
+                    .ok_or(AuthorityTransferError::SourceUnescrowed)?,
+            };
+            if nullifier_key.pubkey()? != source.nullifier_pubkey {
+                return Err(AuthorityTransferError::SourceKey.into());
+            }
+            let mut notes = Vec::new();
+            for mint in &mints {
+                notes.extend(shared.store(ring).spendable(SpendableNotes {
+                    ring,
+                    owner_key,
+                    mint: assets.registry().mint(mint)?,
+                    nullifier_key: &nullifier_key,
+                })?);
+            }
+            sources.push(SealedSource {
+                address: source,
+                nullifier_key,
+                notes,
+            });
+        }
         relay
             .prepare_delegated(
                 relay_id,
                 DelegateSeal {
                     ring,
                     delegate,
-                    source,
-                    nullifier_key: &nullifier_key,
+                    sources: &sources,
                     tx_viewing_key,
-                    notes: &notes,
-                    mint,
                     payments: transfer
                         .payments
                         .iter()
                         .map(|payment| DelegatePayment {
                             recipient: payment.recipient.0,
+                            mint: payment.mint.0,
                             amount: payment.amount,
                         })
                         .collect(),
@@ -288,13 +302,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
     use solana_message::VersionedMessage;
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
-    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
+    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
@@ -321,7 +334,8 @@ mod tests {
 
     struct Sealed {
         delegate: Address,
-        secret: [u8; 31],
+        /// One per source, in the request's order.
+        secrets: Vec<[u8; 31]>,
         nullifiers: Vec<[u8; 32]>,
     }
 
@@ -365,8 +379,16 @@ mod tests {
         ) -> Result<RelayProofInputs, RingRpcError> {
             self.sealed.lock().expect("sealed").push(Sealed {
                 delegate: seal.delegate,
-                secret: *seal.nullifier_key.secret(),
-                nullifiers: seal.notes.iter().map(|note| note.nullifier).collect(),
+                secrets: seal
+                    .sources
+                    .iter()
+                    .map(|source| *source.nullifier_key.secret())
+                    .collect(),
+                nullifiers: seal
+                    .sources
+                    .iter()
+                    .flat_map(|source| source.notes.iter().map(|note| note.nullifier))
+                    .collect(),
             });
             let tx_viewing_key = seal.tx_viewing_key;
             Ok(RelayProofInputs {
@@ -375,8 +397,10 @@ mod tests {
                     plan: None,
                 },
                 ring_program_id: seal.ring,
-                sender: seal.source,
-                nullifier_key: seal.nullifier_key.clone(),
+                sender: seal.sources[0].address,
+                nullifier_key: seal.sources[0].nullifier_key.clone(),
+                co_owners: Vec::new(),
+                approval_blinder: None,
                 external_data: ExternalData::new(
                     *tx_viewing_key.pubkey().as_bytes(),
                     [0; 16],
@@ -391,6 +415,7 @@ mod tests {
                 blinding_seed: [0; 32],
                 output_tree_id: 1,
                 list_salts: Vec::new(),
+                wide_owners: false,
             })
         }
     }
@@ -419,6 +444,14 @@ mod tests {
         signer: &Keypair,
         source: ShieldedAddress,
     ) -> PrepareAuthorityTransferRequest {
+        request_from(fixture, signer, &[source])
+    }
+
+    fn request_from(
+        fixture: &Fixture,
+        signer: &Keypair,
+        sources: &[ShieldedAddress],
+    ) -> PrepareAuthorityTransferRequest {
         let recipient = address(
             &Keypair::new_from_array([13; 32]),
             &NullifierKey::from_secret([13; 31]),
@@ -431,17 +464,17 @@ mod tests {
             },
             delegate: signer.pubkey(),
             transfer: AuthorityTransfer {
-                source: source.into(),
-                mint: MINT.into(),
+                sources: sources.iter().map(|source| (*source).into()).collect(),
                 payments: vec![AuthorityPayment {
                     recipient: recipient.into(),
+                    mint: MINT.into(),
                     amount: 15,
                 }],
             },
         });
         request
             .at(unix_now().expect("clock"))
-            .sign(signer)
+            .sign(signer, &ViewingKey::new())
             .expect("signed request")
     }
 
@@ -467,14 +500,45 @@ mod tests {
             .try_into()
             .unwrap_or_else(|_| panic!("one seal"));
         assert_eq!(
-            (sealed.delegate, sealed.secret),
-            (delegate.pubkey(), *escrowed.secret())
+            (sealed.delegate, sealed.secrets),
+            (delegate.pubkey(), vec![*escrowed.secret()])
         );
         assert_eq!(sealed.nullifiers.len(), 2);
         assert_eq!(
             *prover.proven.lock().expect("proven"),
             [(delegate.pubkey(), *escrowed.secret())]
         );
+    }
+
+    /// The delegate's own wallet and another member's stand alike, each under its escrowed key.
+    #[tokio::test]
+    async fn a_delegate_request_names_its_own_and_another_members_notes() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let (fixture, prover) = served(delegate.pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let keys = fixture.escrow_wallets(&[(&delegate, 1), (&wallet, 2)]);
+        let (own, other) = (&keys[0], &keys[1]);
+        let sources = [address(&delegate, own), address(&wallet, other)];
+
+        fixture
+            .hub
+            .prepare_authority_transfer(&request_from(&fixture, &delegate, &sources))
+            .await
+            .expect("prepared transfer");
+
+        let [sealed] = std::mem::take(&mut *prover.sealed.lock().expect("sealed"))
+            .try_into()
+            .unwrap_or_else(|_| panic!("one seal"));
+        assert_eq!(sealed.secrets, [*own.secret(), *other.secret()]);
+        assert_eq!(sealed.nullifiers.len(), 3);
+
+        let unescrowed = Keypair::new_from_array([12; 32]);
+        let missing = address(&unescrowed, &NullifierKey::from_secret([12; 31]));
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&request_from(&fixture, &delegate, &[missing]))
+            .await
+            .is_err());
     }
 
     /// A retry of the signed request passes its own nonce, proves nothing and resumes the upload.

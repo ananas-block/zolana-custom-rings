@@ -231,6 +231,49 @@ func TestZeroKeyInputs(t *testing.T) {
 	})
 }
 
+// No wire names the delegate's identity, its own note and another's solve alike.
+func TestDelegateInputOwners(t *testing.T) {
+	ring := ringID(t)
+	owner := big.NewInt(0x0a11ce)
+	other := big.NewInt(0x0b0b)
+	key := big.NewInt(0x77)
+	keyed := func(t testing.TB, holder *big.Int, blinding int64) ringaudit.Input {
+		t.Helper()
+		return ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, holder, key, ring, 100, blinding)}
+	}
+	rails := map[string]func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit{
+		"confidential": func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit {
+			w := onRail(confidential2, ringtransfer.Delegate)
+			w.Inputs = inputs
+			return w.Build(t).Circuit
+		},
+		"anonymous": func(t *testing.T, inputs []ringaudit.Input) frontend.Circuit {
+			w := onAnonymous(anonymous2, ringtransfer.AnonymousDelegate)
+			w.Inputs = inputs
+			return w.Build(t).Circuit
+		},
+	}
+	for name, build := range rails {
+		t.Run(name, func(t *testing.T) {
+			t.Run("one owner", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51)}))
+			})
+			t.Run("two owners", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51), keyed(t, other, 52)}))
+			})
+			t.Run("a keyed owner beside a zero key note", func(t *testing.T) {
+				requireSolved(t, build(t, []ringaudit.Input{keyed(t, owner, 51), zeroKeyNote(t, other, ring, 100, 52)}))
+			})
+		})
+	}
+	t.Run("a note off its tracking key", func(t *testing.T) {
+		w := onRail(confidential2, ringtransfer.Delegate)
+		w.Inputs = []ringaudit.Input{keyed(t, owner, 51), keyed(t, other, 52)}
+		w.Enrolled = map[string]*big.Int{other.String(): big.NewInt(0x78)}
+		refused(t, w.Build(t).Circuit, "transfer.OwnerRows.AssertInputOwners")
+	})
+}
+
 // The authority rail reads no policy and keeps every auditor check.
 func TestDelegateBypass(t *testing.T) {
 	frozen := func(w ringtransfer.World) ringtransfer.World {
@@ -645,6 +688,25 @@ func Test49InputsOnTheWideKey(t *testing.T) {
 	refused(t, built.Circuit, "transfer.OpenInputs")
 }
 
+// A count below the live notes leaves one past it.
+func Test24DefaultNotesOnTheWideEntryKey(t *testing.T) {
+	shape := transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true}
+	w := ringtransfer.Signed(shape)
+	sender, key := ringtransfer.Sender(t), ringtransfer.SenderNullifierPk(t)
+	w.Inputs = make([]ringaudit.Input, 24)
+	for i := range w.Inputs {
+		amount := uint64(4)
+		if i == 23 {
+			amount = 8
+		}
+		w.Inputs[i] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, key, big.NewInt(0), amount, int64(51+i)), OwnerKey: ringtransfer.SenderKey(), Mint: ringaudit.FixtureMint}
+	}
+	built := w.Build(t)
+	requireSolved(t, built.Circuit)
+	built.Circuit.InputCount = 23
+	refused(t, built.Circuit, "transfer.OpenInputs")
+}
+
 // A statement cell moves the public input alone.
 func TestStatementBindsEveryElement(t *testing.T) {
 	if testing.Short() {
@@ -677,4 +739,46 @@ func TestNarrowKeysFitTheWideKey(t *testing.T) {
 			t.Errorf("%s does not fit the wide key %s", shape, wide)
 		}
 	}
+}
+
+// The digest binds the proved totals on the key, with one owner a peak and a total of the same debit.
+func TestApprovalTotalsReachTheStatement(t *testing.T) {
+	w := onRail(confidential2, ringtransfer.Signer)
+	w.Policy = ringtransfer.Policy{OwnRegistry: true}
+	layout := func(b ringtransfer.Built) []*big.Int {
+		held, returned := new(big.Int), new(big.Int)
+		for _, input := range b.Circuit.Inputs {
+			if ringtest.AsBigInt(input.Domain).Int64() == transaction.UtxoDomain {
+				held.Add(held, ringtest.AsBigInt(input.Amount))
+			}
+		}
+		fields := []*big.Int{}
+		for _, slot := range b.Circuit.Outputs {
+			if ringtest.AsBigInt(slot.Output.Domain).Int64() == transaction.UtxoDomain && ringtest.AsBigInt(slot.Output.OwnerPkHash).Cmp(ringtest.AsBigInt(b.Circuit.Rows[0])) == 0 {
+				returned.Add(returned, ringtest.AsBigInt(slot.Output.Amount))
+			}
+		}
+		debit := new(big.Int).Sub(held, returned)
+		for _, slot := range b.Circuit.Outputs {
+			fields = append(fields, ringtest.AsBigInt(slot.Output.Asset), debit, debit)
+		}
+		for range transaction.NPublicSlots {
+			fields = append(fields, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0))
+		}
+		return fields
+	}
+	disclose := func(b ringtransfer.Built, fields []*big.Int) {
+		blinder := big.NewInt(0x51)
+		b.Circuit.ApprovalBlinder = blinder
+		b.Circuit.ApprovalTotals = spptest.MustHashChain4(t, append([]*big.Int{big.NewInt(shared.ApprovalTotalsDomain), blinder}, fields...))
+		b.Rebind(t)
+	}
+	honest := w.Build(t)
+	disclose(honest, layout(honest))
+	requireSolved(t, honest.Circuit)
+	forged := w.Build(t)
+	fields := layout(forged)
+	fields[1] = new(big.Int).Sub(fields[1], big.NewInt(1))
+	disclose(forged, fields)
+	refused(t, forged.Circuit, "policy.Screening.AssertApprovalTotals")
 }

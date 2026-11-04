@@ -1,3 +1,4 @@
+import { equalBytes } from "@heliuslabs/zolana/internal";
 import type { Address } from "@heliuslabs/zolana/interface";
 import { address, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
@@ -123,6 +124,12 @@ function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
         context: { slot: 20n, blockTime: 0n },
         data: transactions
           .filter((tx) => tx.slot > (request.filters?.slot?.gt ?? 0n))
+          // An indexer serves only a row publishing a requested tag.
+          .filter((tx) =>
+            [...tx.outputSlots, ...tx.messages].some(({ viewTag }) =>
+              request.tags.some((tag) => equalBytes(tag, viewTag)),
+            ),
+          )
           .map((tx) => ({ slot: tx.slot, signature: tx.txSignature, events: [tx] })),
         paginationToken: null,
       }),
@@ -133,7 +140,7 @@ function syncClient(transactions: readonly IndexedShieldedTransaction[]) {
   };
 }
 
-/** Scheme 13 under the sender's agreement with the recipient key. */
+/** Ring body under the sender's agreement with the recipient key. */
 function ringBody(
   recipient: ShieldedKeypair,
   hash: Bytes32 = note(recipient).hash,
@@ -162,7 +169,7 @@ function ringBody(
   );
 }
 
-describe("scheme 13 bodies", () => {
+describe("ring bodies", () => {
   it("opens a note under the ring key with its mint from the body", async () => {
     const recipient = ShieldedKeypair.generate();
     const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
@@ -192,7 +199,7 @@ describe("scheme 13 bodies", () => {
     expect(await opened(keys, [ringBody(recipient, other)])).toEqual({ utxos: [], pending: 0 });
   });
 
-  it("refuses the sync when the holder fails on a scheme 13 slot", async () => {
+  it("refuses the sync when the holder fails on a ring body slot", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);
     const failure = new Error("holder offline");
@@ -202,6 +209,14 @@ describe("scheme 13 bodies", () => {
 });
 
 describe("syncRingWallet", () => {
+  it("reads a confidential payment under the slot tag it publishes", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const wallet = new Wallet({ identity: recipient.shieldedAddress() });
+    const client = syncClient([ringBody(recipient)]);
+    await syncRingWallet({ wallet, keys: LocalRingKeys.fromKeypair(recipient), client });
+    expect(wallet.utxos().map((entry) => entry.utxo.amount)).toEqual([AMOUNT]);
+  });
+
   it("counts ring notes and reads stable tags once per sync", async () => {
     const recipient = ShieldedKeypair.generate();
     const keys = LocalRingKeys.fromKeypair(recipient);

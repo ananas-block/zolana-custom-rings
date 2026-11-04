@@ -170,10 +170,10 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
     relayed.notes(member, 1).deposit()?;
     let ring_rpc = relayed.serve()?;
     let transfer = AuthorityTransfer {
-        source: member_address.into(),
-        mint: SOL_MINT.into(),
+        sources: vec![member_address.into()],
         payments: vec![AuthorityPayment {
             recipient: member_address.into(),
+            mint: SOL_MINT.into(),
             amount: MOVED,
         }],
     };
@@ -188,7 +188,7 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
             delegate: delegate.pubkey(),
             transfer: transfer.clone(),
         })
-        .sign(&delegate)?;
+        .sign(&delegate, &spr_keypair::ViewingKey::new())?;
         let prepared = PreparedAuthorityTransfer::new(request, &quote, &config)?;
         Ok(match env.run(prepared.send(&ring_rpc.relay)) {
             Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),

@@ -63,6 +63,18 @@
     [
       8,
       4
+    ],
+    [
+      12,
+      2
+    ],
+    [
+      16,
+      2
+    ],
+    [
+      24,
+      2
     ]
   ],
   "anonymous_ring": [
@@ -448,6 +460,14 @@
       "owners": 2,
       "wide": true,
       "withdrawals": 4
+    },
+    {
+      "entry": true,
+      "inputs": 24,
+      "outputs": 2,
+      "owners": 12,
+      "wide": true,
+      "withdrawals": 32
     }
   ]
 }

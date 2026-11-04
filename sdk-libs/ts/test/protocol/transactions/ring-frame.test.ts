@@ -6,7 +6,6 @@ import { hashChain4 } from "@heliuslabs/zolana/internal";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
-import { TRANSFER_STATEMENT_VERSION } from "../../../src/crypto/derivation/ring-domain.js";
 import { RingError } from "../../../src/protocol/error.js";
 import {
   ringTransferStatement,
@@ -251,7 +250,7 @@ describe("the ring frame", () => {
     expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);
   });
 
-  it("keeps a bodiless slot out of SPP's data and frames a recipient under scheme 13", () => {
+  it("keeps a bodiless slot out of SPP's data and frames a recipient under ring body", () => {
     const frame = ringFrame({ rail: "anonymous", inputs: 1, outputs: 2 });
     const reply = new Uint8Array(97).fill(9);
     const withReply: Frame = { ...frame, replies: { length: 97, region: reply } };
@@ -296,9 +295,9 @@ describe("the ring frame", () => {
 });
 
 describe("the transfer statement", () => {
-  const STATEMENT_LENGTH = 49;
+  const STATEMENT_LENGTH = 48;
 
-  it("orders the confidential elements and closes on the length and version", () => {
+  it("orders the confidential elements and closes on the length", () => {
     const frame: Frame = {
       ...ringFrame({ rail: "confidential", inputs: 2, outputs: 2 }),
       approval: ApprovalMask.outflow | ApprovalMask.withdrawal,
@@ -313,9 +312,7 @@ describe("the transfer statement", () => {
     expect(bigint(elements[17])).toBe(2n);
     expect(bigint(elements[21])).toBe(2n);
     expect(bigint(elements[31])).toBe(1n);
-    expect(bigint(elements.at(-2))).toBe(BigInt(elements.length));
-    expect(bigint(elements.at(-1))).toBe(TRANSFER_STATEMENT_VERSION);
-    expect(TRANSFER_STATEMENT_VERSION).toBe(4n);
+    expect(bigint(elements.at(-1))).toBe(BigInt(elements.length));
   });
 
   it("zero fills the output chains to the capacity and leaves the tail chain zero off has_data", () => {
@@ -364,7 +361,7 @@ describe("the transfer statement", () => {
   });
 });
 
-describe("scheme 13", () => {
+describe("ring body", () => {
   const slot = ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }).outputs[1];
 
   it("frames body then reply and reads them back", () => {

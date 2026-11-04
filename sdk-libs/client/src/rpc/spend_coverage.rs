@@ -8,7 +8,7 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 use super::{base64, Attestation, ReadTarget, RequestBuildError, SignedRequest};
 
 pub const GET_SPEND_COVERAGE: &str = "getSpendCoverage";
-const SPEND_COVERAGE_DOMAIN: &str = "zolana/ring-rpc-spend-coverage/v1";
+const SPEND_COVERAGE_DOMAIN: &str = "zolana/ring-rpc-spend-coverage";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

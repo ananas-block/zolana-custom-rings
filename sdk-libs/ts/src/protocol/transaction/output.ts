@@ -4,9 +4,9 @@ import { TransactionError } from "@heliuslabs/zolana/transaction";
 /** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
 export const RingScheme = Object.freeze({
   confidential: 3,
-  ringSenderBundle: 12,
+  ringSenderBundle: 9,
   /** `u16le(body_len) ‖ body ‖ reply`, one form on every rail. */
-  ringBody: 13,
+  ringBody: 10,
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
@@ -40,7 +40,7 @@ export function encodeRingOutput(scheme: RingScheme, payload: Uint8Array): Uint8
   return out;
 }
 
-/** Scheme 13, Rust `encode_ring_body_output`. */
+/** Ring body, Rust `encode_ring_body_output`. */
 export function encodeRingBodyOutput(body: Uint8Array, reply: Uint8Array): Uint8Array {
   if (body.length > 0xffff)
     throw new TransactionError("TRANSACTION_INVALID_LENGTH", {
@@ -72,7 +72,7 @@ export function readRingOutput(bytes: Uint8Array): RingOutputFrame {
   return Object.freeze({ encoding, scheme: bytes[5] ?? 0, body: bytes.slice(6) });
 }
 
-/** The body and reply of a scheme 13 output, `undefined` below the plain body's length, Rust `ring_body_output`. */
+/** The body and reply of a ring body output, `undefined` below the plain body's length, Rust `ring_body_output`. */
 export function ringBodyOutput(
   data: Uint8Array,
 ): Readonly<{ body: Uint8Array; reply: Uint8Array }> | undefined {

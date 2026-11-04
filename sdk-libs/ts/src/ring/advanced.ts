@@ -229,7 +229,6 @@ export {
   LIST_IDS,
   ListId,
   POLICY_LISTS,
-  POLICY_TABLE_VERSION,
   admitTransfer,
   buildRuleTable,
   checkedListId,

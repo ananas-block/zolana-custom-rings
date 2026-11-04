@@ -2,7 +2,6 @@
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
-use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
@@ -12,8 +11,8 @@ use zolana_ring_transaction::RingOutputRail;
 
 use super::{
     anonymous::CoOwner, canonical_shape, pad_under_rail, public_owners::check_zero_key_inputs,
-    sealed, shape_keyed, transaction_key, CoOwnerKey, DeliveredRail, Rail, RailKind, RingSender,
-    RingTransfer, Spend, Staged, TransferAuthority,
+    sealed, shape_keyed, transaction_key, ApprovalDisclosure, CoOwnerKey, DeliveredRail, Rail,
+    RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -67,6 +66,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 co_owners: Vec::new(),
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
     }
 
@@ -224,12 +224,7 @@ impl Owner<'_> {
             co_owners: self
                 .co_owners
                 .iter()
-                .map(|co_owner| {
-                    Ok(CoOwnerKey {
-                        owner_pk_hash: solana_owner_identity(co_owner.owner.as_array())?,
-                        key: co_owner.nullifier_key.clone(),
-                    })
-                })
+                .map(CoOwnerKey::of)
                 .collect::<Result<_, RingError>>()?,
         })
     }

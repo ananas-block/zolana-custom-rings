@@ -13,7 +13,6 @@ export {
 export {
   RING_ADDRESS_CHECKSUM_DOMAIN,
   RING_ADDRESS_PAYLOAD_LENGTH,
-  RING_ADDRESS_VERSION,
   RING_PAYMENT_SCHEME,
   RingAddress,
   RingPaymentRequest,

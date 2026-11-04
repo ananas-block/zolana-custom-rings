@@ -1,10 +1,11 @@
 use custom_ring_interface::{
     CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
-    OpeningRecord, PlainGroth16Proof, RecordKind, DEPOSIT_STATEMENT_VERSION,
+    OpeningRecord, PlainGroth16Proof, RecordKind, MAX_RING_DEPOSIT_AUDIT_SLOTS,
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
 };
 use serde::Deserialize;
 use spr_hasher::{
+    hash_chain::create_hash_chain_4_from_slice,
     primitives::{hash_bytes, solana_owner_identity},
     Hasher, HasherError, Poseidon,
 };
@@ -285,22 +286,42 @@ fn solved_go_deposits_reach_the_program_statement_and_the_reader() {
     }
 }
 
+/// HashChain4 pads zeros, every count hashes one length.
 #[test]
-fn the_statement_closes_on_its_version() {
-    let input = DepositPublicInput {
-        context_hash: &[5; 32],
-        anonymous: false,
-        owner_utxo_hashes: &[[1; 32]],
-        ciphertexts: &[[3; CT]],
-        assets: &[asset(10, 11)],
-        auditor_pk: &[6; 33],
-        eph_pk: &[7; 33],
-        tracking_root: &[14; 32],
-        registry: None,
+fn a_zero_tail_stays_injective_at_the_one_length() {
+    let owners = [[1; 32]; MAX_RING_DEPOSIT_AUDIT_SLOTS];
+    let ciphertexts = [[3; CT]; MAX_RING_DEPOSIT_AUDIT_SLOTS];
+    let assets: [DepositedAsset; MAX_RING_DEPOSIT_AUDIT_SLOTS] =
+        core::array::from_fn(|_| asset(10, 11));
+    let chain = |count: usize| {
+        DepositPublicInput {
+            context_hash: &[5; 32],
+            anonymous: false,
+            owner_utxo_hashes: &owners[..count],
+            ciphertexts: &ciphertexts[..count],
+            assets: &assets[..count],
+            auditor_pk: &[6; 33],
+            eph_pk: &[7; 33],
+            tracking_root: &[14; 32],
+            registry: None,
+        }
+        .elements()
+        .unwrap()
     };
-    let elements = input.elements().unwrap();
-    assert_eq!(elements.last().unwrap()[31], DEPOSIT_STATEMENT_VERSION);
-    assert_eq!(CT, 144);
+    let hash = |elements: &[[u8; 32]]| create_hash_chain_4_from_slice(elements).unwrap();
+    let one = chain(1);
+    assert_eq!(one.last(), Some(&[0; 32]));
+    let reference = hash(&one);
+    let padded = |zeros: usize| hash(&[one.to_vec(), vec![[0; 32]; zeros]].concat());
+    assert_eq!((padded(1), padded(2)), (reference, reference));
+    assert_ne!(padded(3), reference);
+    let mut moved = one;
+    moved.last_mut().unwrap()[31] = 1;
+    assert_ne!(hash(&moved), reference);
+    let hashes: std::collections::BTreeSet<_> = (1..=MAX_RING_DEPOSIT_AUDIT_SLOTS)
+        .map(|count| hash(&chain(count)))
+        .collect();
+    assert_eq!(hashes.len(), MAX_RING_DEPOSIT_AUDIT_SLOTS);
 }
 
 #[test]

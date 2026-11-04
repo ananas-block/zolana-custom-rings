@@ -761,8 +761,10 @@ fn unknown_tags_are_refused() {
         10,
         12,
         18,
+        21,
         22,
         23,
+        24,
         26,
         28,
         29,
@@ -953,5 +955,34 @@ fn a_ring_with_an_unknown_mode_reads_as_invalid() {
     refused(
         ring.role_send(RingRole::Policy, rules),
         CustomRingError::InvalidRingPolicy,
+    );
+}
+
+#[test]
+fn an_spp_tag_with_its_forwarded_body_refuses_at_the_ring() {
+    use spr_interface::instruction::tag::{RING_AUTHORITY_TRANSACT, RING_MERGE_V2};
+
+    let mut ring = Ring::new(Setup::Policy);
+    let admin = ring.holder(RingRole::Admin);
+    let delegate = Keypair::new();
+    let mut merge = set_delegate(&admin.pubkey(), &delegate.pubkey());
+    merge.data = vec![RING_MERGE_V2, 1, 2, 3];
+    refused(
+        ring.send(merge, &[&admin, &delegate]),
+        CustomRingError::InvalidInstructionData,
+    );
+    let cosigner = Address::new_from_array([1; 32]);
+    set_co_signer(&mut ring, &cosigner, 4);
+    let authority = ring.holder(RingRole::CosignAdmin);
+    let mut transact = ClearCoSignerIx {
+        authority: authority.pubkey(),
+        signer: cosigner,
+        rent_recipient: authority.pubkey(),
+    }
+    .instruction();
+    transact.data = vec![RING_AUTHORITY_TRANSACT, 1, 2, 3];
+    refused(
+        ring.send(transact, &[&authority]),
+        CustomRingError::InvalidInstructionData,
     );
 }

@@ -1,3 +1,4 @@
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import type { Address, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
@@ -17,6 +18,7 @@ export const RingRpcMethod = Object.freeze({
   getRecordUpdateStatus: "getRecordUpdateStatus",
   setMergeSettings: "setMergeSettings",
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
+  getListSalt: "getListSalt",
   getPendingEnrolments: "getPendingEnrolments",
   refuseEnrolment: "refuseEnrolment",
   createRecordsRegistry: "createRecordsRegistry",
@@ -233,11 +235,21 @@ export interface AuthorityPayment {
   readonly amount: bigint;
 }
 
-/** Rust `AuthorityTransfer`, the change returns to `source`. */
+/** Rust `AuthorityTransfer`, change returns to an input's owner. */
 export interface AuthorityTransfer {
-  readonly source: ShieldedAddress;
+  readonly sources: readonly ShieldedAddress[];
   readonly mint: Address;
   readonly payments: readonly AuthorityPayment[];
+}
+
+/** Rust `GetListSaltRequest`. */
+export interface GetListSaltRequest {
+  readonly ring: Address;
+  readonly writer: Address;
+  readonly owner: Address;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
 }
 
 /** Rust `PrepareAuthorityTransferRequest`, answered with a `signMessage` step until the delegate signs. */
@@ -245,6 +257,8 @@ export interface PrepareAuthorityTransferRequest {
   readonly ring: Address;
   readonly delegate: Address;
   readonly transfer: AuthorityTransfer;
+  /** The delegate picks it, the frame's proof binds each record to it. */
+  readonly txViewingKey: Bytes32;
   readonly timestamp: bigint;
   readonly nonce: Base64String;
   readonly signature: Signature;

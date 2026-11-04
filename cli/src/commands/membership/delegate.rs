@@ -2,7 +2,7 @@
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::tracking::TrackingAuthorization;
-use custom_ring_sdk::{DelegateMove, DelegatePayment, WideFrames};
+use custom_ring_sdk::{DelegateMove, DelegatePayment, DelegateSource, WideFrames};
 use solana_signer::Signer;
 use spr_client::{IndexerRpcConfig, Rpc};
 use spr_keypair::X25519Pubkey;
@@ -80,15 +80,17 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
             ring: ctx.ring,
             delegate: delegate.pubkey(),
             payer: authority.pubkey(),
-            source,
-            source_nullifier_key: &nullifier_key,
-            utxos: &recovered.utxos,
-            mint,
+            sources: vec![DelegateSource {
+                address: source,
+                nullifier_key: &nullifier_key,
+                utxos: &recovered.utxos,
+            }],
             payments: args
                 .to
                 .iter()
                 .map(|to| DelegatePayment {
                     recipient: *to,
+                    mint,
                     amount,
                 })
                 .collect(),

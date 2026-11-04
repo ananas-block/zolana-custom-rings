@@ -7,8 +7,7 @@ use solana_address::Address;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use zolana_ring_keys::{
-    ring_address::{RING_ADDRESS_CHECKSUM_DOMAIN, RING_ADDRESS_VERSION},
-    RingAddress, RingKeyError, RingPaymentRequest,
+    ring_address::RING_ADDRESS_CHECKSUM_DOMAIN, RingAddress, RingKeyError, RingPaymentRequest,
 };
 
 const VECTORS_JSON: &str = include_str!("../../../test-vectors/wallet/ring_address.json");
@@ -143,12 +142,10 @@ fn compute() -> RingAddressVectors {
             bs58::encode(payload).into_string()
         )
     };
-    let mut wrong_version = payload.clone();
-    wrong_version[0] = RING_ADDRESS_VERSION - 1;
     let mut bad_checksum = payload.clone();
     *bad_checksum.last_mut().unwrap() ^= 1;
     let mut bad_viewing_key = payload.clone();
-    bad_viewing_key[1 + 34 + 32] = 5;
+    bad_viewing_key[34 + 32] = 5;
     let salt_at = payload.len() - 4 - 32;
     let mut zero_salt = payload.clone();
     zero_salt[salt_at..salt_at + 32].fill(0);
@@ -164,7 +161,6 @@ fn compute() -> RingAddressVectors {
         ),
         ("short_payload", uri(&payload[..payload.len() - 1])),
         ("long_payload", uri(&[payload.as_slice(), &[0]].concat())),
-        ("unknown_version", uri(&with_checksum(wrong_version))),
         ("bad_checksum", uri(&bad_checksum)),
         ("bad_viewing_key", uri(&with_checksum(bad_viewing_key))),
         ("zero_salt_on_keyed_address", uri(&with_checksum(zero_salt))),
@@ -229,7 +225,6 @@ fn shared_vectors_match() {
         ("non_base58", "InvalidRingAddressBase58"),
         ("short_payload", "InvalidRingAddressLength"),
         ("long_payload", "InvalidRingAddressLength"),
-        ("unknown_version", "UnknownRingAddressVersion"),
         ("bad_checksum", "InvalidRingAddressChecksum"),
         ("bad_viewing_key", "InvalidPublicKey"),
         ("zero_salt_on_keyed_address", "InvalidRingAddressListSalt"),

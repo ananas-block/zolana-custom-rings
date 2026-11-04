@@ -33,6 +33,7 @@ import {
   trackingAuthorizationPda,
 } from "../../protocol/pda/index.js";
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
+import { enrollAccounts } from "../../protocol/ring-rpc/relay-enroll-inputs.js";
 import type { RingProver } from "../../rpc/ports.js";
 import { readerKeyBytes, type ReaderKey } from "./reader-access.js";
 import { sealNullifierKey } from "./register-key.js";
@@ -71,7 +72,6 @@ export async function enrollInstruction(
     seal,
     stored: await enrollmentState({ trackingRegistry, owner }, client, context),
   });
-  const [authorization] = await trackingAuthorizationPda(trackingRegistry, owner);
   const writer = new Writer()
     .u8(ENROLL_TAG, "tag")
     .bytes(seal.nullifierPk, 32, "nullifierPk")
@@ -81,17 +81,7 @@ export async function enrollInstruction(
     .bytes(seal.ciphertext, 64, "ciphertext");
   if (input.proof !== undefined)
     writer.bytes(checkedCustomRingProof(input.proof), input.proof.length, "proof");
-  return instruction(
-    writer.finish(),
-    [
-      meta(input.payer, true, true),
-      meta(input.owner, true, false),
-      meta(trackingRegistry, false, true),
-      meta(authorization, false, true),
-      meta(SYSTEM_PROGRAM, false, false),
-    ],
-    STORAGE_PROGRAM_ID,
-  );
+  return instruction(writer.finish(), await enrollAccounts(input, owner), STORAGE_PROGRAM_ID);
 }
 
 export type EnrollmentReadClient = Pick<ChainReader, "getAccount">;

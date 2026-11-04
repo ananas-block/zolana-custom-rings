@@ -10,7 +10,7 @@ use super::{
 };
 
 pub const GET_WALLET_STATUS: &str = "getWalletStatus";
-const WALLET_STATUS_DOMAIN: &str = "zolana/ring-rpc-wallet-status/v1";
+const WALLET_STATUS_DOMAIN: &str = "zolana/ring-rpc-wallet-status";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

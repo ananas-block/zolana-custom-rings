@@ -37,6 +37,7 @@ var Shapes = [...]Shape{
 	{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true},
 	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true},
 	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true},
+	{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true},
 }
 
 func (s Shape) String() string {
@@ -95,6 +96,10 @@ type Sections struct {
 	policy.Tracking
 	// ApprovalMask is the proven approval bits, the program demands their co-signers.
 	ApprovalMask frontend.Variable
+	// ApprovalTotals is zero unless the frame discloses the totals to a co-signer.
+	ApprovalTotals frontend.Variable
+	// ApprovalBlinder is fresh per transaction and enters no statement.
+	ApprovalBlinder frontend.Variable
 	policy.Policy
 }
 
@@ -195,6 +200,7 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
+	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
@@ -229,7 +235,7 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
-		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, s.NoSpend,
+		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, s.NoSpend,
 		c.OutputCount, opened.OutputChain, s.RecordChain, s.TailChain,
 		c.InputCount, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{
@@ -253,9 +259,9 @@ func (b transactionBinding) bindTransaction(api frontend.API, inputChain fronten
 	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, b.PrivateTxBlinding}))
 }
 
-// closeStatement binds the element count and the nonzero version last, a statement of another length or layout hashes apart.
+// closeStatement binds the nonzero element count last, a statement of another length hashes apart.
 func closeStatement(fields []frontend.Variable) []frontend.Variable {
-	return append(fields, len(fields)+2, shared.TransferStatementVersion)
+	return append(fields, len(fields)+1)
 }
 
 func publicSlots(assets, amounts, gross []frontend.Variable) []frontend.Variable {

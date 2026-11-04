@@ -7,12 +7,9 @@ use std::{
 
 use solana_address::Address;
 use spr_interface::{MAX_INPUT_TREES, ZERO_NULLIFIER_PUBKEY};
-use spr_transaction::{
-    instructions::{merge::MAX_MERGE_INPUTS, transact::MAX_SPEND_INPUTS},
-    TransactionError, WalletUtxo,
-};
+use spr_transaction::{instructions::merge::MAX_MERGE_INPUTS, TransactionError, WalletUtxo};
 
-/// The largest keyed UTXOs `keep` admits until they cover `amount`, at most `max_inputs` up to [`MAX_SPEND_INPUTS`].
+/// The largest keyed UTXOs `keep` admits until they cover `amount`, at most `max_inputs`.
 pub fn select_spend_where<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
     asset: Address,
@@ -74,7 +71,6 @@ fn select(
     amount: u64,
     max_inputs: usize,
 ) -> Result<Vec<WalletUtxo>, TransactionError> {
-    let max_inputs = max_inputs.min(MAX_SPEND_INPUTS);
     if amount == 0 {
         return Err(TransactionError::ZeroSpendAmount);
     }

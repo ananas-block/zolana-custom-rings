@@ -1,4 +1,4 @@
-/** Ring notes of scheme 13 and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
+/** Ring notes and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`. */
 import { syncWallet, WalletError, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
 import type { IndexerReader } from "@heliuslabs/zolana/client";
 import {
@@ -42,7 +42,7 @@ export interface RingNotes {
   readonly pending: number;
 }
 
-/** Every note is unspent, scheme 13 opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
+/** Every note is unspent, a ring body opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
 export async function openRingNotes(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -428,6 +428,13 @@ class RingSyncPages {
       config?.requireSlot ?? client.indexerConfig?.requireSlot,
     );
     const limit = config?.pageLimit ?? 1_000;
+    const held = input.keys.viewingPublicKeys();
+    // The core sync names a held key whole, a delivered slot publishes its slot tag.
+    const withSlotTags = (tags: readonly Bytes32[]): readonly Bytes32[] =>
+      tags.flatMap((tag) => {
+        const key = held.find((candidate) => equalBytes(candidate.u(), tag));
+        return key === undefined ? [tag] : [tag, slotTag(key.u())];
+      });
     this.client = {
       ...(client.solanaRpc === undefined ? {} : { solanaRpc: client.solanaRpc }),
       ...(client.commitment === undefined ? {} : { commitment: client.commitment }),
@@ -448,7 +455,11 @@ class RingSyncPages {
         return page;
       },
       getShieldedTransactionsByTags: async (request, rpcConfig, context) => {
-        const page = await client.getShieldedTransactionsByTags(request, rpcConfig, context);
+        const page = await client.getShieldedTransactionsByTags(
+          { ...request, tags: withSlotTags(request.tags) },
+          rpcConfig,
+          context,
+        );
         this.transactions.push(...page.data.flatMap((item) => item.events));
         return page;
       },

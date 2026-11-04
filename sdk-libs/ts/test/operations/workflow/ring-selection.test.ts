@@ -388,12 +388,11 @@ describe("ring approval summary", () => {
     return summary;
   }
 
-  /** An entry of `amount` into an anonymous ring out of nine default notes of 1000. */
-  async function anonymousEntry(amount: bigint) {
+  async function anonymousEntry(amount: bigint, notes: number) {
     const keypair = spendingKeypair();
     const wallet = ringUtxoWallet(
       keypair,
-      Array.from({ length: 9 }, () => [1_000n, undefined] as const),
+      Array.from({ length: notes }, () => [1_000n, undefined] as const),
     );
     const { approve, requests } = recordingApproval();
     const error: unknown = await prepareRingEntryRelay({
@@ -413,17 +412,17 @@ describe("ring approval summary", () => {
     return { error, requests };
   }
 
-  it("funds an anonymous ring's entry from at most eight default notes, the entry key's bound", async () => {
-    const eight = await anonymousEntry(8_000n);
-    expect(eight.requests.map((request) => request.intent)).toMatchObject([
-      { kind: "ringEntry", amount: 8_000n },
+  it("funds an anonymous ring's entry from at most 24 default notes, the widest entry key", async () => {
+    const widest = await anonymousEntry(24_000n, 25);
+    expect(widest.requests.map((request) => request.intent)).toMatchObject([
+      { kind: "ringEntry", amount: 24_000n },
     ]);
-    const nine = await anonymousEntry(8_001n);
-    expect(nine.error).toMatchObject({
+    const past = await anonymousEntry(24_001n, 25);
+    expect(past.error).toMatchObject({
       code: "RING_BUILD_ENTRY",
       causeCode: "RING_TOO_MANY_INPUTS",
     });
-    expect(nine.requests).toEqual([]);
+    expect(past.requests).toEqual([]);
   });
 
   it("names the whole default UTXO crossing into the ring, change included", async () => {

@@ -94,7 +94,7 @@ fn compute_vectors() -> ExpansionVectors {
         })
         .collect();
     ExpansionVectors {
-        description: "Compact ring transact data of each rail at statement version 4 and what \
+        description: "Compact ring transact data of each rail and what \
                       the ring program forwards for it, the SPP TransactIxData, the SPP instruction \
                       data and the external data hash over the SPP tag, the data before \
                       private_tx_hash and two settlement accounts per leg. Byte 0 carries the \
@@ -110,11 +110,11 @@ fn compute_vectors() -> ExpansionVectors {
                       of ceil(m / 8) bytes each. A slot is a u16 body length under has_data, its \
                       hash, its tag of 8 bytes or 32 on an exit and its body, 72 bytes for a recipient body and 83 for an exit \
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
-                      per body-bearing slot follow the slots. The anonymous frame's scheme 12 \
-                      bundle follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
+                      per body-bearing slot follow the slots. The anonymous frame's sender bundle \
+                      follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
                       m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
-                      those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || tx_viewing_u \
-                      || envelope || records || tails. Recipient bodies forward as scheme 13, \
+                      those of ring-disclosure-ranges.json. The auditor message is 0x04 || tx_viewing_u \
+                      || envelope || records || tails. Recipient bodies forward as ring body, \
                       u16le(body_len) || body || reply. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),
@@ -782,6 +782,25 @@ fn a_data_frame_carries_each_length_and_each_tail() {
 }
 
 #[test]
+fn approval_totals_cost_a_digest_and_at_most_the_extension_flags() {
+    let fixture = Fixture::new();
+    for (mut data, delta) in [
+        (fixture.confidential_thresholds(), 33),
+        (fixture.confidential_extensions(), 32),
+    ] {
+        let before = data.encode().unwrap().len();
+        data.extensions.approval_totals = Some(&fixture.fields[73]);
+        let encoded = data.encode().unwrap();
+        assert_eq!(encoded.len() - before, delta);
+        let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
+        assert_eq!(
+            parsed.into_data().extensions.approval_totals,
+            Some(&fixture.fields[73])
+        );
+    }
+}
+
+#[test]
 fn the_extensions_reach_the_forwarded_data() {
     let fixture = Fixture::new();
     let data = fixture.confidential_extensions();
@@ -810,6 +829,35 @@ fn the_extensions_reach_the_forwarded_data() {
         RingTransactData::parse(&unknown, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+#[test]
+fn a_tag_on_the_wire_reaches_the_external_data_hash_at_its_width() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| {
+        let compact = data.encode().unwrap();
+        RingTransactData::parse(&compact, RingRail::Confidential)
+            .unwrap()
+            .into_data()
+            .external_data_hash(&config, &[])
+            .unwrap()
+    };
+    let honest = fixture.confidential_delivered();
+    assert!(honest.outputs[3].is_exit() && !honest.outputs[0].is_exit());
+    assert_eq!(
+        hash(&honest),
+        honest.external_data_hash(&config, &[]).unwrap()
+    );
+    let mut slot = honest.clone();
+    slot.outputs[0].owner_tag[31] ^= 1;
+    assert_ne!(hash(&slot), hash(&honest));
+    let mut exit = honest.clone();
+    exit.outputs[3].owner_tag[0] ^= 1;
+    assert_ne!(hash(&exit), hash(&honest));
+    let mut wide = honest.clone();
+    wide.outputs[0].owner_tag[0] ^= 1;
+    assert!(wide.encode().is_err());
 }
 
 /// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.

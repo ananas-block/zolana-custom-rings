@@ -40,9 +40,10 @@ use spr_transaction::{
     utxo::SppProofInputUtxo,
     ShieldedKeys, TransactionError,
 };
-use zolana_ring_client::rpc::SubjectListSalt;
+use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
-use zolana_ring_policy::Member;
+use zolana_ring_policy::{ApprovalTotals, Member};
+use zolana_ring_transaction::random_field_element;
 use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
@@ -51,8 +52,8 @@ pub use self::{
         EntrySpend, NoteData, RingPayment, WideFrames,
     },
     delegate::{
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
-        DelegateWithdrawal, Delegated,
+        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
+        DelegateTransferInput, DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     public_owners::{PublicOwnerTransfer, PublicOwners},
@@ -80,7 +81,9 @@ use crate::{
     address_ceiling::{AddressCeiling, MergeCapacity},
     co_signer::CoSignerChoice,
     heap::boxed,
+    limits::Outflows,
     projection::retry_projection_lag,
+    relay_message::ApprovalOpening,
     submission::{check_transaction_size, send_budget, BoundPolicy, BoundState},
     trees::{spend_trees, SpendTrees},
     BufferedFrame, CustomRing, CustomRingConfig, RingError,
@@ -117,6 +120,15 @@ pub struct RingTransfer<R: Rail> {
     priority_fee: Option<u64>,
     buffered: bool,
     list_salts: Vec<SubjectListSalt>,
+    approval: ApprovalDisclosure,
+}
+
+/// A frame that discloses its totals carries a digest a named co-signer opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ApprovalDisclosure {
+    #[default]
+    None,
+    Totals,
 }
 
 #[must_use = "build or submit the proven transfer"]
@@ -131,6 +143,8 @@ pub struct ProvenRingTransfer {
     pub outputs: Vec<SppProofOutputUtxo>,
     pub co_signers: Vec<Address>,
     pub co_sign_demand: CoSignDemand,
+    /// For a co-signer that reads exact totals, never the transaction secret.
+    pub approval_opening: Option<ApprovalOpening>,
 }
 
 /// A transfer past its outputs' sealing, ready for its statements.
@@ -191,9 +205,22 @@ impl Spend<'_> {
 
 /// One public co-owner's nullifier key, one prover holds every owner's secret.
 pub(crate) struct CoOwnerKey {
+    pub owner: Address,
     /// `owner_proof_input_hash`, the field a proof input carries.
     pub owner_pk_hash: [u8; 32],
     pub key: NullifierKey,
+}
+
+impl CoOwnerKey {
+    fn of(co_owner: &CoOwner<'_>) -> Result<Self, RingError> {
+        Ok(Self {
+            owner: co_owner.owner,
+            owner_pk_hash: spr_hasher::primitives::solana_owner_identity(
+                co_owner.owner.as_array(),
+            )?,
+            key: co_owner.nullifier_key.clone(),
+        })
+    }
 }
 
 /// `owner` is `None` only when every input is padding.
@@ -268,6 +295,13 @@ impl<R: Rail> RingTransfer<R> {
         self
     }
 
+    /// The frame carries a digest of its totals, the opening reads as `approval_opening`.
+    #[must_use = "use the updated transfer"]
+    pub const fn with_exact_approval(mut self) -> Self {
+        self.approval = ApprovalDisclosure::Totals;
+        self
+    }
+
     /// Past one transaction the frame settles from a buffer its payer writes.
     #[must_use = "use the updated transfer"]
     pub const fn with_buffered_settlement(mut self) -> Self {
@@ -307,12 +341,23 @@ impl<R: Rail> RingTransfer<R> {
         &self,
         client: &RingClient<P, I>,
     ) -> Result<Unwitnessed<'_>, RingError> {
-        let sealed = boxed(|| self.seal(client.zolana())).await?;
+        let prepared = boxed(|| self.prepare(client.zolana())).await?;
+        let policy = boxed(|| prepared.read_policy(client.zolana())).await?;
+        let sealed = prepared.seal(policy.wide_owners, policy)?;
         boxed(|| sealed.frame(client)).await
     }
 
     /// Reads accounts only, no Merkle path and no record.
-    async fn seal<C: AsyncRpc + ?Sized>(&self, client: &C) -> Result<Sealed<'_>, RingError> {
+    async fn seal_unread<C: AsyncRpc + ?Sized>(
+        &self,
+        client: &C,
+    ) -> Result<Sealed<'_, ()>, RingError> {
+        let prepared = boxed(|| self.prepare(client)).await?;
+        let wide = prepared.unread_wide();
+        prepared.seal(wide, ())
+    }
+
+    async fn prepare<C: AsyncRpc + ?Sized>(&self, client: &C) -> Result<Prepared<'_>, RingError> {
         let config = self.ring.require_config(client).await?;
         self.ring.require_active(client).await?;
         let mut staged = match self.rail.kind() {
@@ -328,6 +373,11 @@ impl<R: Rail> RingTransfer<R> {
         };
         check_ring_output_markers(&staged.proof_inputs)?;
         staged.list_salts.extend_from_slice(&self.list_salts);
+        let approval_blinder = match (self.rail.kind(), self.approval) {
+            (RailKind::Relayed(relayed), _) => relayed.approval_blinder(),
+            (RailKind::Delegated(_), _) | (_, ApprovalDisclosure::None) => None,
+            (_, ApprovalDisclosure::Totals) => Some(random_field_element()),
+        };
         boxed(|| {
             Pipeline {
                 ring: self.ring,
@@ -336,8 +386,9 @@ impl<R: Rail> RingTransfer<R> {
                 co_signers: self.co_signers.clone(),
                 priority_fee: self.priority_fee,
                 buffered: self.buffered,
+                approval_blinder,
             }
-            .seal(client)
+            .prepare(client)
         })
         .await
     }
@@ -350,6 +401,7 @@ struct Pipeline<'a> {
     co_signers: Vec<Address>,
     priority_fee: Option<u64>,
     buffered: bool,
+    approval_blinder: Option<[u8; 32]>,
 }
 
 struct Frame {
@@ -369,6 +421,7 @@ struct Frame {
     parts: TransactParts,
     accounts: TransactAccounts,
     co_sign_demand: CoSignDemand,
+    approval_opening: Option<ApprovalOpening>,
 }
 
 struct Unwitnessed<'a> {
@@ -381,10 +434,19 @@ struct Unwitnessed<'a> {
     buffered: bool,
 }
 
-/// A transfer whose external data is final, before any record read.
-struct Sealed<'a> {
+/// A transfer whose external data is final.
+struct Sealed<'a, P = PolicyInputs> {
     pipeline: Pipeline<'a>,
     sealed: SealedAudit,
+    trees: SpendTrees,
+    preview: Preview,
+    published_inputs: usize,
+    policy: P,
+}
+
+/// Staged and checked, the key it selects decides every stream counter.
+struct Prepared<'a> {
+    pipeline: Pipeline<'a>,
     trees: SpendTrees,
     preview: Preview,
     published_inputs: usize,
@@ -401,6 +463,9 @@ struct Preview {
     expiry_unix_ts: u32,
     /// Past the sender bundle and ahead of the auditor's message.
     app_messages: Vec<OwnedAppMessage>,
+    /// The key the spend selects fixes every stream counter.
+    wide_owners: bool,
+    discloses_approval: bool,
 }
 
 impl Preview {
@@ -436,8 +501,7 @@ pub(crate) struct Assembled {
 }
 
 impl<'a> Pipeline<'a> {
-    /// The external data is final after the seal, the owner signs its message hash.
-    async fn seal<R: AsyncRpc + ?Sized>(self, client: &R) -> Result<Sealed<'a>, RingError> {
+    async fn prepare<R: AsyncRpc + ?Sized>(self, client: &R) -> Result<Prepared<'a>, RingError> {
         let Staged {
             mut proof_inputs,
             rail,
@@ -449,7 +513,6 @@ impl<'a> Pipeline<'a> {
             presealed,
             list_salts,
         } = self.staged;
-        let config = &self.config;
         let program = self.ring.program_id();
         let ring_rail = spend.rail();
         // The compact data carries a u32 expiry, an unbounded one keeps its farthest value.
@@ -490,7 +553,6 @@ impl<'a> Pipeline<'a> {
             .iter()
             .filter(|input| !input.is_compact())
             .count();
-        let auditor = config.auditor_pubkey;
         let preview = Preview {
             rail: ring_rail,
             in_proof_owner: spend.in_proof_owner()?,
@@ -509,7 +571,128 @@ impl<'a> Pipeline<'a> {
                     data: message.data.clone(),
                 })
                 .collect(),
+            wide_owners: false,
+            discloses_approval: self.approval_blinder.is_some(),
         };
+
+        Ok(Prepared {
+            pipeline: Pipeline {
+                priority_fee: self.priority_fee,
+                buffered: self.buffered,
+                approval_blinder: self.approval_blinder,
+                ring: self.ring,
+                config: self.config,
+                co_signers: self.co_signers,
+                staged: Staged {
+                    proof_inputs,
+                    rail,
+                    sender,
+                    authority,
+                    owner_signers,
+                    interface_transfer_accounts,
+                    spend,
+                    presealed,
+                    list_salts,
+                },
+            },
+            trees,
+            preview,
+            published_inputs,
+        })
+    }
+}
+
+impl<'a> Prepared<'a> {
+    async fn read_policy<R: AsyncRpc + AsyncRingIndexer + ?Sized>(
+        &self,
+        client: &R,
+    ) -> Result<PolicyInputs, RingError> {
+        let staged = &self.pipeline.staged;
+        let proof_inputs = &staged.proof_inputs;
+        let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
+        PolicyRead {
+            token_owner_hint: match &staged.spend {
+                Spend::Anonymous(a) => a.token_owner,
+                _ => None,
+            },
+            config: &self.pipeline.config,
+            rail: self.preview.rail,
+            inputs: proof_inputs,
+            published_inputs: self.published_inputs,
+            spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
+            n_out: self.preview.n_out,
+            public: &public,
+            salts: &KnownSalts::new(staged.list_salts.clone()),
+            wide_floor: staged
+                .presealed
+                .as_ref()
+                .is_some_and(|presealed| presealed.wide_owners),
+        }
+        .read(client)
+        .await
+    }
+
+    /// Sealed before its destinations exist, a recorded tail or entry takes the wide key.
+    fn unread_wide(&self) -> bool {
+        let inputs = &self.pipeline.staged.proof_inputs;
+        let ring_rail = self.preview.rail;
+        let mut owners = Vec::new();
+        for input in &inputs.input_utxos {
+            if !input.is_dummy() && !input.is_compact() && !owners.contains(&input.utxo.owner) {
+                owners.push(input.utxo.owner);
+            }
+        }
+        let spends_default = spends_default_ring(&inputs.input_utxos);
+        let fitted = TransferSpend {
+            rail: ring_rail,
+            inputs: self.published_inputs,
+            outputs: usize::from(self.preview.n_out),
+            spends_default_ring: spends_default,
+            legs: inputs.external_data.interface_transfers.len(),
+            owners: owners.len(),
+            pools: RecordPools::default(),
+            wide: false,
+        }
+        .fitted()
+        .wide;
+        let reads_records =
+            RootRead::transfer(self.pipeline.config.account(), ring_rail.is_delegate())
+                != RootRead::None;
+        let has_data = inputs.output_utxos.iter().any(carries_data);
+        fitted || (reads_records && (has_data || spends_default))
+    }
+
+    /// The external data is final after the seal, the owner signs its message hash.
+    fn seal<P>(self, wide_owners: bool, policy: P) -> Result<Sealed<'a, P>, RingError> {
+        let Prepared {
+            pipeline,
+            trees,
+            mut preview,
+            published_inputs,
+        } = self;
+        let Pipeline {
+            ring,
+            config,
+            staged,
+            co_signers,
+            priority_fee,
+            buffered,
+            approval_blinder,
+        } = pipeline;
+        let Staged {
+            mut proof_inputs,
+            rail,
+            sender,
+            authority,
+            owner_signers,
+            interface_transfer_accounts,
+            spend,
+            presealed,
+            list_salts,
+        } = staged;
+        let ring_rail = preview.rail;
+        let auditor = config.auditor_pubkey;
+        preview.wide_owners = wide_owners;
 
         // The auditor message precedes every hash over the external data.
         let unsealed = preview.parts(&proof_inputs, &rail, &sender)?;
@@ -551,11 +734,12 @@ impl<'a> Pipeline<'a> {
 
         Ok(Sealed {
             pipeline: Pipeline {
-                priority_fee: self.priority_fee,
-                buffered: self.buffered,
-                ring: self.ring,
-                config: self.config,
-                co_signers: self.co_signers,
+                priority_fee,
+                buffered,
+                approval_blinder,
+                ring,
+                config,
+                co_signers,
                 staged: Staged {
                     proof_inputs,
                     rail,
@@ -572,6 +756,7 @@ impl<'a> Pipeline<'a> {
             trees,
             preview,
             published_inputs,
+            policy,
         })
     }
 }
@@ -590,11 +775,13 @@ impl<'a> Sealed<'a> {
                     co_signers: supplied_co_signers,
                     priority_fee,
                     buffered,
+                    approval_blinder,
                 },
             sealed,
             trees,
             preview,
             published_inputs,
+            policy,
         } = self;
         let Staged {
             proof_inputs,
@@ -605,11 +792,10 @@ impl<'a> Sealed<'a> {
             interface_transfer_accounts,
             spend,
             presealed: _,
-            list_salts,
+            list_salts: _,
         } = staged;
         let config = &ring_config;
         let ring_rail = preview.rail;
-        let n_out = preview.n_out;
         let ring_id = ring.ring_id()?;
         let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
         let public_assets = public.asset_fields()?;
@@ -623,22 +809,6 @@ impl<'a> Sealed<'a> {
                 None
             }
         };
-        let policy = PolicyRead {
-            token_owner_hint: match &spend {
-                Spend::Anonymous(a) => a.token_owner,
-                _ => None,
-            },
-            config,
-            rail: ring_rail,
-            inputs: &proof_inputs,
-            published_inputs,
-            spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
-            n_out,
-            public: &public,
-            salts: &KnownSalts::new(list_salts),
-        }
-        .read(client.zolana())
-        .await?;
         let transfers = &proof_inputs.external_data.interface_transfers;
         let no_spend = audit::real_input_count(&proof_inputs.input_utxos)? == 0;
         let demand = match ring_rail.is_delegate() {
@@ -693,13 +863,20 @@ impl<'a> Sealed<'a> {
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
         parts.approval = policy.approval;
+        let approval_opening = match approval_blinder {
+            Some(blinder) => {
+                let totals = approval_totals_of(&proof_inputs, parts.n_out)?;
+                parts.extensions.approval_totals = Some(totals.commitment(&blinder)?);
+                Some(ApprovalOpening::of(&totals, &blinder))
+            }
+            None => None,
+        };
         parts.tracking_revision = policy.tracking.revision;
         parts.own_revision = policy.own.map(|own| own.revision);
         parts.policy = (policy.read == RootRead::Policy).then(|| PolicyProof {
             curator_revision: policy.curator.map(|curator| curator.revision),
         });
         parts.spl_withdrawal_owners = policy.spl_withdrawal_owners.clone();
-        parts.wide_owners = policy.wide_owners;
         if anonymous.is_some() {
             // SPP publishes the hidden owner's key exactly when it spends its own default-ring note.
             let hidden_default = proof_inputs.input_utxos.iter().any(|input| {
@@ -750,6 +927,7 @@ impl<'a> Sealed<'a> {
                 parts,
                 accounts,
                 co_sign_demand: demand,
+                approval_opening,
             },
             config: ring_config,
             authority,
@@ -927,6 +1105,7 @@ impl Assembled {
             mut parts,
             accounts,
             co_sign_demand,
+            approval_opening,
             ..
         } = self.frame;
         parts.proof = proof;
@@ -958,6 +1137,7 @@ impl Assembled {
             outputs: proof_inputs.output_utxos,
             co_signers,
             co_sign_demand,
+            approval_opening,
         })
     }
 }
@@ -1041,7 +1221,7 @@ const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
 fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
     let preview = parts.preview;
     let external = &parts.inputs.external_data;
-    let nullifiers: Vec<_> = parts
+    let nullifiers = parts
         .inputs
         .input_utxos
         .iter()
@@ -1076,6 +1256,8 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
             cache: None,
+            // Sized here, `frame` writes the digest of the totals.
+            approval_totals: preview.discloses_approval.then_some([0; 32]),
         },
         interface_transfers: external
             .interface_transfers
@@ -1084,19 +1266,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             .collect(),
         has_data: parts.inputs.output_utxos.iter().any(carries_data),
         entry: spends_default_ring(&parts.inputs.input_utxos),
-        // A spend past the narrow key's inputs names the wide key before the policy reads its pools.
-        wide_owners: TransferSpend {
-            rail: preview.rail,
-            inputs: nullifiers.len(),
-            outputs: usize::from(preview.n_out),
-            spends_default_ring: spends_default_ring(&parts.inputs.input_utxos),
-            legs: 0,
-            owners: 0,
-            pools: RecordPools::default(),
-            wide: false,
-        }
-        .fitted()
-        .wide,
+        wide_owners: preview.wide_owners,
         outputs: parts
             .published
             .iter()
@@ -1279,6 +1449,28 @@ pub(crate) fn public_leg(transfer: &SettlementTransfer) -> PublicLeg {
             SettlementTransfer::Sol { .. } => None,
         },
     }
+}
+
+/// The wallet and the relay read one layout, rows are the inputs' owners whatever their padding.
+pub(crate) fn approval_totals_of(
+    inputs: &SppProofInputs,
+    n_out: u8,
+) -> Result<ApprovalTotals, RingError> {
+    let public = public_slots(&inputs.external_data.interface_transfers)?;
+    let senders = inputs
+        .input_utxos
+        .iter()
+        .filter(|input| !input.is_dummy() && !input.is_address())
+        .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    Outflows {
+        senders: &senders,
+        inputs: &inputs.input_utxos,
+        outputs: &inputs.output_utxos,
+        public_assets: &public.asset_fields()?,
+        public_gross: &public.gross(),
+    }
+    .approval_totals(usize::from(n_out))
 }
 
 pub(crate) fn public_slots(transfers: &[SettlementTransfer]) -> Result<PublicSlots, RingError> {

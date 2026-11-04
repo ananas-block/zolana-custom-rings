@@ -1,4 +1,4 @@
-//! Scheme 11 bodies, scheme 12 bundles and reply metadata, each under its own label over a CRDS slot secret.
+//! Ring bodies, sender bundles and reply metadata, each under its own label over a CRDS slot secret.
 
 use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},
@@ -9,7 +9,7 @@ use custom_ring_interface::{
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_x25519_public_key;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_keypair::{ShieldedAddress, X25519Keypair, X25519Pubkey};
 use spr_transaction::{
     derive_output_blinding_seed, utxo::derive_transact_output_blinding, Blinding, Data, DataRecord,
     Mint, SppProofOutputUtxo, Utxo,
@@ -316,4 +316,11 @@ impl OutputBlindings {
     pub fn output_seed(&self) -> &[u8; 32] {
         &self.output_seed
     }
+}
+
+/// False for a low-order transaction key, every clamped secret refuses the same keys.
+pub fn is_contributory(tx_viewing_pk: &X25519Pubkey) -> bool {
+    X25519Keypair::from_bytes(&[0; 32])
+        .ecdh(tx_viewing_pk)
+        .is_ok()
 }

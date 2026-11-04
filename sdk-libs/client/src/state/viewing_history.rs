@@ -13,11 +13,6 @@ use zolana_ring_transaction::is_contributory;
 
 use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
 
-pub const VIEWING_HISTORY_VERSION: u32 = 8;
-
-/// Read once and rewritten as [`VIEWING_HISTORY_VERSION`].
-const MIGRATED_VIEWING_HISTORY_VERSION: u32 = 7;
-
 /// How far below its watermark a sync still reads an unobserved index.
 pub const PENDING_RETENTION: u64 = 256;
 
@@ -394,7 +389,6 @@ impl fmt::Debug for ViewingHistory {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct HistoryJson {
-    version: u32,
     viewing_history: Vec<EntryJson>,
 }
 
@@ -416,33 +410,12 @@ struct RingPositionJson {
     after_slot: Option<u64>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryV7 {
-    viewing_history: Vec<EntryV7>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EntryV7 {
-    viewing_pubkey: String,
-    created_at: i64,
-    tx: CounterJson,
-    request: CounterJson,
-    known_senders: Vec<CounterpartyV7>,
-}
-
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CounterJson {
     next: u64,
     scanned: u64,
     pending: Vec<u64>,
-}
-
-#[derive(Deserialize)]
-struct CounterpartyV7 {
-    pubkey: String,
 }
 
 impl From<&StreamCounter> for CounterJson {
@@ -485,7 +458,6 @@ impl ViewingHistory {
     /// Stored only inside `AnonymousWallet`, its positions and watermarks cover the wallet's notes.
     pub(crate) fn to_json_value(&self) -> serde_json::Value {
         let history = HistoryJson {
-            version: VIEWING_HISTORY_VERSION,
             viewing_history: self
                 .entries
                 .iter()
@@ -518,32 +490,13 @@ impl ViewingHistory {
             .expect("a struct of strings, integers and vectors serializes")
     }
 
-    /// Another version fails with [`AnonymousError::ViewingHistoryVersion`], a sync rebuilds it.
     pub(crate) fn from_json_value(value: serde_json::Value) -> Result<Self, AnonymousError> {
-        #[derive(Deserialize)]
-        struct Versioned {
-            version: u32,
-        }
-        let Versioned { version } = Versioned::deserialize(&value).map_err(unparsed)?;
-        let entries = match version {
-            VIEWING_HISTORY_VERSION => {
-                let history = HistoryJson::deserialize(&value).map_err(unparsed)?;
-                history
-                    .viewing_history
-                    .into_iter()
-                    .map(entry_of)
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            MIGRATED_VIEWING_HISTORY_VERSION => {
-                let history = HistoryV7::deserialize(&value).map_err(unparsed)?;
-                history
-                    .viewing_history
-                    .into_iter()
-                    .map(entry_of_v7)
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            version => return Err(AnonymousError::ViewingHistoryVersion { version }),
-        };
+        let entries = HistoryJson::deserialize(&value)
+            .map_err(unparsed)?
+            .viewing_history
+            .into_iter()
+            .map(entry_of)
+            .collect::<Result<Vec<_>, _>>()?;
         for (at, entry) in entries.iter().enumerate() {
             if at > 0 && entries[at - 1].created_at >= entry.created_at
                 || entries[..at]
@@ -576,32 +529,12 @@ fn entry_of(stored: EntryJson) -> Result<ViewingKeyEntry, AnonymousError> {
         created_at: stored.created_at,
         tx: stored.tx.try_into()?,
         request: stored.request.try_into()?,
-        known_senders: senders(stored.known_senders.iter())?,
+        known_senders: senders(&stored.known_senders)?,
         ring_positions,
     })
 }
 
-/// Its notes were never stored beside it, each watermark restarts and each `next` stays.
-fn entry_of_v7(stored: EntryV7) -> Result<ViewingKeyEntry, AnonymousError> {
-    let counter = |counter: CounterJson| -> Result<StreamCounter, AnonymousError> {
-        let mut counter = StreamCounter::try_from(counter)?;
-        counter.scanned = 0;
-        counter.pending.clear();
-        Ok(counter)
-    };
-    Ok(ViewingKeyEntry {
-        viewing_pubkey: pubkey("viewingPubkey", &stored.viewing_pubkey)?,
-        created_at: stored.created_at,
-        tx: counter(stored.tx)?,
-        request: counter(stored.request)?,
-        known_senders: senders(stored.known_senders.iter().map(|sender| &sender.pubkey))?,
-        ring_positions: BTreeMap::new(),
-    })
-}
-
-fn senders<'a>(
-    keys: impl Iterator<Item = &'a String>,
-) -> Result<HashSet<X25519Pubkey>, AnonymousError> {
+fn senders(keys: &[String]) -> Result<HashSet<X25519Pubkey>, AnonymousError> {
     let mut known = HashSet::new();
     for text in keys {
         let key = pubkey("knownSenders", text)?;
@@ -716,34 +649,6 @@ mod tests {
             ViewingHistory::from_json_value(stored),
             Err(AnonymousError::ViewingHistory(_))
         ));
-    }
-
-    #[test]
-    fn version_7_migrates_with_no_progress_and_its_next_indices_kept() {
-        let viewing = ViewingKey::new().pubkey();
-        let sender = hex::encode(ViewingKey::new().pubkey().as_bytes());
-        let stored = serde_json::json!({
-            "version": 7,
-            "viewingHistory": [{
-                "viewingPubkey": hex::encode(viewing.as_bytes()),
-                "createdAt": 1,
-                "tx": { "next": 5, "scanned": 4, "pending": [1] },
-                "request": { "next": 2, "scanned": 2, "pending": [] },
-                "knownSenders": [{ "pubkey": sender, "next": 3, "scanned": 3, "pending": [] }],
-                "knownRecipients": [{ "pubkey": sender, "next": 1, "scanned": 1, "pending": [] }],
-            }],
-        });
-        let migrated = ViewingHistory::from_json_value(stored).unwrap();
-        let entry = migrated.current();
-        assert_eq!((entry.tx_count(), entry.tx.scanned()), (5, 0));
-        assert_eq!(entry.tx.pending().count(), 0);
-        assert_eq!((entry.request_count(), entry.request.scanned()), (2, 0));
-        assert_eq!(entry.known_senders().len(), 1);
-        assert!(entry.ring_positions().is_empty());
-        assert_eq!(
-            ViewingHistory::from_json_value(migrated.to_json_value()).unwrap(),
-            migrated
-        );
     }
 
     #[test]

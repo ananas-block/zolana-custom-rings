@@ -5,8 +5,8 @@ use zolana_ring_client::rpc::auditor_keypair;
 
 use crate::{config::RootSecret, error::RingRpcError};
 
-const DERIVATION_INFO: &[u8] = b"zolana/ring-auditor/v1";
-pub const GRANT_ROW_KEY_INFO: &[u8] = b"zolana/ring-rpc-grant-rows/v1";
+const DERIVATION_INFO: &[u8] = b"zolana/ring-auditor";
+pub const GRANT_ROW_KEY_INFO: &[u8] = b"zolana/ring-rpc-grant-rows";
 /// Part of the pinned derivation info of every registered auditor key.
 const DERIVATION_SUFFIX: &[u8] = &[0];
 
@@ -62,7 +62,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(auditor.pubkey().as_bytes()),
-            "04269a2c3596d0b1d0d5971be8132ee7f641f5948c2d8cb98b9896a9a8363dda42"
+            "04dce77eb5607cf1f4b729cdbaa87b6698b1a65d52f40bcf503d4c2f978c97143f"
         );
     }
 }

@@ -1,5 +1,6 @@
 //! Ring member lists, one bit each in a member registry record, and the rule table over them.
 
+mod approval_totals;
 mod asset_limits;
 mod list;
 mod member;
@@ -8,6 +9,7 @@ mod quantities;
 mod rule_table;
 mod rules;
 
+pub use approval_totals::{ApprovalTotals, OutputTotals, PublicTotals, APPROVAL_TOTALS_DOMAIN};
 pub use asset_limits::{AssetLimits, AssetLimitsError};
 pub use list::{ListChange, ListId, ListSet, ListWrite, ListWriteError, Writer};
 pub use member::{Member, MemberError, WALLET_GRANT_DOMAIN};
@@ -19,7 +21,7 @@ pub use quantities::{
 pub use rule_table::{
     EncodedRuleTable, Guard, Mode, OutflowLimit, PolicySource, PolicyTableError, Rule, RuleSource,
     RuleTable, RuleTableBuilder, RuleTableError, SourceMap, SourceMapError, Subject, TableParts,
-    MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS, POLICY_TABLE_VERSION,
+    MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS,
 };
 pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
 

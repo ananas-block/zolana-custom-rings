@@ -14,8 +14,8 @@ use super::{
     audit::PresealedAudit,
     delegate::delegate_rail,
     public_owners::check_zero_key_inputs,
-    sealed, shape_keyed, DeliveredRail, Rail, RailKind, RingTransfer, Spend, Staged,
-    TransferAuthority,
+    sealed, shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
+    RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -55,6 +55,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
                 owner_signature: None,
             },
             list_salts: Vec::new(),
+            approval: ApprovalDisclosure::None,
         }
     }
 
@@ -67,6 +68,10 @@ impl<'a> RingTransfer<Relayed<'a>> {
 }
 
 impl Relayed<'_> {
+    pub(super) fn approval_blinder(&self) -> Option<[u8; 32]> {
+        self.proof_inputs.approval_blinder
+    }
+
     pub(super) async fn stage<R: AsyncRpc + ?Sized>(
         &self,
         ring: CustomRing,
@@ -122,10 +127,6 @@ impl Relayed<'_> {
                 let owner = HiddenOwner::of(&sender.signing_pubkey)?;
                 owner.check_signers([self.fee_payer])?;
                 check_anonymous_inputs(&proof_inputs, &sender)?;
-                // The relay wire carries one nullifier key.
-                if let Some(owner) = public_co_owners(&proof_inputs, &sender)?.first() {
-                    return Err(RingError::MissingCoOwnerKey { owner: *owner });
-                }
                 let exits = AnonymousExits {
                     transfers: &proof_inputs.external_data.interface_transfers,
                     hidden_owner: &owner.0,
@@ -142,7 +143,7 @@ impl Relayed<'_> {
                 };
                 (
                     rail(RingDelivery::Anonymous(plan.clone())),
-                    Vec::new(),
+                    public_co_owners(&proof_inputs, &sender)?,
                     Spend::Anonymous(Box::new(spend)),
                 )
             }
@@ -169,7 +170,7 @@ impl Relayed<'_> {
                     .ok_or(RingError::MissingInProofOwnerSignature)?;
                 (
                     rail(delivery),
-                    Vec::new(),
+                    public_co_owners(&proof_inputs, &sender)?,
                     Spend::InProofOwner(OwnerAuthorization::Prepared {
                         owner: sender.signing_pubkey,
                         signature,
@@ -212,13 +213,23 @@ impl Relayed<'_> {
             sender,
             authority: TransferAuthority {
                 owner: Some(relayed.nullifier_key.clone()),
-                co_owners: Vec::new(),
+                co_owners: relayed
+                    .co_owners
+                    .iter()
+                    .map(|co_owner| {
+                        CoOwnerKey::of(&CoOwner {
+                            owner: co_owner.owner,
+                            nullifier_key: &co_owner.nullifier_key,
+                        })
+                    })
+                    .collect::<Result<_, RingError>>()?,
             },
             owner_signers,
             interface_transfer_accounts: relayed.interface_transfer_accounts.clone(),
             spend,
             presealed: Some(PresealedAudit {
                 message: auditor_message,
+                wide_owners: relayed.wide_owners,
             }),
             list_salts: relayed.list_salts.clone(),
         })

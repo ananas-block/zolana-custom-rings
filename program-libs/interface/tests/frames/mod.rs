@@ -60,7 +60,7 @@ impl Fixture {
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             records: core::array::from_fn(|i| [0x80 + i as u8; AUDIT_RECORD_LEN]),
             tails: core::array::from_fn(|i| [0xc0 + i as u8; DATA_TAIL_LEN]),
-            envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
+            envelope: (0..8192u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             recipient_body: core::array::from_fn(|byte| byte as u8 ^ 0x5a),
             extended_body: core::array::from_fn(|byte| byte as u8 ^ 0x3c),
@@ -228,6 +228,7 @@ impl Fixture {
                 data: &self.payload,
             }],
             cache: None,
+            approval_totals: None,
         };
         data.outputs = vec![self.recipient(0), self.recipient(1)];
         self.with_audit_stream(data)

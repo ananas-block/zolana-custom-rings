@@ -134,7 +134,7 @@ describe("auditor envelope", () => {
     expect(auditSharedSecret(dh, ephemeralPublicKey, auditor.publicKey())).toEqual(
       field("2590b2b949a2f87b9201e4d065167ea9282c4bd06a32e888e24e33c5bddae54f"),
     );
-    const envelope = field("da94f616e95702bdea89178dd9c4547393ebce9d47e67d0cac1533f13b678b90");
+    const envelope = field("48537b94c6262ed3b45768a5d0f065edbb25515039bef17bacf99386f7f55e6a");
     expect(
       openAuditorRegions(auditor, ephemeralPublicKey, [
         { counter: STREAM_FIRST_COUNTER, bytes: envelope },

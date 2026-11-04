@@ -31,6 +31,8 @@ pub(crate) struct SealedAudit {
 
 pub(crate) struct PresealedAudit {
     pub message: MessageData,
+    /// The owner sealed under the wide key.
+    pub wide_owners: bool,
 }
 
 pub(super) struct AuditSeal<'a> {

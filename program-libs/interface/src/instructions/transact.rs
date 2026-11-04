@@ -231,6 +231,8 @@ pub struct FrameExtensions<'a> {
     pub messages: Vec<AppMessage<'a>>,
     /// The cached selector, refused on the authority rails.
     pub cache: Option<CacheAccess>,
+    /// Present only for a co-signer that reads exact totals, the opening stays off chain.
+    pub approval_totals: Option<&'a [u8; 32]>,
 }
 
 impl<'a> FrameExtensions<'a> {
@@ -269,11 +271,15 @@ impl<'a> FrameExtensions<'a> {
         let cache = has(extension_flag::CACHE)
             .then(|| read_cache_access(bytes))
             .transpose()?;
+        let approval_totals = has(extension_flag::APPROVAL_TOTALS)
+            .then(|| bytes.array())
+            .transpose()?;
         Ok(Self {
             data_hash,
             ring_data_hash,
             messages,
             cache,
+            approval_totals,
         })
     }
 
@@ -286,7 +292,11 @@ impl<'a> FrameExtensions<'a> {
                     extension_flag::RING_DATA_HASH,
                 )
                 | flag(!self.messages.is_empty(), extension_flag::MESSAGES)
-                | flag(self.cache.is_some(), extension_flag::CACHE),
+                | flag(self.cache.is_some(), extension_flag::CACHE)
+                | flag(
+                    self.approval_totals.is_some(),
+                    extension_flag::APPROVAL_TOTALS,
+                ),
         );
         if let Some(hash) = self.data_hash {
             out.extend_from_slice(hash);
@@ -307,6 +317,9 @@ impl<'a> FrameExtensions<'a> {
         if let Some(cache) = &self.cache {
             write_cache_access(cache, out);
         }
+        if let Some(totals) = self.approval_totals {
+            out.extend_from_slice(totals);
+        }
         Ok(())
     }
 
@@ -314,6 +327,7 @@ impl<'a> FrameExtensions<'a> {
         const FIELD: usize = 32;
         1 + self.data_hash.map_or(0, |_| FIELD)
             + self.ring_data_hash.map_or(0, |_| FIELD)
+            + self.approval_totals.map_or(0, |_| FIELD)
             + match self.messages.is_empty() {
                 true => 0,
                 false => {
@@ -333,7 +347,8 @@ pub mod extension_flag {
     pub const RING_DATA_HASH: u8 = 1 << 1;
     pub const MESSAGES: u8 = 1 << 2;
     pub const CACHE: u8 = 1 << 3;
-    pub const KNOWN: u8 = DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE;
+    pub const APPROVAL_TOTALS: u8 = 1 << 4;
+    pub const KNOWN: u8 = DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS;
 }
 
 const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
@@ -420,7 +435,7 @@ impl InputTrees {
 pub enum SlotBody<'a> {
     /// A slot another message covers, such as change the sender bundle holds.
     None,
-    /// Scheme 13 under the slot's view tag or recipient key.
+    /// Ring body under the slot's view tag or recipient key.
     Recipient(&'a [u8]),
     /// Scheme 3 under its own owner tag, a default-ring wallet reads it.
     Exit(&'a [u8]),
@@ -494,7 +509,7 @@ fn slot_bits(set: impl Iterator<Item = bool>) -> u64 {
         .fold(0, |bits, (slot, _)| bits | 1 << slot)
 }
 
-/// Scheme 12, forwarded under its tag as the first SPP message, `m` fixes the length.
+/// Sender bundle, forwarded under its tag as the first SPP message, `m` fixes the length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramedSenderBundle<'a> {
     pub tag: &'a [u8; 32],
@@ -586,6 +601,7 @@ impl<'a> ParsedTransact<'a> {
             },
             family,
             approval_mask: data.approval,
+            approval_totals: data.extensions.approval_totals.unwrap_or(&ZERO_FIELD),
             no_spend: data.no_spend,
             outputs: &data.outputs,
             output_capacity: self.stream.capacity,

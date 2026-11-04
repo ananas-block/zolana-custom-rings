@@ -1074,14 +1074,18 @@ describe("RpcTransactionOrigin", () => {
       .finish();
 
     /** The vector frame's row, its salt and ciphertext read back from the forwarded body. */
-    function bind(authority: MergeRingAuthority, tamper = false) {
+    function bind(
+      authority: MergeRingAuthority,
+      tamper = false,
+      wrapperTag: number = RingInstructionTag.merge,
+    ) {
       const request = { ...vectorFrame, authority };
       const forwarded = forwardedMergeData(
         request,
         sppMergeBody(request.compactBody),
         InstructionTag.ringMergeV2,
       );
-      const wrapper = Uint8Array.of(RingInstructionTag.merge, ...encodeRingMergeRequest(request));
+      const wrapper = Uint8Array.of(wrapperTag, ...encodeRingMergeRequest(request));
       const source = forwarded.slice();
       if (tamper) source[source.length - 1] = (source[source.length - 1] ?? 0) ^ 1;
       const indexed = (nullifiers: readonly Bytes32[], payload: Uint8Array, hash: Bytes32) => ({
@@ -1122,6 +1126,10 @@ describe("RpcTransactionOrigin", () => {
       const tampered = bind(authority, true);
       await expect(
         new RpcTransactionOrigin(rpcWith(tampered.confirmed)).confirmedTransaction(row, RING),
+      ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
+      const sppTag = bind(authority, false, InstructionTag.ringMergeV2);
+      await expect(
+        new RpcTransactionOrigin(rpcWith(sppTag.confirmed)).confirmedTransaction(row, RING),
       ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
     });
   });
@@ -1171,7 +1179,7 @@ describe("RpcTransactionOrigin", () => {
         RING,
       );
 
-    it("binds a CRDEP002 capsule and refuses another forwarded byte", () => {
+    it("binds a CRDEPOST capsule and refuses another forwarded byte", () => {
       expect(bound(source)).toHaveLength(1);
       const tampered = source.slice();
       tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 1;

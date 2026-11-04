@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use custom_ring_interface::{
     compute_unit_limit, storage_instruction, tag as ring_tag, tracking::TrackingAuthorization,
-    InstructionTag, FRAME_BUFFER_HEADER_LEN, STORAGE_PROGRAM_ID,
+    InstructionTag, FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
     close_frame_buffer, AddressCeiling, BufferedFrame, CeilingDecision, MergeCapacity, RingError,
@@ -36,7 +36,7 @@ use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs,
     RelayEnrollInputs, RelayId, RelayIntent, RelayMergeInputs, RelayProofInputs,
     RelayProofInputsError, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
-    TokenAccountSetupError,
+    TokenAccountSetupError, ENROLL_COMPUTE_UNITS,
 };
 use zolana_ring_policy::Member;
 
@@ -64,16 +64,15 @@ const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
 
 const LANDING_POLL: Duration = Duration::from_millis(500);
-const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
+const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge";
 /// Modelled, the first enrollment verifies a proof in its instruction.
-const ENROLL_COMPUTE_UNITS: u32 = 400_000;
 /// One blockhash lifetime for the last write to land and one for the wallet to sign.
 pub const ABANDONED_AFTER_SLOTS: u64 = 2 * QUOTE_SLOTS;
 const SWEEP_PAGE: u64 = 16;
 const LAMPORTS_PER_SIGNATURE: u64 = 5_000;
-const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame/v1";
-const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll/v1";
-const SETUP_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-setup/v1";
+const FRAME_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-frame";
+const ENROLL_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-enroll";
+const SETUP_KEY_DOMAIN: &[u8] = b"zolana/ring-rpc-reserve-setup";
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -1530,22 +1529,9 @@ fn check_enrollment(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Resul
     }
 }
 
-/// `payer, owner, tracking_registry, authorization, system_program`.
 fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> ProvenRelay {
-    let (authorization, _) =
-        TrackingAuthorization::find_address(&enrollment.tracking_registry, &enrollment.owner);
     ProvenRelay {
-        instruction: Instruction {
-            program_id: STORAGE_PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new(fee_payer, true),
-                AccountMeta::new_readonly(enrollment.owner, true),
-                AccountMeta::new(enrollment.tracking_registry, false),
-                AccountMeta::new(authorization, false),
-                AccountMeta::new_readonly(Address::default(), false),
-            ],
-            data: enrollment.instruction_data.clone(),
-        },
+        instruction: enrollment.instruction(fee_payer),
         budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
         co_signers: Vec::new(),
         signers: vec![enrollment.owner],

@@ -46,6 +46,11 @@ impl Assembled {
             public_input_hash: self.public_input_hash,
             audit: audit.params()?,
             approval_mask: frame.policy.approval.bits(),
+            approval_totals: parts.extensions.approval_totals,
+            approval_blinder: frame
+                .approval_opening
+                .as_ref()
+                .map(|opening| opening.blinder.0),
             output_count: byte(parts.outputs.len())?,
             outputs: audit.output_openings(stream.capacity)?,
             input_count: byte(frame.published_inputs)?,

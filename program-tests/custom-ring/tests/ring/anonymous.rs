@@ -254,7 +254,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         indexed.output_slots.iter().any(|slot| {
             slot.view_tag != [0; 32]
                 && slot.view_tag != recipient_keys.viewing_pubkey().u()
-                && ring_recipient_output_body(&slot.payload).is_some()
+                && ring_body_output(&slot.payload).is_some()
         }),
         "the payment publishes a recipient body under a slot secret tag"
     );

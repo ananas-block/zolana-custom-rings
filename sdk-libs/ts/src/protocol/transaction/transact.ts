@@ -88,6 +88,8 @@ export interface FrameExtensions {
   readonly messages?: readonly AppMessage[];
   /** The cached selector, refused on the authority rails. */
   readonly cache?: CacheAccess;
+  /** Present only for a co-signer that reads exact totals, the opening stays off chain. */
+  readonly approvalTotals?: Bytes32;
 }
 
 /** Rust `ApprovalMask`. */
@@ -125,7 +127,7 @@ export type InputTrees =
 export type SlotBody =
   /** A slot another message covers, such as change the sender bundle holds. */
   | Readonly<{ kind: "none" }>
-  /** Scheme 13 under the slot's view tag or recipient key. */
+  /** Ring body under the slot's view tag or recipient key. */
   | Readonly<{ kind: "recipient"; body: Uint8Array }>
   /** Scheme 3 under its own owner tag, a default-ring wallet reads it. */
   | Readonly<{ kind: "exit"; payload: Uint8Array }>;
@@ -141,7 +143,7 @@ export interface RingOutput {
   readonly tail?: Uint8Array;
 }
 
-/** Scheme 12, forwarded under its tag as the first SPP message, its length fixed by `m`. */
+/** Sender bundle, forwarded under its tag as the first SPP message, its length fixed by `m`. */
 export interface PublishedSenderBundle {
   readonly tag: Bytes32;
   readonly body: Uint8Array;
@@ -299,10 +301,11 @@ export function ringStreamLayout(
     entry: boolean;
     hasData: boolean;
     publicOwners?: boolean;
+    /** The selected key's flag, unset fits the published counts alone. */
+    wideOwners?: boolean;
   }>,
 ): AuditStreamLayout {
-  // A spend past the narrow key's inputs names the wide key before the policy reads its pools.
-  const spend = fittedSpend({
+  const fitted = fittedSpend({
     rail: shape.rail,
     inputs: shape.inputs,
     outputs: shape.nOut,
@@ -312,6 +315,7 @@ export function ringStreamLayout(
     pools: { own: 0, curator: 0, tracking: 0 },
     wide: false,
   });
+  const spend = { ...fitted, wide: shape.wideOwners ?? fitted.wide };
   const flags: FrameFlags = {
     defaultOwnerTag: false,
     publicOwners: shape.publicOwners ?? false,
@@ -483,8 +487,9 @@ const ExtensionFlag = Object.freeze({
   ringDataHash: 1 << 1,
   messages: 1 << 2,
   cache: 1 << 3,
+  approvalTotals: 1 << 4,
 });
-const KNOWN_EXTENSIONS = 0b1111;
+const KNOWN_EXTENSIONS = 0b1_1111;
 
 /** The flags of the frame header, Rust `FrameFlags`. */
 interface FrameFlags {
@@ -749,11 +754,15 @@ function readExtensions(bytes: Reader): FrameExtensions {
       })
     : undefined;
   const cache = has(flags, ExtensionFlag.cache) ? readCacheAccess(bytes) : undefined;
+  const approvalTotals = has(flags, ExtensionFlag.approvalTotals)
+    ? field32(bytes, "approvalTotals")
+    : undefined;
   return Object.freeze({
     ...(dataHash === undefined ? {} : { dataHash }),
     ...(ringDataHash === undefined ? {} : { ringDataHash }),
     ...(messages === undefined ? {} : { messages: Object.freeze(messages) }),
     ...(cache === undefined ? {} : { cache }),
+    ...(approvalTotals === undefined ? {} : { approvalTotals }),
   });
 }
 
@@ -772,7 +781,8 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
     extensions.dataHash === undefined &&
     extensions.ringDataHash === undefined &&
     (extensions.messages === undefined || extensions.messages.length === 0) &&
-    extensions.cache === undefined
+    extensions.cache === undefined &&
+    extensions.approvalTotals === undefined
   );
 }
 
@@ -783,6 +793,7 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
     [messages.length > 0, ExtensionFlag.messages],
     [extensions.cache !== undefined, ExtensionFlag.cache],
+    [extensions.approvalTotals !== undefined, ExtensionFlag.approvalTotals],
   ];
   out.u8(
     bits.reduce((flags, [set, bit]) => (set ? flags | bit : flags), 0),
@@ -801,6 +812,8 @@ function writeExtensions(out: Writer, extensions: FrameExtensions): void {
     }
   }
   if (extensions.cache !== undefined) writeCacheAccess(out, extensions.cache);
+  if (extensions.approvalTotals !== undefined)
+    out.bytes(extensions.approvalTotals, 32, "approvalTotals");
 }
 
 function writeCacheAccess(out: Writer, cache: CacheAccess): void {

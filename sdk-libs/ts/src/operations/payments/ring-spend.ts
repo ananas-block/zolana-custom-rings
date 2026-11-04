@@ -143,7 +143,8 @@ function isOwn(input: ProofInputUtxo, owner: ShieldedAddress): boolean {
   );
 }
 
-function standIn(input: ProofInputUtxo, owner: ShieldedAddress): ProofInputUtxo {
+/** The core builders and intent check hold every input to one owner, the value stays the note's. */
+export function standIn(input: ProofInputUtxo, owner: ShieldedAddress): ProofInputUtxo {
   if (isOwn(input, owner)) return input;
   const { utxo } = input;
   return new ProofInputUtxo({

@@ -91,7 +91,7 @@ func (k Key) circuitType() common.CircuitType {
 	case Deposit:
 		return named("deposit-%d", k.Inputs)
 	case Merge:
-		return named("merge-v4")
+		return named("merge")
 	}
 	panic(fmt.Sprintf("ring: unknown ring family %d", k.Family))
 }

@@ -23,7 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-const depositElements = 4 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits + 1
+const depositElements = 4 + 2*circuits.MaxDeposits + 4 + 4 + 2*circuits.MaxDeposits
 
 const (
 	depositDefine = "circuits.(*DepositCircuit).Define"
@@ -202,8 +202,39 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 		d.Circuit.PublicInputHash = spptest.MustHashChain4(t, moved)
 		requireStatementRefused(t, d)
 	}
-	if last := elements[len(elements)-1]; last.Cmp(big.NewInt(circuits.DepositStatementVersion)) != 0 {
-		t.Fatalf("the statement closes on %v", last)
+}
+
+// HashChain4 pads zeros, every capacity holds one length and refuses a shorter chain.
+func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
+	zero := new(big.Int)
+	for _, capacity := range circuits.DepositCapacities {
+		for _, count := range []int{1, capacity} {
+			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential).Narrow(t, capacity)
+			elements := d.Elements(t)
+			if len(elements) != depositElements {
+				t.Fatalf("capacity %d count %d holds %d elements", capacity, count, len(elements))
+			}
+			if tail := elements[len(elements)-1]; (count < circuits.MaxDeposits) != (tail.Sign() == 0) {
+				t.Fatalf("count %d ends the chain on %v", count, tail)
+			}
+			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, elements[:len(elements)-1])
+			requireStatementRefused(t, d)
+		}
+	}
+	chain := ringdeposit.Build(t, 1, ringdeposit.ModeConfidential).Elements(t)
+	reference := spptest.MustHashChain4(t, chain)
+	for _, padded := range [][]*big.Int{append(slices.Clone(chain), zero), append(slices.Clone(chain), zero, zero)} {
+		if spptest.MustHashChain4(t, padded).Cmp(reference) != 0 {
+			t.Fatal("the zero tail no longer pads")
+		}
+	}
+	if spptest.MustHashChain4(t, append(slices.Clone(chain), zero, zero, zero)).Cmp(reference) == 0 {
+		t.Fatal("a third zero opens a new round")
+	}
+	moved := slices.Clone(chain)
+	moved[len(moved)-1] = big.NewInt(1)
+	if spptest.MustHashChain4(t, moved).Cmp(reference) == 0 {
+		t.Fatal("the tail moves the hash at the one length")
 	}
 }
 
@@ -299,7 +330,7 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		cases = append(cases, v)
 	}
 	ringtest.PinVector(t, "deposit/deposit.json", map[string]any{
-		"description": "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep1. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
+		"description": "Solved deposit witnesses. A record is kind || u64be(amount) || owner_key || mint || be32(nullifier_pk) || 7 zero bytes || be32(blinding), slot i at counter 2 + 9 * i under label CRING/dep. owner_utxo_hash = Poseidon(Poseidon(solana_owner_identity(owner_key), nullifier_pk), blinding). Produced by prover/circuits/deposit_test.go with WRITE_AUDIT_VECTORS=1.",
 		"cases":       cases,
 	})
 }
