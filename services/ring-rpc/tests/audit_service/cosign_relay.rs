@@ -158,12 +158,13 @@ impl CappedRelay {
         let fixture = Fixture::new();
         // The note a capped transfer spends, the co-signer reads its owner from the store.
         let sender = owner();
-        let (note_row, nullifier) = keyed_note(
-            &fixture,
-            0x40,
-            sender_fields(SENDER_CAP),
-            &sender.nullifier_key,
-        );
+        let (note_row, nullifier) = KeyedNote {
+            fixture: &fixture,
+            seed: 0x40,
+            note: sender_fields(SENDER_CAP),
+            key: &sender.nullifier_key,
+        }
+        .delivered();
         let mut source = fixture.source().with_transactions(vec![note_row]);
         source.tracking.enroll(
             &sender_fields(SENDER_CAP).owner_key,

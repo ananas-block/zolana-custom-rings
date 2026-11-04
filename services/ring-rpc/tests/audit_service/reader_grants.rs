@@ -2,7 +2,7 @@
 
 use super::*;
 use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
-use zolana_ring_client::rpc::{GetWalletStatusResponse, GET_WALLET_STATUS};
+use zolana_ring_client::rpc::{GetWalletStatusResponse, WalletNoteStatus, GET_WALLET_STATUS};
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -380,20 +380,29 @@ async fn a_confidential_owner_signer_of_an_unnamed_input_reads_its_own_notes_alo
     assert_reads_own_notes_alone(wallet_activity(source, &fixture, OWNER).await);
 }
 
+fn owned_note(amount: u64) -> UtxoFields {
+    UtxoFields {
+        owner_key: OWNER.to_bytes(),
+        ..sol(0, amount)
+    }
+}
+
 /// `OWNER`'s tracked note spent beside `co_spent`, paying a stranger and `OWNER`.
 fn tracked_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
     let key = NullifierKey::from_secret([7; 31]);
-    let owned = |amount| UtxoFields {
-        owner_key: OWNER.to_bytes(),
-        ..sol(0, amount)
-    };
-    let (note, nullifier) = keyed_note(fixture, 0x60, owned(900), &key);
+    let (note, nullifier) = KeyedNote {
+        fixture,
+        seed: 0x60,
+        note: owned_note(900),
+        key: &key,
+    }
+    .delivered();
     let nullifiers = [&[nullifier], co_spent].concat();
     let spend = Indexed {
         transfer: &spending(0x61, &nullifiers),
         outputs: &[
             paid(sol(0xb0, 500), fixture.recipient_u),
-            paid(owned(7), fixture.recipient_u),
+            paid(owned_note(7), fixture.recipient_u),
         ],
         auditor: &fixture.auditor.pubkey(),
         signature: 0x61,
@@ -408,12 +417,8 @@ fn tracked_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
     source
 }
 
-/// The amounts of the wallet's spend, after the note it received.
-async fn spent_amounts(source: StaticSource, fixture: &Fixture) -> Vec<u64> {
-    let reader = wallet_reader(&source, OWNER);
-    let service = fixture.hub(source).service(None).expect("service");
-    service.backfill_utxos().await.expect("backfill");
-    let items = activity(wallet_read(&service, &reader, OWNER).await);
+/// The output amounts of the wallet's spend, one input of its own, after the note it received.
+fn sender_amounts(items: Vec<WalletActivity>) -> Vec<u64> {
     let Some(WalletActivity {
         view: WalletView::Sender {
             inputs, outputs, ..
@@ -429,6 +434,14 @@ async fn spent_amounts(source: StaticSource, fixture: &Fixture) -> Vec<u64> {
         .flat_map(|output| &output.utxo)
         .map(|utxo| utxo.amount)
         .collect()
+}
+
+/// The amounts of the wallet's spend, after the note it received.
+async fn spent_amounts(source: StaticSource, fixture: &Fixture) -> Vec<u64> {
+    let reader = wallet_reader(&source, OWNER);
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    sender_amounts(activity(wallet_read(&service, &reader, OWNER).await))
 }
 
 #[tokio::test]
@@ -582,4 +595,105 @@ async fn a_wallet_reads_its_own_notes_with_its_own_signature() {
         .sign(&owner)
         .expect("signed");
     assert!(service.wallet_status(&other).await.is_err());
+}
+
+/// `OWNER`'s tracked note spent on the anonymous rail, `real` flags each input after it.
+fn anonymous_spend(fixture: &Fixture, others: &[([u8; 32], bool)]) -> StaticSource {
+    let key = NullifierKey::from_secret([7; 31]);
+    let (note, nullifier) = KeyedNote {
+        fixture,
+        seed: 0x62,
+        note: owned_note(900),
+        key: &key,
+    }
+    .anonymous();
+    let nullifiers: Vec<_> = core::iter::once(nullifier)
+        .chain(others.iter().map(|(other, _)| *other))
+        .collect();
+    let real: Vec<_> = core::iter::once(true)
+        .chain(others.iter().map(|(_, real)| *real))
+        .collect();
+    let spend = Indexed {
+        transfer: &spending(0x63, &nullifiers),
+        outputs: &[
+            Output::Ring {
+                utxo: sol(0xb0, 500),
+                recipient_u: x25519_u(0x50),
+                tag: Some(field(0x51)),
+            },
+            Output::Ring {
+                utxo: owned_note(7),
+                recipient_u: x25519_u(0x52),
+                tag: Some(field(0x53)),
+            },
+        ],
+        auditor: &fixture.auditor.pubkey(),
+        signature: 0x63,
+        frames: &fixture.frames,
+    }
+    .anonymous(&real);
+    let mut source = fixture.source().with_transactions(vec![note, spend]);
+    source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
+    source.next_cursor = None;
+    source
+        .tracking
+        .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
+    source
+}
+
+#[tokio::test]
+async fn an_anonymous_spend_reads_a_resolved_input_an_unresolved_one_and_padding_apart() {
+    let fixture = Fixture::new();
+    let source = anonymous_spend(&fixture, &[(field(0x71), true), (field(0x72), false)]);
+    let reader = wallet_reader(&source, OWNER);
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+
+    let coverage = service
+        .spend_coverage(&coverage_failures::coverage_request(&authority()))
+        .await
+        .expect("coverage");
+    assert_eq!(coverage.resolved, 1);
+    assert_eq!(coverage.padding, 1);
+    // The paying transfer's own input stays unresolved beside the spend's.
+    assert_eq!(
+        coverage
+            .unresolved_real
+            .iter()
+            .map(|row| row.nullifier.0)
+            .collect::<Vec<_>>(),
+        [field(0x62), field(0x71)]
+    );
+    assert!(coverage.unreadable.is_empty());
+    assert!(coverage.integrity_faults.is_empty());
+
+    let status = service
+        .wallet_status(
+            &WalletStatusRequest::new(target(RING), OWNER)
+                .sign(&delegate())
+                .expect("signed read"),
+        )
+        .await
+        .expect("status");
+    let spent = status
+        .notes
+        .iter()
+        .find(|note| note.amount == 900)
+        .expect("the resolved note");
+    assert_eq!(spent.status, WalletNoteStatus::Spent);
+
+    // The unresolved input makes the wallet a co-owner, it reads its own notes alone.
+    let items = activity(wallet_read(&service, &reader, OWNER).await);
+    assert_eq!(sender_amounts(items), [7]);
+}
+
+#[tokio::test]
+async fn padding_beside_a_resolved_anonymous_input_leaves_a_sole_owner() {
+    let fixture = Fixture::new();
+    let source = anonymous_spend(&fixture, &[(field(0x72), false)]);
+    let reader = wallet_reader(&source, OWNER);
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    let items = activity(wallet_read(&service, &reader, OWNER).await);
+    assert_eq!(sender_amounts(items), [500, 7]);
 }

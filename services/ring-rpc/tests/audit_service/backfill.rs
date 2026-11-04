@@ -165,6 +165,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             wallet: None,
         })
     );
+    // The sealed record carries the raw mint, no registry read names it.
     let mint = |response: &GetDecryptedTransactionsResponse| {
         let utxo = response.value.items[0].outputs[0].utxo.as_ref();
         utxo.and_then(|utxo| utxo.mint.as_ref()).map(|mint| mint.0)
@@ -613,7 +614,13 @@ async fn a_tracked_seal_names_a_note_and_a_forged_seal_names_none() {
     let fixture = Fixture::new();
     let owner = [0xb0; 32];
     let key = NullifierKey::from_secret([7; 31]);
-    let (row, _) = keyed_note(&fixture, 91, sol(0xb0, 500), &key);
+    let (row, _) = KeyedNote {
+        fixture: &fixture,
+        seed: 91,
+        note: sol(0xb0, 500),
+        key: &key,
+    }
+    .delivered();
     let status = |source: StaticSource| {
         let fixture = &fixture;
         async move {

@@ -882,38 +882,59 @@ fn spending(seed: u8, nullifiers: &[[u8; 32]]) -> Transfer {
     }
 }
 
-/// A delivered note under `key` and the nullifier its spend publishes.
-fn keyed_note(
-    fixture: &Fixture,
+/// A note under `key`, published with the nullifier its spend names.
+struct KeyedNote<'a> {
+    fixture: &'a Fixture,
     seed: u8,
     note: UtxoFields,
-    key: &NullifierKey,
-) -> (ShieldedTransaction, [u8; 32]) {
-    let paying = ring_transfer(seed);
-    let row = Indexed {
-        transfer: &paying,
-        outputs: &[
-            paid(
-                UtxoFields {
-                    nullifier_pk: key.pubkey().expect("key"),
-                    ..note
-                },
-                fixture.recipient_u,
-            ),
-            Output::Dummy,
-        ],
-        auditor: &fixture.auditor.pubkey(),
-        signature: seed,
-        frames: &fixture.frames,
+    key: &'a NullifierKey,
+}
+
+impl KeyedNote<'_> {
+    fn delivered(self) -> (ShieldedTransaction, [u8; 32]) {
+        let output = paid(self.keyed(), self.fixture.recipient_u);
+        self.publish(output, |indexed| indexed.delivered())
     }
-    .delivered();
-    let nullifier = key
-        .nullifier(
-            &row.output_slots[0].output_context.hash,
-            &paying.blinding(0),
-        )
-        .expect("nullifier");
-    (row, nullifier)
+
+    fn anonymous(self) -> (ShieldedTransaction, [u8; 32]) {
+        let output = Output::Ring {
+            utxo: self.keyed(),
+            recipient_u: self.fixture.recipient_u,
+            tag: Some(field(self.seed)),
+        };
+        self.publish(output, |indexed| indexed.anonymous(&[true]))
+    }
+
+    fn keyed(&self) -> UtxoFields {
+        UtxoFields {
+            nullifier_pk: self.key.pubkey().expect("key"),
+            ..self.note
+        }
+    }
+
+    fn publish(
+        &self,
+        output: Output,
+        rail: fn(Indexed<'_>) -> ShieldedTransaction,
+    ) -> (ShieldedTransaction, [u8; 32]) {
+        let paying = ring_transfer(self.seed);
+        let auditor = self.fixture.auditor.pubkey();
+        let row = rail(Indexed {
+            transfer: &paying,
+            outputs: &[output, Output::Dummy],
+            auditor: &auditor,
+            signature: self.seed,
+            frames: &self.fixture.frames,
+        });
+        let nullifier = self
+            .key
+            .nullifier(
+                &row.output_slots[0].output_context.hash,
+                &paying.blinding(0),
+            )
+            .expect("nullifier");
+        (row, nullifier)
+    }
 }
 
 fn utxo(owner: u8, asset_address: Address, amount: u64) -> UtxoFields {
