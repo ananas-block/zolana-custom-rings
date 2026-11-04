@@ -19,6 +19,7 @@ const (
 	TransferAnonymous
 	TransferAnonymousEntry
 	ApplyRecords
+	ApplyEnrollments
 	RegisterKey
 	Deposit
 	Merge
@@ -64,6 +65,9 @@ func keys() []Key {
 	for _, writes := range registry.ApplyWidths {
 		add(Key{Family: ApplyRecords, Inputs: writes})
 	}
+	for _, writes := range registry.ApplyWidths {
+		add(Key{Family: ApplyEnrollments, Inputs: writes})
+	}
 	add(Key{Family: RegisterKey})
 	for _, capacity := range circuits.DepositCapacities {
 		add(Key{Family: Deposit, Inputs: capacity})
@@ -102,6 +106,8 @@ func (k Key) circuitType() common.CircuitType {
 		return named("transfer-anonymous-entry-%d-in%d-w%d-s%d%s", k.Outputs, k.Inputs, k.Withdrawals, k.Owners, k.dataSuffix())
 	case ApplyRecords:
 		return named("apply-records-%d", k.Inputs)
+	case ApplyEnrollments:
+		return named("apply-enrollments-%d", k.Inputs)
 	case RegisterKey:
 		return named("register-key")
 	case Deposit:

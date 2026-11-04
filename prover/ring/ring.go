@@ -34,6 +34,8 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bindPolicy[AnonymousTransferParams](k, transfer.NewAnonymousTransferCircuit, k.anonymousShape())
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
+	case ApplyEnrollments:
+		return bind[ApplyEnrollmentsParams](k, registry.NewApplyEnrollmentsCircuit, k.Inputs)
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
@@ -64,11 +66,13 @@ func bind[P headed, S any, C frontend.Circuit](k Key, constructor func(S) (C, er
 type pooledCircuit interface {
 	frontend.Circuit
 	RecordPools() policy.RecordPoolShape
+	TrackingPoolSize() int
 }
 
 type pooledParams interface {
 	headed
 	pooled() PolicyParams
+	tracking() TrackingParams
 }
 
 // bindPolicy refuses a pool index outside the key's pools before assignment.
@@ -76,7 +80,8 @@ func bindPolicy[P pooledParams, S any, C pooledCircuit](k Key, constructor func(
 	extension := bind[P](k, constructor, shape)
 	plain := extension.Request
 	extension.Request = func() common.ExtensionRequest {
-		return &policyRequest[P]{request: plain().(*request[P]), pools: extension.Circuit().(C).RecordPools()}
+		circuit := extension.Circuit().(C)
+		return &policyRequest[P]{request: plain().(*request[P]), pools: circuit.RecordPools(), trackingPool: circuit.TrackingPoolSize()}
 	}
 	return extension
 }
@@ -104,17 +109,23 @@ func (r *request[P]) UnmarshalJSON(data []byte) error {
 
 type policyRequest[P pooledParams] struct {
 	*request[P]
-	pools policy.RecordPoolShape
+	pools        policy.RecordPoolShape
+	trackingPool int
 }
 
 func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
 	if err := r.params.pooled().validateIndices(r.pools); err != nil {
 		return nil, err
 	}
+	if err := r.params.tracking().validateIndices(r.trackingPool); err != nil {
+		return nil, err
+	}
 	return r.request.Assignment()
 }
 
 func (p PolicyParams) pooled() PolicyParams { return p }
+
+func (p TransferParams) tracking() TrackingParams { return p.TrackingParams }
 
 func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
 	if err := validatePoolIndices(p.OwnSubjects, p.OwnProof, pools.Own); err != nil {
@@ -130,6 +141,25 @@ func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
 	}
 	for _, index := range p.PublicAssetEntries {
 		if err := poolIndex("public asset subject", index, pools.OwnSubjects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t TrackingParams) validateIndices(size int) error {
+	for _, subject := range t.TrackingSubjects {
+		if err := poolIndex("tracking record", subject.RecordIndex, size); err != nil {
+			return err
+		}
+	}
+	for _, path := range t.TrackingProof.Paths {
+		if path.Index >= registry.TrackingCapacity {
+			return fmt.Errorf("tracking path index is outside the tree")
+		}
+	}
+	for _, entry := range slices.Concat(t.RowEntries, t.OutputEntries) {
+		if err := poolIndex("tracking subject", entry, size); err != nil {
 			return err
 		}
 	}
