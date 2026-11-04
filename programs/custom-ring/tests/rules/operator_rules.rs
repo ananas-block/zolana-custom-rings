@@ -339,6 +339,31 @@ fn a_rotated_admin_appoints_the_delegate_and_the_old_one_cannot() {
 }
 
 #[test]
+fn both_policy_writes_refuse_a_rule_against_its_list_polarity() {
+    let mut ring = uninitialized(Setup::Policy);
+    let inverted = list_table(ListId::Block, Vec::new());
+    let mut data = policy_config(&ring);
+    data.policy = Some(PolicyBindingIxData {
+        table: inverted.clone(),
+    });
+    refused(
+        upgrade_initialize(&mut ring, data),
+        CustomRingError::RuleListPolarity,
+    );
+    let mut ring = Ring::new(Setup::Policy);
+    let policy = ring.roles.policy.pubkey();
+    refused(
+        ring.role_send(RingRole::Policy, rules_write(&policy, inverted)),
+        CustomRingError::RuleListPolarity,
+    );
+    ring.role_send(
+        RingRole::Policy,
+        rules_write(&policy, allow_list_table(Vec::new())),
+    )
+    .expect("a grant list read by presence");
+}
+
+#[test]
 fn a_rule_over_a_member_written_list_is_refused() {
     let mut ring = Ring::new(Setup::Policy);
     let policy = ring.roles.policy.pubkey();

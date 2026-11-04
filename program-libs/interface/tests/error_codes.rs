@@ -118,6 +118,7 @@ pinned_codes! {
     TrackingRootBelowFloor = 8503,
     PrivateSourceOtherTracking = 8504,
     PublicRegistryAsPrivateSource = 8505,
+    RuleListPolarity = 8506,
 }
 
 #[test]

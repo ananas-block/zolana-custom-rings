@@ -166,6 +166,7 @@ ring_errors! {
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a private source's floor",
     PrivateSourceOtherTracking = 8504 => "a private source pairs with another tracking registry",
     PublicRegistryAsPrivateSource = 8505 => "the private source names a registry with no tracking pair",
+    RuleListPolarity = 8506 => "a rule reads a grant list by absence or a deny list by presence",
 }
 
 impl From<CustomRingError> for ProgramError {
@@ -185,6 +186,7 @@ impl From<RuleTableError> for CustomRingError {
         match error {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
             RuleTableError::ListNotPolicyReadable => Self::ListNotPolicyReadable,
+            RuleTableError::ListPolarity => Self::RuleListPolarity,
             _ => Self::InvalidPolicyRules,
         }
     }
