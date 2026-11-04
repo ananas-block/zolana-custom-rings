@@ -27,7 +27,7 @@ use zolana_ring_transaction::{
 use crate::history::{HistoryPosition, PageEnd};
 use crate::{
     anonymous_wallet::PendingNote,
-    confidential::RingMerges,
+    confidential::{is_ring_merge, RingMerges},
     delivered::{self, RingDeliveryContext},
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
     deposit_payload, exactly_one, exactly_one_each,
@@ -664,39 +664,22 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         rows: &[ShieldedTransaction],
     ) -> Result<(), AnonymousError> {
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let owner = self.address.signing_pubkey;
-        let owner_tag = owner.owner_proof_input_hash()?;
+        let sync = self.sync;
+        let opener = OwnerMergeOpener::new(sync.keys, self.address.signing_pubkey, sync.assets)?;
         for tx in rows {
-            let Some(merge) = OwnerMerge::of(tx, &owner_tag) else {
+            let Some(merge) = opener.candidate(tx) else {
                 continue;
             };
-            if self.is_found(&tx.output_slots[0].output_context.hash) {
+            if self.is_found(merge.commitment()) {
                 continue;
             }
-            let seed = exactly_one(self.sync.keys.merge_seeds(&[MergeSeedRequest {
-                viewing_pubkey,
-                ring_program_id: merge.ring,
-                first_nullifier: merge.first_nullifier,
-            }])?)?;
-            let Some(mint) = merge.open(tx, &seed, owner)? else {
-                continue;
-            };
             let found = AnonymousStream::Merge {
                 first_nullifier: merge.first_nullifier,
             };
-            match self.sync.assets.registry().mint(&mint.utxo.asset.asset) {
-                Ok(registered) => {
-                    let note = OpenedNote {
-                        utxo: spr_transaction::Utxo {
-                            asset: registered,
-                            ..mint.utxo
-                        },
-                        ..mint
-                    };
-                    self.accept(index, tx, found, 0, note)?;
-                }
-                Err(TransactionError::UnknownMint(_)) => self.hold_back(tx, 0, mint)?,
-                Err(error) => return Err(error.into()),
+            match opener.open(&merge, viewing_pubkey)? {
+                Some(OpenedBody::Note(note)) => self.accept(index, tx, found, 0, note)?,
+                Some(OpenedBody::UnknownMint(note)) => self.hold_back(tx, 0, note)?,
+                None => {}
             }
         }
         Ok(())
@@ -1218,32 +1201,93 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
     }
 }
 
+/// Opens one owner's zero-key merges, the shared reader of normal fetch and full scan.
+pub(crate) struct OwnerMergeOpener<'a, K: ?Sized> {
+    keys: &'a K,
+    owner: PublicKey,
+    owner_tag: [u8; 32],
+    assets: &'a RingAssets,
+}
+
+impl<'a, K: MergeSeedHolder + ?Sized> OwnerMergeOpener<'a, K> {
+    pub(crate) fn new(
+        keys: &'a K,
+        owner: PublicKey,
+        assets: &'a RingAssets,
+    ) -> Result<Self, AnonymousError> {
+        Ok(Self {
+            keys,
+            owner,
+            owner_tag: owner.owner_proof_input_hash()?,
+            assets,
+        })
+    }
+
+    pub(crate) fn candidate<'t>(&self, tx: &'t ShieldedTransaction) -> Option<OwnerMerge<'t>> {
+        OwnerMerge::of(tx, &self.owner_tag)
+    }
+
+    /// `None` under another wallet's seed, a holder failure fails the read.
+    pub(crate) fn open(
+        &self,
+        merge: &OwnerMerge<'_>,
+        viewing_pubkey: X25519Pubkey,
+    ) -> Result<Option<OpenedBody>, AnonymousError> {
+        let seed = exactly_one(self.keys.merge_seeds(&[MergeSeedRequest {
+            viewing_pubkey,
+            ring_program_id: merge.ring,
+            first_nullifier: merge.first_nullifier,
+        }])?)?;
+        let Some(note) = merge.rebuild(&seed, self.owner)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            match self.assets.registry().mint(&note.utxo.asset.asset) {
+                Ok(registered) => OpenedBody::Note(OpenedNote {
+                    utxo: spr_transaction::Utxo {
+                        asset: registered,
+                        ..note.utxo
+                    },
+                    ..note
+                }),
+                Err(TransactionError::UnknownMint(_)) => OpenedBody::UnknownMint(note),
+                Err(error) => return Err(error.into()),
+            },
+        ))
+    }
+}
+
 /// Nothing of it is authentic until its commitment rebuilds.
-struct OwnerMerge {
+pub(crate) struct OwnerMerge<'t> {
+    pub(crate) tx: &'t ShieldedTransaction,
     ring: Address,
     first_nullifier: [u8; 32],
     body: RingMergeBody,
 }
 
-impl OwnerMerge {
-    fn of(tx: &ShieldedTransaction, owner_tag: &[u8; 32]) -> Option<Self> {
+impl<'t> OwnerMerge<'t> {
+    fn of(tx: &'t ShieldedTransaction, owner_tag: &[u8; 32]) -> Option<Self> {
         let [slot] = tx.output_slots.as_slice() else {
             return None;
         };
-        if slot.view_tag != *owner_tag {
+        if slot.view_tag != *owner_tag || !is_ring_merge(tx) {
             return None;
         }
         Some(Self {
+            tx,
             ring: tx.ring_program_id?,
             first_nullifier: *tx.nullifiers.first()?,
             body: RingMergeBody::of(slot)?,
         })
     }
 
+    fn commitment(&self) -> &'t [u8; 32] {
+        &self.tx.output_slots[0].output_context.hash
+    }
+
     /// `None` under another wallet's seed.
-    fn open(
+    fn rebuild(
         &self,
-        tx: &ShieldedTransaction,
         seed: &MergeSeed,
         owner: PublicKey,
     ) -> Result<Option<OpenedNote>, AnonymousError> {
@@ -1257,14 +1301,13 @@ impl OwnerMerge {
             seed.output_blinding(&self.first_nullifier)?,
             Some(self.ring),
         );
-        let context = &tx.output_slots[0].output_context;
         let hash = utxo.hash(
             &ZERO_NULLIFIER_PUBKEY,
             &[0; 32],
             &self.body.ring_data_hash,
-            context.tree_id,
+            self.tx.output_slots[0].output_context.tree_id,
         )?;
-        Ok((hash == context.hash).then_some(OpenedNote {
+        Ok((hash == *self.commitment()).then_some(OpenedNote {
             utxo,
             nullifier_pk: ZERO_NULLIFIER_PUBKEY,
             data_hash: None,

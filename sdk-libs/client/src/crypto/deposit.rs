@@ -4,6 +4,7 @@ use borsh::BorshDeserialize;
 use solana_address::Address;
 use spr_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME};
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use spr_transaction::{
     AssetRegistry, DecryptLabel, DecryptRequest, DepositPayload, Mint, ShieldedKeys,
@@ -153,18 +154,25 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
         if utxo.data.utxo_data().is_some() && data_hash == [0; 32] {
             return Ok(None);
         }
-        let rebuilt = utxo.hash(
-            &self.address.nullifier_pubkey,
-            &data_hash,
-            &output.ring_data_hash,
-            context.tree_id,
-        );
-        if !rebuilt.is_ok_and(|hash| hash == context.hash) {
+        // An enrollment finalizes the key for later notes and leaves a zero-key commitment valid, so only the
+        // published commitment selects the key, never the current tracking record. A third key rebuilds nothing.
+        let Some(nullifier_pubkey) = [self.address.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY]
+            .into_iter()
+            .find(|candidate| {
+                utxo.hash(
+                    candidate,
+                    &data_hash,
+                    &output.ring_data_hash,
+                    context.tree_id,
+                )
+                .is_ok_and(|hash| hash == context.hash)
+            })
+        else {
             return Ok(None);
-        }
+        };
         let opened = Box::new(WalletUtxo {
             utxo,
-            nullifier_pubkey: self.address.nullifier_pubkey,
+            nullifier_pubkey,
             utxo_hash: context.hash,
             nullifier: [0; 32],
             tx_viewing_key: None,
@@ -185,12 +193,130 @@ impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use custom_ring_interface::RingDepositAuditCapsule;
-    use spr_keypair::ViewingKey;
+    use solana_signature::Signature;
+    use spr_client::{EncryptedUtxoMatch, OutputContext, OutputSlot};
+    use spr_event::{encode_encrypted_ring_deposit_output, EncryptedRingDepositOutput};
+    use spr_keypair::{hash::owner_hash, ShieldedKeypair, SigningKey, ViewingKey};
+    use spr_transaction::{owner_utxo_hash, Utxo};
+    use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
 
+    use super::*;
     use crate::deposit_payload;
-    use zolana_ring_transaction::RingDepositPlaintext;
+
+    pub(crate) const RING: Address = Address::new_from_array([0x90; 32]);
+    pub(crate) const TREE: u16 = 9;
+    pub(crate) const AMOUNT: u64 = 25;
+    /// Canonical and neither the wallet's key nor zero.
+    pub(crate) const THIRD_KEY: [u8; 32] = [0x11; 32];
+
+    pub(crate) fn wallet(seed: u8) -> ShieldedKeypair {
+        ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
+    }
+
+    pub(crate) fn ring_note(owner: &ShieldedAddress, blinding: [u8; 32]) -> Utxo {
+        Utxo {
+            owner: owner.signing_pubkey,
+            asset: Mint::SOL,
+            amount: AMOUNT,
+            blinding,
+            ring_program_id: Some(RING),
+            data: Default::default(),
+        }
+    }
+
+    /// A deposit to `owner` under its bootstrap tag, its commitment under `nullifier_pk`.
+    pub(crate) fn deposit_under(
+        owner: &ShieldedAddress,
+        nullifier_pk: &[u8; 32],
+        blinding: [u8; 32],
+    ) -> EncryptedUtxoMatch {
+        let encrypted = RingDepositPlaintext {
+            blinding,
+            utxo_data: None,
+            memo: None,
+            ring_data: Vec::new(),
+        }
+        .encrypt(&owner.viewing_pubkey)
+        .unwrap();
+        let payload = encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
+            owner_utxo_hash: owner_utxo_hash(
+                &owner_hash(&owner.signing_pubkey, nullifier_pk).unwrap(),
+                &blinding,
+            )
+            .unwrap(),
+            asset: Mint::SOL.asset.to_bytes(),
+            amount: AMOUNT,
+            data_hash: None,
+            ring_program_id: RING.to_bytes(),
+            ring_data_hash: [0; 32],
+            encrypted,
+        });
+        let hash = ring_note(owner, blinding)
+            .hash(nullifier_pk, &[0; 32], &[0; 32], TREE)
+            .unwrap();
+        EncryptedUtxoMatch {
+            slot: 1,
+            tx_signature: Signature::from([blinding[31]; 64]),
+            output_slot: OutputSlot {
+                view_tag: owner.viewing_pubkey.u(),
+                output_context: OutputContext {
+                    hash,
+                    tree_id: TREE,
+                    leaf_index: 0,
+                },
+                payload,
+            },
+            tx_viewing_pk: None,
+            salt: None,
+        }
+    }
+
+    /// The row a ring's history serves for `deposit`.
+    pub(crate) fn ring_row(deposit: EncryptedUtxoMatch) -> ShieldedTransaction {
+        ShieldedTransaction {
+            ring_program_id: Some(RING),
+            ..deposit.into_proofless_transaction().unwrap()
+        }
+    }
+
+    /// The note `owner` opens from a deposit committed under `nullifier_pk`.
+    fn opened_under(nullifier_pk: &[u8; 32]) -> Option<WalletUtxo> {
+        let owner = wallet(7);
+        let address = owner.shielded_address().unwrap();
+        let row = ring_row(deposit_under(&address, nullifier_pk, [0x12; 32]));
+        let assets = RingAssets::new([]).unwrap();
+        let mut opened = DepositOpener {
+            keys: &owner,
+            address: &address,
+            assets: assets.registry(),
+            deposit_payload,
+        }
+        .open_held(core::slice::from_ref(&row))
+        .unwrap();
+        opened.pop().map(|deposit| match deposit {
+            OpenedDeposit::Note(utxo) | OpenedDeposit::UnknownMint(utxo) => *utxo,
+        })
+    }
+
+    #[test]
+    fn a_deposit_committed_under_zero_opens_under_zero_for_an_enrolled_address() {
+        let note = opened_under(&ZERO_NULLIFIER_PUBKEY).unwrap();
+        assert_eq!(note.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY);
+        assert_eq!(note.utxo.amount, AMOUNT);
+    }
+
+    #[test]
+    fn a_deposit_committed_under_the_address_key_keeps_that_key() {
+        let key = wallet(7).shielded_address().unwrap().nullifier_pubkey;
+        assert_eq!(opened_under(&key).unwrap().nullifier_pubkey, key);
+    }
+
+    #[test]
+    fn a_deposit_committed_under_a_third_key_opens_nothing() {
+        assert_eq!(opened_under(&THIRD_KEY), None);
+    }
 
     #[test]
     fn recipient_opens_plain_and_auditor_wrapped_ciphertexts() {
