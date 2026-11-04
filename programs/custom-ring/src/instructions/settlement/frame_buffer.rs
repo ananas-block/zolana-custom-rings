@@ -90,9 +90,11 @@ pub fn process_settle_buffered_ix(
             return Err(CustomRingError::FrameDigestMismatch.into());
         }
         let (&frame_tag, body) = frame.split_first().ok_or(CustomRingError::FrameLength)?;
-        if frame_tag != tag::TRANSFER {
-            return Err(CustomRingError::UnsupportedBufferedTag.into());
-        }
+        let transfer_tag = match frame_tag {
+            tag::TRANSFER => InstructionTag::Transfer,
+            tag::AUTHORITY_TRANSFER => InstructionTag::AuthorityTransfer,
+            _ => return Err(CustomRingError::UnsupportedBufferedTag.into()),
+        };
         // 2. The closed buffer leaves readers the event, valid once the transaction succeeds.
         invoke::<1, _>(
             &InstructionView {
@@ -106,7 +108,7 @@ pub fn process_settle_buffered_ix(
             program_id,
             accounts: inner,
             data: body,
-            tag: InstructionTag::Transfer,
+            tag: transfer_tag,
             writer: Some(&frame_buffer.header.writer),
         }
         .run()?
