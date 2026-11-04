@@ -20,6 +20,12 @@ import type {
 } from "../protocol/membership/member-registry.js";
 import type { RingTransactInstructionData } from "../protocol/proof/circuit.js";
 import type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
+import type {
+  PendingEnrollments,
+  PendingEnrollmentsRequest,
+  TrackingOpenings,
+  TrackingOpeningsRequest,
+} from "../protocol/indexer/tracking-codec.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
 /** The nullifier key a member escrowed, sealed to the auditor. */
@@ -109,6 +115,17 @@ export interface RingRecordReader {
     request: StorageRecordPoolRequest,
     context?: RequestContext,
   ): Promise<StorageRecordPool>;
+}
+
+export interface TrackingReader {
+  getTrackingOpenings(
+    request: TrackingOpeningsRequest,
+    context?: RequestContext,
+  ): Promise<TrackingOpenings>;
+  getPendingEnrollments(
+    request: PendingEnrollmentsRequest,
+    context?: RequestContext,
+  ): Promise<PendingEnrollments>;
 }
 
 export type RingSubmissionStatus =

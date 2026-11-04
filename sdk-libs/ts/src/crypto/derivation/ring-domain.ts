@@ -19,6 +19,14 @@ export const RingDomain = Object.freeze({
   recordUpdate: 0x4352_5255, // "CRRU"
   walletGrant: 0x4352_5747, // "CRWG"
   addressRecord: 0x4352_4144, // "CRAD"
+  trackingLeaf: 0x4352_544b,
+  trackingEntry: 0x4352_5451,
+  applyEnrollments: 0x4352_5441,
+  listSalt: 0x4352_5053,
+  listTag: 0x4352_5054,
+  listPosition: 0x4352_504c,
+  listLeaf: 0x4352_5056,
+  listLeafSalt: 0x4352_5055,
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 

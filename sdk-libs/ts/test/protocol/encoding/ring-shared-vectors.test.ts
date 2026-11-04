@@ -1,4 +1,9 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
+import {
+  TRACKING_EMPTY_ROOT,
+  trackingEntryChained,
+  trackingEntryHash,
+} from "../../../src/protocol/membership/tracking.js";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -9,7 +14,7 @@ import records from "../../../../../test-vectors/registry/ring-records.json" wit
 import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
-import { solanaOwnerIdentity, encodeBase58, hashChain } from "@heliuslabs/zolana/internal";
+import { ZERO_32, solanaOwnerIdentity, encodeBase58, hashChain } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import type { Address, Bytes16, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
@@ -72,6 +77,9 @@ import {
   applyRecordsStatementHash,
   registerKeyStatementElements,
   registerKeyStatementHash,
+  applyEnrollmentsStatementElements,
+  applyEnrollmentsStatementHash,
+  restrictiveWrite,
   ciphertextDigest,
   outputCiphertextChain,
   transferStatementElements,
@@ -499,19 +507,59 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
+      restrictive: apply.restrictive,
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
     expect(hex(applyRecordsStatementHash(applyStatement))).toBe(apply.public_input_hash);
     const register = statements.register_key;
     const registerStatement = {
+      ringId: field(register.ring_id),
       member: field(register.member),
       nullifierPk: field(register.nullifier_pk),
+      listTag: field(register.list_tag),
       auditorPubkey: bytes<Bytes33>(register.auditor_pubkey, 33),
       ephU: field(register.eph_u),
       ciphertext: field(register.ciphertext),
     };
     expect(hexes(registerKeyStatementElements(registerStatement))).toEqual(register.elements);
     expect(hex(registerKeyStatementHash(registerStatement))).toBe(register.public_input_hash);
+  });
+
+  it("rebuilds the apply enrollments statement, its domain apart from apply records", () => {
+    const apply = statements.apply_enrollments;
+    const statement = {
+      oldRoot: field(apply.old_root),
+      newRoot: field(apply.new_root),
+      oldNextIndex: apply.old_next_index,
+      newNextIndex: apply.new_next_index,
+      chainStart: field(apply.chain_start),
+      chainEnd: field(apply.chain_end),
+      count: BigInt(apply.count),
+    };
+    expect(hexes(applyEnrollmentsStatementElements(statement))).toEqual(apply.elements);
+    expect(hex(applyEnrollmentsStatementHash(statement))).toBe(apply.public_input_hash);
+  });
+
+  it("marks a write restrictive as the apply circuit does", () => {
+    for (const write of statements.restrictive)
+      expect(
+        restrictiveWrite(BigInt(write.mask), BigInt(write.value), write.replaces_mint_policy),
+      ).toBe(write.restrictive);
+  });
+
+  it("hashes a tracking entry and chains it as the program does", () => {
+    const tracking = statements.tracking;
+    const entry = {
+      member: field(tracking.member),
+      nullifierPk: field(tracking.nullifier_pk),
+      ctHash: field(tracking.ct_hash),
+      viewingU: field(tracking.viewing_u),
+      revision: BigInt(tracking.revision),
+      listTag: field(tracking.list_tag),
+    };
+    expect(hex(trackingEntryHash(entry))).toBe(tracking.entry_hash);
+    expect(hex(trackingEntryChained(ZERO_32, entry))).toBe(tracking.chain_from_zero);
+    expect(hex(TRACKING_EMPTY_ROOT)).toBe(tracking.empty_root);
   });
 
   it("rebuilds the deposit statement over the context of its SPP data", () => {

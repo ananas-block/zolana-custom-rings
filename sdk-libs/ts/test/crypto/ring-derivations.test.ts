@@ -45,6 +45,14 @@ describe("ring domains", () => {
       withdrawals: ascii("CRPW"),
       recordUpdate: ascii("CRRU"),
       walletGrant: ascii("CRWG"),
+      trackingLeaf: ascii("CRTK"),
+      trackingEntry: ascii("CRTQ"),
+      applyEnrollments: ascii("CRTA"),
+      listSalt: ascii("CRPS"),
+      listTag: ascii("CRPT"),
+      listPosition: ascii("CRPL"),
+      listLeaf: ascii("CRPV"),
+      listLeafSalt: ascii("CRPU"),
     });
     const values = [
       ...Object.values(RingDomain),

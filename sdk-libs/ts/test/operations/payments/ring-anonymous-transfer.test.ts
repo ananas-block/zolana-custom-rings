@@ -202,6 +202,7 @@ async function addressOf(fixture: Fixture, owner: ShieldedKeypair): Promise<Ring
   return new RingAddress({
     recipient: owner.shieldedAddress(),
     ringProgramId: fixture.ringProgramId,
+    listSalt: new Uint8Array(32).fill(1) as Bytes32,
   });
 }
 
@@ -454,6 +455,7 @@ describe("anonymous ring payment", () => {
         X25519PublicKey.fromBytes(Uint8Array.of(4, ...new Uint8Array(32))),
       ),
       ringProgramId: fixture.ringProgramId,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
     await expect(
       rail({ fixture, sender, transfer: spend(fixture, sender) })
@@ -957,6 +959,7 @@ describe("anonymous ring exits and entries", () => {
     const unenrolled = new RingAddress({
       recipient: bob.shieldedAddress(),
       ringProgramId: fixture.ringProgramId,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
     const pay = (enrolled: boolean, to: RingAddress) =>
       rail({ fixture, sender, transfer: spend(fixture, sender), enrolled })

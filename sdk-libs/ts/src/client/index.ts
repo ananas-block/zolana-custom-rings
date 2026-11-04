@@ -51,6 +51,7 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  TrackingReader,
   StorageMemberOpenings,
   StorageMemberPage,
   StorageOpeningsRequest,

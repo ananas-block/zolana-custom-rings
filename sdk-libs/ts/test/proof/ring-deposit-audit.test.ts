@@ -797,7 +797,11 @@ describe("ring deposit builder", () => {
     const recipient = ShieldedKeypair.generate();
     const local = LocalRingKeys.fromKeypair(member);
     const { client } = await fixture({ mode: "anonymous" });
-    const to = new RingAddress({ recipient: recipient.shieldedAddress(), ringProgramId: RING });
+    const to = new RingAddress({
+      recipient: recipient.shieldedAddress(),
+      ringProgramId: RING,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
+    });
     const recipientKey = recipient.shieldedAddress().viewingPublicKey;
     const depositTag = recipient.viewingKey().recipientRequestViewTag(0n);
     const paid = (target: RingAddress | RingPaymentRequest) =>
@@ -833,7 +837,11 @@ describe("ring deposit builder", () => {
         PreparedRingDeposit.prepare(
           params(client, {
             kind: "anonymousPayment",
-            to: new RingAddress({ recipient: recipient.shieldedAddress(), ringProgramId: other }),
+            to: new RingAddress({
+              recipient: recipient.shieldedAddress(),
+              ringProgramId: other,
+              listSalt: new Uint8Array(32).fill(1) as Bytes32,
+            }),
           }),
         ),
       ).rejects.toMatchObject({ code: "RING_BUILD_DEPOSIT", causeCode: "RING_FOREIGN_RING" });

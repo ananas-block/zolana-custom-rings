@@ -14,12 +14,6 @@ import {
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import {
-  ENROLL_ADDRESS_TAG,
-  authorizationAddressHash,
-  decodeAddressAuthorization,
-  enrollAddressInstruction,
-} from "../../../src/operations/management/enroll-address.js";
 import { RingDomain, domainField } from "../../../src/crypto/derivation/ring-domain.js";
 import { packBytesBe } from "../../../src/crypto/derivation/hasher.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
@@ -51,7 +45,6 @@ import {
 } from "../../../src/protocol/membership/member-registry.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
-import { addressAuthorizationPda, STORAGE_PROGRAM_ID } from "../../../src/protocol/pda/index.js";
 import { applyRecordsStatementHash } from "../../../src/protocol/proof/statement.js";
 import { recordTree } from "../../helpers/member-registry.js";
 
@@ -365,82 +358,6 @@ describe("address_record.json", () => {
     );
     expect(first?.nullifierPk).toEqual(second?.nullifierPk);
     expect(first?.viewingU).not.toEqual(second?.viewingU);
-  });
-});
-
-describe("enrollment", () => {
-  const registry = encodeBase58(field(vector.registry));
-  const enrollments = vector.steps.flatMap((step) => step.enrollments);
-
-  it("lays out tag 5, the nullifier key and the viewing key, the ring id off the data", async () => {
-    expect(enrollments.length).toBeGreaterThan(0);
-    for (const enrollment of enrollments) {
-      const owner = encodeBase58(field(enrollment.owner));
-      const instruction = await enrollAddressInstruction({
-        payer: encodeBase58(field(vector.creator)),
-        owner,
-        registry,
-        ...enrolledKeys(enrollment),
-      });
-      const data = Uint8Array.from(instruction.data ?? []);
-      expect(hex(data)).toBe(enrollment.instruction_data);
-      expect(data).toHaveLength(65);
-      expect(data[0]).toBe(ENROLL_ADDRESS_TAG);
-      expect(instruction.programAddress).toBe(STORAGE_PROGRAM_ID);
-      const [authorization] = await addressAuthorizationPda(registry, owner);
-      expect(instruction.accounts?.map((account) => account.address)).toEqual([
-        encodeBase58(field(vector.creator)),
-        owner,
-        registry,
-        authorization,
-        SYSTEM_PROGRAM,
-      ]);
-    }
-  });
-
-  it("refuses a viewing key off its encoding at building", async () => {
-    await expect(
-      enrollAddressInstruction({
-        payer: encodeBase58(field(vector.creator)),
-        owner: encodeBase58(field(vector.owners[0] ?? "")),
-        registry,
-        nullifierPk: field("11".repeat(32)),
-        viewingU: ZERO_32,
-      }),
-    ).rejects.toMatchObject({ code: "RING_NONCANONICAL_VIEWING_KEY" });
-  });
-
-  it("decodes the authorization account to the hash a queued address write chains", () => {
-    const enrollment = enrollmentOf(vector.owners[0] ?? "", 2n);
-    const keys = enrolledKeys(enrollment);
-    const data = new Uint8Array(178);
-    data[0] = 2;
-    data[1] = 254;
-    data.set(field(vector.registry), 2);
-    data.set(field(enrollment.owner), 34);
-    data.set(field(vector.ring_id), 66);
-    data.set(keys.nullifierPk, 98);
-    data.set(keys.viewingU, 130);
-    data[162] = 2;
-    data[170] = 1;
-    const decoded = decodeAddressAuthorization(data);
-    expect(decoded).toMatchObject({
-      bump: 254,
-      registry,
-      owner: encodeBase58(field(enrollment.owner)),
-      addressRevision: 2n,
-      appliedRevision: 1n,
-    });
-    const rotation = namedStep("rotation_moves_the_owner_revision_and_replaces_the_hash");
-    expect(hex(authorizationAddressHash(decoded))).toBe(rotation.entries[0]?.address_hash);
-    expect(() => decodeAddressAuthorization(data.subarray(1))).toThrow(
-      expect.objectContaining({ code: "RING_ADDRESS_NOT_ENROLLED" }),
-    );
-    const other = data.slice();
-    other[0] = 1;
-    expect(() => decodeAddressAuthorization(other)).toThrow(
-      expect.objectContaining({ code: "RING_ADDRESS_NOT_ENROLLED" }),
-    );
   });
 });
 

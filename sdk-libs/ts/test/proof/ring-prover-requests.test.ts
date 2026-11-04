@@ -489,6 +489,7 @@ function request(item: Json): RingProofRequest {
     return {
       kind: "registerKey",
       publicInputHash,
+      ringId: field(item["ringId"]),
       member: field(item["member"]),
       nullifierSecret: bytes<Bytes32>(item["nullifierSecret"], 32),
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
@@ -793,6 +794,7 @@ async function anonymousRequest(
       to: new RingAddress({
         recipient: bob.shieldedAddress(),
         ringProgramId: fixture.ringProgramId,
+        listSalt: new Uint8Array(32).fill(1) as Bytes32,
       }),
       asset: SOL_MINT,
       amount: 400n,
@@ -956,8 +958,10 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         X25519PublicKey.fromBytes(tagged(typed.auditorPk)),
       );
       const statement = {
+        ringId: typed.ringId,
         member: typed.member,
         nullifierPk: envelope.nullifierPublicKey,
+        listTag: field(golden("custom-ring-register-key")["listTag"]),
         auditorPubkey: tagged(typed.auditorPk),
         ephU: envelope.sealed.ephemeralPublicKey.u(),
         ciphertext: envelope.sealed.ciphertext,

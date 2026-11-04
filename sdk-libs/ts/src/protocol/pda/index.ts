@@ -76,6 +76,37 @@ export function ringRecordsAddress(
   );
 }
 
+/** One enrollment per owner per tracking registry. */
+export function trackingAuthorizationPda(
+  registry: Address,
+  owner: Address,
+): Promise<ProgramDerivedAddress> {
+  const addresses = getAddressEncoder();
+  return getProgramDerivedAddress({
+    programAddress: STORAGE_PROGRAM_ID,
+    seeds: [encoder.encode("tracking"), addresses.encode(registry), addresses.encode(owner)],
+  });
+}
+
+/** One account per owner per reader, the key splits because a seed holds 32 bytes. */
+export function ownerGrantPda(
+  registry: Address,
+  owner: Address,
+  reader: Uint8Array,
+): Promise<ProgramDerivedAddress> {
+  const addresses = getAddressEncoder();
+  return getProgramDerivedAddress({
+    programAddress: STORAGE_PROGRAM_ID,
+    seeds: [
+      encoder.encode("owner_grant"),
+      addresses.encode(registry),
+      addresses.encode(owner),
+      reader.subarray(0, 2),
+      reader.subarray(2),
+    ],
+  });
+}
+
 /** The Storage program's enrollment account, canonical bump. */
 export function addressAuthorizationPda(
   registry: Address,

@@ -18,6 +18,7 @@ import {
   domainField,
 } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
+import { ListId, recordBit } from "../membership/policy.js";
 import {
   RingTransactData,
   changeBitmap,
@@ -117,13 +118,21 @@ export interface ApplyRecordsStatement {
   /** `chain(tail - 1)`. */
   readonly chainEnd: Bytes32;
   readonly count: bigint;
+  /** Set when any write restricts, `Update` then retires every earlier root. */
+  readonly restrictive: boolean;
 }
 
-/** The auditor envelope of a registered nullifier key, Rust `RegisterKeyStatement`. */
+/** An application of named enrollments, Rust `ApplyEnrollmentsStatement`. */
+export type ApplyEnrollmentsStatement = Omit<ApplyRecordsStatement, "restrictive">;
+
+/** The auditor envelope of an enrolled nullifier key, Rust `RegisterKeyStatement`. */
 export interface RegisterKeyStatement {
+  /** The tracking registry's. */
+  readonly ringId: Bytes32;
   /** The owner identity of the signing member. */
   readonly member: Bytes32;
   readonly nullifierPk: Bytes32;
+  readonly listTag: Bytes32;
   readonly auditorPubkey: Bytes33;
   readonly ephU: Bytes32;
   readonly ciphertext: Bytes32;
@@ -311,12 +320,44 @@ export function signerBinding(identities: readonly Bytes32[], slots: number): Si
   return Object.freeze({ count: identities.length, chain: filledChain(identities, slots) });
 }
 
-/** `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
+/** A write clears a grant list, sets a deny list or replaces mint settings, mirror `registry.Restrictive`. */
+export function restrictiveWrite(
+  mask: bigint,
+  value: bigint,
+  replacesMintPolicy: boolean,
+): boolean {
+  const grant = recordBit(ListId.allow) | recordBit(ListId.approval);
+  const deny = recordBit(ListId.block) | recordBit(ListId.frozen);
+  return replacesMintPolicy || (mask & grant & ~value) !== 0n || (value & deny) !== 0n;
+}
+
+/** `[CRAP, old_root, new_root, old_next, new_next, chain_start, chain_end, count, restrictive]`. */
 export function applyRecordsStatementElements(
   statement: ApplyRecordsStatement,
 ): readonly Bytes32[] {
   return [
-    domainField(RingDomain.applyRecords),
+    ...applyStatementHead(RingDomain.applyRecords, statement),
+    u64Field(statement.restrictive ? 1n : 0n, "restrictive"),
+  ];
+}
+
+/** `[CRTA, old_root, new_root, old_next, new_next, chain_start, chain_end, count]`. */
+export function applyEnrollmentsStatementElements(
+  statement: ApplyEnrollmentsStatement,
+): readonly Bytes32[] {
+  return applyStatementHead(RingDomain.applyEnrollments, statement);
+}
+
+export function applyEnrollmentsStatementHash(statement: ApplyEnrollmentsStatement): Bytes32 {
+  return chain(applyEnrollmentsStatementElements(statement));
+}
+
+function applyStatementHead(
+  domain: RingDomain,
+  statement: ApplyEnrollmentsStatement,
+): readonly Bytes32[] {
+  return [
+    domainField(domain),
     checkedBytes<Bytes32>(statement.oldRoot, 32, "old root"),
     checkedBytes<Bytes32>(statement.newRoot, 32, "new root"),
     u64Field(BigInt(statement.oldNextIndex), "old next index", U32_MAX),
@@ -331,12 +372,14 @@ export function applyRecordsStatementHash(statement: ApplyRecordsStatement): Byt
   return chain(applyRecordsStatementElements(statement));
 }
 
-/** `[CRRG, member, nullifier_pk, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
+/** `[CRRG, ring_id, member, nullifier_pk, list_tag, aud0, aud1, eph0, eph1, hash_bytes(ciphertext)]`. */
 export function registerKeyStatementElements(statement: RegisterKeyStatement): readonly Bytes32[] {
   return [
     domainField(RingDomain.registerKey),
+    checkedBytes<Bytes32>(statement.ringId, 32, "ring id"),
     checkedBytes<Bytes32>(statement.member, 32, "member"),
     checkedBytes<Bytes32>(statement.nullifierPk, 32, "nullifier pk"),
+    checkedBytes<Bytes32>(statement.listTag, 32, "list tag"),
     ...packedKey(checkedBytes<Bytes33>(statement.auditorPubkey, 33, "auditor pubkey")),
     ...packedKey(taggedX25519(statement.ephU)),
     hashBytes(checkedBytes<Bytes32>(statement.ciphertext, 32, "ciphertext")) as Bytes32,

@@ -13,6 +13,12 @@ import {
 } from "@heliuslabs/zolana";
 import { ZolanaClient, type ProvingKeyReport } from "@heliuslabs/zolana/client";
 
+import type {
+  PendingEnrollments,
+  PendingEnrollmentsRequest,
+  TrackingOpenings,
+  TrackingOpeningsRequest,
+} from "../protocol/indexer/tracking-codec.js";
 import { RingError } from "../protocol/error.js";
 import { RingIndexer } from "./indexer.js";
 import type {
@@ -94,6 +100,20 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     context?: RequestContext,
   ): Promise<StorageRecordPool> {
     return this.#ringIndexer.getStorageRecordPool(request, context);
+  }
+
+  getTrackingOpenings(
+    request: TrackingOpeningsRequest,
+    context?: RequestContext,
+  ): Promise<TrackingOpenings> {
+    return this.#ringIndexer.getTrackingOpenings(request, context);
+  }
+
+  getPendingEnrollments(
+    request: PendingEnrollmentsRequest,
+    context?: RequestContext,
+  ): Promise<PendingEnrollments> {
+    return this.#ringIndexer.getPendingEnrollments(request, context);
   }
 
   /** One ring proof, the 192-byte `CustomRingProof` the ring program verifies. */

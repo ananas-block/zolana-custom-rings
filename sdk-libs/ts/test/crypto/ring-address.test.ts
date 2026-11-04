@@ -102,6 +102,7 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
         viewing.publicKey(),
       ),
       ringProgramId: ring,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
     });
     const request = new RingPaymentRequest({
       address: ringAddress,

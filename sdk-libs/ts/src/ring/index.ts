@@ -118,11 +118,7 @@ export {
   AuthorityRecordUpdate,
   WalletRecordUpdate,
 } from "../operations/management/record-updates.js";
-export type {
-  AddressEntry,
-  EscrowEntry,
-  RecordUpdateTarget,
-} from "../operations/management/record-updates.js";
+export type { RecordUpdateTarget } from "../operations/management/record-updates.js";
 export type {
   ReaderAccess,
   RecordUpdate,
@@ -136,18 +132,13 @@ export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-re
 export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
-  KeyRegistration,
-  NullifierKeyEscrow,
   fetchRingSealedKey,
   openNullifierKey,
   openRingSealedKey,
   sealNullifierKey,
 } from "../operations/management/register-key.js";
 export type {
-  KeyEscrowAuthority,
-  KeyEscrowRequest,
   NullifierKeyEnvelope,
-  ProvenEscrow,
   RingSealedKeyClient,
   RingSealedKeyEntry,
   SealedNullifierKey,
@@ -520,14 +511,72 @@ export {
 export type { ReaderKey } from "../operations/management/reader-access.js";
 export { createPasskey, passkeyReader, type Passkey } from "../crypto/keys/passkey.js";
 export {
-  decodeAddressAuthorization,
-  enrollAddressInstruction,
-  type AddressAuthorization,
-  checkedEnrollAddressInstruction,
-  type EnrollAddress,
-  type EnrollmentReadClient,
-} from "../operations/management/enroll-address.js";
-export { addressAuthorizationPda } from "../protocol/pda/index.js";
+  APPLY_ENROLLMENTS_TAG,
+  ENROLL_TAG,
+  OWNER_GRANT_TAG,
+  applyEnrollmentsInstruction,
+  checkEnrollment,
+  enrollInstruction,
+  enrollmentState,
+  ownerGrantInstruction,
+  proveEnrollment,
+  type ApplyEnrollments,
+  type Enroll,
+  type EnrollmentSeal,
+  type WriteOwnerGrant,
+} from "../operations/management/enrollment.js";
+export {
+  TRACKING_CAPACITY,
+  TRACKING_EMPTY_ROOT,
+  TRACKING_GRACE_SLOTS,
+  TRACKING_QUAD_HEIGHT,
+  decodeOwnerGrant,
+  decodeTrackingAuthorization,
+  decodeTrackingRegistry,
+  isEnrollmentPending,
+  trackingEntryChained,
+  trackingEntryHash,
+  trackingRecordHash,
+  verifyTrackingOpening,
+  type OwnerGrant,
+  type TrackingAuthorization,
+  type TrackingEntry,
+  type TrackingOpening,
+  type TrackingRecord,
+  type TrackingRegistry,
+} from "../protocol/membership/tracking.js";
+export {
+  listLeaf,
+  listLeafSalt,
+  listPosition,
+  openListLeaf,
+  presentRead,
+  type PresentRead,
+  type PublishedListLeaf,
+} from "../protocol/membership/private-list.js";
+export { RingNullifierKey, listTagOf } from "../crypto/keys/ring-nullifier-key.js";
+export {
+  fetchTrackingRegistry,
+  newestTrackingRoot,
+  resolveRingRecipient,
+  type ResolvedRecipient,
+  type RingRecipientClient,
+  type TrackingRoot,
+} from "../rpc/tracking-resolver.js";
+export type {
+  PendingEnrollment,
+  PendingEnrollments,
+  PendingEnrollmentsRequest,
+  ServedTrackingOpening,
+  TrackingOpenings,
+  TrackingOpeningsRequest,
+  TrackingSeal,
+} from "../protocol/indexer/tracking-codec.js";
+export {
+  addressAuthorizationPda,
+  ownerGrantPda,
+  trackingAuthorizationPda,
+} from "../protocol/pda/index.js";
 export type { AuthorizedAddress } from "../protocol/membership/member-registry.js";
 export type { ReplyMetadata } from "../protocol/codec/anonymous-delivery.js";
 export {

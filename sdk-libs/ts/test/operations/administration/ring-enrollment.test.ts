@@ -1,0 +1,459 @@
+import { address, generateKeyPairSigner, type Address } from "@solana/kit";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+import { readFileSync } from "node:fs";
+
+import { initializePoseidon } from "@heliuslabs/zolana";
+import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/zolana/internal";
+import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import {
+  NullifierKey,
+  ShieldedKeypair,
+  SigningKey,
+  X25519Keypair,
+} from "@heliuslabs/zolana/keypair";
+import { hexToBytes } from "@noble/hashes/utils.js";
+
+import { listTagOf, RingNullifierKey } from "../../../src/crypto/keys/ring-nullifier-key.js";
+import {
+  applyEnrollmentsInstruction,
+  checkEnrollment,
+  enrollInstruction,
+  enrollmentState,
+  ownerGrantInstruction,
+  proveEnrollment,
+  type EnrollmentSeal,
+} from "../../../src/operations/management/enrollment.js";
+import { memberOfTag } from "../../../src/protocol/membership/policy.js";
+import { presentRead } from "../../../src/protocol/membership/private-list.js";
+import {
+  decodeOwnerGrant,
+  decodeTrackingAuthorization,
+  decodeTrackingRegistry,
+  isEnrollmentPending,
+  TRACKING_EMPTY_ROOT,
+  TRACKING_GRACE_SLOTS,
+  TRACKING_QUAD_HEIGHT,
+  TRACKING_SENTINEL,
+  trackingRecordHash,
+  verifyTrackingOpening,
+  type TrackingAuthorization,
+  type TrackingRecord,
+} from "../../../src/protocol/membership/tracking.js";
+import {
+  ownerGrantPda,
+  STORAGE_PROGRAM_ID,
+  trackingAuthorizationPda,
+} from "../../../src/protocol/pda/index.js";
+import { registerKeyStatementHash } from "../../../src/protocol/proof/statement.js";
+import type { RegisterKeyProofRequest } from "../../../src/rpc/prover/ring.js";
+import { poseidon } from "@heliuslabs/zolana/internal";
+
+const REGISTRY = address("Stor111111111111111111111111111111111111111");
+const OWNER = address("Cura111111111111111111111111111111111111111");
+const field = (value: number): Bytes32 => new Uint8Array(32).fill(value) as Bytes32;
+const PROOF = new Uint8Array(192).fill(5);
+
+const SEAL: EnrollmentSeal = Object.freeze({
+  nullifierPk: field(0x11),
+  listTag: field(0x12),
+  ephU: field(0x13),
+  ciphertext: field(0x14),
+});
+
+function stored(fields: Partial<TrackingAuthorization> = {}): TrackingAuthorization {
+  return {
+    bump: 255,
+    registry: REGISTRY,
+    owner: OWNER,
+    ...SEAL,
+    viewingU: field(0x15),
+    revision: 1n,
+    appliedRevision: 1n,
+    lastEnrollSlot: 100n,
+    ...fields,
+  };
+}
+
+function authorizationBytes(): Uint8Array {
+  const data = new Uint8Array(250);
+  data[0] = 4;
+  data[1] = 254;
+  data.set(addressBytes(REGISTRY, "registry"), 2);
+  data.set(addressBytes(OWNER, "owner"), 34);
+  data.set(SEAL.nullifierPk, 66);
+  data.set(SEAL.listTag, 98);
+  data.set(field(0x15), 130);
+  data.set(SEAL.ephU, 162);
+  data.set(SEAL.ciphertext, 194);
+  const view = new DataView(data.buffer);
+  view.setBigUint64(226, 3n, true);
+  view.setBigUint64(234, 2n, true);
+  view.setBigUint64(242, 900n, true);
+  return data;
+}
+
+beforeAll(initializePoseidon);
+
+describe("checkEnrollment", () => {
+  it("passes a first enrollment and a rotation at the limit", () => {
+    expect(() => checkEnrollment({ seal: SEAL, stored: undefined, slot: 0n })).not.toThrow();
+    expect(() =>
+      checkEnrollment({ seal: SEAL, stored: stored(), slot: 100n + TRACKING_GRACE_SLOTS }),
+    ).not.toThrow();
+  });
+
+  it("refuses the zero key before the owner signs", () => {
+    expect(() =>
+      checkEnrollment({
+        seal: { ...SEAL, nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
+        stored: undefined,
+        slot: 0n,
+      }),
+    ).toThrow("RING_ENROLLMENT_ZERO_KEY");
+  });
+
+  it.each(["nullifierPk", "listTag", "ephU", "ciphertext"] as const)(
+    "refuses a changed %s, it is final after the first enrollment",
+    (name) => {
+      expect(() =>
+        checkEnrollment({
+          seal: { ...SEAL, [name]: field(0x77) },
+          stored: stored(),
+          slot: 1_000_000n,
+        }),
+      ).toThrow("RING_ENROLLMENT_KEY_MISMATCH");
+    },
+  );
+
+  it("names the slot a rotation inside the limit may run at", () => {
+    expect(() =>
+      checkEnrollment({ seal: SEAL, stored: stored(), slot: 100n + TRACKING_GRACE_SLOTS - 1n }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "RING_ENROLLMENT_ROTATION_TOO_SOON",
+        details: { allowedAtSlot: (100n + TRACKING_GRACE_SLOTS).toString() },
+      }),
+    );
+  });
+});
+
+describe("tracking accounts", () => {
+  it("decodes an authorization at its field offsets and reports it pending", () => {
+    const decoded = decodeTrackingAuthorization(authorizationBytes());
+    expect(decoded).toMatchObject({
+      bump: 254,
+      registry: REGISTRY,
+      owner: OWNER,
+      revision: 3n,
+      appliedRevision: 2n,
+      lastEnrollSlot: 900n,
+    });
+    expect(decoded.nullifierPk).toEqual(SEAL.nullifierPk);
+    expect(decoded.ciphertext).toEqual(SEAL.ciphertext);
+    expect(isEnrollmentPending(decoded)).toBe(true);
+    expect(isEnrollmentPending({ ...decoded, appliedRevision: 3n })).toBe(false);
+  });
+
+  it("refuses an account off its discriminator or size", () => {
+    const data = authorizationBytes();
+    expect(() => decodeTrackingAuthorization(data.subarray(1))).toThrow("RING_TRACKING_INVALID");
+    const other = data.slice();
+    other[0] = 2;
+    expect(() => decodeTrackingAuthorization(other)).toThrow("RING_TRACKING_INVALID");
+  });
+
+  it("decodes a registry and refuses a next index past the tree", () => {
+    const data = new Uint8Array(1611);
+    data[0] = 3;
+    data[1] = 255;
+    data.set(field(0x21), 2);
+    data[34] = 4;
+    new DataView(data.buffer).setUint32(67, 1, true);
+    new DataView(data.buffer).setUint32(71, 2, true);
+    data.set(TRACKING_EMPTY_ROOT, 75);
+    const decoded = decodeTrackingRegistry(data);
+    expect(decoded.nextIndex).toBe(1);
+    expect(decoded.reservedLeaves).toBe(2);
+    expect(decoded.roots[0]?.hash).toEqual(TRACKING_EMPTY_ROOT);
+    expect(decoded.roots[1]).toBeUndefined();
+    new DataView(data.buffer).setUint32(67, 0, true);
+    expect(() => decodeTrackingRegistry(data)).toThrow("RING_TRACKING_INVALID");
+  });
+
+  it("decodes an owner grant, only one means active", () => {
+    const data = new Uint8Array(101);
+    data[0] = 5;
+    data[1] = 200;
+    data.set(addressBytes(REGISTRY, "registry"), 2);
+    data.set(addressBytes(OWNER, "owner"), 34);
+    data[66] = 1;
+    data[100] = 1;
+    expect(decodeOwnerGrant(data).active).toBe(true);
+    data[100] = 0;
+    expect(decodeOwnerGrant(data).active).toBe(false);
+  });
+});
+
+describe("tracking openings", () => {
+  const paths = () => {
+    const zeros: Bytes32[] = [ZERO_32];
+    for (let level = 0; level < TRACKING_QUAD_HEIGHT; level += 1) {
+      const below = zeros[level] as Bytes32;
+      zeros.push(poseidon([below, below, below, below]) as Bytes32);
+    }
+    return zeros;
+  };
+
+  /** The tree holding only `leaf` at index 0. */
+  function single(leaf: TrackingRecord) {
+    const zeros = paths();
+    const siblings = zeros.slice(0, TRACKING_QUAD_HEIGHT).map((zero) => [zero, zero, zero]);
+    let root = trackingRecordHash(leaf);
+    for (const level of siblings) root = poseidon([root, ...level]) as Bytes32;
+    return { root, path: { index: 0, siblings } };
+  }
+
+  it("folds the sentinel to the registry's first root", () => {
+    expect(single(TRACKING_SENTINEL).root).toEqual(TRACKING_EMPTY_ROOT);
+  });
+
+  it("proves absence through the low row and refuses a member outside it", () => {
+    const { root, path } = single(TRACKING_SENTINEL);
+    expect(
+      verifyTrackingOpening({ kind: "absent", low: TRACKING_SENTINEL, path }, root, field(0x05)),
+    ).toBeUndefined();
+    const member = field(0x05);
+    const low = { ...TRACKING_SENTINEL, next: field(0x04) };
+    const short = single(low);
+    expect(() =>
+      verifyTrackingOpening({ kind: "absent", low, path: short.path }, short.root, member),
+    ).toThrow("RING_TRACKING_INVALID");
+  });
+
+  it("returns a present row only under its own root and member", () => {
+    const record = { ...TRACKING_SENTINEL, member: field(0x05), revision: 2n };
+    const { root, path } = single(record);
+    expect(verifyTrackingOpening({ kind: "present", record, path }, root, field(0x05))).toEqual(
+      record,
+    );
+    expect(() =>
+      verifyTrackingOpening({ kind: "present", record, path }, field(0x06), field(0x05)),
+    ).toThrow("RING_TRACKING_INVALID");
+    expect(() =>
+      verifyTrackingOpening({ kind: "present", record, path }, root, field(0x06)),
+    ).toThrow("RING_TRACKING_INVALID");
+  });
+});
+
+describe("enrollment instructions", () => {
+  it("lays out tag 6, the fields then the proof on a first enrollment, none on a rotation", async () => {
+    const owner = await generateKeyPairSigner();
+    const first = await enrollInstruction({
+      payer: owner,
+      owner,
+      trackingRegistry: REGISTRY,
+      seal: SEAL,
+      viewingU: field(0x15),
+      proof: PROOF,
+    });
+    const data = new Reader(new Uint8Array(first.data ?? []));
+    expect(data.u8("tag")).toBe(6);
+    expect(data.bytes(32, "nullifierPk")).toEqual(SEAL.nullifierPk);
+    expect(data.bytes(32, "listTag")).toEqual(SEAL.listTag);
+    expect(data.bytes(32, "viewingU")).toEqual(field(0x15));
+    expect(data.bytes(32, "ephU")).toEqual(SEAL.ephU);
+    expect(data.bytes(32, "ciphertext")).toEqual(SEAL.ciphertext);
+    expect(data.bytes(192, "proof")).toEqual(PROOF);
+    data.done();
+    expect(first.programAddress).toBe(STORAGE_PROGRAM_ID);
+    const [authorization] = await trackingAuthorizationPda(REGISTRY, owner.address);
+    expect(first.accounts?.map((account) => account.address)).toEqual([
+      owner.address,
+      owner.address,
+      REGISTRY,
+      authorization,
+      "11111111111111111111111111111111",
+    ]);
+    const rotation = await enrollInstruction({
+      payer: owner,
+      owner,
+      trackingRegistry: REGISTRY,
+      seal: SEAL,
+      viewingU: field(0x15),
+    });
+    expect(rotation.data).toHaveLength(1 + 160);
+  });
+
+  it("names the authorizations in chain order and refuses an apply naming none", async () => {
+    const other = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
+    const applied = await applyEnrollmentsInstruction({
+      trackingRegistry: REGISTRY,
+      revision: 9n,
+      proof: PROOF,
+      newRoot: field(0x31),
+      newNextIndex: 3,
+      owners: [other, OWNER],
+    });
+    expect(applied.data).toHaveLength(1 + 8 + 192 + 32 + 4);
+    expect(applied.accounts?.map((account) => account.address)).toEqual([
+      REGISTRY,
+      (await trackingAuthorizationPda(REGISTRY, other))[0],
+      (await trackingAuthorizationPda(REGISTRY, OWNER))[0],
+    ]);
+    await expect(
+      applyEnrollmentsInstruction({
+        trackingRegistry: REGISTRY,
+        revision: 9n,
+        proof: PROOF,
+        newRoot: field(0x31),
+        newNextIndex: 3,
+        owners: [],
+      }),
+    ).rejects.toMatchObject({ code: "RING_ENROLLMENT_NONE_NAMED" });
+  });
+
+  it("writes an owner grant under the split reader key", async () => {
+    const owner = await generateKeyPairSigner();
+    const reader = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
+    const built = await ownerGrantInstruction({
+      payer: owner,
+      owner,
+      trackingRegistry: REGISTRY,
+      reader,
+      active: true,
+    });
+    const data = new Uint8Array(built.data ?? []);
+    expect(data[0]).toBe(8);
+    expect(data).toHaveLength(1 + 34 + 1);
+    expect(data[35]).toBe(1);
+    const [grant] = await ownerGrantPda(REGISTRY, owner.address, data.subarray(1, 35));
+    expect(built.accounts?.[3]?.address).toBe(grant);
+  });
+});
+
+describe("proveEnrollment", () => {
+  const auditor = X25519Keypair.generate();
+
+  function registryAccount(ringId: Bytes32): { data: Uint8Array } {
+    const data = new Uint8Array(1611);
+    data[0] = 3;
+    data.set(ringId, 2);
+    data.set(auditor.publicKey().toBytes(), 34);
+    new DataView(data.buffer).setUint32(67, 1, true);
+    return { data };
+  }
+
+  it("seals the ring key to the registry's auditor and states ring, member and list tag", async () => {
+    const holder = ShieldedKeypair.fromKeypair(
+      SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
+    );
+    const ring = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
+    const key = await RingNullifierKey.derive(holder, ring);
+    const ringId = field(0x1e);
+    const seen: RegisterKeyProofRequest[] = [];
+    const { seal, proof } = await proveEnrollment({
+      key,
+      owner: OWNER,
+      trackingRegistry: REGISTRY,
+      client: {
+        getAccount: vi.fn(async () => registryAccount(ringId)),
+      } as never,
+      prover: {
+        proveRing: async (request: RegisterKeyProofRequest) => {
+          seen.push({ ...request });
+          return PROOF;
+        },
+      } as never,
+    });
+    expect(proof).toEqual(PROOF);
+    expect(seal.nullifierPk).toEqual(key.nullifierPublicKey());
+    expect(seal.nullifierPk).not.toEqual(holder.nullifierPublicKey());
+    expect(seal.listTag).toEqual(listTagOf(key.listSalt()));
+    const [request] = seen;
+    if (request === undefined) throw new Error("no proof asked");
+    expect(request.ringId).toEqual(ringId);
+    expect(request.member).toEqual(memberOfTag(addressBytes(OWNER, "owner")));
+    expect(request.publicInputHash).toEqual(
+      registerKeyStatementHash({
+        ringId,
+        member: request.member,
+        nullifierPk: seal.nullifierPk,
+        listTag: seal.listTag,
+        auditorPubkey: auditor.publicKey().toBytes() as Bytes33,
+        ephU: seal.ephU,
+        ciphertext: seal.ciphertext,
+      }),
+    );
+    // The holder wipes its copies once the prover answers.
+    expect(request.nullifierSecret.every((byte) => byte === 0)).toBe(true);
+    expect(request.ephSk.every((byte) => byte === 0)).toBe(true);
+    key.destroy();
+  });
+
+  it("refuses a registry account it cannot read before any proof", async () => {
+    const holder = ShieldedKeypair.fromKeypair(
+      SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
+    );
+    const key = await RingNullifierKey.derive(holder, OWNER);
+    const proveRing = vi.fn();
+    await expect(
+      proveEnrollment({
+        key,
+        owner: OWNER,
+        trackingRegistry: REGISTRY,
+        client: { getAccount: async () => undefined } as never,
+        prover: { proveRing } as never,
+      }),
+    ).rejects.toMatchObject({ code: "RING_TRACKING_INVALID" });
+    expect(proveRing).not.toHaveBeenCalled();
+    key.destroy();
+  });
+
+  it("reads the stored enrollment by its account address", async () => {
+    const [account] = await trackingAuthorizationPda(REGISTRY, OWNER);
+    const getAccount = vi.fn(async (key: Address) =>
+      key === account ? { data: authorizationBytes() } : undefined,
+    );
+    const state = await enrollmentState({ trackingRegistry: REGISTRY, owner: OWNER }, {
+      getAccount,
+    } as never);
+    expect(state?.revision).toBe(3n);
+    expect(
+      await enrollmentState({ trackingRegistry: REGISTRY, owner: REGISTRY }, {
+        getAccount,
+      } as never),
+    ).toBeUndefined();
+  });
+});
+
+describe("list salt vector", () => {
+  const vector = JSON.parse(
+    readFileSync(
+      new URL("../../../../../test-vectors/proof/ring-statements.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { tracking: Record<string, string> };
+
+  it("derives the list salt and tag the Go circuit proves", () => {
+    const { nullifier_secret: secret, list_salt: salt, secret_list_tag: tag } = vector.tracking;
+    if (secret === undefined || salt === undefined || tag === undefined)
+      throw new Error("no vector");
+    const key = NullifierKey.fromSecret(hexToBytes(secret).subarray(1) as never);
+    const derived = RingNullifierKey.derive({ ringNullifierKey: () => key }, OWNER);
+    return derived.then((ring) => {
+      expect(Buffer.from(ring.listSalt()).toString("hex")).toBe(salt);
+      expect(Buffer.from(ring.listTag()).toString("hex")).toBe(tag);
+    });
+  });
+});
+
+describe("presentRead", () => {
+  it("reads a salt zero grant for a subject with no row and refuses it by name once enrolled", () => {
+    expect(presentRead({ saltZero: true }).kind).toBe("granted");
+    expect(presentRead({ saltZero: false }).kind).toBe("notListed");
+    expect(presentRead({ salted: true, saltZero: false }).kind).toBe("granted");
+    expect(presentRead({ salted: false, saltZero: false }).kind).toBe("notListed");
+    expect(presentRead({ salted: false, saltZero: true }).kind).toBe("saltedWriteMissing");
+  });
+});

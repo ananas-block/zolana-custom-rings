@@ -81,30 +81,6 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
         ...(entry.mintPolicy === null ? {} : { mintPolicy: entry.mintPolicy }),
       };
     }
-    case "escrow": {
-      const ciphertext = indexerScalars.base64Bytes(entry.ciphertext);
-      if (ciphertext.length !== 32) throw invalid("CiphertextLength");
-      return escrowEntry(indexerScalars.hashBytes(entry.member), {
-        nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
-        ciphertext: ciphertext as Bytes32,
-      });
-    }
-    case "address": {
-      const member = checkMember(memberOfTag(addressBytes(entry.owner, "owner")));
-      return {
-        member,
-        mask: 0n,
-        value: 0n,
-        escrowKey: ZERO_32,
-        addressHash: addressRecordHash({
-          member,
-          ringId: indexerScalars.hashBytes(entry.ringId),
-          nullifierPk: indexerScalars.hashBytes(entry.nullifierPk),
-          viewingU: indexerScalars.hashBytes(entry.viewingU),
-          addressRevision: entry.addressRevision,
-        }),
-      };
-    }
     case "walletGrant": {
       const bit = recordBit(ListId.reader);
       return {

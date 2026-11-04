@@ -20,6 +20,7 @@ describe("ring prover contracts", () => {
   const registerKey: RegisterKeyProofRequest = {
     kind: "registerKey",
     publicInputHash: bytes(1),
+    ringId: bytes(5),
     member: bytes(2),
     nullifierSecret: new Uint8Array(32) as Bytes32,
     ephSk: bytes(3),

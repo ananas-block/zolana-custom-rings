@@ -44,7 +44,7 @@ import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";
 import { ListId, recordBit } from "./policy.js";
-import type { ApplyRecordsStatement } from "../proof/statement.js";
+import { restrictiveWrite, type ApplyRecordsStatement } from "../proof/statement.js";
 
 /** `q - 1`, the sentinel's next, every member sorts strictly below it. */
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
@@ -391,6 +391,9 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     chainStart: inputs.chainStart,
     chainEnd: inputs.chainEnd,
     count: BigInt(inputs.writes.length),
+    restrictive: inputs.writes.some(({ entry }) =>
+      restrictiveWrite(entry.mask, entry.value, entry.mintPolicy !== undefined),
+    ),
   });
 }
 
