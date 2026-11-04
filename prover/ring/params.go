@@ -99,7 +99,6 @@ type TransferParams struct {
 	Rows              []Field         `json:"rows"`
 	PrivateTxHash     Field           `json:"privateTxHash"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
-	PrivateRoot       Field           `json:"privateRoot"`
 	TrackingParams
 	PolicyParams
 }
@@ -169,6 +168,7 @@ type PolicyInputsParams struct {
 	RingProgramID   Field        `json:"ringId"`
 	OwnRoot         Field        `json:"ownRoot"`
 	CuratorRoot     Field        `json:"curatorRoot"`
+	PrivateRoot     Field        `json:"privateRoot"`
 	PublicAssets    []Field      `json:"publicAssets"`
 	PublicAmounts   []Field      `json:"publicAmounts"`
 	PublicGross     []Field      `json:"publicGross"`
@@ -192,6 +192,47 @@ type PooledSubject struct {
 type PooledEntry struct {
 	Own     uint32   `json:"own"`
 	Curator []uint32 `json:"curator"`
+	Private []uint32 `json:"private,omitempty"`
+}
+
+// PrivateOpening opens one position of a private row.
+type PrivateOpening struct {
+	Written  bool    `json:"written"`
+	Lists    uint64  `json:"lists"`
+	LeafSalt Field   `json:"leafSalt"`
+	Siblings []Field `json:"siblings"`
+}
+
+// PrivateRow is one owner's private row, a zero Live pads.
+type PrivateRow struct {
+	Live     bool           `json:"live"`
+	ListSalt Field          `json:"listSalt"`
+	Salted   PrivateOpening `json:"salted"`
+	Zero     PrivateOpening `json:"zero"`
+}
+
+// PrivateListWrite is one applied private list write.
+type PrivateListWrite struct {
+	Member       Field   `json:"member"`
+	ListSalt     Field   `json:"listSalt"`
+	WriteCounter uint64  `json:"writeCounter"`
+	Mask         uint64  `json:"mask"`
+	Value        uint64  `json:"value"`
+	OldWritten   bool    `json:"oldWritten"`
+	OldLists     uint64  `json:"oldLists"`
+	OldLeafSalt  Field   `json:"oldLeafSalt"`
+	Siblings     []Field `json:"siblings"`
+}
+
+type ApplyPrivateListParams struct {
+	RequestHead
+	OldRoot    Field `json:"oldRoot"`
+	NewRoot    Field `json:"newRoot"`
+	ChainStart Field `json:"chainStart"`
+	ChainEnd   Field `json:"chainEnd"`
+	Count      uint8 `json:"count"`
+	// A nil write past Count assigns zeros.
+	Writes []*PrivateListWrite `json:"writes"`
 }
 
 type SharedRegistryPath struct {
@@ -217,6 +258,10 @@ type PolicyParams struct {
 	OwnerEntries       []PooledEntry `json:"ownerEntries"`
 	AssetEntries       []PooledEntry `json:"assetEntries"`
 	PublicAssetEntries []uint32      `json:"publicAssetEntries"`
+	// One private row per subject on a key with private rows, none otherwise.
+	PrivateRows     []PrivateRow `json:"privateRows,omitempty"`
+	PrivateOwners   []Field      `json:"privateOwners,omitempty"`
+	PrivateTracking []uint32     `json:"privateTracking,omitempty"`
 }
 
 type QueueEntry struct {
