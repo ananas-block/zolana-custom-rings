@@ -88,18 +88,14 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		}
 	}
 	c.PrivateTxBlinding = privateTxBlinding
-	c.Senders[0] = w.Sender
-	for j := 1; j < len(c.Senders); j++ {
-		c.Senders[j] = 0
-		if j-1 < len(w.CoOwners) {
-			c.Senders[j] = w.CoOwners[j-1]
-		}
+	for j, row := range w.rows(len(c.Senders)) {
+		c.Senders[j] = row
 	}
 	for o := range c.Outputs {
 		s := pick(w.Slots, o)
 		c.Outputs[o] = s.wires(0xb100 + int64(o))
 		p.CtHashes[o], p.Recipients[o] = 0, 0
-		if !w.Anonymous && !w.Unscreened {
+		if !w.Anonymous && !w.Unscreened && !w.Delegate {
 			p.Recipients[o] = s.Owner
 		}
 		if s.Owner != 0 {
@@ -126,8 +122,8 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	c.InputChain = inputChain
 	c.Delivery = ringtest.Bit(w.Delivery)
-	c.Exempt, c.KeyEscrow, c.Delegate = ringtest.Bit(w.Exempt), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
-	c.Published, c.ApprovalRequired = ringtest.Bit(!w.Anonymous), ringtest.Bit(w.ApprovalRequired)
+	c.ThresholdsActive, c.KeyEscrow, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.KeyEscrow), ringtest.Bit(w.Delegate)
+	c.Published, c.ApprovalMask = ringtest.Bit(!w.Anonymous), w.Approval
 	b.pool(t, own, curator)
 	b.Rehash(t)
 	return b
@@ -168,6 +164,17 @@ func (b Witness) Rebind(t testing.TB) {
 	}
 	p.WithdrawalHash = spptest.MustHashChain4(t, fields)
 	b.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(b.Circuit.Statement()))
+}
+
+// rows is the sender and co-owners ascending with zero rows last, the order the circuit holds.
+func (w World) rows(capacity int) []int64 {
+	rows := append([]int64{w.Sender}, w.CoOwners...)
+	slices.Sort(rows)
+	rows = slices.Compact(rows)
+	for len(rows) < capacity {
+		rows = append(rows, 0)
+	}
+	return rows
 }
 
 // balancedInputs spends what balance owes per asset, every output plus every net withdrawal, none on a deposit-funded asset.

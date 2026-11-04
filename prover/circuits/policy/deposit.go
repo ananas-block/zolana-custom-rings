@@ -45,8 +45,9 @@ func (d DepositScreen) Assert(api frontend.API, rc frontend.Rangechecker, policy
 		ownerLists, _, _, _ := d.OwnerRecords[i].Resolve(api, active, ownRoot, deposit.Owner)
 		curatedOwner, _, _, _ := d.CuratorOwnerRecords[i].Resolve(api, api.Mul(active, table.sources.anyForeign), d.CuratorRoot, deposit.Owner)
 		resolved.owners[i] = subjectView{onList: table.sources.lists(api, sourceLists(api, ownerLists), sourceLists(api, curatedOwner)), escrowKey: 0}
-		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active}
+		// Public funds are no same-ring input, every deposit is a receipt.
+		payments[i] = Payment{Owner: deposit.Owner, Asset: deposit.Asset, Amount: deposit.Amount, Active: active, Ring: 1}
 	}
 	// 3. Every active owner and asset rule holds for each deposit as for a transfer output.
-	assertPaymentRules(api, newComparator(rc, len(deposits)), screened, screenedRules(api, screened, table), table, resolved, payments)
+	assertPaymentRules(api, newComparator(rc), screenedRules(api, screened, table), table, resolved, payments, nil)
 }

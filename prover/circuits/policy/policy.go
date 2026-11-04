@@ -23,9 +23,9 @@ type PolicyInputs struct {
 	OwnRoot         frontend.Variable
 	CuratorRoot     frontend.Variable
 	PublicAssets    [transaction.NPublicSlots]frontend.Variable
-	// PublicAmounts are SPP's signed nets, a withdrawal enters as the field negation of its amount.
+	// PublicAmounts are SPP's signed nets, the statement alone reads them.
 	PublicAmounts [transaction.NPublicSlots]frontend.Variable
-	// PublicGross are the gross withdrawals per slot, read under an exemption.
+	// PublicGross are the gross withdrawals per slot, no deposit subtracted, read while Outflow is on.
 	PublicGross [transaction.NPublicSlots]frontend.Variable
 	Table
 

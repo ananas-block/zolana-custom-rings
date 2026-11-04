@@ -22,12 +22,12 @@ type SectionCircuit struct {
 	InputChain        frontend.Variable
 	PrivateTxHash     frontend.Variable
 	PrivateTxBlinding frontend.Variable
-	Exempt            frontend.Variable
+	ThresholdsActive  frontend.Variable
 	KeyEscrow         frontend.Variable
 	Delegate          frontend.Variable
 	Published         frontend.Variable
 	Delivery          frontend.Variable
-	ApprovalRequired  frontend.Variable
+	ApprovalMask      frontend.Variable
 }
 
 // sectionSenders is the sender rows of the transfer keys the harness stands for.
@@ -65,16 +65,16 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 	for i, w := range c.Inputs {
 		inputs[i] = w.Open(api)
 	}
-	g := policy.Rail{Exempt: c.Exempt, KeyEscrow: c.KeyEscrow, Delegate: c.Delegate, Published: c.Published, Delivery: c.Delivery}.Gates(api, c.PolicyHash)
+	g := policy.Rail{ThresholdsActive: c.ThresholdsActive, KeyEscrow: c.KeyEscrow, Delegate: c.Delegate, Published: c.Published, Delivery: c.Delivery}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: c.Senders, Inputs: inputs}, outputs)
-	api.AssertIsEqual(c.ApprovalRequired, screening.Approval)
+	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.Statement()))
 	return nil
 }
 
 // Statement binds every value the section reads from the program, in the harness's own order.
 func (c *SectionCircuit) Statement() []frontend.Variable {
-	fields := []frontend.Variable{c.Exempt, c.KeyEscrow, c.Delegate, c.Published, c.Delivery, c.ApprovalRequired, c.PrivateTxHash, c.PolicyHash, c.RingProgramID, c.OwnRoot, c.CuratorRoot}
+	fields := []frontend.Variable{c.ThresholdsActive, c.KeyEscrow, c.Delegate, c.Published, c.Delivery, c.ApprovalMask, c.PrivateTxHash, c.PolicyHash, c.RingProgramID, c.OwnRoot, c.CuratorRoot}
 	fields = append(fields, c.Senders...)
 	fields = append(fields, c.Recipients...)
 	for k := range c.PublicAssets {

@@ -37,16 +37,16 @@ type screenedPolicy struct {
 }
 
 func (p *screenedPolicy) gates(api frontend.API, rail policy.Rail) policy.Gates {
-	// Exempt switches assertExemption and the own pool lookups the thresholds read.
+	// Exempt carries thresholds_active, the Outflow gate and the own pool lookups the thresholds read.
 	api.AssertIsBoolean(p.Exempt)
-	rail.Exempt = p.Exempt
+	rail.ThresholdsActive = p.Exempt
 	return rail.Gates(api, p.PolicyHash)
 }
 
 func (p *screenedPolicy) screen(api frontend.API, rc frontend.Rangechecker, g policy.Gates, spend policy.Spend, slots []shared.Output) policy.Screening {
 	screening := p.Screen(api, rc, g, spend, slots)
-	// Screen returns zero while Outflow is off, approval_required then reads the outflow's verdict alone.
-	api.AssertIsEqual(p.ApprovalRequired, screening.Approval)
+	// ApprovalRequired carries approval_mask, zero while Outflow is off.
+	api.AssertIsEqual(p.ApprovalRequired, screening.ApprovalMask)
 	return screening
 }
 

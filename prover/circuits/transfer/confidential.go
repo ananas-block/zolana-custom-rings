@@ -104,7 +104,7 @@ func (c *ConfidentialTransferCircuit) Define(api frontend.API) error {
 }
 
 func (c *ConfidentialTransferCircuit) assertRail(api frontend.API) {
-	for _, bit := range []frontend.Variable{c.InProof, c.Delegate, c.ApprovalRequired} {
+	for _, bit := range []frontend.Variable{c.InProof, c.Delegate} {
 		api.AssertIsBoolean(bit)
 	}
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.InProof})
