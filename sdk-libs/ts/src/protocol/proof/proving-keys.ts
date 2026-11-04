@@ -72,6 +72,27 @@ export function ringProvingKey(circuit: RingKeyCircuit): ExpectedProvingKey {
   return pinnedProvingKey(`${ringCircuitType(circuit).replaceAll("-", "_")}.key`);
 }
 
+/** SPP's authority exit keys, zolana's prover serves them. */
+export const RING_AUTHORITY_EXIT_SHAPES: readonly Readonly<{
+  nInputs: number;
+  nOutputs: number;
+}>[] = Object.freeze([
+  Object.freeze({ nInputs: 2, nOutputs: 2 }),
+  Object.freeze({ nInputs: 4, nOutputs: 4 }),
+]);
+
+/** A shape off the two keys is refused by name. */
+export function ringAuthorityExitKeyName(
+  shape: Readonly<{ nInputs: number; nOutputs: number }>,
+): string {
+  const { nInputs, nOutputs } = shape;
+  if (!RING_AUTHORITY_EXIT_SHAPES.some((s) => s.nInputs === nInputs && s.nOutputs === nOutputs))
+    throw new RingError("RING_PROVING_KEYS_MISSING", {
+      details: { keyNames: `transfer_ring_authority_exit_${nInputs}_${nOutputs}.key` },
+    });
+  return `transfer_ring_authority_exit_${nInputs}_${nOutputs}.key`;
+}
+
 /** A key without a pin has no committed verifying key, the proof is refused by the key's name. */
 function pinnedProvingKey(name: string): ExpectedProvingKey {
   const sha256 = Object.hasOwn(RING_PROVING_KEY_SHA256S, name)

@@ -71,7 +71,7 @@ export type AnonymousStream =
   /** A deposit under a tag the wallet minted for a request. */
   | Readonly<{ kind: "request"; index: bigint }>
   | Readonly<{ kind: "bootstrap" }>
-  /** A transfer's slot or bundle whose proven tag matched. */
+  /** A transfer's slot or bundle whose tag matched. */
   | Readonly<{ kind: "provenTag" }>
   | Readonly<{ kind: "merge"; firstNullifier: Bytes32 }>
   /** Tried with no use of its tag. */
@@ -687,7 +687,7 @@ class Scan {
     );
   }
 
-  /** The one recovery path of every rail, no tag is read here. */
+  /** Recovers every rail without reading a tag, tags are unproved hints. */
   async #tryEverySite(
     viewingPublicKey: X25519PublicKey,
     rows: readonly IndexedShieldedTransaction[],

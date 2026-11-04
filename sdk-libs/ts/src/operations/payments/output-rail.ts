@@ -438,7 +438,7 @@ export class RingOutputRail {
     );
   }
 
-  /** The first message, its tag proven against index `m`. */
+  /** The first message, its tag derived for index `m`. */
   publishedSender(
     proofInputs: SppProofInputs,
     senderViewingPublicKey: X25519PublicKey,

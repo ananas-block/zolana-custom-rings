@@ -207,6 +207,16 @@ export interface MergeSettings {
   readonly minAverageAmount: bigint;
 }
 
+/** Rust `SetMergeSettingsRequest`. */
+export interface SetMergeSettingsRequest {
+  readonly ring: Address;
+  readonly owner: Address;
+  readonly settings: MergeSettings;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
+}
+
 /** Rust `AuthorityPayment`. */
 export interface AuthorityPayment {
   readonly recipient: ShieldedAddress;
