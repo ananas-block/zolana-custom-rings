@@ -55,21 +55,21 @@ ring_errors! {
     // 8148 and 8149 retired.
     DelegateDisabled = 8150 => "the ring has no delegate",
     UnauthorizedDelegate = 8151 => "the delegate must sign",
-    DelegatePublicLeg = 8152 => "a delegate move settles no public leg",
+    DelegatePublicLeg = 8152 => "a delegate move takes no deposit leg",
     DelegateAlreadySet = 8153 => "the delegate is permanent",
     // 8154 to 8156 retired.
-    ApprovalWithoutCoSigner = 8157 => "dual control needs a configured co-signer",
+    // 8157 retired.
     // 8158 and 8159 retired.
     // 8160 to 8165 retired.
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
     // 8167 retired.
     // 8168 and 8169 retired.
-    DelegateRequiresPolicy = 8170 => "a delegate needs a policy ring",
+    // 8170 retired.
     // 8171 retired.
     // 8172 retired.
     MissingFundingSigner = 8173 => "forwarded funding account must sign on entry",
     InvalidRingMode = 8174 => "the ring mode is unknown",
-    AnonymousRingRefused = 8175 => "an anonymous ring refuses this operation",
+    // 8175 retired.
     // 8176 retired.
     InvalidAnonymousOutput = 8177 => "an anonymous ring output must carry a zero owner tag",
     InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run and the co-signer, and no owner run on the entry key",
@@ -110,7 +110,7 @@ ring_errors! {
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
     // 8235 and 8236 retired.
-    CoSignerIsDelegate = 8237 => "dual control needs a co-signer other than the delegate",
+    // 8237 retired.
     InvalidRingProofPoint = 8238 => "a ring proof point does not decompress",
     ThresholdsWithoutWithdrawals = 8239 => "co-signer thresholds need the withdrawal scope",
     UnexpectedMemberRegistryRoot = 8240 => "the statement binds no member registry root",
@@ -129,16 +129,13 @@ ring_errors! {
         "an anonymous SPL withdrawal's token account address must be off the ed25519 curve",
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
-    AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
+    AnonymousRingDataNotZero = 8251 => "an anonymous ring merge output carries ring data",
     // 8252 retired.
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
-    ExemptionWithoutWithdrawal = 8254 => "an exempt transfer settles no public withdrawal",
-    AnonymousRingNeedsRecords = 8256 => "an anonymous ring needs a records registry",
+    // 8254 and 8256 retired.
     OutputCountOutOfRange = 8257 => "the published output count is zero or above the key's capacity",
     InvalidChangeBits = 8258 => "change bits overlap an exit or are no prefix of two slots",
     ReplyLength = 8259 => "reply metadata is shorter than its keys or misses one reply per body-bearing slot",
-    AddressWriteNeedsAuthorization = 8264 => "an address write reads its hash from an authorization",
-    AddressRevisionMismatch = 8265 => "the address write names another revision than the authorization",
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ViewTagNotCanonical = 8267 => "a recipient, dummy or sender bundle view tag is at or above the field modulus",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
@@ -151,7 +148,7 @@ ring_errors! {
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     // 8303 to 8306 retired.
-    OwnerSignerOnInProofRail = 8350 => "the in-proof owner rail takes no owner signer",
+    // 8350 retired.
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
@@ -161,6 +158,9 @@ ring_errors! {
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
+    ApproverMissing = 8500 => "a proven approval bit has no configured approver for its class",
+    TooManyCoSigners = 8501 => "the frame carries more co-signers than the five classes need",
+    InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
 }
 
 impl From<CustomRingError> for ProgramError {

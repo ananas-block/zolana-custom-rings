@@ -17,8 +17,6 @@ pub const AUDIT_SHARED_SECRET: u32 = 0x4352_5f53;
 pub use zolana_ring_policy::POLICY_TABLE_DOMAIN as POLICY_TABLE;
 /// `"CRQW"`
 pub const QUEUE_WRITE: u32 = 0x4352_5157;
-/// `"CRAD"`
-pub const AUTHORIZED_ADDRESS: u32 = 0x4352_4144;
 /// `"CRAP"`
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`

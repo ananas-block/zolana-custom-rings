@@ -68,11 +68,10 @@ pub struct PublicSlots {
 }
 
 impl Default for PublicSlots {
-    /// A transact without legs is still a transfer.
     fn default() -> Self {
         Self {
             slots: ArrayVec::new(),
-            classes: CoSignScope::TRANSFERS,
+            classes: CoSignScope::NONE,
         }
     }
 }
@@ -113,7 +112,8 @@ impl PublicSlots {
         self.slots.is_empty()
     }
 
-    pub fn classes(&self) -> CoSignScope {
+    /// The co-sign classes the public legs add, `NONE` without a leg.
+    pub const fn classes(&self) -> CoSignScope {
         self.classes
     }
 

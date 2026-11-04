@@ -1,6 +1,4 @@
-use custom_ring_interface::{
-    CustomRingError, ParsedTransact, RingMode, RingPolicy, TransferBinding,
-};
+use custom_ring_interface::{CustomRingError, ParsedTransact, RingPolicy, TransferBinding};
 use pinocchio::{Address, ProgramResult};
 use zolana_ring_policy::ring_id_field;
 
@@ -13,7 +11,6 @@ pub(super) struct RingStatements<'a> {
     pub ring: &'a RingPolicy,
     pub transfer: &'a ParsedTransact<'a>,
     pub accounts: &'a TransactAccounts,
-    pub key_escrow: bool,
 }
 
 impl RingStatements<'_> {
@@ -34,7 +31,6 @@ impl RingStatements<'_> {
             .transfer_statement(TransferBinding {
                 ring_id: &ring_id,
                 auditor_pubkey: &self.ring.auditor_pubkey,
-                key_escrow: self.key_escrow,
                 sender: &self.accounts.sender,
                 signers: self.accounts.signers,
                 party_identities: &self.accounts.party_identities,
@@ -54,9 +50,4 @@ impl RingStatements<'_> {
         }
         .verify()
     }
-}
-
-/// `ConfidentialEscrow` mode alone, its proof escrows every output nullifier key.
-pub(super) fn escrows_keys(ring: &RingPolicy) -> Result<bool, CustomRingError> {
-    Ok(ring.mode()? == RingMode::ConfidentialEscrow)
 }

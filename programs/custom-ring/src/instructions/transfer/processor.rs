@@ -5,10 +5,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 
-use super::{
-    accounts::TransactCheck,
-    verify::{escrows_keys, RingStatements},
-};
+use super::{accounts::TransactCheck, verify::RingStatements};
 use crate::instructions::loader::{load_policy, validate_spp_program};
 
 #[inline(never)]
@@ -40,13 +37,12 @@ pub fn process_transfer_ix(
     .validate(accounts)?;
     // 4. A bad SPP proof point is refused before either pairing.
     let spp_data = data.spp_instruction_data(&ring)?;
-    // 5. The ring proof verifies over program-derived values before the SPP call the exempt bit relaxes.
+    // 5. The ring proof verifies the frame's approval mask and spend bit before the SPP call.
     RingStatements {
         program_id,
         ring: &ring,
         transfer: &transfer,
         accounts: &validated,
-        key_escrow: escrows_keys(&ring)?,
     }
     .verify()?;
     // 6. SPP verifies its own proof over the expanded data the ring PDA signs.
