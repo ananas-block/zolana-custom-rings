@@ -1,4 +1,4 @@
-//! Anonymous ring sync, each ring's history read from its stored position under the proven tags.
+//! Anonymous ring sync, each ring's history read from its stored position under the tag hints.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -48,8 +48,8 @@ pub enum AnonymousStream {
         index: u64,
     },
     Bootstrap,
-    /// A transfer's slot or bundle whose proven tag matched.
-    ProvenTag,
+    /// A transfer's slot or bundle whose tag hint matched.
+    TagHint,
     Merge {
         first_nullifier: [u8; 32],
     },
@@ -236,7 +236,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             scan.entry(*index).await?;
         }
         for read in scan.ring_reads(&held) {
-            scan.read_ring(read, Trial::ProvenTags).await?;
+            scan.read_ring(read, Trial::TagHints).await?;
         }
         scan.merges(MergeSource::Indexer).await?;
         scan.finish(self.keys)
@@ -312,7 +312,7 @@ fn sites_of(tx: &ShieldedTransaction) -> impl Iterator<Item = Site> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Trial {
-    ProvenTags,
+    TagHints,
     EverySite,
 }
 
@@ -507,7 +507,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             self.note_spends(&rows);
             for index in &entries {
                 match trial {
-                    Trial::ProvenTags => self.test_tags(*index, &rows)?,
+                    Trial::TagHints => self.test_tags(*index, &rows)?,
                     Trial::EverySite => self.try_every_site(*index, &rows)?,
                 }
                 self.open_owner_merges(*index, &rows)?;
@@ -534,7 +534,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         let mut candidates: Vec<Vec<Body<'_>>> = Vec::new();
         for tx in rows {
             let bodies: Vec<Body<'_>> = sites_of(tx)
-                .filter_map(|site| Body::of(tx, site, AnonymousStream::ProvenTag))
+                .filter_map(|site| Body::of(tx, site, AnonymousStream::TagHint))
                 .collect();
             if !bodies.is_empty() {
                 candidates.push(bodies);

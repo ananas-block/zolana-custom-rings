@@ -72,7 +72,7 @@ export type AnonymousStream =
   | Readonly<{ kind: "request"; index: bigint }>
   | Readonly<{ kind: "bootstrap" }>
   /** A transfer's slot or bundle whose tag matched. */
-  | Readonly<{ kind: "provenTag" }>
+  | Readonly<{ kind: "tagHint" }>
   | Readonly<{ kind: "merge"; firstNullifier: Bytes32 }>
   /** Tried with no use of its tag. */
   | Readonly<{ kind: "fullScan" }>;
@@ -516,7 +516,7 @@ class Scan {
         reads.set(key, read);
       }
     for (const { ring, afterSlot, keys } of reads.values())
-      await this.#readRing({ ring, afterSlot, keys, trial: "provenTags" });
+      await this.#readRing({ ring, afterSlot, keys, trial: "tagHints" });
   }
 
   /** Recovery, every site tried under every held key from the ring's start. */
@@ -599,7 +599,7 @@ class Scan {
       ring: Address;
       afterSlot: bigint | null;
       keys: readonly X25519PublicKey[];
-      trial: "provenTags" | "everySite";
+      trial: "tagHints" | "everySite";
       merges?: LocalMerges;
     }>,
   ): Promise<void> {
@@ -619,7 +619,7 @@ class Scan {
         this.#ringRows.push(...fresh);
         read.merges?.add(fresh);
         for (const viewingPublicKey of keys)
-          if (trial === "provenTags") await this.#testTags(viewingPublicKey, fresh);
+          if (trial === "tagHints") await this.#testTags(viewingPublicKey, fresh);
           else await this.#tryEverySite(viewingPublicKey, fresh);
       },
       this.#context,
@@ -638,7 +638,7 @@ class Scan {
     rows: readonly IndexedShieldedTransaction[],
   ): Promise<void> {
     const candidates = rows
-      .map((tx) => sitesOf(tx).flatMap((site) => bodyAt(tx, site, PROVEN_TAG) ?? []))
+      .map((tx) => sitesOf(tx).flatMap((site) => bodyAt(tx, site, TAG_HINT) ?? []))
       .filter((bodies) => bodies.length > 0);
     if (candidates.length === 0) return;
     const recognized = await this.#ownBundles(viewingPublicKey, candidates.flat());
@@ -1379,7 +1379,7 @@ function outputIndex(body: Body): number {
 
 const BOOTSTRAP = Object.freeze({ kind: "bootstrap" });
 const FULL_SCAN: AnonymousStream = Object.freeze({ kind: "fullScan" });
-const PROVEN_TAG: AnonymousStream = Object.freeze({ kind: "provenTag" });
+const TAG_HINT: AnonymousStream = Object.freeze({ kind: "tagHint" });
 /** A capped read never moves a position, a scan runs to its terminal page. */
 const SCAN_TO_TERMINAL = scanLimits({ maxPages: Number.MAX_SAFE_INTEGER });
 const MAX_CHANGE_SLOTS = 2;
