@@ -82,7 +82,6 @@ impl Fixture {
         }
     }
 
-    /// `transfers` as the frame's legs, one framed owner per SPL withdrawal.
     pub fn settle_legs<'a>(
         &'a self,
         data: &mut RingTransactData<'a>,
@@ -98,7 +97,7 @@ impl Fixture {
         self
     }
 
-    /// One input per shape input slot, every output a ring output, the own root read off the authority rails as `Ring::new` binds records.
+    /// The own root read off the authority rails as `Ring::new` binds records.
     pub fn transfer(
         &self,
         rail: RingRail,
@@ -164,7 +163,6 @@ impl Fixture {
         data
     }
 
-    /// `transfer` on an anonymous ring whose every live owner signs in public, no hidden sender proves anything.
     pub fn public_owners(&self, n_in: u8, n_out: u8, policy: bool) -> RingTransactData<'_> {
         let mut data = self.transfer(RingRail::Anonymous, n_in, n_out, policy);
         data.public_owners = true;
@@ -190,7 +188,6 @@ impl Fixture {
         data
     }
 
-    /// Cuts the envelope to the data's stream layout.
     pub fn fit_stream<'a>(&'a self, data: &mut RingTransactData<'a>) {
         data.envelope = &self.envelope[..data.audit_stream().unwrap().envelope().len];
     }
@@ -774,7 +771,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     ));
 }
 
-/// A ring with no records has no thresholds to read, so the frame names no own root.
+/// No records means no thresholds, the frame names no own root.
 #[test]
 fn a_bare_ring_reads_the_tracking_root_alone() {
     let fixture = Fixture::new();
@@ -916,7 +913,7 @@ fn a_co_signer_whose_scope_misses_the_demanded_class_is_refused() {
     );
 }
 
-/// The payer withdraws each `legs` amount in SOL as the one owner, `prefix` holds one co-signer slot or none.
+/// `prefix` holds one co-signer slot or none.
 fn withdraw(ring: &mut Ring, legs: &[u64], prefix: Vec<AccountMeta>, signers: &[&Keypair]) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
@@ -984,7 +981,6 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
     );
 }
 
-/// A transfer from the payer proving `mask`, co-signed by `co_signers` under their own records.
 fn approved(ring: &mut Ring, mask: ApprovalMask, co_signers: &[&Keypair]) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);

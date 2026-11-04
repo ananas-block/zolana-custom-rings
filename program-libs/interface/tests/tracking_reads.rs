@@ -1,5 +1,3 @@
-//! What a transfer reads of the tracking registry, the pin and a private source's floor.
-
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},

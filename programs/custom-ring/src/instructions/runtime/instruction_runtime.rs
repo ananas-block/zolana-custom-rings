@@ -139,7 +139,6 @@ impl RingAuth {
 }
 
 impl PlacedRingAuth {
-    /// Calls SPP.
     pub fn invoke<A: AsRef<AccountView>>(&self, accounts: &[A], data: &[u8]) -> ProgramResult {
         self.invoke_program(
             &Address::new_from_array(SHIELDED_POOL_PROGRAM_ID),

@@ -197,7 +197,6 @@ impl RingRoles {
 #[repr(u8)]
 pub enum RingMode {
     Confidential = 0,
-    /// Hides the sender and the ring recipients.
     Anonymous = 2,
 }
 
@@ -213,7 +212,6 @@ impl TryFrom<u8> for RingMode {
     }
 }
 
-/// Subset of the class bits, a record's scope is nonzero.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CoSignScope(u8);
 
@@ -224,12 +222,11 @@ impl CoSignScope {
     pub const WITHDRAWALS: Self = Self(4);
     pub const APPROVE_OUTFLOW: Self = Self(8);
     pub const APPROVE_WITHDRAWAL: Self = Self(16);
-    /// A proven mask bit demands these, with no record they fail closed.
     pub const APPROVALS: Self = Self(Self::APPROVE_OUTFLOW.0 | Self::APPROVE_WITHDRAWAL.0);
     pub const ALL: Self =
         Self(Self::TRANSFERS.0 | Self::DEPOSITS.0 | Self::WITHDRAWALS.0 | Self::APPROVALS.0);
 
-    /// A record's scope, `None` for zero or an unknown bit.
+    /// A record's scope is nonzero.
     pub const fn new(bits: u8) -> Option<Self> {
         if bits == 0 || bits & !Self::ALL.0 != 0 {
             return None;
@@ -270,7 +267,6 @@ impl BitOr for CoSignScope {
     }
 }
 
-/// Count of `CoSigner` records covering each class, an optional class with none demands no co-signer.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct CoSignerCounts([u8; 5]);
@@ -344,13 +340,12 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
-/// The policy roots an instruction binds, each read from a live registry after the ring account.
-/// Every read also takes the pinned tracking registry.
+/// Policy roots only, every read also takes the pinned tracking registry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RootRead {
     None,
     Own,
-    /// The own root, and the curator root when a source names one.
+    /// The own root, and the curator and private roots when the ring names them.
     Policy,
 }
 
@@ -399,7 +394,7 @@ impl LiveRoots<'_> {
             .ok_or(CustomRingError::MissingRegistry)
     }
 
-    /// A root below a private source's floor stays served, so a subject could still prove itself unenrolled and read salt 0.
+    /// A root below a private source's floor stays served by the registry, refused here.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
         for source in [self.own, self.curator, self.private_source]
             .into_iter()
@@ -479,7 +474,7 @@ pub struct RingPolicy {
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     /// Little endian, the slot `Initialize` ran in.
     pub created_slot: [u8; 8],
-    /// The ring's own `StorageRegistry`, zero on a ring bound to none, which holds no thresholds.
+    /// The own `StorageRegistry`, zero means no thresholds.
     pub records: Address,
     /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
@@ -509,7 +504,6 @@ pub struct CoSigner {
     pub bump: u8,
 }
 
-/// The lists owner rows read privately, and the loaded registry serving them.
 #[must_use]
 #[derive(Debug, Copy, Clone)]
 pub struct PrivateSourceWrite<'a> {
@@ -608,7 +602,6 @@ impl RingPolicy {
         Ok(())
     }
 
-    /// `InvalidSource` for the curator or the private source.
     pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
         if self.curator() == Some(records) || self.private_source == records {
             return Err(CustomRingError::InvalidSource);
@@ -665,7 +658,7 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    /// The registries `read` passes after the ring account, own, curator, private source, then the pinned tracking registry.
+    /// Account order after the ring account.
     pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
         self.own_registry(read)
             .into_iter()
@@ -682,7 +675,6 @@ impl RingPolicy {
         }
     }
 
-    /// Names the private source or clears it with no registry and no lists, each `source` read from a loaded registry.
     pub fn set_private_source(
         &mut self,
         write: PrivateSourceWrite<'_>,
@@ -708,24 +700,21 @@ impl RingPolicy {
         let mut next = *self;
         next.private_source = address;
         next.private_lists = write.owner_lists.bits();
-        // A proof binds the table hash, so a stale one fails the moment the source changes.
+        // A proof bound to the old source fails under the new table hash.
         next.policy_hash = next.rules.hash(&next.source_map()?)?;
         next.count_generation(slot)?;
         *self = next;
         Ok(())
     }
 
-    /// The own registry `read` passes after the ring account.
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
         (read != RootRead::None).then_some(self.records)
     }
 
-    /// The curator registry `read` passes after the own registry.
     pub fn curator_registry(&self, read: RootRead) -> Option<Address> {
         (read == RootRead::Policy).then(|| self.curator()).flatten()
     }
 
-    /// The private source `read` passes after the curator.
     pub fn private_registry(&self, read: RootRead) -> Option<Address> {
         (read == RootRead::Policy && self.private_source != Address::default())
             .then_some(self.private_source)

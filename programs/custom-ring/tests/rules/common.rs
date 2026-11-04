@@ -50,7 +50,6 @@ pub fn ring_auth() -> Address {
     pda(RING_AUTH_PDA_SEED)
 }
 
-/// Where `Initialize` creates the tracking registry the ring pins.
 pub fn tracking_registry() -> Address {
     let ring_id = ring_id_field(PROGRAM.as_array()).expect("ring id");
     TrackingRegistry::find_address(&ring_auth(), &ring_id).0
@@ -240,7 +239,6 @@ impl Ring {
         );
     }
 
-    /// The pinned tracking registry after applies reach `revision`.
     pub fn serve_tracking(&mut self, revision: Revision) {
         let mut tracking: TrackingRegistry = self.read(&tracking_registry());
         tracking.roots[0] = root(revision.value(), [0x09; 32]);
@@ -721,7 +719,6 @@ pub fn set_delegate(admin: &Address, delegate: &Address) -> Instruction {
     )
 }
 
-/// A policy ring with a delegate.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
     let admin = ring.holder(RingRole::Admin);

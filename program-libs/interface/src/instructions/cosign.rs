@@ -1,4 +1,4 @@
-//! The co-signers a ring operation must carry, one rule for the program and the SDKs.
+//! One co-sign rule for the program and the SDKs.
 
 use crate::{CoSignScope, CoSigner, CustomRingError, RingPolicy};
 use solana_address::Address;
@@ -42,7 +42,6 @@ impl ApprovalMask {
 /// One record per class at most, a further record covers nothing.
 pub const MAX_CO_SIGNERS: usize = 5;
 
-/// The frame's co-signer byte, the mask below the count.
 #[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CoSignHeader {
@@ -81,7 +80,6 @@ impl CoSignHeader {
 pub struct CoSignOperation {
     /// Clear under the statement's `no_spend`.
     pub spends_note: bool,
-    /// `PublicSlots::classes`.
     pub public_legs: CoSignScope,
     pub approval: ApprovalMask,
 }
@@ -112,7 +110,7 @@ impl CoSignDemand {
         classes: CoSignScope::DEPOSITS,
     };
 
-    /// An optional class with no record drops out, an approval class with no record fails closed.
+    /// A class with no record drops out, an approval class fails closed.
     pub fn requirement(self, ring: &RingPolicy) -> Result<CoSignRequirement, CustomRingError> {
         let covered = ring.co_signers.covered();
         if self
@@ -129,7 +127,6 @@ impl CoSignDemand {
     }
 }
 
-/// The classes no carried record covers yet.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoSignRequirement {
@@ -137,7 +134,6 @@ pub struct CoSignRequirement {
 }
 
 impl CoSignRequirement {
-    /// True until a demanded class is outstanding.
     pub const fn is_satisfied(self) -> bool {
         self.uncovered.is_empty()
     }
@@ -146,7 +142,7 @@ impl CoSignRequirement {
         self.uncovered
     }
 
-    /// The record's signer, `CoSignerOutOfScope` unless it covers an outstanding class, so an unrelated or repeated record is refused.
+    /// An unrelated or repeated record covers nothing and is refused.
     pub fn cover(self, record: &CoSigner) -> Result<(Self, Address), CustomRingError> {
         let scope = record.scope().ok_or(CustomRingError::CoSignerOutOfScope)?;
         if !scope.intersects(self.uncovered) {
@@ -160,7 +156,6 @@ impl CoSignRequirement {
         ))
     }
 
-    /// `MissingCoSigner` while a demanded class is outstanding.
     pub const fn check_satisfied(self) -> Result<(), CustomRingError> {
         match self.is_satisfied() {
             true => Ok(()),
