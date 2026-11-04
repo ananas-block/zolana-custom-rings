@@ -75,8 +75,6 @@ const NARROW_SHAPES: [TransferShape; 4] = [
 ];
 const WIDE_SHAPE: TransferShape = narrow(8, 24, 32, 24);
 const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
-/// A wider anonymous frame with replies exceeds the program's heap budget.
-const ANONYMOUS_OUTPUTS: usize = 8;
 
 pub const TRANSFER_SHAPES: [TransferShape; 7] = [
     NARROW_SHAPES[0],
@@ -102,9 +100,7 @@ impl FrameKey {
         let holds = |shape: &TransferShape| self.outputs <= usize::from(shape.outputs);
         // SPP's authority rail holds every input to the ring.
         let delegate = matches!(self.rail, RingRail::Delegate | RingRail::AnonymousDelegate);
-        if delegate && self.spends_default_ring
-            || self.rail.anonymous_frame() && self.outputs > ANONYMOUS_OUTPUTS
-        {
+        if delegate && self.spends_default_ring {
             return None;
         }
         match (self.spends_default_ring, self.wide) {
@@ -402,17 +398,9 @@ mod tests {
             assert_eq!(key(2), Some(transfer(2, 24, 4, 4)));
             assert_eq!(key(4), Some(transfer(4, 24, 4, 4)));
             assert_eq!(key(8), Some(transfer(8, 16, 4, 4)));
+            assert_eq!(key(16), Some(transfer(16, 5, 8, 5)));
             assert_eq!(key(17), None);
         }
-    }
-
-    #[test]
-    fn only_a_confidential_frame_reaches_sixteen_outputs() {
-        let key = |rail| RingCircuit::transfer(spend(rail, 16, false, false));
-        assert_eq!(key(RingRail::Confidential), Some(transfer(16, 5, 8, 5)));
-        assert_eq!(key(RingRail::Delegate), Some(transfer(16, 5, 8, 5)));
-        assert_eq!(key(RingRail::Anonymous), None);
-        assert_eq!(key(RingRail::AnonymousDelegate), None);
     }
 
     #[test]
