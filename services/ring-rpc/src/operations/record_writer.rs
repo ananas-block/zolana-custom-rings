@@ -12,7 +12,6 @@ use custom_ring_sdk::{CustomRing, InitializeStorage, UpdateStorage};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
-use solana_instruction::AccountMeta;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
@@ -359,19 +358,14 @@ impl RecordWriter {
         if !data.reaches_policy() && slot < state.roots[ROOT_HISTORY - 1].expires_at() {
             return Ok(());
         }
-        let floor_account = state
-            .reads_tracking(&data)
-            .then_some(state.tracking_registry);
-        let mut instruction = UpdateStorage {
+        let instruction = UpdateStorage {
             authority: self.authority(),
             registry,
+            state: &state,
             data,
         }
         .instruction()
         .map_err(|error| RingRpcError::StorageUpdate(error.into()))?;
-        instruction
-            .accounts
-            .extend(floor_account.map(|tracking| AccountMeta::new_readonly(tracking, false)));
         let latest = self.chain.latest_blockhash().await?;
         let message = compile_message(
             &self.authority(),

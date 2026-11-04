@@ -1,6 +1,6 @@
 //! Sends a ring operation and proves it again when the chain moved under its proof.
 
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 use custom_ring_interface::{
     compute_unit_limit,
@@ -24,8 +24,8 @@ use spr_client::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    address_ceiling::{AddressCeiling, CeilingDecision, MergeCapacity},
-    buffered::BufferedFrame,
+    address_ceiling::{FitSigners, FitTransport, TransactionFit},
+    buffered::{write_budget, BufferedFrame},
     heap::boxed,
     AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
     PublicOwnerTransfer, RingError, RingMergeOperation,
@@ -44,25 +44,15 @@ pub(crate) fn send_budget(tag: InstructionTag, priority_fee: Option<u64>) -> Com
     }
 }
 
+/// The operation fits one transaction with no buffer.
 pub(crate) fn check_transaction_size(
     payer: &Address,
     instruction: &Instruction,
     budget: ComputeBudgetConfig,
 ) -> Result<(), RingError> {
-    let size = spr_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
-    if size.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
-        return Err(RingError::TransactionTooLarge {
-            bytes: size.bytes,
-            limit: solana_message::v1::MAX_TRANSACTION_SIZE,
-        });
-    }
-    if size.addresses > usize::from(solana_message::v1::MAX_ADDRESSES) {
-        return Err(RingError::TooManyAddresses {
-            addresses: size.addresses,
-            limit: usize::from(solana_message::v1::MAX_ADDRESSES),
-        });
-    }
-    Ok(())
+    TransactionFit::inline(instruction, FitSigners::new(*payer), budget)
+        .map(drop)
+        .map_err(RingError::from)
 }
 
 const MAX_ATTEMPTS: u8 = 3;
@@ -253,6 +243,7 @@ impl BoundState {
         }
         Ok([
             CustomRingError::RootNotServed,
+            CustomRingError::TrackingRootBelowFloor,
             CustomRingError::UnboundRegistry,
         ]
         .into_iter()
@@ -280,10 +271,109 @@ struct Proved {
     bound: BoundState,
 }
 
+/// One transaction the submission owes, held from before its broadcast until its signature resolves.
 struct Attempt {
-    transaction: VersionedTransaction,
+    step: Step,
+    sent: Option<Sent>,
+}
+
+struct Step {
+    instruction: Instruction,
+    budget: ComputeBudgetConfig,
     bound: BoundState,
+    stage: Stage,
+}
+
+struct Sent {
+    transaction: VersionedTransaction,
     last_valid_block_height: u64,
+    /// Preflight refused it, a later lookup would read an unknown signature and lose the error.
+    refused: Option<TransactionError>,
+}
+
+enum Stage {
+    /// The confirmation ends the submission.
+    Inline,
+    /// The confirmation leads to the next chunk or the settlement.
+    Write(Box<Upload>),
+    /// The confirmation ends the submission and the program closed the buffer.
+    Settle(Box<BufferedFrame>),
+}
+
+/// The chunks a confirmed write leaves, in offset order.
+struct Upload {
+    frame: BufferedFrame,
+    writes: VecDeque<Instruction>,
+    settle_budget: ComputeBudgetConfig,
+}
+
+impl Step {
+    fn inline(proved: Proved) -> Self {
+        Self {
+            instruction: proved.instruction,
+            budget: proved.budget,
+            bound: proved.bound,
+            stage: Stage::Inline,
+        }
+    }
+
+    /// The header width of the settlement matches the fit's, the priority fee stays with it.
+    fn upload(
+        proved: Proved,
+        writer: Address,
+        priority_fee: Option<u64>,
+    ) -> Result<Self, RingError> {
+        let frame = BufferedFrame::for_writer(&proved.instruction, writer)?;
+        let writes = frame.writes()?.into();
+        let upload = Upload {
+            frame,
+            writes,
+            settle_budget: send_budget(InstructionTag::SettleBuffered, priority_fee),
+        };
+        Ok(upload.next(proved.bound))
+    }
+
+    /// `None` when the confirmed step ended the submission.
+    fn after_confirmation(self) -> Option<Self> {
+        match self.stage {
+            Stage::Inline | Stage::Settle(_) => None,
+            Stage::Write(upload) => Some(upload.next(self.bound)),
+        }
+    }
+
+    /// A failed upload or settlement can leave the writer's rent in a buffer only the writer closes.
+    fn buffer(&self) -> Option<&BufferedFrame> {
+        match &self.stage {
+            Stage::Inline => None,
+            Stage::Write(upload) => Some(&upload.frame),
+            Stage::Settle(frame) => Some(frame),
+        }
+    }
+
+    /// A write needs the writer alone, a transaction refuses a signer its message does not name.
+    fn signed_by_writer_alone(&self) -> bool {
+        matches!(self.stage, Stage::Write(_))
+    }
+}
+
+impl Upload {
+    /// The settlement follows the last write, the program checks the buffer against its digest.
+    fn next(mut self, bound: BoundState) -> Step {
+        match self.writes.pop_front() {
+            Some(instruction) => Step {
+                instruction,
+                budget: write_budget(),
+                bound,
+                stage: Stage::Write(Box::new(self)),
+            },
+            None => Step {
+                instruction: self.frame.settle(),
+                budget: self.settle_budget,
+                bound,
+                stage: Stage::Settle(Box::new(self.frame)),
+            },
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -325,7 +415,8 @@ impl<'a> RingSubmission<'a> {
     }
 
     pub fn pending_transaction(&self) -> Option<&VersionedTransaction> {
-        self.pending.as_ref().map(|attempt| &attempt.transaction)
+        let sent = self.pending.as_ref()?.sent.as_ref()?;
+        Some(&sent.transaction)
     }
 
     pub fn attempts(&self) -> u8 {
@@ -340,7 +431,7 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
-    /// Inputs stay reserved while the sent signature is unresolved.
+    /// Inputs stay reserved while the sent signature is unresolved, `Pending` can name an upload write.
     pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
@@ -351,102 +442,82 @@ impl<'a> RingSubmission<'a> {
             return Ok(terminal.clone());
         }
         loop {
-            let (attempt, failure) = match self.pending.take() {
-                Some(attempt) => (attempt, None),
-                None => {
-                    if self.attempts > 0 {
-                        self.operation.refresh_for_retry()?;
-                    }
-                    let public: Vec<Address> = core::iter::once(payer.pubkey())
-                        .chain(signers.iter().map(|signer| signer.pubkey()))
-                        .collect();
-                    self.operation
-                        .check_public_signers(client.zolana(), &public)
-                        .await?;
-                    let proved = boxed(|| {
-                        self.operation
-                            .prove(client, payer.pubkey(), self.priority_fee)
-                    })
-                    .await?;
-                    if self.operation.settles_from_buffer() {
-                        let decision = AddressCeiling {
-                            payer: payer.pubkey(),
-                            instruction: &proved.instruction,
-                            budget: proved.budget,
-                            inputs: &[],
-                            merge_capacity: MergeCapacity {
-                                keyed: 0,
-                                zero_key: 0,
-                            },
-                        }
-                        .decide()?;
-                        if matches!(decision, CeilingDecision::Buffered(_)) {
-                            let settled = boxed(|| {
-                                self.send_buffered(
-                                    client,
-                                    payer,
-                                    signers,
-                                    proved.bound.clone(),
-                                    &proved.instruction,
-                                )
-                            })
-                            .await?;
-                            match settled {
-                                Some(status) => return Ok(status),
-                                None => continue,
-                            }
-                        }
-                    }
-                    check_transaction_size(&payer.pubkey(), &proved.instruction, proved.budget)?;
+            // 1. A held attempt reconciles ahead of any new proof or broadcast. Its transaction
+            // can land until its blockhash expires, and a nullifier stops no double landing of a
+            // deposit, so a new proof waits for a final status. Every RPC error below returns with
+            // the attempt still held, and the next call resumes here.
+            let attempt = match self.pending.take() {
+                Some(attempt) => attempt,
+                None => boxed(|| self.prepare(client, payer, signers)).await?,
+            };
+            let attempt = self.pending.insert(attempt);
+            // 2. The signature enters the held state ahead of the bytes, a broadcast whose future
+            // is dropped or whose answer is lost stays reconcilable. Only a preflight refusal says
+            // the bytes did not land, any other send error leaves the outcome to the lookup.
+            let sent = match &mut attempt.sent {
+                Some(sent) => sent,
+                unsent => {
                     let (blockhash, last_valid_block_height) =
                         client.get_latest_blockhash().await?;
                     let message = compile_message(
                         &payer.pubkey(),
-                        &[proved.instruction],
+                        core::slice::from_ref(&attempt.step.instruction),
                         blockhash,
-                        proved.budget,
+                        attempt.step.budget,
                     )?;
                     // The signer list is not `Send`, it ends before the next await.
                     let transaction = {
                         let mut all: Vec<&dyn Signer> = vec![payer];
-                        all.extend(signers.iter().map(|signer| *signer as &dyn Signer));
+                        if !attempt.step.signed_by_writer_alone() {
+                            all.extend(signers.iter().map(|signer| *signer as &dyn Signer));
+                        }
                         sign_transaction(message, &all)?
                     };
-                    self.attempts += 1;
+                    let sent = unsent.insert(Sent {
+                        transaction,
+                        last_valid_block_height,
+                        refused: None,
+                    });
                     let config = RpcSendTransactionConfig {
                         preflight_commitment: Some(CommitmentLevel::Confirmed),
                         ..RpcSendTransactionConfig::default()
                     };
-                    let failure = client
-                        .send_transaction_with_config(&transaction, config)
+                    sent.refused = client
+                        .send_transaction_with_config(&sent.transaction, config)
                         .await
                         .err()
                         .and_then(transaction_error);
-                    let attempt = Attempt {
-                        transaction,
-                        bound: proved.bound,
-                        last_valid_block_height,
-                    };
-                    (attempt, failure)
+                    sent
                 }
             };
-            let attempt = self.pending.insert(attempt);
-            let signature = attempt.transaction.signatures[0];
-            let outcome = match failure {
+            let signature = sent.transaction.signatures[0];
+            let last_valid_block_height = sent.last_valid_block_height;
+            // 3. An unknown status returns as pending below, with nothing released.
+            let observed = match sent.refused.clone() {
                 Some(error) => Outcome::Failed(error),
-                None => {
-                    outcome(client.zolana(), signature, attempt.last_valid_block_height).await?
-                }
+                None => outcome(client.zolana(), signature, last_valid_block_height).await?,
             };
-            let outcome = match outcome {
-                Outcome::Failed(error)
-                    if attempt.bound.reproof_fixes(&error, client.zolana()).await? =>
-                {
-                    Outcome::Stale(error)
+            // 4. Failed or expired is final, the transaction can no longer land, so the buffer
+            // closes here and never earlier. The close runs ahead of the stale check, a new proof
+            // writes another buffer and would orphan the rent of the old one.
+            let observed = match observed {
+                Outcome::Failed(error) => {
+                    if let Some(frame) = attempt.step.buffer() {
+                        boxed(|| frame.abandon(client.zolana(), payer)).await?;
+                    }
+                    match attempt
+                        .step
+                        .bound
+                        .reproof_fixes(&error, client.zolana())
+                        .await?
+                    {
+                        true => Outcome::Stale(error),
+                        false => Outcome::Failed(error),
+                    }
                 }
-                outcome => outcome,
+                observed => observed,
             };
-            if let Some(status) = self.settle(signature, outcome) {
+            if let Some(status) = self.settle(signature, observed) {
                 return Ok(status);
             }
         }
@@ -466,36 +537,54 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
-    /// `None` proves again after a stale failure below the attempt limit, a failed buffer closes first.
-    async fn send_buffered<R: AsyncRpc, I: RingIndexerBackend>(
+    /// Proves the next attempt, nothing held and every earlier signature final.
+    async fn prepare<R: AsyncRpc, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
         payer: &(dyn Signer + Sync),
         signers: &[&(dyn Signer + Sync)],
-        bound: BoundState,
-        inline: &Instruction,
-    ) -> Result<Option<SubmissionStatus>, RingError> {
-        let frame = BufferedFrame::for_writer(inline, payer.pubkey())?;
-        self.attempts += 1;
-        let settled = frame.send(client.zolana(), payer, signers).await?;
-        if let SettledSubmission::Failed { error, .. } = &settled {
-            // The writer's rent stays locked in a buffer only it can close.
-            frame.abandon(client.zolana(), payer).await?;
-            if self.attempts < MAX_ATTEMPTS && bound.reproof_fixes(error, client.zolana()).await? {
-                return Ok(None);
-            }
+    ) -> Result<Attempt, RingError> {
+        if self.attempts > 0 {
+            self.operation.refresh_for_retry()?;
         }
-        let terminal = SubmissionStatus::Settled(settled);
-        self.terminal = Some(terminal.clone());
-        Ok(Some(terminal))
+        let public: Vec<Address> = core::iter::once(payer.pubkey())
+            .chain(signers.iter().map(|signer| signer.pubkey()))
+            .collect();
+        self.operation
+            .check_public_signers(client.zolana(), &public)
+            .await?;
+        let proved = boxed(|| {
+            self.operation
+                .prove(client, payer.pubkey(), self.priority_fee)
+        })
+        .await?;
+        let message = FitSigners::new(payer.pubkey());
+        let fit = match self.operation.settles_from_buffer() {
+            true => TransactionFit::of(&proved.instruction, message, proved.budget)?,
+            false => TransactionFit::inline(&proved.instruction, message, proved.budget)?,
+        };
+        let step = match fit.transport {
+            FitTransport::Inline => Step::inline(proved),
+            FitTransport::Buffered => Step::upload(proved, payer.pubkey(), self.priority_fee)?,
+        };
+        self.attempts += 1;
+        Ok(Attempt { step, sent: None })
     }
 
-    /// `None` proves again after a stale failure below the attempt limit.
+    /// `None` continues the loop, with the next upload step held or a stale failure below the
+    /// attempt limit released to a new proof.
     fn settle(&mut self, signature: Signature, outcome: Outcome) -> Option<SubmissionStatus> {
         let settled = match outcome {
             Outcome::Unknown => return Some(SubmissionStatus::Pending { signature }),
             Outcome::Confirmed { slot } => {
-                self.pending = None;
+                let next = self
+                    .pending
+                    .take()
+                    .and_then(|attempt| attempt.step.after_confirmation());
+                if let Some(step) = next {
+                    self.pending = Some(Attempt { step, sent: None });
+                    return None;
+                }
                 SettledSubmission::Confirmed { signature, slot }
             }
             Outcome::Failed(error) => {

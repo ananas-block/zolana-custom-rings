@@ -61,7 +61,7 @@ fn the_settlement_signs_the_frame_digest_ahead_of_the_transfer_accounts() {
 fn a_frame_past_the_cpi_limit_or_of_another_tag_has_no_buffer() {
     assert!(matches!(
         BufferedFrame::new(&inline(MAX_FRAME_LEN + 1), WRITER, 0),
-        Err(AddressCeilingError::FrameTooLarge { .. })
+        Err(FitError::FrameTooLarge { .. })
     ));
     let mut delegate = inline(10);
     delegate.data[0] = tag::AUTHORITY_TRANSFER;
@@ -74,8 +74,6 @@ fn a_frame_past_the_cpi_limit_or_of_another_tag_has_no_buffer() {
     deposit.data[0] = tag::DEPOSIT;
     assert!(matches!(
         BufferedFrame::new(&deposit, WRITER, 0),
-        Err(AddressCeilingError::Program(
-            CustomRingError::UnsupportedBufferedTag
-        ))
+        Err(FitError::Program(CustomRingError::UnsupportedBufferedTag))
     ));
 }
