@@ -96,13 +96,13 @@ pub type RecordPool = RecordPoolOf<MemberRecord>;
 
 impl<L: IndexedLeaf + Default + Clone> RecordPoolOf<L> {
     /// Refuses unless every record opens under `root` and each subject's record is its own or brackets it.
-    pub fn verify(&self, height: usize, root: &[u8; 32]) -> Result<(), RecordTreeError> {
+    pub fn verify(&self, root: &[u8; 32]) -> Result<(), RecordTreeError> {
         let leaves = self
             .records
             .iter()
             .map(L::leaf_hash)
             .collect::<Result<Vec<_>, _>>()?;
-        self.proof.verify_at(height, root, &leaves)?;
+        self.proof.verify_at(L::HEIGHT, root, &leaves)?;
         self.subjects.iter().try_for_each(|subject| {
             let record = self
                 .records
@@ -116,14 +116,14 @@ impl<L: IndexedLeaf + Default + Clone> RecordPoolOf<L> {
     }
 
     /// Every opening the zero record, the pool of a key whose queries are all off.
-    pub fn unopened(height: usize, openings: usize) -> Result<Self, RecordTreeError> {
-        let canopy = Canopy::covering_at(height, openings)?;
+    pub fn unopened(openings: usize) -> Result<Self, RecordTreeError> {
+        let canopy = Canopy::covering_at(L::HEIGHT, openings)?;
         let path = SharedPath {
             index: 0,
             siblings: vec![[[0; 32]; QUAD_ARITY - 1]; canopy.path_levels()],
         };
         let record = L::default();
-        let node = path.fold(height, record.leaf_hash()?)?;
+        let node = path.fold(L::HEIGHT, record.leaf_hash()?)?;
         let mut nodes = vec![[0; 32]; canopy.width()];
         nodes[node.position] = node.value;
         Ok(Self {
@@ -143,7 +143,7 @@ impl<L: IndexedLeaf + Default + Clone> RecordPoolOf<L> {
     }
 
     /// Repeats the records and the subjects cyclically to the `openings` a key's pool takes.
-    pub fn padded(self, height: usize, openings: usize) -> Result<Self, RecordTreeError> {
+    pub fn padded(self, openings: usize) -> Result<Self, RecordTreeError> {
         if self.records.is_empty()
             || self.subjects.is_empty()
             || self.records.len() > openings
@@ -151,7 +151,7 @@ impl<L: IndexedLeaf + Default + Clone> RecordPoolOf<L> {
         {
             return Err(RecordTreeError::PoolCapacity);
         }
-        if Canopy::covering_at(height, openings)?.width() != self.proof.canopy.len() {
+        if Canopy::covering_at(L::HEIGHT, openings)?.width() != self.proof.canopy.len() {
             return Err(RecordTreeError::PoolShape);
         }
         Ok(Self {

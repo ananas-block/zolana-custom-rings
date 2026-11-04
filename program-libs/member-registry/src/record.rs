@@ -81,6 +81,7 @@ impl MemberRecord {
 
 impl IndexedLeaf for MemberRecord {
     const SENTINEL: Self = Self::SENTINEL;
+    const HEIGHT: usize = QUAD_HEIGHT;
 
     fn member(&self) -> &[u8; 32] {
         &self.member

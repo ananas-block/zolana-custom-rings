@@ -36,9 +36,7 @@ fn vector() -> serde_json::Value {
             member,
             mask: 0,
             value: 0,
-            escrow_key: [0; 32],
             mint_policy: Some(policy),
-            address_hash: [0; 32],
         };
         tree.apply([0; 32], &[entry]).unwrap();
         rows.push(serde_json::json!({"member": hex::encode(member), "amount": amount.to_string(), "field": hex::encode(policy.field()), "wire": hex::encode(policy.bytes()), "limits": policy.limits.fields().map(hex::encode), "entry_hash": hex::encode(entry.hash().unwrap())}));

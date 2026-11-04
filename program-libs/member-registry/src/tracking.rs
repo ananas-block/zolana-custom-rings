@@ -85,6 +85,7 @@ impl TrackingRecord {
 
 impl IndexedLeaf for TrackingRecord {
     const SENTINEL: Self = Self::SENTINEL;
+    const HEIGHT: usize = TRACKING_QUAD_HEIGHT;
 
     fn member(&self) -> &[u8; 32] {
         &self.member

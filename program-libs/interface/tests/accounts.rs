@@ -1,16 +1,28 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     domain,
-    member_registry::AuthorizedAddress,
-    storage::{AddressAuthorization, FirstEnrollment, StorageError},
-    storage_instruction::{AddressWriteData, EnrollAddressIxData, StorageWriteData},
-    CustomRingError, NewRing, QueueEntry, RingAccount, RingMode, RingPolicy, RingRole, RingRoles,
-    SourceSlot, N_SOURCE_SLOTS,
+    storage::{
+        PrivateRootUpdate, RegistryId, Revision, RootUpdate, StorageError, StorageRegistry,
+        PRIVATE_SOURCE_EMPTY_ROOT,
+    },
+    storage_instruction::{
+        EnrollIxData, EnrollRequest, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData,
+        StorageUpdateIxData,
+    },
+    tracking::{
+        tracking_chain_start, EnrollmentRotation, FirstEnrollment, OwnerGrant,
+        TrackingAuthorization, TrackingEntry, TrackingRegistry, TrackingRootUpdate,
+        TRACKING_CAPACITY, TRACKING_EMPTY_ROOT, TRACKING_GRACE_SLOTS,
+    },
+    ApplyRecordsIxData, CustomRingError, CustomRingProof, NewRing, RecordWriteData, RingAccount,
+    RingMode, RingPolicy, RingRole, RingRoles, SourceSlot, WriteRecordsIxData,
+    MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS, READER_KEY_ED25519, ROOT_HISTORY,
+    STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use serde_json::{json, Value};
 use solana_address::Address;
 use spr_hasher::{
-    primitives::{pack_be, right_align, solana_owner_identity},
+    primitives::{hash_bytes, pack_be, right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
 use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
@@ -18,7 +30,7 @@ use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
 const PROGRAM: Address = Address::new_from_array([7; 32]);
 const ENROLL_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/registry/enroll_address.json"
+    "/../../test-vectors/registry/tracking_enroll.json"
 );
 
 fn key(byte: u8) -> Address {
@@ -122,207 +134,621 @@ fn a_policy_write_validates_and_repins_the_table() {
     assert_eq!(policy.policy_hash(), Ok(&hash));
 }
 
-fn first_enrollment(viewing_u: [u8; 32]) -> AddressAuthorization {
+fn enroll_ix(viewing_u: [u8; 32]) -> EnrollIxData {
+    EnrollIxData {
+        nullifier_pk: [0x14; 32],
+        list_tag: [0x15; 32],
+        viewing_u,
+        eph_u: [0x16; 32],
+        ciphertext: [0x17; 32],
+    }
+}
+
+fn first_enrollment(slot: u64) -> TrackingAuthorization {
     FirstEnrollment {
         registry: key(0x11),
         owner: key(0x12),
         bump: 253,
-        ring_id: [0x13; 32],
-        ix: &EnrollAddressIxData {
-            nullifier_pk: [0x14; 32],
-            viewing_u,
-        },
+        slot,
+        ix: &enroll_ix([0x18; 32]),
     }
     .account()
 }
 
-fn write_at(owner: Address, address_revision: u64) -> AddressWriteData {
-    AddressWriteData {
-        owner,
-        address_revision: address_revision.to_le_bytes(),
-    }
+fn rotate(
+    account: &mut TrackingAuthorization,
+    slot: u64,
+    ix: &EnrollIxData,
+) -> Result<(), StorageError> {
+    account.rotate(EnrollmentRotation { slot, ix })
 }
 
 #[test]
-fn the_address_hash_binds_ring_owner_keys_and_revision() {
-    let address = AuthorizedAddress {
-        ring_id: [1; 32],
-        nullifier_pk: [2; 32],
-        viewing_u: [3; 32],
-        address_revision: 9,
-    };
-    let member = [4; 32];
-    let [view0, view1] = pack_be(&address.viewing_u);
+fn the_entry_binds_every_field_and_comes_from_the_account() {
+    let account = first_enrollment(0);
+    let entry = account.entry().unwrap();
+    let [view0, view1] = pack_be(&entry.viewing_u);
     assert_eq!(
-        address.hash(&member).unwrap(),
+        entry.member,
+        solana_owner_identity(account.owner.as_array()).unwrap()
+    );
+    assert_eq!(entry.ct_hash, hash_bytes(&account.ciphertext).unwrap());
+    assert_eq!(
+        entry.hash().unwrap(),
         Poseidon::hashv(&[
-            &domain::field(domain::AUTHORIZED_ADDRESS),
-            &address.ring_id,
-            &member,
-            &address.nullifier_pk,
+            &domain::field(domain::TRACKING_ENTRY),
+            &entry.member,
+            &entry.nullifier_pk,
+            &entry.ct_hash,
             &view0,
             &view1,
-            &right_align(&9u64.to_be_bytes()),
+            &right_align(&1u64.to_be_bytes()),
+            &entry.list_tag,
         ])
         .unwrap()
     );
     let moved = [
-        AuthorizedAddress {
-            ring_id: [9; 32],
-            ..address
+        TrackingEntry {
+            member: [9; 32],
+            ..entry
         },
-        AuthorizedAddress {
+        TrackingEntry {
             nullifier_pk: [9; 32],
-            ..address
+            ..entry
         },
-        AuthorizedAddress {
+        TrackingEntry {
+            ct_hash: [9; 32],
+            ..entry
+        },
+        TrackingEntry {
             viewing_u: [9; 32],
-            ..address
+            ..entry
         },
-        AuthorizedAddress {
-            address_revision: 10,
-            ..address
+        TrackingEntry {
+            revision: 2,
+            ..entry
+        },
+        TrackingEntry {
+            list_tag: [9; 32],
+            ..entry
         },
     ];
     for other in moved {
-        assert_ne!(other.hash(&member), address.hash(&member));
+        assert_ne!(other.hash(), entry.hash());
     }
-    assert_ne!(address.hash(&[5; 32]), address.hash(&member));
 }
 
 #[test]
-fn an_applied_address_chains_its_hash_once_and_preserves_at_zero() {
-    let mut account = first_enrollment([0x15; 32]);
-    let owner = account.owner;
-    let member = solana_owner_identity(owner.as_array()).unwrap();
-    assert_eq!(
-        account.apply(&write_at(owner, 2)),
-        Err(StorageError::InvalidAddressAuthorization)
-    );
+fn an_enrollment_applies_once_and_a_rotation_opens_the_next() {
+    let mut account = first_enrollment(0);
+    assert!(account.is_pending());
     assert_eq!(account.applied_revision(), 0);
-    let entry = account.apply(&write_at(owner, 1)).unwrap();
+    assert_eq!(account.apply().unwrap().revision, 1);
     assert_eq!(account.applied_revision(), 1);
+    assert!(!account.is_pending());
+    assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
+    rotate(&mut account, TRACKING_GRACE_SLOTS, &enroll_ix([0x19; 32])).unwrap();
+    assert!(account.is_pending());
+    let entry = account.apply().unwrap();
+    assert_eq!((entry.revision, entry.viewing_u), (2, [0x19; 32]));
+}
+
+#[test]
+fn rotations_coalesce_into_the_latest_state() {
+    let mut account = first_enrollment(0);
+    rotate(&mut account, TRACKING_GRACE_SLOTS, &enroll_ix([0x19; 32])).unwrap();
+    rotate(
+        &mut account,
+        2 * TRACKING_GRACE_SLOTS,
+        &enroll_ix([0x1a; 32]),
+    )
+    .unwrap();
+    let entry = account.apply().unwrap();
+    assert_eq!((entry.revision, entry.viewing_u), (3, [0x1a; 32]));
+    assert_eq!(account.apply(), Err(StorageError::EnrollmentAlreadyApplied));
+}
+
+#[test]
+fn a_rotation_waits_out_the_rate_limit_from_the_stored_slot() {
+    let start = 100;
+    let mut account = first_enrollment(start);
+    let ready = start + TRACKING_GRACE_SLOTS;
+    let before = account;
     assert_eq!(
-        entry,
-        QueueEntry {
-            member,
-            address_hash: account.address().hash(&member).unwrap(),
-            ..QueueEntry::default()
-        }
+        rotate(&mut account, ready - 1, &enroll_ix([0x19; 32])),
+        Err(StorageError::RotationTooSoon)
     );
+    assert_eq!(account, before);
+    rotate(&mut account, ready, &enroll_ix([0x19; 32])).unwrap();
+    assert_eq!(account.last_enroll_slot(), ready);
     assert_eq!(
-        account.apply(&write_at(owner, 1)),
-        Err(StorageError::AddressAlreadyApplied)
-    );
-    assert_ne!(
-        entry.hash().unwrap(),
-        QueueEntry {
-            address_hash: [0; 32],
-            ..entry
-        }
-        .hash()
-        .unwrap()
+        rotate(&mut account, ready + 1, &enroll_ix([0x1a; 32])),
+        Err(StorageError::RotationTooSoon)
     );
 }
 
 #[test]
-fn a_rotation_moves_the_revision_and_refuses_a_nullifier_key_change() {
-    let mut account = first_enrollment([0x15; 32]);
-    let rotated = EnrollAddressIxData {
-        nullifier_pk: account.nullifier_pk,
-        viewing_u: [0x16; 32],
-    };
-    assert_eq!(account.enroll(&rotated), Ok(()));
-    assert_eq!((account.viewing_u, account.revision()), ([0x16; 32], 2));
-    assert_eq!(
-        account.enroll(&EnrollAddressIxData {
-            nullifier_pk: [0x17; 32],
+fn a_rotation_refuses_every_final_field_and_moves_the_viewing_key_alone() {
+    let mut account = first_enrollment(0);
+    let slot = TRACKING_GRACE_SLOTS;
+    let rotated = enroll_ix([0x19; 32]);
+    let before = account;
+    for changed in [
+        EnrollIxData {
+            nullifier_pk: [9; 32],
             ..rotated
-        }),
-        Err(StorageError::NullifierKeyChanged)
+        },
+        EnrollIxData {
+            list_tag: [9; 32],
+            ..rotated
+        },
+        EnrollIxData {
+            eph_u: [9; 32],
+            ..rotated
+        },
+        EnrollIxData {
+            ciphertext: [9; 32],
+            ..rotated
+        },
+    ] {
+        assert_eq!(
+            rotate(&mut account, slot, &changed),
+            Err(StorageError::EnrollmentKeyFinal)
+        );
+    }
+    assert_eq!(account, before);
+    rotate(&mut account, slot, &rotated).unwrap();
+    assert_eq!(
+        account,
+        TrackingAuthorization {
+            viewing_u: [0x19; 32],
+            revision: 2u64.to_le_bytes(),
+            last_enroll_slot: slot.to_le_bytes(),
+            ..before
+        }
     );
-    assert_eq!(account.revision(), 2);
     account.revision = u64::MAX.to_le_bytes();
     assert_eq!(
-        account.enroll(&rotated),
+        rotate(&mut account, 2 * slot, &rotated),
         Err(StorageError::RevisionOverflow)
     );
 }
 
 #[test]
-fn an_address_write_needs_an_authorization_for_its_entry() {
-    let write = StorageWriteData::Address(write_at(key(0x12), 1));
-    assert_eq!(
-        write.entry(),
-        Err(CustomRingError::AddressWriteNeedsAuthorization)
-    );
-    let encoded = StorageWriteData::encode_all(&[write]);
-    assert_eq!(encoded[0], 2);
-    assert_eq!(encoded.len(), 1 + 40);
-    assert_eq!(StorageWriteData::parse_all(&encoded), Ok(vec![write]));
-    assert_eq!(
-        StorageWriteData::parse_all(&encoded[..40]),
-        Err(CustomRingError::InvalidInstructionData)
-    );
-}
-
-#[test]
-fn the_enrollment_checks_the_viewing_key_it_stores() {
-    let check = |viewing_u| {
-        EnrollAddressIxData {
-            nullifier_pk: [1; 32],
-            viewing_u,
-        }
-        .check()
-    };
+fn the_enrollment_checks_what_no_proof_binds_and_refuses_a_zero_key() {
+    let check = |viewing_u| enroll_ix(viewing_u).check();
     assert_eq!(check([9; 32]), Ok(()));
     assert_eq!(check([0; 32]), Err(StorageError::NonCanonicalViewingKey));
     assert_eq!(check([0xff; 32]), Err(StorageError::NonCanonicalViewingKey));
-    // The nullifier key is fixed, one no leaf can hash would lock the owner out for good.
     assert_eq!(
-        EnrollAddressIxData {
-            nullifier_pk: [0xff; 32],
-            viewing_u: [9; 32],
+        EnrollIxData {
+            nullifier_pk: spr_interface::ZERO_NULLIFIER_PUBKEY,
+            ..enroll_ix([9; 32])
         }
         .check(),
+        Err(StorageError::ZeroNullifierKey)
+    );
+    for not_canonical in [
+        EnrollIxData {
+            nullifier_pk: [0xff; 32],
+            ..enroll_ix([9; 32])
+        },
+        EnrollIxData {
+            list_tag: [0xff; 32],
+            ..enroll_ix([9; 32])
+        },
+    ] {
+        assert_eq!(
+            not_canonical.check(),
+            Err(StorageError::InvalidInstructionData)
+        );
+    }
+}
+
+#[test]
+fn enroll_data_holds_the_fields_and_at_most_one_proof() {
+    let ix = enroll_ix([9; 32]);
+    let proof = CustomRingProof::zeroed();
+    let rotation = EnrollRequest {
+        ix: &ix,
+        proof: None,
+    };
+    let first = EnrollRequest {
+        ix: &ix,
+        proof: Some(&proof),
+    };
+    assert_eq!(EnrollRequest::parse(&rotation.encode()), Ok(rotation));
+    assert_eq!(EnrollRequest::parse(&first.encode()), Ok(first));
+    let refused = Err(StorageError::InvalidInstructionData);
+    assert_eq!(
+        EnrollRequest::parse(&rotation.encode()[..EnrollIxData::SIZE - 1]),
+        refused
+    );
+    assert_eq!(
+        EnrollRequest::parse(&first.encode()[..EnrollIxData::SIZE + 1]),
+        refused
+    );
+}
+
+fn tracking_ix() -> InitializeTrackingIxData {
+    let mut auditor_pubkey = [9; TAGGED_X25519_KEY_LEN];
+    auditor_pubkey[0] = VIEWING_PUBKEY_TAG;
+    InitializeTrackingIxData {
+        ring_id: [1; 32],
+        auditor_pubkey,
+    }
+}
+
+#[test]
+fn a_tracking_registry_starts_at_the_sentinel_and_pins_ring_and_auditor() {
+    let ix = tracking_ix();
+    assert_eq!(ix.check(), Ok(()));
+    let registry = TrackingRegistry::new(254, &ix);
+    assert_eq!(registry.ring_id, ix.ring_id);
+    assert_eq!(registry.auditor_pubkey, ix.auditor_pubkey);
+    assert_eq!(registry.newest().hash, TRACKING_EMPTY_ROOT);
+    assert_eq!(registry.newest().revision, Revision::from(0));
+    assert_eq!((registry.next_index(), registry.reserved_leaves()), (1, 1));
+    let bytes = bytemuck::bytes_of(&registry);
+    assert_eq!(
+        TrackingRegistry::decode(&STORAGE_PROGRAM_ID, bytes),
+        Some(registry)
+    );
+    assert_eq!(TrackingRegistry::decode(&key(1), bytes), None);
+    for (ring_id, auditor_pubkey, refusal) in [
+        (
+            [0; 32],
+            ix.auditor_pubkey,
+            StorageError::InvalidTrackingRegistry,
+        ),
+        (
+            [0xff; 32],
+            ix.auditor_pubkey,
+            StorageError::InvalidTrackingRegistry,
+        ),
+        (
+            ix.ring_id,
+            [9; TAGGED_X25519_KEY_LEN],
+            StorageError::InvalidAuditorKey,
+        ),
+    ] {
+        assert_eq!(
+            InitializeTrackingIxData {
+                ring_id,
+                auditor_pubkey
+            }
+            .check(),
+            Err(refusal)
+        );
+    }
+    let mut zero_key = ix;
+    zero_key.auditor_pubkey[1..].fill(0);
+    assert_eq!(zero_key.check(), Err(StorageError::InvalidAuditorKey));
+}
+
+fn tracking_update(revision: u64, slot: u64, byte: u8) -> TrackingRootUpdate {
+    TrackingRootUpdate {
+        revision: revision.into(),
+        slot,
+        new_root: [byte; 32],
+        new_next_index: 1,
+    }
+}
+
+#[test]
+fn a_tracking_update_serves_the_old_root_for_its_grace_and_never_evicts_it() {
+    let mut registry = TrackingRegistry::new(254, &tracking_ix());
+    registry.update(tracking_update(0, 10, 1)).unwrap();
+    let first_root = TRACKING_EMPTY_ROOT;
+    assert_eq!(registry.root(0.into(), 10), Ok(first_root));
+    let lapse = 10 + TRACKING_GRACE_SLOTS;
+    assert_eq!(registry.root(0.into(), lapse - 1), Ok(first_root));
+    assert_eq!(
+        registry.root(0.into(), lapse),
+        Err(StorageError::RootExpired)
+    );
+    assert_eq!(
+        registry.update(tracking_update(0, 11, 2)),
+        Err(StorageError::RevisionChanged)
+    );
+    // A flood of applies waits on `HistoryFull`, every in-flight root stays served.
+    let mut filled = registry;
+    let newest = ROOT_HISTORY as u64 - 1;
+    for revision in 1..newest {
+        filled.update(tracking_update(revision, 11, 3)).unwrap();
+    }
+    let snapshot = filled;
+    assert_eq!(
+        filled.update(tracking_update(newest, 12, 4)),
+        Err(StorageError::HistoryFull)
+    );
+    assert_eq!(filled, snapshot);
+    assert!(filled.root(1.into(), 12).is_ok());
+    filled.update(tracking_update(newest, lapse, 4)).unwrap();
+}
+
+#[test]
+fn a_full_tracking_tree_refuses_a_new_leaf_by_name_and_no_rotation_needs_one() {
+    let mut registry = TrackingRegistry::new(254, &tracking_ix());
+    registry.reserve_leaf().unwrap();
+    assert_eq!(registry.reserved_leaves(), 2);
+    registry.reserved_leaves = (TRACKING_CAPACITY as u32 - 1).to_le_bytes();
+    registry.reserve_leaf().unwrap();
+    assert_eq!(u64::from(registry.reserved_leaves()), TRACKING_CAPACITY);
+    let full = registry;
+    assert_eq!(registry.reserve_leaf(), Err(StorageError::TrackingTreeFull));
+    assert_eq!(registry, full);
+    // The bytes stay valid at capacity, a full tree keeps applying.
+    registry.next_index = (TRACKING_CAPACITY as u32).to_le_bytes();
+    assert!(TrackingRegistry::from_data(bytemuck::bytes_of(&registry)).is_some());
+    registry.next_index = (TRACKING_CAPACITY as u32 + 1).to_le_bytes();
+    assert!(TrackingRegistry::from_data(bytemuck::bytes_of(&registry)).is_none());
+}
+
+#[test]
+fn the_grant_scopes_owner_and_reader_and_checks_its_scheme() {
+    let reader = {
+        let mut reader = [7; 34];
+        reader[0] = READER_KEY_ED25519;
+        reader
+    };
+    let (one, _) = OwnerGrant::find_address(&key(1), &key(2), &reader);
+    let mut other_reader = reader;
+    other_reader[33] = 8;
+    for other in [
+        OwnerGrant::find_address(&key(1), &key(3), &reader).0,
+        OwnerGrant::find_address(&key(9), &key(2), &reader).0,
+        OwnerGrant::find_address(&key(1), &key(2), &other_reader).0,
+    ] {
+        assert_ne!(one, other);
+    }
+    let ix = OwnerGrantIxData { reader, active: 1 };
+    assert_eq!(ix.check(), Ok(()));
+    let mut unknown = reader;
+    unknown[0] = 9;
+    assert_eq!(
+        OwnerGrantIxData {
+            reader: unknown,
+            active: 1
+        }
+        .check(),
+        Err(StorageError::InvalidReaderKey)
+    );
+    assert_eq!(
+        OwnerGrantIxData { reader, active: 2 }.check(),
         Err(StorageError::InvalidInstructionData)
     );
 }
 
-fn enroll_vector() -> Value {
+fn apply_ix() -> ApplyRecordsIxData {
+    ApplyRecordsIxData {
+        new_root: [8; 32],
+        new_next_index: 1u32.to_le_bytes(),
+        ..ApplyRecordsIxData::zeroed()
+    }
+}
+
+fn update_data<'a>(
+    revision: u64,
+    restrictive: bool,
+    apply: &'a ApplyRecordsIxData,
+) -> StorageUpdateIxData<'a> {
+    StorageUpdateIxData {
+        revision: revision.into(),
+        restrictive,
+        writes: vec![RecordWriteData {
+            member: [1; 32],
+            lists: WriteRecordsIxData {
+                mask: 1u64.to_le_bytes(),
+                value: 1u64.to_le_bytes(),
+            },
+            mint_policy: custom_ring_interface::mint_policy_write(None),
+        }],
+        apply,
+    }
+}
+
+fn public_registry(grace_slots: u64) -> StorageRegistry {
+    StorageRegistry::new(
+        key(1),
+        &InitializeIxData {
+            registry_id: RegistryId([1; 32]),
+            grace_slots: grace_slots.to_le_bytes(),
+            ring_id: [0; 32],
+            tracking_registry: Address::default(),
+        },
+    )
+}
+
+fn private_registry() -> StorageRegistry {
+    StorageRegistry::new(
+        key(1),
+        &InitializeIxData {
+            registry_id: RegistryId([1; 32]),
+            grace_slots: 10u64.to_le_bytes(),
+            ring_id: [0; 32],
+            tracking_registry: key(5),
+        },
+    )
+}
+
+#[test]
+fn a_restrictive_update_ends_every_older_root_at_once_and_a_permissive_one_keeps_grace() {
+    let apply = apply_ix();
+    let mut registry = public_registry(10);
+    registry
+        .update(RootUpdate {
+            slot: 1,
+            data: &update_data(0, false, &apply),
+        })
+        .unwrap();
+    assert!(registry.root(0.into(), 1).is_ok());
+    assert!(registry.root(0.into(), 10).is_ok());
+    assert_eq!(registry.root(0.into(), 11), Err(StorageError::RootExpired));
+    registry
+        .update(RootUpdate {
+            slot: 1,
+            data: &update_data(1, true, &apply),
+        })
+        .unwrap();
+    assert_eq!(registry.root(1.into(), 1), Err(StorageError::RootExpired));
+    assert_eq!(registry.root(0.into(), 1), Err(StorageError::RootExpired));
+    assert!(registry.root(2.into(), 1).is_ok());
+}
+
+#[test]
+fn a_restrictive_update_runs_through_a_full_history() {
+    let apply = apply_ix();
+    let mut registry = public_registry(u64::MAX);
+    let revision = ROOT_HISTORY as u64 - 1;
+    for earlier in 0..revision {
+        registry
+            .update(RootUpdate {
+                slot: 1,
+                data: &update_data(earlier, false, &apply),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        registry.update(RootUpdate {
+            slot: 2,
+            data: &update_data(revision, false, &apply),
+        }),
+        Err(StorageError::HistoryFull)
+    );
+    registry
+        .update(RootUpdate {
+            slot: 2,
+            data: &update_data(revision, true, &apply),
+        })
+        .unwrap();
+    assert_eq!(
+        registry.root((revision - 1).into(), 2),
+        Err(StorageError::RootExpired)
+    );
+}
+
+#[test]
+fn update_data_round_trips_only_a_boolean_restrictive_byte() {
+    let apply = apply_ix();
+    let data = update_data(7, true, &apply);
+    let encoded = data.encode().unwrap();
+    assert_eq!(StorageUpdateIxData::parse(&encoded), Ok(data));
+    let mut not_boolean = encoded.clone();
+    not_boolean[8] = 2;
+    assert_eq!(
+        StorageUpdateIxData::parse(&not_boolean),
+        Err(StorageError::InvalidInstructionData)
+    );
+    let mut no_writes = encoded;
+    no_writes[9] = 0;
+    assert_eq!(
+        StorageUpdateIxData::parse(&no_writes),
+        Err(StorageError::InvalidInstructionData)
+    );
+}
+
+#[test]
+fn a_mint_settings_tag_above_one_is_no_entry() {
+    let apply = apply_ix();
+    let mut data = update_data(0, false, &apply);
+    data.writes[0].mint_policy[0] = 2;
+    assert!(data.entries().next().unwrap().is_err());
+}
+
+fn private_update(revision: u64, restrictive: bool, tracking: u64) -> PrivateRootUpdate {
+    PrivateRootUpdate {
+        revision: revision.into(),
+        restrictive,
+        slot: 1,
+        new_root: [8; 32],
+        tracking_revision: tracking.into(),
+    }
+}
+
+#[test]
+fn only_a_restrictive_private_update_moves_the_floor() {
+    let mut source = private_registry();
+    assert!(source.is_private());
+    assert_eq!(source.newest().hash, PRIVATE_SOURCE_EMPTY_ROOT);
+    source.update_private(private_update(0, false, 5)).unwrap();
+    assert_eq!(source.tracking_floor, Revision::from(0));
+    source.update_private(private_update(1, true, 5)).unwrap();
+    assert_eq!(source.tracking_floor, Revision::from(5));
+    assert_eq!(
+        source.check_tracking_revision(4.into()),
+        Err(StorageError::TrackingRootBelowFloor)
+    );
+    assert_eq!(source.check_tracking_revision(5.into()), Ok(()));
+    assert_eq!(source.check_tracking_revision(6.into()), Ok(()));
+    source.update_private(private_update(2, false, 9)).unwrap();
+    assert_eq!(source.tracking_floor, Revision::from(5));
+    assert_eq!(source.root(2.into(), 1), Ok([8; 32]));
+    assert_eq!(source.root(1.into(), 1), Err(StorageError::RootExpired));
+}
+
+#[test]
+fn a_refused_private_update_leaves_the_floor_and_each_kind_takes_its_own_update() {
+    let mut source = private_registry();
+    let before = source;
+    assert_eq!(
+        source.update_private(private_update(3, true, 5)),
+        Err(StorageError::RevisionChanged)
+    );
+    assert_eq!(source, before);
+    let apply = apply_ix();
+    assert_eq!(
+        source.update(RootUpdate {
+            slot: 1,
+            data: &update_data(0, true, &apply),
+        }),
+        Err(StorageError::SourceKindMismatch)
+    );
+    let mut public = public_registry(10);
+    assert!(!public.is_private());
+    assert_eq!(public.newest().hash, MEMBER_REGISTRY_EMPTY_ROOT);
+    assert_eq!(
+        public.update_private(private_update(0, true, 5)),
+        Err(StorageError::SourceKindMismatch)
+    );
+    // A public source has no floor, every tracking root stays readable.
+    assert_eq!(public.check_tracking_revision(0.into()), Ok(()));
+}
+
+fn enrollment_vector() -> Value {
     let registry = key(0x31);
     let owner = key(0x32);
-    let ix = EnrollAddressIxData {
+    let ix = EnrollIxData {
         nullifier_pk: [0x23; 32],
+        list_tag: [0x24; 32],
         viewing_u: [0x34; 32],
+        eph_u: [0x35; 32],
+        ciphertext: [0x36; 32],
     };
-    let (authorization, bump) = AddressAuthorization::find_address(&registry, &owner);
+    let (authorization, bump) = TrackingAuthorization::find_address(&registry, &owner);
     let mut account = FirstEnrollment {
         registry,
         owner,
         bump,
-        ring_id: [0x25; 32],
+        slot: 77,
         ix: &ix,
     }
     .account();
-    let member = solana_owner_identity(owner.as_array()).unwrap();
-    let write = write_at(owner, 1);
-    let entry = account.apply(&write).unwrap();
+    let entry = account.apply().unwrap();
+    let chain_start = tracking_chain_start(&registry, Revision::from(0)).unwrap();
     json!({
-        "description": "One owner enrollment and its authority apply. enroll_data follows tag 5, nullifier_pk || viewing_u, the ring id comes from the registry. The authorization PDA has seeds [address, registry, owner]. address_hash is Poseidon(CRAD, ring_id, member, nullifier_pk, view0, view1, address_revision) and the ADDRESS write body is owner || address_revision u64 LE. entry_hash is the queue entry Poseidon(CRQW, member, mask, value, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2, address_hash). account is the authorization after the apply. Produced by program-libs/interface/tests/accounts.rs.",
+        "description": "One enrollment and its permissionless apply. enroll_data follows tag 6, nullifier_pk || list_tag || viewing_u || eph_u || ciphertext, and a first enrollment appends a RegisterKey proof. The authorization PDA has seeds [tracking, registry, owner]. entry_hash is Poseidon(CRTQ, member, nullifier_pk, ct_hash, view0, view1, revision, list_tag), chain_start is the hash chain of [CRTA, registry field, revision], chain_end is Poseidon(chain_start, entry_hash). account is the authorization after the apply, at slot 77. Produced by program-libs/interface/tests/accounts.rs.",
         "registry": hex::encode(registry),
         "owner": hex::encode(owner),
-        "member": hex::encode(member),
-        "ring_id": hex::encode(account.ring_id),
-        "nullifier_pk": hex::encode(ix.nullifier_pk),
-        "viewing_u": hex::encode(ix.viewing_u),
+        "member": hex::encode(entry.member),
+        "ct_hash": hex::encode(entry.ct_hash),
         "enroll_data": hex::encode(bytemuck::bytes_of(&ix)),
         "authorization": hex::encode(authorization),
         "bump": bump,
-        "address_revision": 1,
-        "address_hash": hex::encode(entry.address_hash),
-        "address_write": hex::encode(StorageWriteData::encode_all(&[StorageWriteData::Address(write)])),
+        "revision": entry.revision,
         "entry_hash": hex::encode(entry.hash().unwrap()),
+        "chain_start": hex::encode(chain_start),
+        "chain_end": hex::encode(entry.chained(&chain_start).unwrap()),
         "account": hex::encode(bytemuck::bytes_of(&account)),
     })
 }
@@ -332,12 +758,12 @@ fn the_enrollment_is_the_shared_vector() {
     let committed: Value =
         serde_json::from_str(&std::fs::read_to_string(ENROLL_VECTOR).expect("vector file"))
             .expect("vector json");
-    assert_eq!(committed, enroll_vector());
+    assert_eq!(committed, enrollment_vector());
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/registry/enroll_address.json"]
-fn write_enroll_address_vector() {
-    let json = serde_json::to_string_pretty(&enroll_vector()).expect("json");
+#[ignore = "rewrites test-vectors/registry/tracking_enroll.json"]
+fn write_tracking_enroll_vector() {
+    let json = serde_json::to_string_pretty(&enrollment_vector()).expect("json");
     std::fs::write(ENROLL_VECTOR, json + "\n").expect("write vector file");
 }
