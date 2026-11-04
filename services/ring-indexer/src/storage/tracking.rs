@@ -42,7 +42,7 @@ impl Enrollment {
     }
 }
 
-const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization, a.member, a.nullifier_pk, \
+const ENROLLMENT_READ: &str = "SELECT a.owner, a.authorization_account, a.member, a.nullifier_pk, \
      a.ct_hash, a.list_tag, a.eph_u, a.ciphertext, e.viewing_u, e.revision, \
      e.slot AS last_enroll_slot, \
      (SELECT COALESCE(MAX(d.revision),0) FROM tracking_enrollments AS d \
@@ -60,7 +60,7 @@ impl<C: ConnectionTrait> TrackingStore<'_, C> {
 
     /// The account an apply names.
     pub async fn enrollment_at(&self, authorization: &[u8; 32]) -> Result<Option<Enrollment>> {
-        self.enrollment_where("a.authorization", authorization)
+        self.enrollment_where("a.authorization_account", authorization)
             .await
     }
 
@@ -87,7 +87,8 @@ impl<C: ConnectionTrait> TrackingStore<'_, C> {
     }
 
     pub async fn save_first(&self, first: &Enrollment, slot: u64) -> Result<()> {
-        let sql = "INSERT INTO tracking_authorizations(registry,owner,authorization,member,\
+        let sql =
+            "INSERT INTO tracking_authorizations(registry,owner,authorization_account,member,\
                    nullifier_pk,ct_hash,list_tag,eph_u,ciphertext,slot) \
                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
         let values = vec![
@@ -142,7 +143,7 @@ pub(super) async fn rollback_slot<C: ConnectionTrait>(conn: &C, slot: u64) -> Re
 fn enrollment(row: &QueryResult) -> Result<Enrollment> {
     Ok(Enrollment {
         owner: field(row, "owner")?,
-        authorization: field(row, "authorization")?,
+        authorization: field(row, "authorization_account")?,
         member: field(row, "member")?,
         nullifier_pk: field(row, "nullifier_pk")?,
         ct_hash: field(row, "ct_hash")?,
