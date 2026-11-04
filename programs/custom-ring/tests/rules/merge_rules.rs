@@ -58,7 +58,11 @@ fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData {
 }
 
 /// `owner` fills the SPP slot `OwnerSigned` reads.
-fn merge_instruction(ring: &Ring, data: &CustomRingMergeIxData, owner: Option<&Keypair>) -> Instruction {
+fn merge_instruction(
+    ring: &Ring,
+    data: &CustomRingMergeIxData,
+    owner: Option<&Keypair>,
+) -> Instruction {
     let mut spp: Vec<AccountMeta> = (0..RING_MERGE_PAYER_INDEX)
         .map(|_| AccountMeta::new(Address::new_unique(), false))
         .collect();
@@ -114,7 +118,11 @@ fn a_zero_key_merge_reads_no_tracking_root() {
 fn a_zero_key_merge_without_its_owner_account_is_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let instruction = merge_instruction(&ring, &merge_data(MergeRingAuthority::OwnerSigned), None);
-    assert!(ring.send(instruction, &[]).is_err());
+    let sent = ring.send(instruction, &[]);
+    assert!(
+        format!("{sent:?}").contains("NotEnoughAccountKeys"),
+        "{sent:?}"
+    );
 }
 
 #[test]
@@ -122,14 +130,21 @@ fn a_merge_reads_only_the_pinned_tracking_registry() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let mut instruction = ring_merge(&ring);
     instruction.accounts[1] = AccountMeta::new_readonly(Address::new_unique(), false);
-    refused(ring.send(instruction, &[]), CustomRingError::UnboundRegistry);
+    refused(
+        ring.send(instruction, &[]),
+        CustomRingError::UnboundRegistry,
+    );
 }
 
-/// A co-signer never stops a merge, a frozen owner keeps it under any record.
+/// A frozen owner keeps its merge under any co-signer record.
 #[test]
 fn a_transfer_scoped_co_signer_demands_nothing_of_a_merge() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    set_co_signer(&mut ring, &Keypair::new().pubkey(), CoSignScope::TRANSFERS.bits());
+    set_co_signer(
+        &mut ring,
+        &Keypair::new().pubkey(),
+        CoSignScope::TRANSFERS.bits(),
+    );
     let instruction = ring_merge(&ring);
     reaches_verification(ring.send(instruction, &[]));
 }

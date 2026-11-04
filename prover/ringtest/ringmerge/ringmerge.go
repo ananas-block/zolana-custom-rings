@@ -29,7 +29,7 @@ const (
 // RingProgramID is the ring the fixture merge settles under.
 var RingProgramID = big.NewInt(0x5a0e)
 
-// FirstNullifier names the SPP merge, this proof opens no input.
+// FirstNullifier names the SPP merge, the ring proof opens no input.
 var FirstNullifier = big.NewInt(0x1f1f)
 
 // RingData is the output ring data hash SPP publishes.

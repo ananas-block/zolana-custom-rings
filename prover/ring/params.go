@@ -413,7 +413,9 @@ type MergeParams struct {
 	TrackingRoot       Field            `json:"trackingRoot"`
 	EphSk              Bytes            `json:"ephSk"`
 	OwnerKey           Bytes            `json:"ownerKey"`
-	Mint               Bytes            `json:"mint"`
+	OwnerPkHash        Field            `json:"ownerPkHash"`
+	MintChunks         []Field          `json:"mintChunks"`
+	Asset              Field            `json:"asset"`
 	Amount             Field            `json:"amount"`
 	NullifierPk        Field            `json:"nullifierPk"`
 	Seed               Field            `json:"seed"`

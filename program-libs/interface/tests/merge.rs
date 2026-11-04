@@ -7,8 +7,10 @@ use std::ops::Range;
 use custom_ring_interface::{
     domain::MERGE_RECORD_LABEL, storage::Revision, AuditRecord, CustomRingError,
     CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof, HistoricalMergeIxDataRef,
-    OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord, OPENING_RECORD_LEN,
+    MergePublicInput, OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord,
+    OPENING_RECORD_LEN,
 };
+use serde::Deserialize;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{
     instruction_data::{
@@ -21,6 +23,10 @@ use spr_interface::instruction::{
 const FRAME_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../test-vectors/merge/merge_frame_v4.hex"
+);
+const MERGE_VECTOR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-vectors/merge/merge_v4.json"
 );
 const HISTORICAL_FRAME_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -190,6 +196,75 @@ fn framing_errors_are_refused_before_or_by_the_spp_parser() {
         assert_eq!(
             CustomRingMergeIxDataRef::from_bytes(refused).err(),
             Some(CustomRingError::InvalidInstructionData)
+        );
+    }
+}
+
+fn hex_bytes(value: &str) -> Vec<u8> {
+    hex::decode(value.trim_start_matches("0x")).unwrap()
+}
+
+fn field<const N: usize>(value: &str) -> [u8; N] {
+    hex_bytes(value).try_into().unwrap()
+}
+
+#[test]
+fn merge_statement_matches_the_go_vector() {
+    #[derive(Deserialize)]
+    struct Request {
+        #[serde(rename = "outputUtxoHash")]
+        output_utxo_hash: String,
+        #[serde(rename = "firstNullifier")]
+        first_nullifier: String,
+        #[serde(rename = "ringProgramId")]
+        ring_id: String,
+        payer: String,
+        #[serde(rename = "trackingRoot")]
+        tracking_root: String,
+    }
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        record: String,
+        ciphertext: String,
+        elements: Vec<String>,
+        public_input_hash: String,
+        request: Request,
+    }
+    #[derive(Deserialize)]
+    struct Vector {
+        auditor_pk: String,
+        eph_pk: String,
+        cases: Vec<Case>,
+    }
+    let vector: Vector =
+        serde_json::from_str(&std::fs::read_to_string(MERGE_VECTOR).unwrap()).unwrap();
+    for case in &vector.cases {
+        let request = &case.request;
+        let record = OpeningRecord::decode(&hex_bytes(&case.record)).unwrap();
+        assert_eq!(record.record.kind, RecordKind::Ring);
+        // Element 10 is what the program computes from the signer under a zero key.
+        let elements = case
+            .elements
+            .iter()
+            .map(|element| field::<32>(element))
+            .collect::<Vec<_>>();
+        assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
+        let statement = MergePublicInput {
+            output_utxo_hash: &field(&request.output_utxo_hash),
+            first_nullifier: &field(&request.first_nullifier),
+            ring_id: &field(&request.ring_id),
+            auditor_pk: &field(&vector.auditor_pk),
+            eph_pk: &field(&vector.eph_pk),
+            ciphertext: &field(&case.ciphertext),
+            payer: &field(&request.payer),
+            published_owner: &elements[10],
+            tracking_root: &field(&request.tracking_root),
+        };
+        assert_eq!(elements, statement.elements().unwrap());
+        assert_eq!(
+            field::<32>(&case.public_input_hash),
+            statement.hash().unwrap()
         );
     }
 }
