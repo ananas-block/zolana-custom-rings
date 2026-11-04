@@ -28,8 +28,6 @@ pub struct RelayProofInputs {
     pub sender: ShieldedAddress,
     pub nullifier_key: NullifierKey,
     pub tx_viewing_key: ViewingKey,
-    /// Ephemeral secret of the auditor message in `external_data`.
-    pub audit_ephemeral_key: Zeroizing<[u8; 32]>,
     pub inputs: Vec<SppProofInputUtxo>,
     pub outputs: Vec<SppProofOutputUtxo>,
     pub external_data: ExternalData,
@@ -251,7 +249,6 @@ struct ProofInputsWire {
     sender: [u8; SHIELDED_ADDRESS_LEN],
     nullifier_secret: [u8; BLINDING_LEN],
     tx_viewing_secret: [u8; 32],
-    audit_ephemeral_key: [u8; 32],
     #[wincode(with = "containers::Vec<InputWire, FixIntLen<u8>>")]
     inputs: Vec<InputWire>,
     #[wincode(with = "containers::Vec<OutputWire, FixIntLen<u8>>")]
@@ -267,7 +264,6 @@ impl Drop for ProofInputsWire {
     fn drop(&mut self) {
         self.nullifier_secret.zeroize();
         self.tx_viewing_secret.zeroize();
-        self.audit_ephemeral_key.zeroize();
     }
 }
 
@@ -371,7 +367,6 @@ impl ProofInputsWire {
             sender: inputs.sender.to_bytes(),
             nullifier_secret: *inputs.nullifier_key.secret(),
             tx_viewing_secret: *inputs.tx_viewing_key.secret_bytes(),
-            audit_ephemeral_key: *inputs.audit_ephemeral_key,
             inputs: inputs
                 .inputs
                 .iter()
@@ -436,7 +431,6 @@ impl ProofInputsWire {
             tx_viewing_key: ViewingKey::from_secret_key(X25519Keypair::from_bytes(
                 &self.tx_viewing_secret,
             )),
-            audit_ephemeral_key: Zeroizing::new(self.audit_ephemeral_key),
             external_data: ExternalData {
                 instruction_discriminator: external.instruction_discriminator,
                 expiry_unix_ts: external.expiry_unix_ts,

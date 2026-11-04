@@ -245,7 +245,6 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
             }],
         ),
         tx_viewing_key,
-        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
         inputs: vec![spend],
         outputs: vec![SppProofOutputUtxo {
             asset: Mint::SOL,

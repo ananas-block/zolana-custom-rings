@@ -1016,7 +1016,6 @@ fn relay_proof_inputs() -> RelayProofInputs {
         nullifier_key: NullifierKey::from_secret(*owner.nullifier_key.secret()),
         sender,
         tx_viewing_key,
-        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
         inputs: vec![
             spend,
             SppProofInputUtxo::dummy_with_blinding([27; 32], 4).expect("dummy"),
