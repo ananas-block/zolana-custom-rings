@@ -11,7 +11,7 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    relay_message::{ExpectedDelegate, ExpectedMessage, ExpectedTransfer, RelayTransferTerms},
+    relay_message::{ExpectedDelegate, ExpectedMessage, ExpectedPublicOwner, RelayTransferTerms},
     CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
@@ -169,20 +169,15 @@ impl PendingSignature {
         self.expected.as_deref()?.terms_for(signer)
     }
 
-    /// A public owner other than the sealing wallet, `terms` opens its slots alone.
-    pub fn for_transfer_terms(
+    pub(crate) fn expecting_owner(
         relay_id: RelayId,
         message: Vec<u8>,
-        terms: RelayTransferTerms,
-        config: &CustomRingConfig,
+        expected: ExpectedPublicOwner,
     ) -> Self {
         Self {
             relay_id,
             message,
-            expected: Some(Box::new(ExpectedMessage::Transfer(ExpectedTransfer::new(
-                vec![terms],
-                config,
-            )))),
+            expected: Some(Box::new(ExpectedMessage::PublicOwner(expected))),
         }
     }
 

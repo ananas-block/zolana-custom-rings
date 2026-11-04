@@ -1131,8 +1131,8 @@ mod public_signers {
     use super::*;
     use crate::{
         tests::support::relay_message, ApplicationData, CoOwner, CustomRingConfig, MessageMismatch,
-        NoteData, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms, RingTransfer,
-        SlotOpening,
+        NoteData, OwnerApproval, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms,
+        RingTransfer, SlotOpening,
     };
 
     const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
@@ -1253,9 +1253,24 @@ mod public_signers {
         terms: &RelayTransferTerms,
         config: &CustomRingConfig,
     ) -> PendingSignature {
-        let crossed: RelayTransferTerms =
-            serde_json::from_str(&serde_json::to_string(terms).unwrap()).unwrap();
-        PendingSignature::for_transfer_terms(relay_id.clone(), message, crossed, config)
+        approval(relay_id, message, terms, config, &[])
+    }
+
+    fn approval(
+        relay_id: &RelayId,
+        message: Vec<u8>,
+        terms: &RelayTransferTerms,
+        config: &CustomRingConfig,
+        known_notes: &[WalletUtxo],
+    ) -> PendingSignature {
+        OwnerApproval {
+            relay_id: relay_id.clone(),
+            message,
+            terms: serde_json::from_str(&serde_json::to_string(terms).unwrap()).unwrap(),
+            config,
+            known_notes,
+        }
+        .pending()
     }
 
     async fn signs(pending: &PendingSignature, signer: &ShieldedKeypair) {
@@ -1384,12 +1399,11 @@ mod public_signers {
         let (sender, payee, co_owner) = (keypair(1), keypair(2), keypair(3));
         let client = chain(RingMode::Anonymous, None, &[&sender, &payee, &co_owner]).client();
         let config = ring().require_config(client.zolana()).await.unwrap();
+        let spent = ring_utxo(&co_owner, Mint::SOL, 10, 1);
+        let kept = ring_utxo(&co_owner, Mint::SOL, 10, 2);
         let transaction = transfer(
             &sender,
-            vec![
-                ring_utxo(&sender, Mint::SOL, 10, 0),
-                ring_utxo(&co_owner, Mint::SOL, 10, 1),
-            ],
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0), spent.clone()],
         )
         .with_anonymous_signer(&sender.signing_key)
         .with_co_owner(CoOwner {
@@ -1413,27 +1427,50 @@ mod public_signers {
         assert_eq!(terms.nullifiers.len(), 1);
         let built = frame(&client, &asked.request).await;
         let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let known = [spent.clone(), kept.clone()];
         signs(
-            &pending_for(&asked.relay_id, message, &terms, &config),
+            &approval(&asked.relay_id, message.clone(), &terms, &config, &known),
             &co_owner,
         )
         .await;
 
-        let parsed = RingTransactData::parse(&built.data[1..], RingRail::Anonymous).unwrap();
-        let mut data = parsed.into_data();
-        let others = vec![[9; 32]; data.nullifiers.len()];
-        data.nullifiers = &others;
-        let spent_other = Instruction {
-            data: [vec![tag::TRANSFER], data.encode().unwrap()].concat(),
-            ..built.clone()
-        };
+        // No list stands behind the check, the note the terms name is not the wallet's.
         refused(
-            &pending_for(
+            &approval(&asked.relay_id, message, &terms, &config, &[]),
+            &co_owner,
+            MessageMismatch::Data,
+        );
+
+        // The relay holds the key, its frame spends a second note the terms do not name.
+        let rewritten = |nullifiers: &[[u8; 32]]| {
+            let parsed = RingTransactData::parse(&built.data[1..], RingRail::Anonymous).unwrap();
+            let mut data = parsed.into_data();
+            data.nullifiers = nullifiers;
+            relay_message(
+                &FEE_PAYER,
+                &[Instruction {
+                    data: [vec![tag::TRANSFER], data.encode().unwrap()].concat(),
+                    ..built.clone()
+                }],
+                UNITS,
+            )
+            .0
+        };
+        let also_kept = [kept.nullifier, spent.nullifier];
+        refused(
+            &approval(
                 &asked.relay_id,
-                relay_message(&FEE_PAYER, &[spent_other], UNITS).0,
+                rewritten(&also_kept),
                 &terms,
                 &config,
+                &known,
             ),
+            &co_owner,
+            MessageMismatch::SpendsUnnamedNote,
+        );
+        let others = [[9; 32], [8; 32]];
+        refused(
+            &approval(&asked.relay_id, rewritten(&others), &terms, &config, &known),
             &co_owner,
             MessageMismatch::Data,
         );
