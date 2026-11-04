@@ -265,7 +265,7 @@ export function ownerRows(
 ): readonly Bytes32[] {
   const owners = new Map<string, Bytes32>();
   for (const spent of input.inputs) {
-    if (!isLive(spent)) continue;
+    if (!isLive(spent) || spent.isAddress()) continue;
     if (input.delegate && equalBytes(spent.nullifierPublicKey, ZERO_NULLIFIER_PK)) continue;
     const owner = spent.utxo.owner.ownerProofInputHash();
     if (!isZero(owner)) owners.set(bytesKey(owner), owner);

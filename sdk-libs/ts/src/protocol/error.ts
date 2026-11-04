@@ -254,6 +254,9 @@ export const RingProgramError = Object.freeze({
   anonymousExitTokenAccountInvalid: 8250,
   outputBodyLength: 8253,
   listNotPolicyReadable: 8255,
+  multiListAbsenceRule: 8235,
+  invertedListPolarity: 8236,
+  mixedPolarityRule: 8237,
   outputCountOutOfRange: 8257,
   invalidChangeBits: 8258,
   replyLength: 8259,
@@ -285,6 +288,7 @@ export const RingProgramError = Object.freeze({
   frameWriteOutOfRange: 8524,
   unsupportedBufferedTag: 8525,
   framePayerNotWriter: 8526,
+  invalidSignerDataCounts: 8527,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
@@ -319,7 +323,6 @@ export const StorageProgramError = Object.freeze({
   invalidOwnerGrant: 9031,
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
-  trackingRootBelowFloor: 9034,
 } as const);
 
 export class RingError extends Error {
