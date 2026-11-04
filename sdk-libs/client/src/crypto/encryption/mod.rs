@@ -662,8 +662,8 @@ mod tests {
         deposits: Vec<([u8; 32], Vec<u8>)>,
     ) -> spr_event_parser::InstructionGroup {
         let mut group = deposit_fixture::group(ring, true, deposits);
-        let revision = core::mem::size_of::<custom_ring_interface::storage::Revision>();
-        group.outer.data.drain(..revision);
+        let later_fields = core::mem::size_of::<custom_ring_interface::storage::Revision>() + 1;
+        group.outer.data.drain(..later_fields);
         group.outer.data[0] = custom_ring_interface::tag::HISTORICAL_DEPOSIT;
         group
     }
