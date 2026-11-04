@@ -178,6 +178,7 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
         }],
     };
 
+    let config = env.run(relayed.ring.require_config(env.client.as_async()))?;
     let quote = ring_rpc.quote(env, RelayOperation::Delegate)?;
 
     // The service opens the member's deposit under its enrolled key at its next backfill.
@@ -188,7 +189,7 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
             transfer: transfer.clone(),
         })
         .sign(&delegate)?;
-        let prepared = PreparedAuthorityTransfer::new(request, &quote)?;
+        let prepared = PreparedAuthorityTransfer::new(request, &quote, &config)?;
         Ok(match env.run(prepared.send(&ring_rpc.relay)) {
             Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),
             Ok(RelaySent::Submitted(_)) => bail!("the delegate signs the move"),

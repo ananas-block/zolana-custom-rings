@@ -57,7 +57,7 @@ impl RelayProver for RecordingProver {
         let (signers, data) = match request.payload {
             RelayPayload::Transfer(proof_inputs) => (
                 match proof_inputs.rail {
-                    RelayRail::Delegate { delegate } => vec![delegate],
+                    RelayRail::Delegate { delegate, .. } => vec![delegate],
                     _ => Vec::new(),
                 },
                 proof_inputs.blinding_seed.to_vec(),

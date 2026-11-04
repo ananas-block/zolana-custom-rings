@@ -7,7 +7,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_instruction::Instruction;
 use spr_client::{AsyncRpc, ComputeBudgetConfig};
-use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{AssetRegistry, WalletUtxo};
 use zolana_ring_client::rpc::{RelayDepositInputs, RelayMergeInputs, RelayProofInputs, RelayRail};
 
@@ -33,6 +33,7 @@ pub struct DelegateSeal<'a> {
     pub delegate: Address,
     pub source: ShieldedAddress,
     pub nullifier_key: &'a NullifierKey,
+    pub tx_viewing_key: ViewingKey,
     pub notes: &'a [WalletUtxo],
     pub mint: Address,
     pub payments: Vec<DelegatePayment>,
@@ -105,6 +106,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             payments: seal.payments,
             assets: seal.assets,
             wide_frames: WideFrames::Buffer,
+            tx_viewing_key: seal.tx_viewing_key,
         }
         .select(&self.client)
         .await
@@ -140,7 +142,9 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             .await
             .map_err(RelayError::proof)?;
         let (tag, delegate) = match proof_inputs.rail {
-            RelayRail::Delegate { delegate } => (InstructionTag::AuthorityTransfer, Some(delegate)),
+            RelayRail::Delegate { delegate, .. } => {
+                (InstructionTag::AuthorityTransfer, Some(delegate))
+            }
             _ => (InstructionTag::Transfer, None),
         };
         Ok(ProvenRelay {
