@@ -29,7 +29,7 @@ export interface RingDepositSpp {
 }
 
 /** Rust `DepositPrefix`, ahead of the forwarded SPP deposit. */
-export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + 3 * REVISION_LENGTH;
+export const AUDITED_DEPOSIT_PREFIX_LENGTH = 2 + CUSTOM_RING_PROOF_LENGTH + 3 * REVISION_LENGTH;
 
 /** The accounts `[ring, registries, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(

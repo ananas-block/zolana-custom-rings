@@ -17,6 +17,7 @@ import {
   ownerSolanaAccount,
   withdrawalIntentRecipient,
   equalBytes,
+  isZero,
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -932,7 +933,7 @@ function spendListSalts(params: SpendBase): readonly RingListSalt[] {
         : undefined;
   return [
     ...(params.listSalts ?? []),
-    ...(address === undefined
+    ...(address === undefined || isZero(address.listSalt)
       ? []
       : [
           {

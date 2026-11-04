@@ -279,6 +279,16 @@ function poolMembers(
   };
 }
 
+/** A ring reading no salted list discloses no salt to a relay. */
+export function relayListSalts(
+  config: RingPolicy,
+  salts: readonly RingListSalt[],
+): readonly RingListSalt[] {
+  if (!config.hasPolicy) return [];
+  const { sources, salted } = pinnedPolicy(config);
+  return policySourceView({ slots: sources, salted }).salted === 0 ? [] : salts;
+}
+
 function saltsByOwner(salts: readonly RingListSalt[]): ReadonlyMap<string, Bytes32> {
   return new Map(salts.map(({ owner, salt }) => [bytesKey(owner), salt]));
 }

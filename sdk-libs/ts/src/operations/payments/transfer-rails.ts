@@ -64,7 +64,7 @@ import {
   type FrameExtensions,
 } from "../../protocol/transaction/transact.js";
 import { RingError } from "../../protocol/error.js";
-import type { RingListSalt } from "../../proof/policy-proof.js";
+import { relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
@@ -262,6 +262,7 @@ export class CustomRingTransfer {
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
           assets: this.#input.assets,
+          listSalts: relayListSalts(config, this.#input.listSalts ?? []),
         });
         return new PreparedRelay({
           ring: ringProgramId,
@@ -663,6 +664,7 @@ export class AnonymousTransfer {
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
           assets: this.#owner.assets,
+          listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
         });
         return Object.freeze({
           relay: new PreparedRelay({

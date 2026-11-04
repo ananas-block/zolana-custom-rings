@@ -11,6 +11,7 @@ import {
   encodeBase58,
   encodeData,
   equalBytes,
+  isZero,
   readData,
   splInterfaceWithBump,
   writeTransactOutput,
@@ -42,6 +43,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 
 import { AnonymousPlan } from "../../operations/payments/output-rail.js";
+import type { RingListSalt } from "../../proof/policy-proof.js";
 import { RingError } from "../error.js";
 
 /** Rust `RelayRail`. */
@@ -70,6 +72,21 @@ export interface RelayProofInputs {
   readonly blindingSeed: Bytes32;
   readonly outputTreeId: number;
   readonly assets: AssetRegistry;
+  /** Encoding drops the sender's, Ring RPC derives it from `nullifierKey`. */
+  readonly listSalts: readonly RingListSalt[];
+}
+
+export function writeRelayListSalts(
+  writer: Writer,
+  salts: readonly RingListSalt[],
+  sender: ShieldedAddress,
+): Writer {
+  const senderOwner = sender.signingPublicKey.ownerProofInputHash();
+  const sent = salts.filter(({ owner, salt }) => !isZero(salt) && !equalBytes(owner, senderOwner));
+  writer.u8(sent.length, "listSalts.length");
+  for (const { owner, salt } of sent)
+    writer.bytes(owner, 32, "listSalts.owner").bytes(salt, 32, "listSalts.salt");
+  return writer;
 }
 
 /** The caller wipes the returned bytes, they hold every secret of the transfer. */
@@ -96,10 +113,8 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
   writer.u8(value.outputs.length, "outputs.length");
   value.outputs.forEach((output, index) => writeOutput(writer, output, index, value.assets));
   writeExternalData(writer, value.externalData, value.withdrawal);
-  return writer
-    .bytes(value.blindingSeed, 32, "blindingSeed")
-    .u16(value.outputTreeId, "outputTreeId")
-    .finish();
+  writer.bytes(value.blindingSeed, 32, "blindingSeed").u16(value.outputTreeId, "outputTreeId");
+  return writeRelayListSalts(writer, value.listSalts, value.sender).finish();
 }
 
 /** Rust `RelayMergeInputs`, Ring RPC derives the merged note from the nullifier key. */
@@ -167,6 +182,9 @@ export async function decodeRelayProofInputs(
   const external = readExternalData(reader);
   const blindingSeed = reader.hash("blindingSeed");
   const outputTreeId = reader.u16("outputTreeId");
+  const listSalts = reader.list("listSalts", () =>
+    Object.freeze({ owner: reader.hash("listSalts.owner"), salt: reader.hash("listSalts.salt") }),
+  );
   reader.done();
   const legs = await Promise.all(external.legs.map(withdrawalLeg));
   const externalData = createExternalData({
@@ -190,6 +208,7 @@ export async function decodeRelayProofInputs(
     blindingSeed,
     outputTreeId,
     assets,
+    listSalts,
   });
 }
 

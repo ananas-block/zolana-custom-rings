@@ -88,7 +88,6 @@ export function storageRegistryAccount(
   source: Readonly<{
     trackingRegistry?: Address;
     trackingFloor?: bigint;
-    lastWriteCounter?: bigint;
   }> = {},
 ): RpcAccount {
   const writer = new Writer()
@@ -98,8 +97,7 @@ export function storageRegistryAccount(
     .u32(1, "nextIndex")
     .bytes(new Uint8Array(32), 32, "ringId")
     .bytes(addressBytes(source.trackingRegistry ?? ZERO_ADDRESS))
-    .u64(source.trackingFloor ?? 0n, "trackingFloor")
-    .u64(source.lastWriteCounter ?? 0n, "lastWriteCounter");
+    .u64(source.trackingFloor ?? 0n, "trackingFloor");
   for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
     const root = roots[slot];
     writer
@@ -126,8 +124,7 @@ export function ringPolicyData(
     bump: number;
     records?: Address;
     tracking?: Address;
-    privateSource?: Address;
-    privateLists?: number;
+    saltedLists?: number;
     roles?: Partial<RingRoles>;
     auditorPublicKey?: Uint8Array;
     mode?: RingMode;
@@ -146,10 +143,8 @@ export function ringPolicyData(
     .u8(input.bump, "bump")
     .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
     .bytes(
-      Uint8Array.from([1, 2, 4, 8, 16], (bit) =>
-        ((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1,
-      ),
-      5,
+      Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
+      3,
       "coSigners",
     );
   for (const role of RING_ROLES) writer.bytes(addressBytes(roles[role]));
@@ -159,8 +154,7 @@ export function ringPolicyData(
     .u64(input.createdSlot ?? 0n, "createdSlot")
     .bytes(addressBytes(input.records ?? ZERO_ADDRESS))
     .bytes(addressBytes(input.tracking ?? ZERO_ADDRESS))
-    .bytes(addressBytes(input.privateSource ?? ZERO_ADDRESS))
-    .u8(input.privateLists ?? 0, "privateLists");
+    .u8(input.saltedLists ?? 0, "saltedLists");
   writePolicyFields(writer, input);
   return writer.finish();
 }

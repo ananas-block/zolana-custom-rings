@@ -47,7 +47,11 @@ import { checkHiddenParties } from "./anonymous.js";
 import { type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import { RecordKind } from "../../protocol/codec/audit-stream.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
-import { readDepositSection, type PolicyReadClient } from "../../proof/policy-proof.js";
+import {
+  readDepositSection,
+  relayListSalts,
+  type PolicyReadClient,
+} from "../../proof/policy-proof.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import { DEPOSIT_DEMAND, demandRequirement, resolveRingCoSigner } from "../../proof/cosign.js";
 import { type RingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
@@ -296,6 +300,12 @@ export class PreparedRingDeposit {
         tree: prepared.#tree,
         depositor: signerAddress(prepared.#depositor),
         recipient: prepared.#recipient,
+        listSalt:
+          prepared.#listSalt === undefined
+            ? ZERO_32
+            : (relayListSalts(sealing.config, [
+                { owner: prepared.#ownerPkHash, salt: prepared.#listSalt },
+              ])[0]?.salt ?? ZERO_32),
         deposit: prepared.#deposit,
         blindingSecret: prepared.#blindingSecret,
         auditEphemeralKey: prepared.#ephemeralSecret,

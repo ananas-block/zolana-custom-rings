@@ -4,6 +4,7 @@ import { getBase58Decoder, getBase64Encoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
+import { Writer } from "@heliuslabs/zolana/internal";
 import {
   TransactWithdrawal,
   type Bytes16,
@@ -25,6 +26,7 @@ import {
   decodeRelayProofInputs,
   encodeRelayMergeInputs,
   encodeRelayProofInputs,
+  writeRelayListSalts,
 } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { encodeRelayDepositInputs } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
 
@@ -62,6 +64,23 @@ function ownerSpend() {
 }
 
 describe("relay proof inputs", () => {
+  it("names other owners' salts, the sender's and a zero-key salt left out", () => {
+    const { sender } = ownerSpend();
+    const senderOwner = sender.signingPublicKey.ownerProofInputHash();
+    const owner = filled(70) as Bytes32;
+    const salt = filled(71) as Bytes32;
+    const written = writeRelayListSalts(
+      new Writer(),
+      [
+        { owner: senderOwner, salt },
+        { owner, salt },
+        { owner: filled(72) as Bytes32, salt: filled(0) as Bytes32 },
+      ],
+      sender,
+    ).finish();
+    expect(written).toEqual(Uint8Array.of(1, ...owner, ...salt));
+  });
+
   it("encodes the anonymous payload byte for byte as the Rust vector and derives its spend on decode", async () => {
     const vector = JSON.parse(
       readFileSync(
@@ -121,6 +140,7 @@ describe("relay proof inputs", () => {
       blindingSeed: filled(28) as Bytes32,
       outputTreeId: 4,
       assets: new AssetRegistry(),
+      listSalts: [],
     });
     const wire = new Uint8Array(getBase64Encoder().encode(vector.proofInputs));
     expect(encoded).toEqual(wire);
@@ -160,6 +180,7 @@ describe("relay proof inputs", () => {
       tree: address(42),
       depositor: address(41),
       recipient: ownerSpend().sender,
+      listSalt: filled(0) as Bytes32,
       deposit: {
         asset: {
           kind: "spl",

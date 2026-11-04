@@ -110,6 +110,12 @@ of a published address can compute the owner's private list key on every Ring
 and read its list status there, so publish an address only where that disclosure
 is acceptable.
 
+On a ring reading a salted list, a relayed transfer or deposit gives Ring RPC the
+salt of every enrolled owner the policy screens, and Ring RPC can then read those
+owners' list status on every Ring. A transfer names other owners in `listSalts`
+and Ring RPC derives the sender's from the nullifier key it holds. A deposit
+carries the recipient's.
+
 On an anonymous Ring the transfer proof binds each live recipient slot's
 ciphertext, its recipient and its discovery tag. A wallet finds its notes with
 `AnonymousSync.fetch`, which scans every Ring its `ViewingHistory` names, and
