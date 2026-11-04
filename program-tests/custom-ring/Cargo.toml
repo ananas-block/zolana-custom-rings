@@ -17,6 +17,7 @@ custom-ring-interface = { workspace = true }
 custom-ring-sdk = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true }
+sea-orm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 solana-address = { workspace = true }

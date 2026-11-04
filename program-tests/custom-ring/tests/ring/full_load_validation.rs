@@ -12,10 +12,12 @@ use super::{
 };
 use custom_ring_interface::{
     storage::StorageRegistry, tag, tracking::TrackingRegistry, PolicyWithdrawal,
+    FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{ClearCoSigner, RelaySent, RingSubmission, SetCoSigner, SettledSubmission};
 use custom_ring_test_validator::{
     policy::{CuratedRings, RELEASED},
+    ring_rpc::{RELAY_BUDGET_LAMPORTS, RELAY_SIGNER_BUDGET_LAMPORTS},
     ring_wallet::RingWallet,
     shared::restart_prover,
 };
@@ -268,7 +270,8 @@ struct Settlement<'a> {
 }
 
 impl Settlement<'_> {
-    fn check(self) -> Result<()> {
+    /// The frame's length, tag included.
+    fn check(self) -> Result<usize> {
         let env = self.env;
         let groups =
             ConfirmedInstructionGroups::try_from(finalized_transaction(env, self.signature)?)?;
@@ -350,7 +353,7 @@ impl Settlement<'_> {
             "{}: settled and audited after its buffer closed",
             self.label
         );
-        Ok(())
+        Ok(frame.len())
     }
 }
 
@@ -513,7 +516,7 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         RelaySent::SignMessage(_) => bail!("the relay awaits a signature"),
     };
     let signature = ring_rpc.confirmed(&env, &relay_id)?;
-    Settlement {
+    let frame_len = Settlement {
         env: &env,
         label: "relay",
         ring,
@@ -524,6 +527,31 @@ fn full_load_validation_settles_through_the_submission_and_the_relay() -> Result
         before: &before,
     }
     .check()?;
+
+    let rent = env
+        .client
+        .rpc()
+        .client()
+        .get_minimum_balance_for_rent_exemption(FRAME_BUFFER_HEADER_LEN + frame_len)?;
+    let budget = wait_for("the relay to release its reservation", || {
+        let budget = ring_rpc.budget_use()?;
+        Ok(match budget.reservations {
+            0 => Probe::Ready(budget),
+            _ => Probe::NotYet,
+        })
+    })?;
+    ensure!(
+        budget.signer_scopes == 0,
+        "{budget:?} keeps a signer's share"
+    );
+    ensure!(
+        (1..rent).contains(&u64::try_from(budget.spent_lamports)?),
+        "{budget:?} against {rent} lamports of buffer rent"
+    );
+    println!(
+        "relay budget: released, {} lamports spent of {RELAY_BUDGET_LAMPORTS}, {rent} of rent returned, signer share {RELAY_SIGNER_BUDGET_LAMPORTS}",
+        budget.spent_lamports
+    );
 
     let mut wallet = RingWallet::new(&recipients[0], env.ring_assets()?, ring.program_id());
     wallet.sync(&env)?;

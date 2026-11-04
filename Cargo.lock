@@ -1614,6 +1614,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "reqwest",
+ "sea-orm",
  "serde",
  "serde_json",
  "solana-account 4.3.2",

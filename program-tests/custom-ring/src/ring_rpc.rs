@@ -10,6 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use custom_ring_cli::{wait_for, Probe};
 use custom_ring_sdk::{RingError, RingRelay};
+use sea_orm::{ConnectionTrait, Statement, Value};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use solana_address::Address;
@@ -27,11 +28,21 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_rpc::{
     run_server, BindPolicy, ChainSource, ClientLimits, Hub, LiveStorageChain, ManagedMerge,
-    RelayServices, RelayServicesInit, ServerOptions, ServiceIdentity, Store, TransactionSource,
-    Upstreams, STORE_CONNECTIONS,
+    RelayBudget, RelayServices, RelayServicesInit, ServerOptions, ServiceIdentity, Store,
+    TransactionSource, Upstreams, STORE_CONNECTIONS,
 };
 
 use crate::shared::{prover_url, TestEnv, ACTOR_AIRDROP};
+
+pub const RELAY_BUDGET_LAMPORTS: u64 = 1_000_000_000;
+pub const RELAY_SIGNER_BUDGET_LAMPORTS: u64 = 200_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RelayBudgetUse {
+    pub reservations: i64,
+    pub signer_scopes: i64,
+    pub spent_lamports: i64,
+}
 
 pub struct RingRpcSpec<'a> {
     pub env: &'a TestEnv,
@@ -46,6 +57,7 @@ pub struct LocalRingRpc {
 
 pub struct RelayedRingRpc {
     served: LocalRingRpc,
+    store: Store,
     pub fee_payer: Address,
     pub target: ReadTarget,
     pub relay: RingRpcRelay,
@@ -99,13 +111,14 @@ impl RingRpcSpec<'_> {
             rpc,
             hub,
             genesis_hash,
-        } = self.start(runtime, store, Some(services))?;
+        } = self.start(runtime, store.clone(), Some(services))?;
         let merge = hub
             .managed_merge()
             .context("relay services run the managed merge")?;
         Ok(RelayedRingRpc {
             relay: RingRpcRelay::new(&rpc.url),
             served: rpc,
+            store,
             fee_payer: fee_payer_address,
             target: ReadTarget {
                 cluster: genesis_hash,
@@ -143,7 +156,12 @@ impl RingRpcSpec<'_> {
             .with_storage_chain(Arc::new(storage_chain), Keypair::new())
             .with_co_signer(Keypair::new());
         if let Some(services) = relay {
-            builder = builder.with_relay_services(services);
+            builder = builder
+                .with_relay_services(services)
+                .with_relay_budget(RelayBudget {
+                    total_lamports: RELAY_BUDGET_LAMPORTS,
+                    signer_lamports: RELAY_SIGNER_BUDGET_LAMPORTS,
+                });
         }
         let hub = Arc::new(
             builder
@@ -206,6 +224,39 @@ impl RelayedRingRpc {
                 RelayStatus::Confirmed { signature, .. } => Probe::Ready(signature.0),
                 RelayStatus::Failed { reason } => bail!("the relay failed, {reason}"),
                 RelayStatus::AwaitingSignature | RelayStatus::Sent { .. } => Probe::NotYet,
+            })
+        })
+    }
+
+    pub fn budget_use(&self) -> Result<RelayBudgetUse> {
+        const TOTAL_SCOPE: [u8; 32] = [0; 32];
+        let db = self.store.connection();
+        let backend = db.get_database_backend();
+        let amount = |sql: &str, values: Vec<Value>| {
+            let statement = Statement::from_sql_and_values(backend, sql, values);
+            async move {
+                let row = db.query_one(statement).await?;
+                row.map_or(Ok(0), |row| row.try_get::<i64>("", "amount"))
+            }
+        };
+        let total = || Value::Bytes(Some(Box::new(TOTAL_SCOPE.to_vec())));
+        self.served.runtime.block_on(async {
+            Ok(RelayBudgetUse {
+                reservations: amount(
+                    "SELECT COUNT(*) AS amount FROM relay_reservations",
+                    Vec::new(),
+                )
+                .await?,
+                signer_scopes: amount(
+                    "SELECT COUNT(*) AS amount FROM relay_reserved WHERE scope != $1",
+                    vec![total()],
+                )
+                .await?,
+                spent_lamports: amount(
+                    "SELECT committed AS amount FROM relay_reserved WHERE scope = $1",
+                    vec![total()],
+                )
+                .await?,
             })
         })
     }
