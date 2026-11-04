@@ -94,7 +94,7 @@ export function transferProofRequest(
     sender: Bytes32;
     inProof: boolean;
     publicOwners: boolean;
-    /** Payer, co-signer and exit destination, zero when absent, unread off the anonymous frame. */
+    /** Payer, each co-signer and exit destination, zero when absent, unread off the anonymous frame. */
     partyIdentities: readonly Bytes32[];
     /** SPP's owner signer run by owner identity, in-proof and authority bind none. */
     signers: readonly Bytes32[];
