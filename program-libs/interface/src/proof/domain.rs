@@ -43,6 +43,10 @@ pub const WITHDRAWALS: u32 = 0x4352_5057;
 pub const RECORD_UPDATE: u32 = 0x4352_5255;
 /// `"CRWG"`
 pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
+/// `"CRPS"`
+pub const LIST_SALT: u32 = 0x4352_5053;
+/// `"CRPT"`
+pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRPL"`
 pub const LIST_POSITION: u32 = 0x4352_504c;
 /// `"CRPV"`
