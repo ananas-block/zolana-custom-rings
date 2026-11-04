@@ -170,6 +170,8 @@ pub enum RingError {
     IncompleteProofSet,
     #[error("the transfer needs a shape no {rail} key serves")]
     ShapeUnkeyed { rail: RingRail },
+    #[error("the deposit needs more records than any deposit key holds")]
+    DepositUnkeyed,
     #[error("the policy refuses the transfer, {0}")]
     PolicyRuleUnsatisfied(#[from] RuleRefusal),
     #[error("transfer references another ring {0}")]
