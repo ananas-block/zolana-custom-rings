@@ -13,7 +13,7 @@ use crate::{
 /// A sorted linked leaf, a member's absence opens the low leaf bracketing it.
 pub trait IndexedLeaf: Copy {
     const SENTINEL: Self;
-    /// Levels of the tree holding this leaf.
+    /// Levels of the leaf's tree.
     const HEIGHT: usize;
 
     fn member(&self) -> &[u8; 32];

@@ -43,7 +43,7 @@ pub mod method {
     }
 }
 
-/// One tracking leaf, `viewing_u` splits into the leaf's two view fields.
+/// `viewing_u` splits into the leaf's two view fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingTrackingRecordView {
@@ -59,7 +59,7 @@ pub struct RingTrackingRecordView {
     pub seal: Option<RingTrackingSealView>,
 }
 
-/// What `TrackingAuthorization` retains, `ciphertext` hashes to the leaf's `ct_hash`.
+/// `ciphertext` hashes to the leaf's `ct_hash`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingTrackingSealView {
@@ -106,7 +106,7 @@ pub struct GetTrackingOpeningsResponse {
     pub openings: Vec<RingTrackingOpening>,
 }
 
-/// Leaves from `start_index` under one root the registry serves, leaf 0 the sentinel.
+/// Leaf 0 is the sentinel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetTrackingRecordsRequest {
@@ -198,16 +198,16 @@ pub struct RingTrackingWriteView {
     pub revision: u64,
     pub list_tag: Hash,
     pub exists: bool,
-    /// A rotation's old leaf, an insert reads its low record's `next` and nothing else.
+    /// An insert reads its low record's `next` and nothing else.
     pub old: RingTrackingRecordView,
-    /// The member's leaf, for an absent member the append leaf after its low record relinks.
+    /// An absent member's append leaf after its low record relinks.
     pub slot: RingRecordPathView,
     /// An absent member's low record, empty for a present member.
     pub low: RingTrackingRecordView,
     pub low_path: RingRecordPathView,
 }
 
-/// `chain_start` binds the registry and `revision`, the revision `ApplyEnrollments` names.
+/// `chain_start` binds the registry and the revision `ApplyEnrollments` names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetTrackingApplyProofInputsResponse {

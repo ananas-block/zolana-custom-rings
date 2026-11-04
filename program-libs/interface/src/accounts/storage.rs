@@ -255,7 +255,7 @@ impl StorageRegistry {
         u64::from_le_bytes(self.last_write_counter)
     }
 
-    /// Strictly increasing across the source, the circuit opens no old counter and the chain binds this one.
+    /// Strictly increasing across the source, the circuit opens no old counter and the chain binds the new one.
     pub fn advance_write_counter(&mut self, counter: u64) -> Result<(), StorageError> {
         if counter <= self.last_write_counter() {
             return Err(StorageError::WriteCounterNotIncreasing);

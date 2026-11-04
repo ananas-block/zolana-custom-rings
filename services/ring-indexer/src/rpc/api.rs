@@ -46,8 +46,10 @@ use crate::{
     },
 };
 
+mod private_list;
 mod tracking;
 
+pub(crate) use private_list::private_list_writes;
 pub(crate) use tracking::{
     pending_enrollments, tracking_apply_proof_inputs, tracking_openings, tracking_record_pool,
     tracking_records,
@@ -200,7 +202,7 @@ pub(crate) async fn storage_member_openings(
     request: GetStorageMemberOpeningsRequest,
 ) -> Result<GetStorageMemberOpeningsResponse, RingApiError> {
     check_members(&request.members)?;
-    let read = Snapshot::<StorageState>::registry(db, &request.registry)
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -232,10 +234,8 @@ pub(crate) async fn storage_member_records(
     chain: &impl ChainSource,
     request: GetStorageMemberRecordsRequest,
 ) -> Result<GetStorageMemberRecordsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid storage page limit"));
-    }
-    let read = Snapshot::<StorageState>::registry(db, &request.registry)
+    check_page_limit(request.limit)?;
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -278,7 +278,7 @@ pub(crate) async fn storage_record_pool(
         return Err(validation("invalid record pool openings"));
     }
     let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
-    let read = Snapshot::<StorageState>::registry(db, &request.registry)
+    let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
         .await?;
@@ -310,7 +310,7 @@ pub(crate) async fn storage_apply_proof_inputs(
         .map(storage_entry)
         .collect::<Result<Vec<_>, _>>()
         .map_err(validation)?;
-    let snapshot = Snapshot::<StorageState>::registry(db, &request.registry).await?;
+    let snapshot = Snapshot::<StorageState>::policy(db, &request.registry).await?;
     let root = StorageRoot::current(&*snapshot.state.account);
     let chain_start = chain_start(&request.registry.0, root.revision.into()).map_err(internal)?;
     let loaded: LoadedRegistry = TreeRead::batch::<QUAD_HEIGHT>(root.tree(), &entries)
@@ -337,6 +337,13 @@ pub(crate) async fn storage_apply_proof_inputs(
         chain_end: Hash(inputs.chain_end),
         writes: inputs.writes.iter().map(write_view).collect(),
     })
+}
+
+fn check_page_limit(limit: u64) -> Result<(), RingApiError> {
+    if limit == 0 || limit > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid page limit"));
+    }
+    Ok(())
 }
 
 fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
@@ -506,6 +513,20 @@ impl<A: CachedAccount> Snapshot<RegistryState<A>> {
     }
 }
 
+impl Snapshot<StorageState> {
+    /// A private source opens no policy record.
+    async fn policy(
+        db: &DatabaseConnection,
+        registry: &SerializablePubkey,
+    ) -> Result<Self, RingApiError> {
+        let snapshot = Self::registry(db, registry).await?;
+        if snapshot.state.account.is_private() {
+            return Err(validation("a private source serves published writes only"));
+        }
+        Ok(snapshot)
+    }
+}
+
 impl<A: CachedAccount> RootRead<A> {
     async fn load<const H: usize>(
         &self,
@@ -551,7 +572,7 @@ impl<L: IndexedLeaf + Default, const H: usize> LoadedRegistry<L, H> {
     ) -> Result<PoolView<L>, RingApiError> {
         let members: Vec<[u8; 32]> = members.iter().map(|member| member.0).collect();
         let pool: RecordPoolOf<L> = self.tree.record_pool(&members, canopy).map_err(internal)?;
-        pool.verify(H, root)
+        pool.verify(root)
             .map_err(|error| internal(format!("registry pool disagrees ({error})")))?;
         let records = pool
             .records

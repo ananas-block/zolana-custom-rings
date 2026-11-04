@@ -2,12 +2,16 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::QUAD_HEIGHT;
 use sea_orm::ConnectionTrait;
+use spr_indexer_api::Hash;
 use zolana_ring_indexer::tree::{
     node_keys, Canopy, IndexedRecord, LoadedTree, MemberRead, MemberRecord, ReadRows, WritableLeaf,
     WrittenRows,
 };
 
-use crate::storage::{RegistryStore, StoredLeaf, TreeVersion};
+use crate::{
+    indexer::{fault, from_storage, ApplyError},
+    storage::{RegistryStore, StoredLeaf, TreeVersion},
+};
 
 pub(crate) struct LoadedRegistry<L = MemberRecord, const H: usize = QUAD_HEIGHT> {
     pub tree: LoadedTree<L, H>,
@@ -100,4 +104,52 @@ pub(crate) async fn plant_tree<C: ConnectionTrait, L: StoredLeaf, const H: usize
     let records = rows.records.values().copied().collect::<Vec<_>>();
     store.save_records(&records, 0).await?;
     store.save_nodes(&rows.nodes, 0).await
+}
+
+/// A proven batch, its rows save only once it reaches the root the program recorded.
+#[must_use]
+pub(crate) struct AppliedBatch<'a, L: WritableLeaf<H>, const H: usize> {
+    pub at: TreeVersion,
+    pub chain_start: [u8; 32],
+    pub entries: &'a [L::Entry],
+    pub new_root: [u8; 32],
+    pub new_next_index: u32,
+    pub revision: u64,
+}
+
+impl<L: StoredLeaf + WritableLeaf<H>, const H: usize> AppliedBatch<'_, L, H>
+where
+    L::Entry: Sync,
+    L::WriteProof: Send,
+{
+    pub async fn save<C: ConnectionTrait>(
+        self,
+        store: &RegistryStore<'_, C, L>,
+    ) -> Result<(), ApplyError> {
+        let loaded: LoadedRegistry<L, H> = TreeRead::batch::<H>(self.at, self.entries)
+            .load(store)
+            .await
+            .map_err(from_storage)?;
+        let batch = loaded
+            .tree
+            .apply_batch(self.chain_start, self.entries)
+            .map_err(|error| fault(format!("writes do not apply ({error})")))?;
+        let recorded_next_index = u64::from(self.new_next_index);
+        if batch.inputs.new_root != self.new_root
+            || batch.inputs.new_next_index != recorded_next_index
+        {
+            return Err(fault(format!(
+                "applied root mismatch at revision {}, projected {} at {}, program {} at {}",
+                self.revision,
+                Hash(batch.inputs.new_root),
+                batch.inputs.new_next_index,
+                Hash(self.new_root),
+                recorded_next_index
+            )));
+        }
+        let records = batch.rows.records.values().copied().collect::<Vec<_>>();
+        store.save_records(&records, self.revision).await?;
+        store.save_nodes(&batch.rows.nodes, self.revision).await?;
+        Ok(())
+    }
 }

@@ -16,8 +16,7 @@ use crate::{
     parse,
 };
 
-/// Permissionless, the program reads every entry from the named account so an applier chooses only
-/// which ones and in what order, a stale proof fails and the next applier reuses the accounts.
+/// Permissionless, every entry comes from its named account, an applier picks only accounts and order.
 pub fn process_apply_enrollments_ix(
     program_id: &Address,
     accounts: &mut [AccountView],

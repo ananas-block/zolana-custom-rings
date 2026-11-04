@@ -33,6 +33,8 @@ use crate::{
     tests::{database, field},
 };
 
+#[path = "private_source_replay_tests.rs"]
+mod private_source_replay;
 #[path = "tracking_replay_tests.rs"]
 mod tracking_replay;
 
@@ -209,10 +211,9 @@ fn replay_indexer(db: Arc<DatabaseConnection>, rpc: Arc<SolanaRpc>) -> Indexer {
     }
 }
 
-/// `authority, registry`, the storage program's `Update` accounts.
-fn update_instruction(authority: Address, registry: Address, data: &StorageUpdateIxData) -> Value {
+fn update_instruction(accounts: [Address; 2], data: &StorageUpdateIxData) -> Value {
     let wire = [&[tag::UPDATE][..], &data.encode().unwrap()].concat();
-    transaction(STORAGE_PROGRAM_ID, &[authority, registry], &wire)
+    transaction(STORAGE_PROGRAM_ID, &accounts, &wire)
 }
 
 fn initialize_transaction(
@@ -261,8 +262,7 @@ impl StorageReplay {
             .apply(chain_start, &entries)
             .unwrap();
         let update = update_instruction(
-            creator,
-            registry,
+            [creator, registry],
             &StorageUpdateIxData {
                 revision: Revision::default(),
                 restrictive: false,
@@ -349,4 +349,74 @@ async fn a_storage_update_serves_openings_under_its_new_root() {
     .unwrap();
     assert_eq!(opened.map(|record| record.lists), Some(1));
     replay.stop().await;
+}
+
+#[tokio::test]
+async fn a_restrictive_update_stops_every_older_root_in_the_same_slot() {
+    let creator = Address::new_from_array([41; 32]);
+    let (registry, initialize) = initialize_transaction(creator, [42; 32], [0; 32]);
+    let write = |member: u8, mask: u64, value: u64| RecordWriteData {
+        member: field(member),
+        lists: WriteRecordsIxData {
+            mask: mask.to_le_bytes(),
+            value: value.to_le_bytes(),
+        },
+        ..Zeroable::zeroed()
+    };
+    let mut tree = MemberRegistryTree::new().unwrap();
+    let mut update = |revision: u64, restrictive: bool, write: RecordWriteData| {
+        let revision = Revision::from(revision);
+        let inputs = tree
+            .apply(
+                chain_start(&registry, revision).unwrap(),
+                &[write.storage_entry().unwrap()],
+            )
+            .unwrap();
+        let root = inputs.new_root;
+        let sent = update_instruction(
+            [creator, registry],
+            &StorageUpdateIxData {
+                revision,
+                restrictive,
+                writes: vec![write],
+                apply: &apply_data(root, inputs.new_next_index),
+            },
+        );
+        (root, sent)
+    };
+    let (graced_root, graced) = update(0, false, write(4, 1, 1));
+    let (restricted_root, restricted) = update(1, true, write(4, 1, 0));
+    let chain = Arc::new(Mutex::new(Chain {
+        blocks: BTreeMap::from([
+            (1, block(1, vec![initialize])),
+            (2, block(2, vec![graced])),
+            (3, block(3, vec![restricted])),
+        ]),
+        ..Default::default()
+    }));
+    let (rpc, handle) = rpc(chain).await;
+    let indexer = replay_indexer(Arc::new(database().await), rpc);
+    while indexer.synchronize().await.unwrap() == Progress::Behind {}
+    let account = StorageStore::new(indexer.db.as_ref(), registry.to_bytes())
+        .state()
+        .await
+        .unwrap()
+        .unwrap()
+        .account;
+    assert_eq!(account.newest().hash, restricted_root);
+    assert!(account.roots[1..].iter().all(|root| root.hash == [0; 32]));
+    let opening = |root: [u8; 32]| GetStorageMemberOpeningsRequest {
+        registry: registry.into(),
+        members: vec![Hash(field(4))],
+        expected_root: Hash(root),
+    };
+    let refused = api::storage_member_openings(
+        indexer.db.as_ref(),
+        indexer.rpc.as_ref(),
+        opening(graced_root),
+    )
+    .await;
+    assert_eq!(refused, Err(crate::error::RingApiError::RootChanged));
+    handle.stop().unwrap();
+    handle.stopped().await;
 }

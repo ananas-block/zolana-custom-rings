@@ -29,6 +29,7 @@ use spr_rpc_http::MethodPathLayer;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
 use zolana_ring_indexer::{
+    private_list::method::GetPrivateListWrites,
     rpc::method::{
         GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
         GetStorageRecordPool,
@@ -46,7 +47,7 @@ use crate::{
 };
 
 /// Served here, every other call goes to Photon untouched.
-pub const RING_METHODS: [&str; 9] = [
+pub const RING_METHODS: [&str; 10] = [
     GetStorageMemberOpenings::NAME,
     GetStorageMemberRecords::NAME,
     GetStorageRecordPool::NAME,
@@ -56,6 +57,7 @@ pub const RING_METHODS: [&str; 9] = [
     GetTrackingRecordPool::NAME,
     GetPendingEnrollments::NAME,
     GetTrackingApplyProofInputs::NAME,
+    GetPrivateListWrites::NAME,
 ];
 
 const MAX_BODY_BYTES: u32 = TEN_MB_SIZE_BYTES;
@@ -159,6 +161,7 @@ fn ring_methods(lookups: Lookups) -> Result<RpcModule<Lookups>> {
         GetTrackingRecordPool => api::tracking_record_pool,
         GetPendingEnrollments => api::pending_enrollments,
         GetTrackingApplyProofInputs => api::tracking_apply_proof_inputs,
+        GetPrivateListWrites => api::private_list_writes,
     );
     Ok(module)
 }
