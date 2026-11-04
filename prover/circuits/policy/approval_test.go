@@ -135,7 +135,6 @@ func TestDelegateClearsTheMask(t *testing.T) {
 	w.Own[ringpolicy.Bob] = ringpolicy.Record{}
 	w.Own[ringpolicy.Alice] = ringpolicy.Record{}
 	w.Withdrawals, w.WithdrawalCapacity = nil, 0
-	w.KeyEscrow = false
 	requireMask(t, w, 0)
 	t.Run("reads no table", func(t *testing.T) {
 		b := w.Build(t)
