@@ -660,24 +660,23 @@ fn an_unrestrictive_table_passes() {
 }
 
 #[test]
-fn a_salted_list_needs_a_slot_and_enters_the_table_hash() {
-    let block = ListSet::single(ListId::Block);
-    let validated = |map: &SourceMap| {
-        RuleTable::builder()
-            .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
-            .build()
-            .encode()
-            .validate(map)
-            .map(|_| ())
-    };
+fn a_salted_list_needs_a_slot_and_enters_the_table_fields() {
+    let table = RuleTable::builder()
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
+        .build()
+        .encode();
     assert_eq!(
-        validated(&sources(&[]).with_salted(block)),
-        Err(PolicyTableError::MissingSource(ListId::Block))
+        table.validate(&sources(&[])),
+        Err(PolicyTableError::MissingSource(ListId::PrivateBlock))
+    );
+    let map = sources(&[(ListId::PrivateBlock, [0; 32])]);
+    assert!(table.validate(&map).is_ok());
+    assert_eq!(
+        table.fields(&map)[17],
+        field_u8(ListSet::single(ListId::PrivateBlock).bits())
     );
     let public = sources(&[(ListId::Block, [0; 32])]);
-    let salted = public.with_salted(block);
-    assert_eq!(validated(&salted), Ok(()));
-    assert_ne!(TABLE.hash(&public).unwrap(), TABLE.hash(&salted).unwrap());
+    assert_eq!(table.fields(&public)[17], [0; 32]);
 }
 
 #[test]

@@ -436,7 +436,6 @@ fn a_source_write_refuses_each_table_form_it_would_store_again() {
             update: UpdatePolicyIxData::Source(PolicySourceIxData {
                 list_id: list_id as u8,
                 source: 0,
-                salted: false,
             }),
             trailing: &[],
         }
@@ -466,44 +465,6 @@ fn both_policy_writes_take_a_grant_over_several_lists_and_one_denial_per_list() 
     let policy = ring.roles.policy.pubkey();
     ring.role_send(RingRole::Policy, rules_write(&policy, table))
         .expect("consistent list operations");
-}
-
-fn salting_write(policy: Address, list_id: ListId) -> Instruction {
-    UpdatePolicyIx {
-        authority: policy,
-        update: UpdatePolicyIxData::Source(PolicySourceIxData {
-            list_id: list_id as u8,
-            source: 0,
-            salted: true,
-        }),
-        trailing: &[],
-    }
-    .instruction()
-}
-
-#[test]
-fn a_source_write_salting_a_public_list_refuses_and_a_private_one_lands() {
-    let mut ring = Ring::new(Setup::Policy);
-    let policy = ring.roles.policy.pubkey();
-    let before: RingPolicy = ring.read(&policy_pda());
-    refused(
-        ring.role_send(RingRole::Policy, salting_write(policy, ListId::Allow)),
-        CustomRingError::SaltedPublicList,
-    );
-    let after: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(after, before);
-    ring.role_send(
-        RingRole::Policy,
-        rules_write(&policy, list_table(ListId::PrivateAllow, Vec::new())),
-    )
-    .expect("a private grant list");
-    ring.role_send(
-        RingRole::Policy,
-        salting_write(policy, ListId::PrivateAllow),
-    )
-    .expect("a private list stays salted");
-    let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.salted(), ListSet::single(ListId::PrivateAllow));
 }
 
 #[test]
@@ -757,7 +718,6 @@ const ROLE_WRITES: [RoleWrite; 8] = [
                 update: UpdatePolicyIxData::Source(PolicySourceIxData {
                     list_id: ListId::Allow as u8,
                     source: 0,
-                    salted: false,
                 }),
                 trailing: &[],
             }
@@ -1017,11 +977,7 @@ fn a_source_write_names_a_known_list() {
     for list_id in [0, u8::MAX] {
         let instruction = UpdatePolicyIx {
             authority: policy,
-            update: UpdatePolicyIxData::Source(PolicySourceIxData {
-                list_id,
-                source: 0,
-                salted: false,
-            }),
+            update: UpdatePolicyIxData::Source(PolicySourceIxData { list_id, source: 0 }),
             trailing: &[],
         }
         .instruction();

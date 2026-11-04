@@ -80,7 +80,6 @@ impl Case {
         let slots: Vec<PolicySource> = self.sources.iter().map(Source::slot).collect();
         SourceMap::from_slots(slots.try_into().expect("one source per slot"))
             .expect("positional sources")
-            .with_salted(ListSet::from_bits(self.salted))
     }
 }
 
@@ -408,6 +407,7 @@ fn ring_policy_table_parts_encode_and_decode() {
             .expect("the rows fit the table");
         assert_eq!(built.encode(), stored, "{}", case.name);
         let sources = case.source_map();
+        assert_eq!(case.salted, sources.salted().bits(), "{}", case.name);
         assert_eq!(
             case.fields,
             stored.fields(&sources).map(hex::encode),

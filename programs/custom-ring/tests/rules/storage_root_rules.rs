@@ -196,7 +196,6 @@ fn a_forged_tracking_registry_with_a_matching_ring_id_and_an_empty_root_fails_at
     reaches_verification(reading(tracking_registry(), &mut ring));
 }
 
-/// The table write leaves the stored salted byte empty, the list is private and read salted.
 fn read_private_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
     let authority = ring.holder(RingRole::Policy);
     let update = rules_write(
@@ -236,11 +235,7 @@ fn a_salted_list_reads_its_own_source_under_the_tracking_pin() {
     let data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     read_private_allow_list(&mut ring, Address::default(), 0);
     let account: RingPolicy = ring.read(&policy_pda());
-    assert_eq!(account.salted(), ListSet::EMPTY);
-    assert_eq!(
-        account.source_map().unwrap().salted(),
-        ListSet::single(ListId::PrivateAllow)
-    );
+    assert_eq!(account.salted(), ListSet::single(ListId::PrivateAllow));
     for unpaired in [Address::default(), Address::new_from_array([0x61; 32])] {
         pin_records(&mut ring, unpaired, 0);
         refused(

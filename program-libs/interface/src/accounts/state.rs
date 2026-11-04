@@ -470,8 +470,6 @@ pub struct RingPolicy {
     pub records: Address,
     /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
-    /// [`ListSet`] bits owner rows read under salted keys.
-    pub salted_lists: u8,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -498,7 +496,6 @@ pub struct CoSigner {
 #[derive(Debug, Copy, Clone)]
 pub struct PolicyUpdate {
     pub sources: [SourceSlot; N_SOURCE_SLOTS],
-    pub salted_lists: ListSet,
     pub rules: EncodedRuleTable,
     pub slot: u64,
 }
@@ -577,30 +574,20 @@ impl RingPolicy {
         (self.policy_hash != [0; 32]).then_some(&self.policy_hash)
     }
 
-    /// A list no rule reads keeps no salted bit.
-    ///
     /// `Initialize`, the table write and the source write all end here, the one point a table
     /// reaches the account, and each validates the whole table it would store.
     pub fn set_policy(&mut self, update: PolicyUpdate) -> Result<(), CustomRingError> {
         let PolicyUpdate {
             sources,
-            salted_lists,
             rules,
             slot,
         } = update;
-        // Entries of a public list sit at owner keys. A salted bit moves every read to a salted
-        // key and those entries stop matching, a blocked owner then reads as absent.
-        if !salted_lists.is_subset(ListSet::PRIVATE_LISTS) {
-            return Err(CustomRingError::SaltedPublicList);
-        }
-        let salted_lists = ListSet::from_bits(salted_lists.bits() & rules.referenced().bits());
-        let source_map = salted_source_map(&sources, salted_lists)?;
+        let source_map = source_map_of(&sources)?;
         rules.validate(&source_map)?;
         let policy_hash = rules.hash(&source_map)?;
         self.count_generation(slot)?;
         self.policy_hash = policy_hash;
         self.sources = sources;
-        self.salted_lists = salted_lists.bits();
         self.rules = rules;
         Ok(())
     }
@@ -640,12 +627,12 @@ impl RingPolicy {
 
     /// The map `policy_hash` was computed over.
     pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        salted_source_map(&self.sources, self.salted())
+        source_map_of(&self.sources)
     }
 
-    /// The stored byte, `source_map` adds every private list a rule reads.
-    pub const fn salted(&self) -> ListSet {
-        ListSet::from_bits(self.salted_lists)
+    /// `SourceMap::salted` of `source_map`, read from the slots with no registry hash.
+    pub fn salted(&self) -> ListSet {
+        ListSet::salted_among(|list_id| self.sources[list_id.slot()].list_id != 0)
     }
 
     pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {
@@ -660,12 +647,11 @@ impl RingPolicy {
             .chain([self.tracking])
     }
 
-    pub fn salted_registries(&self) -> Result<Vec<Address>, CustomRingError> {
-        let salted = self.source_map()?.salted();
-        Ok(salted
+    pub fn salted_registries(&self) -> Vec<Address> {
+        self.salted()
             .iter()
             .map(|list_id| *source_address(&self.sources[list_id.slot()], &self.records))
-            .collect())
+            .collect()
     }
 
     /// A salted list needs a floor against the ring's tracking registry.
@@ -674,14 +660,12 @@ impl RingPolicy {
         address: &Address,
         source: &StorageRegistry,
     ) -> Result<(), CustomRingError> {
-        // The source map's set, a private list is salted whatever the stored byte holds. The byte
-        // alone stays empty after `Initialize`, an unpaired source then serves the private list
-        // with no floor and a blocked enrolled owner proves itself unenrolled under an old
-        // tracking root.
-        let needs_pin =
-            self.source_map()?.salted().iter().any(|list_id| {
-                source_address(&self.sources[list_id.slot()], &self.records) == address
-            });
+        // A mapped private list needs the pin. An unpaired source serving one takes no floor, and
+        // a blocked enrolled owner then proves itself unenrolled under an old tracking root.
+        let needs_pin = self
+            .salted()
+            .iter()
+            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address);
         match source.tracking_registry == self.tracking || (!needs_pin && !source.is_private()) {
             true => Ok(()),
             false => Err(CustomRingError::SaltedSourceOtherTracking),
@@ -711,20 +695,17 @@ fn source_address<'a>(slot: &'a SourceSlot, records: &'a Address) -> &'a Address
     }
 }
 
-fn salted_source_map(
-    sources: &[SourceSlot; N_SOURCE_SLOTS],
-    salted: ListSet,
-) -> Result<SourceMap, CustomRingError> {
+fn source_map_of(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, CustomRingError> {
     let mut slots = [PolicySource::default(); N_SOURCE_SLOTS];
     for (dst, slot) in slots.iter_mut().zip(sources) {
         *dst = slot.policy_source()?;
     }
-    Ok(SourceMap::from_slots(slots)?.with_salted(salted))
+    Ok(SourceMap::from_slots(slots)?)
 }
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1093);
+const _: () = assert!(RingPolicy::SIZE == 1092);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);

@@ -116,7 +116,6 @@ pinned_codes! {
     InvalidTrackingRegistry = 8502,
     TrackingRootBelowFloor = 8503,
     SaltedSourceOtherTracking = 8504,
-    SaltedPublicList = 8505,
     InvalidFrameBuffer = 8520,
     FrameLength = 8521,
     UnauthorizedFrameWriter = 8522,

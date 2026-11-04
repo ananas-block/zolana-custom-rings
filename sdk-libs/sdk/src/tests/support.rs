@@ -52,7 +52,7 @@ use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingOpening,
     TrackingRecord, TrackingTree,
 };
-use zolana_ring_policy::{ListSet, Member, RuleTable};
+use zolana_ring_policy::{Member, RuleTable};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
@@ -273,7 +273,6 @@ impl RingSettings {
 fn policy_update(sources: [SourceSlot; N_SOURCE_SLOTS], rules: &RuleTable) -> PolicyUpdate {
     PolicyUpdate {
         sources,
-        salted_lists: ListSet::EMPTY,
         rules: rules.encode(),
         slot: SLOT,
     }

@@ -31,7 +31,6 @@ pub struct PolicySource {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceMap {
     slots: [PolicySource; MAX_SOURCES],
-    salted: ListSet,
 }
 
 /// A slot violates the positional layout.
@@ -100,7 +99,7 @@ rule_errors! {
 
 impl SourceMap {
     pub fn new(entries: &[(ListId, [u8; 32])]) -> Result<Self, SourceMapError> {
-        let mut sources = Self::default().with_salted(ListSet::EMPTY);
+        let mut sources = Self::default();
         for (list_id, registry) in entries {
             let slot = &mut sources.slots[list_id.slot()];
             if slot.list_id != 0 {
@@ -124,10 +123,7 @@ impl SourceMap {
                 return Err(SourceMapError::NotPositional);
             }
         }
-        let map = Self {
-            slots,
-            salted: ListSet::PRIVATE_LISTS,
-        };
+        let map = Self { slots };
         map.check_curators()?;
         Ok(map)
     }
@@ -146,25 +142,10 @@ impl SourceMap {
         Ok(())
     }
 
-    /// Owners read these lists at their salted keys, an asset keeps its public record.
-    #[must_use]
-    pub const fn with_salted(self, lists: ListSet) -> Self {
-        Self {
-            salted: lists.union(ListSet::PRIVATE_LISTS),
-            ..self
-        }
-    }
-
-    /// An unmapped bit would ask a prover for a salt no rule reads.
+    /// Owners read these lists at their salted keys, an asset keeps its public record. An
+    /// unmapped bit would ask a prover for a salt no rule reads.
     pub fn salted(&self) -> ListSet {
-        self.slots
-            .iter()
-            .filter(|slot| slot.list_id != 0)
-            .filter_map(|slot| ListId::try_from(slot.list_id).ok())
-            .filter(|list_id| self.salted.contains(*list_id))
-            .fold(ListSet::EMPTY, |set, list_id| {
-                set.union(ListSet::single(list_id))
-            })
+        ListSet::salted_among(|list_id| self.slots[list_id.slot()].list_id != 0)
     }
 
     /// The registry serving a list, zero for the ring's own, `None` when unmapped.

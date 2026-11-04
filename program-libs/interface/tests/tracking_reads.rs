@@ -99,7 +99,7 @@ fn a_floor_above_the_named_root_refuses_a_curator_source_too() {
     );
 }
 
-fn private_ring(curator: Address, salted_lists: ListSet) -> RingPolicy {
+fn salted_ring(curator: Address) -> RingPolicy {
     let mut ring = *ring();
     ring.records = key(5);
     let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
@@ -109,7 +109,6 @@ fn private_ring(curator: Address, salted_lists: ListSet) -> RingPolicy {
     };
     ring.set_policy(PolicyUpdate {
         sources,
-        salted_lists,
         rules: RuleTable::builder()
             .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
             .build()
@@ -118,10 +117,6 @@ fn private_ring(curator: Address, salted_lists: ListSet) -> RingPolicy {
     })
     .unwrap();
     ring
-}
-
-fn salted_ring(curator: Address) -> RingPolicy {
-    private_ring(curator, ListSet::single(ListId::PrivateBlock))
 }
 
 #[test]
@@ -155,71 +150,23 @@ fn a_source_serving_no_salted_list_needs_no_pin_and_no_foreign_one() {
 }
 
 #[test]
-fn an_unpaired_private_source_refuses_with_an_empty_salted_byte() {
-    let other = CustomRingError::SaltedSourceOtherTracking;
-    for (ring, serving) in [
-        (private_ring(Address::default(), ListSet::EMPTY), key(5)),
-        (private_ring(key(7), ListSet::EMPTY), key(7)),
-    ] {
-        assert_eq!(ring.salted(), ListSet::EMPTY);
-        assert_eq!(ring.check_source_pair(&serving, &source(key(9), 0)), Ok(()));
-        for unpaired in [key(8), Address::default()] {
-            assert_eq!(
-                ring.check_source_pair(&serving, &source(unpaired, 0)),
-                Err(other)
-            );
-        }
-    }
-}
-
-#[test]
-fn a_private_list_is_salted_whatever_the_byte_and_a_bit_survives_only_on_a_list_a_rule_reads() {
+fn the_salted_set_reads_the_slots_and_matches_the_source_map() {
     let mut ring = salted_ring(Address::default());
     assert_eq!(ring.salted(), ListSet::single(ListId::PrivateBlock));
-    let salted_hash = ring.policy_hash;
-    let unsalted = PolicyUpdate {
-        sources: ring.sources,
-        salted_lists: ListSet::EMPTY,
-        rules: ring.rules,
-        slot: 6,
-    };
-    ring.set_policy(unsalted).unwrap();
-    assert_eq!(ring.salted(), ListSet::EMPTY);
-    assert_eq!(ring.policy_hash, salted_hash);
-    assert_eq!(
-        ring.source_map().unwrap().salted(),
-        ListSet::single(ListId::PrivateBlock)
-    );
+    assert_eq!(ring.salted(), ring.source_map().unwrap().salted());
+    let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+    sources[ListId::Block.slot()].list_id = ListId::Block as u8;
     ring.set_policy(PolicyUpdate {
-        salted_lists: ListSet::single(ListId::PrivateAllow),
-        ..unsalted
+        sources,
+        rules: RuleTable::builder()
+            .rule(Rule::forbid(Subject::Sender, ListId::Block))
+            .build()
+            .encode(),
+        slot: 6,
     })
     .unwrap();
     assert_eq!(ring.salted(), ListSet::EMPTY);
-}
-
-#[test]
-fn a_write_salting_a_public_list_refuses_and_changes_nothing() {
-    let mut ring = salted_ring(Address::default());
-    let before = ring;
-    for public in [
-        ListId::Allow,
-        ListId::Block,
-        ListId::Frozen,
-        ListId::Approval,
-    ] {
-        assert_eq!(
-            ring.set_policy(PolicyUpdate {
-                sources: ring.sources,
-                salted_lists: ListSet::single(public),
-                rules: ring.rules,
-                slot: 6,
-            }),
-            Err(CustomRingError::SaltedPublicList),
-            "{public:?}"
-        );
-    }
-    assert_eq!(ring, before);
+    assert_eq!(ring.source_map().unwrap().salted(), ListSet::EMPTY);
 }
 
 #[test]
@@ -237,5 +184,5 @@ fn a_transfer_reads_the_own_and_curator_roots_before_the_pinned_tracking_registr
 
 #[test]
 fn the_salted_registries_name_the_source_of_each_salted_list() {
-    assert_eq!(salted_ring(key(9)).salted_registries(), Ok(vec![key(9)]));
+    assert_eq!(salted_ring(key(9)).salted_registries(), vec![key(9)]);
 }

@@ -116,7 +116,6 @@ fn a_policy_write_validates_and_repins_the_table() {
         .encode();
     let update = |sources, rules, slot| PolicyUpdate {
         sources,
-        salted_lists: ListSet::EMPTY,
         rules,
         slot,
     };
@@ -146,7 +145,6 @@ fn a_policy_write_refuses_each_table_form_and_keeps_the_pinned_table() {
     }
     let write = |rule: Rule, slot| PolicyUpdate {
         sources,
-        salted_lists: ListSet::EMPTY,
         rules: RuleTable::builder().rule(rule).build().encode(),
         slot,
     };

@@ -120,7 +120,6 @@ ring_errors! {
     InvalidTrackingRegistry = 8502 => "tracking registry account is invalid",
     TrackingRootBelowFloor = 8503 => "the frame names a tracking root below a salted source's floor",
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
-    SaltedPublicList = 8505 => "a write salts a public list",
     InvalidFrameBuffer = 8520 => "frame buffer account is invalid",
     FrameLength = 8521 => "frame length is zero or exceeds one inner create",
     UnauthorizedFrameWriter = 8522 => "the signer is not the frame buffer writer",
