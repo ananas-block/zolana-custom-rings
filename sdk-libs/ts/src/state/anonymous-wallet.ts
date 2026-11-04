@@ -18,8 +18,6 @@ import { registeredMint } from "../operations/workflow/recover.js";
 import type { RingKeys } from "./ring-keys.js";
 import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
 
-export const ANONYMOUS_WALLET_VERSION = 1;
-
 /** A reply read from a note, what a sender wrote about itself and nothing the proof binds. */
 export interface PendingClaim {
   readonly utxoHash: Bytes32;
@@ -206,7 +204,7 @@ export class AnonymousWallet {
       claimedNullifierPk: bytesToHex(claim.claimedNullifierPk),
     }));
     return (
-      `{"walletVersion":${ANONYMOUS_WALLET_VERSION},"history":${this.#history.toJson()},` +
+      `{"history":${this.#history.toJson()},` +
       `"wallet":${JSON.stringify(serializeWallet(this.wallet))},` +
       `"pending":${JSON.stringify(serializeWallet(this.#pending))},` +
       `"claims":${JSON.stringify(claims)}}`
@@ -215,10 +213,8 @@ export class AnonymousWallet {
 
   static fromJson(text: string): AnonymousWallet {
     const stored = document(parseExact(text));
-    if (stored["walletVersion"] !== BigInt(ANONYMOUS_WALLET_VERSION))
-      throw invalid(`version ${String(stored["walletVersion"])} is unknown`);
     const { history, wallet, pending, claims } = stored;
-    const known = ["walletVersion", "history", "wallet", "pending", "claims"];
+    const known = ["history", "wallet", "pending", "claims"];
     if (
       Object.keys(stored).some((key) => !known.includes(key)) ||
       typeof wallet !== "string" ||

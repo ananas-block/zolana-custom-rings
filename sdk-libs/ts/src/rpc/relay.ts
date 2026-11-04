@@ -32,7 +32,7 @@ import type { RingRpc } from "./ring-rpc.js";
 
 type Hash = indexerTypes.Hash;
 
-const RELAY_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay/v1");
+const RELAY_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay");
 const base58 = getBase58Decoder();
 const base64 = getBase64Encoder();
 

@@ -180,7 +180,6 @@ export {
   PENDING_RETENTION,
   StreamCounter,
   TAG_GAP,
-  VIEWING_HISTORY_VERSION,
   ViewingHistory,
   ViewingKeyEntry,
 } from "../state/viewing-history.js";
@@ -192,7 +191,7 @@ export type {
   ScanWorkerRequest,
   ScanWorkerResponse,
 } from "../state/anonymous-scan.js";
-export { AnonymousWallet, ANONYMOUS_WALLET_VERSION } from "../state/anonymous-wallet.js";
+export { AnonymousWallet } from "../state/anonymous-wallet.js";
 export type { PendingClaim } from "../state/anonymous-wallet.js";
 export {
   AnonymousSync,

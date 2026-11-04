@@ -19,7 +19,7 @@ use crate::{
     utxos::{CreatedIn, PageDelta, StoredUtxo},
 };
 
-const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal/v1";
+const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal";
 const NONCE_LEN: usize = 12;
 const NOTE_BODY_LEN: usize =
     32 + 1 + 32 + 32 + 1 + 32 + 8 + 32 + 32 + 32 + 2 + 1 + 8 + 64 + 2 + 4 + 8 + 1 + 32;

@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 use zeroize::Zeroizing;
 
-const RELAY_DOMAIN: &[u8] = b"zolana/ring-rpc-relay/v1";
+const RELAY_DOMAIN: &[u8] = b"zolana/ring-rpc-relay";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use super::{base64, relay_id, Attestation, ReadTarget, RelayId, RequestBuildError, SignedRequest};
 
-const AUTHORITY_TRANSFER_DOMAIN: &str = "zolana/ring-rpc-authority-transfer/v1";
+const AUTHORITY_TRANSFER_DOMAIN: &str = "zolana/ring-rpc-authority-transfer";
 
 /// The base58 text of `ShieldedAddress::to_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

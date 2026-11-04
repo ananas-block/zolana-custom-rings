@@ -410,11 +410,11 @@ describe("atomic progress", () => {
     expect(indexer.ringReads).toHaveLength(reads);
   });
 
-  it("refuses an unknown wallet version and a malformed claim", async () => {
+  it("refuses another field and a malformed claim", async () => {
     const bob = new ScanWallet(2);
     const wallet = anonymousWallet(bob, bob.fresh());
     const text = wallet.toJson();
-    expect(() => AnonymousWallet.fromJson(text.replace('"walletVersion":1', '"walletVersion":2'))).toThrow(
+    expect(() => AnonymousWallet.fromJson(text.replace('"history"', '"version":2,"history"'))).toThrow(
       "RING_WALLET_DOCUMENT",
     );
     expect(() =>

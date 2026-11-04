@@ -14,7 +14,7 @@ pub struct RelayEnrollInputs {
     pub instruction_data: Vec<u8>,
 }
 
-const ENROLL_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-enroll/v1";
+const ENROLL_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-enroll";
 
 impl RelayEnrollInputs {
     /// The owner's signature over it spends the relay's budget, it names no quote so a retry keeps it.

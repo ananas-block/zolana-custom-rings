@@ -15,9 +15,7 @@ use spr_keypair::{
 
 use crate::{ListSaltHolder, RingKeyError};
 
-pub const RING_ADDRESS_VERSION: u8 = 4;
-
-pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr/v4";
+pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr";
 
 pub const RING_PAYMENT_SCHEME: &str = "zolana:";
 
@@ -25,8 +23,8 @@ const CHECKSUM_LEN: usize = 4;
 
 const LIST_SALT_LEN: usize = 32;
 
-/// `version ‖ recipient ‖ ring_program_id ‖ list_salt`.
-const BODY_LEN: usize = 1 + SHIELDED_ADDRESS_LEN + 32 + LIST_SALT_LEN;
+/// `recipient ‖ ring_program_id ‖ list_salt`.
+const BODY_LEN: usize = SHIELDED_ADDRESS_LEN + 32 + LIST_SALT_LEN;
 
 pub const RING_ADDRESS_PAYLOAD_LEN: usize = BODY_LEN + CHECKSUM_LEN;
 
@@ -81,14 +79,12 @@ impl RingAddress {
         }
     }
 
-    /// `version ‖ recipient ‖ ring_program_id ‖ list_salt ‖ checksum`.
+    /// `recipient ‖ ring_program_id ‖ list_salt ‖ checksum`.
     pub fn to_bytes(&self) -> [u8; RING_ADDRESS_PAYLOAD_LEN] {
         let mut bytes = [0u8; RING_ADDRESS_PAYLOAD_LEN];
         let (body, tail) = bytes.split_at_mut(BODY_LEN);
-        let (version, rest) = body.split_at_mut(1);
-        let (recipient, rest) = rest.split_at_mut(SHIELDED_ADDRESS_LEN);
+        let (recipient, rest) = body.split_at_mut(SHIELDED_ADDRESS_LEN);
         let (program, salt) = rest.split_at_mut(32);
-        version[0] = RING_ADDRESS_VERSION;
         recipient.copy_from_slice(&self.recipient.to_bytes());
         program.copy_from_slice(self.ring_program_id.as_array());
         salt.copy_from_slice(&self.list_salt);
@@ -101,16 +97,10 @@ impl RingAddress {
             .try_into()
             .map_err(|_| RingKeyError::InvalidRingAddressLength)?;
         let (body, checksum_bytes) = bytes.split_at(BODY_LEN);
-        let (&version, rest) = body
-            .split_first()
-            .ok_or(RingKeyError::InvalidRingAddressLength)?;
-        if version != RING_ADDRESS_VERSION {
-            return Err(RingKeyError::UnknownRingAddressVersion(version));
-        }
         if *checksum_bytes != checksum(body) {
             return Err(RingKeyError::InvalidRingAddressChecksum);
         }
-        let (recipient, rest) = rest
+        let (recipient, rest) = body
             .split_first_chunk::<SHIELDED_ADDRESS_LEN>()
             .ok_or(RingKeyError::InvalidRingAddressLength)?;
         let (program, salt) = rest
