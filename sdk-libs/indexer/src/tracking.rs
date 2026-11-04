@@ -198,9 +198,8 @@ pub struct RingTrackingWriteView {
     pub revision: u64,
     pub list_tag: Hash,
     pub exists: bool,
-    pub old_next: Hash,
-    pub old_viewing_u: Hash,
-    pub old_revision: u64,
+    /// A rotation's old leaf, an insert reads its low record's `next` and nothing else.
+    pub old: RingTrackingRecordView,
     /// The member's leaf, for an absent member the append leaf after its low record relinks.
     pub slot: RingRecordPathView,
     /// An absent member's low record, empty for a present member.

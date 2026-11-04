@@ -1,14 +1,20 @@
 use custom_ring_interface::{
     storage::StorageError,
     storage_instruction::{tag, ApplyEnrollmentsIxData, EnrollRequest, InitializeTrackingIxData},
-    tracking::{EnrollmentRotation, TrackingAuthorization, TrackingEntry, TrackingRegistry},
+    tracking::{
+        tracking_chain_start, EnrollmentRotation, TrackingAuthorization, TrackingEntry,
+        TrackingRegistry, TrackingRootUpdate, TRACKING_QUAD_HEIGHT,
+    },
 };
 use sea_orm::ConnectionTrait;
 use solana_address::Address;
+use spr_indexer_api::Hash;
+use zolana_ring_indexer::tree::TrackingRecord;
 
 use crate::{
     block::Instruction,
     indexer::{fault, from_storage, ApplyError},
+    member_registry::{plant_tree, LoadedRegistry, TreeRead},
     rpc::SolanaRpc,
     storage::{Enrollment, StorageRoot, TrackingState, TrackingStore},
 };
@@ -211,9 +217,61 @@ impl<C: ConnectionTrait> TrackingProjection<'_, '_, C> {
     }
 
     async fn apply(self, call: ApplyCall<'_>) -> Result<(), ApplyError> {
-        let entries = self.applied_entries(call.authorizations).await?;
-        let _ = (call.data, entries);
-        Err(fault("tracking tree is not wired"))
+        let ApplyCall {
+            data,
+            authorizations,
+        } = call;
+        // 1. The program admits the apply at the projected revision.
+        let root = StorageRoot::current(&*self.state.account);
+        let mut rotated = *self.state.account;
+        rotated
+            .update(TrackingRootUpdate {
+                revision: data.revision,
+                slot: self.slot,
+                new_root: data.apply.new_root,
+                new_next_index: data.apply.new_next_index(),
+            })
+            .map_err(|error| fault(format!("apply refused ({error})")))?;
+        let revision = rotated.newest().revision.value();
+        // 2. The entries reach the root the program recorded.
+        let entries = self.applied_entries(authorizations).await?;
+        let registry = Address::new_from_array(self.state.registry);
+        let chain_start = tracking_chain_start(&registry, data.revision)
+            .map_err(|error| fault(format!("chain start failed ({error})")))?;
+        let loaded: LoadedRegistry<TrackingRecord, TRACKING_QUAD_HEIGHT> =
+            TreeRead::batch::<TRACKING_QUAD_HEIGHT>(root.tree(), &entries)
+                .load(self.store.tree())
+                .await
+                .map_err(from_storage)?;
+        let batch = loaded
+            .tree
+            .apply_batch(chain_start, &entries)
+            .map_err(|error| fault(format!("entries do not apply ({error})")))?;
+        let recorded_next_index = u64::from(data.apply.new_next_index());
+        if batch.inputs.new_root != data.apply.new_root
+            || batch.inputs.new_next_index != recorded_next_index
+        {
+            return Err(fault(format!(
+                "applied root mismatch at revision {revision}, projected {} at {}, program {} at {}",
+                Hash(batch.inputs.new_root),
+                batch.inputs.new_next_index,
+                Hash(data.apply.new_root),
+                recorded_next_index
+            )));
+        }
+        // 3. Rows at the new revision hold the new tree.
+        let records = batch.rows.records.values().copied().collect::<Vec<_>>();
+        self.store.tree().save_records(&records, revision).await?;
+        self.store
+            .tree()
+            .save_nodes(&batch.rows.nodes, revision)
+            .await?;
+        // 4. The roots rotate as the program rotates them.
+        *self.state.account = rotated;
+        self.store
+            .save_root(&StorageRoot::current(&rotated))
+            .await?;
+        Ok(())
     }
 
     /// Each owner's newest enrollment before this apply, older rotations never reach a leaf.
@@ -247,6 +305,7 @@ pub(crate) async fn create<C: ConnectionTrait>(
     store: &TrackingStore<'_, C>,
     state: &TrackingState,
 ) -> anyhow::Result<()> {
+    plant_tree::<_, _, TRACKING_QUAD_HEIGHT>(store.tree()).await?;
     store
         .save_root(&StorageRoot::current(&*state.account))
         .await?;
