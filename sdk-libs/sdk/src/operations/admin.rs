@@ -1,11 +1,11 @@
 //! Instructions of the ring roles and the upgrade authority.
 
-use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, InitializeIxData, InstructionTag, PolicyBindingIxData,
     PolicySourceIxData, PolicyTableIxData, RingKind, RingRole, RingRoles, SetCoSignerRecordIxData,
     SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
 };
+use custom_ring_interface::{STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::ComputeBudgetConfig;
@@ -133,6 +133,8 @@ impl Initialize<'_> {
             AccountMeta::new_readonly(pda::protocol_config(), false),
             AccountMeta::new(ring.ring_auth_pda(), false),
             AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
+            AccountMeta::new(ring.tracking_registry()?, false),
+            AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false),
         ]);
         let policy = match self.policy {
             Some(InitialPolicy { records, table }) => {

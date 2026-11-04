@@ -151,7 +151,7 @@ export async function proveEnrollment(
   try {
     const seal: EnrollmentSeal = Object.freeze({
       nullifierPk: envelope.nullifierPublicKey,
-      listTag: listTagOf(listSaltOf(nullifierKey)),
+      listTag: listTagOf(listSaltOf(nullifierKey, registry.ringId)),
       ephU: envelope.sealed.ephemeralPublicKey.u(),
       ciphertext: envelope.sealed.ciphertext,
     });

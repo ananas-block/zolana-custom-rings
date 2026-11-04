@@ -197,7 +197,11 @@ mod tests {
             ct_hash: [7; 32],
             viewing_u: viewing.u(),
             revision: 3,
-            list_tag: list_tag(&owner.nullifier_key).unwrap(),
+            list_tag: list_tag(
+                &owner.nullifier_key,
+                &zolana_ring_policy::ring_id_field(RING.as_array()).unwrap(),
+            )
+            .unwrap(),
         }
     }
 

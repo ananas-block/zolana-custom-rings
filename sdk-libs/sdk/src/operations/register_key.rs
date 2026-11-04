@@ -59,7 +59,7 @@ impl Enroll<'_> {
         let envelope = NullifierKeyEnvelope::new(key, &auditor_pk)?;
         let nullifier_pk = key.pubkey()?;
         let secret = Zeroizing::new(right_align(&key.secret()));
-        let list_tag = list_tag(key)?;
+        let list_tag = list_tag(key, &ring_id)?;
         let member = solana_owner_identity(self.owner.as_array())?;
         let eph_u = envelope.sealed.eph_pk.u();
         let public_input_hash = RegisterKeyStatement {

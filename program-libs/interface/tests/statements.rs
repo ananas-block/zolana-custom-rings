@@ -64,6 +64,7 @@ struct TrackingCase {
     entry_hash: String,
     chain_from_zero: String,
     nullifier_secret: String,
+    salt_ring_id: String,
     list_salt: String,
     secret_list_tag: String,
 }
@@ -534,8 +535,8 @@ fn compute_vectors() -> StatementVectors {
         list_tag: values.fields[16],
     };
     let nullifier_secret = right_aligned(0x07);
-    let list_salt = domain::list_salt(&nullifier_secret).unwrap();
     let ring_id = values.fields[17];
+    let list_salt = domain::list_salt(&nullifier_secret, &ring_id).unwrap();
     let list_tag = values.fields[16];
     let register = RegisterKeyStatement {
         ring_id: &ring_id,
@@ -643,6 +644,7 @@ fn compute_vectors() -> StatementVectors {
             entry_hash: hex::encode(tracking_entry.hash().unwrap()),
             chain_from_zero: hex::encode(tracking_entry.chained(&[0; 32]).unwrap()),
             nullifier_secret: hex::encode(nullifier_secret),
+            salt_ring_id: hex::encode(ring_id),
             list_salt: hex::encode(list_salt),
             secret_list_tag: hex::encode(domain::list_tag(&list_salt).unwrap()),
         },

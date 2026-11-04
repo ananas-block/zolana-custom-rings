@@ -10,6 +10,7 @@ import { SOL_MINT, Wallet, type WalletUtxo } from "@heliuslabs/zolana/transactio
 import { getBase58Decoder, type Address } from "@solana/kit";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
+import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
 import { listSaltOf, listTagOf } from "../../src/crypto/keys/list-salt.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
 import { selectRingInputs } from "../../src/operations/payments/transfer.js";
@@ -124,13 +125,13 @@ describe("list_salt.json", () => {
     );
     const key = holder.nullifierKey();
     expect(bytesToHex(Uint8Array.of(0, ...key.secretBytes()))).toBe(vector["nullifier_secret"]);
-    const salt = listSaltOf(key);
+    const salt = listSaltOf(key, hexToBytes(vector["ring_id"] ?? "") as Bytes32);
     expect(bytesToHex(salt)).toBe(vector["list_salt"]);
     expect(bytesToHex(listTagOf(salt))).toBe(vector["list_tag"]);
     const program = getBase58Decoder().decode(new Uint8Array(32).fill(4)) as Address;
     const addressed = await RingAddress.enrolled(holder, program);
     expect(addressed.recipient.toBytes()).toEqual(holder.shieldedAddress().toBytes());
-    expect(addressed.listSalt).toEqual(salt);
+    expect(addressed.listSalt).toEqual(listSaltOf(key, ringIdField(program)));
     key.destroy();
   });
 });

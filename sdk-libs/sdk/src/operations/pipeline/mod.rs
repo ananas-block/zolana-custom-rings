@@ -605,7 +605,11 @@ impl<'a> Sealed<'a> {
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
             n_out,
             public: &public,
-            salts: &KnownSalts::new(list_salts).with_authority(&authority, sender_pk_hash)?,
+            salts: &KnownSalts::new(list_salts).with_authority(
+                &authority,
+                sender_pk_hash,
+                &ring_id,
+            )?,
         }
         .read(client.zolana())
         .await?;

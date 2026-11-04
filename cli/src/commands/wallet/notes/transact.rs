@@ -1001,7 +1001,10 @@ impl Deposit<'_> {
             asset: self.asset,
             amount: self.amount,
             cosigner: self.cosigner,
-            list_salt: Some(zolana_ring_keys::list_salt(&self.sender.nullifier_key)?),
+            list_salt: Some(zolana_ring_keys::list_salt(
+                &self.sender.nullifier_key,
+                &ctx.ring.ring_id()?,
+            )?),
         };
         // Stored before it is sent, a sync reads every sender tag the deposit may take.
         if let (Some(history), Some(advanced)) = (history, deposit.viewing_history()?) {

@@ -18,7 +18,7 @@ fn public_co_owner_receives_payment_under_each_owners_net_debit_cap() -> Result<
     .send(&env.client)?;
     let sender = &env.sender.keypair;
     let co_owner = &env.recipient.keypair;
-    EnrollAddresses {
+    EnrollOwners {
         ring,
         owners: &[sender, co_owner],
         env: &env,
@@ -122,24 +122,30 @@ fn public_co_owner_receives_payment_under_each_owners_net_debit_cap() -> Result<
         1
     );
     let audited = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()).with_mode(RingMode::Anonymous),
         auditor: &auditor,
         signature,
     }
     .run(&env)?;
     assert!(audited.payload_errors.is_empty());
+    let mut spent: Vec<_> = AuditedSpends {
+        ring,
+        auditor: &auditor,
+        owners: &[sender.pubkey(), co_owner.pubkey()],
+        audited: &audited,
+    }
+    .notes(&env)?
+    .iter()
+    .map(|note| (note.amount, note.owner_key))
+    .collect();
+    spent.sort_unstable();
     assert_eq!(
-        audited.sender.map(|value| value.owner_key),
-        Some(sender.signing_pubkey().as_ed25519()?)
+        spent,
+        [
+            (1_000_000, co_owner.signing_pubkey().as_ed25519()?),
+            (10_000_000, sender.signing_pubkey().as_ed25519()?),
+        ]
     );
-    let mut amounts: Vec<_> = audited
-        .inputs
-        .iter()
-        .filter_map(|input| input.opening.opened().map(|opening| opening.amount))
-        .collect();
-    amounts.sort_unstable();
-    assert_eq!(amounts, [1_000_000, 10_000_000]);
     let mut wallet = RingWallet::new(co_owner, env.ring_assets()?, ring_program);
     wallet.sync(&env)?;
     assert!(wallet.unspent().any(|note| note.utxo.amount == 11_000_000));

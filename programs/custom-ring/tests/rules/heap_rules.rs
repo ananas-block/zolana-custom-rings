@@ -53,6 +53,7 @@ struct Wide {
     exempt: bool,
     entry: bool,
     in_proof: bool,
+    wide: bool,
 }
 
 impl Wide {
@@ -62,7 +63,7 @@ impl Wide {
             Legs::Spl(count) => (count, "spl"),
         };
         format!(
-            "{} {}x{} {legs} {kind}{}{}{}{}",
+            "{} {}x{} {legs} {kind}{}{}{}{}{}",
             self.rail,
             self.inputs,
             self.outputs,
@@ -70,6 +71,7 @@ impl Wide {
             if self.exempt { " exempt" } else { "" },
             if self.entry { " entry" } else { "" },
             if self.in_proof { " in-proof" } else { "" },
+            if self.wide { " wide" } else { "" },
         )
     }
 }
@@ -108,6 +110,7 @@ fn cases() -> Vec<Wide> {
             exempt: false,
             entry: false,
             in_proof: false,
+            wide: shape.wide,
         };
         push(policy, shape);
         push(
@@ -146,6 +149,7 @@ fn cases() -> Vec<Wide> {
                 exempt: false,
                 entry: shape.entry,
                 in_proof: false,
+                wide: shape.wide && !shape.entry,
             },
             shape,
         );
@@ -159,6 +163,7 @@ fn frame<'a>(fixture: &'a Fixture, owners: &'a [[u8; 32]], case: Wide) -> RingTr
         false => fixture.transfer(case.rail, case.inputs, case.outputs, case.policy),
     };
     data.entry = case.entry;
+    data.wide_owners = case.wide;
     let count = case.legs.count();
     let amount = |leg: usize| 1_000 + leg as u64;
     data.interface_transfers = match case.legs {

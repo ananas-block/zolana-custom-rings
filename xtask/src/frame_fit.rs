@@ -430,6 +430,7 @@ impl Transfer {
             withdrawals: u8::try_from(LEGS)?,
             owners: u8::try_from(inputs)?,
             entry: frame.entry(),
+            wide: data.wide_owners,
         };
         let envelope = vec![14u8; data.stream_under(key).envelope().len];
         data.envelope = &envelope;
@@ -695,6 +696,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     .instruction()?;
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
+        key_capacity: u8::try_from(width)?,
         proof: bytemuck::Zeroable::zeroed(),
         tracking_revision: Revision::from(1),
         own_revision: Revision::from(1),

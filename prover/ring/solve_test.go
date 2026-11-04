@@ -200,8 +200,8 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 	sealed := keys.SealStream(t, secret[:], shared.NfKeyEncInfo)
 	secretField := new(big.Int).SetBytes(secret[1:])
 	nullifierPk := spptest.MustNullifierPk(t, secretField)
-	listTag := ringregistry.ListTag(t, ringregistry.ListSalt(t, secretField))
 	ringID := big.NewInt(0x7711)
+	listTag := ringregistry.ListTag(t, ringregistry.ListSalt(t, secretField, ringID))
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	return &RegisterKeyParams{
 		RequestHead: RequestHead{

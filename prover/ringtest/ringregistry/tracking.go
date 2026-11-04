@@ -36,9 +36,9 @@ func (e TrackingEntry) Wires() registry.TrackingEntry {
 }
 
 // ListSalt mirrors shared.ListSalt.
-func ListSalt(t testing.TB, nullifierSecret *big.Int) *big.Int {
+func ListSalt(t testing.TB, nullifierSecret, ringID *big.Int) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListSaltDomain), nullifierSecret)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListSaltDomain), nullifierSecret, ringID)
 }
 
 // ListTag mirrors shared.ListTag.
