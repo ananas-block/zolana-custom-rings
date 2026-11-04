@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use custom_ring_interface::{compute_unit_limit, InstructionTag};
 use custom_ring_sdk::{
-    CustomRing, DelegateMove, DelegatePayment, RelayedDeposit, RelayedTransferInput, RingClient,
-    RingIndexerBackend, RingTransfer, WideFrames,
+    CustomRing, DelegateMove, DelegatePayment, DelegateSource, RelayedDeposit,
+    RelayedTransferInput, RingClient, RingIndexerBackend, RingTransfer, WideFrames,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -31,13 +31,18 @@ pub struct RelayProofRequest<'a> {
 pub struct DelegateSeal<'a> {
     pub ring: Address,
     pub delegate: Address,
-    pub source: ShieldedAddress,
-    pub nullifier_key: &'a NullifierKey,
+    pub sources: &'a [SealedSource],
     pub tx_viewing_key: ViewingKey,
-    pub notes: &'a [WalletUtxo],
     pub mint: Address,
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
+}
+
+/// One member the service holds the key and opened notes of.
+pub struct SealedSource {
+    pub address: ShieldedAddress,
+    pub nullifier_key: NullifierKey,
+    pub notes: Vec<WalletUtxo>,
 }
 
 /// Read from the relay, never from the request.
@@ -99,9 +104,15 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             ring: CustomRing::new(seal.ring),
             delegate: seal.delegate,
             payer: parties.fee_payer,
-            source: seal.source,
-            source_nullifier_key: seal.nullifier_key,
-            utxos: seal.notes,
+            sources: seal
+                .sources
+                .iter()
+                .map(|source| DelegateSource {
+                    address: source.address,
+                    nullifier_key: &source.nullifier_key,
+                    utxos: &source.notes,
+                })
+                .collect(),
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
