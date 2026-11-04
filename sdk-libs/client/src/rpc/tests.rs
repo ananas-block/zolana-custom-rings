@@ -1018,6 +1018,7 @@ fn relay_proof_inputs() -> RelayProofInputs {
         blinding_seed: [28; 32],
         output_tree_id: 4,
         list_salts: Vec::new(),
+        co_owners: Vec::new(),
         wide_owners: false,
     }
 }
@@ -1173,9 +1174,25 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
         timestamp: Some(1_700_000_000),
         nonce: [4; 32],
     }
-    .sign(&delegate)
+    .sign(&delegate, &spr_keypair::ViewingKey::from_bytes(&[6; 32]))
     .expect("sign");
-    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+    let wire = serde_json::to_string(&signed).expect("json");
+    if std::env::var_os("UPDATE_RING_VECTORS").is_some() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/rpc/authority_transfer.json"
+        );
+        let mut stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vector")).expect("json");
+        stored["wire"] = serde_json::Value::String(wire.clone());
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&stored).expect("json") + "\n",
+        )
+        .expect("vector");
+        return;
+    }
+    assert_eq!(wire, vector.wire);
 }
 
 fn signed_enrolment() -> SubmitRecordUpdateRequest {

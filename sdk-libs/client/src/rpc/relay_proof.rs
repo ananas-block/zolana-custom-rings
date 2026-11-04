@@ -24,9 +24,10 @@ use super::{RelayOperation, TokenAccountSetup};
 pub struct RelayProofInputs {
     pub rail: RelayRail,
     pub ring_program_id: Address,
-    /// Owns every real input.
+    /// Owns every real input no co-owner owns.
     pub sender: ShieldedAddress,
     pub nullifier_key: NullifierKey,
+    pub co_owners: Vec<RelayCoOwner>,
     pub tx_viewing_key: ViewingKey,
     pub inputs: Vec<SppProofInputUtxo>,
     pub outputs: Vec<SppProofOutputUtxo>,
@@ -39,6 +40,13 @@ pub struct RelayProofInputs {
     pub list_salts: Vec<SubjectListSalt>,
     /// The owner sealed under the wide key, the relayer proves on it.
     pub wide_owners: bool,
+}
+
+/// A public owner of later inputs, it signs the relay's message and the prover holds its secret.
+#[derive(Clone)]
+pub struct RelayCoOwner {
+    pub owner: Address,
+    pub nullifier_key: NullifierKey,
 }
 
 /// The leaf's `list_tag` refuses a wrong salt.
@@ -186,7 +194,7 @@ impl RelayMergeInputs {
                 .iter()
                 .enumerate()
                 .map(|(index, input)| {
-                    SpendWire::of(&SppProofInputUtxo::from(input), &self.sender)
+                    SpendWire::of(&SppProofInputUtxo::from(input), &self.sender, &[])
                         .ok_or(RelayProofInputsError::MergeInput { index })
                 })
                 .collect::<Result<_, _>>()?,
@@ -204,7 +212,7 @@ impl RelayMergeInputs {
             .inputs
             .iter()
             .map(|spend| {
-                let input = spend.input(&sender, &nullifier_key)?;
+                let input = spend.input(&sender, &nullifier_key, &[])?;
                 Ok(WalletUtxo {
                     utxo: input.utxo,
                     nullifier_pubkey: input.nullifier_pubkey,
@@ -263,12 +271,23 @@ struct ProofInputsWire {
     #[wincode(with = "containers::Vec<SubjectListSalt, FixIntLen<u8>>")]
     list_salts: Vec<SubjectListSalt>,
     wide_owners: bool,
+    #[wincode(with = "containers::Vec<CoOwnerWire, FixIntLen<u8>>")]
+    co_owners: Vec<CoOwnerWire>,
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+struct CoOwnerWire {
+    owner: Address,
+    nullifier_secret: [u8; BLINDING_LEN],
 }
 
 impl Drop for ProofInputsWire {
     fn drop(&mut self) {
         self.nullifier_secret.zeroize();
         self.tx_viewing_secret.zeroize();
+        for co_owner in &mut self.co_owners {
+            co_owner.nullifier_secret.zeroize();
+        }
     }
 }
 
@@ -296,7 +315,7 @@ struct PlanWire {
 #[derive(SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 enum InputWire {
-    Spend(SpendWire),
+    Spend(Box<SpendWire>),
     Dummy { blinding: [u8; 32], tree_id: u16 },
     Compact { tree_id: u16 },
 }
@@ -313,6 +332,8 @@ struct SpendWire {
     ring_data_hash: Option<[u8; 32]>,
     tree_id: u16,
     leaf_index: u64,
+    /// Unset on the sender's input.
+    co_owner: Option<Address>,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -378,7 +399,7 @@ impl ProofInputsWire {
                 .iter()
                 .enumerate()
                 .map(|(index, input)| {
-                    InputWire::of(input, &inputs.sender)
+                    InputWire::of(input, &inputs.sender, &inputs.co_owners)
                         .ok_or(RelayProofInputsError::Input { index })
                 })
                 .collect::<Result<_, _>>()?,
@@ -407,6 +428,14 @@ impl ProofInputsWire {
             output_tree_id: inputs.output_tree_id,
             list_salts: inputs.list_salts.clone(),
             wide_owners: inputs.wide_owners,
+            co_owners: inputs
+                .co_owners
+                .iter()
+                .map(|co_owner| CoOwnerWire {
+                    owner: co_owner.owner,
+                    nullifier_secret: *co_owner.nullifier_key.secret(),
+                })
+                .collect(),
         })
     }
 
@@ -420,14 +449,23 @@ impl ProofInputsWire {
             .iter()
             .map(WithdrawalWire::legs)
             .unzip();
+        let co_owners: Vec<RelayCoOwner> = self
+            .co_owners
+            .iter()
+            .map(|co_owner| RelayCoOwner {
+                owner: co_owner.owner,
+                nullifier_key: NullifierKey::from_secret(co_owner.nullifier_secret),
+            })
+            .collect();
         Ok(RelayProofInputs {
             rail: self.rail.rail()?,
             ring_program_id: self.ring_program_id,
             inputs: self
                 .inputs
                 .iter()
-                .map(|input| input.input(&sender, &nullifier_key))
+                .map(|input| input.input(&sender, &nullifier_key, &co_owners))
                 .collect::<Result<_, _>>()?,
+            co_owners,
             outputs: self
                 .outputs
                 .iter()
@@ -522,7 +560,11 @@ impl PlanWire {
 }
 
 impl InputWire {
-    fn of(input: &SppProofInputUtxo, sender: &ShieldedAddress) -> Option<Self> {
+    fn of(
+        input: &SppProofInputUtxo,
+        sender: &ShieldedAddress,
+        co_owners: &[RelayCoOwner],
+    ) -> Option<Self> {
         if input.is_address() || input.cache_slot.is_some() {
             return None;
         }
@@ -536,36 +578,50 @@ impl InputWire {
                 tree_id,
             });
         }
-        SpendWire::of(input, sender).map(Self::Spend)
+        SpendWire::of(input, sender, co_owners).map(|spend| Self::Spend(Box::new(spend)))
     }
 
     fn input(
         &self,
         sender: &ShieldedAddress,
         nullifier_key: &NullifierKey,
+        co_owners: &[RelayCoOwner],
     ) -> Result<SppProofInputUtxo, RelayProofInputsError> {
         Ok(match self {
             Self::Compact { tree_id } => SppProofInputUtxo::compact(*tree_id)?,
             Self::Dummy { blinding, tree_id } => {
                 SppProofInputUtxo::dummy_with_blinding(*blinding, *tree_id)?
             }
-            Self::Spend(spend) => spend.input(sender, nullifier_key)?,
+            Self::Spend(spend) => spend.input(sender, nullifier_key, co_owners)?,
         })
     }
 }
 
 impl SpendWire {
-    fn of(input: &SppProofInputUtxo, sender: &ShieldedAddress) -> Option<Self> {
+    fn of(
+        input: &SppProofInputUtxo,
+        sender: &ShieldedAddress,
+        co_owners: &[RelayCoOwner],
+    ) -> Option<Self> {
         if input.is_address()
             || input.cache_slot.is_some()
             || input.is_compact()
             || input.is_dummy()
-            || input.utxo.owner != sender.signing_pubkey
-            || input.nullifier_pubkey != sender.nullifier_pubkey
         {
             return None;
         }
         let utxo = &input.utxo;
+        let spent_by_sender = utxo.owner == sender.signing_pubkey
+            && input.nullifier_pubkey == sender.nullifier_pubkey;
+        let co_owner = match spent_by_sender {
+            true => None,
+            false => {
+                let named = Address::new_from_array(utxo.owner.as_ed25519().ok()?);
+                let held = co_owners.iter().find(|co_owner| co_owner.owner == named)?;
+                (held.nullifier_key.pubkey().ok()? == input.nullifier_pubkey).then_some(named)?;
+                Some(named)
+            }
+        };
         Some(Self {
             asset: utxo.asset.asset,
             asset_id: utxo.asset.asset_id,
@@ -577,16 +633,32 @@ impl SpendWire {
             ring_data_hash: input.ring_data_hash,
             tree_id: input.tree_id,
             leaf_index: input.leaf_index,
+            co_owner,
         })
     }
 
     fn input(
         &self,
         sender: &ShieldedAddress,
-        nullifier_key: &NullifierKey,
+        sender_key: &NullifierKey,
+        co_owners: &[RelayCoOwner],
     ) -> Result<SppProofInputUtxo, RelayProofInputsError> {
+        let (owner, nullifier_pubkey, nullifier_key) = match self.co_owner {
+            None => (sender.signing_pubkey, sender.nullifier_pubkey, sender_key),
+            Some(named) => {
+                let held = co_owners
+                    .iter()
+                    .find(|co_owner| co_owner.owner == named)
+                    .ok_or(RelayProofInputsError::NullifierKey)?;
+                (
+                    spr_keypair::PublicKey::from_ed25519(named.as_array()),
+                    held.nullifier_key.pubkey()?,
+                    &held.nullifier_key,
+                )
+            }
+        };
         let utxo = Utxo {
-            owner: sender.signing_pubkey,
+            owner,
             asset: Mint::new(self.asset, self.asset_id),
             amount: self.amount,
             blinding: self.blinding,
@@ -594,7 +666,7 @@ impl SpendWire {
             data: self.data.clone(),
         };
         let utxo_hash = utxo.hash(
-            &sender.nullifier_pubkey,
+            &nullifier_pubkey,
             &self.data_hash.unwrap_or_default(),
             &self.ring_data_hash.unwrap_or_default(),
             self.tree_id,
@@ -603,7 +675,7 @@ impl SpendWire {
             address: false,
             nullifier: nullifier_key.nullifier(&utxo_hash, &self.blinding)?,
             utxo,
-            nullifier_pubkey: sender.nullifier_pubkey,
+            nullifier_pubkey,
             utxo_hash,
             data_hash: self.data_hash,
             ring_data_hash: self.ring_data_hash,

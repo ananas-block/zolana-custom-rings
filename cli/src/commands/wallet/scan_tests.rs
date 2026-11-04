@@ -410,6 +410,35 @@ fn an_anonymous_scan_adds_payments_and_the_change_of_a_default_ring_spend() {
     assert!(current.known_senders().is_empty());
 }
 
+/// A confidential ring holds no anonymous wallet, each slot publishes the 8 B tag alone.
+#[test]
+fn a_confidential_ring_wallet_finds_a_payment_under_its_slot_tag() {
+    let wallet = Member::new(1, "confidential-scan");
+    let mut ledger = Ledger::default();
+    let paid = wallet.payment_from_2(&mut ledger, Mint::SOL);
+    let viewing_u = wallet.keys.viewing_pubkey().u();
+    for tx in &mut ledger.transactions {
+        tx.output_slots[0].view_tag = custom_ring_interface::stream::slot_tag(viewing_u);
+    }
+    let zolana = ledger.client();
+    let assets = RingAssets::new([]).unwrap();
+    let held: Vec<[u8; 32]> = ScanAt {
+        keys: &zolana_ring_keys::RotatingRingKeys::new(&wallet.keys).unwrap(),
+        assets: &assets,
+        chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
+        slot: 9,
+        store: None,
+        ring: RING,
+    }
+    .fetch(&zolana)
+    .unwrap()
+    .spendable
+    .utxos()
+    .map(|utxo| utxo.utxo_hash)
+    .collect();
+    assert_eq!(held, [paid]);
+}
+
 #[test]
 fn a_note_in_a_mint_registered_after_the_registry_read_is_kept() {
     let wallet = Member::new(1, "late-mint");

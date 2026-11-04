@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use custom_ring_interface::ring_body_output;
+use custom_ring_interface::{ring_body_output, stream::slot_tag};
 use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_keypair::{KeypairError, ShieldedAddress};
@@ -69,8 +69,25 @@ impl<'a, K: ShieldedKeys + RingKeys + ?Sized> RingConfidentialScan<'a, K> {
         indexer: &I,
         transactions: &[ShieldedTransaction],
     ) -> Result<RingConfidentialNotes, AnonymousError> {
-        let mut notes = self.open(transactions)?;
         let mut reads = IndexerReads::configured(indexer, self.config);
+        // A delivered slot publishes the short tag, a read by the full key never reaches it.
+        let slot_tags: Vec<[u8; 32]> = self
+            .keys
+            .viewing_public_keys()
+            .iter()
+            .map(|key| slot_tag(key.u()))
+            .collect();
+        let delivered = reads.tagged(&slot_tags).await?;
+        let read: Vec<ShieldedTransaction> = transactions
+            .iter()
+            .cloned()
+            .chain(delivered.into_iter().filter(|tx| {
+                !transactions
+                    .iter()
+                    .any(|known| known.tx_signature == tx.tx_signature)
+            }))
+            .collect();
+        let mut notes = self.open(&read)?;
         let mut queried = HashSet::new();
         loop {
             let unread: Vec<[u8; 32]> = notes

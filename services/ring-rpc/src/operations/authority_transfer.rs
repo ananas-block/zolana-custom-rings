@@ -294,7 +294,7 @@ mod tests {
     use solana_message::VersionedMessage;
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
-    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
+    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
@@ -377,6 +377,7 @@ mod tests {
                 ring_program_id: seal.ring,
                 sender: seal.source,
                 nullifier_key: seal.nullifier_key.clone(),
+                co_owners: Vec::new(),
                 external_data: ExternalData::new(
                     *tx_viewing_key.pubkey().as_bytes(),
                     [0; 16],
@@ -442,7 +443,7 @@ mod tests {
         });
         request
             .at(unix_now().expect("clock"))
-            .sign(signer)
+            .sign(signer, &ViewingKey::new())
             .expect("signed request")
     }
 
