@@ -25,7 +25,7 @@ import (
 )
 
 // Properties:
-// 1. The first Count of 1..8 owner commitments each open to the blinding and the record sealed to AuditorPk at their slot, a padding slot's plaintext is all zero.
+// 1. The first Count of 1..Capacity owner commitments each open to the blinding and the record sealed to AuditorPk at their slot, a padding slot's plaintext is all zero.
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. Each occupied slot's record names the key whose Solana owner identity is its owner_pk_hash and the mint whose asset field is its asset.
 // 4. A nullifier key off ZeroNullifierPk is the one its owner's row holds under TrackingRoot, ZeroNullifierPk holds its owner to no row under TrackingRoot.
@@ -93,7 +93,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	); err != nil {
 		return err
 	}
-	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds the flag as 0 or 1.
+	// 1. Count selects 1..Capacity occupied slots, DepositPublicInput::hash builds the flag as 0 or 1.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.Capacity)
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, c.Capacity)
@@ -101,17 +101,17 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	deposits := make([]policy.Payment, c.Capacity)
 	for i := range commitments {
 		active := count.Active[i]
-		// 2. A padding slot carries no owner, key, blinding secret, asset or amount.
+		// 2. A padding slot carries no owner, nullifier key, blinding secret, asset or amount.
 		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.Assets[i], c.Amounts[i]} {
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: value})
 		}
-		// 3. A nonzero key is its owner's row's, a zero key leaves its owner absent under the root.
+		// 3. A key off ZeroNullifierPk is its owner's row's, ZeroNullifierPk leaves its owner absent under the root.
 		c.assertOutputKey(api, i, active)
 		// 4. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
 		owner := gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i]})
 		blinding := shared.DepositBlinding(api, c.BlindingSecrets[i])
 		commitments[i] = gadget.PoseidonHash(api, []frontend.Variable{owner, blinding})
-		// 5. No envelope secret exists, the record carries the blinding the reader rebuilds the commitment with.
+		// 5. The record seals the blinding the reader rebuilds the commitment with.
 		record := audit.RecordOpening{
 			Live: active, Kind: api.Mul(active, audit.KindRing), Amount: c.Amounts[i], OwnerPkHash: c.OwnerPkHashes[i], NullifierPk: c.NullifierPks[i], Asset: c.Assets[i],
 			OwnerKey: c.OwnerKeys[i], MintChunks: c.MintChunks[i],

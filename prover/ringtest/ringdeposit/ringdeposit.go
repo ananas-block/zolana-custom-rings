@@ -32,7 +32,6 @@ const (
 	ModeAnonymous
 )
 
-// MintA and MintB are the raw addresses the fixtures deposit, the auditor reads them with no mint registry.
 var MintA, MintB = fixtureMint(0xa0), fixtureMint(0xb0)
 
 func fixtureMint(seed byte) [32]byte {
@@ -43,7 +42,6 @@ func fixtureMint(seed byte) [32]byte {
 	return mint
 }
 
-// Note is one occupied slot on the host.
 type Note struct {
 	OwnerKey    [32]byte
 	NullifierPk *big.Int
@@ -66,8 +64,7 @@ type Policy struct {
 	Listed     [][32]byte
 	OwnerLists map[int]uint64
 	Curator    bool
-	// Mint is every slot's deposited token.
-	Mint [32]byte
+	Mint       [32]byte
 }
 
 // Spec names one deposit, an unset field takes the honest default.
@@ -75,9 +72,8 @@ type Spec struct {
 	Count int
 	Mode  RingMode
 	// ZeroKeys holds these slots under ZeroNullifierPk with no row.
-	ZeroKeys []int
-	Policy   Policy
-	// BlindingOf derives the blinding every commitment and record carries.
+	ZeroKeys   []int
+	Policy     Policy
 	BlindingOf func(testing.TB, *big.Int) *big.Int
 }
 
@@ -115,7 +111,6 @@ func RecipientsBlocked(slots ...int) Policy {
 	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit)}, OwnerLists: lists, Mint: MintA}
 }
 
-// BuildScreened deposits count owners into a ring whose policy screens every deposit.
 func BuildScreened(t testing.TB, count int, policy Policy) *Deposit {
 	t.Helper()
 	return Spec{Count: count, Policy: policy}.Build(t)
@@ -247,13 +242,11 @@ func (d *Deposit) Elements(t testing.TB) []*big.Int {
 	return append(chain, big.NewInt(circuits.DepositStatementVersion))
 }
 
-// Rebind rehashes the statement over the host values as set.
 func (d *Deposit) Rebind(t testing.TB) {
 	t.Helper()
 	d.Circuit.PublicInputHash = spptest.MustHashChain(t, d.Elements(t))
 }
 
-// Opened is what the auditor reads of one slot.
 type Opened struct {
 	Kind        byte
 	Amount      uint64
