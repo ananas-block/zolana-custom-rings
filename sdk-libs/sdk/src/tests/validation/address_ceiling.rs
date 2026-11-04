@@ -29,6 +29,21 @@ fn note(owner: u8, seed: u32) -> SpentInput {
 
 /// Payer, program, one nullifier PDA per input and `other` accounts.
 fn decide(inputs: &[SpentInput], other: u32) -> Result<CeilingDecision, AddressCeilingError> {
+    decide_under(
+        inputs,
+        other,
+        MergeCapacity {
+            keyed: 45,
+            zero_key: 45,
+        },
+    )
+}
+
+fn decide_under(
+    inputs: &[SpentInput],
+    other: u32,
+    merge_capacity: MergeCapacity,
+) -> Result<CeilingDecision, AddressCeilingError> {
     let accounts = inputs
         .iter()
         .map(|input| input.nullifier_pda)
@@ -44,6 +59,7 @@ fn decide(inputs: &[SpentInput], other: u32) -> Result<CeilingDecision, AddressC
         },
         budget: ComputeBudgetConfig::new(1_000_000),
         inputs,
+        merge_capacity,
     }
     .decide()
 }
@@ -66,9 +82,10 @@ fn merging_first_names_only_the_groups_the_ceiling_needs() {
         .chain((4..6).map(|seed| note(2, seed)))
         .collect();
     let other = LIMIT as u32 - 2 - 6 + 2;
-    let Ok(CeilingDecision::MergeFirst(groups)) = decide(&inputs, other) else {
+    let Ok(CeilingDecision::MergeFirst { groups, addresses }) = decide(&inputs, other) else {
         panic!("merge first");
     };
+    assert_eq!(addresses, LIMIT - 1);
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].inputs, [0, 1, 2, 3]);
     assert_eq!(groups[0].owner, inputs[0].owner);
@@ -150,3 +167,132 @@ fn consolidation_short_of_the_ceiling_is_refused_with_how_far_it_reached() {
     };
     assert_eq!((compiled, after_merging), (LIMIT + 5, LIMIT + 2));
 }
+
+/// A group past one merge's capacity leaves one note per merge, the count reads each.
+#[tokio::test]
+async fn an_oversized_group_splits_and_the_count_keeps_every_note_left() {
+    use crate::{
+        tests::support::{ring, ring_utxo, Chain, RingSettings, TREE_ID},
+        FittedMerge, MergeProofInput,
+    };
+    use custom_ring_interface::RingMode;
+    use spr_interface::pda;
+
+    let owner = keypair(1);
+    let notes: Vec<_> = (0..49)
+        .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))
+        .collect();
+    let keyed = FittedMerge {
+        ring: ring(),
+        inputs: notes,
+        output_tree_id: TREE_ID,
+        keys: &owner,
+        proof_input: &MergeProofInput {
+            nullifier_key: owner.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID),
+        },
+        payer: address(1),
+    }
+    .prepare(&Chain::ring(RingSettings::new(RingMode::Confidential)))
+    .await
+    .unwrap()
+    .published_inputs();
+    assert!(keyed < 49);
+    let capacity = MergeCapacity {
+        keyed,
+        zero_key: keyed,
+    };
+
+    let inputs: Vec<_> = (0..49).map(|seed| note(1, seed)).collect();
+    // Past the first merge alone, two notes left reach the ceiling exactly.
+    let reachable = LIMIT as u32 - 2 - 2;
+    let Ok(CeilingDecision::MergeFirst { groups, addresses }) =
+        decide_under(&inputs, reachable, capacity)
+    else {
+        panic!("merge first");
+    };
+    assert_eq!(addresses, LIMIT);
+    let widths: Vec<usize> = groups.iter().map(|group| group.inputs.len()).collect();
+    assert_eq!(widths, [keyed, 49 - keyed]);
+    assert!(widths.iter().all(|width| *width <= keyed));
+
+    // One more account, an unsplit group of one PDA would still read as under the ceiling.
+    let Err(AddressCeilingError::Unsupported { after_merging, .. }) =
+        decide_under(&inputs, reachable + 1, capacity)
+    else {
+        panic!("unsupported");
+    };
+    assert_eq!(after_merging, LIMIT + 1);
+}
+
+/// One input past a capacity is a run of one, it stays a note of its own and merges nothing.
+#[test]
+fn a_lone_note_past_the_capacity_is_named_by_no_merge() {
+    let inputs: Vec<_> = (0..4).map(|seed| note(1, seed)).collect();
+    let capacity = MergeCapacity {
+        keyed: 3,
+        zero_key: 3,
+    };
+    let Ok(CeilingDecision::MergeFirst { groups, addresses }) =
+        decide_under(&inputs, LIMIT as u32 - 2 - 4 + 1, capacity)
+    else {
+        panic!("merge first");
+    };
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].inputs, [0, 1, 2]);
+    assert_eq!(addresses, LIMIT - 1);
+}
+
+/// The owner's signature and account leave a zero-key merge narrower, pinned from its own selection.
+#[tokio::test]
+async fn a_zero_key_group_splits_at_the_zero_key_capacity() {
+    use crate::{
+        tests::support::{ring, ring_utxo, zero_key, Chain, RingSettings, TREE_ID},
+        FittedMerge, MergeProofInput,
+    };
+    use custom_ring_interface::RingMode;
+    use spr_interface::{pda, ZERO_NULLIFIER_PUBKEY};
+
+    let owner = keypair(1);
+    let notes: Vec<_> = (0..52)
+        .map(|leaf| zero_key(ring_utxo(&owner, Mint::SOL, 5, leaf)))
+        .collect();
+    let carried = FittedMerge {
+        ring: ring(),
+        inputs: notes,
+        output_tree_id: TREE_ID,
+        keys: &owner,
+        proof_input: &MergeProofInput {
+            nullifier_key: owner.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID),
+        },
+        payer: address(1),
+    }
+    .prepare(&Chain::ring(RingSettings::new(RingMode::Confidential)))
+    .await
+    .unwrap()
+    .published_inputs();
+    assert_eq!(carried, WIDEST_ZERO_KEY_MERGE);
+
+    let inputs: Vec<_> = (0..4)
+        .map(|seed| SpentInput {
+            nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+            ..note(1, seed)
+        })
+        .collect();
+    let capacity = MergeCapacity {
+        keyed: 45,
+        zero_key: 2,
+    };
+    let Ok(CeilingDecision::MergeFirst { groups, .. }) =
+        decide_under(&inputs, LIMIT as u32 - 2 - 4 + 1, capacity)
+    else {
+        panic!("merge first");
+    };
+    assert_eq!(groups[0].inputs, [0, 1]);
+}
+
+/// Inputs a zero-key merge carries in one v1 transaction, measured here.
+const WIDEST_ZERO_KEY_MERGE: usize = 44;

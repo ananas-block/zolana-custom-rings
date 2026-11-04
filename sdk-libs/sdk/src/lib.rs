@@ -62,7 +62,7 @@ pub use crate::{
         RingStatus,
     },
     address_ceiling::{
-        AddressCeiling, AddressCeilingError, CeilingDecision, MergeGroup, SpentInput,
+        AddressCeiling, AddressCeilingError, CeilingDecision, MergeCapacity, MergeGroup, SpentInput,
     },
     admin::{
         ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,

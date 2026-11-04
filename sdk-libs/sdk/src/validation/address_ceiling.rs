@@ -4,7 +4,7 @@ use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_message::v1;
 use spr_client::{transaction_size, ClientError, ComputeBudgetConfig, TransactionSize};
-use spr_interface::pda;
+use spr_interface::{pda, ZERO_NULLIFIER_PUBKEY};
 use spr_keypair::PublicKey;
 use spr_transaction::utxo::SppProofInputUtxo;
 use thiserror::Error;
@@ -59,17 +59,29 @@ pub struct AddressCeiling<'a> {
     pub instruction: &'a Instruction,
     pub budget: ComputeBudgetConfig,
     pub inputs: &'a [SpentInput],
+    pub merge_capacity: MergeCapacity,
+}
+
+/// [`crate::FittedMerge`]'s published inputs per kind of merge, a zero-key merge adds its signer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MergeCapacity {
+    pub keyed: usize,
+    pub zero_key: usize,
 }
 
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CeilingDecision {
     UnderCeiling(TransactionSize),
-    /// The fewest groups whose merges bring the compiled count under the ceiling.
-    MergeFirst(Vec<MergeGroup>),
+    MergeFirst {
+        /// The fewest merges that bring the compiled count under the ceiling.
+        groups: Vec<MergeGroup>,
+        /// With one nullifier PDA left per merged note.
+        addresses: usize,
+    },
 }
 
-/// Inputs one SPP merge can consolidate.
+/// One executable merge, one transaction carries it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeGroup {
     pub owner: PublicKey,
@@ -114,7 +126,10 @@ impl AddressCeiling<'_> {
             chosen.push(group);
             after_merging = self.compiled(&merged_away)?.addresses;
             if after_merging <= limit {
-                return Ok(CeilingDecision::MergeFirst(chosen));
+                return Ok(CeilingDecision::MergeFirst {
+                    groups: chosen,
+                    addresses: after_merging,
+                });
             }
         }
         Err(AddressCeilingError::Unsupported {
@@ -141,7 +156,7 @@ impl AddressCeiling<'_> {
         )
     }
 
-    /// Widest first, a group of one consolidates nothing.
+    /// Widest first, a run of one consolidates nothing.
     fn groups(&self) -> Vec<MergeGroup> {
         let mut groups: Vec<MergeGroup> = Vec::new();
         for (position, input) in self.inputs.iter().enumerate() {
@@ -163,8 +178,27 @@ impl AddressCeiling<'_> {
                 }),
             }
         }
-        groups.retain(|group| group.inputs.len() > 1);
-        groups.sort_by_key(|group| core::cmp::Reverse(group.inputs.len()));
-        groups
+        let mut merges: Vec<MergeGroup> = groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .inputs
+                    .chunks(self.capacity_of(group).max(1))
+                    .filter(|run| run.len() > 1)
+                    .map(|run| MergeGroup {
+                        inputs: run.to_vec(),
+                        ..group.clone()
+                    })
+            })
+            .collect();
+        merges.sort_by_key(|merge| core::cmp::Reverse(merge.inputs.len()));
+        merges
+    }
+
+    fn capacity_of(&self, group: &MergeGroup) -> usize {
+        match group.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY {
+            true => self.merge_capacity.zero_key,
+            false => self.merge_capacity.keyed,
+        }
     }
 }
