@@ -65,8 +65,15 @@ fn a_frame_past_the_cpi_limit_or_of_another_tag_has_no_buffer() {
     ));
     let mut delegate = inline(10);
     delegate.data[0] = tag::AUTHORITY_TRANSFER;
+    let settled = BufferedFrame::new(&delegate, WRITER, 0).unwrap().settle();
+    assert_eq!(
+        settled.data,
+        settle_buffered_data(&frame_digest(&delegate.data).unwrap())
+    );
+    let mut deposit = inline(10);
+    deposit.data[0] = tag::DEPOSIT;
     assert!(matches!(
-        BufferedFrame::new(&delegate, WRITER, 0),
+        BufferedFrame::new(&deposit, WRITER, 0),
         Err(AddressCeilingError::Program(
             CustomRingError::UnsupportedBufferedTag
         ))

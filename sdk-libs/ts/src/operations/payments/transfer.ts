@@ -957,13 +957,17 @@ function unfunded(cause: unknown): boolean {
 
 /** Padded inputs are published, the widest two-output shape an anonymous key serves bounds a spend. */
 function anonymousInputCap(selection: "ring" | "entry"): number {
-  const keyed = frameKeyShape({
-    rail: "anonymous",
-    outputs: SPEND_OUTPUTS,
-    spendsDefaultRing: selection === "entry",
-    wide: true,
-  });
-  return Math.min(keyed?.inputs ?? 0, MAX_TRANSACT_INPUTS);
+  const keyed = (inputs: number) =>
+    frameKeyShape({
+      rail: "anonymous",
+      inputs,
+      outputs: SPEND_OUTPUTS,
+      spendsDefaultRing: selection === "entry",
+      wide: true,
+    }) !== undefined;
+  let inputs = MAX_TRANSACT_INPUTS;
+  while (inputs > 0 && !keyed(inputs)) inputs -= 1;
+  return inputs;
 }
 
 type AnonymousRecipient = Readonly<{

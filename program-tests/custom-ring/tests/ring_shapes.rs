@@ -152,6 +152,7 @@ fn swept(shape: TransferShape) -> bool {
 fn narrow_key(outputs: u8) -> Option<TransferShape> {
     FrameKey {
         rail: RingRail::Confidential,
+        inputs: 1,
         outputs: outputs.into(),
         spends_default_ring: false,
         wide: false,
@@ -1006,6 +1007,7 @@ impl ShapeRing<'_> {
                         asset: env.assets.mint(&asset)?,
                         amount,
                         reply: None,
+                        data: custom_ring_sdk::NoteData::default(),
                     })?;
                 }
                 env.run(anonymous.with_shape(shape)?.prove(client))

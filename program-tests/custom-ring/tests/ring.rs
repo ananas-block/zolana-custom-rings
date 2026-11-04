@@ -863,6 +863,7 @@ impl<'a> AnonymousPayment<'a> {
             asset: Mint::SOL,
             amount: self.amount,
             reply: None,
+            data: custom_ring_sdk::NoteData::default(),
         })?
         .with_shape(shape)?)
     }

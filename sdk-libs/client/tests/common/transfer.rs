@@ -434,6 +434,7 @@ impl Transfer {
         } = keyed;
         let shape = FrameKey {
             rail,
+            inputs: self.nullifiers.len(),
             outputs: outputs.len(),
             spends_default_ring: entry,
             wide: false,

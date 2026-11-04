@@ -45,7 +45,7 @@ import {
 } from "../codec/ring-disclosure-layout.js";
 import { MIN_REPLY_LEN, RECIPIENT_BODY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
 import { SLOT_TAG_LEN, slotTag } from "../../crypto/derivation/ring-stream.js";
-import { frameKeyShape } from "../proof/transfer-shapes.js";
+import { fittedSpend, frameKeyShape } from "../proof/transfer-shapes.js";
 
 import { RingInstructionTag } from "./instruction-tag.js";
 import type { RingMode } from "../codec/ring-codecs.js";
@@ -301,13 +301,28 @@ export function ringStreamLayout(
     publicOwners?: boolean;
   }>,
 ): AuditStreamLayout {
+  // A spend past the narrow key's inputs names the wide key before the policy reads its pools.
+  const spend = fittedSpend({
+    rail: shape.rail,
+    inputs: shape.inputs,
+    outputs: shape.nOut,
+    spendsDefaultRing: shape.entry,
+    legs: 0,
+    owners: 0,
+    pools: { own: 0, curator: 0, tracking: 0 },
+    wide: false,
+  });
   const flags: FrameFlags = {
     defaultOwnerTag: false,
     publicOwners: shape.publicOwners ?? false,
     hasData: shape.hasData,
     entry: shape.entry,
-    wideOwners: false,
+    wideOwners: spend.wide,
   };
+  if (frameKeyShape(spend) === undefined)
+    throw new RingError("RING_CATALOG_KEY_MISSING", {
+      details: { rail: shape.rail, inputs: shape.inputs, outputs: shape.nOut },
+    });
   checkFrameFlags(flags, shape.rail);
   return streamOf(shape.rail, {
     nIn: shape.nIn,
@@ -525,11 +540,12 @@ function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
   );
   const shape = frameKeyShape({
     rail,
+    inputs,
     outputs: nOut,
     spendsDefaultRing: flags.entry,
     wide: flags.wideOwners,
   });
-  if (shape === undefined || !supported || inputs > shape.inputs) throw invalid("RingShapeUnkeyed");
+  if (shape === undefined || !supported) throw invalid("RingShapeUnkeyed");
   if (inputs === 0 || inputs > nIn) throw invalid("RingTransactLength");
   if (outputs < 1 || outputs > nOut) throw invalid("OutputCountOutOfRange");
   return Object.freeze(

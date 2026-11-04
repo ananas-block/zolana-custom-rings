@@ -138,9 +138,14 @@ struct Pool {
 fn served(rail: RingRail, entry: bool) -> Vec<(TransferShape, usize, usize)> {
     let mut served = Vec::new();
     for wide in [false, true] {
-        for outputs in [2, 4, 8, 16] {
+        for spp in SPP_SUPPORTED_SHAPES
+            .iter()
+            .filter(|spp| rail.supports(**spp))
+        {
+            let (inputs, outputs) = (spp.n_inputs(), spp.n_outputs());
             let key = FrameKey {
                 rail,
+                inputs,
                 outputs,
                 spends_default_ring: entry,
                 wide,
@@ -148,13 +153,12 @@ fn served(rail: RingRail, entry: bool) -> Vec<(TransferShape, usize, usize)> {
             let Some(shape) = key.shape() else {
                 continue;
             };
-            let inputs = SPP_SUPPORTED_SHAPES
-                .iter()
-                .filter(|spp| spp.n_outputs() == outputs)
-                .map(|spp| spp.n_inputs())
-                .filter(|inputs| *inputs <= usize::from(shape.inputs))
-                .max();
-            served.extend(inputs.map(|inputs| (shape, inputs, outputs)));
+            let same_key =
+                |case: &&mut (TransferShape, usize, usize)| case.0 == shape && case.2 == outputs;
+            match served.iter_mut().find(same_key) {
+                Some(case) => case.1 = case.1.max(inputs),
+                None => served.push((shape, inputs, outputs)),
+            }
         }
     }
     served
