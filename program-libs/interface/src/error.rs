@@ -124,6 +124,7 @@ ring_errors! {
     FrameWriteOutOfRange = 8524 => "the write falls outside the frame",
     UnsupportedBufferedTag = 8525 => "the frame's tag does not settle from a buffer",
     FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
+    InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or set a bit past the last entry",
 }
 
 impl From<CustomRingError> for ProgramError {

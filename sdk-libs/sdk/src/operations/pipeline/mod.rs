@@ -1258,6 +1258,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             cache: None,
             // Sized here, `frame` writes the digest of the totals.
             approval_totals: preview.discloses_approval.then_some([0; 32]),
+            signer_data_counts: None,
         },
         interface_transfers: external
             .interface_transfers

@@ -120,6 +120,7 @@ pinned_codes! {
     FrameWriteOutOfRange = 8524,
     UnsupportedBufferedTag = 8525,
     FramePayerNotWriter = 8526,
+    InvalidSignerDataCounts = 8527,
 }
 
 #[test]

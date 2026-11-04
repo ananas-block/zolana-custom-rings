@@ -229,6 +229,7 @@ impl Fixture {
             }],
             cache: None,
             approval_totals: None,
+            signer_data_counts: None,
         };
         data.outputs = vec![self.recipient(0), self.recipient(1)];
         self.with_audit_stream(data)
