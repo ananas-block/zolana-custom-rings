@@ -374,6 +374,7 @@ fn compute_vectors() -> StatementVectors {
             sender: ConfidentialSender::Signer,
         },
         approval_mask: ApprovalMask::OUTFLOW,
+        approval_totals: &[0; 32],
         no_spend: false,
         outputs: &eight,
         output_capacity: 8,
@@ -700,7 +701,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert!(transfer.iter().all(|len| *len == 48));
+    assert!(transfer.iter().all(|len| *len == 49));
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -810,8 +811,8 @@ fn the_element_count_follows_the_family_alone() {
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals, and length.
-    let cells = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
+    // Head, rail bits, mask, totals digest, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals and length.
+    let cells = AUDIT_HEAD_ELEMENTS + 3 + 3 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -823,6 +824,7 @@ fn the_element_count_follows_the_family_alone() {
                     sender: ConfidentialSender::Signer,
                 },
                 approval_mask: ApprovalMask::default(),
+                approval_totals: &[0; 32],
                 no_spend: false,
                 outputs: &outputs[..published],
                 output_capacity: capacity,
@@ -840,7 +842,7 @@ fn the_element_count_follows_the_family_alone() {
             let elements = statement.elements().unwrap();
             assert_eq!(elements.len(), expected);
             assert_eq!(
-                elements[AUDIT_HEAD_ELEMENTS + 5],
+                elements[AUDIT_HEAD_ELEMENTS + 6],
                 right_aligned(published as u64)
             );
             assert_eq!(elements[elements.len() - 1], right_aligned(expected as u64));
@@ -889,6 +891,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
             delegate: false,
         },
         approval_mask: ApprovalMask::WITHDRAWAL,
+        approval_totals: &[0; 32],
         no_spend: true,
         outputs: &outputs,
         output_capacity: 4,
@@ -912,6 +915,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         right_aligned(0),
         right_aligned(0),
         right_aligned(2),
+        zero,
         right_aligned(1),
         right_aligned(4),
         create_hash_chain_4_from_slice(&hashes).unwrap(),
@@ -966,6 +970,7 @@ fn delivery_bytes_stay_outside_the_statement() {
             delegate: false,
         },
         approval_mask: ApprovalMask::default(),
+        approval_totals: &[0; 32],
         no_spend: false,
         outputs: &outputs,
         output_capacity: 4,

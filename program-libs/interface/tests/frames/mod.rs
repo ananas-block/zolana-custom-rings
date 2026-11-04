@@ -228,6 +228,7 @@ impl Fixture {
                 data: &self.payload,
             }],
             cache: None,
+            approval_totals: None,
         };
         data.outputs = vec![self.recipient(0), self.recipient(1)];
         self.with_audit_stream(data)

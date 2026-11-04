@@ -117,7 +117,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	c.InputChain = inputChain
 	c.ThresholdsActive, c.Delegate = ringtest.Bit(!w.NoOwnRegistry && !w.Delegate), ringtest.Bit(w.Delegate)
-	c.ApprovalMask = w.Approval
+	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.Approval, 0, 0
 	tracking := ringregistry.NewTracking(t)
 	for _, owner := range w.Enrolled {
 		Enroll(t, tracking, big.NewInt(owner), big.NewInt(owner+1))

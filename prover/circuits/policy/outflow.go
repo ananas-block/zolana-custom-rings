@@ -38,6 +38,8 @@ type limitedAsset struct {
 // held = debit + kept.
 type ownerFlow struct{ debit, kept, charge, outflow frontend.Variable }
 
+type assetTotals struct{ peak, outflow frontend.Variable }
+
 type flowSource struct {
 	inputs, outputs []shared.Output
 	// Keyed by row then slot.
@@ -50,8 +52,8 @@ type flowSource struct {
 	gross []frontend.Variable
 }
 
-// constrainOutflow holds each row's outflow per asset to the asset's cap and returns the proven approval mask, zero while active is off.
-func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active frontend.Variable, spend Spend, outputs []shared.Output, resolved subjects) frontend.Variable {
+// constrainOutflow holds each row's outflow per asset to the asset's cap, the proven approval mask reads zero while active is off.
+func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active frontend.Variable, spend Spend, outputs []shared.Output, resolved subjects) Screening {
 	gross := make([]frontend.Variable, len(p.PublicGross))
 	for k := range gross {
 		// An active gross lies below 2^64 as the comparator needs, an inactive one is unread.
@@ -60,23 +62,29 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 	}
 	source := newFlowSource(api, spend, outputs, p.PublicAssets[:], gross)
 	overOutflow := frontend.Variable(0)
-	bound := func(limit limitedAsset, flows []ownerFlow) {
-		outflows := make([]frontend.Variable, len(flows))
+	bound := func(limit limitedAsset, flows []ownerFlow) assetTotals {
+		outflows, total := make([]frontend.Variable, len(flows)), frontend.Variable(0)
 		for j, flow := range flows {
 			outflows[j] = flow.outflow
+			total = api.Add(total, flow.outflow)
 		}
 		peak := cmp.peak(api, outflows)
 		bounded := api.Mul(active, limit.active)
 		transaction.AssertWhen(api, api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cap)), cmp.atMost(api, peak, limit.policy.cap))
 		cosigned := api.Mul(bounded, ringgadget.IsNonZero(api, limit.policy.cosignAbove))
 		overOutflow = api.Or(overOutflow, api.Mul(cosigned, cmp.above(api, peak, limit.policy.cosignAbove)))
+		return assetTotals{peak: peak, outflow: total}
 	}
+	totals := make([]frontend.Variable, 0, 3*len(outputs)+4*len(resolved.publicAssets))
 	for o, out := range outputs {
-		bound(limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]}, source.flowsOf(api, cmp, out.Asset))
+		slot := bound(limitedAsset{asset: out.Asset, active: out.Utxo, policy: resolved.mintPolicies[o]}, source.flowsOf(api, cmp, out.Asset))
+		// A dummy keeps its asset and may share a live one, zeros keep its slot from reading as live.
+		totals = append(totals, api.Mul(out.Utxo, out.Asset), api.Mul(out.Utxo, slot.peak), api.Mul(out.Utxo, slot.outflow))
 	}
-	for _, public := range resolved.publicAssets {
+	for k, public := range resolved.publicAssets {
 		// An asset any row keeps is a live output's asset, whose flow above holds the charge.
-		bound(public.limitedAsset, source.splitOf(api, cmp, source.flagsOf(api, public.asset)).rows)
+		slot := bound(public.limitedAsset, source.splitOf(api, cmp, source.flagsOf(api, public.asset)).rows)
+		totals = append(totals, public.asset, slot.peak, slot.outflow, gross[k])
 	}
 	overWithdrawal := frontend.Variable(0)
 	for k, asset := range resolved.publicAssets {
@@ -85,7 +93,11 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, active
 		watched := api.Mul(active, asset.active, ringgadget.IsNonZero(api, threshold))
 		overWithdrawal = api.Or(overWithdrawal, api.Mul(watched, cmp.above(api, gross[k], threshold)))
 	}
-	return api.Add(api.Mul(ApprovalOutflow, overOutflow), api.Mul(ApprovalWithdrawal, overWithdrawal))
+	return Screening{
+		ApprovalMask: api.Add(api.Mul(ApprovalOutflow, overOutflow), api.Mul(ApprovalWithdrawal, overWithdrawal)),
+		totals:       totals,
+		outflow:      active,
+	}
 }
 
 func newFlowSource(api frontend.API, spend Spend, outputs []shared.Output, publicAssets, gross []frontend.Variable) flowSource {
