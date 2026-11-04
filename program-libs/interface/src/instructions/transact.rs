@@ -897,11 +897,16 @@ impl<'a> RingTransactData<'a> {
 
     /// The bytes `parse` reads back, refusing what it refuses.
     pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
+        self.encode_under(self.audit_stream()?.key)
+    }
+
+    /// For catalog sizing, `parse` refuses a `key` off the catalog.
+    pub fn encode_under(&self, key: AuditKey) -> Result<Vec<u8>, CustomRingError> {
         let flags = self.flags();
         flags.check(self.rail)?;
         let header = FrameHeader::of(self)?;
         check_extensions(&self.extensions, self.rail)?;
-        let stream = self.audit_stream()?;
+        let stream = self.stream_under(key);
         let anonymous_frame = self.rail.anonymous_frame();
         let hidden_owner_proof = self.rail == RingRail::Anonymous && !self.public_owners;
         let output_count = usize::from(header.output_count);
@@ -1234,13 +1239,17 @@ impl<'a> RingTransactData<'a> {
     /// Every ciphertext length of the transfer, refusing a frame no key serves.
     pub fn audit_stream(&self) -> Result<AuditStreamLayout, CustomRingError> {
         let key = self.rail.audit_key(&FrameHeader::of(self)?)?;
-        Ok(AuditStreamLayout {
+        Ok(self.stream_under(key))
+    }
+
+    pub fn stream_under(&self, key: AuditKey) -> AuditStreamLayout {
+        AuditStreamLayout {
             key,
             inputs: self.nullifiers.len(),
             outputs: self.outputs.len(),
             capacity: usize::from(self.n_out),
             has_data: self.has_data,
-        })
+        }
     }
 
     fn recipient_body_count(&self) -> usize {

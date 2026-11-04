@@ -4465,11 +4465,21 @@ name = "ring-xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "custom-ring-interface",
  "hex",
  "serde_json",
+ "solana-address 2.6.1",
+ "solana-instruction",
+ "solana-message",
+ "spr-client",
+ "spr-interface",
+ "spr-keypair",
+ "spr-program",
+ "spr-transaction",
  "xtask",
  "zolana-cli-common",
+ "zolana-ring-transaction",
 ]
 
 [[package]]
