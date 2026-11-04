@@ -2,7 +2,7 @@
 
 use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use custom_ring_interface::{
-    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, restrictive_write, tail_chain,
+    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
     ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
     AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
     DepositRegistry, DepositedAsset, RegisterKeyStatement, RingOutput, SignerSet, SlotBody,
@@ -33,19 +33,10 @@ struct StatementVectors {
     description: String,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
-    restrictive: Vec<RestrictiveCase>,
     apply_enrollments: ApplyEnrollmentsCase,
     tracking: TrackingCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct RestrictiveCase {
-    mask: u64,
-    value: u64,
-    replaces_mint_policy: bool,
-    restrictive: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -137,7 +128,6 @@ struct ApplyCase {
     chain_start: String,
     chain_end: String,
     count: u64,
-    restrictive: bool,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -528,7 +518,6 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
-        restrictive: true,
     };
     let apply_enrollments = ApplyEnrollmentsStatement {
         old_root: values.fields[11],
@@ -633,11 +622,9 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
-            restrictive: apply.restrictive,
             elements: hexes(&apply.elements()),
             public_input_hash: hex::encode(apply.hash().unwrap()),
         },
-        restrictive: restrictive_cases(),
         apply_enrollments: ApplyEnrollmentsCase {
             old_root: hex::encode(apply_enrollments.old_root),
             new_root: hex::encode(apply_enrollments.new_root),
@@ -704,61 +691,8 @@ fn compute_vectors() -> StatementVectors {
     }
 }
 
-fn restrictive_cases() -> Vec<RestrictiveCase> {
-    use zolana_ring_policy::ListId::{Allow, Approval, Block, Frozen, Reader};
-    let set = |list: zolana_ring_policy::ListId| (list.record_bit(), list.record_bit(), false);
-    let clear = |list: zolana_ring_policy::ListId| (list.record_bit(), 0, false);
-    [
-        set(Allow),
-        clear(Allow),
-        set(Approval),
-        clear(Approval),
-        set(Block),
-        clear(Block),
-        set(Frozen),
-        clear(Frozen),
-        set(Reader),
-        clear(Reader),
-        (0, 0, false),
-        (0, 0, true),
-        (
-            Allow.record_bit() | Block.record_bit(),
-            Allow.record_bit(),
-            false,
-        ),
-        (
-            Allow.record_bit() | Frozen.record_bit(),
-            Allow.record_bit() | Frozen.record_bit(),
-            false,
-        ),
-    ]
-    .into_iter()
-    .map(|(mask, value, replaces_mint_policy)| RestrictiveCase {
-        mask,
-        value,
-        replaces_mint_policy,
-        restrictive: restrictive_write(mask, value, replaces_mint_policy),
-    })
-    .collect()
-}
-
 fn right_aligned(amount: u64) -> [u8; 32] {
     spr_hasher::primitives::right_align(&amount.to_be_bytes())
-}
-
-#[test]
-fn restrictive_write_follows_list_direction() {
-    let flags: Vec<bool> = restrictive_cases()
-        .iter()
-        .map(|case| case.restrictive)
-        .collect();
-    assert_eq!(
-        flags,
-        [
-            false, true, false, true, true, false, true, false, false, false, false, true, false,
-            true
-        ]
-    );
 }
 
 #[test]

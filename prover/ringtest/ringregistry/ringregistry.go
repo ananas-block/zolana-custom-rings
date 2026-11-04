@@ -170,13 +170,6 @@ func (e Entry) Hash(t testing.TB) *big.Int {
 	return ringtest.MustPoseidonHash(t, fields...)
 }
 
-// Restrictive mirrors registry.Restrictive.
-func (e Entry) Restrictive() bool {
-	clearsGrant := new(big.Int).AndNot(new(big.Int).And(e.Mask, big.NewInt(AllowBit|ApprovalBit)), e.Value).Sign() != 0
-	setsDeny := new(big.Int).And(e.Value, big.NewInt(BlockBit|FrozenBit)).Sign() != 0
-	return clearsGrant || setsDeny || (e.MintPolicy != nil && e.MintPolicy.Sign() != 0)
-}
-
 type Write struct {
 	Entry                                                    Entry
 	Exists                                                   bool

@@ -38,14 +38,11 @@ pub const TRACKING_EMPTY_ROOT: [u8; 32] = [
 #[repr(C)]
 pub struct TrackingRegistry {
     pub discriminator: u8,
-    pub bump: u8,
     /// Immutable, enrollment proofs bind it.
     pub ring_id: [u8; 32],
     /// Immutable, enrollment proofs seal to it.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub next_index: [u8; 4],
-    /// Leaves promised to created authorizations, the sentinel included, an apply cannot run out.
-    pub reserved_leaves: [u8; 4],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
 }
@@ -55,7 +52,6 @@ pub struct TrackingRegistry {
 #[repr(C)]
 pub struct TrackingAuthorization {
     pub discriminator: u8,
-    pub bump: u8,
     pub registry: Address,
     pub owner: Address,
     /// Final after creation, with `list_tag` and the ciphertext.
@@ -68,18 +64,13 @@ pub struct TrackingAuthorization {
     pub revision: [u8; 8],
     /// Little endian, zero before the first apply, grants nothing while behind `revision`.
     pub applied_revision: [u8; 8],
-    pub last_enroll_slot: [u8; 8],
 }
 
-/// A program owner's on-chain consent to one reader, a PDA cannot sign off chain.
+/// A program owner's on-chain consent to one reader, a PDA cannot sign off chain, the address names both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct OwnerGrant {
     pub discriminator: u8,
-    pub bump: u8,
-    pub registry: Address,
-    pub owner: Address,
-    pub reader: ReaderKeyBytes,
     /// Zero revokes.
     pub active: u8,
 }
@@ -100,15 +91,6 @@ pub struct TrackingEntry {
 pub struct FirstEnrollment<'a> {
     pub registry: Address,
     pub owner: Address,
-    pub bump: u8,
-    pub slot: u64,
-    pub ix: &'a EnrollIxData,
-}
-
-/// A later enrollment of the same owner, the rate limit reads `slot`.
-#[must_use]
-pub struct EnrollmentRotation<'a> {
-    pub slot: u64,
     pub ix: &'a EnrollIxData,
 }
 
@@ -137,14 +119,12 @@ impl TrackingRegistry {
     }
 
     /// Holds only the sentinel root at revision zero.
-    pub fn new(bump: u8, ix: &InitializeTrackingIxData) -> Self {
+    pub fn new(ix: &InitializeTrackingIxData) -> Self {
         let mut registry = Self::zeroed();
         registry.discriminator = Self::DISCRIMINATOR;
-        registry.bump = bump;
         registry.ring_id = ix.ring_id;
         registry.auditor_pubkey = ix.auditor_pubkey;
         registry.next_index = 1u32.to_le_bytes();
-        registry.reserved_leaves = 1u32.to_le_bytes();
         registry.roots[0].hash = TRACKING_EMPTY_ROOT;
         registry
     }
@@ -171,26 +151,12 @@ impl TrackingRegistry {
         u32::from_le_bytes(self.next_index)
     }
 
-    pub const fn reserved_leaves(&self) -> u32 {
-        u32::from_le_bytes(self.reserved_leaves)
-    }
-
     pub const fn newest(&self) -> Root {
         self.roots[0]
     }
 
     pub fn root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
         root_at(&self.roots, revision, slot)
-    }
-
-    /// One leaf per first enrollment, so a full tree refuses here and never at apply.
-    pub fn reserve_leaf(&mut self) -> Result<(), StorageError> {
-        let reserved = u64::from(self.reserved_leaves());
-        if reserved >= TRACKING_CAPACITY {
-            return Err(StorageError::TrackingTreeFull);
-        }
-        self.reserved_leaves = (reserved as u32 + 1).to_le_bytes();
-        Ok(())
     }
 
     /// Writes nothing on a refusal, a retired root stays served for its whole grace.
@@ -254,18 +220,13 @@ impl TrackingAuthorization {
         u64::from_le_bytes(self.applied_revision)
     }
 
-    pub const fn last_enroll_slot(&self) -> u64 {
-        u64::from_le_bytes(self.last_enroll_slot)
-    }
-
     /// Its newest revision has not reached a root yet.
     pub const fn is_pending(&self) -> bool {
         self.applied_revision() < self.revision()
     }
 
     /// Writes nothing on a refusal, only the viewing key and the revision move.
-    pub fn rotate(&mut self, rotation: EnrollmentRotation<'_>) -> Result<(), StorageError> {
-        let EnrollmentRotation { slot, ix } = rotation;
+    pub fn rotate(&mut self, ix: &EnrollIxData) -> Result<(), StorageError> {
         if ix.nullifier_pk != self.nullifier_pk
             || ix.list_tag != self.list_tag
             || ix.eph_u != self.eph_u
@@ -273,16 +234,12 @@ impl TrackingAuthorization {
         {
             return Err(StorageError::EnrollmentKeyFinal);
         }
-        if slot < self.last_enroll_slot().saturating_add(TRACKING_GRACE_SLOTS) {
-            return Err(StorageError::RotationTooSoon);
-        }
         let revision = self
             .revision()
             .checked_add(1)
             .ok_or(StorageError::RevisionOverflow)?;
         self.viewing_u = ix.viewing_u;
         self.revision = revision.to_le_bytes();
-        self.last_enroll_slot = slot.to_le_bytes();
         Ok(())
     }
 
@@ -312,7 +269,6 @@ impl FirstEnrollment<'_> {
     pub fn account(self) -> TrackingAuthorization {
         TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
-            bump: self.bump,
             registry: self.registry,
             owner: self.owner,
             nullifier_pk: self.ix.nullifier_pk,
@@ -322,7 +278,6 @@ impl FirstEnrollment<'_> {
             ciphertext: self.ix.ciphertext,
             revision: 1u64.to_le_bytes(),
             applied_revision: [0; 8],
-            last_enroll_slot: self.slot.to_le_bytes(),
         }
     }
 }
@@ -464,11 +419,11 @@ pub fn tracking_chain_start(
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<TrackingRegistry>() == 1);
-const _: () = assert!(TrackingRegistry::SIZE == 1611);
+const _: () = assert!(TrackingRegistry::SIZE == 1606);
 const _: () = assert!(core::mem::align_of::<TrackingAuthorization>() == 1);
-const _: () = assert!(TrackingAuthorization::SIZE == 250);
+const _: () = assert!(TrackingAuthorization::SIZE == 241);
 const _: () = assert!(core::mem::align_of::<OwnerGrant>() == 1);
-const _: () = assert!(OwnerGrant::SIZE == 101);
+const _: () = assert!(OwnerGrant::SIZE == 2);
 
 #[cfg(test)]
 mod tests {

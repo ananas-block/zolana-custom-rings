@@ -58,7 +58,7 @@
       "chain_start": "0000000000000000000000000000000000000000000000000000000000000000",
       "chain_end": "106a009b76e9926d2e6da8203f24f9109463390d8f392f7ad605c855242368fc",
       "count": 3,
-      "statement_hash": "24a1ad797142f59b39057f8f338ee52c6080561693b22566796e78c74bff072d",
+      "statement_hash": "1244349e142d4ad4623513419f8a7577ed27d109489d41d90bfd65ec1049995f",
       "writes": [
         {
           "member": "1707f8a2d1d48885b87c71fd7bafe7e8a2552f32d593c16088f6ff70c0843f5e",
@@ -1021,7 +1021,7 @@
       "chain_start": "027538d9c04582d9b60bdba6b0b140e932fb272631ea31c8cd531dc68782cc0a",
       "chain_end": "2b34b3cf4061a701ab6c84abae9aa699ffe88791d2346f6593f756199f014a7c",
       "count": 16,
-      "statement_hash": "066c52c8534b1ace038cc004b3997b2f6fb2cd4fcc126d6222b014cc129d966c",
+      "statement_hash": "0bec21a0e9e81f8aaf8609f4a11b887704c4861d3bbf0e5c7c7b65c4bba5e4ba",
       "writes": [
         {
           "member": "0ba208ef5aff0693f13fd825f662072f6d4746032e407cef46f7667a596bbfd4",
