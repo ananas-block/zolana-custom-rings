@@ -1,3 +1,6 @@
+import { getBase64Decoder } from "@solana/kit";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { RingError } from "../error.js";
 import { getBase58Decoder } from "@solana/kit";
 
 import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
@@ -415,10 +418,16 @@ export function encodePrepareAuthorityTransferRequest(
     ring: checkedAddress(value.ring, "ring"),
     delegate: checkedAddress(value.delegate, "delegate"),
     transfer: encodeAuthorityTransfer(value.transfer),
+    txViewingKey: getBase64Decoder().decode(checkedTxKey(value.txViewingKey)),
     timestamp: toU64(value.timestamp, "timestamp"),
     nonce: checkedBase64(value.nonce, "nonce"),
     signature: checkedSignature(value.signature, "signature"),
   };
+}
+
+function checkedTxKey(key: Bytes32): Bytes32 {
+  if (key.length !== 32) throw new RingError("RING_RPC", { details: { path: "txViewingKey" } });
+  return key;
 }
 
 function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {

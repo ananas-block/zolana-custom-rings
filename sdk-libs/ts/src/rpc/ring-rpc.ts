@@ -1,3 +1,4 @@
+import { ViewingKey } from "@heliuslabs/zolana/keypair";
 import { checkedApiKey, serviceUrl } from "@heliuslabs/zolana/internal";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
@@ -336,6 +337,7 @@ export class RingAuthorityTransferRequest {
   readonly #target: RingReadTarget;
   readonly #transfer: AuthorityTransfer;
   #timestamp?: bigint;
+  #txViewingKey?: Bytes32;
 
   private constructor(target: RingReadTarget, transfer: AuthorityTransfer) {
     this.#target = checkedReadTarget(target);
@@ -352,6 +354,12 @@ export class RingAuthorityTransferRequest {
   /** Unix seconds, the RPC rejects a clock more than its skew away. */
   at(timestamp: bigint): this {
     this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  /** A fresh key when absent. */
+  withTxViewingKey(txViewingKey: Bytes32): this {
+    this.#txViewingKey = txViewingKey;
     return this;
   }
 
@@ -372,11 +380,19 @@ export class RingAuthorityTransferRequest {
       ring: this.#target.ringProgramId,
       delegate: delegate.address,
       transfer: this.#transfer,
+      txViewingKey: this.#txViewingKey ?? freshTxViewingKey(),
       timestamp,
       nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
       signature: base58Decoder.decode(signature) as Signature,
     });
   }
+}
+
+function freshTxViewingKey(): Bytes32 {
+  const key = ViewingKey.generate();
+  const secret = key.secretBytes();
+  key.destroy();
+  return secret;
 }
 
 /** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the policy authority signs. */

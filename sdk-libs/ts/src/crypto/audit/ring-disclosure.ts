@@ -32,6 +32,8 @@ import {
 import { RingKeyError } from "../error.js";
 import {
   saltedAuditorSchedule,
+  sealedAuditorSchedule,
+  type AuditSchedule,
   sealSaltedAuditorStream,
   type AuditorEnvelope,
   type AuditorMessage,
@@ -106,8 +108,27 @@ export function openRingDisclosure(
   auditor: X25519Keypair,
   published: PublishedAudit,
 ): RingDisclosure {
-  const { layout, message, salt } = published;
-  const schedule = saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt);
+  const { message, salt } = published;
+  return readDisclosure(
+    saltedAuditorSchedule(auditor, message.ephemeralPublicKey, salt),
+    published,
+  );
+}
+
+/** Rust `AuditEnvelope::open_sealed`, the wrong auditor key decrypts noise. */
+export function openSealedDisclosure(
+  txViewingSecret: Bytes32,
+  auditorPublicKey: X25519PublicKey,
+  published: PublishedAudit,
+): RingDisclosure {
+  return readDisclosure(
+    sealedAuditorSchedule(txViewingSecret, auditorPublicKey, published.salt),
+    published,
+  );
+}
+
+function readDisclosure(schedule: AuditSchedule, published: PublishedAudit): RingDisclosure {
+  const { layout, message } = published;
   const opened: Uint8Array[] = [];
   const plain = (counter: number, bytes: Uint8Array): Uint8Array => {
     const plaintext = schedule.apply(counter, bytes);
