@@ -1,6 +1,4 @@
-//! The per-ring tracking registry and the owner accounts its leaves come from.
-//!
-//! A ring pins its registry's address, `ring_id` and the seeds authenticate nothing.
+//! A ring pins its tracking registry's address, `ring_id` and the seeds authenticate nothing.
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
@@ -12,7 +10,7 @@ use spr_hasher::{
     },
     Hasher, HasherError, Poseidon,
 };
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
+pub use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use zolana_ring_policy::registry_field;
 
 use crate::{
@@ -27,7 +25,7 @@ use crate::{
 
 pub const TRACKING_QUAD_HEIGHT: usize = 13;
 pub const TRACKING_CAPACITY: u64 = 1 << (2 * TRACKING_QUAD_HEIGHT);
-/// Fixed by the program, a retired tracking root reads this long and no write shortens it.
+/// Fixed by the program, no write shortens a retired tracking root's service.
 pub const TRACKING_GRACE_SLOTS: u64 = GRACE_SLOTS;
 
 /// Root of the tree holding only the sentinel.

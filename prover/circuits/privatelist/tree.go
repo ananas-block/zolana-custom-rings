@@ -1,4 +1,4 @@
-// Package privatelist proves owner lists whose entries stay private, a sparse Merkle tree keyed by a salted position.
+// Package privatelist proves private owner lists in a sparse Merkle tree keyed by a salted position.
 package privatelist
 
 import (
@@ -13,7 +13,7 @@ import (
 const (
 	// Depth mirrors PRIVATE_LIST_DEPTH in program-libs/interface/src/accounts/private_list.rs.
 	Depth = 96
-	// NLists is the leaf bitmap width, small enough for a salt holder to open a leaf by trial.
+	// Small enough for a salt holder to open a leaf by trial.
 	NLists = 8
 )
 

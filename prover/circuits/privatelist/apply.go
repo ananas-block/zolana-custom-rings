@@ -16,7 +16,7 @@ import (
 // ApplyWidths mirrors PRIVATE_LIST_APPLY_WIDTHS in program-libs/interface/src/accounts/private_list.rs.
 var ApplyWidths = []int{2, 8, 16}
 
-// Write carries what the program cannot read, it chains only the position, the new leaf and the counter.
+// The program reads only the chained position, new leaf and counter.
 type Write struct {
 	Member       frontend.Variable
 	ListSalt     frontend.Variable
@@ -58,7 +58,6 @@ func (c *ApplyCircuit) Define(api frontend.API) error {
 		return err
 	}
 	rc := rangecheck.New(api)
-	// At least one write, the writes past the count act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
 	state := applyState{root: c.OldRoot, chain: c.ChainStart, restricts: 0}
 	for i, write := range c.Writes {
@@ -66,7 +65,7 @@ func (c *ApplyCircuit) Define(api frontend.API) error {
 	}
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
-	// The sum stays far below q, it is zero exactly when no active write restricts.
+	// The sum stays far below q, zero exactly when no active write restricts.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(ringgadget.IsNonZero(api, state.restricts))))
 	return nil
 }
@@ -108,7 +107,7 @@ func (w Write) apply(api frontend.API, rc frontend.Rangechecker, active frontend
 	}
 }
 
-// EntryHash is what the program chains from the published write.
+// EntryHash mirrors PublishedListWrite::entry_hash in program-libs/interface/src/accounts/private_list.rs.
 func EntryHash(api frontend.API, position, leaf, writeCounter frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListWriteDomain, position, leaf, writeCounter})
 }

@@ -49,6 +49,8 @@ pub struct StorageRegistry {
     pub tracking_registry: Address,
     /// The paired registry's revision at the last restrictive update, frames name no older tracking root.
     pub tracking_floor: Revision,
+    /// Little endian, a private source's newest write counter, a repeat at one position reuses a leaf salt.
+    pub last_write_counter: [u8; 8],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
 }
@@ -120,6 +122,8 @@ pub enum StorageError {
     TrackingRootBelowFloor = 9034,
     #[error("the update does not fit the source's kind")]
     SourceKindMismatch = 9035,
+    #[error("a private write's counter does not increase")]
+    WriteCounterNotIncreasing = 9036,
 }
 
 #[must_use]
@@ -247,6 +251,19 @@ impl StorageRegistry {
         Ok(())
     }
 
+    pub const fn last_write_counter(&self) -> u64 {
+        u64::from_le_bytes(self.last_write_counter)
+    }
+
+    /// Strictly increasing across the source, the circuit opens no old counter and the chain binds the new one.
+    pub fn advance_write_counter(&mut self, counter: u64) -> Result<(), StorageError> {
+        if counter <= self.last_write_counter() {
+            return Err(StorageError::WriteCounterNotIncreasing);
+        }
+        self.last_write_counter = counter.to_le_bytes();
+        Ok(())
+    }
+
     /// Writes nothing on a refusal.
     pub fn update_private(&mut self, update: PrivateRootUpdate) -> Result<(), StorageError> {
         if !self.is_private() {
@@ -366,7 +383,7 @@ impl From<StorageError> for ProgramError {
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<StorageRegistry>() == 1);
-const _: () = assert!(StorageRegistry::SIZE == 1653);
+const _: () = assert!(StorageRegistry::SIZE == 1661);
 
 #[cfg(test)]
 mod tests {

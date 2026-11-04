@@ -47,7 +47,6 @@ func requireEqual(t *testing.T, name string, got, want *big.Int) {
 	}
 }
 
-// The host twin rebuilds the Rust writes and the circuit accepts them under the Rust statement.
 func TestApplyMatchesRustVectors(t *testing.T) {
 	var v listVector
 	ringtest.ReadVector(t, "registry/private-list.json", &v)

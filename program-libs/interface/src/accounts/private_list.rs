@@ -1,5 +1,4 @@
-//! Owner lists whose entries stay private, a sparse tree keyed by a salted position, mirror
-//! `prover/circuits/privatelist`.
+//! Mirrors `prover/circuits/privatelist`.
 
 use solana_address::Address;
 use spr_hasher::{
@@ -35,15 +34,13 @@ impl From<HasherError> for PrivateListError {
     }
 }
 
-/// `Poseidon(CRPS, nullifier_secret)`, zero for a subject with no tracking row.
+/// Zero for a subject with no tracking row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ListSalt(pub [u8; 32]);
 
-/// `Poseidon(CRPT, list_salt)`, final in the tracking leaf.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ListTag(pub [u8; 32]);
 
-/// `Poseidon(CRPL, owner, list_salt)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ListPosition(pub [u8; 32]);
 
@@ -63,7 +60,6 @@ impl ListSalt {
         Poseidon::hashv(&[&domain::field(domain::LIST_POSITION), owner, &self.0]).map(ListPosition)
     }
 
-    /// `Poseidon(CRPU, list_salt, write_counter)`.
     pub fn leaf_salt(&self, write_counter: u64) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[
             &domain::field(domain::LIST_LEAF_SALT),
@@ -74,7 +70,7 @@ impl ListSalt {
 }
 
 impl ListPosition {
-    /// Low [`PRIVATE_LIST_DEPTH`] bits, bit `l` routes level `l` from the leaves up, one is a right child.
+    /// Low [`PRIVATE_LIST_DEPTH`] bits, bit `l` set is a right child at level `l` above the leaves.
     pub fn route(&self) -> u128 {
         let [.., b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15] = self.0;
         u128::from_be_bytes([
@@ -82,7 +78,6 @@ impl ListPosition {
         ])
     }
 
-    /// `Poseidon(CRPV, position, lists, leaf_salt)`.
     pub fn leaf(&self, lists: ListSet, leaf_salt: &[u8; 32]) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[
             &domain::field(domain::LIST_LEAF),
@@ -93,12 +88,11 @@ impl ListPosition {
     }
 }
 
-/// The one position a curator may write for an owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteTarget {
     /// Fully public, every reader opens the entry.
     Unenrolled,
-    /// An applied tracking row and the salt the auditor service returned for it.
+    /// The tracking row must be applied.
     Enrolled {
         list_tag: ListTag,
         list_salt: ListSalt,
@@ -118,7 +112,7 @@ impl WriteTarget {
     }
 }
 
-/// `lists' = (lists & !mask) | value`, the program cannot read either.
+/// The program reads neither mask nor value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlindChange {
     pub mask: ListSet,
@@ -156,7 +150,6 @@ pub struct PublishedListWrite {
 }
 
 impl PublishedListWrite {
-    /// `Poseidon(CRPQ, position, leaf, write_counter)`.
     pub fn entry_hash(&self) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[
             &domain::field(domain::LIST_WRITE),
@@ -166,12 +159,10 @@ impl PublishedListWrite {
         ])
     }
 
-    /// `Poseidon(previous, entry_hash)`.
     pub fn chain(&self, previous: &[u8; 32]) -> Result<[u8; 32], HasherError> {
         Poseidon::hashv(&[previous, &self.entry_hash()?])
     }
 
-    /// Trials every bitmap, `None` when `list_salt` opens no leaf here.
     pub fn open(&self, list_salt: &ListSalt) -> Result<Option<ListSet>, HasherError> {
         let leaf_salt = list_salt.leaf_salt(self.write_counter)?;
         for bits in 0..=u8::MAX {
@@ -184,7 +175,6 @@ impl PublishedListWrite {
     }
 }
 
-/// One curator write, the published form follows from the target and the old lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlindWrite {
     pub owner: [u8; 32],
@@ -210,7 +200,7 @@ impl BlindWrite {
     }
 }
 
-/// What the program rebuilds for an apply proof, `restrictive` decides the root rotation.
+/// `restrictive` decides the root rotation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApplyPrivateListStatement {
     pub old_root: [u8; 32],
@@ -222,7 +212,6 @@ pub struct ApplyPrivateListStatement {
 }
 
 impl ApplyPrivateListStatement {
-    /// `[CRPA, old_root, new_root, chain_start, chain_end, count, restrictive]`.
     pub fn elements(&self) -> [[u8; 32]; 7] {
         [
             domain::field(domain::APPLY_LIST),

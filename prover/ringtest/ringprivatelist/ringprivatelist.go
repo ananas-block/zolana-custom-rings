@@ -33,7 +33,7 @@ func Leaf(t testing.TB, position *big.Int, lists uint64, leafSalt *big.Int) *big
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListLeafDomain), position, new(big.Int).SetUint64(lists), leafSalt)
 }
 
-// Published is all a write shows, a reader rebuilds the tree from these alone.
+// All a write shows, a reader rebuilds the tree from these alone.
 type Published struct {
 	Position, Leaf *big.Int
 	WriteCounter   uint64
@@ -43,7 +43,7 @@ func (p Published) EntryHash(t testing.TB) *big.Int {
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListWriteDomain), p.Position, p.Leaf, new(big.Int).SetUint64(p.WriteCounter))
 }
 
-// Tree is the public tree anyone rebuilds, it holds no salt and no list bits.
+// Public, holds no salt and no list bits.
 type Tree struct {
 	nodes  map[string]*big.Int
 	zeros  [privatelist.Depth + 1]*big.Int
@@ -92,7 +92,7 @@ func route(position *big.Int) *big.Int {
 	return new(big.Int).And(position, routeMask)
 }
 
-// Siblings runs leaf level first.
+// Leaf level first.
 func (tr *Tree) Siblings(position *big.Int) [privatelist.Depth]*big.Int {
 	var siblings [privatelist.Depth]*big.Int
 	prefix := route(position)
@@ -122,14 +122,13 @@ func (tr *Tree) Publish(t testing.TB, write Published) {
 	}
 }
 
-// OpenedLeaf is a salt holder's read of a position, Written unset on the empty leaf.
 type OpenedLeaf struct {
 	Written  bool
 	Lists    uint64
 	LeafSalt *big.Int
 }
 
-// Read trials every bitmap against the position's last write, needing no curator.
+// Needs no curator, a salt holder trials every bitmap.
 func (tr *Tree) Read(t testing.TB, owner, listSalt *big.Int) OpenedLeaf {
 	t.Helper()
 	position := Position(t, owner, listSalt)
@@ -149,7 +148,6 @@ func (tr *Tree) Read(t testing.TB, owner, listSalt *big.Int) OpenedLeaf {
 	return OpenedLeaf{LeafSalt: big.NewInt(0)}
 }
 
-// Opening is the wires of this salt's read at owner's position.
 func (tr *Tree) Opening(t testing.TB, owner, listSalt *big.Int) privatelist.Opening {
 	t.Helper()
 	opened := tr.Read(t, owner, listSalt)
@@ -164,13 +162,12 @@ func OpeningWires(opened OpenedLeaf, siblings [privatelist.Depth]*big.Int) priva
 	return opening
 }
 
-// Row is the row of an owner holding listSalt, salt zero for an unenrolled owner.
+// Salt zero for an unenrolled owner.
 func (tr *Tree) Row(t testing.TB, owner, listSalt *big.Int) privatelist.Row {
 	t.Helper()
 	return privatelist.Row{Live: 1, ListSalt: listSalt, Salted: tr.Opening(t, owner, listSalt), Zero: tr.Opening(t, owner, big.NewInt(0))}
 }
 
-// PaddingRow proves nothing and serves no query.
 func PaddingRow() privatelist.Row {
 	return privatelist.Row{Live: 0, ListSalt: 0, Salted: zeroOpening(), Zero: zeroOpening()}
 }
@@ -183,19 +180,18 @@ func zeroOpening() privatelist.Opening {
 	return opening
 }
 
-// Change is what a curator writes, the program never reads it.
+// The program never reads a Change.
 type Change struct {
 	Owner, ListSalt *big.Int
 	Mask, Value     uint64
 }
 
-// Applied is one write's proof input with the published form it landed as.
 type Applied struct {
 	Wires     privatelist.Write
 	Published Published
 }
 
-// Apply writes change under counter, a list byte outside its mask is the caller's refusal case.
+// Unchecked, a value outside its mask is the caller's refusal case.
 func (tr *Tree) Apply(t testing.TB, change Change, counter uint64) Applied {
 	t.Helper()
 	position := Position(t, change.Owner, change.ListSalt)
@@ -215,7 +211,6 @@ func (tr *Tree) Apply(t testing.TB, change Change, counter uint64) Applied {
 	return Applied{Wires: wires, Published: published}
 }
 
-// ZeroWrite pads a batch past its count.
 func ZeroWrite() privatelist.Write {
 	write := privatelist.Write{Member: 0, ListSalt: 0, WriteCounter: 0, Mask: 0, Value: 0, OldWritten: 0, OldLists: 0, OldLeafSalt: 0}
 	for level := range write.Siblings {
@@ -224,13 +219,12 @@ func ZeroWrite() privatelist.Write {
 	return write
 }
 
-// Curator holds the write counter a storage registry publishes.
 type Curator struct {
 	Tree    *Tree
 	Counter uint64
 }
 
-// WriteSalted writes an applied tracking row's owner, a salt off its list tag is refused ahead of any proof.
+// The owner's tracking row must be applied.
 func (c *Curator) WriteSalted(t testing.TB, owner, listSalt, listTag *big.Int, mask, value uint64) Applied {
 	t.Helper()
 	if ListTag(t, listSalt).Cmp(listTag) != 0 {
@@ -239,7 +233,7 @@ func (c *Curator) WriteSalted(t testing.TB, owner, listSalt, listTag *big.Int, m
 	return c.write(t, Change{Owner: owner, ListSalt: listSalt, Mask: mask, Value: value})
 }
 
-// WriteUnenrolled is public by construction, an enrolled owner never takes it.
+// Public by construction, only for an owner with no tracking row.
 func (c *Curator) WriteUnenrolled(t testing.TB, owner *big.Int, mask, value uint64) Applied {
 	t.Helper()
 	return c.write(t, Change{Owner: owner, ListSalt: big.NewInt(0), Mask: mask, Value: value})

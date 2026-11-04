@@ -44,7 +44,7 @@ pub struct QueueEntry {
     pub member: [u8; 32],
     pub mask: u64,
     pub value: u64,
-    /// Only authority writes replace mint settings; list writes preserve them.
+    /// Only authority writes replace mint settings, list writes preserve them.
     pub mint_policy: Option<MintPolicy>,
 }
 

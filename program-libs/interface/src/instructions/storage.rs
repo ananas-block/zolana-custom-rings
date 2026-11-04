@@ -37,7 +37,7 @@ pub struct InitializeIxData {
     pub grace_slots: [u8; 8],
     /// `ring_id_field` of the ring it serves, immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Nonzero creates a private source paired with this tracking registry.
+    /// Nonzero creates a private source paired with the named tracking registry.
     pub tracking_registry: Address,
 }
 

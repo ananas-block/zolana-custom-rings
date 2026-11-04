@@ -27,7 +27,7 @@ pub fn process_update_private_ix(
         .map_err(|_| StorageError::HashingFailed)?;
     let mut registry = load_registry_mut(program_id, registry_account)?;
     check_authority(&registry, authority_account)?;
-    // The pinned pair, another registry's revision would set a floor no frame of this ring reads.
+    // The immutable pair, a floor from another registry guards no frame.
     if tracking_account.address() != &registry.tracking_registry {
         return Err(StorageError::InvalidTrackingRegistry.into());
     }
@@ -45,8 +45,9 @@ pub fn process_update_private_ix(
     let chain_end = ix.writes.iter().try_fold(
         chain_start,
         |chain, write| -> Result<[u8; 32], ProgramError> {
-            write
-                .published()
+            let published = write.published();
+            registry.advance_write_counter(published.write_counter)?;
+            published
                 .chain(&chain)
                 .map_err(|_| StorageError::HashingFailed.into())
         },
