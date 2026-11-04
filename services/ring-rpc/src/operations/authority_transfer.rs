@@ -32,6 +32,8 @@ pub enum AuthorityTransferError {
     SourceKey = -32223,
     #[error("the service runs no relay")]
     RelayUnavailable = -32224,
+    #[error("the transaction key is not a clamped X25519 secret")]
+    TxViewingKey = -32225,
 }
 
 impl AuthorityTransferError {
@@ -139,6 +141,10 @@ impl<S: TransactionSource> Hub<S> {
             now,
         }
         .decide()?;
+        let tx_viewing_key = request
+            .tx_viewing_key
+            .key()
+            .map_err(|_| AuthorityTransferError::TxViewingKey)?;
         let relay_id = request
             .relay_id()
             .map_err(|_| RingRpcError::StateUnavailable)?;
@@ -197,6 +203,7 @@ impl<S: TransactionSource> Hub<S> {
                     delegate,
                     source,
                     nullifier_key: &nullifier_key,
+                    tx_viewing_key,
                     notes: &notes,
                     mint,
                     payments: transfer
@@ -225,7 +232,7 @@ mod tests {
     use solana_message::VersionedMessage;
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
-    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
+    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
@@ -260,7 +267,7 @@ mod tests {
             let RelayPayload::Transfer(proof_inputs) = request.payload else {
                 panic!("an authority transfer proves a transfer");
             };
-            let RelayRail::Delegate { delegate } = proof_inputs.rail else {
+            let RelayRail::Delegate { delegate, .. } = proof_inputs.rail else {
                 panic!("an authority transfer proves on the delegate rail");
             };
             self.proven
@@ -297,10 +304,11 @@ mod tests {
                 secret: *seal.nullifier_key.secret(),
                 nullifiers: seal.notes.iter().map(|note| note.nullifier).collect(),
             });
-            let tx_viewing_key = ViewingKey::new();
+            let tx_viewing_key = seal.tx_viewing_key;
             Ok(RelayProofInputs {
                 rail: RelayRail::Delegate {
                     delegate: seal.delegate,
+                    plan: None,
                 },
                 ring_program_id: seal.ring,
                 sender: seal.source,

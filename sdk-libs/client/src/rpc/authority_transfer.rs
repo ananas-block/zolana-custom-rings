@@ -4,7 +4,8 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
-use spr_keypair::ShieldedAddress;
+use spr_keypair::{KeypairError, ShieldedAddress, ViewingKey};
+use zeroize::Zeroizing;
 
 use super::{base64, relay_id, Attestation, ReadTarget, RelayId, RequestBuildError, SignedRequest};
 
@@ -30,6 +31,10 @@ pub struct AuthorityTransfer {
     pub payments: Vec<AuthorityPayment>,
 }
 
+/// The delegate picks the transaction key, the frame's proof binds each record to it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TxViewingSecret(Zeroizing<[u8; 32]>);
+
 /// `prepareAuthorityTransfer` answers with a `RelayStep::SignMessage` until the delegate signs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -37,6 +42,7 @@ pub struct PrepareAuthorityTransferRequest {
     pub ring: SerializablePubkey,
     pub delegate: SerializablePubkey,
     pub transfer: AuthorityTransfer,
+    pub tx_viewing_key: TxViewingSecret,
     pub timestamp: u64,
     pub nonce: Base64String,
     /// Raw Ed25519 over the `AuthorityTransferAttestation` message.
@@ -51,6 +57,40 @@ pub struct AuthorityTransferAttestation {
 }
 
 pub type AuthorityTransferRequest = SignedRequest<AuthorityTransferAttestation>;
+
+impl TxViewingSecret {
+    /// An unclamped alias would key another stream.
+    pub fn key(&self) -> Result<ViewingKey, KeypairError> {
+        ViewingKey::from_canonical_bytes(&self.0)
+    }
+}
+
+impl From<&ViewingKey> for TxViewingSecret {
+    fn from(key: &ViewingKey) -> Self {
+        Self(key.secret_bytes())
+    }
+}
+
+impl core::fmt::Debug for TxViewingSecret {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("TxViewingSecret(..)")
+    }
+}
+
+impl Serialize for TxViewingSecret {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Base64String(self.0.to_vec()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TxViewingSecret {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = Base64String::deserialize(deserializer)?;
+        <[u8; 32]>::try_from(bytes.0.as_slice())
+            .map(|secret| Self(Zeroizing::new(secret)))
+            .map_err(|_| D::Error::custom("a transaction key is 32 bytes"))
+    }
+}
 
 impl Serialize for SerializableShieldedAddress {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -111,6 +151,7 @@ impl AuthorityTransferRequest {
             ring: self.attestation.target.ring.into(),
             delegate: self.attestation.delegate.into(),
             transfer: self.attestation.transfer,
+            tx_viewing_key: TxViewingSecret::from(&ViewingKey::new()),
             timestamp,
             nonce: self.nonce.to_vec().into(),
             signature: signature.into(),
