@@ -3365,8 +3365,19 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
         .with_tracking(&[address])
         .client();
     let transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    let member =
+        Member::from_bytes(address.signing_pubkey.owner_proof_input_hash().unwrap()).unwrap();
     assert!(matches!(
-        owner_transfer(&sender, transaction).frame(&client).await.err(),
+        owner_transfer(&sender, transaction.clone())
+            .frame(&client)
+            .await
+            .err(),
+        Some(RingError::ListSaltUnknown { .. })
+    ));
+    assert!(matches!(
+        owner_transfer(&sender, transaction)
+            .with_list_salt(member, [9; 32])
+            .frame(&client).await.err(),
         Some(RingError::ListSaltMismatch { member })
             if member == address.signing_pubkey.owner_proof_input_hash().unwrap()
     ));

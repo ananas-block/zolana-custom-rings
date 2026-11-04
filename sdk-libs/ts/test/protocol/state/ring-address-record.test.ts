@@ -142,7 +142,7 @@ describe("tracking_enroll.json", () => {
     expect(hex(ACCOUNT.listTag)).toBe(enroll.enroll_data.slice(64, 128));
     expect(hex(ACCOUNT.viewingU)).toBe(enroll.enroll_data.slice(128, 192));
     expect(hex(ACCOUNT.ephU)).toBe(enroll.enroll_data.slice(192, 256));
-    expect(hex(ACCOUNT.ciphertext)).toBe(enroll.enroll_data.slice(256, 320));
+    expect(hex(ACCOUNT.ciphertext)).toBe(enroll.enroll_data.slice(256, 384));
   });
 
   it("derives the authorization PDA from the registry and the owner", async () => {

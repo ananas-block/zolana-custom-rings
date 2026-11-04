@@ -2,13 +2,10 @@
 
 use custom_ring_interface::{domain, key_catalog::RecordPools};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::NullifierKey;
 use zolana_ring_client::{records::RecordPoolRead, rpc::SubjectListSalt};
-use zolana_ring_keys::list_salt;
 use zolana_ring_member_registry::{RecordPool, TrackingRecord};
 use zolana_ring_policy::{Member, RecordLists, SourceMap};
 
-use super::TransferAuthority;
 use crate::{
     request::{OwnerEntry, PoolEntry},
     RingError,
@@ -136,35 +133,6 @@ pub(crate) struct SaltedKey {
 impl KnownSalts {
     pub fn new(salts: Vec<SubjectListSalt>) -> Self {
         Self(salts)
-    }
-
-    /// `sender` holds the authority's owner key.
-    pub fn with_authority(
-        mut self,
-        authority: &TransferAuthority,
-        sender: [u8; 32],
-        ring_id: &[u8; 32],
-    ) -> Result<Self, RingError> {
-        let derive = |member: [u8; 32], key: &NullifierKey| -> Result<_, RingError> {
-            Ok(SubjectListSalt {
-                member,
-                list_salt: list_salt(key, ring_id)?,
-            })
-        };
-        self.0.extend(
-            authority
-                .owner
-                .iter()
-                .map(|key| derive(sender, key))
-                .chain(
-                    authority
-                        .co_owners
-                        .iter()
-                        .map(|co_owner| derive(co_owner.owner_pk_hash, &co_owner.key)),
-                )
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        Ok(self)
     }
 
     /// `None` only with no tracking row.

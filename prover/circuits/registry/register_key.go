@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"slices"
+
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -13,6 +15,7 @@ type RegisterKeyCircuit struct {
 	RingID          frontend.Variable
 	Member          frontend.Variable
 	NullifierSecret [32]frontend.Variable
+	ListSalt        [32]frontend.Variable
 	EphSk           [32]frontend.Variable
 	AuditorPk       [32]frontend.Variable
 }
@@ -24,10 +27,13 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// Poseidon(0) is the zero key, never enrolled.
 	api.AssertIsDifferent(secret, 0)
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{secret})
-	// 2. A list tag from another secret or ring would move the owner's salted record key.
-	listTag := shared.ListTag(api, shared.ListSalt(api, secret, c.RingID))
-	// The envelope seals the same 32 bytes to the auditor under CRING/nfk1, its cipher bounds every ciphertext byte.
-	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
+	// 2. A salt the envelope does not hold would leave the owner off the auditor's list writes.
+	api.AssertIsEqual(c.ListSalt[0], 0)
+	salt := shared.PackBounded(api, c.ListSalt[1:])[0]
+	api.AssertIsDifferent(salt, 0)
+	listTag := shared.ListTag(api, salt)
+	// The cipher under CRING/nfk1 bounds every ciphertext byte.
+	sealed := shared.Envelope{Plaintext: slices.Concat(c.NullifierSecret[:], c.ListSalt[:]), EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.SealStream(api)
 	// 3. The statement binds the ring, member and auditor key the program supplies, and the instruction's envelope.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(api, nullifierPk, listTag, sealed)))
 	return nil

@@ -143,7 +143,7 @@ fn apply_stream(secret: &[u8; 32], schedule: StreamSchedule, data: &mut [u8]) ->
     Ok(())
 }
 
-/// A nullifier key sealed to the ring auditor, plaintext byte zero is the pad the circuit pins.
+/// A nullifier key and list salt sealed to the ring auditor, plaintext bytes 0 and 32 are the pads the circuit pins.
 pub struct NullifierKeyEnvelope {
     pub ephemeral_sk: Zeroizing<[u8; 32]>,
     pub sealed: SealedNullifierKey,
@@ -157,16 +157,24 @@ pub struct SealedNullifierKey {
 }
 
 impl NullifierKeyEnvelope {
-    pub fn new(nullifier_key: &NullifierKey, auditor_pk: &X25519Pubkey) -> Result<Self> {
-        Self::seal(nullifier_key, auditor_pk, X25519Keypair::new())
+    pub fn new(
+        nullifier_key: &NullifierKey,
+        list_salt: &[u8; 32],
+        auditor_pk: &X25519Pubkey,
+    ) -> Result<Self> {
+        Self::seal(nullifier_key, list_salt, auditor_pk, X25519Keypair::new())
     }
 
     fn seal(
         nullifier_key: &NullifierKey,
+        list_salt: &[u8; 32],
         auditor_pk: &X25519Pubkey,
         ephemeral: X25519Keypair,
     ) -> Result<Self> {
-        let mut ciphertext = Zeroizing::new(right_align(&nullifier_key.secret()));
+        let mut ciphertext = Zeroizing::new([0u8; REGISTER_KEY_CIPHERTEXT_LEN]);
+        let (secret, salt) = ciphertext.split_at_mut(32);
+        secret.copy_from_slice(&*Zeroizing::new(right_align(&nullifier_key.secret())));
+        salt.copy_from_slice(list_salt);
         seal_stream(
             &ephemeral,
             auditor_pk,
@@ -187,6 +195,24 @@ impl NullifierKeyEnvelope {
 impl SealedNullifierKey {
     /// The pad alone does not authenticate the key against its registry record.
     pub fn open(&self, auditor: &X25519Keypair) -> Result<NullifierKey> {
+        let plaintext = self.plaintext(auditor)?;
+        let secret: &[u8; 31] = plaintext[1..32]
+            .try_into()
+            .map_err(|_| AuditError::NullifierPad)?;
+        Ok(NullifierKey::from_secret(*secret))
+    }
+
+    pub fn open_list_salt(&self, auditor: &X25519Keypair) -> Result<[u8; 32]> {
+        let plaintext = self.plaintext(auditor)?;
+        plaintext[32..]
+            .try_into()
+            .map_err(|_| AuditError::NullifierPad)
+    }
+
+    fn plaintext(
+        &self,
+        auditor: &X25519Keypair,
+    ) -> Result<Zeroizing<[u8; REGISTER_KEY_CIPHERTEXT_LEN]>> {
         let mut plaintext = Zeroizing::new(self.ciphertext);
         open_stream(
             auditor,
@@ -194,11 +220,10 @@ impl SealedNullifierKey {
             StreamSchedule::Ring(REGISTER_KEY_LABEL),
             &mut *plaintext,
         )?;
-        let [pad, secret @ ..] = &*plaintext;
-        if *pad != 0 {
+        if plaintext[0] != 0 || plaintext[32] != 0 {
             return Err(AuditError::NullifierPad);
         }
-        Ok(NullifierKey::from_secret(*secret))
+        Ok(plaintext)
     }
 }
 
@@ -376,13 +401,23 @@ mod tests {
         );
     }
 
+    const LIST_SALT: [u8; 32] = {
+        let mut salt = [0x09; 32];
+        salt[0] = 0;
+        salt
+    };
+
     #[test]
     fn nullifier_key_envelope_round_trips_through_the_auditor() {
         let auditor = X25519Keypair::new();
         let nullifier_key = NullifierKey::from_secret([7u8; 31]);
-        let envelope =
-            NullifierKeyEnvelope::new(&nullifier_key, &auditor.pubkey()).expect("encrypt");
+        let envelope = NullifierKeyEnvelope::new(&nullifier_key, &LIST_SALT, &auditor.pubkey())
+            .expect("encrypt");
         let recovered = envelope.sealed.open(&auditor).expect("decrypt");
+        assert_eq!(
+            envelope.sealed.open_list_salt(&auditor).expect("salt"),
+            LIST_SALT
+        );
         assert_eq!(
             recovered.secret().as_slice(),
             nullifier_key.secret().as_slice()
@@ -398,8 +433,8 @@ mod tests {
         let auditor = X25519Keypair::new();
         let stranger = X25519Keypair::new();
         let nullifier_key = NullifierKey::from_secret([9u8; 31]);
-        let envelope =
-            NullifierKeyEnvelope::new(&nullifier_key, &auditor.pubkey()).expect("encrypt");
+        let envelope = NullifierKeyEnvelope::new(&nullifier_key, &LIST_SALT, &auditor.pubkey())
+            .expect("encrypt");
         match envelope.sealed.open(&stranger) {
             Err(AuditError::NullifierPad) => {}
             Ok(recovered) => {
@@ -418,7 +453,7 @@ mod tests {
     const NULLIFIER_SECRET: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const NULLIFIER_PK: &str = "2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5";
     const EPH_PK: &str = "043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63";
-    const CIPHERTEXT: &str = "44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba";
+    const CIPHERTEXT: &str = "44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba1288554456faebe97fdaf6a409ddb5c5830df78ba0529a3ddf3075c429643612";
 
     #[test]
     fn the_sealed_key_matches_the_pinned_vector() {
@@ -426,7 +461,8 @@ mod tests {
         let nullifier_key = NullifierKey::from_secret(bytes(NULLIFIER_SECRET));
         let ephemeral = X25519Keypair::from_bytes(&bytes(EPHEMERAL_SK));
         let envelope =
-            NullifierKeyEnvelope::seal(&nullifier_key, &auditor.pubkey(), ephemeral).expect("seal");
+            NullifierKeyEnvelope::seal(&nullifier_key, &LIST_SALT, &auditor.pubkey(), ephemeral)
+                .expect("seal");
         assert_eq!(envelope.nullifier_pk, bytes(NULLIFIER_PK));
         assert_eq!(envelope.sealed.eph_pk.as_bytes(), &bytes::<33>(EPH_PK));
         assert_eq!(envelope.sealed.ciphertext, bytes(CIPHERTEXT));

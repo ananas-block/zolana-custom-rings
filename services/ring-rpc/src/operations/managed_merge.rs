@@ -640,7 +640,7 @@ pub(crate) mod tests {
                     &nullifier_pk,
                 )
                 .expect("owner hash"),
-                sealed: NullifierKeyEnvelope::new(&key, &auditor)
+                sealed: NullifierKeyEnvelope::new(&key, &[0x09; 32], &auditor)
                     .expect("envelope")
                     .sealed,
             };

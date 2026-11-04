@@ -297,6 +297,7 @@ type RegisterKeyParams struct {
 	RingID          Field `json:"ringId"`
 	Member          Field `json:"member"`
 	NullifierSecret Bytes `json:"nullifierSecret"`
+	ListSalt        Bytes `json:"listSalt"`
 	EphSk           Bytes `json:"ephSk"`
 	AuditorPk       Bytes `json:"auditorPk"`
 }

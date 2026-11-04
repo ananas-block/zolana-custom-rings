@@ -26,6 +26,7 @@ import {
   fetchRingSealedKey,
   openNullifierKey,
   openRingSealedKey,
+  openListSalt,
   sealNullifierKey,
   sealNullifierKeyWith,
 } from "../../../src/operations/management/register-key.js";
@@ -50,8 +51,9 @@ const EPHEMERAL_SK = hex("011013121514171619181b1a1d1c1f1e010003020504070609080b
 const NULLIFIER_SECRET = hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 const NULLIFIER_PK = hex("2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5");
 const EPH_PK = hex("043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63");
-const CIPHERTEXT = hex("44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba");
+const CIPHERTEXT = hex("44409b9e390ec45df98e391d4a86c1e57b52cbd8d60eb9f7426442ed822616ba1288554456faebe97fdaf6a409ddb5c5830df78ba0529a3ddf3075c429643612");
 
+const LIST_SALT = Uint8Array.of(0, ...new Uint8Array(31).fill(9)) as Bytes32;
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const TRACKING = address("6NxnStrvfxkDAnWHyvc6SVXkZvBKtpHS3Bd9WfCSgUSv");
@@ -166,7 +168,7 @@ function trackingRegistryData(root: Bytes32): Uint8Array {
 /** An owner whose applied tracking row binds its sealed key. */
 function enrolled(seed: number) {
   const who = actor(seed);
-  const envelope = sealNullifierKey(who.keypair.nullifierKey(), AUDITOR.publicKey());
+  const envelope = sealNullifierKey(who.keypair.nullifierKey(), LIST_SALT, AUDITOR.publicKey());
   envelope.ephemeralSecret.fill(0);
   const seal: TrackingSeal = {
     owner: who.signer,
@@ -189,12 +191,13 @@ describe("nullifier key envelope", () => {
   it("matches the Rust vector and opens only for the auditor", () => {
     const ephemeral = X25519Keypair.fromBytes(EPHEMERAL_SK);
     const nullifierKey = NullifierKey.fromSecret(NULLIFIER_SECRET as Bytes31);
-    const envelope = sealNullifierKeyWith(ephemeral, nullifierKey, AUDITOR.publicKey());
+    const envelope = sealNullifierKeyWith(ephemeral, nullifierKey, LIST_SALT, AUDITOR.publicKey());
     expect(envelope.nullifierPublicKey).toEqual(NULLIFIER_PK);
     expect(envelope.sealed.ephemeralPublicKey.toBytes()).toEqual(EPH_PK);
     expect(envelope.sealed.ciphertext).toEqual(CIPHERTEXT);
     expect(openNullifierKey(envelope.sealed, AUDITOR).secretBytes()).toEqual(NULLIFIER_SECRET);
-    const fresh = sealNullifierKey(nullifierKey, AUDITOR.publicKey());
+    expect(openListSalt(envelope.sealed, AUDITOR)).toEqual(LIST_SALT);
+    const fresh = sealNullifierKey(nullifierKey, LIST_SALT, AUDITOR.publicKey());
     expect(fresh.sealed.ciphertext).not.toEqual(CIPHERTEXT);
     expect(openNullifierKey(fresh.sealed, AUDITOR).secretBytes()).toEqual(NULLIFIER_SECRET);
   });

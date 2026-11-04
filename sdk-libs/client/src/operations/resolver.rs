@@ -159,7 +159,7 @@ mod tests {
         rpc::{RingRecordPathView, StorageRootView},
         tracking::{GetTrackingOpeningsResponse, RingTrackingOpening},
     };
-    use zolana_ring_keys::list_tag;
+    use zolana_ring_keys::ListSaltHolder;
     use zolana_ring_member_registry::{RecordOpening, RecordTree, TrackingPath, TrackingTree};
 
     use super::*;
@@ -197,11 +197,7 @@ mod tests {
             ct_hash: [7; 32],
             viewing_u: viewing.u(),
             revision: 3,
-            list_tag: list_tag(
-                &owner.nullifier_key,
-                &zolana_ring_policy::ring_id_field(RING.as_array()).unwrap(),
-            )
-            .unwrap(),
+            list_tag: domain::list_tag(&owner.list_salt(&RING).unwrap()).unwrap(),
         }
     }
 

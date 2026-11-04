@@ -143,7 +143,7 @@ pub(crate) struct Staged<'a> {
     pub spend: Spend<'a>,
     /// Set when the wallet sealed the auditor message the owner signed over.
     pub presealed: Option<PresealedAudit>,
-    /// Salts the authority's keys do not derive.
+    /// Every enrolled subject a salted list reads.
     pub list_salts: Vec<SubjectListSalt>,
 }
 
@@ -626,11 +626,7 @@ impl<'a> Sealed<'a> {
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
             n_out,
             public: &public,
-            salts: &KnownSalts::new(list_salts).with_authority(
-                &authority,
-                sender_pk_hash,
-                &ring_id,
-            )?,
+            salts: &KnownSalts::new(list_salts),
         }
         .read(client.zolana())
         .await?;

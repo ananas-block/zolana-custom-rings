@@ -133,6 +133,7 @@ export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
   fetchRingSealedKey,
+  openListSalt,
   openNullifierKey,
   openRingSealedKey,
   sealNullifierKey,

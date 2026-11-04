@@ -483,4 +483,3 @@ async fn a_frame_past_the_cpi_limit_is_refused_before_any_write() {
     );
     assert!(fixture.sent().is_empty());
 }
-

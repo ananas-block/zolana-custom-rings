@@ -1,7 +1,7 @@
 /** The ring derivations over a wallet's viewing key, Rust `zolana_ring_keys::RingKeys`. */
 import type { Bytes16, Bytes32, RequestContext } from "@heliuslabs/zolana";
 import type { Address } from "@solana/kit";
-import { addressBytes, bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
+import { addressBytes, bytesKey, equalBytes, isCanonicalField } from "@heliuslabs/zolana/internal";
 import {
   NullifierKey,
   ViewingKey,
@@ -18,6 +18,7 @@ import {
 
 import { extended } from "../operations/workflow/extended.js";
 import { RingKeyError } from "../crypto/error.js";
+import { listSaltOf } from "../crypto/keys/list-salt.js";
 import {
   bundleTag,
   deliveredSlotSecret,
@@ -72,6 +73,8 @@ export interface MergeSeedRequest {
 
 /** The ring derivations of a wallet's viewing keys, no viewing secret leaves the holder. */
 export interface RingKeys extends ShieldedKeys {
+  /** One salt per ring, a rotation keeps it. */
+  listSalt(ringProgramId: Address, context?: RequestContext): Promise<Bytes32>;
   /** One seed per request, a keeper's merge under another seed does not open. */
   mergeSeeds(
     requests: readonly MergeSeedRequest[],
@@ -98,6 +101,7 @@ export interface RingKeys extends ShieldedKeys {
 export function isRingKeys(keys: ShieldedKeys): keys is RingKeys {
   const candidate: Partial<Record<keyof RingKeys, unknown>> = keys;
   return (
+    typeof candidate.listSalt === "function" &&
     typeof candidate.mergeSeeds === "function" &&
     typeof candidate.ringDeliverySecrets === "function" &&
     typeof candidate.ringTagMatches === "function" &&
@@ -110,6 +114,7 @@ export function ringWalletKeys<K extends ShieldedKeys>(keys: K, ring: RingKeys):
   if (!equalBytes(keys.address().toBytes(), ring.address().toBytes()))
     throw new TransactionError("TRANSACTION_KEYS_IDENTITY_MISMATCH");
   return extended(keys, {
+    listSalt: ring.listSalt.bind(ring),
     mergeSeeds: ring.mergeSeeds.bind(ring),
     ringDeliverySecrets: ring.ringDeliverySecrets.bind(ring),
     ringTagMatches: ring.ringTagMatches.bind(ring),
@@ -120,15 +125,18 @@ export function ringWalletKeys<K extends ShieldedKeys>(keys: K, ring: RingKeys):
 export class LocalRingKeys implements RingKeys {
   readonly #keys: LocalShieldedKeys;
   readonly #tags: ViewingKeyHolder;
+  /** The identity key, `list_tag` is final so a rotation keeps the salt. */
+  readonly #listRoot: ViewingKey;
 
-  private constructor(keys: LocalShieldedKeys, viewing: readonly ViewingKey[]) {
+  private constructor(keys: LocalShieldedKeys, viewing: readonly ViewingKey[], listRoot: ViewingKey) {
     this.#keys = keys;
     this.#tags = new ViewingKeyHolder(viewing);
+    this.#listRoot = listRoot;
   }
 
   /** Copies the keypair's roles, the keypair stays the caller's. */
   static fromKeypair(keypair: ShieldedKeypair): LocalRingKeys {
-    return new LocalRingKeys(LocalShieldedKeys.fromKeypair(keypair), [keypair.viewingKey()]);
+    return new LocalRingKeys(LocalShieldedKeys.fromKeypair(keypair), [keypair.viewingKey()], keypair.viewingKey());
   }
 
   /** `viewingKeys` lists the current key first, the caller's objects stay the caller's. */
@@ -136,12 +144,15 @@ export class LocalRingKeys implements RingKeys {
     input: Readonly<{
       address: ShieldedAddress;
       viewingKeys: readonly ViewingKey[];
+      /** The wallet's identity viewing key. */
+      listRoot: ViewingKey;
       nullifierKey: NullifierKey;
     }>,
   ): LocalRingKeys {
     return new LocalRingKeys(
       LocalShieldedKeys.fromKeys(input),
       input.viewingKeys.map((key) => key.clone()),
+      input.listRoot.clone(),
     );
   }
 
@@ -171,15 +182,22 @@ export class LocalRingKeys implements RingKeys {
     return this.#tags.deliverySecrets(requests);
   }
 
+  async listSalt(ringProgramId: Address): Promise<Bytes32> {
+    return listSaltOf(this.#listRoot, ringProgramId);
+  }
+
   async mergeSeeds(requests: readonly MergeSeedRequest[]): Promise<readonly Bytes32[]> {
-    return requests.map((request) =>
-      this.#tags
+    return requests.map((request) => {
+      // A real nullifier is canonical, the list salt's label is not.
+      if (!isCanonicalField(request.firstNullifier))
+        throw new RingKeyError("KEYPAIR_INVALID_MERGE_SEED");
+      return this.#tags
         .held(request.viewingPublicKey)
         .mergeSeed(
           addressBytes(request.ringProgramId, "ring program id") as Bytes32,
           request.firstNullifier,
-        ),
-    );
+        );
+    });
   }
 
   ringTagMatches(

@@ -14,7 +14,7 @@ import (
 
 func ListSaltIn(t testing.TB, owner, ringID *big.Int) *big.Int {
 	t.Helper()
-	return ringregistry.ListSalt(t, new(big.Int).Add(owner, big.NewInt(4)), ringID)
+	return ringtest.MustPoseidonHash(t, new(big.Int).Add(owner, big.NewInt(4)), ringID)
 }
 
 func ListSaltOf(t testing.TB, owner *big.Int) *big.Int {

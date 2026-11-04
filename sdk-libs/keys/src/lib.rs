@@ -12,7 +12,7 @@ pub use keys::{
     RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys,
     ViewTagRequest, ViewTagStream,
 };
-pub use list_salt::{list_salt, list_tag};
+pub use list_salt::{ListSaltHolder, LIST_SALT_LABEL};
 pub use merge_seed::{MergeSeedHolder, MergeSeedRequest};
 pub use ring_address::{RingAddress, RingPaymentRequest};
 pub use stream_cipher::{symmetric_apply_audit, RingStream};

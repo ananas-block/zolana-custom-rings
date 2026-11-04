@@ -21,7 +21,6 @@ export const RingDomain = Object.freeze({
   trackingLeaf: 0x4352_544b,
   trackingEntry: 0x4352_5451,
   applyEnrollments: 0x4352_5441,
-  listSalt: 0x4352_5053,
   listTag: 0x4352_5054,
   listPosition: 0x4352_504c,
 } as const);
