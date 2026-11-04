@@ -120,19 +120,17 @@ func TestTrackingOpeningRefusals(t *testing.T) {
 }
 
 type trackingVector struct {
-	EmptyRoot       string `json:"empty_root"`
-	Member          string `json:"member"`
-	NullifierPk     string `json:"nullifier_pk"`
-	CtHash          string `json:"ct_hash"`
-	ViewingU        string `json:"viewing_u"`
-	Revision        uint64 `json:"revision"`
-	ListTag         string `json:"list_tag"`
-	EntryHash       string `json:"entry_hash"`
-	ChainFromZero   string `json:"chain_from_zero"`
-	NullifierSecret string `json:"nullifier_secret"`
-	SaltRingID      string `json:"salt_ring_id"`
-	ListSalt        string `json:"list_salt"`
-	SecretListTag   string `json:"secret_list_tag"`
+	EmptyRoot     string `json:"empty_root"`
+	Member        string `json:"member"`
+	NullifierPk   string `json:"nullifier_pk"`
+	CtHash        string `json:"ct_hash"`
+	ViewingU      string `json:"viewing_u"`
+	Revision      uint64 `json:"revision"`
+	ListTag       string `json:"list_tag"`
+	EntryHash     string `json:"entry_hash"`
+	ChainFromZero string `json:"chain_from_zero"`
+	ListSalt      string `json:"list_salt"`
+	SecretListTag string `json:"secret_list_tag"`
 }
 
 // The host twin mirrors both gadgets, the Rust side pins them through the same vector.
@@ -161,7 +159,7 @@ func TestTrackingHashesMatchRustVector(t *testing.T) {
 	if chain := ringtest.MustPoseidonHash(t, big.NewInt(0), hash); chain.Cmp(ringtest.VectorField(t, v.ChainFromZero)) != 0 {
 		t.Fatalf("chain %x, Rust %s", chain, v.ChainFromZero)
 	}
-	gadgets := &listDerivationCircuit{Secret: ringtest.VectorField(t, v.NullifierSecret), RingID: ringtest.VectorField(t, v.SaltRingID), Salt: ringtest.VectorField(t, v.ListSalt), Tag: ringtest.VectorField(t, v.SecretListTag)}
+	gadgets := &listDerivationCircuit{Salt: ringtest.VectorField(t, v.ListSalt), Tag: ringtest.VectorField(t, v.SecretListTag)}
 	if err := test.IsSolved(&listDerivationCircuit{}, gadgets, ecc.BN254.ScalarField()); err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +170,11 @@ func TestTrackingHashesMatchRustVector(t *testing.T) {
 }
 
 type listDerivationCircuit struct {
-	Secret, RingID, Salt, Tag frontend.Variable
+	Salt, Tag frontend.Variable
 }
 
 func (c *listDerivationCircuit) Define(api frontend.API) error {
-	salt := shared.ListSalt(api, c.Secret, c.RingID)
-	api.AssertIsEqual(salt, c.Salt)
-	api.AssertIsEqual(shared.ListTag(api, salt), c.Tag)
+	api.AssertIsEqual(shared.ListTag(api, c.Salt), c.Tag)
 	return nil
 }
 

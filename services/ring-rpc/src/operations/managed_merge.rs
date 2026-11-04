@@ -356,6 +356,10 @@ pub(crate) mod tests {
     }
 
     impl TransactionSource for EscrowRingSource {
+        async fn salted_list_writers(&self, _ring: Address) -> Result<Vec<Address>, ClientError> {
+            Ok(vec![list_writer().pubkey()])
+        }
+
         async fn transactions_by_tag(
             &self,
             _request: TransactionPage,
@@ -480,9 +484,9 @@ pub(crate) mod tests {
     /// No outcome until a test sets one, a send fails while `down`.
     pub(crate) struct ScriptedChain {
         height: Mutex<u64>,
-        outcome: Mutex<Option<ChainOutcome>>,
+        pub(crate) outcome: Mutex<Option<ChainOutcome>>,
         sent: Mutex<usize>,
-        down: Mutex<bool>,
+        pub(crate) down: Mutex<bool>,
     }
 
     impl Default for ScriptedChain {
@@ -498,6 +502,17 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl ChainSubmit for ScriptedChain {
+        async fn account_data(
+            &self,
+            _address: solana_address::Address,
+        ) -> Result<Option<Vec<u8>>, RingRpcError> {
+            Ok(None)
+        }
+
+        async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
+            Ok(0)
+        }
+
         async fn slot(&self) -> Result<u64, RingRpcError> {
             Ok(1)
         }
@@ -558,6 +573,17 @@ pub(crate) mod tests {
         RingAssets::new([Mint::new(MINT, 7)]).expect("assets")
     }
 
+    pub(crate) fn list_writer() -> Keypair {
+        Keypair::new_from_array([23; 32])
+    }
+
+    /// A zero lead byte as `RegisterKey` proves.
+    pub(crate) const LIST_SALT: [u8; 32] = {
+        let mut salt = [9; 32];
+        salt[0] = 0;
+        salt
+    };
+
     pub(crate) struct Fixture {
         pub(crate) hub: Arc<Hub<EscrowRingSource>>,
         builder: Arc<RecordingBuilder>,
@@ -612,7 +638,12 @@ pub(crate) mod tests {
                     crate::cosign::ApproveClass::Transfers,
                 ]));
             if let Some(relay) = relay {
-                builder = builder.with_relay(relay);
+                builder = builder.with_relay(relay).with_relay_budget(
+                    crate::relay_reservations::RelayBudget {
+                        total_lamports: 1_000_000,
+                        signer_lamports: 1_000_000,
+                    },
+                );
             }
             let hub = builder.local(RING, auditor).expect("hub");
             Self {
@@ -640,7 +671,8 @@ pub(crate) mod tests {
                     &nullifier_pk,
                 )
                 .expect("owner hash"),
-                sealed: NullifierKeyEnvelope::new(&key, &auditor)
+                list_tag: custom_ring_interface::domain::list_tag(&LIST_SALT).expect("tag"),
+                sealed: NullifierKeyEnvelope::new(&key, &LIST_SALT, &auditor)
                     .expect("envelope")
                     .sealed,
             };

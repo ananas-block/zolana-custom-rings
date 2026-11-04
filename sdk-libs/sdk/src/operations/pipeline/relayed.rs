@@ -176,7 +176,7 @@ impl Relayed<'_> {
                     }),
                 )
             }
-            RelayRail::Delegate { delegate } => {
+            RelayRail::Delegate { delegate, plan } => {
                 match config.delegate {
                     None => return Err(RingError::MissingDelegate),
                     Some(stored) if stored != *delegate => {
@@ -188,14 +188,16 @@ impl Relayed<'_> {
                 if !Shape::new(proof_inputs.input_utxos.len(), n_outputs).is_ring_authority() {
                     return Err(RingError::ShapeUnkeyed { rail: ring_rail });
                 }
+                let delivery = match plan {
+                    Some(plan) => RingDelivery::Anonymous(plan.clone()),
+                    None => DeliveredRail {
+                        outputs: n_outputs,
+                        rail: ring_rail,
+                    }
+                    .delivery()?,
+                };
                 (
-                    rail(
-                        DeliveredRail {
-                            outputs: n_outputs,
-                            rail: ring_rail,
-                        }
-                        .delivery()?,
-                    ),
+                    rail(delivery),
                     Vec::new(),
                     Spend::Delegate {
                         delegate: *delegate,

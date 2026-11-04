@@ -5,7 +5,6 @@ mod assets;
 mod error;
 mod published;
 mod recipient_delivery;
-mod ring_delivered;
 mod ring_deposit;
 
 use std::cell::RefCell;
@@ -38,13 +37,9 @@ pub use assets::RingAssets;
 pub use error::RingRailError;
 pub use published::PublishedSlot;
 pub use recipient_delivery::{
-    open_recipient_body, open_reply, open_sender_bundle, recipient_body, seal_recipient_body,
-    seal_reply, seal_sender_bundle, AnonymousOutput, OpenedBody, OpenedNote, OutputBlindings,
-    ReplyClaim, ReplyMetadata,
-};
-pub use ring_delivered::{
-    is_contributory, open_delivered_body, seal_delivered_body, DeliveredBody, RingDelivered,
-    RingDeliveredNote, RingDeliveryOpening, RingUtxoOwner,
+    is_contributory, open_recipient_body, open_reply, open_sender_bundle, recipient_body,
+    seal_recipient_body, seal_reply, seal_sender_bundle, AnonymousOutput, OpenedBody, OpenedNote,
+    OutputBlindings, ReplyClaim, ReplyMetadata,
 };
 pub use ring_deposit::RingDepositPlaintext;
 
@@ -52,7 +47,7 @@ pub use ring_deposit::RingDepositPlaintext;
 pub enum RingDelivery {
     /// A body under the owner's viewing key, the owner tag its `u`.
     Delivered,
-    /// Scheme 11 under view tags at each recipient output, scheme 12 in a message.
+    /// Scheme 13 under view tags at each recipient output, scheme 12 in a message.
     Anonymous(Box<AnonymousPlan>),
 }
 

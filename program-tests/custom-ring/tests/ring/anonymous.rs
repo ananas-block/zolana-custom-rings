@@ -254,7 +254,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         indexed.output_slots.iter().any(|slot| {
             slot.view_tag != [0; 32]
                 && slot.view_tag != recipient_keys.viewing_pubkey().u()
-                && ring_recipient_output_body(&slot.payload).is_some()
+                && ring_body_output(&slot.payload).is_some()
         }),
         "the payment publishes a recipient body under a slot secret tag"
     );
@@ -293,7 +293,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     input_amounts.sort_unstable();
     assert_eq!(input_amounts, [RING_DEPOSIT_B, RING_DEPOSIT_A]);
 
-    // 5. The recipient finds the payment by its proven tag, a body names no sender.
+    // 5. The recipient finds the payment by its tag hint, a body names no sender.
     let mut recipient_wallet = fresh_wallet(&env, recipient_keys, ring_program)?;
     recipient_wallet.sync(&env)?;
     assert_eq!(

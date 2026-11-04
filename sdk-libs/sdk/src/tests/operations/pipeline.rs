@@ -80,6 +80,7 @@ fn payment(to: &RingAddress, amount: u64) -> AnonymousPayment {
         asset: Mint::SOL,
         amount,
         reply: None,
+        data: crate::NoteData::default(),
     }
 }
 
@@ -947,6 +948,8 @@ impl<'a> MoveFixture<'a> {
                 })
                 .collect(),
             assets: self.assets,
+            wide_frames: WideFrames::Refuse,
+            tx_viewing_key: spr_keypair::ViewingKey::new(),
         }
     }
 }
@@ -3431,8 +3434,19 @@ async fn a_salted_list_holds_an_enrolled_sender_to_its_list_tag() {
         .with_tracking(&[address])
         .client();
     let transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    let member =
+        Member::from_bytes(address.signing_pubkey.owner_proof_input_hash().unwrap()).unwrap();
     assert!(matches!(
-        owner_transfer(&sender, transaction).frame(&client).await.err(),
+        owner_transfer(&sender, transaction.clone())
+            .frame(&client)
+            .await
+            .err(),
+        Some(RingError::ListSaltUnknown { .. })
+    ));
+    assert!(matches!(
+        owner_transfer(&sender, transaction)
+            .with_list_salt(member, [9; 32])
+            .frame(&client).await.err(),
         Some(RingError::ListSaltMismatch { member })
             if member == address.signing_pubkey.owner_proof_input_hash().unwrap()
     ));
@@ -3476,4 +3490,87 @@ async fn a_salted_owner_passes_under_its_rows_tag_alone() {
         read(&unenrolled).await,
         Err(RingError::Resolve(ResolveError::NotEnrolled))
     ));
+}
+
+/// SPP holds a data hash to a signing owner, a ring data hash to nobody.
+#[tokio::test]
+async fn a_hidden_sender_pays_a_note_carrying_data() {
+    use crate::{tests::support::keypair, ApplicationData, NoteData};
+
+    let sender = keypair(1);
+    let reader = keypair(2);
+    let recipient = ring_address(&reader);
+    let chain = enrolled(&[&sender, &reader]);
+    let pay = |data: NoteData| {
+        owner_transfer(
+            &sender,
+            ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]),
+        )
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(payment(&recipient, 4).with_data(data))
+        .unwrap()
+    };
+
+    let hashed = pay(NoteData {
+        ring_data_hash: Some([3; 32]),
+        application: None,
+    });
+    let staged = stage_anonymous(&hashed, &chain).await.unwrap();
+    assert!(staged.owner_signers.is_empty());
+    let paid = |staged: &Staged<'_>| {
+        staged
+            .proof_inputs
+            .output_utxos
+            .iter()
+            .find(|output| output.owner_address == Some(recipient.recipient))
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(paid(&staged).ring_data_hash, Some([3; 32]));
+
+    let signed = pay(NoteData {
+        ring_data_hash: None,
+        application: Some(ApplicationData {
+            hash: [4; 32],
+            bytes: b"app".to_vec(),
+        }),
+    });
+    let staged = stage_anonymous(&signed, &chain).await.unwrap();
+    assert_eq!(paid(&staged).data_hash, Some([4; 32]));
+    let position = staged
+        .proof_inputs
+        .output_utxos
+        .iter()
+        .position(|output| output.owner_address == Some(recipient.recipient))
+        .unwrap();
+    assert_eq!(
+        payment_at(&staged, &reader, position).data,
+        [&[4; 32][..], b"app"].concat()
+    );
+    let assembled = signed
+        .assemble(&enrolled(&[&sender, &reader]).client())
+        .await
+        .unwrap();
+    let frame = &assembled.frame;
+    let instruction = frame
+        .accounts
+        .instruction(frame.ring, &assembled.config, &frame.parts)
+        .unwrap();
+    let parsed = RingTransactData::parse(&instruction.data[1..], RingRail::Anonymous).unwrap();
+    assert!(parsed.data().has_data);
+    let owner = recipient
+        .recipient
+        .signing_pubkey
+        .confidential_view_tag()
+        .unwrap();
+    assert_eq!(staged.owner_signers, [Address::new_from_array(owner)]);
+
+    let unbound = pay(NoteData {
+        ring_data_hash: None,
+        application: Some(ApplicationData {
+            hash: [0; 32],
+            bytes: b"app".to_vec(),
+        }),
+    });
+    assert!(stage_anonymous(&unbound, &chain).await.is_err());
 }

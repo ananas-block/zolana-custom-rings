@@ -1,11 +1,13 @@
 use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
+use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::NullifierKey;
 use thiserror::Error;
 use zolana_ring_client::rpc::{
     AuthorityTransferAttestation, DelegateNotesAttestation, GetDelegateNotesRequest,
-    GetDelegateNotesResponse, PrepareAuthorityTransferRequest, RelayStep,
+    GetDelegateNotesResponse, GetListSaltRequest, GetListSaltResponse, ListSaltAttestation,
+    PrepareAuthorityTransferRequest, RelayStep,
 };
 
 use crate::{
@@ -32,6 +34,10 @@ pub enum AuthorityTransferError {
     SourceKey = -32223,
     #[error("the service runs no relay")]
     RelayUnavailable = -32224,
+    #[error("the transaction key is not a clamped X25519 secret")]
+    TxViewingKey = -32225,
+    #[error("the signer writes no salted list of the ring")]
+    NotListWriter = -32226,
 }
 
 impl AuthorityTransferError {
@@ -112,6 +118,64 @@ impl<S: TransactionSource> Hub<S> {
         })
     }
 
+    /// An owner dodging a block need not hand over an address.
+    pub async fn list_salt(
+        &self,
+        request: &GetListSaltRequest,
+    ) -> Result<GetListSaltResponse, RingRpcError> {
+        let (ring, writer, owner) = (request.ring.0, request.writer.0, request.owner.0);
+        let service = self.service(Some(ring))?;
+        let shared = self.shared();
+        let now = shared.clock.now()?;
+        // 1. The named key signed the read for the service and ring.
+        let nonce = WalletCheck {
+            wallet: writer,
+            signature: &request.signature,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            attestation: &ListSaltAttestation {
+                target: service.read_target(),
+                writer,
+                owner,
+            },
+            now,
+        }
+        .decide()?;
+        // 2. The policy authority or the authority of a salted list's registry, under the auditor key held here.
+        let config = shared
+            .source
+            .ring_config(ring)
+            .await?
+            .ok_or(AuthorityTransferError::NotListWriter)?;
+        let writes = config.roles.policy == writer
+            || shared
+                .source
+                .salted_list_writers(ring)
+                .await?
+                .contains(&writer);
+        if !writes {
+            return Err(AuthorityTransferError::NotListWriter.into());
+        }
+        if config.auditor_pubkey != service.auditor_pubkey() {
+            return Err(AuthorityTransferError::EscrowUnserved.into());
+        }
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
+        Ok(GetListSaltResponse {
+            list_salt: service
+                .tracked_list_salt(&owner.to_bytes())
+                .await?
+                .map(Hash),
+        })
+    }
+
     /// A repeated request returns the stored relay step.
     pub async fn prepare_authority_transfer(
         &self,
@@ -139,6 +203,10 @@ impl<S: TransactionSource> Hub<S> {
             now,
         }
         .decide()?;
+        let tx_viewing_key = request
+            .tx_viewing_key
+            .key()
+            .map_err(|_| AuthorityTransferError::TxViewingKey)?;
         let relay_id = request
             .relay_id()
             .map_err(|_| RingRpcError::StateUnavailable)?;
@@ -153,15 +221,17 @@ impl<S: TransactionSource> Hub<S> {
         if config.auditor_pubkey != service.auditor_pubkey() {
             return Err(AuthorityTransferError::EscrowUnserved.into());
         }
-        shared
-            .replay
-            .accept(ReplayCheck {
-                ring,
-                nonce,
-                timestamp: request.timestamp,
-                now,
-            })
-            .await?;
+        if !relay.holds(&relay_id).await? {
+            shared
+                .replay
+                .accept(ReplayCheck {
+                    ring,
+                    nonce,
+                    timestamp: request.timestamp,
+                    now,
+                })
+                .await?;
+        }
         // 3. The escrowed secret opens to the source's nullifier key and stays in memory.
         let source = transfer.source.0;
         let owner_key = source
@@ -195,6 +265,7 @@ impl<S: TransactionSource> Hub<S> {
                     delegate,
                     source,
                     nullifier_key: &nullifier_key,
+                    tx_viewing_key,
                     notes: &notes,
                     mint,
                     payments: transfer
@@ -223,7 +294,7 @@ mod tests {
     use solana_message::VersionedMessage;
     use solana_signer::Signer;
     use spr_client::ComputeBudgetConfig;
-    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
+    use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
     use zolana_ring_client::rpc::{
         unix_now, AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation,
@@ -233,15 +304,19 @@ mod tests {
     use super::*;
     use crate::{
         database::Store,
-        managed_merge::tests::{fee_payer, Fixture, ScriptedChain, GENESIS, MINT, RING},
+        managed_merge::tests::{
+            fee_payer, list_writer, Fixture, ScriptedChain, GENESIS, LIST_SALT, MINT, RING,
+        },
         relay::{RelayParts, RelayPayload},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+        relay_reservations::RelayReservations,
     };
 
     #[derive(Default)]
     struct SealingProver {
         sealed: Mutex<Vec<Sealed>>,
         proven: Mutex<Vec<(Address, [u8; 31])>>,
+        frame: Mutex<Option<Vec<u8>>>,
     }
 
     struct Sealed {
@@ -256,7 +331,7 @@ mod tests {
             let RelayPayload::Transfer(proof_inputs) = request.payload else {
                 panic!("an authority transfer proves a transfer");
             };
-            let RelayRail::Delegate { delegate } = proof_inputs.rail else {
+            let RelayRail::Delegate { delegate, .. } = proof_inputs.rail else {
                 panic!("an authority transfer proves on the delegate rail");
             };
             self.proven
@@ -270,7 +345,12 @@ mod tests {
                         AccountMeta::new(request.parties.fee_payer, true),
                         AccountMeta::new_readonly(delegate, true),
                     ],
-                    data: vec![21],
+                    data: self
+                        .frame
+                        .lock()
+                        .expect("frame")
+                        .clone()
+                        .unwrap_or_else(|| vec![21]),
                 },
                 budget: ComputeBudgetConfig::new(400_000),
                 co_signers: Vec::new(),
@@ -288,10 +368,11 @@ mod tests {
                 secret: *seal.nullifier_key.secret(),
                 nullifiers: seal.notes.iter().map(|note| note.nullifier).collect(),
             });
-            let tx_viewing_key = ViewingKey::new();
+            let tx_viewing_key = seal.tx_viewing_key;
             Ok(RelayProofInputs {
                 rail: RelayRail::Delegate {
                     delegate: seal.delegate,
+                    plan: None,
                 },
                 ring_program_id: seal.ring,
                 sender: seal.source,
@@ -397,6 +478,68 @@ mod tests {
         );
     }
 
+    /// A retry of the signed request passes its own nonce, proves nothing and resumes the upload.
+    #[tokio::test]
+    async fn a_wide_delegate_frame_reserves_under_the_delegate_and_a_retry_resumes() {
+        let delegate = Keypair::new_from_array([21; 32]);
+        let prover = Arc::new(SealingProver::default());
+        let mut frame = vec![9; 6000];
+        frame[0] = custom_ring_interface::tag::AUTHORITY_TRANSFER;
+        *prover.frame.lock().expect("frame") = Some(frame);
+        let chain = Arc::new(ScriptedChain::default());
+        *chain.outcome.lock().expect("outcome") =
+            Some(crate::landing::ChainOutcome::Confirmed { slot: 1 });
+        *chain.down.lock().expect("down") = true;
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let relay = RelayParts {
+            store: store.clone(),
+            prover: prover.clone(),
+            fee_payer: fee_payer(),
+            chain: chain.clone(),
+        };
+        let fixture = Fixture::serving(Some(delegate.pubkey()), Some(relay)).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        let escrowed = fixture.escrow_notes(&wallet, 2);
+        let reservations = RelayReservations::new(store.connection());
+
+        let stranger = Keypair::new_from_array([22; 32]);
+        let foreign = request(&fixture, &stranger, address(&wallet, &escrowed));
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&foreign)
+            .await
+            .is_err());
+        let foreign_id = foreign.relay_id().expect("relay id");
+        assert!(reservations
+            .by_relay(&foreign_id)
+            .await
+            .expect("read")
+            .is_none());
+
+        let signed = request(&fixture, &delegate, address(&wallet, &escrowed));
+        let relay_id = signed.relay_id().expect("relay id");
+        assert!(fixture
+            .hub
+            .prepare_authority_transfer(&signed)
+            .await
+            .is_err());
+        let held = reservations
+            .by_relay(&relay_id)
+            .await
+            .expect("read")
+            .expect("reservation");
+        assert_eq!(held.signer, delegate.pubkey());
+
+        *chain.down.lock().expect("down") = false;
+        let step = fixture
+            .hub
+            .prepare_authority_transfer(&signed)
+            .await
+            .expect("the retry");
+        assert!(matches!(step, RelayStep::SignMessage { .. }), "{step:?}");
+        assert_eq!(prover.proven.lock().expect("proven").len(), 1);
+    }
+
     fn notes_request(
         fixture: &Fixture,
         signer: &Keypair,
@@ -439,6 +582,49 @@ mod tests {
             .await
             .expect_err("only the configured delegate reads");
         assert_eq!(ErrorObjectOwned::from(refused).code(), -32220);
+    }
+
+    fn salt_request(fixture: &Fixture, signer: &Keypair, owner: Address) -> GetListSaltRequest {
+        SignedRequest::new(ListSaltAttestation {
+            target: ReadTarget {
+                cluster: GENESIS,
+                service: fixture.hub.service_pubkey(),
+                ring: RING,
+            },
+            writer: signer.pubkey(),
+            owner,
+        })
+        .at(unix_now().expect("clock"))
+        .sign(signer)
+        .expect("signed request")
+    }
+
+    #[tokio::test]
+    async fn a_list_writer_reads_the_salt_and_another_key_nothing() {
+        let (fixture, _prover) = served(Keypair::new_from_array([21; 32]).pubkey()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 1);
+        let writer = list_writer();
+        let read = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &writer, wallet.pubkey()))
+            .await
+            .expect("the writer reads");
+        assert_eq!(read.list_salt.expect("salt").0, LIST_SALT);
+        let impostor = Keypair::new_from_array([22; 32]);
+        let refused = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &impostor, wallet.pubkey()))
+            .await
+            .expect_err("only a writer reads");
+        assert_eq!(ErrorObjectOwned::from(refused).code(), -32226);
+        let unenrolled = Keypair::new_from_array([12; 32]);
+        let none = fixture
+            .hub
+            .list_salt(&salt_request(&fixture, &writer, unenrolled.pubkey()))
+            .await
+            .expect("no row reads nothing");
+        assert_eq!(none.list_salt, None);
     }
 
     #[tokio::test]

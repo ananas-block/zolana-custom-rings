@@ -122,12 +122,21 @@ describe("BufferedFrame", () => {
     });
   });
 
+  it("admits a delegate frame", async () => {
+    const buffered = await BufferedFrame.of(
+      inline(5000, RingInstructionTag.authorityTransfer),
+      WRITER,
+      0n,
+    );
+    expect(buffered.settle().data?.[0]).toBe(RingInstructionTag.settleBuffered);
+  });
+
   it("has no buffer past the CPI limit or for another tag", async () => {
     await expect(BufferedFrame.of(inline(MAX_FRAME_LEN + 1), WRITER, 0n)).rejects.toMatchObject({
       code: "RING_FRAME_TOO_LARGE",
     });
     await expect(
-      BufferedFrame.of(inline(10, RingInstructionTag.authorityTransfer), WRITER, 0n),
+      BufferedFrame.of(inline(10, RingInstructionTag.merge), WRITER, 0n),
     ).rejects.toMatchObject({ code: "RING_BUFFERED_TAG" });
     await expect(BufferedFrame.of(inline(10), WRITER, 1n << 64n)).rejects.toMatchObject({
       code: "RING_BUFFERED_NONCE",

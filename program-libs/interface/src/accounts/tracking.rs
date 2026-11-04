@@ -421,7 +421,7 @@ pub fn tracking_chain_start(
 const _: () = assert!(core::mem::align_of::<TrackingRegistry>() == 1);
 const _: () = assert!(TrackingRegistry::SIZE == 1606);
 const _: () = assert!(core::mem::align_of::<TrackingAuthorization>() == 1);
-const _: () = assert!(TrackingAuthorization::SIZE == 241);
+const _: () = assert!(TrackingAuthorization::SIZE == 273);
 const _: () = assert!(core::mem::align_of::<OwnerGrant>() == 1);
 const _: () = assert!(OwnerGrant::SIZE == 2);
 

@@ -1,4 +1,4 @@
-//! Gross public payments screened by policy version 4.
+//! Gross public payments the policy screens.
 use crate::{CustomRingError, SettlementAccount};
 use spr_hasher::{
     hash_chain::create_hash_chain_4,

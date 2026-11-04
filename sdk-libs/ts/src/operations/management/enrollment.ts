@@ -14,10 +14,10 @@ import {
   ZERO_NULLIFIER_PK,
   type SignerAccount,
 } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/zolana/keypair";
 
-import { listSaltOf, listTagOf } from "../../crypto/keys/list-salt.js";
+import { listTagOf } from "../../crypto/keys/list-salt.js";
 import { checkedCustomRingProof } from "../../protocol/codec/ring-codecs.js";
 import { RingError } from "../../protocol/error.js";
 import { checkedViewingU } from "../../protocol/membership/member-opening.js";
@@ -46,7 +46,7 @@ export interface EnrollmentSeal {
   readonly nullifierPk: Bytes32;
   readonly listTag: Bytes32;
   readonly ephU: Bytes32;
-  readonly ciphertext: Bytes32;
+  readonly ciphertext: Bytes64;
 }
 
 export interface Enroll {
@@ -78,7 +78,7 @@ export async function enrollInstruction(
     .bytes(seal.listTag, 32, "listTag")
     .bytes(checkedViewingU(input.viewingU), 32, "viewingU")
     .bytes(seal.ephU, 32, "ephU")
-    .bytes(seal.ciphertext, 32, "ciphertext");
+    .bytes(seal.ciphertext, 64, "ciphertext");
   if (input.proof !== undefined)
     writer.bytes(checkedCustomRingProof(input.proof), input.proof.length, "proof");
   return instruction(
@@ -132,6 +132,8 @@ export async function proveEnrollment(
     holder: Pick<ShieldedKeypairLike, "nullifierKey">;
     owner: Address;
     trackingRegistry: Address;
+    /** `RingKeys.listSalt` of the ring. */
+    listSalt: Bytes32;
     client: EnrollmentReadClient;
     prover: RingProver;
   }>,
@@ -147,11 +149,11 @@ export async function proveEnrollment(
   const secret = nullifierKey.secretBytes();
   const nullifierSecret = rightAlign(secret);
   secret.fill(0);
-  const envelope = sealNullifierKey(nullifierKey, auditor);
+  const envelope = sealNullifierKey(nullifierKey, input.listSalt, auditor);
   try {
     const seal: EnrollmentSeal = Object.freeze({
       nullifierPk: envelope.nullifierPublicKey,
-      listTag: listTagOf(listSaltOf(nullifierKey, registry.ringId)),
+      listTag: listTagOf(input.listSalt),
       ephU: envelope.sealed.ephemeralPublicKey.u(),
       ciphertext: envelope.sealed.ciphertext,
     });
@@ -170,6 +172,7 @@ export async function proveEnrollment(
         ringId: registry.ringId,
         member,
         nullifierSecret,
+        listSalt: input.listSalt,
         ephSk: envelope.ephemeralSecret,
         auditorPk: auditor.u(),
       },

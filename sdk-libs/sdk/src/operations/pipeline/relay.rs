@@ -127,9 +127,14 @@ impl RingTransfer<Delegated<'_>> {
         client: &C,
     ) -> Result<RelayProofInputs, RingError> {
         let sealed = self.seal_unread(client).await?;
+        let plan = match sealed.pipeline.staged.rail.delivery() {
+            RingDelivery::Anonymous(plan) => Some(plan.clone()),
+            RingDelivery::Delivered => None,
+        };
         Ok(sealed.relay_proof_inputs(
             RelayRail::Delegate {
                 delegate: self.rail.delegate,
+                plan,
             },
             self.rail.source_key.clone(),
         ))

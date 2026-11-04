@@ -53,7 +53,7 @@ fn ix_data(viewing: u8) -> EnrollIxData {
         list_tag: field(2),
         viewing_u: field(viewing),
         eph_u: field(4),
-        ciphertext: [5; 32],
+        ciphertext: [5; 64],
     }
 }
 
@@ -109,7 +109,7 @@ impl Ledger {
             list_tag: field(2),
             viewing_u: field(viewing),
             eph_u: field(4),
-            ciphertext: [5; 32],
+            ciphertext: [5; 64],
             revision: revision.to_le_bytes(),
             applied_revision: [0; 8],
         };
@@ -171,7 +171,7 @@ impl Ledger {
             list_tag: field(2),
             viewing_u: field(viewing),
             eph_u: field(4),
-            ciphertext: [5; 32],
+            ciphertext: [5; 64],
             revision: revision.to_le_bytes(),
             applied_revision: [0; 8],
         }
@@ -254,7 +254,7 @@ async fn a_replayed_enrollment_takes_final_fields_from_the_account_and_its_key_f
             held.eph_u,
             held.ciphertext
         ),
-        (field(1), field(2), field(4), [5; 32])
+        (field(1), field(2), field(4), [5; 64])
     );
     assert_eq!(held.authorization, ledger.authorization.to_bytes());
     ledger.stop().await;
@@ -501,7 +501,7 @@ async fn an_applied_enrollment_opens_under_the_program_root_with_its_seal() {
     assert_eq!(no_row, None);
     let seal = present.record.seal.as_ref().unwrap();
     assert_eq!(seal.owner, OWNER.into());
-    assert_eq!(seal.ciphertext.0, [5; 32]);
+    assert_eq!(seal.ciphertext.0, [5; 64]);
     assert_eq!(seal.eph_pk.0[1..], field(4));
     let page = api::tracking_records(
         db,

@@ -1170,6 +1170,20 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
 }
 
 #[test]
+fn a_ring_tag_equal_to_spp_merge_names_no_record_and_no_source() {
+    let (mut group, _) = v2_merge_group();
+    group.outer.data[0] = tag::RING_MERGE_V2;
+    let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
+    assert_eq!(origin.merge_disclosure, None);
+    let (mut group, _) = v2_merge_group();
+    group.inner[0].program_id = RING;
+    assert!(matches!(
+        ring_event_origin_in(std::slice::from_ref(&group), 0, RING),
+        Err(AuditError::InvalidEventIndex(0))
+    ));
+}
+
+#[test]
 fn rpc_origin_binds_the_confirmed_slot() {
     let origin =
         confirmed_origin(withdrawing_transaction(Vec::new(), Vec::new()), 0, RING).unwrap();
@@ -1198,7 +1212,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 fn policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../test-vectors/proof/ring-transact-expansion-v4.json"
+        "../../../../../test-vectors/proof/ring-transact-expansion.json"
     ))
     .unwrap();
     let bytes = hex::decode(vectors["cases"][0]["compact"].as_str().unwrap()).unwrap();
@@ -1369,7 +1383,7 @@ fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
 
 #[test]
 fn a_frame_reads_under_its_tag_alone() {
-    let current = include_str!("../../../../../test-vectors/settlement/frame_v4.hex");
+    let current = include_str!("../../../../../test-vectors/settlement/frame.hex");
     let [first, ..] = &tagged_frames(current, ring_tag::TRANSFER)[..] else {
         panic!("a vector frame")
     };

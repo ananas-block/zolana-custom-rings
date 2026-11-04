@@ -133,6 +133,7 @@ export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export { NF_KEY_ENC_INFO } from "../crypto/audit/audit.js";
 export {
   fetchRingSealedKey,
+  openListSalt,
   openNullifierKey,
   openRingSealedKey,
   sealNullifierKey,
@@ -229,7 +230,12 @@ export type {
   RingApprovalRequest,
   RingTransactionIntent,
 } from "../protocol/transaction/intent.js";
-export type { AnonymousPayment, AnonymousSpendSigner } from "../operations/payments/anonymous.js";
+export type {
+  AnonymousPayment,
+  AnonymousSpendSigner,
+  ApplicationData,
+  NoteData,
+} from "../operations/payments/anonymous.js";
 export {
   AnonymousTransfer,
   CustomRingTransfer,
@@ -573,6 +579,11 @@ export {
 export { privateListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
 export { BufferedFrame } from "../operations/payments/buffered-frame.js";
+export {
+  encodeRelayEnrollInputs,
+  enrollRequestDigest,
+  type RelayEnrollInputs,
+} from "../protocol/ring-rpc/relay-enroll-inputs.js";
 export type { TransactionSize } from "../operations/workflow/compile.js";
 export {
   decideAddressCeiling,

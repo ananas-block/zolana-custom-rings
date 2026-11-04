@@ -47,8 +47,8 @@ use zolana_ring_transaction::{PublishedSlot, RingDelivery, RingOutputRail};
 
 pub use self::{
     anonymous::{
-        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, CoOwner, EntrySpend,
-        RingPayment, WideFrames,
+        Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CoOwner,
+        EntrySpend, NoteData, RingPayment, WideFrames,
     },
     delegate::{
         DelegateMove, DelegateOutput, DelegatePayment, DelegateTransfer, DelegateTransferInput,
@@ -61,6 +61,7 @@ pub use self::{
 
 pub(crate) use self::{
     anonymous::HiddenOwner,
+    delegate::delegate_rail,
     pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, RecordPlan, SourceGates},
 };
 
@@ -143,7 +144,7 @@ pub(crate) struct Staged<'a> {
     pub spend: Spend<'a>,
     /// Set when the wallet sealed the auditor message the owner signed over.
     pub presealed: Option<PresealedAudit>,
-    /// Salts the authority's keys do not derive.
+    /// Every enrolled subject a salted list reads.
     pub list_salts: Vec<SubjectListSalt>,
 }
 
@@ -563,9 +564,7 @@ impl<'a> Prepared<'a> {
     ) -> Result<PolicyInputs, RingError> {
         let staged = &self.pipeline.staged;
         let proof_inputs = &staged.proof_inputs;
-        let sender_pk_hash = staged.sender.signing_pubkey.owner_proof_input_hash()?;
         let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
-        let ring_id = self.pipeline.ring.ring_id()?;
         PolicyRead {
             token_owner_hint: match &staged.spend {
                 Spend::Anonymous(a) => a.token_owner,
@@ -578,11 +577,7 @@ impl<'a> Prepared<'a> {
             spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
             n_out: self.preview.n_out,
             public: &public,
-            salts: &KnownSalts::new(staged.list_salts.clone()).with_authority(
-                &staged.authority,
-                sender_pk_hash,
-                &ring_id,
-            )?,
+            salts: &KnownSalts::new(staged.list_salts.clone()),
             wide_floor: staged
                 .presealed
                 .as_ref()

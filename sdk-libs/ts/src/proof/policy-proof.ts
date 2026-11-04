@@ -127,7 +127,7 @@ export interface PolicyProving {
   readonly publicSlots: PublicSlots;
 }
 
-/** One owner's salt, from its `RingAddress` or `listSaltOf`. */
+/** From the owner's `RingAddress` or `RingKeys.listSalt`. */
 export interface RingListSalt {
   readonly owner: Bytes32;
   readonly salt: Bytes32;

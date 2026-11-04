@@ -1,5 +1,5 @@
 use anyhow::Result;
-use custom_ring_interface::tracking::TrackingAuthorization;
+use custom_ring_interface::{tracking::TrackingAuthorization, REGISTER_KEY_CIPHERTEXT_LEN};
 use sea_orm::{ConnectionTrait, QueryResult};
 use solana_address::Address;
 
@@ -15,7 +15,7 @@ pub(crate) struct Enrollment {
     pub ct_hash: [u8; 32],
     pub list_tag: [u8; 32],
     pub eph_u: [u8; 32],
-    pub ciphertext: [u8; 32],
+    pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
     pub viewing_u: [u8; 32],
     pub revision: u64,
     pub applied_revision: u64,
@@ -191,7 +191,7 @@ mod tests {
             ct_hash: [2; 32],
             list_tag: [3; 32],
             eph_u: [4; 32],
-            ciphertext: [5; 32],
+            ciphertext: [5; REGISTER_KEY_CIPHERTEXT_LEN],
             viewing_u: [6; 32],
             revision: 1,
             applied_revision: 0,

@@ -366,7 +366,6 @@ export interface TransactionAuditInput {
   readonly knownUtxos?: KnownUtxos;
 }
 
-/** One v4 transfer, the envelope's count kept for the spend index. */
 export interface OpenedRingAudit {
   readonly audited: AuditedRingTransaction;
   /** `R`, a position at or past it is padding. */

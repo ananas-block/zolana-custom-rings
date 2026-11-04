@@ -4,10 +4,6 @@ use spr_event::{OutputDataEncoding, CONFIDENTIAL_ENCRYPTED_SCHEME_TAG};
 
 use crate::{audit_stream::RECIPIENT_BODY_LEN, CustomRingError};
 
-/// Read only, nothing encodes it.
-pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
-/// Read only, nothing encodes it.
-pub const RING_RECIPIENT_SCHEME_TAG: u8 = 11;
 pub const RING_SENDER_BUNDLE_SCHEME_TAG: u8 = 12;
 /// `u16le(body_len) || body || reply`, one form on every rail, the reply absent without reply metadata.
 pub const RING_BODY_SCHEME_TAG: u8 = 13;
@@ -24,17 +20,6 @@ pub const CONFIDENTIAL_DATA_FREE_BODY_LEN: usize =
 
 /// The encoding tag and the u32 body length before the scheme byte.
 const BODY_OFFSET: usize = 1 + 4;
-
-/// A scheme 10 body at its escrowed or full length, `None` otherwise.
-pub fn ring_confidential_delivered_output_body(data: &[u8]) -> Option<&[u8]> {
-    encrypted_output_body(data, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG)
-        .filter(|body| matches!(body.len(), 72 | 104))
-}
-
-/// `body || reply` of a scheme 11 output, `None` below the body's length.
-pub fn ring_recipient_output_body(data: &[u8]) -> Option<(&[u8; RECIPIENT_BODY_LEN], &[u8])> {
-    encrypted_output_body(data, RING_RECIPIENT_SCHEME_TAG)?.split_first_chunk()
-}
 
 pub fn encode_confidential_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
     encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body)

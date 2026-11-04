@@ -523,7 +523,7 @@ fn a_compact_transfer_reaches_the_key_of_its_capacity() {
     ));
 }
 
-/// Scheme 11 and the reply are bound by the statement alone, SPP stores both.
+/// Scheme 13 and the reply are bound by the statement alone, SPP stores both.
 #[test]
 fn reply_metadata_reaches_the_key_on_the_anonymous_rail_and_no_other() {
     let fixture = Fixture::new();
@@ -703,7 +703,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
 fn vector_case(name: &str) -> Vec<u8> {
     let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-vectors/proof/ring-transact-expansion-v4.json"
+        "/../../test-vectors/proof/ring-transact-expansion.json"
     )))
     .unwrap();
     let case = vectors["cases"]

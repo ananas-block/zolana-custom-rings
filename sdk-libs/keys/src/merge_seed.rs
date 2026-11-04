@@ -1,4 +1,5 @@
 use solana_address::Address;
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{shielded::ShieldedKeypair, X25519Pubkey};
 use spr_transaction::instructions::merge::MergeSeed;
 
@@ -35,6 +36,10 @@ fn held_seeds<H: HeldKeys>(
     requests
         .iter()
         .map(|request| {
+            // A real nullifier is canonical, the list salt's label is not.
+            if !is_canonical_bn254_scalar_be(&request.first_nullifier) {
+                return Err(RingKeyError::InvalidMergeSeed);
+            }
             MergeSeed::derive(
                 holder.held(&request.viewing_pubkey)?,
                 &request.ring_program_id,

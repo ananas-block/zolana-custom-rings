@@ -26,6 +26,7 @@ use zolana_secret_file::{
 mod authority_transfer;
 mod delegate_read;
 mod enrolment;
+mod list_salt_read;
 mod merge_settings;
 mod reader_grant;
 mod record_update;
@@ -40,6 +41,7 @@ mod wallet_status;
 pub use authority_transfer::*;
 pub use delegate_read::*;
 pub use enrolment::*;
+pub use list_salt_read::*;
 pub use merge_settings::*;
 pub use reader_grant::*;
 pub use record_update::*;

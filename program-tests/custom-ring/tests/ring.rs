@@ -67,9 +67,8 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
-    ring_recipient_output_body, ring_sender_bundle_output_body, AnonymousProofData,
-    CustomRingError, RingMode, RingPolicy, RingRail, RingRole, RingTransactData, RING_POLICY,
-    RING_POLICY_PDA_SEED,
+    ring_body_output, ring_sender_bundle_output_body, AnonymousProofData, CustomRingError,
+    RingMode, RingPolicy, RingRail, RingRole, RingTransactData, RING_POLICY, RING_POLICY_PDA_SEED,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
@@ -854,6 +853,7 @@ impl<'a> AnonymousPayment<'a> {
             asset: Mint::SOL,
             amount: self.amount,
             reply: None,
+            data: custom_ring_sdk::NoteData::default(),
         })?
         .with_shape(shape)?)
     }

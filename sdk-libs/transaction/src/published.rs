@@ -110,13 +110,13 @@ impl RingOutputRail {
             .ok_or(RingRailError::SenderBundleFraming)?;
         let frame_outputs = u32::try_from(published_outputs(&inputs.output_utxos).len())
             .map_err(|_| TransactionError::TooManyOutputs)?;
-        let proven = self.sender_bundle_tag(
+        let expected_tag = self.sender_bundle_tag(
             sender_viewing_pubkey,
             &inputs.first_nullifier()?,
             frame_outputs,
         )?;
         let body = ring_sender_bundle_output_body(&message.data)
-            .filter(|_| message.view_tag == proven)
+            .filter(|_| message.view_tag == expected_tag)
             .ok_or(RingRailError::SenderBundleFraming)?;
         Ok(Some(FramedSenderBundle {
             tag: &message.view_tag,

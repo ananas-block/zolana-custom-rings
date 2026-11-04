@@ -220,8 +220,8 @@ impl<'m> RingFrame<'m> {
             return Err(scope());
         }
         match frame.split_first() {
-            Some((&tag::TRANSFER, data)) => Ok(RingFrame {
-                tag: tag::TRANSFER,
+            Some((&frame_tag @ (tag::TRANSFER | tag::AUTHORITY_TRANSFER), data)) => Ok(RingFrame {
+                tag: frame_tag,
                 data,
                 accounts: inner.to_vec(),
             }),
@@ -577,22 +577,24 @@ mod tests {
         let buffer = Address::new_from_array([4; 32]);
         let spp = Address::new_from_array([5; 32]);
         let frame = [tag::TRANSFER, 1, 2, 3];
-        let settle = Instruction {
-            program_id: RING,
-            accounts: vec![
-                AccountMeta::new(buffer, false),
-                AccountMeta::new_readonly(RING, false),
-                AccountMeta::new_readonly(spp, false),
-            ],
-            data: settle_buffered_data(&frame_digest(&frame).unwrap()),
+        let settling = |frame: &[u8]| {
+            message(&[Instruction {
+                program_id: RING,
+                accounts: vec![
+                    AccountMeta::new(buffer, false),
+                    AccountMeta::new_readonly(RING, false),
+                    AccountMeta::new_readonly(spp, false),
+                ],
+                data: settle_buffered_data(&frame_digest(frame).unwrap()),
+            }])
         };
-        let message = message(&[settle]);
         let held = |frame: &[u8], owner| Account {
             owner,
             data: [bytemuck::bytes_of(&FrameBufferHeader::new(writer)), frame].concat(),
             ..Account::default()
         };
         assert_eq!(FRAME_BUFFER_HEADER_LEN, held(&[], RING).data.len());
+        let message = settling(&frame);
         let signed = held(&frame, RING);
         let read = RingFrame::of(&message, RING)
             .unwrap()
@@ -600,6 +602,18 @@ mod tests {
             .unwrap();
         assert_eq!((read.tag, read.data), (tag::TRANSFER, &frame[1..]));
         assert_eq!(read.accounts, [spp]);
+
+        let delegate = [tag::AUTHORITY_TRANSFER, 1, 2, 3];
+        let delegated = settling(&delegate);
+        let signed_delegate = held(&delegate, RING);
+        let read = RingFrame::of(&delegated, RING)
+            .unwrap()
+            .settled_from(&signed_delegate, RING)
+            .unwrap();
+        assert_eq!(
+            (read.tag, read.data),
+            (tag::AUTHORITY_TRANSFER, &delegate[1..])
+        );
 
         for refused in [
             held(&[tag::TRANSFER, 1, 2, 9], RING),
@@ -630,7 +644,7 @@ mod tests {
         let frame = hex::decode(
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../test-vectors/settlement/frame_v4.hex"
+                "/../../test-vectors/settlement/frame.hex"
             ))
             .lines()
             .next()

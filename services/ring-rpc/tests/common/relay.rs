@@ -35,6 +35,7 @@ use zolana_ring_rpc::{
 use zolana_ring_transaction::AnonymousPlan;
 
 pub const SLOT: u64 = 1_000;
+pub const RENT_LAMPORTS: u64 = 1_000;
 pub const LAST_VALID_BLOCK_HEIGHT: u64 = 500;
 const OWNER_SEED: [u8; 32] = [5; 32];
 
@@ -57,7 +58,7 @@ impl RelayProver for RecordingProver {
         let (signers, data) = match request.payload {
             RelayPayload::Transfer(proof_inputs) => (
                 match proof_inputs.rail {
-                    RelayRail::Delegate { delegate } => vec![delegate],
+                    RelayRail::Delegate { delegate, .. } => vec![delegate],
                     _ => Vec::new(),
                 },
                 proof_inputs.blinding_seed.to_vec(),
@@ -110,6 +111,10 @@ pub struct RecordingChain {
     pub refuse_next: AtomicBool,
     /// Answers every outcome lookup, `None` reads as a sent transaction landing.
     pub outcome: Mutex<Option<Option<ChainOutcome>>>,
+    /// The send at this count of landed transactions is refused.
+    pub refuse_at: AtomicU64,
+    pub slot: AtomicU64,
+    pub accounts: Mutex<Vec<Address>>,
 }
 
 impl Default for RecordingChain {
@@ -120,6 +125,9 @@ impl Default for RecordingChain {
             reply_lost: AtomicBool::new(false),
             refuse_next: AtomicBool::new(false),
             outcome: Mutex::new(None),
+            refuse_at: AtomicU64::new(u64::MAX),
+            slot: AtomicU64::new(SLOT),
+            accounts: Mutex::default(),
         }
     }
 }
@@ -133,7 +141,20 @@ impl RecordingChain {
 #[async_trait]
 impl ChainSubmit for RecordingChain {
     async fn slot(&self) -> Result<u64, RingRpcError> {
-        Ok(SLOT)
+        Ok(self.slot.load(Ordering::Relaxed))
+    }
+
+    async fn account_data(&self, address: Address) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(self
+            .accounts
+            .lock()
+            .expect("accounts")
+            .contains(&address)
+            .then(Vec::new))
+    }
+
+    async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
+        Ok(RENT_LAMPORTS)
     }
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
@@ -145,7 +166,13 @@ impl ChainSubmit for RecordingChain {
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
-        if self.refuse_next.swap(false, Ordering::Relaxed) {
+        let landed = self.sent.lock().expect("sent").len() as u64;
+        if self.refuse_next.swap(false, Ordering::Relaxed)
+            || self
+                .refuse_at
+                .compare_exchange(landed, u64::MAX, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             return Err(RelayError::SendRefused {
                 reason: "preflight refused".to_owned(),
             }

@@ -116,7 +116,7 @@ fn public_co_owner_receives_payment_under_each_owners_net_debit_cap() -> Result<
             .output_slots
             .iter()
             .filter(|slot| {
-                slot.view_tag != [0; 32] && ring_recipient_output_body(&slot.payload).is_some()
+                slot.view_tag != [0; 32] && ring_body_output(&slot.payload).is_some()
             })
             .count(),
         1

@@ -64,6 +64,14 @@ pub trait TransactionSource: Send + Sync {
         async { Ok(None) }
     }
 
+    /// The authorities of the registries a salted list reads.
+    fn salted_list_writers(
+        &self,
+        _ring: Address,
+    ) -> impl Future<Output = Result<Vec<Address>, ClientError>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
     fn transactions_by_tag(
         &self,
         request: TransactionPage,
@@ -572,6 +580,29 @@ impl TransactionSource for ChainSource {
         }
         .configuration()
         .map(Some)
+    }
+
+    async fn salted_list_writers(&self, ring: Address) -> Result<Vec<Address>, ClientError> {
+        let (address, _) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(Vec::new());
+        };
+        let policy = RingPolicy::decode(&account.owner, &ring, &account.data)
+            .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
+        let mut writers = Vec::new();
+        for registry in policy
+            .salted_registries()
+            .map_err(|_| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        {
+            let account = self.rpc.get_account(registry).await?;
+            writers.extend(
+                account
+                    .as_ref()
+                    .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+                    .map(|registry| registry.authority),
+            );
+        }
+        Ok(writers)
     }
 
     async fn ring_chain_status(&self, ring: Address) -> Result<RingChainStatus, ClientError> {

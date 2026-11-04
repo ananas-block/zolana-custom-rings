@@ -1007,6 +1007,7 @@ impl ShapeRing<'_> {
                         asset: env.assets.mint(&asset)?,
                         amount,
                         reply: None,
+                        data: custom_ring_sdk::NoteData::default(),
                     })?;
                 }
                 env.run(anonymous.with_shape(shape)?.prove(client))

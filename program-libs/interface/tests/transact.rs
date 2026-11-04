@@ -1,4 +1,4 @@
-//! Pins `test-vectors/proof/ring-transact-expansion-v4.json` for the TS SDK and the ring program tests.
+//! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK, the client and the ring program tests.
 
 mod frames;
 
@@ -29,7 +29,7 @@ use spr_interface::{
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/proof/ring-transact-expansion-v4.json"
+    "/../../test-vectors/proof/ring-transact-expansion.json"
 );
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -205,7 +205,7 @@ fn ring_transact_expansion_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/proof/ring-transact-expansion-v4.json"]
+#[ignore = "rewrites test-vectors/proof/ring-transact-expansion.json"]
 fn write_ring_transact_expansion_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
@@ -213,7 +213,7 @@ fn write_ring_transact_expansion_vector() {
 
 const FRAME_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/settlement/frame_v4.hex"
+    "/../../test-vectors/settlement/frame.hex"
 );
 
 fn frame_lines() -> String {
@@ -233,7 +233,7 @@ fn the_frames_are_the_shared_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/settlement/frame_v4.hex"]
+#[ignore = "rewrites test-vectors/settlement/frame.hex"]
 fn write_frame_vector() {
     std::fs::write(FRAME_VECTOR, frame_lines()).expect("write vector file");
 }
@@ -810,6 +810,35 @@ fn the_extensions_reach_the_forwarded_data() {
         RingTransactData::parse(&unknown, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+#[test]
+fn a_tag_on_the_wire_reaches_the_external_data_hash_at_its_width() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| {
+        let compact = data.encode().unwrap();
+        RingTransactData::parse(&compact, RingRail::Confidential)
+            .unwrap()
+            .into_data()
+            .external_data_hash(&config, &[])
+            .unwrap()
+    };
+    let honest = fixture.confidential_delivered();
+    assert!(honest.outputs[3].is_exit() && !honest.outputs[0].is_exit());
+    assert_eq!(
+        hash(&honest),
+        honest.external_data_hash(&config, &[]).unwrap()
+    );
+    let mut slot = honest.clone();
+    slot.outputs[0].owner_tag[31] ^= 1;
+    assert_ne!(hash(&slot), hash(&honest));
+    let mut exit = honest.clone();
+    exit.outputs[3].owner_tag[0] ^= 1;
+    assert_ne!(hash(&exit), hash(&honest));
+    let mut wide = honest.clone();
+    wide.outputs[0].owner_tag[0] ^= 1;
+    assert!(wide.encode().is_err());
 }
 
 /// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.

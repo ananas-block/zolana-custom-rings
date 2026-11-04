@@ -2,12 +2,12 @@ use async_trait::async_trait;
 use custom_ring_interface::{compute_unit_limit, InstructionTag};
 use custom_ring_sdk::{
     CustomRing, DelegateMove, DelegatePayment, RelayedDeposit, RelayedTransferInput, RingClient,
-    RingIndexerBackend, RingTransfer,
+    RingIndexerBackend, RingTransfer, WideFrames,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
 use spr_client::{AsyncRpc, ComputeBudgetConfig};
-use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{AssetRegistry, WalletUtxo};
 use zolana_ring_client::rpc::{RelayDepositInputs, RelayMergeInputs, RelayProofInputs, RelayRail};
 
@@ -33,6 +33,7 @@ pub struct DelegateSeal<'a> {
     pub delegate: Address,
     pub source: ShieldedAddress,
     pub nullifier_key: &'a NullifierKey,
+    pub tx_viewing_key: ViewingKey,
     pub notes: &'a [WalletUtxo],
     pub mint: Address,
     pub payments: Vec<DelegatePayment>,
@@ -104,6 +105,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
+            wide_frames: WideFrames::Buffer,
+            tx_viewing_key: seal.tx_viewing_key,
         }
         .select(&self.client)
         .await
@@ -126,10 +129,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             proof_inputs,
             fee_payer: request.parties.fee_payer,
         });
-        // The relay writes the buffer of a frame past one transaction, a delegate settles inline.
-        if !matches!(proof_inputs.rail, RelayRail::Delegate { .. }) {
-            transfer = transfer.with_buffered_settlement();
-        }
+        // The relay writes the buffer of a frame past one transaction.
+        transfer = transfer.with_buffered_settlement();
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
         }
@@ -141,7 +142,9 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             .await
             .map_err(RelayError::proof)?;
         let (tag, delegate) = match proof_inputs.rail {
-            RelayRail::Delegate { delegate } => (InstructionTag::AuthorityTransfer, Some(delegate)),
+            RelayRail::Delegate { delegate, .. } => {
+                (InstructionTag::AuthorityTransfer, Some(delegate))
+            }
             _ => (InstructionTag::Transfer, None),
         };
         Ok(ProvenRelay {

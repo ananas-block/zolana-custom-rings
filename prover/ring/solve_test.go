@@ -3,6 +3,7 @@ package ring
 import (
 	"encoding/json"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -200,11 +201,13 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 	keys := ringaudit.DefaultKeys(t)
 	secret := ringtest.Scalar(0x07)
 	secret[0] = 0
-	sealed := keys.SealStream(t, secret[:], shared.NfKeyEncInfo)
+	salt := ringtest.Scalar(0x09)
+	salt[0] = 0
+	sealed := keys.SealStream(t, slices.Concat(secret[:], salt[:]), shared.NfKeyEncInfo)
 	secretField := new(big.Int).SetBytes(secret[1:])
 	nullifierPk := spptest.MustNullifierPk(t, secretField)
 	ringID := big.NewInt(0x7711)
-	listTag := ringregistry.ListTag(t, ringregistry.ListSalt(t, secretField, ringID))
+	listTag := ringregistry.ListTag(t, new(big.Int).SetBytes(salt[1:]))
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	return &RegisterKeyParams{
 		RequestHead: RequestHead{
@@ -214,7 +217,7 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 				sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
 			})),
 		},
-		RingID: fb(ringID), Member: fb(member), NullifierSecret: secret[:], EphSk: eph[:], AuditorPk: auditor[:],
+		RingID: fb(ringID), Member: fb(member), NullifierSecret: secret[:], ListSalt: salt[:], EphSk: eph[:], AuditorPk: auditor[:],
 	}
 }
 

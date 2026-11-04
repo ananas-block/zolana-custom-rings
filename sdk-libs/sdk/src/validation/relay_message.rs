@@ -1,7 +1,8 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
 use custom_ring_interface::{
-    compute_unit_limit, stream::slot_tag, tag, DepositPrefix, InstructionTag, RingRail,
+    compute_unit_limit, frame_digest, settle_buffered_data, stream::slot_tag, tag, AuditRecord,
+    DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact, RecordKind, RingRail,
     RingTransactData,
 };
 use solana_address::Address;
@@ -10,10 +11,14 @@ use solana_message::{v1, VersionedMessage};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
+use spr_keypair::{ShieldedAddress, X25519Pubkey};
 use thiserror::Error;
-use zolana_ring_client::rpc::{PrepareAuthorityTransferRequest, RelayQuote};
+use zolana_ring_client::{
+    rpc::{PrepareAuthorityTransferRequest, RelayQuote, TxViewingSecret},
+    AuditEnvelope,
+};
 
-use crate::{CustomRing, RingError};
+use crate::{pipeline::delegate_rail, CustomRing, CustomRingConfig, RingError};
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum MessageMismatch {
@@ -35,8 +40,12 @@ pub enum MessageMismatch {
     Accounts,
     #[error("the message pays an owner the request does not name")]
     Recipients,
+    #[error("the message publishes a transaction key other than the one the request names")]
+    TransactionKey,
     #[error("the request asks for no signature")]
     Unrequested,
+    #[error("the message settles a buffer, read it from the chain before signing")]
+    SettlesBuffer,
     #[error("the signing key is not the key the request names")]
     Signer,
 }
@@ -62,8 +71,26 @@ pub(crate) struct ExpectedDelegate {
     pub ring: CustomRing,
     pub fee_payer: Address,
     pub delegate: Address,
-    /// In payment order, the viewing key each confidential slot publishes as its owner tag.
-    pub payees: Vec<[u8; 32]>,
+    /// From the ring account, a frame read under the wrong rail or auditor proves nothing.
+    pub rail: RingRail,
+    pub auditor: X25519Pubkey,
+    pub tx_viewing_key: TxViewingSecret,
+    pub source: ExpectedOwner,
+    pub mint: Address,
+    pub payments: Vec<ExpectedPayment>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExpectedOwner {
+    pub owner_key: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub viewing_u: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExpectedPayment {
+    pub owner: ExpectedOwner,
+    pub amount: u64,
 }
 
 /// Only a check builds one.
@@ -124,66 +151,176 @@ impl ExpectedDelegate {
     pub fn new(
         request: &PrepareAuthorityTransferRequest,
         quote: &RelayQuote,
+        config: &CustomRingConfig,
     ) -> Result<Self, RingError> {
         let transfer = &request.transfer;
         Ok(Self {
             ring: CustomRing::new(request.ring.0),
             fee_payer: quote.fee_payer.0,
             delegate: request.delegate.0,
-            payees: transfer
+            rail: delegate_rail(config.mode),
+            auditor: config.auditor_pubkey,
+            tx_viewing_key: request.tx_viewing_key.clone(),
+            source: ExpectedOwner::of(&transfer.source.0)?,
+            mint: transfer.mint.0,
+            payments: transfer
                 .payments
                 .iter()
-                .map(|payment| payment.recipient.0.viewing_pubkey.u())
-                .collect(),
+                .map(|payment| {
+                    Ok(ExpectedPayment {
+                        owner: ExpectedOwner::of(&payment.recipient.0)?,
+                        amount: payment.amount,
+                    })
+                })
+                .collect::<Result<_, RingError>>()?,
         })
     }
 
-    /// A confidential slot alone shows a slot tag of its viewing key, a dummy publishes as a real recipient's would.
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
-        let envelope = Envelope {
+        let envelope = self.envelope(InstructionTag::AuthorityTransfer);
+        let instruction = envelope.open(message)?;
+        if instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
+            return Err(MessageMismatch::SettlesBuffer);
+        }
+        self.check_frame(&instruction.data, &instruction.accounts)?;
+        Ok(envelope.verified(message))
+    }
+
+    /// The account a settling message reads its frame from, `None` on an inline message.
+    pub fn settled_buffer(&self, message: &[u8]) -> Result<Option<Address>, MessageMismatch> {
+        let instruction = self
+            .envelope(InstructionTag::SettleBuffered)
+            .open(message)?;
+        match instruction.data.first() == Some(&tag::SETTLE_BUFFERED) {
+            true => Ok(instruction.accounts.first().map(|meta| meta.pubkey)),
+            false => Ok(None),
+        }
+    }
+
+    /// The digest binds the buffer's frame, every check of an inline message then reads it.
+    pub fn check_settled(
+        &self,
+        message: &[u8],
+        buffer: &[u8],
+    ) -> Result<VerifiedMessage, MessageMismatch> {
+        let envelope = self.envelope(InstructionTag::SettleBuffered);
+        let instruction = envelope.open(message)?;
+        let [_, _, inner @ ..] = instruction.accounts.as_slice() else {
+            return Err(MessageMismatch::Accounts);
+        };
+        let frame = FrameBuffer::of(buffer)
+            .map_err(|_| MessageMismatch::Data)?
+            .frame();
+        let digest = frame_digest(frame).map_err(|_| MessageMismatch::Data)?;
+        if instruction.data != settle_buffered_data(&digest) {
+            return Err(MessageMismatch::Data);
+        }
+        self.check_frame(frame, inner)?;
+        Ok(envelope.verified(message))
+    }
+
+    fn envelope(&self, tag: InstructionTag) -> Envelope {
+        Envelope {
             ring: self.ring,
             fee_payer: self.fee_payer,
             signer: self.delegate,
-            tag: InstructionTag::AuthorityTransfer,
-        };
-        let instruction = envelope.open(message)?;
-        let parsed = instruction
-            .data
+            tag,
+        }
+    }
+
+    fn check_frame(&self, frame: &[u8], accounts: &[AccountMeta]) -> Result<(), MessageMismatch> {
+        let parsed = frame
             .split_first()
             .filter(|(tag, _)| **tag == tag::AUTHORITY_TRANSFER)
-            .and_then(|(_, data)| {
-                RingTransactData::parse(data, RingRail::Delegate)
-                    .or_else(|_| RingTransactData::parse(data, RingRail::AnonymousDelegate))
-                    .ok()
-            })
+            .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
-        let data = parsed.data();
-        if !data.rail.anonymous_frame() {
-            let paid = data
-                .outputs
-                .get(..self.payees.len())
-                .ok_or(MessageMismatch::Recipients)?;
-            if !paid
-                .iter()
-                .zip(&self.payees)
-                .all(|(slot, payee)| slot.owner_tag == slot_tag(*payee))
-            {
-                return Err(MessageMismatch::Recipients);
-            }
-        }
-        let mut named = instruction
-            .accounts
-            .iter()
-            .filter(|meta| meta.pubkey == self.delegate);
+        self.check_moved(&parsed)?;
+        let mut named = accounts.iter().filter(|meta| meta.pubkey == self.delegate);
         let signs_once = matches!(
             (named.next(), named.next()),
             (Some(meta), None) if meta.is_signer && !meta.is_writable
         );
-        let ring_account = instruction.accounts.get(..1).unwrap_or_default();
+        let ring_account = accounts.get(..1).unwrap_or_default();
+        let envelope = self.envelope(InstructionTag::AuthorityTransfer);
         if !signs_once || !envelope.reads_only(ring_account) {
             return Err(MessageMismatch::Accounts);
         }
-        Ok(envelope.verified(message))
+        Ok(())
+    }
+
+    /// The proof binds each record to its slot under the key the frame publishes, a slot tag is an unproved hint.
+    fn check_moved(&self, parsed: &ParsedTransact<'_>) -> Result<(), MessageMismatch> {
+        let data = parsed.data();
+        let tx_viewing_key = self
+            .tx_viewing_key
+            .key()
+            .map_err(|_| MessageMismatch::TransactionKey)?;
+        if *data.tx_viewing_u != tx_viewing_key.pubkey().u() {
+            return Err(MessageMismatch::TransactionKey);
+        }
+        // The request names ring payments alone, a leg or a data commitment moves what no one asked.
+        if !data.interface_transfers.is_empty() || data.has_data {
+            return Err(MessageMismatch::Data);
+        }
+        let opened = AuditEnvelope {
+            eph_u: *data.tx_viewing_u,
+            salt: data.salt,
+            ciphertext: data.envelope,
+        }
+        .open_sealed(&tx_viewing_key, &self.auditor, parsed.audit_stream())
+        .map_err(|_| MessageMismatch::Data)?;
+        let mut unpaid = self.payments.clone();
+        for (slot, output) in data.outputs.iter().enumerate() {
+            let record = opened
+                .record(slot, output.record)
+                .map_err(|_| MessageMismatch::Data)?;
+            match record.kind {
+                RecordKind::Dummy => {}
+                RecordKind::Exit => return Err(MessageMismatch::Recipients),
+                RecordKind::Ring => {
+                    let paid = unpaid.iter().position(|payment| {
+                        record.mint == self.mint.to_bytes() && payment.matches(&record)
+                    });
+                    match paid {
+                        Some(index) => {
+                            let payment = unpaid.swap_remove(index);
+                            // A wrong hint strands the note with no scan reaching it.
+                            if !data.rail.anonymous_frame()
+                                && output.owner_tag != slot_tag(payment.owner.viewing_u)
+                            {
+                                return Err(MessageMismatch::Recipients);
+                            }
+                        }
+                        None if self.source.owns(&record) => {}
+                        None => return Err(MessageMismatch::Recipients),
+                    }
+                }
+            }
+        }
+        match unpaid.is_empty() {
+            true => Ok(()),
+            false => Err(MessageMismatch::Recipients),
+        }
+    }
+}
+
+impl ExpectedOwner {
+    fn of(address: &ShieldedAddress) -> Result<Self, RingError> {
+        Ok(Self {
+            owner_key: address.signing_pubkey.confidential_view_tag()?,
+            nullifier_pk: address.nullifier_pubkey,
+            viewing_u: address.viewing_pubkey.u(),
+        })
+    }
+
+    fn owns(&self, record: &AuditRecord) -> bool {
+        record.owner_key == self.owner_key && record.nullifier_pk == self.nullifier_pk
+    }
+}
+
+impl ExpectedPayment {
+    fn matches(&self, record: &AuditRecord) -> bool {
+        self.owner.owns(record) && record.amount == self.amount
     }
 }
 

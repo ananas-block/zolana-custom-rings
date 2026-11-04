@@ -59,8 +59,8 @@ pub mod viewing_history;
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingUtxo, AnonymousScan, AuditorRecovery, AnonymousStream, AnonymousSync, SenderClaim, SentCheck,
-    SentPayment,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, AuditorRecovery, SenderClaim,
+    SentCheck, SentPayment,
 };
 pub use crate::anonymous_wallet::{
     AnonymousWallet, PendingClaim, PendingNote, ANONYMOUS_WALLET_VERSION,

@@ -66,6 +66,17 @@ struct StubChain {
 
 #[async_trait::async_trait]
 impl ChainSubmit for StubChain {
+    async fn account_data(
+        &self,
+        _address: solana_address::Address,
+    ) -> Result<Option<Vec<u8>>, RingRpcError> {
+        Ok(None)
+    }
+
+    async fn rent_exempt_lamports(&self, _data_len: usize) -> Result<u64, RingRpcError> {
+        Ok(0)
+    }
+
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.slot.load(Ordering::Relaxed))
     }

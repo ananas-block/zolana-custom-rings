@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use solana_signer::Signer;
+use spr_client::AsyncRpc;
 use spr_indexer_api::{SerializablePubkey, SerializableSignature};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
@@ -10,7 +11,7 @@ use zolana_ring_client::rpc::{
 
 use crate::{
     relay_message::{ExpectedDelegate, ExpectedMessage},
-    MessageMismatch, RingError, VerifiedMessage,
+    CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
 #[async_trait]
@@ -58,7 +59,7 @@ pub enum RelaySent {
 pub struct PendingSignature {
     relay_id: RelayId,
     message: Vec<u8>,
-    expected: Option<ExpectedMessage>,
+    expected: Option<Box<ExpectedMessage>>,
 }
 
 impl PreparedRelay {
@@ -92,8 +93,9 @@ impl PreparedAuthorityTransfer {
     pub fn new(
         request: PrepareAuthorityTransferRequest,
         quote: &RelayQuote,
+        config: &CustomRingConfig,
     ) -> Result<Self, RingError> {
-        let expected = ExpectedDelegate::new(&request, quote)?;
+        let expected = ExpectedDelegate::new(&request, quote, config)?;
         Ok(Self { request, expected })
     }
 
@@ -129,7 +131,7 @@ impl RelaySent {
     fn expecting(self, expected: Option<ExpectedMessage>) -> Self {
         match self {
             Self::SignMessage(pending) => Self::SignMessage(PendingSignature {
-                expected,
+                expected: expected.map(Box::new),
                 ..pending
             }),
             submitted @ Self::Submitted(_) => submitted,
@@ -163,12 +165,41 @@ impl PendingSignature {
         Ok(expected.check(&self.message)?)
     }
 
+    /// As [`Self::sign`], a settling message reads the frame its digest signs from the chain.
+    pub async fn sign_on_chain<R: RingRelay + ?Sized, C: AsyncRpc + ?Sized>(
+        self,
+        relay: &R,
+        rpc: &C,
+        signer: &dyn Signer,
+    ) -> Result<RelayStatus, RingError> {
+        if let Some(ExpectedMessage::Delegate(delegate)) = self.expected.as_deref() {
+            if let Some(buffer) = delegate.settled_buffer(&self.message)? {
+                let held = rpc
+                    .get_account(buffer)
+                    .await?
+                    .ok_or(MessageMismatch::Accounts)?;
+                let verified = delegate.check_settled(&self.message, &held.data)?;
+                return self.submit(relay, &verified, signer).await;
+            }
+        }
+        self.sign(relay, signer).await
+    }
+
     pub async fn sign<R: RingRelay + ?Sized>(
         self,
         relay: &R,
         signer: &dyn Signer,
     ) -> Result<RelayStatus, RingError> {
         let verified = self.verify()?;
+        self.submit(relay, &verified, signer).await
+    }
+
+    async fn submit<R: RingRelay + ?Sized>(
+        self,
+        relay: &R,
+        verified: &VerifiedMessage,
+        signer: &dyn Signer,
+    ) -> Result<RelayStatus, RingError> {
         let signature = verified.sign(signer)?;
         relay
             .submit_relay(SubmitRelayRequest {

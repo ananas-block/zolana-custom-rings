@@ -11,6 +11,14 @@ export const FRAME_BUFFER_HEADER_LEN = 34;
 const MAX_CPI_DATA_LEN = 10 * 1024;
 export const MAX_FRAME_LEN = MAX_CPI_DATA_LEN - FRAME_BUFFER_HEADER_LEN;
 
+const FRAME_BUFFER_DISCRIMINATOR = 16;
+
+export function bufferedFrame(account: Uint8Array): Uint8Array | undefined {
+  return account.length < FRAME_BUFFER_HEADER_LEN || account[0] !== FRAME_BUFFER_DISCRIMINATOR
+    ? undefined
+    : account.subarray(FRAME_BUFFER_HEADER_LEN);
+}
+
 /** The first write creates the buffer at `[seed, writer, nonce]`. */
 export interface WriteFrame {
   readonly nonce: bigint;

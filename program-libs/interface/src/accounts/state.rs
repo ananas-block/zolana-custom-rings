@@ -651,6 +651,14 @@ impl RingPolicy {
             .chain([self.tracking])
     }
 
+    pub fn salted_registries(&self) -> Result<Vec<Address>, CustomRingError> {
+        let salted = self.source_map()?.salted();
+        Ok(salted
+            .iter()
+            .map(|list_id| *source_address(&self.sources[list_id.slot()], &self.records))
+            .collect())
+    }
+
     /// A salted list needs a floor against the ring's tracking registry.
     pub fn check_source_pair(
         &self,

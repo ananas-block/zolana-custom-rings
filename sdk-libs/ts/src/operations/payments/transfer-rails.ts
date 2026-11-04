@@ -755,6 +755,7 @@ export class AnonymousTransfer {
       await transactionKey(keys, sender, prepared, context),
       prepared.firstNullifier,
       { kind: "anonymous", plan: anonymousPlan(this.#payments) },
+      this.#payments.map((payment) => payment.data),
     );
     try {
       const proofInputs = rail.encrypt({
@@ -765,9 +766,9 @@ export class AnonymousTransfer {
       });
       checkSlotsOpenable(proofInputs);
       checkZeroKeyInputs(proofInputs.inputUtxos, sender.signingPublicKey);
-      const coOwners = ownerSignerAddresses(proofInputs.inputUtxos, [], owner);
+      const coOwners = ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs, owner);
       checkHiddenOwnerSpends(proofInputs, sender);
-      checkEntryInputs(proofInputs, coOwners);
+      checkEntryInputs(proofInputs, ownerSignerAddresses(proofInputs.inputUtxos, [], owner));
       checkCoOwnerKeys(proofInputs, sender, this.#coOwners);
       const staged = {
         proofInputs,
@@ -925,6 +926,7 @@ export class PublicOwnerTransfer {
       anonymous
         ? { kind: "anonymous", plan: anonymousPlan(this.#payments) }
         : { kind: "delivered" },
+      this.#payments.map((payment) => payment.data),
     );
     try {
       const proofInputs = rail.encrypt({
@@ -1047,6 +1049,8 @@ export interface DelegateTransferInput {
   readonly assets: AssetRegistry;
   /** The outputs land in the first input's tree unless named. */
   readonly outputTreeId?: number;
+  /** Past one transaction the frame settles from a buffer its payer writes. */
+  readonly bufferedSettlement?: boolean;
 }
 
 /** The delegate moves one member's notes with the member's key, the member does not sign, Rust `RingTransfer<Delegated>`. */
@@ -1060,6 +1064,10 @@ export class DelegateTransfer {
 
   static new(input: DelegateTransferInput): DelegateTransfer {
     return new DelegateTransfer(input);
+  }
+
+  withBufferedSettlement(): DelegateTransfer {
+    return new DelegateTransfer({ ...this.#input, bufferedSettlement: true });
   }
 
   prove(client: DelegateTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
@@ -1120,6 +1128,7 @@ export class DelegateTransfer {
           client,
           ringProgramId,
           config,
+          bufferedSettlement: input.bufferedSettlement === true,
           staged: {
             proofInputs,
             rail,
