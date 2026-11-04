@@ -97,6 +97,7 @@ impl Outcome {
 
     const fn lists(rule: usize, subject: TransferSubject) -> Self {
         match subject {
+            TransferSubject::InputAsset(_) => panic!("admit reads no input asset"),
             TransferSubject::Sender => Self::Lists {
                 rule,
                 subject: SubjectKind::Sender,

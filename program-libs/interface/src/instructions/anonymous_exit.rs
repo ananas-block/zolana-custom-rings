@@ -2,7 +2,7 @@
 
 use solana_address::Address;
 use spl_token_2022_interface::{extension::PodStateWithExtensions, pod::PodAccount};
-use spr_hasher::{primitives::solana_owner_identity, HasherError};
+use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::{
     instruction::InterfaceTransfer, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_ACCOUNT_INITIALIZED,
     SPL_TOKEN_PROGRAM_ID,
@@ -54,6 +54,8 @@ pub trait SettlementAccount {
 pub struct AnonymousParties<'a> {
     pub payer: &'a [u8; 32],
     pub co_signers: &'a [Address],
+    /// In leg order, a key another party already names takes no cell.
+    pub funders: &'a [[u8; 32]],
     pub exit_destination: Option<&'a [u8; 32]>,
 }
 
@@ -171,18 +173,44 @@ pub fn anonymous_exit_destination<A: SettlementAccount>(
 
 impl AnonymousParties<'_> {
     /// Solana owner identities, zero for an absent party.
-    pub fn identities(&self) -> Result<[[u8; 32]; ANONYMOUS_PARTIES], HasherError> {
-        let identity =
-            |party: Option<&[u8; 32]>| party.map_or(Ok([0u8; 32]), solana_owner_identity);
-        if self.co_signers.len() > crate::cosign::MAX_CO_SIGNERS {
-            return Err(HasherError::InvalidNumFields);
-        }
+    ///
+    /// The circuit holds the hidden owner apart from every nonzero cell, a public signature would
+    /// name it otherwise. A funder signs in public like a co-signer and shares the same cells, the
+    /// statement's layout stays fixed and a transfer pays for no cell it leaves empty. The payer
+    /// funding its own leg leaves the cells as they were.
+    pub fn identities(&self) -> Result<[[u8; 32]; ANONYMOUS_PARTIES], CustomRingError> {
+        let identity = |party: &[u8; 32]| -> Result<[u8; 32], CustomRingError> {
+            Ok(solana_owner_identity(party)?)
+        };
         let mut identities = [[0u8; 32]; ANONYMOUS_PARTIES];
-        identities[0] = identity(Some(self.payer))?;
-        for (slot, co_signer) in identities[1..].iter_mut().zip(self.co_signers) {
-            *slot = identity(Some(co_signer.as_array()))?;
+        identities[0] = identity(self.payer)?;
+        let (shared, exit) = identities[1..].split_at_mut(crate::cosign::MAX_CO_SIGNERS);
+        let mut named = 0;
+        let mut seat = |party: [u8; 32]| -> Result<(), CustomRingError> {
+            let cell = shared
+                .get_mut(named)
+                .ok_or(CustomRingError::TooManyAnonymousParties)?;
+            *cell = party;
+            named += 1;
+            Ok(())
+        };
+        for co_signer in self.co_signers {
+            seat(identity(co_signer.as_array())?)?;
         }
-        identities[ANONYMOUS_PARTIES - 1] = identity(self.exit_destination)?;
+        for (position, funder) in self.funders.iter().enumerate() {
+            let named_already = funder == self.payer
+                || self
+                    .co_signers
+                    .iter()
+                    .any(|signer| signer.as_array() == funder)
+                || self.funders[..position].contains(funder);
+            if !named_already {
+                seat(identity(funder)?)?;
+            }
+        }
+        if let (Some(cell), Some(destination)) = (exit.first_mut(), self.exit_destination) {
+            *cell = identity(destination)?;
+        }
         Ok(identities)
     }
 }
@@ -191,4 +219,55 @@ fn settlement_at<A>(group: &[A], position: usize) -> Result<&A, CustomRingError>
     group
         .get(position)
         .ok_or(CustomRingError::InvalidSettlementAccounts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell(party: &[u8; 32]) -> [u8; 32] {
+        solana_owner_identity(party).unwrap()
+    }
+
+    #[test]
+    fn a_funder_takes_a_free_cell_and_a_named_key_takes_none() {
+        let (payer, co_signer, funder, exit) = ([1; 32], [2; 32], [3; 32], [4; 32]);
+        let co_signers = [Address::new_from_array(co_signer)];
+        let identities = AnonymousParties {
+            payer: &payer,
+            co_signers: &co_signers,
+            funders: &[payer, funder, co_signer, funder],
+            exit_destination: Some(&exit),
+        }
+        .identities()
+        .unwrap();
+        let mut expected = [[0; 32]; ANONYMOUS_PARTIES];
+        expected[0] = cell(&payer);
+        expected[1] = cell(&co_signer);
+        expected[2] = cell(&funder);
+        expected[ANONYMOUS_PARTIES - 1] = cell(&exit);
+        assert_eq!(identities, expected);
+    }
+
+    #[test]
+    fn parties_past_the_cells_are_refused() {
+        let payer = [1; 32];
+        let co_signers: Vec<Address> = (0..crate::cosign::MAX_CO_SIGNERS as u8)
+            .map(|index| Address::new_from_array([10 + index; 32]))
+            .collect();
+        let parties = |funders: &[[u8; 32]]| {
+            AnonymousParties {
+                payer: &payer,
+                co_signers: &co_signers,
+                funders,
+                exit_destination: None,
+            }
+            .identities()
+        };
+        assert!(parties(&[payer]).is_ok());
+        assert_eq!(
+            parties(&[[3; 32]]),
+            Err(CustomRingError::TooManyAnonymousParties)
+        );
+    }
 }

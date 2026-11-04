@@ -13,6 +13,7 @@ use super::{
     },
     audit::PresealedAudit,
     delegate::delegate_rail,
+    owner::deposit_funder,
     public_owners::check_zero_key_inputs,
     sealed, shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, Spend, Staged, TransferAuthority,
@@ -126,6 +127,16 @@ impl Relayed<'_> {
                     .ok_or(RingError::MissingAnonymousSigner)?;
                 let owner = HiddenOwner::of(&sender.signing_pubkey)?;
                 owner.check_signers([self.fee_payer])?;
+                owner.check_signers(
+                    proof_inputs
+                        .external_data
+                        .interface_transfers
+                        .iter()
+                        .zip(&relayed.interface_transfer_accounts)
+                        .filter_map(|(transfer, accounts)| {
+                            deposit_funder(&transfer.interface_transfer(), accounts)
+                        }),
+                )?;
                 check_anonymous_inputs(&proof_inputs, &sender)?;
                 let exits = AnonymousExits {
                     transfers: &proof_inputs.external_data.interface_transfers,

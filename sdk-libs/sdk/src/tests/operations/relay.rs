@@ -1557,9 +1557,9 @@ mod public_signers {
     use super::*;
     use crate::{
         tests::support::relay_message, ApplicationData, ApprovalLimit, ApprovalOpening, CoOwner,
-        CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval, MessageMismatch, NoteData,
-        OwnerApproval, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms,
-        RingTransfer, SlotOpening,
+        CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval, FundedLeg, FunderApproval,
+        MessageMismatch, NoteData, OwnerApproval, PendingSignature, PreparedRelay,
+        RelayFunderTerms, RelaySent, RelayTransferTerms, RingTransfer, SlotOpening,
     };
 
     pub(super) const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
@@ -2504,6 +2504,92 @@ mod public_signers {
             MessageMismatch::ZeroApprovalBlinder,
         );
         signs(&pending(opening), &co_signer).await;
+    }
+
+    #[tokio::test]
+    async fn a_funder_signs_its_own_deposit_legs_and_nothing_else() {
+        use spr_program::instruction::{
+            TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+        };
+        let (sender, payee, funder) = (keypair(1), keypair(2), keypair(4));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee, &funder]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let mut transaction = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        transaction.deposit_sol(5, address(&funder)).unwrap();
+        let paying = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction,
+        })
+        .with_interface_transfer_accounts(vec![TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts {
+                recipient: address(&funder),
+            },
+        )])
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(pay(&payee, 4))
+        .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let terms = asked
+            .pending
+            .funder_terms(address(&funder))
+            .unwrap()
+            .clone();
+        assert_eq!(
+            terms.legs,
+            [FundedLeg {
+                mint: None,
+                amount: 5
+            }]
+        );
+        assert!(asked.pending.transfer_terms(address(&funder)).is_none());
+        let built = frame(&client, &asked.request).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let pending = |terms: RelayFunderTerms| {
+            FunderApproval {
+                relay_id: asked.relay_id.clone(),
+                message: message.clone(),
+                terms,
+                config: &config,
+            }
+            .pending()
+        };
+        signs(&pending(terms.clone()), &funder).await;
+        refused(
+            &pending(terms.clone()),
+            &payee,
+            MessageMismatch::Unrequested,
+        );
+        let understated = RelayFunderTerms {
+            legs: vec![FundedLeg {
+                mint: None,
+                amount: 4,
+            }],
+            ..terms.clone()
+        };
+        refused(&pending(understated), &funder, MessageMismatch::FunderLegs);
+        let extra_leg = RelayFunderTerms {
+            legs: vec![terms.legs[0], terms.legs[0]],
+            ..terms.clone()
+        };
+        refused(&pending(extra_leg), &funder, MessageMismatch::FunderLegs);
+        let no_legs = RelayFunderTerms {
+            legs: Vec::new(),
+            ..terms.clone()
+        };
+        refused(&pending(no_legs), &funder, MessageMismatch::Unrequested);
     }
 
     /// The TypeScript check reads the same frames, neither rule opens a slot.

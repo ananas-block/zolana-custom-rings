@@ -1168,8 +1168,13 @@ impl<'a> RingTransactData<'a> {
             InputTrees::Two { .. } => 2,
         };
         let start = crate::RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + self.nullifiers.len();
+        // The cached selector's accounts follow the settlement groups, a run read through them would
+        // take a cache as an unsigned owner and every cached frame would refuse.
+        let cache_accounts = self.extensions.cache.map_or(0, |access| {
+            usize::from(access.read_bitmap != 0) + 2 * usize::from(access.writes_cache())
+        });
         spp.len()
-            .checked_sub(settlements)
+            .checked_sub(settlements + cache_accounts)
             .and_then(|end| spp.get(start..end))
             .ok_or(CustomRingError::InvalidSettlementAccounts)
     }

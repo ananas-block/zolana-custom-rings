@@ -272,6 +272,7 @@ impl PolicyRead<'_> {
                 plan: &plan,
                 owners: &live_owners,
                 assets: &live_assets,
+                input_assets: &input_assets,
                 public_assets: &public_assets,
                 pinned: pinned.as_ref(),
             }
@@ -494,6 +495,7 @@ struct ScreenedRecords<'a> {
     plan: &'a RecordPlan,
     owners: &'a [Option<[u8; 32]>],
     assets: &'a [Option<[u8; 32]>],
+    input_assets: &'a [Option<[u8; 32]>],
     public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     pinned: Option<&'a PinnedPolicy>,
 }
@@ -509,6 +511,7 @@ impl ScreenedRecords<'_> {
             plan,
             owners,
             assets,
+            input_assets,
             public_assets,
             pinned,
         } = self;
@@ -607,6 +610,14 @@ impl ScreenedRecords<'_> {
                     outputs: &transfer_subjects,
                 },
             )?;
+            let input_lists: Vec<RecordLists> = input_assets
+                .iter()
+                .flatten()
+                .map(|asset| lists(*asset))
+                .collect();
+            pinned
+                .table
+                .evaluate_input_assets(&pinned.sources, &input_lists)?;
             inputs.rules = policy.rules;
             inputs.sources = pinned.sources;
             inputs.policy_hash = pinned.policy_hash;

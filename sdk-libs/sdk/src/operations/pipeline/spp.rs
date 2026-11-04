@@ -240,7 +240,10 @@ impl Spp {
                 let proven = prover.prove_indexed(prepared.as_ref()).await?;
                 RawSpp {
                     default_owner_tag: match proven.data.circuit {
-                        CircuitId::AnonymousRingEddsa(.., data) => data.default_owner_tag,
+                        CircuitId::AnonymousRingEddsa(.., data)
+                        | CircuitId::AnonymousRingEddsaCached(.., data, _) => {
+                            data.default_owner_tag
+                        }
                         _ => None,
                     },
                     nullifiers: proven

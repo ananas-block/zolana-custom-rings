@@ -124,6 +124,7 @@ pinned_codes! {
     UnsupportedBufferedTag = 8525,
     FramePayerNotWriter = 8526,
     InvalidSignerDataCounts = 8527,
+    TooManyAnonymousParties = 8528,
 }
 
 #[test]

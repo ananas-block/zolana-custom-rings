@@ -11,7 +11,9 @@ use zolana_ring_client::rpc::{
 };
 
 use crate::{
-    relay_message::{ApprovalOpening, ExpectedDelegate, ExpectedMessage, RelayTransferTerms},
+    relay_message::{
+        ApprovalOpening, ExpectedDelegate, ExpectedMessage, RelayFunderTerms, RelayTransferTerms,
+    },
     CustomRingConfig, MessageMismatch, RingError, VerifiedMessage,
 };
 
@@ -167,6 +169,11 @@ impl PendingSignature {
     /// What the wallet sealed for one public owner, an outside co-signer holds none.
     pub fn transfer_terms(&self, signer: Address) -> Option<&RelayTransferTerms> {
         self.expected.as_deref()?.terms_for(signer)
+    }
+
+    /// What the wallet sealed for one public funder of a deposit leg.
+    pub fn funder_terms(&self, signer: Address) -> Option<&RelayFunderTerms> {
+        self.expected.as_deref()?.funder_terms_for(signer)
     }
 
     pub(crate) fn expecting(

@@ -986,6 +986,31 @@ fn a_cached_selector_keeps_the_rail_key() {
     );
 }
 
+/// A cache account past the settlement groups is no owner, a run through it reads an unsigned owner.
+#[test]
+fn a_cached_frames_owner_run_stops_short_of_its_cache_account() {
+    use custom_ring_interface::InputTrees;
+    use spr_interface::verifying_keys::CacheAccess;
+    let fixture = Fixture::new();
+    let mut data = fixture.confidential_extensions();
+    let trees = match data.input_trees {
+        InputTrees::One(_) => 1,
+        InputTrees::Two { .. } => 2,
+    };
+    let start =
+        custom_ring_interface::RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + data.nullifiers.len();
+    let spp: Vec<usize> = (0..start + 3).collect();
+    assert_eq!(
+        data.owner_signers(&spp, 0).unwrap(),
+        [start, start + 1, start + 2]
+    );
+    data.extensions.cache = Some(CacheAccess {
+        read_bitmap: 0b1,
+        write_slots: CacheAccess::NO_WRITES,
+    });
+    assert_eq!(data.owner_signers(&spp, 0).unwrap(), [start, start + 1]);
+}
+
 /// A public-owner frame carries no hidden owner's proof data and settles on SPP's confidential rail.
 #[test]
 fn public_owners_select_the_confidential_circuit() {

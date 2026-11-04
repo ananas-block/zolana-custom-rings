@@ -85,12 +85,12 @@ pub use crate::{
     },
     pipeline::{
         entry_shape_keyed, shape_keyed, transfer_key, Anonymous, AnonymousMove, AnonymousPayment,
-        AnonymousTransfer, ApplicationData, CoOwner, CustomRingTransfer, CustomRingTransferInput,
-        DelegateMove, DelegateOutput, DelegatePayment, DelegateSource, DelegateTransfer,
-        DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend, NoteData, Owner,
-        ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind, Relayed,
-        RelayedTransfer, RelayedTransferInput, RingPayment, RingSender, RingTransfer, TransferKey,
-        WideFrames,
+        AnonymousTransfer, ApplicationData, CachedNote, CoOwner, CustomRingTransfer,
+        CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment, DelegateSource,
+        DelegateTransfer, DelegateTransferInput, DelegateWithdrawal, Delegated, EntrySpend,
+        NoteData, Owner, ProvenRingTransfer, PublicOwnerTransfer, PublicOwners, Rail, RailKind,
+        ReadCache, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
+        RingTransfer, TransferKey, WideFrames,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,
@@ -99,9 +99,9 @@ pub use crate::{
     register_key::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{
-        ApprovalLimit, ApprovalOpening, CoSignerApproval, CoSignerRule, ExactApproval,
-        MessageMismatch, OutputTotalsOpening, OwnerApproval, PublicTotalsOpening,
-        RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
+        ApprovalLimit, ApprovalOpening, CoSignerApproval, CoSignerRule, ExactApproval, FundedLeg,
+        FunderApproval, MessageMismatch, OutputTotalsOpening, OwnerApproval, PublicTotalsOpening,
+        RelayFunderTerms, RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
     },
     select::{select_merge_where, select_spend_where},
     storage::{

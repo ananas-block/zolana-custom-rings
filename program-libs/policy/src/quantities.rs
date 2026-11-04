@@ -247,7 +247,6 @@ pub struct ApprovalInputs<'a> {
 
 impl ApprovalInputs<'_> {
     /// A zero threshold and an asset with no record both mean no threshold.
-    #[must_use]
     pub fn mask(&self, policy_of: impl Fn(&[u8; 32]) -> MintPolicy) -> ApprovalMask {
         let over_outflow = self.flows.iter().any(|flow| {
             let above = policy_of(&flow.asset).cosign_above;

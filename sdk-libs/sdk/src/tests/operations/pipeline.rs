@@ -704,7 +704,7 @@ async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_pro
 
 /// An address slot spends nothing, it leaves the frame off the entry key and names no zero-key spend.
 #[tokio::test]
-async fn an_anonymous_transfer_reserves_an_address_and_a_cached_slot_stays_refused() {
+async fn an_anonymous_transfer_reserves_an_address_reads_a_cache_and_writes_none() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
     let chain = Chain::ring(anonymous());
@@ -729,18 +729,35 @@ async fn an_anonymous_transfer_reserves_an_address_and_a_cached_slot_stays_refus
         assert!(staged.owner_signers.is_empty());
     }
 
-    let transfer = owner_transfer(
-        sender,
-        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
-    )
-    .with_anonymous_signer(&sender.signing_key)
-    .with_payment(payment(&paid, 10))
-    .unwrap();
+    let note = ring_utxo(sender, Mint::SOL, 10, 0);
+    let cache = Address::new_from_array([0x77; 32]);
+    let read = |nullifier: [u8; 32]| {
+        owner_transfer(sender, ring_transaction(vec![note.clone()]))
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(payment(&paid, 10))
+            .unwrap()
+            .with_read_cache(ReadCache {
+                cache,
+                notes: vec![CachedNote { nullifier, slot: 3 }],
+            })
+    };
+    let transfer = read(note.nullifier);
     let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-    let mut cached = staged.proof_inputs.clone();
-    cached.input_utxos[0] = cached.input_utxos[0].clone().with_cache_slot(0).unwrap();
+    assert_eq!(staged.proof_inputs.input_utxos[0].cache_slot, Some(3));
+    assert_eq!(staged.proof_inputs.cache_accounts.read, Some(cache));
+    assert_eq!(
+        cache_access(&staged.proof_inputs).unwrap().read_bitmap,
+        1 << 3
+    );
+    let unknown = read([9; 32]);
     assert!(matches!(
-        anonymous::check_anonymous_inputs(&cached, &sender.shielded_address().unwrap()),
+        stage_anonymous(&unknown, &chain).await,
+        Err(RingError::CachedInputUnknown)
+    ));
+    let mut writing = staged.proof_inputs.clone();
+    writing.output_utxos[0] = writing.output_utxos[0].clone().with_cache_slot(0).unwrap();
+    assert!(matches!(
+        anonymous::check_anonymous_inputs(&writing, &sender.shielded_address().unwrap()),
         Err(RingError::InvalidAnonymousSlot)
     ));
 }
@@ -3961,4 +3978,40 @@ async fn a_policy_transfer_places_each_input_asset_past_every_payment() {
     assert_eq!(params.asset_entries.len(), payments + usize::from(inputs));
     // The funding note's asset is the payment's, the two share one subject row.
     assert_eq!(params.asset_entries[payments], params.asset_entries[0]);
+}
+
+/// A delisted note no payment moves refuses before proving, the guarded rule leaves it alone.
+#[tokio::test]
+async fn a_zero_value_input_of_a_delisted_asset_fails_before_proving() {
+    use crate::tests::support::{keypair, Registry};
+    use zolana_ring_policy::{ListId, Rule, RuleRefusal, RuleTable, Subject, TransferSubject};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    };
+    let table = RuleTable::builder()
+        .rule(Rule::require(Subject::Asset, ListId::Allow))
+        .build();
+    let client = Chain::ring(settings)
+        .with_registry(Registry::new(&[(&sender, 1), (&recipient, 1)]), &table)
+        .client();
+    let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 0, 0)]);
+    transaction
+        .transfer_with_ring(
+            &recipient.shielded_address().unwrap(),
+            Mint::SOL,
+            0,
+            Some(ring().program_id()),
+        )
+        .unwrap();
+    let refused = owner_transfer(&sender, transaction).assemble(&client).await;
+    assert!(matches!(
+        refused,
+        Err(RingError::PolicyRuleUnsatisfied(RuleRefusal::Lists {
+            subject: TransferSubject::Asset(_) | TransferSubject::InputAsset(_),
+            ..
+        }))
+    ));
 }
