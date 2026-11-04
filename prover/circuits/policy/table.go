@@ -67,8 +67,10 @@ type tableView struct {
 }
 
 type sourceView struct {
-	foreign, salted          [NSources]frontend.Variable
-	anyForeign               frontend.Variable
+	foreign, salted [NSources]frontend.Variable
+	anyForeign      frontend.Variable
+	// publicForeign clear, an owner takes no curator row under its public key.
+	publicForeign            frontend.Variable
 	saltedOwn, saltedCurated frontend.Variable
 }
 
@@ -139,13 +141,15 @@ func (t Table) hash(api frontend.API) frontend.Variable {
 // readSources marks list i+1 foreign when slot i names a registry field, one curator registry serves them all.
 func (t Table) readSources(api frontend.API) sourceView {
 	var view sourceView
-	var own, curated [NSources]frontend.Variable
+	var own, curated, public [NSources]frontend.Variable
 	copy(view.salted[:], api.ToBinary(t.Salted, NSources))
 	for i, source := range t.Sources {
 		view.foreign[i] = ringgadget.IsNonZero(api, source.Registry)
 		curated[i] = api.Mul(view.salted[i], view.foreign[i])
 		own[i] = api.Sub(view.salted[i], curated[i])
+		public[i] = api.Sub(view.foreign[i], curated[i])
 	}
+	view.publicForeign = ringgadget.IsAny(api, public[:]...)
 	view.anyForeign = ringgadget.IsAny(api, view.foreign[:]...)
 	view.saltedOwn, view.saltedCurated = ringgadget.IsAny(api, own[:]...), ringgadget.IsAny(api, curated[:]...)
 	return view

@@ -2,7 +2,6 @@ package transfer_test
 
 import (
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -22,13 +21,13 @@ import (
 )
 
 var (
-	confidential2 = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	wideOwners2   = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 24}
-	dataKey2      = transfer.ConfidentialShape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Data: true}
-	confEntry2    = transfer.ConfidentialShape{Inputs: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
-	anonymous2    = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
-	anonData2     = transfer.AnonymousShape{InputClass: 24, Outputs: 2, Withdrawals: 4, Owners: 4, Data: true}
-	entry2        = transfer.AnonymousShape{InputClass: 8, Outputs: 2, Withdrawals: 4, Owners: 4, Entry: true}
+	confidential2 = transfer.Shape{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4}
+	wideOwners2   = transfer.Shape{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24}
+	dataKey2      = confidential2
+	confEntry2    = transfer.Shape{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true}
+	anonymous2    = confidential2
+	anonData2     = confidential2
+	entry2        = confEntry2
 	coOwner       = big.NewInt(0x0c0c)
 	otherOwner    = big.NewInt(0x0d0d)
 )
@@ -45,13 +44,13 @@ func refused(t *testing.T, circuit frontend.Circuit, frame string) {
 	ringtest.RequireRefused(t, test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()), frame)
 }
 
-func onRail(shape transfer.ConfidentialShape, rail ringtransfer.Rail) ringtransfer.Confidential {
+func onRail(shape transfer.Shape, rail ringtransfer.Rail) ringtransfer.Confidential {
 	w := ringtransfer.Signed(shape)
 	w.Rail = rail
 	return w
 }
 
-func onAnonymous(shape transfer.AnonymousShape, rail ringtransfer.AnonymousRail) ringtransfer.Anonymous {
+func onAnonymous(shape transfer.Shape, rail ringtransfer.AnonymousRail) ringtransfer.Anonymous {
 	w := ringtransfer.Hidden(shape)
 	w.Rail = rail
 	return w
@@ -115,27 +114,15 @@ func TestEveryKeySolves(t *testing.T) {
 	if testing.Short() {
 		t.Skip("solves every catalog key")
 	}
-	for _, shape := range transfer.ConfidentialShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			requireSolved(t, ringtransfer.Signed(shape).Build(t).Circuit)
-		})
-	}
-	for _, shape := range transfer.AnonymousShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			requireSolved(t, ringtransfer.Hidden(shape).Build(t).Circuit)
-		})
-	}
-	for _, shape := range transfer.EntryShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			w := ringtransfer.Hidden(shape)
-			w.DefaultInput = shape.InputClass > 2
+	for _, shape := range transfer.Shapes {
+		t.Run(shape.String()+"/signer", func(t *testing.T) {
+			w := ringtransfer.Signed(shape)
+			w.DefaultInput = shape.Entry
 			requireSolved(t, w.Build(t).Circuit)
 		})
-	}
-	for _, shape := range transfer.ConfidentialEntryShapes {
-		t.Run(shape.String(), func(t *testing.T) {
-			w := ringtransfer.Signed(shape)
-			w.DefaultInput = true
+		t.Run(shape.String()+"/hidden", func(t *testing.T) {
+			w := ringtransfer.Hidden(shape)
+			w.DefaultInput = shape.Entry && shape.Inputs > 2
 			requireSolved(t, w.Build(t).Circuit)
 		})
 	}
@@ -160,11 +147,8 @@ func TestCatalogCompilesToTheVerifiedShape(t *testing.T) {
 			}
 		})
 	}
-	for _, shape := range append(transfer.ConfidentialShapes[:len(transfer.ConfidentialShapes):len(transfer.ConfidentialShapes)], transfer.ConfidentialEntryShapes...) {
-		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewConfidentialTransferCircuit(shape) })
-	}
-	for _, shape := range append(transfer.AnonymousShapes[:len(transfer.AnonymousShapes):len(transfer.AnonymousShapes)], transfer.EntryShapes...) {
-		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewAnonymousTransferCircuit(shape) })
+	for _, shape := range transfer.Shapes {
+		compile(shape.String(), func() (frontend.Circuit, error) { return transfer.NewTransferCircuit(shape) })
 	}
 }
 
@@ -268,7 +252,7 @@ func TestDelegateBypass(t *testing.T) {
 		requireSolved(t, w.Build(t).Circuit)
 	})
 	t.Run("exits with the owner published by SPP", func(t *testing.T) {
-		shape := transfer.AnonymousShape{InputClass: 16, Outputs: 4, Withdrawals: 4, Owners: 4}
+		shape := transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4}
 		requireSolved(t, onAnonymous(shape, ringtransfer.AnonymousDelegate).Build(t).Circuit)
 	})
 	t.Run("several victims move in one transfer", func(t *testing.T) {
@@ -293,13 +277,13 @@ func TestDelegateBypass(t *testing.T) {
 	t.Run("a mask on the authority rail", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
 		w.ApprovalMask = policy.ApprovalOutflow
-		refused(t, w.Build(t).Circuit, "transfer.(*Sections).prove")
+		refused(t, w.Build(t).Circuit, "transfer.(*TransferCircuit).Define")
 	})
 	t.Run("a run on the authority rail", func(t *testing.T) {
 		b := onRail(confidential2, ringtransfer.Delegate).Build(t)
 		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = []*big.Int{b.Sender}, 1, b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*Sections).prove")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).Define")
 	})
 	t.Run("an output still reads its row", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.Delegate)
@@ -343,14 +327,14 @@ func TestOutputPredicateOnEveryRail(t *testing.T) {
 		requireSolved(t, w.Build(t).Circuit)
 	})
 	t.Run("an exit to an owner with no row", func(t *testing.T) {
-		w := ringtransfer.Signed(transfer.ConfidentialShape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
+		w := ringtransfer.Signed(transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})
 		requireSolved(t, w.Build(t).Circuit)
 	})
 }
 
 // The program sets the delegate bit and the signer and delegate rails share a key, a signer proof with the bit set is the wall.
 func TestDelegateBitIsTheProgramsWall(t *testing.T) {
-	circuit, err := transfer.NewConfidentialTransferCircuit(confidential2)
+	circuit, err := transfer.NewTransferCircuit(confidential2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,15 +358,15 @@ func TestDelegateBitIsTheProgramsWall(t *testing.T) {
 // The public owner rail has no hidden sender, the hidden rail keeps input 0 out of the run.
 func TestAnonymousOwnerRails(t *testing.T) {
 	t.Run("bits exclude each other", func(t *testing.T) {
-		b := onAnonymous(anonymous2, ringtransfer.PublicOwners).Build(t)
+		b := ringtransfer.Hidden(anonymous2).Build(t)
 		b.Circuit.Delegate = 1
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*AnonymousTransferCircuit).Define")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("a hidden frame with no live input", func(t *testing.T) {
 		w := ringtransfer.Hidden(anonymous2)
 		w.PublicFunded = true
-		refused(t, w.Build(t).Circuit, "transfer.(*AnonymousTransferCircuit).hiddenOwner")
+		refused(t, w.Build(t).Circuit, "transfer.(*TransferCircuit).hiddenOwner")
 	})
 	t.Run("public owners spend no input", func(t *testing.T) {
 		w := onAnonymous(anonymous2, ringtransfer.PublicOwners)
@@ -394,7 +378,7 @@ func TestAnonymousOwnerRails(t *testing.T) {
 		b := w.Build(t)
 		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = []*big.Int{b.Sender}, 1, b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*AnonymousTransferCircuit).hiddenOwner")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).hiddenOwner")
 	})
 	t.Run("a public owner rail input off the run", func(t *testing.T) {
 		w := onAnonymous(anonymous2, ringtransfer.PublicOwners)
@@ -596,13 +580,13 @@ func TestRailCells(t *testing.T) {
 		b := ringtransfer.Signed(confidential2).Build(t)
 		b.Circuit.Sender = b.Sender
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*ConfidentialTransferCircuit).assertRail")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("a delegate with in_proof", func(t *testing.T) {
 		b := onRail(confidential2, ringtransfer.Delegate).Build(t)
 		b.Circuit.InProof = 1
 		b.Rebind(t)
-		refused(t, b.Circuit, "transfer.(*ConfidentialTransferCircuit).assertRail")
+		refused(t, b.Circuit, "transfer.(*TransferCircuit).assertRail")
 	})
 	t.Run("an in-proof input of another owner", func(t *testing.T) {
 		w := onRail(confidential2, ringtransfer.InProof)
@@ -647,7 +631,7 @@ func TestStatementBindsEveryElement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("solves the compiled key once per statement element")
 	}
-	circuit, err := transfer.NewConfidentialTransferCircuit(confidential2)
+	circuit, err := transfer.NewTransferCircuit(confidential2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,22 +645,17 @@ func TestStatementBindsEveryElement(t *testing.T) {
 	}
 }
 
-// An entry key has no wider sibling and keeps its rows.
-func TestNarrowKeysHaveAWiderSibling(t *testing.T) {
-	for _, shape := range transfer.ConfidentialShapes {
-		wider := slices.ContainsFunc(transfer.ConfidentialShapes, func(other transfer.ConfidentialShape) bool {
-			return other.Inputs == shape.Inputs && other.Outputs == shape.Outputs && other.Owners == shape.Owners && other.Withdrawals > shape.Withdrawals
-		})
-		if shape.Withdrawals == 4 && !wider {
-			t.Errorf("%s has no wider sibling", shape)
+// A key with no tracking rows for its legs always has the wide key to move to.
+func TestNarrowKeysFitTheWideKey(t *testing.T) {
+	var wide transfer.Shape
+	for _, shape := range transfer.Shapes {
+		if shape.Withdrawals > wide.Withdrawals {
+			wide = shape
 		}
 	}
-	for _, shape := range transfer.AnonymousShapes {
-		wider := slices.ContainsFunc(transfer.AnonymousShapes, func(other transfer.AnonymousShape) bool {
-			return other.InputClass == shape.InputClass && other.Outputs == shape.Outputs && other.Owners == shape.Owners && other.Withdrawals > shape.Withdrawals
-		})
-		if shape.Withdrawals == 4 && !wider {
-			t.Errorf("%s has no wider sibling", shape)
+	for _, shape := range transfer.Shapes {
+		if !shape.Entry && shape.Withdrawals == 4 && (shape.Inputs > wide.Inputs || shape.Outputs > wide.Outputs || shape.Owners > wide.Owners) {
+			t.Errorf("%s does not fit the wide key %s", shape, wide)
 		}
 	}
 }

@@ -13,6 +13,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 
 pub(crate) struct AuditedDeposit<'a> {
     pub proof: CustomRingProof,
+    pub key_capacity: u8,
     pub tracking_revision: Revision,
     pub own_revision: Revision,
     pub curator_revision: Revision,
@@ -30,6 +31,7 @@ impl<'a> AuditedDeposit<'a> {
         }
         Ok(Self {
             proof: prefix.proof,
+            key_capacity: prefix.key_capacity,
             tracking_revision: prefix.tracking_revision,
             own_revision: prefix.own_revision,
             curator_revision: prefix.curator_revision,
@@ -100,9 +102,9 @@ impl DepositVerification<'_> {
         RingProof {
             proof: &self.audited.proof,
             statement: public_input,
-            key: ring_key(RingCircuit::deposit(
-                u8::try_from(count).map_err(|_| invalid)?,
-            ))?,
+            key: ring_key(RingCircuit::Deposit {
+                capacity: self.audited.key_capacity,
+            })?,
         }
         .verify()
     }

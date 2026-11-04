@@ -29,7 +29,7 @@ func (w World) Build(t testing.TB) Witness {
 // BuildRows builds the world under rows in place of Table's, the table a vector carries.
 func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	t.Helper()
-	c, err := NewSectionCircuit(SectionShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly, Records: w.Records})
+	c, err := NewSectionCircuit(SectionShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, SaltedKeys: w.SaltedKeys, OwnOnly: w.OwnOnly, Records: w.Records})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -185,6 +185,31 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 	})
 }
 
+// A distinct owner reads an own public, a curator public and a salted record.
+func TestDistinctOwnersReadAllThreeRecords(t *testing.T) {
+	for _, curatedSalted := range []bool{false, true} {
+		w := saltedWorld(ringpolicy.Forbid(policy.SubjectOutputOwner, block), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, privateBlock))
+		w.Outputs, w.WithdrawalCapacity, w.SaltedKeys = 16, 8, 28
+		w.Table.Lists = append(w.Table.Lists, ringregistry.FrozenBit)
+		w.Table.Curator = map[uint64]bool{ringregistry.FrozenBit: true, privateBlock: curatedSalted}
+		w.Curator = map[int64]ringpolicy.Record{}
+		w.Slots = nil
+		w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -16}}
+		for i := range int64(24) {
+			owner := 3000 + i
+			w.Enrolled = append(w.Enrolled, owner)
+			w.Own[owner], w.Curator[owner] = ringpolicy.Record{Lists: allow}, ringpolicy.Record{Lists: allow}
+			if i < 16 {
+				w.Slots = append(w.Slots, ringpolicy.Slot{Owner: owner, Asset: ringpolicy.AssetA, Amount: 1})
+			} else {
+				w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: owner, Asset: ringpolicy.AssetA, Amount: 2})
+			}
+		}
+		w.Enrolled = append(w.Enrolled, ringpolicy.Sender)
+		requireSolved(t, w.Build(t))
+	}
+}
+
 func TestSaltedKeyMatchesRust(t *testing.T) {
 	want, _ := new(big.Int).SetString("0cd39067a2c6eff923c63afab8a8d09543bdcc320bcb82dfd063b7da2826d248", 16)
 	if ringregistry.ListKey(t, big.NewInt(7), big.NewInt(9)).Cmp(want) != 0 {

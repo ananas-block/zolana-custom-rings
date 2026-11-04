@@ -396,6 +396,33 @@ func TestDepositReadsTheSaltedList(t *testing.T) {
 	}
 }
 
+// The pools mirror DepositSubjects::pool_width in program-libs/interface/src/instructions/deposit.rs.
+func TestDepositPoolWidths(t *testing.T) {
+	for capacity, width := range map[int]int{1: 2, 2: 4, 4: 8, 8: 21} {
+		c := depositCircuit(t, capacity)
+		if got := c.RecordPools(); got.Own != width || got.Curator != width {
+			t.Fatalf("capacity %d pools %+v, want %d", capacity, got, width)
+		}
+	}
+}
+
+// A salted recipient and an asset fit the next key up, no deposit below four recipients reaches the widest key.
+func TestSaltedDepositTakesTheNarrowestKeyItFits(t *testing.T) {
+	for _, spec := range []ringdeposit.Spec{
+		{Capacity: 2, Count: 1},
+		{Capacity: 4, Count: 2},
+		{Capacity: 4, Count: 3},
+		{Capacity: 8, Count: 4},
+	} {
+		spec.Policy = ringdeposit.SaltedBlock()
+		if err := solveDeposit(spec.Build(t).Circuit); err != nil {
+			t.Fatalf("%d recipients on capacity %d: %v", spec.Count, spec.Capacity, err)
+		}
+	}
+	blocked := ringdeposit.Spec{Capacity: 2, Count: 1, Policy: ringdeposit.SaltedBlock(0)}.Build(t)
+	ringtest.RequireRefused(t, solveDeposit(blocked.Circuit), paymentRule, depositScreen)
+}
+
 // Every slot distinct, each owner's public and salted record, five assets.
 func TestDepositPoolsHoldTheSaltedWidestDeposit(t *testing.T) {
 	d := ringdeposit.Spec{Count: circuits.MaxDeposits, Assets: 5, Policy: ringdeposit.SaltedBlock()}.Build(t)

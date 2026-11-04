@@ -4,6 +4,8 @@ use spr_hasher::{
     HasherError,
 };
 
+use spr_interface::instruction::MAX_DEPOSIT_ASSETS;
+
 use crate::{
     deposit_audit::{MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN},
     TAGGED_X25519_KEY_LEN,
@@ -65,6 +67,41 @@ pub struct DepositPublicInput<'a> {
     pub tracking_root: &'a [u8; 32],
     /// `None` off a policy ring.
     pub registry: Option<DepositRegistry<'a>>,
+}
+
+/// One deposit's distinct subjects, a salted key is an enrolled recipient on a ring reading a salted list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositSubjects {
+    pub slots: u8,
+    pub recipients: usize,
+    pub assets: usize,
+    pub salted_keys: usize,
+}
+
+impl DepositSubjects {
+    /// Mirrors `depositSaltedKeys` and `NewDepositPolicy` in the Go circuits.
+    pub const fn pool_width(capacity: u8) -> usize {
+        let capacity = capacity as usize;
+        let assets = if capacity < MAX_DEPOSIT_ASSETS {
+            capacity
+        } else {
+            MAX_DEPOSIT_ASSETS
+        };
+        let salted = if capacity == MAX_RING_DEPOSIT_AUDIT_SLOTS {
+            capacity
+        } else {
+            0
+        };
+        capacity + assets + salted
+    }
+
+    /// The narrowest key whose slots and pools hold the deposit, every subject taken as its own record.
+    pub fn key_capacity(&self) -> Option<u8> {
+        [1, 2, 4, 8].into_iter().find(|&capacity| {
+            self.slots <= capacity
+                && self.recipients + self.assets + self.salted_keys <= Self::pool_width(capacity)
+        })
+    }
 }
 
 /// Every deposit slot padded to the maximum.

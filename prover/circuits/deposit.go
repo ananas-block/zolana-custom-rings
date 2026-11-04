@@ -66,7 +66,7 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 	if err := shared.ValidateWidth("deposit", capacity, DepositCapacities); err != nil {
 		return nil, err
 	}
-	screen, err := policy.NewDepositPolicy(capacity)
+	screen, err := policy.NewDepositPolicy(capacity, depositSaltedKeys(capacity))
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +78,14 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity),
 		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), MintChunks: make([][2]frontend.Variable, capacity), Tracking: tracking, Policy: screen,
 	}, nil
+}
+
+// depositSaltedKeys fits a public and a salted record per recipient on the widest key, a deposit past a narrower key's pools moves to a wider one.
+func depositSaltedKeys(capacity int) int {
+	if capacity == MaxDeposits {
+		return capacity
+	}
+	return 0
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {

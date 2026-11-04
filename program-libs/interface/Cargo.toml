@@ -33,6 +33,7 @@ level = "warn"
 check-cfg = ['cfg(target_os, values("solana"))']
 
 [dev-dependencies]
+solana-message = { workspace = true }
 borsh = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

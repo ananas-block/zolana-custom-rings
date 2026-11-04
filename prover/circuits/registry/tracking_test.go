@@ -191,49 +191,6 @@ func (c *trackingEntryCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-type restrictiveCircuit struct {
-	Mask, Value, Mint, Want frontend.Variable
-}
-
-func (c *restrictiveCircuit) Define(api frontend.API) error {
-	api.AssertIsEqual(registry.Restrictive(api, api.ToBinary(c.Mask, registry.ListBits), api.ToBinary(c.Value, registry.ListBits), c.Mint), c.Want)
-	return nil
-}
-
-func TestRestrictiveMatchesRustVector(t *testing.T) {
-	var vectors struct {
-		Restrictive []struct {
-			Mask               uint64 `json:"mask"`
-			Value              uint64 `json:"value"`
-			ReplacesMintPolicy bool   `json:"replaces_mint_policy"`
-			Restrictive        bool   `json:"restrictive"`
-		} `json:"restrictive"`
-	}
-	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	if len(vectors.Restrictive) == 0 {
-		t.Fatal("no restrictive cases")
-	}
-	bit := func(set bool) int {
-		if set {
-			return 1
-		}
-		return 0
-	}
-	for _, v := range vectors.Restrictive {
-		w := &restrictiveCircuit{Mask: v.Mask, Value: v.Value, Mint: bit(v.ReplacesMintPolicy), Want: bit(v.Restrictive)}
-		if err := test.IsSolved(&restrictiveCircuit{}, w, ecc.BN254.ScalarField()); err != nil {
-			t.Fatalf("%+v: %v", v, err)
-		}
-		host := ringregistry.Entry{Mask: new(big.Int).SetUint64(v.Mask), Value: new(big.Int).SetUint64(v.Value)}
-		if v.ReplacesMintPolicy {
-			host.MintPolicy = new(big.Int).Lsh(big.NewInt(1), 192)
-		}
-		if host.Restrictive() != v.Restrictive {
-			t.Fatalf("%+v: host twin says %v", v, host.Restrictive())
-		}
-	}
-}
-
 type sharedTrackingCircuit struct {
 	Active, Root frontend.Variable
 	Records      []registry.TrackingRecord

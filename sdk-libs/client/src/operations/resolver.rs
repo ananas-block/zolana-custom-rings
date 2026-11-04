@@ -162,7 +162,7 @@ mod tests {
         rpc::{RingRecordPathView, StorageRootView},
         tracking::{GetTrackingOpeningsResponse, RingTrackingOpening},
     };
-    use zolana_ring_keys::RingNullifierKey;
+    use zolana_ring_keys::list_tag;
     use zolana_ring_member_registry::{RecordOpening, RecordTree, TrackingPath, TrackingTree};
 
     use super::*;
@@ -175,8 +175,7 @@ mod tests {
     }
 
     fn enrolled(owner: &ShieldedKeypair) -> RingAddress {
-        let key = RingNullifierKey::derive(owner, &RING).unwrap();
-        RingAddress::enrolled(owner.shielded_address().unwrap(), RING, &key).unwrap()
+        RingAddress::enrolled(owner, RING).unwrap()
     }
 
     fn zero_key(owner: &ShieldedKeypair) -> RingAddress {
@@ -195,14 +194,13 @@ mod tests {
     }
 
     fn entry(owner: &ShieldedKeypair, viewing: X25519Pubkey) -> TrackingEntry {
-        let key = RingNullifierKey::derive(owner, &RING).unwrap();
         TrackingEntry {
             member: member(owner),
-            nullifier_pk: key.nullifier_pubkey().unwrap(),
+            nullifier_pk: owner.nullifier_key.pubkey().unwrap(),
             ct_hash: [7; 32],
             viewing_u: viewing.u(),
             revision: 3,
-            list_tag: key.list_tag().unwrap(),
+            list_tag: list_tag(&owner.nullifier_key).unwrap(),
         }
     }
 

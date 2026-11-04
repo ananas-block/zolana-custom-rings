@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     storage_instruction::{tag as storage_tag, InitializeTrackingIxData},
-    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, RingKind, RingMode,
-    RingPolicy, STORAGE_PROGRAM_ID,
+    CustomRingError, InitializeIxData, NewRing, PolicyBindingIxData, PolicyUpdate, RingKind,
+    RingMode, RingPolicy, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     error::ProgramError,
@@ -10,7 +10,7 @@ use pinocchio::{
 };
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
-use zolana_ring_policy::ring_id_field;
+use zolana_ring_policy::{ring_id_field, ListSet};
 
 use crate::{
     instructions::{
@@ -93,12 +93,16 @@ pub fn process_initialize_ix(
     if let Some(binding) = ix.policy.as_ref().filter(|_| ix.kind.has_policy()) {
         // Sources name exactly the lists the rules reference, the pinned hash binds every later policy proof.
         let bound = TableBinding {
-            records: &records,
             table: &binding.table,
             curators: iter.remaining_unchecked()?,
         }
         .bind()?;
-        account.set_policy(bound.sources, bound.rules, slot)?;
+        account.set_policy(PolicyUpdate {
+            sources: bound.sources,
+            salted_lists: ListSet::EMPTY,
+            rules: bound.rules,
+            slot,
+        })?;
     }
     Init(&*account).init(ring)?;
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;

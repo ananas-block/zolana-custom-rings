@@ -302,3 +302,30 @@ fn the_statement_closes_on_its_version() {
     assert_eq!(elements.last().unwrap()[31], DEPOSIT_STATEMENT_VERSION);
     assert_eq!(CT, 144);
 }
+
+#[test]
+fn a_salted_deposit_takes_the_narrowest_key_it_fits() {
+    let widths = [1, 2, 4, 8].map(custom_ring_interface::DepositSubjects::pool_width);
+    assert_eq!(widths, [2, 4, 8, 21]);
+    let key = |slots, recipients, assets, salted_keys| {
+        custom_ring_interface::DepositSubjects {
+            slots,
+            recipients,
+            assets,
+            salted_keys,
+        }
+        .key_capacity()
+    };
+    // No salted list keeps the count's key.
+    for (slots, capacity) in [(1, 1), (2, 2), (3, 4), (4, 4), (5, 8), (8, 8)] {
+        let subjects = usize::from(slots);
+        assert_eq!(key(slots, subjects, subjects.min(5), 0), Some(capacity));
+    }
+    // A salted record moves one recipient up one key, not to the widest.
+    assert_eq!(key(1, 1, 1, 1), Some(2));
+    assert_eq!(key(2, 2, 1, 2), Some(4));
+    assert_eq!(key(3, 3, 1, 3), Some(4));
+    assert_eq!(key(4, 4, 1, 4), Some(8));
+    assert_eq!(key(8, 8, 5, 8), Some(8));
+    assert_eq!(key(9, 9, 5, 9), None);
+}

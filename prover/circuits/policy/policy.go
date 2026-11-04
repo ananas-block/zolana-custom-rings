@@ -15,7 +15,7 @@ type PolicyInputs struct {
 	OwnOnly bool `gnark:"-"`
 	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
 	Senders, Outputs int `gnark:"-"`
-	// SaltedKeys widens the pool limits past the public subjects.
+	// SaltedKeys widens each pool past its public subjects.
 	SaltedKeys      int `gnark:"-"`
 	WithdrawalCount frontend.Variable
 	WithdrawalHash  frontend.Variable
@@ -47,12 +47,12 @@ type Policy struct {
 }
 
 type InputsShape struct {
-	Outputs, Withdrawals, Senders int
-	OwnOnly                       bool
+	Outputs, Withdrawals, Senders, SaltedKeys int
+	OwnOnly                                   bool
 }
 
 func (s InputsShape) Inputs() PolicyInputs {
-	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
+	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, SaltedKeys: s.SaltedKeys, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
 }
 
 // NewPolicy sizes the record pools, capacity zero fields take the shape's limits.

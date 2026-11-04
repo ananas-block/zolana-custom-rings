@@ -1,61 +1,26 @@
 //! Every ring circuit and its proving key, no verifying keys.
 use spr_interface::{shape::MAX_TRANSACTION_ADDRESSES, N_PUBLIC_SLOTS};
 
-use crate::{
-    member_registry::APPLY_BATCH, private_list::PRIVATE_LIST_APPLY_WIDTHS, transact::RingRail,
-};
+use crate::{audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail};
 
 pub use crate::ring_keys::RING_KEYS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingCircuit {
-    /// The signer, in-proof and authority rails.
-    TransferConfidential {
+    /// Every rail, the statement's bits name it.
+    Transfer {
         outputs: u8,
+        /// The widest published input count.
         inputs: u8,
         withdrawals: u8,
         owners: u8,
-        data: bool,
-        /// Private rows, zero on a ring with no private source.
-        private: u8,
-    },
-    /// The signer and in-proof rails spending a default-ring note.
-    TransferConfidentialEntry {
-        outputs: u8,
-        class: u8,
-        withdrawals: u8,
-        owners: u8,
-        data: bool,
-        /// Private rows, zero on a ring with no private source.
-        private: u8,
-    },
-    /// The hidden sender, public owner and authority rails over ring notes.
-    TransferAnonymous {
-        outputs: u8,
-        class: u8,
-        withdrawals: u8,
-        owners: u8,
-        data: bool,
-        /// Private rows, zero on a ring with no private source.
-        private: u8,
-    },
-    /// The hidden sender and public owner rails spending a default-ring note.
-    TransferAnonymousEntry {
-        outputs: u8,
-        class: u8,
-        withdrawals: u8,
-        owners: u8,
-        data: bool,
-        /// Private rows, zero on a ring with no private source.
-        private: u8,
+        /// One evidence slot per input, the key also spends default-ring notes.
+        entry: bool,
     },
     ApplyRecords {
         writes: u8,
     },
     ApplyEnrollments {
-        writes: u8,
-    },
-    ApplyPrivateList {
         writes: u8,
     },
     RegisterKey,
@@ -65,139 +30,144 @@ pub enum RingCircuit {
     Merge,
 }
 
-/// One transfer family at one output count, mirror `ConfidentialBases`, `AnonymousBases` and `EntryBases` in `prover/circuits/transfer`.
+/// One transfer key, mirror `Shapes` in `prover/circuits/transfer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferShape {
     pub outputs: u8,
-    /// The widest published input count the key serves.
     pub inputs: u8,
-    /// Keyed leg capacities, ascending, zero past them.
-    pub withdrawals: [u8; 2],
-    /// Keyed owner rows, ascending, zero past them, mirror `ownerCapacities`.
-    pub owners: [u8; 2],
+    pub withdrawals: u8,
+    pub owners: u8,
+    pub entry: bool,
 }
 
-pub const CONFIDENTIAL_TRANSFER_SHAPES: [TransferShape; 4] = [
+const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> TransferShape {
     TransferShape {
-        outputs: 2,
-        inputs: 24,
-        withdrawals: [4, 32],
-        owners: [4, 24],
-    },
+        outputs,
+        inputs,
+        withdrawals,
+        owners,
+        entry: false,
+    }
+}
+
+/// Mirror `narrowWithdrawals`.
+const NARROW_WITHDRAWALS: u8 = 4;
+/// Mirror `ownerAddresses`.
+const OWNER_ADDRESSES: usize = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
+
+const fn entry(outputs: u8, inputs: u8, owners: u8) -> TransferShape {
     TransferShape {
-        outputs: 4,
-        inputs: 24,
-        withdrawals: [4, 32],
-        owners: [4, 24],
-    },
-    TransferShape {
-        outputs: 8,
-        inputs: 16,
-        withdrawals: [4, 32],
-        owners: [4, 16],
-    },
-    TransferShape {
-        outputs: 16,
-        inputs: 5,
-        withdrawals: [8, 0],
-        owners: [4, 5],
-    },
+        outputs,
+        inputs,
+        withdrawals: 4,
+        owners,
+        entry: true,
+    }
+}
+
+/// Ascending outputs, a frame takes the first that holds its SPP width.
+const NARROW_SHAPES: [TransferShape; 4] = [
+    narrow(2, 24, 4, 4),
+    narrow(4, 24, 4, 4),
+    narrow(8, 16, 4, 4),
+    narrow(16, 5, 8, 5),
+];
+const WIDE_SHAPE: TransferShape = narrow(8, 24, 32, 24);
+const ENTRY_SHAPES: [TransferShape; 2] = [entry(4, 8, 8), entry(8, 2, 2)];
+
+pub const TRANSFER_SHAPES: [TransferShape; 7] = [
+    NARROW_SHAPES[0],
+    NARROW_SHAPES[1],
+    NARROW_SHAPES[2],
+    NARROW_SHAPES[3],
+    WIDE_SHAPE,
+    ENTRY_SHAPES[0],
+    ENTRY_SHAPES[1],
 ];
 
-pub const ANONYMOUS_TRANSFER_SHAPES: [TransferShape; 3] = [
-    TransferShape {
-        outputs: 2,
-        inputs: 24,
-        withdrawals: [4, 32],
-        owners: [4, 24],
-    },
-    TransferShape {
-        outputs: 4,
-        inputs: 16,
-        withdrawals: [4, 32],
-        owners: [4, 16],
-    },
-    TransferShape {
-        outputs: 8,
-        inputs: 5,
-        withdrawals: [24, 0],
-        owners: [4, 5],
-    },
-];
+/// What names a frame's key, nothing else moves a record's counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameKey {
+    pub rail: RingRail,
+    pub outputs: usize,
+    pub spends_default_ring: bool,
+    pub wide: bool,
+}
 
-pub const ENTRY_TRANSFER_SHAPES: [TransferShape; 3] = [
-    TransferShape {
-        outputs: 2,
-        inputs: 8,
-        withdrawals: [4, 0],
-        owners: [4, 8],
-    },
-    TransferShape {
-        outputs: 4,
-        inputs: 8,
-        withdrawals: [4, 0],
-        owners: [4, 8],
-    },
-    TransferShape {
-        outputs: 8,
-        inputs: 2,
-        withdrawals: [4, 0],
-        owners: [2, 0],
-    },
-];
+impl FrameKey {
+    pub fn shape(self) -> Option<TransferShape> {
+        let holds = |shape: &TransferShape| self.outputs <= usize::from(shape.outputs);
+        // SPP's authority rail holds every input to the ring.
+        let delegate = matches!(self.rail, RingRail::Delegate | RingRail::AnonymousDelegate);
+        if delegate && self.spends_default_ring {
+            return None;
+        }
+        match (self.spends_default_ring, self.wide) {
+            (true, _) => ENTRY_SHAPES.into_iter().find(holds),
+            (false, true) => Some(WIDE_SHAPE).filter(holds),
+            (false, false) => NARROW_SHAPES.into_iter().find(holds),
+        }
+    }
+}
 
 impl TransferShape {
-    /// `None` on the delegate rails spending a default-ring note, SPP's authority rail holds every input to the ring.
-    pub fn family(rail: RingRail, entry: bool) -> Option<&'static [Self]> {
-        match (rail, entry) {
-            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => {
-                Some(&ANONYMOUS_TRANSFER_SHAPES)
-            }
-            (RingRail::Anonymous | RingRail::Confidential, true) => Some(&ENTRY_TRANSFER_SHAPES),
-            (RingRail::Confidential | RingRail::Delegate, false) => {
-                Some(&CONFIDENTIAL_TRANSFER_SHAPES)
-            }
-            (RingRail::Delegate | RingRail::AnonymousDelegate, true) => None,
+    fn holds(self, spend: TransferSpend) -> bool {
+        (1..=usize::from(self.inputs)).contains(&spend.inputs)
+            && spend.legs <= usize::from(self.withdrawals)
+            && spend.owners <= usize::from(self.owners)
+            && self
+                .circuit()
+                .record_pools()
+                .is_some_and(|pools| spend.pools.within(pools))
+    }
+
+    const fn narrow_pools(self) -> bool {
+        self.withdrawals <= NARROW_WITHDRAWALS && !self.entry
+    }
+
+    /// Mirror `publicOwners`.
+    const fn public_owners(self) -> usize {
+        let fit = (OWNER_ADDRESSES - self.withdrawals as usize) / 2;
+        let owners = self.owners as usize;
+        (if owners < fit { owners } else { fit }) + self.withdrawals as usize
+    }
+
+    /// Mirror `trackedWithdrawals`.
+    const fn tracked_withdrawals(self) -> usize {
+        if self.narrow_pools() {
+            0
+        } else {
+            self.public_owners() - self.owners as usize
         }
     }
 
-    /// The family's shape at `outputs`, `None` off the catalog.
-    pub fn of(family: &[Self], outputs: usize) -> Option<Self> {
-        family
-            .iter()
-            .copied()
-            .find(|shape| usize::from(shape.outputs) == outputs)
+    /// Mirror `saltedKeys`.
+    const fn salted_keys(self) -> usize {
+        if self.narrow_pools() {
+            0
+        } else {
+            2 * self.public_owners() + self.outputs as usize
+                - self.owners as usize
+                - self.withdrawals as usize
+        }
     }
 
-    /// The smallest keyed capacity holding `legs`, `None` past the widest.
-    pub fn withdrawal_capacity(self, legs: usize) -> Option<u8> {
-        smallest_capacity(self.withdrawals, legs)
+    pub const fn audit_key(self) -> AuditKey {
+        AuditKey {
+            class: self.inputs as usize,
+            entry: self.entry,
+        }
     }
 
-    /// The smallest keyed row count holding `owners`, `None` past the widest.
-    pub fn owner_capacity(self, owners: usize) -> Option<u8> {
-        smallest_capacity(self.owners, owners)
+    const fn circuit(self) -> RingCircuit {
+        RingCircuit::Transfer {
+            outputs: self.outputs,
+            inputs: self.inputs,
+            withdrawals: self.withdrawals,
+            owners: self.owners,
+            entry: self.entry,
+        }
     }
-}
-
-/// Mirror `privateRows` in `prover/circuits/transfer`, a transaction past them fails closed.
-const fn private_rows(owners: u8, outputs: u8, withdrawals: u8) -> u8 {
-    let legs = if withdrawals < SMALL_OWNERS {
-        withdrawals
-    } else {
-        SMALL_OWNERS
-    };
-    owners + outputs + legs
-}
-
-/// Mirror `smallOwners`.
-const SMALL_OWNERS: u8 = 4;
-
-fn smallest_capacity(capacities: [u8; 2], needed: usize) -> Option<u8> {
-    capacities
-        .into_iter()
-        .filter(|capacity| *capacity != 0)
-        .find(|capacity| usize::from(*capacity) >= needed)
 }
 
 /// Addresses SPP takes beside its nullifier PDAs, zolana/docs/spec.md.
@@ -238,65 +208,45 @@ pub struct TransferSpend {
     pub legs: usize,
     /// Distinct live input owners, rows the key opens.
     pub owners: usize,
-    /// The frame carries data tails.
-    pub has_data: bool,
-    /// The ring reads a private source.
-    pub private_source: bool,
+    /// Distinct records the spend opens in each pool, a salted read takes a row beside the public one.
+    pub pools: RecordPools,
+    /// The header's wide flag, `fitted` derives it from the spend.
+    pub wide: bool,
+}
+
+impl TransferSpend {
+    /// The wide flag follows the narrow key failing to hold the spend.
+    #[must_use]
+    pub fn fitted(self) -> Self {
+        let narrow = FrameKey {
+            wide: false,
+            ..self.frame_key()
+        }
+        .shape();
+        Self {
+            wide: !narrow.is_some_and(|shape| shape.holds(self)),
+            ..self
+        }
+    }
+
+    const fn frame_key(self) -> FrameKey {
+        FrameKey {
+            rail: self.rail,
+            outputs: self.outputs,
+            spends_default_ring: self.spends_default_ring,
+            wide: self.wide,
+        }
+    }
 }
 
 impl RingCircuit {
     /// The one transfer key serving the spend, `None` when the catalog keys none.
     pub fn transfer(spend: TransferSpend) -> Option<Self> {
-        let shapes = TransferShape::family(spend.rail, spend.spends_default_ring)?;
-        let shape = TransferShape::of(shapes, spend.outputs)?;
-        if spend.inputs == 0 || spend.inputs > usize::from(shape.inputs) {
-            return None;
-        }
-        let withdrawals = shape.withdrawal_capacity(spend.legs)?;
-        let owners = shape.owner_capacity(spend.owners)?;
-        let (outputs, class, data) = (shape.outputs, shape.inputs, spend.has_data);
-        let private = match spend.private_source {
-            // The catalog keys private rows on the narrowest legs and owners with no tails.
-            true if data || withdrawals != shape.withdrawals[0] || owners != shape.owners[0] => {
-                return None
-            }
-            true => private_rows(owners, outputs, withdrawals),
-            false => 0,
-        };
-        Some(match (spend.rail, spend.spends_default_ring) {
-            (RingRail::Anonymous | RingRail::AnonymousDelegate, false) => Self::TransferAnonymous {
-                outputs,
-                class,
-                withdrawals,
-                owners,
-                data,
-                private,
-            },
-            (RingRail::Anonymous, true) => Self::TransferAnonymousEntry {
-                outputs,
-                class,
-                withdrawals,
-                owners,
-                data,
-                private,
-            },
-            (_, true) => Self::TransferConfidentialEntry {
-                outputs,
-                class,
-                withdrawals,
-                owners,
-                data,
-                private,
-            },
-            (_, false) => Self::TransferConfidential {
-                outputs,
-                inputs: class,
-                withdrawals,
-                owners,
-                data,
-                private,
-            },
-        })
+        spend
+            .frame_key()
+            .shape()
+            .filter(|shape| shape.holds(spend))
+            .map(TransferShape::circuit)
     }
 
     pub const fn deposit(count: u8) -> Self {
@@ -308,18 +258,6 @@ impl RingCircuit {
                 _ => 8,
             },
         }
-    }
-
-    /// The narrowest width holding `count` writes, `None` for an empty or oversized batch.
-    pub fn apply_private_list(count: u64) -> Option<Self> {
-        (count > 0)
-            .then(|| {
-                PRIVATE_LIST_APPLY_WIDTHS
-                    .into_iter()
-                    .find(|width| u64::from(*width) >= count)
-            })
-            .flatten()
-            .map(|writes| Self::ApplyPrivateList { writes })
     }
 
     pub const fn apply_records(pending: u64) -> Self {
@@ -346,21 +284,26 @@ const fn apply_width(pending: u64) -> u8 {
 }
 
 /// A transfer key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/record_pool.go`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RecordPools {
     pub own: usize,
     pub curator: usize,
     pub tracking: usize,
 }
 
+impl RecordPools {
+    const fn within(self, capacity: Self) -> bool {
+        self.own <= capacity.own
+            && self.curator <= capacity.curator
+            && self.tracking <= capacity.tracking
+    }
+}
+
 impl RingCircuit {
     /// The withdrawal slots of a transfer key, `None` outside the transfer keys.
     pub fn withdrawals(self) -> Option<u8> {
         match self {
-            Self::TransferConfidential { withdrawals, .. }
-            | Self::TransferConfidentialEntry { withdrawals, .. }
-            | Self::TransferAnonymous { withdrawals, .. }
-            | Self::TransferAnonymousEntry { withdrawals, .. } => Some(withdrawals),
+            Self::Transfer { withdrawals, .. } => Some(withdrawals),
             _ => None,
         }
     }
@@ -368,70 +311,42 @@ impl RingCircuit {
     /// The owner rows of a transfer key, `None` outside the transfer keys.
     pub fn owners(self) -> Option<u8> {
         match self {
-            Self::TransferConfidential { owners, .. }
-            | Self::TransferConfidentialEntry { owners, .. }
-            | Self::TransferAnonymous { owners, .. }
-            | Self::TransferAnonymousEntry { owners, .. } => Some(owners),
-            _ => None,
-        }
-    }
-
-    /// The private rows of a transfer key, `None` outside the transfer keys.
-    pub fn private_rows(self) -> Option<u8> {
-        match self {
-            Self::TransferConfidential { private, .. }
-            | Self::TransferConfidentialEntry { private, .. }
-            | Self::TransferAnonymous { private, .. }
-            | Self::TransferAnonymousEntry { private, .. } => Some(private),
+            Self::Transfer { owners, .. } => Some(owners),
             _ => None,
         }
     }
 
     /// Each pool takes as many subjects as records, `None` outside the transfer keys.
     pub fn record_pools(self) -> Option<RecordPools> {
-        let (outputs, withdrawals, owners, private) = match self {
-            Self::TransferConfidential {
-                outputs,
-                withdrawals,
-                owners,
-                private,
-                ..
-            }
-            | Self::TransferConfidentialEntry {
-                outputs,
-                withdrawals,
-                owners,
-                private,
-                ..
-            }
-            | Self::TransferAnonymous {
-                outputs,
-                withdrawals,
-                owners,
-                private,
-                ..
-            }
-            | Self::TransferAnonymousEntry {
-                outputs,
-                withdrawals,
-                owners,
-                private,
-                ..
-            } => (
-                usize::from(outputs),
-                usize::from(withdrawals),
-                usize::from(owners),
-                usize::from(private),
-            ),
-            _ => return None,
+        let Self::Transfer {
+            outputs,
+            inputs,
+            withdrawals,
+            owners,
+            entry,
+        } = self
+        else {
+            return None;
         };
+        let shape = TransferShape {
+            outputs,
+            inputs,
+            withdrawals,
+            owners,
+            entry,
+        };
+        let (outputs, withdrawals, owners) = (
+            usize::from(outputs),
+            usize::from(withdrawals),
+            usize::from(owners),
+        );
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = withdrawals.min(N_PUBLIC_SLOTS);
-        let distinct = owners + 2 * outputs + withdrawals;
+        let distinct = owners + 2 * outputs + withdrawals + shape.salted_keys();
         Some(RecordPools {
             own: distinct + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: distinct + withdrawal_assets,
-            tracking: owners + outputs + private,
+            tracking: owners + outputs + shape.tracked_withdrawals(),
         })
     }
 }
@@ -490,163 +405,112 @@ mod tests {
         assert_eq!(register.asset("v6"), "custom-ring-register-key-v6.key");
     }
 
-    #[test]
-    fn a_transfer_takes_the_smallest_keyed_capacity_of_its_family() {
-        let spend = |rail, inputs, outputs, spends_default_ring, legs, owners| {
-            RingCircuit::transfer(TransferSpend {
-                rail,
-                inputs,
-                outputs,
-                spends_default_ring,
-                legs,
-                owners,
-                has_data: false,
-                private_source: false,
-            })
-        };
-        let confidential = |outputs, inputs, withdrawals, owners| {
-            Some(RingCircuit::TransferConfidential {
-                outputs,
-                inputs,
-                withdrawals,
-                owners,
-                data: false,
-                private: 0,
-            })
-        };
-        let anonymous = |outputs, class, withdrawals, owners| {
-            Some(RingCircuit::TransferAnonymous {
-                outputs,
-                class,
-                withdrawals,
-                owners,
-                data: false,
-                private: 0,
-            })
-        };
-        let entry = |outputs, class, withdrawals, owners| {
-            Some(RingCircuit::TransferAnonymousEntry {
-                outputs,
-                class,
-                withdrawals,
-                owners,
-                data: false,
-                private: 0,
-            })
-        };
-        use RingRail::{Anonymous, Confidential, Delegate};
-        assert_eq!(
-            spend(Confidential, 3, 2, false, 0, 1),
-            confidential(2, 24, 4, 4)
-        );
-        assert_eq!(
-            spend(Delegate, 2, 2, false, 5, 2),
-            confidential(2, 24, 32, 4)
-        );
-        assert_eq!(spend(Confidential, 25, 2, false, 0, 1), None);
-        assert_eq!(
-            spend(Confidential, 5, 16, false, 8, 1),
-            confidential(16, 5, 8, 4)
-        );
-        assert_eq!(spend(Confidential, 6, 16, false, 0, 1), None);
-        assert_eq!(spend(Confidential, 1, 16, false, 9, 1), None);
-        assert_eq!(spend(Confidential, 0, 2, false, 0, 1), None);
-        assert_eq!(
-            spend(Confidential, 1, 2, true, 0, 1),
-            Some(RingCircuit::TransferConfidentialEntry {
-                outputs: 2,
-                class: 8,
-                withdrawals: 4,
-                owners: 4,
-                data: false,
-                private: 0
-            })
-        );
-        assert_eq!(spend(Delegate, 1, 2, true, 0, 1), None);
-        assert_eq!(spend(Anonymous, 5, 8, false, 24, 1), anonymous(8, 5, 24, 4));
-        assert_eq!(spend(Anonymous, 6, 8, false, 0, 1), None);
-        assert_eq!(spend(Anonymous, 2, 8, true, 4, 2), entry(8, 2, 4, 2));
-        assert_eq!(spend(Anonymous, 2, 8, true, 5, 1), None);
-        assert_eq!(spend(Anonymous, 1, 16, false, 0, 1), None);
-    }
-
-    #[test]
-    fn a_transfer_takes_the_smallest_owner_rows_holding_its_owners() {
-        let owners = |outputs, inputs, owners| {
-            RingCircuit::transfer(TransferSpend {
-                rail: RingRail::Confidential,
-                inputs,
-                outputs,
-                spends_default_ring: false,
-                legs: 0,
-                owners,
-                has_data: false,
-                private_source: false,
-            })
-            .and_then(RingCircuit::owners)
-        };
-        assert_eq!(owners(2, 24, 4), Some(4));
-        assert_eq!(owners(2, 24, 5), Some(24));
-        assert_eq!(owners(2, 24, 24), Some(24));
-        assert_eq!(owners(2, 24, 25), None);
-        assert_eq!(owners(8, 16, 16), Some(16));
-        assert_eq!(owners(16, 5, 5), Some(5));
-        assert_eq!(owners(16, 5, 6), None);
-    }
-
-    #[test]
-    fn a_frame_with_tails_takes_the_data_key() {
-        let circuit = RingCircuit::transfer(TransferSpend {
-            rail: RingRail::Confidential,
-            inputs: 2,
-            outputs: 2,
-            spends_default_ring: false,
+    fn spend(
+        rail: RingRail,
+        outputs: usize,
+        spends_default_ring: bool,
+        wide: bool,
+    ) -> TransferSpend {
+        TransferSpend {
+            rail,
+            inputs: 1,
+            outputs,
+            spends_default_ring,
             legs: 0,
             owners: 1,
-            has_data: true,
-            private_source: false,
-        });
-        assert_eq!(
-            circuit,
-            Some(RingCircuit::TransferConfidential {
-                outputs: 2,
-                inputs: 24,
-                withdrawals: 4,
-                owners: 4,
-                data: true,
-                private: 0
-            })
-        );
+            pools: RecordPools::default(),
+            wide,
+        }
+    }
+
+    const fn transfer(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
+        narrow(outputs, inputs, withdrawals, owners).circuit()
     }
 
     #[test]
-    fn a_private_source_takes_the_narrow_private_key() {
-        let spend = |legs, owners, has_data| {
+    fn every_rail_shares_the_key_of_its_output_width() {
+        for rail in [
+            RingRail::Confidential,
+            RingRail::Anonymous,
+            RingRail::Delegate,
+            RingRail::AnonymousDelegate,
+        ] {
+            let key = |outputs| RingCircuit::transfer(spend(rail, outputs, false, false));
+            assert_eq!(key(2), Some(transfer(2, 24, 4, 4)));
+            assert_eq!(key(4), Some(transfer(4, 24, 4, 4)));
+            assert_eq!(key(8), Some(transfer(8, 16, 4, 4)));
+            assert_eq!(key(16), Some(transfer(16, 5, 8, 5)));
+            assert_eq!(key(17), None);
+        }
+    }
+
+    #[test]
+    fn the_wide_flag_names_the_one_wide_key() {
+        let wide =
+            |outputs| RingCircuit::transfer(spend(RingRail::Confidential, outputs, false, true));
+        assert_eq!(wide(2), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(wide(8), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(wide(16), None);
+    }
+
+    #[test]
+    fn a_spend_past_its_key_is_unkeyed() {
+        let past = |inputs, legs, owners, wide| {
             RingCircuit::transfer(TransferSpend {
-                rail: RingRail::Confidential,
-                inputs: 2,
-                outputs: 2,
-                spends_default_ring: false,
+                inputs,
                 legs,
                 owners,
-                has_data,
-                private_source: true,
+                ..spend(RingRail::Confidential, 2, false, wide)
             })
         };
-        assert_eq!(
-            spend(4, 4, false),
-            Some(RingCircuit::TransferConfidential {
-                outputs: 2,
-                inputs: 24,
-                withdrawals: 4,
-                owners: 4,
-                data: false,
-                private: 10
+        assert_eq!(past(24, 4, 4, false), Some(transfer(2, 24, 4, 4)));
+        assert_eq!(past(0, 0, 1, false), None);
+        assert_eq!(past(25, 0, 1, false), None);
+        assert_eq!(past(1, 5, 1, false), None);
+        assert_eq!(past(1, 0, 5, false), None);
+        assert_eq!(past(1, 5, 5, true), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(past(1, 33, 1, true), None);
+        assert_eq!(past(1, 0, 25, true), None);
+    }
+
+    #[test]
+    fn a_spend_past_the_narrow_key_fits_the_wide_flag() {
+        let fitted = |outputs, inputs, legs, owners| {
+            TransferSpend {
+                inputs,
+                legs,
+                owners,
+                ..spend(RingRail::Confidential, outputs, false, false)
+            }
+            .fitted()
+            .wide
+        };
+        assert!(!fitted(2, 24, 4, 4));
+        assert!(fitted(2, 1, 5, 1));
+        assert!(fitted(2, 5, 0, 5));
+        assert!(!fitted(16, 5, 8, 5));
+        assert!(fitted(8, 17, 0, 1));
+    }
+
+    #[test]
+    fn an_entry_takes_the_first_entry_key_holding_its_width() {
+        let entered = |rail, outputs, inputs, owners| {
+            RingCircuit::transfer(TransferSpend {
+                inputs,
+                owners,
+                ..spend(rail, outputs, true, false)
             })
+        };
+        let first = Some(entry(4, 8, 8).circuit());
+        assert_eq!(entered(RingRail::Confidential, 2, 8, 8), first);
+        assert_eq!(entered(RingRail::Anonymous, 4, 1, 1), first);
+        assert_eq!(
+            entered(RingRail::Anonymous, 8, 2, 2),
+            Some(entry(8, 2, 2).circuit())
         );
-        assert_eq!(spend(5, 1, false), None);
-        assert_eq!(spend(1, 5, false), None);
-        assert_eq!(spend(1, 1, true), None);
+        assert_eq!(entered(RingRail::Anonymous, 8, 3, 1), None);
+        assert_eq!(entered(RingRail::Delegate, 2, 1, 1), None);
+        assert_eq!(entered(RingRail::AnonymousDelegate, 2, 1, 1), None);
     }
 
     #[test]
@@ -665,15 +529,9 @@ mod tests {
         assert_eq!(bound(24, 5, 4, false), 16);
         assert_eq!(bound(24, 0, 0, true), 28);
         assert_eq!(bound(64, 5, 32, true), 0);
-        for shape in CONFIDENTIAL_TRANSFER_SHAPES
-            .iter()
-            .chain(&ANONYMOUS_TRANSFER_SHAPES)
-            .chain(&ENTRY_TRANSFER_SHAPES)
-        {
+        for shape in TRANSFER_SHAPES {
             let n_inputs = usize::from(shape.inputs);
-            assert!(
-                usize::from(shape.owners[1].max(shape.owners[0])) <= bound(n_inputs, 0, 0, false)
-            );
+            assert!(usize::from(shape.owners) <= bound(n_inputs, 0, 0, false));
         }
     }
 
@@ -683,38 +541,42 @@ mod tests {
             let pools = circuit.record_pools().unwrap();
             (pools.own, pools.curator, pools.tracking)
         };
-        let confidential =
-            |outputs, inputs, withdrawals, owners| RingCircuit::TransferConfidential {
-                outputs,
-                inputs,
-                withdrawals,
-                owners,
-                data: false,
-                private: 0,
-            };
-        let commitment = |outputs, class, withdrawals, owners| RingCircuit::TransferAnonymous {
-            outputs,
-            class,
-            withdrawals,
-            owners,
-            data: false,
-            private: 0,
+        assert_eq!(pools(transfer(2, 24, 4, 4)), (15, 15, 6));
+        assert_eq!(pools(transfer(8, 24, 32, 24)), (113, 113, 51));
+        assert_eq!(pools(transfer(16, 5, 8, 5)), (77, 77, 29));
+        assert_eq!(pools(entry(4, 8, 8).circuit()), (39, 39, 16));
+        assert_eq!(pools(entry(8, 2, 2).circuit()), (39, 39, 14));
+    }
+
+    #[test]
+    fn a_spend_past_a_narrow_keys_pools_moves_to_the_wide_key() {
+        let fitted = |outputs, pools| {
+            RingCircuit::transfer(
+                TransferSpend {
+                    pools,
+                    ..spend(RingRail::Confidential, outputs, false, false)
+                }
+                .fitted(),
+            )
         };
-        let entry = |outputs, class, withdrawals, owners| RingCircuit::TransferAnonymousEntry {
-            outputs,
-            class,
-            withdrawals,
-            owners,
-            data: false,
-            private: 0,
+        let tracked = RecordPools {
+            tracking: 7,
+            ..RecordPools::default()
         };
-        assert_eq!(pools(confidential(2, 24, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(confidential(2, 24, 32, 4)), (43, 43, 6));
-        assert_eq!(pools(confidential(2, 24, 4, 24)), (35, 35, 26));
-        assert_eq!(pools(confidential(16, 5, 8, 4)), (47, 47, 20));
-        assert_eq!(pools(commitment(4, 16, 32, 4)), (47, 47, 8));
-        assert_eq!(pools(commitment(8, 5, 24, 5)), (48, 48, 13));
-        assert_eq!(pools(entry(2, 8, 4, 4)), (15, 15, 6));
-        assert_eq!(pools(entry(8, 2, 4, 2)), (25, 25, 10));
+        assert_eq!(fitted(2, tracked), Some(transfer(8, 24, 32, 24)));
+        let own = RecordPools {
+            own: 16,
+            ..RecordPools::default()
+        };
+        assert_eq!(fitted(2, own), Some(transfer(8, 24, 32, 24)));
+        assert_eq!(
+            fitted(2, RecordPools::default()),
+            Some(transfer(2, 24, 4, 4))
+        );
+        let past_sixteen = RecordPools {
+            own: 78,
+            ..RecordPools::default()
+        };
+        assert_eq!(fitted(16, past_sixteen), None);
     }
 }

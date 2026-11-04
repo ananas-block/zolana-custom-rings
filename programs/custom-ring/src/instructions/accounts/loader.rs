@@ -1,10 +1,7 @@
 use custom_ring_interface::{
-    anonymous_exit_destination,
-    cosign::{CoSignRequirement, MAX_CO_SIGNERS},
-    storage::StorageRegistry,
-    tracking::TrackingRegistry,
-    CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead,
-    SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
+    anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry,
+    tracking::TrackingRegistry, CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy,
+    RingRole, RootRead, SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -126,7 +123,6 @@ pub fn load_records_registry<'a>(
 pub struct RingRegistries<'a> {
     own: Option<Ref<'a, StorageRegistry>>,
     curator: Option<Ref<'a, StorageRegistry>>,
-    private_source: Option<Ref<'a, StorageRegistry>>,
     tracking: Ref<'a, TrackingRegistry>,
     pub len: usize,
 }
@@ -137,7 +133,6 @@ impl RingRegistries<'_> {
             own: self.own.as_deref(),
             curator: self.curator.as_deref(),
             tracking: &self.tracking,
-            private_source: self.private_source.as_deref(),
             slot,
         }
     }
@@ -169,19 +164,17 @@ impl RegistrySlots<'_> {
             bound
                 .map(|bound| {
                     let source = load_storage_registry(bound_account(&bound)?)?;
-                    ring.check_source_pair(&source)?;
+                    ring.check_source_pair(&bound, &source)?;
                     Ok::<_, ProgramError>(source)
                 })
                 .transpose()
         };
         let own = storage(self.ring.own_registry(self.read))?;
         let curator = storage(self.ring.curator_registry(self.read))?;
-        let private_source = storage(self.ring.private_registry(self.read))?;
         let tracking = load_tracking_registry(bound_account(&self.ring.tracking)?)?;
         Ok(RingRegistries {
             own,
             curator,
-            private_source,
             tracking,
             len,
         })
@@ -222,59 +215,15 @@ pub struct CoSignerSlot<'a> {
 }
 
 impl CoSignerSlot<'_> {
-    pub fn verify(
-        self,
-        requirement: CoSignRequirement,
-    ) -> Result<(CoSignRequirement, Address), ProgramError> {
-        let (rest, expected) =
-            requirement.cover(&*load::<CoSigner>(self.program_id, self.record)?)?;
+    pub fn verify(self, requirement: CoSignRequirement) -> Result<Address, ProgramError> {
+        let expected = requirement.check(&*load::<CoSigner>(self.program_id, self.record)?)?;
         if !self.signer.is_signer() {
             return Err(CustomRingError::MissingCoSigner.into());
         }
         if self.signer.address() != &expected {
             return Err(CustomRingError::UnauthorizedCoSigner.into());
         }
-        Ok((rest, expected))
-    }
-}
-
-/// Each covers a class no earlier one covered.
-#[derive(Default)]
-pub struct CoSigners {
-    signers: [Address; MAX_CO_SIGNERS],
-    len: usize,
-}
-
-impl CoSigners {
-    /// `pairs` holds the frame's count of slots.
-    pub fn verify(
-        program_id: &Address,
-        pairs: &[AccountView],
-        mut requirement: CoSignRequirement,
-    ) -> Result<Self, ProgramError> {
-        let mut co_signers = Self::default();
-        let (pairs, _) = pairs.as_chunks::<2>();
-        for ([record, signer], slot) in pairs.iter().zip(&mut co_signers.signers) {
-            let (rest, signer) = CoSignerSlot {
-                program_id,
-                record,
-                signer,
-            }
-            .verify(requirement)?;
-            requirement = rest;
-            *slot = signer;
-            co_signers.len += 1;
-        }
-        requirement.check_satisfied()?;
-        Ok(co_signers)
-    }
-
-    pub fn as_slice(&self) -> &[Address] {
-        &self.signers[..self.len]
-    }
-
-    pub fn contains(&self, address: &Address) -> bool {
-        self.as_slice().contains(address)
+        Ok(expected)
     }
 }
 

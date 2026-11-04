@@ -12,7 +12,6 @@ pub(crate) struct BoundTable {
 
 #[must_use]
 pub(crate) struct TableBinding<'a> {
-    pub records: &'a Address,
     pub table: &'a PolicyTableIxData,
     pub curators: &'a [AccountView],
 }
@@ -50,7 +49,7 @@ impl TableBinding<'_> {
                         .get(usize::from(n) - 1)
                         .ok_or(CustomRingError::InvalidSource)?;
                     if !loaded.contains(curator.address()) {
-                        loaded.push(curator_source(self.records, curator)?);
+                        loaded.push(curator_source(curator)?);
                     }
                     *curator.address()
                 }
@@ -65,13 +64,7 @@ impl TableBinding<'_> {
 }
 
 /// A curator source names a registry of any authority other than the ring's records.
-pub(crate) fn curator_source(
-    records: &Address,
-    curator: &AccountView,
-) -> Result<Address, ProgramError> {
-    if curator.address() == records {
-        return Err(CustomRingError::InvalidSource.into());
-    }
+pub(crate) fn curator_source(curator: &AccountView) -> Result<Address, ProgramError> {
     load_storage_registry(curator)?;
     Ok(*curator.address())
 }

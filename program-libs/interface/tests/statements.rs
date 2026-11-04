@@ -2,7 +2,7 @@
 
 use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use custom_ring_interface::{
-    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, restrictive_write, tail_chain,
+    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
     ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
     AuditStreamLayout, ConfidentialSender, CustomRingError, DepositContext, DepositPublicInput,
     DepositRegistry, DepositedAsset, RegisterKeyStatement, RingOutput, SignerSet, SlotBody,
@@ -33,19 +33,10 @@ struct StatementVectors {
     description: String,
     transfer: Vec<TransferCase>,
     apply_records: ApplyCase,
-    restrictive: Vec<RestrictiveCase>,
     apply_enrollments: ApplyEnrollmentsCase,
     tracking: TrackingCase,
     register_key: RegisterKeyCase,
     deposit: DepositCase,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct RestrictiveCase {
-    mask: u64,
-    value: u64,
-    replaces_mint_policy: bool,
-    restrictive: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -136,7 +127,6 @@ struct ApplyCase {
     chain_start: String,
     chain_end: String,
     count: u64,
-    restrictive: bool,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -525,7 +515,6 @@ fn compute_vectors() -> StatementVectors {
         chain_start: values.fields[11],
         chain_end: values.fields[12],
         count: 16,
-        restrictive: true,
     };
     let apply_enrollments = ApplyEnrollmentsStatement {
         old_root: values.fields[11],
@@ -607,12 +596,11 @@ fn compute_vectors() -> StatementVectors {
                       zero padded to 8 slots, both tagged keys packed, the tracking root, the \
                       registry root, the curator root, the policy hash, each asset hash with its amount zero \
                       padded to 8 slots and the version. The transfer statements are version 4, HashChain4 over the \
-                      audit head under CRTX, two rail bits, in_proof and delegate on the \
-                      confidential family and public_owners and delegate on the anonymous family, \
+                      audit head under CRTX, in_proof, hidden, delegate, \
                       approval_mask, no_spend, output_count, output_chain, record_chain \
                       HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
-                      zero while has_data is clear, input_count, private_tx_hash, the sender or the \
-                      seven party identities, signer_count, signer_chain, policy_hash, own_root, \
+                      zero while has_data is clear, input_count, private_tx_hash, the sender, the \
+                      party identities, signer_count, signer_chain, policy_hash, own_root, \
                       curator_root, tracking_root, asset, net and gross per public \
                       slot, withdrawal_hash, the element count and the version. No body, tag, \
                       bundle or reply digest and no slot class enters it. Every per-slot chain is \
@@ -630,11 +618,9 @@ fn compute_vectors() -> StatementVectors {
             chain_start: hex::encode(apply.chain_start),
             chain_end: hex::encode(apply.chain_end),
             count: apply.count,
-            restrictive: apply.restrictive,
             elements: hexes(&apply.elements()),
             public_input_hash: hex::encode(apply.hash().unwrap()),
         },
-        restrictive: restrictive_cases(),
         apply_enrollments: ApplyEnrollmentsCase {
             old_root: hex::encode(apply_enrollments.old_root),
             new_root: hex::encode(apply_enrollments.new_root),
@@ -701,61 +687,8 @@ fn compute_vectors() -> StatementVectors {
     }
 }
 
-fn restrictive_cases() -> Vec<RestrictiveCase> {
-    use zolana_ring_policy::ListId::{Allow, Approval, Block, Frozen, Reader};
-    let set = |list: zolana_ring_policy::ListId| (list.record_bit(), list.record_bit(), false);
-    let clear = |list: zolana_ring_policy::ListId| (list.record_bit(), 0, false);
-    [
-        set(Allow),
-        clear(Allow),
-        set(Approval),
-        clear(Approval),
-        set(Block),
-        clear(Block),
-        set(Frozen),
-        clear(Frozen),
-        set(Reader),
-        clear(Reader),
-        (0, 0, false),
-        (0, 0, true),
-        (
-            Allow.record_bit() | Block.record_bit(),
-            Allow.record_bit(),
-            false,
-        ),
-        (
-            Allow.record_bit() | Frozen.record_bit(),
-            Allow.record_bit() | Frozen.record_bit(),
-            false,
-        ),
-    ]
-    .into_iter()
-    .map(|(mask, value, replaces_mint_policy)| RestrictiveCase {
-        mask,
-        value,
-        replaces_mint_policy,
-        restrictive: restrictive_write(mask, value, replaces_mint_policy),
-    })
-    .collect()
-}
-
 fn right_aligned(amount: u64) -> [u8; 32] {
     spr_hasher::primitives::right_align(&amount.to_be_bytes())
-}
-
-#[test]
-fn restrictive_write_follows_list_direction() {
-    let flags: Vec<bool> = restrictive_cases()
-        .iter()
-        .map(|case| case.restrictive)
-        .collect();
-    assert_eq!(
-        flags,
-        [
-            false, true, false, true, true, false, true, false, false, false, false, true, false,
-            true
-        ]
-    );
 }
 
 #[test]
@@ -769,7 +702,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(transfer, [42, 42, 42, 42, 42, 42, 48, 48, 48, 48, 48, 42]);
+    assert!(transfer.iter().all(|len| *len == 45));
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS
@@ -879,8 +812,8 @@ fn the_element_count_follows_the_family_alone() {
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, signer count and chain, four roots, nine public cells, withdrawals, length and version.
-    let shared_cells = AUDIT_HEAD_ELEMENTS + 2 + 2 + 4 + 2 + 2 + 4 + 9 + 1 + 2;
+    // Head, rail bits, mask, no_spend, m, three chains, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals, length and version.
+    let cells = AUDIT_HEAD_ELEMENTS + 3 + 2 + 4 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 2;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -904,12 +837,12 @@ fn the_element_count_follows_the_family_alone() {
                 public_gross: &slots,
                 withdrawal_hash: &zero,
             };
-            let expected = shared_cells + 1;
+            let expected = cells;
             assert_eq!(statement.element_count(), expected);
             let elements = statement.elements().unwrap();
             assert_eq!(elements.len(), expected);
             assert_eq!(
-                elements[AUDIT_HEAD_ELEMENTS + 4],
+                elements[AUDIT_HEAD_ELEMENTS + 5],
                 right_aligned(published as u64)
             );
             assert_eq!(elements[elements.len() - 2], right_aligned(expected as u64));
@@ -922,7 +855,6 @@ fn the_element_count_follows_the_family_alone() {
                 },
                 ..statement
             };
-            let expected = shared_cells + ANONYMOUS_PARTIES;
             assert_eq!(anonymous.element_count(), expected);
             let elements = anonymous.elements().unwrap();
             assert_eq!(elements.len(), expected);
@@ -979,7 +911,8 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
     );
     let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash).collect();
     let mut tail = vec![
-        right_aligned(1),
+        right_aligned(0),
+        right_aligned(0),
         right_aligned(0),
         right_aligned(2),
         right_aligned(1),
@@ -989,6 +922,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         zero,
         right_aligned(3),
         values.fields[3],
+        zero,
     ];
     tail.extend(parties);
     tail.extend([
