@@ -151,7 +151,8 @@ pub struct LiveSlot<'a> {
 }
 
 impl SignerDataCounts {
-    /// `solana_message::v1::MAX_SIGNATURES`, a run has no more entries to count.
+    /// `solana_message::v1::MAX_SIGNATURES`. A CPI caller's PDAs can sign past it, a member past the
+    /// last entry must own no data-bearing slot, the circuit holds the same.
     pub const ENTRIES: usize = 12;
     pub const ENTRY_BITS: usize = 5;
     const ENTRY_MASK: u64 = (1 << Self::ENTRY_BITS) - 1;
@@ -169,19 +170,17 @@ impl SignerDataCounts {
         run: &[[u8; 32]],
         live_slots: impl Iterator<Item = LiveSlot<'a>> + Clone,
     ) -> Result<Self, CustomRingError> {
-        if run.len() > Self::ENTRIES {
-            return Err(CustomRingError::OwnerSignerCount);
-        }
         let mut packed = 0;
         for (entry, signer) in run.iter().enumerate() {
             let count = live_slots
                 .clone()
                 .filter(|slot| slot.owner_identity == signer && *slot.data_hash != ZERO_FIELD)
                 .count() as u64;
-            if count > Self::ENTRY_MASK {
-                return Err(CustomRingError::InvalidSignerDataCounts);
+            match (entry < Self::ENTRIES, count) {
+                (_, 0) => {}
+                (true, 1..=Self::ENTRY_MASK) => packed |= count << (entry * Self::ENTRY_BITS),
+                _ => return Err(CustomRingError::InvalidSignerDataCounts),
             }
-            packed |= count << (entry * Self::ENTRY_BITS);
         }
         Ok(Self(packed))
     }
@@ -540,11 +539,17 @@ mod tests {
     }
 
     #[test]
-    fn a_run_past_the_entries_and_a_count_past_its_bits_are_refused() {
-        let wide = [ALICE; SignerDataCounts::ENTRIES + 1];
+    fn a_data_slot_past_the_entries_and_a_count_past_its_bits_are_refused() {
+        let mut wide = [ALICE; SignerDataCounts::ENTRIES + 1];
+        wide[SignerDataCounts::ENTRIES] = BOB;
+        let bob_data = [slot(&BOB, &DATA)];
         assert_eq!(
             SignerDataCounts::of_run(&wide, core::iter::empty()),
-            Err(CustomRingError::OwnerSignerCount)
+            Ok(SignerDataCounts::default())
+        );
+        assert_eq!(
+            SignerDataCounts::of_run(&wide, bob_data.iter().copied()),
+            Err(CustomRingError::InvalidSignerDataCounts)
         );
         let slots = [slot(&ALICE, &DATA); 32];
         assert_eq!(

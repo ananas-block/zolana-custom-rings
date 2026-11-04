@@ -517,7 +517,8 @@ pub fn exits_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(RingOutput::is_exit))
 }
 
-/// Frame parsing alone reads it.
+/// Frame parsing alone reads it. The bitmap is public and no proof reads it, any reader sees the
+/// slots with no recipient body. SPP's external data hash binds each slot's present or absent data.
 pub fn bodiless_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(|output| output.body == SlotBody::None))
 }

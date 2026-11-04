@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -15,8 +16,7 @@ type AuditHead struct {
 	RingProgramID  *big.Int
 	TxViewingU     [32]byte
 	AuditorPubkey  [33]byte
-	EphU           [32]byte
-	// Envelope is the transmitted envelope ciphertext, its digest head element 9.
+	// Envelope is the transmitted envelope ciphertext, its digest head element 7.
 	Envelope []byte
 	Salt     [16]byte
 	Layout   int64
@@ -27,10 +27,9 @@ func (h AuditHead) ElementsUnder(t testing.TB, domain int64) []*big.Int {
 	t.Helper()
 	txLo, txHi := ringprotocol.Pack33(ringprotocol.Tagged(h.TxViewingU[:]))
 	auditorLo, auditorHi := ringprotocol.Pack33(h.AuditorPubkey)
-	ephLo, ephHi := ringprotocol.Pack33(ringprotocol.Tagged(h.EphU[:]))
 	return []*big.Int{
 		big.NewInt(domain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
-		auditorLo, auditorHi, ephLo, ephHi, ringprotocol.EnvelopeDigest(t, h.Envelope), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
+		auditorLo, auditorHi, ringprotocol.EnvelopeDigest(t, h.Envelope), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
 	}
 }
 
@@ -55,6 +54,21 @@ func SignerChain(t testing.TB, signers []*big.Int, slots int) *big.Int {
 	}
 	copy(cells, signers)
 	return spptest.MustHashChain4(t, cells)
+}
+
+// SignerDataCounts mirrors audit.SignerDataCounts over a run within its entries and the opened output slots.
+func SignerDataCounts(run []*big.Int, slots []Utxo) *big.Int {
+	packed := big.NewInt(0)
+	for entry, signer := range run {
+		count := int64(0)
+		for _, slot := range slots {
+			if slot.IsUtxo() && slot.DataHash.Sign() != 0 && slot.OwnerPkHash.Cmp(signer) == 0 {
+				count++
+			}
+		}
+		packed.Add(packed, new(big.Int).Lsh(big.NewInt(count), uint(entry*audit.SignerDataEntryBits)))
+	}
+	return packed
 }
 
 func OutputCount(outputs []StatementOutput) int {

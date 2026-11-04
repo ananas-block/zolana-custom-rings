@@ -102,6 +102,7 @@ type TransferParams struct {
 	Entries           []EntryOpening  `json:"entries,omitempty"`
 	SignerCount       uint8           `json:"signerCount"`
 	Signers           []Field         `json:"signers"`
+	SignerDataCounts  uint64          `json:"signerDataCounts,omitempty"`
 	Rows              []Field         `json:"rows"`
 	PrivateTxHash     Field           `json:"privateTxHash"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
