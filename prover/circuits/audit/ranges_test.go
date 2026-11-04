@@ -26,7 +26,7 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 	var vectors struct {
 		Keys []rangesVector `json:"keys"`
 	}
-	ringtest.ReadVector(t, "audit/ring-disclosure-ranges.json", &vectors)
+	ringtest.ReadVector(t, "audit/ring-disclosure-ranges-v4.json", &vectors)
 	if len(vectors.Keys) == 0 {
 		t.Fatal("the vector holds no key")
 	}

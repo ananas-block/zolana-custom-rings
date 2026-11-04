@@ -1,4 +1,4 @@
-//! Pins `test-vectors/audit/ring-disclosure-ranges.json` for the Go circuits and the TS SDK.
+//! Pins `test-vectors/audit/ring-disclosure-ranges-v4.json` for the Go circuits and the TS SDK.
 
 use custom_ring_interface::{
     key_catalog::{
@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/audit/ring-disclosure-ranges.json"
+    "/../../test-vectors/audit/ring-disclosure-ranges-v4.json"
 );
 
 struct KeyCase {
@@ -109,7 +109,7 @@ fn the_ranges_are_the_shared_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/audit/ring-disclosure-ranges.json"]
+#[ignore = "rewrites test-vectors/audit/ring-disclosure-ranges-v4.json"]
 fn write_ring_disclosure_ranges_vector() {
     let json = serde_json::to_string_pretty(&compute_vector()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
