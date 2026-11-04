@@ -1245,14 +1245,18 @@ mod public_signers {
         RingTransfer, SlotOpening,
     };
 
-    const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
+    pub(super) const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
     const UNITS: u32 = custom_ring_interface::compute_unit_limit(InstructionTag::Transfer);
 
-    fn address(owner: &ShieldedKeypair) -> Address {
+    pub(super) fn address(owner: &ShieldedKeypair) -> Address {
         Address::new_from_array(owner.signing_pubkey().as_ed25519().unwrap())
     }
 
-    fn chain(mode: RingMode, co_signer: Option<Address>, owners: &[&ShieldedKeypair]) -> Chain {
+    pub(super) fn chain(
+        mode: RingMode,
+        co_signer: Option<Address>,
+        owners: &[&ShieldedKeypair],
+    ) -> Chain {
         let owners: Vec<(&ShieldedKeypair, u64)> = owners.iter().map(|owner| (*owner, 1)).collect();
         Chain::ring(RingSettings {
             has_policy: true,
@@ -1262,7 +1266,10 @@ mod public_signers {
         .with_registry(Registry::new(&owners), &pipeline_rules())
     }
 
-    fn transfer<'a>(sender: &'a ShieldedKeypair, notes: Vec<WalletUtxo>) -> CustomRingTransfer<'a> {
+    pub(super) fn transfer<'a>(
+        sender: &'a ShieldedKeypair,
+        notes: Vec<WalletUtxo>,
+    ) -> CustomRingTransfer<'a> {
         CustomRingTransfer::new(CustomRingTransferInput {
             ring: ring(),
             sender,
@@ -1276,7 +1283,7 @@ mod public_signers {
         })
     }
 
-    fn pay(to: &ShieldedKeypair, amount: u64) -> AnonymousPayment {
+    pub(super) fn pay(to: &ShieldedKeypair, amount: u64) -> AnonymousPayment {
         AnonymousPayment {
             to: RingAddress {
                 recipient: to.shielded_address().unwrap(),
@@ -1290,21 +1297,21 @@ mod public_signers {
         }
     }
 
-    fn quote() -> RelayQuote {
+    pub(super) fn quote() -> RelayQuote {
         RelayQuote {
             fee_payer: SerializablePubkey(FEE_PAYER),
             valid_until_slot: u64::MAX,
         }
     }
 
-    struct Sent {
-        request: PrepareRelayRequest,
-        relay_id: RelayId,
-        pending: PendingSignature,
+    pub(super) struct Sent {
+        pub request: PrepareRelayRequest,
+        pub relay_id: RelayId,
+        pub pending: PendingSignature,
     }
 
     /// `prepare_relay` sets the expectation, a relay that asks reaches a wallet holding terms.
-    async fn sent(prepared: PreparedRelay) -> Sent {
+    pub(super) async fn sent(prepared: PreparedRelay) -> Sent {
         let relay = StubRelay {
             asks_signature: true,
             ..StubRelay::default()
@@ -1325,6 +1332,18 @@ mod public_signers {
         client: &crate::RingClient<Chain, Chain>,
         request: &PrepareRelayRequest,
     ) -> Instruction {
+        let assembled = assembled(client, request).await;
+        let frame = &assembled.frame;
+        frame
+            .accounts
+            .instruction(frame.ring, &assembled.config, &frame.parts)
+            .unwrap()
+    }
+
+    pub(super) async fn assembled(
+        client: &crate::RingClient<Chain, Chain>,
+        request: &PrepareRelayRequest,
+    ) -> crate::pipeline::Assembled {
         let (RelayIntent::Anonymous {
             proof_inputs,
             owner_signature,
@@ -1348,12 +1367,7 @@ mod public_signers {
         for co_signer in &request.co_signers {
             relayed = relayed.with_co_signer(co_signer.0);
         }
-        let assembled = relayed.assemble(client).await.unwrap();
-        let frame = &assembled.frame;
-        frame
-            .accounts
-            .instruction(frame.ring, &assembled.config, &frame.parts)
-            .unwrap()
+        relayed.assemble(client).await.unwrap()
     }
 
     /// The terms cross to the signer's wallet as JSON.
@@ -2265,6 +2279,162 @@ mod public_signers {
                 .commitment(&[7; 32])
                 .unwrap()
         );
+    }
+}
+
+mod request_fixtures {
+    //! Requests the normal SDK path writes, `prover/ring` solves each with no key.
+
+    use custom_ring_interface::key_catalog::RingCircuit;
+    use custom_ring_interface::stream::DeliveredSlot;
+    use spr_keypair::{random_blinding, ShieldedKeypair, X25519Pubkey};
+    use spr_transaction::{Data, Utxo};
+
+    use super::public_signers::{assembled, chain, pay, quote, sent, transfer};
+    use super::*;
+    use crate::{
+        relay_message::ApprovalOpening,
+        tests::support::{wallet, TREE_ID},
+    };
+
+    /// `UPDATE_PROVER_JSON=1` writes the file, `TestRustFixtures` solves what it holds.
+    fn pinned(
+        name: &str,
+        assembled: &crate::pipeline::Assembled,
+    ) -> (serde_json::Value, RingCircuit) {
+        let request = assembled.request().unwrap();
+        let built = serde_json::to_value(
+            crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+        )
+        .unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/custom-ring-transfer-{name}.json"));
+        if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+            std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+        }
+        assert!(path.exists());
+        (built, request.circuit)
+    }
+
+    /// The first message, opened under the sender's viewing key at the index past every slot.
+    fn sender_bundle(
+        assembled: &crate::pipeline::Assembled,
+        sender: &ShieldedKeypair,
+    ) -> custom_ring_interface::SenderBundle {
+        let inputs = &assembled.frame.proof_inputs;
+        let external = &inputs.external_data;
+        let published = external.outputs.len();
+        let tx_viewing_pk = X25519Pubkey::from_bytes(external.tx_viewing_pk).unwrap();
+        let secret = DeliveredSlot {
+            agreement: &sender.viewing_key.ecdh(&tx_viewing_pk).unwrap(),
+            tx_viewing_pk: tx_viewing_pk.as_bytes(),
+            recipient_viewing_pk: sender.viewing_pubkey().as_bytes(),
+            salt: &external.salt,
+            output_index: published as u32,
+            first_nullifier: &inputs.input_utxos[0].nullifier(),
+        }
+        .secret()
+        .unwrap();
+        let body =
+            custom_ring_interface::ring_sender_bundle_output_body(&external.messages[0].data)
+                .unwrap();
+        zolana_ring_transaction::open_sender_bundle(body, &secret, published).unwrap()
+    }
+
+    fn assert_opens(built: &serde_json::Value, opening: &ApprovalOpening) {
+        let digest = built["approvalTotals"].as_str().unwrap();
+        assert_eq!(
+            built["approvalBlinder"].as_str().unwrap(),
+            format!("0x{}", hex::encode(opening.blinder.0))
+        );
+        assert_eq!(digest.len(), 66);
+        assert_ne!(digest, format!("0x{}", hex::encode([0; 32])));
+    }
+
+    #[tokio::test]
+    async fn an_exact_approval_writes_a_digest_its_opening_rebuilds_on_both_paths() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let build = || {
+            transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+                .with_exact_approval()
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 4))
+                .unwrap()
+        };
+        let direct = build().assemble(&client).await.unwrap();
+        let (built, _) = pinned("exact-approval", &direct);
+        assert_opens(&built, direct.frame.approval_opening.as_ref().unwrap());
+
+        let relay = build();
+        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let opening = asked.pending.approval_opening().unwrap().clone();
+        let relayed = assembled(&client, &asked.request).await;
+        let (built, _) = pinned("relayed-exact-approval", &relayed);
+        assert_opens(&built, &opening);
+        assert_eq!(relayed.frame.approval_opening.as_ref(), Some(&opening));
+    }
+
+    /// A default note of 40 enters 25, the sender's 15 returns into the ring.
+    #[tokio::test]
+    async fn an_anonymous_entry_returns_its_change_into_the_ring_on_both_paths() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let entry = wallet(
+            Utxo {
+                owner: sender.signing_pubkey(),
+                asset: Mint::SOL,
+                amount: 40,
+                blinding: random_blinding(),
+                ring_program_id: None,
+                data: Data::default(),
+            },
+            &sender.nullifier_key,
+            TREE_ID,
+            0,
+        );
+        let build = || {
+            transfer(&sender, vec![entry.clone()])
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 25))
+                .unwrap()
+        };
+        let ring_id = ring().program_id();
+        let check = |assembled: &crate::pipeline::Assembled, circuit: RingCircuit| {
+            let RingCircuit::Transfer { entry, .. } = circuit else {
+                panic!("a transfer key");
+            };
+            assert!(entry);
+            let outputs = &assembled.frame.proof_inputs.output_utxos;
+            let live: Vec<_> = outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .map(|output| (output.owner_address, output.ring_program_id, output.amount))
+                .collect();
+            assert_eq!(
+                live,
+                [
+                    (sender.shielded_address().ok(), Some(ring_id), 15),
+                    (payee.shielded_address().ok(), Some(ring_id), 25),
+                ]
+            );
+            let bundle = sender_bundle(assembled, &sender);
+            assert_eq!(
+                (bundle.mint, bundle.amount, bundle.sol_amount),
+                (Mint::SOL.asset.to_bytes(), 15, 0)
+            );
+            assert_eq!(bundle.recipient_keys[0], [0; 32]);
+            assert_eq!(bundle.recipient_keys[1], payee.viewing_pubkey().u());
+        };
+        let direct = build().assemble(&client).await.unwrap();
+        let (_, circuit) = pinned("anonymous-entry", &direct);
+        check(&direct, circuit);
+
+        let relay = build();
+        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let relayed = assembled(&client, &asked.request).await;
+        let (_, circuit) = pinned("relayed-anonymous-entry", &relayed);
+        check(&relayed, circuit);
     }
 }
 
