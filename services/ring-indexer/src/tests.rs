@@ -5,7 +5,7 @@ use std::sync::{
 
 use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, InitializeTrackingIxData, PrivateListWriteData},
+    storage_instruction::{tag, InitializeIxData, InitializeTrackingIxData},
     tracking::TrackingRegistry,
     MEMBER_REGISTRY_EMPTY_ROOT,
 };
@@ -24,8 +24,8 @@ use crate::{
     migration::Migrator,
     rpc::SolanaRpc,
     storage::{
-        self, AppliedRevision, Enrollment, ListWritePage, RingCursor, StorageRoot, StorageState,
-        StorageStore, TrackingState, TrackingStore,
+        self, AppliedRevision, Enrollment, RingCursor, StorageRoot, StorageState, StorageStore,
+        TrackingState, TrackingStore,
     },
     storage_registry::StorageCall,
     tracking_registry::TrackingCall,
@@ -355,7 +355,7 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         &tracking,
         &TrackingState {
             registry: [12; 32],
-            account: Box::new(TrackingRegistry::new(1, &creator)),
+            account: Box::new(TrackingRegistry::new(&creator)),
             fault: None,
         },
     )
@@ -376,7 +376,6 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         viewing_u: [10; 32],
         revision: 1,
         applied_revision: 0,
-        last_enroll_slot: 5,
     };
     tracking.save_first(&enrollment, 5).await.unwrap();
     assert_eq!(tracking.pending(None, 8).await.unwrap(), [enrollment]);
@@ -391,20 +390,5 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     assert!(tracking.pending(None, 8).await.unwrap().is_empty());
     let applied = tracking.enrollment_at(&[2; 32]).await.unwrap().unwrap();
     assert_eq!(applied.applied_revision, 1);
-    let write = PrivateListWriteData {
-        position: field(1),
-        leaf: field(2),
-        write_counter: 1u64.to_le_bytes(),
-    };
-    store.save_list_writes(&[write], 3).await.unwrap();
-    let served = store
-        .list_writes(ListWritePage {
-            start: 0,
-            limit: 8,
-            revision: 3,
-        })
-        .await
-        .unwrap();
-    assert_eq!(served[0].write_counter, 1);
     Migrator::reset(&db).await.unwrap();
 }

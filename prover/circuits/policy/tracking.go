@@ -78,6 +78,6 @@ func (t *Tracking) OpenTracking(api frontend.API) TrackingPool {
 
 // Row reads member at entry while active is set, zeros otherwise.
 func (p TrackingPool) Row(api frontend.API, active, member, entry frontend.Variable) TrackingView {
-	columns := p.subjects.resolve(api, recordQuery{active: active, member: member, index: entry})
+	columns := p.subjects.read(api, recordQuery{active: active, member: member, index: entry})
 	return TrackingView{NullifierPk: columns[0], ListTag: columns[1]}
 }
