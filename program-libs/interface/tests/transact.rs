@@ -812,6 +812,35 @@ fn the_extensions_reach_the_forwarded_data() {
     );
 }
 
+#[test]
+fn a_tag_on_the_wire_reaches_the_external_data_hash_at_its_width() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| {
+        let compact = data.encode().unwrap();
+        RingTransactData::parse(&compact, RingRail::Confidential)
+            .unwrap()
+            .into_data()
+            .external_data_hash(&config, &[])
+            .unwrap()
+    };
+    let honest = fixture.confidential_delivered();
+    assert!(honest.outputs[3].is_exit() && !honest.outputs[0].is_exit());
+    assert_eq!(
+        hash(&honest),
+        honest.external_data_hash(&config, &[]).unwrap()
+    );
+    let mut slot = honest.clone();
+    slot.outputs[0].owner_tag[31] ^= 1;
+    assert_ne!(hash(&slot), hash(&honest));
+    let mut exit = honest.clone();
+    exit.outputs[3].owner_tag[0] ^= 1;
+    assert_ne!(hash(&exit), hash(&honest));
+    let mut wide = honest.clone();
+    wide.outputs[0].owner_tag[0] ^= 1;
+    assert!(wide.encode().is_err());
+}
+
 /// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.
 #[test]
 fn the_external_data_hash_binds_every_delivery_byte() {
