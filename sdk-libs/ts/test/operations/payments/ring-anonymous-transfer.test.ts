@@ -1,3 +1,4 @@
+import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import { AccountState, getTokenEncoder } from "@solana-program/token";
@@ -943,6 +944,28 @@ describe("anonymous ring exits and entries", () => {
       ringError("RING_ENTRY_CO_OWNER"),
     );
     noProofs(fixture);
+  });
+
+  it("settles a frame past one transaction from a buffer only when asked", async () => {
+    const fixture = await anonymousRing();
+    const sender = anonymousSender();
+    const payments = await Promise.all(
+      Array.from({ length: 15 }, () => addressOf(fixture, ShieldedKeypair.generate())),
+    );
+    const planned = (buffered: boolean) => {
+      const paying = payments.reduce(
+        (transfer, to) => transfer.withPayment({ to, asset: SOL_MINT, amount: 1n, reply: null }),
+        rail({ fixture, sender, transfer: spend(fixture, sender) }),
+      );
+      return buffered ? paying.withBufferedSettlement() : paying;
+    };
+    await expect(planned(false).prove(fixture.client)).rejects.toThrow(
+      ringError("RING_TRANSFER_TOO_WIDE"),
+    );
+    const proven = await planned(true).prove(fixture.client);
+    const buffered = await proven.buffered(1n);
+    expect(buffered.settle().data?.[0]).toBe(RingInstructionTag.settleBuffered);
+    expect(buffered.writes().length).toBeGreaterThan(1);
   });
 
   it("refuses a recipient viewing key off its record", async () => {

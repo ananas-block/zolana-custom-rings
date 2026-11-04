@@ -93,7 +93,9 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
+import { decideAddressCeiling } from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
+import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
 
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
@@ -178,7 +180,7 @@ export class ProvenRingTransfer {
   readonly policy?: BoundPolicy;
 
   /** @internal */
-  constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
+  constructor(fields: Omit<ProvenRingTransfer, "instruction" | "buffered">) {
     this.ringProgramId = fields.ringProgramId;
     this.data = fields.data;
     this.accounts = fields.accounts;
@@ -192,6 +194,11 @@ export class ProvenRingTransfer {
 
   instruction(): Promise<Instruction> {
     return ringTransactInstruction(this.ringProgramId, this.accounts, this.data);
+  }
+
+  /** `nonce` names the buffer, the payer writes it and pays the settlement. */
+  async buffered(nonce: bigint): Promise<BufferedFrame> {
+    return BufferedFrame.of(await this.instruction(), this.accounts.payer, nonce);
   }
 }
 
@@ -232,6 +239,8 @@ export type StagedTransferInput = Readonly<{
   /** An enrolled subject on a ring reading a salted list needs its salt here. */
   listSalts?: readonly RingListSalt[];
   transaction?: RingTransactionFrame;
+  /** Past one transaction the frame settles from a buffer its payer writes. */
+  bufferedSettlement?: boolean;
   approve?: (coSigners: readonly Address[]) => Promise<void>;
 }>;
 
@@ -463,12 +472,24 @@ async function assembleStagedTransfer<T>(
       )
     )
       throw new RingError("RING_EXTERNAL_DATA_MISMATCH");
-    checkTransferFits(shape, {
-      ...input.transaction,
-      feePayer: proofInputs.payer,
-      instructions: [await ringTransactInstruction(ringProgramId, accounts, preview)],
-      computeUnitLimit: ringComputeUnitLimit(transactTag(ringRail)),
-    });
+    const inline = await ringTransactInstruction(ringProgramId, accounts, preview);
+    const computeUnitLimit = ringComputeUnitLimit(transactTag(ringRail));
+    if (input.bufferedSettlement === true)
+      await decideAddressCeiling({
+        ...input.transaction,
+        payer: proofInputs.payer,
+        instruction: inline,
+        computeUnitLimit,
+        inputs: [],
+        mergeCapacity: { keyed: 0, zeroKey: 0 },
+      });
+    else
+      checkTransferFits(shape, {
+        ...input.transaction,
+        feePayer: proofInputs.payer,
+        instructions: [inline],
+        computeUnitLimit,
+      });
     return await use(
       Object.freeze({
         sealed,

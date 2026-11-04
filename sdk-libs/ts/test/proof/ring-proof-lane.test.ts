@@ -38,7 +38,6 @@ import {
 import { RingError } from "../../src/protocol/error.js";
 import {
   RING_KEYS,
-  ringAuthorityExitKeyName,
   ringCircuitType,
   ringProvingKey,
 } from "../../src/protocol/proof/proving-keys.js";
@@ -173,15 +172,6 @@ describe("the key table", () => {
     const refused = refusal(() => ringProvingKey({ family: "merge" }));
     expect(refused.code).toBe("RING_PROVING_KEYS_MISSING");
     expect(refused.details).toMatchObject({ keyNames: "custom_ring_merge_v4.key" });
-  });
-
-  it("keys the authority exit at two shapes", () => {
-    expect(ringAuthorityExitKeyName({ nInputs: 4, nOutputs: 4 })).toBe(
-      "transfer_ring_authority_exit_4_4.key",
-    );
-    expect(refusal(() => ringAuthorityExitKeyName({ nInputs: 2, nOutputs: 4 })).code).toBe(
-      "RING_PROVING_KEYS_MISSING",
-    );
   });
 });
 

@@ -45,6 +45,7 @@ import {
 import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
+import { settledFrame } from "./frame-buffer.js";
 import {
   decodeRingMergeRequest,
   forwardedMergeData,
@@ -260,6 +261,33 @@ interface TrustedEvent {
   readonly wrapper: OriginInstruction | undefined;
 }
 
+/** A settlement closes its buffer, its own event inside it alone names the frame it signed. */
+function callerFrame(
+  groups: readonly OriginInstructionGroup[],
+  caller: OriginInstruction,
+  ring: Address,
+): Uint8Array | undefined {
+  if (caller.data[0] !== RingInstructionTag.settleBuffered) return caller.data;
+  const event = instructionAncestry(groups).find(
+    ({ instruction, parent }) =>
+      parent === caller && instruction.data[0] === RingInstructionTag.frameEvent,
+  )?.instruction;
+  if (event === undefined) return undefined;
+  try {
+    return settledFrame({
+      ringProgram: ring,
+      settleProgram: caller.programId,
+      eventProgram: event.programId,
+      succeeded: true,
+      settle: caller.data,
+      event: event.data,
+    });
+  } catch (cause) {
+    if (cause instanceof RingError) return undefined;
+    throw cause;
+  }
+}
+
 function ringEventIn(
   groups: readonly OriginInstructionGroup[],
   eventIndex: number,
@@ -452,7 +480,8 @@ export function confirmedRingWithdrawals(
       if (withdrawals.length === 0) return withdrawals;
       const source = settlementDataOf(instruction);
       if (source === undefined) return withdrawals;
-      const frame = screenedFrame(parent.data, source.anonymous);
+      const settled = callerFrame(groups, parent, ring);
+      const frame = settled === undefined ? undefined : screenedFrame(settled, source.anonymous);
       if (frame === undefined) return withdrawals;
       const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
         const writer = new Writer();
@@ -700,7 +729,8 @@ function bindConfirmedTransaction(
   ring: Address,
 ): ConfirmedRingTransaction | undefined {
   if (indexed.eventIndex === undefined) throw invalid("eventIndex");
-  const found = ringEventIn(confirmedInstructionGroups(confirmed), indexed.eventIndex, ring);
+  const groups = confirmedInstructionGroups(confirmed);
+  const found = ringEventIn(groups, indexed.eventIndex, ring);
   if (found === undefined) return undefined;
   try {
     const data = readConfirmedEvent(found.source, found.event);
@@ -805,7 +835,11 @@ function bindConfirmedTransaction(
       kind: data.kind,
       transaction,
       inputTreeIds,
-      ...boundFrame(found, sppAnonymous, published),
+      ...boundFrame(
+        found.wrapper === undefined ? undefined : callerFrame(groups, found.wrapper, ring),
+        sppAnonymous,
+        published,
+      ),
     });
   } catch (cause) {
     if (cause instanceof RingError) throw cause;
@@ -823,14 +857,13 @@ interface PublishedCounts {
 
 /** The frame of the ring's own `Transfer` or `AuthorityTransfer`, the one the program verified. */
 function boundFrame(
-  found: TrustedEvent,
+  instruction: Uint8Array | undefined,
   sppAnonymous: boolean,
   published: PublishedCounts,
 ): Pick<
   Extract<ConfirmedRingTransaction, { kind: "transfer" }>,
   "layout" | "rail" | "noSpend" | "hasData" | "entry"
 > {
-  const instruction = found.wrapper?.data;
   const tag = instruction?.[0];
   if (
     instruction === undefined ||
