@@ -22,7 +22,7 @@ use crate::instructions::{
     process_deposit_ix, process_merge_ix, process_transfer_ix,
 };
 
-/// Tag 62. The creator signs its own address space, nobody squats its nonce.
+/// The writer seeds the address and signs, nobody squats its nonce.
 #[inline(never)]
 pub fn process_create_frame_buffer_ix(
     program_id: &Address,
@@ -32,15 +32,15 @@ pub fn process_create_frame_buffer_ix(
     let ix = CreateFrameBufferIxData::parse(data)?;
     let mut iter = AccountIterator::new(accounts);
     let rent_payer = iter.next_signer_mut("rent_payer")?;
-    let creator = iter.next_signer("creator")?;
+    let writer = iter.next_signer("writer")?;
     let buffer = iter.next_mut("buffer")?;
     check_system_program(iter.next_account("system_program")?)?;
-    let header = FrameBufferHeader::new(&ix, *rent_payer.address())?;
+    let header = FrameBufferHeader::new(&ix, *writer.address(), *rent_payer.address())?;
 
     let nonce = ix.nonce.to_le_bytes();
     let seeds: [&[u8]; 3] = [
         FRAME_BUFFER_PDA_SEED,
-        creator.address().as_ref(),
+        writer.address().as_ref(),
         nonce.as_ref(),
     ];
     let (derived, bump) = Address::derive_program_address(&seeds, program_id)
@@ -73,7 +73,6 @@ pub fn process_create_frame_buffer_ix(
     Ok(())
 }
 
-/// Tag 59.
 #[inline(never)]
 pub fn process_write_frame_ix(
     program_id: &Address,
@@ -92,7 +91,7 @@ pub fn process_write_frame_ix(
     Ok(())
 }
 
-/// Tag 60. Rent returns to the recorded payer, never to the closer.
+/// Rent returns to the recorded payer, never to the closer.
 #[inline(never)]
 pub fn process_close_frame_buffer_ix(
     program_id: &Address,
@@ -118,7 +117,6 @@ pub fn process_close_frame_buffer_ix(
     close_into(buffer, rent_payer, CustomRingError::FrameRentPayer)
 }
 
-/// Tag 61. Runs the inline handler over the sealed frame and closes the buffer.
 #[inline(never)]
 pub fn process_settle_buffered_ix(
     program_id: &Address,
@@ -128,9 +126,10 @@ pub fn process_settle_buffered_ix(
     let settle = SettleBufferedIxData::parse(data)?;
     let inner_tag = settle.inner()?;
     let (fixed, inner) = accounts
-        .split_at_mut_checked(2)
+        .split_at_mut_checked(3)
         .ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let [buffer, rent_payer] = fixed else {
+    // The runtime resolves the event's callee among the caller's accounts, the third holds the program.
+    let [buffer, rent_payer, _program] = fixed else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     if buffer.address().as_array() != settle.buffer {
@@ -166,7 +165,7 @@ pub fn process_settle_buffered_ix(
     close_into(buffer, rent_payer, CustomRingError::FrameRentPayer)
 }
 
-/// Tag 63. Only the ring PDA signs it, so a top-level or foreign caller cannot forge a frame.
+/// Only the ring PDA signs, a caller cannot forge a frame.
 #[inline(never)]
 pub fn process_frame_event_ix(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
@@ -231,7 +230,7 @@ impl RingAuthSlot {
     }
 }
 
-/// The anonymous proof excludes the payer from the hidden sender, so writer and rent payer hold that slot.
+/// The anonymous proof excludes the payer from the hidden sender, writer and rent payer must hold that slot.
 fn check_parties(
     program_id: &Address,
     header: &FrameBufferHeader,

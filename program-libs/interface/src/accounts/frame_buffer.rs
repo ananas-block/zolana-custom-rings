@@ -6,7 +6,6 @@ use spr_hasher::{Hasher, Sha256};
 
 use crate::{bytes::Bytes, error::CustomRingError, tag, InstructionTag};
 
-// Discriminators 14 and 15 are `CoSigner` and `RingPolicy`.
 pub const FRAME_BUFFER: u8 = 16;
 pub const FRAME_BUFFER_PDA_SEED: &[u8] = b"frame_buffer";
 pub const FRAME_BUFFER_HEADER_LEN: usize = core::mem::size_of::<FrameBufferHeader>();
@@ -15,7 +14,6 @@ pub const MAX_FRAME_LEN: usize = 10 * 1024 - FRAME_BUFFER_HEADER_LEN;
 
 const _: () = assert!(core::mem::align_of::<FrameBufferHeader>() == 1);
 
-/// The account data is this header followed by exactly `length` frame bytes.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct FrameBufferHeader {
@@ -31,7 +29,11 @@ pub struct FrameBufferHeader {
 }
 
 impl FrameBufferHeader {
-    pub fn new(ix: &CreateFrameBufferIxData, rent_payer: Address) -> Result<Self, CustomRingError> {
+    pub fn new(
+        ix: &CreateFrameBufferIxData,
+        writer: Address,
+        rent_payer: Address,
+    ) -> Result<Self, CustomRingError> {
         if !(1..=MAX_FRAME_LEN).contains(&usize::from(ix.length)) {
             return Err(CustomRingError::FrameLength);
         }
@@ -40,7 +42,7 @@ impl FrameBufferHeader {
             sealed: 0,
             length: ix.length.to_le_bytes(),
             expiry_unix_ts: ix.expiry_unix_ts.to_le_bytes(),
-            writer: ix.writer,
+            writer,
             rent_payer,
             digest: ix.digest,
             event_tag: tag::FRAME_EVENT,
@@ -67,7 +69,6 @@ impl FrameBufferHeader {
         FRAME_BUFFER_HEADER_LEN + self.length()
     }
 
-    /// The writer closes at any time, anyone at or past expiry.
     pub fn check_close(
         &self,
         closer: &Address,
@@ -81,7 +82,6 @@ impl FrameBufferHeader {
     }
 }
 
-/// An initialized buffer, read from its account data.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameBuffer<'a> {
     pub header: &'a FrameBufferHeader,
@@ -106,12 +106,10 @@ impl<'a> FrameBuffer<'a> {
         &self.event[1..]
     }
 
-    /// The tag and the frame, the event's whole instruction data.
     pub const fn event_data(&self) -> &'a [u8] {
         self.event
     }
 
-    /// Fails unless the buffer can settle the signed `settle` now.
     pub fn check_settlement(
         &self,
         settle: &SettleBufferedIxData<'_>,
@@ -158,7 +156,6 @@ impl<'a> FrameBuffer<'a> {
     }
 }
 
-/// A buffer open for one write.
 #[derive(Debug)]
 pub struct FrameBufferWrite<'a> {
     header: &'a mut FrameBufferHeader,
@@ -178,7 +175,7 @@ impl<'a> FrameBufferWrite<'a> {
         })
     }
 
-    /// A sealed buffer never changes, so a co-signer's inspected bytes are the settled bytes.
+    /// Sealed bytes never change, a co-signer's inspected bytes are the settled bytes.
     pub fn apply(
         self,
         writer: &Address,
@@ -210,7 +207,7 @@ pub fn frame_digest(frame: &[u8]) -> Result<[u8; 32], CustomRingError> {
     Sha256::hash(frame).map_err(|_| CustomRingError::HashingFailed)
 }
 
-/// The frame a settlement carried, from the data of its tag 61 and of the tag 63 it emitted.
+/// The caller holds `event` to a tag 63 the same tag 61 emitted in a successful transaction.
 pub fn settled_frame<'a>(settle: &[u8], event: &'a [u8]) -> Result<&'a [u8], CustomRingError> {
     let invalid = CustomRingError::InvalidFrameEvent;
     let (&settle_tag, settle) = settle.split_first().ok_or(invalid)?;
@@ -225,24 +222,21 @@ pub fn settled_frame<'a>(settle: &[u8], event: &'a [u8]) -> Result<&'a [u8], Cus
     Ok(frame)
 }
 
-/// Tag 62.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CreateFrameBufferIxData {
     pub nonce: u64,
-    pub writer: Address,
     pub digest: [u8; 32],
     pub length: u16,
     pub expiry_unix_ts: u32,
 }
 
 impl CreateFrameBufferIxData {
-    pub const LEN: usize = 8 + 32 + 32 + 2 + 4;
+    pub const LEN: usize = 8 + 32 + 2 + 4;
 
     pub fn parse(data: &[u8]) -> Result<Self, CustomRingError> {
         let mut bytes = Bytes::new(data, CustomRingError::InvalidInstructionData);
         let parsed = Self {
             nonce: u64::from_le_bytes(*bytes.array()?),
-            writer: Address::new_from_array(*bytes.array()?),
             digest: *bytes.array()?,
             length: bytes.u16()?,
             expiry_unix_ts: bytes.u32()?,
@@ -254,7 +248,6 @@ impl CreateFrameBufferIxData {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(Self::LEN);
         out.extend_from_slice(&self.nonce.to_le_bytes());
-        out.extend_from_slice(self.writer.as_array());
         out.extend_from_slice(&self.digest);
         out.extend_from_slice(&self.length.to_le_bytes());
         out.extend_from_slice(&self.expiry_unix_ts.to_le_bytes());
@@ -262,7 +255,6 @@ impl CreateFrameBufferIxData {
     }
 }
 
-/// Tag 59.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WriteFrameIxData<'a> {
     pub offset: u16,
@@ -295,7 +287,7 @@ impl<'a> WriteFrameIxData<'a> {
     }
 }
 
-/// Tag 61, the message owners and co-signers sign commits to the frame through `digest`.
+/// Owners and co-signers sign `digest`, it fixes the frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettleBufferedIxData<'a> {
     pub digest: &'a [u8; 32],
@@ -325,7 +317,6 @@ impl<'a> SettleBufferedIxData<'a> {
         out
     }
 
-    /// The tags a buffer settles, each read by its inline handler.
     pub fn inner(&self) -> Result<InstructionTag, CustomRingError> {
         match InstructionTag::try_from(self.inner_tag)? {
             tag @ (InstructionTag::Transfer
@@ -355,12 +346,11 @@ mod tests {
     fn account(frame: &[u8]) -> Vec<u8> {
         let create = CreateFrameBufferIxData {
             nonce: 7,
-            writer: WRITER,
             digest: frame_digest(frame).unwrap(),
             length: frame.len() as u16,
             expiry_unix_ts: EXPIRY,
         };
-        let header = FrameBufferHeader::new(&create, RENT_PAYER).unwrap();
+        let header = FrameBufferHeader::new(&create, WRITER, RENT_PAYER).unwrap();
         let mut data = bytemuck::bytes_of(&header).to_vec();
         data.resize(header.account_len(), 0);
         data
@@ -386,18 +376,21 @@ mod tests {
     fn frame_length_stays_within_one_create() {
         let create = |length| CreateFrameBufferIxData {
             nonce: 0,
-            writer: WRITER,
             digest: [0; 32],
             length,
             expiry_unix_ts: EXPIRY,
         };
         let refused = Err(CustomRingError::FrameLength);
-        assert_eq!(FrameBufferHeader::new(&create(0), RENT_PAYER), refused);
         assert_eq!(
-            FrameBufferHeader::new(&create(MAX_FRAME_LEN as u16 + 1), RENT_PAYER),
+            FrameBufferHeader::new(&create(0), WRITER, RENT_PAYER),
             refused
         );
-        let widest = FrameBufferHeader::new(&create(MAX_FRAME_LEN as u16), RENT_PAYER).unwrap();
+        assert_eq!(
+            FrameBufferHeader::new(&create(MAX_FRAME_LEN as u16 + 1), WRITER, RENT_PAYER),
+            refused
+        );
+        let widest =
+            FrameBufferHeader::new(&create(MAX_FRAME_LEN as u16), WRITER, RENT_PAYER).unwrap();
         assert_eq!(widest.account_len(), 10 * 1024);
     }
 

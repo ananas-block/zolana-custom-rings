@@ -163,7 +163,7 @@ ring_errors! {
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
     InvalidFrameBuffer = 8500 => "frame buffer account is invalid",
     FrameBufferExists = 8501 => "frame buffer already exists",
-    FrameBufferAddress = 8502 => "frame buffer is not at its creator and nonce address",
+    FrameBufferAddress = 8502 => "frame buffer is not at its writer and nonce address",
     FrameLength = 8503 => "frame length is zero or exceeds one account create",
     UnauthorizedFrameWriter = 8504 => "the signer is not the frame buffer writer",
     FrameBufferSealed = 8505 => "a sealed frame buffer takes no write",
