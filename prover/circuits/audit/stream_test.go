@@ -51,7 +51,6 @@ func TestNoSpendEqualsAZeroCount(t *testing.T) {
 	})
 }
 
-// A default-ring spend under a key with no entry capacity would stay unreadable.
 func TestDefaultInputNeedsEntryCapacity(t *testing.T) {
 	c := compileSection(t, plainShape)
 	s := ringaudit.NewSection(t, plainShape)
@@ -92,7 +91,6 @@ func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
 	}
 }
 
-// Each default input carries its own owner and key, a mixed entry reads apart.
 func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 	c := compileSection(t, entryShape)
 	s := ringaudit.NewSection(t, entryShape)
@@ -168,7 +166,7 @@ func TestLayoutIsTheKeys(t *testing.T) {
 	t.Run("a bit past the flags", func(t *testing.T) { refuse(t, plainShape, 1<<2) })
 }
 
-// The reader holds the stream and the frame alone, an empty mint registry included.
+// The reader rebuilds every slot with no mint registry.
 func TestReaderRebuildsEverySlot(t *testing.T) {
 	for _, shape := range []audit.StreamShape{plainShape, entryShape} {
 		s := ringaudit.NewSection(t, shape)
@@ -211,7 +209,7 @@ func TestReaderRebuildsADefaultInput(t *testing.T) {
 	}
 }
 
-// The record identifies each slot's key, no trial runs.
+// The record names each slot's key, the reader tries none.
 func TestZeroAndEnrolledKeysReadApart(t *testing.T) {
 	s := ringaudit.NewSection(t, plainShape)
 	stream, hashes, reader := s.Stream(t), s.PublishedHashes(t), s.Reader()
@@ -246,7 +244,6 @@ func TestRecordAtAnotherSlotFailsTheReader(t *testing.T) {
 	compileSection(t, plainShape).RefuseStatement(t, s.Circuit(t), s.StatementOf(t, s.Seal(t, p), s.Claim()))
 }
 
-// The stream readers pin, one key of each shape from its solved witness.
 func TestStreamVector(t *testing.T) {
 	type vectorCase struct {
 		Name         string   `json:"name"`

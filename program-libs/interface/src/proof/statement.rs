@@ -221,7 +221,6 @@ impl TransferStatement<'_> {
         TRANSFER_FIXED_ELEMENTS + sender_cells + 3 * N_PUBLIC_SLOTS + 2
     }
 
-    /// `head, rail bits, mask, no_spend, m, outputs, records, tails, n, private_tx_hash, sender or parties, signer count, signer chain, roots, public slots, withdrawals, length, version`.
     pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
         let capacity = self.output_capacity;
         let mut elements = Vec::with_capacity(self.element_count());

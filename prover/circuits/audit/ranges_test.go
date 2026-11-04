@@ -52,7 +52,7 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 	}
 }
 
-// No two regions share a counter at the widest shape of each kind.
+// No two regions share a counter on these shapes.
 func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	const blockLen = 16
 	if audit.RecordBlocks*blockLen != audit.RecordLen || audit.TailBlocks*blockLen != audit.TailLen {

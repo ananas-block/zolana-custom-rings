@@ -16,7 +16,7 @@ var (
 	entryShape = audit.StreamShape{InputClass: 2, Outputs: 2, Entry: true}
 )
 
-// refuseSealed moves one sealed byte, the statement over the edited stream names bytes the proof never sealed.
+// The statement over the edited stream names bytes the proof never sealed.
 func refuseSealed(t *testing.T, s ringaudit.Audit, edit func(*ringaudit.Plaintexts)) {
 	t.Helper()
 	p := s.Plaintexts(t)
@@ -104,7 +104,7 @@ func TestCompactFrames(t *testing.T) {
 	})
 }
 
-// A wrong clamping keys another stream under one public key.
+// An unclamped alias of one tx_u derives other blindings.
 func TestSealedKeyStaysClamped(t *testing.T) {
 	c := compileSection(t, plainShape)
 	s := ringaudit.NewSection(t, plainShape)

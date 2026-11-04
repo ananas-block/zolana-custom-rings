@@ -1,4 +1,4 @@
-//! Pins `test-vectors/audit/ring-disclosure-ranges-v4.json` for the Go circuits and the TS SDK.
+//! Pins the version 4 audit vectors the Go circuits read.
 
 use custom_ring_interface::{
     ciphertext_digest,
@@ -126,10 +126,8 @@ const fn block_bytes(blocks: usize) -> usize {
 fn the_contract_counts_each_key() {
     let key = |class, entry| AuditKey { class, entry };
     for (key, envelope_blocks) in [
-        // 32 + 1 bytes.
         (key(5, false), 3),
         (key(24, false), 3),
-        // 32 + 1 + 8 + 200 * 2 and 32 + 1 + 8 + 200 * 8 bytes.
         (key(2, true), 28),
         (key(8, true), 103),
     ] {
@@ -236,7 +234,6 @@ fn a_compact_frame_keeps_every_counter_and_drops_the_suffix() {
     }
 }
 
-/// A dataless frame pays no tail byte and reads no tail counter.
 #[test]
 fn a_clear_has_data_transmits_no_tail() {
     let plain = AuditStreamLayout {
@@ -295,7 +292,7 @@ fn a_record_off_its_form_is_refused() {
     refused(|record| record[0] = 3);
     refused(|record| record[1] = 1);
     refused(|record| record[7] = 1);
-    // A dummy's plaintext is all zero, one byte proves the skip.
+    // A kind 0 record holding a value is refused.
     refused(|record| record[0] = 0);
     let encoded = record().encode();
     assert!(AuditRecord::decode(&encoded[..AUDIT_RECORD_LEN - 1]).is_err());
@@ -522,7 +519,6 @@ fn unhex(value: &str) -> Vec<u8> {
     hex::decode(value).unwrap()
 }
 
-/// `HashChain4` of each ciphertext's `hash_bytes` at one fixed length, zero past the published slots.
 fn region_chain<const N: usize>(ciphertexts: &[String], capacity: usize) -> [u8; 32] {
     let mut hashes = vec![[0; 32]; capacity];
     for (hash, ciphertext) in hashes.iter_mut().zip(ciphertexts) {
@@ -532,7 +528,6 @@ fn region_chain<const N: usize>(ciphertexts: &[String], capacity: usize) -> [u8;
     create_hash_chain_4_from_slice(&hashes).unwrap()
 }
 
-/// The Go witnesses solve these bytes, the Rust layout reads them back field for field.
 #[test]
 fn the_solved_go_stream_reads_back_under_the_rust_layout() {
     let path = concat!(

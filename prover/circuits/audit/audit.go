@@ -60,19 +60,15 @@ type StreamRanges struct {
 const (
 	streamBlockLen = 16
 	// StreamFirstCounter is aes.Cipher.CTREncrypt's first counter, mirrored by STREAM_FIRST_COUNTER.
-	StreamFirstCounter = 2
-	EnvelopeKeyLen     = 32
-	// RealInputCountLen mirrors REAL_INPUT_COUNT_LEN.
-	RealInputCountLen = 1
-	// DefaultInputBitsLen mirrors DEFAULT_INPUT_BITS_LEN.
+	StreamFirstCounter  = 2
+	EnvelopeKeyLen      = 32
+	RealInputCountLen   = 1
 	DefaultInputBitsLen = 8
 	fieldLen            = 32
 	amountLen           = 8
 	recordHeadLen       = 8
-	// RecordLen mirrors AUDIT_RECORD_LEN.
-	RecordLen = recordHeadLen + amountLen + 3*fieldLen
-	// TailLen mirrors DATA_TAIL_LEN.
-	TailLen = 2 * fieldLen
+	RecordLen           = recordHeadLen + amountLen + 3*fieldLen
+	TailLen             = 2 * fieldLen
 	// EntryInputLen mirrors ENTRY_INPUT_LEN.
 	EntryInputLen = amountLen + 6*fieldLen
 	RecordBlocks  = RecordLen / streamBlockLen
@@ -83,7 +79,6 @@ func (s StreamShape) Ranges() StreamRanges {
 	return StreamRanges{StreamShape: s}
 }
 
-// EnvelopeHeadLen is the envelope ahead of the evidence entries.
 func (r StreamRanges) EnvelopeHeadLen() int {
 	if r.Entry {
 		return EnvelopeKeyLen + RealInputCountLen + DefaultInputBitsLen
@@ -103,7 +98,7 @@ func (r StreamRanges) EnvelopeLen(count int) int {
 	return r.EnvelopeHeadLen() + count*r.entryLen()
 }
 
-// EnvelopeBlocks is one value per key, every rail of a key shares one circuit.
+// EnvelopeBlocks is fixed per shape, no published count moves a record's counter.
 func (r StreamRanges) EnvelopeBlocks() int {
 	return (r.EnvelopeLen(r.InputClass) + streamBlockLen - 1) / streamBlockLen
 }
@@ -135,7 +130,6 @@ func (r StreamRanges) TailOffset(i int) int {
 	return (r.TailCounter(i) - StreamFirstCounter) * streamBlockLen
 }
 
-// Stream is the sealed auditor stream of one transfer, the statement reads every value.
 type Stream struct {
 	ranges StreamRanges
 	sealed shared.Sealed
@@ -146,8 +140,7 @@ type Stream struct {
 	TailChain frontend.Variable
 	// RealInputs is the sealed R, the count of spent notes.
 	RealInputs frontend.Variable
-	// NoSpend is set exactly when R is zero.
-	NoSpend frontend.Variable
+	NoSpend    frontend.Variable
 }
 
 // SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
@@ -229,7 +222,6 @@ type Opened struct {
 	tails       [][]frontend.Variable
 }
 
-// OpenSlots opens every output and its plaintext regions, tails only on a data key.
 func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, shape StreamShape, layout Layout, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
 	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, hasData: layout.HasData, records: make([][]frontend.Variable, len(outputs))}
