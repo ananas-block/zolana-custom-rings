@@ -38,7 +38,7 @@ pub struct WalletActivity {
     deny_unknown_fields
 )]
 pub enum WalletView {
-    /// The anonymous sender or a named spender, its own notes alone beside the public legs.
+    /// The anonymous sender or a named spender, a co-owner reads its own notes alone.
     Sender {
         inputs: Vec<DecryptedInput>,
         outputs: Vec<DecryptedOutput>,
@@ -50,6 +50,14 @@ pub enum WalletView {
     },
 }
 
+/// Who holds one published input, an input the service cannot name reads as `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputParty {
+    Own,
+    Other,
+    Padding,
+}
+
 impl WalletActivity {
     pub fn read(target: ReadTarget, wallet: Address) -> ReadRequest {
         PagedRead::WalletActivity
@@ -57,11 +65,11 @@ impl WalletActivity {
             .with_wallet(wallet)
     }
 
-    /// `own_input` names the wallet's spent notes, a public co-owner never reads a hidden sender's.
+    /// A wallet that owns every real input keeps all outputs, its own payments.
     pub fn of(
         wallet: Address,
         transaction: DecryptedTransaction,
-        own_input: impl Fn(&DecryptedInput) -> bool,
+        party: impl Fn(&DecryptedInput) -> InputParty,
     ) -> Option<Self> {
         let DecryptedTransaction {
             slot,
@@ -76,20 +84,32 @@ impl WalletActivity {
         } = transaction;
         let names = |key: SerializablePubkey| key.0 == wallet;
         let anonymous = sender.is_some_and(|sender| names(sender.owner_key));
-        let outputs: Vec<_> = outputs
-            .into_iter()
-            .filter(|output| output.owner_key().is_some_and(names))
-            .collect();
         let view = match anonymous || spenders.into_iter().any(names) {
-            true => WalletView::Sender {
-                inputs: inputs
-                    .into_iter()
-                    .filter(|input| !input.unseen && own_input(input))
-                    .collect(),
-                outputs,
-                withdrawals,
-            },
+            true => {
+                let parties: Vec<_> = inputs.iter().map(&party).collect();
+                let sole_owner = !parties.contains(&InputParty::Other);
+                WalletView::Sender {
+                    inputs: inputs
+                        .into_iter()
+                        .zip(parties)
+                        .filter(|(_, party)| *party == InputParty::Own)
+                        .map(|(input, _)| DecryptedInput {
+                            unseen: false,
+                            ..input
+                        })
+                        .collect(),
+                    outputs: outputs
+                        .into_iter()
+                        .filter(|output| sole_owner || output.owner_key().is_some_and(names))
+                        .collect(),
+                    withdrawals,
+                }
+            }
             false => {
+                let outputs: Vec<_> = outputs
+                    .into_iter()
+                    .filter(|output| output.owner_key().is_some_and(names))
+                    .collect();
                 if outputs.is_empty() {
                     return None;
                 }
