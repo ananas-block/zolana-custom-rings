@@ -1,8 +1,9 @@
 //! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
 
+use jsonrpsee::RpcModule;
+use sea_orm::{ConnectionTrait, Statement};
 use solana_instruction::AccountMeta;
 use spr_keypair::{ShieldedKeypair, SigningKey};
-use zolana_ring_client::input_hash_evidence;
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayId, RelayProofInputs,
     RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE,
@@ -29,7 +30,8 @@ const DEPOSIT_CAP: u64 = 1_000;
 struct FramedProver {
     inner: RecordingProver,
     auditor: X25519Pubkey,
-    note: [u8; 32],
+    /// The published nullifier of the note the frames spend.
+    nullifier: [u8; 32],
 }
 
 /// The sender's note the ring opened, a limit reads it through the auditor store.
@@ -89,23 +91,23 @@ impl FramedProver {
             amount => paid(sender_fields(amount), x25519_u(0x52)),
         };
         let outputs = [payment, change];
-        let transfer = ring_transfer(inputs.blinding_seed[0]);
-        let disclosure = transfer.signer_disclosure(
-            &outputs,
-            input_hash_evidence(&[Some(self.note)]).expect("evidence"),
-        );
+        let transfer = spending(inputs.blinding_seed[0], &[self.nullifier]);
+        let mut disclosure = transfer.disclosure(Rail::Delivered, &outputs);
+        disclosure.real_inputs = 1;
         let tx = transfer.publish(Publish {
             slots: transfer
-                .slots(Rail::Delivered, &outputs)
+                .slots(&outputs)
                 .into_iter()
                 .map(|slot| slot.output)
                 .collect(),
             disclosure: &disclosure,
             auditor: &self.auditor,
+            rail: Rail::Delivered,
         });
         transfer.frame(TransferFrame {
             tx: &tx,
             disclosure: &disclosure,
+            rail: Rail::Delivered,
         })
     }
 }
@@ -155,16 +157,19 @@ impl CappedRelay {
     async fn naming(rail: fn() -> RelayRail, named: Option<Address>, limits: AssetLimits) -> Self {
         let fixture = Fixture::new();
         // The note a capped transfer spends, the co-signer reads its owner from the store.
-        let note_row = Indexed {
-            transfer: &ring_transfer(0x40),
-            outputs: &[paid(sender_fields(SENDER_CAP), x25519_u(0x54))],
-            auditor: &fixture.auditor.pubkey(),
-            signature: 0x40,
-            frames: &fixture.frames,
-        }
-        .delivered();
-        let note = note_row.output_slots[0].output_context.hash;
+        let sender = owner();
+        let (note_row, nullifier) = keyed_note(
+            &fixture,
+            0x40,
+            sender_fields(SENDER_CAP),
+            &sender.nullifier_key,
+        );
         let mut source = fixture.source().with_transactions(vec![note_row]);
+        source.tracking.enroll(
+            &sender_fields(SENDER_CAP).owner_key,
+            &sender.nullifier_key,
+            &fixture.auditor.pubkey(),
+        );
         // The history ends at the note, the default cursor names its own page.
         source.next_cursor = None;
         source.records.write_mint_policy(
@@ -194,7 +199,7 @@ impl CappedRelay {
                         ..RecordingProver::default()
                     },
                     auditor: fixture.auditor.pubkey(),
-                    note,
+                    nullifier,
                 }),
                 fee_payer: Keypair::new_from_array([31; 32]),
                 chain: chain.clone(),
@@ -573,46 +578,6 @@ async fn a_refused_send_stores_failed_and_frees_its_reservation() {
 }
 
 #[tokio::test]
-async fn a_failed_reservation_release_is_retried_by_status() {
-    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
-    relay.chain.refuse_next.store(true, Ordering::Relaxed);
-    let refused = relay.spending_cap(1);
-    let relay_id = refused.relay_id().expect("relay id");
-    relay.fault(StoreFault::ReservationReleaseRefused).await;
-    let interrupted = relay
-        .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
-        .await;
-    assert!(interrupted.is_err());
-
-    let connection = relay.store.connection();
-    let stored = connection
-        .query_one(Statement::from_string(
-            connection.get_database_backend(),
-            "SELECT status FROM relay_relays",
-        ))
-        .await
-        .expect("relay query")
-        .expect("stored relay");
-    assert_eq!(
-        stored.try_get::<String>("", "status").expect("status"),
-        "failed"
-    );
-    assert!(relay.chain.sent().is_empty());
-    let beyond = relay
-        .module
-        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
-        .await;
-    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
-
-    relay.heal().await;
-    let status = relay.status(relay_id.clone()).await;
-    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
-    assert_eq!(relay.status(relay_id).await, status);
-    relay.second_cap_fits().await;
-}
-
-#[tokio::test]
 async fn an_on_chain_failure_reads_failed_and_frees_its_reservation() {
     let relay = CappedRelay::new(|| RelayRail::Confidential).await;
     *relay.chain.outcome.lock().expect("outcome") = Some(Some(ChainOutcome::Failed {
@@ -763,4 +728,44 @@ async fn a_derived_relay_refuses_a_ring_whose_auditor_key_it_does_not_hold() {
     assert_eq!(refusal(prepared), RelayError::RingNotServed.code());
     assert!(prover.requests.lock().expect("requests").is_empty());
     assert!(chain.sent().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_reservation_release_is_retried_by_status() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    relay.chain.refuse_next.store(true, Ordering::Relaxed);
+    let refused = relay.spending_cap(1);
+    let relay_id = refused.relay_id().expect("relay id");
+    relay.fault(StoreFault::ReservationReleaseRefused).await;
+    let interrupted = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&refused))
+        .await;
+    assert!(interrupted.is_err());
+
+    let connection = relay.store.connection();
+    let stored = connection
+        .query_one(Statement::from_string(
+            connection.get_database_backend(),
+            "SELECT status FROM relay_relays",
+        ))
+        .await
+        .expect("relay query")
+        .expect("stored relay");
+    assert_eq!(
+        stored.try_get::<String>("", "status").expect("status"),
+        "failed"
+    );
+    assert!(relay.chain.sent().is_empty());
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+
+    relay.heal().await;
+    let status = relay.status(relay_id.clone()).await;
+    assert!(matches!(status, RelayStatus::Failed { .. }), "{status:?}");
+    assert_eq!(relay.status(relay_id).await, status);
+    relay.second_cap_fits().await;
 }

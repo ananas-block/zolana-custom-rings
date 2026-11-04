@@ -1,11 +1,11 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an enrolment for its allow entry, page the enrolments that await the config authority, apply a batch that lands after its status lookup once, and requeue an expired batch once.
+//! Record updates refuse an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an enrolment for its allow entry, page the enrolments that await the config authority, apply a batch that lands after its status lookup once, and requeue an expired batch once.
 
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    storage::{AddressAuthorization, StorageRegistry},
-    storage_instruction::{tag, StorageUpdateIxData, StorageWriteData},
+    storage::StorageRegistry,
+    storage_instruction::{tag, StorageUpdateIxData},
     ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT, RING_POLICY,
     ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
@@ -13,13 +13,11 @@ use custom_ring_sdk::CustomRing;
 use jsonrpsee::MethodsError;
 use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
-use spr_client::Proof;
 use zolana_ring_client::rpc::{
-    AddressEnrollment, EscrowRegistration, GetPendingEnrolmentsRequest,
-    GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess,
-    RecordUpdate, RecordUpdateEntry, RecordUpdateStatus, SubmitRecordUpdateRequest,
-    SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT,
-    RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
+    GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
+    ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry, RecordUpdateStatus,
+    SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_ENROLMENTS,
+    PENDING_ENROLMENTS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -46,10 +44,10 @@ fn initialize_records() -> custom_ring_interface::storage_instruction::Initializ
         registry_id: custom_ring_interface::storage::RegistryId([0; 32]),
         grace_slots: [0; 8],
         ring_id: [1; 32],
+        tracking_registry: Address::default(),
     }
 }
 
-/// The fixture escrow proof binds the owner identity of the wallet.
 fn wallet() -> Keypair {
     Keypair::new_from_array([47; 32])
 }
@@ -160,27 +158,15 @@ impl StorageChain for StubChain {
                     member: write.member,
                     mask: write.mask,
                     value: write.value,
-                    escrow_key: write.escrow_key,
                     exists: false,
                     old_next: empty(),
                     old_lists: 0,
-                    old_escrow: empty(),
                     old_mint_policy: MintPolicy::EMPTY,
-                    address_hash: write.address_hash,
-                    old_address_hash: empty(),
-                    pair: None,
                     slot: path(),
                     low: RingMemberRecordView {
                         member: empty(),
                         next: empty(),
                         lists: 0,
-                        escrow_key: empty(),
-                        owner_pubkey: None,
-                        nullifier_pk: None,
-                        eph_pk: None,
-                        ciphertext: None,
-                        address_hash: empty(),
-                        address: None,
                         mint_policy: MintPolicy::EMPTY,
                     },
                     low_path: path(),
@@ -232,19 +218,13 @@ impl Records {
 }
 
 impl RecordsSetup<'_> {
-    /// A ring whose records registry the writer's authority holds, its escrow auditor the fixture's.
+    /// A ring whose records registry the writer's authority holds.
     async fn serve(self) -> Records {
-        let escrow = escrow_fixture();
         let chain = Arc::new(StubChain {
             slot: AtomicU64::new(NOW),
             height: AtomicU64::new(NOW),
             config: Mutex::new(RingConfiguration {
-                auditor_pubkey: X25519Pubkey::from_bytes(
-                    hex_bytes(&escrow["auditorPk"])
-                        .try_into()
-                        .expect("auditor key"),
-                )
-                .expect("auditor key"),
+                auditor_pubkey: X25519Keypair::new().pubkey(),
                 roles: custom_ring_interface::RingRoles {
                     policy: authority().pubkey(),
                     ..bytemuck::Zeroable::zeroed()
@@ -301,18 +281,6 @@ impl Records {
         self.module
             .call(SUBMIT_RECORD_UPDATE, as_object(request))
             .await
-    }
-
-    /// The member's record holds an escrow key under the registry's newest root.
-    fn escrowed(&self, member: [u8; 32]) {
-        self.recorded(QueueEntry {
-            member,
-            mask: 0,
-            value: 0,
-            escrow_key: [0x0e; 32],
-            mint_policy: None,
-            address_hash: [0; 32],
-        });
     }
 
     /// The entry lands under the registry's newest root.
@@ -385,13 +353,9 @@ impl Records {
         Flushed {
             signature: transaction.signatures[0],
             mode: *mode,
-            members: writes
-                .iter()
-                .map(|write| write.member().expect("leaf member"))
-                .collect(),
+            members: writes.iter().map(|write| write.member).collect(),
             writes,
             data,
-            accounts: message.static_account_keys().to_vec(),
         }
     }
 }
@@ -401,9 +365,8 @@ struct Flushed {
     mode: u8,
     /// The members the `Update` writes, in order.
     members: Vec<[u8; 32]>,
-    writes: Vec<StorageWriteData>,
+    writes: Vec<custom_ring_interface::RecordWriteData>,
     data: Vec<Vec<u8>>,
-    accounts: Vec<Address>,
 }
 
 fn owned(owner: Address, data: &[u8]) -> Account {
@@ -413,38 +376,6 @@ fn owned(owner: Address, data: &[u8]) -> Account {
         owner,
         executable: false,
         rent_epoch: 0,
-    }
-}
-
-fn escrow_fixture() -> serde_json::Value {
-    serde_json::from_str(include_str!("../escrow_proof.json")).expect("escrow fixture")
-}
-
-fn hex_bytes(value: &serde_json::Value) -> Vec<u8> {
-    let text = value.as_str().expect("hex string");
-    hex::decode(text.strip_prefix("0x").unwrap_or(text)).expect("hex")
-}
-
-fn escrow_registration() -> EscrowRegistration {
-    let fixture = escrow_fixture();
-    let proof = Proof::from_gnark_json(&fixture["proof"].to_string()).expect("proof");
-    let compressed = spr_client::ProofCompressed::try_from(proof).expect("compressed proof");
-    let commitment = compressed.commitment.expect("commitment");
-    let proof_bytes = [
-        &compressed.a[..],
-        &compressed.compressed_b().expect("proof b")[..],
-        &compressed.c[..],
-        &commitment.commitment[..],
-        &commitment.commitment_pok[..],
-    ]
-    .concat();
-    let hash = |key: &str| Hash(hex_bytes(&fixture[key]).try_into().expect("32 bytes"));
-    EscrowRegistration {
-        member: hash("member"),
-        nullifier_pk: hash("nullifierPk"),
-        eph_pk: hex_bytes(&fixture["ephPk"]).into(),
-        ciphertext: hex_bytes(&fixture["ciphertext"]).into(),
-        proof: proof_bytes.into(),
     }
 }
 
@@ -483,383 +414,6 @@ fn signed_update(signer: &Keypair, update: RecordUpdate) -> SubmitRecordUpdateRe
         .expect("statement hash");
     request.signature = signer.sign_message(&hash).into();
     request
-}
-
-#[tokio::test]
-async fn a_wallet_escrow_registration_is_batched_only_after_its_proof_checks() {
-    let records = Records::new().await;
-    let registration = escrow_registration();
-    let mut forged = registration.clone();
-    // A valid curve point that is not the commitment's proof of knowledge.
-    forged.proof.0.copy_within(128..160, 160);
-    assert_eq!(
-        refusal(
-            records
-                .submit(signed(&wallet(), vec![RecordUpdateEntry::Escrow(forged)]))
-                .await
-        ),
-        RecordUpdateRefusal::EscrowProof.code()
-    );
-    records
-        .submit(signed(
-            &wallet(),
-            vec![RecordUpdateEntry::Escrow(registration.clone())],
-        ))
-        .await
-        .expect("queued");
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    let flushed = records.flushed().await;
-    assert_eq!(flushed.mode, tag::UPDATE);
-    assert_eq!(flushed.members, [registration.member.0]);
-}
-
-/// One signed revision of the wallet, what `address_enrollment` reads.
-fn enrollment(nullifier_pk: [u8; 32]) -> AddressEnrollment {
-    AddressEnrollment {
-        owner: wallet().pubkey().into(),
-        ring_id: Hash([1; 32]),
-        nullifier_pk: Hash(nullifier_pk),
-        viewing_u: Hash([3; 32]),
-        address_revision: 1,
-    }
-}
-
-impl Records {
-    /// The account the storage program holds for the enrolled owner.
-    fn enrolled(&self, entry: &AddressEnrollment) -> Address {
-        let (address, bump) = AddressAuthorization::find_address(&REGISTRY, &entry.owner.0);
-        let authorization = AddressAuthorization {
-            discriminator: AddressAuthorization::DISCRIMINATOR,
-            bump,
-            registry: REGISTRY,
-            owner: entry.owner.0,
-            ring_id: entry.ring_id.0,
-            nullifier_pk: entry.nullifier_pk.0,
-            viewing_u: entry.viewing_u.0,
-            revision: entry.address_revision.to_le_bytes(),
-            applied_revision: [0; 8],
-        };
-        self.chain.accounts.lock().unwrap().insert(
-            address,
-            owned(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&authorization)),
-        );
-        address
-    }
-}
-
-#[tokio::test]
-async fn an_address_entry_batches_with_its_authorization_account() {
-    let records = Records::new().await;
-    let entry = enrollment([5; 32]);
-    assert_eq!(
-        refusal(
-            records
-                .submit(signed(
-                    &wallet(),
-                    vec![RecordUpdateEntry::Address(entry.clone())]
-                ))
-                .await
-        ),
-        RecordUpdateRefusal::AddressNotAuthorized.code(),
-        "no enrollment on chain"
-    );
-    let authorization = records.enrolled(&entry);
-    records
-        .submit(signed(
-            &wallet(),
-            vec![RecordUpdateEntry::Address(entry.clone())],
-        ))
-        .await
-        .expect("queued");
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    let flushed = records.flushed().await;
-    assert_eq!(flushed.mode, tag::UPDATE);
-    assert!(flushed.accounts.contains(&authorization));
-}
-
-#[tokio::test]
-async fn an_address_entry_whose_account_moved_on_is_refused_with_its_status() {
-    let records = Records::new().await;
-    let entry = enrollment([5; 32]);
-    records.enrolled(&entry);
-    let queued = records
-        .submit(signed(
-            &wallet(),
-            vec![RecordUpdateEntry::Address(entry.clone())],
-        ))
-        .await
-        .expect("queued");
-    records.enrolled(&AddressEnrollment {
-        address_revision: 2,
-        ..entry
-    });
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    records.writer.flush().await.expect("pass");
-    assert!(records.chain.sent.lock().unwrap().is_empty());
-    assert!(matches!(
-        records.status(&queued).await,
-        RecordUpdateStatus::Refused { .. }
-    ));
-}
-
-#[tokio::test]
-async fn an_address_and_an_escrow_of_two_keys_refuse_for_an_early_error() {
-    let records = Records::new().await;
-    let registration = escrow_registration();
-    let other_key = enrollment([5; 32]);
-    assert_ne!(other_key.nullifier_pk, registration.nullifier_pk);
-    records.enrolled(&other_key);
-    assert_eq!(
-        refusal(
-            records
-                .submit(signed(
-                    &wallet(),
-                    vec![
-                        RecordUpdateEntry::Escrow(registration.clone()),
-                        RecordUpdateEntry::Address(other_key),
-                    ],
-                ))
-                .await
-        ),
-        RecordUpdateRefusal::AddressEscrowMismatch.code()
-    );
-    let same_key = enrollment(registration.nullifier_pk.0);
-    records.enrolled(&same_key);
-    records
-        .submit(signed(
-            &wallet(),
-            vec![
-                RecordUpdateEntry::Escrow(registration),
-                RecordUpdateEntry::Address(same_key),
-            ],
-        ))
-        .await
-        .expect("one key");
-}
-
-#[tokio::test]
-async fn a_second_escrow_key_for_one_member_is_refused() {
-    let records = Records::new().await;
-    let escrow = || vec![RecordUpdateEntry::Escrow(escrow_registration())];
-    records
-        .submit(signed(&wallet(), escrow()))
-        .await
-        .expect("queued");
-    // Another slot bound names another update for the same member.
-    assert_eq!(
-        refusal(
-            records
-                .submit(signed_until(&wallet(), escrow(), NOW + 1_001))
-                .await
-        ),
-        RecordUpdateRefusal::EscrowRegistered.code()
-    );
-
-    let records = Records::new().await;
-    records.escrowed(escrow_registration().member.0);
-    assert_eq!(
-        refusal(records.submit(signed(&wallet(), escrow())).await),
-        RecordUpdateRefusal::EscrowRegistered.code()
-    );
-}
-
-#[tokio::test]
-async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_alone() {
-    let records = Records::new().await;
-    records.reads(
-        RuleTable::builder()
-            .rule(Rule::forbid(Subject::Sender, ListId::Block))
-            .build(),
-    );
-    let blocked = ListId::Block.record_bit();
-    let member = Hash([0x0c; 32]);
-    let wallet = wallet();
-    let wallet_member = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet member");
-    let reader = Member::owner_tag(&[0x0d; 32]).expect("reader member");
-    records
-        .submit(signed(
-            &wallet,
-            vec![RecordUpdateEntry::WalletGrant(WalletGrant {
-                wallet: Hash(*wallet_member.as_bytes()),
-                reader: Hash(*reader.as_bytes()),
-                access: ReaderAccess::Revoked,
-            })],
-        ))
-        .await
-        .expect("queued");
-    records
-        .submit(signed(
-            &authority(),
-            vec![RecordUpdateEntry::Write(RingListWriteView {
-                mint_policy: None,
-                member: member.clone(),
-                mask: blocked,
-                value: blocked,
-            })],
-        ))
-        .await
-        .expect("queued");
-    let flushed = records.flushed().await;
-    assert_eq!(flushed.mode, tag::UPDATE_IMMEDIATE);
-    assert_eq!(flushed.members, [member.0]);
-    assert_eq!(flushed.data.len(), 1);
-
-    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
-    records.writer.flush().await.expect("settle");
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    let flushed = records.flushed().await;
-    assert_eq!(flushed.mode, tag::UPDATE);
-    assert_eq!(
-        flushed.members,
-        [*Member::wallet_grant(&wallet_member, &reader)
-            .expect("grant member")
-            .as_bytes()]
-    );
-}
-
-#[tokio::test]
-async fn an_escrow_written_through_the_writer_opens_the_wallets_outputs() {
-    let fixture = Fixture::new();
-    let registration = escrow_registration();
-    let owner = UtxoFields {
-        owner_key: wallet().pubkey().to_bytes(),
-        nullifier_pk: registration.nullifier_pk.0,
-        ..sol(0xc0, 30)
-    };
-    let source = escrowed_source(&fixture, &[owner], &[]);
-    let own_records = source.records.clone();
-    let records = RecordsSetup {
-        fixture: &fixture,
-        source,
-        reader_grants: ReaderGrantStore::Tree,
-    }
-    .serve()
-    .await;
-    records
-        .submit(signed(
-            &wallet(),
-            vec![RecordUpdateEntry::Escrow(registration.clone())],
-        ))
-        .await
-        .expect("queued");
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    let flushed = records.flushed().await;
-    let [StorageWriteData::Escrow(published)] = flushed.writes.as_slice() else {
-        panic!("one escrow write, {:?}", flushed.writes);
-    };
-    assert_eq!(published.owner, wallet().pubkey());
-    assert_eq!(published.nullifier_pk, registration.nullifier_pk.0);
-    assert_eq!(
-        tagged_x25519(&published.eph_u).as_slice(),
-        registration.eph_pk.0
-    );
-    assert_eq!(published.ciphertext.as_slice(), registration.ciphertext.0);
-
-    own_records.escrow(&[*published]);
-    let service = records.hub.service(None).expect("service");
-    service.backfill_utxos().await.expect("backfill");
-    assert!(escrow_pending(&read_at(&service, None).await).is_empty());
-}
-
-#[tokio::test]
-async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allow_entry() {
-    let records = Records::new().await;
-    records.serves_own(ListId::Allow);
-    let registration = escrow_registration();
-    let member = registration.member.clone();
-    let allowed = ListId::Allow.record_bit();
-    let enrolment = records
-        .submit(signed_update(
-            &wallet(),
-            RecordUpdate {
-                genesis_hash: Hash(GENESIS),
-                ring: RING.into(),
-                entries: vec![RecordUpdateEntry::Escrow(registration)],
-                valid_until_slot: NOW + 1_000,
-                awaited_lists: allowed,
-            },
-        ))
-        .await
-        .expect("awaiting");
-    records
-        .chain
-        .slot
-        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    records.writer.flush().await.expect("flush");
-    assert!(records.chain.sent.lock().unwrap().is_empty());
-    assert_eq!(
-        records.status(&enrolment).await,
-        RecordUpdateStatus::AwaitingAuthority
-    );
-
-    let target = ReadTarget {
-        cluster: GENESIS,
-        service: records.hub.service_pubkey(),
-        ring: RING,
-    };
-    let pending: GetPendingEnrolmentsResponse = records
-        .module
-        .call(
-            GET_PENDING_ENROLMENTS,
-            as_object(
-                GetPendingEnrolmentsRequest::read(target, authority().pubkey())
-                    .sign(&authority())
-                    .expect("signed list"),
-            ),
-        )
-        .await
-        .expect("pending");
-    let [listed] = pending.enrolments.as_slice() else {
-        panic!("one pending enrolment, {pending:?}");
-    };
-    assert_eq!(listed.update_id, enrolment.update_id);
-    assert_eq!(listed.member, member);
-
-    records
-        .submit(signed(
-            &authority(),
-            vec![RecordUpdateEntry::Write(RingListWriteView {
-                mint_policy: None,
-                member: member.clone(),
-                mask: allowed,
-                value: allowed,
-            })],
-        ))
-        .await
-        .expect("approval");
-    records
-        .chain
-        .slot
-        .store(NOW + 2 * BATCH_WINDOW_SLOTS, Ordering::Relaxed);
-    let flushed = records.flushed().await;
-    assert_eq!(flushed.mode, tag::UPDATE);
-    assert!(matches!(
-        flushed.writes.as_slice(),
-        [StorageWriteData::Escrow(_), StorageWriteData::Record(_)]
-    ));
-    assert_eq!(flushed.members, [member.0, member.0]);
-
-    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
-    records.writer.flush().await.expect("settle");
-    assert!(matches!(
-        records.status(&enrolment).await,
-        RecordUpdateStatus::Applied { .. }
-    ));
 }
 
 /// An enrolment that sets ring-viewing on the wallet's own record.
@@ -1242,4 +796,139 @@ async fn an_update_signed_for_the_cli_window_outlives_the_longest_graced_wait() 
     let flushed = records.flushed().await;
     assert_eq!(flushed.mode, tag::UPDATE);
     assert_eq!(flushed.members, [member]);
+}
+
+#[tokio::test]
+async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_alone() {
+    let records = Records::new().await;
+    records.reads(
+        RuleTable::builder()
+            .rule(Rule::forbid(Subject::Sender, ListId::Block))
+            .build(),
+    );
+    let blocked = ListId::Block.record_bit();
+    let member = Hash([0x0c; 32]);
+    let wallet = wallet();
+    let wallet_member = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet member");
+    let reader = Member::owner_tag(&[0x0d; 32]).expect("reader member");
+    records
+        .submit(signed(
+            &wallet,
+            vec![RecordUpdateEntry::WalletGrant(WalletGrant {
+                wallet: Hash(*wallet_member.as_bytes()),
+                reader: Hash(*reader.as_bytes()),
+                access: ReaderAccess::Revoked,
+            })],
+        ))
+        .await
+        .expect("queued");
+    records
+        .submit(signed(
+            &authority(),
+            vec![RecordUpdateEntry::Write(RingListWriteView {
+                mint_policy: None,
+                member: member.clone(),
+                mask: blocked,
+                value: blocked,
+            })],
+        ))
+        .await
+        .expect("queued");
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(flushed.members, [member.0]);
+    assert_eq!(flushed.data.len(), 1);
+
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
+    records.writer.flush().await.expect("settle");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(
+        flushed.members,
+        [*Member::wallet_grant(&wallet_member, &reader)
+            .expect("grant member")
+            .as_bytes()]
+    );
+}
+
+#[tokio::test]
+async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allow_entry() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let wallet = wallet();
+    let member = Hash(
+        *Member::owner_tag(wallet.pubkey().as_array())
+            .expect("member")
+            .as_bytes(),
+    );
+    let allowed = ListId::Allow.record_bit();
+    let enrolment = records
+        .submit(viewing_enrolment(&wallet, ListId::Allow))
+        .await
+        .expect("awaiting");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    records.writer.flush().await.expect("flush");
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert_eq!(
+        records.status(&enrolment).await,
+        RecordUpdateStatus::AwaitingAuthority
+    );
+
+    let target = ReadTarget {
+        cluster: GENESIS,
+        service: records.hub.service_pubkey(),
+        ring: RING,
+    };
+    let pending: GetPendingEnrolmentsResponse = records
+        .module
+        .call(
+            GET_PENDING_ENROLMENTS,
+            as_object(
+                GetPendingEnrolmentsRequest::read(target, authority().pubkey())
+                    .sign(&authority())
+                    .expect("signed list"),
+            ),
+        )
+        .await
+        .expect("pending");
+    let [listed] = pending.enrolments.as_slice() else {
+        panic!("one pending enrolment, {pending:?}");
+    };
+    assert_eq!(listed.update_id, enrolment.update_id);
+    assert_eq!(listed.member, member);
+
+    records
+        .submit(signed(
+            &authority(),
+            vec![RecordUpdateEntry::Write(RingListWriteView {
+                mint_policy: None,
+                member: member.clone(),
+                mask: allowed,
+                value: allowed,
+            })],
+        ))
+        .await
+        .expect("approval");
+    records
+        .chain
+        .slot
+        .store(NOW + 2 * BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(flushed.writes.len(), 2);
+    assert_eq!(flushed.members, [member.0, member.0]);
+
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
+    records.writer.flush().await.expect("settle");
+    assert!(matches!(
+        records.status(&enrolment).await,
+        RecordUpdateStatus::Applied { .. }
+    ));
 }

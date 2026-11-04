@@ -1,5 +1,3 @@
-#[path = "../../../sdk-libs/client/tests/common/deposit.rs"]
-mod deposit_fixture;
 #[path = "../../../sdk-libs/client/tests/common/origin.rs"]
 mod origin_fixture;
 
@@ -24,12 +22,9 @@ mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{
-    encode_ring_confidential_delivered_output,
-    storage_instruction::{EscrowWriteData, StorageWriteData},
-    tagged_x25519, AuditEvidence, DeliveredBody, EntryInput, QueueEntry, RingMode,
-    DELIVERED_AUDIT_CAPACITIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
-};
+use custom_ring_interface::tracking::TrackingEntry;
+use custom_ring_interface::{QueueEntry, RingMode, RING_TRANSACT_ACCOUNT_PREFIX_LEN};
+use spr_keypair::NullifierKey;
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
     collections::{HashMap, HashSet},
@@ -41,8 +36,16 @@ use std::{
     },
     time::Duration,
 };
-use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
+use zolana_ring_client::NullifierKeyEnvelope;
+use zolana_ring_indexer::tracking::{
+    GetTrackingRecordsRequest, GetTrackingRecordsResponse, RingIndexedTrackingRecordView,
+    RingTrackingRecordView, RingTrackingSealView,
+};
+use zolana_ring_member_registry::{
+    MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingTree,
+};
 use zolana_ring_policy::{ListId, Member, MintPolicy};
+use zolana_ring_rpc::TrackingRoot;
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -60,24 +63,20 @@ use spr_transaction::{Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
     auditor_view_tag,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream},
-    input_hash_evidence, ring_event_origin_in,
     rpc::{
         unix_now, AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedEscrowPending, DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError,
-        DecryptedSender, DecryptedTransaction, DecryptedWithdrawal, DepositRecord,
-        GetAuditedMergesResponse, GetAuditedUtxosRequest, GetAuditedUtxosResponse,
-        GetDecryptedTransactionsRequest, GetDecryptedTransactionsResponse,
-        GetWalletActivityResponse, HealthResponse, KeyMode, PagedRead, ReadAttestation, ReadAuth,
-        ReadBuildError, ReadSignature, ReadSigner, ReadTarget, ReaderGrantAction,
-        ReaderGrantAttestation, ReaderGrantRequest, RingActivation, RingChainStatus,
-        RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
+        DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
+        GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
+        GetDecryptedTransactionsResponse, GetWalletActivityResponse, HealthResponse, KeyMode,
+        PagedRead, ReadAttestation, ReadAuth, ReadBuildError, ReadSignature, ReadSigner,
+        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, ReaderGrantRequest, RingActivation,
+        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
         RingStatusResponse, SkippedReason, WalletActivity, WalletStatusRequest, WalletView,
         WebAuthnAssertion, AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
         GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
         SET_READER_GRANT,
     },
-    seal_deposits, AuditError, ConfirmedDeposit, DepositOpening, MergeAuditPage,
-    OutputPayloadErrorKind, ReaderKey, RingOrigin, RingWithdrawal,
+    AuditError, ConfirmedDeposit, MergeAuditPage, ReaderKey, RingOrigin, RingWithdrawal,
 };
 use zolana_ring_client::{P256ReaderKey, RingIndexerError, StorageTip};
 use zolana_ring_indexer::rpc::{
@@ -91,12 +90,9 @@ use zolana_ring_rpc::{
     ReaderGrantStore, RecordsTip, RingConfiguration, RingHistoryPage, RingRpcError, RootSecret,
     ServiceIdentity, Store, TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
-use zolana_ring_transaction::{seal_delivered_body, RingAssets};
+use zolana_ring_transaction::RingAssets;
 
-use transfer::{
-    field, input_opening, x25519_u, Disclosure, Frame, Output, Placement, Publish, Rail, Transfer,
-    UtxoFields,
-};
+use transfer::{field, x25519_u, Disclosure, Frame, Output, Publish, Rail, Transfer, UtxoFields};
 
 /// Raw id of the tree these fixtures publish into. A slot names the id, not the
 /// account; the account is `pda::tree(TREE_ID)` wherever one is needed.
@@ -116,6 +112,7 @@ const SPL_WITHDRAWN: u64 = 75;
 const ORIGIN: &str = "http://localhost:3000";
 /// Every fixture ring's own `StorageRegistry`.
 const RECORDS: Address = Address::new_from_array([11; 32]);
+const TRACKING: Address = Address::new_from_array([12; 32]);
 const USER_PRESENT_AND_VERIFIED: u8 = 0x05;
 
 fn authority() -> Keypair {
@@ -439,6 +436,7 @@ struct StaticSource {
     config_down: Arc<AtomicBool>,
     registry: Arc<Mutex<Address>>,
     records_down: Arc<AtomicBool>,
+    tracking: Tracking,
 }
 
 /// The indexer page one cursor reads.
@@ -586,6 +584,17 @@ impl StaticSource {
 }
 
 impl TransactionSource for StaticSource {
+    async fn tracking_root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+        Ok(self.tracking.root())
+    }
+
+    async fn tracking_records(
+        &self,
+        _request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        Ok(self.tracking.page())
+    }
+
     async fn merge_audit_page(
         &self,
         _request: MergeAuditRequest<'_>,
@@ -864,6 +873,49 @@ fn ring_transfer(seed: u8) -> Transfer {
     }
 }
 
+/// A transfer spending `nullifiers`, the first opens its output blinding.
+fn spending(seed: u8, nullifiers: &[[u8; 32]]) -> Transfer {
+    Transfer {
+        first_nullifier: nullifiers[0],
+        nullifiers: nullifiers.to_vec(),
+        ..ring_transfer(seed)
+    }
+}
+
+/// A delivered note under `key` and the nullifier its spend publishes.
+fn keyed_note(
+    fixture: &Fixture,
+    seed: u8,
+    note: UtxoFields,
+    key: &NullifierKey,
+) -> (ShieldedTransaction, [u8; 32]) {
+    let paying = ring_transfer(seed);
+    let row = Indexed {
+        transfer: &paying,
+        outputs: &[
+            paid(
+                UtxoFields {
+                    nullifier_pk: key.pubkey().expect("key"),
+                    ..note
+                },
+                fixture.recipient_u,
+            ),
+            Output::Dummy,
+        ],
+        auditor: &fixture.auditor.pubkey(),
+        signature: seed,
+        frames: &fixture.frames,
+    }
+    .delivered();
+    let nullifier = key
+        .nullifier(
+            &row.output_slots[0].output_context.hash,
+            &paying.blinding(0),
+        )
+        .expect("nullifier");
+    (row, nullifier)
+}
+
 fn utxo(owner: u8, asset_address: Address, amount: u64) -> UtxoFields {
     UtxoFields {
         owner_key: [owner; 32],
@@ -887,12 +939,6 @@ fn paid(utxo: UtxoFields, recipient_u: [u8; 32]) -> Output {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Spend {
-    utxo: UtxoFields,
-    blinding: [u8; 32],
-}
-
 struct Indexed<'a> {
     transfer: &'a Transfer,
     outputs: &'a [Output],
@@ -903,66 +949,14 @@ struct Indexed<'a> {
 
 impl Indexed<'_> {
     fn delivered(self) -> ShieldedTransaction {
-        self.delivered_with(false)
-    }
-
-    /// Dummies fill the outputs to the narrowest delivered capacity.
-    fn delivered_with(self, key_escrow: bool) -> ShieldedTransaction {
-        let capacity = DELIVERED_AUDIT_CAPACITIES
-            .into_iter()
-            .find(|capacity| *capacity >= self.outputs.len())
-            .expect("a delivered capacity holds the outputs");
-        let mut outputs = self.outputs.to_vec();
-        outputs.resize(capacity, Output::Dummy);
-        let disclosure = self
-            .transfer
-            .disclosure(Rail::Delivered, &outputs, key_escrow);
-        let rail = match key_escrow {
-            true => Rail::Escrowed,
-            false => Rail::Delivered,
-        };
-        self.publish(rail, &outputs, &disclosure)
-    }
-
-    /// The entry key's disclosure, the first spent UTXO's owner the sender.
-    fn anonymous(self, spent: &[Option<Spend>]) -> ShieldedTransaction {
-        let sender = spent.iter().flatten().next().expect("a spent UTXO").utxo;
-        let inputs = AuditEvidence::Entry {
-            sender_key: sender.owner_key,
-            sender_nullifier_pk: sender.nullifier_pk,
-            inputs: spent
-                .iter()
-                .map(|spend| {
-                    spend.map_or_else(EntryInput::default, |spend| {
-                        input_opening(
-                            &spend.utxo,
-                            Placement {
-                                blinding: spend.blinding,
-                                ring: Some(RING),
-                                tree_id: TREE_ID,
-                            },
-                        )
-                    })
-                })
-                .collect(),
-        };
-        self.anonymous_with(inputs)
-    }
-
-    /// The commitment key's disclosure, spent UTXO 0 named by its hash and every later one by its prefix.
-    fn anonymous_commitments(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
-        self.anonymous_with(input_hash_evidence(spent).expect("spent UTXO 0"))
-    }
-
-    /// The in-proof rail's disclosure, every published input named by its prefix.
-    fn in_proof(self, spent: &[Option<[u8; 32]>]) -> ShieldedTransaction {
-        let evidence = input_hash_evidence(spent).expect("canonical hashes");
-        let disclosure = self.transfer.in_proof_disclosure(self.outputs, evidence);
+        let disclosure = self.transfer.disclosure(Rail::Delivered, self.outputs);
         self.publish(Rail::Delivered, self.outputs, &disclosure)
     }
 
-    fn anonymous_with(self, inputs: AuditEvidence) -> ShieldedTransaction {
-        let disclosure = self.transfer.anonymous_disclosure(self.outputs, inputs);
+    /// `spent` names the real inputs, the record stream carries their count and no hash.
+    fn anonymous(self, spent: &[bool]) -> ShieldedTransaction {
+        let mut disclosure = self.transfer.disclosure(Rail::Anonymous, self.outputs);
+        disclosure.real_inputs = spent.iter().filter(|real| **real).count() as u8;
         self.publish(Rail::Anonymous, self.outputs, &disclosure)
     }
 
@@ -975,18 +969,20 @@ impl Indexed<'_> {
         let mut transaction = self.transfer.publish(Publish {
             slots: self
                 .transfer
-                .slots(rail, outputs)
+                .slots(outputs)
                 .into_iter()
                 .map(|slot| slot.output)
                 .collect(),
             disclosure,
             auditor: self.auditor,
+            rail,
         });
         transaction.slot = 42;
         transaction.tx_signature = Signature::from([self.signature; 64]);
         let frame = self.transfer.frame(Frame {
             tx: &transaction,
             disclosure,
+            rail,
         });
         self.frames
             .lock()
@@ -1024,7 +1020,7 @@ impl Fixture {
         .delivered();
         let mut foreign_key = Indexed {
             transfer: &ring_transfer(2),
-            outputs: &[paid(sol(0xb2, 9), recipient_u)],
+            outputs: &[paid(sol(0xb2, 9), recipient_u), Output::Dummy],
             auditor: &X25519Keypair::new().pubkey(),
             signature: 2,
             frames: &frames,
@@ -1033,7 +1029,7 @@ impl Fixture {
         foreign_key.messages[0].view_tag = auditor_view_tag(&auditor_pk);
         let mut missing_message = Indexed {
             transfer: &ring_transfer(3),
-            outputs: &[paid(sol(0xb3, 11), recipient_u)],
+            outputs: &[paid(sol(0xb3, 11), recipient_u), Output::Dummy],
             auditor: &auditor_pk,
             signature: 3,
             frames: &frames,
@@ -1100,6 +1096,7 @@ impl Fixture {
             config_down: Arc::default(),
             registry: Arc::new(Mutex::new(RECORDS)),
             records_down: Arc::default(),
+            tracking: Tracking::default(),
         };
         source.with_transactions(vec![
             self.audited.clone(),
@@ -1121,34 +1118,6 @@ impl Fixture {
             .with_clock(Clock::Fixed(now))
             .local(RING, self.auditor.clone())
             .expect("hub")
-    }
-
-    async fn read_anonymous(
-        &self,
-        transactions: Vec<ShieldedTransaction>,
-    ) -> GetDecryptedTransactionsResponse {
-        self.read_transactions(transactions, RingMode::Anonymous)
-            .await
-    }
-
-    async fn read_transactions(
-        &self,
-        transactions: Vec<ShieldedTransaction>,
-        mode: RingMode,
-    ) -> GetDecryptedTransactionsResponse {
-        let mut source = self.source().with_transactions(transactions);
-        source.configs.get_mut(&RING).expect("config").mode = mode;
-        self.hub(source)
-            .service(None)
-            .expect("service")
-            .read(AuditRead {
-                read: PagedRead::DecryptedTransactions,
-                auth: &auth(&delegate()),
-                page: &page(),
-                wallet: None,
-            })
-            .await
-            .expect("read")
     }
 }
 
@@ -1196,11 +1165,8 @@ impl SpentUtxo {
             signature: 80,
             frames: &fixture.frames,
         }
-        .anonymous(&[Some(Spend {
-            utxo: sol(0xa5, 70),
-            blinding: field(0x65),
-        })]);
-        let received = paying.slot(Rail::Anonymous, 0, &payment[0]);
+        .anonymous(&[true]);
+        let received = paying.slot(0, &payment[0]);
         let commitment = received.output.output_context.hash;
         let exit = [Output::Exit(sol(0xe8, 70)), Output::Dummy];
         let spent = Indexed {
@@ -1210,7 +1176,7 @@ impl SpentUtxo {
             signature: 81,
             frames: &fixture.frames,
         }
-        .anonymous_commitments(&[Some(commitment)]);
+        .anonymous(&[true]);
         let entry = Indexed {
             transfer: &ring_transfer(82),
             outputs: &exit,
@@ -1218,10 +1184,7 @@ impl SpentUtxo {
             signature: 82,
             frames: &fixture.frames,
         }
-        .anonymous(&[Some(Spend {
-            utxo: member,
-            blinding: received.blinding,
-        })]);
+        .anonymous(&[true]);
         Self {
             paid,
             spent,
@@ -1250,20 +1213,6 @@ fn paged(transactions: Vec<ShieldedTransaction>, next: Option<u8>, frontier: Opt
         next_cursor: next.map(|byte| vec![byte]),
         scanned_through: frontier.map(|byte| vec![byte]),
     }
-}
-
-fn input_ring(response: &GetDecryptedTransactionsResponse) -> Option<DecryptedInputRing> {
-    response
-        .value
-        .items
-        .last()
-        .expect("spending transfer")
-        .inputs[0]
-        .opening
-        .as_ref()
-        .expect("opening")
-        .ring
-        .clone()
 }
 
 /// The tag stream cursor of the `pages` entry `byte` keys.
@@ -1316,72 +1265,6 @@ fn utxos_request(hashes: Vec<Hash>) -> GetAuditedUtxosRequest {
         .expect("signed UTXO read")
 }
 
-/// The audited deposit of `member` into the ring at `blinding`, its capsule sealed to `auditor`.
-fn audited_deposit(
-    auditor: &X25519Pubkey,
-    member: &UtxoFields,
-    blinding: [u8; 32],
-) -> (ShieldedTransaction, Vec<ConfirmedDeposit>) {
-    let opening = DepositOpening {
-        owner_hash: member.owner_hash(),
-        blinding: zeroize::Zeroizing::new(blinding),
-        owner_key: member.owner_key,
-    };
-    let owner_utxo_hash =
-        spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
-    let sealed = seal_deposits(&[opening], auditor).unwrap();
-    let capsule = custom_ring_interface::RingDepositAuditCapsule {
-        slot_index: 0,
-        eph_pk: sealed.ephemeral_pk.as_bytes(),
-        ciphertext: &sealed.ciphertexts[0],
-        recipient_ciphertext: &[],
-    }
-    .encode();
-    let group = deposit_fixture::group(RING, true, vec![(owner_utxo_hash, capsule.clone())]);
-    let commitment = member.commitment(Placement {
-        blinding,
-        ring: Some(RING),
-        tree_id: TREE_ID,
-    });
-    let deposit = ShieldedTransaction {
-        slot: 40,
-        tx_signature: Signature::from([79; 64]),
-        event_index: Some(0),
-        tx_viewing_pk: None,
-        salt: None,
-        output_slots: vec![spr_transaction::OutputSlot {
-            view_tag: field(0x56),
-            output_context: spr_transaction::OutputContext {
-                hash: commitment,
-                tree_id: TREE_ID,
-                leaf_index: 3,
-            },
-            payload: spr_event::encode_encrypted_ring_deposit_output(
-                spr_event::EncryptedRingDepositOutput {
-                    owner_utxo_hash,
-                    asset: member.asset_address.to_bytes(),
-                    amount: member.amount,
-                    data_hash: None,
-                    ring_program_id: RING.to_bytes(),
-                    ring_data_hash: [0; 32],
-                    encrypted: spr_event::EncryptedRingDepositData {
-                        tx_viewing_pk: [0; 33],
-                        salt: [0; 16],
-                        ciphertext: capsule,
-                    },
-                },
-            ),
-        }],
-        messages: Vec::new(),
-        nullifiers: Vec::new(),
-        proofless: true,
-        ring_config: None,
-        ring_program_id: Some(RING),
-    };
-    let bindings = ring_event_origin_in(&[group], 0, RING).unwrap().deposits;
-    (deposit, bindings)
-}
-
 fn reader_member(reader: ReaderKey) -> Member {
     reader.member().expect("reader member")
 }
@@ -1390,10 +1273,106 @@ fn reader_member(reader: ReaderKey) -> Member {
 #[derive(Clone)]
 struct Records(Arc<Mutex<OwnRecords>>);
 
+/// The ring's tracking tree, `None` until a key enrolls.
+#[derive(Clone, Default)]
+struct Tracking(Arc<Mutex<Option<TrackedTree>>>);
+
+struct TrackedTree {
+    tree: TrackingTree,
+    seals: HashMap<[u8; 32], RingTrackingSealView>,
+    revision: u64,
+}
+
+impl Tracking {
+    /// The owner's key, sealed to `auditor` and applied to a new root.
+    fn enroll(&self, owner: &[u8; 32], key: &NullifierKey, auditor: &X25519Pubkey) {
+        let member = *Member::owner_tag(owner).expect("member").as_bytes();
+        let sealed = NullifierKeyEnvelope::new(key, auditor)
+            .expect("envelope")
+            .sealed;
+        let mut held = self.0.lock().unwrap();
+        let held = held.get_or_insert_with(|| TrackedTree {
+            tree: TrackingTree::new().expect("tree"),
+            seals: HashMap::new(),
+            revision: 0,
+        });
+        held.tree
+            .apply(
+                [0; 32],
+                &[TrackingEntry {
+                    member,
+                    nullifier_pk: key.pubkey().expect("key"),
+                    ct_hash: spr_hasher::primitives::hash_bytes(&sealed.ciphertext).expect("hash"),
+                    viewing_u: x25519_u(0x11),
+                    revision: 1,
+                    list_tag: field(0x12),
+                }],
+            )
+            .expect("apply");
+        held.revision += 1;
+        held.seals.insert(
+            member,
+            RingTrackingSealView {
+                owner: Address::new_from_array(*owner).into(),
+                eph_pk: Base64String(sealed.eph_pk.as_bytes().to_vec()),
+                ciphertext: Base64String(sealed.ciphertext.to_vec()),
+            },
+        );
+    }
+
+    fn root(&self) -> Option<TrackingRoot> {
+        let held = self.0.lock().unwrap();
+        held.as_ref().map(|held| TrackingRoot {
+            registry: TRACKING,
+            root: held.tree.root().expect("root"),
+            revision: held.revision,
+        })
+    }
+
+    fn page(&self) -> GetTrackingRecordsResponse {
+        let held = self.0.lock().unwrap();
+        let held = held.as_ref().expect("a tracking tree");
+        let records = held
+            .tree
+            .records()
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(index, record)| RingIndexedTrackingRecordView {
+                record: RingTrackingRecordView {
+                    member: Hash(record.member),
+                    next: Hash(record.next),
+                    nullifier_pk: Hash(record.nullifier_pk),
+                    ct_hash: Hash(record.ct_hash),
+                    viewing_u: Hash(record.viewing_u),
+                    revision: record.revision,
+                    list_tag: Hash(record.list_tag),
+                    seal: held.seals.get(&record.member).cloned(),
+                },
+                path: path_view(
+                    index as u64,
+                    &held.tree.path(index as u64).expect("path").siblings,
+                ),
+            })
+            .collect();
+        GetTrackingRecordsResponse {
+            context: Context {
+                block_time: 0,
+                slot: 99,
+            },
+            root: StorageRootView {
+                root: Hash(held.tree.root().expect("root")),
+                revision: held.revision,
+                next_index: held.tree.records().len() as u64,
+            },
+            records,
+            next_leaf_index: None,
+        }
+    }
+}
+
 struct OwnRecords {
     tree: MemberRegistryTree,
-    /// The envelope each escrow write published, by member.
-    sealed: HashMap<[u8; 32], EscrowWriteData>,
     revision: u64,
     /// Pages leave out the first record.
     short_pages: bool,
@@ -1403,7 +1382,6 @@ impl Records {
     fn listing(readers: &[Member]) -> Self {
         let records = Self(Arc::new(Mutex::new(OwnRecords {
             tree: MemberRegistryTree::new().expect("record tree"),
-            sealed: HashMap::new(),
             revision: 0,
             short_pages: false,
         })));
@@ -1420,9 +1398,7 @@ impl Records {
             member: *member.as_bytes(),
             mask: bit,
             value: if listed { bit } else { 0 },
-            escrow_key: [0; 32],
             mint_policy: None,
-            address_hash: [0; 32],
         });
     }
 
@@ -1432,28 +1408,6 @@ impl Records {
             mint_policy: Some(policy),
             ..QueueEntry::default()
         });
-    }
-
-    /// The writes and envelopes an indexer projects from an update.
-    fn escrow(&self, writes: &[EscrowWriteData]) {
-        for write in writes {
-            self.apply(
-                StorageWriteData::Escrow(*write)
-                    .entry()
-                    .expect("escrow write"),
-            );
-            let member = write.member().expect("owner tag");
-            self.0.lock().unwrap().sealed.insert(member, *write);
-        }
-    }
-
-    fn shorten_pages(&self) {
-        self.0.lock().unwrap().short_pages = true;
-    }
-
-    /// Every clone of the source serves `other`'s tree from here on.
-    fn replace_with(&self, other: Records) {
-        std::mem::swap(&mut *self.0.lock().unwrap(), &mut *other.0.lock().unwrap());
     }
 
     fn apply(&self, entry: QueueEntry) {
@@ -1507,19 +1461,11 @@ impl Records {
 
 impl OwnRecords {
     fn view(&self, record: &MemberRecord) -> RingMemberRecordView {
-        let sealed = self.sealed.get(&record.member);
         RingMemberRecordView {
             mint_policy: record.mint_policy,
             member: Hash(record.member),
             next: Hash(record.next),
             lists: record.lists,
-            escrow_key: Hash(record.escrow_key),
-            owner_pubkey: sealed.map(|write| write.owner.into()),
-            nullifier_pk: sealed.map(|write| Hash(write.nullifier_pk)),
-            eph_pk: sealed.map(|write| Base64String(tagged_x25519(&write.eph_u).to_vec())),
-            ciphertext: sealed.map(|write| Base64String(write.ciphertext.to_vec())),
-            address_hash: Hash(record.address_hash),
-            address: None,
         }
     }
 }
@@ -1529,77 +1475,6 @@ fn path_view(index: u64, siblings: &[[[u8; 32]; 3]]) -> RingRecordPathView {
         index,
         siblings: siblings.iter().map(|level| level.map(Hash)).collect(),
     }
-}
-
-/// Each owner's escrow write, its envelope sealed to no one.
-fn escrow_writes(owners: &[UtxoFields]) -> Vec<EscrowWriteData> {
-    let eph_u = X25519Keypair::new().pubkey().u();
-    owners
-        .iter()
-        .map(|utxo| EscrowWriteData {
-            owner: Address::new_from_array(utxo.owner_key),
-            nullifier_pk: utxo.nullifier_pk,
-            eph_u,
-            ciphertext: [0x5a; 32],
-        })
-        .collect()
-}
-
-/// A delivered transfer of a Registry-mode ring, its owners' nullifier keys left to the registry.
-fn escrowed_source(
-    fixture: &Fixture,
-    owners: &[UtxoFields],
-    registered: &[UtxoFields],
-) -> StaticSource {
-    let audited = Indexed {
-        transfer: &ring_transfer(90),
-        outputs: &owners
-            .iter()
-            .map(|utxo| paid(*utxo, fixture.recipient_u))
-            .collect::<Vec<_>>(),
-        auditor: &fixture.auditor.pubkey(),
-        signature: 90,
-        frames: &fixture.frames,
-    }
-    .delivered_with(true);
-    let mut source = fixture.source().with_transactions(vec![audited.clone()]);
-    source.configs.get_mut(&RING).expect("config").mode = RingMode::ConfidentialEscrow;
-    source.pages = HashMap::from([
-        (None, paged(vec![audited], None, Some(1))),
-        (Some(vec![1]), paged(Vec::new(), None, Some(1))),
-    ]);
-    source.records.escrow(&escrow_writes(registered));
-    source
-}
-
-/// The slots of the page's one transfer that await their owner's escrow record.
-fn escrow_pending(page: &GetDecryptedTransactionsResponse) -> Vec<DecryptedEscrowPending> {
-    let [item] = page.value.items.as_slice() else {
-        panic!("one escrowed transfer, {:?}", page.value.skipped);
-    };
-    assert!(item.payload_errors.is_empty(), "{:?}", item.payload_errors);
-    item.outputs
-        .iter()
-        .filter_map(|output| output.escrow_pending.clone())
-        .collect()
-}
-
-/// The commitment of `owner`'s output on the ring's audited page.
-async fn fixture_output_hash(service: &AuditService<StaticSource>, owner: &UtxoFields) -> Hash {
-    let page = read_at(service, None).await;
-    page.value.items[0]
-        .outputs
-        .iter()
-        .find(|output| {
-            output
-                .utxo
-                .as_ref()
-                .is_some_and(|utxo| utxo.owner_key.0.to_bytes() == owner.owner_key)
-        })
-        .expect("owner output")
-        .output_context
-        .hash
-        .clone()
 }
 
 #[test]
