@@ -1,24 +1,23 @@
 use sea_orm::DatabaseConnection;
 use spr_indexer_api::Hash;
-use zolana_ring_indexer::{
-    private_list::{
-        GetPrivateListWritesRequest, GetPrivateListWritesResponse, RingPublishedListWriteView,
-    },
-    rpc::MAX_RING_MEMBER_PAGE_LIMIT,
+use zolana_ring_indexer::private_list::{
+    GetPrivateListWritesRequest, GetPrivateListWritesResponse, RingPublishedListWriteView,
 };
 
-use super::{internal, storage_root_view, validation, ChainSource, Served, Snapshot};
-use crate::{error::RingApiError, storage::StorageState};
+use super::{
+    check_page_limit, internal, storage_root_view, validation, ChainSource, Served, Snapshot,
+};
+use crate::{
+    error::RingApiError,
+    storage::{ListWritePage, StorageState},
+};
 
-/// Serves only what each write published, the index holds no salt and no list bits.
 pub(crate) async fn private_list_writes(
     db: &DatabaseConnection,
     chain: &impl ChainSource,
     request: GetPrivateListWritesRequest,
 ) -> Result<GetPrivateListWritesResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid list write page limit"));
-    }
+    check_page_limit(request.limit)?;
     let snapshot = Snapshot::<StorageState>::registry(db, &request.registry).await?;
     if !snapshot.state.account.is_private() {
         return Err(validation("a public source has no list writes"));
@@ -28,7 +27,11 @@ pub(crate) async fn private_list_writes(
     let rows = read
         .snapshot
         .store()
-        .list_writes(request.start, request.limit, root.revision)
+        .list_writes(ListWritePage {
+            start: request.start,
+            limit: request.limit,
+            revision: root.revision,
+        })
         .await
         .map_err(internal)?;
     let context = read.snapshot.confirm(chain, Served::Root(&root)).await?;

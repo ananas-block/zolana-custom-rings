@@ -234,9 +234,7 @@ pub(crate) async fn storage_member_records(
     chain: &impl ChainSource,
     request: GetStorageMemberRecordsRequest,
 ) -> Result<GetStorageMemberRecordsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid storage page limit"));
-    }
+    check_page_limit(request.limit)?;
     let read = Snapshot::<StorageState>::policy(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
@@ -339,6 +337,13 @@ pub(crate) async fn storage_apply_proof_inputs(
         chain_end: Hash(inputs.chain_end),
         writes: inputs.writes.iter().map(write_view).collect(),
     })
+}
+
+fn check_page_limit(limit: u64) -> Result<(), RingApiError> {
+    if limit == 0 || limit > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid page limit"));
+    }
+    Ok(())
 }
 
 fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
@@ -509,7 +514,7 @@ impl<A: CachedAccount> Snapshot<RegistryState<A>> {
 }
 
 impl Snapshot<StorageState> {
-    /// A private source's tree is the sparse list tree, it opens no policy record.
+    /// A private source opens no policy record.
     async fn policy(
         db: &DatabaseConnection,
         registry: &SerializablePubkey,

@@ -172,7 +172,6 @@ pub struct GetStorageApplyProofInputsRequest {
     pub writes: Vec<StorageWriteView>,
 }
 
-/// The leaf write of a `RecordWriteData`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StorageWriteView {

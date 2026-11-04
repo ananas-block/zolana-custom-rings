@@ -12,7 +12,7 @@ const CLEARED_TABLES: [&str; 4] = [
     "storage_registries",
 ];
 
-/// Policy leaves change and an older index skipped every enrollment, so all registries reindex.
+/// Policy leaves change and an older index skipped every enrollment.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

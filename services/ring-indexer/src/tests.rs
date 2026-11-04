@@ -20,14 +20,15 @@ use crate::{
     api,
     block::{BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo},
     error::RingApiError,
-    indexer::{block_batch, Indexer, Readiness, StartSlot, MIN_BLOCK_BATCH},
+    indexer::{block_batch, Indexer, Readiness, RegistryCall, StartSlot, MIN_BLOCK_BATCH},
     migration::Migrator,
     rpc::SolanaRpc,
     storage::{
-        self, Enrollment, RingCursor, StorageRoot, StorageState, StorageStore, TrackingState,
-        TrackingStore,
+        self, AppliedRevision, Enrollment, ListWritePage, RingCursor, StorageRoot, StorageState,
+        StorageStore, TrackingState, TrackingStore,
     },
-    storage_registry, tracking_registry,
+    storage_registry::StorageCall,
+    tracking_registry::TrackingCall,
 };
 
 pub(crate) fn field(value: u8) -> [u8; 32] {
@@ -66,9 +67,12 @@ pub(crate) async fn create_registry(db: &DatabaseConnection, registry: [u8; 32])
         fault: None,
     };
     let tx = db.begin().await.unwrap();
-    storage_registry::create(&StorageStore::new(&tx, registry), &state)
-        .await
-        .unwrap();
+    <StorageCall as RegistryCall<StorageRegistry>>::create(
+        &StorageStore::new(&tx, registry),
+        &state,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     state
 }
@@ -347,7 +351,7 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         ring_id: field(9),
         auditor_pubkey: [9; 33],
     };
-    tracking_registry::create(
+    <TrackingCall as RegistryCall<TrackingRegistry>>::create(
         &tracking,
         &TrackingState {
             registry: [12; 32],
@@ -376,7 +380,14 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     };
     tracking.save_first(&enrollment, 5).await.unwrap();
     assert_eq!(tracking.pending(None, 8).await.unwrap(), [enrollment]);
-    tracking.mark_applied(&[1; 32], 1, 6).await.unwrap();
+    tracking
+        .mark_applied(&AppliedRevision {
+            owner: [1; 32],
+            revision: 1,
+            slot: 6,
+        })
+        .await
+        .unwrap();
     assert!(tracking.pending(None, 8).await.unwrap().is_empty());
     let applied = tracking.enrollment_at(&[2; 32]).await.unwrap().unwrap();
     assert_eq!(applied.applied_revision, 1);
@@ -386,7 +397,14 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         write_counter: 1u64.to_le_bytes(),
     };
     store.save_list_writes(&[write], 3).await.unwrap();
-    let served = store.list_writes(0, 8, 3).await.unwrap();
+    let served = store
+        .list_writes(ListWritePage {
+            start: 0,
+            limit: 8,
+            revision: 3,
+        })
+        .await
+        .unwrap();
     assert_eq!(served[0].write_counter, 1);
     Migrator::reset(&db).await.unwrap();
 }

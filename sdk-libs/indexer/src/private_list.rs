@@ -15,7 +15,7 @@ pub mod method {
     }
 }
 
-/// A private source's published writes up to `expected_root`, a reader rebuilds the sparse tree from them.
+/// A reader rebuilds the sparse tree from these writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetPrivateListWritesRequest {
@@ -26,7 +26,7 @@ pub struct GetPrivateListWritesRequest {
     pub limit: u64,
 }
 
-/// Public by design, it holds no salt and no list bits.
+/// Holds no salt and no list bits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingPublishedListWriteView {

@@ -26,7 +26,8 @@ use crate::{block::BlockMetadata, indexer::Quarantine};
 mod private_list;
 mod tracking;
 
-pub(crate) use tracking::Enrollment;
+pub(crate) use private_list::ListWritePage;
+pub(crate) use tracking::{AppliedRevision, Enrollment, EnrollmentRevision};
 
 /// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

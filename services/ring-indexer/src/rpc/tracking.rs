@@ -22,8 +22,8 @@ use zolana_ring_indexer::{
 };
 
 use super::{
-    check_members, internal, path_view, storage_root_view, validation, ChainSource, LeafPage,
-    OpenedLeaf, Served, Snapshot,
+    check_members, check_page_limit, internal, path_view, storage_root_view, validation,
+    ChainSource, LeafPage, OpenedLeaf, Served, Snapshot,
 };
 use crate::{
     error::RingApiError,
@@ -34,7 +34,6 @@ use crate::{
 type TrackingSnapshot = Snapshot<RegistryState<TrackingRegistry>>;
 type LoadedTracking = LoadedRegistry<TrackingRecord, TRACKING_QUAD_HEIGHT>;
 
-/// An absent opening proves the member holds no row under `root`.
 pub(crate) async fn tracking_openings(
     db: &DatabaseConnection,
     chain: &impl ChainSource,
@@ -65,15 +64,13 @@ pub(crate) async fn tracking_openings(
     })
 }
 
-/// The auditor's page, every leaf carries the seal its authorization retains.
+/// Every leaf carries the seal its authorization retains.
 pub(crate) async fn tracking_records(
     db: &DatabaseConnection,
     chain: &impl ChainSource,
     request: GetTrackingRecordsRequest,
 ) -> Result<GetTrackingRecordsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid tracking page limit"));
-    }
+    check_page_limit(request.limit)?;
     let read = TrackingSnapshot::registry(db, &request.registry)
         .await?
         .at_root(&request.expected_root.0)
@@ -136,15 +133,12 @@ pub(crate) async fn tracking_record_pool(
     })
 }
 
-/// Serves an applier the accounts to name, pending state grants nothing.
 pub(crate) async fn pending_enrollments(
     db: &DatabaseConnection,
     chain: &impl ChainSource,
     request: GetPendingEnrollmentsRequest,
 ) -> Result<GetPendingEnrollmentsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid enrollment page limit"));
-    }
+    check_page_limit(request.limit)?;
     let snapshot = TrackingSnapshot::registry(db, &request.registry).await?;
     let after = request.after.map(|owner| owner.0.to_bytes());
     let rows = snapshot
@@ -234,7 +228,7 @@ async fn indexed_views<C: ConnectionTrait>(
     Ok(views)
 }
 
-/// Serves a seal only under the ciphertext hash its leaf binds, the sentinel has none.
+/// Serves a seal only under the ciphertext hash its leaf binds.
 async fn sealed_view<C: ConnectionTrait>(
     store: &TrackingStore<'_, C>,
     record: &TrackingRecord,
