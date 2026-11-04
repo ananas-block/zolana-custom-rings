@@ -108,8 +108,8 @@ export interface RingSpendParams {
   readonly amount: bigint;
   /** Receives every private output, defaults to `client.tree`. */
   readonly outputTree?: Address;
-  /** Signs when the operation demands one, its record holds every demanded class. */
-  readonly cosigner?: SignerAccount;
+  /** Read in order while a demanded class stays uncovered, each one read signs. */
+  readonly cosigners?: readonly SignerAccount[];
   /** The sender's and any other enrolled owner's salt a salted list reads, a paid `RingAddress` adds its own. */
   readonly listSalts?: readonly RingListSalt[];
   readonly priorityFeeLamports?: bigint;
@@ -640,7 +640,9 @@ async function buildRingSpend<R>(
               ? "confidential"
               : "anonymous",
         ownerInProof: rail.inProofOwner !== undefined,
-        ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
+        ...(params.cosigners === undefined
+          ? {}
+          : { coSigners: params.cosigners.map((cosigner) => signerAddress(cosigner)) }),
       },
       context,
     );
@@ -792,7 +794,7 @@ async function stageRingSpend<R>(
     route: keyof typeof MODE_REFUSALS | "public";
     /** Ring notes only, a default-ring input would publish the owner SPP hides. */
     ownerInProof: boolean;
-    coSigner?: Address;
+    coSigners?: readonly Address[];
   }>,
   context: RequestContext | undefined,
 ): Promise<StagedSpend> {
@@ -866,7 +868,7 @@ async function stageRingSpend<R>(
     keys: params.keys,
     transfer,
     assets: params.wallet.registry,
-    ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
+    ...(input.coSigners === undefined ? {} : { coSigners: input.coSigners }),
     listSalts: spendListSalts(params),
   });
   return Object.freeze({

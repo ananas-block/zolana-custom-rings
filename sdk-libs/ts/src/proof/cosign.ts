@@ -35,10 +35,9 @@ export interface CoSignDemand {
   readonly classes: number;
 }
 
-/** One record holds every demanded class, Rust `CoSignRequirement`. */
 export interface CoSignRequirement {
-  /** `RING_COSIGN_*` bits. */
-  readonly classes: number;
+  /** `RING_COSIGN_*` bits no record covered yet. */
+  readonly uncovered: number;
 }
 
 /** A demanded signer and its `CoSigner` record, the pair ahead of the SPP accounts. */
@@ -83,48 +82,57 @@ export function demandRequirement(
   ring: Pick<RingPolicy, "coSignerClasses">,
 ): CoSignRequirement | undefined {
   const classes = demand.classes & ((ring.coSignerClasses ?? 0) | APPROVALS);
-  return classes === 0 ? undefined : Object.freeze({ classes });
+  return classes === 0 ? undefined : Object.freeze({ uncovered: classes });
 }
 
-/** Rust `CoSignRequirement::check`, a record holds every demanded class. */
-export function checkCoSigner(
+/** Rust `CoSignRequirement::cover`, a record covering no new class is refused. */
+export function coverRequirement(
   requirement: CoSignRequirement,
   record: Pick<RingCoSigner, "scope" | "signer">,
-): void {
-  if ((record.scope & requirement.classes) !== requirement.classes)
+): CoSignRequirement | undefined {
+  if ((record.scope & requirement.uncovered) === 0)
     throw new RingError("RING_COSIGNER_OUT_OF_SCOPE", {
-      details: { signer: record.signer, scope: record.scope, classes: requirement.classes },
+      details: { signer: record.signer, scope: record.scope, uncovered: requirement.uncovered },
     });
+  const uncovered = requirement.uncovered & ~record.scope;
+  return uncovered === 0 ? undefined : Object.freeze({ uncovered });
 }
 
-/** The supplied signer and its record, `undefined` when the demand needs none. */
-export async function resolveRingCoSigner(
+/** Reads `supplied` in order while a demanded class stays uncovered, Rust `CoSignerChoice::resolve`. */
+export async function resolveRingCoSigners(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
     ringProgramId: Address;
     config: Pick<RingPolicy, "coSignerClasses">;
     demand: CoSignDemand;
-    supplied?: Address;
+    supplied: readonly Address[];
     /** Empty on the anonymous and delegate rails. */
     ownerSigners: readonly Address[];
     delegate?: Address;
   }>,
   context?: RequestContext,
-): Promise<RingCoSignerAccounts | undefined> {
-  const { client, ringProgramId, ownerSigners, delegate, supplied: signer } = input;
-  const requirement = demandRequirement(input.demand, input.config);
-  if (requirement === undefined) return undefined;
-  if (signer === undefined)
-    throw new RingError("RING_COSIGNER_REQUIRED", {
-      details: { reason: "missing", ringProgramId, classes: requirement.classes },
-    });
-  // Rust `CoSignerIsOwner` and `CoSignerIsDelegate`, dual control needs a second key.
-  if (ownerSigners.includes(signer)) throw coSignerRequired("coSignerIsOwner", signer);
-  if (signer === delegate) throw coSignerRequired("coSignerIsDelegate", signer);
-  const record = await fetchRingCoSignerRecord(client, ringProgramId, signer, context);
-  if (record === undefined) throw coSignerRequired("noRecord", signer);
-  checkCoSigner(requirement, record);
-  return Object.freeze({ signer, record: await ringCoSignerAddress(ringProgramId, signer) });
+): Promise<readonly RingCoSignerAccounts[]> {
+  const { client, ringProgramId, ownerSigners, delegate } = input;
+  const supplied = input.supplied[Symbol.iterator]();
+  const resolved: RingCoSignerAccounts[] = [];
+  let requirement = demandRequirement(input.demand, input.config);
+  while (requirement !== undefined) {
+    const { value: signer } = supplied.next() as IteratorResult<Address, undefined>;
+    if (signer === undefined)
+      throw new RingError("RING_COSIGNER_REQUIRED", {
+        details: { reason: "missing", ringProgramId, uncovered: requirement.uncovered },
+      });
+    // Rust `CoSignerIsOwner` and `CoSignerIsDelegate`, dual control needs a second key.
+    if (ownerSigners.includes(signer)) throw coSignerRequired("coSignerIsOwner", signer);
+    if (signer === delegate) throw coSignerRequired("coSignerIsDelegate", signer);
+    const record = await fetchRingCoSignerRecord(client, ringProgramId, signer, context);
+    if (record === undefined) throw coSignerRequired("noRecord", signer);
+    requirement = coverRequirement(requirement, record);
+    resolved.push(
+      Object.freeze({ signer, record: await ringCoSignerAddress(ringProgramId, signer) }),
+    );
+  }
+  return Object.freeze(resolved);
 }
 
 function coSignerRequired(reason: string, signer: Address): RingError {

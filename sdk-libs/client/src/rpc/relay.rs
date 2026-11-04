@@ -37,6 +37,9 @@ pub struct PrepareRelayRequest {
     pub ring: SerializablePubkey,
     pub quote: RelayQuote,
     pub intent: RelayIntent,
+    /// In run order, empty names the service alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub co_signers: Vec<SerializablePubkey>,
 }
 
 /// `proof_inputs` holds the rail's proof inputs without Merkle paths or record openings.
