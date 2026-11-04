@@ -55,9 +55,7 @@ pub fn symmetric_apply_audit(
 #[cfg(test)]
 mod audit_stream_tests {
     use custom_ring_interface::{
-        domain::{
-            AUDIT_STREAM_LABEL, DELIVERED_BODY_LABEL, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL,
-        },
+        domain::{AUDIT_STREAM_LABEL, DEPOSIT_AUDIT_LABEL, REGISTER_KEY_LABEL},
         STREAM_FIRST_COUNTER,
     };
 
@@ -103,12 +101,7 @@ mod audit_stream_tests {
             symmetric_apply_audit(&shared, label, &mut buf).unwrap();
             buf
         };
-        let labels = [
-            AUDIT_STREAM_LABEL,
-            DELIVERED_BODY_LABEL,
-            REGISTER_KEY_LABEL,
-            DEPOSIT_AUDIT_LABEL,
-        ];
+        let labels = [AUDIT_STREAM_LABEL, REGISTER_KEY_LABEL, DEPOSIT_AUDIT_LABEL];
         for (index, label) in labels.iter().enumerate() {
             for other in &labels[index + 1..] {
                 assert_ne!(keystream(label), keystream(other));

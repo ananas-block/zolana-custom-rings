@@ -111,7 +111,6 @@ fn transfer(
 
 fn held(owner: &ShieldedKeypair, transactions: &[ShieldedTransaction]) -> Vec<(u64, bool)> {
     let notes = open_ring_confidential(owner, &RingAssets::new([]).unwrap(), transactions).unwrap();
-    assert!(notes.pending.is_empty());
     notes
         .owned
         .utxos

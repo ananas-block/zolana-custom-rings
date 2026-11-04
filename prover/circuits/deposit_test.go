@@ -207,6 +207,43 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 	}
 }
 
+// Modelled with the closing element dropped.
+func TestDepositChainWithoutItsCloseStaysAtOneLength(t *testing.T) {
+	zero := new(big.Int)
+	for _, capacity := range circuits.DepositCapacities {
+		for _, count := range []int{1, capacity} {
+			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential)
+			elements := d.Elements(t)
+			if len(elements) != depositElements {
+				t.Fatalf("capacity %d count %d holds %d elements", capacity, count, len(elements))
+			}
+			chain := elements[:len(elements)-1]
+			if tail := chain[len(chain)-1]; (count < circuits.MaxDeposits) != (tail.Sign() == 0) {
+				t.Fatalf("count %d ends the chain on %v", count, tail)
+			}
+			d.Narrow(t, capacity)
+			d.Circuit.PublicInputHash = spptest.MustHashChain4(t, chain)
+			requireStatementRefused(t, d)
+		}
+	}
+	chain := ringdeposit.Build(t, 1, ringdeposit.ModeConfidential).Elements(t)
+	chain = chain[:len(chain)-1]
+	reference := spptest.MustHashChain4(t, chain)
+	for _, padded := range [][]*big.Int{append(slices.Clone(chain), zero), append(slices.Clone(chain), zero, zero)} {
+		if spptest.MustHashChain4(t, padded).Cmp(reference) != 0 {
+			t.Fatal("the zero tail no longer pads")
+		}
+	}
+	if spptest.MustHashChain4(t, append(slices.Clone(chain), zero, zero, zero)).Cmp(reference) == 0 {
+		t.Fatal("a third zero opens a new round")
+	}
+	moved := slices.Clone(chain)
+	moved[len(moved)-1] = big.NewInt(1)
+	if spptest.MustHashChain4(t, moved).Cmp(reference) == 0 {
+		t.Fatal("the tail moves the hash at the one length")
+	}
+}
+
 // The auditor rebuilds every note from its record, the published commitment and asset field accept it, no mint registry or row is read.
 func TestDepositReaderRebuildsEachNoteFromItsRecord(t *testing.T) {
 	d := ringdeposit.Spec{Count: 3, ZeroKeys: []int{1}}.Build(t)

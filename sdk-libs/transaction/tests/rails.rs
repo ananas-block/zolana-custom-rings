@@ -15,10 +15,10 @@ use spr_transaction::{
     Data, Mint, Utxo, WalletUtxo,
 };
 use zolana_ring_transaction::{
-    open_recipient_body, open_reply, open_sender_bundle, random_tag_preimage, seal_delivered_body,
-    seal_recipient_body, seal_reply, AnonymousOutput, AnonymousPlan, AnonymousSlot, DeliveredBody,
-    OpenedBody, OpenedNote, OutputBlindings, PublishedSlot, ReplyMetadata, RingAssets,
-    RingDelivery, RingDeliveryOpening, RingOutputRail, RingRailError as E, RingUtxoOwner,
+    open_recipient_body, open_reply, open_sender_bundle, random_tag_preimage, seal_recipient_body,
+    seal_reply, AnonymousOutput, AnonymousPlan, AnonymousSlot, OpenedBody, OpenedNote,
+    OutputBlindings, PublishedSlot, ReplyMetadata, RingAssets, RingDelivery, RingOutputRail,
+    RingRailError as E,
 };
 
 const RING: Address = Address::new_from_array([42; 32]);
@@ -971,53 +971,6 @@ fn a_payment_planned_for_another_owner_is_refused() {
         rail.encrypt(tx, &address(&sender)),
         Err(E::RingPaymentSlot { slot_index: 1 })
     ));
-}
-
-/// The commitment rebuilds under any keys a sender names, the recipient compares them with its own.
-#[test]
-fn a_recipient_refuses_a_body_that_names_other_keys() {
-    let sender = keypair(1);
-    let receiver = keypair(2);
-    let recipient = address(&receiver);
-    let (mut tx, tx_key) = ring_transfer(&sender, false);
-    tx.transfer_sol(&recipient, 3).unwrap();
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Delivered);
-    let proof = rail.encrypt(tx, &address(&sender)).unwrap();
-    let secret = delivered_secret(&receiver.viewing_key, &proof, &rail, 0);
-    let assets = RingAssets::new([]).unwrap();
-    let opens = |forged: DeliveredBody| {
-        let body = seal_delivered_body(&forged, &secret).unwrap();
-        RingDeliveryOpening {
-            ring: RING,
-            body: &body,
-            slot_secret: &secret,
-            owner: RingUtxoOwner {
-                signing_pubkey: &recipient.signing_pubkey,
-                nullifier_pubkey: &recipient.nullifier_pubkey,
-            },
-            commitment: &proof.external_data.outputs[0].utxo_hash,
-            tree_id: TREE,
-        }
-        .open(&assets)
-        .unwrap()
-        .and_then(|delivered| delivered.mint)
-        .is_some()
-    };
-    let sealed = DeliveredBody {
-        blinding: proof.output_utxos[0].blinding,
-        amount: 3,
-        owner_key: recipient.signing_pubkey.confidential_view_tag().unwrap(),
-        nullifier_pk: Some(recipient.nullifier_pubkey),
-    };
-    assert!(opens(sealed));
-    assert!(!opens(DeliveredBody {
-        owner_key: [0x77; 32],
-        ..sealed
-    }));
-    assert!(!opens(DeliveredBody {
-        nullifier_pk: Some([0x77; 32]),
-        ..sealed
-    }));
 }
 
 #[test]
