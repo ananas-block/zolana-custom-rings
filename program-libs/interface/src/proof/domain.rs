@@ -21,10 +21,6 @@ pub const QUEUE_WRITE: u32 = 0x4352_5157;
 pub const APPLY_RECORDS: u32 = 0x4352_4150;
 /// `"CRRG"`
 pub const REGISTER_KEY: u32 = 0x4352_5247;
-/// `"CRPS"`
-pub const LIST_SALT: u32 = 0x4352_5053;
-/// `"CRPT"`
-pub const LIST_TAG: u32 = 0x4352_5054;
 /// `"CRTK"`
 pub const TRACKING_LEAF: u32 = 0x4352_544b;
 /// `"CRTQ"`
