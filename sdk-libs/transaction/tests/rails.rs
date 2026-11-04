@@ -1080,3 +1080,78 @@ fn a_published_tag_other_than_the_slots_own_is_refused_at_build() {
         Err(E::SenderBundleFraming)
     ));
 }
+
+#[test]
+fn a_body_with_data_under_a_zero_hash_opens_nothing() {
+    let owner = keypair(1);
+    let owner_address = address(&owner);
+    let utxo = Utxo {
+        owner: owner_address.signing_pubkey,
+        asset: Mint::SOL,
+        amount: 5,
+        blinding: [7; 32],
+        ring_program_id: Some(RING),
+        data: Data::default(),
+    };
+    let hash = utxo
+        .hash(&owner_address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+    let assets = RingAssets::new([]).unwrap();
+    let output = AnonymousOutput {
+        owner: &owner_address,
+        assets: &assets,
+        ring: RING,
+        tree_id: TREE,
+        utxo_hash: &hash,
+    };
+    let body = |data: Vec<u8>| RecipientBody {
+        blinding: [7; 32],
+        amount: 5,
+        mint: Mint::SOL.asset.to_bytes(),
+        ring_data_hash: None,
+        data,
+    };
+    assert!(output.open_body(&body(Vec::new())).unwrap().is_some());
+    let forged = [&[0u8; 32][..], b"unbound"].concat();
+    assert_eq!(output.open_body(&body(forged)).unwrap(), None);
+}
+
+#[test]
+fn a_memo_on_a_ring_output_is_refused_on_both_rails() {
+    let owner = keypair(1);
+    let recipient = address(&keypair(2));
+    let sender = address(&owner);
+    let transaction = |memo: bool| {
+        let (mut tx, _) = ring_spend(&owner, vec![input(&owner, Mint::SOL, 10, 0)], false);
+        let output = SppProofOutputUtxo {
+            owner_address: Some(recipient),
+            asset: Mint::SOL,
+            amount: 4,
+            ring_program_id: Some(RING),
+            ..Default::default()
+        };
+        let output = match memo {
+            true => output.with_memo(b"lost".to_vec()),
+            false => output,
+        };
+        tx.add_output_utxo(output).unwrap();
+        tx
+    };
+    for memo in [false, true] {
+        let delivered = RingOutputRail::new(ViewingKey::new(), RingDelivery::Delivered)
+            .encrypt(transaction(memo), &sender);
+        let plan = AnonymousPlan::new().with_payment(recipient.viewing_pubkey);
+        let hidden =
+            RingOutputRail::new(ViewingKey::new(), RingDelivery::Anonymous(Box::new(plan)))
+                .encrypt(transaction(memo), &sender);
+        for sealed in [delivered, hidden] {
+            match memo {
+                true => assert!(matches!(
+                    sealed,
+                    Err(zolana_ring_transaction::RingRailError::OutputDataNotCarried { .. })
+                )),
+                false => assert!(sealed.is_ok()),
+            }
+        }
+    }
+}

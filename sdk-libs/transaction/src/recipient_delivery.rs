@@ -219,6 +219,8 @@ impl AnonymousOutput<'_> {
         let mint = Address::new_from_array(body.mint);
         let asset = self.assets.by_mint(&mint);
         let (data_hash, app_data) = match body.data.split_first_chunk::<32>() {
+            // Data under a zero hash binds to no commitment.
+            Some((hash, _)) if *hash == [0; 32] => return Ok(None),
             Some((hash, app_data)) => (Some(*hash), app_data),
             None if body.data.is_empty() => (None, &[][..]),
             None => return Ok(None),

@@ -1,8 +1,6 @@
 //! Scheme 10 bodies of frames before statement version 4, read and never written by a new frame.
 
-use custom_ring_interface::{
-    domain::DELIVERED_BODY_LABEL, stream::SlotSecret, CustomRingError,
-};
+use custom_ring_interface::{domain::DELIVERED_BODY_LABEL, stream::SlotSecret, CustomRingError};
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
