@@ -1,6 +1,3 @@
-// Read after ringgadget/bytes.go, shared/derivation.go. Read before
-// shared/envelope.go, audit/audit.go, merge.go.
-
 package shared
 
 import (

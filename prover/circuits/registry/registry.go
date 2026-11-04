@@ -1,10 +1,3 @@
-// Defines how member records sit in the ring's Merkle tree. Every circuit that
-// reads or updates a record uses these hashes, so they must match the Rust
-// registry exactly.
-//
-// Read first. Read before registry/opening.go, registry/shared_path.go,
-// registry/apply_records.go.
-
 // Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes a storage `Update` or `UpdateImmediate` carries to it.
 package registry
 

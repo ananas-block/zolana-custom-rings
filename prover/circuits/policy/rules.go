@@ -64,12 +64,12 @@ type paymentScreen struct {
 }
 
 func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, payments []Payment, inputs []shared.Output) paymentScreen {
-	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
+	// A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(payments))
 	for o, pay := range payments {
 		liveOwner[o] = api.Mul(pay.Active, ringgadget.IsNonZero(api, pay.Owner))
 	}
-	// 2. A mint without a threshold reads zero, a positive guard then needs the lists.
+	// A mint without a threshold reads zero, a positive guard then needs the lists.
 	guards := paymentGuards(api, cmp, payments, inputs)
 	assetExempt := make([]frontend.Variable, len(payments))
 	for o := range payments {
@@ -93,7 +93,7 @@ func (s paymentScreen) assert(api frontend.API, rule ruleFields, onPayment front
 // paymentGuards gives each payment receipt + exit + paid of its owner and asset, and the sum of that over its asset's distinct owners.
 func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs []shared.Output) []paymentGuard {
 	n := len(payments)
-	// 1. Ring amounts net against same-ring inputs, an exit or a withdrawal stays gross.
+	// Ring amounts net against same-ring inputs, an exit or a withdrawal stays gross.
 	ringAmounts, grossAmounts := make([]frontend.Variable, n), make([]frontend.Variable, n)
 	received, passing, repeats := make([]frontend.Variable, n), make([]frontend.Variable, n), make([]frontend.Variable, n)
 	sameAsset := make([][]frontend.Variable, n)
@@ -105,7 +105,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 		sameAsset[p] = make([]frontend.Variable, n)
 		sameAsset[p][p] = 1
 	}
-	// 2. Each pair folds once, repeats counts the earlier live payments of one owner and asset.
+	// Each pair folds once, repeats counts the earlier live payments of one owner and asset.
 	for p := range payments {
 		for q := range payments[:p] {
 			sameAsset[p][q] = api.IsZero(api.Sub(payments[p].Asset, payments[q].Asset))
@@ -118,7 +118,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 			repeats[p] = api.Add(repeats[p], api.Mul(samePair, payments[q].Active))
 		}
 	}
-	// 3. A default-ring input reads no Ring flag, entry funding stays a receipt.
+	// A default-ring input reads no Ring flag, entry funding stays a receipt.
 	guards := make([]paymentGuard, n)
 	for p, pay := range payments {
 		spent := frontend.Variable(0)
@@ -128,7 +128,7 @@ func paymentGuards(api frontend.API, cmp comparator, payments []Payment, inputs 
 		}
 		guards[p].owner = api.Add(cmp.saturatingSub(api, received[p], spent), passing[p])
 	}
-	// 4. Only the first payment of an owner and asset counts toward the asset's sum.
+	// Only the first payment of an owner and asset counts toward the asset's sum.
 	for p := range payments {
 		guards[p].asset = 0
 		for q, pay := range payments {
@@ -175,17 +175,17 @@ func newComparator(rc frontend.Rangechecker) comparator {
 func (c comparator) atMost(api frontend.API, total, threshold frontend.Variable) frontend.Variable {
 	offset := new(big.Int).Lsh(big.NewInt(1), uint(c.width))
 	delta := api.Add(api.Sub(threshold, total), offset)
-	// 1. The hint proposes the low width bits and the top bit of delta, untrusted until the checks below bind them.
+	// The hint proposes the low width bits and the top bit of delta, untrusted until the checks below bind them.
 	parts, err := api.Compiler().NewHint(comparisonHint, 2, delta, c.width)
 	if err != nil {
 		panic(err)
 	}
 	low, top := parts[0], parts[1]
-	// 2. low below 2^width leaves one split per delta.
+	// low below 2^width leaves one split per delta.
 	c.rc.Check(low, c.width)
-	// 3. top is a bit, the split then covers delta below 2^(width+1) only.
+	// top is a bit, the split then covers delta below 2^(width+1) only.
 	api.AssertIsBoolean(top)
-	// 4. delta lies in (0, 2^(width+1)), its split is unique and top is set exactly when total <= threshold.
+	// delta lies in (0, 2^(width+1)), its split is unique and top is set exactly when total <= threshold.
 	api.AssertIsEqual(delta, api.Add(low, api.Mul(top, offset)))
 	return top
 }

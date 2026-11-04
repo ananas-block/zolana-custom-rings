@@ -1,5 +1,4 @@
-//! The 4-ary indexed trees of a ring, its policy records and its tracking leaves,
-//! one apply and one opening over any [`RecordStore`].
+//! The 4-ary indexed trees of a ring, one apply and one opening over any [`RecordStore`].
 
 mod memory;
 mod path;

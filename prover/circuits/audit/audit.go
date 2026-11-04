@@ -1,6 +1,3 @@
-// Read after shared/envelope.go, shared/derivation.go, shared/utxo.go. Read
-// before audit/layout.go, audit/record.go, transfer/transfer.go.
-
 // Package audit proves what a ring auditor reads from a ring transfer.
 package audit
 
