@@ -15,6 +15,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -103,22 +104,34 @@ func TestMergeTrackingRow(t *testing.T) {
 			s.Rebind(t)
 		}},
 		{"another row field", func(_ *testing.T, s *ringmerge.Statement) {
-			s.Circuit.Tracking.CtHash = big.NewInt(1)
+			s.Circuit.Tracking.Record.CtHash = big.NewInt(1)
 		}},
 		{"another path", func(_ *testing.T, s *ringmerge.Statement) {
-			s.Circuit.Tracking.Path.Index = 1
+			s.Circuit.Tracking.Path.Index = 2
 		}},
 		{"another member's row", func(t *testing.T, s *ringmerge.Statement) {
-			s.Circuit.TrackingRoot = s.Tracking.Path.Root(t, s.Tracking.Leaf(t, big.NewInt(0x77), s.NullifierPk))
+			other := big.NewInt(0x77)
+			s.Tracking.Apply(t, s.TrackingEntry(other, s.NullifierPk))
+			s.Circuit.Tracking = s.Tracking.Opening(other).Wires()
+			s.Circuit.TrackingRoot = s.Tracking.Root()
 			s.Rebind(t)
 		}},
 		{"a row under another key", func(t *testing.T, s *ringmerge.Statement) {
-			s.Circuit.TrackingRoot = s.Tracking.Path.Root(t, s.Tracking.Leaf(t, s.OwnerPkHash, big.NewInt(5)))
+			s.Tracking = ringregistry.NewTracking(t)
+			s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, big.NewInt(5)))
+			s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
+			s.Circuit.TrackingRoot = s.Tracking.Root()
+			s.Rebind(t)
+		}},
+		{"an absent row", func(t *testing.T, s *ringmerge.Statement) {
+			s.Tracking = ringregistry.NewTracking(t)
+			s.Tracking.Apply(t, s.TrackingEntry(big.NewInt(0x77), s.NullifierPk))
+			s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
+			s.Circuit.TrackingRoot = s.Tracking.Root()
 			s.Rebind(t)
 		}},
 		{"no row at all", func(t *testing.T, s *ringmerge.Statement) {
-			zero := ringmerge.BuildZeroKey(t)
-			s.Circuit.Tracking = zero.Circuit.Tracking
+			s.Circuit.Tracking = ringmerge.UnreadTracking()
 			s.Circuit.TrackingRoot = 0
 			s.Rebind(t)
 		}},

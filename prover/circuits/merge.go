@@ -38,20 +38,6 @@ const (
 	mergeAmountBytes    = 8
 )
 
-// trackingLeafDomain = "CRTK"
-const trackingLeafDomain = 0x4352544b
-
-// TrackingRow opens one owner's row of the ring's tracking tree.
-type TrackingRow struct {
-	Next, CtHash, View0, View1, Revision, ListTag frontend.Variable
-	Path                                          registry.QuadPath
-}
-
-// Root folds the leaf that names member and its nullifier key, another member's or another key's row fails against the tracking root.
-func (r TrackingRow) Root(api frontend.API, member, nullifierPk frontend.Variable) frontend.Variable {
-	return r.Path.Root(api, gadget.PoseidonHash(api, []frontend.Variable{trackingLeafDomain, member, r.Next, nullifierPk, r.CtHash, r.View0, r.View1, r.Revision, r.ListTag}))
-}
-
 // MergeCircuit binds a ring's SPP merge output to a record only its auditor opens.
 type MergeCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
@@ -72,7 +58,7 @@ type MergeCircuit struct {
 	Seed               frontend.Variable
 	OutputTreeID       frontend.Variable
 	OutputRingDataHash frontend.Variable
-	Tracking           TrackingRow
+	Tracking           registry.TrackingOpening
 }
 
 func (c *MergeCircuit) Define(api frontend.API) error {
@@ -83,8 +69,10 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	hidden := api.Sub(1, zeroKey)
 	// 2. A hidden owner cannot pay, the payer is public.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: api.IsZero(api.Sub(ownerPkHash, c.Payer))})
-	// 3. A hidden owner's key is its row's, a zero key is not checked against any row and its owner signs in SPP.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: hidden, A: c.Tracking.Root(api, ownerPkHash, c.NullifierPk), B: c.TrackingRoot})
+	// 3. A hidden owner's key is its row's, a zero key reads no row and its owner signs in SPP.
+	row := c.Tracking.Resolve(api, hidden, c.TrackingRoot, ownerPkHash)
+	api.AssertIsEqual(row.Present, hidden)
+	api.AssertIsEqual(row.NullifierPk, api.Mul(hidden, c.NullifierPk))
 
 	// 4. The output is the SPP merge output, the auditor rebuilds this hash from the record.
 	api.AssertIsEqual(c.OutputUtxoHash, transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{

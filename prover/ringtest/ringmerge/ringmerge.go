@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
@@ -46,40 +47,28 @@ type Statement struct {
 	Amount         *big.Int
 	OutputHash     *big.Int
 	OutputBlinding *big.Int
-	// Tracking is the fixture row's tree, nil under a zero key.
-	Tracking *Row
+	// Tracking holds the owner's row, nil under a zero key.
+	Tracking *ringregistry.Tracking
 	Record   []byte
 	// PublishedOwner is what the program reads from the SPP body.
 	PublishedOwner *big.Int
-}
-
-// Row is one tracking row over the zero path.
-type Row struct {
-	Path                                 ringregistry.Path
-	Next, CtHash, View0, View1, Revision *big.Int
-	ListTag                              *big.Int
-}
-
-// Leaf mirrors circuits.TrackingRow.
-func (r *Row) Leaf(t testing.TB, member, nullifierPk *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(0x4352544b), member, r.Next, nullifierPk, r.CtHash, r.View0, r.View1, r.Revision, r.ListTag)
 }
 
 // Build merges under an enrolled nonzero key, the seed is the nullifier secret.
 func Build(t testing.TB) *Statement {
 	t.Helper()
 	s := build(t, big.NewInt(secret), spptest.MustNullifierPk(t, big.NewInt(secret)))
-	row := &Row{
-		Path: ringregistry.ZeroPath(), Next: big.NewInt(0), CtHash: big.NewInt(0xc7), View0: big.NewInt(0xa1), View1: big.NewInt(0xa2),
-		Revision: big.NewInt(1), ListTag: big.NewInt(0xb7),
-	}
-	s.Tracking = row
-	wires := s.Circuit
-	wires.Tracking = circuits.TrackingRow{Next: row.Next, CtHash: row.CtHash, View0: row.View0, View1: row.View1, Revision: row.Revision, ListTag: row.ListTag, Path: row.Path.Wires()}
-	wires.TrackingRoot = row.Path.Root(t, row.Leaf(t, s.OwnerPkHash, s.NullifierPk))
+	s.Tracking = ringregistry.NewTracking(t)
+	s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, s.NullifierPk))
+	s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
+	s.Circuit.TrackingRoot = s.Tracking.Root()
 	s.Rebind(t)
 	return s
+}
+
+// TrackingEntry enrolls member under nullifierPk.
+func (s *Statement) TrackingEntry(member, nullifierPk *big.Int) ringregistry.TrackingEntry {
+	return ringregistry.TrackingEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), View0: big.NewInt(0xa1), View1: big.NewInt(0xa2), Revision: big.NewInt(1), ListTag: big.NewInt(0xb7)}
 }
 
 // BuildZeroKey merges under ZeroNullifierPk with a private seed, the owner is published and no row is read.
@@ -88,10 +77,18 @@ func BuildZeroKey(t testing.TB) *Statement {
 	s := build(t, big.NewInt(zeroKeySeed), new(big.Int).Set(shared.ZeroNullifierPk))
 	s.PublishedOwner = s.OwnerPkHash
 	s.Circuit.TrackingRoot = 0
-	zero := big.NewInt(0)
-	s.Circuit.Tracking = circuits.TrackingRow{Next: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero, Path: ringregistry.ZeroPath().Wires()}
+	s.Circuit.Tracking = UnreadTracking()
 	s.Rebind(t)
 	return s
+}
+
+// UnreadTracking is the all zero opening a zero key carries.
+func UnreadTracking() registry.TrackingOpening {
+	zero := big.NewInt(0)
+	return ringregistry.TrackingOpening{
+		Record: ringregistry.TrackingRecord{Member: zero, Next: zero, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero},
+		Path:   ringregistry.ZeroTrackingWrite().Slot,
+	}.Wires()
 }
 
 func build(t testing.TB, seed, nullifierPk *big.Int) *Statement {
