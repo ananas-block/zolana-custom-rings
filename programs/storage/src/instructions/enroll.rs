@@ -2,17 +2,13 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     storage::StorageError,
     storage_instruction::{EnrollIxData, EnrollRequest},
-    tracking::{owner_member, EnrollmentRotation},
+    tracking::owner_member,
     verifying_key, CustomRingProof, RegisterKeyStatement, RingProof,
 };
-use pinocchio::{
-    error::ProgramError,
-    sysvars::{clock::Clock, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
 
 use crate::loader::{
-    check_signer, load_owned_tracking_authorization_mut, load_tracking_registry_mut,
+    check_signer, load_owned_tracking_authorization_mut, load_tracking_registry,
     TrackingAuthorizationInit,
 };
 
@@ -34,7 +30,6 @@ pub fn process_enroll_ix(
         return Err(StorageError::InvalidSystemProgram.into());
     }
     ix.check()?;
-    let slot = Clock::get()?.slot;
     if authorization_account.data_len() != 0 {
         if proof.is_some() {
             return Err(StorageError::EnrollmentProofShape.into());
@@ -47,14 +42,10 @@ pub fn process_enroll_ix(
         if &authorization.owner != owner_account.address() {
             return Err(StorageError::InvalidTrackingAuthorization.into());
         }
-        return authorization
-            .rotate(EnrollmentRotation { slot, ix })
-            .map_err(Into::into);
+        return authorization.rotate(ix).map_err(Into::into);
     }
     let proof = proof.ok_or(StorageError::EnrollmentProofShape)?;
-    let registry_address = *registry_account.address();
-    let mut registry = load_tracking_registry_mut(program_id, registry_account)?;
-    registry.reserve_leaf()?;
+    let registry = load_tracking_registry(program_id, registry_account)?;
     check_register_key(RegisterKeyCheck {
         ring_id: &registry.ring_id,
         auditor_pubkey: &registry.auditor_pubkey,
@@ -66,8 +57,7 @@ pub fn process_enroll_ix(
         program_id,
         payer: payer_account,
         owner: owner_account.address(),
-        registry: &registry_address,
-        slot,
+        registry: registry_account.address(),
         ix,
     }
     .init(authorization_account)

@@ -17,12 +17,6 @@ use crate::{
 #[repr(transparent)]
 pub struct Revision(pub [u8; 8]);
 
-/// Root of the empty sparse list tree of a private source, depth 96 over a zero leaf.
-pub const PRIVATE_SOURCE_EMPTY_ROOT: [u8; 32] = [
-    0x11, 0xd2, 0xaf, 0xd5, 0xff, 0x79, 0x46, 0xd0, 0x51, 0x67, 0x92, 0xa9, 0xa3, 0x87, 0x45, 0x2b,
-    0xe8, 0x28, 0xde, 0xbd, 0x39, 0xba, 0xf7, 0xe1, 0xe4, 0xc8, 0x02, 0x3e, 0x72, 0xfa, 0x16, 0x35,
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct Root {
@@ -45,12 +39,10 @@ pub struct StorageRegistry {
     pub next_index: [u8; 4],
     /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Immutable, a private source's paired tracking registry, zero on a public source.
+    /// Immutable, zero on a source no salted list reads.
     pub tracking_registry: Address,
-    /// The paired registry's revision at the last restrictive update, frames name no older tracking root.
+    /// The pinned registry's newest revision at the last zero grace update, frames name no older tracking root.
     pub tracking_floor: Revision,
-    /// Little endian, a private source's newest write counter, a repeat at one position reuses a leaf salt.
-    pub last_write_counter: [u8; 8],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
 }
@@ -102,10 +94,6 @@ pub enum StorageError {
     EnrollmentAlreadyApplied = 9024,
     #[error("the enrolled nullifier key, list tag and ciphertext are final")]
     EnrollmentKeyFinal = 9025,
-    #[error("the tracking tree is full")]
-    TrackingTreeFull = 9026,
-    #[error("the owner rotated within the rate limit")]
-    RotationTooSoon = 9027,
     #[error("a zero nullifier key does not enroll")]
     ZeroNullifierKey = 9028,
     #[error("a first enrollment carries a proof and a rotation none")]
@@ -120,28 +108,14 @@ pub enum StorageError {
     InvalidAuditorKey = 9033,
     #[error("the frame names a tracking root below the source's floor")]
     TrackingRootBelowFloor = 9034,
-    #[error("the update does not fit the source's kind")]
-    SourceKindMismatch = 9035,
-    #[error("a private write's counter does not increase")]
-    WriteCounterNotIncreasing = 9036,
 }
 
 #[must_use]
 pub struct RootUpdate<'a> {
     pub slot: u64,
     pub data: &'a StorageUpdateIxData<'a>,
-}
-
-/// A proven private source write, its tree has no next index.
-#[must_use]
-pub struct PrivateRootUpdate {
-    /// The revision the proof was made against.
-    pub revision: Revision,
-    pub restrictive: bool,
-    pub slot: u64,
-    pub new_root: [u8; 32],
-    /// The paired registry's newest revision, read from the account `tracking_registry` names.
-    pub tracking_revision: Revision,
+    /// The pinned registry's newest revision, read when [`StorageRegistry::reads_tracking`] holds.
+    pub tracking_revision: Option<Revision>,
 }
 
 impl From<u64> for Revision {
@@ -186,10 +160,7 @@ impl StorageRegistry {
         registry.ring_id = ix.ring_id;
         registry.tracking_registry = ix.tracking_registry;
         registry.next_index = 1u32.to_le_bytes();
-        registry.roots[0].hash = match registry.is_private() {
-            true => PRIVATE_SOURCE_EMPTY_ROOT,
-            false => MEMBER_REGISTRY_EMPTY_ROOT,
-        };
+        registry.roots[0].hash = MEMBER_REGISTRY_EMPTY_ROOT;
         registry
     }
 
@@ -227,7 +198,7 @@ impl StorageRegistry {
         root_at(&self.roots, revision, slot)
     }
 
-    /// Owner rows may read it, its tree is the sparse list tree.
+    /// A salted list may read it.
     pub fn is_private(&self) -> bool {
         self.tracking_registry != Address::default()
     }
@@ -240,63 +211,40 @@ impl StorageRegistry {
         Ok(())
     }
 
+    /// A zero grace write on a pinned source takes the pinned registry's revision as its floor.
+    pub fn reads_tracking(&self, data: &StorageUpdateIxData<'_>) -> bool {
+        data.reaches_policy() && self.is_private()
+    }
+
     /// Writes nothing on a refusal.
     pub fn update(&mut self, update: RootUpdate<'_>) -> Result<(), StorageError> {
-        let RootUpdate { slot, data } = update;
-        if self.is_private() {
-            return Err(StorageError::SourceKindMismatch);
-        }
-        self.advance(data.revision, data.restrictive, slot, data.apply.new_root)?;
-        self.next_index = data.apply.new_next_index;
-        Ok(())
-    }
-
-    pub const fn last_write_counter(&self) -> u64 {
-        u64::from_le_bytes(self.last_write_counter)
-    }
-
-    /// Strictly increasing across the source, the circuit opens no old counter and the chain binds the new one.
-    pub fn advance_write_counter(&mut self, counter: u64) -> Result<(), StorageError> {
-        if counter <= self.last_write_counter() {
-            return Err(StorageError::WriteCounterNotIncreasing);
-        }
-        self.last_write_counter = counter.to_le_bytes();
-        Ok(())
-    }
-
-    /// Writes nothing on a refusal.
-    pub fn update_private(&mut self, update: PrivateRootUpdate) -> Result<(), StorageError> {
-        if !self.is_private() {
-            return Err(StorageError::SourceKindMismatch);
-        }
-        self.advance(
-            update.revision,
-            update.restrictive,
-            update.slot,
-            update.new_root,
-        )?;
-        if update.restrictive {
-            self.tracking_floor = update.tracking_revision;
-        }
-        Ok(())
-    }
-
-    /// The proof holds `restrictive`, every root older than a restriction stops being served.
-    fn advance(
-        &mut self,
-        revision: Revision,
-        restrictive: bool,
-        slot: u64,
-        new_root: [u8; 32],
-    ) -> Result<(), StorageError> {
-        let retirement = match restrictive {
+        let RootUpdate {
+            slot,
+            data,
+            tracking_revision,
+        } = update;
+        let floor = self
+            .reads_tracking(data)
+            .then(|| tracking_revision.ok_or(StorageError::InvalidTrackingRegistry))
+            .transpose()?;
+        let retirement = match data.reaches_policy() {
             true => Retirement::Immediate,
             false => Retirement::Graced {
                 slot,
                 grace_slots: self.grace_slots(),
             },
         };
-        advance_roots(&mut self.roots, revision, retirement, new_root)
+        advance_roots(
+            &mut self.roots,
+            data.revision,
+            retirement,
+            data.apply.new_root,
+        )?;
+        if let Some(floor) = floor {
+            self.tracking_floor = floor;
+        }
+        self.next_index = data.apply.new_next_index;
+        Ok(())
     }
 
     fn valid(&self) -> bool {
@@ -383,19 +331,4 @@ impl From<StorageError> for ProgramError {
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<StorageRegistry>() == 1);
-const _: () = assert!(StorageRegistry::SIZE == 1661);
-
-#[cfg(test)]
-mod tests {
-    use spr_hasher::{Hasher, Poseidon};
-
-    use super::*;
-
-    #[test]
-    fn the_private_empty_root_folds_a_zero_leaf_through_every_level() {
-        let root = (0..96).fold([0u8; 32], |node, _| {
-            Poseidon::hashv(&[&node, &node]).unwrap()
-        });
-        assert_eq!(root, PRIVATE_SOURCE_EMPTY_ROOT);
-    }
-}
+const _: () = assert!(StorageRegistry::SIZE == 1653);

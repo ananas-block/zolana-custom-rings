@@ -1,5 +1,5 @@
-// Proves that a batch of queued record updates was applied to the registry and
-// whether any of them restricts. Updates apply in queue order with none skipped
+// Proves that a batch of queued record updates was applied to the registry.
+// Updates apply in queue order with none skipped
 // or added, and the records stay sorted by member, as proofs of a missing record
 // need.
 //
@@ -25,8 +25,7 @@ import (
 // 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in queue order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
 // 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask.
 // 3. An absent member is inserted after its low record at exactly the next index, and a write that would leave its record empty inserts nothing.
-// 4. The statement binds both roots, both next indexes, both chain ends, the count and whether any write is restrictive.
-// 5. A write is restrictive when it clears a grant list, sets a deny list or replaces mint settings, a write to any other list is neutral.
+// 4. The statement binds both roots, both next indexes, both chain ends and the count.
 
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
@@ -75,7 +74,6 @@ type ApplyRecordsCircuit struct {
 
 type registryState struct {
 	root, next, chain frontend.Variable
-	restrictive       frontend.Variable
 }
 
 func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
@@ -92,7 +90,7 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
 	// 2. Every active write moves the running root, next index and chain in queue order.
-	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart, restrictive: 0}
+	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
 	for i, w := range c.Writes {
 		state = w.apply(api, count.Active[i], state)
 	}
@@ -100,7 +98,7 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.next, c.NewNextIndex)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(state.restrictive)))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement()))
 	return nil
 }
 
@@ -108,7 +106,6 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
 	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
 	maskBits := api.ToBinary(w.Entry.Mask, ListBits)
-	valueBits := api.ToBinary(w.Entry.Value, ListBits)
 	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, maskBits), w.Entry.Value)}
 	// 2. Mint settings move only under bit 192 of the entry, the 193 bit decomposition range-checks it.
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
@@ -146,23 +143,10 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	// 7. The chain absorbs every active entry, no write is skipped, added or reordered.
 	chain := gadget.PoseidonHash(api, []frontend.Variable{s.chain, w.Entry.Hash(api)})
 	return registryState{
-		root:        api.Select(changes, written, s.root),
-		next:        api.Add(s.next, insert),
-		chain:       api.Select(active, chain, s.chain),
-		restrictive: api.Or(s.restrictive, api.Mul(active, Restrictive(api, maskBits, valueBits, policyBits[192]))),
+		root:  api.Select(changes, written, s.root),
+		next:  api.Add(s.next, insert),
+		chain: api.Select(active, chain, s.chain),
 	}
-}
-
-// Restrictive reads Value bits past the mask as set, a list a write sets without masking still counts.
-func Restrictive(api frontend.API, maskBits, valueBits []frontend.Variable, replacesMintPolicy frontend.Variable) frontend.Variable {
-	terms := []frontend.Variable{replacesMintPolicy}
-	for _, bit := range grantListBits {
-		terms = append(terms, api.Mul(maskBits[bit], api.Sub(1, valueBits[bit])))
-	}
-	for _, bit := range denyListBits {
-		terms = append(terms, valueBits[bit])
-	}
-	return ringgadget.IsAny(api, terms...)
 }
 
 func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Variable) frontend.Variable {
@@ -176,8 +160,8 @@ func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Vari
 }
 
 // statement mirrors ApplyRecordsStatement::elements in program-libs/interface/src/proof/statement.rs.
-func (c *ApplyRecordsCircuit) statement(restrictive frontend.Variable) []frontend.Variable {
+func (c *ApplyRecordsCircuit) statement() []frontend.Variable {
 	return []frontend.Variable{
-		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count, restrictive,
+		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
 	}
 }

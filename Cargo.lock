@@ -7787,6 +7787,7 @@ dependencies = [
  "solana-keypair",
  "solana-transaction-error",
  "spr-client",
+ "zolana-ring-policy",
 ]
 
 [[package]]
