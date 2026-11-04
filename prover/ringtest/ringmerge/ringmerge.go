@@ -2,16 +2,17 @@
 package ringmerge
 
 import (
+	"encoding/binary"
 	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
@@ -19,203 +20,177 @@ import (
 )
 
 const (
-	realInputs   = 2
-	InputTreeID  = 7
-	outputTreeID = 9
+	OutputTreeID = 9
+	secret       = 19
+	zeroKeySeed  = 0x5eed
+	amount       = 12
 )
+
+// RingProgramID is the ring the fixture merge settles under.
+var RingProgramID = big.NewInt(0x5a0e)
+
+// FirstNullifier names the SPP merge, this proof opens no input.
+var FirstNullifier = big.NewInt(0x1f1f)
+
+// RingData is the output ring data hash SPP publishes.
+var RingData = big.NewInt(0xd0)
+
+// Payer is an identity no owner of the fixture holds.
+var Payer = big.NewInt(11)
 
 type Statement struct {
-	Keys    ringaudit.Keys
-	Circuit *circuits.MergeCircuit
-	// Registry holds the owner's escrow record on an escrowed merge, nil otherwise.
-	Registry       *ringregistry.Registry
-	CtHash         *big.Int
-	ownerKey       [32]byte
+	Keys           ringaudit.Keys
+	Circuit        *circuits.MergeCircuit
+	OwnerKey       [32]byte
 	OwnerPkHash    *big.Int
 	NullifierPk    *big.Int
-	secret         *big.Int
+	Seed           *big.Int
 	Mint           [32]byte
-	Amounts        []*big.Int
-	InputHashes    []*big.Int
-	FirstNf        *big.Int
+	Amount         *big.Int
 	OutputHash     *big.Int
 	OutputBlinding *big.Int
-	PrivateTxHash  *big.Int
-	DisclosureKey  [32]byte
-	// SPP output ciphertext salt, the disclosure pad reuses it.
-	Salt      [16]byte
-	Plaintext []byte
-	// Masked disclosure chunks the ring instruction carries.
-	Fields []*big.Int
+	// Tracking holds the owner's row, nil under a zero key.
+	Tracking *ringregistry.Tracking
+	Record   []byte
+	// PublishedOwner is what the program reads from the SPP body.
+	PublishedOwner *big.Int
 }
 
-// Build is a two-input merge padded to width slots under the default audit keys, on a ring without key escrow.
-func Build(t testing.TB, width int) *Statement {
+// Build merges under an enrolled nonzero key, the seed is the nullifier secret.
+func Build(t testing.TB) *Statement {
 	t.Helper()
-	return build(t, width, escrowOff, 19)
-}
-
-// BuildZeroSecret is Build on a key escrow ring under nullifier secret 0, the owner holds no record.
-func BuildZeroSecret(t testing.TB, width int) *Statement {
-	t.Helper()
-	return build(t, width, escrowUnread, 0)
-}
-
-// BuildEscrowed is Build on a key escrow ring, the owner's record escrows the nullifier key the merge spends under.
-func BuildEscrowed(t testing.TB, width int) *Statement {
-	t.Helper()
-	return build(t, width, escrowRecord, 19)
-}
-
-type escrowMode int
-
-const (
-	escrowOff escrowMode = iota
-	escrowRecord
-	escrowUnread
-)
-
-func build(t testing.TB, width int, escrow escrowMode, secret int64) *Statement {
-	t.Helper()
-	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(secret), CtHash: big.NewInt(0)}
-	for i := range s.Salt {
-		s.Salt[i] = byte(0x50 + i)
-	}
-	for i := range s.Mint {
-		s.Mint[i] = byte(0xc0 + i)
-	}
-	for i := range s.DisclosureKey {
-		s.DisclosureKey[i] = byte(0x40 ^ i)
-	}
-	for i := range s.ownerKey {
-		s.ownerKey[i] = byte(0xa0 + i)
-	}
-	c, err := circuits.NewMergeCircuit(width)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Circuit = c
-	s.OwnerPkHash = ringtest.MustSolanaPkField(t, s.ownerKey)
-	s.NullifierPk = spptest.MustNullifierPk(t, s.secret)
-	c.KeyEscrow, c.MemberRegistryRoot, c.CtHash, c.Member = 0, 0, 0, ringregistry.UnreadRecordWires()
-	if escrow == escrowUnread {
-		c.KeyEscrow, c.MemberRegistryRoot = 1, ringregistry.New(t).Root()
-	}
-	if escrow == escrowRecord {
-		s.Registry, s.CtHash = ringregistry.New(t), big.NewInt(0xc7)
-		s.Registry.Apply(t, ringregistry.Entry{
-			Member: s.OwnerPkHash, Mask: big.NewInt(ringregistry.EscrowBit), Value: big.NewInt(ringregistry.EscrowBit),
-			EscrowKey: ringregistry.EscrowKey(t, s.NullifierPk, s.CtHash),
-		})
-		c.KeyEscrow, c.MemberRegistryRoot, c.CtHash = 1, s.Registry.Root(), s.CtHash
-		c.Member = s.Registry.Opening(s.OwnerPkHash).RecordWires()
-	}
-	ownerHash := spptest.MustOwnerHash(t, s.OwnerPkHash, s.NullifierPk)
-	asset := ringtest.AssetField(t, s.Mint)
-	ringProgramID := big.NewInt(0x5a0e)
-	ringData := big.NewInt(0xd0)
-
-	s.Amounts = []*big.Int{big.NewInt(5), big.NewInt(7)}
-	s.InputHashes = make([]*big.Int, width)
-	for i := range width {
-		s.InputHashes[i] = big.NewInt(0)
-		c.Inputs[i] = circuits.MergeInput{Domain: protocol.DummyDomain, TreeID: 0, Amount: 0, Blinding: 0, RingDataHash: 0}
-		if i >= realInputs {
-			continue
-		}
-		blinding := big.NewInt(int64(0x1111 * (i + 1)))
-		utxo := protocol.Utxo{
-			Domain: big.NewInt(protocol.UtxoDomain), Owner: ownerHash, Asset: asset, Amount: s.Amounts[i],
-			Blinding: blinding, DataHash: big.NewInt(0), RingDataHash: ringData, RingProgramID: ringProgramID,
-		}
-		s.InputHashes[i] = spptest.MustUtxoHash(t, utxo, big.NewInt(InputTreeID))
-		c.Inputs[i] = circuits.MergeInput{Domain: protocol.UtxoDomain, TreeID: InputTreeID, Amount: s.Amounts[i], Blinding: blinding, RingDataHash: ringData}
-		if i == 0 {
-			s.FirstNf = spptest.MustNullifier(t, s.InputHashes[0], blinding, s.secret)
-		}
-	}
-	sum := new(big.Int).Add(s.Amounts[0], s.Amounts[1])
-	s.OutputBlinding = ringtest.MustPoseidonHash(t, big.NewInt(mergeshared.MergeOutputBlindingDomainV1), s.secret, s.FirstNf)
-	s.OutputHash = spptest.MustUtxoHash(t, protocol.Utxo{
-		Domain: big.NewInt(protocol.UtxoDomain), Owner: ownerHash, Asset: asset, Amount: sum, Blinding: s.OutputBlinding,
-		DataHash: big.NewInt(0), RingDataHash: ringData, RingProgramID: ringProgramID,
-	}, big.NewInt(outputTreeID))
-	s.PrivateTxHash = s.PrivateTx(t, s.InputHashes)
-
-	c.Asset = asset
-	c.InputCount = realInputs
-	eph, auditor := s.Keys.EphSk(), s.Keys.AuditorPk()
-	ringtest.SetBytes(c.OwnerKey[:], s.ownerKey[:])
-	ringtest.SetBytes(c.EphSk[:], eph[:])
-	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
-	ringtest.SetBytes(c.DisclosureKey[:], s.DisclosureKey[:])
-	c.NullifierSecret = s.secret
-	c.OutputTreeID = outputTreeID
-	c.OutputRingDataHash = ringData
-	c.RingProgramID = ringProgramID
-	c.Salt = s.saltField()
-	c.PrivateTxHash = s.PrivateTxHash
-	c.OutputUtxoHash = s.OutputHash
-	c.FirstNullifier = s.FirstNf
-	c.PartyIdentities = [3]frontend.Variable{11, 12, 0}
-	s.bind(t)
+	s := build(t, big.NewInt(secret), spptest.MustNullifierPk(t, big.NewInt(secret)))
+	s.Tracking = ringregistry.NewTracking(t)
+	s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, s.NullifierPk))
+	s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
+	s.Circuit.TrackingRoot = s.Tracking.Root()
+	s.Rebind(t)
 	return s
 }
 
-// PrivateTx binds no address nullifier, as SPP's merge spends none.
-func (s *Statement) PrivateTx(t testing.TB, inputHashes []*big.Int) *big.Int {
-	t.Helper()
-	addresses := make([]*big.Int, len(inputHashes))
-	for i := range addresses {
-		addresses[i] = big.NewInt(0)
-	}
-	blinding, err := protocol.PrivateTxBlinding(s.FirstNf, s.secret)
-	return spptest.MustPrivateTxHash(t, inputHashes, []*big.Int{s.OutputHash}, addresses, spptest.MustHash(t, blinding, err))
+// TrackingEntry enrolls member under nullifierPk.
+func (s *Statement) TrackingEntry(member, nullifierPk *big.Int) ringregistry.TrackingEntry {
+	return ringregistry.TrackingEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), View0: big.NewInt(0xa1), View1: big.NewInt(0xa2), Revision: big.NewInt(1), ListTag: big.NewInt(0xb7)}
 }
 
-func (s *Statement) bind(t testing.TB) {
+// BuildZeroKey merges under ZeroNullifierPk with a private seed, the owner is published and no row is read.
+func BuildZeroKey(t testing.TB) *Statement {
 	t.Helper()
-	s.Plaintext = disclosure(t, s.InputHashes)
-	s.Fields = s.Disclosed(t)
+	s := build(t, big.NewInt(zeroKeySeed), new(big.Int).Set(shared.ZeroNullifierPk))
+	s.PublishedOwner = s.OwnerPkHash
+	s.Circuit.TrackingRoot = 0
+	s.Circuit.Tracking = UnreadTracking()
 	s.Rebind(t)
+	return s
 }
 
-// Disclosed masks the list as InputHashes holds it.
-func (s *Statement) Disclosed(t testing.TB) []*big.Int {
-	t.Helper()
-	return ringprotocol.Disclose(t, shared.MergeDisclosureDomain, s.DisclosureKey, s.Salt, ringprotocol.PackDisclosure(disclosure(t, s.InputHashes)))
+// UnreadTracking is the all zero opening a zero key carries.
+func UnreadTracking() registry.TrackingOpening {
+	zero := big.NewInt(0)
+	return ringregistry.TrackingOpening{
+		Record: ringregistry.TrackingRecord{Member: zero, Next: zero, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero},
+		Path:   ringregistry.ZeroTrackingWrite().Slot,
+	}.Wires()
 }
 
-// disclosure is be32(hash_i) per slot, 32 zero bytes at a dummy.
-func disclosure(t testing.TB, hashes []*big.Int) []byte {
+func build(t testing.TB, seed, nullifierPk *big.Int) *Statement {
 	t.Helper()
-	plaintext := make([]byte, 0, 32*len(hashes))
-	for _, hash := range hashes {
-		hashBytes := spptest.MustFieldBytes(t, hash)
-		plaintext = append(plaintext, hashBytes[:]...)
+	s := &Statement{Keys: ringaudit.DefaultKeys(t), Seed: seed, NullifierPk: nullifierPk, Amount: big.NewInt(amount), PublishedOwner: big.NewInt(0)}
+	for i := range s.Mint {
+		s.Mint[i] = byte(0xc0 + i)
+		s.OwnerKey[i] = byte(0xa0 + i)
 	}
-	return plaintext
+	s.OwnerPkHash = ringtest.MustSolanaPkField(t, s.OwnerKey)
+	s.OutputBlinding = ringtest.MustPoseidonHash(t, big.NewInt(mergeshared.MergeOutputBlindingDomainV1), seed, FirstNullifier)
+	s.OutputHash = s.outputHash(t, s.OutputBlinding)
+
+	c := &circuits.MergeCircuit{}
+	eph, auditor := s.Keys.EphSk(), s.Keys.AuditorPk()
+	ringtest.SetBytes(c.EphSk[:], eph[:])
+	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
+	ringtest.SetBytes(c.OwnerKey[:], s.OwnerKey[:])
+	c.OwnerPkHash, c.Asset = s.OwnerPkHash, ringtest.AssetField(t, s.Mint)
+	c.MintChunks = [2]frontend.Variable{new(big.Int).SetBytes(s.Mint[:31]), new(big.Int).SetBytes(s.Mint[31:])}
+	c.Amount, c.NullifierPk, c.Seed = s.Amount, nullifierPk, seed
+	c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID, c.Payer = s.OutputHash, FirstNullifier, RingProgramID, Payer
+	c.OutputTreeID, c.OutputRingDataHash = OutputTreeID, RingData
+	s.Circuit = c
+	s.Record = s.PlainRecord(t)
+	return s
 }
 
-// saltField is the salt right aligned in one field, as SPP binds it.
-func (s *Statement) saltField() *big.Int {
-	return new(big.Int).SetBytes(s.Salt[:])
+func (s *Statement) outputHash(t testing.TB, blinding *big.Int) *big.Int {
+	t.Helper()
+	return spptest.MustUtxoHash(t, protocol.Utxo{
+		Domain: big.NewInt(protocol.UtxoDomain), Owner: spptest.MustOwnerHash(t, s.OwnerPkHash, s.NullifierPk), Asset: ringtest.AssetField(t, s.Mint), Amount: s.Amount,
+		Blinding: blinding, DataHash: big.NewInt(0), RingDataHash: RingData, RingProgramID: RingProgramID,
+	}, big.NewInt(OutputTreeID))
+}
+
+// PlainRecord is kind 1, 7 reserved bytes, amount, owner key, mint, nullifier key and seed.
+func (s *Statement) PlainRecord(t testing.TB) []byte {
+	t.Helper()
+	record := make([]byte, 16, circuits.MergeRecordLen)
+	record[0] = 1
+	binary.BigEndian.PutUint64(record[8:], s.Amount.Uint64())
+	record = append(append(record, s.OwnerKey[:]...), s.Mint[:]...)
+	nullifierPk, seed := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.Seed)
+	return append(append(record, nullifierPk[:]...), seed[:]...)
+}
+
+// Ciphertext is the record under the one-time envelope, the auditor reverses it.
+func (s *Statement) Ciphertext(t testing.TB) []byte {
+	t.Helper()
+	return s.Keys.StreamCiphertext(t, s.Record, shared.MergeEncInfo)
 }
 
 // Elements mirrors MergePublicInput::elements.
 func (s *Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
-	sealed := s.Keys.Seal(t, s.DisclosureKey[:], shared.MergeEncInfo)
+	sealed := s.Keys.Sealed(t, s.Ciphertext(t))
 	return []*big.Int{
-		big.NewInt(shared.MergeStatementDomain), s.PrivateTxHash, s.OutputHash, s.FirstNf, ringtest.AsBigInt(s.Circuit.RingProgramID),
-		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields), ringtest.AsBigInt(s.Circuit.InputCount),
-		ringtest.AsBigInt(s.Circuit.PartyIdentities[0]), ringtest.AsBigInt(s.Circuit.PartyIdentities[1]), ringtest.AsBigInt(s.Circuit.PartyIdentities[2]),
-		ringtest.AsBigInt(s.Circuit.KeyEscrow), ringtest.AsBigInt(s.Circuit.MemberRegistryRoot),
+		big.NewInt(shared.MergeStatementDomain), ringtest.AsBigInt(s.Circuit.OutputUtxoHash), ringtest.AsBigInt(s.Circuit.FirstNullifier), ringtest.AsBigInt(s.Circuit.RingProgramID),
+		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
+		ringtest.AsBigInt(s.Circuit.Payer), s.PublishedOwner, ringtest.AsBigInt(s.Circuit.TrackingRoot),
 	}
 }
 
-// Rebind rehashes the statement over the host values as set, Fields included.
+// Rebind rehashes the statement over the host values as set.
 func (s *Statement) Rebind(t testing.TB) {
 	t.Helper()
 	s.Circuit.PublicInputHash = spptest.MustHashChain(t, s.Elements(t))
+}
+
+// Opened is what the auditor reads, and all it needs beside the published merge.
+type Opened struct {
+	Plain       []byte
+	OwnerKey    [32]byte
+	Mint        [32]byte
+	Amount      uint64
+	NullifierPk *big.Int
+	Seed        *big.Int
+}
+
+// Open reverses the envelope's stream, CTR is its own inverse.
+func Open(t testing.TB, s *Statement) Opened {
+	t.Helper()
+	plain := s.Keys.StreamCiphertext(t, s.Ciphertext(t), shared.MergeEncInfo)
+	return Opened{
+		Plain:       plain,
+		Amount:      binary.BigEndian.Uint64(plain[8:16]),
+		OwnerKey:    [32]byte(plain[16:48]),
+		Mint:        [32]byte(plain[48:80]),
+		NullifierPk: new(big.Int).SetBytes(plain[80:112]),
+		Seed:        new(big.Int).SetBytes(plain[112:144]),
+	}
+}
+
+// Hash rebuilds the output from the record and what SPP publishes.
+func (o Opened) Hash(t testing.TB) *big.Int {
+	t.Helper()
+	blinding := ringtest.MustPoseidonHash(t, big.NewInt(mergeshared.MergeOutputBlindingDomainV1), o.Seed, FirstNullifier)
+	return spptest.MustUtxoHash(t, protocol.Utxo{
+		Domain: big.NewInt(protocol.UtxoDomain), Owner: spptest.MustOwnerHash(t, ringtest.MustSolanaPkField(t, o.OwnerKey), o.NullifierPk), Asset: ringtest.AssetField(t, o.Mint), Amount: new(big.Int).SetUint64(o.Amount),
+		Blinding: blinding, DataHash: big.NewInt(0), RingDataHash: RingData, RingProgramID: RingProgramID,
+	}, big.NewInt(OutputTreeID))
 }

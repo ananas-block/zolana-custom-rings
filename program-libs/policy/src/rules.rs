@@ -5,7 +5,10 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::{Guard, ListSet, Rule, RuleSource, RuleTable, SourceMap, Subject};
+use crate::{
+    asset_guard, owner_guard, DebitInput, DebitOutput, Guard, ListSet, Rule, RuleSource, RuleTable,
+    SourceMap, Subject,
+};
 
 /// A member's record `lists` in each registry, zero for an absent member.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -17,6 +20,8 @@ pub struct RecordLists {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputSubjects {
+    /// Set on a same-ring output, clear on an exit or a withdrawal.
+    pub ring: bool,
     /// The owner identity, zero carries no owner obligation.
     pub owner: [u8; 32],
     /// `Member::asset` of the mint.
@@ -30,7 +35,9 @@ pub struct OutputSubjects {
 #[derive(Clone, Copy, Debug)]
 pub struct TransferSubjects<'a> {
     pub sender: RecordLists,
-    /// The UTXO outputs in slot order, dummies and compact padding left out.
+    /// Live inputs of the ring, a default-ring note and a deposit net no receipt.
+    pub ring_inputs: &'a [DebitInput],
+    /// The payments in slot order, dummies and compact padding left out.
     pub outputs: &'a [OutputSubjects],
 }
 
@@ -50,10 +57,6 @@ pub enum RuleRefusal {
         rule: usize,
         subject: TransferSubject,
     },
-    #[error("rule {rule} has no asset limit for the asset of output {output}")]
-    NoAssetLimit { rule: usize, output: usize },
-    #[error("rule {rule} sums each owner over one asset, output {output} carries another")]
-    MixedAssets { rule: usize, output: usize },
 }
 
 impl RuleTable {
@@ -63,11 +66,22 @@ impl RuleTable {
         sources: &SourceMap,
         transfer: &TransferSubjects<'_>,
     ) -> Result<(), RuleRefusal> {
-        self.admit_one_asset(transfer.outputs)?;
         let foreign = foreign_lists(sources);
+        let payments: Vec<DebitOutput> = transfer
+            .outputs
+            .iter()
+            .map(|output| DebitOutput {
+                ring: output.ring,
+                owner: output.owner,
+                asset: output.asset,
+                amount: output.amount,
+            })
+            .collect();
         for (index, rule) in self.rules().iter().enumerate() {
             let check = RuleCheck {
                 outputs: transfer.outputs,
+                ring_inputs: transfer.ring_inputs,
+                payments: &payments,
                 foreign,
                 index,
                 rule,
@@ -82,23 +96,6 @@ impl RuleTable {
             }
         }
         Ok(())
-    }
-
-    /// A scalar guard on an owner rule sums an owner's outputs, all of one asset.
-    fn admit_one_asset(&self, outputs: &[OutputSubjects]) -> Result<(), RuleRefusal> {
-        let Some(rule) = self.rules().iter().position(|rule| {
-            rule.subject == Subject::OutputOwner && matches!(rule.guard, Guard::AboveAmount(_))
-        }) else {
-            return Ok(());
-        };
-        let mixed = outputs.first().and_then(|first| {
-            outputs
-                .iter()
-                .position(|output| output.asset != first.asset)
-        });
-        mixed.map_or(Ok(()), |output| {
-            Err(RuleRefusal::MixedAssets { rule, output })
-        })
     }
 }
 
@@ -122,6 +119,8 @@ impl RecordLists {
 
 struct RuleCheck<'a> {
     outputs: &'a [OutputSubjects],
+    ring_inputs: &'a [DebitInput],
+    payments: &'a [DebitOutput],
     foreign: ListSet,
     index: usize,
     rule: &'a Rule,
@@ -134,25 +133,15 @@ impl RuleCheck<'_> {
         if !on_asset && output.owner == [0; 32] {
             return Ok(());
         }
-        let limit = (output.mint_policy.threshold != 0).then_some(output.mint_policy.threshold);
-        if self.rule.guard == Guard::AboveAmountByAsset && limit.is_none() {
-            return Err(RuleRefusal::NoAssetLimit {
-                rule: self.index,
-                output: index,
-            });
-        }
-        let live_owner =
-            |other: &OutputSubjects| other.owner != [0; 32] && other.owner == output.owner;
-        let same_asset = |other: &OutputSubjects| other.asset == output.asset;
         let exempt = match self.rule.guard {
             Guard::Always => false,
             Guard::AboveAmount(threshold) if on_asset => {
-                self.total(same_asset) <= u128::from(threshold)
+                asset_guard(self.ring_inputs, self.payments, &output.asset) <= u128::from(threshold)
             }
-            Guard::AboveAmount(threshold) => self.total(live_owner) <= u128::from(threshold),
-            Guard::AboveAmountByAsset => limit.is_some_and(|limit| {
-                self.total(|other| live_owner(other) && same_asset(other)) <= u128::from(limit)
-            }),
+            Guard::AboveAmount(threshold) => self.guard(output) <= u128::from(threshold),
+            Guard::AboveAmountByAsset => {
+                self.guard(output) <= u128::from(output.mint_policy.threshold)
+            }
         };
         if exempt {
             return Ok(());
@@ -164,6 +153,15 @@ impl RuleCheck<'_> {
         }
     }
 
+    fn guard(&self, output: &OutputSubjects) -> u128 {
+        owner_guard(
+            self.ring_inputs,
+            self.payments,
+            &output.owner,
+            &output.asset,
+        )
+    }
+
     fn listed(&self, subject: TransferSubject, records: RecordLists) -> Result<(), RuleRefusal> {
         if holds(self.rule, records.on(self.foreign)) {
             return Ok(());
@@ -172,14 +170,6 @@ impl RuleCheck<'_> {
             rule: self.index,
             subject,
         })
-    }
-
-    fn total(&self, grouped: impl Fn(&OutputSubjects) -> bool) -> u128 {
-        self.outputs
-            .iter()
-            .filter(|other| grouped(other))
-            .map(|other| u128::from(other.amount))
-            .sum()
     }
 }
 

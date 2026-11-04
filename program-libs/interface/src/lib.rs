@@ -26,6 +26,8 @@ pub mod instruction;
 pub mod key_catalog;
 #[path = "accounts/member_registry.rs"]
 pub mod member_registry;
+#[path = "instructions/historical_merge.rs"]
+pub mod historical_merge;
 #[path = "instructions/merge.rs"]
 pub mod merge;
 #[path = "codec/output.rs"]
@@ -75,6 +77,7 @@ pub use disclosure::*;
 pub use error::CustomRingError;
 pub use instruction::*;
 pub use member_registry::*;
+pub use historical_merge::*;
 pub use merge::*;
 pub use output::*;
 pub use spp::*;
