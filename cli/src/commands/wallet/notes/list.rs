@@ -1,6 +1,6 @@
 //! `list`, the member records of the ring's registry and where each list reads them.
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, ensure, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
@@ -10,6 +10,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
+use zolana_ring_keys::{RingAddress, RingKeyError};
 use zolana_ring_policy::{ListId, ListSet, ListWrite, ListWriteError, Member};
 
 use crate::{
@@ -30,6 +31,13 @@ pub struct MemberArgs {
     /// A mint the list screens, repeatable.
     #[arg(long = "asset", value_name = "MINT")]
     assets: Vec<Address>,
+    /// A member's ring address on a private list, whose salt keys its record, repeatable.
+    #[arg(long = "salted-owner", value_name = "RING_ADDRESS", value_parser = parse_ring_address)]
+    salted_owners: Vec<RingAddress>,
+}
+
+fn parse_ring_address(text: &str) -> Result<RingAddress, RingKeyError> {
+    RingAddress::from_base58(text)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +90,43 @@ pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
 }
 
 impl MemberArgs {
-    pub(crate) fn subjects(&self) -> Result<Vec<Subject>> {
+    /// A private list reads only an owner's salted key, a public one never does.
+    pub(crate) fn subjects(&self, list_id: ListId, ring: Address) -> Result<Vec<Subject>> {
+        if !ListSet::PRIVATE_LISTS.contains(list_id) {
+            ensure!(
+                self.salted_owners.is_empty(),
+                "the {} list is public, name its owners with --owner",
+                list_id.name()
+            );
+            return self.public_subjects();
+        }
+        ensure!(
+            self.owners.is_empty() && self.assets.is_empty(),
+            "the {} list keys owners by their salt, name them with --salted-owner",
+            list_id.name()
+        );
+        self.salted_owners
+            .iter()
+            .map(|address| {
+                ensure!(
+                    address.ring_program_id == ring,
+                    "a ring address of ring {} cannot name a member of ring {ring}",
+                    address.ring_program_id
+                );
+                ensure!(
+                    address.list_salt != [0; 32],
+                    "a ring address with no salt has no tracking row and no private record"
+                );
+                let owner = address.recipient.signing_pubkey.as_ed25519()?;
+                Ok(Subject {
+                    member: Member::salted(&Member::owner_tag(&owner)?, &address.list_salt)?,
+                    label: format!("salted owner {}", Address::new_from_array(owner)),
+                })
+            })
+            .collect()
+    }
+
+    fn public_subjects(&self) -> Result<Vec<Subject>> {
         let owners = self.owners.iter().map(|tag| {
             Ok(Subject {
                 member: Member::owner_tag(tag.as_array())?,
@@ -172,7 +216,7 @@ impl ListChange {
 impl EntryArgs {
     fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects()?;
+        let subjects = self.members.subjects(list_id, ctx.ring.program_id())?;
         let outcomes = ListUpdate {
             authority: ctx.authority()?,
             list_id,
@@ -192,7 +236,7 @@ impl EntryArgs {
 
     fn show(self, ctx: &Context) -> Result<()> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects()?;
+        let subjects = self.members.subjects(list_id, ctx.ring.program_id())?;
         let members: Vec<Member> = subjects.iter().map(|subject| subject.member).collect();
         let pinned = policy::pinned(ctx)?;
         let (source, reads) = match pinned.account.registry_for(list_id) {
@@ -342,7 +386,45 @@ mod tests {
             }
             _ => panic!("a member command"),
         };
-        Ok(members.subjects().expect("members"))
+        Ok(members
+            .subjects(ListId::Block, Address::new_from_array([0x11; 32]))
+            .expect("members"))
+    }
+
+    /// A private list keys an owner by its salt, the same key the circuit derives.
+    #[test]
+    fn a_private_list_writes_the_salted_key_and_refuses_a_plain_owner() {
+        let ring = Address::new_from_array([0x11; 32]);
+        let wallet = spr_keypair::ShieldedKeypair::from_keypair(
+            spr_keypair::SigningKey::from_ed25519_bytes(&[7; 32]),
+        )
+        .unwrap();
+        let address = RingAddress::enrolled(&wallet, ring).unwrap();
+        let args = |owners: Vec<Address>, salted_owners: Vec<RingAddress>| MemberArgs {
+            owners,
+            assets: Vec::new(),
+            salted_owners,
+        };
+        let salted = args(Vec::new(), vec![address.clone()])
+            .subjects(ListId::PrivateBlock, ring)
+            .unwrap();
+        let owner = address.recipient.signing_pubkey.as_ed25519().unwrap();
+        assert_eq!(
+            salted[0].member,
+            Member::salted(&Member::owner_tag(&owner).unwrap(), &address.list_salt).unwrap()
+        );
+        assert_ne!(salted[0].member, Member::owner_tag(&owner).unwrap());
+
+        let plain = TAG.parse().unwrap();
+        assert!(args(vec![plain], Vec::new())
+            .subjects(ListId::PrivateAllow, ring)
+            .is_err());
+        assert!(args(Vec::new(), vec![address.clone()])
+            .subjects(ListId::Block, ring)
+            .is_err());
+        assert!(args(Vec::new(), vec![address])
+            .subjects(ListId::PrivateBlock, Address::new_from_array([0x12; 32]))
+            .is_err());
     }
 
     fn subject(member: Member, label: String) -> Subject {
