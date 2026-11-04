@@ -7,8 +7,7 @@ fn an_opening_prints_no_blinding() {
         blinding: [0xab; 32],
         ..Opening::default()
     };
-    for printed in [format!("{opening:?}")] {
-        assert!(redacts(&printed, &["blinding"]));
-        assert!(!printed.contains("171, 171"));
-    }
+    let printed = format!("{opening:?}");
+    assert!(redacts(&printed, &["blinding"]));
+    assert!(!printed.contains("171, 171"));
 }

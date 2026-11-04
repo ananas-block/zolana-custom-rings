@@ -895,14 +895,14 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN2_OUT2);
     assert!(matches!(
         staged.rail.delivery(),
-        RingDelivery::Delivered { .. }
+        RingDelivery::Delivered
     ));
     let shaped = transfer().with_shape(Shape::IN4_OUT4).unwrap();
     let staged = shaped.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN4_OUT4);
     assert!(matches!(
         staged.rail.delivery(),
-        RingDelivery::Delivered { .. }
+        RingDelivery::Delivered
     ));
 }
 
@@ -2925,7 +2925,7 @@ fn each_input_takes_the_secret_its_own_nullifier_names() {
     let zero = zero_key(ring_utxo(&owner, Mint::SOL, 10, 1));
     let input_of = |note: &WalletUtxo| TransferInput {
         utxo: spr_transaction::utxo::ProofInputUtxo::try_from(
-            &spr_transaction::utxo::SppProofInputUtxo::try_from(note.clone()).unwrap(),
+            &spr_transaction::utxo::SppProofInputUtxo::from(note.clone()),
         )
         .unwrap(),
         is_dummy: BigUint::default(),
