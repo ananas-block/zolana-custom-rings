@@ -14,14 +14,13 @@ import (
 )
 
 type resolveCircuit struct {
-	Cond, Root, Member, Lists, EscrowKey frontend.Variable
-	Opening                              registry.QuadOpening
+	Cond, Root, Member, Lists frontend.Variable
+	Opening                   registry.QuadOpening
 }
 
 func (c *resolveCircuit) Define(api frontend.API) error {
-	lists, escrowKey, _, _ := c.Opening.Resolve(api, c.Cond, c.Root, c.Member)
+	lists, _, _ := c.Opening.Resolve(api, c.Cond, c.Root, c.Member)
 	api.AssertIsEqual(lists, c.Lists)
-	api.AssertIsEqual(escrowKey, c.EscrowKey)
 	return nil
 }
 
@@ -31,20 +30,20 @@ var (
 	carol = big.NewInt(0x0c)
 )
 
-// openingRegistry holds alice with lists and a key and carol with lists, bob is absent between them.
+// openingRegistry holds alice and carol with lists, bob is absent between them.
 func openingRegistry(t *testing.T) *ringregistry.Registry {
 	t.Helper()
 	members := ringregistry.New(t)
-	members.Apply(t, ringregistry.Entry{Member: alice, Mask: big.NewInt(0xff), Value: big.NewInt(0b101), EscrowKey: big.NewInt(0x5e)})
-	members.Apply(t, ringregistry.Entry{Member: carol, Mask: big.NewInt(0xff), Value: big.NewInt(0b010), EscrowKey: big.NewInt(0)})
+	members.Apply(t, ringregistry.Entry{Member: alice, Mask: big.NewInt(0xff), Value: big.NewInt(0b101)})
+	members.Apply(t, ringregistry.Entry{Member: carol, Mask: big.NewInt(0xff), Value: big.NewInt(0b010)})
 	return members
 }
 
 func resolveAssignment(members *ringregistry.Registry, member *big.Int) *resolveCircuit {
 	opening := members.Opening(member)
-	c := &resolveCircuit{Cond: 1, Root: members.Root(), Member: member, Lists: 0, EscrowKey: 0, Opening: opening.Wires()}
+	c := &resolveCircuit{Cond: 1, Root: members.Root(), Member: member, Lists: 0, Opening: opening.Wires()}
 	if opening.Present {
-		c.Lists, c.EscrowKey = opening.Record.Lists, opening.Record.EscrowKey
+		c.Lists = opening.Record.Lists
 	}
 	return c
 }
@@ -86,19 +85,19 @@ func TestQuadOpeningRefusals(t *testing.T) {
 	}{
 		{"wrong root", alice, func(c *resolveCircuit) { c.Root = big.NewInt(1) }, rootGate},
 		{"lists not in the record", alice, func(c *resolveCircuit) { c.Opening.Lists, c.Lists = big.NewInt(0b111), big.NewInt(0b111) }, rootGate},
-		{"escrow key not in the record", alice, func(c *resolveCircuit) { c.Opening.EscrowKey, c.EscrowKey = big.NewInt(1), big.NewInt(1) }, rootGate},
+		{"mint policy not in the record", alice, func(c *resolveCircuit) { c.Opening.MintPolicy = big.NewInt(1) }, rootGate},
 		{"another member's record", alice, func(c *resolveCircuit) { c.Member = bob }, rootGate},
 		{"present member through the record linking to it", alice, func(c *resolveCircuit) {
 			// The sentinel links to alice, the only low record a present alice has.
-			c.Opening, c.Lists, c.EscrowKey = sentinel.Wires(), 0, 0
+			c.Opening, c.Lists = sentinel.Wires(), 0
 		}, bracket},
 		{"absent member with lists", bob, func(c *resolveCircuit) { c.Opening.Lists, c.Lists = big.NewInt(1), big.NewInt(1) }, emptyGate},
-		{"absent member with an escrow key", bob, func(c *resolveCircuit) { c.Opening.EscrowKey, c.EscrowKey = big.NewInt(1), big.NewInt(1) }, emptyGate},
+		{"absent member with a mint policy", bob, func(c *resolveCircuit) { c.Opening.MintPolicy = big.NewInt(1) }, emptyGate},
 		{"absent member past the low record's next", bob, func(c *resolveCircuit) { c.Member = big.NewInt(0xff) }, bracket},
 		{"absent member equal to the low record", bob, func(c *resolveCircuit) { c.Member = alice }, bracket},
 		{"absent member equal to the low record's next", bob, func(c *resolveCircuit) { c.Member = carol }, bracket},
 		{"present flag not boolean", alice, func(c *resolveCircuit) { c.Opening.Present = 2 }, flag},
-		{"unset cond with a flag that is not boolean", alice, func(c *resolveCircuit) { c.Cond, c.Lists, c.EscrowKey, c.Opening.Present = 0, 0, 0, 2 }, flag},
+		{"unset cond with a flag that is not boolean", alice, func(c *resolveCircuit) { c.Cond, c.Lists, c.Opening.Present = 0, 0, 2 }, flag},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -133,8 +132,8 @@ func TestQuadRecordOpeningRequiresTheRecord(t *testing.T) {
 		t.Fatalf("an unset cond binds the record: %v", err)
 	}
 	for name, tamper := range map[string]func(*presentCircuit){
-		"absent member":    func(c *presentCircuit) { c.Member = bob },
-		"wrong escrow key": func(c *presentCircuit) { c.Opening.EscrowKey = big.NewInt(1) },
+		"absent member": func(c *presentCircuit) { c.Member = bob },
+		"wrong lists":   func(c *presentCircuit) { c.Opening.Lists = big.NewInt(1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := honest()
