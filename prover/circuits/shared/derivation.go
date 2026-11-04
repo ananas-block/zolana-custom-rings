@@ -61,8 +61,6 @@ const PolicyStatementVersion = 4
 const (
 	// DomSepCRShared = "CR_S"
 	DomSepCRShared = 0x43525f53
-	// MergeDisclosureDomain = "CR_MD", a merge pad under the same key never repeats an output pad.
-	MergeDisclosureDomain = 0x4352_5f4d44
 )
 
 // Key schedule labels, distinct per ciphertext kind.
@@ -75,7 +73,8 @@ const (
 	NfKeyEncInfo = "CRING/nfk1"
 	// DepositEncInfo mirrors DEPOSIT_AUDIT_LABEL.
 	DepositEncInfo = "CRING/dep1"
-	MergeEncInfo   = "CRING/mrg1"
+	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
+	MergeEncInfo = "CRING/mrg2"
 	// RecipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
 	RecipientBodyEncInfo = "CRING/rcp1"
 	// SenderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.

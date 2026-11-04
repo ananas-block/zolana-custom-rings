@@ -11,7 +11,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
@@ -116,22 +115,6 @@ func AuditStreamKeys(t testing.TB, secret *big.Int, label string) (key [32]byte,
 func EnvelopeDigest(t testing.TB, ciphertext []byte) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, big.NewInt(int64(len(ciphertext))), spptest.MustHashChain4(t, PackDisclosure(ciphertext)))
-}
-
-// KeySchedule mirrors ve.KeySchedule for an info string of at most 31 bytes.
-func KeySchedule(t testing.TB, secret *big.Int, info string) (key [32]byte, nonce [12]byte) {
-	t.Helper()
-	if len(info) > 31 {
-		t.Fatalf("info %q packs into more than one field", info)
-	}
-	siloed := ringtest.MustPoseidonHash(t, Tag(ve.DomSepSilo), secret, new(big.Int).SetBytes([]byte(info)))
-	keyLo := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey), siloed))
-	keyHi := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey+1), siloed))
-	nonceRaw := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepNonce), siloed))
-	copy(key[:16], keyHi[16:])
-	copy(key[16:], keyLo[16:])
-	copy(nonce[:], nonceRaw[20:])
-	return key, nonce
 }
 
 // CTREncrypt mirrors aes.Cipher.CTREncrypt, the first keystream block counts from nonce || 2.

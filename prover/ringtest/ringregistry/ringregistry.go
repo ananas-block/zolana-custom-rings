@@ -149,7 +149,7 @@ func (o Opening) RecordWires() registry.QuadRecordOpening {
 // UnreadRecordWires is the zero opening a proof assigns where it reads no record.
 func UnreadRecordWires() registry.QuadRecordOpening {
 	zero := big.NewInt(0)
-	return Opening{Record: Record{Next: zero, Lists: zero, EscrowKey: zero}, Path: zeroPath()}.RecordWires()
+	return Opening{Record: Record{Next: zero, Lists: zero, EscrowKey: zero}, Path: ZeroPath()}.RecordWires()
 }
 
 // Value lies inside Mask, as the program queues an entry.
@@ -238,7 +238,7 @@ func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	if present {
 		old := r.records[index]
 		w := Write{Entry: e, Exists: true, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: copied(old.MintPolicy), OldWithdrawalThreshold: copied(old.WithdrawalThreshold), OldAddressHash: copied(old.AddressHash), OldAssetLimits: old.AssetLimits,
-			Slot: r.Path(index), Low: Record{Member: zero, Next: zero, Lists: zero, EscrowKey: zero, MintPolicy: zero, WithdrawalThreshold: zero}, LowPath: zeroPath()}
+			Slot: r.Path(index), Low: Record{Member: zero, Next: zero, Lists: zero, EscrowKey: zero, MintPolicy: zero, WithdrawalThreshold: zero}, LowPath: ZeroPath()}
 		r.set(t, index, Record{Member: e.Member, Next: old.Next, Lists: masked(old.Lists, e), EscrowKey: fillOnce(old.EscrowKey, e.EscrowKey), MintPolicy: writtenPolicy(old.MintPolicy, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(old.WithdrawalThreshold, e), AssetLimits: writtenLimits(old.AssetLimits, e), AddressHash: writtenAddress(old.AddressHash, e)})
 		return w
 	}
@@ -297,7 +297,8 @@ func (r *Registry) Path(index uint64) Path {
 	return p
 }
 
-func zeroPath() Path {
+// ZeroPath is the path of a leaf in an otherwise empty tree.
+func ZeroPath() Path {
 	p := Path{}
 	for level := range p.Siblings {
 		for k := range p.Siblings[level] {
