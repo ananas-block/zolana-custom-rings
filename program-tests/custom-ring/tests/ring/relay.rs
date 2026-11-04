@@ -171,9 +171,9 @@ fn a_relayed_authority_transfer_moves_the_enrolled_members_note() -> Result<()> 
     let ring_rpc = relayed.serve()?;
     let transfer = AuthorityTransfer {
         sources: vec![member_address.into()],
-        mint: SOL_MINT.into(),
         payments: vec![AuthorityPayment {
             recipient: member_address.into(),
+            mint: SOL_MINT.into(),
             amount: MOVED,
         }],
     };

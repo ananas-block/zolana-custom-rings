@@ -33,7 +33,6 @@ pub struct DelegateSeal<'a> {
     pub delegate: Address,
     pub sources: &'a [SealedSource],
     pub tx_viewing_key: ViewingKey,
-    pub mint: Address,
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
 }
@@ -113,7 +112,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
                     utxos: &source.notes,
                 })
                 .collect(),
-            mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
             wide_frames: WideFrames::Buffer,

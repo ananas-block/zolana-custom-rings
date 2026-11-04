@@ -145,7 +145,6 @@ pub(crate) struct ExpectedDelegate {
     pub tx_viewing_key: TxViewingSecret,
     /// Change returns to an input's owner.
     pub sources: Vec<ExpectedOwner>,
-    pub mint: Address,
     pub payments: Vec<ExpectedPayment>,
 }
 
@@ -159,6 +158,7 @@ pub(crate) struct ExpectedOwner {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExpectedPayment {
     pub owner: ExpectedOwner,
+    pub mint: Address,
     pub amount: u64,
 }
 
@@ -411,13 +411,13 @@ impl ExpectedDelegate {
                 .iter()
                 .map(|source| ExpectedOwner::of(&source.0))
                 .collect::<Result<_, RingError>>()?,
-            mint: transfer.mint.0,
             payments: transfer
                 .payments
                 .iter()
                 .map(|payment| {
                     Ok(ExpectedPayment {
                         owner: ExpectedOwner::of(&payment.recipient.0)?,
+                        mint: payment.mint.0,
                         amount: payment.amount,
                     })
                 })
@@ -461,9 +461,7 @@ impl ExpectedDelegate {
                 RecordKind::Dummy => {}
                 RecordKind::Exit => return Err(MessageMismatch::Recipients),
                 RecordKind::Ring => {
-                    let paid = unpaid.iter().position(|payment| {
-                        record.mint == self.mint.to_bytes() && payment.matches(&record)
-                    });
+                    let paid = unpaid.iter().position(|payment| payment.matches(&record));
                     match paid {
                         Some(index) => {
                             let payment = unpaid.swap_remove(index);
@@ -530,13 +528,26 @@ pub struct OwnerApproval<'a> {
 
 impl OwnerApproval<'_> {
     pub fn pending(self) -> PendingSignature {
-        let setup = self
-            .terms
+        PendingSignature::expecting_owner(
+            self.relay_id,
+            self.message,
+            ExpectedPublicOwner::new(
+                self.terms,
+                self.config.mode,
+                self.known_notes.iter().map(|note| note.nullifier).collect(),
+            ),
+        )
+    }
+}
+
+impl ExpectedPublicOwner {
+    pub fn new(terms: RelayTransferTerms, mode: RingMode, known_nullifiers: Vec<[u8; 32]>) -> Self {
+        let setup = terms
             .setup
             .iter()
             .map(|create| {
                 CreateAssociatedTokenAccount {
-                    payer: self.terms.fee_payer.0,
+                    payer: terms.fee_payer.0,
                     owner: create.owner.0,
                     mint: create.mint.0,
                     token_program: create.token_program.0,
@@ -544,23 +555,17 @@ impl OwnerApproval<'_> {
                 .instruction()
             })
             .collect();
-        PendingSignature::expecting_owner(
-            self.relay_id,
-            self.message,
-            ExpectedPublicOwner {
-                setup,
-                rail: match self.config.mode {
-                    RingMode::Anonymous => RingRail::Anonymous,
-                    RingMode::Confidential => RingRail::Confidential,
-                },
-                known_nullifiers: self.known_notes.iter().map(|note| note.nullifier).collect(),
-                terms: self.terms,
+        Self {
+            setup,
+            rail: match mode {
+                RingMode::Anonymous => RingRail::Anonymous,
+                RingMode::Confidential => RingRail::Confidential,
             },
-        )
+            known_nullifiers,
+            terms,
+        }
     }
-}
 
-impl ExpectedPublicOwner {
     /// A slot of another owner, an opening that rebuilds another commitment or a held note the terms do not name binds nothing.
     fn check_moved(&self, data: &RingTransactData<'_>) -> Result<(), MessageMismatch> {
         let terms = &self.terms;
@@ -665,7 +670,9 @@ impl ExpectedOwner {
 
 impl ExpectedPayment {
     fn matches(&self, record: &AuditRecord) -> bool {
-        self.owner.owns(record) && record.amount == self.amount
+        self.owner.owns(record)
+            && record.mint == self.mint.to_bytes()
+            && record.amount == self.amount
     }
 }
 

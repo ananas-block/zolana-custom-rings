@@ -19,6 +19,7 @@ pub struct SerializableShieldedAddress(pub ShieldedAddress);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityPayment {
     pub recipient: SerializableShieldedAddress,
+    pub mint: SerializablePubkey,
     pub amount: u64,
 }
 
@@ -27,7 +28,6 @@ pub struct AuthorityPayment {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityTransfer {
     pub sources: Vec<SerializableShieldedAddress>,
-    pub mint: SerializablePubkey,
     pub payments: Vec<AuthorityPayment>,
 }
 
@@ -120,8 +120,8 @@ impl Attestation for AuthorityTransferAttestation {
             .fold(String::new(), |mut lines, payment| {
                 let _ = write!(
                     lines,
-                    "\npayment: {} {}",
-                    payment.recipient.0, payment.amount
+                    "\npayment: {} {} {}",
+                    payment.recipient.0, payment.mint.0, payment.amount
                 );
                 lines
             });
@@ -133,10 +133,9 @@ impl Attestation for AuthorityTransferAttestation {
                 lines
             });
         format!(
-            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}\nmint: {}{payments}\ntimestamp: {timestamp}\nnonce: {}",
+            "{AUTHORITY_TRANSFER_DOMAIN}\n{}\ndelegate: {}{sources}{payments}\ntimestamp: {timestamp}\nnonce: {}",
             self.target.lines(),
             self.delegate,
-            transfer.mint.0,
             base64(nonce),
         )
         .into_bytes()

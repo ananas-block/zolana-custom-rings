@@ -939,12 +939,12 @@ impl<'a> MoveFixture<'a> {
                 nullifier_key: &self.member.nullifier_key,
                 utxos: case.utxos,
             }],
-            mint: Mint::SOL.asset,
             payments: case
                 .amounts
                 .iter()
                 .map(|amount| DelegatePayment {
                     recipient: self.recipient,
+                    mint: Mint::SOL.asset,
                     amount: *amount,
                 })
                 .collect(),

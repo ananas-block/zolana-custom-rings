@@ -961,9 +961,9 @@ pub(crate) fn relay_message(
 }
 
 /// `UPDATE_RELAY_MESSAGES=1` rewrites the file from `fresh`, the committed file is the one read.
-pub(crate) fn pinned_vector<R>(name: &str, fresh: MessageVector<R>) -> MessageVector<R>
+pub(crate) fn pinned_vector<V>(name: &str, fresh: V) -> V
 where
-    R: serde::Serialize + serde::de::DeserializeOwned,
+    V: serde::Serialize + serde::de::DeserializeOwned,
 {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-vectors/rpc")

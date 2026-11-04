@@ -85,12 +85,12 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 nullifier_key: &nullifier_key,
                 utxos: &recovered.utxos,
             }],
-            mint,
             payments: args
                 .to
                 .iter()
                 .map(|to| DelegatePayment {
                     recipient: *to,
+                    mint,
                     amount,
                 })
                 .collect(),

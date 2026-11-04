@@ -1,5 +1,6 @@
 use custom_ring_sdk::DelegatePayment;
 use jsonrpsee::types::ErrorObjectOwned;
+use solana_address::Address;
 use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::NullifierKey;
@@ -234,7 +235,12 @@ impl<S: TransactionSource> Hub<S> {
         }
         // 3. Each escrowed secret opens to its source's key and stays in memory, the source's notes follow.
         let assets = shared.due_assets().await;
-        let mint = transfer.mint.0;
+        let mut mints: Vec<Address> = Vec::new();
+        for payment in &transfer.payments {
+            if !mints.contains(&payment.mint.0) {
+                mints.push(payment.mint.0);
+            }
+        }
         let mut sources = Vec::with_capacity(transfer.sources.len());
         for source in &transfer.sources {
             let source = source.0;
@@ -252,12 +258,15 @@ impl<S: TransactionSource> Hub<S> {
             if nullifier_key.pubkey()? != source.nullifier_pubkey {
                 return Err(AuthorityTransferError::SourceKey.into());
             }
-            let notes = shared.store(ring).spendable(SpendableNotes {
-                ring,
-                owner_key,
-                mint: assets.registry().mint(&mint)?,
-                nullifier_key: &nullifier_key,
-            })?;
+            let mut notes = Vec::new();
+            for mint in &mints {
+                notes.extend(shared.store(ring).spendable(SpendableNotes {
+                    ring,
+                    owner_key,
+                    mint: assets.registry().mint(mint)?,
+                    nullifier_key: &nullifier_key,
+                })?);
+            }
             sources.push(SealedSource {
                 address: source,
                 nullifier_key,
@@ -272,12 +281,12 @@ impl<S: TransactionSource> Hub<S> {
                     delegate,
                     sources: &sources,
                     tx_viewing_key,
-                    mint,
                     payments: transfer
                         .payments
                         .iter()
                         .map(|payment| DelegatePayment {
                             recipient: payment.recipient.0,
+                            mint: payment.mint.0,
                             amount: payment.amount,
                         })
                         .collect(),
@@ -293,7 +302,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
     use solana_message::VersionedMessage;
@@ -456,9 +464,9 @@ mod tests {
             delegate: signer.pubkey(),
             transfer: AuthorityTransfer {
                 sources: sources.iter().map(|source| (*source).into()).collect(),
-                mint: MINT.into(),
                 payments: vec![AuthorityPayment {
                     recipient: recipient.into(),
+                    mint: MINT.into(),
                     amount: 15,
                 }],
             },
