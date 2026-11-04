@@ -56,6 +56,7 @@ pub(crate) async fn create_registry(db: &DatabaseConnection, registry: [u8; 32])
                 registry_id: RegistryId::default(),
                 grace_slots: [0; 8],
                 ring_id: [0; 32],
+                tracking_registry: Address::default(),
             },
         )),
         fault: None,
@@ -214,9 +215,10 @@ async fn storage_shaped_instructions_of_other_programs_cost_no_queries() {
     let storage_tags = [
         tag::INITIALIZE,
         tag::UPDATE,
-        tag::UPDATE_IMMEDIATE,
         tag::UPDATE_AUTHORITY,
-        tag::ENROLL_ADDRESS,
+        tag::ENROLL,
+        tag::APPLY_ENROLLMENTS,
+        tag::INITIALIZE_TRACKING,
     ];
     let shaped = storage_tags
         .into_iter()
@@ -270,43 +272,6 @@ async fn the_record_tree_migration_rewinds_a_key_registry_index_to_its_start() {
     let rewound = storage::cursor(&db).await.unwrap().unwrap();
     assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
     assert!(rewound.tip.is_none() && !rewound.is_ready());
-}
-
-#[tokio::test]
-async fn the_address_migration_clears_old_leaves_and_rewinds_to_the_start() {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-    Migrator::up(&db, Some(6)).await.unwrap();
-    let mut cursor = RingCursor::new(9);
-    cursor.tip = Some(BlockMetadata {
-        slot: 40,
-        ..Default::default()
-    });
-    cursor.scanned_slot = 40;
-    cursor.resume(&db).await.unwrap();
-    for sql in [
-        "INSERT INTO storage_registries(registry,state) VALUES(x'0b','{}')",
-        "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,lists,escrow_key) \
-         VALUES(x'0b',0,0,x'00',x'00',0,x'00')",
-    ] {
-        db.execute_unprepared(sql).await.unwrap();
-    }
-    Migrator::up(&db, None).await.unwrap();
-    let rewound = storage::cursor(&db).await.unwrap().unwrap();
-    assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
-    assert!(rewound.tip.is_none() && !rewound.is_ready());
-    for table in ["storage_registries", "ring_records"] {
-        let rows = db
-            .query_one(Statement::from_string(
-                db.get_database_backend(),
-                format!("SELECT COUNT(*) AS rows FROM {table}"),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(rows.try_get::<i64>("", "rows").unwrap(), 0, "{table}");
-    }
-    Migrator::down(&db, Some(1)).await.unwrap();
-    Migrator::up(&db, None).await.unwrap();
 }
 
 #[tokio::test]
@@ -366,7 +331,7 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     let store = StorageStore::new(&db, state.registry);
     assert_eq!(store.state().await.unwrap(), Some(state));
     let low = store.tree().low_record(&field(4), 0).await.unwrap();
-    assert_eq!(low.record.index, 0);
+    assert_eq!(low.index, 0);
     let mut cursor = RingCursor::new(0);
     cursor.resume(&db).await.unwrap();
     let tx = storage::begin_read(&db).await.unwrap();

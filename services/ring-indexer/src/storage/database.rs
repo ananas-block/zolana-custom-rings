@@ -7,7 +7,6 @@ use std::{
 use anyhow::{Context, Result};
 use bytemuck::Pod;
 use custom_ring_interface::{
-    member_registry::AuthorizedAddress,
     state::ROOT_HISTORY,
     storage::{Revision, Root, StorageError, StorageRegistry},
     tracking::TrackingRegistry,
@@ -18,9 +17,8 @@ use sea_orm::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::Address;
-use zolana_ring_indexer::{
-    records::SealedKey,
-    tree::{IndexedRecord, MemberRecord, NodePosition},
+use zolana_ring_indexer::tree::{
+    IndexedLeaf, IndexedRecord, MemberRecord, NodePosition, TrackingRecord,
 };
 
 use crate::{block::BlockMetadata, indexer::Quarantine};
@@ -34,13 +32,6 @@ pub(crate) use tracking::Enrollment;
 pub(crate) struct TreeVersion {
     pub version: u64,
     pub next_index: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StoredRecord {
-    pub record: IndexedRecord,
-    pub seal: Option<SealedKey>,
-    pub address: Option<AuthorizedAddress>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,12 +86,73 @@ pub(crate) struct BlockJournal {
     pub undo: BlockUndo,
 }
 
+/// A leaf a registry's table stores, versioned by the revision that wrote it.
+pub(crate) trait StoredLeaf: IndexedLeaf + Default + Send + Sync {
+    const TABLE: &'static str;
+    const COLUMNS: &'static str;
+
+    fn from_row(row: &QueryResult) -> Result<Self>;
+    /// In the order of `COLUMNS`.
+    fn values(&self) -> Result<Vec<Value>>;
+}
+
+impl StoredLeaf for MemberRecord {
+    const TABLE: &'static str = "ring_records";
+    const COLUMNS: &'static str = "member, next_member, lists, mint_policy";
+
+    fn from_row(row: &QueryResult) -> Result<Self> {
+        Ok(Self {
+            member: field(row, "member")?,
+            next: field(row, "next_member")?,
+            lists: uint(row, "lists")?,
+            mint_policy: read_mint_policy(row)?.unwrap_or_default(),
+        })
+    }
+
+    fn values(&self) -> Result<Vec<Value>> {
+        Ok(vec![
+            bytes(&self.member),
+            bytes(&self.next),
+            int(self.lists)?,
+            serde_json::to_string(&self.mint_policy)?.into(),
+        ])
+    }
+}
+
+impl StoredLeaf for TrackingRecord {
+    const TABLE: &'static str = "tracking_records";
+    const COLUMNS: &'static str =
+        "member, next_member, nullifier_pk, ct_hash, viewing_u, revision, list_tag";
+
+    fn from_row(row: &QueryResult) -> Result<Self> {
+        Ok(Self {
+            member: field(row, "member")?,
+            next: field(row, "next_member")?,
+            nullifier_pk: field(row, "nullifier_pk")?,
+            ct_hash: field(row, "ct_hash")?,
+            viewing_u: field(row, "viewing_u")?,
+            revision: uint(row, "revision")?,
+            list_tag: field(row, "list_tag")?,
+        })
+    }
+
+    fn values(&self) -> Result<Vec<Value>> {
+        Ok(vec![
+            bytes(&self.member),
+            bytes(&self.next),
+            bytes(&self.nullifier_pk),
+            bytes(&self.ct_hash),
+            bytes(&self.viewing_u),
+            int(self.revision)?,
+            bytes(&self.list_tag),
+        ])
+    }
+}
+
 /// A registry account the projection mirrors, one state table and one leaf table per kind.
 pub(crate) trait ProjectedAccount: Pod + Eq + Send + Sync {
+    type Leaf: StoredLeaf;
     const STATES: &'static str;
-    const LEAVES: &'static str;
-    /// The column of `LEAVES` holding the registry address.
-    const LEAF_REGISTRY: &'static str;
 
     fn from_image(data: &[u8]) -> Option<&Self>;
     fn roots(&self) -> &[Root; ROOT_HISTORY];
@@ -109,9 +161,8 @@ pub(crate) trait ProjectedAccount: Pod + Eq + Send + Sync {
 }
 
 impl ProjectedAccount for StorageRegistry {
+    type Leaf = MemberRecord;
     const STATES: &'static str = "storage_registries";
-    const LEAVES: &'static str = "ring_records";
-    const LEAF_REGISTRY: &'static str = "program";
 
     fn from_image(data: &[u8]) -> Option<&Self> {
         Self::from_data(data)
@@ -131,9 +182,8 @@ impl ProjectedAccount for StorageRegistry {
 }
 
 impl ProjectedAccount for TrackingRegistry {
+    type Leaf = TrackingRecord;
     const STATES: &'static str = "tracking_registries";
-    const LEAVES: &'static str = "tracking_records";
-    const LEAF_REGISTRY: &'static str = "registry";
 
     fn from_image(data: &[u8]) -> Option<&Self> {
         Self::from_data(data)
@@ -204,10 +254,6 @@ pub(crate) struct RegistryUndo<A> {
 pub(crate) type StorageUndo = RegistryUndo<StorageRegistry>;
 pub(crate) type TrackingUndo = RegistryUndo<TrackingRegistry>;
 
-const RECORD_COLUMNS: &str = "leaf_index, member, next_member, lists, escrow_key, seal, \
-     mint_policy, address_hash, address_ring_id, address_nullifier_pk, address_viewing_u, \
-     address_revision";
-
 /// Lookups read every table from one Postgres snapshot.
 pub(crate) async fn begin_read(
     db: &DatabaseConnection,
@@ -275,8 +321,6 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
         TrackingStore::new(tx, undo.registry).restore(undo).await?;
     }
     let slot = vec![int(journal.metadata.slot)?];
-    let enrollments = "DELETE FROM storage_address_enrollments WHERE slot=$1";
-    exec(tx, enrollments, slot.clone()).await?;
     tracking::rollback_slot(tx, journal.metadata.slot).await?;
     exec(tx, "DELETE FROM ring_blocks WHERE slot=$1", slot).await?;
     cursor.tip = journal.previous_tip;
@@ -285,30 +329,43 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
 }
 
 /// One registry's record tree, every statement binds the registry as `$1`.
-pub(crate) struct RegistryStore<'c, C> {
+pub(crate) struct RegistryStore<'c, C, L = MemberRecord> {
     conn: &'c C,
     pub(crate) program: [u8; 32],
+    leaf: PhantomData<L>,
 }
 
-impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
+impl<'c, C: ConnectionTrait, L: StoredLeaf> RegistryStore<'c, C, L> {
     pub fn new(conn: &'c C, program: [u8; 32]) -> Self {
-        Self { conn, program }
+        Self {
+            conn,
+            program,
+            leaf: PhantomData,
+        }
     }
 
-    pub async fn record(&self, member: &[u8; 32], applied: u64) -> Result<Option<StoredRecord>> {
+    pub async fn record(
+        &self,
+        member: &[u8; 32],
+        applied: u64,
+    ) -> Result<Option<IndexedRecord<L>>> {
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records WHERE program=$1 AND member=$2 \
-             AND applied<=$3 ORDER BY applied DESC LIMIT 1"
+            "SELECT leaf_index, {} FROM {} WHERE program=$1 AND member=$2 \
+             AND applied<=$3 ORDER BY applied DESC LIMIT 1",
+            L::COLUMNS,
+            L::TABLE
         );
         let values = vec![bytes(member), int(applied)?];
         let row = self.query_one(&sql, values).await?;
         row.as_ref().map(stored_record).transpose()
     }
 
-    pub async fn low_record(&self, member: &[u8; 32], applied: u64) -> Result<StoredRecord> {
+    pub async fn low_record(&self, member: &[u8; 32], applied: u64) -> Result<IndexedRecord<L>> {
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records WHERE program=$1 AND member<$2 \
-             AND applied<=$3 ORDER BY member DESC, applied DESC LIMIT 1"
+            "SELECT leaf_index, {} FROM {} WHERE program=$1 AND member<$2 \
+             AND applied<=$3 ORDER BY member DESC, applied DESC LIMIT 1",
+            L::COLUMNS,
+            L::TABLE
         );
         let values = vec![bytes(member), int(applied)?];
         let row = self.query_one(&sql, values).await?;
@@ -320,11 +377,12 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         &self,
         leaves: Range<u64>,
         applied: u64,
-    ) -> Result<Vec<StoredRecord>> {
+    ) -> Result<Vec<IndexedRecord<L>>> {
+        let (columns, table) = (L::COLUMNS, L::TABLE);
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records AS r WHERE program=$1 \
+            "SELECT leaf_index, {columns} FROM {table} AS r WHERE program=$1 \
              AND leaf_index>=$2 AND leaf_index<$3 AND applied=(SELECT MAX(applied) \
-             FROM ring_records AS m WHERE m.program=r.program AND m.leaf_index=r.leaf_index \
+             FROM {table} AS m WHERE m.program=r.program AND m.leaf_index=r.leaf_index \
              AND m.applied<=$4) ORDER BY leaf_index"
         );
         let values = vec![int(leaves.start)?, int(leaves.end)?, int(applied)?];
@@ -332,33 +390,20 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         rows.iter().map(stored_record).collect()
     }
 
-    pub async fn save_records(&self, records: &[StoredRecord], applied: u64) -> Result<()> {
-        for stored in records {
-            let record = &stored.record.record;
-            let sql = "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,\
-                       lists,escrow_key,seal,mint_policy,address_hash,address_ring_id,\
-                       address_nullifier_pk,address_viewing_u,address_revision) \
-                       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)";
-            let address = stored.address.as_ref();
-            let values = vec![
-                int(stored.record.index)?,
-                int(applied)?,
-                bytes(&record.member),
-                bytes(&record.next),
-                int(record.lists)?,
-                bytes(&record.escrow_key),
-                seal_value(stored.seal.as_ref())?,
-                serde_json::to_string(&record.mint_policy)?.into(),
-                bytes(&record.address_hash),
-                optional_bytes(address.map(|address| &address.ring_id)),
-                optional_bytes(address.map(|address| &address.nullifier_pk)),
-                optional_bytes(address.map(|address| &address.viewing_u)),
-                address
-                    .map(|address| i64::try_from(address.address_revision))
-                    .transpose()?
-                    .into(),
-            ];
-            self.exec(sql, values).await?;
+    pub async fn save_records(&self, records: &[IndexedRecord<L>], applied: u64) -> Result<()> {
+        for indexed in records {
+            let mut values = vec![int(indexed.index)?, int(applied)?];
+            values.extend(indexed.record.values()?);
+            let params = (1..=values.len() + 1)
+                .map(|param| format!("${param}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "INSERT INTO {}(program,leaf_index,applied,{}) VALUES({params})",
+                L::TABLE,
+                L::COLUMNS
+            );
+            self.exec(&sql, values).await?;
         }
         Ok(())
     }
@@ -448,62 +493,21 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
 }
 
 /// Tree rows share the node and root tables under the registry address, versioned by revision.
-pub(crate) struct ProjectedStore<'c, C, A> {
-    tree: RegistryStore<'c, C>,
-    account: PhantomData<A>,
+pub(crate) struct ProjectedStore<'c, C, A: ProjectedAccount> {
+    tree: RegistryStore<'c, C, A::Leaf>,
 }
 
 pub(crate) type StorageStore<'c, C> = ProjectedStore<'c, C, StorageRegistry>;
 pub(crate) type TrackingStore<'c, C> = ProjectedStore<'c, C, TrackingRegistry>;
 
-impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
-    /// The member's newest enrollment, the only address its authorization account holds.
-    pub async fn newest_enrollment(&self, member: &[u8; 32]) -> Result<Option<AuthorizedAddress>> {
-        let sql = "SELECT ring_id, nullifier_pk, viewing_u, address_revision \
-                   FROM storage_address_enrollments WHERE registry=$1 AND member=$2 \
-                   ORDER BY address_revision DESC LIMIT 1";
-        let row = self.tree.query_one(sql, vec![bytes(member)]).await?;
-        row.as_ref()
-            .map(|row| {
-                Ok(AuthorizedAddress {
-                    ring_id: field(row, "ring_id")?,
-                    nullifier_pk: field(row, "nullifier_pk")?,
-                    viewing_u: field(row, "viewing_u")?,
-                    address_revision: uint(row, "address_revision")?,
-                })
-            })
-            .transpose()
-    }
-
-    pub async fn save_enrollment(
-        &self,
-        member: &[u8; 32],
-        address: &AuthorizedAddress,
-        slot: u64,
-    ) -> Result<()> {
-        let sql = "INSERT INTO storage_address_enrollments(registry,member,address_revision,\
-                   ring_id,nullifier_pk,viewing_u,slot) VALUES($1,$2,$3,$4,$5,$6,$7)";
-        let values = vec![
-            bytes(member),
-            int(address.address_revision)?,
-            bytes(&address.ring_id),
-            bytes(&address.nullifier_pk),
-            bytes(&address.viewing_u),
-            int(slot)?,
-        ];
-        self.tree.exec(sql, values).await
-    }
-}
-
 impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
     pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
         Self {
             tree: RegistryStore::new(conn, registry),
-            account: PhantomData,
         }
     }
 
-    pub fn tree(&self) -> &RegistryStore<'c, C> {
+    pub fn tree(&self) -> &RegistryStore<'c, C, A::Leaf> {
         &self.tree
     }
 
@@ -549,13 +553,12 @@ impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
     }
 
     async fn restore(&self, undo: &RegistryUndo<A>) -> Result<()> {
-        let leaves = format!("{} WHERE {}=$1", A::LEAVES, A::LEAF_REGISTRY);
+        let leaves = format!("{} WHERE program=$1", <A::Leaf as StoredLeaf>::TABLE);
         let Some(before) = &undo.before else {
             for sql in [
                 format!("DELETE FROM {leaves}"),
                 "DELETE FROM ring_record_nodes WHERE program=$1".into(),
                 "DELETE FROM storage_roots WHERE registry=$1".into(),
-                "DELETE FROM storage_address_enrollments WHERE registry=$1".into(),
                 format!("DELETE FROM {} WHERE registry=$1", A::STATES),
             ] {
                 self.tree.exec(&sql, vec![]).await?;
@@ -604,41 +607,11 @@ impl<C: ConnectionTrait, A: ProjectedAccount> Quarantine for ProjectedStore<'_, 
     }
 }
 
-fn stored_record(row: &QueryResult) -> Result<StoredRecord> {
-    Ok(StoredRecord {
-        record: IndexedRecord {
-            index: uint(row, "leaf_index")?,
-            record: MemberRecord {
-                member: field(row, "member")?,
-                next: field(row, "next_member")?,
-                lists: uint(row, "lists")?,
-                escrow_key: field(row, "escrow_key")?,
-                mint_policy: read_mint_policy(row)?.unwrap_or_default(),
-                address_hash: field(row, "address_hash")?,
-            },
-        },
-        seal: seal(row)?,
-        address: address(row)?,
+fn stored_record<L: StoredLeaf>(row: &QueryResult) -> Result<IndexedRecord<L>> {
+    Ok(IndexedRecord {
+        index: uint(row, "leaf_index")?,
+        record: L::from_row(row)?,
     })
-}
-
-fn address(row: &QueryResult) -> Result<Option<AuthorizedAddress>> {
-    let revision = row.try_get::<Option<i64>>("", "address_revision")?;
-    revision
-        .map(|revision| {
-            Ok(AuthorizedAddress {
-                ring_id: field(row, "address_ring_id")?,
-                nullifier_pk: field(row, "address_nullifier_pk")?,
-                viewing_u: field(row, "address_viewing_u")?,
-                address_revision: u64::try_from(revision)?,
-            })
-        })
-        .transpose()
-}
-
-fn seal(row: &QueryResult) -> Result<Option<SealedKey>> {
-    let text = row.try_get::<Option<String>>("", "seal")?;
-    Ok(text.as_deref().map(serde_json::from_str).transpose()?)
 }
 
 fn field(row: &QueryResult, column: &str) -> Result<[u8; 32]> {
@@ -664,20 +637,12 @@ fn bytes(value: &[u8; 32]) -> Value {
     value.to_vec().into()
 }
 
-fn optional_bytes(value: Option<&[u8; 32]>) -> Value {
-    value.map(|value| value.to_vec()).into()
-}
-
 fn json<T: Serialize>(value: &T) -> Result<Value> {
     Ok(serde_json::to_string(value)?.into())
 }
 
 fn int(value: u64) -> Result<Value> {
     Ok(i64::try_from(value)?.into())
-}
-
-fn seal_value(seal: Option<&SealedKey>) -> Result<Value> {
-    Ok(seal.map(json).transpose()?.unwrap_or(Value::String(None)))
 }
 
 async fn read_json<T: DeserializeOwned, C: ConnectionTrait>(

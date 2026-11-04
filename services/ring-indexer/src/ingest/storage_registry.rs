@@ -1,22 +1,16 @@
 use custom_ring_interface::{
-    member_registry::AuthorizedAddress,
     storage::{chain_start, RootUpdate, StorageError, StorageRegistry},
-    storage_instruction::{
-        tag, AddressWriteData, EnrollAddressIxData, InitializeIxData, StorageUpdateIxData,
-        StorageWriteData, UpdateMode,
-    },
-    CustomRingError,
+    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
+    QUAD_HEIGHT,
 };
 use sea_orm::ConnectionTrait;
 use solana_address::Address;
 use spr_indexer_api::Hash;
-use zolana_ring_indexer::records::{QueuedWrite, SealedKey};
-use zolana_ring_policy::Member;
 
 use crate::{
     block::Instruction,
     indexer::{fault, from_storage, ApplyError},
-    member_registry::{plant_tree, HiddenFields, ProjectedWrite, TreeRead},
+    member_registry::{plant_tree, LoadedRegistry, TreeRead},
     storage::{StorageRoot, StorageState, StorageStore},
 };
 
@@ -27,7 +21,6 @@ pub(crate) enum StorageCall<'a> {
         authority: Address,
         new_authority: Address,
     },
-    EnrollAddress(AddressEnrollment<'a>),
 }
 
 pub(crate) struct StorageInit<'a> {
@@ -36,14 +29,8 @@ pub(crate) struct StorageInit<'a> {
 }
 
 pub(crate) struct StorageUpdate<'a> {
-    pub mode: UpdateMode,
     pub authority: Address,
     pub data: StorageUpdateIxData<'a>,
-}
-
-pub(crate) struct AddressEnrollment<'a> {
-    pub owner: Address,
-    pub data: &'a EnrollAddressIxData,
 }
 
 /// `call` fails on data the program refuses.
@@ -72,15 +59,10 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                 Ok(StorageCall::Initialize(StorageInit { creator, data }))
             }),
         },
-        tag::UPDATE | tag::UPDATE_IMMEDIATE => StorageInstruction {
+        tag::UPDATE => StorageInstruction {
             registry: registry(1)?,
             call: account(0).and_then(|authority| {
-                let mode = match tag {
-                    tag::UPDATE => UpdateMode::Graced,
-                    _ => UpdateMode::Immediate,
-                };
                 Ok(StorageCall::Update(StorageUpdate {
-                    mode,
                     authority,
                     data: StorageUpdateIxData::parse(data)?,
                 }))
@@ -93,17 +75,6 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
                     authority,
                     new_authority: account(1)?,
                 })
-            }),
-        },
-        tag::ENROLL_ADDRESS => StorageInstruction {
-            registry: registry(2)?,
-            call: account(1).and_then(|owner| {
-                let data = bytemuck::try_from_bytes(data)
-                    .map_err(|_| StorageError::InvalidInstructionData)?;
-                Ok(StorageCall::EnrollAddress(AddressEnrollment {
-                    owner,
-                    data,
-                }))
             }),
         },
         _ => return None,
@@ -127,7 +98,7 @@ pub(crate) async fn create<C: ConnectionTrait>(
     store: &StorageStore<'_, C>,
     state: &StorageState,
 ) -> anyhow::Result<()> {
-    plant_tree(store.tree()).await?;
+    plant_tree::<_, _, QUAD_HEIGHT>(store.tree()).await?;
     store
         .save_root(&StorageRoot::current(&*state.account))
         .await?;
@@ -154,76 +125,40 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
                 self.state.account.authority = new_authority;
                 Ok(())
             }
-            StorageCall::EnrollAddress(enrollment) => self.enroll(enrollment).await,
         }
-    }
-
-    /// The ring comes from the registry, a rotation moves the revision and keeps the nullifier key.
-    async fn enroll(self, enrollment: AddressEnrollment<'_>) -> Result<(), ApplyError> {
-        let AddressEnrollment { owner, data } = enrollment;
-        let ring_id = self.state.account.ring_id;
-        if ring_id == [0; 32] {
-            return Err(fault("the registry serves no ring"));
-        }
-        let member = *Member::owner_tag(owner.as_array())
-            .map_err(|error| fault(format!("owner identity failed ({error})")))?
-            .as_bytes();
-        let held = self
-            .store
-            .newest_enrollment(&member)
-            .await
-            .map_err(from_storage)?;
-        let address_revision = match held {
-            None => 1,
-            Some(held) if held.nullifier_pk == data.nullifier_pk => held
-                .address_revision
-                .checked_add(1)
-                .ok_or_else(|| fault("address revision overflows"))?,
-            Some(_) => return Err(fault("enrollment changes the nullifier key")),
-        };
-        let address = AuthorizedAddress {
-            ring_id,
-            nullifier_pk: data.nullifier_pk,
-            viewing_u: data.viewing_u,
-            address_revision,
-        };
-        self.store
-            .save_enrollment(&member, &address, self.slot)
-            .await
-            .map_err(from_storage)
     }
 
     async fn update(self, update: StorageUpdate<'_>) -> Result<(), ApplyError> {
-        let StorageUpdate {
-            mode,
-            authority,
-            data,
-        } = update;
+        let StorageUpdate { authority, data } = update;
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
         let mut rotated = *account;
         rotated
             .update(RootUpdate {
-                mode,
                 slot: self.slot,
                 data: &data,
             })
             .map_err(|error| fault(format!("update refused ({error})")))?;
         let revision = rotated.roots[0].revision.value();
         // 2. The writes reach the root the program recorded.
-        let mut writes = Vec::with_capacity(data.writes.len());
-        for write in &data.writes {
-            writes.push(projected_write(self.store, write).await?);
-        }
-        let entries: Vec<_> = writes.iter().map(|write| write.queued.entry).collect();
+        let entries = data
+            .writes
+            .iter()
+            .map(|write| {
+                write
+                    .storage_entry()
+                    .map_err(|error| fault(format!("storage write refused ({error})")))
+            })
+            .collect::<Result<Vec<_>, ApplyError>>()?;
         let registry = Address::new_from_array(self.state.registry);
         let chain_start = chain_start(&registry, data.revision)
             .map_err(|error| fault(format!("chain start failed ({error})")))?;
-        let loaded = TreeRead::batch(StorageRoot::current(account).tree(), &entries)
-            .load(self.store.tree())
-            .await
-            .map_err(from_storage)?;
+        let loaded: LoadedRegistry =
+            TreeRead::batch::<QUAD_HEIGHT>(StorageRoot::current(account).tree(), &entries)
+                .load(self.store.tree())
+                .await
+                .map_err(from_storage)?;
         let batch = loaded
             .tree
             .apply_batch(chain_start, &entries)
@@ -239,17 +174,8 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
                 recorded_next_index
             )));
         }
-        // 3. Rows at the new revision hold the new tree and every published envelope.
-        let hidden = HiddenFields {
-            base: &loaded.stored,
-            pending: &writes,
-        };
-        let records = batch
-            .rows
-            .records
-            .values()
-            .map(|record| hidden.stored(*record))
-            .collect::<Result<Vec<_>, ApplyError>>()?;
+        // 3. Rows at the new revision hold the new tree.
+        let records = batch.rows.records.values().copied().collect::<Vec<_>>();
         self.store.tree().save_records(&records, revision).await?;
         self.store
             .tree()
@@ -270,46 +196,4 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             Err(fault("signer is not the registry authority"))
         }
     }
-}
-
-async fn projected_write<C: ConnectionTrait>(
-    store: &StorageStore<'_, C>,
-    write: &StorageWriteData,
-) -> Result<ProjectedWrite, ApplyError> {
-    let refused = |error: CustomRingError| fault(format!("storage write refused ({error})"));
-    let (entry, seal, address) = match write {
-        StorageWriteData::Record(_) => (write.entry().map_err(refused)?, None, None),
-        StorageWriteData::Escrow(escrow) => {
-            let seal = SealedKey {
-                owner_pubkey: escrow.owner.to_bytes(),
-                nullifier_pk: escrow.nullifier_pk,
-                eph_u: escrow.eph_u,
-                ciphertext: escrow.ciphertext,
-            };
-            (write.entry().map_err(refused)?, Some(seal), None)
-        }
-        StorageWriteData::Address(write) => {
-            let address = enrolled_address(store, write).await?;
-            (write.entry(&address).map_err(refused)?, None, Some(address))
-        }
-    };
-    Ok(ProjectedWrite {
-        queued: QueuedWrite { entry, seal },
-        address,
-    })
-}
-
-/// The program applies only the newest enrollment, the authorization account holds no other.
-async fn enrolled_address<C: ConnectionTrait>(
-    store: &StorageStore<'_, C>,
-    write: &AddressWriteData,
-) -> Result<AuthorizedAddress, ApplyError> {
-    let member = write
-        .member()
-        .map_err(|error| fault(format!("storage write refused ({error})")))?;
-    store
-        .newest_enrollment(&member)
-        .await
-        .map_err(from_storage)?
-        .ok_or_else(|| fault("an address write has no enrollment"))
 }
