@@ -46,6 +46,8 @@ pub mod storage;
 pub mod storage_instruction;
 #[path = "codec/stream.rs"]
 pub mod stream;
+#[path = "accounts/tracking.rs"]
+pub mod tracking;
 #[path = "instructions/transact.rs"]
 pub mod transact;
 #[path = "proof/verification.rs"]

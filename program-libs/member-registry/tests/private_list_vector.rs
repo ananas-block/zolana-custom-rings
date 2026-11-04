@@ -5,7 +5,7 @@ use custom_ring_interface::{
         private_list_chain_start, ApplyPrivateListStatement, BlindChange, BlindWrite, ListSalt,
         WriteTarget, PRIVATE_LIST_DEPTH,
     },
-    storage::Revision,
+    storage::{Revision, PRIVATE_SOURCE_EMPTY_ROOT},
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -167,6 +167,14 @@ fn the_vector_file_matches() {
         serde_json::from_str(&std::fs::read_to_string(VECTORS).expect("vector file"))
             .expect("json");
     assert_eq!(committed, compute());
+}
+
+#[test]
+fn the_tree_starts_at_the_private_source_empty_root() {
+    assert_eq!(
+        PrivateListTree::new().unwrap().root(),
+        PRIVATE_SOURCE_EMPTY_ROOT
+    );
 }
 
 #[test]

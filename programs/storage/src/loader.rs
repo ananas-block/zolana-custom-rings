@@ -1,6 +1,9 @@
 use custom_ring_interface::{
-    storage::{AddressAuthorization, FirstEnrollment, StorageError, StorageRegistry},
-    storage_instruction::{EnrollAddressIxData, InitializeIxData},
+    storage::{StorageError, StorageRegistry},
+    storage_instruction::{
+        EnrollIxData, InitializeIxData, InitializeTrackingIxData, OwnerGrantIxData,
+    },
+    tracking::{FirstEnrollment, OwnerGrant, TrackingAuthorization, TrackingRegistry},
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -8,6 +11,9 @@ use pinocchio::{
     error::ProgramError,
     AccountView, Address, ProgramResult,
 };
+
+/// Seeds of the longest PDA here and its bump.
+const MAX_SIGNER_SEEDS: usize = 6;
 
 #[must_use]
 pub struct RegistryInit<'a> {
@@ -30,22 +36,14 @@ impl RegistryInit<'_> {
         if account.data_len() != 0 {
             return Err(StorageError::AlreadyInitialized.into());
         }
-        let bump = [bump];
-        let [seed, creator, registry_id] = seeds;
-        let signer_seeds = [
-            Seed::from(seed),
-            Seed::from(creator),
-            Seed::from(registry_id),
-            Seed::from(&bump),
-        ];
-        pinocchio_system::create_account_with_minimum_balance_signed(
-            account,
-            StorageRegistry::SIZE,
-            self.program_id,
-            self.payer,
-            None,
-            &[Signer::from(signer_seeds.as_slice())],
-        )?;
+        CanonicalPda {
+            program_id: self.program_id,
+            payer: self.payer,
+            seeds: &seeds,
+            bump,
+            size: StorageRegistry::SIZE,
+        }
+        .create(account)?;
         account
             .try_borrow_mut()?
             .copy_from_slice(bytemuck::bytes_of(&StorageRegistry::new(
@@ -56,52 +54,75 @@ impl RegistryInit<'_> {
     }
 }
 
-/// One enrollment of `owner`, whose signature the processor checked.
+/// Creates a registry the ring pins by address, its seeds and ring id authenticate nothing.
 #[must_use]
-pub struct AddressEnrollment<'a> {
+pub struct TrackingRegistryInit<'a> {
+    pub program_id: &'a Address,
+    pub payer: &'a AccountView,
+    pub creator: &'a Address,
+    pub ix: &'a InitializeTrackingIxData,
+}
+
+impl TrackingRegistryInit<'_> {
+    #[inline(always)]
+    pub fn init(self, account: &mut AccountView) -> ProgramResult {
+        let seeds = TrackingRegistry::seeds(self.creator, &self.ix.ring_id);
+        let (address, bump) = Address::derive_program_address(&seeds, self.program_id)
+            .ok_or(StorageError::InvalidTrackingRegistry)?;
+        if account.address() != &address || !account.is_writable() {
+            return Err(StorageError::InvalidTrackingRegistry.into());
+        }
+        if account.data_len() != 0 {
+            return Err(StorageError::AlreadyInitialized.into());
+        }
+        CanonicalPda {
+            program_id: self.program_id,
+            payer: self.payer,
+            seeds: &seeds,
+            bump,
+            size: TrackingRegistry::SIZE,
+        }
+        .create(account)?;
+        account
+            .try_borrow_mut()?
+            .copy_from_slice(bytemuck::bytes_of(&TrackingRegistry::new(bump, self.ix)));
+        Ok(())
+    }
+}
+
+/// A first enrollment, whose owner signature and proof the processor checked.
+#[must_use]
+pub struct TrackingAuthorizationInit<'a> {
     pub program_id: &'a Address,
     pub payer: &'a AccountView,
     pub owner: &'a Address,
     pub registry: &'a Address,
-    pub ring_id: [u8; 32],
-    pub ix: &'a EnrollAddressIxData,
+    pub slot: u64,
+    pub ix: &'a EnrollIxData,
 }
 
-impl AddressEnrollment<'_> {
-    /// Creates the authorization at revision 1, a later call rotates its viewing key.
+impl TrackingAuthorizationInit<'_> {
     #[inline(always)]
-    pub fn write(self, account: &mut AccountView) -> ProgramResult {
-        let seeds = AddressAuthorization::seeds(self.registry, self.owner);
+    pub fn init(self, account: &mut AccountView) -> ProgramResult {
+        let seeds = TrackingAuthorization::seeds(self.registry, self.owner);
         let (address, bump) = Address::derive_program_address(&seeds, self.program_id)
-            .ok_or(StorageError::InvalidAddressAuthorization)?;
+            .ok_or(StorageError::InvalidTrackingAuthorization)?;
         if account.address() != &address || !account.is_writable() {
-            return Err(StorageError::InvalidAddressAuthorization.into());
+            return Err(StorageError::InvalidTrackingAuthorization.into());
         }
-        if account.data_len() != 0 {
-            let mut existing = load_owned_authorization_mut(self.program_id, account)?;
-            return existing.enroll(self.ix).map_err(Into::into);
+        CanonicalPda {
+            program_id: self.program_id,
+            payer: self.payer,
+            seeds: &seeds,
+            bump,
+            size: TrackingAuthorization::SIZE,
         }
-        let bump_seed = [bump];
-        let [seed, registry, owner] = seeds;
-        let signer_seeds = [
-            Seed::from(seed),
-            Seed::from(registry),
-            Seed::from(owner),
-            Seed::from(&bump_seed),
-        ];
-        pinocchio_system::create_account_with_minimum_balance_signed(
-            account,
-            AddressAuthorization::SIZE,
-            self.program_id,
-            self.payer,
-            None,
-            &[Signer::from(signer_seeds.as_slice())],
-        )?;
+        .create(account)?;
         let first = FirstEnrollment {
             registry: *self.registry,
             owner: *self.owner,
             bump,
-            ring_id: self.ring_id,
+            slot: self.slot,
             ix: self.ix,
         }
         .account();
@@ -112,48 +133,104 @@ impl AddressEnrollment<'_> {
     }
 }
 
+/// One owner's consent to one reader, whose signature the processor checked.
+#[must_use]
+pub struct OwnerGrantWrite<'a> {
+    pub program_id: &'a Address,
+    pub payer: &'a AccountView,
+    pub owner: &'a Address,
+    pub registry: &'a Address,
+    pub ix: &'a OwnerGrantIxData,
+}
+
+impl OwnerGrantWrite<'_> {
+    /// Creates the grant, a later call changes only whether it is active.
+    #[inline(always)]
+    pub fn write(self, account: &mut AccountView) -> ProgramResult {
+        let seeds = OwnerGrant::seeds(self.registry, self.owner, &self.ix.reader);
+        let (address, bump) = Address::derive_program_address(&seeds, self.program_id)
+            .ok_or(StorageError::InvalidOwnerGrant)?;
+        // The derivation names the owner, so only its signature reaches this account.
+        if account.address() != &address || !account.is_writable() {
+            return Err(StorageError::InvalidOwnerGrant.into());
+        }
+        if account.data_len() != 0 {
+            if !account.owned_by(self.program_id) {
+                return Err(StorageError::InvalidOwnerGrant.into());
+            }
+            let mut grant =
+                RefMut::filter_map(account.try_borrow_mut()?, OwnerGrant::from_data_mut)
+                    .map_err(|_| StorageError::InvalidOwnerGrant)?;
+            grant.active = self.ix.active;
+            return Ok(());
+        }
+        CanonicalPda {
+            program_id: self.program_id,
+            payer: self.payer,
+            seeds: &seeds,
+            bump,
+            size: OwnerGrant::SIZE,
+        }
+        .create(account)?;
+        let grant = OwnerGrant {
+            discriminator: OwnerGrant::DISCRIMINATOR,
+            bump,
+            registry: *self.registry,
+            owner: *self.owner,
+            reader: self.ix.reader,
+            active: self.ix.active,
+        };
+        account
+            .try_borrow_mut()?
+            .copy_from_slice(bytemuck::bytes_of(&grant));
+        Ok(())
+    }
+}
+
+/// Any creator's registry, the storage program never reads a ring's trust from it.
 #[inline(always)]
-pub fn load_registry<'a>(
+pub fn load_tracking_registry<'a>(
     program_id: &Address,
     account: &'a AccountView,
-) -> Result<Ref<'a, StorageRegistry>, ProgramError> {
+) -> Result<Ref<'a, TrackingRegistry>, ProgramError> {
     if !account.owned_by(program_id) {
-        return Err(StorageError::InvalidRegistry.into());
+        return Err(StorageError::InvalidTrackingRegistry.into());
     }
-    Ref::filter_map(account.try_borrow()?, StorageRegistry::from_data)
-        .map_err(|_| StorageError::InvalidRegistry.into())
+    Ref::filter_map(account.try_borrow()?, TrackingRegistry::from_data)
+        .map_err(|_| StorageError::InvalidTrackingRegistry.into())
 }
 
-/// `owner`'s authorization on `registry`, the derivation names both.
 #[inline(always)]
-pub fn load_authorization_mut<'a>(
+pub fn load_tracking_registry_mut<'a>(
+    program_id: &Address,
+    account: &'a mut AccountView,
+) -> Result<RefMut<'a, TrackingRegistry>, ProgramError> {
+    if !account.owned_by(program_id) || !account.is_writable() {
+        return Err(StorageError::InvalidTrackingRegistry.into());
+    }
+    RefMut::filter_map(account.try_borrow_mut()?, TrackingRegistry::from_data_mut)
+        .map_err(|_| StorageError::InvalidTrackingRegistry.into())
+}
+
+/// An authorization of `registry`, its stored field binds it because it is created only at its PDA.
+#[inline(always)]
+pub fn load_owned_tracking_authorization_mut<'a>(
     program_id: &Address,
     registry: &Address,
-    owner: &Address,
     account: &'a mut AccountView,
-) -> Result<RefMut<'a, AddressAuthorization>, ProgramError> {
-    let (address, _) =
-        Address::derive_program_address(&AddressAuthorization::seeds(registry, owner), program_id)
-            .ok_or(StorageError::InvalidAddressAuthorization)?;
-    if account.address() != &address || !account.is_writable() {
-        return Err(StorageError::InvalidAddressAuthorization.into());
+) -> Result<RefMut<'a, TrackingAuthorization>, ProgramError> {
+    if !account.owned_by(program_id) || !account.is_writable() {
+        return Err(StorageError::InvalidTrackingAuthorization.into());
     }
-    load_owned_authorization_mut(program_id, account)
-}
-
-#[inline(always)]
-fn load_owned_authorization_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, AddressAuthorization>, ProgramError> {
-    if !account.owned_by(program_id) {
-        return Err(StorageError::InvalidAddressAuthorization.into());
-    }
-    RefMut::filter_map(
+    let authorization = RefMut::filter_map(
         account.try_borrow_mut()?,
-        AddressAuthorization::from_data_mut,
+        TrackingAuthorization::from_data_mut,
     )
-    .map_err(|_| StorageError::InvalidAddressAuthorization.into())
+    .map_err(|_| StorageError::InvalidTrackingAuthorization)?;
+    if &authorization.registry != registry {
+        return Err(StorageError::InvalidTrackingAuthorization.into());
+    }
+    Ok(authorization)
 }
 
 #[inline(always)]
@@ -190,5 +267,35 @@ fn check_writable(account: &AccountView) -> Result<(), StorageError> {
     match account.is_writable() {
         true => Ok(()),
         false => Err(StorageError::ReadOnlyRegistry),
+    }
+}
+
+/// Handles a donated balance, `seeds` and `bump` come from the caller's derivation.
+#[must_use]
+struct CanonicalPda<'a> {
+    program_id: &'a Address,
+    payer: &'a AccountView,
+    seeds: &'a [&'a [u8]],
+    bump: u8,
+    size: usize,
+}
+
+impl CanonicalPda<'_> {
+    #[inline(always)]
+    fn create(self, account: &mut AccountView) -> ProgramResult {
+        let bump = [self.bump];
+        let mut signer_seeds: [Seed; MAX_SIGNER_SEEDS] =
+            core::array::from_fn(|_| Seed::from(&bump));
+        for (slot, seed) in signer_seeds.iter_mut().zip(self.seeds) {
+            *slot = Seed::from(*seed);
+        }
+        pinocchio_system::create_account_with_minimum_balance_signed(
+            account,
+            self.size,
+            self.program_id,
+            self.payer,
+            None,
+            &[Signer::from(&signer_seeds[..=self.seeds.len()])],
+        )
     }
 }

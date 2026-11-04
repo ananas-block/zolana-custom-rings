@@ -4,6 +4,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/lookup"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -50,7 +51,7 @@ func (r Row) read(api frontend.API, rc frontend.Rangechecker, active, root front
 	api.AssertIsBoolean(subject.Enrolled)
 	live := api.Mul(active, r.Live)
 	enrolled := api.Mul(live, subject.Enrolled)
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: enrolled, A: ListTag(api, r.ListSalt), B: subject.ListTag})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: enrolled, A: shared.ListTag(api, r.ListSalt), B: subject.ListTag})
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(live, enrolled), V: r.ListSalt})
 	salted := r.Salted.read(api, rc, live, root, Position(api, subject.Owner, r.ListSalt))
 	zero := r.Zero.read(api, rc, live, root, Position(api, subject.Owner, 0))

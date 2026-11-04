@@ -120,7 +120,7 @@ type recordColumns struct {
 var (
 	ownColumns = recordColumns{width: 6 + NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		return pooledRecord{escrowKey: record.EscrowKey, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: record.AddressHash}.columns()
+		return pooledRecord{escrowKey: 0, onList: sourceLists(api, record.Lists), mintPolicy: decodeMintPolicy(api, record.MintPolicy), withdrawalThreshold: record.WithdrawalThreshold, addressHash: 0}.columns()
 	}}
 	// A curator lookup reads list bits alone, every other field binds through the leaf hash only.
 	curatorColumns = recordColumns{width: NSources, project: func(api frontend.API, record registry.Record) []frontend.Variable {

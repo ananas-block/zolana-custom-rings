@@ -31,15 +31,6 @@ const (
 	WritableLists = GrantLists | DenyLists | ReaderBit
 )
 
-// ListSalt is one way, a disclosed salt reveals no nullifier secret.
-func ListSalt(api frontend.API, nullifierSecret frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListSaltDomain, nullifierSecret})
-}
-
-func ListTag(api frontend.API, listSalt frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListTagDomain, listSalt})
-}
-
 func Position(api frontend.API, owner, listSalt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{shared.ListPositionDomain, owner, listSalt})
 }
