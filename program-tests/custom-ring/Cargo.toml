@@ -52,6 +52,9 @@ spr-user-registry-interface = { workspace = true, features = ["solana"] }
 [dev-dependencies]
 base64 = { workspace = true }
 bytemuck = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 solana-account = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
 spr-api = { workspace = true, features = ["reqwest"] }

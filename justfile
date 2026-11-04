@@ -158,13 +158,15 @@ test-custom-ring-rules: (_custom-ring-suite "policy_rules")
 test-custom-ring-repin: (_custom-ring-suite "policy_repin")
 
 # One real key proven in a scratch export of HEAD.
-one-key-validation key="custom-ring-transfer-2-in24-w4-s4" test="one_key" spp_key="":
+one-key-validation key="custom-ring-transfer-2-in24-w4-s4" test="one_key" spp_key="" keys_dir="":
     #!/usr/bin/env bash
     set -euo pipefail
     git diff --quiet HEAD -- . ':(exclude)zolana' || { echo "Commit the tree, the run exports HEAD" >&2; exit 1; }
     git -C zolana diff --quiet HEAD || { echo "Commit zolana, the run exports its HEAD" >&2; exit 1; }
     run="{{justfile_directory()}}/target/one-key/$(git rev-parse --short=12 HEAD)-$(git -C zolana rev-parse --short=12 HEAD)"
-    tree="$run/tree" keys="$run/keys"
+    tree="$run/tree" keys='{{keys_dir}}'
+    mkdir -p "$run" "${keys:=$run/keys}/.setup"
+    keys="$(cd "$keys" && pwd)"
     key='{{key}}'
     file="${key//-/_}.key"
     module="${file#custom_ring_}"
@@ -182,7 +184,6 @@ one-key-validation key="custom-ring-transfer-2-in24-w4-s4" test="one_key" spp_ke
         mv "$tree.partial/$lock.empty" "$tree.partial/$lock"
         mv "$tree.partial" "$tree"
     fi
-    mkdir -p "$keys/.setup"
     cd "$tree"
     if [[ ! -s "$keys/$file" ]]; then
         (cd prover && go run ./cmd/prover "setup-$key" --output "$keys/.setup/$file" --vk-out "$keys/$key.vk.bin")
@@ -192,8 +193,8 @@ one-key-validation key="custom-ring-transfer-2-in24-w4-s4" test="one_key" spp_ke
         "$tree/program-libs/interface/src/verifying_keys/transfer" "$module"
     jq --arg name "$file" --arg sha256 "$(shasum -a 256 "$keys/$file" | awk '{ print $1 }')" \
         --argjson size "$(wc -c < "$keys/$file")" \
-        '.keys[$name] = { sha256: $sha256, size: $size, source: "release" }' "$lock" > "$keys/lock"
-    cp "$keys/lock" "$lock"
+        '.keys[$name] = { sha256: $sha256, size: $size, source: "release" }' "$lock" > "$run/lock"
+    cp "$run/lock" "$lock"
     python3 tools/generate_ring_keys.py --allow-missing
     {{just_executable()}} build-ring-heap-report
     env -u RING_INDEXER_BIN ZOLANA_SPP_KEYS_DIR="$keys" RING_EXTRA_SPP_KEY='{{spp_key}}' \

@@ -15,19 +15,20 @@ use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},
     tracking::TrackingRegistry,
     verifying_key, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
-    PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
+    MAX_CPI_DATA_LEN, MAX_FRAME_LEN, PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_test_validator::policy::RELEASED;
 use serde_json::Value;
 use solana_message::v1::MAX_ADDRESSES;
+use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
 use spr_api::{HttpClient, HttpFuture, HttpRequest};
 use spr_client::{
     prover::{ExpectedProvingKey, ProveRequest},
     rpc::{GetNonInclusionProofsResponse, IndexerRpcConfig, STATE_TREE_HEIGHT},
-    ClientError, GetMerkleProofsResponse, MerkleContext, MerkleProof, Proof, ProofDataSource,
-    WitnessReader,
+    ClientError, ConfirmedInstructionGroups, GetMerkleProofsResponse, MerkleContext, MerkleProof,
+    Proof, ProofDataSource, WitnessReader,
 };
-use spr_hasher::{Hasher, Poseidon};
+use spr_hasher::{Hasher, HasherError, Poseidon};
 use spr_indexer_api::Hash;
 use spr_interface::N_PUBLIC_SLOTS;
 use spr_keypair::NullifierKey;
@@ -58,6 +59,8 @@ const KEY: RingCircuit = RingCircuit::Transfer {
 };
 const REVISION: u64 = 1;
 const DISCOVERY_DEPOSIT: u64 = 1_000_000;
+/// The default heap frame, no ring transaction requests a larger one.
+const HEAP_LIMIT: u64 = 32 * 1024;
 const TRACKING_SECTION: [&str; 6] = [
     "trackingRoot",
     "trackingRecords",
@@ -69,45 +72,74 @@ const TRACKING_SECTION: [&str; 6] = [
 
 #[derive(Clone)]
 pub(super) struct SeededNotes {
-    leaves: [[u8; 32]; 2],
-    /// Even, the notes are siblings.
+    leaves: Vec<[u8; 32]>,
     first_leaf: u64,
-    upper_path: Vec<[u8; 32]>,
+    /// The tree's left nodes ahead of the first note.
+    frontier: Vec<[u8; 32]>,
     root: [u8; 32],
     root_index: u16,
     slot: u64,
 }
 
 impl SeededNotes {
-    fn path(&self, position: usize) -> Vec<[u8; 32]> {
-        std::iter::once(self.leaves[1 - position])
-            .chain(self.upper_path.iter().copied())
-            .collect()
+    fn node(&self, level: usize, position: u64) -> Result<[u8; 32], HasherError> {
+        let (start, end) = (position << level, (position + 1) << level);
+        if end <= self.first_leaf {
+            return Ok(self.frontier[level]);
+        }
+        if start >= self.first_leaf + self.leaves.len() as u64 {
+            return Ok(Poseidon::zero_bytes()[level]);
+        }
+        if level == 0 {
+            return Ok(self.leaves[(position - self.first_leaf) as usize]);
+        }
+        Poseidon::hashv(&[
+            &self.node(level - 1, 2 * position)?,
+            &self.node(level - 1, 2 * position + 1)?,
+        ])
     }
 
-    fn check_root(&self, position: usize) -> Result<()> {
-        let mut index = self.first_leaf + position as u64;
-        let mut node = self.leaves[position];
-        for sibling in self.path(position) {
-            node = match index % 2 {
-                0 => Poseidon::hashv(&[&node, &sibling])?,
-                _ => Poseidon::hashv(&[&sibling, &node])?,
-            };
-            index /= 2;
-        }
-        ensure!(node == self.root, "a seeded path misses the tree root");
+    pub(super) fn proof(
+        &self,
+        tree: Address,
+        leaf: [u8; 32],
+    ) -> Result<Option<MerkleProof>, HasherError> {
+        let Some(position) = self.leaves.iter().position(|held| *held == leaf) else {
+            return Ok(None);
+        };
+        let leaf_index = self.first_leaf + position as u64;
+        Ok(Some(MerkleProof {
+            leaf,
+            merkle_context: MerkleContext { tree_type: 0, tree },
+            path: (0..STATE_TREE_HEIGHT)
+                .map(|level| self.node(level, (leaf_index >> level) ^ 1))
+                .collect::<Result<_, _>>()?,
+            leaf_index,
+            root: self.root,
+            root_seq: self.slot,
+            root_index: self.root_index,
+        }))
+    }
+
+    fn check_roots(&self) -> Result<()> {
+        ensure!(
+            self.node(STATE_TREE_HEIGHT, 0)? == self.root,
+            "the seeded leaves miss the tree root"
+        );
         Ok(())
     }
 }
 
 pub(super) struct SeededIndexer {
-    indexer: ZolanaIndexer,
-    notes: SeededNotes,
-    own: MemberRegistryTree,
-    tracking: TrackingTree,
+    pub(super) indexer: ZolanaIndexer,
+    pub(super) notes: SeededNotes,
+    pub(super) own: MemberRegistryTree,
+    /// A curator registry read beside the ring's own.
+    pub(super) curator: Option<(Address, MemberRegistryTree)>,
+    pub(super) tracking: TrackingTree,
 }
 
-fn context(notes: &SeededNotes) -> spr_indexer_api::Context {
+pub(super) fn context(notes: &SeededNotes) -> spr_indexer_api::Context {
     spr_indexer_api::Context {
         block_time: 0,
         slot: notes.slot,
@@ -155,21 +187,12 @@ impl Rpc for SeededIndexer {
         let proofs = leaves
             .into_iter()
             .map(|leaf| {
-                let position = usize::from(leaf == notes.leaves[1]);
-                MerkleProof {
-                    leaf,
-                    merkle_context: MerkleContext {
-                        tree_type: 0,
-                        tree: tree_account,
-                    },
-                    path: notes.path(position),
-                    leaf_index: notes.first_leaf + position as u64,
-                    root: notes.root,
-                    root_seq: notes.slot,
-                    root_index: notes.root_index,
-                }
+                notes
+                    .proof(tree_account, leaf)
+                    .map_err(|error| ClientError::Rpc(error.to_string()))?
+                    .ok_or_else(|| ClientError::Rpc("a leaf no seed holds".to_owned()))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         Ok(GetMerkleProofsResponse {
             context: spr_client::Context {
                 block_time: 0,
@@ -198,8 +221,11 @@ impl RingIndexer for SeededIndexer {
         request: GetStorageRecordPoolRequest,
     ) -> Result<GetStorageRecordPoolResponse, RingIndexerError> {
         let members = member_bytes(&request.members);
-        let pool = self
-            .own
+        let registry = match &self.curator {
+            Some((address, curator)) if request.registry == (*address).into() => curator,
+            _ => &self.own,
+        };
+        let pool = registry
             .record_pool(
                 &members,
                 Canopy::covering(request.openings as usize).unwrap(),
@@ -207,7 +233,7 @@ impl RingIndexer for SeededIndexer {
             .unwrap();
         Ok(GetStorageRecordPoolResponse {
             context: context(&self.notes),
-            root: root_view(self.own.root().unwrap(), self.own.records().len()),
+            root: root_view(registry.root().unwrap(), registry.records().len()),
             records: pool
                 .records
                 .iter()
@@ -340,7 +366,8 @@ impl SeededChain<'_> {
             indexer: SeededIndexer {
                 indexer: ZolanaIndexer::new(self.env.indexer_url.clone()),
                 notes: self.notes,
-                own: own_tree(self.rows)?,
+                own: own_tree(self.rows, &[])?,
+                curator: None,
                 tracking: tracking_tree(self.rows)?,
             },
             prover: prover(),
@@ -350,40 +377,44 @@ impl SeededChain<'_> {
     }
 }
 
-struct LinkedRow<'r> {
+struct LinkedRow {
     member: [u8; 32],
     next: [u8; 32],
-    address: &'r ShieldedAddress,
 }
 
-struct LinkedRows<'r> {
+struct LinkedRows {
     first: [u8; 32],
-    rows: Vec<LinkedRow<'r>>,
+    rows: Vec<LinkedRow>,
 }
 
-fn linked(rows: &[ShieldedAddress]) -> Result<LinkedRows<'_>> {
-    let mut members = rows
-        .iter()
-        .map(|address| Ok((address.signing_pubkey.owner_proof_input_hash()?, address)))
-        .collect::<Result<Vec<_>>>()?;
-    members.sort_by_key(|(member, _)| *member);
+fn linked(mut members: Vec<[u8; 32]>) -> LinkedRows {
+    members.sort_unstable();
     let closing = TrackingRecord::SENTINEL.next;
-    Ok(LinkedRows {
-        first: members.first().map_or(closing, |(member, _)| *member),
+    LinkedRows {
+        first: members.first().copied().unwrap_or(closing),
         rows: members
             .iter()
             .enumerate()
-            .map(|(position, (member, address))| LinkedRow {
+            .map(|(position, member)| LinkedRow {
                 member: *member,
-                next: members.get(position + 1).map_or(closing, |(next, _)| *next),
-                address,
+                next: members.get(position + 1).copied().unwrap_or(closing),
             })
             .collect(),
-    })
+    }
 }
 
-pub(super) fn own_tree(rows: &[ShieldedAddress]) -> Result<MemberRegistryTree> {
-    let linked = linked(rows)?;
+fn address_member(address: &ShieldedAddress) -> Result<[u8; 32]> {
+    Ok(address.signing_pubkey.owner_proof_input_hash()?)
+}
+
+/// `extra` holds the allowed members no shielded address names.
+pub(super) fn own_tree(rows: &[ShieldedAddress], extra: &[[u8; 32]]) -> Result<MemberRegistryTree> {
+    let mut members = rows
+        .iter()
+        .map(address_member)
+        .collect::<Result<Vec<_>>>()?;
+    members.extend_from_slice(extra);
+    let linked = linked(members);
     let records = std::iter::once(MemberRecord {
         next: linked.first,
         ..MemberRecord::SENTINEL
@@ -399,19 +430,26 @@ pub(super) fn own_tree(rows: &[ShieldedAddress]) -> Result<MemberRegistryTree> {
 }
 
 pub(super) fn tracking_tree(rows: &[ShieldedAddress]) -> Result<TrackingTree> {
-    let linked = linked(rows)?;
+    let addresses = rows
+        .iter()
+        .map(|address| Ok((address_member(address)?, address)))
+        .collect::<Result<std::collections::HashMap<_, _>>>()?;
+    let linked = linked(addresses.keys().copied().collect());
     let records = std::iter::once(TrackingRecord {
         next: linked.first,
         ..TrackingRecord::SENTINEL
     })
-    .chain(linked.rows.iter().map(|row| TrackingRecord {
-        member: row.member,
-        next: row.next,
-        nullifier_pk: row.address.nullifier_pubkey,
-        ct_hash: [0x05; 32],
-        viewing_u: row.address.viewing_pubkey.u(),
-        revision: REVISION,
-        list_tag: [0x06; 32],
+    .chain(linked.rows.iter().map(|row| {
+        let address = addresses[&row.member];
+        TrackingRecord {
+            member: row.member,
+            next: row.next,
+            nullifier_pk: address.nullifier_pubkey,
+            ct_hash: [0x05; 32],
+            viewing_u: address.viewing_pubkey.u(),
+            revision: REVISION,
+            list_tag: [0x06; 32],
+        }
     }))
     .collect();
     Ok(TrackingTree::from_records(records)?)
@@ -458,7 +496,7 @@ pub(super) struct NoteSeed<'a> {
     pub(super) env: &'a TestEnv,
     pub(super) ring: CustomRing,
     pub(super) owner: &'a ShieldedKeypair,
-    pub(super) amounts: [u64; 2],
+    pub(super) amounts: &'a [u64],
 }
 
 impl NoteSeed<'_> {
@@ -467,28 +505,19 @@ impl NoteSeed<'_> {
         let env = self.env;
         let rpc = env.client.rpc();
         // Photon discovers a tree from its first indexed transaction.
-        for _ in 0..2 {
-            DefaultRingDeposit {
-                depositor: &env.recipient.keypair,
-                tree: env.tree,
-                asset: DepositAsset::Sol,
-                amount: DISCOVERY_DEPOSIT,
-            }
-            .send(rpc, env.client.indexer(), &env.assets)?;
+        DefaultRingDeposit {
+            depositor: &env.recipient.keypair,
+            tree: env.tree,
+            asset: DepositAsset::Sol,
+            amount: DISCOVERY_DEPOSIT,
         }
+        .send(rpc, env.client.indexer(), &env.assets)?;
         let mut data = tree_data(env)?;
         let mut tree = tree_layout(env.tree, &mut data)?;
         let tree_id = tree.tree_id();
         let utxo_tree = tree.utxo_tree();
         let first_leaf = utxo_tree.next_index();
-        ensure!(first_leaf.is_multiple_of(2), "the seed needs an even leaf");
-        let zeros = Poseidon::zero_bytes();
-        let upper_path = (1..STATE_TREE_HEIGHT)
-            .map(|level| match (first_leaf >> level) & 1 {
-                1 => utxo_tree.subtrees[level],
-                _ => zeros[level],
-            })
-            .collect();
+        let frontier = utxo_tree.subtrees.to_vec();
         let notes = self
             .amounts
             .iter()
@@ -511,7 +540,7 @@ impl NoteSeed<'_> {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let leaves = [notes[0].utxo_hash, notes[1].utxo_hash];
+        let leaves: Vec<[u8; 32]> = notes.iter().map(|note| note.utxo_hash).collect();
         let slot = rpc.get_slot()?;
         utxo_tree
             .append_batch(leaves.iter(), slot)
@@ -519,13 +548,12 @@ impl NoteSeed<'_> {
         let seeded = SeededNotes {
             leaves,
             first_leaf,
-            upper_path,
+            frontier,
             root: utxo_tree.root(),
             root_index: utxo_tree.current_root_index(),
             slot,
         };
-        seeded.check_root(0)?;
-        seeded.check_root(1)?;
+        seeded.check_roots()?;
         env.set_account_data(env.tree, &data)?;
         Ok(Seeded {
             wallets: notes,
@@ -596,12 +624,33 @@ pub(super) struct LandedCost {
 
 pub(super) struct Landed<'a> {
     pub(super) env: &'a TestEnv,
-    pub(super) payer: Address,
-    pub(super) instruction: &'a Instruction,
     pub(super) signature: Signature,
 }
 
 impl Landed<'_> {
+    fn read(&self, encoding: &str) -> Result<Value> {
+        Ok(self.env.client.rpc().client().send(
+            solana_rpc_client_api::request::RpcRequest::GetTransaction,
+            serde_json::json!([self.signature.to_string(), {
+                "encoding": encoding,
+                "commitment": "confirmed",
+                "maxSupportedTransactionVersion": 1,
+            }]),
+        )?)
+    }
+
+    /// The first instruction's tag, every ring operation sends one instruction.
+    pub(super) fn tag(&self) -> Result<Option<u8>> {
+        let read = self.read("json")?;
+        let groups = ConfirmedInstructionGroups::try_from(serde_json::from_value::<
+            EncodedConfirmedTransactionWithStatusMeta,
+        >(read)?)?;
+        Ok(groups
+            .groups
+            .first()
+            .and_then(|group| group.outer.data.first().copied()))
+    }
+
     pub(super) fn cost_with_heap(self, label: &str) -> Result<()> {
         ensure!(
             self.cost(label)?.heap.is_some(),
@@ -612,26 +661,16 @@ impl Landed<'_> {
 
     /// The heap peak needs `CUSTOM_RING_PROGRAM_SO` naming the heap report build.
     pub(super) fn cost(self, label: &str) -> Result<LandedCost> {
-        let tag = self
-            .instruction
-            .data
-            .first()
-            .and_then(|tag| InstructionTag::try_from(*tag).ok())
-            .context("a tagged ring instruction")?;
-        let units_limit = compute_unit_limit(tag);
-        let compiled = spr_client::transaction_size(
-            &self.payer,
-            core::slice::from_ref(self.instruction),
-            ComputeBudgetConfig::new(units_limit),
-        )?;
-        let confirmed: Value = self.env.client.rpc().client().send(
-            solana_rpc_client_api::request::RpcRequest::GetTransaction,
-            serde_json::json!([self.signature.to_string(), {
-                "encoding": "base64",
-                "commitment": "confirmed",
-                "maxSupportedTransactionVersion": 1,
-            }]),
-        )?;
+        let units_limit = compute_unit_limit(
+            self.tag()?
+                .and_then(|tag| InstructionTag::try_from(tag).ok())
+                .context("a tagged ring instruction")?,
+        );
+        let addresses = self.read("json")?["transaction"]["message"]["accountKeys"]
+            .as_array()
+            .context("the message's account keys")?
+            .len();
+        let confirmed = self.read("base64")?;
         let decode = |encoded: &Value| -> Result<Vec<u8>> {
             let encoded = encoded.as_str().context("a base64 field")?;
             Ok(base64::engine::general_purpose::STANDARD.decode(encoded)?)
@@ -649,26 +688,44 @@ impl Landed<'_> {
             }
             false => None,
         };
-        ensure!(
-            bytes == compiled.bytes,
-            "{label} landed {bytes} bytes, compiled {}",
-            compiled.bytes
-        );
         ensure!(bytes <= MAX_TRANSACTION_SIZE, "{label} has {bytes} bytes");
         ensure!(
-            compiled.addresses <= usize::from(MAX_ADDRESSES),
-            "{label} has {} addresses",
-            compiled.addresses
+            addresses <= usize::from(MAX_ADDRESSES),
+            "{label} has {addresses} addresses"
         );
         ensure!(
             units <= u64::from(units_limit),
             "{label} took {units} units over {units_limit}"
         );
+        if let Some(peak) = heap {
+            ensure!(peak <= HEAP_LIMIT, "{label} peaked at {peak} heap bytes");
+        }
         println!(
-            "{label}: {bytes} bytes of {MAX_TRANSACTION_SIZE}, {} addresses of {MAX_ADDRESSES}, {units} units of {units_limit}, heap {heap:?}",
-            compiled.addresses
+            "{label}: {bytes} bytes of {MAX_TRANSACTION_SIZE}, {addresses} addresses of {MAX_ADDRESSES}, {units} units of {units_limit}, heap {heap:?} of {HEAP_LIMIT}"
         );
         Ok(LandedCost { heap })
+    }
+}
+
+pub(super) struct FrameReport<'a> {
+    /// The tag and the frame, as the inline instruction carries them.
+    pub(super) frame: &'a [u8],
+    pub(super) rail: RingRail,
+    pub(super) policy: &'a RingPolicy,
+}
+
+impl FrameReport<'_> {
+    pub(super) fn check(self, label: &str) -> Result<()> {
+        let (_, body) = self.frame.split_first().context("a tagged frame")?;
+        let parsed = RingTransactData::parse(body, self.rail)?;
+        let cpi = parsed.data().spp_instruction_data(self.policy)?.len();
+        let frame = self.frame.len();
+        ensure!(frame <= MAX_FRAME_LEN, "{label} frame takes {frame} bytes");
+        ensure!(cpi <= MAX_CPI_DATA_LEN, "{label} SPP CPI takes {cpi} bytes");
+        println!(
+            "{label}: frame {frame} bytes of {MAX_FRAME_LEN}, SPP CPI data {cpi} bytes of {MAX_CPI_DATA_LEN}"
+        );
+        Ok(())
     }
 }
 
@@ -806,7 +863,7 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
     let policy = policy_registry(ring, &env)?;
     let honest_root = tracking_tree(&honest_rows)?.root()?;
     let wrong_root = tracking_tree(&wrong_rows)?.root()?;
-    let own_root = own_tree(&honest_rows)?.root()?;
+    let own_root = own_tree(&honest_rows, &[])?.root()?;
     AccountEdit {
         env: &env,
         address: policy.records,
@@ -827,7 +884,7 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
         env: &env,
         ring,
         owner: sender,
-        amounts: [RING_DEPOSIT_A, RING_DEPOSIT_B],
+        amounts: &[RING_DEPOSIT_A, RING_DEPOSIT_B],
     }
     .write()?;
     println!("seeded: own and tracking roots, two ring notes");
@@ -955,11 +1012,15 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
     let signature = land(&env, instruction.clone(), sender, &[])?;
     Landed {
         env: &env,
-        payer: sender.pubkey(),
-        instruction: &instruction,
         signature,
     }
     .cost("settlement")?;
+    FrameReport {
+        frame: &instruction.data,
+        rail: RingRail::Confidential,
+        policy: &policy,
+    }
+    .check("2 output inline")?;
     assert_eq!(
         data.nullifiers,
         [notes[0].nullifier, notes[1].nullifier].as_slice()

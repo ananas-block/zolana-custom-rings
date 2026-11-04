@@ -5,7 +5,7 @@ use std::time::Instant;
 use super::{
     one_key::{
         newest_root, nullifier_accounts, own_tree, tracking_tree, with_altered_record, AccountEdit,
-        Landed, NoteSeed, RingBody, Seeded, SeededChain, SettledState,
+        FrameReport, Landed, NoteSeed, RingBody, Seeded, SeededChain, SettledState,
     },
     *,
 };
@@ -117,8 +117,6 @@ impl Upload<'_> {
             let signature = land(self.env, write.clone(), self.writer, &[])?;
             Landed {
                 env: self.env,
-                payer: self.writer.pubkey(),
-                instruction: &write,
                 signature,
             }
             .cost_with_heap(&format!("{} write {index}", self.label))?;
@@ -146,7 +144,7 @@ impl FrameDiff<'_> {
     }
 }
 
-fn finalized_transaction(
+pub(super) fn finalized_transaction(
     env: &TestEnv,
     signature: Signature,
 ) -> Result<EncodedConfirmedTransactionWithStatusMeta> {
@@ -235,7 +233,7 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
     let recipient = &env.recipient.keypair;
     let rows = [sender.shielded_address()?, recipient.shielded_address()?];
     let policy = policy_registry(ring, &env)?;
-    let own_root = own_tree(&rows)?.root()?;
+    let own_root = own_tree(&rows, &[])?.root()?;
     let tracking_root = tracking_tree(&rows)?.root()?;
     AccountEdit {
         env: &env,
@@ -254,7 +252,7 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
         env: &env,
         ring,
         owner: sender,
-        amounts: [RING_DEPOSIT_A, RING_DEPOSIT_B],
+        amounts: &[RING_DEPOSIT_A, RING_DEPOSIT_B],
     }
     .write()?;
     println!("seeded: own and tracking roots, two unbacked ring notes, throwaway key setup");
@@ -295,7 +293,13 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
         bytes > MAX_TRANSACTION_SIZE,
         "the inline frame takes {bytes} bytes, the buffer is not required"
     );
-    println!("inline: {bytes} bytes of {MAX_TRANSACTION_SIZE}, {addresses} addresses");
+    println!("inline transaction: {bytes} bytes of {MAX_TRANSACTION_SIZE}, {addresses} addresses");
+    FrameReport {
+        frame: &inline.data,
+        rail: RingRail::Anonymous,
+        policy: &policy,
+    }
+    .check("6360 byte fixture")?;
     let data = frame(&inline, RingRail::Anonymous)?;
     ensure!(data.has_data, "the frame carries no data tail");
     assert_eq!(
@@ -364,8 +368,6 @@ fn buffered_validation_settles_the_oversized_frame_and_refuses_changes_and_a_res
     let signature = land(&env, settle.clone(), &writer, &[])?;
     Landed {
         env: &env,
-        payer: writer.pubkey(),
-        instruction: &settle,
         signature,
     }
     .cost_with_heap("settlement")?;

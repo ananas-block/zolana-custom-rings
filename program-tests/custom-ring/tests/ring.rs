@@ -52,6 +52,9 @@ mod merge;
 #[path = "ring/buffered_validation.rs"]
 mod buffered_validation;
 #[cfg(feature = "proofs")]
+#[path = "ring/full_load_validation.rs"]
+mod full_load_validation;
+#[cfg(feature = "proofs")]
 #[path = "ring/one_key.rs"]
 mod one_key;
 #[path = "ring/migration.rs"]
