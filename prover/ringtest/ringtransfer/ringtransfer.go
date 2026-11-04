@@ -61,7 +61,7 @@ type World struct {
 	FrozenCoOwner bool
 	Omitted       int
 	// Inputs replace the fixture's spend, owners off the rail's run need CoOwners.
-	Inputs []ringaudit.Slot
+	Inputs []ringaudit.Input
 	// DefaultInput moves input 1 to the default ring, an entry key's evidence opens it.
 	DefaultInput bool
 	// HasData writes data hashes on the first ring output, the key needs tails.
@@ -105,7 +105,7 @@ func table() policy.Table {
 
 // Assembled is what both families' Build share.
 type Assembled struct {
-	Audit        ringaudit.Section
+	Audit        ringaudit.Audit
 	Own, Curator *ringregistry.Registry
 	Tracking     *ringregistry.Tracking
 	Sender       *big.Int
@@ -114,16 +114,14 @@ type Assembled struct {
 }
 
 // spend fills the fixture's inputs, half and half across the sender's two notes.
-func (w World) spend(t testing.TB, a *ringaudit.Section) {
+func (w World) spend(t testing.TB, a *ringaudit.Audit) {
 	t.Helper()
 	if w.Inputs != nil {
-		a.Inputs = slices.Clone(a.Inputs)
 		copy(a.Inputs, w.Inputs)
 		a.InputCount = max(len(w.Inputs), 1)
 		return
 	}
 	a.InputCount = 2 + len(w.CoOwners)
-	a.Inputs = slices.Clone(a.Inputs)
 	if w.PublicFunded {
 		return
 	}
@@ -133,22 +131,11 @@ func (w World) spend(t testing.TB, a *ringaudit.Section) {
 	if w.DefaultInput {
 		secondRing = big.NewInt(0)
 	}
-	a.Inputs[0] = ringaudit.Slot{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, a.RingProgramID, owed-owed/2, 51), OwnerKey: SenderKey(), Mint: ringaudit.FixtureMint}
-	a.Inputs[1] = ringaudit.Slot{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, secondRing, owed/2, 52), OwnerKey: SenderKey(), Mint: ringaudit.FixtureMint}
+	a.Inputs[0] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, a.RingProgramID, owed-owed/2, 51), OwnerKey: SenderKey(), Mint: ringtest.Repeat(0x0a)}
+	a.Inputs[1] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, secondRing, owed/2, 52), OwnerKey: SenderKey(), Mint: ringtest.Repeat(0x0a)}
 	for k, coOwner := range w.CoOwners {
-		a.Inputs[2+k] = ringaudit.Slot{Utxo: ringaudit.SpentUtxo(t, coOwner, CoOwnerKey(t, coOwner), a.RingProgramID, 1, 53+int64(k))}
+		a.Inputs[2+k] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, coOwner, CoOwnerKey(t, coOwner), a.RingProgramID, 1, 53+int64(k))}
 	}
-}
-
-// RecipientKey is fixture recipient n's Ed25519 key.
-func RecipientKey(n byte) [32]byte {
-	return ringtest.Repeat(0xb2 + n)
-}
-
-// RecipientNullifierPk is the key fixture recipient n enrolled.
-func RecipientNullifierPk(t testing.TB, n byte) *big.Int {
-	t.Helper()
-	return spptest.MustNullifierPk(t, big.NewInt(20+int64(n)))
 }
 
 // CoOwnerKey is the key a co-owner enrolled, one per owner.
@@ -158,12 +145,12 @@ func CoOwnerKey(t testing.TB, owner *big.Int) *big.Int {
 }
 
 // owedAsset is what balance owes of the fixture asset, every output plus every net withdrawal.
-func (w World) owedAsset(t testing.TB, a *ringaudit.Section) uint64 {
+func (w World) owedAsset(t testing.TB, a *ringaudit.Audit) uint64 {
 	t.Helper()
 	owed := int64(0)
-	for _, slot := range a.Outputs {
-		if slot.Utxo.IsUtxo() && slot.Utxo.Asset.Cmp(Asset(t)) == 0 {
-			owed += int64(slot.Utxo.Amount)
+	for _, utxo := range a.Utxos() {
+		if utxo.IsUtxo() && utxo.Asset.Cmp(Asset(t)) == 0 {
+			owed += int64(utxo.Amount)
 		}
 	}
 	for _, public := range w.Public {
@@ -175,30 +162,20 @@ func (w World) owedAsset(t testing.TB, a *ringaudit.Section) uint64 {
 }
 
 // newAudit lays out every output and input before any hash reads them.
-func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Section {
+func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Audit {
 	t.Helper()
 	exits := w.Exits
 	if exits == nil && shape.Outputs > 2 {
 		exits = []int{shape.Outputs - 2}
 	}
-	a := ringaudit.Section{Transfer: ringaudit.NewTransfer(t), Shape: shape, Outputs: make([]ringaudit.Slot, shape.Outputs), Inputs: make([]ringaudit.Slot, shape.InputClass)}
-	for i := range a.Inputs {
-		a.Inputs[i] = ringaudit.Slot{Utxo: ringaudit.SpareInput(i)}
-	}
-	for i := range a.Outputs {
-		switch {
-		case w.AllDummies:
-			a.Outputs[i] = a.Dummy(t, i)
-		case slices.Contains(exits, i):
-			a.Outputs[i] = a.Exit(t, i)
-		default:
-			n := byte(i % 3)
-			a.Outputs[i] = a.RingOutput(t, i, RecipientKey(n), RecipientNullifierPk(t, n), 30+uint64(i))
-		}
+	a := ringaudit.NewAudit(t, shape, exits...)
+	if w.AllDummies {
+		a = a.AllDummies(t)
 	}
 	if w.Omitted > 0 {
-		a = a.Omit(w.Omitted)
+		a = a.Omit(t, w.Omitted)
 	}
+	a.Outputs = slices.Clone(a.Outputs)
 	if w.HasData {
 		a.HasData = true
 		for i := range a.Outputs {
@@ -216,7 +193,7 @@ func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Section
 }
 
 // rows are the distinct live input owners ascending, the delegate's skip a zero key.
-func rows(a ringaudit.Section, delegate bool, capacity int) []frontend.Variable {
+func rows(a ringaudit.Audit, delegate bool, capacity int) []frontend.Variable {
 	var owners []*big.Int
 	for _, input := range a.Inputs {
 		if !input.Utxo.IsUtxo() || (delegate && input.Utxo.NullifierPk.Cmp(shared.ZeroNullifierPk) == 0) {
@@ -238,7 +215,7 @@ func rows(a ringaudit.Section, delegate bool, capacity int) []frontend.Variable 
 }
 
 // tracking enrolls every owner of a nonzero ring key.
-func (w World) tracking(t testing.TB, a ringaudit.Section) *ringregistry.Tracking {
+func (w World) tracking(t testing.TB, a ringaudit.Audit) *ringregistry.Tracking {
 	t.Helper()
 	tree := ringregistry.NewTracking(t)
 	enrolled := map[string]bool{}
@@ -267,7 +244,7 @@ func (w World) tracking(t testing.TB, a ringaudit.Section) *ringregistry.Trackin
 }
 
 // registries lists every sender and UTXO output owner on the allow list and limits the fixture asset.
-func (w World) registries(t testing.TB, a ringaudit.Section, senders []frontend.Variable) (own, curator *ringregistry.Registry) {
+func (w World) registries(t testing.TB, a ringaudit.Audit, senders []frontend.Variable) (own, curator *ringregistry.Registry) {
 	t.Helper()
 	own, curator = ringregistry.New(t), ringregistry.New(t)
 	zero := big.NewInt(0)
@@ -294,9 +271,9 @@ func (w World) registries(t testing.TB, a ringaudit.Section, senders []frontend.
 		}
 		member(identity, lists)
 	}
-	for _, slot := range a.Outputs {
-		if slot.Utxo.IsUtxo() {
-			member(slot.Utxo.OwnerPkHash, ringregistry.AllowBit)
+	for _, utxo := range a.Utxos() {
+		if utxo.IsUtxo() {
+			member(utxo.OwnerPkHash, ringregistry.AllowBit)
 		}
 	}
 	for _, leg := range w.Withdrawals {
@@ -312,7 +289,7 @@ func (w World) registries(t testing.TB, a ringaudit.Section, senders []frontend.
 }
 
 // fill sets every wire both families share and returns what the statement reads.
-func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Section, delegate bool, run []*big.Int) Assembled {
+func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, delegate bool, run []*big.Int) Assembled {
 	t.Helper()
 	wires := a.Wires(a.Layout())
 	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
@@ -325,7 +302,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Section, del
 	for i, input := range a.Inputs {
 		c.Inputs[i] = input.Utxo.Wires()
 		if i < len(c.Entries) {
-			c.Entries[i] = entryWires(input)
+			c.Entries[i] = input.EntryWires()
 		}
 	}
 	c.PrivateTxBlinding = big.NewInt(privateTxBlinding)
@@ -341,7 +318,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Section, del
 	c.PrivateRoot = 0
 	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a)}
 	assembled.Own, assembled.Curator = w.registries(t, a, c.Rows)
-	w.fillPolicy(t, &c.Policy, assembled, delegate, c.Rows)
+	w.fillPolicy(t, &c.Policy, assembled, delegate, c.Rows, a.Utxos())
 	outputOwners := make([]frontend.Variable, len(a.Outputs))
 	for o, slot := range a.Outputs {
 		outputOwners[o] = 0
@@ -353,12 +330,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Section, del
 	return assembled
 }
 
-func entryWires(slot ringaudit.Slot) audit.EntryWires {
-	output := slot.Wires()
-	return audit.EntryWires{OwnerKey: output.OwnerKey, MintChunks: output.MintChunks}
-}
-
-func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable) {
+func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {
 	t.Helper()
 	p.Table = table()
 	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
@@ -388,9 +360,9 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 			p.Withdrawals[i] = policy.WithdrawalWires{Owner: legs[i].Owner, Asset: legs[i].Asset, Amount: new(big.Int).SetUint64(legs[i].Amount)}
 		}
 	}
-	wires := make([]shared.UtxoWires, len(a.Audit.Outputs))
-	for o, slot := range a.Audit.Outputs {
-		wires[o] = slot.Utxo.Wires()
+	wires := make([]shared.UtxoWires, len(utxos))
+	for o, utxo := range utxos {
+		wires[o] = utxo.Wires()
 	}
 	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator)
 }
@@ -405,19 +377,11 @@ func withdrawalHash(t testing.TB, p *policy.Policy) *big.Int {
 	return spptest.MustHashChain4(t, fields)
 }
 
-func utxos(slots []ringaudit.Slot) []ringaudit.Utxo {
-	out := make([]ringaudit.Utxo, len(slots))
-	for i, slot := range slots {
-		out[i] = slot.Utxo
-	}
-	return out
-}
-
 // rehash recomputes private_tx_hash from the audit's slots.
-func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Section) {
+func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
 	t.Helper()
-	inputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, utxos(a.Inputs)))
-	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, utxos(a.Outputs)))
+	inputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.InputUtxos()))
+	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.Utxos()))
 	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, big.NewInt(0), ringtest.AsBigInt(c.PrivateTxBlinding)})
 }
 
@@ -426,8 +390,7 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 	t.Helper()
 	stream := a.Audit.Stream(t)
 	s := Statement{
-		Head: a.Audit.AuditHead(t, a.Audit.Layout(), stream.Envelope(a.Audit.InputCount)), OutputCount: a.Audit.OutputCount(), Capacity: len(a.Audit.Outputs),
-		Hashes: a.Audit.PublishedHashes(t), Records: a.Audit.PublishedRecords(stream), Tails: a.Audit.PublishedTails(stream), InputCount: a.Audit.InputCount,
+		Head: a.Audit.Head(t, stream), Outputs: a.Audit.StatementOutputs(t, stream), InputCount: a.Audit.InputCount,
 		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), NoSpend: a.Audit.RealInputs() == 0,
 		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
 		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
