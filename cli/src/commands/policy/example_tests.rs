@@ -13,7 +13,7 @@ const EXAMPLES: [&str; 8] = [
     "empty-policy",
     "own-blocklist",
     "private-blocklist",
-    "curated-blocklist-approval-exception",
+    "curated-blocklist-with-grants",
     "allowlist",
     "asset-allowlist-owner-threshold",
     "outflow-limit",

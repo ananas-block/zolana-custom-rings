@@ -61,13 +61,10 @@ pub const BLOCK_ONLY: RuleTable = RuleTable::builder()
 pub const LIMIT_CAP: u64 = 650_000_000;
 pub const LIMIT_COSIGN_ABOVE: u64 = 300_000_000;
 
-/// Approval or no Block admits an output owner.
-pub const APPROVAL_OR_UNBLOCKED: RuleTable = RuleTable::builder()
-    .rule(Rule::any_of(
-        Subject::OutputOwner,
-        ListSet::single(ListId::Approval),
-        ListSet::single(ListId::Block),
-    ))
+/// An output owner needs an Approval entry and no Block entry.
+pub const APPROVED_AND_UNBLOCKED: RuleTable = RuleTable::builder()
+    .rule(Rule::require(Subject::OutputOwner, ListId::Approval))
+    .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
     .build();
 
 pub fn owner_member(owner: &ShieldedKeypair) -> Result<Member> {
