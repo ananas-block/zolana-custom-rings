@@ -54,6 +54,13 @@ struct Write {
     root: String,
 }
 
+struct Step {
+    owner: [u8; 32],
+    target: WriteTarget,
+    old_lists: ListSet,
+    change: BlindChange,
+}
+
 fn field(byte: u8) -> [u8; 32] {
     let mut out = [0; 32];
     out[31] = byte;
@@ -75,13 +82,34 @@ fn compute() -> Vectors {
     let allow = ListSet::single(ListId::Allow);
     let block = ListSet::single(ListId::Block);
     let (alice, bob) = (field(0xa1), field(0xb0));
-    let plan: [&[([u8; 32], WriteTarget, ListSet, ListSet, ListSet)]; 3] = [
-        &[
-            (alice, enrolled, ListSet::EMPTY, block, block),
-            (bob, WriteTarget::Unenrolled, ListSet::EMPTY, allow, allow),
+    let change = |mask, value| BlindChange { mask, value };
+    let plan = [
+        vec![
+            Step {
+                owner: alice,
+                target: enrolled,
+                old_lists: ListSet::EMPTY,
+                change: change(block, block),
+            },
+            Step {
+                owner: bob,
+                target: WriteTarget::Unenrolled,
+                old_lists: ListSet::EMPTY,
+                change: change(allow, allow),
+            },
         ],
-        &[(alice, enrolled, block, allow, allow)],
-        &[(alice, enrolled, allow.union(block), block, ListSet::EMPTY)],
+        vec![Step {
+            owner: alice,
+            target: enrolled,
+            old_lists: block,
+            change: change(allow, allow),
+        }],
+        vec![Step {
+            owner: alice,
+            target: enrolled,
+            old_lists: allow.union(block),
+            change: change(block, ListSet::EMPTY),
+        }],
     ];
     let mut tree = PrivateListTree::new().unwrap();
     let registry = Address::new_from_array([0x44; 32]);
@@ -98,18 +126,14 @@ fn compute() -> Vectors {
             let mut restrictive = false;
             let writes = batch
                 .iter()
-                .map(|(owner, target, old_lists, mask, value)| {
+                .map(|step| {
                     counter += 1;
-                    let change = BlindChange {
-                        mask: *mask,
-                        value: *value,
-                    };
-                    restrictive |= change.restrictive();
+                    restrictive |= step.change.restrictive();
                     let published = BlindWrite {
-                        owner: *owner,
-                        target: *target,
-                        old_lists: *old_lists,
-                        change,
+                        owner: step.owner,
+                        target: step.target,
+                        old_lists: step.old_lists,
+                        change: step.change,
                         write_counter: counter,
                     }
                     .published()
@@ -117,10 +141,10 @@ fn compute() -> Vectors {
                     chain = published.chain(&chain).unwrap();
                     tree.publish(&published).unwrap();
                     Write {
-                        owner: hex32(owner),
-                        enrolled: *target != WriteTarget::Unenrolled,
-                        mask: mask.bits(),
-                        value: value.bits(),
+                        owner: hex32(&step.owner),
+                        enrolled: step.target != WriteTarget::Unenrolled,
+                        mask: step.change.mask.bits(),
+                        value: step.change.value.bits(),
                         write_counter: counter,
                         position: hex32(&published.position.0),
                         leaf: hex32(&published.leaf),
@@ -185,16 +209,12 @@ fn a_reader_rebuilds_the_root_from_published_writes() {
         list_salt,
     };
     let block = ListSet::single(ListId::Block);
-    let writes = [(block, block), (block, ListSet::EMPTY)].map(|(mask, value)| (mask, value));
     let mut old_lists = ListSet::EMPTY;
-    let published: Vec<_> = writes
-        .iter()
+    let published: Vec<_> = [block, ListSet::EMPTY]
+        .into_iter()
         .enumerate()
-        .map(|(i, (mask, value))| {
-            let change = BlindChange {
-                mask: *mask,
-                value: *value,
-            };
+        .map(|(i, value)| {
+            let change = BlindChange { mask: block, value };
             let write = BlindWrite {
                 owner: field(2),
                 target,
