@@ -8,9 +8,9 @@ import { encodeBase58 } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 
-import expansion from "../../../../../test-vectors/proof/ring-transact-expansion-v4.json" with { type: "json" };
+import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
 import keyed from "../../../../../test-vectors/proof/ring_keyed_shapes.json" with { type: "json" };
-import statements from "../../../../../test-vectors/audit/transfer_statement_v4.json" with { type: "json" };
+import statements from "../../../../../test-vectors/audit/transfer_statement.json" with { type: "json" };
 import tracking from "../../../../../test-vectors/registry/tracking-records.json" with { type: "json" };
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import {
@@ -50,7 +50,7 @@ const RAILS: Readonly<Record<string, RingRail>> = {
 
 beforeAll(initializePoseidon);
 
-describe("ring-transact-expansion-v4.json", () => {
+describe("ring-transact-expansion.json", () => {
   const config = { auditorPubkey: hexToBytes(expansion.auditor_pubkey) as Bytes33 };
 
   it.each(expansion.cases)("$name reads, writes and expands as Rust does", (vector) => {
@@ -74,9 +74,9 @@ describe("ring-transact-expansion-v4.json", () => {
   });
 });
 
-describe("frame_v4.hex", () => {
+describe("frame.hex", () => {
   const lines = readFileSync(
-    new URL("../../../../../test-vectors/settlement/frame_v4.hex", import.meta.url),
+    new URL("../../../../../test-vectors/settlement/frame.hex", import.meta.url),
     "utf8",
   )
     .split("\n")
@@ -98,7 +98,7 @@ describe("frame_v4.hex", () => {
   );
 });
 
-describe("transfer_statement_v4.json", () => {
+describe("transfer_statement.json", () => {
   it.each(statements.cases)("$name rebuilds its elements and public input", (vector) => {
     const parties = vector.party_identities;
     const statement: TransferStatement = {

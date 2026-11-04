@@ -92,7 +92,7 @@ const roundTrips: readonly Readonly<{ name: string; frame: Frame }>[] = [
   },
 ];
 
-describe("the v4 ring frame", () => {
+describe("the ring frame", () => {
   it.each(roundTrips)("$name round trips", ({ frame }) => {
     const bytes = RingTransactData.encode(frame);
     expect(RingTransactData.parse(bytes, frame.rail)).toEqual(frame);
@@ -295,7 +295,7 @@ describe("the v4 ring frame", () => {
   });
 });
 
-describe("the v4 transfer statement", () => {
+describe("the transfer statement", () => {
   const STATEMENT_LENGTH = 49;
 
   it("orders the confidential elements and closes on the length and version", () => {

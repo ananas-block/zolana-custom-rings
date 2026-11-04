@@ -21,7 +21,7 @@ func TestOldMergeKeysAreGone(t *testing.T) {
 }
 
 // Rust and TypeScript pin the same file.
-const mergeVectorPath = "../../test-vectors/merge/merge_v4.json"
+const mergeVectorPath = "../../test-vectors/merge/merge.json"
 
 const mergeVectorDescription = "Known-answer vector for the ring merge record and statement, one case per key mode. " +
 	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. " +
@@ -90,7 +90,7 @@ func TestMergeVectorPinsHostAndCircuit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != string(encoded) {
-		t.Fatal("the host mirror disagrees with test-vectors/merge/merge_v4.json, rewrite it with WRITE_AUDIT_VECTORS=1")
+		t.Fatal("the host mirror disagrees with test-vectors/merge/merge.json, rewrite it with WRITE_AUDIT_VECTORS=1")
 	}
 	var pinned mergeVector
 	if err := json.Unmarshal(raw, &pinned); err != nil {

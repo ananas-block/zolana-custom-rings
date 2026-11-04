@@ -1,4 +1,4 @@
-//! Pins `test-vectors/proof/ring-transact-expansion-v4.json` for the TS SDK and the ring program tests.
+//! Pins `test-vectors/proof/ring-transact-expansion.json` for the TS SDK and the ring program tests.
 
 mod frames;
 
@@ -29,7 +29,7 @@ use spr_interface::{
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/proof/ring-transact-expansion-v4.json"
+    "/../../test-vectors/proof/ring-transact-expansion.json"
 );
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -205,7 +205,7 @@ fn ring_transact_expansion_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/proof/ring-transact-expansion-v4.json"]
+#[ignore = "rewrites test-vectors/proof/ring-transact-expansion.json"]
 fn write_ring_transact_expansion_vector() {
     let json = serde_json::to_string_pretty(&compute_vectors()).expect("json");
     std::fs::write(VECTORS, json + "\n").expect("write vector file");
@@ -213,7 +213,7 @@ fn write_ring_transact_expansion_vector() {
 
 const FRAME_VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test-vectors/settlement/frame_v4.hex"
+    "/../../test-vectors/settlement/frame.hex"
 );
 
 fn frame_lines() -> String {
@@ -233,7 +233,7 @@ fn the_frames_are_the_shared_vector() {
 }
 
 #[test]
-#[ignore = "rewrites test-vectors/settlement/frame_v4.hex"]
+#[ignore = "rewrites test-vectors/settlement/frame.hex"]
 fn write_frame_vector() {
     std::fs::write(FRAME_VECTOR, frame_lines()).expect("write vector file");
 }

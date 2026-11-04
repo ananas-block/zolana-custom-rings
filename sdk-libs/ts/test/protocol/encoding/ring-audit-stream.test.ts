@@ -7,8 +7,8 @@ import { addressBytes, hashBytes, solanaOwnerIdentity } from "@heliuslabs/zolana
 import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 
-import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges-v4.json" with { type: "json" };
-import vector from "../../../../../test-vectors/audit/audit-stream-v4.json" with { type: "json" };
+import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
+import vector from "../../../../../test-vectors/audit/audit-stream.json" with { type: "json" };
 import { parseAuditorMessage, sealSaltedAuditorStream } from "../../../src/crypto/audit/audit.js";
 import {
   openRingDisclosure,
@@ -49,7 +49,7 @@ import { RingError } from "../../../src/protocol/error.js";
 
 const hex = (value: string): Uint8Array => hexToBytes(value);
 
-describe("the v4 stream regions", () => {
+describe("the stream regions", () => {
   it("are the shared vector for every key", () => {
     for (const key of ranges.keys) {
       const layoutAt = (inputs: number): AuditStreamLayout => ({
@@ -98,7 +98,7 @@ describe("the v4 stream regions", () => {
   });
 });
 
-describe("the v4 stream vector", () => {
+describe("the stream vector", () => {
   const auditor = (): X25519Keypair => X25519Keypair.fromBytes(hex(vector.auditor_sk) as Bytes32);
 
   for (const testCase of vector.cases) {
@@ -278,7 +278,7 @@ describe("the v4 stream vector", () => {
   });
 });
 
-describe("the v4 stream codecs", () => {
+describe("the stream codecs", () => {
   const record = {
     kind: RecordKind.ring,
     amount: 7n,

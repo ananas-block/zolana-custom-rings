@@ -118,7 +118,7 @@ fn transfer_statements_reach_the_go_public_inputs() {
     struct Vector {
         cases: Vec<TransferCase>,
     }
-    let vector: Vector = vector("audit/transfer_statement_v4.json");
+    let vector: Vector = vector("audit/transfer_statement.json");
     assert!(!vector.cases.is_empty());
     for case in &vector.cases {
         let hashes: Vec<[u8; 32]> = case.outputs.iter().map(|o| array(&o.hash)).collect();
@@ -251,7 +251,7 @@ fn merge_statement_matches_the_go_vector() {
         eph_pk: String,
         cases: Vec<Case>,
     }
-    let vector: Vector = vector("merge/merge_v4.json");
+    let vector: Vector = vector("merge/merge.json");
     for case in &vector.cases {
         let request = &case.request;
         let record = OpeningRecord::decode(&bytes(&case.record)).unwrap();

@@ -264,7 +264,7 @@ describe("co-sign", () => {
   });
 });
 
-describe("deposit-v4.json", () => {
+describe("deposit.json", () => {
   type Case = Readonly<{
     name: string;
     context_hash: string;
@@ -282,7 +282,7 @@ describe("deposit-v4.json", () => {
     elements: readonly string[];
     public_input_hash: string;
   }>;
-  const { cases } = vector("deposit/deposit-v4.json") as Readonly<{ cases: readonly Case[] }>;
+  const { cases } = vector("deposit/deposit.json") as Readonly<{ cases: readonly Case[] }>;
 
   it.each(cases.map((entry) => [entry.name, entry] as const))("%s", (_, entry) => {
     const elements = depositStatementElements({
@@ -308,7 +308,7 @@ describe("deposit-v4.json", () => {
   });
 });
 
-describe("merge_v4.json", () => {
+describe("merge.json", () => {
   type Request = Readonly<Record<string, unknown>> &
     Readonly<{
       tracking: Readonly<{
@@ -317,7 +317,7 @@ describe("merge_v4.json", () => {
         path: Readonly<{ index: number; siblings: readonly (readonly string[])[] }>;
       }> | null;
     }>;
-  const { cases } = vector("merge/merge_v4.json") as Readonly<{
+  const { cases } = vector("merge/merge.json") as Readonly<{
     cases: readonly Readonly<{ name: string; request: Request }>[];
   }>;
 

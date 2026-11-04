@@ -1,4 +1,4 @@
-//! Version 4 streams from solved witnesses, version 3 frozen.
+//! Streams from solved witnesses.
 
 use custom_ring_interface::{AuditKey, AuditStreamLayout, AuditorMessage};
 use serde_json::Value;
@@ -10,7 +10,7 @@ use spr_keypair::{ViewingKey, X25519Keypair};
 use spr_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
 use zolana_ring_client::{OutputOpening, TransactionAudit};
 
-const STREAM_V4: &str = include_str!("../../../test-vectors/audit/audit-stream-v4.json");
+const STREAM: &str = include_str!("../../../test-vectors/audit/audit-stream.json");
 const RING: Address = Address::new_from_array([0x90; 32]);
 /// The auditor of the Go fixtures.
 const AUDITOR_SK: &str = "01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c";
@@ -34,8 +34,8 @@ fn auditor() -> X25519Keypair {
 }
 
 #[test]
-fn every_version_4_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
-    let vector: Value = serde_json::from_str(STREAM_V4).unwrap();
+fn every_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
+    let vector: Value = serde_json::from_str(STREAM).unwrap();
     assert_eq!(
         hash_bytes(RING.as_array()).unwrap(),
         array::<32>(&vector["ring_id"])

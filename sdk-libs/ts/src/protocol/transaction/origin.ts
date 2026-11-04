@@ -212,7 +212,7 @@ export interface OriginInstructionGroup {
 
 /** Mirrors Rust `RingWithdrawal`, one public settlement leg out of the ring. */
 export interface RingWithdrawal {
-  /** Checked at execution, read from confirmed v2 policy metadata. */
+  /** Checked at execution, read from confirmed policy metadata. */
   readonly screenedOwner?: Address;
   /** The wallet of a SOL leg, the credited token account of an SPL leg. */
   readonly recipient: Address;
