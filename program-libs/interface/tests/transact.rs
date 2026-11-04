@@ -16,7 +16,8 @@ use custom_ring_interface::{
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
     ring_sender_bundle_output_body, sender_bundle_len, CONFIDENTIAL_DATA_FREE_BODY_LEN,
-    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
+    MIN_REPLY_LEN, OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG,
+    RING_SENDER_BUNDLE_SCHEME_TAG,
 };
 use serde::{Deserialize, Serialize};
 use spr_event::{
@@ -656,19 +657,18 @@ fn flags_the_rail_forbids_are_refused() {
     );
 }
 
-/// The exit circuit alone lets a delegate's output leave the ring.
+/// A delegate exit takes SPP's authority exit selector, a move keeps the authority rail.
 #[test]
 fn a_delegate_exit_selects_the_exit_circuit() {
     let fixture = Fixture::new();
-    let moved = fixture.delegate();
-    assert!(matches!(moved.circuit(), CircuitId::RingAuthority(..)));
     let mut exit = fixture.delegate();
+    assert_eq!(exit.circuit(), CircuitId::RingAuthority(2, 2, 3));
     exit.outputs[1] = fixture.exit(1, &fixture.payload);
-    let exit = fixture.with_audit_stream(exit);
-    assert!(matches!(exit.circuit(), CircuitId::RingAuthorityExit(..)));
-    let compact = exit.encode().unwrap();
-    let parsed = RingTransactData::parse(&compact, RingRail::Delegate).unwrap();
-    assert_eq!(parsed.data().circuit(), exit.circuit());
+    let compact = fixture.with_audit_stream(exit).encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Delegate)
+        .unwrap()
+        .into_data();
+    assert_eq!(parsed.circuit(), CircuitId::RingAuthorityExit(2, 2, 3));
 }
 
 #[test]
@@ -683,11 +683,23 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
         ring
     };
     let rail = |tag, mode| RingRail::new(tag, &ring(mode, Some(delegate)));
-    assert_eq!(rail(Transfer, RingMode::Confidential), Ok(RingRail::Confidential));
+    assert_eq!(
+        rail(Transfer, RingMode::Confidential),
+        Ok(RingRail::Confidential)
+    );
     assert_eq!(rail(Transfer, RingMode::Anonymous), Ok(RingRail::Anonymous));
-    assert_eq!(rail(AuthorityTransfer, RingMode::Confidential), Ok(RingRail::Delegate));
-    assert_eq!(rail(AuthorityTransfer, RingMode::Anonymous), Ok(RingRail::AnonymousDelegate));
-    assert_eq!(rail(Deposit, RingMode::Confidential), Err(CustomRingError::InvalidInstructionData));
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Confidential),
+        Ok(RingRail::Delegate)
+    );
+    assert_eq!(
+        rail(AuthorityTransfer, RingMode::Anonymous),
+        Ok(RingRail::AnonymousDelegate)
+    );
+    assert_eq!(
+        rail(Deposit, RingMode::Confidential),
+        Err(CustomRingError::InvalidInstructionData)
+    );
     for mode in [RingMode::Confidential, RingMode::Anonymous] {
         assert_eq!(
             RingRail::new(AuthorityTransfer, &ring(mode, None)),
@@ -696,7 +708,10 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
     }
     let mut retired = ring(RingMode::Confidential, None);
     retired.mode = 1;
-    assert_eq!(RingRail::new(Transfer, &retired), Err(CustomRingError::InvalidRingMode));
+    assert_eq!(
+        RingRail::new(Transfer, &retired),
+        Err(CustomRingError::InvalidRingMode)
+    );
 }
 
 /// Without `has_data` every body has one length, the frame carries none.
@@ -778,6 +793,64 @@ fn the_extensions_reach_the_forwarded_data() {
         RingTransactData::parse(&unknown, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
+}
+
+/// SPP's proof binds the hash, a byte the ring proof leaves out still cannot move under it.
+#[test]
+fn the_external_data_hash_binds_every_delivery_byte() {
+    let fixture = Fixture::new();
+    let config = config();
+    let hash = |data: &RingTransactData<'_>| data.external_data_hash(&config, &[]).unwrap();
+    let garbage = [0xee; RECIPIENT_BODY_LEN];
+    let other_payload = [0xee; CONFIDENTIAL_DATA_FREE_BODY_LEN];
+    for (name, honest) in [
+        ("confidential", fixture.confidential_delivered()),
+        ("anonymous", fixture.anonymous()),
+        ("delegate", fixture.delegate()),
+        ("anonymous delegate", fixture.anonymous_delegate()),
+    ] {
+        let reference = hash(&honest);
+        let mut body = honest.clone();
+        let slot = body
+            .outputs
+            .iter()
+            .position(|output| matches!(output.body, SlotBody::Recipient(_)))
+            .unwrap();
+        body.outputs[slot].body = SlotBody::Recipient(&garbage);
+        assert_ne!(hash(&body), reference, "{name} body");
+        let mut tag = honest.clone();
+        tag.outputs[slot].owner_tag = &fixture.bytes[40];
+        assert_ne!(hash(&tag), reference, "{name} tag");
+        let mut record = honest.clone();
+        record.outputs[slot].record = &fixture.records[15];
+        assert_ne!(hash(&record), reference, "{name} record");
+    }
+    let confidential = fixture.confidential_delivered();
+    let mut exit = confidential.clone();
+    exit.outputs[3].body = SlotBody::Exit(&other_payload);
+    assert_ne!(hash(&exit), hash(&confidential), "exit body");
+    let honest = fixture.anonymous();
+    let mut bundle = honest.clone();
+    let body = bundle.sender.unwrap().body;
+    bundle.sender = Some(FramedSenderBundle {
+        tag: &fixture.tags[6],
+        body,
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle tag");
+    let mut bundle = honest.clone();
+    let tag = bundle.sender.unwrap().tag;
+    bundle.sender = Some(FramedSenderBundle {
+        tag,
+        body: &fixture.envelope[..sender_bundle_len(4)],
+    });
+    assert_ne!(hash(&bundle), hash(&honest), "bundle body");
+    let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
+    let mut reply = replied.clone();
+    reply.replies = Some(Replies {
+        len: MIN_REPLY_LEN as u16,
+        region: &fixture.envelope[..2 * MIN_REPLY_LEN],
+    });
+    assert_ne!(hash(&reply), hash(&replied), "reply");
 }
 
 #[test]

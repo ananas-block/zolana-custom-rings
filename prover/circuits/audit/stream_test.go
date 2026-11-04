@@ -191,6 +191,26 @@ func TestReaderRebuildsEverySlot(t *testing.T) {
 	}
 }
 
+// The auditor never saw a default-ring note, its evidence alone rebuilds the commitment SPP spends.
+func TestReaderRebuildsADefaultInput(t *testing.T) {
+	s := ringaudit.NewSection(t, entryShape)
+	s.Inputs[1].Utxo.DataHash = big.NewInt(0xda7a)
+	s.Inputs[1].Utxo.RingDataHash = big.NewInt(0x5ca1e)
+	compileSection(t, entryShape).RequireSolved(t, s.Circuit(t))
+	stream, reader, tree := s.Stream(t), s.Reader(), s.Inputs[1].Utxo.TreeID
+	note, err := reader.ReadEntry(t, stream, 1, tree, s.Inputs[1].Utxo.Hash(t))
+	if err != nil || note == nil || note.Amount != s.Inputs[1].Utxo.Amount {
+		t.Fatalf("read %+v, %v", note, err)
+	}
+	if note, err := reader.ReadEntry(t, stream, 0, tree, s.Inputs[0].Utxo.Hash(t)); err != nil || note != nil {
+		t.Fatalf("a ring input read as evidence %+v, %v", note, err)
+	}
+	moved := big.NewInt(0xdead)
+	if _, err := reader.ReadEntry(t, stream, 1, tree, moved); err == nil {
+		t.Fatal("the reader accepted a commitment the evidence does not rebuild")
+	}
+}
+
 // The record identifies each slot's key, no trial runs.
 func TestZeroAndEnrolledKeysReadApart(t *testing.T) {
 	s := ringaudit.NewSection(t, plainShape)
