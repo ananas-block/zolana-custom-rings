@@ -45,7 +45,7 @@ function randomTag(): ViewTag {
   return globalThis.crypto.getRandomValues(new Uint8Array(32)) as ViewTag;
 }
 
-/** Every published tag replaced, a live proof refuses the frame. */
+/** A sender chooses its tags. */
 function underWrongTags(tx: IndexedShieldedTransaction): IndexedShieldedTransaction {
   return {
     ...tx,
@@ -406,6 +406,21 @@ describe("full scan recovery", () => {
       const recovered = await scan(bob, indexer);
       expect(recovered.utxos.map((note) => hex(note.outputContext.hash))).toEqual([hex(hash)]);
       expect(recovered.auditorRecovery.unopened.map(hex)).not.toContain(hex(hash));
+    });
+
+    it("reports a commitment published twice once", async () => {
+      const indexer = new ScanIndexer();
+      const bob = new ScanWallet(2);
+      const hash = deliver(indexer, bob, (slot) => slot);
+      const [first] = indexer.transactions;
+      if (first === undefined) throw new Error("no row");
+      indexer.publish({
+        ...first,
+        slot: first.slot + 1n,
+        txSignature: getBase58Decoder().decode(new Uint8Array(64).fill(0x7e)) as Signature,
+      });
+      const recovered = await scan(bob, indexer);
+      expect(recovered.utxos.map((note) => hex(note.outputContext.hash))).toEqual([hex(hash)]);
     });
 
     it("opens nothing from a bad body and leaves it and a foreign slot to the auditor", async () => {

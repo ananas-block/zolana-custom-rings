@@ -13,6 +13,9 @@ import type {
   RingMemberOpeningView,
   RingMemberRecordView,
   RingRecordPathView,
+  RingRecordWriteView,
+  StorageApplyProofInputsRequest,
+  StorageApplyProofInputsResponse,
   StorageMemberOpeningsRequest,
   StorageMemberOpeningsResponse,
   StorageMemberPageResponse,
@@ -249,6 +252,24 @@ function decodeMemberPage<Root extends Readonly<{ nextIndex: bigint }>>(
   };
 }
 
+/** Rust `GetStorageApplyProofInputsRequest`, each write in Rust `StorageWriteView` order. */
+export function encodeStorageApplyProofInputsRequest(
+  value: StorageApplyProofInputsRequest,
+): WireObject {
+  return {
+    registry: checkedAddress(value.registry, "registry"),
+    writes: value.writes.map((write, index) => {
+      const path = `$.writes[${String(index)}]`;
+      return {
+        member: checkedHash(write.member, `${path}.member`),
+        mask: toU64(write.mask, `${path}.mask`),
+        value: toU64(write.value, `${path}.value`),
+        mintPolicy: encodeMintPolicy(write.mintPolicy),
+      };
+    }),
+  };
+}
+
 /** Rust `MintPolicy` in its field order, `null` keeps the stored settings. */
 export function encodeMintPolicy(policy: MintPolicy | null): WireObject | null {
   return policy === null
@@ -262,6 +283,65 @@ export function encodeMintPolicy(policy: MintPolicy | null): WireObject | null {
           ASSET_LIMIT_KEYS.map((key) => [key, toU64(policy.limits[key], `limits.${key}`)]),
         ),
       };
+}
+
+/** Rust `GetStorageApplyProofInputsResponse`. */
+export function decodeStorageApplyProofInputs(value: unknown): StorageApplyProofInputsResponse {
+  const row = object(value, "$", ["revision", ...APPLY_FIELDS]);
+  return { ...applyProofInputs(row), revision: unboundedU64(row["revision"], "revision") };
+}
+
+const APPLY_FIELDS = [
+  "context",
+  "oldRoot",
+  "newRoot",
+  "oldNextIndex",
+  "newNextIndex",
+  "chainStart",
+  "chainEnd",
+  "writes",
+] as const;
+
+function applyProofInputs(row: WireObject): Omit<StorageApplyProofInputsResponse, "revision"> {
+  return {
+    context: context(row["context"], "context"),
+    oldRoot: checkedHash(row["oldRoot"], "oldRoot"),
+    newRoot: checkedHash(row["newRoot"], "newRoot"),
+    oldNextIndex: wireInteger(row["oldNextIndex"], "oldNextIndex", 1n, MEMBER_REGISTRY_CAPACITY),
+    newNextIndex: wireInteger(row["newNextIndex"], "newNextIndex", 1n, MEMBER_REGISTRY_CAPACITY),
+    chainStart: checkedHash(row["chainStart"], "chainStart"),
+    chainEnd: checkedHash(row["chainEnd"], "chainEnd"),
+    writes: array(row["writes"], "writes", recordWrite),
+  };
+}
+
+function recordWrite(entry: unknown, path: string): RingRecordWriteView {
+  const item = object(entry, path, [
+    "member",
+    "mask",
+    "value",
+    "mintPolicy",
+    "exists",
+    "oldNext",
+    "oldLists",
+    "oldMintPolicy",
+    "slot",
+    "low",
+    "lowPath",
+  ]);
+  return {
+    member: checkedHash(item["member"], `${path}.member`),
+    mask: u64(item["mask"], `${path}.mask`),
+    value: u64(item["value"], `${path}.value`),
+    mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
+    exists: boolean(item["exists"], `${path}.exists`),
+    oldNext: checkedHash(item["oldNext"], `${path}.oldNext`),
+    oldLists: unboundedU64(item["oldLists"], `${path}.oldLists`),
+    oldMintPolicy: decodeMintPolicy(item["oldMintPolicy"]),
+    slot: recordPath(item["slot"], `${path}.slot`),
+    low: memberRecord(item["low"], `${path}.low`),
+    lowPath: recordPath(item["lowPath"], `${path}.lowPath`),
+  };
 }
 
 function decodeMintPolicy(value: unknown): MintPolicy {

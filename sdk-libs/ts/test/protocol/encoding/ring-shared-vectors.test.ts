@@ -11,7 +11,7 @@ import statements from "../../../../../test-vectors/proof/ring-statements.json" 
 import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
 import { ZERO_32, solanaOwnerIdentity, encodeBase58 } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { packDisclosure } from "../../../src/crypto/audit/audit.js";
+import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   fittedSpend,
   ringTransferCircuit,
@@ -453,5 +453,8 @@ describe("disclosure packing", () => {
     expect(hex(fields[1] ?? new Uint8Array())).toBe(
       `00${hex(plaintext.subarray(31))}${"00".repeat(22)}`,
     );
+    expect(unpackDisclosure(fields, 40)).toEqual(plaintext);
+    const padded = fields.map((entry, index) => (index === 1 ? flipped(entry) : entry));
+    expect(() => unpackDisclosure(padded, 40)).toThrow("KEYPAIR_DISCLOSURE_PADDING");
   });
 });

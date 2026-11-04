@@ -7,6 +7,7 @@ export {
   auditorViewTag,
   openAuditorRegions,
   packDisclosure,
+  unpackDisclosure,
   parseAuditorMessage,
   sealSaltedAuditorStream,
   symmetricAuditApply,
