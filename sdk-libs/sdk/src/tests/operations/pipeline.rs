@@ -1197,7 +1197,7 @@ fn slot_kinds(request: &serde_json::Value, sender_key: &[u8; 32]) -> Vec<&'stati
 
 /// A rebuilt transfer never reuses a key and nonce with another plaintext.
 #[tokio::test]
-async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key() {
+async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_seal_another_stream() {
     let sender = &crate::tests::support::keypair(1);
     let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
     let build = || async {
@@ -1211,11 +1211,6 @@ async fn two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key(
     };
     let (first, second) = (build().await, build().await);
     assert_ne!(first.frame.parts.salt, second.frame.parts.salt);
-    assert_ne!(first.frame.parts.eph_u, second.frame.parts.eph_u);
-    assert_ne!(
-        **first.frame.sealed.ephemeral_secret(),
-        **second.frame.sealed.ephemeral_secret()
-    );
     assert_ne!(first.frame.parts.envelope, second.frame.parts.envelope);
 }
 

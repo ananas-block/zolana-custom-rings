@@ -450,7 +450,7 @@ fn an_opened_note_reads_as_its_known_form() {
         audited.outputs[0].opening,
         OutputOpening::Ring {
             utxo: *audited.outputs[0].opening.utxo().unwrap(),
-            owner_tag: RingOwnerTag(x25519_u(0x44)),
+            owner_tag: RingOwnerTag(custom_ring_interface::stream::slot_tag(x25519_u(0x44))),
         }
     );
 }
@@ -844,6 +844,7 @@ fn the_envelope_must_seal_the_published_transaction_key() {
     let sealed = AuditStreamSeal {
         layout: built.layout,
         tx_viewing_key: &other_key,
+        salt: &built.transaction.salt.unwrap(),
         real_inputs: 1,
         evidence: built.disclosure.evidence.clone(),
         records: built.disclosure.records.clone(),

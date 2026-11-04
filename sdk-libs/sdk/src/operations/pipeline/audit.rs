@@ -65,6 +65,7 @@ impl AuditSeal<'_> {
         let sealed = AuditStreamSeal {
             layout: self.layout,
             tx_viewing_key: self.rail.tx_viewing_key(),
+            salt: &self.rail.salt(),
             real_inputs: real_input_count(&self.inputs.input_utxos)?,
             evidence: self.evidence()?,
             records,
@@ -77,7 +78,7 @@ impl AuditSeal<'_> {
             envelope: sealed.envelope,
             records: sealed.records,
             tails: sealed.tails,
-            eph_sk: sealed.ephemeral_sk,
+            eph_sk: self.rail.tx_viewing_key().secret_bytes(),
         })
     }
 
@@ -237,7 +238,6 @@ impl AuditSection<'_> {
                 .ok_or(TransactionError::NoInputs)?
                 .nullifier(),
             tx_viewing_sk: self.rail.tx_viewing_key().secret_bytes(),
-            eph_sk: self.sealed.eph_sk.clone(),
             auditor_pk: *self.auditor,
             salt: self.rail.salt(),
             layout: self.sealed.flags.value(),

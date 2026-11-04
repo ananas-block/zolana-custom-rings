@@ -305,7 +305,7 @@ func (w World) registries(t testing.TB, a ringaudit.Audit, senders []frontend.Va
 func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, delegate bool, run []*big.Int) Assembled {
 	t.Helper()
 	wires := a.Wires(a.Layout())
-	c.FirstNullifier, c.TxViewingSk, c.EphSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.EphSk, wires.AuditorPk, wires.Salt, wires.Layout
+	c.FirstNullifier, c.TxViewingSk, c.AuditorPk, c.Salt, c.Layout = wires.FirstNullifier, wires.TxViewingSk, wires.AuditorPk, wires.Salt, wires.Layout
 	c.RingProgramID = a.RingProgramID
 	c.OutputCount = a.OutputCount()
 	for i, output := range a.Outputs {

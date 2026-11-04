@@ -769,12 +769,16 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
                 }
             })
             .collect();
-        let mut bootstrap = Some(viewing_pubkey.u());
+        let mut bootstrap = Some([
+            viewing_pubkey.u(),
+            custom_ring_interface::stream::slot_tag(viewing_pubkey.u()),
+        ]);
         while !active.is_empty() {
             let mut tagged: Vec<(RoundTag, ViewTag)> = bootstrap
                 .take()
-                .map(|tag| (RoundTag::Bootstrap, tag))
                 .into_iter()
+                .flatten()
+                .map(|tag| (RoundTag::Bootstrap, tag))
                 .collect();
             for (slot, stream) in active.iter_mut().enumerate() {
                 let indices = stream.scan.round();

@@ -40,6 +40,7 @@ use crate::{
         AuditHead, ConfidentialSender, SignerSet, TransferFamily, TransferRoots, TransferStatement,
     },
     storage::Revision,
+    stream::{slot_tag, SLOT_TAG_LEN},
     tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
     RingMode, RingPolicy, RootRead, TAGGED_X25519_KEY_LEN,
 };
@@ -450,7 +451,8 @@ pub enum SlotBody<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingOutput<'a> {
     pub hash: &'a [u8; 32],
-    pub owner_tag: &'a [u8; 32],
+    /// SPP binds an exit's tag to its owner, any other is a slot tag.
+    pub owner_tag: [u8; 32],
     pub body: SlotBody<'a>,
     pub record: &'a [u8; AUDIT_RECORD_LEN],
     /// Present exactly under `has_data`.
@@ -475,7 +477,7 @@ impl<'a> RingOutput<'a> {
         };
         Ok(TransactOutput {
             utxo_hash: *self.hash,
-            owner_tag: OwnerTag::Inline(*self.owner_tag),
+            owner_tag: OwnerTag::Inline(self.owner_tag),
             data,
         })
     }
@@ -598,7 +600,7 @@ impl<'a> ParsedTransact<'a> {
                 ring_id: binding.ring_id,
                 tx_viewing_u: data.tx_viewing_u,
                 auditor_pubkey: binding.auditor_pubkey,
-                eph_u: data.eph_u,
+                eph_u: data.tx_viewing_u,
                 envelope: data.envelope,
                 salt: data.salt,
                 layout: data.audit_layout(),
@@ -676,7 +678,6 @@ pub struct RingTransactData<'a> {
     pub replies: Option<Replies<'a>>,
     /// Present exactly on the anonymous rail.
     pub sender: Option<FramedSenderBundle<'a>>,
-    pub eph_u: &'a [u8; 32],
     /// `envelope_ct`, the transmitted length is the stream layout's.
     pub envelope: &'a [u8],
     pub private_tx_hash: &'a [u8; 32],
@@ -751,7 +752,14 @@ impl<'a> RingTransactData<'a> {
                 (true, false, false) => RECIPIENT_BODY_LEN,
             };
             let hash = bytes.array()?;
-            let owner_tag = bytes.array()?;
+            let owner_tag = match exit {
+                true => *bytes.array()?,
+                false => {
+                    let mut tag = [0; 32];
+                    tag[32 - SLOT_TAG_LEN..].copy_from_slice(bytes.take(SLOT_TAG_LEN)?);
+                    tag
+                }
+            };
             let body = bytes.take(len)?;
             outputs.push(RingOutput {
                 hash,
@@ -789,7 +797,6 @@ impl<'a> RingTransactData<'a> {
             }),
             false => None,
         };
-        let eph_u = bytes.array()?;
         let envelope = bytes.take(stream.envelope().len)?;
         for output in &mut outputs {
             output.record = bytes.array()?;
@@ -860,7 +867,6 @@ impl<'a> RingTransactData<'a> {
             outputs,
             replies,
             sender,
-            eph_u,
             envelope,
             private_tx_hash,
             anonymous,
@@ -900,7 +906,9 @@ impl<'a> RingTransactData<'a> {
                 .is_some_and(|sender| sender.body.len() != sender_bundle_len(output_count))
             || self.envelope.len() != stream.envelope().len
             || !self.outputs.iter().all(|output| {
-                output.tail.is_some() == self.has_data && (self.has_data || output.has_plain_body())
+                output.tail.is_some() == self.has_data
+                    && (self.has_data || output.has_plain_body())
+                    && (output.is_exit() || slot_tag(output.owner_tag) == output.owner_tag)
             })
         {
             return Err(CustomRingError::RingTransactLength);
@@ -947,7 +955,10 @@ impl<'a> RingTransactData<'a> {
                 out.extend_from_slice(&len.to_le_bytes());
             }
             out.extend_from_slice(output.hash);
-            out.extend_from_slice(output.owner_tag);
+            match output.is_exit() {
+                true => out.extend_from_slice(&output.owner_tag),
+                false => out.extend_from_slice(&output.owner_tag[32 - SLOT_TAG_LEN..]),
+            }
             if let SlotBody::Recipient(body) | SlotBody::Exit(body) = output.body {
                 out.extend_from_slice(body);
             }
@@ -960,7 +971,6 @@ impl<'a> RingTransactData<'a> {
             out.extend_from_slice(sender.tag);
             out.extend_from_slice(sender.body);
         }
-        out.extend_from_slice(self.eph_u);
         out.extend_from_slice(self.envelope);
         for output in &self.outputs {
             out.extend_from_slice(output.record);
@@ -1039,7 +1049,12 @@ impl<'a> RingTransactData<'a> {
                     true => 2,
                     false => 0,
                 };
-                len_prefix + 2 * FIELD + output.body_len()
+                let tag = if output.is_exit() {
+                    FIELD
+                } else {
+                    SLOT_TAG_LEN
+                };
+                len_prefix + FIELD + tag + output.body_len()
             })
             .sum::<usize>();
         Ok(1 + 3
@@ -1058,7 +1073,6 @@ impl<'a> RingTransactData<'a> {
             + slots
             + replies
             + sender
-            + FIELD
             + stream.envelope().len
             + stream.records_len()
             + stream.tails_len()
@@ -1240,7 +1254,7 @@ impl<'a> RingTransactData<'a> {
             .iter()
             .filter_map(|output| output.tail.map(|tail| &tail[..]));
         AuditorMessage::data(
-            self.eph_u,
+            self.tx_viewing_u,
             core::iter::once(self.envelope).chain(records).chain(tails),
         )
     }

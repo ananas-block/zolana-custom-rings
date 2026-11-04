@@ -140,8 +140,6 @@ pub(crate) struct AuditParams {
     pub first_nullifier: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub tx_viewing_sk: Zeroizing<[u8; 32]>,
-    #[serde(serialize_with = "fe::zeroizing")]
-    pub eph_sk: Zeroizing<[u8; 32]>,
     #[serde(serialize_with = "coordinate")]
     pub auditor_pk: X25519Pubkey,
     #[serde(with = "fe")]

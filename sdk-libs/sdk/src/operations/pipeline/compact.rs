@@ -77,7 +77,7 @@ impl OwnedOutput {
     pub fn of(output: RingOutput<'_>) -> Self {
         Self {
             hash: *output.hash,
-            owner_tag: *output.owner_tag,
+            owner_tag: output.owner_tag,
             body: OwnedBody::of(output.body),
             record: *output.record,
             tail: output.tail.copied(),
@@ -91,7 +91,7 @@ impl OwnedOutput {
     pub fn view(&self) -> RingOutput<'_> {
         RingOutput {
             hash: &self.hash,
-            owner_tag: &self.owner_tag,
+            owner_tag: self.owner_tag,
             body: self.body.view(),
             record: &self.record,
             tail: self.tail.as_ref(),
@@ -171,7 +171,6 @@ pub(crate) struct TransactParts {
     /// `reply_len` and the region, set exactly under `REPLY_METADATA`.
     pub replies: Option<(u16, Vec<u8>)>,
     pub sender: Option<OwnedSenderBundle>,
-    pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
     pub private_tx_hash: [u8; 32],
     pub anonymous: Option<OwnedAnonymousProofData>,
@@ -185,12 +184,10 @@ impl TransactParts {
     /// Each record and tail sits beside its slot.
     pub fn seal_audit(
         &mut self,
-        eph_u: [u8; 32],
         envelope: Vec<u8>,
         records: &[[u8; AUDIT_RECORD_LEN]],
         tails: &[[u8; DATA_TAIL_LEN]],
     ) {
-        self.eph_u = eph_u;
         self.envelope = envelope;
         for (slot, output) in self.outputs.iter_mut().enumerate() {
             if let Some(record) = records.get(slot) {
@@ -227,7 +224,6 @@ impl TransactParts {
                 .as_ref()
                 .map(|(len, region)| Replies { len: *len, region }),
             sender: self.sender.as_ref().map(OwnedSenderBundle::view),
-            eph_u: &self.eph_u,
             envelope: &self.envelope,
             private_tx_hash: &self.private_tx_hash,
             anonymous: self.anonymous.as_ref().map(|anonymous| AnonymousProofData {

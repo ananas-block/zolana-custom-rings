@@ -59,7 +59,6 @@ func (tr Transfer) Blinding(t testing.TB, i int) *big.Int {
 func (tr Transfer) Wires(layout int64) audit.AuditWires {
 	w := audit.AuditWires{FirstNullifier: tr.FirstNullifier, RingProgramID: tr.RingProgramID, Layout: layout}
 	ringtest.SetBytes(w.TxViewingSk[:], tr.Keys.txViewingSk[:])
-	ringtest.SetBytes(w.EphSk[:], tr.Keys.ephSk[:])
 	ringtest.SetBytes(w.AuditorPk[:], tr.Keys.auditorPk[:])
 	ringtest.SetBytes(w.Salt[:], tr.Salt[:])
 	return w

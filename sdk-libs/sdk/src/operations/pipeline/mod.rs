@@ -506,7 +506,14 @@ impl<'a> Pipeline<'a> {
             unsealed.data().audit_layout(),
         );
         let sealed = match presealed {
-            Some(presealed) => presealed.open(layout, flags, &auditor)?,
+            Some(presealed) => {
+                let opened = presealed.open(layout, flags, &auditor)?;
+                // The program expands the frame's viewing key, another costs a proof and fails the hash.
+                if opened.eph_u != rail.tx_viewing_key().pubkey().u() {
+                    return Err(RingError::RelayAuditorMessage);
+                }
+                opened
+            }
             None => AuditSeal {
                 rail: &rail,
                 layout,
@@ -661,12 +668,7 @@ impl<'a> Sealed<'a> {
             delegate,
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
-        parts.seal_audit(
-            sealed.eph_u,
-            sealed.envelope.clone(),
-            &sealed.records,
-            &sealed.tails,
-        );
+        parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
         parts.approval = policy.approval;
         parts.tracking_revision = policy.tracking.revision;
         parts.own_revision = policy.own.map(|own| own.revision);
@@ -1042,7 +1044,6 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             .collect(),
         replies: owned_replies(parts.published),
         sender: parts.sender_bundle.map(OwnedSenderBundle::of),
-        eph_u: [0; 32],
         envelope: Vec::new(),
         private_tx_hash: [0; 32],
         anonymous: None,

@@ -3,8 +3,8 @@ use std::{collections::BTreeSet, fmt::Write};
 use anyhow::{Context, Result};
 use custom_ring_interface::{
     cosign::ApprovalMask, key_catalog::TransferShape, sender_bundle_len, spl_withdrawal_count,
-    storage::Revision, tag, AnonymousProofData, CustomRingMergeIxData, CustomRingProof,
-    DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    storage::Revision, stream::slot_tag, tag, AnonymousProofData, CustomRingMergeIxData,
+    CustomRingProof, DepositPrefix, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingDepositAuditCapsule, RingOutput,
     RingPolicy, RingRail, RingTransactData, RootRead, SealedMergeRecord, SlotBody,
     AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, MIN_REPLY_LEN,
@@ -338,7 +338,7 @@ impl Transfer {
         let slots: Vec<RingOutput<'_>> = (0..outputs)
             .map(|slot| RingOutput {
                 hash: &field,
-                owner_tag: &field,
+                owner_tag: slot_tag(field),
                 body: match (load.every_body, anonymous_frame, slot) {
                     (true, _, slot) if slot + 1 == outputs => SlotBody::Exit(&exit_body),
                     (false, true, 0) => SlotBody::None,
@@ -392,7 +392,6 @@ impl Transfer {
                 tag: &field,
                 body: &bundle,
             }),
-            eph_u: &field,
             envelope: &[],
             private_tx_hash: &field,
             anonymous: frame.hidden_sender().then_some(AnonymousProofData {
@@ -695,6 +694,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     .instruction()?;
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
+        key_capacity: width as u8,
         proof: bytemuck::Zeroable::zeroed(),
         tracking_revision: Revision::from(1),
         own_revision: Revision::from(1),

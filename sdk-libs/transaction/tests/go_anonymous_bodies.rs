@@ -105,7 +105,9 @@ fn the_rail_publishes_the_proven_tags() {
     .unwrap();
     assert_eq!(
         tag_of(AnonymousSlot::Payment { recipient }, vector.body_index),
-        Some(array(&vector.body_tag))
+        Some(custom_ring_interface::stream::slot_tag(array(
+            &vector.body_tag
+        )))
     );
     assert_eq!(tag_of(AnonymousSlot::Change, 0), Some([0; 32]));
     assert_eq!(
@@ -115,7 +117,9 @@ fn the_rail_publishes_the_proven_tags() {
             },
             2
         ),
-        Some(array(&vector.dummy_tag))
+        Some(custom_ring_interface::stream::slot_tag(array(
+            &vector.dummy_tag
+        )))
     );
     let sender = X25519Pubkey::from_u(array(&vector.sender_viewing_key)).unwrap();
     assert_eq!(

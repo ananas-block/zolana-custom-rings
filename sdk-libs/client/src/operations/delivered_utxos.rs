@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use custom_ring_interface::{ring_confidential_delivered_output_body, stream::SlotSecret};
+use custom_ring_interface::{
+    ring_confidential_delivered_output_body,
+    stream::{slot_tag, SlotSecret},
+};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
@@ -172,7 +175,7 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     let held: HashMap<[u8; 32], X25519Pubkey> = shielded_keys
         .viewing_public_keys()
         .into_iter()
-        .map(|pubkey| (pubkey.u(), pubkey))
+        .flat_map(|pubkey| [(pubkey.u(), pubkey), (slot_tag(pubkey.u()), pubkey)])
         .collect();
     let mut sites = Vec::new();
     let mut requests = Vec::new();

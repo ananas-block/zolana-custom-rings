@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
     encode_ring_sender_bundle_output,
-    stream::{DeliveredSlot, SlotSecret},
+    stream::{slot_tag, DeliveredSlot, SlotSecret},
     RingOutput, SlotBody, AUDIT_RECORD_LEN, RECIPIENT_BODY_LEN,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -174,11 +174,13 @@ impl RingOutputRail {
         Ok(match slot {
             AnonymousSlot::Exit => None,
             AnonymousSlot::Change => Some([0; 32]),
-            AnonymousSlot::Dummy { preimage } => Some(SlotSecret::new(*preimage)?.recipient_tag()?),
-            AnonymousSlot::Payment { recipient } => Some(
+            AnonymousSlot::Dummy { preimage } => {
+                Some(slot_tag(SlotSecret::new(*preimage)?.recipient_tag()?))
+            }
+            AnonymousSlot::Payment { recipient } => Some(slot_tag(
                 self.slot_secret(recipient, first_nullifier, slot_index)?
                     .recipient_tag()?,
-            ),
+            )),
         })
     }
 
@@ -279,7 +281,7 @@ impl RingOutputRail {
                         let sealed = seal.body(index)?;
                         let wire = RingOutput {
                             hash: &hash,
-                            owner_tag: &tag,
+                            owner_tag: tag,
                             body: sealed
                                 .as_ref()
                                 .map_or(SlotBody::None, |sealed| SlotBody::Recipient(&sealed.body)),
@@ -362,9 +364,9 @@ impl RingOutputRail {
             }
             let resolved = match self.slot(output) {
                 Slot::Exit => owner_tag.resolved,
-                Slot::Ring { owner } => owner.viewing_pubkey.u(),
+                Slot::Ring { owner } => slot_tag(owner.viewing_pubkey.u()),
                 // A random key publishes as a real recipient's would.
-                Slot::Dummy => ViewingKey::new().pubkey().u(),
+                Slot::Dummy => slot_tag(ViewingKey::new().pubkey().u()),
             };
             *owner_tag = ResolvedOwnerTag {
                 tag: OwnerTag::Inline(resolved),
@@ -425,7 +427,7 @@ impl RingOutputRail {
         Self::framed(
             RingOutput {
                 hash: &hash,
-                owner_tag: &owner_tag.resolved,
+                owner_tag: owner_tag.resolved,
                 body: SlotBody::Recipient(&body),
                 record: &UNSEALED_RECORD,
                 tail: None,

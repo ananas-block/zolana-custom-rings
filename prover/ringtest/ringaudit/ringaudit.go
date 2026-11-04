@@ -19,6 +19,7 @@ type Keys struct {
 	ephPk       [33]byte
 	auditorPk   [32]byte
 	dh          [32]byte
+	txDh        [32]byte
 }
 
 func AuditorSk() [32]byte { return ringtest.Scalar(0x33) }
@@ -35,7 +36,12 @@ func DefaultKeys(t testing.TB) Keys {
 	if err != nil {
 		t.Fatalf("ecdh: %v", err)
 	}
+	txDh, err := txPriv.ECDH(auditorPriv.PublicKey())
+	if err != nil {
+		t.Fatalf("ecdh: %v", err)
+	}
 	return Keys{
+		txDh:        [32]byte(txDh),
 		txViewingSk: txViewingSk,
 		ephSk:       ephSk,
 		txPk:        ringprotocol.Tagged(txPriv.PublicKey().Bytes()),
@@ -88,6 +94,18 @@ func (k Keys) StreamCiphertext(t testing.TB, plaintext []byte, label string) []b
 	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
 }
 
+// TransferCiphertext seals under the transfer's own key, Poseidon(secret, salt) keeps a resend apart.
+func (k Keys) TransferCiphertext(t testing.TB, plaintext []byte, salt [16]byte) []byte {
+	t.Helper()
+	dhLo, dhHi := ringprotocol.Pack32(k.txDh)
+	txLo, txHi := ringprotocol.Pack33(k.txPk)
+	auditorLo, auditorHi := ringprotocol.Pack33(ringprotocol.Tagged(k.auditorPk[:]))
+	secret := ringtest.MustPoseidonHash(t, ringprotocol.Tag(shared.DomSepCRShared), dhLo, dhHi, txLo, txHi, auditorLo, auditorHi)
+	salted := ringtest.MustPoseidonHash(t, secret, new(big.Int).SetBytes(salt[:]))
+	key, nonce := ringprotocol.AuditStreamKeys(t, salted, shared.AuditEncInfo)
+	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
+}
+
 func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]byte, envelope []byte) AuditHead {
 	t.Helper()
 	return AuditHead{
@@ -95,7 +113,7 @@ func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]
 		RingProgramID:  ringID,
 		TxViewingU:     [32]byte(k.txPk[1:]),
 		AuditorPubkey:  ringprotocol.Tagged(k.auditorPk[:]),
-		EphU:           [32]byte(k.ephPk[1:]),
+		EphU:           [32]byte(k.txPk[1:]),
 		Envelope:       envelope,
 		Salt:           salt,
 	}
@@ -125,6 +143,7 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 
 type Stream struct {
 	Ranges     audit.StreamRanges
+	Salt       [16]byte
 	Ciphertext []byte
 }
 

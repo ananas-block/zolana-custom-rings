@@ -19,7 +19,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// EphSk must be fresh per envelope, a reuse under one auditor key repeats the keystream.
+// EphSk must be fresh per envelope or per SealSalted salt, a reuse under one auditor key repeats the keystream.
 type Envelope struct {
 	Plaintext []frontend.Variable
 	EphSk     [32]frontend.Variable
@@ -38,16 +38,29 @@ func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
 
 // SealStream starts at counter 2, the readers start there.
 func (e Envelope) SealStream(api frontend.API) Sealed {
-	// 1. One encoding per auditor key, the program packs the configured key bytes as they are.
+	// The X25519 gadgets bound every key byte and return canonical bytes, the packings need no byte check.
+	sealed, secret := e.agree(api, PackBounded(api, Tagged(x25519.ScalarMulGenerator(api, e.EphSk))))
+	return e.seal(api, sealed, secret)
+}
+
+// SealSalted takes eph as the packed key of EphSk, a resend repeats EphSk and the salt keeps its keystream apart.
+func (e Envelope) SealSalted(api frontend.API, eph []frontend.Variable, salt frontend.Variable) Sealed {
+	sealed, secret := e.agree(api, eph)
+	return e.seal(api, sealed, gadget.PoseidonHash(api, []frontend.Variable{secret, salt}))
+}
+
+func (e Envelope) agree(api frontend.API, eph []frontend.Variable) (Sealed, frontend.Variable) {
+	// One encoding per auditor key, the program packs the configured key bytes as they are.
 	agreement := AgreeCanonical(api, e.EphSk, e.AuditorPk)
-	// 2. The X25519 gadgets bound every key byte and return canonical bytes, the packings below need no byte check.
-	eph := x25519.ScalarMulGenerator(api, e.EphSk)
-	sealed := Sealed{Auditor: PackBounded(api, Tagged(e.AuditorPk)), Eph: PackBounded(api, Tagged(eph))}
-	// 3. Binding both keys keeps the key schedule input from replaying under another key pair.
-	secret := gadget.PoseidonHash(api, slices.Concat(
+	sealed := Sealed{Auditor: PackBounded(api, Tagged(e.AuditorPk)), Eph: eph}
+	// Binding both keys keeps the key schedule input from replaying under another key pair.
+	return sealed, gadget.PoseidonHash(api, slices.Concat(
 		[]frontend.Variable{uint64(DomSepCRShared)}, PackBounded(api, agreement[:]), sealed.Eph, sealed.Auditor,
 	))
-	// 4. The cipher's byte tables bound every plaintext byte.
+}
+
+func (e Envelope) seal(api frontend.API, sealed Sealed, secret frontend.Variable) Sealed {
+	// The cipher's byte tables bound every plaintext byte.
 	key, nonce := AuditStreamKeySchedule(api, secret, e.Info)
 	sealed.Ciphertext = aes.NewCipher(api, key).CTREncrypt(nonce, e.Plaintext)
 	return sealed

@@ -6,10 +6,10 @@ use frames::{config, spp_b, Fixture};
 
 use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
-    transact_flag, AuditKey, AuditStreamLayout, AuditorMessage, ConfidentialSender,
-    CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof, Replies, RingPolicy,
-    RingRail, RingTransactData, Settlement, SignerSet, SlotBody, TransferBinding, TransferFamily,
-    TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
+    stream::slot_tag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
+    ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
+    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
+    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
@@ -108,12 +108,12 @@ fn compute_vectors() -> ExpansionVectors {
                       salt and the extensions under their flag. The interface transfers follow, \
                       the SPL withdrawal owners under the own root flag, exit_bits and bodiless_bits \
                       of ceil(m / 8) bytes each. A slot is a u16 body length under has_data, its \
-                      hash, its tag and its body, 72 bytes for a recipient body and 83 for an exit \
+                      hash, its tag of 8 bytes or 32 on an exit and its body, 72 bytes for a recipient body and 83 for an exit \
                       without has_data. Under reply metadata a u16 reply_len and reply_len bytes \
                       per body-bearing slot follow the slots. The anonymous frame's scheme 12 \
-                      bundle follows as a 32-byte tag and 80 + 32 m bytes, then eph_u, the envelope, \
+                      bundle follows as a 32-byte tag and 80 + 32 m bytes, then the envelope, \
                       m records of 105 bytes and under has_data m tails of 64 bytes, the lengths \
-                      those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || eph_u \
+                      those of ring-disclosure-ranges-v4.json. The auditor message is 0x04 || tx_viewing_u \
                       || envelope || records || tails. Recipient bodies forward as scheme 13, \
                       u16le(body_len) || body || reply. Produced by \
                       program-libs/interface/tests/transact.rs."
@@ -182,7 +182,7 @@ fn ring_transact_expansion_vector() {
             .zip(&data.outputs)
             .zip(data.slot_replies())
         {
-            assert_eq!(output.owner_tag, OwnerTag::Inline(*slot.owner_tag));
+            assert_eq!(output.owner_tag, OwnerTag::Inline(slot.owner_tag));
             match slot.body {
                 SlotBody::None => assert_eq!(output.data, None, "{}", case.name),
                 SlotBody::Recipient(body) => assert_eq!(
@@ -465,13 +465,30 @@ fn a_bodiless_slot_forwards_no_data_at_any_index() {
     );
 }
 
+/// SPP binds an exit's tag to its owner, any other tag is cut to what the frame carries.
+#[test]
+fn an_exit_keeps_its_whole_tag_and_a_ring_slot_refuses_a_longer_one() {
+    let fixture = Fixture::new();
+    let data = fixture.anonymous();
+    let compact = data.encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Anonymous).unwrap();
+    assert_eq!(parsed.data().outputs[2].owner_tag, fixture.bytes[14]);
+    assert_eq!(
+        parsed.data().outputs[1].owner_tag,
+        slot_tag(fixture.tags[1])
+    );
+    let mut longer = data.clone();
+    longer.outputs[1].owner_tag = fixture.tags[1];
+    assert_eq!(longer.encode(), Err(CustomRingError::RingTransactLength));
+}
+
 /// The proof reads no tag, the frame carries any value the sender names.
 #[test]
 fn a_slot_tag_is_outside_the_frame_checks() {
     let fixture = Fixture::new();
     let mut data = fixture.anonymous();
-    data.outputs[1].owner_tag = &[0xff; 32];
-    data.outputs[0].owner_tag = &[0xfe; 32];
+    data.outputs[1].owner_tag = slot_tag([0xff; 32]);
+    data.outputs[0].owner_tag = slot_tag([0xfe; 32]);
     let compact = data.encode().unwrap();
     assert_eq!(
         RingTransactData::parse(&compact, RingRail::Anonymous)
@@ -818,7 +835,7 @@ fn the_external_data_hash_binds_every_delivery_byte() {
         body.outputs[slot].body = SlotBody::Recipient(&garbage);
         assert_ne!(hash(&body), reference, "{name} body");
         let mut tag = honest.clone();
-        tag.outputs[slot].owner_tag = &fixture.bytes[40];
+        tag.outputs[slot].owner_tag = slot_tag(fixture.bytes[40]);
         assert_ne!(hash(&tag), reference, "{name} tag");
         let mut record = honest.clone();
         record.outputs[slot].record = &fixture.records[15];
@@ -960,12 +977,18 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
     .concat();
     let expected = [
         ([0; 32], None),
-        (fixture.tags[1], framed(RING_BODY_SCHEME_TAG, &body)),
+        (
+            slot_tag(fixture.tags[1]),
+            framed(RING_BODY_SCHEME_TAG, &body),
+        ),
         (
             fixture.bytes[14],
             framed(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, &fixture.payload),
         ),
-        (fixture.tags[3], framed(RING_BODY_SCHEME_TAG, &body)),
+        (
+            slot_tag(fixture.tags[3]),
+            framed(RING_BODY_SCHEME_TAG, &body),
+        ),
     ];
     for (slot, (output, (owner_tag, data))) in parsed.outputs.iter().zip(expected).enumerate() {
         let spp = output.transact_output(&[]).unwrap();
@@ -1110,12 +1133,11 @@ fn a_truncated_or_appended_ciphertext_is_refused() {
     for (name, data, compact) in encoded_cases(&fixture) {
         let stream = data.audit_stream().unwrap();
         let envelope = stream.envelope().len;
-        // The envelope and the records sit whole between eph_u and private_tx_hash.
+        // The envelope and the records sit whole ahead of private_tx_hash.
         let start = compact
-            .windows(data.eph_u.len())
-            .position(|window| window == data.eph_u)
-            .unwrap()
-            + data.eph_u.len();
+            .windows(envelope)
+            .position(|window| window == data.envelope)
+            .unwrap();
         let end = start + envelope + stream.records_len() + stream.tails_len();
         assert_eq!(compact[start..start + envelope], *data.envelope, "{name}");
         assert_eq!(&compact[end..end + 32], data.private_tx_hash, "{name}");

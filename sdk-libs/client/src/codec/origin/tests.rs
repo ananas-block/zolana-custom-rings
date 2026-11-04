@@ -1320,7 +1320,7 @@ fn origin_of_frame(
     let envelope = [0u8; 2048];
     let output = RingOutput {
         hash: &hash,
-        owner_tag: &u,
+        owner_tag: custom_ring_interface::stream::slot_tag(u),
         body: SlotBody::Recipient(&body),
         record: &record,
         tail: None,
@@ -1352,7 +1352,6 @@ fn origin_of_frame(
         outputs: vec![output, output],
         replies: None,
         sender: None,
-        eph_u: &zero,
         envelope: &[],
         private_tx_hash: &zero,
         anonymous: None,
