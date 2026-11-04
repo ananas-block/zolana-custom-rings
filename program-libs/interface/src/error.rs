@@ -161,6 +161,23 @@ ring_errors! {
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
+    InvalidFrameBuffer = 8500 => "frame buffer account is invalid",
+    FrameBufferExists = 8501 => "frame buffer already exists",
+    FrameBufferAddress = 8502 => "frame buffer is not at its creator and nonce address",
+    FrameLength = 8503 => "frame length is zero or exceeds one account create",
+    UnauthorizedFrameWriter = 8504 => "the signer is not the frame buffer writer",
+    FrameBufferSealed = 8505 => "a sealed frame buffer takes no write",
+    FrameBufferNotSealed = 8506 => "the frame buffer is not sealed",
+    FrameDigestMismatch = 8507 => "the frame does not match the digest",
+    FrameBufferExpired = 8508 => "the frame buffer reached its expiry",
+    UnauthorizedFrameCloser = 8509 => "only the writer closes a frame buffer before expiry",
+    FrameRentPayer = 8510 => "the rent account is not the buffer's rent payer",
+    FrameBufferMismatch = 8511 => "the buffer account is not the buffer the settlement names",
+    UnsupportedBufferedTag = 8512 => "the tag does not settle from a buffer",
+    FrameTagMismatch = 8513 => "the frame opens with another tag than the settlement names",
+    FrameWriteOutOfRange = 8514 => "the write falls outside the frame",
+    InvalidFrameEvent = 8515 => "the frame event needs the ring PDA as signer inside a settlement",
+    FramePartyNotPayer = 8516 => "an anonymous settlement needs the payer as writer and rent payer",
 }
 
 impl From<CustomRingError> for ProgramError {
