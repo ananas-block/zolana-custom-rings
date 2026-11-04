@@ -89,15 +89,25 @@ fn a_program_identity_derives_through_the_same_call() {
 }
 
 #[test]
-fn a_zero_root_and_supplied_pda_roles_are_refused() {
-    let supplied = ShieldedPda::with_viewing_key(
-        Address::new_from_array([3; 32]),
-        NullifierKey::from_secret([9; 31]),
-        ViewingKey::new(),
+fn a_zero_root_is_refused_and_two_holders_of_a_supplied_secret_agree() {
+    let party = |secret| {
+        ShieldedPda::with_viewing_key(
+            Address::new_from_array([3; 32]),
+            NullifierKey::from_secret(secret),
+            ViewingKey::new(),
+        )
+    };
+    assert_eq!(
+        pubkey(&party([9; 31]), &RING_A),
+        pubkey(&party([9; 31]), &RING_A)
+    );
+    assert_ne!(
+        pubkey(&party([9; 31]), &RING_A),
+        pubkey(&party([9; 31]), &RING_B)
     );
     assert_eq!(
-        RingNullifierKey::derive(&supplied, &RING_A).err(),
-        Some(RingKeyError::Keypair(KeypairError::PdaRootNotHeld))
+        RingNullifierKey::derive(&party([0; 31]), &RING_A).err(),
+        Some(RingKeyError::Keypair(KeypairError::ZeroNullifierSecret))
     );
     let mut zero = wallet(7);
     zero.nullifier_key = NullifierKey::from_secret([0; 31]);
