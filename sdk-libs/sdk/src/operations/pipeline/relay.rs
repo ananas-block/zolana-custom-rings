@@ -14,9 +14,7 @@ use zolana_ring_transaction::{published_outputs, RingDelivery};
 
 use super::{Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
 use crate::{
-    relay_message::{
-        ExpectedMessage, ExpectedTransfer, RelayTransferTerms, SlotOpening, TokenAccountCreate,
-    },
+    relay_message::{ExpectedMessage, RelayTransferTerms, SlotOpening, TokenAccountCreate},
     PreparedRelay, RingError,
 };
 
@@ -96,8 +94,6 @@ impl<R: Rail> WalletRelay<'_, R> {
             .token_account_setup(payer, &token_account_setup)
             .map_err(|_| RingError::RelayAuditorMessage)?;
         let terms = sealed.transfer_terms(payer, &setup)?;
-        let config = self.transfer.ring.require_config(client).await?;
-        let expected = ExpectedTransfer::new(terms, &config);
         let encode = |rail| {
             sealed
                 .relay_proof_inputs(rail, nullifier_key)
@@ -132,7 +128,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .map(SerializablePubkey)
                 .collect(),
         })
-        .expecting(ExpectedMessage::Transfer(expected)))
+        .expecting(ExpectedMessage::Sealed(terms)))
     }
 }
 

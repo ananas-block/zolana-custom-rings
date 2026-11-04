@@ -98,7 +98,8 @@ pub use crate::{
     register_key::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{
-        MessageMismatch, RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
+        MessageMismatch, OwnerApproval, RelayTransferTerms, SlotOpening, TokenAccountCreate,
+        VerifiedMessage,
     },
     select::{select_merge_where, select_spend_where},
     storage::{

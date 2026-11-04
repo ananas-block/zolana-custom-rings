@@ -15,17 +15,17 @@ use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
 use spr_indexer_api::{Hash, SerializablePubkey};
 use spr_keypair::{PublicKey, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
-use spr_transaction::{Mint, Utxo};
+use spr_transaction::{Mint, Utxo, WalletUtxo};
 use thiserror::Error;
 use zolana_ring_client::{
     rpc::{
-        PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayQuote, TxViewingSecret,
+        PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayId, RelayQuote, TxViewingSecret,
         ENROLL_COMPUTE_UNITS,
     },
     AuditEnvelope, OpenedAudit,
 };
 
-use crate::{pipeline::delegate_rail, CustomRing, CustomRingConfig, RingError};
+use crate::{pipeline::delegate_rail, CustomRing, CustomRingConfig, PendingSignature, RingError};
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum MessageMismatch {
@@ -49,6 +49,8 @@ pub enum MessageMismatch {
     Recipients,
     #[error("the message publishes a transaction key other than the one the request names")]
     TransactionKey,
+    #[error("the message spends a held note the terms do not name")]
+    SpendsUnnamedNote,
     #[error("the request asks for no signature")]
     Unrequested,
     #[error("the message settles a buffer, read it from the chain before signing")]
@@ -62,7 +64,9 @@ pub enum MessageMismatch {
 pub(crate) enum ExpectedMessage {
     Deposit(ExpectedDeposit),
     Delegate(ExpectedDelegate),
-    Transfer(ExpectedTransfer),
+    /// The sealing wallet hands each owner its terms and signs nothing itself.
+    Sealed(Vec<RelayTransferTerms>),
+    PublicOwner(ExpectedPublicOwner),
     Enroll(ExpectedEnroll),
 }
 
@@ -111,18 +115,14 @@ pub struct TokenAccountCreate {
     pub token_program: SerializablePubkey,
 }
 
-/// One entry per public owner the seal names, an outside co-signer holds none.
+/// One public owner reading its terms against the notes its wallet holds.
 #[derive(Clone, Debug)]
-pub(crate) struct ExpectedTransfer {
-    terms: Vec<SignerTerms>,
-    /// From the ring account, a frame read under the wrong rail proves nothing.
-    rail: RingRail,
-}
-
-#[derive(Clone, Debug)]
-struct SignerTerms {
+pub(crate) struct ExpectedPublicOwner {
     terms: RelayTransferTerms,
     setup: Vec<Instruction>,
+    /// From the ring account, a frame read under the wrong rail proves nothing.
+    rail: RingRail,
+    known_nullifiers: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Debug)]
@@ -189,7 +189,8 @@ impl ExpectedMessage {
         match self {
             Self::Deposit(deposit) => deposit.check(message),
             Self::Delegate(delegate) => delegate.check(message),
-            Self::Transfer(transfer) => check_inline(transfer, message, signer),
+            Self::Sealed(_) => Err(MessageMismatch::Unrequested),
+            Self::PublicOwner(owner) => check_inline(owner, message, signer),
             Self::Enroll(enroll) => enroll.check(message),
         }
     }
@@ -200,9 +201,9 @@ impl ExpectedMessage {
         signer: Address,
     ) -> Result<Option<Address>, MessageMismatch> {
         match self {
-            Self::Deposit(_) | Self::Enroll(_) => Ok(None),
+            Self::Deposit(_) | Self::Sealed(_) | Self::Enroll(_) => Ok(None),
             Self::Delegate(delegate) => delegate.settled_buffer(message),
-            Self::Transfer(transfer) => settled_buffer(transfer, message, signer),
+            Self::PublicOwner(owner) => settled_buffer(owner, message, signer),
         }
     }
 
@@ -215,13 +216,15 @@ impl ExpectedMessage {
         match self {
             Self::Deposit(_) | Self::Enroll(_) => Err(MessageMismatch::Data),
             Self::Delegate(delegate) => delegate.check_settled(message, buffer),
-            Self::Transfer(transfer) => check_settled(transfer, message, buffer, signer),
+            Self::Sealed(_) => Err(MessageMismatch::Unrequested),
+            Self::PublicOwner(owner) => check_settled(owner, message, buffer, signer),
         }
     }
 
     pub fn terms_for(&self, signer: Address) -> Option<&RelayTransferTerms> {
         match self {
-            Self::Transfer(transfer) => transfer.terms_for(signer),
+            Self::Sealed(terms) => terms.iter().find(|terms| terms.signer.0 == signer),
+            Self::PublicOwner(owner) => (owner.terms.signer.0 == signer).then_some(&owner.terms),
             Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) => None,
         }
     }
@@ -514,46 +517,51 @@ impl ExpectedFrame for ExpectedDelegate {
     }
 }
 
-impl ExpectedTransfer {
-    pub fn new(terms: Vec<RelayTransferTerms>, config: &CustomRingConfig) -> Self {
-        Self {
-            terms: terms
-                .into_iter()
-                .map(|terms| SignerTerms {
-                    setup: terms
-                        .setup
-                        .iter()
-                        .map(|create| {
-                            CreateAssociatedTokenAccount {
-                                payer: terms.fee_payer.0,
-                                owner: create.owner.0,
-                                mint: create.mint.0,
-                                token_program: create.token_program.0,
-                            }
-                            .instruction()
-                        })
-                        .collect(),
-                    terms,
-                })
-                .collect(),
-            rail: match config.mode {
-                RingMode::Anonymous => RingRail::Anonymous,
-                RingMode::Confidential => RingRail::Confidential,
+/// A public owner's approval, its own notes are a required input since its signature is the only gate on them.
+#[must_use]
+pub struct OwnerApproval<'a> {
+    pub relay_id: RelayId,
+    pub message: Vec<u8>,
+    pub terms: RelayTransferTerms,
+    pub config: &'a CustomRingConfig,
+    /// Every note the wallet holds, the nullifiers are the wallet's own derivation.
+    pub known_notes: &'a [WalletUtxo],
+}
+
+impl OwnerApproval<'_> {
+    pub fn pending(self) -> PendingSignature {
+        let setup = self
+            .terms
+            .setup
+            .iter()
+            .map(|create| {
+                CreateAssociatedTokenAccount {
+                    payer: self.terms.fee_payer.0,
+                    owner: create.owner.0,
+                    mint: create.mint.0,
+                    token_program: create.token_program.0,
+                }
+                .instruction()
+            })
+            .collect();
+        PendingSignature::expecting_owner(
+            self.relay_id,
+            self.message,
+            ExpectedPublicOwner {
+                setup,
+                rail: match self.config.mode {
+                    RingMode::Anonymous => RingRail::Anonymous,
+                    RingMode::Confidential => RingRail::Confidential,
+                },
+                known_nullifiers: self.known_notes.iter().map(|note| note.nullifier).collect(),
+                terms: self.terms,
             },
-        }
-    }
-
-    pub fn terms_for(&self, signer: Address) -> Option<&RelayTransferTerms> {
-        self.signer_terms(signer).map(|held| &held.terms)
-    }
-
-    fn signer_terms(&self, signer: Address) -> Option<&SignerTerms> {
-        self.terms.iter().find(|held| held.terms.signer.0 == signer)
+        )
     }
 }
 
-impl SignerTerms {
-    /// A slot of another owner or an opening that rebuilds another commitment binds nothing.
+impl ExpectedPublicOwner {
+    /// A slot of another owner, an opening that rebuilds another commitment or a held note the terms do not name binds nothing.
     fn check_moved(&self, data: &RingTransactData<'_>) -> Result<(), MessageMismatch> {
         let terms = &self.terms;
         if terms.slots.is_empty() && terms.nullifiers.is_empty() {
@@ -569,13 +577,20 @@ impl SignerTerms {
                 return Err(MessageMismatch::Recipients);
             }
         }
-        let spends_its_notes = terms
-            .nullifiers
-            .iter()
-            .all(|nullifier| data.nullifiers.contains(&nullifier.0));
-        match spends_its_notes {
-            true => Ok(()),
-            false => Err(MessageMismatch::Data),
+        // A named note the wallet cannot place means no list stood behind the check.
+        let named_and_held = terms.nullifiers.iter().all(|nullifier| {
+            data.nullifiers.contains(&nullifier.0) && self.known_nullifiers.contains(&nullifier.0)
+        });
+        if !named_and_held {
+            return Err(MessageMismatch::Data);
+        }
+        let spends_another = data.nullifiers.iter().any(|spent| {
+            self.known_nullifiers.contains(spent)
+                && !terms.nullifiers.iter().any(|named| named.0 == *spent)
+        });
+        match spends_another {
+            true => Err(MessageMismatch::SpendsUnnamedNote),
+            false => Ok(()),
         }
     }
 }
@@ -600,21 +615,21 @@ impl SlotOpening {
     }
 }
 
-impl ExpectedFrame for ExpectedTransfer {
+impl ExpectedFrame for ExpectedPublicOwner {
     const TAG: InstructionTag = InstructionTag::Transfer;
 
-    /// A key the seal names no slot or note of stays refused.
+    /// Another key stays refused.
     fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
-        let held = self
-            .signer_terms(signer)
-            .ok_or(MessageMismatch::Unrequested)?;
+        if self.terms.signer.0 != signer {
+            return Err(MessageMismatch::Unrequested);
+        }
         Ok(Envelope {
-            ring: CustomRing::new(held.terms.ring.0),
-            program: held.terms.ring.0,
+            ring: CustomRing::new(self.terms.ring.0),
+            program: self.terms.ring.0,
             units: compute_unit_limit(tag),
-            fee_payer: held.terms.fee_payer.0,
+            fee_payer: self.terms.fee_payer.0,
             signer,
-            setup: held.setup.clone(),
+            setup: self.setup.clone(),
         })
     }
 
@@ -624,15 +639,12 @@ impl ExpectedFrame for ExpectedTransfer {
         frame: &[u8],
         accounts: &[AccountMeta],
     ) -> Result<(), MessageMismatch> {
-        let held = self
-            .signer_terms(signer)
-            .ok_or(MessageMismatch::Unrequested)?;
         let parsed = frame
             .split_first()
             .filter(|(tag, _)| **tag == tag::TRANSFER)
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
-        held.check_moved(parsed.data())?;
+        self.check_moved(parsed.data())?;
         check_signer(&self.envelope(signer, Self::TAG)?, accounts)
     }
 }
